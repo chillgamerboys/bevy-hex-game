@@ -12,7 +12,7 @@ mod settings;
 mod splash;
 pub(crate) mod title;
 
-pub use hex_ui::{despawn_screen, screen_root, screen_root_node, DespawnOnExit};
+pub use hex_ui::{despawn_screen, screen_root, screen_root_node};
 
 pub(super) fn plugin(app: &mut App) {
     app.init_state::<Screen>();

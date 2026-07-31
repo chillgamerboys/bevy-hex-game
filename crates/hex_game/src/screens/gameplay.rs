@@ -12,7 +12,6 @@
 //! before an interface for it existed; nothing here emits a command any more.
 
 use bevy::prelude::*;
-use bevy::ui_widgets::ScrollArea;
 use hex_assets::{CombatSettings, FormationCatalog};
 use hex_combat::{
     CombatSummary, EncounterOutcome, EncounterResolution, Turn, TurnOrder, UnitCombatSummary,
@@ -32,7 +31,7 @@ use super::combat_lab::{
     CombatLabReportLaunch, CombatLabSandboxRequest, CombatLabSession, CreatorContentOverlay,
     CreatorDisplayName,
 };
-use super::{despawn_screen, DespawnOnExit};
+use super::despawn_screen;
 use crate::combat_reports::{
     CombatLabReport, CombatLabReportStore, CombatLabReportTermination, CurrentCombatLabReport,
 };
@@ -40,8 +39,8 @@ use crate::readouts::{GameplayUiContext, UiUnitIdentity};
 use crate::scenarios::ActiveScenario;
 use crate::storage::StoragePaths;
 use hex_ui::{
-    blurb, fine, heading, row_button, ActionAffordance, ActionAvailability, ActionPriority,
-    GameplayAction, GameplayHudView, UiAssets,
+    ActionAffordance, ActionAvailability, ActionPriority, GameplayAction, GameplayHudView,
+    OutcomeAction, OutcomeActionView, OutcomeCompareChoiceView, OutcomeReportView,
 };
 
 pub(crate) fn plugin(app: &mut App) {
@@ -88,9 +87,8 @@ pub(crate) fn plugin(app: &mut App) {
     app.add_systems(
         Update,
         (
-            handle_outcome_report_controls,
-            sync_outcome_modal,
-            update_outcome_report,
+            handle_outcome_report_intents.after(hex_ui::UiSystems::EmitIntents),
+            sync_outcome_report_view,
             handle_outcome_actions,
         )
             .chain()
@@ -184,9 +182,6 @@ fn handle_gameplay_ui_intents(
     }
 }
 
-#[derive(Component)]
-struct OutcomeModal;
-
 pub(crate) use hex_gameplay_model::ReportMode as OutcomeReportMode;
 use hex_gameplay_model::{
     resolve_lab_run, LabRunAction, LabRunFailure, LabRunTransition, ReportViewModel,
@@ -194,34 +189,12 @@ use hex_gameplay_model::{
 
 type OutcomeReportState = ReportViewModel<crate::combat_reports::CombatLabReportId>;
 
-#[derive(Component, Debug, Clone, Copy)]
-enum OutcomeReportControl {
-    Mode(OutcomeReportMode),
-    CompareWith(crate::combat_reports::CombatLabReportId),
-}
-
-#[derive(Component)]
-struct OutcomeReportTab(OutcomeReportMode);
-
-#[derive(Component)]
-struct OutcomeReportBody;
-
-#[derive(Component)]
-struct OutcomeCompareControls;
-
-#[derive(Component, Clone, Copy)]
-enum OutcomeAction {
-    Continue,
-    Retry,
-    RetryExact,
-    TuneAgain,
-    CopyToSandbox,
-    SaveReport,
-    ReturnTitle,
-}
-
-fn reset_outcome_report(mut state: ResMut<OutcomeReportState>) {
+fn reset_outcome_report(
+    mut state: ResMut<OutcomeReportState>,
+    mut view: ResMut<OutcomeReportView>,
+) {
     *state = OutcomeReportState::default();
+    *view = OutcomeReportView::default();
 }
 
 fn reset_lab_statistics_view(mut view: ResMut<hex_ui::LabStatisticsView>) {
@@ -573,323 +546,185 @@ fn publish_party_view(
         *view = next;
     }
 }
-fn sync_outcome_modal(
+fn sync_outcome_report_view(
     mut commands: Commands,
     resolution: Res<EncounterResolution>,
-    existing: Query<Entity, With<OutcomeModal>>,
-    assets: Res<UiAssets>,
     lab: Option<Res<CombatLabSession>>,
     launch: Option<Res<CombatLabReportLaunch>>,
     summary: Option<Res<CombatSummary>>,
+    current: Option<Res<CurrentCombatLabReport>>,
     reports: Option<Res<CombatLabReportStore>>,
     report_state: Res<OutcomeReportState>,
+    mut view: ResMut<OutcomeReportView>,
 ) {
     let Some(outcome) = resolution.outcome() else {
-        for entity in &existing {
-            commands.entity(entity).despawn();
+        if view.visible {
+            *view = OutcomeReportView::default();
         }
         return;
     };
-    if !existing.is_empty() {
-        return;
-    }
-    let report = lab
-        .as_deref()
-        .zip(launch.as_deref())
-        .zip(summary.as_deref())
-        .and_then(|((lab, launch), summary)| {
-            match CombatLabReport::new(
-                lab.profile.clone(),
-                launch.origin.clone(),
-                launch.map.clone(),
-                launch.content_revision,
-                launch.rosters.clone(),
-                launch.deployment.clone(),
-                CombatLabReportTermination::Outcome(outcome),
-                summary.clone(),
-            ) {
-                Ok(report) => Some(report),
-                Err(error) => {
-                    error!("Combat Lab report evidence failed closed: {error}");
-                    None
-                }
-            }
-        });
-    if let Some(report) = &report {
-        commands.insert_resource(CurrentCombatLabReport(report.clone()));
-    }
-    let return_label = lab
-        .as_deref()
-        .map(|session| match session.return_to {
-            Screen::CharacterCreator => "Return to Creator",
-            Screen::SpellCreator => "Return to Spell Creator",
-            Screen::CombatLab => "Return to Combat Lab",
-            _ => "Return to Title",
-        })
-        .unwrap_or("Return to Title");
-    commands
-        .spawn((
-            Name::new("Encounter Outcome Modal"),
-            OutcomeModal,
-            Node {
-                position_type: PositionType::Absolute,
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::Center,
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.62)),
-            GlobalZIndex(20),
-            Pickable::default(),
-            DespawnOnExit(Screen::Gameplay),
-        ))
-        .with_children(|overlay| {
-            overlay
-                .spawn((
-                    Node {
-                        width: if report.is_some() {
-                            Val::Percent(88.0)
-                        } else {
-                            Val::Px(430.0)
-                        },
-                        max_width: Val::Px(1500.0),
-                        max_height: Val::Percent(90.0),
-                        padding: UiRect::all(Val::Px(28.0)),
-                        flex_direction: FlexDirection::Column,
-                        align_items: AlignItems::Center,
-                        row_gap: Val::Px(16.0),
-                        border: UiRect::all(Val::Px(1.0)),
-                        border_radius: BorderRadius::all(Val::Px(10.0)),
-                        ..default()
-                    },
-                    BorderColor::all(Color::srgba(0.93, 0.79, 0.46, 0.5)),
-                    BackgroundColor(Color::srgba(0.02, 0.03, 0.045, 0.97)),
-                ))
-                .with_children(|panel| {
-                    let (title, detail) = match outcome {
-                        EncounterOutcome::Victory => {
-                            ("Victory", "The battlefield remains as the encounter ended.")
-                        }
-                        EncounterOutcome::Defeat => (
-                            "Defeat",
-                            "Retry replays this scenario with the same resolved seed.",
-                        ),
-                    };
-                    panel.spawn(heading(&assets, title));
-                    panel.spawn(blurb(&assets, detail));
-                    if let (Some(report), Some(lab)) = (&report, lab.as_deref()) {
-                        let changes = report
-                            .profile
-                            .changed_from_shipped(&lab.shipped_combat);
-                        panel.spawn(fine(
-                            &assets,
-                            format!(
-                                "{:?} · {} · seed {} · Player {} / Hostile {} · {} rule change{} · fingerprint {:016X}",
-                                report.profile.preset,
-                                report.map.scenario,
-                                report
-                                    .map
-                                    .resolved_seed
-                                    .map_or_else(|| "authored".to_owned(), |seed| seed.to_string()),
-                                report.rosters.players.len(),
-                                report.rosters.hostiles.len(),
-                                changes.len(),
-                                if changes.len() == 1 { "" } else { "s" },
-                                report.summary_fingerprint,
-                            ),
-                        ));
-                        panel
-                            .spawn(Node {
-                                flex_direction: FlexDirection::Row,
-                                column_gap: Val::Px(7.0),
-                                ..default()
-                            })
-                            .with_children(|tabs| {
-                                for (mode, label) in OutcomeReportMode::ALL {
-                                    let text = if report_state.mode == mode {
-                                        format!("{label} · ACTIVE")
-                                    } else {
-                                        label.to_owned()
-                                    };
-                                    tabs.spawn((
-                                        row_button(label, 155.0),
-                                        OutcomeReportControl::Mode(mode),
-                                        OutcomeReportTab(mode),
-                                    ))
-                                    .with_child(blurb(&assets, text));
-                                }
-                            });
-                        panel
-                            .spawn((
-                                ScrollArea,
-                                Node {
-                                    width: Val::Percent(100.0),
-                                    min_height: Val::Px(0.0),
-                                    flex_grow: 1.0,
-                                    overflow: Overflow::scroll_y(),
-                                    flex_direction: FlexDirection::Column,
-                                    ..default()
-                                },
-                            ))
-                            .with_child((
-                                OutcomeReportBody,
-                                blurb(
-                                    &assets,
-                                    outcome_report_text(
-                                        report,
-                                        report_state.mode,
-                                        reports.as_deref(),
-                                        report_state.compare_report,
-                                    ),
-                                ),
-                            ));
-                        panel
-                            .spawn((
-                                OutcomeCompareControls,
-                                Node {
-                                    flex_direction: FlexDirection::Row,
-                                    column_gap: Val::Px(6.0),
-                                    flex_wrap: FlexWrap::Wrap,
-                                    ..default()
-                                },
-                                if report_state.mode == OutcomeReportMode::Compare {
-                                    Visibility::Inherited
-                                } else {
-                                    Visibility::Hidden
-                                },
-                            ))
-                            .with_children(|selectors| {
-                                if let Some(reports) = reports.as_deref() {
-                                    for saved in &reports.history.reports {
-                                        let selected =
-                                            report_state.compare_report == Some(saved.id);
-                                        let label = if selected {
-                                            format!("COMPARE · REPORT {}", saved.id.0)
-                                        } else {
-                                            format!("Report {}", saved.id.0)
-                                        };
-                                        selectors
-                                            .spawn((
-                                                row_button(label.clone(), 150.0),
-                                                OutcomeReportControl::CompareWith(saved.id),
-                                            ))
-                                            .with_child(blurb(&assets, label));
-                                    }
-                                }
-                            });
-                    }
-                    panel
-                        .spawn(Node {
-                            flex_direction: FlexDirection::Row,
-                            column_gap: Val::Px(10.0),
-                            ..default()
-                        })
-                        .with_children(|buttons| {
-                            if report.is_some() {
-                                for (action, text) in [
-                                    (OutcomeAction::SaveReport, "Save Report"),
-                                    (OutcomeAction::RetryExact, "Retry Exact"),
-                                    (OutcomeAction::TuneAgain, "Tune & Run Again"),
-                                ] {
-                                    buttons
-                                        .spawn((row_button(text, 170.0), action))
-                                        .with_child(blurb(&assets, text));
-                                }
-                                if matches!(
-                                    report.as_ref().map(|report| &report.origin),
-                                    Some(crate::combat_reports::CombatLabReportOrigin::FixedFixture {
-                                        ..
-                                    })
-                                ) {
-                                    let text = "Copy to Sandbox";
-                                    buttons
-                                        .spawn((
-                                            row_button(text, 170.0),
-                                            OutcomeAction::CopyToSandbox,
-                                        ))
-                                        .with_child(blurb(&assets, text));
-                                }
-                            } else {
-                                let primary = match outcome {
-                                    EncounterOutcome::Victory => {
-                                        (OutcomeAction::Continue, "Continue")
-                                    }
-                                    EncounterOutcome::Defeat => (OutcomeAction::Retry, "Retry"),
-                                };
-                                buttons
-                                    .spawn((row_button(primary.1, 150.0), primary.0))
-                                    .with_child(blurb(&assets, primary.1));
+    let report = if lab.is_some() {
+        current
+            .as_deref()
+            .map(|report| report.0.clone())
+            .or_else(|| {
+                lab.as_deref()
+                    .zip(launch.as_deref())
+                    .zip(summary.as_deref())
+                    .and_then(|((lab, launch), summary)| {
+                        match CombatLabReport::new(
+                            lab.profile.clone(),
+                            launch.origin.clone(),
+                            launch.map.clone(),
+                            launch.content_revision,
+                            launch.rosters.clone(),
+                            launch.deployment.clone(),
+                            CombatLabReportTermination::Outcome(outcome),
+                            summary.clone(),
+                        ) {
+                            Ok(report) => {
+                                commands.insert_resource(CurrentCombatLabReport(report.clone()));
+                                Some(report)
                             }
-                            buttons
-                                .spawn((
-                                    row_button(return_label, 170.0),
-                                    OutcomeAction::ReturnTitle,
-                                ))
-                                .with_child(blurb(&assets, return_label));
-                        });
-                });
+                            Err(error) => {
+                                error!("Combat Lab report evidence failed closed: {error}");
+                                None
+                            }
+                        }
+                    })
+            })
+    } else {
+        None
+    };
+    let (title, detail) = match outcome {
+        EncounterOutcome::Victory => ("Victory", "The battlefield remains as the encounter ended."),
+        EncounterOutcome::Defeat => (
+            "Defeat",
+            "Retry replays this scenario with the same resolved seed.",
+        ),
+    };
+    let metadata = report.as_ref().zip(lab.as_deref()).map(|(report, lab)| {
+        let changes = report.profile.changed_from_shipped(&lab.shipped_combat);
+        format!(
+            "{:?} · {} · seed {} · Player {} / Hostile {} · {} rule change{} · fingerprint {:016X}",
+            report.profile.preset,
+            report.map.scenario,
+            report
+                .map
+                .resolved_seed
+                .map_or_else(|| "authored".to_owned(), |seed| seed.to_string()),
+            report.rosters.players.len(),
+            report.rosters.hostiles.len(),
+            changes.len(),
+            if changes.len() == 1 { "" } else { "s" },
+            report.summary_fingerprint,
+        )
+    });
+    let body = report.as_ref().map(|report| {
+        outcome_report_text(
+            report,
+            report_state.mode,
+            reports.as_deref(),
+            report_state.compare_report,
+        )
+    });
+    let comparisons = reports.as_deref().map_or_else(Vec::new, |reports| {
+        reports
+            .history
+            .reports
+            .iter()
+            .map(|saved| {
+                let selected = report_state.compare_report == Some(saved.id);
+                OutcomeCompareChoiceView {
+                    id: saved.id,
+                    label: if selected {
+                        format!("COMPARE · REPORT {}", saved.id.0)
+                    } else {
+                        format!("Report {}", saved.id.0)
+                    },
+                    selected,
+                }
+            })
+            .collect()
+    });
+    let mut actions = if report.is_some() {
+        vec![
+            OutcomeActionView {
+                action: OutcomeAction::SaveReport,
+                label: "Save Report".to_owned(),
+            },
+            OutcomeActionView {
+                action: OutcomeAction::RetryExact,
+                label: "Retry Exact".to_owned(),
+            },
+            OutcomeActionView {
+                action: OutcomeAction::TuneAgain,
+                label: "Tune & Run Again".to_owned(),
+            },
+        ]
+    } else {
+        vec![OutcomeActionView {
+            action: match outcome {
+                EncounterOutcome::Victory => OutcomeAction::Continue,
+                EncounterOutcome::Defeat => OutcomeAction::Retry,
+            },
+            label: match outcome {
+                EncounterOutcome::Victory => "Continue",
+                EncounterOutcome::Defeat => "Retry",
+            }
+            .to_owned(),
+        }]
+    };
+    if matches!(
+        report.as_ref().map(|report| &report.origin),
+        Some(crate::combat_reports::CombatLabReportOrigin::FixedFixture { .. })
+    ) {
+        actions.push(OutcomeActionView {
+            action: OutcomeAction::CopyToSandbox,
+            label: "Copy to Sandbox".to_owned(),
         });
+    }
+    let return_label =
+        lab.as_deref()
+            .map_or("Return to Title", |session| match session.return_to {
+                Screen::CharacterCreator => "Return to Creator",
+                Screen::SpellCreator => "Return to Spell Creator",
+                Screen::CombatLab => "Return to Combat Lab",
+                _ => "Return to Title",
+            });
+    actions.push(OutcomeActionView {
+        action: OutcomeAction::Return,
+        label: return_label.to_owned(),
+    });
+    let next = OutcomeReportView {
+        visible: true,
+        title: title.to_owned(),
+        detail: detail.to_owned(),
+        metadata,
+        mode: report_state.mode,
+        body,
+        comparisons,
+        actions,
+    };
+    if *view != next {
+        *view = next;
+    }
 }
 
-fn handle_outcome_report_controls(
-    clicked: Query<(&Interaction, &OutcomeReportControl), Changed<Interaction>>,
+fn handle_outcome_report_intents(
+    mut intents: MessageReader<hex_ui::UiIntent>,
     mut state: ResMut<OutcomeReportState>,
 ) {
-    for (interaction, control) in &clicked {
-        if *interaction != Interaction::Pressed {
-            continue;
-        }
-        match *control {
-            OutcomeReportControl::Mode(mode) => state.select_mode(mode),
-            OutcomeReportControl::CompareWith(id) => state.compare_with(id),
-        }
-    }
-}
-
-fn update_outcome_report(
-    state: Res<OutcomeReportState>,
-    report: Option<Res<CurrentCombatLabReport>>,
-    reports: Option<Res<CombatLabReportStore>>,
-    mut body: Query<&mut Text, With<OutcomeReportBody>>,
-    tabs: Query<(&OutcomeReportTab, &Children)>,
-    mut tab_text: Query<&mut Text, Without<OutcomeReportBody>>,
-    mut compare_controls: Query<&mut Visibility, With<OutcomeCompareControls>>,
-) {
-    let Some(report) = report.as_deref() else {
-        return;
-    };
-    if let Ok(mut text) = body.single_mut() {
-        **text = outcome_report_text(
-            &report.0,
-            state.mode,
-            reports.as_deref(),
-            state.compare_report,
-        );
-    }
-    for (tab, children) in &tabs {
-        let Some((_, label)) = OutcomeReportMode::ALL
-            .iter()
-            .find(|(mode, _)| *mode == tab.0)
-        else {
-            continue;
-        };
-        if let Some(child) = children.first() {
-            if let Ok(mut text) = tab_text.get_mut(*child) {
-                **text = if state.mode == tab.0 {
-                    format!("{label} · ACTIVE")
-                } else {
-                    (*label).to_owned()
-                };
+    for intent in intents.read() {
+        match *intent {
+            hex_ui::UiIntent::Outcome(hex_ui::OutcomeIntent::SelectMode(mode)) => {
+                state.select_mode(mode);
             }
+            hex_ui::UiIntent::Outcome(hex_ui::OutcomeIntent::CompareWith(id)) => {
+                state.compare_with(id);
+            }
+            _ => {}
         }
-    }
-    if let Ok(mut visibility) = compare_controls.single_mut() {
-        *visibility = if state.mode == OutcomeReportMode::Compare {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
-        };
     }
 }
 
@@ -1079,7 +914,7 @@ fn signed_report_delta(left: u32, right: u32) -> i64 {
 }
 
 fn handle_outcome_actions(
-    clicked: Query<(&Interaction, &OutcomeAction), Changed<Interaction>>,
+    mut intents: MessageReader<hex_ui::UiIntent>,
     resolution: Res<EncounterResolution>,
     active: Option<Res<ActiveScenario>>,
     lab: Option<Res<CombatLabSession>>,
@@ -1094,10 +929,10 @@ fn handle_outcome_actions(
     let Some(outcome) = resolution.outcome() else {
         return;
     };
-    for (interaction, action) in &clicked {
-        if *interaction != Interaction::Pressed {
+    for intent in intents.read() {
+        let hex_ui::UiIntent::Outcome(hex_ui::OutcomeIntent::Activate(action)) = intent else {
             continue;
-        }
+        };
         match (*action, outcome) {
             (OutcomeAction::Continue, EncounterOutcome::Victory) => {
                 if let Some(lab) = lab.as_deref() {
@@ -1180,7 +1015,7 @@ fn handle_outcome_actions(
                     Err(error) => error!("could not save Combat Lab report: {error}"),
                 }
             }
-            (OutcomeAction::ReturnTitle, _) => {
+            (OutcomeAction::Return, _) => {
                 next_screen.set(
                     lab.as_deref()
                         .map_or(Screen::Title, |session| session.return_to),
@@ -1560,16 +1395,11 @@ mod tests {
     }
 
     #[test]
-    fn outcome_report_tabs_are_wired_controls_not_inert_buttons() {
+    fn outcome_report_projects_modes_body_and_typed_actions() {
         let shipped = hex_assets::CombatSettings::default();
         let report = sample_report(4);
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .insert_resource(UiAssets {
-                display: Handle::default(),
-                body: Handle::default(),
-                hex_cell: Handle::default(),
-            })
             .insert_resource(EncounterResolution(Some(EncounterOutcome::Victory)))
             .insert_resource(report.summary.clone())
             .insert_resource(CombatLabSession {
@@ -1589,19 +1419,25 @@ mod tests {
             })
             .init_resource::<CombatLabReportStore>()
             .init_resource::<OutcomeReportState>()
-            .add_systems(Update, sync_outcome_modal);
+            .init_resource::<OutcomeReportView>()
+            .add_systems(Update, sync_outcome_report_view);
         app.update();
 
-        let mut controls = app.world_mut().query::<&OutcomeReportControl>();
-        let modes = controls
-            .iter(app.world())
-            .filter(|control| matches!(control, OutcomeReportControl::Mode(_)))
-            .count();
-        assert_eq!(modes, OutcomeReportMode::ALL.len());
-        let mut body = app
-            .world_mut()
-            .query_filtered::<Entity, With<OutcomeReportBody>>();
-        assert_eq!(body.iter(app.world()).count(), 1);
+        let view = app.world().resource::<OutcomeReportView>();
+        assert!(view.visible);
+        assert_eq!(view.mode, OutcomeReportMode::Overview);
+        assert!(view
+            .body
+            .as_deref()
+            .is_some_and(|body| body.contains("OVERVIEW")));
+        assert!(view
+            .actions
+            .iter()
+            .any(|action| action.action == OutcomeAction::RetryExact));
+        assert!(view
+            .actions
+            .iter()
+            .any(|action| action.action == OutcomeAction::Return));
     }
 
     #[test]
@@ -1631,9 +1467,12 @@ mod tests {
             resolved_seed: Some(seed),
             encounter_override: None,
         }));
-        app.world_mut()
-            .spawn((Interaction::Pressed, OutcomeAction::Retry));
+        app.add_message::<hex_ui::UiIntent>();
         app.add_systems(Update, handle_outcome_actions);
+        app.world_mut()
+            .write_message(hex_ui::UiIntent::Outcome(hex_ui::OutcomeIntent::Activate(
+                OutcomeAction::Retry,
+            )));
         app.update();
 
         let retry = app.world().resource::<crate::scenarios::ScenarioToLoad>();

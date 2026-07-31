@@ -18,6 +18,7 @@ mod lab_statistics;
 mod lattice;
 mod layout;
 mod model;
+mod outcome_report;
 mod party;
 mod scale;
 mod screens;
@@ -41,7 +42,8 @@ pub use model::{
     CastingPanelContentView, CastingPanelView, CastingSpellView, CombatLogLineView, CombatLogView,
     DecisionChoiceView, FormationSlotView, GameplayAction, GameplayChromeView, GameplayHudView,
     GameplayLatticesView, InitiativeEntryView, InitiativeSide, InitiativeView, LabStatisticsIntent,
-    LabStatisticsView, LatticeIntent, OwnLatticeView, PartyIntent, PartyMemberView, PartyView,
+    LabStatisticsView, LatticeIntent, OutcomeAction, OutcomeActionView, OutcomeCompareChoiceView,
+    OutcomeIntent, OutcomeReportView, OwnLatticeView, PartyIntent, PartyMemberView, PartyView,
     PauseView, ResumeView, TargetLatticeStateView, TargetLatticeView, TargetPulseView, TitleIntent,
     TitleScenarioView, TitleView, UiIntent, UiSetting, UiSettingRow, UiSettingsView, UnitBadgeView,
     UnitBadgesView,
@@ -96,6 +98,7 @@ impl Plugin for UiPlugin {
         .init_resource::<PauseView>()
         .init_resource::<PartyView>()
         .init_resource::<LabStatisticsView>()
+        .init_resource::<OutcomeReportView>()
         .init_resource::<InitiativeView>()
         .init_resource::<TitleView>()
         .init_resource::<TargetPulseView>()
@@ -117,7 +120,8 @@ impl Plugin for UiPlugin {
             action_rail::plugin,
             title::plugin,
             unit_badges::plugin,
-        ));
+        ))
+        .add_plugins(outcome_report::plugin);
     }
 }
 

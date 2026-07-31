@@ -374,6 +374,92 @@ pub enum LabStatisticsIntent {
     EndExperiment,
 }
 
+/// One selectable saved-report identity in Compare mode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutcomeCompareChoiceView {
+    /// Stable report identity owned by the gameplay model.
+    pub id: hex_gameplay_model::CombatLabReportId,
+    /// Complete player-facing selector label.
+    pub label: String,
+    /// Whether this report is the current comparison target.
+    pub selected: bool,
+}
+
+/// Outcome actions whose effects remain application-owned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutcomeAction {
+    /// Continue after victory.
+    Continue,
+    /// Retry the active non-Lab scenario.
+    Retry,
+    /// Retry the exact frozen Lab launch.
+    RetryExact,
+    /// Restore the frozen Lab run for tuning.
+    TuneAgain,
+    /// Copy a fixed fixture into the editable sandbox.
+    CopyToSandbox,
+    /// Persist the frozen report.
+    SaveReport,
+    /// Return to the session's owning screen.
+    Return,
+}
+
+/// One ordered outcome-footer action.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutcomeActionView {
+    /// Typed action returned to the application adapter.
+    pub action: OutcomeAction,
+    /// Player-facing verb.
+    pub label: String,
+}
+
+/// Immutable encounter outcome and optional Combat Lab report presentation.
+#[derive(Resource, Debug, Clone, PartialEq, Eq)]
+pub struct OutcomeReportView {
+    /// Whether an encounter outcome currently blocks gameplay.
+    pub visible: bool,
+    /// Outcome heading.
+    pub title: String,
+    /// Short outcome guidance.
+    pub detail: String,
+    /// Frozen run identity and fingerprint, when this is a Lab run.
+    pub metadata: Option<String>,
+    /// Active report mode.
+    pub mode: hex_gameplay_model::ReportMode,
+    /// Already-formatted, gameplay-owned report body.
+    pub body: Option<String>,
+    /// Independent saved-report choices.
+    pub comparisons: Vec<OutcomeCompareChoiceView>,
+    /// Ordered footer actions.
+    pub actions: Vec<OutcomeActionView>,
+}
+
+impl Default for OutcomeReportView {
+    fn default() -> Self {
+        Self {
+            visible: false,
+            title: String::new(),
+            detail: String::new(),
+            metadata: None,
+            mode: hex_gameplay_model::ReportMode::Overview,
+            body: None,
+            comparisons: Vec::new(),
+            actions: Vec::new(),
+        }
+    }
+}
+
+/// Typed outcome/report controls emitted by presentation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutcomeIntent {
+    /// Select one report presentation mode.
+    SelectMode(hex_gameplay_model::ReportMode),
+    /// Select one saved report without changing the active mode implicitly.
+    CompareWith(hex_gameplay_model::CombatLabReportId),
+    /// Activate an application-owned outcome transition.
+    Activate(OutcomeAction),
+}
+
 /// Typed gameplay-lattice inputs emitted by presentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LatticeIntent {
@@ -563,6 +649,8 @@ pub enum UiIntent {
     Party(PartyIntent),
     /// Act on the live Combat Lab statistics drawer.
     LabStatistics(LabStatisticsIntent),
+    /// Act on the encounter outcome or frozen Combat Lab report.
+    Outcome(OutcomeIntent),
     /// Navigate back through the current screen's canonical route.
     Back,
     /// Cycle one Settings value.
