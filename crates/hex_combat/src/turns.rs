@@ -93,6 +93,10 @@ impl PendingRevivals {
     pub(crate) fn snapshot(&self) -> BTreeMap<UnitId, u32> {
         self.0.clone()
     }
+
+    pub(crate) fn project(&mut self, pending: &BTreeMap<UnitId, u32>) {
+        self.0.clone_from(pending);
+    }
 }
 
 impl TurnOrder {

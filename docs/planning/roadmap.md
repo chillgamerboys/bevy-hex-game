@@ -137,9 +137,13 @@ the whole wave lands on `dev` in one merge (CONTRIBUTING.md has the rules).
   interactive rules-testing workspace. Exact `TilePos` occupancy makes positioning
   real, Channel closes the lattice resource loop, and frozen profiles, live telemetry,
   fixtures, and comparable reports make manually played action-economy trials
-  reproducible. The renderer-free simulation target separately proves deterministic
-  state and bounded no-progress under a passive `EndTurn` controller; it does not yet
-  solve fights or serve as balance evidence. The evidence gate retained the shipped
+  reproducible. The renderer-free simulation target now consumes exact scripts or a
+  deterministic baseline controller and proves supported casts, restoration,
+  persistent effects, downing/revival, outcomes, and explicit command/turn/no-progress
+  bounds. It remains regression evidence rather than a balance oracle. Versioned
+  policy and report projections mirror shipping authority inputs, migrate v1 reports,
+  record manual/bounded stops, and support annotated side-by-side experiments. The
+  evidence gate retained the shipped
   four-hex movement default; the measurements and caveats are recorded in the
   [tempo decision audit](../development/wave-7-tempo-decision.md). Flat deterministic
   one-slot initiative remains the baseline; boss initiative, co-casting, rout,
@@ -222,9 +226,11 @@ only their combined behavior. Its lanes entered the integration branch in this o
    [tempo decision audit](../development/wave-7-tempo-decision.md) retains the shipped
    movement/action policy.
 
-The initial Rules panel exposes only already-understood numeric seams:
-movement per turn, strike disables, engage range, disengage margin, levels per bonus
-range, and Reveal duration. It offers **Shipped**, **Tactical two-step**, and
+The Rules panel exposes only already-understood numeric seams:
+movement per turn, strike disables, default initiative, engage range, disengage
+margin, levels per bonus range, and Reveal duration. It also serializes the typed
+fixed-initiative, movement-plus-one-action, burst-only channelling, and
+fight-to-the-end policies without offering unbuilt variants. It offers **Shipped**, **Tactical two-step**, and
 validated **Custom** profiles, shows every deviation from shipped values, and resets
 without editing `combat.ron`. Initiative algorithms, multiple actions, Channel cost,
 rout policy, and co-casting are not disguised as numeric switches before those
