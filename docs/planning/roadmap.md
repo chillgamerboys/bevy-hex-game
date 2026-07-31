@@ -26,6 +26,7 @@ still belong to the crate they change. `docs` is whoever picks it up.
 
 | Epic | Scope | Owner |
 |---|---|---|
+| Gameplay architecture and scoped validation | Wave 8: make a pure serializable combat authority the sole gameplay truth; project it through ECS, animation, and UI; separate pure gameplay screen models from Bevy wiring; and select tests fail-closed by concern and dependency closure so narrow gameplay changes do not execute unrelated owner corpora | gameplay/shared | <!-- linear: HEX-28 owner: shravan-kumaran -->
 | Run bottoms on tiles | Publish `RunBottom(Level)` beside every run entity's `TilePos`, including stacked runs; accepted prerequisite to terrain casting and obstruction-aware trajectories | map |
 | Terrain magic | after boundary asks G/H/L are agreed: canonical exact-voxel `TerrainImpact` announcements using runtime `ElementId`, map-approved conjuration through `TerrainEdit::Set`, 3D volume shapes, the casting legality ladder, and deterministic `TerrainImpactOutcome` consumption; feature destruction remains deferred | combat | <!-- linear: HEX-19 owner: shravan-kumaran -->
 | Trajectories and lingering effects | obstruction, area-unit resolution, area-lingering zones, and dispel; obstruction remains a `RunBottom`/line-of-sight satellite rather than a complete-party combat gate | combat | <!-- linear: HEX-24 owner: shravan-kumaran -->
@@ -136,6 +137,52 @@ the whole wave lands on `dev` in one merge (CONTRIBUTING.md has the rules).
   one-slot initiative remains the baseline; boss initiative, co-casting, rout,
   terrain magic, perception adapters, and campaign persistence remain outside the
   wave.
+- **Wave 8 — gameplay foundation and scoped validation (in progress).** Complete the
+  production audit's organizing move: one pure, integer-valued, serializable combat
+  authority driven by validated commands, with ECS, animation, and UI as projections.
+  Split pure Combat Lab, Creator, report, and launch/retry models from Bevy wiring;
+  consolidate expensive gameplay contract binaries; and make local/PR validation
+  select exact Cargo packages, targets, and features from one fail-closed concern map.
+  Broad owner corpora remain unchanged and continue on their owning changes, `dev`
+  pushes, schedules, and the final combined wave gate.
+
+#### Wave 8 outcome and topology
+
+Wave 8 is one gameplay/shared-integration wave rather than independent refactors.
+The pure combat authority, ECS and animation adapters, gameplay screen models, and
+test selector all change which layer owns truth and which dependency graph each test
+must compile. No leaf is a release candidate on its own, and only the combined state
+can prove that old gameplay behavior, app lifecycle, and scoped validation agree.
+
+Its source PRs target `wave/8-gameplay-foundation` in this order:
+
+1. **Test-scope foundation.** Record cold and warm compile/link/test baselines; add
+   one machine-readable, fail-closed change-to-concern map; correct nextest commands
+   so Cargo package/target/feature selection happens before test filtering; and emit
+   shadow-mode scope decisions without skipping the existing full PR suite.
+2. **Pure combat authority.** Introduce one serializable combat state and validated
+   command reducer over frozen arena, roster, rules-profile, and observation inputs.
+   Run it in temporary shadow against canonical Wave 7 snapshots; do not preserve a
+   second simulator after equivalence.
+3. **ECS and animation cutover.** Make ECS resources/components and animation consume
+   projections from the gameplay authority. Domain movement/busy state, not
+   `Transformation` presence or frame settling, governs legality and turn advance.
+4. **Gameplay screen models.** Extract pure Combat Lab, Creator, report, comparison,
+   Retry Exact, Tune & Run Again, fixture copy, and re-entry transitions from Bevy UI.
+   Keep a small immutable headless app observation target for wiring and lifecycle.
+5. **Test and app seam consolidation.** Collapse units tests into one contracts
+   binary and combat tests into one contracts binary plus simulation. Separate
+   gameplay-owned app behavior from the unchanged shared scenario/loading and
+   map/world contract targets, proving old/new selection equivalence before removing
+   duplication.
+6. **Scope cutover and wave gate.** Enable required scoped PR jobs only after shadow
+   evidence shows no missed failures; keep the full residual suite on `dev`; update
+   local skills, docs, and PR evidence; then run the complete final wave checks,
+   bounded presentation walk, adversarial diff review, and exact-head human sign-off.
+
+Wave 8 does not tune balance, add mechanics or content, upgrade Bevy, or modify
+`hex_map`, `hex_world`, `hex_perception`, `hex_game/src/review.rs`, map visual walks,
+map/perception stress suites, or their acceptance criteria.
 
 #### Wave 7 outcome and topology
 
