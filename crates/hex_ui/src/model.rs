@@ -1013,6 +1013,49 @@ pub struct InitiativeView {
     pub entries: Vec<InitiativeEntryView>,
 }
 
+/// Development-only projection of the current cyclic map time.
+#[cfg(feature = "dev-tools")]
+#[derive(Resource, Debug, Clone, PartialEq)]
+pub enum DevTimeView {
+    /// Cyclic time can be adjusted for the current map.
+    Available {
+        /// Current hour in the scenario's `[0, 24)` cycle.
+        hours: f32,
+    },
+    /// The current lighting profile does not expose a cyclic clock.
+    Unavailable {
+        /// Player-facing explanation supplied by the application adapter.
+        reason: String,
+    },
+}
+
+#[cfg(feature = "dev-tools")]
+impl Default for DevTimeView {
+    fn default() -> Self {
+        Self::Unavailable {
+            reason: "Cyclic time is unavailable for this map.".to_owned(),
+        }
+    }
+}
+
+/// Development-only time controls emitted by presentation.
+#[cfg(feature = "dev-tools")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DevTimeIntent {
+    /// Move the cyclic clock back by thirty minutes.
+    PreviousHalfHour,
+    /// Move the cyclic clock forward by thirty minutes.
+    NextHalfHour,
+    /// Set the cyclic clock to midnight.
+    Midnight,
+    /// Set the cyclic clock to dawn.
+    Dawn,
+    /// Set the cyclic clock to noon.
+    Noon,
+    /// Set the cyclic clock to dusk.
+    Dusk,
+}
+
 /// One configurable setting rendered by the Settings screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UiSetting {
@@ -1170,6 +1213,9 @@ pub enum UiIntent {
     CombatLab(CombatLabIntent),
     /// Act on the exact Combat Lab deployment surface.
     Deployment(DeploymentIntent),
+    /// Adjust the development-only cyclic map clock.
+    #[cfg(feature = "dev-tools")]
+    DevTime(DevTimeIntent),
     /// Navigate back through the current screen's canonical route.
     Back,
     /// Cycle one Settings value.
