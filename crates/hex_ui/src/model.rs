@@ -146,6 +146,79 @@ pub struct UnitBadgesView {
     pub target: Option<UnitBadgeView>,
 }
 
+/// Progress for a required damage/restoration lattice choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DecisionChoiceView {
+    /// Selected cell count.
+    pub chosen: usize,
+    /// Exact required count.
+    pub owed: usize,
+    /// Whether disabled cells are being restored rather than live cells disabled.
+    pub restoring: bool,
+}
+
+/// Player-owned lattice panel projection.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OwnLatticeView {
+    /// Semantic inspector role, already converted to player-facing text.
+    pub heading: String,
+    /// Disclosure-safe unit identity.
+    pub identity: String,
+    /// Renderable cell projections.
+    pub cells: Vec<crate::LatticeCellView>,
+    /// Required choice progress, when this lattice owns it.
+    pub decision: Option<DecisionChoiceView>,
+}
+
+/// Knowledge-gated hostile lattice state.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TargetLatticeStateView {
+    /// Existence is known but no cells are disclosed.
+    Opaque,
+    /// Disclosed cells plus a count of still-unknown cells.
+    Known {
+        /// Renderable disclosed cells.
+        cells: Vec<crate::LatticeCellView>,
+        /// Count of cells not disclosed by knowledge.
+        unknown: Option<usize>,
+    },
+}
+
+/// Hostile target lattice panel projection.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TargetLatticeView {
+    /// Target provenance, already converted to player-facing text.
+    pub heading: String,
+    /// Disclosure-safe target identity.
+    pub identity: String,
+    /// Knowledge-gated lattice state.
+    pub state: TargetLatticeStateView,
+}
+
+/// Immutable gameplay lattice presentation.
+#[derive(Resource, Debug, Default, Clone, PartialEq)]
+pub struct GameplayLatticesView {
+    /// Selected/acting/deciding player lattice.
+    pub own: Option<OwnLatticeView>,
+    /// Retained hostile target lattice.
+    pub target: Option<TargetLatticeView>,
+}
+
+/// Short-lived target-panel damage emphasis.
+#[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct TargetPulseView(pub bool);
+
+/// Typed gameplay-lattice inputs emitted by presentation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LatticeIntent {
+    /// Toggle one actionable canonical cell.
+    ToggleCell(hex_core::LatticeCoord),
+    /// Clear the current local choice.
+    ClearDecision,
+    /// Submit the current exact choice through the command funnel.
+    ConfirmDecision,
+}
+
 /// Disclosed side label used by the initiative renderer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InitiativeSide {
@@ -316,6 +389,8 @@ impl Default for GameplayHudView {
 pub enum UiIntent {
     /// Activate one application-authorized gameplay action.
     Gameplay(GameplayAction),
+    /// Act on a required lattice choice.
+    Lattice(LatticeIntent),
     /// Navigate back through the current screen's canonical route.
     Back,
     /// Cycle one Settings value.

@@ -1,6 +1,5 @@
 //! The player's live lattice and the retained, knowledge-gated hostile target.
 
-use bevy::picking::Pickable;
 use bevy::prelude::*;
 use hex_assets::{ElementCatalog, SpellBook};
 use hex_combat::{CombatSystems, FactionLatticeKnowledge, TurnOrder};
@@ -12,55 +11,14 @@ use hex_lattice::{LatticeSpec, LatticeState, LatticeStats};
 use hex_units::{Downed, Faction, Player, StandsOn, UnitRegistry};
 
 use crate::casting::{AimExit, Aiming};
-use crate::menus::lattice_view::{
-    known_cell_view, live_cell_view, spawn_lattice_cells, CellInteraction, LatticeCellView,
-    LatticeScale,
+use crate::menus::lattice_view::{known_cell_view, live_cell_view, CellInteraction};
+use crate::readouts::GameplayUiContext;
+use hex_ui::{
+    DecisionChoiceView, GameplayLatticesView, LatticeIntent, OwnLatticeView,
+    TargetLatticeStateView, TargetLatticeView, UiIntent,
 };
-use crate::readouts::{
-    region, DecisionHud, GameplayUiContext, HudElement, HudRegion, HudSetup, InspectorRole,
-    TargetProvenance, READ_ONLY_HUD,
-};
-use hex_ui::{blurb, fine, heading, panel, row_button, UiAssets, EDGE, PANEL_BG};
 
-const PULSE_COLOR: Color = Color::srgba(0.25, 0.10, 0.06, 0.9);
-#[derive(Resource, Default, Debug, PartialEq)]
-struct LatticeReadouts {
-    own: Option<OwnLattice>,
-    target: Option<TargetLattice>,
-}
-
-#[derive(Debug, PartialEq)]
-struct OwnLattice {
-    unit: UnitId,
-    role: InspectorRole,
-    identity: String,
-    cells: Vec<LatticeCellView>,
-    decision: Option<DecisionSummary>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct DecisionSummary {
-    pub(crate) chosen: usize,
-    pub(crate) owed: usize,
-    pub(crate) restoring: bool,
-}
-
-#[derive(Debug, PartialEq)]
-struct TargetLattice {
-    unit: UnitId,
-    provenance: TargetProvenance,
-    identity: String,
-    state: TargetState,
-}
-
-#[derive(Debug, PartialEq)]
-enum TargetState {
-    Opaque,
-    Known {
-        cells: Vec<LatticeCellView>,
-        unknown: Option<usize>,
-    },
-}
+pub(crate) type DecisionSummary = DecisionChoiceView;
 
 /// The last hostile a real aim named and the turn that pinned it.
 ///
@@ -119,42 +77,11 @@ pub(super) struct DisableDecision {
     pub(super) live: Vec<hex_core::LatticeCoord>,
 }
 
-#[derive(Component)]
-struct OwnPanel;
-
-#[derive(Component)]
-struct OwnHeading;
-
-#[derive(Component)]
-pub(super) struct TargetPanel;
-
-#[derive(Component)]
-struct TargetHeading;
-
-#[derive(Component)]
-struct OwnBody;
-
-#[derive(Component)]
-struct TargetBody;
-
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-struct OwnCell(hex_core::LatticeCoord);
-
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DecisionControl {
-    Clear,
-    Confirm,
-}
-
 pub(super) fn plugin(app: &mut App) {
     app.init_resource::<hex_core::InputBindings>()
-        .init_resource::<LatticeReadouts>()
         .init_resource::<RetainedTarget>()
         .init_resource::<DisableSelection>()
-        .add_systems(
-            OnEnter(Screen::Gameplay),
-            spawn_panels.in_set(HudSetup::Panels),
-        )
+        .add_systems(OnEnter(Screen::Gameplay), reset)
         .add_systems(
             Update,
             handle_decision_input
@@ -173,8 +100,7 @@ pub(super) fn plugin(app: &mut App) {
         )
         .add_systems(
             Update,
-            (refresh_readouts, rebuild_panels)
-                .chain()
+            refresh_readouts
                 .in_set(AppSystems::Update)
                 .after(GameplaySystems::UiContext)
                 .run_if(in_state(Screen::Gameplay)),
@@ -182,97 +108,9 @@ pub(super) fn plugin(app: &mut App) {
         .add_systems(OnExit(Screen::Gameplay), clear_focus);
 }
 
-fn spawn_panels(
-    mut commands: Commands,
-    mut readouts: ResMut<LatticeReadouts>,
-    mut focus: ResMut<RetainedTarget>,
-    mut selection: ResMut<DisableSelection>,
-    assets: Res<UiAssets>,
-    regions: Query<(Entity, &HudRegion)>,
-) {
-    *readouts = LatticeReadouts::default();
+fn reset(mut focus: ResMut<RetainedTarget>, mut selection: ResMut<DisableSelection>) {
     *focus = RetainedTarget::default();
     *selection = DisableSelection::default();
-
-    let stack = commands
-        .spawn((
-            Name::new("Lattice Readout Stack"),
-            Node {
-                width: Val::Percent(100.0),
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(8.0),
-                ..default()
-            },
-            Pickable::IGNORE,
-        ))
-        .with_children(|stack| {
-            stack
-                .spawn((
-                    Name::new("Own Lattice Panel"),
-                    OwnPanel,
-                    DecisionHud,
-                    HudElement,
-                    panel(),
-                    READ_ONLY_HUD,
-                ))
-                .insert(Node {
-                    width: Val::Percent(100.0),
-                    flex_direction: FlexDirection::Column,
-                    padding: UiRect::all(Val::Px(12.0)),
-                    border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(10.0)),
-                    row_gap: Val::Px(7.0),
-                    ..default()
-                })
-                .with_children(|panel| {
-                    panel.spawn((OwnHeading, heading(&assets, "selected ally")));
-                    panel.spawn((
-                        Name::new("Own Lattice Body"),
-                        OwnBody,
-                        Node {
-                            flex_direction: FlexDirection::Column,
-                            row_gap: Val::Px(5.0),
-                            ..default()
-                        },
-                        Pickable::IGNORE,
-                    ));
-                });
-            stack
-                .spawn((
-                    Name::new("Target Lattice Panel"),
-                    TargetPanel,
-                    HudElement,
-                    panel(),
-                    READ_ONLY_HUD,
-                ))
-                .insert(Node {
-                    display: Display::None,
-                    width: Val::Percent(100.0),
-                    flex_direction: FlexDirection::Column,
-                    padding: UiRect::all(Val::Px(12.0)),
-                    border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(10.0)),
-                    row_gap: Val::Px(7.0),
-                    ..default()
-                })
-                .with_children(|panel| {
-                    panel.spawn((TargetHeading, heading(&assets, "aim target")));
-                    panel.spawn((
-                        Name::new("Target Lattice Body"),
-                        TargetBody,
-                        Node {
-                            flex_direction: FlexDirection::Column,
-                            row_gap: Val::Px(5.0),
-                            ..default()
-                        },
-                        Pickable::IGNORE,
-                    ));
-                });
-        })
-        .id();
-    if let Some(inspector) = region(HudRegion::Inspector, &regions) {
-        commands.entity(inspector).add_child(stack);
-    }
 }
 
 /// Updates retention from an actual hostile occupying the aimed surface.
@@ -419,7 +257,7 @@ fn reconcile_selection(selection: &mut DisableSelection, next: Option<DisableDec
 }
 
 fn refresh_readouts(
-    mut readouts: ResMut<LatticeReadouts>,
+    mut readouts: ResMut<GameplayLatticesView>,
     context: Res<GameplayUiContext>,
     selection: Res<DisableSelection>,
     registry: Res<UnitRegistry>,
@@ -446,42 +284,43 @@ fn refresh_readouts(
             let (unit, _name, spec, state, stats) = own.get(entity).ok()?;
             Some((unit, role, identity, spec, state, stats))
         })
-        .map(|(unit, role, identity, spec, state, stats)| OwnLattice {
-            unit: *unit,
-            role,
-            identity,
-            cells: spec
-                .cells()
-                .map(|(coord, kind)| {
-                    let armed = selection.decision.as_ref().is_some_and(|decision| {
-                        decision.target == *unit && decision.live.contains(&coord)
-                    });
-                    live_cell_view(
-                        coord,
-                        kind,
-                        stats,
-                        state,
-                        &elements,
-                        &spells,
-                        if armed {
-                            CellInteraction::Actionable
-                        } else {
-                            CellInteraction::ReadOnly
-                        },
-                        selection.cells.contains(&coord),
-                    )
-                })
-                .collect(),
-            decision: selection
-                .decision
-                .as_ref()
-                .filter(|decision| decision.target == *unit)
-                .map(|decision| DecisionSummary {
-                    chosen: selection.cells.len(),
-                    owed: decision.owed,
-                    restoring: decision.restoring,
-                }),
-        });
+        .map(
+            |(unit, role, identity, spec, state, stats)| OwnLatticeView {
+                heading: role.label().to_lowercase(),
+                identity,
+                cells: spec
+                    .cells()
+                    .map(|(coord, kind)| {
+                        let armed = selection.decision.as_ref().is_some_and(|decision| {
+                            decision.target == *unit && decision.live.contains(&coord)
+                        });
+                        live_cell_view(
+                            coord,
+                            kind,
+                            stats,
+                            state,
+                            &elements,
+                            &spells,
+                            if armed {
+                                CellInteraction::Actionable
+                            } else {
+                                CellInteraction::ReadOnly
+                            },
+                            selection.cells.contains(&coord),
+                        )
+                    })
+                    .collect(),
+                decision: selection
+                    .decision
+                    .as_ref()
+                    .filter(|decision| decision.target == *unit)
+                    .map(|decision| DecisionChoiceView {
+                        chosen: selection.cells.len(),
+                        owed: decision.owed,
+                        restoring: decision.restoring,
+                    }),
+            },
+        );
 
     // No hostile `LatticeSpec` or `LatticeState` appears in this function. The
     // target projection can only be assembled from `FactionLatticeKnowledge::view`.
@@ -494,9 +333,9 @@ fn refresh_readouts(
         }
         let known = knowledge.view(Faction::Player, unit)?;
         let state = if known.is_opaque() {
-            TargetState::Opaque
+            TargetLatticeStateView::Opaque
         } else {
-            TargetState::Known {
+            TargetLatticeStateView::Known {
                 cells: known
                     .cells()
                     .map(|(coord, cell)| {
@@ -514,173 +353,20 @@ fn refresh_readouts(
                 unknown: known.unknown_count(),
             }
         };
-        Some(TargetLattice {
-            unit,
-            provenance: *provenance,
+        Some(TargetLatticeView {
+            heading: provenance.label().to_lowercase(),
             identity: identity.label(),
             state,
         })
     });
 
-    let next = LatticeReadouts {
+    let next = GameplayLatticesView {
         own: own_view,
         target: target_view,
     };
     if *readouts != next {
         *readouts = next;
     }
-}
-
-fn rebuild_panels(
-    mut commands: Commands,
-    readouts: Res<LatticeReadouts>,
-    own_bodies: Query<Entity, With<OwnBody>>,
-    target_bodies: Query<Entity, With<TargetBody>>,
-    mut target_panels: Query<&mut Node, With<TargetPanel>>,
-    mut own_headings: Query<&mut Text, (With<OwnHeading>, Without<TargetHeading>)>,
-    mut target_headings: Query<&mut Text, (With<TargetHeading>, Without<OwnHeading>)>,
-    assets: Res<UiAssets>,
-) {
-    if !readouts.is_changed() {
-        return;
-    }
-
-    if let Ok(body) = own_bodies.single() {
-        commands.entity(body).despawn_related::<Children>();
-        commands.entity(body).with_children(|body| {
-            let Some(own) = readouts.own.as_ref() else {
-                body.spawn(blurb(&assets, "no player lattice"));
-                return;
-            };
-            body.spawn(blurb(&assets, own.identity.clone()));
-            spawn_lattice_cells(
-                body,
-                &own.cells,
-                &assets,
-                LatticeScale::PANEL,
-                "Own",
-                OwnCell,
-            );
-        });
-    }
-    if let (Ok(mut heading), Some(own)) = (own_headings.single_mut(), readouts.own.as_ref()) {
-        heading.0 = own.role.label().to_lowercase();
-    }
-
-    let has_target = readouts.target.is_some();
-    if let Ok(mut node) = target_panels.single_mut() {
-        node.display = if has_target {
-            Display::Flex
-        } else {
-            Display::None
-        };
-    }
-    if let Ok(body) = target_bodies.single() {
-        commands.entity(body).despawn_related::<Children>();
-        commands.entity(body).with_children(|body| {
-            let Some(target) = readouts.target.as_ref() else {
-                return;
-            };
-            body.spawn(blurb(&assets, target.identity.clone()));
-            match &target.state {
-                TargetState::Opaque => {
-                    body.spawn(blurb(&assets, "lattice unknown"));
-                }
-                TargetState::Known { cells, unknown } => {
-                    spawn_lattice_cells(
-                        body,
-                        cells,
-                        &assets,
-                        LatticeScale::PANEL,
-                        "Target",
-                        |_| (),
-                    );
-                    if let Some(unknown) = unknown.filter(|unknown| *unknown > 0) {
-                        body.spawn(fine(&assets, format!("{unknown} cells unknown")));
-                    }
-                }
-            }
-        });
-    }
-    if let (Ok(mut heading), Some(target)) =
-        (target_headings.single_mut(), readouts.target.as_ref())
-    {
-        heading.0 = target.provenance.label().to_lowercase();
-    }
-}
-
-pub(crate) fn spawn_decision_controls(
-    body: &mut ChildSpawnerCommands,
-    decision: DecisionSummary,
-    assets: &UiAssets,
-) {
-    body.spawn(fine(
-        assets,
-        format!(
-            "{}/{} {} cells chosen",
-            decision.chosen,
-            decision.owed,
-            if decision.restoring {
-                "disabled"
-            } else {
-                "live"
-            }
-        ),
-    ));
-    body.spawn((
-        Name::new("Disable Decision Controls"),
-        Node {
-            flex_direction: FlexDirection::Row,
-            column_gap: Val::Px(8.0),
-            ..default()
-        },
-        Pickable::IGNORE,
-    ))
-    .with_children(|controls| {
-        controls
-            .spawn((
-                row_button("Clear Disable Selection", 119.0),
-                DecisionControl::Clear,
-            ))
-            .with_children(|button| {
-                button.spawn(blurb(assets, "clear"));
-            });
-        if decision.chosen == decision.owed {
-            controls
-                .spawn((
-                    row_button("Confirm Disable Selection", 119.0),
-                    DecisionControl::Confirm,
-                ))
-                .with_children(|button| {
-                    button.spawn(blurb(assets, "confirm"));
-                    button.spawn(fine(assets, "ENTER"));
-                });
-        } else {
-            controls
-                .spawn((
-                    Name::new("Confirm Disable Selection Disabled"),
-                    Node {
-                        width: Val::Px(119.0),
-                        height: Val::Px(46.0),
-                        align_items: AlignItems::Center,
-                        justify_content: JustifyContent::Center,
-                        flex_direction: FlexDirection::Column,
-                        row_gap: Val::Px(1.0),
-                        padding: UiRect::axes(Val::Px(10.0), Val::Px(4.0)),
-                        border: UiRect::all(Val::Px(1.0)),
-                        border_radius: BorderRadius::all(Val::Px(6.0)),
-                        ..default()
-                    },
-                    BorderColor::all(EDGE),
-                    BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.03)),
-                    Pickable::IGNORE,
-                ))
-                .with_children(|button| {
-                    button.spawn(blurb(assets, "confirm"));
-                    button.spawn(fine(assets, "choose more"));
-                });
-        }
-    });
 }
 
 #[expect(
@@ -694,8 +380,7 @@ fn handle_decision_input(
     registry: Res<UnitRegistry>,
     mut queue: ResMut<CommandQueue>,
     mut selection: ResMut<DisableSelection>,
-    cells: Query<(&Interaction, &OwnCell), Changed<Interaction>>,
-    controls: Query<(&Interaction, &DecisionControl), Changed<Interaction>>,
+    mut intents: MessageReader<UiIntent>,
     lattices: Query<(&LatticeSpec, &LatticeState)>,
     owners: Query<&ControlOwner, With<Player>>,
 ) {
@@ -736,22 +421,22 @@ fn handle_decision_input(
 
     let mut clear = false;
     let mut confirm = bindings.just_pressed(&keys, hex_core::InputAction::Confirm);
-    for (interaction, control) in &controls {
-        if *interaction != Interaction::Pressed {
+    let mut toggled = Vec::new();
+    for intent in intents.read() {
+        let UiIntent::Lattice(intent) = intent else {
             continue;
-        }
-        match control {
-            DecisionControl::Clear => clear = true,
-            DecisionControl::Confirm => confirm = true,
+        };
+        match intent {
+            LatticeIntent::ToggleCell(cell) => toggled.push(*cell),
+            LatticeIntent::ClearDecision => clear = true,
+            LatticeIntent::ConfirmDecision => confirm = true,
         }
     }
     if clear {
         selection.cells.clear();
     }
-    for (interaction, cell) in &cells {
-        if *interaction == Interaction::Pressed {
-            toggle_cell(&mut selection, cell.0);
-        }
+    for cell in toggled {
+        toggle_cell(&mut selection, cell);
     }
 
     if !confirm {
@@ -806,16 +491,6 @@ fn toggle_cell(selection: &mut DisableSelection, cell: hex_core::LatticeCoord) {
 
 fn clear_focus(mut focus: ResMut<RetainedTarget>) {
     *focus = RetainedTarget::default();
-}
-
-pub(super) fn set_pulse_color(
-    active: bool,
-    panels: &mut Query<&mut BackgroundColor, With<TargetPanel>>,
-) {
-    let Ok(mut background) = panels.single_mut() else {
-        return;
-    };
-    background.0 = if active { PULSE_COLOR } else { PANEL_BG };
 }
 
 #[cfg(test)]
@@ -1013,6 +688,7 @@ mod tests {
     fn enter_emits_the_forced_player_answer_with_its_control_owner() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
+            .add_message::<UiIntent>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<hex_core::InputBindings>()
             .init_resource::<PendingDecision>()
@@ -1081,6 +757,7 @@ mod tests {
     fn restoration_uses_the_casters_owner_and_the_targets_disabled_cells() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
+            .add_message::<UiIntent>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<hex_core::InputBindings>()
             .init_resource::<PendingDecision>()

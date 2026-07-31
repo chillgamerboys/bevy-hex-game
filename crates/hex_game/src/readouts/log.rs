@@ -13,8 +13,8 @@ use hex_lattice::{CellKind, LatticeSpec};
 use hex_perception::FactionMapKnowledge;
 use hex_units::{Faction, Player, StandsOn, UnitRegistry};
 
-use super::lattice::{set_pulse_color, RetainedTarget, TargetPanel};
-use hex_ui::{CombatLogLineView, CombatLogView};
+use super::lattice::RetainedTarget;
+use hex_ui::{CombatLogLineView, CombatLogView, TargetPulseView};
 
 const CAPACITY: usize = 64;
 const FEED_LINES: usize = 3;
@@ -731,11 +731,13 @@ fn pulse_panel(
     time: Res<Time>,
     focus: Res<RetainedTarget>,
     mut pulse: ResMut<DamagePulse>,
-    mut panels: Query<&mut BackgroundColor, With<TargetPanel>>,
+    mut view: ResMut<TargetPulseView>,
 ) {
     let live = pulse.tick(time.delta());
-    let active = live && pulse.target == focus.unit;
-    set_pulse_color(active, &mut panels);
+    let next = TargetPulseView(live && pulse.target == focus.unit);
+    if *view != next {
+        *view = next;
+    }
 }
 
 #[cfg(test)]

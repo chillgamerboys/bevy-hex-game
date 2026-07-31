@@ -11,6 +11,7 @@ mod combat_log;
 mod creation_presentation;
 mod focus;
 mod gameplay_frame;
+mod gameplay_lattices;
 mod initiative;
 mod lattice;
 mod layout;
@@ -23,6 +24,7 @@ mod title;
 mod unit_badges;
 
 pub use creation_presentation::{effect_summary, CharacterBuildSummary, SpellBuildSummary};
+pub use gameplay_lattices::spawn_decision_controls;
 pub use lattice::{
     paint_interactions as paint_lattice_interactions, short_name, spawn_lattice_cells,
     CellInteraction, LatticeCellView, LatticeScale,
@@ -33,9 +35,11 @@ pub use layout::{
 };
 pub use model::{
     ActionAffordance, ActionAvailability, ActionPriority, BadgeKind, CombatLogLineView,
-    CombatLogView, GameplayAction, GameplayChromeView, GameplayHudView, InitiativeEntryView,
-    InitiativeSide, InitiativeView, PauseView, ResumeView, TitleIntent, TitleScenarioView,
-    TitleView, UiIntent, UiSetting, UiSettingRow, UiSettingsView, UnitBadgeView, UnitBadgesView,
+    CombatLogView, DecisionChoiceView, GameplayAction, GameplayChromeView, GameplayHudView,
+    GameplayLatticesView, InitiativeEntryView, InitiativeSide, InitiativeView, LatticeIntent,
+    OwnLatticeView, PauseView, ResumeView, TargetLatticeStateView, TargetLatticeView,
+    TargetPulseView, TitleIntent, TitleScenarioView, TitleView, UiIntent, UiSetting, UiSettingRow,
+    UiSettingsView, UnitBadgeView, UnitBadgesView,
 };
 pub use scale::{
     resolve_auto_scale, resolve_ui_metrics, resolve_viewport_class, ResolvedUiMetrics, UiScaleMode,
@@ -81,10 +85,12 @@ impl Plugin for UiPlugin {
         .init_resource::<CombatLogView>()
         .init_resource::<GameplayChromeView>()
         .init_resource::<GameplayHudView>()
+        .init_resource::<GameplayLatticesView>()
         .init_resource::<UiSettingsView>()
         .init_resource::<PauseView>()
         .init_resource::<InitiativeView>()
         .init_resource::<TitleView>()
+        .init_resource::<TargetPulseView>()
         .init_resource::<UnitBadgesView>()
         .init_resource::<ResumeView>()
         .add_plugins((
@@ -93,6 +99,7 @@ impl Plugin for UiPlugin {
             scale::plugin,
             focus::plugin,
             gameplay_frame::plugin,
+            gameplay_lattices::plugin,
             initiative::plugin,
             shell::plugin,
             screens::plugin,

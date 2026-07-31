@@ -33,12 +33,11 @@ use hex_core::{CommandQueue, ControlOwner, GameCommand, IssuedCommand, Mode, Pen
 use hex_units::{Faction, UnitRegistry};
 
 use crate::readouts::{
-    region, spawn_decision_controls, DecisionHud, DisableSelection, GameplayUiContext, HudElement,
-    HudRegion,
+    region, DecisionHud, DisableSelection, GameplayUiContext, HudElement, HudRegion,
 };
 use hex_ui::{
-    blurb, fine, heading, row_button, stacked_row_button, UiAssets, BLURB_SIZE, EDGE, LABEL,
-    PANEL_BG,
+    blurb, fine, heading, row_button, spawn_decision_controls, stacked_row_button, UiAssets,
+    BLURB_SIZE, EDGE, LABEL, PANEL_BG,
 };
 
 use super::preview::AimVolume;

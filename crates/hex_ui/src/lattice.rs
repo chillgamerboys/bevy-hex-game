@@ -6,6 +6,7 @@
 //! `FactionLatticeKnowledge` for more information.
 
 use crate::{OwnColors, UiAssets, LABEL};
+use bevy::input_focus::tab_navigation::TabIndex;
 use bevy::prelude::*;
 use hex_core::LatticeCoord;
 
@@ -123,7 +124,17 @@ pub fn spawn_lattice_cells<M: Bundle>(
                     marker(view.coord),
                 ));
                 if view.interaction == CellInteraction::Actionable {
-                    cell.insert(Button);
+                    cell.insert((
+                        Button,
+                        AccessibleLabel::new(format!(
+                            "{} · {} · lattice cell {}, {}",
+                            view.label,
+                            view.detail,
+                            view.coord.q(),
+                            view.coord.r()
+                        )),
+                        TabIndex(0),
+                    ));
                 } else {
                     cell.insert(Pickable::IGNORE);
                 }

@@ -5,7 +5,7 @@ use hex_combat::{CombatSystems, EncounterResolution};
 use hex_core::{AppSystems, GameplayPhase, GameplaySetup, GameplaySystems, Screen};
 pub(crate) use hex_ui::{
     HudElement, RequiredActionSurface as DecisionHud, UiHudSetup as HudSetup,
-    UiRegionRole as HudRegion, READ_ONLY_HUD,
+    UiRegionRole as HudRegion,
 };
 
 mod badges;
@@ -14,8 +14,8 @@ mod initiative;
 mod lattice;
 mod log;
 
-pub(crate) use context::{GameplayUiContext, InspectorRole, TargetProvenance, UiUnitIdentity};
-pub(crate) use lattice::{spawn_decision_controls, DisableSelection};
+pub(crate) use context::{GameplayUiContext, UiUnitIdentity};
+pub(crate) use lattice::DisableSelection;
 
 /// Whether ordinary gameplay chrome is currently shown.
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,7 +111,7 @@ mod tests {
 
     #[test]
     fn read_only_hud_surfaces_pass_world_picks_through() {
-        assert_eq!(READ_ONLY_HUD, Pickable::IGNORE);
+        assert_eq!(hex_ui::READ_ONLY_HUD, Pickable::IGNORE);
     }
 
     #[test]
