@@ -289,6 +289,58 @@ pub enum CastingIntent {
     Cancel,
 }
 
+/// One stable party-member row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PartyMemberView {
+    /// Zero-based party slot returned by activation.
+    pub slot: usize,
+    /// Complete non-color status label.
+    pub label: String,
+    /// Whether this member owns the current turn.
+    pub active: bool,
+    /// Whether this member is selected for movement/formation work.
+    pub selected: bool,
+}
+
+/// One authored slot in the selected formation preset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FormationSlotView {
+    /// Canonical relative offset.
+    pub offset: hex_core::HexCoord,
+    /// Whether this is the formation anchor.
+    pub anchor: bool,
+}
+
+/// Immutable party and formation presentation.
+#[derive(Resource, Debug, Default, Clone, PartialEq, Eq)]
+pub struct PartyView {
+    /// Existing party members in stable slot order.
+    pub members: Vec<PartyMemberView>,
+    /// Whether exploration-only formation controls are visible.
+    pub formation_visible: bool,
+    /// Current movement-mode label.
+    pub movement_mode: String,
+    /// Available preset names.
+    pub presets: Vec<String>,
+    /// Slots authored by the selected preset.
+    pub slots: Vec<FormationSlotView>,
+}
+
+/// Typed party/formation actions emitted by presentation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PartyIntent {
+    /// Select one stable party slot.
+    SelectMember(usize),
+    /// Toggle group/solo movement.
+    ToggleMovementMode,
+    /// Select an authored formation preset.
+    SelectPreset(String),
+    /// Assign the selected unit to an authored relative slot.
+    AssignSlot(hex_core::HexCoord),
+    /// Rest through the canonical command funnel.
+    Rest,
+}
+
 /// Typed gameplay-lattice inputs emitted by presentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LatticeIntent {
@@ -474,6 +526,8 @@ pub enum UiIntent {
     Lattice(LatticeIntent),
     /// Act on the current casting projection.
     Casting(CastingIntent),
+    /// Act on party selection or formation configuration.
+    Party(PartyIntent),
     /// Navigate back through the current screen's canonical route.
     Back,
     /// Cycle one Settings value.

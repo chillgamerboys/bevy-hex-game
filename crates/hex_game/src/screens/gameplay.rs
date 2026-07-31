@@ -18,12 +18,15 @@ use hex_combat::{
     CombatSummary, EncounterOutcome, EncounterResolution, Turn, TurnOrder, UnitCombatSummary,
 };
 use hex_core::{
-    CommandQueue, ControlOwner, GameCommand, GameplayPhase, GameplaySystems, HexCoord, InputAction,
+    CommandQueue, ControlOwner, GameCommand, GameplayPhase, GameplaySystems, InputAction,
     InputBindings, IssuedCommand, Mode, PartyFormation, PartyMovementMode, Pause, PendingDecision,
     Screen, UnitId,
 };
 use hex_lattice::{LatticeSpec, LatticeState};
 use hex_units::{Archetype, Downed, Party, Player, Selected, UnitRegistry};
+
+#[cfg(test)]
+use hex_core::HexCoord;
 
 use super::combat_lab::{
     CombatLabReportLaunch, CombatLabSandboxRequest, CombatLabSession, CreatorContentOverlay,
@@ -33,12 +36,12 @@ use super::{despawn_screen, DespawnOnExit};
 use crate::combat_reports::{
     CombatLabReport, CombatLabReportStore, CombatLabReportTermination, CurrentCombatLabReport,
 };
-use crate::readouts::{region, GameplayUiContext, HudElement, HudRegion, HudSetup, UiUnitIdentity};
+use crate::readouts::{GameplayUiContext, HudSetup, UiUnitIdentity};
 use crate::scenarios::ActiveScenario;
 use crate::storage::StoragePaths;
 use hex_ui::{
     blurb, fine, heading, row_button, ActionAffordance, ActionAvailability, ActionPriority,
-    GameplayAction, GameplayHudView, UiAssets, ACCENT, ACCENT_EDGE, EDGE, LABEL, PANEL_BG,
+    GameplayAction, GameplayHudView, UiAssets, ACCENT_EDGE, LABEL,
 };
 
 pub(crate) fn plugin(app: &mut App) {
@@ -74,7 +77,10 @@ pub(crate) fn plugin(app: &mut App) {
     );
     app.add_systems(
         Update,
-        (handle_party_strip, update_party_strip)
+        (
+            handle_party_strip.after(hex_ui::UiSystems::EmitIntents),
+            publish_party_view,
+        )
             .chain()
             .run_if(in_state(Screen::Gameplay))
             .run_if(resource_equals(GameplayPhase::Active)),
@@ -125,7 +131,6 @@ pub(crate) fn plugin(app: &mut App) {
             reset_pause,
             reset_mode,
             reset_outcome_report,
-            spawn_party_strip.in_set(HudSetup::Panels),
             spawn_lab_statistics.in_set(HudSetup::Panels),
         ),
     );
@@ -184,30 +189,6 @@ fn handle_gameplay_ui_intents(
         }
     }
 }
-
-#[derive(Component)]
-struct PartyStrip;
-
-#[derive(Component)]
-struct FormationPanel;
-
-#[derive(Component)]
-struct PartyMemberButton(usize);
-
-#[derive(Component)]
-struct PartyPresetButton(String);
-
-#[derive(Component)]
-struct PartySlotButton(HexCoord);
-
-#[derive(Component)]
-struct PartyModeButton;
-
-#[derive(Component)]
-struct PartyModeText;
-
-#[derive(Component)]
-struct PartyRestButton;
 
 #[derive(Component)]
 struct OutcomeModal;
@@ -585,280 +566,6 @@ fn format_unit_statistics(unit: UnitId, summary: &UnitCombatSummary) -> String {
     )
 }
 
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "formation offsets are content-limited to a six-cell miniature"
-)]
-fn spawn_party_strip(
-    mut commands: Commands,
-    assets: Res<UiAssets>,
-    formations: Res<FormationCatalog>,
-    regions: Query<(Entity, &HudRegion)>,
-) {
-    let mut offered_slots: Vec<HexCoord> = formations
-        .presets
-        .iter()
-        .flat_map(|preset| preset.slots.iter().map(|slot| slot.offset))
-        .collect();
-    offered_slots.sort_unstable();
-    offered_slots.dedup();
-    let slot_pixels: Vec<(HexCoord, f32, f32)> = offered_slots
-        .iter()
-        .map(|offset| {
-            (
-                *offset,
-                (offset.x() * 20 + offset.y() * 10) as f32,
-                (offset.y() * 18) as f32,
-            )
-        })
-        .collect();
-    let min_slot_x = slot_pixels
-        .iter()
-        .map(|(_, x, _)| *x)
-        .fold(f32::INFINITY, f32::min);
-    let max_slot_x = slot_pixels
-        .iter()
-        .map(|(_, x, _)| *x)
-        .fold(f32::NEG_INFINITY, f32::max);
-    let min_slot_y = slot_pixels
-        .iter()
-        .map(|(_, _, y)| *y)
-        .fold(f32::INFINITY, f32::min);
-    let max_slot_y = slot_pixels
-        .iter()
-        .map(|(_, _, y)| *y)
-        .fold(f32::NEG_INFINITY, f32::max);
-    let Some(party_region) = region(HudRegion::Party, &regions) else {
-        error!("party HUD region was not available during gameplay setup");
-        return;
-    };
-    let Some(inspector_region) = region(HudRegion::Inspector, &regions) else {
-        error!("inspector HUD region was not available during gameplay setup");
-        return;
-    };
-
-    commands.entity(party_region).with_children(|region| {
-        region
-            .spawn((
-                Name::new("Party Strip"),
-                PartyStrip,
-                HudElement,
-                Node {
-                    width: Val::Percent(100.0),
-                    padding: UiRect::all(Val::Px(10.0)),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(8.0),
-                    border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(10.0)),
-                    ..default()
-                },
-                BorderColor::all(EDGE),
-                BackgroundColor(PANEL_BG),
-            ))
-            .with_children(|root| {
-                root.spawn(heading(&assets, "party"));
-                root.spawn(blurb(&assets, "ALLIES · keys 1–6"));
-                root.spawn((
-                    Node {
-                        width: Val::Percent(100.0),
-                        flex_direction: FlexDirection::Column,
-                        row_gap: Val::Px(6.0),
-                        ..default()
-                    },
-                    BackgroundColor(Color::NONE),
-                ))
-                .with_children(|members| {
-                    for index in 0..6 {
-                        members
-                            .spawn((
-                                Name::new(format!("Party Member {}", index + 1)),
-                                Button,
-                                PartyMemberButton(index),
-                                Node {
-                                    width: Val::Percent(100.0),
-                                    min_height: Val::Px(48.0),
-                                    padding: UiRect::axes(Val::Px(8.0), Val::Px(7.0)),
-                                    border: UiRect::all(Val::Px(1.0)),
-                                    border_radius: BorderRadius::all(Val::Px(6.0)),
-                                    ..default()
-                                },
-                                BorderColor::all(EDGE),
-                                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.07)),
-                            ))
-                            .with_child((
-                                Text::new(format!("ALLY {} · —", index + 1)),
-                                TextFont {
-                                    font: assets.body.clone().into(),
-                                    ..TextFont::from_font_size(18.0)
-                                },
-                                TextColor(LABEL),
-                            ));
-                    }
-                });
-            });
-    });
-
-    commands.entity(inspector_region).with_children(|region| {
-        region
-            .spawn((
-                Name::new("Formation Panel"),
-                FormationPanel,
-                HudElement,
-                Node {
-                    width: Val::Percent(100.0),
-                    padding: UiRect::all(Val::Px(12.0)),
-                    border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(10.0)),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(10.0),
-                    ..default()
-                },
-                BorderColor::all(EDGE),
-                BackgroundColor(PANEL_BG),
-            ))
-            .with_children(|formation| {
-                formation.spawn(heading(&assets, "formation"));
-                formation.spawn(blurb(
-                    &assets,
-                    "Select an ally, then choose a slot. Occupied slots swap.",
-                ));
-                formation
-                    .spawn((
-                        Name::new("Party Movement Mode"),
-                        Button,
-                        PartyModeButton,
-                        Node {
-                            width: Val::Percent(100.0),
-                            padding: UiRect::axes(Val::Px(10.0), Val::Px(8.0)),
-                            border: UiRect::all(Val::Px(1.0)),
-                            border_radius: BorderRadius::all(Val::Px(6.0)),
-                            ..default()
-                        },
-                        BorderColor::all(ACCENT_EDGE),
-                        BackgroundColor(Color::srgba(0.93, 0.79, 0.46, 0.16)),
-                    ))
-                    .with_child((
-                        PartyModeText,
-                        Text::new("GROUP MOVEMENT"),
-                        TextFont {
-                            font: assets.body.clone().into(),
-                            ..TextFont::from_font_size(18.0)
-                        },
-                        TextColor(LABEL),
-                    ));
-                formation
-                    .spawn((
-                        Name::new("Party Rest"),
-                        Button,
-                        PartyRestButton,
-                        Node {
-                            width: Val::Percent(100.0),
-                            padding: UiRect::axes(Val::Px(10.0), Val::Px(8.0)),
-                            border: UiRect::all(Val::Px(1.0)),
-                            border_radius: BorderRadius::all(Val::Px(6.0)),
-                            ..default()
-                        },
-                        BorderColor::all(EDGE),
-                        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.07)),
-                    ))
-                    .with_child((
-                        Text::new("REST PARTY · R"),
-                        TextFont {
-                            font: assets.body.clone().into(),
-                            ..TextFont::from_font_size(18.0)
-                        },
-                        TextColor(LABEL),
-                    ));
-                formation
-                    .spawn((
-                        Node {
-                            width: Val::Percent(100.0),
-                            flex_direction: FlexDirection::Row,
-                            flex_wrap: FlexWrap::Wrap,
-                            column_gap: Val::Px(6.0),
-                            row_gap: Val::Px(6.0),
-                            ..default()
-                        },
-                        BackgroundColor(Color::NONE),
-                    ))
-                    .with_children(|presets| {
-                        for preset in &formations.presets {
-                            presets
-                                .spawn((
-                                    Name::new(format!("Formation Preset {}", preset.name)),
-                                    Button,
-                                    PartyPresetButton(preset.name.clone()),
-                                    Node {
-                                        padding: UiRect::axes(Val::Px(9.0), Val::Px(7.0)),
-                                        border: UiRect::all(Val::Px(1.0)),
-                                        border_radius: BorderRadius::all(Val::Px(6.0)),
-                                        ..default()
-                                    },
-                                    BorderColor::all(EDGE),
-                                    BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.07)),
-                                ))
-                                .with_child((
-                                    Text::new(preset.name.clone()),
-                                    TextFont {
-                                        font: assets.body.clone().into(),
-                                        ..TextFont::from_font_size(18.0)
-                                    },
-                                    TextColor(LABEL),
-                                ));
-                        }
-                    });
-                formation.spawn(blurb(&assets, "ASSIGNMENT GRID · ◆ anchor"));
-                formation
-                    .spawn((
-                        Name::new("Formation mini-grid"),
-                        Node {
-                            width: Val::Px(max_slot_x - min_slot_x + 24.0),
-                            height: Val::Px(max_slot_y - min_slot_y + 24.0),
-                            position_type: PositionType::Relative,
-                            align_self: AlignSelf::Center,
-                            ..default()
-                        },
-                        BackgroundColor(Color::NONE),
-                    ))
-                    .with_children(|grid| {
-                        for (offset, x, y) in &slot_pixels {
-                            grid.spawn((
-                                Name::new(format!(
-                                    "Formation Slot ({}, {})",
-                                    offset.x(),
-                                    offset.y()
-                                )),
-                                Button,
-                                PartySlotButton(*offset),
-                                Node {
-                                    position_type: PositionType::Absolute,
-                                    left: Val::Px(x - min_slot_x),
-                                    top: Val::Px(y - min_slot_y),
-                                    width: Val::Px(28.0),
-                                    height: Val::Px(26.0),
-                                    align_items: AlignItems::Center,
-                                    justify_content: JustifyContent::Center,
-                                    border: UiRect::all(Val::Px(1.0)),
-                                    border_radius: BorderRadius::all(Val::Px(4.0)),
-                                    ..default()
-                                },
-                                BorderColor::all(EDGE),
-                                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.1)),
-                            ))
-                            .with_child((
-                                Text::new("⬡"),
-                                TextFont {
-                                    font: assets.body.clone().into(),
-                                    ..TextFont::from_font_size(18.0)
-                                },
-                                TextColor(LABEL),
-                            ));
-                        }
-                    });
-            });
-    });
-}
-
 fn handle_party_strip(
     mut commands: Commands,
     mode: Res<State<Mode>>,
@@ -866,74 +573,61 @@ fn handle_party_strip(
     registry: Res<UnitRegistry>,
     formations: Res<FormationCatalog>,
     mut formation: ResMut<PartyFormation>,
-    member_clicks: Query<(&Interaction, &PartyMemberButton), Changed<Interaction>>,
-    mode_clicks: Query<&Interaction, (Changed<Interaction>, With<PartyModeButton>)>,
-    preset_clicks: Query<(&Interaction, &PartyPresetButton), Changed<Interaction>>,
-    slot_clicks: Query<(&Interaction, &PartySlotButton), Changed<Interaction>>,
-    rest_clicks: Query<&Interaction, (Changed<Interaction>, With<PartyRestButton>)>,
+    mut intents: MessageReader<hex_ui::UiIntent>,
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<InputBindings>,
     mut queue: ResMut<CommandQueue>,
-    selected: Query<(Entity, &UnitId), (With<Player>, With<Selected>)>,
+    selected_units: Query<(Entity, &UnitId), (With<Player>, With<Selected>)>,
     owners: Query<&ControlOwner>,
 ) {
     if *mode.get() != Mode::Exploring {
         return;
     }
-    for (interaction, button) in &member_clicks {
-        if *interaction != Interaction::Pressed {
+    let selected = selected_units.iter().next().map(|(_, unit)| *unit);
+    let mut rest_requested = bindings.just_pressed(&keys, InputAction::Rest);
+    for intent in intents.read() {
+        let hex_ui::UiIntent::Party(intent) = intent else {
             continue;
-        }
-        if let Some(entity) = party
-            .members
-            .get(button.0)
-            .and_then(|unit| registry.entity_of(*unit))
-        {
-            for (old, _) in &selected {
-                if old != entity {
-                    commands.entity(old).remove::<Selected>();
+        };
+        match intent {
+            hex_ui::PartyIntent::SelectMember(slot) => {
+                if let Some(entity) = party
+                    .members
+                    .get(*slot)
+                    .and_then(|unit| registry.entity_of(*unit))
+                {
+                    for (old, _) in &selected_units {
+                        if old != entity {
+                            commands.entity(old).remove::<Selected>();
+                        }
+                    }
+                    commands.entity(entity).insert(Selected);
                 }
             }
-            commands.entity(entity).insert(Selected);
-        }
-    }
-    if mode_clicks
-        .iter()
-        .any(|interaction| *interaction == Interaction::Pressed)
-    {
-        formation.mode = match formation.mode {
-            PartyMovementMode::Group => PartyMovementMode::Solo,
-            PartyMovementMode::Solo => PartyMovementMode::Group,
-        };
-    }
-    for (interaction, button) in &preset_clicks {
-        if *interaction == Interaction::Pressed {
-            if let Some(preset) = formations.get(&button.0) {
-                formation.select_preset(preset, &party.members);
+            hex_ui::PartyIntent::ToggleMovementMode => {
+                formation.mode = match formation.mode {
+                    PartyMovementMode::Group => PartyMovementMode::Solo,
+                    PartyMovementMode::Solo => PartyMovementMode::Group,
+                };
             }
+            hex_ui::PartyIntent::SelectPreset(name) => {
+                if let Some(preset) = formations.get(name) {
+                    formation.select_preset(preset, &party.members);
+                }
+            }
+            hex_ui::PartyIntent::AssignSlot(offset) => {
+                let Some(member) = selected else { continue };
+                let Some(preset) = formations.get(&formation.preset) else {
+                    continue;
+                };
+                if preset.slots.iter().any(|slot| slot.offset == *offset) {
+                    let _ = formation.assign(member, *offset);
+                    formation.fill_unassigned(preset, &party.members);
+                }
+            }
+            hex_ui::PartyIntent::Rest => rest_requested = true,
         }
     }
-    let selected_info = selected.iter().next().map(|(_, unit)| *unit);
-    let selected = selected_info;
-    for (interaction, button) in &slot_clicks {
-        if *interaction != Interaction::Pressed {
-            continue;
-        }
-        let Some(member) = selected else {
-            continue;
-        };
-        let Some(preset) = formations.get(&formation.preset) else {
-            continue;
-        };
-        if preset.slots.iter().any(|slot| slot.offset == button.0) {
-            let _ = formation.assign(member, button.0);
-            formation.fill_unassigned(preset, &party.members);
-        }
-    }
-    let rest_requested = bindings.just_pressed(&keys, InputAction::Rest)
-        || rest_clicks
-            .iter()
-            .any(|interaction| *interaction == Interaction::Pressed);
     if rest_requested {
         let issuer = selected
             .or_else(|| party.members.first().copied())
@@ -953,7 +647,7 @@ fn handle_party_strip(
     }
 }
 
-fn update_party_strip(
+fn publish_party_view(
     mode: Res<State<Mode>>,
     context: Res<GameplayUiContext>,
     party: Res<Party>,
@@ -969,125 +663,75 @@ fn update_party_strip(
         Has<Downed>,
         Has<Selected>,
     )>,
-    mut members: Query<
-        (
-            &PartyMemberButton,
-            &Children,
-            &mut Node,
-            &mut BorderColor,
-            &mut BackgroundColor,
-        ),
-        Without<FormationPanel>,
-    >,
-    mut slots: Query<
-        (
-            &PartySlotButton,
-            &Children,
-            &mut Visibility,
-            &mut BackgroundColor,
-        ),
-        Without<PartyMemberButton>,
-    >,
-    mut modes: Query<&mut Text, With<PartyModeText>>,
-    mut texts: Query<&mut Text, Without<PartyModeText>>,
-    mut formation_panels: Query<&mut Node, (With<FormationPanel>, Without<PartyMemberButton>)>,
+    mut view: ResMut<hex_ui::PartyView>,
 ) {
-    if let Ok(mut panel) = formation_panels.single_mut() {
-        panel.display = if *mode.get() == Mode::Exploring {
-            Display::Flex
-        } else {
-            Display::None
-        };
-    }
     let anchor = formations
         .get(&formation.preset)
         .and_then(|preset| formation.anchor_member(preset));
-    for (button, children, mut node, mut border, mut color) in &mut members {
-        let Some(&member) = party.members.get(button.0) else {
-            node.display = Display::None;
-            continue;
-        };
-        node.display = Display::Flex;
-        let Some(entity) = registry.entity_of(member) else {
-            continue;
-        };
-        let Ok((id, archetype, display_name, spec, state, downed, selected)) = units.get(entity)
-        else {
-            continue;
-        };
-        let condition = spec.zip(state).map_or_else(String::new, |(spec, state)| {
-            let total = spec.cells().count();
-            let live = spec
-                .cells()
-                .filter(|(coord, _)| !state.is_disabled(*coord))
-                .count();
-            format!("{live}/{total}")
-        });
-        let active = context
-            .acting
-            .as_ref()
-            .is_some_and(|unit| unit.unit == *id && unit.faction == hex_units::Faction::Player);
-        let status = format!(
-            "{}ALLY {} · {} #{} · {}{}{}",
-            if active { "▶ " } else { "" },
-            button.0 + 1,
-            display_name.map_or(archetype.0.as_str(), |name| name.0.as_str()),
-            id.0,
-            condition,
-            if downed { " · DOWN" } else { "" },
-            if anchor == Some(*id) {
-                " · ANCHOR ◆"
-            } else {
-                ""
-            }
-        );
-        if let Some(child) = children.first() {
-            if let Ok(mut text) = texts.get_mut(*child) {
-                text.0 = status;
-            }
-        }
-        *border = BorderColor::all(if active || selected { ACCENT } else { EDGE });
-        color.0 = if active {
-            Color::srgba(0.93, 0.79, 0.46, 0.28)
-        } else if selected {
-            Color::srgba(0.93, 0.79, 0.46, 0.16)
-        } else {
-            Color::srgba(1.0, 1.0, 1.0, 0.07)
-        };
-    }
-    for mut text in &mut modes {
-        text.0 = format!("{:?} MOVEMENT", formation.mode).to_uppercase();
-    }
+    let members = party
+        .members
+        .iter()
+        .enumerate()
+        .filter_map(|(slot, member)| {
+            let entity = registry.entity_of(*member)?;
+            let (id, archetype, display_name, spec, state, downed, selected) =
+                units.get(entity).ok()?;
+            let condition = spec.zip(state).map_or_else(String::new, |(spec, state)| {
+                let total = spec.cells().count();
+                let live = spec
+                    .cells()
+                    .filter(|(coord, _)| !state.is_disabled(*coord))
+                    .count();
+                format!("{live}/{total}")
+            });
+            let active = context
+                .acting
+                .as_ref()
+                .is_some_and(|unit| unit.unit == *id && unit.faction == hex_units::Faction::Player);
+            Some(hex_ui::PartyMemberView {
+                slot,
+                label: format!(
+                    "{}ALLY {} · {} #{} · {}{}{}",
+                    if active { "▶ " } else { "" },
+                    slot + 1,
+                    display_name.map_or(archetype.0.as_str(), |name| name.0.as_str()),
+                    id.0,
+                    condition,
+                    if downed { " · DOWN" } else { "" },
+                    if anchor == Some(*id) {
+                        " · ANCHOR ◆"
+                    } else {
+                        ""
+                    }
+                ),
+                active,
+                selected,
+            })
+        })
+        .collect();
     let active_preset = formations.get(&formation.preset);
-    for (slot, children, mut visibility, mut color) in &mut slots {
-        let authored = active_preset.and_then(|preset| {
-            preset
-                .slots
-                .iter()
-                .find(|authored| authored.offset == slot.0)
-        });
-        *visibility = if authored.is_some() {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
-        };
-        color.0 = if authored.is_some_and(|authored| authored.anchor) {
-            Color::srgba(0.93, 0.79, 0.46, 0.45)
-        } else {
-            Color::srgba(1.0, 1.0, 1.0, 0.1)
-        };
-        if let Some(child) = children.first() {
-            if let Ok(mut text) = texts.get_mut(*child) {
-                text.0 = if authored.is_some_and(|authored| authored.anchor) {
-                    "◆".to_owned()
-                } else {
-                    "⬡".to_owned()
-                };
-            }
-        }
+    let next = hex_ui::PartyView {
+        members,
+        formation_visible: *mode.get() == Mode::Exploring,
+        movement_mode: format!("{:?} MOVEMENT", formation.mode).to_uppercase(),
+        presets: formations
+            .presets
+            .iter()
+            .map(|preset| preset.name.clone())
+            .collect(),
+        slots: active_preset
+            .into_iter()
+            .flat_map(|preset| preset.slots.iter())
+            .map(|slot| hex_ui::FormationSlotView {
+                offset: slot.offset,
+                anchor: slot.anchor,
+            })
+            .collect(),
+    };
+    if *view != next {
+        *view = next;
     }
 }
-
 fn sync_outcome_modal(
     mut commands: Commands,
     resolution: Res<EncounterResolution>,

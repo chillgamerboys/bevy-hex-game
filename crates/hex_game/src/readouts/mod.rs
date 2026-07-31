@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 use hex_combat::{CombatSystems, EncounterResolution};
 use hex_core::{AppSystems, GameplayPhase, GameplaySetup, GameplaySystems, Screen};
-pub(crate) use hex_ui::{HudElement, UiHudSetup as HudSetup, UiRegionRole as HudRegion};
+pub(crate) use hex_ui::{HudElement, UiHudSetup as HudSetup};
 
 mod badges;
 mod context;
@@ -59,13 +59,6 @@ pub(crate) fn plugin(app: &mut App) {
                 .run_if(in_state(Screen::Gameplay))
                 .run_if(resource_equals(GameplayPhase::Active)),
         );
-}
-
-/// Finds a region spawned by [`spawn_safe_frame`].
-pub(crate) fn region(wanted: HudRegion, regions: &Query<(Entity, &HudRegion)>) -> Option<Entity> {
-    regions
-        .iter()
-        .find_map(|(entity, region)| (*region == wanted).then_some(entity))
 }
 
 fn reset_hud(mut hud: ResMut<HudVisibility>) {

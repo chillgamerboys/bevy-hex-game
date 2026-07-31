@@ -17,6 +17,7 @@ mod initiative;
 mod lattice;
 mod layout;
 mod model;
+mod party;
 mod scale;
 mod screens;
 mod shell;
@@ -37,11 +38,11 @@ pub use layout::{
 pub use model::{
     ActionAffordance, ActionAvailability, ActionPriority, BadgeKind, CastingAimView, CastingIntent,
     CastingPanelContentView, CastingPanelView, CastingSpellView, CombatLogLineView, CombatLogView,
-    DecisionChoiceView, GameplayAction, GameplayChromeView, GameplayHudView, GameplayLatticesView,
-    InitiativeEntryView, InitiativeSide, InitiativeView, LatticeIntent, OwnLatticeView, PauseView,
-    ResumeView, TargetLatticeStateView, TargetLatticeView, TargetPulseView, TitleIntent,
-    TitleScenarioView, TitleView, UiIntent, UiSetting, UiSettingRow, UiSettingsView, UnitBadgeView,
-    UnitBadgesView,
+    DecisionChoiceView, FormationSlotView, GameplayAction, GameplayChromeView, GameplayHudView,
+    GameplayLatticesView, InitiativeEntryView, InitiativeSide, InitiativeView, LatticeIntent,
+    OwnLatticeView, PartyIntent, PartyMemberView, PartyView, PauseView, ResumeView,
+    TargetLatticeStateView, TargetLatticeView, TargetPulseView, TitleIntent, TitleScenarioView,
+    TitleView, UiIntent, UiSetting, UiSettingRow, UiSettingsView, UnitBadgeView, UnitBadgesView,
 };
 pub use scale::{
     resolve_auto_scale, resolve_ui_metrics, resolve_viewport_class, ResolvedUiMetrics, UiScaleMode,
@@ -91,6 +92,7 @@ impl Plugin for UiPlugin {
         .init_resource::<GameplayLatticesView>()
         .init_resource::<UiSettingsView>()
         .init_resource::<PauseView>()
+        .init_resource::<PartyView>()
         .init_resource::<InitiativeView>()
         .init_resource::<TitleView>()
         .init_resource::<TargetPulseView>()
@@ -105,6 +107,7 @@ impl Plugin for UiPlugin {
             gameplay_frame::plugin,
             gameplay_lattices::plugin,
             initiative::plugin,
+            party::plugin,
             shell::plugin,
             screens::plugin,
             action_rail::plugin,
