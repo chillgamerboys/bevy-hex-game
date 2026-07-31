@@ -11,7 +11,6 @@ slow-timeout = "60s"
 path = "junit.xml"
 store-success-output = false
 store-failure-output = true
-report-skipped = "ignored"
 
 [profile.gameplay-rules]
 fail-fast = false
@@ -22,7 +21,6 @@ default-filter = "package(hex_core) | package(hex_lattice) | package(hex_ai)"
 path = "junit.xml"
 store-success-output = false
 store-failure-output = true
-report-skipped = "ignored"
 
 [profile.gameplay-contracts]
 fail-fast = false
@@ -33,7 +31,6 @@ default-filter = "package(hex_test_support) | package(hex_units) | (package(hex_
 path = "junit.xml"
 store-success-output = false
 store-failure-output = true
-report-skipped = "ignored"
 
 [profile.gameplay-simulation]
 fail-fast = false
@@ -44,7 +41,6 @@ default-filter = "package(hex_combat) & binary(simulation)"
 path = "junit.xml"
 store-success-output = false
 store-failure-output = true
-report-skipped = "ignored"
 
 [profile.gameplay-app]
 fail-fast = false
@@ -55,4 +51,3 @@ default-filter = "package(hex_game) & binary(gameplay_app)"
 path = "junit.xml"
 store-success-output = false
 store-failure-output = true
-report-skipped = "ignored"

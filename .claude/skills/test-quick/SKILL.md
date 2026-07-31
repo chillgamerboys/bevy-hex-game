@@ -1,6 +1,6 @@
 ---
 name: test-quick
-description: Fastest validation loop — fmt + clippy + the workspace test suite. Fast when warm (incremental after the first build); run during iteration and before commits. Skips deny, doc build, link check, and the ship-shape build. Use during iteration; `/test-local` is the next tier up.
+description: Fastest validation loop — fmt + strict lint + fail-closed concern-selected tests. Run during iteration and before commits. Skips deny, doc build, link check, and the ship-shape build. Use during iteration; `/test-local` is the next tier up.
 ---
 
 When invoked, run this sequence. STOP on first failure — the
@@ -17,7 +17,7 @@ Expected: clean. Any error → STOP, surface verbatim.
 ## Step 2 — Clippy
 
 ```bash
-cargo clippy --workspace --all-targets --all-features --profile ci -- -D warnings
+python3 tools/gameplay_scope.py run clippy
 ```
 
 Expected: clean. Any error → STOP, surface verbatim. (Rust has no
@@ -27,22 +27,37 @@ denied outside tests.)
 
 ## Step 3 — Tests
 
+First inspect and record the fail-closed decision:
+
 ```bash
-cargo test --workspace --all-features --profile ci
+BASE=$(gh pr view --json baseRefName -q .baseRefName 2>/dev/null || \
+  git rev-parse --abbrev-ref '@{upstream}' 2>/dev/null | sed 's#^[^/]*/##')
+python3 tools/gameplay_scope.py plan --base "origin/${BASE:-dev}" --head HEAD
 ```
 
-Expected: all pass across all twelve crates plus doctests. Sum the
-`test result:` lines and report:
+Then run the selected test concerns in canonical order:
+
+```bash
+BASE=$(gh pr view --json baseRefName -q .baseRefName 2>/dev/null || \
+  git rev-parse --abbrev-ref '@{upstream}' 2>/dev/null | sed 's#^[^/]*/##')
+for concern in $(python3 tools/gameplay_scope.py selected-tests \
+  --base "origin/${BASE:-dev}" --head HEAD); do
+  python3 tools/gameplay_scope.py run "$concern" || exit $?
+done
+```
+
+Expected: every selected concern passes. Report the selected concerns rather than a
+workspace-wide test count:
 
 ```
-✓ /test-quick — fmt clean, clippy clean, <N> tests passed (<elapsed>s)
+✓ /test-quick — fmt clean, clippy clean, concerns <names> passed (<elapsed>s)
 ```
 
 ## When to invoke
 
-- **During iteration**, while writing code. Incremental compilation
-  makes this cheap once the workspace is warm; the first cold run
-  compiles Bevy and takes far longer — that is expected, not a hang.
+- **During iteration**, while writing code. Exact Cargo package, target, and feature
+  selection keeps pure changes out of the renderer graph. A shared or unknown path
+  deliberately selects the full residual concern.
 - **Before commits**, as a pre-push sanity gate.
 - **In `/audit-diff`** as the verification step when running
   standalone (not from `/audit-pr` — that uses `/test-full`).

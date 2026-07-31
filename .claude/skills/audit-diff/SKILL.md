@@ -43,7 +43,7 @@ attention on design rather than typos and silent swallowing.
 
 3. **Run the verification stack read-only** (don't fix anything yet):
    - `cargo fmt --all --check`
-   - `/test-quick` (fmt + clippy + workspace tests)
+   - `/test-quick` (fmt + clippy + fail-closed concern-selected tests)
 
    When called from `/audit-pr`, this verification is supplied by
    `/test-full` as Step 2; you can skip the manual runs.

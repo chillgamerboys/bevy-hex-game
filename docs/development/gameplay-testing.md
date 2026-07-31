@@ -13,10 +13,10 @@ scenario binaries continue to run in the residual workspace suite.
 
 | Concern | Owns | Allowed dependencies | Oracle | Local command | Ordinary budget |
 |---|---|---|---|---|---:|
-| Pure rules | Value objects, lattice transformations, compact AI policy | Owning crate dependencies only | Return values and immutable state | `cargo nextest run --workspace --all-features --cargo-profile ci --profile gameplay-rules` | 60 s total |
-| ECS contracts | Focused commands, effects, movement, turns, occupancy and Channel seams | `hex_test_support`, then the owning gameplay crate dependencies | Components, resources, messages and exact positions | `cargo nextest run --workspace --all-features --cargo-profile ci --profile gameplay-contracts` | 60 s per test |
-| Deterministic simulation | Multi-turn composition, tempo profiles, 3v3/6v6, canonical summaries and bounded no-progress | Combat dependencies plus `hex_test_support`; never a renderer, viewport, wall clock, or map generator | Full `CombatRunSnapshot` equality across two runs plus named metric assertions | `cargo nextest run -p hex_combat --test simulation --cargo-profile ci --profile gameplay-simulation` | 60 s |
-| Game/UI behavior | Combat Lab report modes, comparison selection, re-entry, identity and drawer lifecycle | `hex_game` with default-off `test-support` | Immutable observation snapshots and projected text/state | `cargo nextest run -p hex_game --features test-support --test gameplay_app --cargo-profile ci --profile gameplay-app` | 60 s |
+| Pure rules | Value objects, lattice transformations, compact AI policy | Owning crate dependencies only | Return values and immutable state | `python3 tools/gameplay_scope.py run rules` | 60 s total |
+| ECS contracts | Focused commands, effects, movement, turns, occupancy and Channel seams | `hex_test_support`, then the owning gameplay crate dependencies | Components, resources, messages and exact positions | `python3 tools/gameplay_scope.py run contracts` | 60 s per test |
+| Deterministic simulation | Multi-turn composition, tempo profiles, 3v3/6v6, canonical summaries and bounded no-progress | Combat dependencies plus `hex_test_support`; never a renderer, viewport, wall clock, or map generator | Full `CombatRunSnapshot` equality across two runs plus named metric assertions | `python3 tools/gameplay_scope.py run simulation` | 60 s |
+| Game/UI behavior | Combat Lab report modes, comparison selection, re-entry, identity and drawer lifecycle | `hex_game` with default-off `test-support` | Immutable observation snapshots and projected text/state | `python3 tools/gameplay_scope.py run app` | 60 s |
 | Visual smoke | Layout, legibility, overlap, responsive composition and presentation regressions | Release-shaped game with `visual-walk`; no `dev` or `test-support` | Reviewed frames plus the human motion/feel walk | Run the one scoped gameplay walk through `/visual-walk` | At most 10 reviewed gameplay frames |
 | Soak/performance | Long stalemates, stress corpora, bounded retention and performance | The scheduled stress workflow | Typed completion/timeout, fingerprints, timing and memory bounds | `.github/workflows/stress.yaml` | Scheduled/manual only |
 
@@ -24,6 +24,47 @@ The required gameplay CI job publishes separate JUnit and timing evidence for th
 first four partitions. The residual workspace job keeps all other packages and the
 unchanged map/game-world contract binaries under the existing feature set, CI
 profile, and timeout.
+
+## Scope selection
+
+The concern filter is not the Cargo selector. Cargo packages, targets, and features
+must be selected first so a rules-only change cannot compile the renderer or unrelated
+owner packages and then merely filter their tests out.
+
+`.config/gameplay-test-scopes.json` is the single machine-readable authority for
+canonical concern commands and changed-path classification. Inspect the proposed
+closure for a branch with:
+
+```sh
+python3 tools/gameplay_scope.py plan --base origin/dev --head HEAD
+```
+
+For a source PR inside a wave, substitute that PR's wave base, for example
+`--base origin/wave/8-gameplay-foundation`. Scoping against `dev` from a cumulative
+wave source would correctly select every earlier lane, but it would not be a useful
+edit-loop scope.
+
+The selector unions concerns across changed files. Shared vocabulary, validation
+infrastructure, world-owned paths, an unknown path, an invalid manifest, or an empty
+diff fail closed to the complete gate. A narrow rules graph additionally runs:
+
+```sh
+python3 tools/gameplay_scope.py check-graph rules
+```
+
+That guard rejects a workspace dependency edge outside `hex_core`, `hex_lattice`, and
+`hex_ai` instead of letting renderer or application dependencies silently erode the
+partition.
+
+Wave 8 introduces the selector in shadow mode: CI publishes the proposed decision
+while retaining the broad PR jobs. Scoped skipping is enabled only after the
+old/full and proposed selections have demonstrated equivalent results. The complete
+residual suite continues on pushes to `dev`, schedules, and final wave/release gates.
+
+For a gameplay-only change that does not modify `hex_core`, shared application
+composition, scenario/loading lifecycle, or a published world seam, V3/map corpora
+are not a relevant PR oracle. Their source, selection, and acceptance criteria remain
+unchanged and continue on their owning changes and broad gates.
 
 ## Shared support boundary
 

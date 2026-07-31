@@ -37,6 +37,16 @@ jobs:
     timeout-minutes: 10
     outputs:
       code: ${{ steps.filter.outputs.code }}
+      full: ${{ steps.filter.outputs.full }}
+      rules: ${{ steps.filter.outputs.rules }}
+      contracts: ${{ steps.filter.outputs.contracts }}
+      simulation: ${{ steps.filter.outputs.simulation }}
+      app: ${{ steps.filter.outputs.app }}
+      residual: ${{ steps.filter.outputs.residual }}
+      clippy: ${{ steps.filter.outputs.clippy }}
+      docs: ${{ steps.filter.outputs.docs }}
+      shipping: ${{ steps.filter.outputs.shipping }}
+      reason: ${{ steps.filter.outputs.reason }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -55,19 +65,29 @@ jobs:
             esac
           fi
 
-          if [ -z "$changed" ]; then
-            echo "could not determine the diff; running everything"
-            echo "code=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "changed files:"; echo "$changed"
-          if echo "$changed" | grep -qv '\.md$'; then
-            echo "code=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "markdown only; skipping the Rust build"
-            echo "code=false" >> "$GITHUB_OUTPUT"
-          fi
+          echo "changed files:"
+          printf '%s\n' "$changed"
+          printf '%s\n' "$changed" > changed-files.txt
+          python3 tools/gameplay_scope.py plan \
+            --paths-file changed-files.txt \
+            --json-out gameplay-scope.json \
+            --github-output "$GITHUB_OUTPUT"
+          {
+            echo '### Gameplay scope shadow decision'
+            echo
+            echo '```json'
+            cat gameplay-scope.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Test the fail-closed selector
+        run: python3 -m unittest tools/test_gameplay_scope.py
+      - name: Upload scope decision
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gameplay-scope-decision
+          path: gameplay-scope.json
+          if-no-files-found: error
 
   # Formatting and licensing need no Bevy build, so they report in seconds
   # instead of waiting behind a ~10 minute compile.
@@ -204,41 +224,37 @@ jobs:
             libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
       - name: Gameplay rules
         if: needs.changes.outputs.code == 'true'
+        shell: bash
         run: |
           set -o pipefail
-          time cargo nextest run \
-            --workspace \
-            --all-features \
-            --cargo-profile ci \
-            --profile gameplay-rules 2>&1 | tee gameplay-rules-timing.log
+          python3 tools/gameplay_scope.py check-graph rules
+          python3 tools/gameplay_scope.py run rules \
+            --timing-out gameplay-rules-timing.json \
+            2>&1 | tee gameplay-rules-timing.log
       - name: Gameplay contracts
         if: needs.changes.outputs.code == 'true'
+        shell: bash
         run: |
           set -o pipefail
-          time cargo nextest run \
-            --workspace \
-            --all-features \
-            --cargo-profile ci \
-            --profile gameplay-contracts 2>&1 | tee gameplay-contracts-timing.log
+          python3 tools/gameplay_scope.py run contracts \
+            --timing-out gameplay-contracts-timing.json \
+            2>&1 | tee gameplay-contracts-timing.log
       - name: Gameplay simulation
         if: needs.changes.outputs.code == 'true'
+        shell: bash
         run: |
           set -o pipefail
-          time cargo nextest run \
-            --package hex_combat \
-            --test simulation \
-            --cargo-profile ci \
-            --profile gameplay-simulation 2>&1 | tee gameplay-simulation-timing.log
+          python3 tools/gameplay_scope.py run simulation \
+            --timing-out gameplay-simulation-timing.json \
+            2>&1 | tee gameplay-simulation-timing.log
       - name: Gameplay app
         if: needs.changes.outputs.code == 'true'
+        shell: bash
         run: |
           set -o pipefail
-          time cargo nextest run \
-            --package hex_game \
-            --features test-support \
-            --test gameplay_app \
-            --cargo-profile ci \
-            --profile gameplay-app 2>&1 | tee gameplay-app-timing.log
+          python3 tools/gameplay_scope.py run app \
+            --timing-out gameplay-app-timing.json \
+            2>&1 | tee gameplay-app-timing.log
       - name: Upload gameplay timing artifacts
         if: always() && needs.changes.outputs.code == 'true'
         uses: actions/upload-artifact@v4
@@ -246,6 +262,7 @@ jobs:
           name: gameplay-test-timings
           path: |
             gameplay-*-timing.log
+            gameplay-*-timing.json
             target/nextest/gameplay-rules/junit.xml
             target/nextest/gameplay-contracts/junit.xml
             target/nextest/gameplay-simulation/junit.xml
