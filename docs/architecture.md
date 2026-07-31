@@ -104,6 +104,12 @@ exist only long enough to compare named state/event fields. The release conditio
 one reducer, with the shadow path deleted rather than retained as an alternate
 simulator.
 
+Movement completion is an explicit domain projection, not an animation query.
+`MovingTo` advances from the pausable virtual clock, publishes exact `TilePos`
+crossings, and clears the shared `Busy` gate when it reaches its bound. Generic
+`Transformation` components may start, finish, or be torn down independently; no
+legality, logical position, AI decision, or turn-order system queries their presence.
+
 Drawing an edge costs something worth naming: the compiler stops being the review
 signal for that boundary, since anything in those crates can now reach the engine. The
 trade is deliberate — the compiler cannot distinguish an intended consumer from an

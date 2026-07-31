@@ -178,7 +178,7 @@ pub enum CommandRefusal {
         /// Which fact was absent.
         data: UnitData,
     },
-    /// The acting unit was still completing presentation for an earlier command.
+    /// The acting unit was still completing domain movement.
     Busy,
     /// The supplied movement path was not a complete walkable route from the unit.
     InvalidPath,

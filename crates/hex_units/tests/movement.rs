@@ -29,7 +29,7 @@ use hex_assets::{
 };
 use hex_assets::{Substance, SubstanceFile, SubstanceTable};
 use hex_core::{
-    CommandQueue, GameCommand, GameplayPhase, GameplaySetup, GameplaySetupFailure, Headroom,
+    Busy, CommandQueue, GameCommand, GameplayPhase, GameplaySetup, GameplaySetupFailure, Headroom,
     HexCoord, HexSpan, HexTile, MapAnchorId, MapAnchors, Mode, PartyFormation, PartyMovementMode,
     Pause, Screen, SubstanceId, TerrainReady, TilePos, TraversalBlockers, TraversalProfile, Turn,
     MAX_HEADROOM,
@@ -308,7 +308,6 @@ fn enter_gameplay(app: &mut App) {
 /// and the one applier — in `hex_combat`, across a boundary this crate cannot
 /// see — grounds the path and starts the animation. These tests exercise the
 /// movement mechanics *behind* that applier, so this helper plays its part,
-/// the same way `remove::<Transformation>()` plays the animation driver's.
 /// The full click-to-walk pipeline is covered by `hex_combat`'s funnel tests.
 ///
 /// Returns [`None`] when no move was emitted or it cannot be grounded — only
@@ -341,8 +340,24 @@ fn commit_move(app: &mut App) -> Option<()> {
     let animation: Transformation = HexPathingLine::new(&steps, speed).into();
     app.world_mut()
         .entity_mut(entity)
-        .insert((animation, MovingTo::new(steps, speed)));
+        .insert((animation, MovingTo::new(steps, speed), Busy));
     Some(())
+}
+
+/// Settles one domain route without using presentation-component lifetime as an oracle.
+fn settle_movement(app: &mut App, entity: Entity) {
+    app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+        core::time::Duration::from_millis(100),
+    ));
+    for _ in 0..32 {
+        if app.world().get::<MovingTo>(entity).is_none() {
+            break;
+        }
+        app.update();
+    }
+    app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+        core::time::Duration::ZERO,
+    ));
 }
 
 /// Regression test for the sunken player.
@@ -590,11 +605,7 @@ fn clicking_a_tile_moves_the_player() {
         "the committed route should be recorded while the walk runs"
     );
 
-    // Stand in for the animation finishing, which is what `hex_anim`'s driver does.
-    app.world_mut()
-        .entity_mut(player)
-        .remove::<Transformation>();
-    app.update();
+    settle_movement(&mut app, player);
 
     let standing = standing_of(&mut app).expect("a player should exist");
     assert_eq!(
@@ -669,13 +680,9 @@ fn solo_mode_emits_for_only_the_selected_party_member() {
     );
 }
 
-/// The real animation driver and movement reconciliation agree on the landing frame.
-///
-/// The unit test above removes `Transformation` directly to isolate reconciliation.
-/// This one drives the engine clock instead, covering the deferred removal and the
-/// ordering edge between the two systems end to end.
+/// A completed domain route reaches its bound and presentation also settles.
 #[test]
-fn a_finished_animation_automatically_commits_its_destination() {
+fn a_completed_domain_route_reaches_its_destination() {
     let mut app = test_app();
     app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
         core::time::Duration::from_millis(100),
@@ -1892,15 +1899,13 @@ fn a_second_click_while_moving_emits_nothing() {
     );
 }
 
-/// The route remains busy until its logical landing has been reconciled.
+/// Removing presentation cannot unlock or complete a domain route.
 ///
-/// `Transformation` is removed through deferred commands when the visual animation
-/// finishes. Before movement reconciliation runs, `MovingTo` still exists and
-/// `StandsOn` still names the preceding whole step. A click in that narrow window
-/// must emit nothing — a command routed from the stale position would overwrite
-/// the pending arrival the moment the applier committed it.
+/// `MovingTo` and `Busy`, not animation component presence, protect the exact
+/// logical route. A presentation teardown while the route is active must neither
+/// emit another command nor teleport to the destination.
 #[test]
-fn a_click_between_animation_finish_and_arrival_is_ignored() {
+fn presentation_teardown_during_a_domain_route_is_ignored() {
     let mut app = test_app();
     enter_gameplay(&mut app);
     take_a_turn(&mut app, 4).expect("a player should exist during gameplay");
@@ -1916,8 +1921,7 @@ fn a_click_between_animation_finish_and_arrival_is_ignored() {
     let player = single::<With<Player>>(&mut app).expect("a player should exist");
     assert!(app.world().get::<MovingTo>(player).is_some());
 
-    // Exactly the state left after the animation driver's deferred removal is
-    // applied and before movement reconciliation consumes the route.
+    let before = standing_of(&mut app).expect("the player has an exact surface");
     app.world_mut()
         .entity_mut(player)
         .remove::<Transformation>();
@@ -1929,7 +1933,17 @@ fn a_click_between_animation_finish_and_arrival_is_ignored() {
         app.world().resource::<CommandQueue>().is_empty(),
         "the landing-frame click was emitted as a command"
     );
-    app.update();
+    assert_eq!(
+        standing_of(&mut app),
+        Some(before),
+        "presentation teardown changed gameplay position"
+    );
+    assert!(
+        app.world().get::<MovingTo>(player).is_some(),
+        "presentation teardown completed the domain route"
+    );
+
+    settle_movement(&mut app, player);
 
     assert_eq!(
         standing_of(&mut app).map(|standing| standing.pos.coord),
@@ -1937,6 +1951,10 @@ fn a_click_between_animation_finish_and_arrival_is_ignored() {
         "the pending arrival should land untouched"
     );
     assert!(app.world().get::<MovingTo>(player).is_none());
+    assert!(
+        app.world().get::<Busy>(player).is_none(),
+        "the completed domain route retained its legality gate"
+    );
     assert!(app.world().get::<Transformation>(player).is_none());
 }
 

@@ -6,7 +6,7 @@
 
 use bevy::prelude::*;
 
-use hex_core::{Busy, UnitId};
+use hex_core::UnitId;
 use hex_units::Footing;
 
 use crate::{CombatData, CombatEvent, CommandRefusal, UnitData};
@@ -144,8 +144,6 @@ pub(super) fn apply(
             striker_standing,
             settings.speed,
         );
-        commands.entity(entity).insert(Busy);
-        ctx.committed.push(entity);
     }
     // The damage seam, now wired. A strike is the one attack every unit has — a wolf
     // is four hexes and a bite — so it deals damage the same way a spell does: it names

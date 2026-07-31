@@ -33,6 +33,8 @@ use hex_core::{AppSystems, PerceptionSystems};
 
 /// What an enemy does with its turn. A placeholder, and says so.
 mod ai;
+/// Freezes published Bevy facts and projects the pure combat authority.
+mod authority_host;
 /// The applier: the one place a command becomes a change to the sim.
 mod commands;
 /// Effects that outlast the action that caused them.
@@ -168,6 +170,7 @@ pub fn plugin(app: &mut App) {
     );
     app.add_plugins((
         turns::plugin,
+        authority_host::plugin,
         ai::plugin,
         commands::plugin,
         effects::plugin,

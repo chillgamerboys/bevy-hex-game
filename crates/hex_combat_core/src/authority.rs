@@ -152,6 +152,31 @@ pub struct CombatLattice {
     pub stats: LatticeStats,
 }
 
+/// A validated exact-surface route awaiting domain movement completion.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct CombatMotion {
+    /// Full route, including the surface currently occupied.
+    pub path: Vec<TilePos>,
+    /// Last route index published as the unit's exact position.
+    pub reached: usize,
+}
+
+/// A host projection disagreed with a committed domain route.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MovementProjectionError {
+    /// The stable unit does not exist in this authority state.
+    UnknownUnit(UnitId),
+    /// The unit has no route awaiting progress.
+    NoMovementInFlight(UnitId),
+    /// The host published a surface outside the monotonic remainder of the route.
+    RouteMismatch {
+        /// Stable unit identity.
+        unit: UnitId,
+        /// Exact rejected surface.
+        position: TilePos,
+    },
+}
+
 /// One serializable combatant record.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct CombatUnit {
@@ -169,6 +194,8 @@ pub struct CombatUnit {
     pub turn: Option<Turn>,
     /// Domain-level command gate. Presentation may mirror this, never derive it.
     pub busy: bool,
+    /// Domain movement in flight. Animation is a projection of this record.
+    pub motion: Option<CombatMotion>,
     /// Whether the unit has left initiative.
     pub downed: bool,
     /// Optional lattice. Harnesses may omit it for movement-only combatants.
@@ -193,6 +220,7 @@ impl CombatUnit {
             initiative,
             turn: None,
             busy: false,
+            motion: None,
             downed: false,
             lattice: None,
         }
@@ -390,6 +418,58 @@ impl CombatState {
         }
     }
 
+    /// Publishes one reached surface for a validated in-flight route.
+    ///
+    /// Runtime movement clocks and deterministic harnesses call this boundary;
+    /// presentation components never do. The update is monotonic and fails closed
+    /// if a caller skips off the committed route.
+    pub fn reach_movement(
+        &mut self,
+        unit: UnitId,
+        position: TilePos,
+    ) -> Result<(), MovementProjectionError> {
+        let actor = self
+            .units
+            .get_mut(&unit)
+            .ok_or(MovementProjectionError::UnknownUnit(unit))?;
+        let complete = {
+            let motion = actor
+                .motion
+                .as_mut()
+                .ok_or(MovementProjectionError::NoMovementInFlight(unit))?;
+            let Some(next) = motion
+                .path
+                .get(motion.reached..)
+                .and_then(|tail| tail.iter().position(|step| *step == position))
+            else {
+                return Err(MovementProjectionError::RouteMismatch { unit, position });
+            };
+            motion.reached = motion.reached.saturating_add(next);
+            motion.reached.saturating_add(1) >= motion.path.len()
+        };
+        actor.position = position;
+        if complete {
+            actor.motion = None;
+            actor.busy = false;
+            self.advance_if_finished();
+        }
+        Ok(())
+    }
+
+    /// Settles an in-flight route at its validated endpoint.
+    pub fn complete_movement(&mut self, unit: UnitId) -> Result<(), MovementProjectionError> {
+        let destination = self
+            .units
+            .get(&unit)
+            .ok_or(MovementProjectionError::UnknownUnit(unit))?
+            .motion
+            .as_ref()
+            .and_then(|motion| motion.path.last())
+            .copied()
+            .ok_or(MovementProjectionError::NoMovementInFlight(unit))?;
+        self.reach_movement(unit, destination)
+    }
+
     fn apply_inner(&mut self, issued: &IssuedCommand) -> Result<(), CommandRefusal> {
         if let Some(outcome) = self.outcome {
             return Err(CommandRefusal::EncounterResolved { outcome });
@@ -469,14 +549,17 @@ impl CombatState {
         occupancy
             .validate_route(path, unit)
             .map_err(|block| CommandRefusal::Occupied { block })?;
-        let destination = path.last().copied().ok_or(CommandRefusal::InvalidPath)?;
         let actor = self
             .units
             .get_mut(&unit)
             .ok_or(CommandRefusal::UnknownUnit)?;
-        actor.position = destination;
         let turn = actor.turn.as_mut().ok_or(CommandRefusal::NoTurn)?;
         turn.movement_left = turn.movement_left.saturating_sub(cost);
+        actor.busy = true;
+        actor.motion = Some(CombatMotion {
+            path: path.to_vec(),
+            reached: 0,
+        });
         Ok(())
     }
 
@@ -519,15 +602,14 @@ impl CombatState {
         {
             return Err(CommandRefusal::TargetOutOfMeleeReach { target });
         }
-        let target_lattice =
-            target_unit
-                .lattice
-                .as_ref()
-                .ok_or(CommandRefusal::MissingUnitData {
-                    unit: target,
-                    data: UnitData::Lattice,
-                })?;
-        let count = resolve_incoming(&target_lattice.state, self.rules.strike_disable_count);
+        // Lattice-less units are playable but cannot take lattice damage. A strike is
+        // still a successful action and presentation event, matching the runtime
+        // adapter; it simply opens no unanswerable defender decision.
+        let target_lattice = target_unit.lattice.as_ref();
+        let target_has_lattice = target_lattice.is_some();
+        let count = target_lattice.map_or(0, |lattice| {
+            resolve_incoming(&lattice.state, self.rules.strike_disable_count)
+        });
         self.units
             .get_mut(&unit)
             .and_then(|unit| unit.turn.as_mut())
@@ -538,11 +620,13 @@ impl CombatState {
             target,
         });
         if count == 0 {
-            self.events.push(CombatEvent::DamagePrevented {
-                source: unit,
-                target,
-                amount: self.rules.strike_disable_count,
-            });
+            if target_has_lattice {
+                self.events.push(CombatEvent::DamagePrevented {
+                    source: unit,
+                    target,
+                    amount: self.rules.strike_disable_count,
+                });
+            }
         } else {
             self.pending = PendingDecision::ChooseDisables {
                 decider: target,
@@ -1062,6 +1146,52 @@ mod tests {
         assert_eq!(sim.events.len(), 1);
     }
 
+    #[test]
+    fn movement_is_busy_until_the_domain_route_reaches_its_bound() {
+        let mut sim = state(
+            vec![
+                CombatUnit::new(
+                    UnitId(0),
+                    PlayerSeat(0),
+                    Faction::Player,
+                    position(0, 0),
+                    20,
+                ),
+                CombatUnit::new(
+                    UnitId(1),
+                    PlayerSeat(0),
+                    Faction::Hostile,
+                    position(4, 0),
+                    10,
+                ),
+            ],
+            4,
+        );
+        sim.apply(IssuedCommand {
+            seat: PlayerSeat(0),
+            command: GameCommand::MoveAlong {
+                unit: UnitId(0),
+                path: vec![position(0, 0), position(1, 0)],
+            },
+        })
+        .expect("the exact route is legal");
+
+        let actor = sim.units.get(&UnitId(0)).expect("actor remains");
+        assert_eq!(actor.position, position(0, 0));
+        assert!(actor.busy);
+        assert_eq!(
+            actor.motion.as_ref().map(|motion| motion.path.as_slice()),
+            Some([position(0, 0), position(1, 0)].as_slice())
+        );
+
+        sim.complete_movement(UnitId(0))
+            .expect("the committed bound settles");
+        let actor = sim.units.get(&UnitId(0)).expect("actor remains");
+        assert_eq!(actor.position, position(1, 0));
+        assert!(!actor.busy);
+        assert!(actor.motion.is_none());
+    }
+
     struct ChannelTables {
         fire: ElementId,
     }
@@ -1302,6 +1432,56 @@ mod tests {
             CombatEvent::EncounterResolved {
                 outcome: EncounterOutcome::Victory
             }
+        )));
+    }
+
+    #[test]
+    fn striking_a_lattice_less_unit_spends_the_action_without_opening_a_decision() {
+        let mut sim = state(
+            vec![
+                CombatUnit::new(
+                    UnitId(0),
+                    PlayerSeat(0),
+                    Faction::Player,
+                    position(0, 0),
+                    20,
+                ),
+                CombatUnit::new(
+                    UnitId(1),
+                    PlayerSeat(0),
+                    Faction::Hostile,
+                    position(1, 0),
+                    10,
+                ),
+            ],
+            4,
+        );
+
+        sim.apply(IssuedCommand {
+            seat: PlayerSeat(0),
+            command: GameCommand::Strike {
+                unit: UnitId(0),
+                target: UnitId(1),
+            },
+        })
+        .expect("a lattice-less target is still a valid melee target");
+
+        assert_eq!(sim.pending, PendingDecision::None);
+        assert!(sim
+            .units
+            .get(&UnitId(0))
+            .and_then(|unit| unit.turn)
+            .is_some_and(|turn| turn.acted));
+        assert_eq!(
+            sim.events
+                .iter()
+                .filter(|event| matches!(event, CombatEvent::Strike { .. }))
+                .count(),
+            1
+        );
+        assert!(!sim.events.iter().any(|event| matches!(
+            event,
+            CombatEvent::DecisionOpened { .. } | CombatEvent::DamagePrevented { .. }
         )));
     }
 }
