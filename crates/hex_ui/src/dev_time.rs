@@ -50,11 +50,15 @@ pub(super) fn plugin(app: &mut App) {
     )
     .add_systems(
         Update,
-        (
-            rebuild.in_set(UiSystems::Render),
-            reconcile_layout.in_set(UiSystems::Render),
-            emit_intents.in_set(UiSystems::EmitIntents),
-        )
+        (rebuild, reconcile_layout)
+            .chain()
+            .in_set(UiSystems::Render)
+            .run_if(in_state(Screen::Gameplay)),
+    )
+    .add_systems(
+        Update,
+        emit_intents
+            .in_set(UiSystems::EmitIntents)
             .run_if(in_state(Screen::Gameplay)),
     );
 }
@@ -237,15 +241,7 @@ fn reconcile_layout(
             Display::Flex
         };
     }
-    let (width, height) = if uses_ultra_middle_band(*metrics) {
-        (132.0, 22.0)
-    } else if is_ultra_constrained(*metrics) {
-        (82.0, 28.0)
-    } else if metrics.viewport == UiViewportClass::Compact {
-        (76.0, 36.0)
-    } else {
-        (96.0, 48.0)
-    };
+    let (width, height) = control_size(*metrics);
     for mut node in &mut controls {
         node.width = Val::Px(width);
         node.height = Val::Px(height);
@@ -256,6 +252,18 @@ fn reconcile_layout(
         } else {
             UiRect::axes(Val::Px(10.0), Val::Px(4.0))
         };
+    }
+}
+
+fn control_size(metrics: ResolvedUiMetrics) -> (f32, f32) {
+    if uses_ultra_middle_band(metrics) {
+        (132.0, 22.0)
+    } else if is_ultra_constrained(metrics) {
+        (82.0, 28.0)
+    } else if metrics.viewport == UiViewportClass::Compact {
+        (76.0, 36.0)
+    } else {
+        (96.0, 48.0)
     }
 }
 
@@ -332,13 +340,16 @@ fn emit_intents(
 mod tests {
     use bevy::input_focus::tab_navigation::{TabGroup, TabIndex};
     use bevy::input_focus::InputFocus;
+    #[cfg(feature = "test-support")]
     use hex_core::AppSystems;
 
     use super::*;
 
+    #[cfg(feature = "test-support")]
     #[derive(Resource, Default)]
     struct RequiredChoiceTransition(bool);
 
+    #[cfg(feature = "test-support")]
     fn activate_required_choice_for_render(
         mut transition: ResMut<RequiredChoiceTransition>,
         mut hud: ResMut<crate::GameplayHudView>,
@@ -546,7 +557,6 @@ mod tests {
         app.world_mut().entity_mut(frame).add_child(inspector);
 
         app.update();
-        app.update();
 
         let (panel, parent, position, width) = {
             let world = app.world_mut();
@@ -562,6 +572,21 @@ mod tests {
         assert_eq!(parent, frame);
         assert_eq!(position, PositionType::Absolute);
         assert_eq!(width, Val::Px(256.0));
+        let control_sizes = {
+            let world = app.world_mut();
+            let mut query = world.query_filtered::<&Node, With<DevTimeControl>>();
+            query
+                .iter(world)
+                .map(|node| (node.width, node.height))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(control_sizes.len(), 6);
+        assert!(
+            control_sizes
+                .iter()
+                .all(|size| *size == (Val::Px(76.0), Val::Px(36.0))),
+            "new compact controls must use their final size in the first rendered frame"
+        );
 
         let mut before = control_entities(app.world_mut());
         before.sort_by_key(|entity| entity.to_bits());
@@ -631,6 +656,7 @@ mod tests {
         assert!(138.0 + 82.0 <= metrics.effective_size.y - 12.0 - 116.0);
     }
 
+    #[cfg(feature = "test-support")]
     #[test]
     fn compact_panel_and_controls_fit_without_covering_primary_gameplay_surfaces() {
         for logical_size in [
@@ -656,7 +682,21 @@ mod tests {
                 app.world_mut()
                     .resource_mut::<NextState<Screen>>()
                     .set(Screen::Gameplay);
-                for _ in 0..8 {
+                app.update();
+                let expected_size = control_size(*app.world().resource::<ResolvedUiMetrics>());
+                let first_frame_sizes = {
+                    let world = app.world_mut();
+                    let mut query = world.query_filtered::<&Node, With<DevTimeControl>>();
+                    query
+                        .iter(world)
+                        .map(|node| (node.width, node.height))
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(first_frame_sizes.len(), 6);
+                assert!(first_frame_sizes
+                    .iter()
+                    .all(|size| { *size == (Val::Px(expected_size.0), Val::Px(expected_size.1)) }));
+                for _ in 0..7 {
                     app.update();
                 }
 
@@ -729,6 +769,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "test-support")]
     #[test]
     fn required_choice_hides_ultra_constrained_controls_and_preserves_their_entities() {
         let mut app = App::new();
@@ -895,6 +936,7 @@ mod tests {
         false
     }
 
+    #[cfg(feature = "test-support")]
     fn overlaps(
         left: &crate::test_support::UiNodeObservation,
         right: &crate::test_support::UiNodeObservation,
@@ -909,6 +951,7 @@ mod tests {
             && left_max.y > right_min.y
     }
 
+    #[cfg(feature = "test-support")]
     fn required_hud() -> crate::GameplayHudView {
         let disabled = |reason: &str| crate::ActionAvailability::Disabled {
             reason: reason.to_owned(),
