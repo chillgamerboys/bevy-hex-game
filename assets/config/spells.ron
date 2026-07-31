@@ -92,7 +92,7 @@
                 (element: "Earth", mana: 1),
                 (element: "Earth", mana: 1),
             ],
-            casting: Enchantment(defense: 0),
+            casting: Evocation,
             mana: Fixed,
             co_castable: false,
             targeting: (range: 2, shape: Column(height: 2), needs_los: true),

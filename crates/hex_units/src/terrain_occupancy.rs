@@ -133,16 +133,27 @@ pub(crate) fn plugin(app: &mut App) {
 /// plausible-looking partial occupancy.
 fn rebuild_terrain_occupancy(
     mut commands: Commands,
-    runs: Query<(&TilePos, &RunBottom), With<HexTile>>,
-    added: Query<(), (With<HexTile>, Added<RunBottom>)>,
+    runs: Query<(&TilePos, Option<&RunBottom>), With<HexTile>>,
+    added_tiles: Query<(), Added<HexTile>>,
+    changed_bottoms: Query<(), (With<HexTile>, Changed<RunBottom>)>,
     mut removed: RemovedComponents<HexTile>,
 ) {
     let removed_count = removed.read().count();
-    if added.is_empty() && removed_count == 0 {
+    if added_tiles.is_empty() && changed_bottoms.is_empty() && removed_count == 0 {
         return;
     }
 
-    match TerrainOccupancy::from_runs(runs.iter().map(|(&top, &bottom)| (top, bottom))) {
+    let Some(complete) = runs
+        .iter()
+        .map(|(&top, bottom)| bottom.copied().map(|bottom| (top, bottom)))
+        .collect::<Option<Vec<_>>>()
+    else {
+        error!("withdrawing terrain occupancy: a material-run entity omits RunBottom");
+        commands.remove_resource::<TerrainOccupancy>();
+        return;
+    };
+
+    match TerrainOccupancy::from_runs(complete) {
         Ok(occupancy) => {
             commands.insert_resource(occupancy);
         }
@@ -265,6 +276,19 @@ mod tests {
         assert!(
             !app.world().contains_resource::<TerrainOccupancy>(),
             "partial occupancy must not survive malformed run bounds"
+        );
+    }
+
+    #[test]
+    fn incomplete_entity_publication_withdraws_the_projection() {
+        let mut app = App::new();
+        plugin(&mut app);
+        app.world_mut().spawn((HexTile, at(0, 0, 2)));
+        app.update();
+
+        assert!(
+            !app.world().contains_resource::<TerrainOccupancy>(),
+            "a tile without RunBottom must withdraw the complete projection"
         );
     }
 }

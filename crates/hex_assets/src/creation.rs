@@ -679,6 +679,33 @@ mod tests {
     }
 
     #[test]
+    fn legacy_clear_terrain_library_records_decode_but_remain_invalid_drafts() {
+        let mut library = CreationLibraryFile::default();
+        let mut saved = SavedSpell::blank(library.allocate_spell_id(), "Old Dig");
+        saved.spell.requirements.push(crate::GemRequirement {
+            element: "Earth".to_owned(),
+            mana: 1,
+        });
+        saved.spell.effects.push(Effect::ClearTerrain);
+        library.spells.push(saved);
+
+        let encoded = ron::to_string(&library).expect("legacy-compatible library serializes");
+        let decoded: CreationLibraryFile =
+            ron::from_str(&encoded).expect("legacy ClearTerrain remains decode-compatible");
+        assert!(decoded.validate_integrity().is_ok());
+
+        let mut spells = HashMap::default();
+        spells.insert(
+            decoded.spells[0].name.clone(),
+            decoded.spells[0].spell.clone(),
+        );
+        let issue = (SpellFile { spells })
+            .validate()
+            .expect_err("legacy effect is retained only as an invalid draft");
+        assert!(issue.contains("decode-only"), "{issue}");
+    }
+
+    #[test]
     fn referenced_spell_cannot_be_deleted() {
         let mut library = CreationLibraryFile::default();
         let spell_id = library.allocate_spell_id();

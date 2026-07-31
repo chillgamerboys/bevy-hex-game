@@ -202,6 +202,11 @@ pub enum Effect {
         /// The substance the wall is made of, by name.
         substance: String,
     },
+    /// Legacy creator-save spelling for terrain removal.
+    ///
+    /// Retained only so schema-v1 libraries still deserialize and can surface a
+    /// precise validation issue. Current content admission always rejects it.
+    ClearTerrain,
     /// Push the target a number of hexes away.
     Displace {
         /// How many hexes to push.
@@ -465,15 +470,17 @@ fn validate_effects(name: &str, spell: &Spell) -> Result<(), String> {
     if creation_effects > 0
         && !matches!(
             spell.targeting.shape,
-            TargetShape::Single
-                | TargetShape::Sphere { .. }
-                | TargetShape::Column { .. }
-                | TargetShape::Path { .. }
+            TargetShape::Single | TargetShape::Column { .. }
         )
     {
         return Err(format!(
-            "spell '{name}' creates terrain with a shape that is not anchored to the \
-             selected surface"
+            "spell '{name}' creates terrain with a shape that is not a fully authorized \
+             vertical volume; use Single or Column"
+        ));
+    }
+    if creation_effects > 0 && !matches!(spell.casting, CastingAxis::Evocation) {
+        return Err(format!(
+            "spell '{name}' creates permanent terrain but is not an Evocation"
         ));
     }
     for effect in &spell.effects {
@@ -506,6 +513,11 @@ fn validate_effects(name: &str, spell: &Spell) -> Result<(), String> {
                 if substance.is_empty() =>
             {
                 return Err(format!("spell '{name}' names an empty substance"));
+            }
+            Effect::ClearTerrain => {
+                return Err(format!(
+                    "spell '{name}' uses legacy ClearTerrain, which is decode-only and no longer supported"
+                ));
             }
             _ => {}
         }
@@ -720,6 +732,10 @@ fn fingerprint_effect(encoder: &mut FingerprintEncoder, effect: &Effect) {
         Effect::SpawnWall { substance } => {
             encoder.u8(8);
             encoder.string(substance);
+        }
+        Effect::ClearTerrain => {
+            // Preserve the schema-v1 discriminant for decode-only creator records.
+            encoder.u8(7);
         }
         Effect::Displace { distance } => {
             encoder.u8(9);
@@ -1010,7 +1026,34 @@ mod tests {
         let error = file
             .validate()
             .expect_err("creation needs a selected-surface anchor");
-        assert!(error.contains("not anchored"), "{error}");
+        assert!(
+            error.contains("fully authorized vertical volume"),
+            "{error}"
+        );
+
+        let mut file = test_file();
+        let mut spillover = ember();
+        spillover.effects = vec![Effect::SetTerrain {
+            substance: "stone".to_owned(),
+        }];
+        spillover.targeting.shape = TargetShape::Sphere { radius: 1 };
+        file.spells.insert("Spillover".to_owned(), spillover);
+        let error = file
+            .validate()
+            .expect_err("positive-radius construction is not fully authorized");
+        assert!(error.contains("use Single or Column"), "{error}");
+
+        let mut file = test_file();
+        let mut bound = ember();
+        bound.casting = CastingAxis::Enchantment { defense: 1 };
+        bound.effects = vec![Effect::SpawnWall {
+            substance: "stone".to_owned(),
+        }];
+        file.spells.insert("Bound".to_owned(), bound);
+        let error = file
+            .validate()
+            .expect_err("permanent construction requires Evocation");
+        assert!(error.contains("not an Evocation"), "{error}");
 
         let mut file = test_file();
         let mut duplicate = ember();

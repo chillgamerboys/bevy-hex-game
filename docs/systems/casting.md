@@ -103,11 +103,9 @@ terrain would need a ledger and an answer for what happens when another effect r
 the same voxels before expiry; that design may be added later without weakening the
 multi-turn persistence rule.
 
-The shipped `Earthen Wall` remains fail-closed because it is authored as an
-enchantment. Applying the permanent edit adapter to it would create terrain with no
-ledger connecting those voxels to the binding, so breaking the enchantment could not
-remove its wall. The exact two-voxel construction adapter is built and covered for
-evocation content; enchantment-bound terrain waits for provenance and removal.
+The shipped `Earthen Wall` is an evocation and uses the exact two-voxel permanent
+construction adapter. Content admission rejects terrain creation on enchantments;
+enchantment-bound terrain still waits for provenance and removal.
 
 Honest caveat: an entity-shaped barrier does not block movement, because units do not
 obstruct each other yet ([status.md](../planning/status.md)). Terrain walls are the
@@ -184,16 +182,18 @@ from there. `Single` therefore creates one voxel above the selected surface, whi
 `Column(height: 2)` creates two complete voxels above it. Selecting a lower surface
 under a bridge or overhang never jumps to the column's highest run.
 
-The authoritative applier checks the complete creation volume before payment. Any
-existing material, unit-support surface, or unit-body intersection refuses the whole
-effect without emitting a partial edit. Its faction-facing refusal is deliberately
-generic because an area may extend into hidden space. The world still validates each
-low-level edit against its private material and topology policy.
+The authoritative applier checks the complete creation volume before emitting any
+edit. Existing material, a unit-support surface, or a unit-body intersection suppresses
+the whole edit batch. Hidden truth cannot become a refusal or payment oracle: the cast
+is accepted and paid in exactly the same way as a clear placement, while authority
+withholds the unsafe edits. `Headroom` is not used to infer air. The world still
+validates each low-level edit against its private material and topology policy.
 
 Initial spell content carries exactly one construction effect, cannot mix construction
-with non-construction effects, and uses only shapes anchored to the selected surface
-(`Single`, `Sphere`, `Column`, or `Path`). This avoids silently applying two different
-materials or effect volumes under one spell-level `TargetShape`.
+with non-construction effects, requires `Evocation`, and uses only fully vertical
+`Single` or `Column` shapes. Positive-radius and authored spillover construction waits
+for a faction-authorized empty-volume contract. This avoids silently applying two
+different materials or exposing hidden blockers through placement legality.
 
 ## Volumes
 

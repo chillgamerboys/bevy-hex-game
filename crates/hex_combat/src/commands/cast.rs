@@ -5,8 +5,9 @@
 //! `docs/systems/casting.md` specifies five rungs, checked in order. This file does
 //! **1 to 5** for permanent terrain construction: whose turn it is (the funnel's
 //! existing gate), whether the lattice can pay ([`castable`]), whether the target is in
-//! range and the shape resolves, whether exact published occupancy admits the complete
-//! creation volume, and emitting low-level [`TerrainEdit::Set`] requests. Elemental
+//! range and the shape resolves, whether public construction policy admits the spell,
+//! and whether exact occupancy permits emitting low-level [`TerrainEdit::Set`] requests.
+//! Hidden obstruction suppresses edits without changing acceptance or payment. Elemental
 //! material response and enchantment-bound terrain remain refused by name rather than
 //! silently skipped.
 //!
@@ -202,10 +203,10 @@ pub(super) fn apply(
         }
     }
 
-    // Terrain creation is the only effect whose full gameplay legality can change
-    // whether the cast commits. Resolve it before payment, from the observed surface
-    // to the air above it, and retain the exact low-level edits for emission only after
-    // the lattice plan succeeds.
+    // Terrain creation is the only effect with a pre-payment public-policy gate. Its
+    // hidden authoritative obstruction check may suppress the edit batch, but never
+    // changes acceptance or payment. Retain any safe low-level edits for emission only
+    // after the lattice plan succeeds.
     let creation_edits =
         plan_terrain_creation(ctx, actors, spell_name, spec, standing.pos, target, facing)?;
 
@@ -341,6 +342,7 @@ pub(super) fn apply(
                 });
             }
             Effect::Illuminate { .. } => refusals.push("Illuminate waits on the perception lane"),
+            Effect::ClearTerrain => refusals.push("legacy ClearTerrain is decode-only"),
             Effect::SetTerrain { .. } | Effect::SpawnWall { .. } => {}
             Effect::Burn { turns } => {
                 let Some(defender) = target_unit else {
@@ -548,12 +550,13 @@ pub fn delivers_anything(spell: &Spell) -> bool {
             matches!(spell.casting, CastingAxis::Evocation)
         }
         Effect::Illuminate { .. }
+        | Effect::ClearTerrain
         | Effect::ModifyIncomingDisables { .. }
         | Effect::Displace { .. } => false,
     })
 }
 
-/// Resolves and validates every creation effect before a cast is paid for.
+/// Resolves public construction policy and plans any authoritatively safe edit batch.
 ///
 /// Detailed obstruction data never crosses into [`CommandRefusal`]: the resolved
 /// volume may extend into hidden space, so identifying its blocker would disclose
@@ -580,6 +583,11 @@ fn plan_terrain_creation(
             data: CombatData::SubstanceTable,
         });
     };
+    if !terrain_creation_is_admitted(spell, table) {
+        return Err(CommandRefusal::TerrainCreationBlocked {
+            spell: spell_name.to_owned(),
+        });
+    }
     let Some(terrain) = ctx.terrain else {
         return Err(CommandRefusal::MissingCombatData {
             data: CombatData::TerrainOccupancy,
@@ -606,9 +614,10 @@ fn plan_terrain_creation(
         })
         .collect();
     if validate_creation_volume(&volume, terrain, bodies).is_err() {
-        return Err(CommandRefusal::TerrainCreationBlocked {
-            spell: spell_name.to_owned(),
-        });
+        // Hidden terrain and units must not become a yes/no or payment oracle. The
+        // cast remains accepted and paid exactly as it would in known-clear space,
+        // while authority atomically withholds the unsafe low-level edit batch.
+        return Ok(Vec::new());
     }
 
     let mut edits = Vec::new();
@@ -632,6 +641,33 @@ fn plan_terrain_creation(
         );
     }
     Ok(edits)
+}
+
+/// Whether public content policy admits a permanent construction spell.
+///
+/// This gate depends only on the spell definition and published substance policy,
+/// never on hidden terrain or unit truth, so AI enumeration can share it safely.
+pub(crate) fn terrain_creation_is_admitted(
+    spell: &Spell,
+    table: &hex_assets::SubstanceTable,
+) -> bool {
+    let mut creations = spell.effects.iter().filter_map(|effect| match effect {
+        Effect::SetTerrain { substance } | Effect::SpawnWall { substance } => Some(substance),
+        _ => None,
+    });
+    let Some(substance) = creations.next() else {
+        return true;
+    };
+    creations.next().is_none()
+        && spell.effects.len() == 1
+        && matches!(spell.casting, CastingAxis::Evocation)
+        && matches!(
+            spell.targeting.shape,
+            TargetShape::Single | TargetShape::Column { .. }
+        )
+        && table
+            .id(substance)
+            .is_some_and(|id| table.is_conjurable(id))
 }
 
 /// The unit standing on `pos`, if any.
@@ -676,10 +712,34 @@ pub(super) type LatticeQuery<'w, 's> =
 
 #[cfg(test)]
 mod tests {
+    use hex_assets::{
+        CastingAxis, Effect, GemRequirement, ManaAxis, Spell, TargetShape, TargetingSpec,
+    };
     use hex_core::{LatticeCoord, SpellId};
     use hex_lattice::{apply_disables, CellKind, LatticeSpec, LatticeState, LatticeStats};
+    use hex_test_support::fixture_assets;
 
-    use super::spell_cell;
+    use super::{spell_cell, terrain_creation_is_admitted};
+
+    fn construction(casting: CastingAxis, shape: TargetShape) -> Spell {
+        Spell {
+            requirements: vec![GemRequirement {
+                element: "Earth".to_owned(),
+                mana: 1,
+            }],
+            casting,
+            mana: ManaAxis::Fixed,
+            co_castable: false,
+            targeting: TargetingSpec {
+                range: 2,
+                shape,
+                needs_los: false,
+            },
+            effects: vec![Effect::SpawnWall {
+                substance: "stone".to_owned(),
+            }],
+        }
+    }
 
     #[test]
     fn redundant_spell_resolution_prefers_a_live_copy() {
@@ -693,5 +753,25 @@ mod tests {
         apply_disables(&mut state, &[first]);
 
         assert_eq!(spell_cell(&spec, &state, spell), Some(second));
+    }
+
+    #[test]
+    fn ai_and_authority_share_public_construction_admission() {
+        let (_, substances) = fixture_assets().expect("the test substance table resolves");
+        assert!(terrain_creation_is_admitted(
+            &construction(CastingAxis::Evocation, TargetShape::Column { height: 2 }),
+            &substances,
+        ));
+        assert!(!terrain_creation_is_admitted(
+            &construction(
+                CastingAxis::Enchantment { defense: 1 },
+                TargetShape::Column { height: 2 }
+            ),
+            &substances,
+        ));
+        assert!(!terrain_creation_is_admitted(
+            &construction(CastingAxis::Evocation, TargetShape::Sphere { radius: 1 }),
+            &substances,
+        ));
     }
 }
