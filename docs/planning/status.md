@@ -208,6 +208,24 @@ deployment, and profile through re-entry. The bounded tempo audit retained the
 shipped four-hex movement default; its measurements and limits are recorded in the
 [Wave 7 decision audit](../development/wave-7-tempo-decision.md).
 
+The **Wave 8 gameplay foundation is live**. `hex_combat_core` is the sole
+renderer-free, serializable authority for validated combat commands, exact positions,
+turns, lattices, transcripts, and bounded deterministic simulations. Bevy combat
+resources, unit movement, animation, and UI are projections or content adapters over
+that authority rather than parallel mutation paths. Pure `hex_gameplay_model`
+transitions own Combat Lab and Creator navigation, report selection, Retry/Tune/Copy,
+re-entry identity, and edit history without exposing mutable widget state.
+
+Gameplay validation is split by oracle into pure rules, focused ECS contracts,
+deterministic simulation, and model/headless-app partitions. One fail-closed concern
+map selects exact packages, targets, and features for narrow pull requests; unknown,
+shared-core, world-owned, or validation-infrastructure changes promote to the
+complete gate. The unchanged residual workspace corpus still runs on its owning
+changes, `dev` pushes, schedules, and combined wave/release candidates. Screenshots
+remain presentation evidence only; the dependency ceilings, commands, budgets, and
+anti-patterns are recorded in the
+[gameplay testing contract](../development/gameplay-testing.md).
+
 The **knowledge seam is live** as `hex_combat::knowledge`:
 `FactionLatticeKnowledge::view` is the one read path for a hostile lattice.
 World-owned `FactionMapKnowledge` gates which subjects currently exist to each viewer;

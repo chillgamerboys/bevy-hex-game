@@ -26,7 +26,6 @@ still belong to the crate they change. `docs` is whoever picks it up.
 
 | Epic | Scope | Owner |
 |---|---|---|
-| Gameplay architecture and scoped validation | Wave 8: make a pure serializable combat authority the sole gameplay truth; project it through ECS, animation, and UI; separate pure gameplay screen models from Bevy wiring; and select tests fail-closed by concern and dependency closure so narrow gameplay changes do not execute unrelated owner corpora | gameplay/shared | <!-- linear: HEX-28 owner: shravan-kumaran -->
 | Run bottoms on tiles | Publish `RunBottom(Level)` beside every run entity's `TilePos`, including stacked runs; accepted prerequisite to terrain casting and obstruction-aware trajectories | map |
 | Terrain magic | after boundary asks G/H/L are agreed: canonical exact-voxel `TerrainImpact` announcements using runtime `ElementId`, map-approved conjuration through `TerrainEdit::Set`, 3D volume shapes, the casting legality ladder, and deterministic `TerrainImpactOutcome` consumption; feature destruction remains deferred | combat | <!-- linear: HEX-19 owner: shravan-kumaran -->
 | Trajectories and lingering effects | obstruction, area-unit resolution, area-lingering zones, and dispel; obstruction remains a `RunBottom`/line-of-sight satellite rather than a complete-party combat gate | combat | <!-- linear: HEX-24 owner: shravan-kumaran -->
@@ -59,6 +58,7 @@ still belong to the crate they change. `docs` is whoever picks it up.
 | Release artifact scaffold | Wave 5 / HEX-17: stable app identity, normalized packages, retained symbol material, and documented future credential slots with no live integrations <!-- linear: HEX-17 owner: shravan-kumaran --> |
 | Creator and Combat Lab | Wave 6: versioned saved character/spell blueprints, immutable templates, Creator-local lattice tests, roster/deployment Sandbox, fixed fixture selector, frozen launches, and deterministic return/retry routing |
 | Tactical integrity and Combat Lab tuning | Wave 7: exact-surface occupancy, Channel, frozen rules profiles, canonical live/post-combat telemetry, comparable reports, deterministic fixtures, and a measured decision to retain the shipped four-hex movement default |
+| Gameplay foundation and scoped validation | Wave 8: one pure serializable combat authority projected through ECS/animation/UI, renderer-free gameplay screen models, concern-specific integration targets, and fail-closed dependency-scoped validation with unchanged broad owner gates <!-- linear: HEX-28 owner: shravan-kumaran --> |
 | V3 active recipe migration | Hills, Sky Islands, Mountains, Caves, Waterfall, Forest, and Fort all use the V3 semantic pipeline in shipped scenarios |
 | Forest authored objects | Forest publishes rotated vegetation `ObjectInstance`s while exact blockers and canopy cutaway remain separate world projections |
 | Structures and Fort | V3 Fort ships worked-stone walls, towers, gates, keep, wall walks, stairs, battlements, and validated defensive circulation |
@@ -137,14 +137,14 @@ the whole wave lands on `dev` in one merge (CONTRIBUTING.md has the rules).
   one-slot initiative remains the baseline; boss initiative, co-casting, rout,
   terrain magic, perception adapters, and campaign persistence remain outside the
   wave.
-- **Wave 8 — gameplay foundation and scoped validation (in progress).** Complete the
-  production audit's organizing move: one pure, integer-valued, serializable combat
+- **Wave 8 — gameplay foundation and scoped validation (delivered).** The production
+  audit's organizing move is complete: one pure, integer-valued, serializable combat
   authority driven by validated commands, with ECS, animation, and UI as projections.
-  Split pure Combat Lab, Creator, report, and launch/retry models from Bevy wiring;
-  consolidate expensive gameplay contract binaries; and make local/PR validation
-  select exact Cargo packages, targets, and features from one fail-closed concern map.
-  Broad owner corpora remain unchanged and continue on their owning changes, `dev`
-  pushes, schedules, and the final combined wave gate.
+  Pure Combat Lab, Creator, report, and launch/retry models are split from Bevy
+  wiring; expensive gameplay contracts are consolidated; and local/PR validation
+  selects exact Cargo packages, targets, and features from one fail-closed concern
+  map. Broad owner corpora remain unchanged and continue on their owning changes,
+  `dev` pushes, schedules, and combined wave/release gates.
 
 #### Wave 8 outcome and topology
 
@@ -154,7 +154,7 @@ test selector all change which layer owns truth and which dependency graph each 
 must compile. No leaf is a release candidate on its own, and only the combined state
 can prove that old gameplay behavior, app lifecycle, and scoped validation agree.
 
-Its source PRs target `wave/8-gameplay-foundation` in this order:
+Its source PRs targeted `wave/8-gameplay-foundation` in this order:
 
 1. **Test-scope foundation.** Record cold and warm compile/link/test baselines; add
    one machine-readable, fail-closed change-to-concern map; correct nextest commands
