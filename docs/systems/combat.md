@@ -93,9 +93,11 @@ retained. The cutover deletes direct ECS mutation paths in this order: turn/posi
 truth, command effects and decisions, then summary/outcome reconstruction. AI and
 human input both remain command producers; animation and UI become projections.
 
-**A turn cannot end while its unit is still moving.** The removal of the
-`Transformation` component is what "finished moving" means, and advancing before then
-would cut the animation off and strand the piece between two hexes.
+**A turn cannot end while its unit is still moving.** `MovingTo` owns a bounded
+domain clock and exact surface path; `Busy` is its legality/turn gate. The movement
+reconciler publishes whole crossed surfaces and clears both at the final surface.
+`Transformation` mirrors that route for presentation only. Removing it early cannot
+move or unlock the unit, and retaining a strike/cast animation cannot retain the turn.
 
 Keys: `SPACE` ends the current player turn and is ignored while a hostile owns the
 turn. `ESC` and `BACKSPACE` were already taken by pause and quit-to-title.

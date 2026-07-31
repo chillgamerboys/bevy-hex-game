@@ -11,8 +11,8 @@ description = "The gameplay loop: real time until something happens, then turns.
 # to it, it is a level above it.
 [dependencies]
 bevy = { workspace = true }
-# For `Transformation` only: a turn must not end while its unit is still mid-stride,
-# and the absence of that component is what "finished moving" means.
+# Presentation projection only: route/swing transforms mirror domain state, but
+# legality and turn advancement never inspect animation-component lifetime.
 hex_anim = { workspace = true }
 hex_ai = { workspace = true }
 # For the substance table and the movement speed, both of which the AI needs to

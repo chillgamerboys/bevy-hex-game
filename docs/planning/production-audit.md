@@ -205,9 +205,9 @@ opposition, and fusion recipes are *data* — opposition is index arithmetic
 over the wheel array, and no code ever matches on a specific element),
 `UnitId(u64)` + allocator + registry, `PlayerSeat`/`ControlOwner` (seat 0
 today; the entire co-op ownership model later), the command types below, a
-`Busy` component (sim-side "still presenting" gate that replaces
-`Has<Transformation>` checks and shrinks hex_anim's blast radius ahead of
-its expected rewrite), `SimSystems::{Emit, Apply}`, and serde derives across
+`Busy` component (domain movement/action gate that replaces
+`Has<Transformation>` checks and keeps presentation lifetime out of legality),
+`SimSystems::{Emit, Apply}`, and serde derives across
 the domain vocabulary.
 
 ### 3. The command funnel

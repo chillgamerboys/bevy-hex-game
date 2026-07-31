@@ -37,13 +37,12 @@ use std::collections::BTreeMap;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
-use hex_anim::Transformation;
 use hex_assets::{
     CombatSettings, ContentIndex, ContentTables, ElementCatalog, FormationCatalog, PlayerSettings,
     SpellBook, SubstanceTable,
 };
 use hex_core::{
-    AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, IssuedCommand, Mode, PartyFormation,
+    Busy, CommandQueue, ControlOwner, GameCommand, IssuedCommand, Mode, PartyFormation,
     PausableSystems, PendingDecision, Screen, TilePos, TraversalBlockers, Turn, UnitId,
 };
 use hex_perception::FactionMapKnowledge;
@@ -143,7 +142,7 @@ struct Verb<'a> {
     blockers: Option<&'a TraversalBlockers>,
     /// Live exact surfaces plus every committed route in flight at drain start.
     occupancy: &'a UnitOccupancy,
-    /// Units this drain already committed presentation for. `Busy` lands via
+    /// Units this drain already committed domain movement for. `Busy` lands via
     /// `Commands` and is not queryable until the next sync point, so within one
     /// drain this set is the truth.
     committed: &'a mut Vec<Entity>,
@@ -162,6 +161,7 @@ struct ResolutionStores<'w> {
     events: MessageWriter<'w, CombatEvent>,
     revivals: ResMut<'w, crate::turns::PendingRevivals>,
     summary: ResMut<'w, crate::CombatSummary>,
+    authority: Option<ResMut<'w, crate::authority_host::CombatAuthority>>,
 }
 
 #[derive(SystemParam)]
@@ -201,20 +201,10 @@ pub(crate) fn plugin(app: &mut App) {
         .register_type::<PendingDecision>();
     app.add_systems(
         Update,
-        (
-            // Frees units whose walk or swing landed this frame, before anyone
-            // decides or applies anything on their behalf.
-            sync_busy
-                .in_set(AppSystems::Update)
-                .in_set(PausableSystems)
-                .after(hex_units::MovementSystems::Reconcile)
-                .before(crate::CombatSystems::Act)
-                .run_if(in_state(Screen::Gameplay)),
-            apply_commands
-                .in_set(crate::CombatSystems::Apply)
-                .in_set(PausableSystems)
-                .run_if(in_state(Screen::Gameplay)),
-        ),
+        (apply_commands
+            .in_set(crate::CombatSystems::Apply)
+            .in_set(PausableSystems)
+            .run_if(in_state(Screen::Gameplay)),),
     );
     // Unit ids reset between sessions, so a held-over command would name
     // somebody else's unit next launch.
@@ -242,30 +232,6 @@ fn clear_pending_decision(mut pending: ResMut<PendingDecision>) {
     if pending.is_open() {
         warn!("combat ended with a decision still open; dropping it");
         *pending = PendingDecision::None;
-    }
-}
-
-/// Keeps [`Busy`] equal to "presentation in flight".
-///
-/// The applier inserts [`Busy`] eagerly when it commits an animation; this
-/// system is the other half, removing it once both the [`Transformation`] and
-/// the [`MovingTo`] it stood for are gone — and re-asserting it for any
-/// presentation that arrived outside the funnel, so the marker can be trusted
-/// wherever it is read.
-fn sync_busy(
-    mut commands: Commands,
-    units: Query<
-        (Entity, Has<Transformation>, Has<MovingTo>, Has<Busy>),
-        Or<(With<Busy>, With<Transformation>, With<MovingTo>)>,
-    >,
-) {
-    for (entity, animating, walking, busy) in &units {
-        let active = animating || walking;
-        if active && !busy {
-            commands.entity(entity).insert(Busy);
-        } else if !active && busy {
-            commands.entity(entity).remove::<Busy>();
-        }
     }
 }
 
@@ -309,13 +275,35 @@ fn apply_commands(
         },
     ));
 
+    if let Some(authority) = stores.authority.as_deref_mut() {
+        if authority.shadow_complete()
+            && !shadow_prestate_matches(
+                &authority.state,
+                &turn_order,
+                &stores.pending,
+                &registry,
+                &units.actors,
+                &units.lattices,
+            )
+        {
+            authority
+                .disable_shadow("ECS state changed outside the reducer-covered command sequence");
+        }
+    }
+
     while let Some(issued) = queue.pop() {
+        let shadow = stores
+            .authority
+            .as_deref_mut()
+            .and_then(|authority| authority.apply_shadow(&issued));
         if let Some(refusal) = modal_refusal(&stores.pending, &issued.command) {
+            assert_shadow_outcome(shadow, &Err(refusal.clone()), &issued);
             drop_command(&mut emitted, &issued, refusal);
             continue;
         }
         let unit = issued.command.unit();
         let Some(entity) = registry.entity_of(unit) else {
+            assert_shadow_outcome(shadow, &Err(CommandRefusal::UnknownUnit), &issued);
             drop_command(&mut emitted, &issued, CommandRefusal::UnknownUnit);
             continue;
         };
@@ -330,14 +318,12 @@ fn apply_commands(
             .and_then(|(_, _, _, _, owner, _, _)| owner.copied())
             .unwrap_or_default();
         if owner.0 != issued.seat {
-            drop_command(
-                &mut emitted,
-                &issued,
-                CommandRefusal::WrongSeat {
-                    issued_by: issued.seat,
-                    owned_by: owner.0,
-                },
-            );
+            let refusal = CommandRefusal::WrongSeat {
+                issued_by: issued.seat,
+                owned_by: owner.0,
+            };
+            assert_shadow_outcome(shadow, &Err(refusal.clone()), &issued);
+            drop_command(&mut emitted, &issued, refusal);
             continue;
         }
 
@@ -369,6 +355,7 @@ fn apply_commands(
             in_combat,
         };
 
+        let observed = issued.clone();
         let recorded = issued.command.clone();
         let outcome = match issued.command {
             GameCommand::MoveAlong { ref path, .. } => move_along::apply(
@@ -448,6 +435,7 @@ fn apply_commands(
                 unit,
             ),
         };
+        assert_shadow_outcome(shadow, &outcome, &observed);
 
         if let Err(refusal) = outcome {
             drop_command(&mut emitted, &issued, refusal);
@@ -456,6 +444,60 @@ fn apply_commands(
         }
     }
     stores.events.write_batch(emitted);
+}
+
+fn shadow_prestate_matches(
+    state: &hex_combat_core::CombatState,
+    order: &TurnOrder,
+    pending: &PendingDecision,
+    registry: &UnitRegistry,
+    actors: &ActorQuery,
+    lattices: &cast::LatticeQuery,
+) -> bool {
+    if state.order != order.order()
+        || state.current() != order.current()
+        || state.round != order.round
+        || state.pending != *pending
+    {
+        return false;
+    }
+    state.units.values().all(|authority| {
+        let Some(entity) = registry.entity_of(authority.id) else {
+            return false;
+        };
+        let Ok((standing, _, turn, busy, _, faction, downed)) = actors.get(entity) else {
+            return false;
+        };
+        if standing.map(|standing| standing.0.pos) != Some(authority.position)
+            || turn != authority.turn.as_ref()
+            || busy != authority.busy
+            || downed != authority.downed
+            || faction.copied() != Some(authority.faction)
+        {
+            return false;
+        }
+        match (&authority.lattice, lattices.get(entity).ok()) {
+            (None, None) => true,
+            (Some(expected), Some((spec, actual))) => {
+                expected.spec == *spec && expected.state == *actual
+            }
+            _ => false,
+        }
+    })
+}
+
+fn assert_shadow_outcome(
+    shadow: Option<Result<(), CommandRefusal>>,
+    ecs: &Result<(), CommandRefusal>,
+    issued: &IssuedCommand,
+) {
+    if let Some(shadow) = shadow {
+        assert_eq!(
+            shadow.as_ref().err(),
+            ecs.as_ref().err(),
+            "pure/ECS command result diverged for {issued:?}"
+        );
+    }
 }
 
 fn current_occupancy(base: &UnitOccupancy, reserved: &BTreeMap<UnitId, TilePos>) -> UnitOccupancy {

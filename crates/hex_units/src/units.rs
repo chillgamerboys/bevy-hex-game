@@ -83,10 +83,10 @@ pub(crate) type TileQuery<'w, 's> = Query<
 #[derive(Component, Debug, Clone, Copy)]
 pub struct StandsOn(pub Standing);
 
-/// A walk in progress, and every surface it passes over.
+/// A domain walk in progress, and every surface it passes over.
 ///
-/// Paired with a [`Transformation`]: that one animates, this one remembers what the
-/// animation *means*. The whole path rather than just the endpoint, because a fight
+/// A [`Transformation`] may mirror this route for presentation, but it does not
+/// advance or complete the walk. The whole path rather than just the endpoint, because a fight
 /// starting mid-stride has to put the piece down on a real hex, and the animation
 /// cannot say which surface each world-space waypoint represents.
 ///
@@ -97,9 +97,14 @@ pub struct MovingTo {
     pub path: Vec<Standing>,
     /// Speed captured when the route was committed.
     ///
-    /// Settings can hot-reload while a piece is walking. Reconciliation must keep the
-    /// schedule the animation was built with rather than silently adopting a new one.
+    /// Settings can hot-reload while a piece is walking. Reconciliation keeps the
+    /// schedule committed with the route rather than silently adopting a new one.
     speed: f32,
+    /// Elapsed domain time, independent of presentation-component lifetime.
+    elapsed: f64,
+    /// The first scheduled tick establishes the route epoch at zero, matching the
+    /// generic animation driver without reading any presentation component.
+    started: bool,
     /// Index of the last route step published as [`StandsOn`].
     reconciled_step: usize,
 }
@@ -111,12 +116,26 @@ impl MovingTo {
         Self {
             path,
             speed,
+            elapsed: 0.0,
+            started: false,
             reconciled_step: 0,
         }
     }
 
-    fn reached_at(&self, elapsed: f64) -> Option<usize> {
-        reached_step_index(&self.path, self.speed, elapsed)
+    fn advance(&mut self, delta: f64) -> Option<usize> {
+        if self.speed <= 0.0 {
+            return self.path.len().checked_sub(1);
+        }
+        if !self.started {
+            self.started = true;
+            return reached_step_index(&self.path, self.speed, 0.0);
+        }
+        self.elapsed += delta.max(0.0);
+        reached_step_index(&self.path, self.speed, self.elapsed)
+    }
+
+    fn complete(&self) -> bool {
+        self.reconciled_step.saturating_add(1) >= self.path.len()
     }
 }
 
@@ -309,16 +328,12 @@ fn on_tile_clicked(
             &Body,
             Option<&Turn>,
         ),
-        // Both filters are click-UX rules enforced with what this crate can
-        // see. `Transformation` covers the visible walk; `MovingTo` also covers
-        // the deferred landing frame after an animation has been removed but
-        // before its route has been reconciled. A click in that gap would route
-        // from a stale `StandsOn`. The applier's `Busy` gate is the
-        // authoritative copy of the same rule.
+        // `Busy` is the domain movement gate. Presentation may finish before or
+        // after it without changing whether another command is legal.
         (
             With<Player>,
             With<Selected>,
-            Without<Transformation>,
+            Without<hex_core::Busy>,
             Without<MovingTo>,
         ),
     >,
@@ -328,7 +343,7 @@ fn on_tile_clicked(
             Option<&ControlOwner>,
             &StandsOn,
             &Body,
-            Has<Transformation>,
+            Has<hex_core::Busy>,
             Has<MovingTo>,
         ),
         With<Player>,
@@ -415,7 +430,7 @@ fn on_tile_clicked(
         if queue.holds_command_for(anchor)
             || party_players
                 .iter()
-                .any(|(_, _, _, _, transforming, moving)| transforming || moving)
+                .any(|(_, _, _, _, busy, moving)| busy || moving)
         {
             return;
         }
@@ -563,7 +578,7 @@ fn on_tile_clicked(
     }
 }
 
-/// Keeps logical position aligned with the whole route steps already reached.
+/// Advances domain movement and publishes every exact route step already reached.
 ///
 /// Registered by [`movement::plugin`](crate::movement::plugin) rather than here,
 /// because it is bookkeeping every unit needs and nothing to do with spawning a
@@ -573,27 +588,18 @@ fn on_tile_clicked(
 /// range and later leaves it again. Updating only at the final destination makes both
 /// endpoints truthful while every point between them is invisible to gameplay.
 ///
-/// The finished case is still reconciled from the **absence** of a
-/// [`Transformation`] rather than `RemovedComponents`: ordered system sets apply the
-/// driver's deferred removal before this runs, so the destination and route cleanup
-/// land in the same frame.
+/// Completion comes from this route's own bounded clock. Removing or retaining a
+/// [`Transformation`] cannot move a unit, clear [`hex_core::Busy`], or advance a turn.
 pub(crate) fn reconcile_movement(
     mut commands: Commands,
+    time: Res<Time<Virtual>>,
     mut crossings: ResMut<MovementCrossings>,
-    mut moving_units: Query<(
-        Entity,
-        Option<&UnitId>,
-        &mut MovingTo,
-        &mut StandsOn,
-        Option<&Transformation>,
-    )>,
+    mut moving_units: Query<(Entity, Option<&UnitId>, &mut MovingTo, &mut StandsOn)>,
 ) {
     crossings.clear();
 
-    for (entity, unit, mut moving, mut standing, animation) in &mut moving_units {
-        let reached_index = animation
-            .and_then(|animation| moving.reached_at(animation.elapsed()))
-            .or_else(|| moving.path.len().checked_sub(1));
+    for (entity, unit, mut moving, mut standing) in &mut moving_units {
+        let reached_index = moving.advance(time.delta_secs_f64());
 
         if let Some(reached_index) = reached_index {
             let first_new = moving.reconciled_step.saturating_add(1);
@@ -613,8 +619,10 @@ pub(crate) fn reconcile_movement(
             }
         }
 
-        if animation.is_none() {
-            commands.entity(entity).remove::<MovingTo>();
+        if moving.complete() {
+            commands
+                .entity(entity)
+                .remove::<(MovingTo, hex_core::Busy)>();
         }
     }
 
@@ -627,50 +635,36 @@ pub(crate) fn reconcile_movement(
 /// where the ambush happened, not deliver it to a destination chosen before anyone
 /// knew there was a fight.
 ///
-/// It snaps to the **nearest whole step** rather than to the exact interpolated point,
-/// because a piece standing between two hexes is not a position the rest of the game
-/// can express — every rule here is written in terms of a surface.
-pub(crate) fn halt_on_combat(
-    mut commands: Commands,
-    mut walking: Query<
-        (
-            Entity,
-            Option<&MovingTo>,
-            &mut Transform,
-            Option<&StopMovingAt>,
-        ),
-        Or<(With<MovingTo>, With<StopMovingAt>)>,
-    >,
-) {
-    for (entity, moving, mut transform, requested) in &mut walking {
-        let stopped = requested.map(|requested| requested.0).or_else(|| {
-            moving.and_then(|moving| nearest_step(&moving.path, transform.translation))
-        });
-        let Some(stopped) = stopped else {
-            continue;
-        };
-        transform.translation = stopped.world_position();
-        commands
-            .entity(entity)
+/// It remains on the last domain surface published through [`StandsOn`], unless the
+/// engagement system supplied an exact [`StopMovingAt`] crossing. Render interpolation
+/// never chooses the result; the transform merely snaps to the chosen domain surface.
+pub(crate) fn halt_on_combat(world: &mut World) {
+    let stops = {
+        let mut walking = world.query_filtered::<
+            (Entity, &StandsOn, Option<&StopMovingAt>),
+            Or<(With<MovingTo>, With<StopMovingAt>)>,
+        >();
+        walking
+            .iter(world)
+            .map(|(entity, standing, requested)| {
+                let stopped = requested.map_or(standing.0, |requested| requested.0);
+                (entity, stopped)
+            })
+            .collect::<Vec<_>>()
+    };
+
+    for (entity, stopped) in stops {
+        if let Some(mut transform) = world.get_mut::<Transform>(entity) {
+            transform.translation = stopped.world_position();
+        }
+        world
+            .entity_mut(entity)
             .insert(StandsOn(stopped))
             .remove::<MovingTo>()
             .remove::<StopMovingAt>()
+            .remove::<hex_core::Busy>()
             .remove::<Transformation>();
     }
-}
-
-/// The step in `path` closest to a world position.
-///
-/// `total_cmp` rather than `partial_cmp`: distances are never `NaN` here, and a
-/// comparison that cannot fail needs no unwrap to explain away.
-fn nearest_step(path: &[Standing], at: Vec3) -> Option<Standing> {
-    path.iter()
-        .min_by(|a, b| {
-            a.world_position()
-                .distance_squared(at)
-                .total_cmp(&b.world_position().distance_squared(at))
-        })
-        .copied()
 }
 
 /// What kind of unit this is, as its encounter rostered it.

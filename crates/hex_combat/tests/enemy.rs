@@ -157,16 +157,24 @@ fn publish_fixture_knowledge(app: &mut App) {
     app.insert_resource(knowledge);
 }
 
-/// Stands in for the walk animation finishing.
+/// Advances the bounded domain route to completion.
 ///
-/// Removing the component is exactly what `hex_anim`'s driver does once a transformer
-/// reports itself done, and movement reconciliation commits the final route step.
-/// `StandsOn` advances only across whole completed legs, so any test that reads the
-/// final position after ordering a move has to let the move land first.
+/// The fixture normally freezes virtual time at zero so tests choose every
+/// transition explicitly. Temporarily advancing that clock proves movement can
+/// settle without inspecting or removing its presentation component.
 fn finish_moving(app: &mut App, entity: Entity) {
-    app.world_mut()
-        .entity_mut(entity)
-        .remove::<Transformation>();
+    app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+        Duration::from_millis(100),
+    ));
+    for _ in 0..32 {
+        if app.world().get::<MovingTo>(entity).is_none() {
+            break;
+        }
+        app.update();
+    }
+    app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+        Duration::ZERO,
+    ));
     app.update();
 }
 
@@ -456,7 +464,7 @@ fn a_turn_does_not_pass_while_a_unit_is_still_moving() {
     );
 }
 
-/// Once movement presentation finishes, an enemy reconsiders its still-unused action.
+/// Once domain movement finishes, an enemy reconsiders its still-unused action.
 ///
 /// The AI host deliberately does not prequeue EndTurn beside movement: doing so would
 /// throw away the same move-then-act economy the player receives.
@@ -474,34 +482,23 @@ fn an_enemy_reconsiders_after_its_move_finishes() {
 
     end_turn(&mut app);
 
-    // Stand in for the animation completing. Removing the component is exactly what
-    // `hex_anim`'s driver does when a transformer reports itself finished.
-    app.world_mut().entity_mut(enemy).remove::<Transformation>();
-    app.update();
-    app.update();
-
-    assert_eq!(
-        app.world().resource::<TurnOrder>().current(),
-        Some(unit_id(&app, enemy)),
-        "the enemy should retain the turn while its follow-up strike presents"
-    );
-    assert!(
-        app.world().get::<Transformation>(enemy).is_some(),
-        "finishing the move should have produced an adjacent follow-up strike"
-    );
-
-    app.world_mut().entity_mut(enemy).remove::<Transformation>();
-    app.update();
+    finish_moving(&mut app, enemy);
+    // One domain tick projects the follow-up strike; the next lets the policy
+    // explicitly yield its unused movement without waiting for that swing animation.
     app.update();
 
     assert_eq!(
         app.world().resource::<TurnOrder>().current(),
         Some(unit_id(&app, player)),
-        "the turn should return after the follow-up action finishes"
+        "presentation must not retain gameplay authority after the follow-up strike"
+    );
+    assert!(
+        app.world().get::<Transformation>(enemy).is_some(),
+        "finishing the domain move should still project an adjacent follow-up strike"
     );
     assert!(
         app.world().get::<Turn>(player).is_some(),
-        "the player should hold the turn marker again"
+        "the player should hold the turn marker while the prior swing still presents"
     );
 }
 

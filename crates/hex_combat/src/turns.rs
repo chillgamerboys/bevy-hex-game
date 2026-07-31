@@ -347,7 +347,7 @@ fn first_hostile_crossing(
 }
 
 /// Builds the order and hands the first unit its turn.
-fn begin_combat(
+pub(crate) fn begin_combat(
     mut commands: Commands,
     mut turn_order: ResMut<TurnOrder>,
     units: Query<(Entity, Option<&UnitId>, Option<&Initiative>), (With<Faction>, Without<Downed>)>,

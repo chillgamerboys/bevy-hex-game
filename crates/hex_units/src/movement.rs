@@ -53,13 +53,15 @@ use crate::UnitOccupancy;
 /// Ordering for systems that consume a unit's logical position.
 #[derive(SystemSet, Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub enum MovementSystems {
-    /// Reconcile [`StandsOn`](crate::StandsOn) with completed animation legs.
+    /// Advance domain routes and reconcile [`StandsOn`](crate::StandsOn).
     Reconcile,
+    /// Settle exploration movement before combat freezes its opening facts.
+    HaltOnCombat,
 }
 
-/// Every whole waypoint crossed during the latest movement reconciliation.
+/// Every whole waypoint crossed during the latest domain movement tick.
 ///
-/// A single frame may finish several animation legs. Consumers that care whether a
+/// A single fixed tick may finish several route legs. Consumers that care whether a
 /// route passed through an intermediate position must inspect this resource after
 /// [`MovementSystems::Reconcile`] instead of sampling only the final
 /// [`StandsOn`](crate::StandsOn).
@@ -100,7 +102,7 @@ impl MovementCrossings {
 ///
 /// [`Body`] is registered beside where it is defined, and route reconciliation lives
 /// here because every kind of unit needs its logical position kept aligned with the
-/// animation.
+/// domain route.
 pub fn plugin(app: &mut App) {
     app.register_type::<Body>()
         .init_resource::<MovementCrossings>();
@@ -108,18 +110,22 @@ pub fn plugin(app: &mut App) {
     // Where a unit *is*, kept true as it walks. Separated from `units::plugin`, which
     // also reads the active scenario placements and spawns pieces: anything that needs
     // positions to stay honest — `hex_combat`, and its tests — wants this half without
-    // that one.
+    // that one. The route advances from the pausable virtual clock directly;
+    // generic transform animation mirrors it as presentation.
     app.add_systems(
         Update,
         crate::units::reconcile_movement
             .in_set(MovementSystems::Reconcile)
             .in_set(AppSystems::Update)
             .in_set(PausableSystems)
-            .after(hex_anim::AnimationSystems::Drive),
+            .before(hex_anim::AnimationSystems::Drive),
     );
     // Committing to a long walk and then being ambushed halfway should leave the piece
     // where the ambush happened.
-    app.add_systems(OnEnter(Mode::Combat), crate::units::halt_on_combat);
+    app.add_systems(
+        OnEnter(Mode::Combat),
+        crate::units::halt_on_combat.in_set(MovementSystems::HaltOnCombat),
+    );
 }
 
 /// How much room a thing takes up, and therefore where it fits.
