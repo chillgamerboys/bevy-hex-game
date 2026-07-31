@@ -118,6 +118,10 @@ exact positions, lattice summaries, outcome, and report fingerprints. `hex_ui`
 separately exposes `UiTreeSnapshot` for visible regions, focus/accessibility,
 computed bounds/overflow, and action priority. Neither feature exposes mutable
 screen state, and the shipping binary has no feature dependency on either harness.
+`hex_game` also re-exports `HeadlessUiPlugin`, which installs the real presentation
+schedules on a synthetic window without Winit or a renderer. Use it only with
+`UiTreeSnapshot` presentation assertions; canonical behavior still comes from
+`GameplayStateSnapshot` and the owning rules or simulation target.
 
 `hex_gameplay_model` owns renderer-free Combat Lab and Creator transitions. It may
 depend on `bevy_ecs` derive support and `hex_core`, but not on assets, combat, units,

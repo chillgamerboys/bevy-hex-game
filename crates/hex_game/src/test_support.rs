@@ -16,6 +16,8 @@ use crate::combat_reports::{
 };
 use crate::screens::{combat_lab, gameplay};
 
+pub use hex_ui::test_support::HeadlessUiPlugin;
+
 /// Functional post-combat report modes exposed to headless app tests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ReportMode {

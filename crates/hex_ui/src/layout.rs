@@ -34,7 +34,8 @@ pub const READ_ONLY_HUD: Pickable = Pickable::IGNORE;
 #[must_use]
 pub const fn action_rail_clearance(viewport: UiViewportClass) -> f32 {
     match viewport {
-        UiViewportClass::Compact | UiViewportClass::Standard => 196.0,
+        UiViewportClass::Compact => 230.0,
+        UiViewportClass::Standard => 196.0,
         UiViewportClass::Wide => 200.0,
     }
 }
@@ -66,7 +67,7 @@ pub fn apply_region_layout(viewport: UiViewportClass, role: UiRegionRole, node: 
         }
         (UiViewportClass::Compact, UiRegionRole::Actions) => {
             node.left = Val::Px(196.0);
-            node.right = Val::Px(268.0);
+            node.right = Val::Px(12.0);
             node.bottom = Val::Px(action_rail_clearance(viewport));
             node.height = Val::Px(132.0);
         }
@@ -131,6 +132,34 @@ pub fn apply_region_layout(viewport: UiViewportClass, role: UiRegionRole, node: 
     }
 }
 
+/// Applies effective-canvas constraints after the coarse viewport layout.
+pub(crate) fn constrain_region_to_canvas(
+    metrics: crate::ResolvedUiMetrics,
+    role: UiRegionRole,
+    node: &mut Node,
+) {
+    apply_region_layout(metrics.viewport, role, node);
+    if metrics.viewport != UiViewportClass::Compact {
+        return;
+    }
+    if is_ultra_constrained(metrics) {
+        match role {
+            UiRegionRole::Party | UiRegionRole::Turn => node.display = Display::None,
+            UiRegionRole::Actions => {
+                node.top = Val::Px(8.0);
+                node.bottom = Val::Auto;
+                node.height = Val::Px(116.0);
+            }
+            UiRegionRole::Inspector | UiRegionRole::Events => {}
+        }
+    }
+}
+
+pub(crate) fn is_ultra_constrained(metrics: crate::ResolvedUiMetrics) -> bool {
+    metrics.viewport == UiViewportClass::Compact
+        && metrics.effective_size.y < action_rail_clearance(metrics.viewport) + 132.0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,7 +184,24 @@ mod tests {
         assert_eq!(events.display, Display::None);
         assert_eq!(actions.display, Display::Flex);
         assert_eq!(actions.top, Val::Auto);
-        assert_eq!(actions.bottom, Val::Px(196.0));
+        assert_eq!(actions.bottom, Val::Px(230.0));
+        assert_eq!(actions.right, Val::Px(12.0));
+    }
+
+    #[test]
+    fn ultra_constrained_canvas_keeps_actions_onscreen_and_collapses_duplicate_context() {
+        let metrics = crate::ResolvedUiMetrics {
+            scale: 2.0,
+            effective_size: Vec2::new(480.0, 270.0),
+            viewport: UiViewportClass::Compact,
+        };
+        let mut party = Node::default();
+        let mut actions = Node::default();
+        constrain_region_to_canvas(metrics, UiRegionRole::Party, &mut party);
+        constrain_region_to_canvas(metrics, UiRegionRole::Actions, &mut actions);
+        assert_eq!(party.display, Display::None);
+        assert_eq!(actions.top, Val::Px(8.0));
+        assert_eq!(actions.bottom, Val::Auto);
     }
 
     #[test]

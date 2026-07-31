@@ -34,7 +34,7 @@ pub enum GameplayAction {
     EndTurn,
     /// Rest the exploring party.
     Rest,
-    /// Open the pause overlay.
+    /// Toggle the pause overlay.
     Pause,
     /// Confirm the currently required lattice decision.
     ConfirmDecision,

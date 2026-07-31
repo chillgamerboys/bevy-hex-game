@@ -2,8 +2,8 @@ use bevy::prelude::*;
 use hex_core::Screen;
 
 use crate::{
-    blurb, button, despawn_screen, display, heading, label, panel, screen_root, screen_title,
-    PauseView, UiAssets, UiIntent, UiSetting, UiSettingsView,
+    blurb, button, despawn_screen, display, fine, heading, label, panel, screen_root, screen_title,
+    GameplayAction, PauseView, UiAssets, UiIntent, UiSetting, UiSettingsView, UiSystems,
 };
 
 #[derive(Component)]
@@ -27,6 +27,9 @@ struct PauseHint;
 #[derive(Component)]
 struct PauseNotice;
 
+#[derive(Component)]
+struct ResumeControl;
+
 pub(super) fn plugin(app: &mut App) {
     app.add_systems(OnEnter(Screen::Splash), spawn_splash)
         .add_systems(OnExit(Screen::Splash), despawn_screen(Screen::Splash))
@@ -41,7 +44,11 @@ pub(super) fn plugin(app: &mut App) {
     app.add_systems(OnEnter(hex_core::Pause(true)), spawn_pause)
         .add_systems(
             Update,
-            refresh_pause.run_if(in_state(hex_core::Pause(true))),
+            (
+                refresh_pause,
+                handle_pause_controls.in_set(UiSystems::EmitIntents),
+            )
+                .run_if(in_state(hex_core::Pause(true))),
         )
         .add_systems(OnExit(hex_core::Pause(true)), despawn_pause);
 }
@@ -56,7 +63,23 @@ fn spawn_pause(mut commands: Commands, assets: Res<UiAssets>, view: Res<PauseVie
                 PauseNotice,
                 blurb(&assets, view.notice.clone().unwrap_or_default()),
             ));
+            root.spawn((button("Resume"), ResumeControl))
+                .with_children(|resume| {
+                    resume.spawn(label(&assets, "Resume"));
+                    resume.spawn(fine(&assets, "ESC"));
+                });
         });
+}
+
+fn handle_pause_controls(
+    controls: Query<&Interaction, (Changed<Interaction>, With<ResumeControl>)>,
+    mut intents: MessageWriter<UiIntent>,
+) {
+    for interaction in &controls {
+        if *interaction == Interaction::Pressed {
+            intents.write(UiIntent::Gameplay(GameplayAction::Pause));
+        }
+    }
 }
 
 fn refresh_pause(

@@ -136,6 +136,7 @@ fn handle_gameplay_ui_intents(
     pending: Res<PendingDecision>,
     registry: Res<UnitRegistry>,
     owners: Query<(Option<&ControlOwner>, &hex_units::Faction)>,
+    pause: Res<State<Pause>>,
     mut queue: ResMut<CommandQueue>,
     mut next_pause: ResMut<NextState<Pause>>,
 ) {
@@ -162,7 +163,7 @@ fn handle_gameplay_ui_intents(
                 &mut queue,
                 |unit| GameCommand::EndTurn { unit },
             ),
-            GameplayAction::Pause => next_pause.set(Pause(true)),
+            GameplayAction::Pause => next_pause.set(toggled_pause(*pause.get())),
             GameplayAction::Rest if *mode.get() == Mode::Exploring => {
                 let player = registry.iter().find_map(|(unit, entity)| {
                     owners.get(entity).ok().and_then(|(owner, faction)| {
@@ -1270,7 +1271,7 @@ fn handle_input(
     lab: Option<Res<CombatLabSession>>,
 ) {
     if bindings.just_pressed(&keys, InputAction::Pause) {
-        next_pause.set(Pause(!pause.get().0));
+        next_pause.set(toggled_pause(*pause.get()));
     }
     // Backspace rather than Escape, which is taken by pause.
     if bindings.just_pressed(&keys, InputAction::ReturnTitle) {
@@ -1281,12 +1282,22 @@ fn handle_input(
     }
 }
 
+fn toggled_pause(pause: Pause) -> Pause {
+    Pause(!pause.0)
+}
+
 #[cfg(test)]
 mod tests {
     use bevy::state::app::StatesPlugin;
     use bevy::MinimalPlugins;
     use hex_assets::ScenarioLibrary;
     use hex_core::{ResolvedMapSeed, TilePos};
+
+    #[test]
+    fn typed_and_keyboard_pause_paths_share_the_same_toggle() {
+        assert_eq!(toggled_pause(Pause(false)), Pause(true));
+        assert_eq!(toggled_pause(Pause(true)), Pause(false));
+    }
 
     use super::*;
 

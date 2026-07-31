@@ -32,6 +32,9 @@ impl LatticeScale {
 
     /// Compact cells in gameplay side panels.
     pub const PANEL: Self = Self(0.65);
+
+    /// Smallest actionable cells for an ultra-constrained required-choice surface.
+    pub const TIGHT: Self = Self(0.5);
 }
 
 /// Whether a projected cell participates in UI picking.

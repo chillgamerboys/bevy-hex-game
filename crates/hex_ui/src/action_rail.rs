@@ -2,18 +2,20 @@ use bevy::prelude::*;
 use hex_core::Screen;
 
 use crate::{
-    blurb, fine, heading, row_button, ActionAvailability, DespawnOnExit, GameplayHudView,
-    ResolvedUiMetrics, UiAssets, UiIntent, UiViewportClass, ACCENT, EDGE, PANEL_BG,
+    blurb, fine, heading, layout::is_ultra_constrained, row_button, ActionAvailability,
+    DespawnOnExit, GameplayHudView, ResolvedUiMetrics, UiAssets, UiIntent, UiViewportClass, ACCENT,
+    EDGE, PANEL_BG,
 };
 
 #[derive(Component)]
 pub(crate) struct ActionRail;
 
 #[derive(Component)]
-struct ActionRailSummary;
-
-#[derive(Component)]
-struct ActionRailPrompt;
+enum ActionRailCopy {
+    Heading,
+    Summary,
+    Prompt,
+}
 
 #[derive(Component)]
 struct ActionRailActions;
@@ -41,9 +43,12 @@ fn spawn_action_rail(mut commands: Commands, assets: Res<UiAssets>) {
             GlobalZIndex(4),
         ))
         .with_children(|rail| {
-            rail.spawn(heading(&assets, "Now"));
-            rail.spawn((ActionRailSummary, blurb(&assets, "Preparing actions…")));
-            rail.spawn((ActionRailPrompt, blurb(&assets, "")));
+            rail.spawn((ActionRailCopy::Heading, heading(&assets, "Now")));
+            rail.spawn((
+                ActionRailCopy::Summary,
+                blurb(&assets, "Preparing actions…"),
+            ));
+            rail.spawn((ActionRailCopy::Prompt, blurb(&assets, "")));
             rail.spawn((
                 Name::new("Primary Action Rail Controls"),
                 ActionRailActions,
@@ -65,9 +70,14 @@ fn refresh_action_rail(
     metrics: Res<ResolvedUiMetrics>,
     assets: Res<UiAssets>,
     mut commands: Commands,
-    mut rails: Query<(Entity, &mut Node, &mut BorderColor), With<ActionRail>>,
-    mut summaries: Query<&mut Text, With<ActionRailSummary>>,
-    mut prompts: Query<&mut Text, (With<ActionRailPrompt>, Without<ActionRailSummary>)>,
+    mut rails: Query<
+        (Entity, &mut Node, &mut BorderColor),
+        (With<ActionRail>, Without<ActionRailCopy>),
+    >,
+    mut copy: Query<
+        (&ActionRailCopy, &mut Text, &mut Node),
+        (With<ActionRailCopy>, Without<ActionRail>),
+    >,
     actions: Query<Entity, With<ActionRailActions>>,
 ) {
     let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
@@ -79,30 +89,42 @@ fn refresh_action_rail(
         .and_then(|review| review.hud.as_ref())
         .unwrap_or(view.as_ref());
     if let Ok((_, mut node, mut border)) = rails.single_mut() {
-        apply_action_rail_insets(metrics.viewport, &mut node);
+        apply_action_rail_layout(*metrics, &mut node);
         *border = BorderColor::all(if view.required_prompt.is_some() {
             ACCENT
         } else {
             EDGE
         });
     }
-    if let Ok(mut text) = summaries.single_mut() {
-        text.0 = format!(
-            "{} · {} · Move {} · Action {}",
-            view.round,
-            view.actor_label,
-            view.movement_remaining,
-            if view.action_remaining {
-                "ready"
-            } else {
-                "spent"
+    for (kind, mut text, mut node) in &mut copy {
+        node.display = if is_ultra_constrained(*metrics)
+            && matches!(kind, ActionRailCopy::Heading | ActionRailCopy::Prompt)
+        {
+            Display::None
+        } else {
+            Display::Flex
+        };
+        match kind {
+            ActionRailCopy::Heading => {}
+            ActionRailCopy::Summary => {
+                text.0 = format!(
+                    "{} · {} · Move {} · Action {}",
+                    view.round,
+                    view.actor_label,
+                    view.movement_remaining,
+                    if view.action_remaining {
+                        "ready"
+                    } else {
+                        "spent"
+                    }
+                );
             }
-        );
-    }
-    if let Ok(mut text) = prompts.single_mut() {
-        text.0 = view.required_prompt.clone().unwrap_or_else(|| {
-            "Choose an available action; unavailable actions explain why.".to_owned()
-        });
+            ActionRailCopy::Prompt => {
+                text.0 = view.required_prompt.clone().unwrap_or_else(|| {
+                    "Choose an available action; unavailable actions explain why.".to_owned()
+                });
+            }
+        }
     }
     let Ok(action_root) = actions.single() else {
         return;
@@ -162,6 +184,17 @@ fn action_rail_node(viewport: UiViewportClass) -> Node {
     };
     apply_action_rail_insets(viewport, &mut node);
     node
+}
+
+fn apply_action_rail_layout(metrics: ResolvedUiMetrics, node: &mut Node) {
+    apply_action_rail_insets(metrics.viewport, node);
+    if is_ultra_constrained(metrics) {
+        node.padding = UiRect::axes(Val::Px(10.0), Val::Px(6.0));
+        node.row_gap = Val::Px(4.0);
+    } else {
+        node.padding = UiRect::axes(Val::Px(18.0), Val::Px(12.0));
+        node.row_gap = Val::Px(8.0);
+    }
 }
 
 fn apply_action_rail_insets(viewport: UiViewportClass, node: &mut Node) {

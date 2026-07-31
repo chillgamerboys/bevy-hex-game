@@ -5,8 +5,8 @@ use bevy::prelude::*;
 use hex_core::{AppSystems, Screen};
 
 use crate::{
-    apply_region_layout, DespawnOnExit, GameplayChromeView, HudElement, RequiredActionSurface,
-    ResolvedUiMetrics, UiHudSetup, UiRegionRole,
+    layout::constrain_region_to_canvas, DespawnOnExit, GameplayChromeView, HudElement,
+    RequiredActionSurface, ResolvedUiMetrics, UiHudSetup, UiRegionRole,
 };
 
 pub(super) fn plugin(app: &mut App) {
@@ -107,7 +107,14 @@ fn spawn_region(
     mut node: Node,
     viewport: crate::UiViewportClass,
 ) {
-    apply_region_layout(viewport, role, &mut node);
+    constrain_region_to_canvas(
+        ResolvedUiMetrics {
+            viewport,
+            ..ResolvedUiMetrics::default()
+        },
+        role,
+        &mut node,
+    );
     frame.spawn((Name::new(name), role, node, Pickable::IGNORE));
 }
 
@@ -120,7 +127,7 @@ fn apply_responsive_layout(
         return;
     }
     for (role, mut node) in &mut regions {
-        apply_region_layout(metrics.viewport, *role, &mut node);
+        constrain_region_to_canvas(*metrics, *role, &mut node);
     }
 }
 
