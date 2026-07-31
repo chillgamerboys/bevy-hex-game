@@ -100,22 +100,34 @@ fn spawn_panel(
 fn rebuild(
     mut commands: Commands,
     view: Res<CastingPanelView>,
+    review: Option<Res<crate::review::UiReviewPresentation>>,
+    metrics: Res<crate::ResolvedUiMetrics>,
     mut panels: Query<&mut Node, With<CastingPanel>>,
     bodies: Query<Entity, With<PanelBody>>,
     assets: Res<UiAssets>,
 ) {
-    if !view.is_changed() {
+    let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
+    if !view.is_changed() && !review_changed && !metrics.is_changed() {
         return;
     }
+    let view = review
+        .as_ref()
+        .and_then(|review| review.casting.as_ref())
+        .unwrap_or(view.as_ref());
     let Ok(mut panel) = panels.single_mut() else {
         return;
     };
-    panel.display = if view.visible {
+    // On the compact canvas a blocking decision is promoted into the persistent
+    // action rail. Repeating its full prompt and controls in the fixed-height
+    // casting region competes with that required surface at enlarged scales.
+    let promoted_to_rail = metrics.viewport == crate::UiViewportClass::Compact
+        && matches!(view.content, CastingPanelContentView::Decision { .. });
+    panel.display = if view.visible && !promoted_to_rail {
         Display::Flex
     } else {
         Display::None
     };
-    if !view.visible {
+    if !view.visible || promoted_to_rail {
         return;
     }
     let Ok(body) = bodies.single() else { return };

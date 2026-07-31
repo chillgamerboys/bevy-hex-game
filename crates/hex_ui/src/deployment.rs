@@ -4,9 +4,9 @@ use bevy::prelude::*;
 use hex_core::Screen;
 
 use crate::{
-    action_rail_clearance, blurb, fine, heading, label, row_button, DeploymentIntent,
-    DeploymentRosterEntryView, DeploymentView, ResolvedUiMetrics, UiAssets, UiIntent, UiSystems,
-    UiViewportClass, DANGER,
+    action_rail_clearance, blurb, fine, heading, label, row_button, stacked_row_button,
+    DeploymentIntent, DeploymentRosterEntryView, DeploymentView, ResolvedUiMetrics, UiAssets,
+    UiIntent, UiSystems, UiViewportClass, DANGER,
 };
 
 #[derive(Component)]
@@ -67,6 +67,7 @@ fn render(
             },
             BackgroundColor(Color::srgba(0.015, 0.022, 0.035, 0.94)),
             BorderColor::all(Color::srgba(0.93, 0.79, 0.46, 0.52)),
+            GlobalZIndex(11),
         ))
         .with_children(|hud| {
             hud.spawn((
@@ -177,7 +178,7 @@ fn spawn_side(
                 )
             );
             side.spawn((
-                row_button(text.clone(), 235.0),
+                stacked_row_button(text.clone(), 235.0),
                 DeploymentIntent::Select {
                     player,
                     index: entry.index,
@@ -252,8 +253,11 @@ fn apply_layout(
     }
     let compact = metrics.viewport == UiViewportClass::Compact;
     for mut node in &mut roots {
-        node.left = Val::Px(if compact { 12.0 } else { 22.0 });
-        node.right = Val::Px(if compact { 12.0 } else { 22.0 });
+        (node.left, node.right) = match metrics.viewport {
+            UiViewportClass::Compact => (Val::Px(196.0), Val::Px(12.0)),
+            UiViewportClass::Standard => (Val::Px(244.0), Val::Px(320.0)),
+            UiViewportClass::Wide => (Val::Px(288.0), Val::Px(360.0)),
+        };
         node.top = Val::Px(if compact { 12.0 } else { 18.0 });
         node.bottom = if compact {
             Val::Px(action_rail_clearance(metrics.viewport))

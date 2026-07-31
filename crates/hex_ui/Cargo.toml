@@ -15,6 +15,7 @@ serde = { workspace = true }
 [features]
 default = []
 test-support = []
+visual-review = []
 
 [lints]
 workspace = true

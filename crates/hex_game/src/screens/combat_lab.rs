@@ -2039,12 +2039,12 @@ fn handle_deployment_actions(
     mut commands: Commands,
     mut next: ResMut<NextState<Screen>>,
 ) {
-    let Some(session) = session.as_deref_mut() else {
-        return;
-    };
     for intent in intents.read() {
         let UiIntent::Deployment(action) = intent else {
             continue;
+        };
+        let Some(session) = session.as_deref_mut() else {
+            return;
         };
         match action {
             DeploymentAction::Select { player, index } => {

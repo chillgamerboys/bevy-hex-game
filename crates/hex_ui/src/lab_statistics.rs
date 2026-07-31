@@ -106,15 +106,21 @@ fn spawn(mut commands: Commands, assets: Res<UiAssets>) {
 
 fn render(
     view: Res<LabStatisticsView>,
+    review: Option<Res<crate::review::UiReviewPresentation>>,
     mut drawers: Query<&mut Visibility, With<Drawer>>,
     mut bodies: Query<&mut Visibility, (With<Body>, Without<Drawer>)>,
     mut summaries: Query<&mut Text, With<Summary>>,
     buttons: Query<(&Control, &Children)>,
     mut labels: Query<&mut Text, (Without<Summary>, Without<Drawer>)>,
 ) {
-    if !view.is_changed() {
+    let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
+    if !view.is_changed() && !review_changed {
         return;
     }
+    let view = review
+        .as_ref()
+        .and_then(|review| review.statistics.as_ref())
+        .unwrap_or(view.as_ref());
     for mut visibility in &mut drawers {
         *visibility = if view.present && view.visible {
             Visibility::Inherited

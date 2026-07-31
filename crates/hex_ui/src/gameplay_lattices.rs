@@ -135,6 +135,7 @@ fn body_node() -> Node {
 fn rebuild(
     mut commands: Commands,
     view: Res<GameplayLatticesView>,
+    review: Option<Res<crate::review::UiReviewPresentation>>,
     pulse: Res<TargetPulseView>,
     own_bodies: Query<Entity, With<OwnBody>>,
     target_bodies: Query<Entity, With<TargetBody>>,
@@ -143,9 +144,15 @@ fn rebuild(
     mut target_headings: Query<&mut Text, (With<TargetHeading>, Without<OwnHeading>)>,
     assets: Res<UiAssets>,
 ) {
-    if !view.is_changed() && !pulse.is_changed() {
+    let view_changed = view.is_changed();
+    let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
+    if !view_changed && !review_changed && !pulse.is_changed() {
         return;
     }
+    let view = review
+        .as_ref()
+        .and_then(|review| review.lattices.as_ref())
+        .unwrap_or(view.as_ref());
     if let Ok((mut node, mut background)) = target_panels.single_mut() {
         node.display = if view.target.is_some() {
             Display::Flex
@@ -158,7 +165,7 @@ fn rebuild(
             PANEL_BG
         };
     }
-    if !view.is_changed() {
+    if !view_changed && !review_changed {
         return;
     }
     if let Ok(body) = own_bodies.single() {

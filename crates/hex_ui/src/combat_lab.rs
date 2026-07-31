@@ -42,6 +42,7 @@ struct FixtureFilter;
 
 #[derive(Component)]
 struct FixtureCard {
+    #[cfg(any(test, feature = "test-support"))]
     id: &'static str,
     searchable: String,
 }
@@ -1186,6 +1187,7 @@ fn spawn_fixture_selector(
                         list.spawn((
                             panel(),
                             FixtureCard {
+                                #[cfg(any(test, feature = "test-support"))]
                                 id: fixture.id,
                                 searchable,
                             },

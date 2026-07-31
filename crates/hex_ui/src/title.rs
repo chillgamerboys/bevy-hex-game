@@ -8,9 +8,9 @@ use hex_assets::ScenarioCategory;
 use hex_core::Screen;
 
 use crate::{
-    blurb, button, despawn_screen, display, fine, heading, label, panel, screen_root, small_button,
-    ResolvedUiMetrics, ResumeView, TitleIntent, TitleScenarioView, TitleView, UiAssets, UiIntent,
-    UiSystems, UiViewportClass, ACCENT_EDGE, BLURB_SIZE, DANGER,
+    blurb, button, despawn_screen, display, fine, heading, label, panel, screen_root,
+    stacked_row_button, ResolvedUiMetrics, ResumeView, TitleIntent, TitleScenarioView, TitleView,
+    UiAssets, UiIntent, UiSystems, UiViewportClass, ACCENT_EDGE, BLURB_SIZE, DANGER,
 };
 
 const CATEGORY_DECK_MAX_WIDTH: f32 = 1_500.0;
@@ -344,7 +344,7 @@ fn spawn_scenario_card(
         );
         if let Some(seed) = entry.resolved_seed {
             row.spawn((
-                small_button(format!("Reroll {}", entry.scenario.name)),
+                stacked_row_button(format!("Reroll {}", entry.scenario.name), 148.0),
                 TitleControl(TitleIntent::RerollScenario(entry.scenario.clone())),
             ))
             .with_children(|control| {

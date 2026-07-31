@@ -53,11 +53,13 @@ pub(crate) fn plugin(app: &mut App) {
         // the simulation and remains available while a decision is open.
         .add_systems(
             Update,
-            (toggle_hud, publish_hud_view)
+            (
+                toggle_hud.run_if(resource_equals(GameplayPhase::Active)),
+                publish_hud_view,
+            )
                 .chain()
                 .in_set(AppSystems::RecordInput)
-                .run_if(in_state(Screen::Gameplay))
-                .run_if(resource_equals(GameplayPhase::Active)),
+                .run_if(in_state(Screen::Gameplay)),
         );
 }
 
@@ -77,13 +79,14 @@ fn toggle_hud(
 
 fn publish_hud_view(
     hud: Res<HudVisibility>,
+    phase: Res<GameplayPhase>,
     selection: Res<lattice::DisableSelection>,
     resolution: Option<Res<EncounterResolution>>,
     mut view: ResMut<hex_ui::GameplayChromeView>,
 ) {
     let next = hex_ui::GameplayChromeView {
-        shown: hud.shown,
-        decision_required: selection.is_active(),
+        shown: hud.shown && *phase == GameplayPhase::Active,
+        decision_required: *phase == GameplayPhase::Active && selection.is_active(),
         encounter_complete: resolution
             .as_deref()
             .is_some_and(|value| value.is_resolved()),
@@ -109,6 +112,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<HudVisibility>()
+            .init_resource::<GameplayPhase>()
             .init_resource::<lattice::DisableSelection>()
             .init_resource::<hex_ui::GameplayChromeView>()
             .add_systems(Update, publish_hud_view);
@@ -124,6 +128,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<HudVisibility>()
+            .init_resource::<GameplayPhase>()
             .init_resource::<lattice::DisableSelection>()
             .init_resource::<hex_ui::GameplayChromeView>()
             .add_systems(Update, publish_hud_view);
@@ -149,6 +154,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<HudVisibility>()
+            .init_resource::<GameplayPhase>()
             .init_resource::<lattice::DisableSelection>()
             .init_resource::<hex_ui::GameplayChromeView>()
             .insert_resource(EncounterResolution(Some(
@@ -163,5 +169,21 @@ mod tests {
                 .resource::<hex_ui::GameplayChromeView>()
                 .encounter_complete
         );
+    }
+
+    #[test]
+    fn deployment_collapses_ordinary_chrome_without_changing_the_player_preference() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<HudVisibility>()
+            .insert_resource(GameplayPhase::Deployment)
+            .init_resource::<lattice::DisableSelection>()
+            .init_resource::<hex_ui::GameplayChromeView>()
+            .add_systems(Update, publish_hud_view);
+
+        app.update();
+
+        assert!(app.world().resource::<HudVisibility>().shown);
+        assert!(!app.world().resource::<hex_ui::GameplayChromeView>().shown);
     }
 }

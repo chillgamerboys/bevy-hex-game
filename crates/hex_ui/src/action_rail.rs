@@ -73,6 +73,7 @@ fn spawn_action_rail(mut commands: Commands, assets: Res<UiAssets>) {
 
 fn refresh_action_rail(
     view: Res<GameplayHudView>,
+    review: Option<Res<crate::review::UiReviewPresentation>>,
     metrics: Res<ResolvedUiMetrics>,
     assets: Res<UiAssets>,
     mut commands: Commands,
@@ -81,9 +82,14 @@ fn refresh_action_rail(
     mut prompts: Query<&mut Text, (With<ActionRailPrompt>, Without<ActionRailSummary>)>,
     actions: Query<Entity, With<ActionRailActions>>,
 ) {
-    if !view.is_changed() && !metrics.is_changed() {
+    let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
+    if !view.is_changed() && !review_changed && !metrics.is_changed() {
         return;
     }
+    let view = review
+        .as_ref()
+        .and_then(|review| review.hud.as_ref())
+        .unwrap_or(view.as_ref());
     if let Ok((_, mut node, mut border)) = rails.single_mut() {
         match metrics.viewport {
             UiViewportClass::Compact => {

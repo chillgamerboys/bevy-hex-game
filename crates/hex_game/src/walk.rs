@@ -146,6 +146,10 @@ enum WalkStep {
     /// report system. Logical outcome and metric evidence belongs to the deterministic
     /// simulation target; the visual walk reviews only the resulting composition.
     PresentFixtureReport,
+    /// Install an authored immutable UI presentation state without solving combat.
+    PresentUi(String),
+    /// Select Auto or 200% UI scale for responsive presentation review.
+    SetUiScale(String),
     /// Press and release a supported gameplay or menu key.
     Key(String),
     /// Launch a scenario by exact name, bypassing the menu UI.
@@ -188,6 +192,22 @@ fn validate_step(step: &WalkStep) -> Result<(), String> {
         }
         WalkStep::AwaitButton(name) if name.trim().is_empty() => {
             Err("awaited button name must not be empty".to_owned())
+        }
+        WalkStep::PresentUi(name)
+            if !matches!(
+                name.as_str(),
+                "clear"
+                    | "normal-gameplay"
+                    | "required-decision"
+                    | "aiming-disabled"
+                    | "live-statistics"
+                    | "dense-report-compare"
+            ) =>
+        {
+            Err(format!("unknown presentation-only UI fixture {name:?}"))
+        }
+        WalkStep::SetUiScale(name) if !matches!(name.as_str(), "Auto" | "200%") => {
+            Err(format!("unknown UI scale {name:?}; expected Auto or 200%"))
         }
         WalkStep::StartScenario { name, .. } if name.trim().is_empty() => {
             Err("scenario name must not be empty".to_owned())
@@ -355,6 +375,8 @@ fn run_walk(
     mut next: ResMut<NextState<Screen>>,
     mut combat: WalkCombat,
     content: WalkContent,
+    mut ui_scale: ResMut<hex_ui::UiScalePreference>,
+    mut primary_window: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
     buttons: Query<(Entity, &Name), With<Button>>,
     tiles: Query<Entity, With<HexTile>>,
@@ -365,6 +387,16 @@ fn run_walk(
 ) {
     if state.failed {
         return;
+    }
+
+    // The offscreen render target controls capture resolution, but responsive UI
+    // metrics deliberately follow the logical window. Keep both canvases aligned
+    // so a persisted local window preference cannot silently turn a nominal 1080p
+    // review into a compact 720p layout stretched into a larger PNG.
+    if let Ok(mut window) = primary_window.single_mut() {
+        if (window.physical_width(), window.physical_height()) != state.size {
+            window.resolution = bevy::window::WindowResolution::new(state.size.0, state.size.1);
+        }
     }
 
     // Redirect the game's single camera into a readable offscreen image before
@@ -532,6 +564,22 @@ fn run_walk(
             summary.outcome = Some(EncounterOutcome::Victory);
             state.advance();
         }
+        WalkStep::PresentUi(ref name) => {
+            if let Err(reason) = hex_ui::apply_ui_review_fixture(&mut commands, name) {
+                error!("visual walk: {reason}");
+                state.failed = true;
+                exit.write(AppExit::error());
+                return;
+            }
+            state.advance();
+        }
+        WalkStep::SetUiScale(ref name) => {
+            ui_scale.0 = match name.as_str() {
+                "200%" => hex_ui::UiScaleMode::Percent200,
+                _ => hex_ui::UiScaleMode::Auto,
+            };
+            state.advance();
+        }
         WalkStep::Key(ref name) => {
             let key = parse_key(name).unwrap_or(KeyCode::Escape);
             info!("visual walk pressing {name}");
@@ -675,13 +723,15 @@ mod tests {
         Key("KeyR"),
         AwaitButton("Cast Ember"),
         PresentFixtureReport,
+        SetUiScale("200%"),
+        PresentUi("required-decision"),
         Capture("02-crossing"),
     ]"#;
 
     #[test]
     fn a_full_script_parses_with_every_step_kind() {
         let steps: Vec<WalkStep> = ron::from_str(FULL_SCRIPT).expect("script parses");
-        assert_eq!(steps.len(), 13);
+        assert_eq!(steps.len(), 15);
         assert_eq!(steps.first(), Some(&WalkStep::AwaitScreen("Title".into())));
         assert_eq!(
             steps.get(3),
@@ -827,6 +877,7 @@ mod tests {
         let mut launches_default = false;
         let mut continues_save = false;
         let mut launches_fixture = false;
+        let mut launches_lab_sandbox = false;
         for script in ["../../walks/gameplay_ui.ron"] {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(script);
             let text = std::fs::read_to_string(&path)
@@ -848,6 +899,9 @@ mod tests {
                 if matches!(step, WalkStep::Click { name, .. } if name == "Continue") {
                     continues_save = true;
                 }
+                if matches!(step, WalkStep::Click { name, .. } if name == "Load Map & Deploy") {
+                    launches_lab_sandbox = true;
+                }
                 if let WalkStep::StartFixture { id, .. } = step {
                     assert!(
                         crate::screens::combat_lab::fixture_scenario_name(id).is_some(),
@@ -859,7 +913,11 @@ mod tests {
             }
         }
         assert!(
-            checked > 0 || launches_default || continues_save || launches_fixture,
+            checked > 0
+                || launches_default
+                || continues_save
+                || launches_fixture
+                || launches_lab_sandbox,
             "the UI walk must exercise at least one real application launch path"
         );
     }

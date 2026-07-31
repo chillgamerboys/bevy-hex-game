@@ -46,7 +46,7 @@ map-review = []
 # Scripted visual walk: drive the screens from a RON step list and photograph
 # each one, so an agent or a human can review the frames. Same release-shaped
 # philosophy as map-review.
-visual-walk = []
+visual-walk = ["hex_ui/visual-review"]
 # Headless game/UI observation helpers. Never enabled by the shipping build.
 test-support = ["hex_ui/test-support"]
 

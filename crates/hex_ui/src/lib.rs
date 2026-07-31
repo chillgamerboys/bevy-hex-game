@@ -24,6 +24,7 @@ mod layout;
 mod model;
 mod outcome_report;
 mod party;
+mod review;
 mod scale;
 mod screens;
 mod shell;
@@ -67,6 +68,9 @@ pub use theme::{
     ACCENT_EDGE, BLURB_SIZE, DANGER, DISPLAY_SIZE, EDGE, FINE_SIZE, FUSION_COLOR, GEM_COLOR, LABEL,
     LABEL_SIZE, MUTED, PANEL_BG, SCREEN_TITLE_SIZE, SMALL_BUTTON_WIDTH, TITLE_SIZE,
 };
+
+#[cfg(feature = "visual-review")]
+pub use review::apply_ui_review_fixture;
 
 /// Installs the shared runtime design system, responsive scale, focus, and intents.
 pub struct UiPlugin;
