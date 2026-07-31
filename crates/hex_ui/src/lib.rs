@@ -14,11 +14,13 @@ mod scale;
 mod screens;
 mod shell;
 mod theme;
+mod title;
 
 pub use layout::{action_rail_clearance, apply_region_layout, UiRegionRole};
 pub use model::{
     ActionAffordance, ActionAvailability, ActionPriority, GameplayAction, GameplayHudView,
-    PauseView, UiIntent, UiSetting, UiSettingRow, UiSettingsView,
+    PauseView, ResumeView, TitleIntent, TitleScenarioView, TitleView, UiIntent, UiSetting,
+    UiSettingRow, UiSettingsView,
 };
 pub use scale::{
     resolve_auto_scale, resolve_ui_metrics, resolve_viewport_class, ResolvedUiMetrics, UiScaleMode,
@@ -35,12 +37,21 @@ pub use theme::{
 /// Installs the shared runtime design system, responsive scale, focus, and intents.
 pub struct UiPlugin;
 
+/// Public ordering seam for composition-root intent handlers.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UiSystems {
+    /// Pointer and keyboard interactions have been translated into [`UiIntent`].
+    EmitIntents,
+}
+
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<UiIntent>()
             .init_resource::<GameplayHudView>()
             .init_resource::<UiSettingsView>()
             .init_resource::<PauseView>()
+            .init_resource::<TitleView>()
+            .init_resource::<ResumeView>()
             .add_plugins((
                 theme::plugin,
                 scale::plugin,
@@ -48,6 +59,7 @@ impl Plugin for UiPlugin {
                 shell::plugin,
                 screens::plugin,
                 action_rail::plugin,
+                title::plugin,
             ));
     }
 }

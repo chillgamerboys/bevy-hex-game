@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use hex_assets::Scenario;
 use hex_core::{GameplayPhase, UnitId};
 
 /// Whether an action can currently be taken, with the canonical refusal when it cannot.
@@ -125,6 +126,66 @@ pub struct PauseView {
     pub notice: Option<String>,
 }
 
+/// One immutable scenario card on the title screen.
+#[derive(Debug, Clone)]
+pub struct TitleScenarioView {
+    /// Exact launch input represented by the card.
+    pub scenario: Scenario,
+    /// Session-resolved seed shown beside generated scenarios.
+    pub resolved_seed: Option<u64>,
+}
+
+/// Immutable title-screen projection supplied by the composition root.
+#[derive(Resource, Debug, Default, Clone)]
+pub struct TitleView {
+    /// Development scenarios in authored order. The renderer groups them by category.
+    pub scenarios: Vec<TitleScenarioView>,
+    /// Setup failure carried back from gameplay, if one exists.
+    pub setup_failure: Option<String>,
+}
+
+/// Independent Continue affordance supplied by the save adapter.
+#[derive(Resource, Debug, Clone, PartialEq, Eq)]
+pub struct ResumeView {
+    /// Whether Continue may be activated.
+    pub available: bool,
+    /// Visible status or refusal reason attached to Continue.
+    pub message: String,
+}
+
+impl Default for ResumeView {
+    fn default() -> Self {
+        Self {
+            available: false,
+            message: "No exploration resume has been saved.".to_owned(),
+        }
+    }
+}
+
+/// Title-screen intents. Scenario intents retain the exact card snapshot that was
+/// clicked so a same-frame content hot reload cannot reinterpret the action.
+#[derive(Debug, Clone)]
+pub enum TitleIntent {
+    /// Resume the save adapter's current slot.
+    Continue,
+    /// Launch the independently configured default game.
+    NewGame,
+    /// Launch one visible development scenario.
+    StartScenario(Scenario),
+    /// Replace one generated scenario's session seed.
+    RerollScenario(Scenario),
+    /// Open character authoring.
+    CharacterCreator,
+    /// Open spell authoring.
+    SpellCreator,
+    /// Open Combat Lab.
+    CombatLab,
+    /// Open settings.
+    Settings,
+    /// Exit the application.
+    Quit,
+}
+
 impl Default for PauseView {
     fn default() -> Self {
         Self {
@@ -150,7 +211,7 @@ impl Default for GameplayHudView {
 }
 
 /// Typed intentions emitted by presentation and handled by `hex_game`.
-#[derive(Message, Debug, Clone, PartialEq, Eq)]
+#[derive(Message, Debug, Clone)]
 pub enum UiIntent {
     /// Activate one application-authorized gameplay action.
     Gameplay(GameplayAction),
@@ -158,6 +219,8 @@ pub enum UiIntent {
     Back,
     /// Cycle one Settings value.
     AdjustSetting(UiSetting),
+    /// Activate a title-screen route or exact scenario card.
+    Title(TitleIntent),
 }
 
 #[cfg(test)]
