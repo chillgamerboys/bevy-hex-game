@@ -2055,12 +2055,7 @@ mod tests {
     #[test]
     #[ignore = "manual release-mode Ring7/Ring19 generation benchmark"]
     fn ring19_generation_p95_stays_within_three_and_a_half_times_ring7() {
-        assert!(
-            !cfg!(debug_assertions),
-            "run this manual gate with `cargo test --release -p hex_map \
-             procedural_v3::ring19::tests::ring19_generation_p95_stays_within_three_and_a_half_times_ring7 \
-             -- --ignored --exact --nocapture`"
-        );
+        require_release_benchmark();
 
         const WARMUP_RUNS: usize = 2;
         const SAMPLE_COUNT: usize = 20;
@@ -2104,11 +2099,11 @@ mod tests {
         let mut ring19_samples = Vec::with_capacity(SAMPLE_COUNT);
         for sample in 0..SAMPLE_COUNT {
             if sample.is_multiple_of(2) {
-                ring7_samples.push(measure_generation(&generate_ring7));
-                ring19_samples.push(measure_generation(&generate_ring19));
+                ring7_samples.push(measure_generation(generate_ring7));
+                ring19_samples.push(measure_generation(generate_ring19));
             } else {
-                ring19_samples.push(measure_generation(&generate_ring19));
-                ring7_samples.push(measure_generation(&generate_ring7));
+                ring19_samples.push(measure_generation(generate_ring19));
+                ring7_samples.push(measure_generation(generate_ring7));
             }
         }
         ring7_samples.sort_unstable();
@@ -2129,6 +2124,18 @@ mod tests {
             "Ring19 p95 {ring19_p95:?} exceeded 3.5x Ring7 p95 {ring7_p95:?}"
         );
     }
+
+    #[cfg(debug_assertions)]
+    fn require_release_benchmark() {
+        panic!(
+            "run this manual gate with `cargo test --release -p hex_map \
+             procedural_v3::ring19::tests::ring19_generation_p95_stays_within_three_and_a_half_times_ring7 \
+             -- --ignored --exact --nocapture`"
+        );
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn require_release_benchmark() {}
 
     fn measure_generation<T>(generate: impl FnOnce() -> T) -> Duration {
         let started = Instant::now();
