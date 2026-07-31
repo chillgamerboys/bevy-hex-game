@@ -334,6 +334,7 @@ pub mod test_support {
             .query::<(Entity, &TabGroup)>()
             .iter(world)
             .map(|(entity, group)| (entity, *group))
+            .filter(|(entity, _)| is_presented(world, *entity))
             .collect::<Vec<_>>();
         groups.sort_by_key(|(entity, group)| (group.order, entity.to_bits()));
 
@@ -345,8 +346,14 @@ pub mod test_support {
                 })
                 .map(|(group, _)| *group)
         });
+        let active_modal = focused_modal.or_else(|| {
+            groups
+                .iter()
+                .rev()
+                .find_map(|(group, settings)| settings.modal.then_some(*group))
+        });
         let groups = groups.into_iter().filter(|(group, settings)| {
-            focused_modal.map_or(!settings.modal, |focused_modal| *group == focused_modal)
+            active_modal.map_or(!settings.modal, |active_modal| *group == active_modal)
         });
 
         let mut order = Vec::new();
@@ -720,6 +727,31 @@ pub mod test_support {
             let snapshot = ui_tree_snapshot(&mut world);
             assert!(snapshot.nodes.is_empty());
             assert!(snapshot.focus_order.is_empty());
+        }
+
+        #[test]
+        fn pause_overlay_exposes_a_focusable_mouse_and_keyboard_resume_action() {
+            let mut app = App::new();
+            app.add_plugins(HeadlessUiPlugin::default());
+            app.world_mut()
+                .resource_mut::<NextState<hex_core::Screen>>()
+                .set(hex_core::Screen::Gameplay);
+            for _ in 0..4 {
+                app.update();
+            }
+            app.world_mut()
+                .resource_mut::<NextState<hex_core::Pause>>()
+                .set(hex_core::Pause(true));
+            for _ in 0..4 {
+                app.update();
+            }
+
+            let snapshot = ui_tree_snapshot(app.world_mut());
+            let Some(resume) = snapshot.nodes.iter().find(|node| node.name == "Resume") else {
+                panic!("the pause modal must expose its Resume control");
+            };
+            assert_eq!(resume.accessible_label.as_deref(), Some("Resume"));
+            assert!(snapshot.focus_order.iter().any(|name| name == "Resume"));
         }
     }
 }
