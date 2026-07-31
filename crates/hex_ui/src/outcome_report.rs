@@ -9,6 +9,8 @@ use crate::{
     OutcomeReportView, UiAssets, UiIntent, UiSystems,
 };
 
+const OUTCOME_PANEL_BG: Color = Color::srgb(0.02, 0.03, 0.045);
+
 #[derive(Component)]
 struct OutcomeRoot;
 
@@ -79,7 +81,7 @@ fn render(
                         ..default()
                     },
                     BorderColor::all(Color::srgba(0.93, 0.79, 0.46, 0.5)),
-                    BackgroundColor(Color::srgba(0.02, 0.03, 0.045, 0.97)),
+                    BackgroundColor(OUTCOME_PANEL_BG),
                 ))
                 .with_children(|panel| {
                     panel.spawn(heading(&assets, view.title.clone()));
@@ -222,5 +224,10 @@ mod tests {
     fn ordinary_outcomes_keep_a_single_primary_transition_plus_return() {
         assert!((action_width(OutcomeAction::Continue) - 150.0).abs() < f32::EPSILON);
         assert!((action_width(OutcomeAction::Return) - 170.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn report_content_surface_is_opaque_over_live_gameplay() {
+        assert!((OUTCOME_PANEL_BG.to_srgba().alpha - 1.0).abs() < f32::EPSILON);
     }
 }

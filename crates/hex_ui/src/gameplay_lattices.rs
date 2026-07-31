@@ -24,6 +24,12 @@ struct TargetBody;
 #[derive(Component)]
 struct TargetHeading;
 
+#[derive(Component)]
+struct CompactDecisionPanel;
+
+#[derive(Component)]
+struct CompactDecisionBody;
+
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 struct OwnCell(hex_core::LatticeCoord);
 
@@ -105,6 +111,36 @@ fn spawn_panels(
     {
         commands.entity(inspector).add_child(stack);
     }
+    if let Some(actions) = regions
+        .iter()
+        .find_map(|(entity, role)| (*role == UiRegionRole::Actions).then_some(entity))
+    {
+        let compact_decision = commands
+            .spawn((
+                Name::new("Compact Required Lattice Choice"),
+                CompactDecisionPanel,
+                RequiredActionSurface,
+                HudElement,
+                compact_decision_node(Display::None),
+                BorderColor::all(EDGE),
+                BackgroundColor(PANEL_BG),
+            ))
+            .with_child((
+                Name::new("Compact Required Lattice Body"),
+                CompactDecisionBody,
+                Node {
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(12.0),
+                    ..default()
+                },
+                Pickable::IGNORE,
+            ))
+            .id();
+        commands.entity(actions).add_child(compact_decision);
+    }
 }
 
 fn panel_node(display: Display) -> Node {
@@ -128,6 +164,21 @@ fn body_node() -> Node {
     }
 }
 
+fn compact_decision_node(display: Display) -> Node {
+    Node {
+        display,
+        position_type: PositionType::Absolute,
+        top: Val::Px(0.0),
+        right: Val::Px(0.0),
+        bottom: Val::Px(0.0),
+        left: Val::Px(0.0),
+        padding: UiRect::axes(Val::Px(12.0), Val::Px(8.0)),
+        border: UiRect::all(Val::Px(1.0)),
+        border_radius: BorderRadius::all(Val::Px(10.0)),
+        ..default()
+    }
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "the renderer updates two independently scoped panels from one atomic view"
@@ -139,20 +190,34 @@ fn rebuild(
     pulse: Res<TargetPulseView>,
     own_bodies: Query<Entity, With<OwnBody>>,
     target_bodies: Query<Entity, With<TargetBody>>,
-    mut target_panels: Query<(&mut Node, &mut BackgroundColor), With<TargetPanel>>,
+    compact_bodies: Query<Entity, With<CompactDecisionBody>>,
+    mut compact_panels: Query<&mut Node, (With<CompactDecisionPanel>, Without<TargetPanel>)>,
+    mut target_panels: Query<
+        (&mut Node, &mut BackgroundColor),
+        (With<TargetPanel>, Without<CompactDecisionPanel>),
+    >,
     mut own_headings: Query<&mut Text, (With<OwnHeading>, Without<TargetHeading>)>,
     mut target_headings: Query<&mut Text, (With<TargetHeading>, Without<OwnHeading>)>,
     assets: Res<UiAssets>,
+    metrics: Res<crate::ResolvedUiMetrics>,
 ) {
     let view_changed = view.is_changed();
     let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
-    if !view_changed && !review_changed && !pulse.is_changed() {
+    if !view_changed && !review_changed && !pulse.is_changed() && !metrics.is_changed() {
         return;
     }
     let view = review
         .as_ref()
         .and_then(|review| review.lattices.as_ref())
         .unwrap_or(view.as_ref());
+    let compact_decision = compact_decision_visible(metrics.viewport, view);
+    if let Ok(mut panel) = compact_panels.single_mut() {
+        panel.display = if compact_decision {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
     if let Ok((mut node, mut background)) = target_panels.single_mut() {
         node.display = if view.target.is_some() {
             Display::Flex
@@ -165,8 +230,55 @@ fn rebuild(
             PANEL_BG
         };
     }
-    if !view_changed && !review_changed {
+    if !view_changed && !review_changed && !metrics.is_changed() {
         return;
+    }
+    if let Ok(body) = compact_bodies.single() {
+        commands.entity(body).despawn_related::<Children>();
+        if compact_decision {
+            let Some((own, decision)) = view
+                .own
+                .as_ref()
+                .and_then(|own| own.decision.map(|decision| (own, decision)))
+            else {
+                return;
+            };
+            commands.entity(body).with_children(|body| {
+                body.spawn((
+                    Name::new("Compact Required Lattice Summary"),
+                    Node {
+                        width: Val::Px(188.0),
+                        min_width: Val::Px(188.0),
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(3.0),
+                        ..default()
+                    },
+                    Pickable::IGNORE,
+                ))
+                .with_children(|summary| {
+                    summary.spawn(blurb(
+                        &assets,
+                        if decision.restoring {
+                            "RESTORE CELL"
+                        } else {
+                            "SELECT LIVE CELL"
+                        },
+                    ));
+                    summary.spawn(fine(
+                        &assets,
+                        format!("{} / {} selected", decision.chosen, decision.owed,),
+                    ));
+                });
+                spawn_lattice_cells(
+                    body,
+                    &own.cells,
+                    &assets,
+                    LatticeScale::PANEL,
+                    "Compact Required",
+                    OwnCell,
+                );
+            });
+        }
     }
     if let Ok(body) = own_bodies.single() {
         commands.entity(body).despawn_related::<Children>();
@@ -219,6 +331,11 @@ fn rebuild(
     if let (Ok(mut heading), Some(target)) = (target_headings.single_mut(), view.target.as_ref()) {
         heading.0.clone_from(&target.heading);
     }
+}
+
+fn compact_decision_visible(viewport: crate::UiViewportClass, view: &GameplayLatticesView) -> bool {
+    viewport == crate::UiViewportClass::Compact
+        && view.own.as_ref().is_some_and(|own| own.decision.is_some())
 }
 
 /// Adds the shared clear/confirm affordances to any required-decision surface.
@@ -314,5 +431,38 @@ fn emit_intents(
             DecisionControl::Clear => LatticeIntent::ClearDecision,
             DecisionControl::Confirm => LatticeIntent::ConfirmDecision,
         }));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compact_layout_promotes_only_required_lattice_choices() {
+        let mut view = GameplayLatticesView::default();
+        assert!(!compact_decision_visible(
+            crate::UiViewportClass::Compact,
+            &view
+        ));
+
+        view.own = Some(crate::OwnLatticeView {
+            heading: "required choice".to_owned(),
+            identity: "player".to_owned(),
+            cells: Vec::new(),
+            decision: Some(crate::DecisionChoiceView {
+                chosen: 1,
+                owed: 2,
+                restoring: false,
+            }),
+        });
+        assert!(compact_decision_visible(
+            crate::UiViewportClass::Compact,
+            &view
+        ));
+        assert!(!compact_decision_visible(
+            crate::UiViewportClass::Standard,
+            &view
+        ));
     }
 }
