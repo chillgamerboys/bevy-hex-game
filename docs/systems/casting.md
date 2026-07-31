@@ -160,11 +160,12 @@ and changes nothing about the boundary with the world owner.
 
 ### Occupancy
 
-Rungs 4 and 5 both need to know which voxels are solid, and gameplay cannot currently
-answer that: tiles publish each run's *top* (`TilePos`) but not its *bottom*, and
-`Headroom` saturates. `RunBottom(Level)` is the missing datum — see
-[boundary.md](../planning/boundary.md) ask C. It is the keystone for casting legality,
-conjuration placement, trajectory, cover, and pathing alike.
+Tiles now publish each run's inclusive top (`TilePos`) and bottom
+(`RunBottom(Level)`), including every stacked run; `Headroom` remains a separate
+saturated clearance fact. This satisfies [boundary.md](../planning/boundary.md) ask C
+without reconstructing occupancy from world units. The gameplay adapters that use
+these bounds for casting legality, conjuration placement, trajectory, cover, and
+pathing remain part of the terrain-magic and trajectory work.
 
 ## Volumes
 
@@ -229,8 +230,8 @@ Initial conjured walls are **2 voxels tall**. The canonical walker is 2 tall and
 **Volumes are geometric in 0.3** — a sphere next to a cave wall fills voxels inside
 the rock and the chamber beyond it. This is wrong, it is documented as wrong, and it is
 bounded: obstruction-aware clipping arrives with the same line-of-sight work that
-`RunBottom` unlocks, and `needs_los` on `TargetingSpec` (**built**, parsed) is unenforced
-until then.
+the live `RunBottom` publication enables, and `needs_los` on `TargetingSpec`
+(**built**, parsed) is unenforced until then.
 
 When that lands, sight and spell trajectories should share **one** raycast primitive.
 Two independently-written line algorithms that disagree about grazing a corner is a bug

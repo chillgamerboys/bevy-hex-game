@@ -35,7 +35,7 @@ than agreed, the fallback the gameplay side ships without it is in
 | `TerrainEdit::Set` / `::Clear` — the write path | gameplay | world | live | [systems/map.md](systems/map.md) |
 | `BiomeRegions` — published by V3; gameplay consumer pending | world | gameplay | **partial** | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
 | `TraversalBlockers` — exact feature-occupied surfaces consumed by validation, perception, and movement | world | perception / `hex_units` | live | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
-| `RunBottom(Level)` — each run's lowest voxel; prerequisite to terrain casting and obstruction-aware trajectories | world | gameplay | **agreed** | [planning/boundary.md](planning/boundary.md) C |
+| `RunBottom(Level)` — each run's lowest voxel; prerequisite to terrain casting and obstruction-aware trajectories | world | gameplay | **live** | [planning/boundary.md](planning/boundary.md) C |
 | `TerrainImpact { batch, canonical_volume, ElementId, power }` — declarative voxel effect | gameplay | world | **agreed** | [planning/boundary.md](planning/boundary.md) G |
 | `TerrainImpactOutcome` — explicit, deterministically ordered per-voxel dispositions | world | gameplay | **agreed** | [planning/boundary.md](planning/boundary.md) H |
 | `PendingTerrainEdits` — replay before first spawn | gameplay | world | **asked** | [planning/boundary.md](planning/boundary.md) ask D1 |

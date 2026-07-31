@@ -344,9 +344,10 @@ Further damage against an already downed target is refused before spending the a
 or mana, while non-damaging inspection such as Reveal can still reach the retained
 lattice.
 
-One thing a landed cast still cannot do: reach terrain, because rungs 4 and 5 of the
-ladder wait on `RunBottom` from the world lane. It refuses by name rather than silently
-doing nothing.
+One thing a landed cast still cannot do: reach terrain. The world now publishes exact
+inclusive run bounds through `TilePos` and `RunBottom`, but gameplay has not yet built
+legality rungs 4 and 5, the terrain announcement, or outcome consumption. It refuses by
+name rather than silently doing nothing.
 
 **A cast can now outlast itself.** `Burn` runs through the persistent-effect runtime
 (`hex_combat::effects`, vocabulary in `hex_core::effects`): a cast books a countdown in
@@ -419,8 +420,9 @@ The first implementation also ships with explicit limitations:
 
 - **Volumes are geometric, not obstruction-aware.** A sphere next to a cave
   wall fills voxels inside the rock and the chamber beyond it. Clipping waits on the
-  same line-of-sight work that `RunBottom` ([boundary.md](boundary.md) ask C) unlocks,
-  and `needs_los` on spell content is parsed but unenforced until then.
+  same line-of-sight work that the live `RunBottom`
+  ([boundary.md](boundary.md) ask C) publication enables, and `needs_los` on spell
+  content is parsed but unenforced until then.
 - **A breached cave roof will not admit daylight.** Terrain edits already keep the
   interior *roof* projection current, but interior **membership** is never re-derived,
   so a chamber you blow open still counts as inside. Live perception therefore
@@ -450,7 +452,8 @@ The first implementation also ships with explicit limitations:
   (`LatticeError::AreaEffectUnapplied`). The interface can only paint what a lattice can
   cast, so the preview cannot promise what the applier will not deliver. The refusal
   lifts the day the applier iterates the volume and queues one decision per unit inside
-  it; it is the same seam `RunBottom` and the announce path close for terrain.
+  it; the terrain side separately waits on the gameplay announcement and legality
+  adapters now that exact run bounds are published.
 - **Burn attributes one source per tick.** Several burns on one target come due as a
   single count and therefore a single decision, which has room for one `source`. The
   earliest-lit fire fills it. The rules never read `source`, so the imprecision is

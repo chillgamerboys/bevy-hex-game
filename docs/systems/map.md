@@ -15,6 +15,9 @@ If you only want to change how the terrain looks, [development/config.md](../dev
 **A position** — `TilePos { coord, level }` — is one voxel. This is how anything in the
 world is addressed.
 
+**A run bottom** — `RunBottom(Level)` — is the lowest material voxel represented by a
+tile entity. That entity's `TilePos` is the same run's topmost material voxel.
+
 **Headroom** — `Headroom(Level)` — is how many clear voxels sit above a tile's surface.
 Zero means it is buried inside a column.
 
@@ -249,10 +252,15 @@ footing; a water run is rendered but is not standable. Tagging the base instead 
 force gameplay to know the level height to work the surface out, which would put a
 dependency on the map back into movement.
 
+The same entity carries `RunBottom` for its **lowest material voxel**. The two integer
+levels are inclusive and exact, including for stacked runs under bridges, platforms,
+overhangs, and caves. Gameplay never reconstructs the bottom from `HexSpan`, the
+entity transform, `level_height`, or saturated `Headroom`.
+
 ## What each crate sees
 
 ```
-hex_core     HexTile, HexCoord, TilePos, HexSpan, SubstanceId, Headroom,
+hex_core     HexTile, HexCoord, TilePos, RunBottom, HexSpan, SubstanceId, Headroom,
              TraversalEndpoint, TraversalProfile, SpecialMovementRegion,
              SpecialMovementRegions, InteriorRegionId, InteriorRegions,
              CutawayOccluder, MapViewHint, BiomeRegions, TraversalBlockers,
@@ -266,7 +274,7 @@ hex_units reads tiles; cannot see hex_map
 The map exposes rendered footing through components on tile entities:
 
 ```rust
-(HexTile, HexCoord, TilePos, HexSpan, SubstanceId, Headroom, Mesh3d, ...)
+(HexTile, HexCoord, TilePos, RunBottom, HexSpan, SubstanceId, Headroom, Mesh3d, ...)
 ```
 
 Exact optional-region memberships live in the `SpecialMovementRegions` resource keyed
@@ -295,6 +303,7 @@ spell, decides how each material responds.
 |---|---|
 | A tile entity covers a **run**, not a voxel | its `HexSpan` may be many levels tall |
 | A tile's `TilePos` is its **run surface** | the topmost material voxel, not the base |
+| A tile's `RunBottom` is its **run floor** | the lowest material voxel, in integer levels |
 | Headroom of 0 means **buried** | solid, but inside a column and not standable |
 | A one-voxel gap under a bridge is **not** a corridor | a 2-level body does not fit; a 1-level one does |
 | Two standable endpoints do not guarantee a step | the shared lateral aperture can still be too short |

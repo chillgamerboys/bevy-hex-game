@@ -28,7 +28,6 @@ still belong to the crate they change. `docs` is whoever picks it up.
 
 | Epic | Scope | Owner |
 |---|---|---|
-| Run bottoms on tiles | Publish `RunBottom(Level)` beside every run entity's `TilePos`, including stacked runs; accepted prerequisite to terrain casting and obstruction-aware trajectories | map |
 | Terrain magic | after boundary asks G/H/L are agreed: canonical exact-voxel `TerrainImpact` announcements using runtime `ElementId`, map-approved conjuration through `TerrainEdit::Set`, 3D volume shapes, the casting legality ladder, and deterministic `TerrainImpactOutcome` consumption; feature destruction remains deferred | combat | <!-- linear: HEX-19 owner: shravan-kumaran -->
 | Trajectories and lingering effects | obstruction, area-unit resolution, area-lingering zones, and dispel; obstruction remains a `RunBottom`/line-of-sight satellite rather than a complete-party combat gate | combat | <!-- linear: HEX-24 owner: shravan-kumaran -->
 | Magic outside combat | general real-time casting and its input model; Rest has moved into outcomes/recovery and does not settle this deferred question | combat | <!-- linear: HEX-25 owner: shravan-kumaran -->
@@ -45,6 +44,7 @@ still belong to the crate they change. `docs` is whoever picks it up.
 
 | Epic | Delivered |
 |---|---|
+| Run bottoms on tiles | Every material-run entity publishes exact inclusive integer bounds through `RunBottom` and `TilePos`, including stacked platform/cave runs and terrain-edit rebuilds |
 | Casting UX | HEX-21 landed in Wave 3: cursor shape previews, blocked reasons, target cycling, and per-element cast presentation |
 | Combat readability | HEX-23 landed in Wave 3: initiative order, detailed lattice panels, and the structured combat log |
 | AI host | Wave 4: pure request/action contracts, authoritative canonical legal actions, profile/algorithm dispatch, encounter overrides, and deterministic `baseline-v1` |
@@ -79,10 +79,10 @@ branched from updated `dev` after that contract merged.
 
 **Map lane:** every active shipped procedural scenario now uses V3; `Ring7` and
 `Ring19` are live, and Two Rings is selectable without replacing Seven Regions.
-`RunBottom` is the next small world-owned contract; frozen V1/V2 removal remains
-independent cleanup. The map owner keeps semantic plans private and publishes exact
-shared consequences. Recipe PRs do not edit gameplay-owned crates. Two Rings still
-requires the wave's final human visual and play approval before release.
+`RunBottom` publication is live; frozen V1/V2 removal remains independent cleanup.
+The map owner keeps semantic plans private and publishes exact shared consequences.
+Recipe PRs do not edit gameplay-owned crates. Two Rings still requires the wave's
+final human visual and play approval before release.
 
 **Perception lane:** knowledge-safe casting and AI plus cave gameplay-light and
 physical presentation are live. Fog presentation → movement adapter →
@@ -110,9 +110,9 @@ the whole wave lands on `dev` in one merge (CONTRIBUTING.md has the rules).
 
 - **Wave 3 — the slice becomes a game (delivered).** Lattices wired the damage loop
   from casts through disables and downing, alongside persistent effects, knowledge and
-  divination, and authored encounters. Terrain magic remained gated: `RunBottom` must
-  land before it starts, and the declarative impact, outcome, and
-  conjuration-admission asks G/H/L retain their agreed shapes.
+  divination, and authored encounters. The `RunBottom` prerequisite is now live;
+  terrain magic still owns the unbuilt legality, declaration, outcome, and
+  conjuration-admission adapters for the agreed G/H/L shapes.
 - **Wave 4 — complete party combat (delivered).** Algorithm-neutral AI hosting, party
   controls, formation traversal, outcomes, Renewal, Rest, and one integrated 3v3
   scenario through a mandatory human playtest checkpoint. Casting UX and combat
@@ -357,8 +357,9 @@ attacks, and lost-contact search do not.
 
 Specified in [boundary.md](boundary.md), each with exact signatures,
 publisher/consumer, tests, and a fallback if deferred. Most gameplay work can proceed
-independently, but terrain casting deliberately blocks on `RunBottom` and the accepted
-impact/outcome/conjuration contracts rather than reconstructing world facts.
+independently. Exact run bounds are now published; terrain casting can consume them
+alongside the accepted impact/outcome/conjuration contracts rather than reconstructing
+world facts.
 
 ### Where the rest of the documentation lives
 

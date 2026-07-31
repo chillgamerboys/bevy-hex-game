@@ -210,9 +210,10 @@ You already hold both bounds when merging runs in the spawn pass. Every run enti
 including stacked runs under bridges, overhangs, and caves, carries it. Spawn-bundle
 tests assert the exact inclusive bottom and top for each such run.
 
-This lands before terrain casting. If it slips, terrain casting waits; gameplay does
-not reconstruct occupancy or ship terrain effects that cannot distinguish rock from
-air. Obstruction-aware sight may still use its independent approximation while it
+**Publication is live:** the shared type and map adapter land together while gameplay
+consumers remain downstream. Terrain casting did wait for this contract; it does not
+reconstruct occupancy or ship terrain effects that cannot distinguish rock from air.
+Obstruction-aware sight may still use its independent approximation while its consumer
 waits: a sight line is
 blocked iff some intervening column's highest run top reaches it. Wrong only
 for shooting *under* bridges and overhangs.
