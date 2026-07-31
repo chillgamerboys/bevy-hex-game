@@ -34,9 +34,10 @@ module. `hex_units/tests/contracts.rs` links every focused unit/ECS contract onc
 Their concern modules live below a directory with the target name so ownership stays
 readable without adding another linker invocation.
 
-`hex_game/tests/gameplay_app.rs` is the default-off gameplay-owned application
-target. `hex_game/tests/game_content_contracts.rs` is the separately selectable
-shared shipped-content seam, and the `hex_game` library target retains inline
+The app partition runs `hex_gameplay_model`'s inline pure tests together with
+`hex_game/tests/gameplay_app.rs`, the default-off gameplay-owned application target.
+`hex_game/tests/game_content_contracts.rs` is the separately selectable shared
+shipped-content seam, and the `hex_game` library target retains inline
 scenario/loading contracts that require private composition details. Those shared
 targets stay in the residual gate. The three packages set `autotests = false` and
 declare their integration targets explicitly, so adding a helper file cannot silently
@@ -73,10 +74,19 @@ That guard rejects a workspace dependency edge outside `hex_core`, `hex_lattice`
 `hex_ai` instead of letting renderer or application dependencies silently erode the
 partition.
 
-Wave 8 introduces the selector in shadow mode: CI publishes the proposed decision
-while retaining the broad PR jobs. Scoped skipping is enabled only after the
-old/full and proposed selections have demonstrated equivalent results. The complete
-residual suite continues on pushes to `dev`, schedules, and final wave/release gates.
+Changed-path closures follow executable dependency direction, not broad gameplay
+proximity. For example, unit, animation, AI-adapter, and ECS-combat changes cannot
+affect the renderer-free `hex_combat_core` simulation and therefore do not rerun it.
+Asset and animation changes do select the residual partition because their owning
+inline tests live outside the four explicit gameplay targets. A concern may be
+omitted only when it cannot compile or exercise the changed authority.
+
+Pull-request CI applies the selector directly and publishes the decision plus
+per-concern JUnit and timing evidence. Pushes to `dev` or `main` forcibly promote
+the decision to the complete integration gate, regardless of changed paths. Final
+wave/release candidates likewise run the complete gate before the exact-head manual
+sign-off; unknown paths, invalid configuration, and empty diffs also fail closed to
+that same result.
 
 For a gameplay-only change that does not modify `hex_core`, shared application
 composition, scenario/loading lifecycle, or a published world seam, V3/map corpora

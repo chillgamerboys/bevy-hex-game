@@ -44,6 +44,13 @@ class GameplayScopeTests(unittest.TestCase):
             decision.concerns, ("app", "clippy", "docs", "shipping")
         )
 
+    def test_gameplay_screen_model_change_selects_app_and_shipping(self) -> None:
+        decision = self.classify("crates/hex_gameplay_model/src/combat_lab.rs")
+        self.assertFalse(decision.full)
+        self.assertEqual(
+            decision.concerns, ("app", "clippy", "docs", "shipping")
+        )
+
     def test_combat_authority_change_selects_its_downstream_closure(self) -> None:
         decision = self.classify("crates/hex_combat_core/src/authority.rs")
         self.assertFalse(decision.full)
@@ -52,16 +59,55 @@ class GameplayScopeTests(unittest.TestCase):
             ("contracts", "simulation", "app", "clippy", "docs", "shipping"),
         )
 
+    def test_ai_change_omits_independent_pure_simulation(self) -> None:
+        decision = self.classify("crates/hex_ai/src/lib.rs")
+        self.assertFalse(decision.full)
+        self.assertEqual(
+            decision.concerns,
+            ("rules", "contracts", "app", "clippy", "docs", "shipping"),
+        )
+
+    def test_units_change_omits_independent_pure_simulation(self) -> None:
+        decision = self.classify("crates/hex_units/src/movement.rs")
+        self.assertFalse(decision.full)
+        self.assertEqual(
+            decision.concerns,
+            ("contracts", "app", "clippy", "docs", "shipping"),
+        )
+
+    def test_combat_adapter_change_omits_independent_pure_simulation(self) -> None:
+        decision = self.classify("crates/hex_combat/src/authority_host.rs")
+        self.assertFalse(decision.full)
+        self.assertEqual(
+            decision.concerns,
+            ("contracts", "app", "clippy", "docs", "shipping"),
+        )
+
+    def test_test_support_change_runs_only_its_consuming_partitions(self) -> None:
+        decision = self.classify("crates/hex_test_support/src/lib.rs")
+        self.assertFalse(decision.full)
+        self.assertEqual(
+            decision.concerns,
+            ("contracts", "app", "clippy", "docs"),
+        )
+
+    def test_animation_change_keeps_its_inline_tests_in_residual(self) -> None:
+        decision = self.classify("crates/hex_anim/src/lib.rs")
+        self.assertFalse(decision.full)
+        self.assertEqual(
+            decision.concerns,
+            ("contracts", "app", "residual", "clippy", "docs", "shipping"),
+        )
+
     def test_gameplay_asset_rule_precedes_shared_asset_fallback(self) -> None:
         decision = self.classify("crates/hex_assets/src/combat_rules.rs")
         self.assertFalse(decision.full)
         self.assertEqual(
             decision.concerns,
             (
-                "rules",
                 "contracts",
-                "simulation",
                 "app",
+                "residual",
                 "clippy",
                 "docs",
                 "shipping",
@@ -131,6 +177,14 @@ class GameplayScopeTests(unittest.TestCase):
         decision = self.classify(".config/gameplay-test-scopes.json")
         self.assertTrue(decision.full)
 
+    def test_push_gate_promotes_a_narrow_decision_to_full(self) -> None:
+        narrow = self.classify("crates/hex_lattice/src/cast.rs")
+        decision = gameplay_scope.force_full(narrow, self.config["all_concerns"])
+        self.assertTrue(decision.full)
+        self.assertTrue(decision.code)
+        self.assertEqual(decision.concerns, tuple(self.config["all_concerns"]))
+        self.assertIn("forced-full-integration", decision.matched_rules)
+
     def test_rules_command_has_an_exact_package_graph(self) -> None:
         command = self.config["concerns"]["rules"]["command"]
         self.assertNotIn("--workspace", command)
@@ -141,6 +195,41 @@ class GameplayScopeTests(unittest.TestCase):
             if index > 0 and command[index - 1] == "--package"
         ]
         self.assertEqual(packages, ["hex_core", "hex_lattice", "hex_ai"])
+
+    def test_simulation_command_selects_inline_rules_and_dedicated_target(self) -> None:
+        command = self.config["concerns"]["simulation"]["command"]
+        self.assertIn("--lib", command)
+        self.assertIn("--test", command)
+        self.assertEqual(command[command.index("--test") + 1], "simulation")
+
+    def test_app_command_selects_model_lib_and_headless_target(self) -> None:
+        command = self.config["concerns"]["app"]["command"]
+        packages = [
+            value
+            for index, value in enumerate(command)
+            if index > 0 and command[index - 1] == "--package"
+        ]
+        self.assertEqual(packages, ["hex_gameplay_model", "hex_game"])
+        self.assertIn("--lib", command)
+        self.assertIn("--test", command)
+        self.assertEqual(command[command.index("--test") + 1], "gameplay_app")
+        self.assertIn("hex_game/test-support", command)
+
+    def test_residual_excludes_every_owned_gameplay_partition(self) -> None:
+        command = self.config["concerns"]["residual"]["command"]
+        expression = command[command.index("-E") + 1]
+        for package in (
+            "hex_core",
+            "hex_lattice",
+            "hex_ai",
+            "hex_units",
+            "hex_combat_core",
+            "hex_combat",
+            "hex_test_support",
+            "hex_gameplay_model",
+        ):
+            self.assertIn(f"package({package})", expression)
+        self.assertIn("package(hex_game) & binary(gameplay_app)", expression)
 
     def test_local_test_order_contains_only_test_concerns(self) -> None:
         self.assertEqual(
@@ -157,6 +246,21 @@ class GameplayScopeTests(unittest.TestCase):
             output = pathlib.Path(directory) / "nested" / "timing.json"
             gameplay_scope.write_output(output, "{}\n")
             self.assertEqual(output.read_text(encoding="utf-8"), "{}\n")
+
+    def test_manual_runtime_gate_tracks_the_screen_model_crate(self) -> None:
+        workflow = (
+            ROOT / ".github" / "workflows" / "manual-runtime-signoff.yaml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("hex_gameplay_model", workflow)
+
+    def test_shipping_job_allows_a_cold_windows_link_to_finish(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yaml").read_text(
+            encoding="utf-8"
+        )
+        build_job = workflow.split("\n  build:\n", maxsplit=1)[1].split(
+            "\n  coverage:\n", maxsplit=1
+        )[0]
+        self.assertIn("timeout-minutes: 45", build_job)
 
 
 if __name__ == "__main__":

@@ -45,7 +45,7 @@ store-failure-output = true
 [profile.gameplay-app]
 fail-fast = false
 slow-timeout = "60s"
-default-filter = "package(hex_game) & binary(gameplay_app)"
+default-filter = "package(hex_gameplay_model) | (package(hex_game) & binary(gameplay_app))"
 
 [profile.gameplay-app.junit]
 path = "junit.xml"

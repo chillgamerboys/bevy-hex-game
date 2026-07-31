@@ -38,7 +38,7 @@ jobs:
 
           changed="$(git diff --name-only "$BASE_SHA...$HEAD_SHA")"
           if ! printf '%s\n' "$changed" | grep -Eq \
-            '^(crates/(hex_assets|hex_core|hex_lattice|hex_ai|hex_anim|hex_units|hex_combat_core|hex_combat|hex_game|hex_test_support)/|assets/config/(combat\.ron|elements\.ron|spells\.ron|lattices\.ron|combat_lab_maps\.ron|encounters/)|walks/)'
+            '^(crates/(hex_assets|hex_core|hex_lattice|hex_ai|hex_anim|hex_units|hex_combat_core|hex_combat|hex_gameplay_model|hex_game|hex_test_support)/|assets/config/(combat\.ron|elements\.ron|spells\.ron|lattices\.ron|combat_lab_maps\.ron|encounters/)|walks/)'
           then
             echo "No gameplay runtime path changed; manual gameplay sign-off is not required."
             exit 0
