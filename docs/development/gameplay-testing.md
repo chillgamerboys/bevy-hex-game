@@ -139,6 +139,13 @@ equality before checking named metrics. A bounded no-progress result is data. It
 never silently converted to success, inferred from a frame, or described as a
 terminal outcome.
 
+The current `ControllerInput::Scripted` runner emits only `EndTurn`. Consequently the
+simulation partition presently proves deterministic state/turn composition, exact
+occupancy, profile propagation, fingerprints, and typed no-progress behavior; it does
+not prove tactical choices, spell composition, fight outcomes, or balance. Those
+claims require a controller that issues real canonical commands and a pure reducer
+that can execute the relevant content-dependent verbs.
+
 ## Visual evidence policy
 
 Screenshots answer presentation questions: whether controls fit, labels read, dense
