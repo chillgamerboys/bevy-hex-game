@@ -5,6 +5,9 @@
     "contracts",
     "simulation",
     "app",
+    "map_unit",
+    "map_generation",
+    "map_contracts",
     "residual",
     "clippy",
     "docs",
@@ -15,6 +18,9 @@
     "contracts",
     "simulation",
     "app",
+    "map_unit",
+    "map_generation",
+    "map_contracts",
     "residual"
   ],
   "concerns": {
@@ -106,6 +112,52 @@
         "gameplay-app"
       ]
     },
+    "map_unit": {
+      "description": "Map storage, settings, grid, and renderer-free publication units.",
+      "command": [
+        "cargo",
+        "nextest",
+        "run",
+        "--package",
+        "hex_map",
+        "--lib",
+        "--cargo-profile",
+        "map-test",
+        "--profile",
+        "map-unit"
+      ]
+    },
+    "map_generation": {
+      "description": "Deterministic V1, V2, and V3 generation contracts and PR corpora.",
+      "command": [
+        "cargo",
+        "nextest",
+        "run",
+        "--package",
+        "hex_map",
+        "--lib",
+        "--cargo-profile",
+        "map-test",
+        "--profile",
+        "map-generation"
+      ]
+    },
+    "map_contracts": {
+      "description": "Headless map publication, edit, presentation, and lifecycle contracts.",
+      "command": [
+        "cargo",
+        "nextest",
+        "run",
+        "--package",
+        "hex_map",
+        "--test",
+        "contracts",
+        "--cargo-profile",
+        "map-test",
+        "--profile",
+        "map-contracts"
+      ]
+    },
     "residual": {
       "description": "All remaining non-map workspace and cross-owner contract tests.",
       "command": [
@@ -161,14 +213,46 @@
       ]
     }
   },
+  "partition_checks": {
+    "map": {
+      "concerns": ["map_unit", "map_generation", "map_contracts"],
+      "expected_counts": {
+        "map_unit": 94,
+        "map_generation": 384,
+        "map_contracts": 61
+      },
+      "expected_ignored": 25,
+      "full_command": [
+        "cargo",
+        "nextest",
+        "list",
+        "--package",
+        "hex_map",
+        "--cargo-profile",
+        "map-test"
+      ],
+      "all_tests_command": [
+        "cargo",
+        "test",
+        "--package",
+        "hex_map",
+        "--all-features",
+        "--profile",
+        "map-test",
+        "--",
+        "--list"
+      ]
+    }
+  },
   "rules": [
     {
       "name": "scope-infrastructure",
       "patterns": [
-        ".config/gameplay-test-scopes.json",
+        ".config/test-scopes.json",
         ".config/nextest.toml",
         "tools/gameplay_scope.py",
-        "tools/test_gameplay_scope.py",
+        "tools/test_scope.py",
+        "tools/test_test_scope.py",
         ".github/workflows/**",
         "Cargo.toml",
         "Cargo.lock",
@@ -179,6 +263,46 @@
       "reason": "Validation infrastructure changes require the complete gate."
     },
     {
+      "name": "map-contract-tests",
+      "patterns": ["crates/hex_map/tests/**"],
+      "concerns": ["map_contracts", "clippy"],
+      "reason": "Map integration tests exercise the explicit headless publication target."
+    },
+    {
+      "name": "map-generation",
+      "patterns": [
+        "crates/hex_map/src/procedural.rs",
+        "crates/hex_map/src/procedural_v2/**",
+        "crates/hex_map/src/procedural_v3/**"
+      ],
+      "concerns": ["map_generation", "map_contracts", "clippy", "docs", "shipping"],
+      "reason": "Map generation changes require their deterministic corpus and published-world contracts."
+    },
+    {
+      "name": "map-publication",
+      "patterns": [
+        "crates/hex_map/src/grid.rs",
+        "crates/hex_map/src/feature_render.rs",
+        "crates/hex_map/src/liquid_render.rs",
+        "crates/hex_map/src/crystal_render.rs"
+      ],
+      "concerns": ["map_unit", "map_contracts", "clippy", "docs", "shipping"],
+      "reason": "Map publication and presentation changes require unit and headless contract evidence."
+    },
+    {
+      "name": "map-foundations",
+      "patterns": [
+        "crates/hex_map/Cargo.toml",
+        "crates/hex_map/src/lib.rs",
+        "crates/hex_map/src/generator.rs",
+        "crates/hex_map/src/settings.rs",
+        "crates/hex_map/src/terrain.rs",
+        "crates/hex_map/src/voxel.rs"
+      ],
+      "concerns": ["map_unit", "map_generation", "map_contracts", "clippy", "docs", "shipping"],
+      "reason": "Shared map foundations feed unit, generation, and publication contracts."
+    },
+    {
       "name": "shared-core",
       "patterns": ["crates/hex_core/**"],
       "full": true,
@@ -187,7 +311,6 @@
     {
       "name": "world-owned",
       "patterns": [
-        "crates/hex_map/**",
         "crates/hex_world/**",
         "crates/hex_perception/**",
         "crates/hex_objects/**",
@@ -247,8 +370,8 @@
     {
       "name": "test-support",
       "patterns": ["crates/hex_test_support/**"],
-      "concerns": ["contracts", "app", "clippy", "docs"],
-      "reason": "Shared synthetic fixtures are consumed by the ECS-contract and headless-application partitions."
+      "concerns": ["contracts", "app", "map_contracts", "clippy", "docs"],
+      "reason": "Shared test support is consumed by gameplay contracts, headless application tests, and map publication contracts."
     },
     {
       "name": "gameplay-assets",

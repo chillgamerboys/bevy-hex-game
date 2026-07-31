@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed gameplay test-scope selection.
+"""Fail-closed repository test-scope selection.
 
 The JSON manifest is the authority. This script only validates and applies it.
 Unknown paths, malformed configuration, and empty diffs select the full gate.
@@ -21,7 +21,7 @@ from typing import Any, Iterable
 
 
 REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parents[1]
-DEFAULT_CONFIG = REPOSITORY_ROOT / ".config" / "gameplay-test-scopes.json"
+DEFAULT_CONFIG = REPOSITORY_ROOT / ".config" / "test-scopes.json"
 
 
 class ScopeConfigurationError(ValueError):
@@ -99,6 +99,41 @@ def load_config(path: pathlib.Path = DEFAULT_CONFIG) -> dict[str, Any]:
         )
     if not isinstance(rules, list) or not rules:
         raise ScopeConfigurationError("rules must be a non-empty list")
+
+    partition_checks = raw.get("partition_checks", {})
+    if not isinstance(partition_checks, dict):
+        raise ScopeConfigurationError("partition_checks must be an object")
+    for name, definition in partition_checks.items():
+        if not isinstance(name, str) or not name or not isinstance(definition, dict):
+            raise ScopeConfigurationError("partition checks need named objects")
+        partition_concerns = definition.get("concerns")
+        expected_counts = definition.get("expected_counts")
+        if (
+            not isinstance(partition_concerns, list)
+            or not partition_concerns
+            or set(partition_concerns) - set(all_concerns)
+            or not isinstance(expected_counts, dict)
+            or set(expected_counts) != set(partition_concerns)
+            or not all(
+                isinstance(value, int) and value >= 0
+                for value in expected_counts.values()
+            )
+        ):
+            raise ScopeConfigurationError(
+                f"partition check {name} has invalid concerns or counts"
+            )
+        for command_name in ("full_command", "all_tests_command"):
+            partition_command = definition.get(command_name)
+            if not isinstance(partition_command, list) or not all(
+                isinstance(value, str) and value for value in partition_command
+            ):
+                raise ScopeConfigurationError(
+                    f"partition check {name} has invalid {command_name}"
+                )
+        if not isinstance(definition.get("expected_ignored"), int):
+            raise ScopeConfigurationError(
+                f"partition check {name} needs expected_ignored"
+            )
 
     for concern, definition in concerns.items():
         if not isinstance(definition, dict):
@@ -368,6 +403,68 @@ def check_workspace_graph(concern: str, config: dict[str, Any]) -> None:
         )
 
 
+def _listed_tests(command: list[str]) -> set[str]:
+    """Run one list command and return its stable test identities."""
+
+    result = subprocess.run(
+        command,
+        cwd=REPOSITORY_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return {
+        line.strip()
+        for line in result.stdout.splitlines()
+        if line.strip() and not line.startswith("warning:")
+    }
+
+
+def check_partitions(name: str, config: dict[str, Any]) -> None:
+    """Prove a configured test partition is exhaustive and disjoint."""
+
+    definition = config.get("partition_checks", {}).get(name)
+    if definition is None:
+        raise ScopeConfigurationError(f"unknown partition check: {name}")
+
+    full = _listed_tests(definition["full_command"])
+    selected: set[str] = set()
+    for concern in definition["concerns"]:
+        command = list(config["concerns"][concern]["command"])
+        if command[:3] != ["cargo", "nextest", "run"]:
+            raise ScopeConfigurationError(
+                f"partition concern {concern} is not a nextest command"
+            )
+        command[2] = "list"
+        tests = _listed_tests(command)
+        expected = definition["expected_counts"][concern]
+        if len(tests) != expected:
+            raise ScopeConfigurationError(
+                f"partition {concern} has {len(tests)} tests, expected {expected}"
+            )
+        overlap = selected & tests
+        if overlap:
+            raise ScopeConfigurationError(
+                f"partition {concern} overlaps existing tests: {sorted(overlap)}"
+            )
+        selected.update(tests)
+
+    if selected != full:
+        raise ScopeConfigurationError(
+            "partition union differs from full test set: "
+            f"missing={sorted(full - selected)}, extra={sorted(selected - full)}"
+        )
+
+    all_tests = _listed_tests(definition["all_tests_command"])
+    discoverable = {line for line in all_tests if line.endswith(": test")}
+    ignored = len(discoverable) - len(full)
+    if ignored != definition["expected_ignored"]:
+        raise ScopeConfigurationError(
+            f"partition has {ignored} ignored tests, expected "
+            f"{definition['expected_ignored']}"
+        )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the command-line interface."""
 
@@ -406,6 +503,10 @@ def build_parser() -> argparse.ArgumentParser:
         "check-graph", help="verify one narrow workspace dependency ceiling"
     )
     graph.add_argument("concern")
+    partitions = subparsers.add_parser(
+        "check-partitions", help="verify one exhaustive test partition"
+    )
+    partitions.add_argument("name")
     return parser
 
 
@@ -492,6 +593,10 @@ def main() -> int:
             check_workspace_graph(arguments.concern, config)
             print(f"{arguments.concern} workspace dependency graph is within ceiling")
             return 0
+        if arguments.subcommand == "check-partitions":
+            check_partitions(arguments.name, config)
+            print(f"{arguments.name} test partitions are exhaustive and disjoint")
+            return 0
 
         if arguments.paths_file is not None:
             paths = arguments.paths_file.read_text(encoding="utf-8").splitlines()
@@ -513,7 +618,7 @@ def main() -> int:
             )
         return 0
     except (ScopeConfigurationError, OSError, subprocess.CalledProcessError) as error:
-        print(f"gameplay scope error: {error}", file=sys.stderr)
+        print(f"test scope error: {error}", file=sys.stderr)
         return 2
 
 
