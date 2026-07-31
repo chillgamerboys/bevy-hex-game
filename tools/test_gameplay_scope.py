@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import pathlib
 import sys
+import tempfile
 import unittest
 
 
@@ -41,6 +42,14 @@ class GameplayScopeTests(unittest.TestCase):
         self.assertFalse(decision.full)
         self.assertEqual(
             decision.concerns, ("app", "clippy", "docs", "shipping")
+        )
+
+    def test_combat_authority_change_selects_its_downstream_closure(self) -> None:
+        decision = self.classify("crates/hex_combat_core/src/authority.rs")
+        self.assertFalse(decision.full)
+        self.assertEqual(
+            decision.concerns,
+            ("contracts", "simulation", "app", "clippy", "docs", "shipping"),
         )
 
     def test_gameplay_asset_rule_precedes_shared_asset_fallback(self) -> None:
@@ -142,6 +151,12 @@ class GameplayScopeTests(unittest.TestCase):
     def test_repository_relative_paths_are_required(self) -> None:
         with self.assertRaises(gameplay_scope.ScopeConfigurationError):
             self.classify("../outside")
+
+    def test_artifact_output_creates_its_parent_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = pathlib.Path(directory) / "nested" / "timing.json"
+            gameplay_scope.write_output(output, "{}\n")
+            self.assertEqual(output.read_text(encoding="utf-8"), "{}\n")
 
 
 if __name__ == "__main__":

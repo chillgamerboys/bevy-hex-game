@@ -40,7 +40,9 @@ pub mod effects;
 /// What a faction knows about a hostile lattice.
 pub mod knowledge;
 /// Structured outcomes produced by combat resolution.
-pub mod outcomes;
+pub mod outcomes {
+    pub use hex_combat_core::outcomes::*;
+}
 /// Terminal encounter detection and its simulation gate.
 pub mod resolution;
 /// Deterministic session combat reporting.

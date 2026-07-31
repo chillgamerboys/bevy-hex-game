@@ -37,7 +37,8 @@ use hex_core::{
 };
 
 use crate::movement::{Body, Footing, Reach, Standing};
-use crate::units::{Faction, MovingTo, Party, Player, StandsOn, TileQuery, UnitRegistry};
+use crate::units::{MovingTo, Party, Player, StandsOn, TileQuery, UnitRegistry};
+use crate::Faction;
 use crate::UnitOccupancy;
 
 /// Thickness of an overlay cap in world units. Thin enough to read as paint on the

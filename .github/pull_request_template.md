@@ -20,7 +20,8 @@
 Gameplay runtime changes may be marked ready only after a named human runs the
 release-shaped build at the exact final PR head. Any later push invalidates this
 sign-off. Agent-operated native review and visual-walk evidence are useful but do not
-replace the named human gate.
+replace the named human gate. Source lanes targeting wave/* defer this evidence to
+the combined wave PR into dev; do not copy a sign-off from a lane or older wave head.
 -->
 
 - Agent-operated native review:

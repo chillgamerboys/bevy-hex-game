@@ -15,7 +15,7 @@ scenario binaries continue to run in the residual workspace suite.
 |---|---|---|---|---|---:|
 | Pure rules | Value objects, lattice transformations, compact AI policy | Owning crate dependencies only | Return values and immutable state | `python3 tools/gameplay_scope.py run rules` | 60 s total |
 | ECS contracts | Focused commands, effects, movement, turns, occupancy and Channel seams | `hex_test_support`, then the owning gameplay crate dependencies | Components, resources, messages and exact positions | `python3 tools/gameplay_scope.py run contracts` | 60 s per test |
-| Deterministic simulation | Multi-turn composition, tempo profiles, 3v3/6v6, canonical summaries and bounded no-progress | Combat dependencies plus `hex_test_support`; never a renderer, viewport, wall clock, or map generator | Full `CombatRunSnapshot` equality across two runs plus named metric assertions | `python3 tools/gameplay_scope.py run simulation` | 60 s |
+| Deterministic simulation | Multi-turn composition, tempo profiles, 3v3/6v6, canonical summaries and bounded no-progress | `hex_combat_core` over `hex_core` + `hex_lattice`; never Bevy App, `hex_test_support`, renderer, viewport, wall clock, asset server, ECS entity, perception implementation, or map generator | Full `CombatRunSnapshot` equality across two runs plus named metric assertions | `python3 tools/gameplay_scope.py run simulation` | 60 s |
 | Game/UI behavior | Combat Lab report modes, comparison selection, re-entry, identity and drawer lifecycle | `hex_game` with default-off `test-support` | Immutable observation snapshots and projected text/state | `python3 tools/gameplay_scope.py run app` | 60 s |
 | Visual smoke | Layout, legibility, overlap, responsive composition and presentation regressions | Release-shaped game with `visual-walk`; no `dev` or `test-support` | Reviewed frames plus the human motion/feel walk | Run the one scoped gameplay walk through `/visual-walk` | At most 10 reviewed gameplay frames |
 | Soak/performance | Long stalemates, stress corpora, bounded retention and performance | The scheduled stress workflow | Typed completion/timeout, fingerprints, timing and memory bounds | `.github/workflows/stress.yaml` | Scheduled/manual only |
@@ -85,9 +85,10 @@ on the harness.
 
 ## Simulation evidence
 
-One `CombatCase` freezes typed unit/controller inputs, profile, arena and run bounds.
-One run produces a `CombatRunSnapshot` containing the canonical `CombatSummary`,
-summary, command, and full-transcript fingerprints, typed outcome or bounded
+One `CombatCase` freezes typed unit/controller inputs, profile, explicit arena links,
+world-published observation, stable content names, and run bounds. One run produces a
+`CombatRunSnapshot` containing canonical metrics and complete state plus state,
+command, and full-transcript fingerprints, typed outcome or bounded
 no-progress termination, turn state, lattice summaries, and exact `TilePos`
 positions.
 
@@ -119,6 +120,11 @@ playtest are distinct evidence. Gameplay runtime PRs record the human result in 
 structured PR fields together with the full final head SHA, reviewer, date, and exact
 route exercised. A later push makes that evidence stale and the required
 `Current-head manual runtime sign-off` check fails until the new head is played.
+
+Source-lane PRs targeting `wave/*` defer this gate because they are not independently
+shippable runtime candidates. The combined wave PR targeting `dev` must carry the
+named human sign-off for its exact final head; merging a lane into a wave never
+inherits, substitutes for, or weakens that release gate.
 
 Draft PRs may omit the sign-off while implementation is moving. A gameplay PR may not
 be marked ready or merged with a placeholder, a blocked result, a different commit,

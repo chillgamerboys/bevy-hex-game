@@ -79,6 +79,20 @@ One unit holds a `Turn` at a time. It carries a movement budget and whether the 
 has been taken. Ending it passes the marker to the next unit in the order; running off
 the end wraps and counts a round.
 
+The serializable authority for those facts is `hex_combat_core::CombatState`. It
+reduces frozen rules, roster, exact directed arena links, explicit faction
+observation, and stable content names through one ordered command boundary. Its
+canonical simulation requires no Bevy `App`, ECS schedule, renderer, viewport,
+wall-clock settling, asset server, or map generator. Exact links are published input,
+so the reducer never guesses connectivity from `HexCoord` and cannot collapse stacked
+surfaces.
+
+Wave 8's adapter migration is fail-closed: field/event shadow comparisons may
+temporarily compare the existing ECS path with the reducer, but no second simulator is
+retained. The cutover deletes direct ECS mutation paths in this order: turn/position
+truth, command effects and decisions, then summary/outcome reconstruction. AI and
+human input both remain command producers; animation and UI become projections.
+
 **A turn cannot end while its unit is still moving.** The removal of the
 `Transformation` component is what "finished moving" means, and advancing before then
 would cut the animation off and strand the piece between two hexes.

@@ -244,6 +244,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          python3 tools/gameplay_scope.py check-graph simulation
           python3 tools/gameplay_scope.py run simulation \
             --timing-out gameplay-simulation-timing.json \
             2>&1 | tee gameplay-simulation-timing.log
@@ -344,6 +345,7 @@ jobs:
           --package hex_core
           --package hex_lattice
           --package hex_ai
+          --package hex_combat_core
           --package hex_perception
           --all-features
           --lcov

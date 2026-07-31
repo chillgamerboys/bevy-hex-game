@@ -63,14 +63,14 @@
         "nextest",
         "run",
         "--package",
-        "hex_combat",
-        "--test",
-        "simulation",
+        "hex_combat_core",
         "--cargo-profile",
         "ci",
         "--profile",
         "gameplay-simulation"
-      ]
+      ],
+      "root_packages": ["hex_combat_core"],
+      "allowed_workspace_packages": ["hex_combat_core", "hex_core", "hex_lattice"]
     },
     "app": {
       "description": "Headless gameplay application and UI behavior.",
@@ -103,7 +103,7 @@
         "--profile",
         "ci",
         "-E",
-        "not (package(hex_core) | package(hex_lattice) | package(hex_ai) | package(hex_units) | package(hex_combat) | package(hex_test_support) | (package(hex_game) & binary(gameplay_app)))"
+        "not (package(hex_core) | package(hex_lattice) | package(hex_ai) | package(hex_units) | package(hex_combat_core) | package(hex_combat) | package(hex_test_support) | (package(hex_game) & binary(gameplay_app)))"
       ]
     },
     "clippy": {
@@ -209,6 +209,12 @@
       "patterns": ["crates/hex_units/**"],
       "concerns": ["contracts", "simulation", "app", "clippy", "docs", "shipping"],
       "reason": "Unit movement and state feed combat simulation and deployment/application seams."
+    },
+    {
+      "name": "combat-authority",
+      "patterns": ["crates/hex_combat_core/**"],
+      "concerns": ["contracts", "simulation", "app", "clippy", "docs", "shipping"],
+      "reason": "Pure combat authority feeds ECS, summaries, application behavior, and shipping gameplay."
     },
     {
       "name": "combat",

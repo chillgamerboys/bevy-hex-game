@@ -368,10 +368,7 @@ fn roster_shortfall(encounter: Option<&Encounter>, units: &Query<&Faction>) -> O
 
     for faction in encounter.factions() {
         let rostered = encounter.unit_count(faction);
-        let standing = units
-            .iter()
-            .filter(|spawned| **spawned == Faction::from(faction))
-            .count();
+        let standing = units.iter().filter(|spawned| **spawned == faction).count();
         if standing != rostered {
             let plural = if rostered == 1 { "unit" } else { "units" };
             return Some(format!(

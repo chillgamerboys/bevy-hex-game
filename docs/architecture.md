@@ -9,6 +9,7 @@ contact with the next change.
 hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → hex_game
 hex_core → hex_assets → hex_objects ───────────────────────────────→ hex_game
 hex_core → hex_ai → {hex_assets, hex_units, hex_combat}   (contracts, controllers, host)
+{hex_core, hex_lattice} → hex_combat_core → hex_combat   (pure combat authority)
 hex_core → {hex_assets, hex_units} → hex_perception → {hex_combat, hex_game}
 hex_core → hex_lattice → {hex_assets, hex_units, hex_combat}   (the pure rules engine)
 hex_core → hex_anim ─────────────────────→ hex_units
@@ -27,9 +28,10 @@ will, and no amount of documentation prevents it. A compiler error does.
 
 | Crate | Holds | Depends on | Owner |
 |---|---|---|---|
-| `hex_core` | Hex coordinates, voxel positions, substances, headroom, terrain edits, app states, ordering sets, lattice ids | Bevy sub-crates only — no renderer | gameplay |
+| `hex_core` | Hex coordinates, voxel positions, factions, exact occupancy, substances, headroom, terrain edits, app states, ordering sets, lattice ids | Bevy sub-crates only — no renderer | gameplay |
 | `hex_lattice` | **The lattice**: gems, fusions, spells, mana, disables, enchantments — the game's core rules, as a pure engine | `hex_core` | gameplay |
 | `hex_ai` | Authorized observations, canonical legal-action requests, profile/controller identities, and replaceable algorithm traits; no legality or simulation mutation | `hex_core`, Bevy sub-crates | gameplay |
+| `hex_combat_core` | Frozen combat inputs, serializable state, the command reducer, typed outcomes, canonical snapshots and bounded simulation | `hex_core`, `hex_lattice`, `bevy_ecs` derive support only | gameplay |
 | `hex_assets` | Generic asset loading plus domain-owned RON schema and settings modules | `hex_core`, `hex_lattice` | loader infrastructure: gameplay; each schema/settings module and its content: that domain's owner |
 | `hex_objects` | Palette-backed rendering of static authored voxel objects | `hex_core`, `hex_assets` | shared presentation |
 | `hex_map` | **The map**: voxel storage, terrain generation, tile spawning, map settings | `hex_core`, `hex_assets` | world |
@@ -85,6 +87,22 @@ result: a unit's spec, state, and stats are attached at spawn, keyed by its arch
 **`hex_combat`** drives it — casting through the command funnel, damage through
 `apply_disables`, defender-owned disable choices, persistent effects, and the
 knowledge seam the engine deliberately refuses to own.
+
+### `hex_combat_core` is the authority, not a second simulator
+
+Combat truth has a renderer-free home above the lattice engine. `CombatState` accepts
+only frozen rules, stable roster records, exact arena links, explicit faction
+observation, and ordered `IssuedCommand`s. It contains integer-valued/domain state,
+ordered collections, and stable IDs—never an `Entity`, transform, viewport, clock,
+asset server, or map-generator type. A refusal is transactional and produces the same
+typed `CombatEvent` vocabulary as a successful transition.
+
+`hex_combat` is the Bevy host: it resolves live published contracts into frozen input,
+feeds human and AI commands to the authority, and projects state/events to ECS,
+animation, summaries, and UI. During the Wave 8 cutover, an old mutation path may
+exist only long enough to compare named state/event fields. The release condition is
+one reducer, with the shadow path deleted rather than retained as an alternate
+simulator.
 
 Drawing an edge costs something worth naming: the compiler stops being the review
 signal for that boundary, since anything in those crates can now reach the engine. The
@@ -449,7 +467,7 @@ through dependency-limited `hex_test_support`; map tests retain their own world-
 fixtures and acceptance criteria. Separate asset integration tests parse the GLB
 directly to verify mesh geometry.
 
-**Composition** has one `hex_combat` simulation target and one `hex_game` headless
+**Composition** has one `hex_combat_core` simulation target and one `hex_game` headless
 app/UI target. A simulation compares complete canonical snapshots from two fresh runs.
 Rendered frames review presentation only; they are not a combat oracle.
 
