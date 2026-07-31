@@ -35,7 +35,7 @@ store-failure-output = true
 [profile.gameplay-simulation]
 fail-fast = false
 slow-timeout = "60s"
-default-filter = "package(hex_combat_core)"
+default-filter = "package(hex_combat_core) & binary(simulation)"
 
 [profile.gameplay-simulation.junit]
 path = "junit.xml"

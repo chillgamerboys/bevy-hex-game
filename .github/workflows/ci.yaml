@@ -57,12 +57,14 @@ jobs:
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             git fetch --no-tags origin "${{ github.base_ref }}" || true
             changed=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD" 2>/dev/null) || changed=""
+            force_full=()
           else
             before="${{ github.event.before }}"
             case "$before" in
               ''|0000000000000000000000000000000000000000) changed="" ;;
               *) changed=$(git diff --name-only "$before" "${{ github.sha }}" 2>/dev/null) || changed="" ;;
             esac
+            force_full=(--force-full)
           fi
 
           echo "changed files:"
@@ -70,10 +72,11 @@ jobs:
           printf '%s\n' "$changed" > changed-files.txt
           python3 tools/gameplay_scope.py plan \
             --paths-file changed-files.txt \
+            "${force_full[@]}" \
             --json-out gameplay-scope.json \
             --github-output "$GITHUB_OUTPUT"
           {
-            echo '### Gameplay scope shadow decision'
+            echo '### Gameplay scope decision'
             echo
             echo '```json'
             cat gameplay-scope.json
@@ -145,18 +148,18 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.clippy == 'true' || needs.changes.outputs.residual == 'true' || (needs.changes.outputs.docs == 'true' && needs.changes.outputs.code == 'true')
       - uses: dtolnay/rust-toolchain@stable
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.clippy == 'true' || needs.changes.outputs.residual == 'true' || (needs.changes.outputs.docs == 'true' && needs.changes.outputs.code == 'true')
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.clippy == 'true' || needs.changes.outputs.residual == 'true' || (needs.changes.outputs.docs == 'true' && needs.changes.outputs.code == 'true')
       - uses: taiki-e/install-action@nextest
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.residual == 'true'
       # Bevy needs these to build on Linux even for a check-only run.
       - name: Install Linux dependencies
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.clippy == 'true' || needs.changes.outputs.residual == 'true' || (needs.changes.outputs.docs == 'true' && needs.changes.outputs.code == 'true')
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
@@ -164,32 +167,29 @@ jobs:
       # Package isolation catches missing direct-dependency features that workspace
       # feature unification can otherwise hide.
       - run: cargo check --package hex_core --profile ci
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.clippy == 'true'
       # --all-features so hex_dev is linted too; it is excluded from a default build.
       - run: cargo clippy --workspace --all-targets --all-features --profile ci -- -D warnings
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.clippy == 'true'
       - name: Run ordinary tests with per-test timing
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.residual == 'true'
         shell: bash
         run: |
           set -o pipefail
           {
-            time cargo nextest run \
-              --workspace \
-              --all-features \
-              --cargo-profile ci \
-              --profile ci \
-              -E 'not (package(hex_core) | package(hex_lattice) | package(hex_ai) | package(hex_units) | package(hex_combat) | package(hex_test_support) | (package(hex_game) & binary(gameplay_app)))'
+            time python3 tools/gameplay_scope.py run residual \
+              --timing-out residual-timing.json
             # Nextest deliberately does not execute doctests.
             time cargo test --workspace --all-features --profile ci --doc
           } 2>&1 | tee test-timing.log
       - name: Upload test timing artifacts
-        if: always() && needs.changes.outputs.code == 'true'
+        if: always() && needs.changes.outputs.residual == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: workspace-test-timings
           path: |
             test-timing.log
+            residual-timing.json
             target/nextest/ci/junit.xml
           if-no-files-found: error
       # Docs are a deliverable here, not a nicety: the map is owned by someone who
@@ -198,7 +198,7 @@ jobs:
       # This does *not* cover doc comments in `tests/` — rustdoc skips integration
       # tests — which is how a link to a deleted type survived a green pipeline.
       - run: cargo doc --workspace --no-deps --all-features
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.docs == 'true' && needs.changes.outputs.code == 'true'
         env:
           RUSTDOCFLAGS: -D warnings
 
@@ -209,21 +209,21 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.rules == 'true' || needs.changes.outputs.contracts == 'true' || needs.changes.outputs.simulation == 'true' || needs.changes.outputs.app == 'true'
       - uses: dtolnay/rust-toolchain@stable
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.rules == 'true' || needs.changes.outputs.contracts == 'true' || needs.changes.outputs.simulation == 'true' || needs.changes.outputs.app == 'true'
       - uses: Swatinem/rust-cache@v2
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.rules == 'true' || needs.changes.outputs.contracts == 'true' || needs.changes.outputs.simulation == 'true' || needs.changes.outputs.app == 'true'
       - uses: taiki-e/install-action@nextest
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.rules == 'true' || needs.changes.outputs.contracts == 'true' || needs.changes.outputs.simulation == 'true' || needs.changes.outputs.app == 'true'
       - name: Install Linux dependencies
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.rules == 'true' || needs.changes.outputs.contracts == 'true' || needs.changes.outputs.simulation == 'true' || needs.changes.outputs.app == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
             libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
       - name: Gameplay rules
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.rules == 'true'
         shell: bash
         run: |
           set -o pipefail
@@ -232,7 +232,7 @@ jobs:
             --timing-out gameplay-rules-timing.json \
             2>&1 | tee gameplay-rules-timing.log
       - name: Gameplay contracts
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.contracts == 'true'
         shell: bash
         run: |
           set -o pipefail
@@ -240,7 +240,7 @@ jobs:
             --timing-out gameplay-contracts-timing.json \
             2>&1 | tee gameplay-contracts-timing.log
       - name: Gameplay simulation
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.simulation == 'true'
         shell: bash
         run: |
           set -o pipefail
@@ -249,7 +249,7 @@ jobs:
             --timing-out gameplay-simulation-timing.json \
             2>&1 | tee gameplay-simulation-timing.log
       - name: Gameplay app
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.app == 'true'
         shell: bash
         run: |
           set -o pipefail
@@ -257,7 +257,7 @@ jobs:
             --timing-out gameplay-app-timing.json \
             2>&1 | tee gameplay-app-timing.log
       - name: Upload gameplay timing artifacts
-        if: always() && needs.changes.outputs.code == 'true'
+        if: always() && (needs.changes.outputs.rules == 'true' || needs.changes.outputs.contracts == 'true' || needs.changes.outputs.simulation == 'true' || needs.changes.outputs.app == 'true')
         uses: actions/upload-artifact@v4
         with:
           name: gameplay-test-timings
@@ -283,13 +283,13 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v5
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.shipping == 'true'
       - uses: dtolnay/rust-toolchain@stable
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.shipping == 'true'
       - uses: Swatinem/rust-cache@v2
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.shipping == 'true'
       - name: Install Linux dependencies
-        if: runner.os == 'Linux' && needs.changes.outputs.code == 'true'
+        if: runner.os == 'Linux' && needs.changes.outputs.shipping == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
@@ -302,18 +302,18 @@ jobs:
       # LLVM's MSVC-compatible linker; selecting it changes no Cargo profile or
       # package input and keeps the exact shipping build inside the same budget.
       - name: Record the Windows shipping linker
-        if: runner.os == 'Windows' && needs.changes.outputs.code == 'true'
+        if: runner.os == 'Windows' && needs.changes.outputs.shipping == 'true'
         shell: pwsh
         run: |
           $linker = Get-Command lld-link.exe -ErrorAction Stop
           & $linker.Source --version
       - name: Build the Windows shipping package
-        if: runner.os == 'Windows' && needs.changes.outputs.code == 'true'
+        if: runner.os == 'Windows' && needs.changes.outputs.shipping == 'true'
         env:
           CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: lld-link.exe
         run: cargo build --package hex_game --release
       - name: Build the shipping package
-        if: runner.os != 'Windows' && needs.changes.outputs.code == 'true'
+        if: runner.os != 'Windows' && needs.changes.outputs.shipping == 'true'
         run: cargo build --package hex_game --release
 
   coverage:
@@ -323,23 +323,23 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.full == 'true'
       - uses: dtolnay/rust-toolchain@stable
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.full == 'true'
         with:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.full == 'true'
       - uses: taiki-e/install-action@cargo-llvm-cov
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.full == 'true'
       - name: Install Linux dependencies
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.full == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
             libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
       - name: Measure headless domain coverage
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.full == 'true'
         run: >-
           cargo llvm-cov
           --package hex_core
@@ -351,7 +351,7 @@ jobs:
           --lcov
           --output-path coverage.lcov
       - name: Upload coverage
-        if: always() && needs.changes.outputs.code == 'true'
+        if: always() && needs.changes.outputs.full == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: domain-coverage

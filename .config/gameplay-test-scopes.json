@@ -64,6 +64,8 @@
         "run",
         "--package",
         "hex_combat_core",
+        "--test",
+        "simulation",
         "--cargo-profile",
         "ci",
         "--profile",

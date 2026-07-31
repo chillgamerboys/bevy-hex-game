@@ -235,6 +235,27 @@ def classify(paths: Iterable[str], config: dict[str, Any]) -> ScopeDecision:
     )
 
 
+def force_full(decision: ScopeDecision, all_concerns: Iterable[str]) -> ScopeDecision:
+    """Promote a decision to the complete integration gate."""
+
+    return ScopeDecision(
+        changed_files=decision.changed_files,
+        concerns=tuple(all_concerns),
+        full=True,
+        code=True,
+        matched_rules=tuple(sorted((*decision.matched_rules, "forced-full-integration"))),
+        reasons=tuple(
+            sorted(
+                (
+                    *decision.reasons,
+                    "Pushes to dev/main require complete integration validation.",
+                )
+            )
+        ),
+        unknown_files=decision.unknown_files,
+    )
+
+
 def changed_paths(base: str, head: str) -> tuple[str, ...]:
     """Read committed, staged, working-tree, and untracked paths from Git."""
 
@@ -353,6 +374,11 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--head", default="HEAD")
     plan.add_argument("--json-out", type=pathlib.Path)
     plan.add_argument("--github-output", type=pathlib.Path)
+    plan.add_argument(
+        "--force-full",
+        action="store_true",
+        help="promote the decision to the complete integration gate",
+    )
 
     selected = subparsers.add_parser(
         "selected-tests", help="print selected local test concerns in run order"
@@ -444,6 +470,8 @@ def main() -> int:
         else:
             paths = changed_paths(arguments.base, arguments.head)
         decision = classify(paths, config)
+        if arguments.force_full:
+            decision = force_full(decision, config["all_concerns"])
         output = decision.as_dict(config["all_concerns"])
         rendered = json.dumps(output, indent=2, sort_keys=True)
         print(rendered)

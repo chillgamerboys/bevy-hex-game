@@ -131,6 +131,14 @@ class GameplayScopeTests(unittest.TestCase):
         decision = self.classify(".config/gameplay-test-scopes.json")
         self.assertTrue(decision.full)
 
+    def test_push_gate_promotes_a_narrow_decision_to_full(self) -> None:
+        narrow = self.classify("crates/hex_lattice/src/cast.rs")
+        decision = gameplay_scope.force_full(narrow, self.config["all_concerns"])
+        self.assertTrue(decision.full)
+        self.assertTrue(decision.code)
+        self.assertEqual(decision.concerns, tuple(self.config["all_concerns"]))
+        self.assertIn("forced-full-integration", decision.matched_rules)
+
     def test_rules_command_has_an_exact_package_graph(self) -> None:
         command = self.config["concerns"]["rules"]["command"]
         self.assertNotIn("--workspace", command)
@@ -141,6 +149,11 @@ class GameplayScopeTests(unittest.TestCase):
             if index > 0 and command[index - 1] == "--package"
         ]
         self.assertEqual(packages, ["hex_core", "hex_lattice", "hex_ai"])
+
+    def test_simulation_command_selects_only_the_dedicated_target(self) -> None:
+        command = self.config["concerns"]["simulation"]["command"]
+        self.assertIn("--test", command)
+        self.assertEqual(command[command.index("--test") + 1], "simulation")
 
     def test_local_test_order_contains_only_test_concerns(self) -> None:
         self.assertEqual(
