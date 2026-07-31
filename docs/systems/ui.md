@@ -122,6 +122,11 @@ Interactive controls participate in a logical Tab/Shift-Tab order and carry an
 Space activate the focused control through its ordinary interaction handler. Escape
 uses the screen's typed Back/resume intent consistently.
 
+The runtime derives sequential focusability from the visible hierarchy. Controls in
+a hidden or `Display::None` subtree temporarily leave the tab order and return at
+their original logical index when the surface reopens; focus is cleared if its
+control becomes unreachable.
+
 A true modal uses a Bevy `TabGroup` so focus cannot escape until its blocking choice
 is resolved. Informational drawers are not modals and do not trap focus. Controller
 navigation and remapping are intentionally deferred.

@@ -1,5 +1,6 @@
 //! Responsive gameplay chrome owned entirely by the presentation crate.
 
+use bevy::input_focus::tab_navigation::TabGroup;
 use bevy::prelude::*;
 use hex_core::{AppSystems, Screen};
 
@@ -34,6 +35,7 @@ fn spawn_safe_frame(mut commands: Commands, metrics: Res<ResolvedUiMetrics>) {
                 ..default()
             },
             Pickable::IGNORE,
+            TabGroup::new(0),
             DespawnOnExit(Screen::Gameplay),
         ))
         .with_children(|frame| {
@@ -146,6 +148,7 @@ fn apply_visibility(
 
 #[cfg(test)]
 mod tests {
+    use bevy::input_focus::tab_navigation::TabGroup;
     use bevy::MinimalPlugins;
 
     use super::*;
@@ -188,5 +191,19 @@ mod tests {
             app.world().get::<Visibility>(required),
             Some(&Visibility::Hidden)
         );
+    }
+
+    #[test]
+    fn gameplay_controls_share_a_real_tab_navigation_group() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<ResolvedUiMetrics>()
+            .add_systems(Update, spawn_safe_frame);
+        app.update();
+
+        let mut groups = app.world_mut().query::<(&Name, &TabGroup)>();
+        assert!(groups
+            .iter(app.world())
+            .any(|(name, group)| name.as_str() == "Gameplay HUD Safe Frame" && !group.modal));
     }
 }

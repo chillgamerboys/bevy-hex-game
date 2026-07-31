@@ -35,19 +35,7 @@ fn spawn_action_rail(mut commands: Commands, assets: Res<UiAssets>) {
             Name::new("Primary Action Rail"),
             ActionRail,
             DespawnOnExit(Screen::Gameplay),
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Px(244.0),
-                right: Val::Px(320.0),
-                bottom: Val::Px(12.0),
-                min_height: Val::Px(116.0),
-                padding: UiRect::axes(Val::Px(18.0), Val::Px(12.0)),
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(8.0),
-                border: UiRect::all(Val::Px(2.0)),
-                border_radius: BorderRadius::all(Val::Px(10.0)),
-                ..default()
-            },
+            action_rail_node(UiViewportClass::Standard),
             BorderColor::all(ACCENT),
             BackgroundColor(PANEL_BG),
             GlobalZIndex(4),
@@ -91,23 +79,7 @@ fn refresh_action_rail(
         .and_then(|review| review.hud.as_ref())
         .unwrap_or(view.as_ref());
     if let Ok((_, mut node, mut border)) = rails.single_mut() {
-        match metrics.viewport {
-            UiViewportClass::Compact => {
-                node.left = Val::Px(12.0);
-                node.right = Val::Px(12.0);
-                node.bottom = Val::Px(12.0);
-            }
-            UiViewportClass::Standard => {
-                node.left = Val::Px(244.0);
-                node.right = Val::Px(320.0);
-                node.bottom = Val::Px(12.0);
-            }
-            UiViewportClass::Wide => {
-                node.left = Val::Px(280.0);
-                node.right = Val::Px(360.0);
-                node.bottom = Val::Px(16.0);
-            }
-        }
+        apply_action_rail_insets(metrics.viewport, &mut node);
         *border = BorderColor::all(if view.required_prompt.is_some() {
             ACCENT
         } else {
@@ -177,6 +149,32 @@ fn refresh_action_rail(
     });
 }
 
+fn action_rail_node(viewport: UiViewportClass) -> Node {
+    let mut node = Node {
+        position_type: PositionType::Absolute,
+        min_height: Val::Px(116.0),
+        padding: UiRect::axes(Val::Px(18.0), Val::Px(12.0)),
+        flex_direction: FlexDirection::Column,
+        row_gap: Val::Px(8.0),
+        border: UiRect::all(Val::Px(2.0)),
+        border_radius: BorderRadius::all(Val::Px(10.0)),
+        ..default()
+    };
+    apply_action_rail_insets(viewport, &mut node);
+    node
+}
+
+fn apply_action_rail_insets(viewport: UiViewportClass, node: &mut Node) {
+    let (left, right, bottom) = match viewport {
+        UiViewportClass::Compact => (12.0, 12.0, 12.0),
+        UiViewportClass::Standard => (244.0, 320.0, 12.0),
+        UiViewportClass::Wide => (280.0, 360.0, 16.0),
+    };
+    node.left = Val::Px(left);
+    node.right = Val::Px(right);
+    node.bottom = Val::Px(bottom);
+}
+
 fn handle_action_rail(
     clicks: Query<(&Interaction, &ActionRailKey), Changed<Interaction>>,
     mut intents: MessageWriter<UiIntent>,
@@ -190,8 +188,51 @@ fn handle_action_rail(
 
 #[cfg(test)]
 mod tests {
+    use bevy::prelude::{Val, Vec2};
+
+    use crate::{resolve_ui_metrics, UiScaleMode};
+
+    use super::*;
+
     #[test]
     fn required_priority_is_reserved_for_blocking_choices() {
         assert!(crate::ActionPriority::Required > crate::ActionPriority::Primary);
+    }
+
+    #[test]
+    fn required_rail_remains_reachable_across_the_structural_matrix() {
+        for logical_size in [
+            Vec2::new(960.0, 540.0),
+            Vec2::new(1280.0, 720.0),
+            Vec2::new(1920.0, 1080.0),
+            Vec2::new(2560.0, 1440.0),
+            Vec2::new(3840.0, 2160.0),
+        ] {
+            for mode in [UiScaleMode::Auto, UiScaleMode::Percent200] {
+                let metrics = resolve_ui_metrics(logical_size, mode);
+                let node = action_rail_node(metrics.viewport);
+                let Val::Px(left) = node.left else {
+                    panic!("the required rail needs a bounded left inset");
+                };
+                let Val::Px(right) = node.right else {
+                    panic!("the required rail needs a bounded right inset");
+                };
+                let Val::Px(bottom) = node.bottom else {
+                    panic!("the required rail needs a bounded bottom inset");
+                };
+                let Val::Px(min_height) = node.min_height else {
+                    panic!("the required rail needs a bounded minimum height");
+                };
+                let available_width = metrics.effective_size.x - left - right;
+                assert!(
+                    available_width >= 156.0,
+                    "a required action and its reason must fit at {logical_size:?} in {mode:?}"
+                );
+                assert!(
+                    bottom + min_height <= metrics.effective_size.y,
+                    "the required rail must remain on-canvas at {logical_size:?} in {mode:?}"
+                );
+            }
+        }
     }
 }

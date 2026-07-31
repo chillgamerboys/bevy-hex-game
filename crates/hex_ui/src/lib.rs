@@ -151,7 +151,10 @@ impl Plugin for UiPlugin {
 pub mod test_support {
     //! Immutable observations for headless presentation tests.
 
-    use bevy::input_focus::{tab_navigation::TabIndex, InputFocus};
+    use bevy::input_focus::{
+        tab_navigation::{TabGroup, TabIndex},
+        InputFocus,
+    };
     use bevy::prelude::*;
 
     use crate::{ActionPriority, ResolvedUiMetrics};
@@ -184,7 +187,7 @@ pub mod test_support {
         pub metrics: ResolvedUiMetrics,
         /// Visible named nodes in stable name order.
         pub nodes: Vec<UiNodeObservation>,
-        /// Named focusable nodes ordered by tab index, then stable name.
+        /// Named focusable nodes in Bevy's tab-group, index, and hierarchy order.
         pub focus_order: Vec<String>,
         /// Highest action priority presented by the action rail.
         pub action_priority: Option<ActionPriority>,
@@ -201,6 +204,7 @@ pub mod test_support {
         let action_priority = world
             .get_resource::<crate::GameplayHudView>()
             .and_then(|view| view.actions.iter().map(|action| action.priority).max());
+        let focus_order = logical_focus_order(world, focused);
         let mut query = world.query::<(
             Entity,
             &Name,
@@ -246,18 +250,96 @@ pub mod test_support {
                     }
                 },
             )
+            .filter(|node| node.visible)
             .collect::<Vec<_>>();
         nodes.sort_by(|left, right| left.name.cmp(&right.name));
-        let mut focus_nodes = nodes
-            .iter()
-            .filter_map(|node| node.tab_index.map(|index| (index, node.name.clone())))
-            .collect::<Vec<_>>();
-        focus_nodes.sort();
         UiTreeSnapshot {
             metrics,
             nodes,
-            focus_order: focus_nodes.into_iter().map(|(_, name)| name).collect(),
+            focus_order,
             action_priority,
+        }
+    }
+
+    fn logical_focus_order(world: &mut World, focused: Option<Entity>) -> Vec<String> {
+        let mut groups = world
+            .query::<(Entity, &TabGroup)>()
+            .iter(world)
+            .map(|(entity, group)| (entity, *group))
+            .collect::<Vec<_>>();
+        groups.sort_by_key(|(entity, group)| (group.order, entity.to_bits()));
+
+        let focused_modal = focused.and_then(|focused| {
+            groups
+                .iter()
+                .find(|(group, settings)| {
+                    settings.modal && is_descendant_or_self(world, focused, *group)
+                })
+                .map(|(group, _)| *group)
+        });
+        let groups = groups.into_iter().filter(|(group, settings)| {
+            focused_modal.map_or(!settings.modal, |focused_modal| *group == focused_modal)
+        });
+
+        let mut order = Vec::new();
+        for (group, _) in groups {
+            let mut within_group = Vec::new();
+            let mut hierarchy_position = 0_usize;
+            gather_focusable(
+                world,
+                group,
+                group,
+                &mut hierarchy_position,
+                &mut within_group,
+            );
+            within_group.sort_by_key(|(index, position, _)| (*index, *position));
+            order.extend(within_group.into_iter().map(|(_, _, name)| name));
+        }
+        order
+    }
+
+    fn is_descendant_or_self(world: &World, mut entity: Entity, ancestor: Entity) -> bool {
+        loop {
+            if entity == ancestor {
+                return true;
+            }
+            let Some(parent) = world.get::<ChildOf>(entity) else {
+                return false;
+            };
+            entity = parent.parent();
+        }
+    }
+
+    fn gather_focusable(
+        world: &World,
+        group: Entity,
+        entity: Entity,
+        hierarchy_position: &mut usize,
+        output: &mut Vec<(i32, usize, String)>,
+    ) {
+        if entity != group && world.get::<TabGroup>(entity).is_some() {
+            return;
+        }
+        let visible = world
+            .get::<Visibility>(entity)
+            .is_none_or(|visibility| *visibility != Visibility::Hidden)
+            && world
+                .get::<InheritedVisibility>(entity)
+                .is_none_or(|visibility| visibility.get());
+        if visible {
+            if let (Some(index), Some(name)) =
+                (world.get::<TabIndex>(entity), world.get::<Name>(entity))
+            {
+                if index.0 >= 0 {
+                    output.push((index.0, *hierarchy_position, name.as_str().to_owned()));
+                }
+            }
+        }
+        *hierarchy_position += 1;
+        if let Some(children) = world.get::<Children>(entity) {
+            for child in children.iter() {
+                gather_focusable(world, group, child, hierarchy_position, output);
+            }
         }
     }
 
@@ -278,28 +360,43 @@ pub mod test_support {
 
     #[cfg(test)]
     mod tests {
-        use bevy::input_focus::tab_navigation::TabIndex;
+        use bevy::input_focus::tab_navigation::{TabGroup, TabIndex};
 
         use super::*;
 
         #[test]
         fn snapshot_exposes_accessibility_and_focus_order_without_mutable_ui_state() {
             let mut world = World::new();
-            world.spawn((
-                Name::new("Confirm Choice"),
-                Button,
-                TabIndex(2),
-                AccessibleLabel::new("Confirm selected lattice cells"),
-            ));
-            world.spawn((
-                Name::new("Choose Cell"),
-                Button,
-                TabIndex(1),
-                AccessibleLabel::new("Choose lattice cell"),
-            ));
+            let group = world
+                .spawn((
+                    Name::new("Screen"),
+                    TabGroup::new(0),
+                    Visibility::Inherited,
+                    InheritedVisibility::VISIBLE,
+                ))
+                .id();
+            let confirm = world
+                .spawn((
+                    Name::new("Confirm Choice"),
+                    Button,
+                    TabIndex(0),
+                    AccessibleLabel::new("Confirm selected lattice cells"),
+                    InheritedVisibility::VISIBLE,
+                ))
+                .id();
+            let choose = world
+                .spawn((
+                    Name::new("Choose Cell"),
+                    Button,
+                    TabIndex(0),
+                    AccessibleLabel::new("Choose lattice cell"),
+                    InheritedVisibility::VISIBLE,
+                ))
+                .id();
+            world.entity_mut(group).add_children(&[confirm, choose]);
 
             let snapshot = ui_tree_snapshot(&mut world);
-            assert_eq!(snapshot.focus_order, ["Choose Cell", "Confirm Choice"]);
+            assert_eq!(snapshot.focus_order, ["Confirm Choice", "Choose Cell"]);
             let Some(confirm) = snapshot
                 .nodes
                 .iter()
