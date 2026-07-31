@@ -1,0 +1,8 @@
+//! One linked integration target for every focused unit/ECS contract.
+
+#[path = "contracts/movement.rs"]
+mod movement;
+#[path = "contracts/serde_roundtrip.rs"]
+mod serde_roundtrip;
+#[path = "contracts/volumes.rs"]
+mod volumes;

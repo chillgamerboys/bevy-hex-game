@@ -368,6 +368,7 @@ fn open_due_decision(
     mut effects: ResMut<PersistentEffects>,
     mut pending: ResMut<PendingDecision>,
     mut events: MessageWriter<CombatEvent>,
+    mut authority: Option<ResMut<crate::authority_host::CombatAuthority>>,
 ) {
     if pending.is_open() {
         return;
@@ -390,6 +391,9 @@ fn open_due_decision(
         count: hit.count,
         source: hit.source,
     };
+    if let Some(authority) = authority.as_deref_mut() {
+        authority.mark_adapter_pending();
+    }
     events.write(CombatEvent::DecisionOpened {
         decider: hit.target,
         source: hit.source,

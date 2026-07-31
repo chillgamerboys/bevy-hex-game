@@ -1,4 +1,4 @@
-//! Integration tests for the knowledge and divination seam.
+//! Contract tests for the knowledge and divination seam.
 //!
 //! The store's own rules are unit-tested beside it. What these prove is the
 //! wiring: that the publishing systems actually run, that decay is ordered
@@ -26,15 +26,31 @@ use hex_perception::{
     apply_observations, FactionMapKnowledge, FactionObservation, FactionObservations, ObservedUnit,
     SurfaceSnapshot, SurfaceSnapshots,
 };
-use hex_test_support::TestAppBuilder;
+use hex_test_support::{SyntheticArena, TestAppBuilder};
 use hex_units::{Faction, Standing, StandsOn};
 
+#[expect(
+    clippy::expect_used,
+    reason = "invalid shared deterministic fixture data must fail during construction"
+)]
 fn test_app() -> App {
-    let mut builder = TestAppBuilder::new().with_fixed_step(Duration::ZERO);
+    let mut builder = TestAppBuilder::new()
+        .with_fixed_step(Duration::ZERO)
+        .with_arena(SyntheticArena::flat_radius(12, 1))
+        .expect("the shared synthetic arena must be valid");
     let app = builder.app_mut();
     app.insert_resource(hex_assets::CombatSettings::default());
     app.add_plugins(hex_combat::plugin);
     builder.build()
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "fixture facts must be accepted by the active combat authority"
+)]
+fn publish_adapter_facts(app: &mut App) {
+    hex_combat::publish_combat_adapter_facts(app.world_mut())
+        .expect("the fixture projection must be valid");
 }
 
 /// A three-cell lattice: two gems and a blank.
@@ -78,8 +94,9 @@ fn spawn_unit(
     ));
     if lattice {
         let spec = spec();
-        let state = LatticeState::new(&spec, &stats());
-        unit.insert((spec, state));
+        let stats = stats();
+        let state = LatticeState::new(&spec, &stats);
+        unit.insert((spec, state, stats));
     }
     unit.id()
 }
@@ -351,6 +368,7 @@ fn divined_cells_refresh_from_live_truth_without_resetting_expiry() {
             .expect("the enemy has live lattice state");
         hex_lattice::apply_disables(&mut state, &[LatticeCoord::ORIGIN]);
     }
+    publish_adapter_facts(&mut app);
     app.update();
 
     let refreshed = app

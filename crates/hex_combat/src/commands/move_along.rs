@@ -97,6 +97,46 @@ pub(super) fn apply(
     Ok(())
 }
 
+/// Projects an authority-approved route into domain movement and animation.
+pub(super) fn project(
+    ctx: &mut Verb,
+    commands: &mut Commands,
+    tiles: &TileQuery,
+    actors: &mut ActorQuery,
+    unit: UnitId,
+    entity: Entity,
+    path: &[TilePos],
+) -> Result<(), CommandRefusal> {
+    let Ok((standing, body, _, _, _, _, _)) = actors.get_mut(entity) else {
+        return Err(CommandRefusal::MissingUnitData {
+            unit,
+            data: UnitData::EntityRecord,
+        });
+    };
+    let (Some(standing), Some(body), Some(table)) = (standing, body, ctx.table) else {
+        return Err(CommandRefusal::MissingCombatData {
+            data: CombatData::SubstanceTable,
+        });
+    };
+    let footing = Footing::from_tiles(tiles.iter(), table, *body, ctx.blockers);
+    let Some(steps) = ground_path(path, standing.0, &footing) else {
+        return Err(CommandRefusal::InvalidPath);
+    };
+    let destination = steps.last().map(|standing| standing.pos);
+    let mut unit_commands = commands.entity(entity);
+    if let Some(settings) = ctx.settings {
+        let animation: Transformation = HexPathingLine::new(&steps, settings.speed).into();
+        unit_commands.insert((animation, MovingTo::new(steps, settings.speed), Busy));
+    } else {
+        unit_commands.insert((MovingTo::new(steps, 0.0), Busy));
+    }
+    ctx.committed.push(entity);
+    if let Some(destination) = destination {
+        ctx.reserved.insert(unit, destination);
+    }
+    Ok(())
+}
+
 /// Grounds a commanded path against the live terrain.
 ///
 /// Returns the path as standings when it starts where the unit stands, every

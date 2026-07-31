@@ -3,6 +3,7 @@ name = "hex_game"
 version.workspace = true
 edition.workspace = true
 publish = false
+autotests = false
 description = "The game binary: app setup, plugin wiring, screens and menus."
 
 [dependencies]
@@ -46,6 +47,10 @@ map-review = []
 visual-walk = []
 # Headless game/UI observation helpers. Never enabled by the shipping build.
 test-support = []
+
+[[test]]
+name = "game_content_contracts"
+path = "tests/game_content_contracts.rs"
 
 [[test]]
 name = "gameplay_app"

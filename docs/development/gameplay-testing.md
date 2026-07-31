@@ -25,6 +25,23 @@ first four partitions. The residual workspace job keeps all other packages and t
 unchanged map/game-world contract binaries under the existing feature set, CI
 profile, and timeout.
 
+## Integration target topology
+
+Expensive Bevy links are explicit Cargo targets rather than one binary per source
+module. `hex_units/tests/contracts.rs` links every focused unit/ECS contract once;
+`hex_combat/tests/contracts.rs` does the same for combat, while
+`hex_combat_core/tests/simulation.rs` remains the sole multi-turn simulation target.
+Their concern modules live below a directory with the target name so ownership stays
+readable without adding another linker invocation.
+
+`hex_game/tests/gameplay_app.rs` is the default-off gameplay-owned application
+target. `hex_game/tests/game_content_contracts.rs` is the separately selectable
+shared shipped-content seam, and the `hex_game` library target retains inline
+scenario/loading contracts that require private composition details. Those shared
+targets stay in the residual gate. The three packages set `autotests = false` and
+declare their integration targets explicitly, so adding a helper file cannot silently
+create a new expensive binary or escape its concern selector.
+
 ## Scope selection
 
 The concern filter is not the Cargo selector. Cargo packages, targets, and features

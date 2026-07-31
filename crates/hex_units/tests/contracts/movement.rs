@@ -1,4 +1,4 @@
-//! Integration tests for the player and movement.
+//! Contract tests for the player and movement.
 //!
 //! These exist because of two bugs that a person found by clicking, both green
 //! across every automated check at the time:
@@ -386,7 +386,7 @@ fn the_player_spawns_on_the_surface() {
 
 #[test]
 fn shipped_unit_swatches_preserve_the_pre_migration_colors() {
-    let palette: ArtPalette = ron::from_str(include_str!("../../../assets/art/palette.ron"))
+    let palette: ArtPalette = ron::from_str(include_str!("../../../../assets/art/palette.ron"))
         .expect("the shipped art palette should parse");
 
     for (id, expected) in [

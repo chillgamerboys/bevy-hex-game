@@ -156,3 +156,47 @@ pub(super) fn apply(
     info!("strike: {unit:?} hits {target:?}");
     Ok(())
 }
+
+/// Projects an authority-approved strike into presentation only.
+pub(super) fn project(
+    ctx: &Verb,
+    commands: &mut Commands,
+    actors: &ActorQuery,
+    unit: UnitId,
+    entity: Entity,
+    target: UnitId,
+) -> Result<(), CommandRefusal> {
+    let Some(target_entity) = ctx.registry.entity_of(target) else {
+        return Err(CommandRefusal::UnknownTarget { target });
+    };
+    let Ok((Some(target_standing), ..)) = actors.get(target_entity) else {
+        return Err(CommandRefusal::MissingUnitData {
+            unit: target,
+            data: UnitData::Standing,
+        });
+    };
+    let Ok((Some(standing), ..)) = actors.get(entity) else {
+        return Err(CommandRefusal::MissingUnitData {
+            unit,
+            data: UnitData::Standing,
+        });
+    };
+    if let Some(settings) = ctx.settings {
+        presentation::lunge(
+            commands,
+            entity,
+            standing.0,
+            target_standing.0,
+            settings.speed,
+        );
+        presentation::recoil(
+            commands,
+            target_entity,
+            target_standing.0,
+            standing.0,
+            settings.speed,
+        );
+    }
+    info!("strike: {unit:?} hits {target:?}");
+    Ok(())
+}

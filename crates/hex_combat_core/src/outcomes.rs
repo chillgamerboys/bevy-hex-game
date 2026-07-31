@@ -16,6 +16,8 @@ use serde::{Deserialize, Serialize};
 /// A runtime dependency the command applier needed but could not read.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CombatData {
+    /// The renderer-free combat authority failed to initialize.
+    AuthorityState,
     /// Combat policy settings, including damage and divination duration.
     CombatSettings,
     /// The table that resolves spell names and definitions.
@@ -514,6 +516,9 @@ mod tests {
                 current: Some(UnitId(9)),
             },
             CommandRefusal::DecisionPending { decider: UnitId(3) },
+            CommandRefusal::MissingCombatData {
+                data: CombatData::AuthorityState,
+            },
             CommandRefusal::MissingCombatData {
                 data: CombatData::CombatSettings,
             },

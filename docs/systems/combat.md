@@ -87,11 +87,13 @@ wall-clock settling, asset server, or map generator. Exact links are published i
 so the reducer never guesses connectivity from `HexCoord` and cannot collapse stacked
 surfaces.
 
-Wave 8's adapter migration is fail-closed: field/event shadow comparisons may
-temporarily compare the existing ECS path with the reducer, but no second simulator is
-retained. The cutover deletes direct ECS mutation paths in this order: turn/position
-truth, command effects and decisions, then summary/outcome reconstruction. AI and
-human input both remain command producers; animation and UI become projections.
+Wave 8's adapter boundary is fail-closed. Move, Strike, End Turn, Channel, and exact
+disable choices reduce only in `CombatState`; ECS receives their projection. Cast and
+restoration still resolve authored content through typed host adapters, then publish
+the complete position/turn/downed/lattice/order/decision/revival projection
+transactionally before another command may run. Missing authority is a typed refusal,
+never permission to invoke a legacy mutator. AI and human input both remain command
+producers; animation and UI are projections.
 
 **A turn cannot end while its unit is still moving.** `MovingTo` owns a bounded
 domain clock and exact surface path; `Busy` is its legality/turn gate. The movement

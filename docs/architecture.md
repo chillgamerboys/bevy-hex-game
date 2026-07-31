@@ -99,10 +99,11 @@ typed `CombatEvent` vocabulary as a successful transition.
 
 `hex_combat` is the Bevy host: it resolves live published contracts into frozen input,
 feeds human and AI commands to the authority, and projects state/events to ECS,
-animation, summaries, and UI. During the Wave 8 cutover, an old mutation path may
-exist only long enough to compare named state/event fields. The release condition is
-one reducer, with the shadow path deleted rather than retained as an alternate
-simulator.
+animation, summaries, and UI. Reducer-covered verbs mutate only `CombatState`.
+Content-dependent Cast and restoration resolution are explicit host adapters: each
+publishes a complete projection back through transactional exact-roster validation
+before any later command may reduce. Missing authority refuses every combat command;
+there is no legacy fallback or retained shadow simulator.
 
 Movement completion is an explicit domain projection, not an animation query.
 `MovingTo` advances from the pausable virtual clock, publishes exact `TilePos`
