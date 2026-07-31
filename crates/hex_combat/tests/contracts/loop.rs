@@ -15,11 +15,12 @@ use bevy::prelude::*;
 
 use hex_combat::{Initiative, TurnOrder};
 use hex_core::{
-    CommandQueue, GameCommand, HexCoord, HexSpan, IssuedCommand, Mode, PlayerSeat, Screen, TilePos,
-    Turn, UnitId,
+    CommandQueue, GameCommand, HexCoord, HexSpan, IssuedCommand, LatticeCoord, Mode, PlayerSeat,
+    Screen, TilePos, Turn, UnitId,
 };
+use hex_lattice::{apply_disables, CellKind, LatticeSpec, LatticeState, LatticeStats};
 use hex_test_support::{SyntheticArena, TestAppBuilder};
-use hex_units::{Faction, Standing, StandsOn};
+use hex_units::{Downed, Faction, Standing, StandsOn};
 
 /// Far enough apart that no fight starts on its own.
 const FAR: i32 = 12;
@@ -119,6 +120,50 @@ fn closing_the_distance_starts_a_fight() {
         "the higher initiative acts first"
     );
     assert_eq!(order.position_of(unit_id(&app, enemy)), Some(1));
+}
+
+/// Authored fixtures may open with a completely disabled lattice. That unit must be
+/// down before both ECS and the pure authority freeze initiative, rather than being
+/// removed from only one projection on the first combat frame.
+#[test]
+fn an_initially_disabled_unit_is_excluded_from_both_opening_orders() {
+    let mut app = test_app();
+    spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20);
+    spawn_unit(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::new_cubic(3, -3, 0),
+        10,
+    );
+    let disabled = spawn_unit(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::new_cubic(2, -2, 0),
+        30,
+    );
+    let spec = LatticeSpec::default().with(LatticeCoord::ORIGIN, CellKind::Blank);
+    let stats = LatticeStats::default();
+    let mut state = LatticeState::new(&spec, &stats);
+    apply_disables(&mut state, &[LatticeCoord::ORIGIN]);
+    app.world_mut()
+        .entity_mut(disabled)
+        .insert((spec, state, stats));
+
+    enter_gameplay(&mut app);
+    app.update();
+
+    assert_eq!(mode(&app), Mode::Combat);
+    let disabled_id = unit_id(&app, disabled);
+    assert!(app.world().entity(disabled).contains::<Downed>());
+    let order = app.world().resource::<TurnOrder>();
+    assert!(!order.order().contains(&disabled_id));
+    let authority =
+        hex_combat::authority_snapshot(app.world()).expect("opening authority must be valid");
+    assert!(authority
+        .units
+        .get(&disabled_id)
+        .is_some_and(|unit| unit.downed));
+    assert_eq!(authority.order, order.order());
 }
 
 /// Units far apart stay in real time. Without this the game would open in combat.
