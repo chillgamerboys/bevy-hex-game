@@ -258,6 +258,58 @@ fn ending_the_last_turn_wraps_and_counts_a_round() {
     );
 }
 
+/// A content adapter can spend the last action/movement budget without reducing an
+/// authority-owned command. The ECS turn handoff must be adopted after it settles in
+/// the same frame, or the host retains the previous actor and panics at its projection
+/// boundary (the exact path exercised by a cast in Ability Lab).
+#[test]
+fn adapter_spending_the_turn_advances_both_projections_in_the_same_frame() {
+    let mut app = test_app();
+    let player = spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20);
+    let enemy = spawn_unit(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::new_cubic(2, -2, 0),
+        10,
+    );
+    enter_gameplay(&mut app);
+    app.update();
+
+    let player_id = unit_id(&app, player);
+    let enemy_id = unit_id(&app, enemy);
+    assert_eq!(
+        app.world().resource::<TurnOrder>().current(),
+        Some(player_id)
+    );
+    {
+        let turn = app.world_mut().get_mut::<Turn>(player);
+        assert!(
+            turn.is_some(),
+            "the current unit must hold its projected turn"
+        );
+        if let Some(mut turn) = turn {
+            turn.acted = true;
+            turn.movement_left = 0;
+        }
+    }
+    publish_adapter_facts(&mut app);
+
+    app.update();
+
+    assert_eq!(
+        app.world().resource::<TurnOrder>().current(),
+        Some(enemy_id),
+        "the settled ECS projection should hand the turn to the next unit"
+    );
+    let authority =
+        hex_combat::authority_snapshot(app.world()).expect("combat authority must remain valid");
+    assert_eq!(
+        authority.current(),
+        Some(enemy_id),
+        "the authority must adopt that handoff at the settled frame boundary"
+    );
+}
+
 /// Walking away ends the fight and clears the order, so nothing keeps a turn.
 #[test]
 fn retreating_ends_the_fight() {
