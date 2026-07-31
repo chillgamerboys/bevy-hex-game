@@ -379,9 +379,10 @@ to be out of date. Everything else under `docs/` describes contracts.
   single `hex_game/tests/gameplay_app.rs` target owns gameplay UI behavior behind
   `test-support`. `game_content_contracts` and the library's private
   scenario/loading tests stay separately selectable in the residual shared seam.
-  Map tests retain their separate world-owned infrastructure. None can see anything
-  visual — a black sky or a mistransformed tile still needs a human looking at the
-  window.
+  Map tests may reuse the neutral app shell while retaining their world-owned fixture
+  data and acceptance criteria; they must not replace the map producer with a synthetic
+  consumer arena. None can see anything visual — a black sky or a mistransformed tile
+  still needs a human looking at the window.
 
 **Gaps in the engine and the toolchain** — `bevy_lint` unusable at 0.19, Bevy
 features untrimmed, animation still `Box<dyn Transformer>` — are recorded in
