@@ -16,6 +16,7 @@ mod gameplay_lattices;
 mod initiative;
 mod lab_statistics;
 mod lattice;
+mod lattice_demo;
 mod layout;
 mod model;
 mod outcome_report;
@@ -42,11 +43,11 @@ pub use model::{
     CastingPanelContentView, CastingPanelView, CastingSpellView, CombatLogLineView, CombatLogView,
     DecisionChoiceView, FormationSlotView, GameplayAction, GameplayChromeView, GameplayHudView,
     GameplayLatticesView, InitiativeEntryView, InitiativeSide, InitiativeView, LabStatisticsIntent,
-    LabStatisticsView, LatticeIntent, OutcomeAction, OutcomeActionView, OutcomeCompareChoiceView,
-    OutcomeIntent, OutcomeReportView, OwnLatticeView, PartyIntent, PartyMemberView, PartyView,
-    PauseView, ResumeView, TargetLatticeStateView, TargetLatticeView, TargetPulseView, TitleIntent,
-    TitleScenarioView, TitleView, UiIntent, UiSetting, UiSettingRow, UiSettingsView, UnitBadgeView,
-    UnitBadgesView,
+    LabStatisticsView, LatticeDemoIntent, LatticeDemoSpellView, LatticeDemoView, LatticeIntent,
+    OutcomeAction, OutcomeActionView, OutcomeCompareChoiceView, OutcomeIntent, OutcomeReportView,
+    OwnLatticeView, PartyIntent, PartyMemberView, PartyView, PauseView, ResumeView,
+    TargetLatticeStateView, TargetLatticeView, TargetPulseView, TitleIntent, TitleScenarioView,
+    TitleView, UiIntent, UiSetting, UiSettingRow, UiSettingsView, UnitBadgeView, UnitBadgesView,
 };
 pub use scale::{
     resolve_auto_scale, resolve_ui_metrics, resolve_viewport_class, ResolvedUiMetrics, UiScaleMode,
@@ -99,6 +100,7 @@ impl Plugin for UiPlugin {
         .init_resource::<PartyView>()
         .init_resource::<LabStatisticsView>()
         .init_resource::<OutcomeReportView>()
+        .init_resource::<LatticeDemoView>()
         .init_resource::<InitiativeView>()
         .init_resource::<TitleView>()
         .init_resource::<TargetPulseView>()
@@ -121,7 +123,7 @@ impl Plugin for UiPlugin {
             title::plugin,
             unit_badges::plugin,
         ))
-        .add_plugins(outcome_report::plugin);
+        .add_plugins((outcome_report::plugin, lattice_demo::plugin));
     }
 }
 

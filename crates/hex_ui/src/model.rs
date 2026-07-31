@@ -460,6 +460,51 @@ pub enum OutcomeIntent {
     Activate(OutcomeAction),
 }
 
+/// One spell row in the isolated Lattice Demo.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LatticeDemoSpellView {
+    /// Canonical spell-cell coordinate returned by activation.
+    pub coord: hex_core::LatticeCoord,
+    /// Stable spell name used by accessibility and walk automation.
+    pub name: String,
+    /// Player-facing spell heading, including ritual status.
+    pub headline: String,
+    /// Casting-kind detail.
+    pub kind: String,
+    /// Total payable mana when the cast is legal.
+    pub cost: Option<u32>,
+    /// Canonical blocked reason when the cast is unavailable.
+    pub blocked: Option<String>,
+}
+
+/// Immutable isolated lattice-rules presentation.
+#[derive(Resource, Debug, Default, Clone, PartialEq)]
+pub struct LatticeDemoView {
+    /// Whether content has produced a demo state.
+    pub ready: bool,
+    /// Fully disclosed projected lattice cells.
+    pub cells: Vec<crate::LatticeCellView>,
+    /// Stable spell action rows.
+    pub spells: Vec<LatticeDemoSpellView>,
+    /// Current mana/enchantment totals.
+    pub totals: String,
+    /// Bounded gameplay-owned event lines.
+    pub log: Vec<String>,
+}
+
+/// Typed isolated Lattice Demo controls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LatticeDemoIntent {
+    /// Strike or restore a projected cell, or cast its spell.
+    ActivateCell(hex_core::LatticeCoord),
+    /// Cast from the selected spell row.
+    Cast(hex_core::LatticeCoord),
+    /// Channel mana for the isolated lattice.
+    EndTurn,
+    /// Rebuild fresh battle state from the inscription.
+    Reset,
+}
+
 /// Typed gameplay-lattice inputs emitted by presentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LatticeIntent {
@@ -651,6 +696,8 @@ pub enum UiIntent {
     LabStatistics(LabStatisticsIntent),
     /// Act on the encounter outcome or frozen Combat Lab report.
     Outcome(OutcomeIntent),
+    /// Act on the isolated Lattice Demo.
+    LatticeDemo(LatticeDemoIntent),
     /// Navigate back through the current screen's canonical route.
     Back,
     /// Cycle one Settings value.

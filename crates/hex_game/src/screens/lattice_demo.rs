@@ -35,15 +35,9 @@ use hex_lattice::{
 };
 
 use crate::casting::blocked_reason;
-use crate::menus::lattice_view::{
-    live_cell_view, spawn_lattice_cells, CellInteraction, LatticeScale,
-};
-use hex_ui::{
-    blurb, display, divider, fine, heading, label, panel, small_button, UiAssets,
-    SMALL_BUTTON_WIDTH,
-};
+use crate::menus::lattice_view::{live_cell_view, CellInteraction};
 
-use super::{despawn_screen, screen_root};
+use super::despawn_screen;
 
 /// Spells the demo tries to place, chosen to cover the casting axes: a cheap
 /// evocation, a defensive enchantment, a ritual, and a tier-6 evocation whose
@@ -62,15 +56,14 @@ const LOG_LINES: usize = 6;
 
 pub(super) fn plugin(app: &mut App) {
     app.init_resource::<hex_core::InputBindings>();
-    app.add_systems(OnEnter(Screen::LatticeDemo), spawn_demo_screen);
     app.add_systems(
         Update,
         (
             init_demo,
-            handle_cell_clicks,
-            handle_cast_buttons,
-            handle_action_buttons,
-            rebuild_readout,
+            handle_cell_intents.after(hex_ui::UiSystems::EmitIntents),
+            handle_cast_intents.after(hex_ui::UiSystems::EmitIntents),
+            handle_action_intents.after(hex_ui::UiSystems::EmitIntents),
+            publish_demo_view,
             handle_input,
         )
             .chain()
@@ -105,52 +98,6 @@ pub(crate) struct LocalDemoRequest {
     pub(crate) spells: SpellBook,
     pub(crate) index: ContentIndex,
     pub(crate) return_to: Screen,
-}
-
-/// The stable container the whole readout is rebuilt under.
-#[derive(Component)]
-struct DemoBody;
-
-/// A clickable lattice cell, carrying its coordinate.
-#[derive(Component)]
-struct DemoCell(LatticeCoord);
-
-/// A button that attempts the cast at the given spell cell.
-#[derive(Component)]
-struct CastsSpell(LatticeCoord);
-
-/// The button that channels mana back toward capacity.
-#[derive(Component)]
-struct EndsTurn;
-
-/// The button that rebuilds the battle state from the inscription.
-#[derive(Component)]
-struct ResetsDemo;
-
-fn spawn_demo_screen(mut commands: Commands, assets: Res<UiAssets>) {
-    commands
-        .spawn(screen_root(Screen::LatticeDemo, "Lattice Demo Screen"))
-        .with_children(|parent| {
-            parent.spawn(display(&assets, "The Lattice"));
-            parent
-                .spawn((
-                    Name::new("Demo Body"),
-                    DemoBody,
-                    Node {
-                        flex_direction: FlexDirection::Row,
-                        column_gap: Val::Px(32.0),
-                        align_items: AlignItems::Stretch,
-                        ..default()
-                    },
-                ))
-                .with_children(|body| {
-                    body.spawn(blurb(&assets, "waiting for content..."));
-                });
-            parent.spawn(blurb(
-                &assets,
-                "cast from the right panel   ·   click a gem to strike it   ·   BACKSPACE to return",
-            ));
-        });
 }
 
 fn remove_demo_state(mut commands: Commands) {
@@ -316,90 +263,81 @@ fn build_demo_stats(
 }
 
 /// Clicking a gem or fusion strikes it; clicking a spell cell attempts the cast.
-fn handle_cell_clicks(
+fn handle_cell_intents(
     demo: Option<ResMut<DemoLattice>>,
-    clicked: Query<(&Interaction, &DemoCell), Changed<Interaction>>,
+    mut intents: MessageReader<hex_ui::UiIntent>,
     elements: Option<Res<ElementCatalog>>,
 ) {
     let Some(mut demo) = demo else { return };
     let Some(elements) = elements else { return };
     let index = demo.index.clone();
     let tables = index.tables(&elements);
-    for (interaction, cell) in &clicked {
-        if *interaction != Interaction::Pressed {
+    for intent in intents.read() {
+        let hex_ui::UiIntent::LatticeDemo(hex_ui::LatticeDemoIntent::ActivateCell(cell)) = intent
+        else {
             continue;
-        }
-        match demo.spec.get(cell.0) {
+        };
+        match demo.spec.get(*cell) {
             Some(CellKind::Gem { .. } | CellKind::Fusion { .. }) => {
                 let spells = demo.spells.clone();
-                strike(&mut demo, cell.0, &spells);
+                strike(&mut demo, *cell, &spells);
             }
             Some(CellKind::Spell { .. }) => {
                 let spells = demo.spells.clone();
-                try_cast(&mut demo, cell.0, &tables, &spells);
+                try_cast(&mut demo, *cell, &tables, &spells);
             }
             _ => {}
         }
     }
 }
 
-fn handle_cast_buttons(
+fn handle_cast_intents(
     demo: Option<ResMut<DemoLattice>>,
-    clicked: Query<(&Interaction, &CastsSpell), Changed<Interaction>>,
+    mut intents: MessageReader<hex_ui::UiIntent>,
     elements: Option<Res<ElementCatalog>>,
 ) {
     let Some(mut demo) = demo else { return };
     let Some(elements) = elements else { return };
     let index = demo.index.clone();
     let tables = index.tables(&elements);
-    for (interaction, cast) in &clicked {
-        if *interaction == Interaction::Pressed {
-            let spells = demo.spells.clone();
-            try_cast(&mut demo, cast.0, &tables, &spells);
-        }
+    for intent in intents.read() {
+        let hex_ui::UiIntent::LatticeDemo(hex_ui::LatticeDemoIntent::Cast(cell)) = intent else {
+            continue;
+        };
+        let spells = demo.spells.clone();
+        try_cast(&mut demo, *cell, &tables, &spells);
     }
 }
 
-fn handle_action_buttons(
+fn handle_action_intents(
     demo: Option<ResMut<DemoLattice>>,
-    end_turns: Query<&Interaction, (Changed<Interaction>, With<EndsTurn>)>,
-    resets: Query<&Interaction, (Changed<Interaction>, With<ResetsDemo>)>,
+    mut intents: MessageReader<hex_ui::UiIntent>,
 ) {
     let Some(mut demo) = demo else { return };
-    if end_turns
-        .iter()
-        .any(|interaction| *interaction == Interaction::Pressed)
-    {
-        {
-            let DemoLattice {
-                spec, stats, state, ..
-            } = &mut *demo;
-            channel(state, spec, stats);
+    for intent in intents.read() {
+        match intent {
+            hex_ui::UiIntent::LatticeDemo(hex_ui::LatticeDemoIntent::EndTurn) => {
+                let DemoLattice {
+                    spec, stats, state, ..
+                } = &mut *demo;
+                channel(state, spec, stats);
+                push_log(
+                    &mut demo.log,
+                    "end of turn: channelled mana back toward capacity".to_owned(),
+                );
+            }
+            hex_ui::UiIntent::LatticeDemo(hex_ui::LatticeDemoIntent::Reset) => {
+                let DemoLattice {
+                    spec, stats, state, ..
+                } = &mut *demo;
+                *state = LatticeState::new(spec, stats);
+                push_log(
+                    &mut demo.log,
+                    "reset: fresh battle state from the inscription".to_owned(),
+                );
+            }
+            _ => {}
         }
-        // No burn tick here any more. Burn stopped being something a lattice carries —
-        // it lives in `hex_combat`'s effect ledger, which this screen deliberately
-        // cannot see, because the demo is a sandbox for the *rules engine* rather than
-        // for the fight. A burn needs a turn order to tick against, and there is not one
-        // here.
-        push_log(
-            &mut demo.log,
-            "end of turn: channelled mana back toward capacity".to_owned(),
-        );
-    }
-    if resets
-        .iter()
-        .any(|interaction| *interaction == Interaction::Pressed)
-    {
-        {
-            let DemoLattice {
-                spec, stats, state, ..
-            } = &mut *demo;
-            *state = LatticeState::new(spec, stats);
-        }
-        push_log(
-            &mut demo.log,
-            "reset: fresh battle state from the inscription".to_owned(),
-        );
     }
 }
 
@@ -480,45 +418,24 @@ fn push_log(log: &mut Vec<String>, line: String) {
     }
 }
 
-/// Redraws the whole readout whenever the demo state changes.
-///
-/// A full despawn-and-respawn is deliberate: the demo is a verification
-/// surface, not a HUD, and one dumb redraw path cannot drift out of step with
-/// the state the way per-widget patching can.
-fn rebuild_readout(
-    mut commands: Commands,
+/// Projects the isolated rules state without exposing it to presentation.
+fn publish_demo_view(
     demo: Option<Res<DemoLattice>>,
     elements: Option<Res<ElementCatalog>>,
-    bodies: Query<Entity, With<DemoBody>>,
-    assets: Res<UiAssets>,
+    mut view: ResMut<hex_ui::LatticeDemoView>,
 ) {
-    let Some(demo) = demo else { return };
-    if !demo.is_changed() {
+    let Some(demo) = demo else {
+        if view.ready {
+            *view = hex_ui::LatticeDemoView::default();
+        }
         return;
-    }
+    };
     let Some(elements) = elements else { return };
-    let Ok(body) = bodies.single() else { return };
-    let tables = demo.index.tables(&elements);
-
-    commands.entity(body).despawn_related::<Children>();
-    commands.entity(body).with_children(|panels| {
-        spawn_lattice_panel(panels, &demo, &elements, &demo.spells, &assets);
-        spawn_control_panel(panels, &demo, &tables, &demo.spells, &assets);
-    });
-}
-
-fn spawn_lattice_panel(
-    panels: &mut ChildSpawnerCommands,
-    demo: &DemoLattice,
-    elements: &ElementCatalog,
-    spells: &SpellBook,
-    assets: &UiAssets,
-) {
-    if demo.spec.capacity() == 0 {
-        panels.spawn(blurb(assets, "the content defined no demo lattice"));
+    if !demo.is_changed() && !elements.is_changed() {
         return;
     }
-    let views: Vec<_> = demo
+    let tables = demo.index.tables(&elements);
+    let cells = demo
         .spec
         .cells()
         .map(|(coord, kind)| {
@@ -527,155 +444,69 @@ fn spawn_lattice_panel(
                 kind,
                 &demo.stats,
                 &demo.state,
-                elements,
-                spells,
+                &elements,
+                &demo.spells,
                 CellInteraction::Actionable,
                 false,
             )
         })
         .collect();
-
-    panels
-        .spawn((Name::new("Lattice Panel"), panel()))
-        .with_children(|framed| {
-            framed.spawn(heading(assets, "the inscription"));
-            spawn_lattice_cells(framed, &views, assets, LatticeScale::DEMO, "Demo", DemoCell);
-        });
-}
-
-fn spawn_control_panel(
-    panels: &mut ChildSpawnerCommands,
-    demo: &DemoLattice,
-    tables: &ContentTables,
-    spells: &SpellBook,
-    assets: &UiAssets,
-) {
-    panels
-        .spawn((Name::new("Demo Controls"), panel()))
-        .insert(Node {
-            flex_direction: FlexDirection::Column,
-            row_gap: Val::Px(10.0),
-            width: Val::Px(470.0),
-            padding: UiRect::all(Val::Px(18.0)),
-            border: UiRect::all(Val::Px(1.0)),
-            border_radius: BorderRadius::all(Val::Px(10.0)),
-            ..default()
-        })
-        .with_children(|controls| {
-            controls.spawn(heading(assets, "spells"));
-
-            for (coord, kind) in demo.spec.cells() {
-                let CellKind::Spell { spell } = kind else {
-                    continue;
-                };
-                let name = spells.name(spell).unwrap_or("unknown spell");
-                let kind_line = match tables.casting(spell) {
-                    Casting::Enchantment { defense } => format!("enchantment · defense {defense}"),
-                    Casting::Evocation => "evocation".to_owned(),
-                };
-                let ritual = spells
-                    .spell(spell)
-                    .is_some_and(hex_assets::Spell::is_ritual);
-                let headline = if ritual {
+    let spells = demo
+        .spec
+        .cells()
+        .filter_map(|(coord, kind)| {
+            let CellKind::Spell { spell } = kind else {
+                return None;
+            };
+            let name = demo
+                .spells
+                .name(spell)
+                .unwrap_or("unknown spell")
+                .to_owned();
+            let kind = match tables.casting(spell) {
+                Casting::Enchantment { defense } => format!("enchantment · defense {defense}"),
+                Casting::Evocation => "evocation".to_owned(),
+            };
+            let ritual = demo
+                .spells
+                .spell(spell)
+                .is_some_and(hex_assets::Spell::is_ritual);
+            let (cost, blocked) = match castable(&demo.spec, &demo.state, coord, &tables) {
+                Ok(plan) => (
+                    Some(plan.drains.values().map(|&mana| u32::from(mana)).sum()),
+                    None,
+                ),
+                Err(blocked) => (None, Some(blocked_reason(&blocked).to_owned())),
+            };
+            Some(hex_ui::LatticeDemoSpellView {
+                coord,
+                headline: if ritual {
                     format!("{name} (ritual)")
                 } else {
-                    name.to_owned()
-                };
-
-                controls
-                    .spawn((
-                        Name::new("Spell Row"),
-                        Node {
-                            height: Val::Px(50.0),
-                            flex_direction: FlexDirection::Row,
-                            column_gap: Val::Px(14.0),
-                            align_items: AlignItems::Center,
-                            ..default()
-                        },
-                    ))
-                    .with_children(|row| {
-                        // The action slot is a button's width whether it holds a
-                        // button or a blocked reason, so every row aligns.
-                        match castable(&demo.spec, &demo.state, coord, tables) {
-                            Ok(plan) => {
-                                let cost: u32 =
-                                    plan.drains.values().map(|&mana| u32::from(mana)).sum();
-                                // The spell's name in the button `Name` gives
-                                // walk scripts a stable handle — entity order
-                                // is not stable across UI rebuilds.
-                                row.spawn((
-                                    small_button(format!("Cast {name}")),
-                                    CastsSpell(coord),
-                                ))
-                                .with_children(|cast| {
-                                    cast.spawn(blurb(assets, "cast"));
-                                    cast.spawn(fine(assets, format!("{cost} mana")));
-                                });
-                            }
-                            Err(blocked) => {
-                                row.spawn((
-                                    Name::new("Blocked Reason"),
-                                    Node {
-                                        width: Val::Px(SMALL_BUTTON_WIDTH),
-                                        ..default()
-                                    },
-                                    children![fine(
-                                        assets,
-                                        format!("blocked · {}", blocked_reason(&blocked))
-                                    )],
-                                ));
-                            }
-                        }
-                        row.spawn((
-                            Node {
-                                flex_direction: FlexDirection::Column,
-                                row_gap: Val::Px(2.0),
-                                ..default()
-                            },
-                            children![label(assets, headline), fine(assets, kind_line)],
-                        ));
-                    });
-            }
-
-            controls.spawn(divider(430.0));
-            controls.spawn(blurb(
-                assets,
-                format!(
-                    "free mana {}   ·   locked {}   ·   enchantments {}",
-                    demo.state.total_gem_mana(),
-                    demo.state.total_locked_mana(),
-                    demo.state.enchantment_count(),
-                ),
-            ));
-
-            controls
-                .spawn((
-                    Name::new("Demo Actions"),
-                    Node {
-                        flex_direction: FlexDirection::Row,
-                        column_gap: Val::Px(12.0),
-                        ..default()
-                    },
-                ))
-                .with_children(|actions| {
-                    actions
-                        .spawn((small_button("End Turn"), EndsTurn))
-                        .with_children(|action| {
-                            action.spawn(blurb(assets, "end turn"));
-                            action.spawn(fine(assets, "channel mana"));
-                        });
-                    actions
-                        .spawn((small_button("Reset"), ResetsDemo))
-                        .with_children(|action| {
-                            action.spawn(blurb(assets, "reset"));
-                            action.spawn(fine(assets, "fresh state"));
-                        });
-                });
-
-            for line in &demo.log {
-                controls.spawn(fine(assets, format!("·  {line}")));
-            }
-        });
+                    name.clone()
+                },
+                name,
+                kind,
+                cost,
+                blocked,
+            })
+        })
+        .collect();
+    let next = hex_ui::LatticeDemoView {
+        ready: true,
+        cells,
+        spells,
+        totals: format!(
+            "free mana {} · locked {} · enchantments {}",
+            demo.state.total_gem_mana(),
+            demo.state.total_locked_mana(),
+            demo.state.enchantment_count(),
+        ),
+        log: demo.log.clone(),
+    };
+    if *view != next {
+        *view = next;
+    }
 }
 
 fn handle_input(

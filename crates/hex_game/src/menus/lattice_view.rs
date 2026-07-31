@@ -9,8 +9,7 @@ use hex_lattice::{CellKind, LatticeState, LatticeStats};
 
 use hex_ui::{element_color, FUSION_COLOR};
 pub(crate) use hex_ui::{
-    paint_lattice_interactions as paint_interactions, short_name, spawn_lattice_cells,
-    CellInteraction, LatticeCellView, LatticeScale,
+    paint_lattice_interactions as paint_interactions, short_name, CellInteraction, LatticeCellView,
 };
 
 const SPELL_COLOR: Color = Color::srgba(0.30, 0.33, 0.40, 0.95);
