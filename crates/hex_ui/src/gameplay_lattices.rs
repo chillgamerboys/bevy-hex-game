@@ -130,7 +130,8 @@ fn spawn_panels(
                 CompactDecisionBody,
                 Node {
                     width: Val::Percent(100.0),
-                    height: Val::Percent(100.0),
+                    min_height: Val::Px(0.0),
+                    flex_grow: 1.0,
                     flex_direction: FlexDirection::Row,
                     align_items: AlignItems::Center,
                     column_gap: Val::Px(12.0),
@@ -244,12 +245,15 @@ fn rebuild(
                 return;
             };
             commands.entity(body).with_children(|body| {
+                let ultra_constrained = metrics.effective_size.x < 700.0;
                 body.spawn((
                     Name::new("Compact Required Lattice Summary"),
                     Node {
-                        width: Val::Px(188.0),
-                        min_width: Val::Px(188.0),
+                        width: Val::Px(if ultra_constrained { 120.0 } else { 188.0 }),
+                        min_width: Val::Px(if ultra_constrained { 120.0 } else { 188.0 }),
+                        height: Val::Px(72.0),
                         flex_direction: FlexDirection::Column,
+                        justify_content: JustifyContent::Center,
                         row_gap: Val::Px(3.0),
                         ..default()
                     },
@@ -260,6 +264,8 @@ fn rebuild(
                         &assets,
                         if decision.restoring {
                             "RESTORE CELL"
+                        } else if ultra_constrained {
+                            "SELECT CELL"
                         } else {
                             "SELECT LIVE CELL"
                         },
@@ -273,7 +279,11 @@ fn rebuild(
                     body,
                     &own.cells,
                     &assets,
-                    LatticeScale::PANEL,
+                    if ultra_constrained {
+                        LatticeScale::TIGHT
+                    } else {
+                        LatticeScale::PANEL
+                    },
                     "Compact Required",
                     OwnCell,
                 );

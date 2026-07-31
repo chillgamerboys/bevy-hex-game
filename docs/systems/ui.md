@@ -24,6 +24,8 @@ The public seam is deliberately small:
 - `ActionAffordance` carries the label, shortcut, priority, and canonical enabled or
   disabled reason for one action.
 - The default-off `test-support` feature exposes immutable UI-tree observations.
+  `HeadlessUiPlugin` runs the real Bevy UI, text, focus, and layout schedules on a
+  synthetic primary window without Winit, a renderer, or gameplay plugins.
 
 Creator and Combat Lab transitions remain in `hex_gameplay_model`. A widget may
 select or submit a transition, but it must not duplicate the transition policy.
@@ -88,7 +90,8 @@ Compact                         Standard / Wide
 
 Structural tests cover 960×540, 1280×720, 1920×1080, 2560×1440, and
 3840×2160 in Auto and 200% modes. Required controls must remain visible,
-unobscured, and reachable.
+unobscured, and reachable. The matrix uses `UiTreeSnapshot` bounds and focus order;
+it does not inspect pixels or rendered text.
 
 ## Typography, spacing, and contrast
 
