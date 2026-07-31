@@ -13,7 +13,7 @@ use hex_core::{GameplayPhase, HexCoord, TilePos, UnitId};
 use hex_game::combat_reports::{
     CombatLabReport, CombatLabReportController, CombatLabReportDeployment, CombatLabReportId,
     CombatLabReportMap, CombatLabReportOrigin, CombatLabReportRosterEntry, CombatLabReportRosters,
-    SavedCombatLabReport,
+    CombatLabReportTermination, SavedCombatLabReport,
 };
 use hex_game::test_support::{
     fixture_filter_snapshot, live_statistics_text, live_statistics_visible, report_text,
@@ -53,7 +53,7 @@ fn sample_report(rounds: u32, player_id: u64, hostile_id: u64) -> CombatLabRepor
             ..Default::default()
         },
     );
-    CombatLabReport::new(
+    let result = CombatLabReport::new(
         CombatRulesProfile::shipped(&shipped),
         CombatLabReportOrigin::Sandbox,
         CombatLabReportMap {
@@ -80,9 +80,13 @@ fn sample_report(rounds: u32, player_id: u64, hostile_id: u64) -> CombatLabRepor
             players: vec![position(-2, 1, 1)],
             hostiles: vec![position(3, -1, 2)],
         },
-        EncounterOutcome::Victory,
+        CombatLabReportTermination::Outcome(EncounterOutcome::Victory),
         summary,
-    )
+    );
+    match result {
+        Ok(report) => report,
+        Err(_) => std::process::abort(),
+    }
 }
 
 #[test]
@@ -104,10 +108,14 @@ fn report_modes_are_functional_canonical_and_independently_selectable() {
     let saved = [
         SavedCombatLabReport {
             id: CombatLabReportId(17),
+            label: "older".to_owned(),
+            notes: String::new(),
             report: older,
         },
         SavedCombatLabReport {
             id: CombatLabReportId(23),
+            label: "selected".to_owned(),
+            notes: String::new(),
             report: selected,
         },
     ];

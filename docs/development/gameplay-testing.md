@@ -128,10 +128,11 @@ those decisions.
 ## Simulation evidence
 
 One `CombatCase` freezes typed unit/controller inputs, profile, explicit arena links,
-world-published observation, stable content names, and run bounds. One run produces a
+world-published observation, stable content names, active-combat spell facts, and
+independent command/turn/no-progress bounds. One run produces a
 `CombatRunSnapshot` containing canonical metrics and complete state plus state,
-command, and full-transcript fingerprints, typed outcome or bounded
-no-progress termination, turn state, lattice summaries, and exact `TilePos`
+command, and full-transcript fingerprints, typed outcome or exact bound termination,
+turn state, lattice summaries, and exact `TilePos`
 positions.
 
 Every acceptance case runs twice from fresh state and requires complete snapshot
@@ -139,12 +140,15 @@ equality before checking named metrics. A bounded no-progress result is data. It
 never silently converted to success, inferred from a frame, or described as a
 terminal outcome.
 
-The current `ControllerInput::Scripted` runner emits only `EndTurn`. Consequently the
-simulation partition presently proves deterministic state/turn composition, exact
-occupancy, profile propagation, fingerprints, and typed no-progress behavior; it does
-not prove tactical choices, spell composition, fight outcomes, or balance. Those
-claims require a controller that issues real canonical commands and a pure reducer
-that can execute the relevant content-dependent verbs.
+`ControllerInput::Scripted` consumes exact replayable commands and fails when a
+per-unit script is exhausted or names another unit. `ControllerInput::Baseline` is a
+stable non-random reference policy that answers lattice decisions, casts supported
+spells, strikes, advances over explicit links, and yields. The reducer owns cast
+payment, direct disables, restoration, Burn, downing, revival scheduling, and
+outcomes, so the partition proves their composition as well as deterministic
+state/turn, occupancy, profile, fingerprint, and bound behavior. It remains a
+regression oracle, not evidence that the baseline policy is strategically optimal or
+that balance is fun.
 
 ## Visual evidence policy
 

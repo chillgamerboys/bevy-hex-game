@@ -4,26 +4,57 @@ use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 
 use hex_core::{
-    Faction, GameCommand, IssuedCommand, LatticeCoord, PendingDecision, PlayerSeat, TilePos, Turn,
-    UnitId, UnitOccupancy,
+    EffectEnd, EffectId, EffectPayload, Faction, GameCommand, IssuedCommand, LatticeCoord,
+    PendingDecision, PersistentEffect, PlayerSeat, TilePos, Turn, UnitId, UnitOccupancy,
 };
 use hex_lattice::{
-    apply_disables, channel, resolve_incoming, CellKind, LatticeSpec, LatticeState, LatticeStats,
+    apply_disables, castable, channel, resolve_incoming, restore, CastBlocked, CellKind,
+    LatticeSpec, LatticeState, LatticeStats,
 };
 use serde::{Deserialize, Serialize};
 use xxhash_rust::xxh3::xxh3_64;
 
-use crate::{CombatData, CombatEvent, CommandRefusal, EncounterOutcome, UnitData};
+use crate::{
+    CastBlockReason, CombatData, CombatEvent, CommandRefusal, EncounterOutcome,
+    FrozenCombatContent, FrozenEffect, FrozenTargeting, RestorationRefusal, UnitData,
+};
+
+/// Current pure rules-policy schema.
+pub const RULES_PROFILE_VERSION: u16 = 1;
+
+/// Implemented initiative policy.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InitiativePolicy {
+    /// One slot per active unit, fixed by authored initiative then stable unit id.
+    FixedByInitiativeThenUnitId,
+}
+
+/// Implemented action-economy policy.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActionEconomyPolicy {
+    /// A movement budget plus exactly one action.
+    MovementAndOneAction,
+}
 
 /// Frozen, content-independent policy values used by combat.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct RulesProfile {
+    /// Serialized pure-policy schema.
+    pub version: u16,
     /// Stable profile identity included in snapshots and reports.
     pub name: String,
+    /// Typed initiative baseline.
+    pub initiative: InitiativePolicy,
+    /// Typed action-economy baseline.
+    pub action_economy: ActionEconomyPolicy,
     /// Exact movement edges granted at the start of every turn.
     pub movement_per_turn: u32,
     /// Raw lattice disables opened by the placeholder melee strike.
     pub strike_disable_count: u16,
+    /// Elevation levels required for one bonus target-range hex.
+    pub levels_per_bonus_range: u32,
+    /// Further round rollovers each Reveal tier remains known.
+    pub reveal_rounds_per_tier: u32,
 }
 
 impl RulesProfile {
@@ -37,9 +68,14 @@ impl RulesProfile {
             return Err("rules profile name must not be empty".to_owned());
         }
         Ok(Self {
+            version: RULES_PROFILE_VERSION,
             name,
+            initiative: InitiativePolicy::FixedByInitiativeThenUnitId,
+            action_economy: ActionEconomyPolicy::MovementAndOneAction,
             movement_per_turn,
             strike_disable_count: 1,
+            levels_per_bonus_range: 5,
+            reveal_rounds_per_tier: 1,
         })
     }
 
@@ -48,6 +84,38 @@ impl RulesProfile {
     pub fn with_strike_disable_count(mut self, count: u16) -> Self {
         self.strike_disable_count = count;
         self
+    }
+
+    /// Overrides targeting and Reveal policy while retaining the shipping algorithms.
+    #[must_use]
+    pub fn with_cast_policy(
+        mut self,
+        levels_per_bonus_range: u32,
+        reveal_rounds_per_tier: u32,
+    ) -> Self {
+        self.levels_per_bonus_range = levels_per_bonus_range;
+        self.reveal_rounds_per_tier = reveal_rounds_per_tier;
+        self
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.version != RULES_PROFILE_VERSION {
+            return Err(format!(
+                "rules profile version {} is unsupported; expected {RULES_PROFILE_VERSION}",
+                self.version
+            ));
+        }
+        if self.movement_per_turn == 0
+            || self.strike_disable_count == 0
+            || self.levels_per_bonus_range == 0
+            || self.reveal_rounds_per_tier == 0
+        {
+            return Err(
+                "pure combat rules require positive movement, strike, range, and Reveal values"
+                    .to_owned(),
+            );
+        }
+        Ok(())
     }
 }
 
@@ -370,6 +438,8 @@ pub struct CombatState {
     pub arena: ArenaSnapshot,
     /// Frozen stable content names needed by structured outcomes.
     pub elements: ElementNames,
+    /// Frozen authored facts required by active-combat casts.
+    pub content: FrozenCombatContent,
     /// Unit records in stable-id order.
     pub units: BTreeMap<UnitId, CombatUnit>,
     /// Initiative order in stable identities.
@@ -380,6 +450,12 @@ pub struct CombatState {
     pub round: u32,
     /// Revived units waiting for an exact round boundary before rejoining initiative.
     pub pending_revivals: BTreeMap<UnitId, u32>,
+    /// Running persistent effects in allocation order.
+    pub effects: BTreeMap<EffectId, PersistentEffect>,
+    /// Next monotonic persistent-effect identity.
+    next_effect_id: u64,
+    /// Complete-lattice Reveal expiry keyed by viewer and subject.
+    pub reveals: BTreeMap<(Faction, UnitId), u32>,
     /// Canonical aggregate summary.
     pub metrics: CombatMetrics,
     /// One defender choice suspending further simulation commands.
@@ -400,10 +476,28 @@ impl CombatState {
         elements: ElementNames,
         units: impl IntoIterator<Item = CombatUnit>,
     ) -> Result<Self, String> {
-        Self::start_with_session(
+        Self::start_with_content(
             rules,
             arena,
             elements,
+            FrozenCombatContent::default(),
+            units,
+        )
+    }
+
+    /// Starts combat with immutable active-combat content.
+    pub fn start_with_content(
+        rules: RulesProfile,
+        arena: ArenaSnapshot,
+        elements: ElementNames,
+        content: FrozenCombatContent,
+        units: impl IntoIterator<Item = CombatUnit>,
+    ) -> Result<Self, String> {
+        Self::start_with_content_and_session(
+            rules,
+            arena,
+            elements,
+            content,
             units,
             PendingDecision::None,
             BTreeMap::new(),
@@ -423,6 +517,28 @@ impl CombatState {
         pending: PendingDecision,
         pending_revivals: BTreeMap<UnitId, u32>,
     ) -> Result<Self, String> {
+        Self::start_with_content_and_session(
+            rules,
+            arena,
+            elements,
+            FrozenCombatContent::default(),
+            units,
+            pending,
+            pending_revivals,
+        )
+    }
+
+    /// Starts combat while adopting frozen content and already-published session facts.
+    pub fn start_with_content_and_session(
+        rules: RulesProfile,
+        arena: ArenaSnapshot,
+        elements: ElementNames,
+        content: FrozenCombatContent,
+        units: impl IntoIterator<Item = CombatUnit>,
+        pending: PendingDecision,
+        pending_revivals: BTreeMap<UnitId, u32>,
+    ) -> Result<Self, String> {
+        rules.validate()?;
         for observed in arena.observed.values().flatten() {
             if !arena.surfaces.contains(observed) {
                 return Err(format!(
@@ -467,11 +583,15 @@ impl CombatState {
             rules,
             arena,
             elements,
+            content,
             units: by_id,
             order,
             current: 0,
             round: 0,
             pending_revivals,
+            effects: BTreeMap::new(),
+            next_effect_id: 0,
+            reveals: BTreeMap::new(),
             metrics: CombatMetrics::default(),
             pending,
             commands: Vec::new(),
@@ -770,14 +890,30 @@ impl CombatState {
                 owned_by: actor.seat,
             });
         }
-        if let PendingDecision::ChooseDisables { decider, .. } = self.pending {
-            if !matches!(
-                issued.command,
-                GameCommand::ChooseDisables {
-                    unit: answerer,
-                    ..
-                } if answerer == decider
-            ) {
+        let required_answer = match self.pending {
+            PendingDecision::None => None,
+            PendingDecision::ChooseDisables { decider, .. } => Some((decider, false)),
+            PendingDecision::ChooseRestores { decider, .. } => Some((decider, true)),
+        };
+        if let Some((decider, restores)) = required_answer {
+            let matches = if restores {
+                matches!(
+                    issued.command,
+                    GameCommand::ChooseRestores {
+                        unit: answerer,
+                        ..
+                    } if answerer == decider
+                )
+            } else {
+                matches!(
+                    issued.command,
+                    GameCommand::ChooseDisables {
+                        unit: answerer,
+                        ..
+                    } if answerer == decider
+                )
+            };
+            if !matches {
                 return Err(CommandRefusal::DecisionPending { decider });
             }
         }
@@ -787,15 +923,22 @@ impl CombatState {
             GameCommand::EndTurn { unit } => self.apply_end_turn(*unit),
             GameCommand::Channel { unit } => self.apply_channel(*unit),
             GameCommand::ChooseDisables { unit, cells } => self.apply_choose_disables(*unit, cells),
-            // These commands require resolved spell/effect or exploration-party
-            // adapters that are deliberately not reconstructed from authored/live
-            // resources inside the pure authority.
+            GameCommand::ChooseRestores {
+                unit,
+                target,
+                cells,
+            } => self.apply_choose_restores(*unit, *target, cells),
+            GameCommand::Cast {
+                unit,
+                spell,
+                target,
+                facing,
+                ..
+            } => self.apply_cast(*unit, spell, *target, *facing),
+            // Exploration verbs remain explicit host adapters. They are outside the
+            // active-combat authority and are not evidence for a fight simulation.
             GameCommand::MoveParty { .. } => Err(CommandRefusal::PartyMovementUnavailable),
-            GameCommand::ChooseRestores { .. } => Err(CommandRefusal::RestorationUnavailable),
             GameCommand::Rest { .. } => Err(CommandRefusal::RestUnavailable),
-            GameCommand::Cast { .. } => Err(CommandRefusal::MissingCombatData {
-                data: CombatData::ContentTables,
-            }),
         }
     }
 
@@ -831,22 +974,15 @@ impl CombatState {
         if cost > remaining {
             return Err(CommandRefusal::MovementBudgetExceeded { cost, remaining });
         }
-        let occupancy = UnitOccupancy::from_positions(
-            self.units
-                .values()
-                .filter_map(|actor| {
-                    (!actor.downed).then_some(
-                        std::iter::once((actor.id, actor.position)).chain(
-                            actor
-                                .motion
-                                .iter()
-                                .flat_map(|motion| motion.path.iter().copied())
-                                .map(|position| (actor.id, position)),
-                        ),
-                    )
-                })
-                .flatten(),
-        );
+        let occupancy = UnitOccupancy::from_positions(self.units.values().flat_map(|actor| {
+            std::iter::once((actor.id, actor.position)).chain(
+                actor
+                    .motion
+                    .iter()
+                    .flat_map(|motion| motion.path.iter().copied())
+                    .map(|position| (actor.id, position)),
+            )
+        }));
         occupancy
             .validate_route(path, unit)
             .map_err(|block| CommandRefusal::Occupied { block })?;
@@ -888,8 +1024,14 @@ impl CombatState {
     }
 
     fn apply_strike(&mut self, unit: UnitId, target: UnitId) -> Result<(), CommandRefusal> {
-        let actor = self.validate_actor(unit)?;
-        let turn = actor.turn.ok_or(CommandRefusal::NoTurn)?;
+        let (turn, actor_position, actor_faction) = {
+            let actor = self.validate_actor(unit)?;
+            (
+                actor.turn.ok_or(CommandRefusal::NoTurn)?,
+                actor.position,
+                actor.faction,
+            )
+        };
         if turn.acted {
             return Err(CommandRefusal::ActionAlreadySpent);
         }
@@ -900,12 +1042,12 @@ impl CombatState {
         if target_unit.downed {
             return Err(CommandRefusal::TargetDowned { target });
         }
-        if !actor.faction.is_hostile_to(target_unit.faction) {
+        if !actor_faction.is_hostile_to(target_unit.faction) {
             return Err(CommandRefusal::TargetNotHostile { target });
         }
         let links = self.arena.links_for(unit);
-        if !links.contains(&(actor.position, target_unit.position))
-            || !links.contains(&(target_unit.position, actor.position))
+        if !links.contains(&(actor_position, target_unit.position))
+            || !links.contains(&(target_unit.position, actor_position))
         {
             return Err(CommandRefusal::TargetOutOfMeleeReach { target });
         }
@@ -1037,6 +1179,345 @@ impl CombatState {
         Ok(())
     }
 
+    fn apply_cast(
+        &mut self,
+        unit: UnitId,
+        spell_name: &str,
+        target: TilePos,
+        _facing: Option<hex_core::Sextant>,
+    ) -> Result<(), CommandRefusal> {
+        let (turn, actor_position, actor_faction) = {
+            let actor = self.validate_actor(unit)?;
+            (
+                actor.turn.ok_or(CommandRefusal::NoTurn)?,
+                actor.position,
+                actor.faction,
+            )
+        };
+        if turn.acted {
+            return Err(CommandRefusal::ActionAlreadySpent);
+        }
+        let spell = self.content.spell(spell_name).cloned().ok_or_else(|| {
+            CommandRefusal::UnknownSpell {
+                spell: spell_name.to_owned(),
+            }
+        })?;
+        match spell.targeting {
+            FrozenTargeting::SelfOnly if target != actor_position => {
+                return Err(CommandRefusal::TargetOutOfRange {
+                    spell: spell_name.to_owned(),
+                    target,
+                });
+            }
+            FrozenTargeting::SelfOnly => {}
+            FrozenTargeting::ExactSurface { range } => {
+                let high_ground = actor_position.level.saturating_sub(target.level).max(0);
+                let bonus = u32::try_from(high_ground)
+                    .unwrap_or(u32::MAX)
+                    .checked_div(self.rules.levels_per_bonus_range)
+                    .unwrap_or_default();
+                if actor_position.coord.distance(target.coord) > range.saturating_add(bonus) {
+                    return Err(CommandRefusal::TargetOutOfRange {
+                        spell: spell_name.to_owned(),
+                        target,
+                    });
+                }
+            }
+        }
+        if !self.arena.observes(actor_faction, target) {
+            return Err(CommandRefusal::TargetUnobserved {
+                spell: spell_name.to_owned(),
+                target,
+            });
+        }
+        let target_unit = self
+            .units
+            .values()
+            .find(|candidate| candidate.position == target)
+            .map(|candidate| (candidate.id, candidate.downed));
+        let damages = spell.effects.iter().any(|effect| {
+            matches!(
+                effect,
+                FrozenEffect::DisableHexes { .. } | FrozenEffect::Burn { .. }
+            )
+        });
+        if let Some((target, true)) = target_unit {
+            if damages {
+                return Err(CommandRefusal::TargetDowned { target });
+            }
+        }
+        let cell = {
+            let lattice = self
+                .units
+                .get(&unit)
+                .and_then(|actor| actor.lattice.as_ref())
+                .ok_or(CommandRefusal::MissingUnitData {
+                    unit,
+                    data: UnitData::Lattice,
+                })?;
+            spell_cell(&lattice.spec, &lattice.state, spell.id).ok_or_else(|| {
+                CommandRefusal::SpellNotInscribed {
+                    spell: spell_name.to_owned(),
+                }
+            })?
+        };
+        let plan = {
+            let lattice = self
+                .units
+                .get(&unit)
+                .and_then(|actor| actor.lattice.as_ref())
+                .ok_or(CommandRefusal::MissingUnitData {
+                    unit,
+                    data: UnitData::Lattice,
+                })?;
+            castable(&lattice.spec, &lattice.state, cell, &self.content).map_err(|blocked| {
+                let reason = match blocked {
+                    CastBlocked::NotASpell => CastBlockReason::NotASpell,
+                    CastBlocked::SpellDisabled => CastBlockReason::SpellDisabled,
+                    CastBlocked::Unsatisfiable => CastBlockReason::Unsatisfiable,
+                };
+                CommandRefusal::CastBlocked {
+                    spell: spell_name.to_owned(),
+                    reason,
+                }
+            })?
+        };
+        {
+            let lattice = self
+                .units
+                .get_mut(&unit)
+                .and_then(|actor| actor.lattice.as_mut())
+                .ok_or(CommandRefusal::MissingUnitData {
+                    unit,
+                    data: UnitData::Lattice,
+                })?;
+            if !hex_lattice::apply_cast(&mut lattice.state, &plan, &self.content) {
+                return Err(CommandRefusal::CastPlanStale {
+                    spell: spell_name.to_owned(),
+                });
+            }
+        }
+        self.events.push(CombatEvent::Cast {
+            caster: unit,
+            spell: spell_name.to_owned(),
+            target,
+        });
+
+        for effect in spell.effects {
+            match effect {
+                FrozenEffect::DisableHexes { count } => {
+                    let Some((target, _)) = target_unit else {
+                        continue;
+                    };
+                    let Some(lattice) = self
+                        .units
+                        .get(&target)
+                        .and_then(|target| target.lattice.as_ref())
+                    else {
+                        continue;
+                    };
+                    let landed = resolve_incoming(&lattice.state, count);
+                    let prevented = count.saturating_sub(landed);
+                    if prevented > 0 {
+                        self.events.push(CombatEvent::DamagePrevented {
+                            source: unit,
+                            target,
+                            amount: prevented,
+                        });
+                    }
+                    if landed > 0 {
+                        self.pending = PendingDecision::ChooseDisables {
+                            decider: target,
+                            count: landed,
+                            source: unit,
+                        };
+                        self.events.push(CombatEvent::DecisionOpened {
+                            decider: target,
+                            source: unit,
+                            count: landed,
+                        });
+                    }
+                }
+                FrozenEffect::Burn { turns } => {
+                    let Some((target, _)) = target_unit else {
+                        continue;
+                    };
+                    if turns == 0
+                        || self
+                            .units
+                            .get(&target)
+                            .and_then(|target| target.lattice.as_ref())
+                            .is_none()
+                    {
+                        continue;
+                    }
+                    let id = EffectId(self.next_effect_id);
+                    self.next_effect_id = self.next_effect_id.saturating_add(1);
+                    self.effects.insert(
+                        id,
+                        PersistentEffect {
+                            source: unit,
+                            target,
+                            payload: EffectPayload::Burn,
+                            start: self.round,
+                            end: EffectEnd::AfterTurns(turns),
+                            ticks: 0,
+                        },
+                    );
+                    self.events.push(CombatEvent::BurnApplied {
+                        source: unit,
+                        target,
+                        turns,
+                    });
+                }
+                FrozenEffect::RestoreHexes { count } => {
+                    let Some((target, _)) = target_unit else {
+                        continue;
+                    };
+                    let disabled = self
+                        .units
+                        .get(&target)
+                        .and_then(|target| target.lattice.as_ref())
+                        .map_or(0, |lattice| {
+                            lattice
+                                .spec
+                                .cells()
+                                .filter(|(coord, _)| lattice.state.is_disabled(*coord))
+                                .count()
+                        });
+                    let owed = usize::from(count).min(disabled);
+                    if owed > 0 {
+                        self.pending = PendingDecision::ChooseRestores {
+                            decider: unit,
+                            target,
+                            count: u16::try_from(owed).unwrap_or(u16::MAX),
+                        };
+                    }
+                }
+                FrozenEffect::Reveal { tier } => {
+                    let Some((subject, _)) = target_unit else {
+                        continue;
+                    };
+                    let Some(lattice) = self
+                        .units
+                        .get(&subject)
+                        .and_then(|subject| subject.lattice.as_ref())
+                    else {
+                        continue;
+                    };
+                    let cells = lattice.spec.cells().map(|(coord, _)| coord).collect();
+                    let rounds = self.rules.reveal_rounds_per_tier.saturating_mul(tier);
+                    self.reveals.insert(
+                        (actor_faction, subject),
+                        self.round.saturating_add(rounds).saturating_add(1),
+                    );
+                    self.events.push(CombatEvent::Revealed {
+                        viewer: actor_faction,
+                        subject,
+                        cells,
+                        rounds,
+                    });
+                }
+            }
+        }
+        self.units
+            .get_mut(&unit)
+            .and_then(|actor| actor.turn.as_mut())
+            .ok_or(CommandRefusal::NoTurn)?
+            .acted = true;
+        Ok(())
+    }
+
+    fn apply_choose_restores(
+        &mut self,
+        caster: UnitId,
+        target: UnitId,
+        cells: &[LatticeCoord],
+    ) -> Result<(), CommandRefusal> {
+        let PendingDecision::ChooseRestores {
+            decider,
+            target: expected,
+            count,
+        } = self.pending
+        else {
+            return Err(CommandRefusal::Restoration {
+                reason: RestorationRefusal::NoDecision,
+            });
+        };
+        if decider != caster {
+            return Err(CommandRefusal::WrongDecisionUnit { expected: decider });
+        }
+        if target != expected {
+            return Err(CommandRefusal::Restoration {
+                reason: RestorationRefusal::WrongTarget { expected },
+            });
+        }
+        let lattice = self
+            .units
+            .get(&target)
+            .and_then(|target| target.lattice.as_ref())
+            .ok_or(CommandRefusal::MissingUnitData {
+                unit: target,
+                data: UnitData::Lattice,
+            })?;
+        let disabled = lattice
+            .spec
+            .cells()
+            .filter(|(coord, _)| lattice.state.is_disabled(*coord))
+            .count();
+        let owed = usize::from(count).min(disabled);
+        if cells.len() != owed {
+            return Err(CommandRefusal::Restoration {
+                reason: RestorationRefusal::WrongCount {
+                    expected: u16::try_from(owed).unwrap_or(u16::MAX),
+                    actual: u16::try_from(cells.len()).unwrap_or(u16::MAX),
+                },
+            });
+        }
+        let mut seen = BTreeSet::new();
+        for &cell in cells {
+            if lattice.spec.get(cell).is_none() {
+                return Err(CommandRefusal::CellOutsideLattice { cell });
+            }
+            if !seen.insert(cell) {
+                return Err(CommandRefusal::DuplicateCell { cell });
+            }
+            if !lattice.state.is_disabled(cell) {
+                return Err(CommandRefusal::Restoration {
+                    reason: RestorationRefusal::CellNotDisabled { cell },
+                });
+            }
+        }
+        let actor = self
+            .units
+            .get_mut(&target)
+            .ok_or(CommandRefusal::UnknownUnit)?;
+        let lattice = actor
+            .lattice
+            .as_mut()
+            .ok_or(CommandRefusal::MissingUnitData {
+                unit: target,
+                data: UnitData::Lattice,
+            })?;
+        restore(&mut lattice.state, cells);
+        self.pending = PendingDecision::None;
+        self.events.push(CombatEvent::HexesRestored {
+            caster,
+            target,
+            cells: cells.to_vec(),
+        });
+        if !cells.is_empty() && actor.downed {
+            actor.downed = false;
+            let reenters_round = self.round.saturating_add(1);
+            self.pending_revivals.insert(target, reenters_round);
+            self.events.push(CombatEvent::Revived {
+                unit: target,
+                reenters_round,
+            });
+        }
+        Ok(())
+    }
+
     fn apply_channel(&mut self, unit: UnitId) -> Result<(), CommandRefusal> {
         let actor = self.validate_actor(unit)?;
         let turn = actor.turn.ok_or(CommandRefusal::NoTurn)?;
@@ -1118,6 +1599,8 @@ impl CombatState {
                 self.current = 0;
                 self.round = self.round.saturating_add(1);
                 self.insert_due_revivals();
+                self.reveals.retain(|_, expiry| *expiry > self.round);
+                self.expire_effects();
             }
         }
         self.grant_current_turn();
@@ -1208,6 +1691,70 @@ impl CombatState {
                 acted: false,
             });
         }
+        if self.pending.is_open() {
+            return;
+        }
+
+        let source = self
+            .effects
+            .iter()
+            .find(|(_, effect)| {
+                effect.target == current
+                    && effect.payload == EffectPayload::Burn
+                    && !matches!(effect.end, EffectEnd::AfterTurns(turns) if effect.ticks >= turns)
+            })
+            .map(|(_, effect)| effect.source);
+        let mut due = 0_u16;
+        for effect in self.effects.values_mut() {
+            if effect.target != current || effect.payload != EffectPayload::Burn {
+                continue;
+            }
+            if let EffectEnd::AfterTurns(turns) = effect.end {
+                if effect.ticks >= turns {
+                    continue;
+                }
+                effect.ticks = effect.ticks.saturating_add(1);
+            }
+            due = due.saturating_add(1);
+        }
+        self.expire_effects();
+        if let Some(source) = source.filter(|_| due > 0) {
+            let answerable = self
+                .units
+                .get(&current)
+                .and_then(|unit| unit.lattice.as_ref())
+                .is_some();
+            if answerable {
+                self.pending = PendingDecision::ChooseDisables {
+                    decider: current,
+                    count: due,
+                    source,
+                };
+                self.events.push(CombatEvent::BurnTicked {
+                    source,
+                    target: current,
+                    count: due,
+                });
+                self.events.push(CombatEvent::DecisionOpened {
+                    decider: current,
+                    source,
+                    count: due,
+                });
+            }
+        }
+    }
+
+    fn expire_effects(&mut self) {
+        let round = self.round;
+        let units = &self.units;
+        self.effects.retain(|_, effect| match effect.end {
+            EffectEnd::AfterRounds(rounds) => round < effect.start.saturating_add(rounds),
+            EffectEnd::AfterTurns(turns) => effect.ticks < turns,
+            EffectEnd::WithEnchantment(enchantment) => units
+                .get(&effect.target)
+                .and_then(|unit| unit.lattice.as_ref())
+                .is_some_and(|lattice| lattice.state.enchantment(enchantment).is_some()),
+        });
     }
 
     /// Deterministic fingerprint of the complete serializable authority state.
@@ -1223,17 +1770,80 @@ impl CombatState {
 }
 
 /// Who supplies commands in a deterministic case.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum ControllerInput {
-    /// Repeatable scripted commands issued under one seat.
-    Scripted(PlayerSeat),
+    /// Exact replayable commands, consumed in their recorded order.
+    Scripted {
+        /// Seat claim retained with every emitted command.
+        seat: PlayerSeat,
+        /// Exact command payloads, including defender choices.
+        commands: Vec<GameCommand>,
+    },
+    /// Stable non-random reference policy used for unattended comparisons.
+    Baseline {
+        /// Seat claim retained with every emitted command.
+        seat: PlayerSeat,
+    },
 }
 
-/// Bounds for one deterministic run.
+macro_rules! positive_bound {
+    ($name:ident, $doc:literal) => {
+        #[doc = $doc]
+        #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+        #[serde(transparent)]
+        pub struct $name(u32);
+
+        impl $name {
+            /// Creates a non-zero bound.
+            pub fn new(value: u32) -> Result<Self, String> {
+                (value > 0).then_some(Self(value)).ok_or_else(|| {
+                    concat!(stringify!($name), " must be greater than zero").to_owned()
+                })
+            }
+
+            /// Returns the validated scalar value.
+            #[must_use]
+            pub const fn get(self) -> u32 {
+                self.0
+            }
+        }
+    };
+}
+
+positive_bound!(CommandBound, "Maximum accepted commands in one run.");
+positive_bound!(TurnBound, "Maximum completed turns in one run.");
+positive_bound!(
+    NoProgressBound,
+    "Maximum consecutive turns without movement or an action."
+);
+
+/// Independent typed bounds for one deterministic run.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RunBounds {
-    /// Maximum commands applied before typed no-progress termination.
-    pub max_commands: u32,
+    /// Absolute command ceiling.
+    pub commands: CommandBound,
+    /// Absolute completed-turn ceiling.
+    pub turns: TurnBound,
+    /// Consecutive idle-turn ceiling.
+    pub no_progress_turns: NoProgressBound,
+}
+
+impl RunBounds {
+    /// Creates validated run bounds.
+    pub fn new(commands: u32, turns: u32, no_progress_turns: u32) -> Result<Self, String> {
+        Ok(Self {
+            commands: CommandBound::new(commands)?,
+            turns: TurnBound::new(turns)?,
+            no_progress_turns: NoProgressBound::new(no_progress_turns)?,
+        })
+    }
+
+    fn validate(self) -> Result<(), String> {
+        if self.commands.get() == 0 || self.turns.get() == 0 || self.no_progress_turns.get() == 0 {
+            return Err("serialized run bounds must all be greater than zero".to_owned());
+        }
+        Ok(())
+    }
 }
 
 /// Complete pure simulation fixture.
@@ -1247,6 +1857,9 @@ pub struct CombatCase {
     pub arena: ArenaSnapshot,
     /// Frozen element display names.
     pub elements: ElementNames,
+    /// Frozen active-combat content.
+    #[serde(default)]
+    pub content: FrozenCombatContent,
     /// Frozen roster.
     pub units: Vec<CombatUnit>,
     /// Typed command producer per unit.
@@ -1258,40 +1871,84 @@ pub struct CombatCase {
 impl CombatCase {
     /// Runs a bounded canonical case without Bevy App, ECS schedule, or wall clock.
     pub fn run(&self) -> Result<CombatRunSnapshot, String> {
-        let mut state = CombatState::start(
+        self.bounds.validate()?;
+        let mut state = CombatState::start_with_content(
             self.rules.clone(),
             self.arena.clone(),
             self.elements.clone(),
+            self.content.clone(),
             self.units.clone(),
         )?;
-        for _ in 0..self.bounds.max_commands {
-            if state.outcome.is_some() {
-                break;
+        let mut cursors = BTreeMap::<UnitId, usize>::new();
+        let termination = loop {
+            if let Some(outcome) = state.outcome {
+                break CombatTermination::Outcome(outcome);
             }
-            let Some(current) = state.current() else {
-                break;
+            if state.metrics.successful_commands >= self.bounds.commands.get() {
+                break CombatTermination::CommandBoundReached {
+                    commands: state.metrics.successful_commands,
+                };
+            }
+            if state.metrics.turns >= self.bounds.turns.get() {
+                break CombatTermination::TurnBoundReached {
+                    completed_turns: state.metrics.turns,
+                };
+            }
+            if state.metrics.no_progress_current >= self.bounds.no_progress_turns.get() {
+                break CombatTermination::NoProgressBoundReached {
+                    completed_turns: state.metrics.turns,
+                    no_progress_streak: state.metrics.no_progress_current,
+                };
+            }
+            let owner = match state.pending {
+                PendingDecision::ChooseDisables { decider, .. }
+                | PendingDecision::ChooseRestores { decider, .. } => decider,
+                PendingDecision::None => state.current().ok_or_else(|| {
+                    format!("case {} has no current unit or terminal outcome", self.name)
+                })?,
             };
-            let seat = match self.controllers.get(&current) {
-                Some(ControllerInput::Scripted(seat)) => *seat,
-                None => {
-                    return Err(format!(
-                        "case {} has no controller for current unit {current:?}",
-                        self.name
-                    ));
+            let controller = self.controllers.get(&owner).ok_or_else(|| {
+                format!("case {} has no controller for unit {owner:?}", self.name)
+            })?;
+            let (seat, command) = match controller {
+                ControllerInput::Scripted { seat, commands } => {
+                    let cursor = cursors.entry(owner).or_default();
+                    let command = commands.get(*cursor).cloned().ok_or_else(|| {
+                        format!(
+                            "case {} exhausted the exact script for unit {owner:?} at command {}",
+                            self.name, *cursor
+                        )
+                    })?;
+                    *cursor = cursor.saturating_add(1);
+                    (*seat, command)
                 }
+                ControllerInput::Baseline { seat } => (*seat, baseline_command(&state, owner)?),
             };
-            let issued = IssuedCommand {
-                seat,
-                command: GameCommand::EndTurn { unit: current },
-            };
+            if command.unit() != owner {
+                return Err(format!(
+                    "case {} controller for {owner:?} emitted a command for {:?}",
+                    self.name,
+                    command.unit()
+                ));
+            }
+            let issued = IssuedCommand { seat, command };
+            let moved = matches!(issued.command, GameCommand::MoveAlong { .. });
             if let Err(refusal) = state.apply(issued) {
                 return Err(format!(
-                    "case {} scripted command was refused: {refusal:?}",
+                    "case {} controller command was refused: {refusal:?}",
                     self.name
                 ));
             }
-        }
-        CombatRunSnapshot::from_state(self.name.clone(), state)
+            if moved {
+                state.complete_movement(owner).map_err(|error| {
+                    format!(
+                        "case {} could not settle pure movement: {error:?}",
+                        self.name
+                    )
+                })?;
+            }
+        };
+        CombatRunSnapshot::from_state(self.name.clone(), state, termination)
     }
 }
 
@@ -1300,12 +1957,22 @@ impl CombatCase {
 pub enum CombatTermination {
     /// Combat reached a retained-world outcome.
     Outcome(EncounterOutcome),
-    /// The command bound was reached without progress to an outcome.
-    BoundedNoProgress {
+    /// The consecutive idle-turn bound was reached.
+    NoProgressBoundReached {
         /// Authoritative turns completed.
         completed_turns: u32,
         /// Current consecutive no-progress turns.
         no_progress_streak: u32,
+    },
+    /// The absolute accepted-command bound was reached.
+    CommandBoundReached {
+        /// Accepted commands.
+        commands: u32,
+    },
+    /// The absolute completed-turn bound was reached.
+    TurnBoundReached {
+        /// Authoritative turns completed.
+        completed_turns: u32,
     },
 }
 
@@ -1361,7 +2028,11 @@ pub struct CombatRunSnapshot {
 }
 
 impl CombatRunSnapshot {
-    fn from_state(case: String, state: CombatState) -> Result<Self, String> {
+    fn from_state(
+        case: String,
+        state: CombatState,
+        termination: CombatTermination,
+    ) -> Result<Self, String> {
         let current = state.current();
         let active = current
             .and_then(|unit| state.units.get(&unit))
@@ -1388,13 +2059,6 @@ impl CombatRunSnapshot {
                 })
             })
             .collect();
-        let termination = state.outcome.map_or(
-            CombatTermination::BoundedNoProgress {
-                completed_turns: state.metrics.turns,
-                no_progress_streak: state.metrics.no_progress_current,
-            },
-            CombatTermination::Outcome,
-        );
         Ok(Self {
             case,
             summary: state.metrics.clone(),
@@ -1411,15 +2075,238 @@ impl CombatRunSnapshot {
     }
 }
 
+fn baseline_command(state: &CombatState, owner: UnitId) -> Result<GameCommand, String> {
+    match state.pending {
+        PendingDecision::ChooseDisables { decider, count, .. } => {
+            let lattice = state
+                .units
+                .get(&decider)
+                .and_then(|unit| unit.lattice.as_ref())
+                .ok_or_else(|| format!("baseline decision unit {decider:?} has no lattice"))?;
+            let mut cells = lattice
+                .spec
+                .cells()
+                .filter(|(coord, _)| !lattice.state.is_disabled(*coord))
+                .map(|(coord, kind)| (cell_priority(kind), coord))
+                .collect::<Vec<_>>();
+            cells.sort_unstable();
+            let owed = usize::from(count).min(cells.len());
+            return Ok(GameCommand::ChooseDisables {
+                unit: owner,
+                cells: cells
+                    .into_iter()
+                    .take(owed)
+                    .map(|(_, coord)| coord)
+                    .collect(),
+            });
+        }
+        PendingDecision::ChooseRestores {
+            decider,
+            target,
+            count,
+        } => {
+            let lattice = state
+                .units
+                .get(&target)
+                .and_then(|unit| unit.lattice.as_ref())
+                .ok_or_else(|| format!("baseline restoration target {target:?} has no lattice"))?;
+            let mut cells = lattice
+                .spec
+                .cells()
+                .filter(|(coord, _)| lattice.state.is_disabled(*coord))
+                .map(|(coord, kind)| (Reverse(cell_priority(kind)), coord))
+                .collect::<Vec<_>>();
+            cells.sort_unstable();
+            let owed = usize::from(count).min(cells.len());
+            return Ok(GameCommand::ChooseRestores {
+                unit: decider,
+                target,
+                cells: cells
+                    .into_iter()
+                    .take(owed)
+                    .map(|(_, coord)| coord)
+                    .collect(),
+            });
+        }
+        PendingDecision::None => {}
+    }
+
+    let actor = state
+        .units
+        .get(&owner)
+        .ok_or_else(|| format!("baseline owns unknown unit {owner:?}"))?;
+    let turn = actor
+        .turn
+        .ok_or_else(|| format!("baseline unit {owner:?} has no turn"))?;
+    if turn.acted {
+        return Ok(GameCommand::EndTurn { unit: owner });
+    }
+
+    if let Some(target) = state.units.values().find(|target| {
+        !target.downed
+            && actor.faction.is_hostile_to(target.faction)
+            && state
+                .arena
+                .links_for(owner)
+                .contains(&(actor.position, target.position))
+            && state
+                .arena
+                .links_for(owner)
+                .contains(&(target.position, actor.position))
+    }) {
+        return Ok(GameCommand::Strike {
+            unit: owner,
+            target: target.id,
+        });
+    }
+
+    if let Some(lattice) = actor.lattice.as_ref() {
+        for spell in state.content.spells() {
+            let Some(cell) = spell_cell(&lattice.spec, &lattice.state, spell.id) else {
+                continue;
+            };
+            if castable(&lattice.spec, &lattice.state, cell, &state.content).is_err() {
+                continue;
+            }
+            let target = match spell.targeting {
+                FrozenTargeting::SelfOnly => Some(actor.position),
+                FrozenTargeting::ExactSurface { range } => state
+                    .units
+                    .values()
+                    .filter(|candidate| !candidate.downed)
+                    .filter(|candidate| {
+                        let restoration = spell
+                            .effects
+                            .iter()
+                            .any(|effect| matches!(effect, FrozenEffect::RestoreHexes { .. }));
+                        if restoration {
+                            candidate.faction == actor.faction
+                                && candidate.lattice.as_ref().is_some_and(|lattice| {
+                                    lattice
+                                        .spec
+                                        .cells()
+                                        .any(|(coord, _)| lattice.state.is_disabled(coord))
+                                })
+                        } else {
+                            actor.faction.is_hostile_to(candidate.faction)
+                        }
+                    })
+                    .filter(|candidate| state.arena.observes(actor.faction, candidate.position))
+                    .filter(|candidate| {
+                        let high_ground = actor
+                            .position
+                            .level
+                            .saturating_sub(candidate.position.level)
+                            .max(0);
+                        let bonus = u32::try_from(high_ground).unwrap_or(u32::MAX)
+                            / state.rules.levels_per_bonus_range;
+                        actor.position.coord.distance(candidate.position.coord)
+                            <= range.saturating_add(bonus)
+                    })
+                    .map(|candidate| candidate.position)
+                    .next(),
+            };
+            if let Some(target) = target {
+                return Ok(GameCommand::Cast {
+                    unit: owner,
+                    spell: spell.name.clone(),
+                    target,
+                    facing: None,
+                    mana: None,
+                });
+            }
+        }
+    }
+
+    let can_restore_mana = actor.lattice.as_ref().is_some_and(|lattice| {
+        lattice.spec.cells().any(|(coord, kind)| match kind {
+            CellKind::Gem { element } => {
+                state.elements.name(element).is_some()
+                    && lattice.state.mana(coord) < lattice.stats.capacity(element)
+            }
+            CellKind::Blank | CellKind::Fusion { .. } | CellKind::Spell { .. } => false,
+        })
+    });
+    if can_restore_mana {
+        return Ok(GameCommand::Channel { unit: owner });
+    }
+
+    if turn.movement_left > 0 {
+        let occupied = state
+            .units
+            .values()
+            .map(|unit| unit.position)
+            .collect::<BTreeSet<_>>();
+        let hostiles = state
+            .units
+            .values()
+            .filter(|unit| !unit.downed && actor.faction.is_hostile_to(unit.faction))
+            .map(|unit| unit.position)
+            .collect::<Vec<_>>();
+        let distance = |position: TilePos| {
+            hostiles
+                .iter()
+                .map(|target| position.coord.distance(target.coord))
+                .min()
+                .unwrap_or(u32::MAX)
+        };
+        let current_distance = distance(actor.position);
+        let next = state
+            .arena
+            .links_for(owner)
+            .iter()
+            .filter_map(|(from, to)| (*from == actor.position).then_some(*to))
+            .filter(|position| !occupied.contains(position))
+            .filter(|position| distance(*position) < current_distance)
+            .min_by_key(|position| (distance(*position), *position));
+        if let Some(next) = next {
+            return Ok(GameCommand::MoveAlong {
+                unit: owner,
+                path: vec![actor.position, next],
+            });
+        }
+    }
+
+    Ok(GameCommand::EndTurn { unit: owner })
+}
+
+fn cell_priority(kind: CellKind) -> u8 {
+    match kind {
+        CellKind::Blank => 0,
+        CellKind::Gem { .. } => 1,
+        CellKind::Fusion { .. } => 2,
+        CellKind::Spell { .. } => 3,
+    }
+}
+
 fn fingerprint(domain: &[u8], value: &impl Serialize) -> Result<u64, String> {
     let mut bytes = domain.to_vec();
-    serde_json::to_writer(&mut bytes, value).map_err(|error| {
+    let encoded = ron::to_string(value).map_err(|error| {
         format!(
             "{} fingerprint serialization failed: {error}",
             String::from_utf8_lossy(domain)
         )
     })?;
+    bytes.extend_from_slice(encoded.as_bytes());
     Ok(xxh3_64(&bytes))
+}
+
+fn spell_cell(
+    spec: &LatticeSpec,
+    state: &LatticeState,
+    spell: hex_core::SpellId,
+) -> Option<LatticeCoord> {
+    let mut fallback = None;
+    for (coord, kind) in spec.cells() {
+        if !matches!(kind, CellKind::Spell { spell: found } if found == spell) {
+            continue;
+        }
+        if !state.is_disabled(coord) {
+            return Some(coord);
+        }
+        fallback = fallback.or(Some(coord));
+    }
+    fallback
 }
 
 #[cfg(test)]
@@ -1585,6 +2472,64 @@ mod tests {
         (fire, spec, state, stats)
     }
 
+    fn spell_content(name: &str, effect: FrozenEffect) -> FrozenCombatContent {
+        FrozenCombatContent::new(
+            [crate::FrozenSpell {
+                id: hex_core::SpellId(0),
+                name: name.to_owned(),
+                requirements: vec![crate::FrozenRequirement {
+                    element: ElementId(0),
+                    mana: 1,
+                }],
+                casting: crate::FrozenCasting::Evocation,
+                targeting: FrozenTargeting::ExactSurface { range: 5 },
+                effects: vec![effect],
+            }],
+            [],
+        )
+        .expect("fixture frozen content")
+    }
+
+    fn caster_lattice() -> (LatticeSpec, LatticeState, LatticeStats) {
+        let spell = LatticeCoord::ORIGIN;
+        let [gem, ..] = spell.neighbors();
+        let spec = LatticeSpec::default()
+            .with(
+                spell,
+                CellKind::Spell {
+                    spell: hex_core::SpellId(0),
+                },
+            )
+            .with(
+                gem,
+                CellKind::Gem {
+                    element: ElementId(0),
+                },
+            );
+        let stats = LatticeStats::new(
+            BTreeMap::from([(ElementId(0), 4)]),
+            BTreeMap::from([(ElementId(0), 1)]),
+        );
+        let state = LatticeState::new(&spec, &stats);
+        (spec, state, stats)
+    }
+
+    fn blank_lattice(count: usize, disabled: bool) -> (LatticeSpec, LatticeState, LatticeStats) {
+        let coords = std::iter::once(LatticeCoord::ORIGIN)
+            .chain(LatticeCoord::ORIGIN.neighbors())
+            .take(count)
+            .collect::<Vec<_>>();
+        let spec = coords.iter().fold(LatticeSpec::default(), |spec, &coord| {
+            spec.with(coord, CellKind::Blank)
+        });
+        let stats = LatticeStats::default();
+        let mut state = LatticeState::new(&spec, &stats);
+        if disabled {
+            apply_disables(&mut state, &coords);
+        }
+        (spec, state, stats)
+    }
+
     #[test]
     fn channel_is_one_action_and_refusal_is_transactional() {
         let (fire, spec, lattice, stats) = depleted_lattice();
@@ -1637,6 +2582,217 @@ mod tests {
     }
 
     #[test]
+    fn baseline_policy_casts_frozen_content_and_channels_depleted_mana() {
+        let (caster_spec, caster_state, caster_stats) = caster_lattice();
+        let (target_spec, target_state, target_stats) = blank_lattice(1, false);
+        let casting = CombatState::start_with_content(
+            rules(4),
+            corridor(5),
+            ElementNames::new(BTreeMap::from([(ElementId(0), "Fire".to_owned())])),
+            spell_content("Spark", FrozenEffect::DisableHexes { count: 1 }),
+            [
+                CombatUnit::new(
+                    UnitId(0),
+                    PlayerSeat(0),
+                    Faction::Player,
+                    position(0, 0),
+                    20,
+                )
+                .with_lattice(caster_spec, caster_state, caster_stats),
+                CombatUnit::new(
+                    UnitId(1),
+                    PlayerSeat(0),
+                    Faction::Hostile,
+                    position(4, 0),
+                    10,
+                )
+                .with_lattice(target_spec, target_state, target_stats),
+            ],
+        )
+        .expect("casting fixture");
+        assert_eq!(
+            baseline_command(&casting, UnitId(0)),
+            Ok(GameCommand::Cast {
+                unit: UnitId(0),
+                spell: "Spark".to_owned(),
+                target: position(4, 0),
+                facing: None,
+                mana: None,
+            })
+        );
+
+        let (fire, spec, state, stats) = depleted_lattice();
+        let channeling = CombatState::start(
+            rules(4),
+            corridor(5),
+            ElementNames::new(BTreeMap::from([(fire, "Fire".to_owned())])),
+            [
+                CombatUnit::new(
+                    UnitId(0),
+                    PlayerSeat(0),
+                    Faction::Player,
+                    position(0, 0),
+                    20,
+                )
+                .with_lattice(spec, state, stats),
+                CombatUnit::new(
+                    UnitId(1),
+                    PlayerSeat(0),
+                    Faction::Hostile,
+                    position(4, 0),
+                    10,
+                ),
+            ],
+        )
+        .expect("channel fixture");
+        assert_eq!(
+            baseline_command(&channeling, UnitId(0)),
+            Ok(GameCommand::Channel { unit: UnitId(0) })
+        );
+    }
+
+    #[test]
+    fn pure_cast_burn_ticks_at_target_turn_and_opens_exact_choice() {
+        let (caster_spec, caster_state, caster_stats) = caster_lattice();
+        let (target_spec, target_state, target_stats) = blank_lattice(3, false);
+        let mut sim = CombatState::start_with_content(
+            rules(4),
+            corridor(3),
+            ElementNames::new(BTreeMap::from([(ElementId(0), "Fire".to_owned())])),
+            spell_content("Cinder", FrozenEffect::Burn { turns: 1 }),
+            [
+                CombatUnit::new(
+                    UnitId(0),
+                    PlayerSeat(0),
+                    Faction::Player,
+                    position(0, 0),
+                    20,
+                )
+                .with_lattice(caster_spec, caster_state, caster_stats),
+                CombatUnit::new(
+                    UnitId(1),
+                    PlayerSeat(0),
+                    Faction::Hostile,
+                    position(1, 0),
+                    10,
+                )
+                .with_lattice(target_spec, target_state, target_stats),
+            ],
+        )
+        .expect("fixture state");
+        sim.apply(IssuedCommand {
+            seat: PlayerSeat(0),
+            command: GameCommand::Cast {
+                unit: UnitId(0),
+                spell: "Cinder".to_owned(),
+                target: position(1, 0),
+                facing: None,
+                mana: None,
+            },
+        })
+        .expect("pure cast");
+        sim.apply(IssuedCommand {
+            seat: PlayerSeat(0),
+            command: GameCommand::EndTurn { unit: UnitId(0) },
+        })
+        .expect("finish caster turn");
+        assert!(matches!(
+            sim.pending,
+            PendingDecision::ChooseDisables {
+                decider: UnitId(1),
+                count: 1,
+                source: UnitId(0),
+            }
+        ));
+        assert!(
+            sim.effects.is_empty(),
+            "one-turn Burn expires after its tick"
+        );
+        assert!(sim.events.iter().any(|event| matches!(
+            event,
+            CombatEvent::BurnTicked {
+                source: UnitId(0),
+                target: UnitId(1),
+                count: 1,
+            }
+        )));
+    }
+
+    #[test]
+    fn pure_restoration_revives_for_the_next_round() {
+        let (caster_spec, caster_state, caster_stats) = caster_lattice();
+        let (ally_spec, ally_state, ally_stats) = blank_lattice(1, true);
+        let mut ally = CombatUnit::new(
+            UnitId(1),
+            PlayerSeat(0),
+            Faction::Player,
+            position(1, 0),
+            15,
+        )
+        .with_lattice(ally_spec, ally_state, ally_stats);
+        ally.downed = true;
+        let mut sim = CombatState::start_with_content(
+            rules(4),
+            corridor(4),
+            ElementNames::new(BTreeMap::from([(ElementId(0), "Life".to_owned())])),
+            spell_content("Renew", FrozenEffect::RestoreHexes { count: 1 }),
+            [
+                CombatUnit::new(
+                    UnitId(0),
+                    PlayerSeat(0),
+                    Faction::Player,
+                    position(0, 0),
+                    20,
+                )
+                .with_lattice(caster_spec, caster_state, caster_stats),
+                ally,
+                CombatUnit::new(
+                    UnitId(2),
+                    PlayerSeat(0),
+                    Faction::Hostile,
+                    position(3, 0),
+                    10,
+                ),
+            ],
+        )
+        .expect("fixture state");
+        sim.apply(IssuedCommand {
+            seat: PlayerSeat(0),
+            command: GameCommand::Cast {
+                unit: UnitId(0),
+                spell: "Renew".to_owned(),
+                target: position(1, 0),
+                facing: None,
+                mana: None,
+            },
+        })
+        .expect("restoration cast");
+        sim.apply(IssuedCommand {
+            seat: PlayerSeat(0),
+            command: GameCommand::ChooseRestores {
+                unit: UnitId(0),
+                target: UnitId(1),
+                cells: vec![LatticeCoord::ORIGIN],
+            },
+        })
+        .expect("exact restoration");
+        assert!(
+            !sim.units
+                .get(&UnitId(1))
+                .expect("restored unit remains in the simulation")
+                .downed
+        );
+        assert_eq!(sim.pending_revivals.get(&UnitId(1)), Some(&1));
+        assert!(sim.events.iter().any(|event| matches!(
+            event,
+            CombatEvent::Revived {
+                unit: UnitId(1),
+                reenters_round: 1,
+            }
+        )));
+    }
+
+    #[test]
     fn bounded_case_runs_twice_to_complete_snapshot_equality() {
         let units = vec![
             CombatUnit::new(
@@ -1659,12 +2815,23 @@ mod tests {
             rules: rules(4),
             arena: corridor(5),
             elements: ElementNames::default(),
+            content: FrozenCombatContent::default(),
             controllers: units
                 .iter()
-                .map(|unit| (unit.id, ControllerInput::Scripted(unit.seat)))
+                .map(|unit| {
+                    (
+                        unit.id,
+                        ControllerInput::Scripted {
+                            seat: unit.seat,
+                            commands: (0..4)
+                                .map(|_| GameCommand::EndTurn { unit: unit.id })
+                                .collect(),
+                        },
+                    )
+                })
                 .collect(),
             units,
-            bounds: RunBounds { max_commands: 8 },
+            bounds: RunBounds::new(100, 100, 8).expect("fixture bounds"),
         };
         let first = case.run().expect("first run");
         let second = case.run().expect("second run");
@@ -1673,7 +2840,7 @@ mod tests {
         assert_eq!(first.summary.no_progress_current, 8);
         assert!(matches!(
             first.termination,
-            CombatTermination::BoundedNoProgress {
+            CombatTermination::NoProgressBoundReached {
                 completed_turns: 8,
                 no_progress_streak: 8
             }
