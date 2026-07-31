@@ -12,16 +12,17 @@
 //! before an interface for it existed; nothing here emits a command any more.
 
 use bevy::prelude::*;
-use hex_assets::{CombatSettings, FormationCatalog};
+use hex_assets::{CombatSettings, ElementCatalog, FormationCatalog};
 use hex_combat::{
-    CombatSummary, EncounterOutcome, EncounterResolution, Turn, TurnOrder, UnitCombatSummary,
+    ChannelReadiness, CombatSummary, CommandRefusal, EncounterOutcome, EncounterResolution, Turn,
+    TurnOrder, UnitCombatSummary,
 };
 use hex_core::{
-    CommandQueue, ControlOwner, GameCommand, GameplayPhase, GameplaySystems, InputAction,
+    Busy, CommandQueue, ControlOwner, GameCommand, GameplayPhase, GameplaySystems, InputAction,
     InputBindings, IssuedCommand, Mode, PartyFormation, PartyMovementMode, Pause, PendingDecision,
     Screen, UnitId,
 };
-use hex_lattice::{LatticeSpec, LatticeState};
+use hex_lattice::{LatticeSpec, LatticeState, LatticeStats};
 use hex_units::{Archetype, Downed, Party, Player, Selected, UnitRegistry};
 
 #[cfg(test)]
@@ -35,7 +36,7 @@ use super::despawn_screen;
 use crate::combat_reports::{
     CombatLabReport, CombatLabReportStore, CombatLabReportTermination, CurrentCombatLabReport,
 };
-use crate::readouts::{GameplayUiContext, UiUnitIdentity};
+use crate::readouts::{DisableSelection, GameplayUiContext, UiUnitIdentity};
 use crate::scenarios::ActiveScenario;
 use crate::storage::StoragePaths;
 use hex_ui::{
@@ -178,7 +179,12 @@ fn handle_gameplay_ui_intents(
                     });
                 }
             }
-            GameplayAction::Rest | GameplayAction::ConfirmDecision => {}
+            GameplayAction::ConfirmDecision => {
+                // The decision input system independently reads this same typed
+                // intent and reduces it through the exact ChooseDisables/
+                // ChooseRestores command funnel.
+            }
+            GameplayAction::Rest => {}
         }
     }
 }
@@ -1034,8 +1040,18 @@ fn publish_hud_view(
     mode: Res<State<Mode>>,
     order: Res<TurnOrder>,
     pending: Res<PendingDecision>,
+    selection: Res<DisableSelection>,
     context: Res<GameplayUiContext>,
-    acting: Query<(Has<Player>, &Turn)>,
+    elements: Option<Res<ElementCatalog>>,
+    acting: Query<(
+        &UnitId,
+        Has<Player>,
+        &Turn,
+        Has<Busy>,
+        Has<Downed>,
+        Option<&LatticeSpec>,
+        Option<&LatticeStats>,
+    )>,
     mut view: ResMut<GameplayHudView>,
 ) {
     if *phase == GameplayPhase::Deployment {
@@ -1113,9 +1129,10 @@ fn publish_hud_view(
             // being out of range is indistinguishable from a click that did not
             // register — which is precisely the complaint the tinted range answers,
             // and the number is what confirms the tint rather than merely repeating it.
-            let (player_turn, movement_remaining, action_remaining) = match acting.single() {
-                Ok((true, turn)) => (true, turn.movement_left, !turn.acted),
-                Ok((false, _)) | Err(_) => (false, 0, false),
+            let actor_facts = acting.single().ok();
+            let (player_turn, movement_remaining, action_remaining) = match actor_facts {
+                Some((_, true, turn, _, _, _, _)) => (true, turn.movement_left, !turn.acted),
+                Some((_, false, _, _, _, _, _)) | None => (false, 0, false),
             };
             let actor = context
                 .acting
@@ -1136,18 +1153,33 @@ fn publish_hud_view(
                     },
                 }
             };
+            let channel = match actor_facts {
+                Some((unit, true, turn, busy, downed, lattice, stats)) if !pending.is_open() => {
+                    channel_availability(hex_combat::channel_refusal(ChannelReadiness {
+                        in_combat: true,
+                        unit: *unit,
+                        current: order.current(),
+                        downed,
+                        busy,
+                        turn: Some(turn),
+                        lattice,
+                        stats,
+                        elements: elements.as_deref(),
+                    }))
+                }
+                Some((_, true, _, _, _, _, _)) => ActionAvailability::Disabled {
+                    reason: "Resolve the required lattice choice first".to_owned(),
+                },
+                Some((_, false, _, _, _, _, _)) | None => ActionAvailability::Disabled {
+                    reason: "Enemy turn".to_owned(),
+                },
+            };
             let mut actions = vec![
                 ActionAffordance {
                     action: GameplayAction::Channel,
                     label: "Channel".to_owned(),
                     shortcut: None,
-                    availability: if action_remaining {
-                        availability.clone()
-                    } else {
-                        ActionAvailability::Disabled {
-                            reason: "Action already spent".to_owned(),
-                        }
-                    },
+                    availability: channel,
                     priority: ActionPriority::Primary,
                 },
                 ActionAffordance {
@@ -1158,16 +1190,16 @@ fn publish_hud_view(
                     priority: ActionPriority::Primary,
                 },
             ];
-            if pending.is_open() {
+            if pending.is_open() && selection.remaining_choices().is_some() {
                 actions.insert(
                     0,
                     ActionAffordance {
                         action: GameplayAction::ConfirmDecision,
                         label: "Confirm choice".to_owned(),
                         shortcut: Some("Enter".to_owned()),
-                        availability: ActionAvailability::Disabled {
-                            reason: "Choose the required cells in the lattice".to_owned(),
-                        },
+                        availability: decision_confirmation_availability(
+                            selection.remaining_choices(),
+                        ),
                         priority: ActionPriority::Required,
                     },
                 );
@@ -1186,6 +1218,46 @@ fn publish_hud_view(
     };
     if *view != next {
         *view = next;
+    }
+}
+
+fn decision_confirmation_availability(remaining: Option<usize>) -> ActionAvailability {
+    match remaining {
+        Some(0) => ActionAvailability::Enabled,
+        Some(1) => ActionAvailability::Disabled {
+            reason: "Choose 1 more lattice cell".to_owned(),
+        },
+        Some(remaining) => ActionAvailability::Disabled {
+            reason: format!("Choose {remaining} more lattice cells"),
+        },
+        None => ActionAvailability::Disabled {
+            reason: "Waiting for the decision owner".to_owned(),
+        },
+    }
+}
+
+fn channel_availability(refusal: Option<CommandRefusal>) -> ActionAvailability {
+    let Some(refusal) = refusal else {
+        return ActionAvailability::Enabled;
+    };
+    let reason = match refusal {
+        CommandRefusal::Busy => "Still finishing movement",
+        CommandRefusal::ActionAlreadySpent => "Action already spent",
+        CommandRefusal::ActingUnitDowned { .. } => "This unit is downed",
+        CommandRefusal::NoTurn => "No active turn",
+        CommandRefusal::MissingUnitData {
+            data: hex_combat::UnitData::Lattice,
+            ..
+        } => "This unit has no channel lattice",
+        CommandRefusal::MissingCombatData {
+            data: hex_combat::CombatData::ElementCatalog,
+        } => "Element content is unavailable",
+        CommandRefusal::NotCurrentTurn { .. } => "Another unit is acting",
+        CommandRefusal::CombatOnly => "Channel is combat-only",
+        _ => "Command unavailable",
+    };
+    ActionAvailability::Disabled {
+        reason: reason.to_owned(),
     }
 }
 
@@ -1297,6 +1369,31 @@ mod tests {
     fn typed_and_keyboard_pause_paths_share_the_same_toggle() {
         assert_eq!(toggled_pause(Pause(false)), Pause(true));
         assert_eq!(toggled_pause(Pause(true)), Pause(false));
+    }
+
+    #[test]
+    fn required_confirmation_enables_exactly_when_the_choice_is_complete() {
+        assert_eq!(
+            decision_confirmation_availability(Some(0)),
+            ActionAvailability::Enabled
+        );
+        assert_eq!(
+            decision_confirmation_availability(Some(2)),
+            ActionAvailability::Disabled {
+                reason: "Choose 2 more lattice cells".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn channel_affordance_preserves_the_combat_owned_refusal() {
+        assert_eq!(
+            channel_availability(Some(CommandRefusal::Busy)),
+            ActionAvailability::Disabled {
+                reason: "Still finishing movement".to_owned(),
+            }
+        );
+        assert_eq!(channel_availability(None), ActionAvailability::Enabled);
     }
 
     use super::*;

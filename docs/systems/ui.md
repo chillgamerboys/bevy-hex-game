@@ -125,6 +125,11 @@ Interactive controls participate in a logical Tab/Shift-Tab order and carry an
 Space activate the focused control through its ordinary interaction handler. Escape
 uses the screen's typed Back/resume intent consistently.
 
+When a focusable control owns keyboard focus, Enter, Space, and Tab do not also
+dispatch gameplay confirm, end-turn, or next-target shortcuts. The focused control's
+typed intent is the single input for that keypress; explicit cancel/back keys remain
+available.
+
 The runtime derives sequential focusability from the visible hierarchy. Controls in
 a hidden or `Display::None` subtree temporarily leave the tab order and return at
 their original logical index when the surface reopens; focus is cleared if its

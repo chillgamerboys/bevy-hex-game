@@ -36,7 +36,10 @@
 //! earns its keep is range: stepping away can carry an anchor out of reach exactly as
 //! stepping toward it brings one in.
 
-use bevy::prelude::*;
+use bevy::{
+    input_focus::{tab_navigation::TabIndex, InputFocus},
+    prelude::*,
+};
 use hex_assets::{
     CastingAxis, CombatSettings, ContentIndex, ElementCatalog, ManaAxis, Spell, SpellBook,
     TargetShape, Trajectory,
@@ -607,6 +610,8 @@ fn resolve_aim_input(
     pending: Res<PendingDecision>,
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<InputBindings>,
+    focus: Option<Res<InputFocus>>,
+    focusable_controls: Query<(), With<TabIndex>>,
     mut intents: MessageReader<hex_ui::UiIntent>,
     knowledge: Option<Res<FactionMapKnowledge>>,
     active_units: Query<&UnitId, Without<Downed>>,
@@ -614,7 +619,11 @@ fn resolve_aim_input(
     if pending.is_open() {
         return;
     }
-    let Some(request) = requested(&keys, &bindings, &mut intents) else {
+    let focus_owns_shortcuts = focus
+        .as_deref()
+        .and_then(InputFocus::get)
+        .is_some_and(|entity| focusable_controls.contains(entity));
+    let Some(request) = requested(&keys, &bindings, focus_owns_shortcuts, &mut intents) else {
         return;
     };
     let Some(caster) = readout.caster else {
@@ -727,6 +736,7 @@ enum AimRequest {
 fn requested(
     keys: &ButtonInput<KeyCode>,
     bindings: &InputBindings,
+    focus_owns_shortcuts: bool,
     intents: &mut MessageReader<hex_ui::UiIntent>,
 ) -> Option<AimRequest> {
     for intent in intents.read() {
@@ -739,10 +749,18 @@ fn requested(
             });
         }
     }
-    if bindings.just_pressed(keys, InputAction::Confirm) {
+    raw_aim_request(keys, bindings, focus_owns_shortcuts)
+}
+
+fn raw_aim_request(
+    keys: &ButtonInput<KeyCode>,
+    bindings: &InputBindings,
+    focus_owns_shortcuts: bool,
+) -> Option<AimRequest> {
+    if !focus_owns_shortcuts && bindings.just_pressed(keys, InputAction::Confirm) {
         return Some(AimRequest::Confirm);
     }
-    if bindings.just_pressed(keys, InputAction::NextTarget) {
+    if !focus_owns_shortcuts && bindings.just_pressed(keys, InputAction::NextTarget) {
         return Some(AimRequest::Next);
     }
     if bindings.just_pressed(keys, InputAction::CancelCast) {
@@ -931,6 +949,24 @@ mod tests {
     use hex_core::Level;
 
     use super::*;
+
+    #[test]
+    fn focused_ui_owns_enter_and_tab_without_hiding_the_explicit_cancel_key() {
+        let bindings = InputBindings::default();
+
+        for key in [KeyCode::Enter, KeyCode::Tab] {
+            let mut keys = ButtonInput::default();
+            keys.press(key);
+            assert!(raw_aim_request(&keys, &bindings, true).is_none());
+        }
+
+        let mut keys = ButtonInput::default();
+        keys.press(KeyCode::KeyQ);
+        assert!(matches!(
+            raw_aim_request(&keys, &bindings, true),
+            Some(AimRequest::Cancel)
+        ));
+    }
     use hex_ui::{FUSION_COLOR, GEM_COLOR};
 
     fn shipped_content() -> (ElementCatalog, SpellBook) {

@@ -1,6 +1,9 @@
 //! The player's live lattice and the retained, knowledge-gated hostile target.
 
-use bevy::prelude::*;
+use bevy::{
+    input_focus::{tab_navigation::TabIndex, InputFocus},
+    prelude::*,
+};
 use hex_assets::{ElementCatalog, SpellBook};
 use hex_combat::{CombatSystems, FactionLatticeKnowledge, TurnOrder};
 use hex_core::{
@@ -49,6 +52,12 @@ impl DisableSelection {
             restoring: decision.restoring,
         })
     }
+
+    pub(crate) fn remaining_choices(&self) -> Option<usize> {
+        self.decision
+            .as_ref()
+            .map(|decision| decision.owed.saturating_sub(self.cells.len()))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,6 +77,7 @@ pub(super) fn plugin(app: &mut App) {
         .add_systems(
             Update,
             handle_decision_input
+                .after(hex_ui::UiSystems::EmitIntents)
                 .in_set(AppSystems::RecordInput)
                 .run_if(in_state(Screen::Gameplay)),
         )
@@ -359,6 +369,8 @@ fn refresh_readouts(
 fn handle_decision_input(
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<hex_core::InputBindings>,
+    focus: Option<Res<InputFocus>>,
+    focusable_controls: Query<(), With<TabIndex>>,
     pending: Res<PendingDecision>,
     registry: Res<UnitRegistry>,
     mut queue: ResMut<CommandQueue>,
@@ -403,16 +415,19 @@ fn handle_decision_input(
     };
 
     let mut clear = false;
-    let mut confirm = bindings.just_pressed(&keys, hex_core::InputAction::Confirm);
+    let focus_owns_shortcuts = focus
+        .as_deref()
+        .and_then(InputFocus::get)
+        .is_some_and(|entity| focusable_controls.contains(entity));
+    let mut confirm = raw_confirmation_requested(&keys, &bindings, focus_owns_shortcuts);
     let mut toggled = Vec::new();
     for intent in intents.read() {
-        let UiIntent::Lattice(intent) = intent else {
-            continue;
-        };
         match intent {
-            LatticeIntent::ToggleCell(cell) => toggled.push(*cell),
-            LatticeIntent::ClearDecision => clear = true,
-            LatticeIntent::ConfirmDecision => confirm = true,
+            UiIntent::Lattice(LatticeIntent::ToggleCell(cell)) => toggled.push(*cell),
+            UiIntent::Lattice(LatticeIntent::ClearDecision) => clear = true,
+            UiIntent::Lattice(LatticeIntent::ConfirmDecision)
+            | UiIntent::Gameplay(hex_ui::GameplayAction::ConfirmDecision) => confirm = true,
+            _ => {}
         }
     }
     if clear {
@@ -454,6 +469,14 @@ fn handle_decision_input(
     });
 }
 
+fn raw_confirmation_requested(
+    keys: &ButtonInput<KeyCode>,
+    bindings: &hex_core::InputBindings,
+    focus_owns_shortcuts: bool,
+) -> bool {
+    !focus_owns_shortcuts && bindings.just_pressed(keys, hex_core::InputAction::Confirm)
+}
+
 fn toggle_cell(selection: &mut DisableSelection, cell: hex_core::LatticeCoord) {
     let Some(decision) = selection.decision.as_ref() else {
         return;
@@ -486,6 +509,15 @@ mod tests {
     use hex_core::{HexCoord, LatticeCoord, TilePos};
 
     use super::*;
+
+    #[test]
+    fn focused_ui_owns_enter_instead_of_double_confirming_a_decision() {
+        let mut keys = ButtonInput::default();
+        keys.press(KeyCode::Enter);
+        let bindings = hex_core::InputBindings::default();
+        assert!(raw_confirmation_requested(&keys, &bindings, false));
+        assert!(!raw_confirmation_requested(&keys, &bindings, true));
+    }
 
     fn pos(x: i32, y: i32) -> TilePos {
         TilePos::new(HexCoord::from_axial(x, y), 0)
@@ -668,7 +700,7 @@ mod tests {
     }
 
     #[test]
-    fn enter_emits_the_forced_player_answer_with_its_control_owner() {
+    fn focused_typed_confirm_emits_one_forced_answer_with_its_control_owner() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_message::<UiIntent>()
@@ -719,13 +751,18 @@ mod tests {
             source: UnitId(2),
         };
         app.update();
+        let focused = app.world_mut().spawn(TabIndex(0)).id();
+        app.insert_resource(InputFocus::from_entity(focused));
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .press(KeyCode::Enter);
+        app.world_mut()
+            .write_message(UiIntent::Gameplay(hex_ui::GameplayAction::ConfirmDecision));
         app.update();
 
+        let mut queue = app.world_mut().resource_mut::<CommandQueue>();
         assert_eq!(
-            app.world_mut().resource_mut::<CommandQueue>().pop(),
+            queue.pop(),
             Some(IssuedCommand {
                 seat: PlayerSeat(8),
                 command: GameCommand::ChooseDisables {
@@ -733,6 +770,10 @@ mod tests {
                     cells: vec![LatticeCoord::ORIGIN, LatticeCoord::new(1, 0)],
                 },
             })
+        );
+        assert!(
+            queue.pop().is_none(),
+            "one keypress must enqueue one answer"
         );
     }
 
