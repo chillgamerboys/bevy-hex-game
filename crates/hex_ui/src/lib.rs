@@ -9,6 +9,7 @@ use bevy::prelude::*;
 mod action_rail;
 mod creation_presentation;
 mod focus;
+mod gameplay_frame;
 mod initiative;
 mod lattice;
 mod layout;
@@ -25,12 +26,13 @@ pub use lattice::{
     CellInteraction, LatticeCellView, LatticeScale,
 };
 pub use layout::{
-    action_rail_clearance, apply_region_layout, HudElement, UiRegionRole, READ_ONLY_HUD,
+    action_rail_clearance, apply_region_layout, HudElement, RequiredActionSurface, UiRegionRole,
+    READ_ONLY_HUD,
 };
 pub use model::{
-    ActionAffordance, ActionAvailability, ActionPriority, GameplayAction, GameplayHudView,
-    InitiativeEntryView, InitiativeSide, InitiativeView, PauseView, ResumeView, TitleIntent,
-    TitleScenarioView, TitleView, UiIntent, UiSetting, UiSettingRow, UiSettingsView,
+    ActionAffordance, ActionAvailability, ActionPriority, GameplayAction, GameplayChromeView,
+    GameplayHudView, InitiativeEntryView, InitiativeSide, InitiativeView, PauseView, ResumeView,
+    TitleIntent, TitleScenarioView, TitleView, UiIntent, UiSetting, UiSettingRow, UiSettingsView,
 };
 pub use scale::{
     resolve_auto_scale, resolve_ui_metrics, resolve_viewport_class, ResolvedUiMetrics, UiScaleMode,
@@ -71,6 +73,7 @@ impl Plugin for UiPlugin {
             (UiHudSetup::Frame, UiHudSetup::Panels).chain(),
         )
         .add_message::<UiIntent>()
+        .init_resource::<GameplayChromeView>()
         .init_resource::<GameplayHudView>()
         .init_resource::<UiSettingsView>()
         .init_resource::<PauseView>()
@@ -81,6 +84,7 @@ impl Plugin for UiPlugin {
             theme::plugin,
             scale::plugin,
             focus::plugin,
+            gameplay_frame::plugin,
             initiative::plugin,
             shell::plugin,
             screens::plugin,

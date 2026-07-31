@@ -17,8 +17,8 @@ use crate::menus::lattice_view::{
     LatticeScale,
 };
 use crate::readouts::{
-    region, GameplayUiContext, HudElement, HudRegion, HudSetup, InspectorRole, TargetProvenance,
-    READ_ONLY_HUD,
+    region, DecisionHud, GameplayUiContext, HudElement, HudRegion, HudSetup, InspectorRole,
+    TargetProvenance, READ_ONLY_HUD,
 };
 use hex_ui::{blurb, fine, heading, panel, row_button, UiAssets, EDGE, PANEL_BG};
 
@@ -124,10 +124,6 @@ struct OwnPanel;
 
 #[derive(Component)]
 struct OwnHeading;
-
-/// The one ordinary HUD root that remains visible while it is command-modal.
-#[derive(Component)]
-pub(crate) struct DecisionHud;
 
 #[derive(Component)]
 pub(super) struct TargetPanel;

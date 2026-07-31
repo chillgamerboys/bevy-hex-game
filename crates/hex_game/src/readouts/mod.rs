@@ -4,7 +4,8 @@ use bevy::prelude::*;
 use hex_combat::{CombatSystems, EncounterResolution};
 use hex_core::{AppSystems, GameplayPhase, GameplaySetup, GameplaySystems, Screen};
 pub(crate) use hex_ui::{
-    HudElement, UiHudSetup as HudSetup, UiRegionRole as HudRegion, READ_ONLY_HUD,
+    HudElement, RequiredActionSurface as DecisionHud, UiHudSetup as HudSetup,
+    UiRegionRole as HudRegion, READ_ONLY_HUD,
 };
 
 mod badges;
@@ -14,7 +15,7 @@ mod lattice;
 mod log;
 
 pub(crate) use context::{GameplayUiContext, InspectorRole, TargetProvenance, UiUnitIdentity};
-pub(crate) use lattice::{spawn_decision_controls, DecisionHud, DisableSelection};
+pub(crate) use lattice::{spawn_decision_controls, DisableSelection};
 
 /// Whether ordinary gameplay chrome is currently shown.
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,10 +48,6 @@ pub(crate) fn plugin(app: &mut App) {
                 .chain()
                 .in_set(GameplaySetup::View),
         )
-        .add_systems(
-            OnEnter(Screen::Gameplay),
-            spawn_safe_frame.in_set(HudSetup::Frame),
-        )
         .add_plugins(context::plugin)
         .add_plugins(badges::plugin)
         .add_plugins((lattice::plugin, initiative::plugin, log::plugin))
@@ -59,123 +56,12 @@ pub(crate) fn plugin(app: &mut App) {
         // the simulation and remains available while a decision is open.
         .add_systems(
             Update,
-            (toggle_hud, apply_hud_visibility, apply_responsive_hud)
+            (toggle_hud, publish_hud_view)
                 .chain()
                 .in_set(AppSystems::RecordInput)
                 .run_if(in_state(Screen::Gameplay))
                 .run_if(resource_equals(GameplayPhase::Active)),
         );
-}
-
-fn apply_responsive_hud(
-    metrics: Res<hex_ui::ResolvedUiMetrics>,
-    added_regions: Query<(), Added<HudRegion>>,
-    mut regions: Query<(&HudRegion, &mut Node)>,
-) {
-    if !metrics.is_changed() && added_regions.is_empty() {
-        return;
-    }
-    for (region, mut node) in &mut regions {
-        let role = match region {
-            HudRegion::Party => hex_ui::UiRegionRole::Party,
-            HudRegion::Turn => hex_ui::UiRegionRole::Turn,
-            HudRegion::Inspector => hex_ui::UiRegionRole::Inspector,
-            HudRegion::Actions => hex_ui::UiRegionRole::Actions,
-            HudRegion::Events => hex_ui::UiRegionRole::Events,
-        };
-        hex_ui::apply_region_layout(metrics.viewport, role, &mut node);
-    }
-}
-
-fn spawn_safe_frame(mut commands: Commands) {
-    commands
-        .spawn((
-            Name::new("Gameplay HUD Safe Frame"),
-            Node {
-                position_type: PositionType::Absolute,
-                top: Val::Px(0.0),
-                right: Val::Px(0.0),
-                bottom: Val::Px(0.0),
-                left: Val::Px(0.0),
-                ..default()
-            },
-            Pickable::IGNORE,
-            crate::screens::DespawnOnExit(Screen::Gameplay),
-        ))
-        .with_children(|frame| {
-            frame.spawn((
-                Name::new("Party HUD Region"),
-                HudRegion::Party,
-                Node {
-                    position_type: PositionType::Absolute,
-                    top: Val::Px(12.0),
-                    bottom: Val::Px(12.0),
-                    left: Val::Px(12.0),
-                    width: Val::Px(224.0),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(8.0),
-                    ..default()
-                },
-                Pickable::IGNORE,
-            ));
-            frame.spawn((
-                Name::new("Turn HUD Region"),
-                HudRegion::Turn,
-                Node {
-                    position_type: PositionType::Absolute,
-                    top: Val::Px(12.0),
-                    left: Val::Px(244.0),
-                    right: Val::Px(320.0),
-                    height: Val::Px(72.0),
-                    ..default()
-                },
-                Pickable::IGNORE,
-            ));
-            frame.spawn((
-                Name::new("Inspector HUD Region"),
-                HudRegion::Inspector,
-                Node {
-                    position_type: PositionType::Absolute,
-                    top: Val::Px(12.0),
-                    right: Val::Px(12.0),
-                    bottom: Val::Px(12.0),
-                    width: Val::Px(300.0),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(8.0),
-                    ..default()
-                },
-                Pickable::IGNORE,
-            ));
-            frame.spawn((
-                Name::new("Actions HUD Region"),
-                HudRegion::Actions,
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: Val::Px(244.0),
-                    right: Val::Px(320.0),
-                    bottom: Val::Px(12.0),
-                    height: Val::Px(132.0),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(4.0),
-                    ..default()
-                },
-                Pickable::IGNORE,
-            ));
-            frame.spawn((
-                Name::new("Events HUD Region"),
-                HudRegion::Events,
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: Val::Px(244.0),
-                    right: Val::Px(320.0),
-                    bottom: Val::Px(152.0),
-                    flex_direction: FlexDirection::Column,
-                    align_items: AlignItems::Center,
-                    ..default()
-                },
-                Pickable::IGNORE,
-            ));
-        });
 }
 
 /// Finds a region spawned by [`spawn_safe_frame`].
@@ -199,26 +85,21 @@ fn toggle_hud(
     }
 }
 
-fn apply_hud_visibility(
+fn publish_hud_view(
     hud: Res<HudVisibility>,
     selection: Res<lattice::DisableSelection>,
     resolution: Option<Res<EncounterResolution>>,
-    mut roots: Query<(&mut Visibility, Has<DecisionHud>), With<HudElement>>,
+    mut view: ResMut<hex_ui::GameplayChromeView>,
 ) {
-    for (mut visibility, decision_lattice) in &mut roots {
-        let encounter_complete = resolution
+    let next = hex_ui::GameplayChromeView {
+        shown: hud.shown,
+        decision_required: selection.is_active(),
+        encounter_complete: resolution
             .as_deref()
-            .is_some_and(|value| value.is_resolved());
-        let wanted = if encounter_complete && decision_lattice {
-            Visibility::Hidden
-        } else if hud.shown || (decision_lattice && selection.is_active()) {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
-        };
-        if *visibility != wanted {
-            *visibility = wanted;
-        }
+            .is_some_and(|value| value.is_resolved()),
+    };
+    if *view != next {
+        *view = next;
     }
 }
 
@@ -234,25 +115,18 @@ mod tests {
     }
 
     #[test]
-    fn hiding_the_hud_changes_roots_without_despawning_them() {
+    fn hiding_the_hud_publishes_visibility_without_mutating_ui_nodes() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<HudVisibility>()
             .init_resource::<lattice::DisableSelection>()
-            .add_systems(Update, apply_hud_visibility);
-        let root = app
-            .world_mut()
-            .spawn((HudElement, Visibility::Inherited))
-            .id();
+            .init_resource::<hex_ui::GameplayChromeView>()
+            .add_systems(Update, publish_hud_view);
 
         app.world_mut().resource_mut::<HudVisibility>().shown = false;
         app.update();
 
-        assert_eq!(
-            app.world().get::<Visibility>(root),
-            Some(&Visibility::Hidden)
-        );
-        assert!(app.world().get_entity(root).is_ok(), "the root stays alive");
+        assert!(!app.world().resource::<hex_ui::GameplayChromeView>().shown);
     }
 
     #[test]
@@ -261,15 +135,8 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .init_resource::<HudVisibility>()
             .init_resource::<lattice::DisableSelection>()
-            .add_systems(Update, apply_hud_visibility);
-        let ordinary = app
-            .world_mut()
-            .spawn((HudElement, Visibility::Inherited))
-            .id();
-        let decision = app
-            .world_mut()
-            .spawn((HudElement, DecisionHud, Visibility::Inherited))
-            .id();
+            .init_resource::<hex_ui::GameplayChromeView>()
+            .add_systems(Update, publish_hud_view);
         app.world_mut().resource_mut::<HudVisibility>().shown = false;
         app.world_mut()
             .resource_mut::<lattice::DisableSelection>()
@@ -282,14 +149,9 @@ mod tests {
         });
         app.update();
 
-        assert_eq!(
-            app.world().get::<Visibility>(ordinary),
-            Some(&Visibility::Hidden)
-        );
-        assert_eq!(
-            app.world().get::<Visibility>(decision),
-            Some(&Visibility::Inherited)
-        );
+        let view = app.world().resource::<hex_ui::GameplayChromeView>();
+        assert!(!view.shown);
+        assert!(view.decision_required);
     }
 
     #[test]
@@ -298,20 +160,18 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .init_resource::<HudVisibility>()
             .init_resource::<lattice::DisableSelection>()
+            .init_resource::<hex_ui::GameplayChromeView>()
             .insert_resource(EncounterResolution(Some(
                 hex_combat::EncounterOutcome::Victory,
             )))
-            .add_systems(Update, apply_hud_visibility);
-        let decision = app
-            .world_mut()
-            .spawn((HudElement, DecisionHud, Visibility::Inherited))
-            .id();
+            .add_systems(Update, publish_hud_view);
 
         app.update();
 
-        assert_eq!(
-            app.world().get::<Visibility>(decision),
-            Some(&Visibility::Hidden)
+        assert!(
+            app.world()
+                .resource::<hex_ui::GameplayChromeView>()
+                .encounter_complete
         );
     }
 }

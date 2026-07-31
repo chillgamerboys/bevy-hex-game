@@ -23,6 +23,10 @@ pub enum UiRegionRole {
 #[derive(Component)]
 pub struct HudElement;
 
+/// Command-modal gameplay surface that remains visible when ordinary chrome is hidden.
+#[derive(Component)]
+pub struct RequiredActionSurface;
+
 /// Picking policy for read-only HUD surfaces above the native world.
 pub const READ_ONLY_HUD: Pickable = Pickable::IGNORE;
 
@@ -38,14 +42,24 @@ pub const fn action_rail_clearance(viewport: UiViewportClass) -> f32 {
 /// Applies a complete, reversible layout for one responsive region.
 pub fn apply_region_layout(viewport: UiViewportClass, role: UiRegionRole, node: &mut Node) {
     node.display = Display::Flex;
+    node.top = Val::Auto;
+    node.right = Val::Auto;
+    node.bottom = Val::Auto;
+    node.left = Val::Auto;
+    node.width = Val::Auto;
+    node.height = Val::Auto;
     match (viewport, role) {
         (UiViewportClass::Compact, UiRegionRole::Party) => {
+            node.top = Val::Px(8.0);
+            node.bottom = Val::Px(8.0);
             node.left = Val::Px(8.0);
             node.width = Val::Px(180.0);
         }
         (UiViewportClass::Compact, UiRegionRole::Turn) => {
+            node.top = Val::Px(12.0);
             node.left = Val::Px(196.0);
             node.right = Val::Px(268.0);
+            node.height = Val::Px(72.0);
         }
         (UiViewportClass::Compact, UiRegionRole::Inspector | UiRegionRole::Events) => {
             node.display = Display::None;
@@ -57,14 +71,19 @@ pub fn apply_region_layout(viewport: UiViewportClass, role: UiRegionRole, node: 
             node.height = Val::Px(132.0);
         }
         (UiViewportClass::Standard, UiRegionRole::Party) => {
+            node.top = Val::Px(12.0);
+            node.bottom = Val::Px(12.0);
             node.left = Val::Px(12.0);
             node.width = Val::Px(224.0);
         }
         (UiViewportClass::Standard, UiRegionRole::Turn) => {
+            node.top = Val::Px(12.0);
             node.left = Val::Px(244.0);
             node.right = Val::Px(320.0);
+            node.height = Val::Px(72.0);
         }
         (UiViewportClass::Standard, UiRegionRole::Inspector) => {
+            node.top = Val::Px(12.0);
             node.right = Val::Px(12.0);
             node.bottom = Val::Px(12.0);
             node.width = Val::Px(300.0);
@@ -81,14 +100,19 @@ pub fn apply_region_layout(viewport: UiViewportClass, role: UiRegionRole, node: 
             node.bottom = Val::Px(390.0);
         }
         (UiViewportClass::Wide, UiRegionRole::Party) => {
+            node.top = Val::Px(16.0);
+            node.bottom = Val::Px(16.0);
             node.left = Val::Px(16.0);
             node.width = Val::Px(260.0);
         }
         (UiViewportClass::Wide, UiRegionRole::Turn) => {
+            node.top = Val::Px(16.0);
             node.left = Val::Px(288.0);
             node.right = Val::Px(360.0);
+            node.height = Val::Px(76.0);
         }
         (UiViewportClass::Wide, UiRegionRole::Inspector) => {
+            node.top = Val::Px(16.0);
             node.right = Val::Px(16.0);
             node.bottom = Val::Px(12.0);
             node.width = Val::Px(332.0);
@@ -130,6 +154,7 @@ mod tests {
         assert_eq!(inspector.display, Display::None);
         assert_eq!(events.display, Display::None);
         assert_eq!(actions.display, Display::Flex);
+        assert_eq!(actions.top, Val::Auto);
         assert_eq!(actions.bottom, Val::Px(196.0));
     }
 

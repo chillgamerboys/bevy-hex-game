@@ -76,6 +76,27 @@ pub struct GameplayHudView {
     pub actions: Vec<ActionAffordance>,
 }
 
+/// Immutable visibility projection for gameplay chrome.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GameplayChromeView {
+    /// Whether ordinary HUD surfaces are shown.
+    pub shown: bool,
+    /// Whether a command-modal decision must remain reachable.
+    pub decision_required: bool,
+    /// Whether terminal encounter presentation supersedes stale decisions.
+    pub encounter_complete: bool,
+}
+
+impl Default for GameplayChromeView {
+    fn default() -> Self {
+        Self {
+            shown: true,
+            decision_required: false,
+            encounter_complete: false,
+        }
+    }
+}
+
 /// Disclosed side label used by the initiative renderer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InitiativeSide {
