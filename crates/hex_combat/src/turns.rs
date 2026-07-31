@@ -499,6 +499,7 @@ fn end_turn_on_space(
 fn advance_turn(
     mut commands: Commands,
     mut turn_order: ResMut<TurnOrder>,
+    mut authority: Option<ResMut<crate::authority_host::CombatAuthority>>,
     registry: Res<UnitRegistry>,
     settings: Res<CombatSettings>,
     mut rounds: MessageWriter<RoundElapsed>,
@@ -573,6 +574,13 @@ fn advance_turn(
         next: turn_order.current(),
         round: turn_order.round,
     });
+    // Content-dependent commands (casts today) spend the ECS turn through their
+    // adapter before this system advances it. That transition is deliberately
+    // outside the pure command reducer, so publish the complete settled handoff
+    // back to the authority after the deferred Turn swap lands.
+    if let Some(authority) = authority.as_deref_mut() {
+        authority.mark_adapter_pending();
+    }
 }
 
 /// Movement budget when `combat.ron` has not loaded, for headless harnesses only.

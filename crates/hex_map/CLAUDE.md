@@ -44,6 +44,7 @@ commands.spawn((
     HexTile,       // marker
     hex_coord,     // HexCoord  — which hex
     tile_pos,      // TilePos   — the run's TOPMOST MATERIAL VOXEL, not its base
+    run_bottom,    // RunBottom — the run's LOWEST MATERIAL VOXEL
     span,          // HexSpan   — the run's world extent
     substance,     // SubstanceId
     headroom,      // Headroom  — clear voxels above the run, 0 if buried
@@ -51,7 +52,7 @@ commands.spawn((
 ));
 ```
 
-`hex_units` queries `(&TilePos, &HexSpan, &SubstanceId, &Headroom)` with
+Gameplay may query `(&TilePos, &RunBottom, &HexSpan, &SubstanceId, &Headroom)` with
 `With<HexTile>` and consumes exact projections such as `TraversalBlockers`.
 `MapAnchors`, `BiomeRegions`, `InteriorRegions`, and view hints use the same shared,
 stack-safe pattern. `TerrainEdit` is the only live write interface; the accepted
@@ -93,6 +94,11 @@ run's topmost material voxel. Gameplay combines the position with the substance'
 `solid` flag before treating it as footing. Tagging the base would force gameplay to
 know `level_height` to work the surface out, which puts a dependency on this crate
 straight back into movement — the exact thing the split prevents.
+
+`RunBottom` publishes the same run's lowest material voxel as an integer `Level`.
+Together those two components make the inclusive voxel bounds exact without gameplay
+reconstructing a level from `HexSpan`, world transforms, `level_height`, or saturated
+`Headroom`.
 
 ### Storage is not rendering
 

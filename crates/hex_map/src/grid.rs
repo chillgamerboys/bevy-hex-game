@@ -3,9 +3,10 @@
 //! Storage and generation are private to `hex_map`; rendered terrain reaches other
 //! crates as entities carrying [`HexTile`](hex_core::HexTile),
 //! [`HexCoord`](hex_core::HexCoord), a surface [`TilePos`](hex_core::TilePos),
-//! [`HexSpan`](hex_core::HexSpan), [`SubstanceId`](hex_core::SubstanceId), and
-//! [`Headroom`](hex_core::Headroom). The substance table itself is shared through
-//! `hex_assets` because gameplay also reads its behavior flags.
+//! [`RunBottom`](hex_core::RunBottom), [`HexSpan`](hex_core::HexSpan),
+//! [`SubstanceId`](hex_core::SubstanceId), and [`Headroom`](hex_core::Headroom).
+//! The substance table itself is shared through `hex_assets` because gameplay also
+//! reads its behavior flags.
 //!
 //! Keeping that boundary narrow is what lets the map be rebuilt without touching
 //! gameplay. A richer map means producing different voxels in the terrain builder;
@@ -23,7 +24,7 @@ use hex_core::{
     BiomeRegions, CanopyOccluder, CutawayOccluder, GameplayLight, GameplaySetup,
     GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile, InteriorRegionId,
     InteriorRegions, MapAnchorId, MapAnchors, MapViewHint, PerceptionSystems,
-    PresentationOcclusion, ResolvedMapSeed, Screen, SpecialMovementRegions, SubstanceId,
+    PresentationOcclusion, ResolvedMapSeed, RunBottom, Screen, SpecialMovementRegions, SubstanceId,
     TerrainEdit, TerrainReady, TilePos, TraversalBlockers, TraversalProfile,
 };
 
@@ -52,6 +53,7 @@ pub fn plugin(app: &mut App) {
         .register_type::<HexTile>()
         .register_type::<SubstanceId>()
         .register_type::<TilePos>()
+        .register_type::<RunBottom>()
         .register_type::<Headroom>()
         .register_type::<InteriorRegionId>()
         .register_type::<CutawayOccluder>()
@@ -383,6 +385,7 @@ fn build_grid(
                 span,
                 run.substance,
                 position,
+                RunBottom(run.bottom),
                 headroom,
             ));
             if let Some(region) = projected.cutaway {

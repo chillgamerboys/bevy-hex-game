@@ -68,4 +68,4 @@ pub use terrain_impact::{
 pub use traversal::{TraversalEndpoint, TraversalProfile};
 pub use unit_ids::{ControlOwner, PlayerSeat, SimSeeds, UnitId};
 pub use view::CameraFocusTarget;
-pub use voxel::{Headroom, Level, SubstanceId, TerrainEdit, TilePos, MAX_HEADROOM};
+pub use voxel::{Headroom, Level, RunBottom, SubstanceId, TerrainEdit, TilePos, MAX_HEADROOM};

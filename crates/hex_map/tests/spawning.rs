@@ -43,7 +43,7 @@ use hex_core::{
     BiomeRegionId, BiomeRegions, CanopyOccluder, CutawayOccluder, GameplayLight, GameplaySetup,
     GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile, InteriorRegionId,
     InteriorRegions, Level, MapAnchorId, MapAnchors, MapViewHint, PresentationOcclusion,
-    ResolvedMapSeed, Screen, SpecialMovementRegion, SpecialMovementRegions, SubstanceId,
+    ResolvedMapSeed, RunBottom, Screen, SpecialMovementRegion, SpecialMovementRegions, SubstanceId,
     TerrainEdit, TerrainReady, TilePos, TraversalBlockers, MAX_HEADROOM,
 };
 use hex_map::{
@@ -2578,6 +2578,33 @@ fn tile_count(app: &mut App) -> usize {
         .count()
 }
 
+fn published_run_bounds(app: &mut App, coord: HexCoord) -> BTreeSet<(Level, Level, SubstanceId)> {
+    let world = app.world_mut();
+    let mut tiles = world.query_filtered::<(&TilePos, &RunBottom, &SubstanceId), With<HexTile>>();
+    tiles
+        .iter(world)
+        .filter(|(position, _, _)| position.coord == coord)
+        .map(|(position, bottom, substance)| (bottom.0, position.level, *substance))
+        .collect()
+}
+
+fn assert_column_run_publication(app: &mut App, coord: HexCoord) {
+    let expected: BTreeSet<_> = app
+        .world()
+        .resource::<VoxelMap>()
+        .column(coord)
+        .into_iter()
+        .flat_map(hex_map::runs)
+        .map(|run| (run.bottom, run.top - 1, run.substance))
+        .collect();
+    let published = published_run_bounds(app, coord);
+
+    assert_eq!(
+        published, expected,
+        "every material run in {coord:?} must publish its exact inclusive bottom and top"
+    );
+}
+
 fn object_instance_snapshot(app: &mut App) -> BTreeSet<(String, TilePos, u8)> {
     let world = app.world_mut();
     let mut objects = world.query::<&ObjectInstance>();
@@ -3283,15 +3310,31 @@ fn tiles_carry_the_complete_component_contract() {
     let mut app = test_app();
     enter_gameplay(&mut app);
 
-    let mut query = app
-        .world_mut()
-        .query_filtered::<(&HexCoord, &TilePos, &HexSpan, &SubstanceId, &Headroom), With<HexTile>>(
+    {
+        let registry = app.world().resource::<AppTypeRegistry>().read();
+        assert!(
+            registry.get(TypeId::of::<RunBottom>()).is_some(),
+            "the map plugin must register the shared RunBottom component"
         );
+    }
+
+    let mut query = app.world_mut().query_filtered::<(
+        &HexCoord,
+        &TilePos,
+        &RunBottom,
+        &HexSpan,
+        &SubstanceId,
+        &Headroom,
+    ), With<HexTile>>();
 
     let mut checked = 0;
-    for (coord, pos, span, substance, headroom) in query.iter(app.world()) {
+    for (coord, pos, bottom, span, substance, headroom) in query.iter(app.world()) {
         assert!(!substance.is_air(), "air should not be spawned as a prism");
         assert_eq!(pos.coord, *coord, "a tile's position must match its column");
+        assert!(
+            bottom.0 <= pos.level,
+            "a run's inclusive bottom cannot exceed its inclusive top"
+        );
         assert!(span.height() > 0.0, "a tile span must have positive height");
         assert!(
             (0..=MAX_HEADROOM).contains(&headroom.0),
@@ -3300,6 +3343,16 @@ fn tiles_carry_the_complete_component_contract() {
         checked += 1;
     }
     assert!(checked > 0, "no tiles were checked");
+
+    let coords: Vec<_> = app
+        .world()
+        .resource::<VoxelMap>()
+        .columns()
+        .map(|(coord, _)| coord)
+        .collect();
+    for coord in coords {
+        assert_column_run_publication(&mut app, coord);
+    }
 }
 
 /// In gap-free generated terrain, only the top run of each column has headroom, and
@@ -3389,6 +3442,17 @@ fn a_platform_overhead_reduces_the_headroom_below() {
     app.update();
     app.update();
 
+    assert_column_run_publication(&mut app, coord);
+    let published = published_run_bounds(&mut app, coord);
+    assert!(
+        published.contains(&(surface + gap + 1, surface + gap + 1, stone)),
+        "the one-voxel platform must publish its exact bottom and inclusive top"
+    );
+    assert!(
+        published.iter().any(|(_, top, _)| *top == surface),
+        "the ground run below the platform must retain its own published bounds"
+    );
+
     let mut query = app
         .world_mut()
         .query_filtered::<(&TilePos, &Headroom), With<HexTile>>();
@@ -3419,7 +3483,7 @@ fn clearing_a_voxel_splits_a_run() {
     let before = tile_count(&mut app);
 
     // Find a run thick enough that hollowing its middle leaves material either side.
-    let target = {
+    let (target, original_run) = {
         let map = app
             .world()
             .get_resource::<VoxelMap>()
@@ -3429,7 +3493,7 @@ fn clearing_a_voxel_splits_a_run() {
                 hex_map::runs(column)
                     .into_iter()
                     .find(|run| run.levels() >= 3)
-                    .map(|run| TilePos::new(coord, run.bottom + 1))
+                    .map(|run| (TilePos::new(coord, run.bottom + 1), run))
             })
             .expect("generated terrain should contain at least one run three levels deep")
     };
@@ -3458,6 +3522,25 @@ fn clearing_a_voxel_splits_a_run() {
         after,
         before + 1,
         "splitting one run into two should add exactly one entity"
+    );
+
+    assert_column_run_publication(&mut app, target.coord);
+    let published = published_run_bounds(&mut app, target.coord);
+    assert!(
+        published.contains(&(
+            original_run.bottom,
+            target.level - 1,
+            original_run.substance
+        )),
+        "the lower cave wall fragment must publish the original run bottom"
+    );
+    assert!(
+        published.contains(&(
+            target.level + 1,
+            original_run.top - 1,
+            original_run.substance
+        )),
+        "the overhanging fragment must publish the first material voxel above the cave"
     );
 }
 

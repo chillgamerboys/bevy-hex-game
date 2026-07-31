@@ -168,7 +168,7 @@ owner's review; crate boundaries do not change.
 
 **`hex_map` is a leaf** — nothing depends on it but the binary. It is owned by one
 person, and the map reaches the rest of the game only through `HexTile`, `HexCoord`,
-surface `TilePos`, `HexSpan`, `SubstanceId` and `Headroom` components on tile
+surface `TilePos`, `RunBottom`, `HexSpan`, `SubstanceId` and `Headroom` components on tile
 entities. See `crates/hex_map/CLAUDE.md`. Cargo isolates the implementation, but
 malformed components can still break gameplay at runtime.
 
@@ -219,9 +219,9 @@ and tests without a renderer. It holds the largest share of the test suite.
 - **The vertical axis is `level`, never `z`** — cube coordinates already use `x`, `y`
   and `z`, and all three are horizontal.
 - **A tile entity is a run of voxels, not one voxel**, and its `TilePos` is the run's
-  topmost material voxel. Its substance determines whether that position is solid
-  footing. Interior voxels have no entity, which is why targeting is positional. See
-  `docs/systems/map.md`.
+  topmost material voxel while `RunBottom` is its lowest. Its substance determines
+  whether that position is solid footing. Interior voxels have no entity, which is why
+  targeting is positional. See `docs/systems/map.md`.
 - **A surface needs room above it.** Every tile carries `Headroom` — clear voxels above
   it, 0 when buried inside a column — and a `Body` may stand only where headroom admits
   its traversal profile. The canonical walker is exactly 2 levels tall and may climb

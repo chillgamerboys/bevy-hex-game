@@ -17,7 +17,7 @@ use hex_ai::{
 };
 use hex_assets::{
     AiProfileCatalog, CastingAxis, CombatSettings, ContentIndex, Effect, ElementCatalog, SpellBook,
-    SubstanceTable, TargetShape,
+    SubstanceTable, TargetShape, Trajectory,
 };
 use hex_core::{
     Busy, CommandQueue, ControlOwner, GameCommand, GameplaySetup, GameplaySetupFailure,
@@ -27,8 +27,8 @@ use hex_core::{
 use hex_lattice::{castable, CellKind, LatticeSpec, LatticeState, LatticeStats};
 use hex_perception::{FactionKnowledge, FactionMapKnowledge, SurfaceSnapshot};
 use hex_units::{
-    targeting, volumes, Body, Downed, Enemy, Faction, Footing, Player, Reach, StandsOn,
-    UnitOccupancy, UnitRegistry,
+    known_trajectory_is_clear, targeting, trajectory_destination, volumes, Body, Downed, Enemy,
+    Faction, Footing, KnownTerrainOccupancy, Player, Reach, StandsOn, UnitOccupancy, UnitRegistry,
 };
 use xxhash_rust::xxh3::xxh3_64;
 
@@ -335,6 +335,7 @@ fn drive_ai(
                             world.content.as_deref(),
                             world.elements.as_deref(),
                             world.combat.as_deref(),
+                            table,
                         ),
                         None,
                     )
@@ -609,11 +610,18 @@ fn enumerate_turn_actions(
     content: Option<&ContentIndex>,
     elements: Option<&ElementCatalog>,
     combat: Option<&CombatSettings>,
+    substances: &SubstanceTable,
 ) -> Vec<GameCommand> {
     let id = *actor.1;
     let Some(turn) = actor.5 else {
         return Vec::new();
     };
+    let known_terrain = KnownTerrainOccupancy::from_observed_surfaces(
+        spatial
+            .surfaces()
+            .filter(|(_, known)| known.state() == KnowledgeState::Observed)
+            .map(|(position, _)| position),
+    );
     let observed_hostiles: BTreeSet<UnitId> = spatial
         .units()
         .filter(|(_, unit)| actor.4.is_hostile_to(unit.faction))
@@ -693,6 +701,9 @@ fn enumerate_turn_actions(
             if !delivers_anything(spell) {
                 continue;
             }
+            if !crate::commands::cast::terrain_creation_is_admitted(spell, substances) {
+                continue;
+            }
             let Some(cell) = crate::commands::cast::spell_cell(spec, state, spell_id) else {
                 continue;
             };
@@ -729,6 +740,17 @@ fn enumerate_turn_actions(
                 &[None]
             };
             for target in spell_anchors {
+                if !trajectory_available(
+                    spell.targeting.trajectory,
+                    actor.2 .0.pos,
+                    target,
+                    spell.effects.iter().any(|effect| {
+                        matches!(effect, Effect::SetTerrain { .. } | Effect::SpawnWall { .. })
+                    }),
+                    &known_terrain,
+                ) {
+                    continue;
+                }
                 if damages_downed(spell, target, units, &authorized_units) {
                     continue;
                 }
@@ -749,6 +771,22 @@ fn enumerate_turn_actions(
         }
     }
     commands
+}
+
+fn trajectory_available(
+    trajectory: Trajectory,
+    standing: TilePos,
+    target: TilePos,
+    creates_terrain: bool,
+    terrain: &KnownTerrainOccupancy,
+) -> bool {
+    matches!(trajectory, Trajectory::None)
+        || known_trajectory_is_clear(
+            trajectory,
+            standing.above(),
+            trajectory_destination(target, creates_terrain),
+            terrain,
+        )
 }
 
 fn damages_downed(
@@ -1154,6 +1192,41 @@ mod tests {
         let low = TilePos::new(HexCoord::ORIGIN, 1);
         let high = TilePos::new(HexCoord::ORIGIN, 2);
         assert_ne!(tile_key(&low), tile_key(&high));
+    }
+
+    #[test]
+    fn ai_legality_uses_only_faction_authorized_material() {
+        let standing = TilePos::new(HexCoord::ORIGIN, 1);
+        let target = TilePos::new(HexCoord::from_axial(3, 0), 1);
+        let blocker = TilePos::new(HexCoord::from_axial(1, 0), 2);
+        let observed = KnownTerrainOccupancy::from_observed_surfaces([blocker]);
+        let hidden = KnownTerrainOccupancy::default();
+
+        assert!(!trajectory_available(
+            Trajectory::Direct,
+            standing,
+            target,
+            false,
+            &observed,
+        ));
+        assert!(trajectory_available(
+            Trajectory::Arc { rise: 3 },
+            standing,
+            target,
+            false,
+            &observed,
+        ));
+        assert!(trajectory_available(
+            Trajectory::None,
+            standing,
+            target,
+            false,
+            &hidden,
+        ));
+        assert!(
+            trajectory_available(Trajectory::Direct, standing, target, false, &hidden),
+            "unknown blockers must not change the AI legal command set"
+        );
     }
 
     #[test]
