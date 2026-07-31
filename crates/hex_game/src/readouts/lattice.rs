@@ -49,23 +49,6 @@ impl DisableSelection {
             restoring: decision.restoring,
         })
     }
-
-    #[cfg(test)]
-    pub(crate) fn begin_test_decision(
-        &mut self,
-        decider: UnitId,
-        target: UnitId,
-        owed: usize,
-        restoring: bool,
-    ) {
-        self.decision = Some(DisableDecision {
-            decider,
-            target,
-            owed,
-            restoring,
-            live: vec![hex_core::LatticeCoord::ORIGIN],
-        });
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

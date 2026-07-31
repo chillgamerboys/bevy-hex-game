@@ -68,6 +68,7 @@ pub(crate) fn plugin(app: &mut App) {
         Update,
         handle_gameplay_ui_intents
             .after(publish_hud_view)
+            .after(hex_ui::UiSystems::EmitIntents)
             .run_if(in_state(Screen::Gameplay))
             .run_if(resource_equals(GameplayPhase::Active)),
     );

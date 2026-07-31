@@ -42,9 +42,9 @@ fn spawn_badge(commands: &mut Commands, assets: &UiAssets, kind: BadgeKind) {
             Node {
                 display: Display::None,
                 position_type: PositionType::Absolute,
-                width: Val::Px(190.0),
+                width: Val::Px(240.0),
                 min_height: Val::Px(44.0),
-                margin: UiRect::left(Val::Px(-95.0)),
+                margin: UiRect::left(Val::Px(-120.0)),
                 padding: UiRect::axes(Val::Px(8.0), Val::Px(5.0)),
                 justify_content: JustifyContent::Center,
                 border: UiRect::all(Val::Px(1.0)),
@@ -92,16 +92,27 @@ fn render_badges(
         };
         node.display = Display::Flex;
         node.left = Val::Px(anchor.x);
-        node.top = Val::Px(
-            anchor.y
-                - match root.0 {
-                    BadgeKind::Acting => 48.0,
-                    BadgeKind::Target => 16.0,
-                },
-        );
+        node.top = Val::Px(badge_top(root.0, *anchor, &view));
         for child in children.iter() {
             if let Ok(mut text) = labels.get_mut(child) {
                 text.0.clone_from(label);
+            }
+        }
+    }
+}
+
+fn badge_top(kind: BadgeKind, anchor: Vec2, view: &UnitBadgesView) -> f32 {
+    match kind {
+        BadgeKind::Acting => anchor.y - 48.0,
+        BadgeKind::Target => {
+            let base = anchor.y - 96.0;
+            let Some(acting) = view.acting.as_ref().and_then(|badge| badge.anchor) else {
+                return base;
+            };
+            if (acting.x - anchor.x).abs() < 240.0 {
+                base.min(acting.y - 48.0 - 64.0)
+            } else {
+                base
             }
         }
     }
@@ -122,5 +133,20 @@ mod tests {
         };
         assert_eq!(badge.unit, UnitId(0));
         assert!(badge.label.starts_with("ACTIVE"));
+    }
+
+    #[test]
+    fn nearby_target_badge_stacks_above_the_actor() {
+        let view = UnitBadgesView {
+            acting: Some(UnitBadgeView {
+                unit: UnitId(0),
+                kind: BadgeKind::Acting,
+                label: "ACTIVE".to_owned(),
+                anchor: Some(Vec2::new(500.0, 400.0)),
+            }),
+            target: None,
+        };
+        let target_top = badge_top(BadgeKind::Target, Vec2::new(520.0, 420.0), &view);
+        assert!(target_top <= 288.0);
     }
 }

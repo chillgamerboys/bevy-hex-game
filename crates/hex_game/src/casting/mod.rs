@@ -79,10 +79,6 @@ pub fn plugin(app: &mut App) {
     app.add_observer(preview::on_anchor_clicked);
 
     app.add_systems(
-        OnEnter(Screen::Gameplay),
-        panel::spawn_panel.in_set(crate::readouts::HudSetup::Panels),
-    );
-    app.add_systems(
         OnExit(Screen::Gameplay),
         (forget_aim, preview::clear_preview),
     );
@@ -90,9 +86,7 @@ pub fn plugin(app: &mut App) {
         Update,
         (
             refresh_readout,
-            resolve_aim_input,
-            panel::channel_from_button,
-            panel::end_turn_from_button,
+            resolve_aim_input.after(hex_ui::UiSystems::EmitIntents),
         )
             .chain()
             .in_set(AppSystems::RecordInput)
@@ -104,7 +98,7 @@ pub fn plugin(app: &mut App) {
     // there is anything to paint.
     app.add_systems(
         Update,
-        (preview::redraw_preview, panel::rebuild_panel)
+        (preview::redraw_preview, panel::publish_view)
             .chain()
             .after(resolve_aim_input)
             .after(GameplaySystems::UiContext)
@@ -202,25 +196,6 @@ pub struct Aim {
     pub spell: String,
     /// The one positional anchor the cast will name.
     pub anchor: TilePos,
-}
-
-/// Marks the button that starts aiming a named spell.
-///
-/// Carries the name rather than a row index, because entity order is not stable across
-/// UI rebuilds and this panel is rebuilt wholesale — the same reason the lattice demo's
-/// cast buttons carry their spell's coordinate.
-#[derive(Component, Debug, Clone)]
-struct AimsSpell(String);
-
-/// Marks one of the three buttons that act on the aim in flight.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-enum AimControl {
-    /// Emit the cast.
-    Confirm,
-    /// Point at the next unit in range.
-    Next,
-    /// Put the spell down.
-    Cancel,
 }
 
 /// The words the interface uses for a blocked cast.
@@ -618,15 +593,14 @@ fn resolve_aim_input(
     pending: Res<PendingDecision>,
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<InputBindings>,
-    chooses: Query<(&Interaction, &AimsSpell), Changed<Interaction>>,
-    controls: Query<(&Interaction, &AimControl), Changed<Interaction>>,
+    mut intents: MessageReader<hex_ui::UiIntent>,
     knowledge: Option<Res<FactionMapKnowledge>>,
     active_units: Query<&UnitId, Without<Downed>>,
 ) {
     if pending.is_open() {
         return;
     }
-    let Some(request) = requested(&keys, &bindings, &chooses, &controls) else {
+    let Some(request) = requested(&keys, &bindings, &mut intents) else {
         return;
     };
     let Some(caster) = readout.caster else {
@@ -721,20 +695,15 @@ enum AimRequest {
 fn requested(
     keys: &ButtonInput<KeyCode>,
     bindings: &InputBindings,
-    chooses: &Query<(&Interaction, &AimsSpell), Changed<Interaction>>,
-    controls: &Query<(&Interaction, &AimControl), Changed<Interaction>>,
+    intents: &mut MessageReader<hex_ui::UiIntent>,
 ) -> Option<AimRequest> {
-    for (interaction, spell) in chooses {
-        if *interaction == Interaction::Pressed {
-            return Some(AimRequest::Choose(spell.0.clone()));
-        }
-    }
-    for (interaction, control) in controls {
-        if *interaction == Interaction::Pressed {
-            return Some(match control {
-                AimControl::Confirm => AimRequest::Confirm,
-                AimControl::Next => AimRequest::Next,
-                AimControl::Cancel => AimRequest::Cancel,
+    for intent in intents.read() {
+        if let hex_ui::UiIntent::Casting(intent) = intent {
+            return Some(match intent {
+                hex_ui::CastingIntent::Begin(spell) => AimRequest::Choose(spell.clone()),
+                hex_ui::CastingIntent::Confirm => AimRequest::Confirm,
+                hex_ui::CastingIntent::NextTarget => AimRequest::Next,
+                hex_ui::CastingIntent::Cancel => AimRequest::Cancel,
             });
         }
     }

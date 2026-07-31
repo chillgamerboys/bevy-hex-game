@@ -7,6 +7,7 @@
 use bevy::prelude::*;
 
 mod action_rail;
+mod casting_panel;
 mod combat_log;
 mod creation_presentation;
 mod focus;
@@ -34,12 +35,13 @@ pub use layout::{
     READ_ONLY_HUD,
 };
 pub use model::{
-    ActionAffordance, ActionAvailability, ActionPriority, BadgeKind, CombatLogLineView,
-    CombatLogView, DecisionChoiceView, GameplayAction, GameplayChromeView, GameplayHudView,
-    GameplayLatticesView, InitiativeEntryView, InitiativeSide, InitiativeView, LatticeIntent,
-    OwnLatticeView, PauseView, ResumeView, TargetLatticeStateView, TargetLatticeView,
-    TargetPulseView, TitleIntent, TitleScenarioView, TitleView, UiIntent, UiSetting, UiSettingRow,
-    UiSettingsView, UnitBadgeView, UnitBadgesView,
+    ActionAffordance, ActionAvailability, ActionPriority, BadgeKind, CastingAimView, CastingIntent,
+    CastingPanelContentView, CastingPanelView, CastingSpellView, CombatLogLineView, CombatLogView,
+    DecisionChoiceView, GameplayAction, GameplayChromeView, GameplayHudView, GameplayLatticesView,
+    InitiativeEntryView, InitiativeSide, InitiativeView, LatticeIntent, OwnLatticeView, PauseView,
+    ResumeView, TargetLatticeStateView, TargetLatticeView, TargetPulseView, TitleIntent,
+    TitleScenarioView, TitleView, UiIntent, UiSetting, UiSettingRow, UiSettingsView, UnitBadgeView,
+    UnitBadgesView,
 };
 pub use scale::{
     resolve_auto_scale, resolve_ui_metrics, resolve_viewport_class, ResolvedUiMetrics, UiScaleMode,
@@ -83,6 +85,7 @@ impl Plugin for UiPlugin {
         )
         .add_message::<UiIntent>()
         .init_resource::<CombatLogView>()
+        .init_resource::<CastingPanelView>()
         .init_resource::<GameplayChromeView>()
         .init_resource::<GameplayHudView>()
         .init_resource::<GameplayLatticesView>()
@@ -95,6 +98,7 @@ impl Plugin for UiPlugin {
         .init_resource::<ResumeView>()
         .add_plugins((
             theme::plugin,
+            casting_panel::plugin,
             combat_log::plugin,
             scale::plugin,
             focus::plugin,

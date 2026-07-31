@@ -208,6 +208,87 @@ pub struct GameplayLatticesView {
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct TargetPulseView(pub bool);
 
+/// One spell action shown by the casting panel.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CastingSpellView {
+    /// Stable spell name used by the returned intent.
+    pub name: String,
+    /// Player-facing cost, range, and shape summary.
+    pub cost: String,
+    /// Canonical preflight refusal, when the lattice cannot pay.
+    pub blocked: Option<String>,
+    /// Element presentation tint.
+    pub color: Color,
+}
+
+/// Current aim summary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CastingAimView {
+    /// Player-facing spell and resolved-volume summary.
+    pub label: String,
+    /// Whether confirm/next/cancel controls are currently legal to offer.
+    pub controls_enabled: bool,
+}
+
+/// Mutually exclusive casting-panel presentation states.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CastingPanelContentView {
+    /// Status or refusal with optional turn controls.
+    Message {
+        /// Player-facing status.
+        text: String,
+        /// Whether Channel and End Turn remain available beside it.
+        turn_controls: bool,
+    },
+    /// Required lattice choice.
+    Decision {
+        /// Player-facing owner/target context.
+        prompt: String,
+        /// Exact choice progress.
+        choice: DecisionChoiceView,
+    },
+    /// Ordinary spells or an aim in flight.
+    Spells {
+        /// Panel-wide refusal that temporarily suspends every spell.
+        unavailable: Option<String>,
+        /// Stable spell actions.
+        spells: Vec<CastingSpellView>,
+        /// Active aim, when one replaces the spell list.
+        aiming: Option<CastingAimView>,
+    },
+}
+
+impl Default for CastingPanelContentView {
+    fn default() -> Self {
+        Self::Message {
+            text: "no unit to cast from".to_owned(),
+            turn_controls: true,
+        }
+    }
+}
+
+/// Immutable casting-panel projection.
+#[derive(Resource, Debug, Default, Clone, PartialEq)]
+pub struct CastingPanelView {
+    /// Whether combat mode makes the panel relevant.
+    pub visible: bool,
+    /// Complete panel content.
+    pub content: CastingPanelContentView,
+}
+
+/// Typed casting actions emitted by presentation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CastingIntent {
+    /// Begin aiming the named projected spell.
+    Begin(String),
+    /// Confirm the current aim.
+    Confirm,
+    /// Cycle to the next legal target.
+    NextTarget,
+    /// Cancel the current aim.
+    Cancel,
+}
+
 /// Typed gameplay-lattice inputs emitted by presentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LatticeIntent {
@@ -391,6 +472,8 @@ pub enum UiIntent {
     Gameplay(GameplayAction),
     /// Act on a required lattice choice.
     Lattice(LatticeIntent),
+    /// Act on the current casting projection.
+    Casting(CastingIntent),
     /// Navigate back through the current screen's canonical route.
     Back,
     /// Cycle one Settings value.
