@@ -23,6 +23,7 @@ xxhash-rust = { workspace = true }
 
 [dev-dependencies]
 hex_assets = { workspace = true }
+hex_test_support = { workspace = true }
 ron = { workspace = true }
 
 [lints]

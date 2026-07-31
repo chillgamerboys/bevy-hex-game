@@ -22,12 +22,9 @@
 //! the wrong scale still will not be caught here — only by looking at the window.
 //! These raise the floor; they do not replace running the game.
 
-use bevy::app::PluginsState;
-use bevy::asset::AssetPlugin;
 use bevy::ecs::reflect::AppTypeRegistry;
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
-use bevy::state::app::StatesPlugin;
 
 use std::any::TypeId;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -40,7 +37,7 @@ use hex_assets::{
     VoxelStyleCatalog,
 };
 use hex_core::{
-    BiomeRegionId, BiomeRegions, CanopyOccluder, CutawayOccluder, GameplayLight, GameplaySetup,
+    BiomeRegionId, BiomeRegions, CanopyOccluder, CutawayOccluder, GameplayLight,
     GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile, InteriorRegionId,
     InteriorRegions, Level, MapAnchorId, MapAnchors, MapViewHint, PresentationOcclusion,
     ResolvedMapSeed, RunBottom, Screen, SpecialMovementRegion, SpecialMovementRegions, SubstanceId,
@@ -57,6 +54,7 @@ use hex_map::{
     V3DeepForestSettings, V3EnvironmentSettings, V3ForestSettings, V3FortSettings, V3HillsSettings,
     V3LayoutSettings, V3RecipeSettings, V3WaterfallSettings, VoxelMap,
 };
+use hex_test_support::{enter_gameplay, TestAppBuilder};
 
 /// Radius used by the tests. Small enough to stay fast, large enough that the
 /// tile-count formula is a meaningful check.
@@ -68,29 +66,8 @@ const TEST_RADIUS: u32 = 4;
 /// terrain construction, not the asset pipeline, and a test that depends on file IO
 /// fails for reasons that have nothing to do with what it is checking.
 fn test_app() -> App {
-    let mut app = App::new();
-
-    app.add_plugins((MinimalPlugins, AssetPlugin::default(), StatesPlugin));
-    app.init_asset::<Mesh>();
-    app.init_asset::<StandardMaterial>();
-    app.init_state::<Screen>();
-
-    // The real binary configures these in `AppPlugin`. Repeating it here rather than
-    // depending on `hex_game` keeps the test on the crate it is about — and means
-    // this test would still catch a missing sync point if the binary's wiring were
-    // deleted entirely.
-    app.configure_sets(
-        OnEnter(Screen::Gameplay),
-        (
-            GameplaySetup::Resources,
-            GameplaySetup::Terrain,
-            GameplaySetup::Actors,
-            GameplaySetup::Perception,
-            GameplaySetup::View,
-            GameplaySetup::Finalize,
-        )
-            .chain(),
-    );
+    let mut builder = TestAppBuilder::new();
+    let app = builder.app_mut();
 
     // Default handles rather than real assets. Tile *placement* is what these tests
     // check, and it does not depend on a mesh having loaded — dragging in file IO
@@ -120,12 +97,7 @@ fn test_app() -> App {
     });
 
     app.add_plugins(hex_map::grid::plugin);
-
-    while app.plugins_state() != PluginsState::Cleaned {
-        app.finish();
-        app.cleanup();
-    }
-    app
+    builder.build()
 }
 
 /// The substances the generator expects, built directly rather than loaded from RON.
@@ -241,17 +213,6 @@ fn runtime_art_catalog_without(omitted_object: Option<&str>) -> RuntimeArtCatalo
         .expect("fixture object ids should form a valid manifest");
     RuntimeArtCatalog::from_sources(&palette, &styles, &manifest, objects)
         .expect("tracked runtime art catalog should resolve")
-}
-
-/// Runs the app until it has entered gameplay and the world has settled.
-fn enter_gameplay(app: &mut App) {
-    app.world_mut()
-        .resource_mut::<NextState<Screen>>()
-        .set(Screen::Gameplay);
-    // Two updates: one to apply the transition and run `OnEnter`, one to flush the
-    // commands it queued so the entities are queryable.
-    app.update();
-    app.update();
 }
 
 fn procedural_app() -> App {

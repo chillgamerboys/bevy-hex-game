@@ -3364,6 +3364,7 @@ dependencies = [
  "bevy",
  "hex_assets",
  "hex_core",
+ "hex_test_support",
  "rand 0.8.7",
  "ron",
  "serde",
