@@ -213,6 +213,9 @@ pub struct CombatSummary {
     /// round trip change no-progress telemetry.
     #[serde(default)]
     progress_units: BTreeSet<UnitId>,
+    /// First serialization failure encountered while building rolling evidence.
+    #[serde(default)]
+    pub evidence_error: Option<String>,
 }
 
 impl CombatSummary {
@@ -221,15 +224,16 @@ impl CombatSummary {
     /// Runtime cursors are serde-skipped, so collection timing cannot affect the
     /// artifact. Count and rolling-fingerprint fields continue to cover details that
     /// aged out of the bounded windows.
-    #[must_use]
-    pub fn fingerprint(&self) -> u64 {
+    pub fn fingerprint(&self) -> Result<u64, String> {
+        if let Some(error) = &self.evidence_error {
+            return Err(format!("combat summary evidence is incomplete: {error}"));
+        }
         let mut bytes = Vec::new();
         bytes.extend_from_slice(b"hex-combat-summary-v1");
         bytes.extend_from_slice(&COMBAT_SUMMARY_FINGERPRINT_VERSION.to_le_bytes());
-        if serde_json::to_writer(&mut bytes, self).is_err() {
-            bytes.extend_from_slice(b"<serialization-error>");
-        }
-        xxh3_64(&bytes)
+        serde_json::to_writer(&mut bytes, self)
+            .map_err(|error| format!("combat summary fingerprint serialization failed: {error}"))?;
+        Ok(xxh3_64(&bytes))
     }
 
     pub(crate) fn record_command(&mut self, command: &GameCommand) {
@@ -447,12 +451,17 @@ impl CombatSummary {
                 self.progress_units.insert(*unit);
             }
         }
-        self.event_fingerprint = rolling_fingerprint(
+        match rolling_fingerprint(
             b"combat-event-v1",
             self.event_fingerprint,
             self.event_count,
             event,
-        );
+        ) {
+            Ok(fingerprint) => self.event_fingerprint = fingerprint,
+            Err(error) => {
+                self.evidence_error.get_or_insert(error);
+            }
+        };
         self.event_count = self.event_count.saturating_add(1);
         push_bounded(&mut self.events, event.clone());
     }
@@ -461,12 +470,17 @@ impl CombatSummary {
         let record = AiDecisionRecord::from(trace);
         let unit = self.units.entry(record.actor).or_default();
         unit.ai_choices = unit.ai_choices.saturating_add(1);
-        self.ai_selection_fingerprint = rolling_fingerprint(
+        match rolling_fingerprint(
             b"ai-selection-v1",
             self.ai_selection_fingerprint,
             self.ai_selection_count,
             &record,
-        );
+        ) {
+            Ok(fingerprint) => self.ai_selection_fingerprint = fingerprint,
+            Err(error) => {
+                self.evidence_error.get_or_insert(error);
+            }
+        };
         self.ai_selection_count = self.ai_selection_count.saturating_add(1);
         self.ai_trace_cursor = trace.sequence.saturating_add(1);
         push_bounded(&mut self.ai_selections, record);
@@ -494,18 +508,23 @@ fn push_bounded<T>(values: &mut VecDeque<T>, value: T) {
     values.push_back(value);
 }
 
-fn rolling_fingerprint(domain: &[u8], previous: u64, ordinal: u64, value: &impl Serialize) -> u64 {
+fn rolling_fingerprint(
+    domain: &[u8],
+    previous: u64,
+    ordinal: u64,
+    value: &impl Serialize,
+) -> Result<u64, String> {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(domain);
     bytes.extend_from_slice(&previous.to_le_bytes());
     bytes.extend_from_slice(&ordinal.to_le_bytes());
-    if serde_json::to_writer(&mut bytes, value).is_err() {
-        // Every summary input derives Serialize and Vec writes cannot fail. Keeping a
-        // deterministic marker still makes the function total if that contract ever
-        // changes, rather than silently reusing the previous fingerprint.
-        bytes.extend_from_slice(b"<serialization-error>");
-    }
-    xxh3_64(&bytes)
+    serde_json::to_writer(&mut bytes, value).map_err(|error| {
+        format!(
+            "{} rolling fingerprint serialization failed at {ordinal}: {error}",
+            String::from_utf8_lossy(domain)
+        )
+    })?;
+    Ok(xxh3_64(&bytes))
 }
 
 /// Opt-in unbounded transcript for tests and diagnostic tooling.

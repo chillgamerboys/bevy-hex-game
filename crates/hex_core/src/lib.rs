@@ -10,6 +10,7 @@
 //! their common language belongs.
 
 pub mod app;
+pub mod combat_lab;
 pub mod commands;
 pub mod config;
 pub mod effects;
@@ -35,6 +36,7 @@ pub use app::{
     AppSystems, GameplayPhase, GameplaySetup, GameplaySystems, Mode, PausableSystems, Pause,
     RoundElapsed, Screen, Turn,
 };
+pub use combat_lab::{combat_lab_fixture, CombatLabFixtureDefinition, COMBAT_LAB_FIXTURES};
 pub use commands::{Busy, CommandQueue, GameCommand, IssuedCommand, PendingDecision};
 pub use effects::{EffectEnd, EffectId, EffectPayload, PersistentEffect};
 pub use elements::{ElementId, SpellId};

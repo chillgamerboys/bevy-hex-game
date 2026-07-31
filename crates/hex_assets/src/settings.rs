@@ -1205,7 +1205,7 @@ pub struct CombatSettings {
 }
 
 /// The initiative options from `docs/design/game.md` § Open questions.
-#[derive(Reflect, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Reflect, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InitiativePolicy {
     /// Today's placeholder: a flat number on the unit, ties by stable id.
     FlatComponent,
@@ -1220,7 +1220,7 @@ pub enum InitiativePolicy {
 }
 
 /// The action-economy options from the design's open questions.
-#[derive(Reflect, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Reflect, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActionEconomy {
     /// Today's shape: a movement budget plus one action per turn.
     MoveAndAction,
@@ -1233,7 +1233,7 @@ pub enum ActionEconomy {
 }
 
 /// Whether channelling trickles passively or only bursts on the action.
-#[derive(Reflect, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Reflect, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannellingTrickle {
     /// Today's rule: mana returns only when the channel action is taken.
     BurstOnly,
@@ -1242,7 +1242,7 @@ pub enum ChannellingTrickle {
 }
 
 /// How a fight can end before one side is annihilated.
-#[derive(Reflect, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Reflect, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoutPolicy {
     /// Today's rule: fights end only by distance or destruction.
     FightToTheEnd,
