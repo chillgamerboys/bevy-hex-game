@@ -18,18 +18,17 @@ use bevy::picking::events::{Click, Pointer};
 use bevy::picking::Pickable;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
-use serde::{Deserialize, Serialize};
 
 use hex_ai::{AiController, AiGroupId, AiProfileId};
 use hex_anim::Transformation;
 use hex_assets::{
-    AiProfileCatalog, ArtPalette, CubeCoord, Encounter, EncounterFaction, EncounterPlacement,
-    FormationCatalog, FormationCenter, GameAssets, LatticeLibrary, PlayerSettings, RosteredUnit,
-    SubstanceTable,
+    AiProfileCatalog, ArtPalette, CubeCoord, Encounter, EncounterPlacement, FormationCatalog,
+    FormationCenter, GameAssets, LatticeLibrary, PlayerSettings, RosteredUnit, SubstanceTable,
 };
 use hex_lattice::LatticeState;
 use std::{collections::BTreeMap, sync::Arc};
 
+pub use hex_core::Faction;
 use hex_core::{
     CommandQueue, ControlOwner, GameCommand, GameplayPhase, GameplaySetup, GameplaySetupFailure,
     Headroom, HexCoord, HexSpan, HexTile, IssuedCommand, MapAnchorId, MapAnchors, Mode,
@@ -134,34 +133,6 @@ impl StopMovingAt {
     #[must_use]
     pub const fn new(standing: Standing) -> Self {
         Self(standing)
-    }
-}
-
-/// Which side a unit is on.
-///
-/// A component rather than a `Player`-or-not check, so "is this hostile to me" is one
-/// comparison and does not have to enumerate every unit type that exists. Neutral
-/// parties and enemies that turn on each other both fit without a new mechanism.
-#[derive(Component, Reflect, Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[reflect(Component)]
-pub enum Faction {
-    /// The party the player controls.
-    Player,
-    /// Everything that wants the party dead.
-    Hostile,
-}
-
-impl Faction {
-    /// Whether these two sides fight each other.
-    ///
-    /// Deliberately not `self != other`: a third neutral faction should be hostile to
-    /// nobody, and writing the rule as inequality would make it hostile to everybody.
-    #[must_use]
-    pub fn is_hostile_to(self, other: Self) -> bool {
-        matches!(
-            (self, other),
-            (Self::Player, Self::Hostile) | (Self::Hostile, Self::Player)
-        )
     }
 }
 
@@ -734,15 +705,6 @@ pub struct Archetype(pub String);
 #[reflect(Component)]
 pub struct Downed;
 
-impl From<EncounterFaction> for Faction {
-    fn from(faction: EncounterFaction) -> Self {
-        match faction {
-            EncounterFaction::Player => Self::Player,
-            EncounterFaction::Hostile => Self::Hostile,
-        }
-    }
-}
-
 /// Resolves a coordinate written in an encounter file.
 ///
 /// A triple that does not sum to zero is not a hex at all. The encounter file's own
@@ -837,7 +799,7 @@ fn spawn_units(
     // Declaration order, which is what makes the dealt ids a function of the encounter
     // rather than of this run.
     for (unit, standing) in placements {
-        let faction = Faction::from(unit.faction);
+        let faction = unit.faction;
         let lattice = lattice_for(content.lattices.as_deref(), unit.archetype);
         let controller = if faction == Faction::Hostile {
             let profile = unit

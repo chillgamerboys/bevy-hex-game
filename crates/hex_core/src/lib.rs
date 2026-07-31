@@ -14,10 +14,12 @@ pub mod commands;
 pub mod config;
 pub mod effects;
 pub mod elements;
+pub mod faction;
 pub mod formation;
 pub mod hex;
 pub mod input;
 pub mod lattice_ids;
+pub mod occupancy;
 pub mod perception;
 pub mod presentation;
 pub mod setup;
@@ -36,6 +38,7 @@ pub use app::{
 pub use commands::{Busy, CommandQueue, GameCommand, IssuedCommand, PendingDecision};
 pub use effects::{EffectEnd, EffectId, EffectPayload, PersistentEffect};
 pub use elements::{ElementId, SpellId};
+pub use faction::Faction;
 pub use formation::{
     FormationError, FormationPreset, FormationSlot, PartyFormation, PartyMovementMode, PartyPath,
     MAX_FORMATION_SLOTS, MIN_FORMATION_SLOTS,
@@ -43,6 +46,7 @@ pub use formation::{
 pub use hex::{HexCoord, HexGrid, HexSpan, HexTile, Sextant};
 pub use input::{InputAction, InputBindings};
 pub use lattice_ids::{EnchantId, LatticeCoord};
+pub use occupancy::{OccupancyBlock, UnitOccupancy};
 pub use perception::{
     ExteriorIllumination, GameplayLight, IlluminationLevel, KnowledgeExpiry, KnowledgeSource,
     KnowledgeState, KnownTraversal, LightDomain, LocalMapKnowledge, PerceptionSystems, SightBand,

@@ -1,15 +1,16 @@
 //! Stable, structured outcomes produced by the combat simulation.
 //!
-//! [`GameCommand`](hex_core::GameCommand) is the replayable stream of intent. This
+//! [`GameCommand`] is the replayable stream of intent. This
 //! module is its dual: facts that actually happened after validation and resolution.
 //! Presentation consumes these messages, but owns all wording and disclosure policy.
 //! No variant stores an `Entity`, a session-local `SpellId`, or a preformatted line.
 
 use std::collections::BTreeMap;
 
-use bevy::prelude::Message;
-use hex_core::{GameCommand, LatticeCoord, PartyPath, PlayerSeat, TilePos, UnitId};
-use hex_units::{Faction, OccupancyBlock};
+use bevy_ecs::prelude::Message;
+use hex_core::{
+    Faction, GameCommand, LatticeCoord, OccupancyBlock, PartyPath, PlayerSeat, TilePos, UnitId,
+};
 use serde::{Deserialize, Serialize};
 
 /// A runtime dependency the command applier needed but could not read.

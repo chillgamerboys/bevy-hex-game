@@ -1,0 +1,17 @@
+[package]
+name = "hex_combat_core"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "Pure, serializable combat authority and deterministic simulation."
+
+[dependencies]
+bevy_ecs = { workspace = true }
+hex_core = { workspace = true }
+hex_lattice = { workspace = true }
+serde = { workspace = true }
+serde_json = "1"
+xxhash-rust = { workspace = true }
+
+[lints]
+workspace = true

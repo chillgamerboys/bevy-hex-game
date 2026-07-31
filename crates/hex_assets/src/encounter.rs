@@ -33,6 +33,7 @@
 //!   not gaps in it today.
 
 use bevy::prelude::*;
+pub use hex_core::Faction as EncounterFaction;
 use hex_core::TilePos;
 use serde::{de::Error as _, Deserialize, Deserializer};
 
@@ -81,30 +82,6 @@ pub struct RosterEntry {
     pub ai_profile: Option<String>,
     /// Optional deterministic coordination-group tag.
     pub ai_group: Option<String>,
-}
-
-/// Which side a rostered unit is on.
-///
-/// Mirrors `hex_units::Faction` rather than using it: `hex_units` depends on this
-/// crate, so naming its types here would invert the crate graph. The conversion lives
-/// with the spawn path.
-#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
-pub enum EncounterFaction {
-    /// The party the player controls.
-    Player,
-    /// Everything that wants the party dead.
-    Hostile,
-}
-
-impl EncounterFaction {
-    /// The name to use in a designer-facing message.
-    #[must_use]
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Player => "player",
-            Self::Hostile => "hostile",
-        }
-    }
 }
 
 /// Where a rostered unit starts.

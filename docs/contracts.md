@@ -45,6 +45,7 @@ than agreed, the fallback the gameplay side ships without it is in
 
 | Contract | Publisher | Consumer | Status | Specified in |
 |---|---|---|---|---|
+| `UnitId` + `Faction` on unit entities — stable identity and shared side vocabulary | gameplay | perception / combat / presentation | live | [systems/combat.md](systems/combat.md) |
 | `IlluminationLevel` / `ExteriorIllumination` — gameplay illumination, never sampled from the renderer | world | perception | live | [systems/perception.md](systems/perception.md) |
 | `GameplayLight` + derived `LightDomain` — fixed V3 cave sources published and consumed | world | perception | live | [systems/perception.md](systems/perception.md) |
 | `SightProfile` / `SightBand` — sight limits per illumination tier | perception | perception | live | [systems/perception.md](systems/perception.md) |

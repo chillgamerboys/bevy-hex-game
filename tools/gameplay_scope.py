@@ -28,6 +28,13 @@ class ScopeConfigurationError(ValueError):
     """The scope manifest cannot be applied safely."""
 
 
+def write_output(path: pathlib.Path, content: str) -> None:
+    """Write one selector artifact, creating its repository-local parent."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
 @dataclass(frozen=True)
 class ScopeDecision:
     """One fail-closed selection result."""
@@ -410,9 +417,7 @@ def main() -> int:
             rendered_timing = json.dumps(timing, sort_keys=True)
             print(f"scope timing: {rendered_timing}")
             if arguments.timing_out is not None:
-                arguments.timing_out.write_text(
-                    rendered_timing + "\n", encoding="utf-8"
-                )
+                write_output(arguments.timing_out, rendered_timing + "\n")
             return result.returncode
         if arguments.subcommand == "selected-tests":
             decision = classify(
@@ -443,7 +448,7 @@ def main() -> int:
         rendered = json.dumps(output, indent=2, sort_keys=True)
         print(rendered)
         if arguments.json_out is not None:
-            arguments.json_out.write_text(rendered + "\n", encoding="utf-8")
+            write_output(arguments.json_out, rendered + "\n")
         if arguments.github_output is not None:
             write_github_outputs(
                 arguments.github_output, decision, config["all_concerns"]
