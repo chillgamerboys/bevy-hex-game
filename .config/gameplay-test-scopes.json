@@ -201,20 +201,20 @@
     {
       "name": "ai-rules",
       "patterns": ["crates/hex_ai/**"],
-      "concerns": ["rules", "contracts", "simulation", "clippy", "docs"],
-      "reason": "AI policy flows through combat legal actions and deterministic simulation."
+      "concerns": ["rules", "contracts", "app", "clippy", "docs", "shipping"],
+      "reason": "AI policy owns pure rules and feeds unit, combat, application, and shipping behavior."
     },
     {
       "name": "animation",
       "patterns": ["crates/hex_anim/**"],
-      "concerns": ["contracts", "simulation", "app", "clippy", "docs", "shipping"],
-      "reason": "Animation changes cross unit movement, combat lifecycle, and presentation."
+      "concerns": ["contracts", "app", "residual", "clippy", "docs", "shipping"],
+      "reason": "Animation owns residual inline tests and crosses unit movement, combat lifecycle, and presentation."
     },
     {
       "name": "units",
       "patterns": ["crates/hex_units/**"],
-      "concerns": ["contracts", "simulation", "app", "clippy", "docs", "shipping"],
-      "reason": "Unit movement and state feed combat simulation and deployment/application seams."
+      "concerns": ["contracts", "app", "clippy", "docs", "shipping"],
+      "reason": "Unit movement and state feed combat contracts and deployment/application seams."
     },
     {
       "name": "gameplay-screen-model",
@@ -231,14 +231,14 @@
     {
       "name": "combat",
       "patterns": ["crates/hex_combat/**"],
-      "concerns": ["contracts", "simulation", "app", "clippy", "docs", "shipping"],
-      "reason": "Combat state feeds deterministic summaries and gameplay projections."
+      "concerns": ["contracts", "app", "clippy", "docs", "shipping"],
+      "reason": "Combat adapters feed application summaries and gameplay projections."
     },
     {
       "name": "test-support",
       "patterns": ["crates/hex_test_support/**"],
-      "concerns": ["contracts", "simulation", "app", "clippy", "docs"],
-      "reason": "Shared synthetic fixtures are consumed by every gameplay behavioral partition."
+      "concerns": ["contracts", "app", "clippy", "docs"],
+      "reason": "Shared synthetic fixtures are consumed by the ECS-contract and headless-application partitions."
     },
     {
       "name": "gameplay-assets",
@@ -263,8 +263,8 @@
         "assets/config/lattices.ron",
         "assets/config/spells.ron"
       ],
-      "concerns": ["rules", "contracts", "simulation", "app", "clippy", "docs", "shipping"],
-      "reason": "Gameplay schema and content flow into rules, launches, simulation, and UI."
+      "concerns": ["contracts", "app", "residual", "clippy", "docs", "shipping"],
+      "reason": "Gameplay schema and content own asset tests and flow into contracts, launches, and UI."
     },
     {
       "name": "shared-assets",

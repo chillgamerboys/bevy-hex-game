@@ -74,6 +74,13 @@ That guard rejects a workspace dependency edge outside `hex_core`, `hex_lattice`
 `hex_ai` instead of letting renderer or application dependencies silently erode the
 partition.
 
+Changed-path closures follow executable dependency direction, not broad gameplay
+proximity. For example, unit, animation, AI-adapter, and ECS-combat changes cannot
+affect the renderer-free `hex_combat_core` simulation and therefore do not rerun it.
+Asset and animation changes do select the residual partition because their owning
+inline tests live outside the four explicit gameplay targets. A concern may be
+omitted only when it cannot compile or exercise the changed authority.
+
 Pull-request CI applies the selector directly and publishes the decision plus
 per-concern JUnit and timing evidence. Pushes to `dev` or `main` forcibly promote
 the decision to the complete integration gate, regardless of changed paths. Final

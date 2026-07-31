@@ -59,16 +59,55 @@ class GameplayScopeTests(unittest.TestCase):
             ("contracts", "simulation", "app", "clippy", "docs", "shipping"),
         )
 
+    def test_ai_change_omits_independent_pure_simulation(self) -> None:
+        decision = self.classify("crates/hex_ai/src/lib.rs")
+        self.assertFalse(decision.full)
+        self.assertEqual(
+            decision.concerns,
+            ("rules", "contracts", "app", "clippy", "docs", "shipping"),
+        )
+
+    def test_units_change_omits_independent_pure_simulation(self) -> None:
+        decision = self.classify("crates/hex_units/src/movement.rs")
+        self.assertFalse(decision.full)
+        self.assertEqual(
+            decision.concerns,
+            ("contracts", "app", "clippy", "docs", "shipping"),
+        )
+
+    def test_combat_adapter_change_omits_independent_pure_simulation(self) -> None:
+        decision = self.classify("crates/hex_combat/src/authority_host.rs")
+        self.assertFalse(decision.full)
+        self.assertEqual(
+            decision.concerns,
+            ("contracts", "app", "clippy", "docs", "shipping"),
+        )
+
+    def test_test_support_change_runs_only_its_consuming_partitions(self) -> None:
+        decision = self.classify("crates/hex_test_support/src/lib.rs")
+        self.assertFalse(decision.full)
+        self.assertEqual(
+            decision.concerns,
+            ("contracts", "app", "clippy", "docs"),
+        )
+
+    def test_animation_change_keeps_its_inline_tests_in_residual(self) -> None:
+        decision = self.classify("crates/hex_anim/src/lib.rs")
+        self.assertFalse(decision.full)
+        self.assertEqual(
+            decision.concerns,
+            ("contracts", "app", "residual", "clippy", "docs", "shipping"),
+        )
+
     def test_gameplay_asset_rule_precedes_shared_asset_fallback(self) -> None:
         decision = self.classify("crates/hex_assets/src/combat_rules.rs")
         self.assertFalse(decision.full)
         self.assertEqual(
             decision.concerns,
             (
-                "rules",
                 "contracts",
-                "simulation",
                 "app",
+                "residual",
                 "clippy",
                 "docs",
                 "shipping",
@@ -207,6 +246,12 @@ class GameplayScopeTests(unittest.TestCase):
             output = pathlib.Path(directory) / "nested" / "timing.json"
             gameplay_scope.write_output(output, "{}\n")
             self.assertEqual(output.read_text(encoding="utf-8"), "{}\n")
+
+    def test_manual_runtime_gate_tracks_the_screen_model_crate(self) -> None:
+        workflow = (
+            ROOT / ".github" / "workflows" / "manual-runtime-signoff.yaml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("hex_gameplay_model", workflow)
 
 
 if __name__ == "__main__":
