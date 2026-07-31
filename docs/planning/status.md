@@ -227,12 +227,20 @@ shipped four-hex movement default; its measurements and limits are recorded in t
 [Wave 7 decision audit](../development/wave-7-tempo-decision.md).
 
 The **Wave 8 gameplay foundation is live**. `hex_combat_core` is the sole
-renderer-free, serializable authority for validated combat commands, exact positions,
-turns, lattices, transcripts, and bounded deterministic simulations. Bevy combat
-resources, unit movement, animation, and UI are projections or content adapters over
-that authority rather than parallel mutation paths. Pure `hex_gameplay_model`
-transitions own Combat Lab and Creator navigation, report selection, Retry/Tune/Copy,
-re-entry identity, and edit history without exposing mutable widget state.
+renderer-free, serializable authority for the commands it reduces, exact positions,
+turns, lattices, and transcripts. Bevy combat resources, unit movement, animation,
+and UI are projections or validated content adapters over that authority rather than
+parallel mutation paths. Cast, restoration, Rest, and party-movement resolution still
+enter through those ECS/content adapters and are then adopted back into the authority;
+the pure reducer does not yet execute a complete content-driven fight.
+
+The bounded deterministic simulation target proves canonical state, occupancy,
+turn/action accounting, profile propagation, fingerprints, and typed no-progress
+termination. Its current scripted controller deliberately emits only `EndTurn`, so it
+is not tactical AI, a balance oracle, or evidence for fight length. Pure
+`hex_gameplay_model` transitions own Combat Lab and Creator navigation, report
+selection, Retry/Tune/Copy, re-entry identity, and edit history without exposing
+mutable widget state.
 
 Gameplay validation is split by oracle into pure rules, focused ECS contracts,
 deterministic simulation, and model/headless-app partitions. One fail-closed concern

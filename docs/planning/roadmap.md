@@ -132,10 +132,12 @@ the whole wave lands on `dev` in one merge (CONTRIBUTING.md has the rules).
   each choice, resolves deployment, freezes content for Retry, and refuses resume
   writes. Fixed automated scenarios live behind one searchable stable-ID selector.
 - **Wave 7 — tactical integrity and tempo (delivered).** Combat Lab is now the
-  authoritative rules-testing workspace. Exact `TilePos` occupancy makes positioning
-  real, Channel closes the lattice resource loop, and deterministic profiles,
-  telemetry, fixtures, and comparable reports turn action-economy choices into
-  measured decisions rather than guesses. The evidence gate retained the shipped
+  interactive rules-testing workspace. Exact `TilePos` occupancy makes positioning
+  real, Channel closes the lattice resource loop, and frozen profiles, live telemetry,
+  fixtures, and comparable reports make manually played action-economy trials
+  reproducible. The renderer-free simulation target separately proves deterministic
+  state and bounded no-progress under a passive `EndTurn` controller; it does not yet
+  solve fights or serve as balance evidence. The evidence gate retained the shipped
   four-hex movement default; the measurements and caveats are recorded in the
   [tempo decision audit](../development/wave-7-tempo-decision.md). Flat deterministic
   one-slot initiative remains the baseline; boss initiative, co-casting, rout,
