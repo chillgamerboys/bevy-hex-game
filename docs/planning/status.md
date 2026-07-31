@@ -251,13 +251,16 @@ mutable widget state.
 
 Gameplay validation is split by oracle into pure rules, focused ECS contracts,
 deterministic simulation, and model/headless-app partitions. One fail-closed concern
-map selects exact packages, targets, and features for narrow pull requests; unknown,
-shared-core, world-owned, or validation-infrastructure changes promote to the
-complete gate. The unchanged residual workspace corpus still runs on its owning
-changes, `dev` pushes, schedules, and combined wave/release candidates. Screenshots
-remain presentation evidence only; the dependency ceilings, commands, budgets, and
-anti-patterns are recorded in the
-[gameplay testing contract](../development/gameplay-testing.md).
+map selects exact packages, targets, and features for narrow pull requests. Map
+validation uses the same authority for unit, deterministic generation, and real-plugin
+publication contracts, with all PR seeds preserved under an optimized test-only
+profile. Unknown paths, shared core/assets, other world crates, or validation
+infrastructure promote to the complete gate. The residual workspace corpus still runs
+on its owning changes, `dev` pushes, schedules, and combined wave/release candidates.
+Screenshots remain presentation evidence only; the dependency ceilings, commands,
+budgets, and anti-patterns are recorded in the
+[gameplay](../development/gameplay-testing.md) and
+[map](../development/map-testing.md) testing contracts.
 
 The **knowledge seam is live** as `hex_combat::knowledge`:
 `FactionLatticeKnowledge::view` is the one read path for a hostile lattice.

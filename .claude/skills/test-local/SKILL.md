@@ -14,24 +14,25 @@ cargo fmt --all --check
 ## Step 2 — Clippy
 
 ```bash
-python3 tools/gameplay_scope.py run clippy
+python3 tools/test_scope.py run clippy
 ```
 
 ## Step 3 — Full workspace suite
 
 ```bash
-python3 tools/gameplay_scope.py run rules
-python3 tools/gameplay_scope.py run contracts
-python3 tools/gameplay_scope.py run simulation
-python3 tools/gameplay_scope.py run app
-python3 tools/gameplay_scope.py run residual
-cargo nextest run --workspace --all-features --cargo-profile ci --profile ci -E 'package(hex_map)'
+python3 tools/test_scope.py run rules
+python3 tools/test_scope.py run contracts
+python3 tools/test_scope.py run simulation
+python3 tools/test_scope.py run app
+python3 tools/test_scope.py run map_unit
+python3 tools/test_scope.py run map_generation
+python3 tools/test_scope.py run map_contracts
+python3 tools/test_scope.py run residual
 cargo test --workspace --all-features --profile ci --doc
 ```
 
-Report each concern independently. The explicit map command is the unchanged
-world-owned shard enabled beside the residual concern in CI. `/test-local` is
-deliberately broad; `/test-quick` uses the scope selector for the edit loop.
+Report each concern independently. `/test-local` is deliberately broad;
+`/test-quick` uses the scope selector for the edit loop.
 
 ## Step 4 — Dependency audit
 
@@ -44,7 +45,7 @@ cargo deny check
 ## Step 5 — Doc build
 
 ```bash
-python3 tools/gameplay_scope.py run docs
+python3 tools/test_scope.py run docs
 ```
 
 ## Step 6 — Markdown relative links
