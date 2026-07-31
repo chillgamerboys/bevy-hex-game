@@ -28,6 +28,8 @@ pub enum CombatData {
     SubstanceTable,
     /// Faction-scoped current and remembered spatial knowledge.
     SpatialKnowledge,
+    /// Exact material occupancy projected from world-published run bounds.
+    TerrainOccupancy,
     /// Stable names for session-local element ids.
     ElementCatalog,
 }
@@ -265,6 +267,22 @@ pub enum CommandRefusal {
         spell: String,
         /// The unobserved anchor.
         target: TilePos,
+    },
+    /// Material intersected the spell's authored trajectory.
+    ///
+    /// The exact voxel is deliberately absent because an intervening blocker may be
+    /// hidden from the caster's faction.
+    TrajectoryBlocked {
+        /// The stable spell name from the command.
+        spell: String,
+    },
+    /// A terrain-creation effect intersected material, unit support, or a unit body.
+    ///
+    /// The detailed obstruction is deliberately absent: an area may extend into
+    /// hidden space, and a faction-facing refusal must not disclose what blocked it.
+    TerrainCreationBlocked {
+        /// The stable spell name from the command.
+        spell: String,
     },
     /// The caster's lattice did not contain the named spell.
     SpellNotInscribed {
@@ -535,6 +553,9 @@ mod tests {
                 data: CombatData::SpatialKnowledge,
             },
             CommandRefusal::MissingCombatData {
+                data: CombatData::TerrainOccupancy,
+            },
+            CommandRefusal::MissingCombatData {
                 data: CombatData::ElementCatalog,
             },
             CommandRefusal::MissingUnitData {
@@ -609,6 +630,12 @@ mod tests {
             CommandRefusal::TargetUnobserved {
                 spell: "Ember".to_owned(),
                 target,
+            },
+            CommandRefusal::TrajectoryBlocked {
+                spell: "Ember".to_owned(),
+            },
+            CommandRefusal::TerrainCreationBlocked {
+                spell: "Stone Shaper".to_owned(),
             },
             CommandRefusal::SpellNotInscribed {
                 spell: "Ember".to_owned(),

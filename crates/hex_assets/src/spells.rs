@@ -25,7 +25,7 @@
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use hex_core::{HexCoord, Level, Screen, SpellId};
-use serde::{Deserialize, Serialize};
+use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 
 use crate::fingerprint::FingerprintEncoder;
 use crate::{LoadSettings, CONFIG_EXTENSIONS};
@@ -129,14 +129,79 @@ pub enum TargetShape {
 
 /// Where a spell can be cast, reusing `hex_units::targeting`'s height-advantage
 /// geometry at cast time. Pure data here.
-#[derive(Reflect, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TargetingSpec {
     /// Base range in hexes, before any high-ground bonus.
     pub range: u8,
     /// The shape the spell covers.
     pub shape: TargetShape,
-    /// Whether an unobstructed line of sight to the target is required.
-    pub needs_los: bool,
+    /// How material occupancy between caster and target affects the cast.
+    pub trajectory: Trajectory,
+}
+
+/// How a spell travels from its caster to the selected anchor.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Trajectory {
+    /// A straight exact-voxel segment, blocked by touched intervening material.
+    Direct,
+    /// A two-segment arch through a deterministic apex.
+    Arc {
+        /// Exact levels the apex rises above the higher endpoint.
+        rise: u8,
+    },
+    /// Deliberately ignores material obstruction.
+    None,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UnvalidatedTargetingSpec {
+    range: u8,
+    shape: TargetShape,
+    #[serde(default, deserialize_with = "present_value")]
+    trajectory: Option<Trajectory>,
+    // Read-only migration seam for creator saves and external content authored before
+    // the trajectory vocabulary. Serialization always writes `trajectory`, so this is
+    // not a second live authority.
+    #[serde(default, deserialize_with = "present_value")]
+    needs_los: Option<bool>,
+}
+
+fn present_value<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+impl<'de> Deserialize<'de> for TargetingSpec {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = UnvalidatedTargetingSpec::deserialize(deserializer)?;
+        let trajectory = match (raw.trajectory, raw.needs_los) {
+            (Some(trajectory), None) => trajectory,
+            (None, Some(true)) => Trajectory::Direct,
+            (None, Some(false)) => Trajectory::None,
+            (Some(_), Some(_)) => {
+                return Err(D::Error::custom(
+                    "targeting cannot define both trajectory and legacy needs_los",
+                ));
+            }
+            (None, None) => {
+                return Err(D::Error::custom(
+                    "targeting must define trajectory (or legacy needs_los)",
+                ));
+            }
+        };
+        Ok(Self {
+            range: raw.range,
+            shape: raw.shape,
+            trajectory,
+        })
+    }
 }
 
 /// One primitive effect a spell applies when it resolves. A closed vocabulary
@@ -197,13 +262,16 @@ pub enum Effect {
         /// The substance to place, by name (resolved against the substance table).
         substance: String,
     },
-    /// Clear the terrain voxel at the target (turning it to air).
-    ClearTerrain,
     /// Conjure a wall of a named substance.
     SpawnWall {
         /// The substance the wall is made of, by name.
         substance: String,
     },
+    /// Legacy creator-save spelling for terrain removal.
+    ///
+    /// Retained only so schema-v1 libraries still deserialize and can surface a
+    /// precise validation issue. Current content admission always rejects it.
+    ClearTerrain,
     /// Push the target a number of hexes away.
     Displace {
         /// How many hexes to push.
@@ -268,6 +336,16 @@ const MAX_TIER: usize = 6;
 /// million voxels, allocated inside a frame. The resolvers deliberately do not clamp,
 /// so this is where an implausible number has to be caught.
 const MAX_SHAPE_EXTENT: u8 = 16;
+
+/// Largest authored anchor range accepted by exact trajectory enumeration.
+///
+/// A technical allocation/work guardrail, not a balance ruling.
+pub const MAX_TARGET_RANGE: u8 = 16;
+
+/// Largest authored arc rise accepted by exact trajectory enumeration.
+///
+/// A technical traversal guardrail, not a balance ruling.
+pub const MAX_ARC_RISE: u8 = 16;
 
 /// The largest number of voxels an authored path may list.
 const MAX_PATH_VOXELS: usize = 64;
@@ -354,7 +432,25 @@ impl SpellFile {
                     spell.targeting.range
                 ));
             }
+            if spell.targeting.range > MAX_TARGET_RANGE {
+                return Err(format!(
+                    "spell '{name}' targeting range is {}; the technical maximum is {MAX_TARGET_RANGE}",
+                    spell.targeting.range
+                ));
+            }
             validate_shape(name, &spell.targeting.shape)?;
+            if matches!(spell.targeting.trajectory, Trajectory::Arc { rise: 0 }) {
+                return Err(format!(
+                    "spell '{name}' trajectory Arc.rise must be at least 1"
+                ));
+            }
+            if let Trajectory::Arc { rise } = spell.targeting.trajectory {
+                if rise > MAX_ARC_RISE {
+                    return Err(format!(
+                        "spell '{name}' trajectory Arc.rise is {rise}; the technical maximum is {MAX_ARC_RISE}"
+                    ));
+                }
+            }
             validate_effects(name, spell)?;
         }
         Ok(())
@@ -447,6 +543,39 @@ fn validate_shape(name: &str, shape: &TargetShape) -> Result<(), String> {
 /// Checks a spell's effects have sane fields and that the spell does *something*.
 fn validate_effects(name: &str, spell: &Spell) -> Result<(), String> {
     let mut exact_cell_decisions = 0_u8;
+    let creation_effects = spell
+        .effects
+        .iter()
+        .filter(|effect| matches!(effect, Effect::SetTerrain { .. } | Effect::SpawnWall { .. }))
+        .count();
+    if creation_effects > 0 && creation_effects != spell.effects.len() {
+        return Err(format!(
+            "spell '{name}' mixes terrain creation with another effect; the initial \
+             creation slice requires one placement volume and no second effect volume"
+        ));
+    }
+    if creation_effects > 1 {
+        return Err(format!(
+            "spell '{name}' has multiple terrain-creation effects; one cast may publish \
+             one material over one placement volume"
+        ));
+    }
+    if creation_effects > 0
+        && !matches!(
+            spell.targeting.shape,
+            TargetShape::Single | TargetShape::Column { .. }
+        )
+    {
+        return Err(format!(
+            "spell '{name}' creates terrain with a shape that is not a fully authorized \
+             vertical volume; use Single or Column"
+        ));
+    }
+    if creation_effects > 0 && !matches!(spell.casting, CastingAxis::Evocation) {
+        return Err(format!(
+            "spell '{name}' creates permanent terrain but is not an Evocation"
+        ));
+    }
     for effect in &spell.effects {
         let zero = |field: &str| format!("spell '{name}' effect {field} must be at least 1");
         match effect {
@@ -477,6 +606,11 @@ fn validate_effects(name: &str, spell: &Spell) -> Result<(), String> {
                 if substance.is_empty() =>
             {
                 return Err(format!("spell '{name}' names an empty substance"));
+            }
+            Effect::ClearTerrain => {
+                return Err(format!(
+                    "spell '{name}' uses legacy ClearTerrain, which is decode-only and no longer supported"
+                ));
             }
             _ => {}
         }
@@ -614,7 +748,14 @@ fn spell_file_fingerprint(file: &SpellFile) -> u64 {
         encoder.bool(spell.co_castable);
         encoder.u8(spell.targeting.range);
         fingerprint_shape(&mut encoder, &spell.targeting.shape);
-        encoder.bool(spell.targeting.needs_los);
+        match spell.targeting.trajectory {
+            Trajectory::Direct => encoder.u8(0),
+            Trajectory::Arc { rise } => {
+                encoder.u8(1);
+                encoder.u8(rise);
+            }
+            Trajectory::None => encoder.u8(2),
+        }
         encoder.usize(spell.effects.len());
         for effect in &spell.effects {
             fingerprint_effect(&mut encoder, effect);
@@ -688,10 +829,13 @@ fn fingerprint_effect(encoder: &mut FingerprintEncoder, effect: &Effect) {
             encoder.u8(6);
             encoder.string(substance);
         }
-        Effect::ClearTerrain => encoder.u8(7),
         Effect::SpawnWall { substance } => {
             encoder.u8(8);
             encoder.string(substance);
+        }
+        Effect::ClearTerrain => {
+            // Preserve the schema-v1 discriminant for decode-only creator records.
+            encoder.u8(7);
         }
         Effect::Displace { distance } => {
             encoder.u8(9);
@@ -736,7 +880,7 @@ mod tests {
         TargetingSpec {
             range: 3,
             shape: TargetShape::Single,
-            needs_los: true,
+            trajectory: Trajectory::Direct,
         }
     }
 
@@ -777,7 +921,7 @@ mod tests {
                         length: 2,
                         width: 0,
                     },
-                    needs_los: true,
+                    trajectory: Trajectory::Direct,
                 },
                 effects: vec![Effect::Burn { turns: 2 }],
             },
@@ -808,7 +952,8 @@ mod tests {
                 seen.insert(std::mem::discriminant(effect));
             }
         }
-        // The ten variants of Effect (ClearTerrain has no fields, so build it directly).
+        // Every spell-authored effect variant. Destruction is `TerrainImpact`, not a
+        // spell-side clear instruction.
         let all = [
             Effect::DisableHexes {
                 count: 1,
@@ -822,7 +967,6 @@ mod tests {
             Effect::SetTerrain {
                 substance: "stone".to_owned(),
             },
-            Effect::ClearTerrain,
             Effect::SpawnWall {
                 substance: "stone".to_owned(),
             },
@@ -891,6 +1035,94 @@ mod tests {
     }
 
     #[test]
+    fn validate_rejects_a_zero_rise_arc_instead_of_aliasing_direct() {
+        let mut file = test_file();
+        file.spells
+            .get_mut("Ember")
+            .expect("the fixture contains Ember")
+            .targeting
+            .trajectory = Trajectory::Arc { rise: 0 };
+        let error = file.validate().expect_err("a zero-rise arc is ambiguous");
+        assert!(error.contains("Arc.rise must be at least 1"), "{error}");
+    }
+
+    #[test]
+    fn trajectory_range_and_rise_guardrails_reject_pathological_content() {
+        let mut distant = test_file();
+        distant
+            .spells
+            .get_mut("Ember")
+            .expect("the fixture contains Ember")
+            .targeting
+            .range = MAX_TARGET_RANGE + 1;
+        let error = distant
+            .validate()
+            .expect_err("trajectory range above the technical bound must fail");
+        assert!(error.contains("technical maximum"), "{error}");
+
+        let mut towering = test_file();
+        towering
+            .spells
+            .get_mut("Ember")
+            .expect("the fixture contains Ember")
+            .targeting
+            .trajectory = Trajectory::Arc {
+            rise: MAX_ARC_RISE + 1,
+        };
+        let error = towering
+            .validate()
+            .expect_err("arc rise above the technical bound must fail");
+        assert!(error.contains("technical maximum"), "{error}");
+    }
+
+    #[test]
+    fn invalid_trajectory_reload_keeps_the_last_valid_spellbook() {
+        let valid = test_file();
+        let mut app = App::new();
+        app.add_systems(Update, build_spellbook);
+        app.insert_resource(valid.clone());
+        app.update();
+        assert!(app.world().resource::<SpellBook>().matches_source(&valid));
+
+        let mut invalid = ember();
+        invalid.targeting.range = u8::MAX;
+        let encoded = format!(
+            "(spells:{{\"Ember\":{}}})",
+            ron::to_string(&invalid).expect("the raw invalid spell serializes")
+        );
+        assert!(
+            ron::from_str::<SpellFile>(&encoded).is_err(),
+            "the asset loader must reject the candidate before resource replacement"
+        );
+        app.update();
+        assert!(
+            app.world().resource::<SpellBook>().matches_source(&valid),
+            "a rejected reload must leave the accepted book live"
+        );
+    }
+
+    #[test]
+    fn legacy_boolean_targeting_migrates_on_read_but_never_serializes_back() {
+        let direct: TargetingSpec =
+            ron::from_str("(range: 3, shape: Single, needs_los: true)").expect("legacy targeting");
+        let none: TargetingSpec =
+            ron::from_str("(range: 3, shape: Single, needs_los: false)").expect("legacy targeting");
+        assert_eq!(direct.trajectory, Trajectory::Direct);
+        assert_eq!(none.trajectory, Trajectory::None);
+
+        let serialized = ron::to_string(&direct).expect("new targeting serializes");
+        assert!(serialized.contains("trajectory:Direct"), "{serialized}");
+        assert!(!serialized.contains("needs_los"), "{serialized}");
+        assert!(
+            ron::from_str::<TargetingSpec>(
+                "(range: 3, shape: Single, trajectory: Direct, needs_los: true)"
+            )
+            .is_err(),
+            "two trajectory authorities must be rejected"
+        );
+    }
+
+    #[test]
     fn validate_rejects_a_do_nothing_spell() {
         let mut file = test_file();
         let mut inert = ember();
@@ -951,6 +1183,82 @@ mod tests {
             .expect_err("one cast cannot overwrite damage with restoration");
         assert!(
             error.contains("multiple exact-cell decision effects"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn terrain_creation_cannot_mix_effect_volumes_or_use_a_caster_relative_shape() {
+        let mut file = test_file();
+        let mut mixed = ember();
+        mixed.effects = vec![
+            Effect::SetTerrain {
+                substance: "stone".to_owned(),
+            },
+            Effect::Burn { turns: 1 },
+        ];
+        file.spells.insert("Mixed".to_owned(), mixed);
+        let error = file.validate().expect_err("mixed effect volumes must fail");
+        assert!(error.contains("mixes terrain creation"), "{error}");
+
+        let mut file = test_file();
+        let mut directed = ember();
+        directed.effects = vec![Effect::SetTerrain {
+            substance: "stone".to_owned(),
+        }];
+        directed.targeting.shape = TargetShape::Line {
+            length: 2,
+            width: 0,
+        };
+        file.spells.insert("Directed".to_owned(), directed);
+        let error = file
+            .validate()
+            .expect_err("creation needs a selected-surface anchor");
+        assert!(
+            error.contains("fully authorized vertical volume"),
+            "{error}"
+        );
+
+        let mut file = test_file();
+        let mut spillover = ember();
+        spillover.effects = vec![Effect::SetTerrain {
+            substance: "stone".to_owned(),
+        }];
+        spillover.targeting.shape = TargetShape::Sphere { radius: 1 };
+        file.spells.insert("Spillover".to_owned(), spillover);
+        let error = file
+            .validate()
+            .expect_err("positive-radius construction is not fully authorized");
+        assert!(error.contains("use Single or Column"), "{error}");
+
+        let mut file = test_file();
+        let mut bound = ember();
+        bound.casting = CastingAxis::Enchantment { defense: 1 };
+        bound.effects = vec![Effect::SpawnWall {
+            substance: "stone".to_owned(),
+        }];
+        file.spells.insert("Bound".to_owned(), bound);
+        let error = file
+            .validate()
+            .expect_err("permanent construction requires Evocation");
+        assert!(error.contains("not an Evocation"), "{error}");
+
+        let mut file = test_file();
+        let mut duplicate = ember();
+        duplicate.effects = vec![
+            Effect::SetTerrain {
+                substance: "stone".to_owned(),
+            },
+            Effect::SpawnWall {
+                substance: "stone".to_owned(),
+            },
+        ];
+        file.spells.insert("Duplicate".to_owned(), duplicate);
+        let error = file
+            .validate()
+            .expect_err("one cast cannot publish two construction materials");
+        assert!(
+            error.contains("multiple terrain-creation effects"),
             "{error}"
         );
     }

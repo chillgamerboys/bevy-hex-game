@@ -2284,7 +2284,11 @@ mod tests {
             "the baseline hostile party should select a cast"
         );
         assert!(first.summary.rounds > 0);
-        assert!(first.summary.downings >= 2);
+        assert!(
+            first.summary.downings >= 1,
+            "the replay should make damage progress before resolving or reaching its \
+             bounded terrain-obstructed stalemate"
+        );
         assert!(
             first.summary.outcome.is_some() || first.stalled,
             "the run should resolve or reproduce the bounded chokepoint stalemate"

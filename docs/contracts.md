@@ -24,7 +24,7 @@ than agreed, the fallback the gameplay side ships without it is in
 
 | Contract | Publisher | Consumer | Status | Specified in |
 |---|---|---|---|---|
-| `HexTile` + `TilePos`, `HexSpan`, `SubstanceId`, `Headroom` on tile entities | world | gameplay | live | [systems/map.md](systems/map.md) |
+| `HexTile` + `TilePos`, `RunBottom`, `HexSpan`, `SubstanceId`, `Headroom` on every material-run entity | world | gameplay | live | [systems/map.md](systems/map.md) |
 | `TraversalProfile` / `TraversalEndpoint` — standability and step predicates | core | both | live | [systems/map.md](systems/map.md) |
 | `MapAnchorId` / `MapAnchors` — named exact surfaces | world | gameplay | live | [systems/map.md](systems/map.md) |
 | `SpecialMovementRegions` — deliberately opaque region ids | world | gameplay | live | [systems/map.md](systems/map.md) |

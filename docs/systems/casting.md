@@ -5,8 +5,10 @@ affects, who decides what happens to the material inside that shape, and how eff
 that outlive their turn are expressed.
 
 > **Status:** this is the normative contract for the 0.3 casting slice. Unit effects,
-> Burn, Reveal, geometry, aiming, and the command path are built. Terrain announcements,
-> obstruction, and spell-created illumination remain contracts.
+> Burn, Reveal, geometry, aiming, the command path, exact material occupancy, and
+> permanent evocation construction are built. Elemental terrain announcements,
+> obstruction, enchantment-bound terrain, and spell-created illumination remain
+> contracts.
 
 Read [the design](../design/game.md) for the magic system this serves, and
 [combat.md](combat.md) for the turn loop a cast happens inside.
@@ -45,7 +47,7 @@ arbitrary — it tracks whether there is a material with an opinion.
 
 | Path | Message | Who decides the outcome |
 |---|---|---|
-| **Conjuration** | `TerrainEdit::Set` — **built** | Gameplay names the substance and the volume; the world validates placement |
+| **Conjuration** | `TerrainEdit::Set` — **built for permanent evocations** | Gameplay names the substance and the volume; the world validates placement |
 | **Elemental effect** | `TerrainImpact { batch, volume, element, power }` — *contract* | The world owns the entire material response |
 
 `batch` is the id the world echoes back in its acknowledgment, so an outcome can be
@@ -68,10 +70,10 @@ power.
 `TerrainImpact` so the world owner arbitrates it; `Clear` remains for save restoration
 and authored terrain, where the exact outcome is the point.
 
-That is a change to shipped content, not just a rule: **"Stone Shaper" currently
-carries `effects: [SetTerrain(substance: "stone"), ClearTerrain]`**, and its
-`ClearTerrain` becomes an `Impact` when terrain magic lands. Whether `Effect::ClearTerrain`
-survives as a variant at all is decided then — nothing else uses it.
+That is a change to shipped content, not just a rule: **"Stone Shaper" now carries
+only `SetTerrain(substance: "stone")`**. Spell-authored `ClearTerrain` was removed;
+destruction becomes an `Impact` when terrain magic lands. The lower-level
+`TerrainEdit::Clear` remains available for save restoration and authored terrain.
 
 Power will be an explicit content field — `Impact(element, power: N)`, a variant
 `Effect` does not have yet — so designers tune it directly rather than having it
@@ -101,6 +103,10 @@ terrain would need a ledger and an answer for what happens when another effect r
 the same voxels before expiry; that design may be added later without weakening the
 multi-turn persistence rule.
 
+The shipped `Earthen Wall` is an evocation and uses the exact two-voxel permanent
+construction adapter. Content admission rejects terrain creation on enchantments;
+enchantment-bound terrain still waits for provenance and removal.
+
 Honest caveat: an entity-shaped barrier does not block movement, because units do not
 obstruct each other yet ([status.md](../planning/status.md)). Terrain walls are the
 blocking tool until occupancy exists.
@@ -124,8 +130,9 @@ applier in `hex_combat` is authoritative.
    spell only when its resolved shape can contain more than one distinct voxel. Boundary
    shapes resolving to zero or one distinct voxel remain legal; genuinely area-shaped
    unit effects wait until resolution iterates every occupied voxel.
-5. **Announce** — the surviving terrain volume goes to the world, which arbitrates.
-   Terrain effects still fail closed as undeliverable rather than charging for no result.
+5. **Announce** — a legal permanent construction volume emits exact
+   `TerrainEdit::Set` messages (**built**). Elemental impacts still fail closed as
+   undeliverable rather than charging for no result.
 
 Rungs 1–2 are gameplay's own state. Rung 4 is gameplay's knowledge too: **where
 characters stand is ours**, so a cast interacts with units through legality, exactly as
@@ -160,12 +167,33 @@ and changes nothing about the boundary with the world owner.
 
 ### Occupancy
 
-Tiles now publish each run's inclusive top (`TilePos`) and bottom
+Tiles publish each run's inclusive top (`TilePos`) and bottom
 (`RunBottom(Level)`), including every stacked run; `Headroom` remains a separate
-saturated clearance fact. This satisfies [boundary.md](../planning/boundary.md) ask C
-without reconstructing occupancy from world units. The gameplay adapters that use
-these bounds for casting legality, conjuration placement, trajectory, cover, and
-pathing remain part of the terrain-magic and trajectory work.
+saturated clearance fact. `hex_units::TerrainOccupancy` now compacts those exact
+inclusive bounds, preserving real air gaps between stacked runs without reconstructing
+occupancy from rendered spans or world units. Construction legality consumes that
+projection; trajectory, cover, and pathing remain downstream consumers.
+
+### Construction placement
+
+The selected `TilePos` remains the currently Observed authorization and range anchor.
+Permanent construction begins at `target.above()`, and the authored shape resolves
+from there. `Single` therefore creates one voxel above the selected surface, while
+`Column(height: 2)` creates two complete voxels above it. Selecting a lower surface
+under a bridge or overhang never jumps to the column's highest run.
+
+The authoritative applier checks the complete creation volume before emitting any
+edit. Existing material, a unit-support surface, or a unit-body intersection suppresses
+the whole edit batch. Hidden truth cannot become a refusal or payment oracle: the cast
+is accepted and paid in exactly the same way as a clear placement, while authority
+withholds the unsafe edits. `Headroom` is not used to infer air. The world still
+validates each low-level edit against its private material and topology policy.
+
+Initial spell content carries exactly one construction effect, cannot mix construction
+with non-construction effects, requires `Evocation`, and uses only fully vertical
+`Single` or `Column` shapes. Positive-radius and authored spillover construction waits
+for a faction-authorized empty-volume contract. This avoids silently applying two
+different materials or exposing hidden blockers through placement legality.
 
 ## Volumes
 
@@ -225,17 +253,45 @@ multi-voxel preview from promising area damage the applier cannot yet deliver.
 Initial conjured walls are **2 voxels tall**. The canonical walker is 2 tall and climbs
 1, so a 1-voxel wall is a step rather than a useful first implementation.
 
+The surface-only renderer cannot draw free-standing air voxels without a world-owned
+presentation height contract. The aiming panel reports the exact translated voxel
+count and keeps the selected support cap visible; it does not infer `level_height` or
+fabricate world-space occupancy to paint the air volume.
+
 ### Obstruction
 
-**Volumes are geometric in 0.3** — a sphere next to a cave wall fills voxels inside
-the rock and the chamber beyond it. This is wrong, it is documented as wrong, and it is
-bounded: obstruction-aware clipping arrives with the same line-of-sight work that
-the live `RunBottom` publication enables, and `needs_los` on `TargetingSpec`
-(**built**, parsed) is unenforced until then.
+`TargetingSpec::trajectory` is a closed vocabulary:
 
-When that lands, sight and spell trajectories should share **one** raycast primitive.
-Two independently-written line algorithms that disagree about grazing a corner is a bug
-nobody will find for months.
+- `Direct` follows a straight centre-to-centre segment;
+- `Arc { rise }` follows two segments through a deterministic apex exactly `rise`
+  integer levels above the higher endpoint;
+- `None` deliberately ignores material obstruction.
+
+Direct and arc traversal uses one direction-symmetric integer 3D supercover in
+`hex_units`. Every closed voxel prism the segment touches counts, including exact
+face, edge, and corner grazes. The source and destination endpoints are excluded; all
+other touched material blocks. The source is the caster's lowest body voxel
+(`standing.above()`). An ordinary spell ends in the body/air voxel above the selected
+surface; otherwise a level shot across flat ground would enter the floor before it
+arrived. Terrain construction instead ends at the selected material surface because
+that surface authorizes the separate placement volume above it. Occupancy comes only
+from the exact `RunBottom` projection — never `HexSpan`, transforms, `level_height`,
+or saturated `Headroom`. A blocked cast exposes only a generic refusal because the
+obstruction itself may be hidden.
+
+Authoritative casting checks the trajectory after observation and before payment.
+Faction-facing preview anchors, target cycling, and AI legal-action enumeration use
+the same geometry over a separate authorized projection containing only exact material
+surface positions that are currently Observed. Remembered or Unknown material cannot
+change those choices; authority may still refuse against full physical truth. The
+RecordInput target cycle intentionally uses the last published faction knowledge after
+a same-frame edit, then redraws after the next knowledge publication. Authored target
+range and `Arc.rise` are both capped at 16 as a technical traversal guardrail.
+
+**Effect volumes remain geometric.** A sphere next to a cave wall may include voxels
+inside the rock and the chamber beyond it after its trajectory reaches the anchor.
+Per-voxel clipping remains later work. Obstruction-aware sight must reuse this
+supercover rather than grow an independently rounded ray.
 
 ## The command
 

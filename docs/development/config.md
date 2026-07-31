@@ -832,7 +832,7 @@ Each spell by name:
             casting: Evocation,
             mana: Fixed,
             co_castable: false,
-            targeting: (range: 3, shape: Single, needs_los: true),
+            targeting: (range: 3, shape: Single, trajectory: Direct),
             effects: [
                 DisableHexes(count: 1, targeted: false),
                 Burn(turns: 2),
@@ -853,8 +853,14 @@ Each spell by name:
   `Variable` and `co_castable` is what the design calls a **ritual** — you do not write
   "ritual"; it follows from the two flags.
 - **`targeting`** is `range` (how far away the target may be, in hexes), `shape` (what
-  the spell covers once it gets there) and `needs_los` (whether line of sight is
-  required — parsed, but not enforced until obstruction lands).
+  the spell covers once it gets there), and `trajectory`: `Direct`, `Arc(rise: N)`,
+  or `None`. `Direct` tests a straight exact-voxel segment, `Arc` rises `N` integer
+  levels above the higher endpoint, and `None` deliberately ignores material
+  obstruction. Direct and arc authority fails closed if exact terrain occupancy is
+  absent; preview, target cycling, and AI use only currently Observed material facts.
+  Both authored `range` and `Arc.rise` have a technical maximum of 16.
+  Old creator saves using `needs_los: true/false` migrate on read to `Direct`/`None`;
+  newly written content always uses `trajectory`, and defining both is rejected.
 
   `range` and a shape's own extents are different numbers. Fireball's `range: 4` is
   how far it is thrown; its `Sphere(radius: 2)` is how big the ball is.
@@ -896,7 +902,7 @@ Each spell by name:
   without a programmer, which is deliberate:
 
   `DisableHexes`, `Burn`, `RestoreHexes`, `ModifyIncomingDisables`, `Reveal`,
-  `Illuminate`, `SetTerrain`, `ClearTerrain`, `SpawnWall`, `Displace`.
+  `Illuminate`, `SetTerrain`, `SpawnWall`, `Displace`.
 
   `SetTerrain` and `SpawnWall` name a substance from `substances.ron`.
 

@@ -18,30 +18,37 @@
             solid: false,
             // There is nothing to dig out of it.
             diggable: false,
+            // Empty space is never a substance a spell can create.
+            conjurable: false,
         ),
 
         "grass": (
             swatch: Some("terrain/grass"),
             solid: true,
             diggable: true,
+            conjurable: false,
         ),
 
         "dirt": (
             swatch: Some("terrain/dirt"),
             solid: true,
             diggable: true,
+            conjurable: false,
         ),
 
         "stone": (
             swatch: Some("terrain/stone"),
             solid: true,
             diggable: true,
+            // The current construction spells name stone explicitly.
+            conjurable: true,
         ),
 
         "gravel": (
             swatch: Some("terrain/gravel"),
             solid: true,
             diggable: true,
+            conjurable: false,
         ),
 
         // Rendered as a voxel but excluded from movement footing. It remains
@@ -50,6 +57,7 @@
             swatch: Some("liquid/water"),
             solid: false,
             diggable: true,
+            conjurable: false,
         ),
 
         // Durability is not modelled yet, so metal is currently just a solid,
@@ -58,6 +66,7 @@
             swatch: Some("structure/metal"),
             solid: true,
             diggable: true,
+            conjurable: false,
         ),
 
         // Cut and fitted masonry used by generated walls, towers, stairs, and keeps.
@@ -67,6 +76,7 @@
             swatch: Some("structure/worked-stone"),
             solid: true,
             diggable: true,
+            conjurable: false,
         ),
 
         // Procedural-environment materials. Their behaviour is intentionally simple
@@ -75,18 +85,21 @@
             swatch: Some("terrain/snow"),
             solid: true,
             diggable: true,
+            conjurable: false,
         ),
 
         "ice": (
             swatch: Some("terrain/ice"),
             solid: true,
             diggable: true,
+            conjurable: false,
         ),
 
         "basalt": (
             swatch: Some("terrain/basalt"),
             solid: true,
             diggable: true,
+            conjurable: false,
         ),
 
         // Lava is an opaque, non-solid voxel for now. Damage and emissive rendering
@@ -95,6 +108,7 @@
             swatch: Some("liquid/lava"),
             solid: false,
             diggable: true,
+            conjurable: false,
         ),
 
         // The floor of the world. Not diggable, so nothing can tunnel out the
@@ -103,6 +117,7 @@
             swatch: Some("terrain/bedrock"),
             solid: true,
             diggable: false,
+            conjurable: false,
         ),
     },
 )

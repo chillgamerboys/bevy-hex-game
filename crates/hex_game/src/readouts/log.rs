@@ -728,6 +728,8 @@ fn refusal_label(refusal: &CommandRefusal) -> &'static str {
         CommandRefusal::TargetOutOfRange { .. } => "target is out of range",
         CommandRefusal::ShapeUnresolved { .. } => "shape could not resolve",
         CommandRefusal::TargetUnobserved { .. } => "target is unobserved",
+        CommandRefusal::TrajectoryBlocked { .. } => "spell trajectory is blocked",
+        CommandRefusal::TerrainCreationBlocked { .. } => "terrain creation is blocked",
         CommandRefusal::SpellNotInscribed { .. } => "spell is not inscribed",
         CommandRefusal::CastBlocked { .. } => "lattice cannot pay",
         CommandRefusal::CastPlanStale { .. } => "lattice changed",

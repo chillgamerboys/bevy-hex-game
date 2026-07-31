@@ -52,6 +52,13 @@ pub struct Substance {
     /// Whether it can be dug or tunnelled through. Bedrock is `false`, which is what
     /// stops anything leaving the bottom of the world.
     pub diggable: bool,
+    /// Whether ordinary spell content may create this substance.
+    ///
+    /// This is world-owned admission policy, not a restriction on the low-level
+    /// [`TerrainEdit::Set`](hex_core::TerrainEdit::Set) restoration/authored-edit
+    /// path. Missing legacy fields fail closed to `false`.
+    #[serde(default)]
+    pub conjurable: bool,
 }
 
 impl Substance {
@@ -63,6 +70,7 @@ impl Substance {
             color: (0.0, 0.0, 0.0),
             solid,
             diggable,
+            conjurable: false,
         }
     }
 
@@ -74,7 +82,15 @@ impl Substance {
             color: (0.0, 0.0, 0.0),
             solid,
             diggable,
+            conjurable: false,
         }
+    }
+
+    /// Marks this substance as admitted for ordinary spell conjuration.
+    #[must_use]
+    pub fn with_conjurable(mut self, conjurable: bool) -> Self {
+        self.conjurable = conjurable;
+        self
     }
 }
 
@@ -168,13 +184,16 @@ pub enum SubstanceTableError {
     },
     /// The explicit air sentinel tried to participate in terrain behavior.
     #[error(
-        "air must be non-solid and non-diggable, but found solid={solid}, diggable={diggable}"
+        "air must be non-solid, non-diggable, and non-conjurable, but found \
+         solid={solid}, diggable={diggable}, conjurable={conjurable}"
     )]
     InvalidAirBehavior {
         /// Invalid authored solidity.
         solid: bool,
         /// Invalid authored diggability.
         diggable: bool,
+        /// Invalid authored conjuration admission.
+        conjurable: bool,
     },
     /// A stable reference did not resolve in `palette.ron`.
     #[error("substance '{substance}' references missing art-palette swatch '{swatch}'")]
@@ -217,6 +236,15 @@ impl SubstanceTable {
     #[must_use]
     pub fn is_diggable(&self, id: SubstanceId) -> bool {
         self.get(id).is_some_and(|s| s.diggable)
+    }
+
+    /// Whether ordinary spell content may create this substance.
+    ///
+    /// Unknown ids fail closed. Save restoration and authored terrain use the
+    /// lower-level edit path and do not consult this policy.
+    #[must_use]
+    pub fn is_conjurable(&self, id: SubstanceId) -> bool {
+        self.get(id).is_some_and(|substance| substance.conjurable)
     }
 
     /// How many substances the table holds.
@@ -276,15 +304,17 @@ impl SubstanceTable {
                     color: (0.0, 0.0, 0.0),
                     solid: false,
                     diggable: false,
+                    conjurable: false,
                 });
                 by_name.insert(name.clone(), SubstanceId(0));
                 continue;
             };
             let mut substance = substance.clone();
-            if name == AIR_NAME && (substance.solid || substance.diggable) {
+            if name == AIR_NAME && (substance.solid || substance.diggable || substance.conjurable) {
                 return Err(SubstanceTableError::InvalidAirBehavior {
                     solid: substance.solid,
                     diggable: substance.diggable,
+                    conjurable: substance.conjurable,
                 });
             }
             substance.color = match (name.as_str(), substance.swatch.as_ref()) {
@@ -349,6 +379,7 @@ impl SubstanceTable {
             encoder.f32(substance.color.2);
             encoder.bool(substance.solid);
             encoder.bool(substance.diggable);
+            encoder.bool(substance.conjurable);
         }
         encoder.finish()
     }
@@ -549,7 +580,7 @@ mod tests {
             } else {
                 Substance::from_swatch(swatch_id(name), solid, diggable)
             };
-            substances.insert(name.to_owned(), substance);
+            substances.insert(name.to_owned(), substance.with_conjurable(name == "stone"));
         }
         SubstanceFile { substances }
     }
@@ -617,12 +648,14 @@ mod tests {
 
         assert!(table.is_solid(stone));
         assert!(table.is_diggable(stone));
+        assert!(table.is_conjurable(stone));
         assert!(table.is_solid(bedrock));
         assert!(
             !table.is_diggable(bedrock),
             "bedrock is what stops anything leaving the bottom of the world"
         );
         assert!(!table.is_solid(SubstanceId::AIR));
+        assert!(!table.is_conjurable(SubstanceId::AIR));
     }
 
     #[test]
@@ -724,17 +757,27 @@ mod tests {
     }
 
     #[test]
-    fn explicit_air_cannot_be_solid_or_diggable() {
-        for (solid, diggable) in [(true, false), (false, true), (true, true)] {
+    fn explicit_air_cannot_participate_in_terrain_behavior() {
+        for (solid, diggable, conjurable) in [
+            (true, false, false),
+            (false, true, false),
+            (true, true, false),
+            (false, false, true),
+        ] {
             let mut file = test_file();
             let air = file.substances.get_mut(AIR_NAME).expect("air should exist");
             air.solid = solid;
             air.diggable = diggable;
+            air.conjurable = conjurable;
 
             assert_eq!(
                 SubstanceTable::from_file(&file, &test_palette())
                     .expect_err("explicit air must remain empty and immutable"),
-                SubstanceTableError::InvalidAirBehavior { solid, diggable }
+                SubstanceTableError::InvalidAirBehavior {
+                    solid,
+                    diggable,
+                    conjurable,
+                }
             );
         }
     }
@@ -795,6 +838,7 @@ mod tests {
         assert!(table.get(unknown).is_none());
         assert!(!table.is_solid(unknown));
         assert!(!table.is_diggable(unknown));
+        assert!(!table.is_conjurable(unknown));
     }
 
     /// Reassigning sorted ids under a live world would reinterpret existing voxels.
@@ -1429,6 +1473,7 @@ mod tests {
         let ice = table.id("ice").expect("ice should be registered");
         let basalt = table.id("basalt").expect("basalt should be registered");
         let lava = table.id("lava").expect("lava should be registered");
+        let stone = table.id("stone").expect("stone should be registered");
 
         assert!(table.is_solid(gravel));
         assert!(table.is_diggable(gravel));
@@ -1443,5 +1488,20 @@ mod tests {
         assert!(!table.is_solid(lava), "lava must not be footing");
         assert!(table.is_diggable(lava), "lava should be clearable");
         assert!(!table.is_diggable(bedrock));
+        assert!(
+            table.is_conjurable(stone),
+            "the substance named by shipped construction spells must be admitted"
+        );
+        for (name, substance) in [
+            ("air", SubstanceId::AIR),
+            ("water", water),
+            ("lava", lava),
+            ("bedrock", bedrock),
+        ] {
+            assert!(
+                !table.is_conjurable(substance),
+                "{name} must fail closed for ordinary spell conjuration"
+            );
+        }
     }
 }

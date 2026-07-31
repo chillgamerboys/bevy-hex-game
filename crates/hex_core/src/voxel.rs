@@ -211,7 +211,7 @@ impl SubstanceId {
 ///
 /// Reading terrain does not go through here: gameplay queries entities marked
 /// [`HexTile`](crate::HexTile) for their [`TilePos`], [`HexSpan`](crate::HexSpan),
-/// [`SubstanceId`] and [`Headroom`].
+/// [`RunBottom`], [`SubstanceId`] and [`Headroom`].
 #[derive(Message, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TerrainEdit {
     /// Replace the voxel at `pos` with `substance`, unless its current substance is

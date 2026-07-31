@@ -13,7 +13,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AxialPair, CastingAxis, Effect, ElementCatalog, LatticeFile, ManaAxis, Spell, SpellBook,
-    SpellFile, TargetShape, TargetingSpec, UnvalidatedArchetype, UnvalidatedCell, UnvalidatedEntry,
+    SpellFile, TargetShape, TargetingSpec, Trajectory, UnvalidatedArchetype, UnvalidatedCell,
+    UnvalidatedEntry,
 };
 use crate::{LoadSettings, CONFIG_EXTENSIONS};
 
@@ -232,7 +233,7 @@ impl SavedSpell {
                 targeting: TargetingSpec {
                     range: 3,
                     shape: TargetShape::Single,
-                    needs_los: false,
+                    trajectory: Trajectory::None,
                 },
                 effects: Vec::new(),
             },
@@ -436,17 +437,17 @@ pub fn creator_spell_issues(saved: &SavedSpell, elements: &ElementCatalog) -> Ve
     if saved.spell.co_castable {
         issues.push("co-casting is not supported by the creator".to_owned());
     }
-    if saved.spell.targeting.needs_los {
-        issues.push("creator spells cannot require line of sight yet".to_owned());
-    }
     if !matches!(
         saved.spell.targeting.shape,
         TargetShape::SelfCast | TargetShape::Single
     ) {
         issues.push("creator spells must target Self or Single".to_owned());
     }
-    if saved.spell.targeting.range > 16 {
-        issues.push("creator spell range cannot exceed 16".to_owned());
+    if saved.spell.targeting.range > crate::MAX_TARGET_RANGE {
+        issues.push(format!(
+            "creator spell range cannot exceed {}",
+            crate::MAX_TARGET_RANGE
+        ));
     }
 
     for requirement in &saved.spell.requirements {
@@ -676,6 +677,34 @@ mod tests {
         assert_eq!(library.allocate_character_id(), CustomCharacterId(1));
         assert_eq!(library.allocate_character_id(), CustomCharacterId(2));
         assert_eq!(library.allocate_spell_id(), CustomSpellId(1));
+    }
+
+    #[test]
+    fn legacy_clear_terrain_library_records_decode_but_remain_invalid_drafts() {
+        let mut library = CreationLibraryFile::default();
+        let mut saved = SavedSpell::blank(library.allocate_spell_id(), "Old Dig");
+        saved.spell.requirements.push(crate::GemRequirement {
+            element: "Earth".to_owned(),
+            mana: 1,
+        });
+        saved.spell.effects.push(Effect::ClearTerrain);
+        library.spells.push(saved);
+
+        let encoded = ron::to_string(&library).expect("legacy-compatible library serializes");
+        let decoded: CreationLibraryFile =
+            ron::from_str(&encoded).expect("legacy ClearTerrain remains decode-compatible");
+        assert!(decoded.validate_integrity().is_ok());
+
+        let saved = decoded
+            .spells
+            .first()
+            .expect("the decoded library retains its legacy spell");
+        let mut spells = HashMap::default();
+        spells.insert(saved.name.clone(), saved.spell.clone());
+        let issue = (SpellFile { spells })
+            .validate()
+            .expect_err("legacy effect is retained only as an invalid draft");
+        assert!(issue.contains("decode-only"), "{issue}");
     }
 
     #[test]

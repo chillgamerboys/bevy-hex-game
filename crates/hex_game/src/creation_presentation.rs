@@ -202,7 +202,7 @@ mod tests {
 
     use hex_assets::{
         CreationCell, CustomCharacterId, CustomSpellId, GemRequirement, ManaAxis, SavedSpell,
-        TargetingSpec,
+        TargetingSpec, Trajectory,
     };
 
     use super::*;
@@ -222,7 +222,7 @@ mod tests {
                 targeting: TargetingSpec {
                     range: 4,
                     shape: TargetShape::Single,
-                    needs_los: false,
+                    trajectory: Trajectory::None,
                 },
                 effects: vec![
                     Effect::DisableHexes {
