@@ -16,8 +16,9 @@
 //!
 //! Tile entities are spawned carrying [`HexTile`](hex_core::HexTile),
 //! [`HexCoord`](hex_core::HexCoord), a surface [`TilePos`](hex_core::TilePos),
-//! [`HexSpan`](hex_core::HexSpan), [`SubstanceId`](hex_core::SubstanceId), and
-//! [`Headroom`](hex_core::Headroom). Exact optional-region memberships are published
+//! its inclusive [`RunBottom`](hex_core::RunBottom), [`HexSpan`](hex_core::HexSpan),
+//! [`SubstanceId`](hex_core::SubstanceId), and [`Headroom`](hex_core::Headroom).
+//! Exact optional-region memberships are published
 //! separately through [`SpecialMovementRegions`](hex_core::SpecialMovementRegions).
 //! `hex_units` queries the tile components off the entities. It never reads
 //! [`HeightMap`] or any other type defined here.

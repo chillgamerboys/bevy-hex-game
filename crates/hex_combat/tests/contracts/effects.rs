@@ -25,15 +25,15 @@ use hex_combat::{
 };
 use hex_core::{
     CommandQueue, ControlOwner, EffectEnd, EffectPayload, GameCommand, Headroom, HexCoord, HexSpan,
-    IssuedCommand, LatticeCoord, LightDomain, Mode, PendingDecision, PlayerSeat, RunBottom, Screen,
-    SubstanceId, TerrainEdit, TilePos, TraversalProfile, Turn, UnitId,
+    HexTile, IssuedCommand, LatticeCoord, LightDomain, Mode, PendingDecision, PlayerSeat,
+    RunBottom, Screen, SubstanceId, TerrainEdit, TilePos, TraversalProfile, Turn, UnitId,
 };
 use hex_lattice::{apply_cast, castable, CellKind, LatticeSpec, LatticeState, LatticeStats};
 use hex_perception::{
     apply_observations, FactionMapKnowledge, FactionObservation, FactionObservations, ObservedUnit,
     SurfaceSnapshot, SurfaceSnapshots,
 };
-use hex_test_support::{SyntheticArena, TestAppBuilder};
+use hex_test_support::{SyntheticArena, TestAppBuilder, STONE};
 use hex_units::{Body, Downed, Faction, Standing, StandsOn, TerrainOccupancy, UnitRegistry};
 
 /// The level every unit in these tests stands on.
@@ -1323,23 +1323,109 @@ fn an_earthen_wall_publishes_two_complete_voxels_above_the_selected_surface() {
 }
 
 #[test]
-fn material_or_a_unit_body_blocks_creation_before_mana_or_action_is_spent() {
+fn settled_construction_replaces_stale_movement_authority_before_the_next_command() {
     let mut app = test_app(2);
     let (fight, build_surface) = terrain_caster(&mut app, "Stone Shaper");
+    cast_named(&mut app, UnitId(1), "Stone Shaper", build_surface);
+    assert_eq!(take_terrain_edits(&mut app).len(), 1);
+
+    let old_tile = {
+        let world = app.world_mut();
+        let mut tiles = world.query_filtered::<(Entity, &TilePos), With<HexTile>>();
+        tiles
+            .iter(world)
+            .find_map(|(entity, &position)| (position == build_surface).then_some(entity))
+            .expect("the selected synthetic surface exists")
+    };
+    app.world_mut().despawn(old_tile);
+    let raised = build_surface.above();
+    app.world_mut().spawn((
+        HexTile,
+        raised.coord,
+        raised,
+        RunBottom(build_surface.level),
+        HexSpan::new(raised.level as f32, raised.level as f32 + 1.0),
+        STONE,
+        Headroom(16),
+    ));
+    app.insert_resource(
+        TerrainOccupancy::from_runs(
+            HexCoord::ORIGIN
+                .within_radius(12)
+                .into_iter()
+                .filter(|coord| *coord != build_surface.coord)
+                .map(|coord| (TilePos::new(coord, GROUND), RunBottom(GROUND)))
+                .chain([(raised, RunBottom(build_surface.level))]),
+        )
+        .expect("the settled raised run is exact"),
+    );
+    app.update();
+
+    let state = hex_combat::authority_snapshot(app.world())
+        .expect("combat authority survives the settled terrain refresh");
+    let origin = app
+        .world()
+        .get::<StandsOn>(fight.defender)
+        .expect("the next actor remains standing")
+        .0
+        .pos;
+    let issued = |path| IssuedCommand {
+        seat: PlayerSeat::default(),
+        command: GameCommand::MoveAlong {
+            unit: UnitId(2),
+            path,
+        },
+    };
+
+    let mut stale = state.clone();
+    assert_eq!(
+        stale.apply(issued(vec![origin, build_surface])),
+        Err(CommandRefusal::InvalidPath),
+        "the pre-edit floor route must be withdrawn"
+    );
+    let mut current = state;
+    assert_eq!(
+        current.apply(issued(vec![origin, raised])),
+        Ok(()),
+        "the newly published climb must be admitted"
+    );
+}
+
+#[test]
+fn hidden_air_material_and_unit_truth_have_the_same_acceptance_and_payment() {
+    let mut clear_app = test_app(2);
+    let (clear_fight, clear_surface) = terrain_caster(&mut clear_app, "Stone Shaper");
+    let clear_mana_before = clear_app
+        .world()
+        .get::<LatticeState>(clear_fight.caster)
+        .expect("the caster has a lattice")
+        .total_gem_mana();
     let command = GameCommand::Cast {
         unit: UnitId(1),
         spell: "Stone Shaper".to_owned(),
-        target: build_surface,
+        target: clear_surface,
         facing: None,
         mana: None,
     };
-    let mana_before = app
+    push(&mut clear_app, command.clone());
+    clear_app.update();
+    let clear_events = take_events(&mut clear_app);
+    let clear_mana_after = clear_app
         .world()
-        .get::<LatticeState>(fight.caster)
+        .get::<LatticeState>(clear_fight.caster)
         .expect("the caster has a lattice")
         .total_gem_mana();
-    let occupied = build_surface.above();
-    app.insert_resource(
+    assert_eq!(take_terrain_edits(&mut clear_app).len(), 1);
+
+    let mut material_app = test_app(2);
+    let (material_fight, material_surface) = terrain_caster(&mut material_app, "Stone Shaper");
+    let material_mana_before = material_app
+        .world()
+        .get::<LatticeState>(material_fight.caster)
+        .expect("the caster has a lattice")
+        .total_gem_mana();
+    let occupied = material_surface.above();
+    material_app.insert_resource(
         TerrainOccupancy::from_runs(
             HexCoord::ORIGIN
                 .within_radius(12)
@@ -1349,64 +1435,72 @@ fn material_or_a_unit_body_blocks_creation_before_mana_or_action_is_spent() {
         )
         .expect("the occupied placement fixture is exact"),
     );
-
-    push(&mut app, command.clone());
-    app.update();
+    push(&mut material_app, command.clone());
+    material_app.update();
+    let material_events = take_events(&mut material_app);
     assert_eq!(
-        take_events(&mut app),
-        vec![CombatEvent::CommandRefused {
-            command: command.clone(),
-            refusal: CommandRefusal::TerrainCreationBlocked {
-                spell: "Stone Shaper".to_owned(),
-            },
-        }]
+        material_events, clear_events,
+        "hidden material must not change the visible command outcome"
     );
-    assert!(take_terrain_edits(&mut app).is_empty());
+    assert!(take_terrain_edits(&mut material_app).is_empty());
     assert_eq!(
-        app.world()
-            .get::<LatticeState>(fight.caster)
-            .expect("the refused caster keeps its lattice")
-            .total_gem_mana(),
-        mana_before
+        material_mana_before
+            - material_app
+                .world()
+                .get::<LatticeState>(material_fight.caster)
+                .expect("the caster keeps its lattice")
+                .total_gem_mana(),
+        clear_mana_before - clear_mana_after,
+        "hidden material must not change payment"
     );
     assert!(
-        !app.world()
-            .get::<Turn>(fight.caster)
-            .expect("the refused caster keeps its turn")
+        material_app
+            .world()
+            .get::<Turn>(material_fight.caster)
+            .expect("the accepted caster keeps its turn record")
             .acted
     );
 
-    // Restore empty terrain, then target the hostile's exact supporting surface. The
-    // proposed voxel above it intersects the hostile's body and must fail through the
-    // same non-disclosing refusal.
-    app.insert_resource(
-        TerrainOccupancy::from_runs(
-            HexCoord::ORIGIN
-                .within_radius(12)
-                .into_iter()
-                .map(|coord| (TilePos::new(coord, GROUND), RunBottom(GROUND))),
-        )
-        .expect("the empty-air fixture is exact"),
-    );
-    let body_command = GameCommand::Cast {
-        unit: UnitId(1),
-        spell: "Stone Shaper".to_owned(),
-        target: fight.defender_pos,
-        facing: None,
-        mana: None,
-    };
-    push(&mut app, body_command.clone());
-    app.update();
+    let mut unit_app = test_app(2);
+    let (unit_fight, unit_surface) = terrain_caster(&mut unit_app, "Stone Shaper");
+    let old_standing = unit_app
+        .world()
+        .get::<StandsOn>(unit_fight.defender)
+        .copied()
+        .expect("the defender stands in the fixture");
+    unit_app
+        .world_mut()
+        .entity_mut(unit_fight.defender)
+        .insert(StandsOn(Standing {
+            pos: unit_surface,
+            span: old_standing.0.span,
+        }));
+    publish_adapter_facts(&mut unit_app);
+    unit_app.update();
+    let _settling_events = take_events(&mut unit_app);
+    let unit_mana_before = unit_app
+        .world()
+        .get::<LatticeState>(unit_fight.caster)
+        .expect("the caster has a lattice")
+        .total_gem_mana();
+    push(&mut unit_app, command);
+    unit_app.update();
+    let unit_events = take_events(&mut unit_app);
     assert_eq!(
-        take_events(&mut app),
-        vec![CombatEvent::CommandRefused {
-            command: body_command,
-            refusal: CommandRefusal::TerrainCreationBlocked {
-                spell: "Stone Shaper".to_owned(),
-            },
-        }]
+        unit_events, clear_events,
+        "a unit absent from faction knowledge must not change the visible command outcome"
     );
-    assert!(take_terrain_edits(&mut app).is_empty());
+    assert!(take_terrain_edits(&mut unit_app).is_empty());
+    assert_eq!(
+        unit_mana_before
+            - unit_app
+                .world()
+                .get::<LatticeState>(unit_fight.caster)
+                .expect("the caster keeps its lattice")
+                .total_gem_mana(),
+        clear_mana_before - clear_mana_after,
+        "a hidden unit must not change payment"
+    );
 }
 
 #[test]

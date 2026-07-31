@@ -23,7 +23,7 @@ use hex_core::{
 };
 use hex_lattice::{LatticeSpec, LatticeState, LatticeStats};
 use hex_perception::FactionMapKnowledge;
-use hex_units::{Body, Downed, Footing, StandsOn};
+use hex_units::{Body, Downed, Footing, StandsOn, TerrainOccupancy, TerrainOccupancySystems};
 
 use crate::{Initiative, TurnOrder};
 
@@ -158,6 +158,14 @@ pub(crate) fn plugin(app: &mut App) {
     .add_systems(OnExit(hex_core::Mode::Combat), clear)
     .add_systems(
         Update,
+        refresh_arena_after_terrain_publication
+            .after(TerrainOccupancySystems::Publish)
+            .after(hex_core::PerceptionSystems::PublishKnowledge)
+            .before(crate::CombatSystems::Act)
+            .run_if(in_state(hex_core::Mode::Combat)),
+    )
+    .add_systems(
+        Update,
         reconcile_domain_movement
             .after(hex_units::MovementSystems::Reconcile)
             .before(crate::CombatSystems::Apply)
@@ -167,6 +175,56 @@ pub(crate) fn plugin(app: &mut App) {
         PostUpdate,
         assert_equivalent_projections.run_if(in_state(hex_core::Mode::Combat)),
     );
+}
+
+/// Replaces the movement authority's frozen arena after settled terrain edits.
+///
+/// Unit/order state remains authoritative and continuous; only the published surface,
+/// traversal, and observation graph is rebuilt. This runs at the occupancy publication
+/// boundary, before any new command can be reduced against stale terrain.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "arena refresh consumes the same independent published facts as combat entry"
+)]
+fn refresh_arena_after_terrain_publication(
+    mut commands: Commands,
+    occupancy: Option<Res<TerrainOccupancy>>,
+    mut authority: Option<ResMut<CombatAuthority>>,
+    substances: Option<Res<SubstanceTable>>,
+    blockers: Option<Res<hex_core::TraversalBlockers>>,
+    spatial: Option<Res<FactionMapKnowledge>>,
+    tiles: TileFacts,
+    units: UnitFacts,
+) {
+    let Some(occupancy) = occupancy else {
+        return;
+    };
+    if !occupancy.is_changed() {
+        return;
+    }
+    let Some(authority) = authority.as_deref_mut() else {
+        return;
+    };
+    let Some(substances) = substances.as_deref() else {
+        let reason = "cannot refresh combat arena: SubstanceTable is unavailable".to_owned();
+        commands.remove_resource::<CombatAuthority>();
+        commands.insert_resource(CombatAuthorityFailure(reason));
+        return;
+    };
+    match build_arena(
+        substances,
+        blockers.as_deref(),
+        spatial.as_deref(),
+        &tiles,
+        &units,
+    ) {
+        Ok(arena) => authority.state.arena = arena,
+        Err(reason) => {
+            error!("combat arena refresh failed after terrain publication: {reason}");
+            commands.remove_resource::<CombatAuthority>();
+            commands.insert_resource(CombatAuthorityFailure(reason));
+        }
+    }
 }
 
 #[expect(
@@ -365,15 +423,13 @@ fn freeze(
 ) -> Result<CombatState, String> {
     let settings = settings.ok_or("CombatSettings is unavailable")?;
     let substances = substances.ok_or("SubstanceTable is unavailable")?;
-    let mut bodies = Vec::new();
-    let mut unit_bodies = BTreeMap::new();
     let mut roster = Vec::new();
     for (
         id,
         owner,
         faction,
         standing,
-        body,
+        _body,
         turn,
         busy,
         downed,
@@ -383,12 +439,6 @@ fn freeze(
         lattice_stats,
     ) in units.iter()
     {
-        if let Some(body) = body.copied() {
-            if !bodies.contains(&body) {
-                bodies.push(body);
-            }
-        }
-        unit_bodies.insert(*id, body.copied());
         let lattice = match (spec, lattice, lattice_stats) {
             (Some(spec), Some(state), Some(stats)) => Some(CombatLattice {
                 spec: spec.clone(),
@@ -419,48 +469,7 @@ fn freeze(
         return Err("combat roster is empty".to_owned());
     }
 
-    let all_tiles = tiles.iter().collect::<Vec<_>>();
-    let surfaces = all_tiles
-        .iter()
-        .map(|(position, ..)| **position)
-        .collect::<BTreeSet<_>>();
-    let mut links = BTreeSet::new();
-    let mut links_by_body = Vec::new();
-    for body in bodies {
-        let footing = Footing::from_tiles(all_tiles.iter().copied(), substances, body, blockers);
-        let mut body_links = BTreeSet::new();
-        for from in footing.standings() {
-            for neighbor in from.pos.coord.neighbors() {
-                for to in footing.steps_from(from, neighbor) {
-                    links.insert((from.pos, to.pos));
-                    body_links.insert((from.pos, to.pos));
-                }
-            }
-        }
-        links_by_body.push((body, body_links));
-    }
-    let mut arena = ArenaSnapshot::new(surfaces, links)?;
-    for (&unit, body) in &unit_bodies {
-        let links = body
-            .and_then(|body| {
-                links_by_body
-                    .iter()
-                    .find(|(candidate, _)| *candidate == body)
-            })
-            .map_or_else(BTreeSet::new, |(_, links)| links.clone());
-        arena = arena.with_unit_links(unit, links)?;
-    }
-    if let Some(spatial) = spatial {
-        for faction in [Faction::Player, Faction::Hostile] {
-            let observed = spatial
-                .faction(faction)
-                .surfaces()
-                .filter_map(|(position, known)| {
-                    (known.state() == KnowledgeState::Observed).then_some(position)
-                });
-            arena = arena.with_observation(faction, observed);
-        }
-    }
+    let arena = build_arena(substances, blockers, spatial, tiles, units)?;
 
     let mut element_names = BTreeMap::new();
     if let Some(elements) = elements {
@@ -512,6 +521,69 @@ fn freeze(
         ));
     }
     Ok(state)
+}
+
+fn build_arena(
+    substances: &SubstanceTable,
+    blockers: Option<&hex_core::TraversalBlockers>,
+    spatial: Option<&FactionMapKnowledge>,
+    tiles: &TileFacts,
+    units: &UnitFacts,
+) -> Result<ArenaSnapshot, String> {
+    let mut bodies = Vec::new();
+    let mut unit_bodies = BTreeMap::new();
+    for (id, _, _, _, body, ..) in units.iter() {
+        if let Some(body) = body.copied() {
+            if !bodies.contains(&body) {
+                bodies.push(body);
+            }
+        }
+        unit_bodies.insert(*id, body.copied());
+    }
+    let all_tiles = tiles.iter().collect::<Vec<_>>();
+    let surfaces = all_tiles
+        .iter()
+        .map(|(position, ..)| **position)
+        .collect::<BTreeSet<_>>();
+    let mut links = BTreeSet::new();
+    let mut links_by_body = Vec::new();
+    for body in bodies {
+        let footing = Footing::from_tiles(all_tiles.iter().copied(), substances, body, blockers);
+        let mut body_links = BTreeSet::new();
+        for from in footing.standings() {
+            for neighbor in from.pos.coord.neighbors() {
+                for to in footing.steps_from(from, neighbor) {
+                    links.insert((from.pos, to.pos));
+                    body_links.insert((from.pos, to.pos));
+                }
+            }
+        }
+        links_by_body.push((body, body_links));
+    }
+    let mut arena = ArenaSnapshot::new(surfaces, links)?;
+    for (&unit, body) in &unit_bodies {
+        let links = body
+            .and_then(|body| {
+                links_by_body
+                    .iter()
+                    .find(|(candidate, _)| *candidate == body)
+            })
+            .map_or_else(BTreeSet::new, |(_, links)| links.clone());
+        arena = arena.with_unit_links(unit, links)?;
+    }
+    if let Some(spatial) = spatial {
+        for faction in [Faction::Player, Faction::Hostile] {
+            let observed = spatial
+                .faction(faction)
+                .surfaces()
+                .filter_map(|(position, known)| {
+                    (known.state() == KnowledgeState::Observed).then_some(position)
+                });
+            arena = arena.with_observation(faction, observed);
+        }
+    }
+
+    Ok(arena)
 }
 
 fn freeze_content(

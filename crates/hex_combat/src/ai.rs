@@ -337,6 +337,7 @@ fn drive_ai(
                             world.elements.as_deref(),
                             world.combat.as_deref(),
                             world.terrain.as_deref(),
+                            table,
                         ),
                         None,
                     )
@@ -612,6 +613,7 @@ fn enumerate_turn_actions(
     elements: Option<&ElementCatalog>,
     combat: Option<&CombatSettings>,
     terrain: Option<&TerrainOccupancy>,
+    substances: &SubstanceTable,
 ) -> Vec<GameCommand> {
     let id = *actor.1;
     let Some(turn) = actor.5 else {
@@ -694,6 +696,9 @@ fn enumerate_turn_actions(
             .collect();
         for (spell_id, name, spell) in book.iter() {
             if !delivers_anything(spell) {
+                continue;
+            }
+            if !crate::commands::cast::terrain_creation_is_admitted(spell, substances) {
                 continue;
             }
             let Some(cell) = crate::commands::cast::spell_cell(spec, state, spell_id) else {

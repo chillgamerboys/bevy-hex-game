@@ -175,14 +175,15 @@ encounter-owned exact `TilePos` overlay. No current system depends on it.
 
 ## C — Run bottoms (exact occupancy: casting legality, line-of-sight, cover)
 
-**Need**: material-sensitive spell trajectories and cover want column occupancy. Tiles publish
-their run's top (`TilePos`) and world extent (`HexSpan`) but not the run's
-bottom **level**, and gameplay must not divide by `level_height` to recover
-it (that reintroduces the dependency the split exists to prevent);
-`Headroom` saturates, so occupancy can't be reconstructed exactly. The published
-bounds now feed one gameplay-owned exact occupancy projection and deterministic
-trajectory supercover; obstruction-aware sight remains later work and must reuse that
-primitive rather than introduce a second ray.
+**Delivered**: material-sensitive trajectories, future sight, and cover want column
+occupancy. Every material-run
+entity now publishes its inclusive top (`TilePos`) and bottom (`RunBottom`) alongside
+its world extent (`HexSpan`). Gameplay does not divide by `level_height` or infer from
+the saturated `Headroom` clearance fact. The published bounds feed one gameplay-owned
+exact occupancy projection and deterministic trajectory supercover; faction-facing
+trajectory choices filter that geometry through authorized knowledge, while full truth
+stays at command authority. Obstruction-aware sight remains later work and must reuse
+the primitive rather than introduce a second ray.
 
 Initial spatial perception is deliberately obstruction-agnostic and does not need
 this component. Gameplay lights are radial within one light domain; sight uses exact
@@ -193,13 +194,13 @@ different reason. [casting.md](../systems/casting.md) validates a cast against t
 voxels it would affect — is this voxel solid, is it empty enough to conjure into, is it
 somebody's supporting surface — and none of those are answerable without exact
 occupancy. Wave 3 deliberately shipped terrain effects fail-closed rather than
-reconstructing it; `RunBottom` now gates the terrain-casting follow-up and later
-obstruction-aware sight.
+reconstructing it; `RunBottom` has now unblocked permanent construction and remains
+the foundation for obstruction-aware trajectories and sight.
 
 One component answers casting legality, conjuration placement, trajectory, cover, and
 pathing alike, using the existing published-data pattern rather than a new API surface.
 
-**Accepted contract and sequencing**: add one component to the existing spawn bundle.
+**Accepted and live contract**: one component extends the existing spawn bundle.
 The type lives in gameplay-owned `hex_core`:
 
 ```rust
