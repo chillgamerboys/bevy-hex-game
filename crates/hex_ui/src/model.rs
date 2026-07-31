@@ -341,6 +341,39 @@ pub enum PartyIntent {
     Rest,
 }
 
+/// Immutable live Combat Lab statistics presentation.
+#[derive(Resource, Debug, Clone, PartialEq, Eq)]
+pub struct LabStatisticsView {
+    /// Whether the current gameplay run belongs to Combat Lab.
+    pub present: bool,
+    /// Whether the encounter is still active and the drawer may be shown.
+    pub visible: bool,
+    /// Whether the secondary statistics body is expanded.
+    pub expanded: bool,
+    /// Canonical, already-formatted combat summary.
+    pub text: String,
+}
+
+impl Default for LabStatisticsView {
+    fn default() -> Self {
+        Self {
+            present: false,
+            visible: false,
+            expanded: true,
+            text: "Waiting for canonical combat statistics…".to_owned(),
+        }
+    }
+}
+
+/// Typed actions available from the live Combat Lab statistics drawer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LabStatisticsIntent {
+    /// Expand or collapse the secondary statistics body.
+    Toggle,
+    /// Freeze the current run as a manual-stop report.
+    EndExperiment,
+}
+
 /// Typed gameplay-lattice inputs emitted by presentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LatticeIntent {
@@ -528,6 +561,8 @@ pub enum UiIntent {
     Casting(CastingIntent),
     /// Act on party selection or formation configuration.
     Party(PartyIntent),
+    /// Act on the live Combat Lab statistics drawer.
+    LabStatistics(LabStatisticsIntent),
     /// Navigate back through the current screen's canonical route.
     Back,
     /// Cycle one Settings value.

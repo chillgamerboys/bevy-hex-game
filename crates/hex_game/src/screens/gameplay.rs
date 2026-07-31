@@ -36,12 +36,12 @@ use super::{despawn_screen, DespawnOnExit};
 use crate::combat_reports::{
     CombatLabReport, CombatLabReportStore, CombatLabReportTermination, CurrentCombatLabReport,
 };
-use crate::readouts::{GameplayUiContext, HudSetup, UiUnitIdentity};
+use crate::readouts::{GameplayUiContext, UiUnitIdentity};
 use crate::scenarios::ActiveScenario;
 use crate::storage::StoragePaths;
 use hex_ui::{
     blurb, fine, heading, row_button, ActionAffordance, ActionAvailability, ActionPriority,
-    GameplayAction, GameplayHudView, UiAssets, ACCENT_EDGE, LABEL,
+    GameplayAction, GameplayHudView, UiAssets,
 };
 
 pub(crate) fn plugin(app: &mut App) {
@@ -100,18 +100,12 @@ pub(crate) fn plugin(app: &mut App) {
     app.add_systems(
         Update,
         (
-            toggle_lab_statistics,
-            update_lab_statistics,
-            end_lab_experiment,
+            handle_lab_statistics_intents.after(hex_ui::UiSystems::EmitIntents),
+            publish_lab_statistics_view,
         )
             .chain()
             .run_if(in_state(Screen::Gameplay))
             .run_if(resource_equals(GameplayPhase::Active)),
-    );
-    app.add_systems(
-        Update,
-        (sync_lab_statistics_visibility, apply_lab_statistics_layout)
-            .run_if(in_state(Screen::Gameplay)),
     );
     // Pausable, because the system that acts on the flag is. `mirror_truth` runs in
     // `PausableSystems`, so a toggle that kept firing while paused would set the
@@ -131,7 +125,7 @@ pub(crate) fn plugin(app: &mut App) {
             reset_pause,
             reset_mode,
             reset_outcome_report,
-            spawn_lab_statistics.in_set(HudSetup::Panels),
+            reset_lab_statistics_view,
         ),
     );
     app.add_systems(OnExit(Screen::Gameplay), despawn_screen(Screen::Gameplay));
@@ -193,24 +187,6 @@ fn handle_gameplay_ui_intents(
 #[derive(Component)]
 struct OutcomeModal;
 
-#[derive(Component)]
-struct LabStatisticsDrawer;
-
-#[derive(Component)]
-struct LabStatisticsPanel;
-
-#[derive(Component)]
-struct LabStatisticsText;
-
-#[derive(Component)]
-struct LabStatisticsToggle;
-
-#[derive(Component)]
-struct LabStatisticsToggleText;
-
-#[derive(Component)]
-struct LabEndExperiment;
-
 pub(crate) use hex_gameplay_model::ReportMode as OutcomeReportMode;
 use hex_gameplay_model::{
     resolve_lab_run, LabRunAction, LabRunFailure, LabRunTransition, ReportViewModel,
@@ -248,91 +224,18 @@ fn reset_outcome_report(mut state: ResMut<OutcomeReportState>) {
     *state = OutcomeReportState::default();
 }
 
-fn spawn_lab_statistics(
-    mut commands: Commands,
-    assets: Res<UiAssets>,
-    lab: Option<Res<CombatLabSession>>,
-) {
-    if lab.is_none() {
-        return;
-    }
-    commands
-        .spawn((
-            Name::new("Combat Lab Live Statistics Drawer"),
-            LabStatisticsDrawer,
-            DespawnOnExit(Screen::Gameplay),
-            Node {
-                position_type: PositionType::Absolute,
-                right: Val::Px(320.0),
-                top: Val::Px(200.0),
-                width: Val::Px(480.0),
-                max_height: Val::Px(340.0),
-                padding: UiRect::all(Val::Px(10.0)),
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(7.0),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(7.0)),
-                ..default()
-            },
-            BorderColor::all(ACCENT_EDGE),
-            BackgroundColor(Color::srgba(0.02, 0.03, 0.045, 0.96)),
-            GlobalZIndex(12),
-        ))
-        .with_children(|drawer| {
-            drawer
-                .spawn((
-                    row_button("Statistics · Collapse", 210.0),
-                    LabStatisticsToggle,
-                ))
-                .with_child((
-                    LabStatisticsToggleText,
-                    blurb(&assets, "Statistics · Collapse"),
-                ));
-            drawer
-                .spawn((
-                    LabStatisticsPanel,
-                    ScrollArea,
-                    Node {
-                        min_height: Val::Px(0.0),
-                        flex_grow: 1.0,
-                        flex_direction: FlexDirection::Column,
-                        row_gap: Val::Px(5.0),
-                        overflow: Overflow::scroll_y(),
-                        ..default()
-                    },
-                ))
-                .with_children(|panel| {
-                    panel.spawn(heading(&assets, "LIVE COMBAT LAB STATISTICS"));
-                    panel.spawn((
-                        LabStatisticsText,
-                        Text::new("Waiting for canonical combat statistics…"),
-                        TextFont {
-                            font: assets.body.clone().into(),
-                            ..TextFont::from_font_size(18.0)
-                        },
-                        TextColor(LABEL),
-                    ));
-                    panel.spawn(blurb(
-                        &assets,
-                        "Totals are gameplay-owned · per-unit and timeline details open in the outcome report.",
-                    ));
-                    panel
-                        .spawn((
-                            row_button("End Experiment", 190.0),
-                            LabEndExperiment,
-                        ))
-                        .with_child(blurb(&assets, "End Experiment"));
-                });
-        });
+fn reset_lab_statistics_view(mut view: ResMut<hex_ui::LabStatisticsView>) {
+    *view = hex_ui::LabStatisticsView::default();
 }
 
 #[expect(
     clippy::too_many_arguments,
     reason = "manual stop freezes the same independent launch facts as outcome reporting"
 )]
-fn end_lab_experiment(
-    clicked: Query<&Interaction, (Changed<Interaction>, With<LabEndExperiment>)>,
+fn handle_lab_statistics_intents(
     mut commands: Commands,
+    mut intents: MessageReader<hex_ui::UiIntent>,
+    mut view: ResMut<hex_ui::LabStatisticsView>,
     lab: Option<Res<CombatLabSession>>,
     launch: Option<Res<CombatLabReportLaunch>>,
     summary: Option<Res<CombatSummary>>,
@@ -341,10 +244,19 @@ fn end_lab_experiment(
     mut reports: ResMut<CombatLabReportStore>,
     mut next_screen: ResMut<NextState<Screen>>,
 ) {
-    if !clicked
-        .iter()
-        .any(|interaction| *interaction == Interaction::Pressed)
-    {
+    let mut end_experiment = false;
+    for intent in intents.read() {
+        match intent {
+            hex_ui::UiIntent::LabStatistics(hex_ui::LabStatisticsIntent::Toggle) => {
+                view.expanded = !view.expanded;
+            }
+            hex_ui::UiIntent::LabStatistics(hex_ui::LabStatisticsIntent::EndExperiment) => {
+                end_experiment = true;
+            }
+            _ => {}
+        }
+    }
+    if !end_experiment {
         return;
     }
     let (Some(lab), Some(launch), Some(summary), Some(shipped)) = (
@@ -387,96 +299,25 @@ pub(crate) fn lab_statistics_should_be_visible(
     phase == GameplayPhase::Active && resolution.is_none_or(|resolution| resolution.0.is_none())
 }
 
-fn sync_lab_statistics_visibility(
+fn publish_lab_statistics_view(
     phase: Res<GameplayPhase>,
     resolution: Option<Res<EncounterResolution>>,
-    mut drawers: Query<&mut Visibility, With<LabStatisticsDrawer>>,
-) {
-    let visibility = lab_statistics_should_be_visible(*phase, resolution.as_deref())
-        .then_some(Visibility::Inherited);
-    for mut drawer in &mut drawers {
-        *drawer = visibility.unwrap_or(Visibility::Hidden);
-    }
-}
-
-fn apply_lab_statistics_layout(
-    metrics: Res<hex_ui::ResolvedUiMetrics>,
-    added_drawers: Query<(), Added<LabStatisticsDrawer>>,
-    mut drawers: Query<&mut Node, With<LabStatisticsDrawer>>,
-) {
-    if !metrics.is_changed() && added_drawers.is_empty() {
-        return;
-    }
-    for mut node in &mut drawers {
-        match metrics.viewport {
-            hex_ui::UiViewportClass::Compact => {
-                node.display = Display::None;
-                node.left = Val::Px(12.0);
-                node.right = Val::Px(12.0);
-                node.top = Val::Px(92.0);
-                node.bottom = Val::Px(hex_ui::action_rail_clearance(metrics.viewport));
-                node.width = Val::Auto;
-                node.max_height = Val::Auto;
-            }
-            hex_ui::UiViewportClass::Standard => {
-                node.display = Display::Flex;
-                node.left = Val::Auto;
-                node.right = Val::Px(320.0);
-                node.top = Val::Px(200.0);
-                node.bottom = Val::Auto;
-                node.width = Val::Px(480.0);
-                node.max_height = Val::Px(340.0);
-            }
-            hex_ui::UiViewportClass::Wide => {
-                node.display = Display::Flex;
-                node.left = Val::Auto;
-                node.right = Val::Px(360.0);
-                node.top = Val::Px(160.0);
-                node.bottom = Val::Auto;
-                node.width = Val::Px(520.0);
-                node.max_height = Val::Px(440.0);
-            }
-        }
-    }
-}
-
-fn toggle_lab_statistics(
-    clicked: Query<&Interaction, (Changed<Interaction>, With<LabStatisticsToggle>)>,
-    mut panels: Query<&mut Visibility, With<LabStatisticsPanel>>,
-    mut labels: Query<&mut Text, With<LabStatisticsToggleText>>,
-) {
-    if !clicked
-        .iter()
-        .any(|interaction| *interaction == Interaction::Pressed)
-    {
-        return;
-    }
-    let Ok(mut visibility) = panels.single_mut() else {
-        return;
-    };
-    let expanded = *visibility != Visibility::Hidden;
-    *visibility = if expanded {
-        Visibility::Hidden
-    } else {
-        Visibility::Inherited
-    };
-    if let Ok(mut text) = labels.single_mut() {
-        **text = if expanded {
-            "Statistics · Expand".to_owned()
-        } else {
-            "Statistics · Collapse".to_owned()
-        };
-    }
-}
-
-fn update_lab_statistics(
+    lab: Option<Res<CombatLabSession>>,
     summary: Option<Res<CombatSummary>>,
-    mut text: Query<&mut Text, With<LabStatisticsText>>,
+    mut view: ResMut<hex_ui::LabStatisticsView>,
 ) {
-    let (Some(summary), Ok(mut text)) = (summary.as_deref(), text.single_mut()) else {
-        return;
+    let next = hex_ui::LabStatisticsView {
+        present: lab.is_some(),
+        visible: lab.is_some() && lab_statistics_should_be_visible(*phase, resolution.as_deref()),
+        expanded: view.expanded,
+        text: summary.as_deref().map_or_else(
+            || "Waiting for canonical combat statistics…".to_owned(),
+            live_statistics_label,
+        ),
     };
-    **text = live_statistics_label(summary);
+    if *view != next {
+        *view = next;
+    }
 }
 
 pub(crate) fn live_statistics_label(summary: &CombatSummary) -> String {
