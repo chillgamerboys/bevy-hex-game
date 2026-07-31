@@ -1,4 +1,4 @@
-//! What combat does when the ground is not flat.
+//! Contract coverage for combat when the ground is not flat.
 //!
 //! Every other fixture in this crate is a single plane: `enemy.rs` spawns one run per
 //! coordinate all at level 1, and `loop.rs` spawns no terrain at all and teleports

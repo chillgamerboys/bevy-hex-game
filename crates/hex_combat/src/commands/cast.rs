@@ -21,9 +21,7 @@
 use bevy::prelude::*;
 
 use hex_assets::{CastingAxis, Effect, Spell, TargetShape};
-use hex_core::{
-    Busy, KnowledgeExpiry, KnowledgeState, LatticeCoord, PendingDecision, TilePos, UnitId,
-};
+use hex_core::{KnowledgeExpiry, KnowledgeState, LatticeCoord, PendingDecision, TilePos, UnitId};
 use hex_lattice::{apply_cast, castable, CastBlocked, CellKind, LatticeSpec, LatticeState};
 use hex_units::{targeting, volumes};
 
@@ -118,9 +116,9 @@ pub(super) fn apply(
             });
         };
         // Rung 1 is "action available", and casting is an action. Without this a unit
-        // casts every frame its turn lasts: a cast starts no animation, so the `Busy`
-        // it sets is gone by the next frame, and `advance_turn` waits for the movement
-        // budget as well — so the whole lattice could be spent in one turn.
+        // casts every frame its turn lasts. Presentation lifetime cannot be the gate:
+        // `advance_turn` also waits for the movement budget, so without this explicit
+        // domain flag the whole lattice could be spent in one turn.
         let Some(turn) = turn else {
             return Err(CommandRefusal::NoTurn);
         };
@@ -408,10 +406,6 @@ pub(super) fn apply(
         .and_then(|(_, _, turn, ..)| turn)
     {
         turn.acted = true;
-    }
-    if ctx.settings.is_some() {
-        commands.entity(entity).insert(Busy);
-        ctx.committed.push(entity);
     }
     info!("cast: {unit:?} casts {spell_name:?} at {target:?}");
     Ok(())

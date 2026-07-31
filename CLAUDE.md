@@ -1,6 +1,6 @@
 # Context for Claude Code
 
-A hex-grid game on **Bevy 0.19**, organised as a fourteen-crate cargo workspace.
+A hex-grid game on **Bevy 0.19**, organised as a multi-crate cargo workspace.
 
 Read **[docs/architecture.md](docs/architecture.md)** first — it explains the crate
 graph and, more usefully, the reasoning behind it. This file is the operational
@@ -112,6 +112,8 @@ hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → h
 hex_core → hex_assets → hex_objects ───────────────────────────────→ hex_game
 {Bevy, bevy_egui, hex_core, hex_assets} → hex_editor  (standalone tool)
 hex_core → hex_ai → {hex_assets, hex_units, hex_combat}   (contracts, controllers, host)
+{hex_core, hex_lattice} → hex_combat_core → hex_combat   (pure combat authority)
+{bevy_ecs, hex_core} → hex_gameplay_model → hex_game  (pure screen behavior)
 hex_core → {hex_assets, hex_units} → hex_perception → {hex_combat, hex_game}
 hex_core → hex_lattice → {hex_assets, hex_units, hex_combat}   (pure rules engine)
 hex_core → hex_anim ─────────────────────→ hex_units
@@ -124,6 +126,12 @@ spells, mana, disables, enchantments. Built like `hex_core` (Bevy sub-crates onl
 design's open questions. `hex_assets` resolves authored content into it, `hex_units`
 carries per-unit lattice state, and `hex_combat` drives casts, disables, and decisions.
 See `crates/hex_lattice`.
+
+**`hex_gameplay_model` is pure screen behavior** — Combat Lab editing, report
+selection and launch routing, plus Creator navigation and edit history. It does not
+depend on assets, combat, units, the game binary, or renderer. `hex_game` adapts typed
+model transitions to Bevy resources, persistence, and navigation instead of owning a
+second copy of those decisions.
 
 **`hex_map`, `hex_world` and `hex_units` must not depend on each other.** Shared
 types go in `hex_core`. Cargo enforces this; a violating `use` fails to compile.
@@ -142,7 +150,7 @@ and AI. Neither gameplay crate may import map-generator internals.
 **Two owners, two roles.** The **world owner** has `hex_map`, `hex_world`,
 `hex_perception`, their schema/settings modules in `hex_assets`, and map/perception
 content (world files, `substances.ron`, lighting profiles, `perception.ron`).
-The **gameplay owner** has `hex_core`, `hex_units`, `hex_combat`, `hex_lattice`,
+The **gameplay owner** has `hex_core`, `hex_units`, `hex_combat_core`, `hex_combat`, `hex_lattice`,
 `hex_anim`, generic `hex_assets` loader infrastructure, and gameplay schema/settings
 modules and content (`combat.ron`, `spells.ron`, `elements.ron`). `hex_game` is shared;
 `hex_objects` and `hex_editor` are shared presentation/tooling with no gameplay
@@ -357,12 +365,16 @@ to be out of date. Everything else under `docs/` describes contracts.
   unwrap, expect, panic, debug and print; slice indexing and the other restrictions
   remain denied.
 - **Headless integration tests** use dependency-limited fixtures from
-  `hex_test_support` and live in their owning gameplay crate. The single
-  `hex_combat/tests/simulation.rs` target owns multi-turn composition; the single
-  `hex_game/tests/gameplay_app.rs` target owns headless UI behavior behind
-  `test-support`. Map tests retain their separate world-owned infrastructure. None
-  can see anything visual — a black sky or a mistransformed tile still needs a human
-  looking at the window.
+  `hex_test_support` and live in their owning gameplay crate. Units and combat each
+  expose one explicit `contracts` target; concern modules live beneath that target
+  rather than creating another Bevy link. The single
+  `hex_combat_core/tests/simulation.rs` target owns multi-turn composition, and the
+  single `hex_game/tests/gameplay_app.rs` target owns gameplay UI behavior behind
+  `test-support`. `game_content_contracts` and the library's private
+  scenario/loading tests stay separately selectable in the residual shared seam.
+  Map tests retain their separate world-owned infrastructure. None can see anything
+  visual — a black sky or a mistransformed tile still needs a human looking at the
+  window.
 
 **Gaps in the engine and the toolchain** — `bevy_lint` unusable at 0.19, Bevy
 features untrimmed, animation still `Box<dyn Transformer>` — are recorded in

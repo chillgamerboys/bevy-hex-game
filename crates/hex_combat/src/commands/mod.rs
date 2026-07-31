@@ -37,13 +37,12 @@ use std::collections::BTreeMap;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
-use hex_anim::Transformation;
 use hex_assets::{
     CombatSettings, ContentIndex, ContentTables, ElementCatalog, FormationCatalog, PlayerSettings,
     SpellBook, SubstanceTable,
 };
 use hex_core::{
-    AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, IssuedCommand, Mode, PartyFormation,
+    Busy, CommandQueue, ControlOwner, GameCommand, IssuedCommand, Mode, PartyFormation,
     PausableSystems, PendingDecision, Screen, TilePos, TraversalBlockers, Turn, UnitId,
 };
 use hex_perception::FactionMapKnowledge;
@@ -143,7 +142,7 @@ struct Verb<'a> {
     blockers: Option<&'a TraversalBlockers>,
     /// Live exact surfaces plus every committed route in flight at drain start.
     occupancy: &'a UnitOccupancy,
-    /// Units this drain already committed presentation for. `Busy` lands via
+    /// Units this drain already committed domain movement for. `Busy` lands via
     /// `Commands` and is not queryable until the next sync point, so within one
     /// drain this set is the truth.
     committed: &'a mut Vec<Entity>,
@@ -162,6 +161,8 @@ struct ResolutionStores<'w> {
     events: MessageWriter<'w, CombatEvent>,
     revivals: ResMut<'w, crate::turns::PendingRevivals>,
     summary: ResMut<'w, crate::CombatSummary>,
+    authority: Option<ResMut<'w, crate::authority_host::CombatAuthority>>,
+    rounds: MessageWriter<'w, hex_core::RoundElapsed>,
 }
 
 #[derive(SystemParam)]
@@ -201,20 +202,10 @@ pub(crate) fn plugin(app: &mut App) {
         .register_type::<PendingDecision>();
     app.add_systems(
         Update,
-        (
-            // Frees units whose walk or swing landed this frame, before anyone
-            // decides or applies anything on their behalf.
-            sync_busy
-                .in_set(AppSystems::Update)
-                .in_set(PausableSystems)
-                .after(hex_units::MovementSystems::Reconcile)
-                .before(crate::CombatSystems::Act)
-                .run_if(in_state(Screen::Gameplay)),
-            apply_commands
-                .in_set(crate::CombatSystems::Apply)
-                .in_set(PausableSystems)
-                .run_if(in_state(Screen::Gameplay)),
-        ),
+        (apply_commands
+            .in_set(crate::CombatSystems::Apply)
+            .in_set(PausableSystems)
+            .run_if(in_state(Screen::Gameplay)),),
     );
     // Unit ids reset between sessions, so a held-over command would name
     // somebody else's unit next launch.
@@ -245,30 +236,6 @@ fn clear_pending_decision(mut pending: ResMut<PendingDecision>) {
     }
 }
 
-/// Keeps [`Busy`] equal to "presentation in flight".
-///
-/// The applier inserts [`Busy`] eagerly when it commits an animation; this
-/// system is the other half, removing it once both the [`Transformation`] and
-/// the [`MovingTo`] it stood for are gone — and re-asserting it for any
-/// presentation that arrived outside the funnel, so the marker can be trusted
-/// wherever it is read.
-fn sync_busy(
-    mut commands: Commands,
-    units: Query<
-        (Entity, Has<Transformation>, Has<MovingTo>, Has<Busy>),
-        Or<(With<Busy>, With<Transformation>, With<MovingTo>)>,
-    >,
-) {
-    for (entity, animating, walking, busy) in &units {
-        let active = animating || walking;
-        if active && !busy {
-            commands.entity(entity).insert(Busy);
-        } else if !active && busy {
-            commands.entity(entity).remove::<Busy>();
-        }
-    }
-}
-
 /// Drains the queue: validate, apply, project.
 ///
 /// Commands apply in issue order, whole-queue-per-run. A dropped command is a
@@ -280,7 +247,7 @@ fn apply_commands(
     mut commands: Commands,
     mut queue: ResMut<CommandQueue>,
     mode: Res<State<Mode>>,
-    turn_order: Res<TurnOrder>,
+    mut turn_order: ResMut<TurnOrder>,
     registry: Res<UnitRegistry>,
     settings: Option<Res<PlayerSettings>>,
     table: Option<Res<SubstanceTable>>,
@@ -309,13 +276,170 @@ fn apply_commands(
         },
     ));
 
+    if in_combat {
+        if let Some(authority) = stores.authority.as_deref_mut() {
+            if authority.adapter_pending() {
+                let adopted = adopt_authority_projection(
+                    &mut authority.state,
+                    &turn_order,
+                    &stores.pending,
+                    &stores.revivals,
+                    &registry,
+                    &units.actors,
+                    &units.lattices,
+                );
+                assert!(
+                    adopted.is_ok(),
+                    "content adapter could not publish its combat projection: {adopted:?}"
+                );
+                authority.finish_adapter_adoption();
+            }
+            let projected = project_authority_state(
+                &authority.state,
+                &mut commands,
+                &mut turn_order,
+                &mut stores.pending,
+                &registry,
+                &mut units.actors,
+                &mut units.lattices,
+            );
+            assert!(
+                projected.is_ok(),
+                "combat authority produced an invalid ECS projection: {projected:?}"
+            );
+            authority.drain_events(&mut emitted);
+            let mut elapsed = Vec::new();
+            authority.drain_rounds(&mut elapsed);
+            stores.rounds.write_batch(elapsed);
+        }
+    }
+
     while let Some(issued) = queue.pop() {
+        if in_combat && stores.authority.is_none() {
+            let refusal = CommandRefusal::MissingCombatData {
+                data: crate::CombatData::AuthorityState,
+            };
+            drop_command(&mut emitted, &issued, refusal);
+            continue;
+        }
+        if in_combat && crate::authority_host::CombatAuthority::handles(&issued.command) {
+            let unit = issued.command.unit();
+            let observed = issued.clone();
+            let recorded = issued.command.clone();
+            let Some(authority) = stores.authority.as_deref_mut() else {
+                drop_command(
+                    &mut emitted,
+                    &issued,
+                    CommandRefusal::MissingCombatData {
+                        data: crate::CombatData::AuthorityState,
+                    },
+                );
+                continue;
+            };
+            let outcome = authority.state.apply(issued);
+            if let Err(refusal) = outcome {
+                if let Some(authority) = stores.authority.as_deref_mut() {
+                    authority.drain_events(&mut emitted);
+                }
+                warn!("command dropped ({refusal:?}): {observed:?}");
+                continue;
+            }
+
+            let entity = registry.entity_of(unit);
+            assert!(
+                entity.is_some(),
+                "authority accepted a unit absent from the ECS registry"
+            );
+            let Some(entity) = entity else {
+                continue;
+            };
+            let mut verb = Verb {
+                turn_order: &turn_order,
+                registry: &registry,
+                settings: settings.as_deref(),
+                table: table.as_deref(),
+                spells: spells.as_deref(),
+                tables: content
+                    .as_deref()
+                    .zip(elements.as_deref())
+                    .map(|(index, elements)| index.tables(elements)),
+                pending: &mut stores.pending,
+                elements: elements.as_deref(),
+                effects: &mut stores.effects,
+                knowledge: &mut stores.knowledge,
+                spatial: stores.spatial.as_deref(),
+                events: &mut emitted,
+                revivals: &mut stores.revivals,
+                combat: combat.as_deref(),
+                party: &party_stores.party,
+                formation: &mut party_stores.formation,
+                formations: party_stores.formations.as_deref(),
+                blockers: blockers.as_deref(),
+                occupancy: &occupancy,
+                committed: &mut committed,
+                reserved: &mut reserved,
+                in_combat,
+            };
+            let projection = match &observed.command {
+                GameCommand::MoveAlong { path, .. } => move_along::project(
+                    &mut verb,
+                    &mut commands,
+                    &tiles,
+                    &mut units.actors,
+                    unit,
+                    entity,
+                    path,
+                ),
+                GameCommand::Strike { target, .. } => {
+                    strike::project(&verb, &mut commands, &units.actors, unit, entity, *target)
+                }
+                _ => Ok(()),
+            };
+            assert!(
+                projection.is_ok(),
+                "authority-approved command could not be projected: {projection:?}"
+            );
+            if let Some(authority) = stores.authority.as_deref_mut() {
+                let projected = project_authority_state(
+                    &authority.state,
+                    &mut commands,
+                    &mut turn_order,
+                    &mut stores.pending,
+                    &registry,
+                    &mut units.actors,
+                    &mut units.lattices,
+                );
+                assert!(
+                    projected.is_ok(),
+                    "combat authority produced an invalid ECS projection: {projected:?}"
+                );
+                authority.drain_events(&mut emitted);
+                let mut elapsed = Vec::new();
+                authority.drain_rounds(&mut elapsed);
+                stores.rounds.write_batch(elapsed);
+            }
+            stores.summary.record_command(&recorded);
+            continue;
+        }
+
         if let Some(refusal) = modal_refusal(&stores.pending, &issued.command) {
+            record_adapter_refusal(
+                stores.authority.as_deref_mut(),
+                in_combat,
+                &issued,
+                &refusal,
+            );
             drop_command(&mut emitted, &issued, refusal);
             continue;
         }
         let unit = issued.command.unit();
         let Some(entity) = registry.entity_of(unit) else {
+            record_adapter_refusal(
+                stores.authority.as_deref_mut(),
+                in_combat,
+                &issued,
+                &CommandRefusal::UnknownUnit,
+            );
             drop_command(&mut emitted, &issued, CommandRefusal::UnknownUnit);
             continue;
         };
@@ -330,14 +454,17 @@ fn apply_commands(
             .and_then(|(_, _, _, _, owner, _, _)| owner.copied())
             .unwrap_or_default();
         if owner.0 != issued.seat {
-            drop_command(
-                &mut emitted,
+            let refusal = CommandRefusal::WrongSeat {
+                issued_by: issued.seat,
+                owned_by: owner.0,
+            };
+            record_adapter_refusal(
+                stores.authority.as_deref_mut(),
+                in_combat,
                 &issued,
-                CommandRefusal::WrongSeat {
-                    issued_by: issued.seat,
-                    owned_by: owner.0,
-                },
+                &refusal,
             );
+            drop_command(&mut emitted, &issued, refusal);
             continue;
         }
 
@@ -369,6 +496,7 @@ fn apply_commands(
             in_combat,
         };
 
+        let observed = issued.clone();
         let recorded = issued.command.clone();
         let outcome = match issued.command {
             GameCommand::MoveAlong { ref path, .. } => move_along::apply(
@@ -448,14 +576,189 @@ fn apply_commands(
                 unit,
             ),
         };
-
         if let Err(refusal) = outcome {
+            if in_combat {
+                if let Some(authority) = stores.authority.as_deref_mut() {
+                    authority
+                        .state
+                        .record_adapter_refusal(observed.clone(), refusal.clone());
+                    let mut discarded = Vec::new();
+                    authority.drain_events(&mut discarded);
+                }
+            }
             drop_command(&mut emitted, &issued, refusal);
         } else {
+            let mut needs_settled_adoption = false;
+            if in_combat {
+                if let Some(authority) = stores.authority.as_deref_mut() {
+                    needs_settled_adoption =
+                        matches!(&observed.command, GameCommand::ChooseRestores { .. });
+                    if !needs_settled_adoption {
+                        let adopted = adopt_authority_projection(
+                            &mut authority.state,
+                            &turn_order,
+                            &stores.pending,
+                            &stores.revivals,
+                            &registry,
+                            &units.actors,
+                            &units.lattices,
+                        );
+                        assert!(
+                            adopted.is_ok(),
+                            "content adapter could not publish its combat projection: {adopted:?}"
+                        );
+                    }
+                    authority.state.record_adapter_success(observed);
+                    if needs_settled_adoption {
+                        authority.mark_adapter_pending();
+                    }
+                }
+            }
             stores.summary.record_command(&recorded);
+            if needs_settled_adoption {
+                // Restoration removes `Downed` through deferred commands. Settle
+                // and validate that complete projection before reducing any later
+                // queued command against the canonical authority.
+                break;
+            }
+        }
+    }
+    if in_combat {
+        if let Some(authority) = stores.authority.as_deref_mut() {
+            authority.state.settle_outcome();
+            authority.drain_events(&mut emitted);
+            let mut elapsed = Vec::new();
+            authority.drain_rounds(&mut elapsed);
+            stores.rounds.write_batch(elapsed);
         }
     }
     stores.events.write_batch(emitted);
+}
+
+fn record_adapter_refusal(
+    authority: Option<&mut crate::authority_host::CombatAuthority>,
+    in_combat: bool,
+    issued: &IssuedCommand,
+    refusal: &CommandRefusal,
+) {
+    if !in_combat || crate::authority_host::CombatAuthority::handles(&issued.command) {
+        return;
+    }
+    if let Some(authority) = authority {
+        authority
+            .state
+            .record_adapter_refusal(issued.clone(), refusal.clone());
+        let mut discarded = Vec::new();
+        authority.drain_events(&mut discarded);
+    }
+}
+
+fn project_authority_state(
+    state: &hex_combat_core::CombatState,
+    commands: &mut Commands,
+    order: &mut TurnOrder,
+    pending: &mut PendingDecision,
+    registry: &UnitRegistry,
+    actors: &mut ActorQuery,
+    lattices: &mut cast::LatticeQuery,
+) -> Result<(), String> {
+    order.project(&state.order, state.current(), state.round);
+    *pending = state.pending.clone();
+    for actor in state.units.values() {
+        let entity = registry
+            .entity_of(actor.id)
+            .ok_or_else(|| format!("authority unit {:?} has no ECS entity", actor.id))?;
+        let (standing, _, turn, busy, _, _, downed) = actors.get_mut(entity).map_err(|error| {
+            format!("authority unit {:?} is not projectable: {error}", actor.id)
+        })?;
+        if standing.map(|standing| standing.0.pos) != Some(actor.position) {
+            return Err(format!(
+                "authority position {:?} disagrees with {:?}",
+                actor.position,
+                standing.map(|standing| standing.0.pos)
+            ));
+        }
+        match (turn, actor.turn) {
+            (Some(mut current), Some(expected)) => *current = expected,
+            (None, Some(expected)) => {
+                commands.entity(entity).insert(expected);
+            }
+            (Some(_), None) => {
+                commands.entity(entity).remove::<Turn>();
+            }
+            (None, None) => {}
+        }
+        if actor.busy != busy {
+            if actor.busy {
+                commands.entity(entity).insert(Busy);
+            } else {
+                commands.entity(entity).remove::<Busy>();
+            }
+        }
+        if actor.downed != downed {
+            if actor.downed {
+                commands.entity(entity).insert(Downed);
+            } else {
+                commands.entity(entity).remove::<Downed>();
+            }
+        }
+        match (&actor.lattice, lattices.get_mut(entity).ok()) {
+            (Some(expected), Some((spec, mut actual))) if expected.spec == *spec => {
+                *actual = expected.state.clone();
+            }
+            (None, None) => {}
+            _ => {
+                return Err(format!(
+                    "authority lattice shape for {:?} cannot be projected",
+                    actor.id
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn adopt_authority_projection(
+    state: &mut hex_combat_core::CombatState,
+    order: &TurnOrder,
+    pending: &PendingDecision,
+    revivals: &crate::turns::PendingRevivals,
+    registry: &UnitRegistry,
+    actors: &ActorQuery,
+    lattices: &cast::LatticeQuery,
+) -> Result<(), String> {
+    let mut projection = Vec::with_capacity(state.units.len());
+    for actor in state.units.values() {
+        let entity = registry
+            .entity_of(actor.id)
+            .ok_or_else(|| format!("authority unit {:?} has no ECS entity", actor.id))?;
+        let (standing, _, turn, busy, _, _, downed) = actors
+            .get(entity)
+            .map_err(|error| format!("adapter unit {:?} is unavailable: {error}", actor.id))?;
+        let position = standing
+            .map(|standing| standing.0.pos)
+            .ok_or_else(|| format!("adapter unit {:?} has no exact position", actor.id))?;
+        let lattice = lattices
+            .get(entity)
+            .ok()
+            .map(|(_, lattice)| lattice.clone());
+        projection.push(hex_combat_core::CombatUnitProjection {
+            id: actor.id,
+            position,
+            turn: turn.copied(),
+            busy,
+            downed,
+            lattice,
+        });
+    }
+    state.adopt_projection(
+        order.order().to_vec(),
+        order.current(),
+        order.round,
+        pending.clone(),
+        revivals.snapshot(),
+        projection,
+    )
 }
 
 fn current_occupancy(base: &UnitOccupancy, reserved: &BTreeMap<UnitId, TilePos>) -> UnitOccupancy {

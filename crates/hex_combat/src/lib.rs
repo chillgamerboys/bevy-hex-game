@@ -33,6 +33,8 @@ use hex_core::{AppSystems, PerceptionSystems};
 
 /// What an enemy does with its turn. A placeholder, and says so.
 mod ai;
+/// Freezes published Bevy facts and projects the pure combat authority.
+mod authority_host;
 /// The applier: the one place a command becomes a change to the sim.
 mod commands;
 /// Effects that outlast the action that caused them.
@@ -40,7 +42,9 @@ pub mod effects;
 /// What a faction knows about a hostile lattice.
 pub mod knowledge;
 /// Structured outcomes produced by combat resolution.
-pub mod outcomes;
+pub mod outcomes {
+    pub use hex_combat_core::outcomes::*;
+}
 /// Terminal encounter detection and its simulation gate.
 pub mod resolution;
 /// Deterministic session combat reporting.
@@ -65,6 +69,23 @@ pub use summary::{
     COMBAT_SUMMARY_FINGERPRINT_VERSION, MAX_COMBAT_SUMMARY_DETAILS,
 };
 pub use turns::{Initiative, TurnOrder};
+
+/// Clones the canonical renderer-free combat state for read-only diagnostics.
+///
+/// This deliberately exposes no mutable authority handle. Behavioral tests may use
+/// it to prove that an in-combat assertion was not satisfied by a legacy fallback.
+pub fn authority_snapshot(world: &World) -> Result<hex_combat_core::CombatState, String> {
+    authority_host::snapshot(world)
+}
+
+/// Publishes a complete content-adapter projection to the combat authority.
+///
+/// This is an explicit synchronization token, not a mutable authority handle. The
+/// projection is adopted only after deferred ECS writes settle and passes the same
+/// exact-roster validation used by runtime content effects.
+pub fn publish_combat_adapter_facts(world: &mut World) -> Result<(), String> {
+    authority_host::publish_adapter_facts(world)
+}
 
 /// Combat-owned compatibility verdict for spells authored by the Wave 6 creator.
 ///
@@ -166,6 +187,7 @@ pub fn plugin(app: &mut App) {
     );
     app.add_plugins((
         turns::plugin,
+        authority_host::plugin,
         ai::plugin,
         commands::plugin,
         effects::plugin,

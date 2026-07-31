@@ -14,18 +14,24 @@ cargo fmt --all --check
 ## Step 2 — Clippy
 
 ```bash
-cargo clippy --workspace --all-targets --all-features --profile ci -- -D warnings
+python3 tools/gameplay_scope.py run clippy
 ```
 
 ## Step 3 — Full workspace suite
 
 ```bash
-cargo test --workspace --all-features --profile ci
+python3 tools/gameplay_scope.py run rules
+python3 tools/gameplay_scope.py run contracts
+python3 tools/gameplay_scope.py run simulation
+python3 tools/gameplay_scope.py run app
+python3 tools/gameplay_scope.py run residual
+cargo nextest run --workspace --all-features --cargo-profile ci --profile ci -E 'package(hex_map)'
+cargo test --workspace --all-features --profile ci --doc
 ```
 
-Sum all `test result:` lines across the twelve workspace crates plus
-doctests. The count drifts, and `/update-docs` owns the exact number
-in CLAUDE.md.
+Report each concern independently. The explicit map command is the unchanged
+world-owned shard enabled beside the residual concern in CI. `/test-local` is
+deliberately broad; `/test-quick` uses the scope selector for the edit loop.
 
 ## Step 4 — Dependency audit
 
@@ -38,7 +44,7 @@ cargo deny check
 ## Step 5 — Doc build
 
 ```bash
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
+python3 tools/gameplay_scope.py run docs
 ```
 
 ## Step 6 — Markdown relative links
@@ -65,7 +71,7 @@ echo "all relative links resolve"
 ## Output
 
 ```
-✓ /test-local — fmt, clippy, <N> tests, deny, doc, links all green (<elapsed>s)
+✓ /test-local — fmt, clippy, all test concerns, deny, doc, links green (<elapsed>s)
 ```
 
 ## When to invoke

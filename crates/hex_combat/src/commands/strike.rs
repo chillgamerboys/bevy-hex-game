@@ -6,7 +6,7 @@
 
 use bevy::prelude::*;
 
-use hex_core::{Busy, UnitId};
+use hex_core::UnitId;
 use hex_units::Footing;
 
 use crate::{CombatData, CombatEvent, CommandRefusal, UnitData};
@@ -144,8 +144,6 @@ pub(super) fn apply(
             striker_standing,
             settings.speed,
         );
-        commands.entity(entity).insert(Busy);
-        ctx.committed.push(entity);
     }
     // The damage seam, now wired. A strike is the one attack every unit has — a wolf
     // is four hexes and a bite — so it deals damage the same way a spell does: it names
@@ -154,6 +152,50 @@ pub(super) fn apply(
     let count = ctx.combat.map_or(0, |settings| settings.strike_disables);
     if count > 0 {
         open_disable_decision(ctx, lattices, target, target_entity, unit, count);
+    }
+    info!("strike: {unit:?} hits {target:?}");
+    Ok(())
+}
+
+/// Projects an authority-approved strike into presentation only.
+pub(super) fn project(
+    ctx: &Verb,
+    commands: &mut Commands,
+    actors: &ActorQuery,
+    unit: UnitId,
+    entity: Entity,
+    target: UnitId,
+) -> Result<(), CommandRefusal> {
+    let Some(target_entity) = ctx.registry.entity_of(target) else {
+        return Err(CommandRefusal::UnknownTarget { target });
+    };
+    let Ok((Some(target_standing), ..)) = actors.get(target_entity) else {
+        return Err(CommandRefusal::MissingUnitData {
+            unit: target,
+            data: UnitData::Standing,
+        });
+    };
+    let Ok((Some(standing), ..)) = actors.get(entity) else {
+        return Err(CommandRefusal::MissingUnitData {
+            unit,
+            data: UnitData::Standing,
+        });
+    };
+    if let Some(settings) = ctx.settings {
+        presentation::lunge(
+            commands,
+            entity,
+            standing.0,
+            target_standing.0,
+            settings.speed,
+        );
+        presentation::recoil(
+            commands,
+            target_entity,
+            target_standing.0,
+            standing.0,
+            settings.speed,
+        );
     }
     info!("strike: {unit:?} hits {target:?}");
     Ok(())

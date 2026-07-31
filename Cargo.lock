@@ -3246,11 +3246,24 @@ dependencies = [
  "hex_ai",
  "hex_anim",
  "hex_assets",
+ "hex_combat_core",
  "hex_core",
  "hex_lattice",
  "hex_perception",
  "hex_test_support",
  "hex_units",
+ "serde",
+ "serde_json",
+ "xxhash-rust",
+]
+
+[[package]]
+name = "hex_combat_core"
+version = "0.4.0"
+dependencies = [
+ "bevy_ecs",
+ "hex_core",
+ "hex_lattice",
  "serde",
  "serde_json",
  "xxhash-rust",
@@ -3308,6 +3321,7 @@ dependencies = [
  "hex_combat",
  "hex_core",
  "hex_dev",
+ "hex_gameplay_model",
  "hex_lattice",
  "hex_map",
  "hex_objects",
@@ -3319,6 +3333,15 @@ dependencies = [
  "serde",
  "serde_json",
  "xxhash-rust",
+]
+
+[[package]]
+name = "hex_gameplay_model"
+version = "0.4.0"
+dependencies = [
+ "bevy_ecs",
+ "hex_core",
+ "serde",
 ]
 
 [[package]]

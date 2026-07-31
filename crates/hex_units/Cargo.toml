@@ -3,6 +3,7 @@ name = "hex_units"
 version.workspace = true
 edition.workspace = true
 publish = false
+autotests = false
 description = "The things that stand on the map: bodies, positions, and where they may step."
 
 # Must NOT depend on hex_world or hex_map. The three talk through components and
@@ -23,6 +24,10 @@ serde = { workspace = true }
 hex_test_support = { workspace = true }
 ron = { workspace = true }
 serde_json = "1"
+
+[[test]]
+name = "contracts"
+path = "tests/contracts.rs"
 
 [lints]
 workspace = true

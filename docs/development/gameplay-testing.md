@@ -7,23 +7,98 @@ judge.
 
 This partition does not own `hex_map`, the map review runner, Forest or Waterfall
 walks, perception/map stress suites, or their acceptance criteria. Cross-owner
-scenario binaries continue to run in the residual workspace suite.
+scenario binaries continue to run in the residual workspace suite. The unchanged
+`hex_map` corpus runs beside it in the world-owned map shard whenever that residual
+concern is selected.
 
 ## Concern partitions
 
 | Concern | Owns | Allowed dependencies | Oracle | Local command | Ordinary budget |
 |---|---|---|---|---|---:|
-| Pure rules | Value objects, lattice transformations, compact AI policy | Owning crate dependencies only | Return values and immutable state | `cargo nextest run --workspace --all-features --cargo-profile ci --profile gameplay-rules` | 60 s total |
-| ECS contracts | Focused commands, effects, movement, turns, occupancy and Channel seams | `hex_test_support`, then the owning gameplay crate dependencies | Components, resources, messages and exact positions | `cargo nextest run --workspace --all-features --cargo-profile ci --profile gameplay-contracts` | 60 s per test |
-| Deterministic simulation | Multi-turn composition, tempo profiles, 3v3/6v6, canonical summaries and bounded no-progress | Combat dependencies plus `hex_test_support`; never a renderer, viewport, wall clock, or map generator | Full `CombatRunSnapshot` equality across two runs plus named metric assertions | `cargo nextest run -p hex_combat --test simulation --cargo-profile ci --profile gameplay-simulation` | 60 s |
-| Game/UI behavior | Combat Lab report modes, comparison selection, re-entry, identity and drawer lifecycle | `hex_game` with default-off `test-support` | Immutable observation snapshots and projected text/state | `cargo nextest run -p hex_game --features test-support --test gameplay_app --cargo-profile ci --profile gameplay-app` | 60 s |
+| Pure rules | Value objects, lattice transformations, compact AI policy | Owning crate dependencies only | Return values and immutable state | `python3 tools/gameplay_scope.py run rules` | 60 s total |
+| ECS contracts | Focused commands, effects, movement, turns, occupancy and Channel seams | `hex_test_support`, then the owning gameplay crate dependencies | Components, resources, messages and exact positions | `python3 tools/gameplay_scope.py run contracts` | 60 s per test |
+| Deterministic simulation | Multi-turn composition, tempo profiles, 3v3/6v6, canonical summaries and bounded no-progress | `hex_combat_core` over `hex_core` + `hex_lattice`; never Bevy App, `hex_test_support`, renderer, viewport, wall clock, asset server, ECS entity, perception implementation, or map generator | Full `CombatRunSnapshot` equality across two runs plus named metric assertions | `python3 tools/gameplay_scope.py run simulation` | 60 s |
+| Game/UI behavior | Pure Combat Lab/Creator transitions plus Bevy wiring, re-entry and drawer lifecycle | `hex_gameplay_model` for state/launch/navigation truth; `hex_game` with default-off `test-support` only for Bevy lifecycle | Pure state equality, then immutable app observations and projected text/state | `python3 tools/gameplay_scope.py run app` | 60 s |
 | Visual smoke | Layout, legibility, overlap, responsive composition and presentation regressions | Release-shaped game with `visual-walk`; no `dev` or `test-support` | Reviewed frames plus the human motion/feel walk | Run the one scoped gameplay walk through `/visual-walk` | At most 10 reviewed gameplay frames |
 | Soak/performance | Long stalemates, stress corpora, bounded retention and performance | The scheduled stress workflow | Typed completion/timeout, fingerprints, timing and memory bounds | `.github/workflows/stress.yaml` | Scheduled/manual only |
 
 The required gameplay CI job publishes separate JUnit and timing evidence for the
-first four partitions. The residual workspace job keeps all other packages and the
-unchanged map/game-world contract binaries under the existing feature set, CI
-profile, and timeout.
+first four partitions. The residual workspace job keeps all other non-map packages
+and cross-owner game/world contract binaries under the existing feature set, CI
+profile, and timeout. The same residual decision also enables the separately
+budgeted, unchanged `hex_map` test shard.
+
+## Integration target topology
+
+Expensive Bevy links are explicit Cargo targets rather than one binary per source
+module. `hex_units/tests/contracts.rs` links every focused unit/ECS contract once;
+`hex_combat/tests/contracts.rs` does the same for combat, while
+`hex_combat_core/tests/simulation.rs` remains the sole multi-turn simulation target.
+Their concern modules live below a directory with the target name so ownership stays
+readable without adding another linker invocation.
+
+The app partition runs `hex_gameplay_model`'s inline pure tests together with
+`hex_game/tests/gameplay_app.rs`, the default-off gameplay-owned application target.
+Before enabling `test-support`, it also compiles the default-feature `hex_game`
+library-test target in package isolation. That preflight prevents workspace feature
+unification from hiding a test-only field or import that the ordinary shipping-shaped
+crate cannot compile.
+`hex_game/tests/game_content_contracts.rs` is the separately selectable shared
+shipped-content seam, and the `hex_game` library target retains inline
+scenario/loading contracts that require private composition details. Those shared
+targets stay in the residual gate. The three packages set `autotests = false` and
+declare their integration targets explicitly, so adding a helper file cannot silently
+create a new expensive binary or escape its concern selector.
+
+## Scope selection
+
+The concern filter is not the Cargo selector. Cargo packages, targets, and features
+must be selected first so a rules-only change cannot compile the renderer or unrelated
+owner packages and then merely filter their tests out.
+
+`.config/gameplay-test-scopes.json` is the single machine-readable authority for
+canonical concern commands and changed-path classification. Inspect the proposed
+closure for a branch with:
+
+```sh
+python3 tools/gameplay_scope.py plan --base origin/dev --head HEAD
+```
+
+For a source PR inside a wave, substitute that PR's wave base, for example
+`--base origin/wave/8-gameplay-foundation`. Scoping against `dev` from a cumulative
+wave source would correctly select every earlier lane, but it would not be a useful
+edit-loop scope.
+
+The selector unions concerns across changed files. Shared vocabulary, validation
+infrastructure, world-owned paths, an unknown path, an invalid manifest, or an empty
+diff fail closed to the complete gate. A narrow rules graph additionally runs:
+
+```sh
+python3 tools/gameplay_scope.py check-graph rules
+```
+
+That guard rejects a workspace dependency edge outside `hex_core`, `hex_lattice`, and
+`hex_ai` instead of letting renderer or application dependencies silently erode the
+partition.
+
+Changed-path closures follow executable dependency direction, not broad gameplay
+proximity. For example, unit, animation, AI-adapter, and ECS-combat changes cannot
+affect the renderer-free `hex_combat_core` simulation and therefore do not rerun it.
+Asset and animation changes do select the residual partition because their owning
+inline tests live outside the four explicit gameplay targets. A concern may be
+omitted only when it cannot compile or exercise the changed authority.
+
+Pull-request CI applies the selector directly and publishes the decision plus
+per-concern JUnit and timing evidence. Pushes to `dev` or `main` forcibly promote
+the decision to the complete integration gate, regardless of changed paths. Final
+wave/release candidates likewise run the complete gate before the exact-head manual
+sign-off; unknown paths, invalid configuration, and empty diffs also fail closed to
+that same result.
+
+For a gameplay-only change that does not modify `hex_core`, shared application
+composition, scenario/loading lifecycle, or a published world seam, V3/map corpora
+are not a relevant PR oracle. Their source, selection, and acceptance criteria remain
+unchanged and continue on their owning changes and broad gates.
 
 ## Shared support boundary
 
@@ -42,11 +117,20 @@ That feature returns immutable facts and formatted canonical projections; it doe
 not expose mutable screen resources. The shipping binary has no feature dependency
 on the harness.
 
+`hex_gameplay_model` owns renderer-free Combat Lab and Creator transitions. It may
+depend on `bevy_ecs` derive support and `hex_core`, but not on assets, combat, units,
+game, map, world, perception, or the Bevy facade. It is the oracle for roster
+editing, report selection/deletion, report presentation mode, exact Retry/Tune/Copy
+routing, Creator navigation identity, and bounded edit history. Widget systems emit
+typed actions into that model and apply effectful results; they do not duplicate
+those decisions.
+
 ## Simulation evidence
 
-One `CombatCase` freezes typed unit/controller inputs, profile, arena and run bounds.
-One run produces a `CombatRunSnapshot` containing the canonical `CombatSummary`,
-summary, command, and full-transcript fingerprints, typed outcome or bounded
+One `CombatCase` freezes typed unit/controller inputs, profile, explicit arena links,
+world-published observation, stable content names, and run bounds. One run produces a
+`CombatRunSnapshot` containing canonical metrics and complete state plus state,
+command, and full-transcript fingerprints, typed outcome or bounded
 no-progress termination, turn state, lattice summaries, and exact `TilePos`
 positions.
 
@@ -78,6 +162,11 @@ playtest are distinct evidence. Gameplay runtime PRs record the human result in 
 structured PR fields together with the full final head SHA, reviewer, date, and exact
 route exercised. A later push makes that evidence stale and the required
 `Current-head manual runtime sign-off` check fails until the new head is played.
+
+Source-lane PRs targeting `wave/*` defer this gate because they are not independently
+shippable runtime candidates. The combined wave PR targeting `dev` must carry the
+named human sign-off for its exact final head; merging a lane into a wave never
+inherits, substitutes for, or weakens that release gate.
 
 Draft PRs may omit the sign-off while implementation is moving. A gameplay PR may not
 be marked ready or merged with a placeholder, a blocked result, a different commit,

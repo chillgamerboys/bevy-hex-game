@@ -1,4 +1,4 @@
-//! Integration tests for the combat loop.
+//! Contract tests for the combat loop.
 //!
 //! Headless, with stand-in units rather than real ones — `hex_combat` consumes
 //! `Faction`, `StandsOn` and `Initiative`, and anything producing those will do. That
@@ -15,22 +15,39 @@ use bevy::prelude::*;
 
 use hex_combat::{Initiative, TurnOrder};
 use hex_core::{
-    CommandQueue, GameCommand, HexCoord, HexSpan, IssuedCommand, Mode, PlayerSeat, Screen, TilePos,
-    Turn, UnitId,
+    CommandQueue, GameCommand, HexCoord, HexSpan, IssuedCommand, LatticeCoord, Mode, PlayerSeat,
+    Screen, TilePos, Turn, UnitId,
 };
-use hex_test_support::TestAppBuilder;
-use hex_units::{Faction, Standing, StandsOn};
+use hex_lattice::{apply_disables, CellKind, LatticeSpec, LatticeState, LatticeStats};
+use hex_test_support::{SyntheticArena, TestAppBuilder};
+use hex_units::{Downed, Faction, Standing, StandsOn};
 
 /// Far enough apart that no fight starts on its own.
 const FAR: i32 = 12;
 
+#[expect(
+    clippy::expect_used,
+    reason = "invalid shared deterministic fixture data must fail during construction"
+)]
 fn test_app() -> App {
-    let mut builder = TestAppBuilder::new().with_fixed_step(Duration::ZERO);
+    let mut builder = TestAppBuilder::new()
+        .with_fixed_step(Duration::ZERO)
+        .with_arena(SyntheticArena::flat_radius(16, 1))
+        .expect("the shared synthetic arena must be valid");
     let app = builder.app_mut();
     // The shipped combat.ron values; production loads the file instead.
     app.insert_resource(hex_assets::CombatSettings::default());
     app.add_plugins(hex_combat::plugin);
     builder.build()
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "fixture facts must be accepted by the active combat authority"
+)]
+fn publish_adapter_facts(app: &mut App) {
+    hex_combat::publish_combat_adapter_facts(app.world_mut())
+        .expect("the fixture projection must be valid");
 }
 
 /// The stable id combat dealt this entity when the fight began.
@@ -103,6 +120,50 @@ fn closing_the_distance_starts_a_fight() {
         "the higher initiative acts first"
     );
     assert_eq!(order.position_of(unit_id(&app, enemy)), Some(1));
+}
+
+/// Authored fixtures may open with a completely disabled lattice. That unit must be
+/// down before both ECS and the pure authority freeze initiative, rather than being
+/// removed from only one projection on the first combat frame.
+#[test]
+fn an_initially_disabled_unit_is_excluded_from_both_opening_orders() {
+    let mut app = test_app();
+    spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20);
+    spawn_unit(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::new_cubic(3, -3, 0),
+        10,
+    );
+    let disabled = spawn_unit(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::new_cubic(2, -2, 0),
+        30,
+    );
+    let spec = LatticeSpec::default().with(LatticeCoord::ORIGIN, CellKind::Blank);
+    let stats = LatticeStats::default();
+    let mut state = LatticeState::new(&spec, &stats);
+    apply_disables(&mut state, &[LatticeCoord::ORIGIN]);
+    app.world_mut()
+        .entity_mut(disabled)
+        .insert((spec, state, stats));
+
+    enter_gameplay(&mut app);
+    app.update();
+
+    assert_eq!(mode(&app), Mode::Combat);
+    let disabled_id = unit_id(&app, disabled);
+    assert!(app.world().entity(disabled).contains::<Downed>());
+    let order = app.world().resource::<TurnOrder>();
+    assert!(!order.order().contains(&disabled_id));
+    let authority =
+        hex_combat::authority_snapshot(app.world()).expect("opening authority must be valid");
+    assert!(authority
+        .units
+        .get(&disabled_id)
+        .is_some_and(|unit| unit.downed));
+    assert_eq!(authority.order, order.order());
 }
 
 /// Units far apart stay in real time. Without this the game would open in combat.
@@ -217,6 +278,7 @@ fn retreating_ends_the_fight() {
     if let Some(mut standing) = app.world_mut().get_mut::<StandsOn>(player) {
         standing.0.pos = TilePos::new(far, 1);
     }
+    publish_adapter_facts(&mut app);
     app.update();
     app.update();
 
@@ -253,6 +315,7 @@ fn the_disengage_margin_stops_combat_flapping() {
     if let Some(mut standing) = app.world_mut().get_mut::<StandsOn>(player) {
         standing.0.pos = TilePos::new(HexCoord::new_cubic(5, -5, 0), 1);
     }
+    publish_adapter_facts(&mut app);
     app.update();
     app.update();
 

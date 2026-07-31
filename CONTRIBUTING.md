@@ -46,25 +46,31 @@ Run the same Rust checks CI runs:
 ```sh
 cargo fmt --all --check
 cargo deny check
-cargo clippy --workspace --all-targets --all-features --profile ci -- -D warnings
-cargo nextest run --workspace --all-features --cargo-profile ci --profile gameplay-rules
-cargo nextest run --workspace --all-features --cargo-profile ci --profile gameplay-contracts
-cargo nextest run -p hex_combat --test simulation --cargo-profile ci --profile gameplay-simulation
-cargo nextest run -p hex_game --features test-support --test gameplay_app --cargo-profile ci --profile gameplay-app
-cargo nextest run --workspace --all-features --cargo-profile ci --profile ci \
-  -E 'not (package(hex_core) | package(hex_lattice) | package(hex_ai) | package(hex_units) | package(hex_combat) | package(hex_test_support) | (package(hex_game) & binary(gameplay_app)))'
+python3 tools/gameplay_scope.py plan --base origin/dev --head HEAD
+python3 tools/gameplay_scope.py check-graph rules
+python3 tools/gameplay_scope.py run clippy
+python3 tools/gameplay_scope.py run rules
+python3 tools/gameplay_scope.py run contracts
+python3 tools/gameplay_scope.py run simulation
+python3 tools/gameplay_scope.py run app
+python3 tools/gameplay_scope.py run residual
+cargo nextest run --workspace --all-features --cargo-profile ci --profile ci -E 'package(hex_map)'
 cargo test --workspace --all-features --profile ci --doc
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
+python3 tools/gameplay_scope.py run docs
 cargo build --workspace --profile ci
 ```
 
-CI runs the final build command on Linux, Windows, and macOS. Run it on your local
-platform; the CI matrix covers the other two. Markdown-only changes skip the Rust
-commands, but still need valid relative links.
+The explicit map command mirrors its separately budgeted, world-owned CI shard; it
+is part of the full local gate, not a gameplay concern command. CI runs the final
+build command on Linux, Windows, and macOS. Run it on your local platform; the CI
+matrix covers the other two. Markdown-only changes skip the Rust commands, but
+still need valid relative links.
 
 The gameplay commands are separated because their evidence has different authority:
 pure rules, focused ECS contracts, deterministic multi-turn snapshots, and headless
-game/UI behavior. See the
+game/UI behavior. Their exact Cargo package, target, and feature selections live in
+`.config/gameplay-test-scopes.json`; do not duplicate or broaden them in a new
+workflow. See the
 [gameplay testing contract](docs/development/gameplay-testing.md) before adding a
 helper, integration binary, screenshot, soak, or balance claim.
 

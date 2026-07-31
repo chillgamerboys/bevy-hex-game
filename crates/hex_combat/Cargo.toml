@@ -3,6 +3,7 @@ name = "hex_combat"
 version.workspace = true
 edition.workspace = true
 publish = false
+autotests = false
 description = "The gameplay loop: real time until something happens, then turns."
 
 # Depends on hex_units, which is a layer rather than a sibling -- a turn order is a
@@ -11,14 +12,15 @@ description = "The gameplay loop: real time until something happens, then turns.
 # to it, it is a level above it.
 [dependencies]
 bevy = { workspace = true }
-# For `Transformation` only: a turn must not end while its unit is still mid-stride,
-# and the absence of that component is what "finished moving" means.
+# Presentation projection only: route/swing transforms mirror domain state, but
+# legality and turn advancement never inspect animation-component lifetime.
 hex_anim = { workspace = true }
 hex_ai = { workspace = true }
 # For the substance table and the movement speed, both of which the AI needs to
 # work out where it can walk and how fast to animate getting there.
 hex_assets = { workspace = true }
 hex_core = { workspace = true }
+hex_combat_core = { workspace = true }
 # The knowledge seam holds lattice facts, so it needs the lattice vocabulary. This
 # edge is the designed one -- `hex_core -> hex_lattice` is the dependency direction,
 # so `hex_core` cannot see `LatticeState`, and a store of lattice knowledge therefore
@@ -35,6 +37,10 @@ xxhash-rust = { workspace = true }
 
 [dev-dependencies]
 hex_test_support = { workspace = true }
+
+[[test]]
+name = "contracts"
+path = "tests/contracts.rs"
 
 [lints]
 workspace = true

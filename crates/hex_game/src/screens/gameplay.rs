@@ -164,31 +164,12 @@ struct LabStatisticsToggle;
 #[derive(Component)]
 struct LabStatisticsToggleText;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum OutcomeReportMode {
-    #[default]
-    Overview,
-    Units,
-    SpellsEffects,
-    Timeline,
-    Compare,
-}
+pub(crate) use hex_gameplay_model::ReportMode as OutcomeReportMode;
+use hex_gameplay_model::{
+    resolve_lab_run, LabRunAction, LabRunFailure, LabRunTransition, ReportViewModel,
+};
 
-impl OutcomeReportMode {
-    const ALL: [(Self, &'static str); 5] = [
-        (Self::Overview, "Overview"),
-        (Self::Units, "Units"),
-        (Self::SpellsEffects, "Spells & Effects"),
-        (Self::Timeline, "Timeline"),
-        (Self::Compare, "Compare"),
-    ];
-}
-
-#[derive(Resource, Debug, Default)]
-struct OutcomeReportState {
-    mode: OutcomeReportMode,
-    compare_report: Option<crate::combat_reports::CombatLabReportId>,
-}
+type OutcomeReportState = ReportViewModel<crate::combat_reports::CombatLabReportId>;
 
 #[derive(Component, Debug, Clone, Copy)]
 enum OutcomeReportControl {
@@ -1242,11 +1223,8 @@ fn handle_outcome_report_controls(
             continue;
         }
         match *control {
-            OutcomeReportControl::Mode(mode) => state.mode = mode,
-            OutcomeReportControl::CompareWith(id) => {
-                state.mode = OutcomeReportMode::Compare;
-                state.compare_report = Some(id);
-            }
+            OutcomeReportControl::Mode(mode) => state.select_mode(mode),
+            OutcomeReportControl::CompareWith(id) => state.compare_with(id),
         }
     }
 }
@@ -1518,42 +1496,56 @@ fn handle_outcome_actions(
                 commands.insert_resource(active.0.clone());
                 next_screen.set(Screen::Loading);
             }
-            (OutcomeAction::RetryExact, _) => {
-                let Some(active) = active.as_deref() else {
-                    error!("cannot retry exact Lab run: frozen scenario input was not retained");
-                    continue;
+            (
+                action @ (OutcomeAction::RetryExact
+                | OutcomeAction::TuneAgain
+                | OutcomeAction::CopyToSandbox),
+                _,
+            ) => {
+                let action = match action {
+                    OutcomeAction::RetryExact => LabRunAction::RetryExact,
+                    OutcomeAction::TuneAgain => LabRunAction::TuneAgain,
+                    OutcomeAction::CopyToSandbox => LabRunAction::CopyToSandbox,
+                    _ => unreachable!("match arm limits outcome actions"),
                 };
-                commands.insert_resource(active.0.clone());
-                next_screen.set(Screen::Loading);
-            }
-            (OutcomeAction::TuneAgain, _) => {
-                let Some(report) = current_report.as_deref() else {
-                    error!("cannot tune Lab run: frozen report state is unavailable");
-                    continue;
-                };
-                commands.insert_resource(CombatLabSandboxRequest {
-                    report: report.0.clone(),
-                    overlay: overlay.as_deref().cloned(),
-                });
-                next_screen.set(Screen::CombatLab);
-            }
-            (OutcomeAction::CopyToSandbox, _) => {
-                let Some(report) = current_report.as_deref() else {
-                    error!("cannot copy fixture: frozen report state is unavailable");
-                    continue;
-                };
-                if !matches!(
-                    report.0.origin,
-                    crate::combat_reports::CombatLabReportOrigin::FixedFixture { .. }
-                ) {
-                    error!("cannot copy non-fixture report to Sandbox");
-                    continue;
+                let transition = resolve_lab_run(
+                    action,
+                    active.as_deref().map(|active| &active.0),
+                    current_report.as_deref().map(|report| &report.0),
+                    |report| {
+                        matches!(
+                            report.origin,
+                            crate::combat_reports::CombatLabReportOrigin::FixedFixture { .. }
+                        )
+                    },
+                );
+                match transition {
+                    Ok(LabRunTransition::RetryExact(scenario)) => {
+                        commands.insert_resource(scenario);
+                        next_screen.set(Screen::Loading);
+                    }
+                    Ok(LabRunTransition::RestoreSandbox(report)) => {
+                        commands.insert_resource(CombatLabSandboxRequest {
+                            report,
+                            overlay: overlay.as_deref().cloned(),
+                        });
+                        next_screen.set(Screen::CombatLab);
+                    }
+                    Err(failure) => {
+                        let message = match failure {
+                            LabRunFailure::MissingScenario => {
+                                "cannot retry exact Lab run: frozen scenario input was not retained"
+                            }
+                            LabRunFailure::MissingReport => {
+                                "cannot restore Lab run: frozen report state is unavailable"
+                            }
+                            LabRunFailure::CopyRequiresFixture => {
+                                "cannot copy non-fixture report to Sandbox"
+                            }
+                        };
+                        error!("{message}");
+                    }
                 }
-                commands.insert_resource(CombatLabSandboxRequest {
-                    report: report.0.clone(),
-                    overlay: overlay.as_deref().cloned(),
-                });
-                next_screen.set(Screen::CombatLab);
             }
             (OutcomeAction::SaveReport, _) => {
                 let (Some(report), Some(store), Some(lab), Some(paths)) = (

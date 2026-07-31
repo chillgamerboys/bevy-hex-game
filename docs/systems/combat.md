@@ -79,9 +79,27 @@ One unit holds a `Turn` at a time. It carries a movement budget and whether the 
 has been taken. Ending it passes the marker to the next unit in the order; running off
 the end wraps and counts a round.
 
-**A turn cannot end while its unit is still moving.** The removal of the
-`Transformation` component is what "finished moving" means, and advancing before then
-would cut the animation off and strand the piece between two hexes.
+The serializable authority for those facts is `hex_combat_core::CombatState`. It
+reduces frozen rules, roster, exact directed arena links, explicit faction
+observation, and stable content names through one ordered command boundary. Its
+canonical simulation requires no Bevy `App`, ECS schedule, renderer, viewport,
+wall-clock settling, asset server, or map generator. Exact links are published input,
+so the reducer never guesses connectivity from `HexCoord` and cannot collapse stacked
+surfaces.
+
+Wave 8's adapter boundary is fail-closed. Move, Strike, End Turn, Channel, and exact
+disable choices reduce only in `CombatState`; ECS receives their projection. Cast and
+restoration still resolve authored content through typed host adapters, then publish
+the complete position/turn/downed/lattice/order/decision/revival projection
+transactionally before another command may run. Missing authority is a typed refusal,
+never permission to invoke a legacy mutator. AI and human input both remain command
+producers; animation and UI are projections.
+
+**A turn cannot end while its unit is still moving.** `MovingTo` owns a bounded
+domain clock and exact surface path; `Busy` is its legality/turn gate. The movement
+reconciler publishes whole crossed surfaces and clears both at the final surface.
+`Transformation` mirrors that route for presentation only. Removing it early cannot
+move or unlock the unit, and retaining a strike/cast animation cannot retain the turn.
 
 Keys: `SPACE` ends the current player turn and is ignored while a hostile owns the
 turn. `ESC` and `BACKSPACE` were already taken by pause and quit-to-title.

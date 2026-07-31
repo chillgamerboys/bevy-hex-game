@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use hex_core::{PartyPath, TilePos, UnitId};
+use crate::{PartyPath, TilePos, UnitId};
 use serde::{Deserialize, Serialize};
 
 /// Why a route conflicts with another body.
@@ -190,7 +190,7 @@ impl UnitOccupancy {
 
 #[cfg(test)]
 mod tests {
-    use hex_core::HexCoord;
+    use crate::HexCoord;
 
     use super::*;
 

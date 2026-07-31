@@ -3,6 +3,7 @@ name = "hex_game"
 version.workspace = true
 edition.workspace = true
 publish = false
+autotests = false
 description = "The game binary: app setup, plugin wiring, screens and menus."
 
 [dependencies]
@@ -12,6 +13,7 @@ hex_assets = { workspace = true }
 hex_objects = { workspace = true }
 hex_combat = { workspace = true }
 hex_core = { workspace = true }
+hex_gameplay_model = { workspace = true }
 hex_lattice = { workspace = true }
 hex_units = { workspace = true }
 hex_map = { workspace = true }
@@ -46,6 +48,10 @@ map-review = []
 visual-walk = []
 # Headless game/UI observation helpers. Never enabled by the shipping build.
 test-support = []
+
+[[test]]
+name = "game_content_contracts"
+path = "tests/game_content_contracts.rs"
 
 [[test]]
 name = "gameplay_app"

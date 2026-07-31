@@ -89,6 +89,10 @@ impl PendingRevivals {
     pub(crate) fn schedule(&mut self, unit: UnitId, round: u32) {
         self.0.insert(unit, round);
     }
+
+    pub(crate) fn snapshot(&self) -> BTreeMap<UnitId, u32> {
+        self.0.clone()
+    }
 }
 
 impl TurnOrder {
@@ -114,6 +118,16 @@ impl TurnOrder {
     #[must_use]
     pub fn position_of(&self, unit: UnitId) -> Option<usize> {
         self.order.iter().position(|u| *u == unit)
+    }
+
+    /// Projects the pure authority's current order without deriving any rule.
+    pub(crate) fn project(&mut self, order: &[UnitId], current: Option<UnitId>, round: u32) {
+        self.order.clear();
+        self.order.extend_from_slice(order);
+        self.current = current
+            .and_then(|unit| self.position_of(unit))
+            .unwrap_or_default();
+        self.round = round;
     }
 
     /// Moves to the next unit, wrapping and counting a round.
@@ -347,10 +361,19 @@ fn first_hostile_crossing(
 }
 
 /// Builds the order and hands the first unit its turn.
-fn begin_combat(
+pub(crate) fn begin_combat(
     mut commands: Commands,
     mut turn_order: ResMut<TurnOrder>,
-    units: Query<(Entity, Option<&UnitId>, Option<&Initiative>), (With<Faction>, Without<Downed>)>,
+    units: Query<
+        (
+            Entity,
+            Option<&UnitId>,
+            Option<&Initiative>,
+            Option<&LatticeSpec>,
+            Option<&LatticeState>,
+        ),
+        (With<Faction>, Without<Downed>),
+    >,
     mut allocator: ResMut<UnitAllocator>,
     mut registry: ResMut<UnitRegistry>,
     settings: Res<CombatSettings>,
@@ -360,26 +383,35 @@ fn begin_combat(
     // filtered out, combat starting with nobody in it and no error anywhere.
     // A unit without a `UnitId` (hand-spawned in a test, or a future spawn path
     // that forgot) is registered here rather than dropped.
-    let mut combatants: Vec<(UnitId, Entity, Initiative)> = units
-        .iter()
-        .map(|(entity, unit, initiative)| {
-            let unit = unit.copied().unwrap_or_else(|| {
-                // Dealing here re-admits query iteration order into id order —
-                // the exact nondeterminism this system exists to remove — so
-                // the breach must be observable, never silent.
-                warn!("dealing a combat-time id to {entity:?}; a spawn path missed it");
-                let id = allocator.allocate();
-                commands.entity(entity).insert(id);
-                id
-            });
-            // Upsert unconditionally: a unit carrying an id the registry has
-            // not seen (a test's explicit id, a future load path) must still
-            // resolve, or its turn silently never advances.
-            registry.register(unit, entity);
-            let fallback = Initiative(settings.default_initiative);
-            (unit, entity, initiative.copied().unwrap_or(fallback))
-        })
-        .collect();
+    let mut combatants: Vec<(UnitId, Entity, Initiative)> = Vec::new();
+    for (entity, unit, initiative, spec, state) in &units {
+        let unit = unit.copied().unwrap_or_else(|| {
+            // Dealing here re-admits query iteration order into id order —
+            // the exact nondeterminism this system exists to remove — so
+            // the breach must be observable, never silent.
+            warn!("dealing a combat-time id to {entity:?}; a spawn path missed it");
+            let id = allocator.allocate();
+            commands.entity(entity).insert(id);
+            id
+        });
+        // Upsert unconditionally: a unit carrying an id the registry has
+        // not seen (a test's explicit id, a future load path) must still
+        // resolve, or its turn silently never advances.
+        registry.register(unit, entity);
+        if spec
+            .zip(state)
+            .is_some_and(|(spec, state)| lattice_is_fully_disabled(spec, state))
+        {
+            // Normalize authored/fixture opening state before the authority freezes
+            // the roster. Waiting for the first Update would let ECS remove the unit
+            // after the authority had already published a different initiative order.
+            commands.entity(entity).insert(Downed).remove::<Turn>();
+            info!("{unit:?} enters combat down — every hex is already disabled");
+            continue;
+        }
+        let fallback = Initiative(settings.default_initiative);
+        combatants.push((unit, entity, initiative.copied().unwrap_or(fallback)));
+    }
 
     // Highest initiative first. Ties break on the stable `UnitId` rather than
     // being left to query order or entity index — the design rules out
@@ -564,7 +596,7 @@ fn check_for_downed(
     for (entity, &unit, spec, state) in &units {
         // A lattice with no cells at all is not a downed unit — it is a unit with no
         // lattice, which `all()` would call downed on the vacuous truth.
-        if spec.capacity() == 0 || !spec.cells().all(|(coord, _)| state.is_disabled(coord)) {
+        if !lattice_is_fully_disabled(spec, state) {
             continue;
         }
         let held_the_turn = turn_order.current() == Some(unit);
@@ -595,6 +627,10 @@ fn check_for_downed(
             });
         }
     }
+}
+
+fn lattice_is_fully_disabled(spec: &LatticeSpec, state: &LatticeState) -> bool {
+    spec.capacity() != 0 && spec.cells().all(|(coord, _)| state.is_disabled(coord))
 }
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-//! Round-trip coverage for the serde derives on the unit-side domain types.
+//! Contract coverage for serde round trips on unit-side domain types.
 //!
 //! [`Body`] only round-trips because `hex_core::TraversalProfile` also derives
 //! serde; this locks in that the whole `Body` → profile chain persists.

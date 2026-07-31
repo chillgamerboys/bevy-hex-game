@@ -1,4 +1,4 @@
-//! Integration tests for the command funnel: one applier, replayable input.
+//! Contract tests for the command funnel: one applier, replayable input.
 //!
 //! Commands are pushed straight into the [`CommandQueue`] — the same resource
 //! every emitter writes — so these tests cover the applier's contract without
@@ -150,6 +150,68 @@ fn take_events(app: &mut App) -> Vec<CombatEvent> {
         .resource_mut::<Messages<CombatEvent>>()
         .drain()
         .collect()
+}
+
+#[test]
+fn combat_commands_fail_closed_when_the_authority_cannot_initialize() {
+    let mut builder = TestAppBuilder::new();
+    let app = builder.app_mut();
+    app.insert_resource(hex_assets::CombatSettings::default());
+    app.add_plugins(hex_combat::plugin);
+    app.init_resource::<UnitRegistry>();
+    let mut app = builder.build();
+    spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20, 1);
+    spawn_unit(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::new_cubic(2, -2, 0),
+        10,
+        2,
+    );
+    enter_gameplay(&mut app);
+    assert_eq!(mode(&app), Mode::Combat, "precondition: fighting");
+    assert!(
+        hex_combat::authority_snapshot(app.world()).is_err(),
+        "the fixture intentionally omits published arena facts"
+    );
+    take_events(&mut app);
+
+    let before = *app
+        .world()
+        .get::<Turn>(
+            app.world()
+                .resource::<UnitRegistry>()
+                .entity_of(UnitId(1))
+                .expect("the fixture unit is registered"),
+        )
+        .expect("the first unit owns the turn");
+    let command = GameCommand::EndTurn { unit: UnitId(1) };
+    push(&mut app, command.clone());
+    app.update();
+
+    assert_eq!(
+        app.world().resource::<TurnOrder>().current(),
+        Some(UnitId(1)),
+        "missing authority must never fall back to the legacy mutator"
+    );
+    let after = *app
+        .world()
+        .get::<Turn>(
+            app.world()
+                .resource::<UnitRegistry>()
+                .entity_of(UnitId(1))
+                .expect("the fixture unit stays registered"),
+        )
+        .expect("the refused command preserves the turn");
+    assert_eq!(after, before);
+    assert!(
+        take_events(&mut app).contains(&CombatEvent::CommandRefused {
+            command,
+            refusal: CommandRefusal::MissingCombatData {
+                data: CombatData::AuthorityState,
+            },
+        })
+    );
 }
 
 /// Runs frames until the queue is drained and nothing is mid-presentation.
@@ -878,9 +940,16 @@ fn a_downed_unit_receives_the_exact_channel_refusal() {
         10,
         2,
     );
+    spawn_unit(
+        &mut app,
+        Faction::Player,
+        HexCoord::new_cubic(1, -1, 0),
+        5,
+        3,
+    );
     insert_depleted_channel_lattice(&mut app, player);
-    enter_gameplay(&mut app);
     app.world_mut().entity_mut(player).insert(Downed);
+    enter_gameplay(&mut app);
 
     let command = GameCommand::Channel { unit: UnitId(1) };
     push(&mut app, command.clone());

@@ -1,0 +1,338 @@
+{
+  "version": 1,
+  "all_concerns": [
+    "rules",
+    "contracts",
+    "simulation",
+    "app",
+    "residual",
+    "clippy",
+    "docs",
+    "shipping"
+  ],
+  "local_test_order": [
+    "rules",
+    "contracts",
+    "simulation",
+    "app",
+    "residual"
+  ],
+  "concerns": {
+    "rules": {
+      "description": "Pure core, lattice, and AI rules.",
+      "command": [
+        "cargo",
+        "nextest",
+        "run",
+        "--package",
+        "hex_core",
+        "--package",
+        "hex_lattice",
+        "--package",
+        "hex_ai",
+        "--cargo-profile",
+        "ci",
+        "--profile",
+        "gameplay-rules"
+      ],
+      "root_packages": ["hex_core", "hex_lattice", "hex_ai"],
+      "allowed_workspace_packages": ["hex_core", "hex_lattice", "hex_ai"]
+    },
+    "contracts": {
+      "description": "Focused gameplay ECS contracts.",
+      "command": [
+        "cargo",
+        "nextest",
+        "run",
+        "--package",
+        "hex_test_support",
+        "--package",
+        "hex_units",
+        "--package",
+        "hex_combat",
+        "--cargo-profile",
+        "ci",
+        "--profile",
+        "gameplay-contracts"
+      ]
+    },
+    "simulation": {
+      "description": "Deterministic multi-turn combat snapshots.",
+      "command": [
+        "cargo",
+        "nextest",
+        "run",
+        "--package",
+        "hex_combat_core",
+        "--lib",
+        "--test",
+        "simulation",
+        "--cargo-profile",
+        "ci",
+        "--profile",
+        "gameplay-simulation"
+      ],
+      "root_packages": ["hex_combat_core"],
+      "allowed_workspace_packages": ["hex_combat_core", "hex_core", "hex_lattice"]
+    },
+    "app": {
+      "description": "Headless gameplay application and UI behavior.",
+      "preflight_command": [
+        "cargo",
+        "test",
+        "--package",
+        "hex_game",
+        "--lib",
+        "--no-run",
+        "--profile",
+        "ci"
+      ],
+      "command": [
+        "cargo",
+        "nextest",
+        "run",
+        "--package",
+        "hex_gameplay_model",
+        "--package",
+        "hex_game",
+        "--features",
+        "hex_game/test-support",
+        "--lib",
+        "--test",
+        "gameplay_app",
+        "--cargo-profile",
+        "ci",
+        "--profile",
+        "gameplay-app"
+      ]
+    },
+    "residual": {
+      "description": "All remaining non-map workspace and cross-owner contract tests.",
+      "command": [
+        "cargo",
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--cargo-profile",
+        "ci",
+        "--profile",
+        "ci",
+        "-E",
+        "not (package(hex_core) | package(hex_lattice) | package(hex_ai) | package(hex_units) | package(hex_combat_core) | package(hex_combat) | package(hex_test_support) | package(hex_gameplay_model) | package(hex_map) | (package(hex_game) & binary(gameplay_app)))"
+      ]
+    },
+    "clippy": {
+      "description": "Strict workspace lint contract.",
+      "command": [
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--profile",
+        "ci",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    },
+    "docs": {
+      "description": "Warnings-denied workspace documentation.",
+      "environment": {
+        "RUSTDOCFLAGS": "-D warnings"
+      },
+      "command": [
+        "cargo",
+        "doc",
+        "--workspace",
+        "--no-deps",
+        "--all-features"
+      ]
+    },
+    "shipping": {
+      "description": "Default-feature shipping package.",
+      "command": [
+        "cargo",
+        "build",
+        "--package",
+        "hex_game",
+        "--release"
+      ]
+    }
+  },
+  "rules": [
+    {
+      "name": "scope-infrastructure",
+      "patterns": [
+        ".config/gameplay-test-scopes.json",
+        ".config/nextest.toml",
+        "tools/gameplay_scope.py",
+        "tools/test_gameplay_scope.py",
+        ".github/workflows/**",
+        "Cargo.toml",
+        "Cargo.lock",
+        "rust-toolchain.toml",
+        "deny.toml"
+      ],
+      "full": true,
+      "reason": "Validation infrastructure changes require the complete gate."
+    },
+    {
+      "name": "shared-core",
+      "patterns": ["crates/hex_core/**"],
+      "full": true,
+      "reason": "Shared gameplay/world vocabulary has a workspace-wide consumer closure."
+    },
+    {
+      "name": "world-owned",
+      "patterns": [
+        "crates/hex_map/**",
+        "crates/hex_world/**",
+        "crates/hex_perception/**",
+        "crates/hex_objects/**",
+        "crates/hex_editor/**",
+        "assets/config/worlds/**",
+        "assets/config/lighting/**",
+        "assets/config/lighting.ron",
+        "assets/config/perception.ron",
+        "assets/config/substances.ron",
+        "assets/config/world.ron"
+      ],
+      "full": true,
+      "reason": "World-owned changes retain their existing complete owner and seam coverage."
+    },
+    {
+      "name": "lattice-rules",
+      "patterns": ["crates/hex_lattice/**"],
+      "concerns": ["rules", "contracts", "simulation", "clippy", "docs"],
+      "reason": "Lattice rules flow through unit state and combat application."
+    },
+    {
+      "name": "ai-rules",
+      "patterns": ["crates/hex_ai/**"],
+      "concerns": ["rules", "contracts", "app", "clippy", "docs", "shipping"],
+      "reason": "AI policy owns pure rules and feeds unit, combat, application, and shipping behavior."
+    },
+    {
+      "name": "animation",
+      "patterns": ["crates/hex_anim/**"],
+      "concerns": ["contracts", "app", "residual", "clippy", "docs", "shipping"],
+      "reason": "Animation owns residual inline tests and crosses unit movement, combat lifecycle, and presentation."
+    },
+    {
+      "name": "units",
+      "patterns": ["crates/hex_units/**"],
+      "concerns": ["contracts", "app", "clippy", "docs", "shipping"],
+      "reason": "Unit movement and state feed combat contracts and deployment/application seams."
+    },
+    {
+      "name": "gameplay-screen-model",
+      "patterns": ["crates/hex_gameplay_model/**"],
+      "concerns": ["app", "clippy", "docs", "shipping"],
+      "reason": "Pure gameplay screen models are consumed by headless UI behavior and the shipping application."
+    },
+    {
+      "name": "combat-authority",
+      "patterns": ["crates/hex_combat_core/**"],
+      "concerns": ["contracts", "simulation", "app", "clippy", "docs", "shipping"],
+      "reason": "Pure combat authority feeds ECS, summaries, application behavior, and shipping gameplay."
+    },
+    {
+      "name": "combat",
+      "patterns": ["crates/hex_combat/**"],
+      "concerns": ["contracts", "app", "clippy", "docs", "shipping"],
+      "reason": "Combat adapters feed application summaries and gameplay projections."
+    },
+    {
+      "name": "test-support",
+      "patterns": ["crates/hex_test_support/**"],
+      "concerns": ["contracts", "app", "clippy", "docs"],
+      "reason": "Shared synthetic fixtures are consumed by the ECS-contract and headless-application partitions."
+    },
+    {
+      "name": "gameplay-assets",
+      "patterns": [
+        "crates/hex_assets/src/ai_profiles.rs",
+        "crates/hex_assets/src/combat_lab.rs",
+        "crates/hex_assets/src/combat_rules.rs",
+        "crates/hex_assets/src/content_index.rs",
+        "crates/hex_assets/src/creation.rs",
+        "crates/hex_assets/src/elements.rs",
+        "crates/hex_assets/src/encounter.rs",
+        "crates/hex_assets/src/formations.rs",
+        "crates/hex_assets/src/lattices.rs",
+        "crates/hex_assets/src/spells.rs",
+        "assets/config/ai_profiles.ron",
+        "assets/config/combat.ron",
+        "assets/config/combat_lab_maps.ron",
+        "assets/config/creation_presets.ron",
+        "assets/config/elements.ron",
+        "assets/config/encounters/**",
+        "assets/config/formations.ron",
+        "assets/config/lattices.ron",
+        "assets/config/spells.ron"
+      ],
+      "concerns": ["contracts", "app", "residual", "clippy", "docs", "shipping"],
+      "reason": "Gameplay schema and content own asset tests and flow into contracts, launches, and UI."
+    },
+    {
+      "name": "shared-assets",
+      "patterns": ["crates/hex_assets/**", "assets/**"],
+      "full": true,
+      "reason": "Unclassified asset-loader, shared schema, or content changes cross ownership."
+    },
+    {
+      "name": "gameplay-app-model",
+      "patterns": [
+        "crates/hex_game/src/screens/combat_lab.rs",
+        "crates/hex_game/src/screens/creator.rs",
+        "crates/hex_game/src/screens/gameplay.rs",
+        "crates/hex_game/src/combat_reports.rs",
+        "crates/hex_game/src/creation_presentation.rs",
+        "crates/hex_game/src/creation_store.rs",
+        "crates/hex_game/src/casting/**",
+        "crates/hex_game/src/readouts/**",
+        "crates/hex_game/src/test_support.rs",
+        "crates/hex_game/tests/gameplay_app.rs"
+      ],
+      "concerns": ["app", "clippy", "docs", "shipping"],
+      "reason": "Gameplay-owned screen behavior needs model/app and shipping evidence."
+    },
+    {
+      "name": "shared-app",
+      "patterns": ["crates/hex_game/**"],
+      "full": true,
+      "reason": "Unclassified application composition may affect shared scenario or owner seams."
+    },
+    {
+      "name": "developer-build-tooling",
+      "patterns": [
+        "crates/hex_dev/**",
+        ".cargo/**"
+      ],
+      "concerns": ["clippy", "docs"],
+      "reason": "Developer build tooling requires lint and documentation validation."
+    },
+    {
+      "name": "contributor-instructions",
+      "patterns": [
+        ".claude/**",
+        ".agents/**",
+        "CONTRIBUTING.md",
+        "AGENTS.md",
+        "CLAUDE.md"
+      ],
+      "concerns": ["docs"],
+      "documentation_only": true,
+      "reason": "Contributor instructions need documentation and relative-link validation."
+    },
+    {
+      "name": "documentation",
+      "patterns": ["*.md", "**/*.md"],
+      "concerns": ["docs"],
+      "documentation_only": true,
+      "reason": "Tracked Markdown needs documentation and relative-link validation."
+    }
+  ]
+}

@@ -40,10 +40,18 @@ pub fn encounter_unresolved(resolution: Res<EncounterResolution>) -> bool {
 pub(crate) fn detect_outcome(
     pending: Res<PendingDecision>,
     mut resolution: ResMut<EncounterResolution>,
+    authority: Option<Res<crate::authority_host::CombatAuthority>>,
     units: Query<&Faction, Without<Downed>>,
     mut queue: ResMut<CommandQueue>,
     mut events: MessageWriter<CombatEvent>,
 ) {
+    if let Some(authority) = authority {
+        resolution.0 = authority.state.outcome;
+        if resolution.is_resolved() {
+            queue.clear();
+        }
+        return;
+    }
     if resolution.is_resolved() || pending.is_open() {
         return;
     }

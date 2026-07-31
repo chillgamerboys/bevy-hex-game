@@ -1,4 +1,4 @@
-//! Headless tests for the shape vocabulary.
+//! Headless contract tests for the shape vocabulary.
 //!
 //! These matter more than most, because every spell forever after trusts these
 //! functions and **nothing visual will ever check them**. A blast that quietly misses

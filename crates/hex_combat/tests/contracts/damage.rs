@@ -1,4 +1,4 @@
-//! Integration tests for the damage loop: cast, decide, disable, go down.
+//! Contract tests for the damage loop: cast, decide, disable, go down.
 //!
 //! These run the real applier over the real command queue. What they prove is the part
 //! no unit test can: that the **defender's choice round-trips through the command log**
@@ -21,18 +21,25 @@ use hex_combat::{
 use hex_core::{
     CommandQueue, ControlOwner, ElementId, GameCommand, Headroom, HexCoord, HexSpan, IssuedCommand,
     KnowledgeExpiry, KnowledgeSource, LatticeCoord, LightDomain, Mode, PendingDecision, PlayerSeat,
-    Screen, SubstanceId, TilePos, UnitId,
+    Screen, SubstanceId, TilePos, TraversalProfile, UnitId,
 };
 use hex_lattice::{apply_disables, CellKind, LatticeSpec, LatticeState, LatticeStats};
 use hex_perception::{
     apply_observations, FactionMapKnowledge, FactionObservation, FactionObservations, ObservedUnit,
     SurfaceSnapshot, SurfaceSnapshots,
 };
-use hex_test_support::TestAppBuilder;
-use hex_units::{Downed, Faction, Party, Player, Standing, StandsOn, UnitRegistry};
+use hex_test_support::{SyntheticArena, TestAppBuilder};
+use hex_units::{Body, Downed, Faction, Party, Player, Standing, StandsOn, UnitRegistry};
 
+#[expect(
+    clippy::expect_used,
+    reason = "invalid shared deterministic fixture data must fail during construction"
+)]
 fn test_app() -> App {
-    let mut builder = TestAppBuilder::new().with_fixed_step(Duration::ZERO);
+    let mut builder = TestAppBuilder::new()
+        .with_fixed_step(Duration::ZERO)
+        .with_arena(SyntheticArena::flat_radius(10, 1))
+        .expect("the shared synthetic arena must be valid");
     let app = builder.app_mut();
     app.insert_resource(hex_assets::CombatSettings::default());
     app.add_plugins(hex_combat::plugin);
@@ -77,6 +84,7 @@ fn spawn(app: &mut App, id: UnitId, faction: Faction, coord: HexCoord) -> Entity
                 span: HexSpan::new(0.0, 1.0),
             }),
             Initiative(10),
+            Body::new(TraversalProfile::WALKER),
             spec,
             state,
             stats,
@@ -138,6 +146,15 @@ fn take_events(app: &mut App) -> Vec<CombatEvent> {
         .resource_mut::<Messages<CombatEvent>>()
         .drain()
         .collect()
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "fixture facts must be accepted by the active combat authority"
+)]
+fn publish_adapter_facts(app: &mut App) {
+    hex_combat::publish_combat_adapter_facts(app.world_mut())
+        .expect("the fixture projection must be valid");
 }
 
 #[expect(
@@ -374,6 +391,11 @@ fn a_revived_unit_rejoins_only_when_the_round_wraps() {
         Faction::Hostile,
         HexCoord::new_cubic(2, -2, 0),
     );
+    *app.world_mut().resource_mut::<PendingDecision>() = PendingDecision::ChooseRestores {
+        decider: UnitId(0),
+        target: UnitId(1),
+        count: 1,
+    };
     app.world_mut()
         .resource_mut::<NextState<Mode>>()
         .set(Mode::Combat);
@@ -384,11 +406,6 @@ fn a_revived_unit_rejoins_only_when_the_round_wraps() {
         &[UnitId(0), UnitId(2)]
     );
 
-    *app.world_mut().resource_mut::<PendingDecision>() = PendingDecision::ChooseRestores {
-        decider: UnitId(0),
-        target: UnitId(1),
-        count: 1,
-    };
     app.world_mut()
         .resource_mut::<CommandQueue>()
         .push(IssuedCommand {
@@ -400,6 +417,20 @@ fn a_revived_unit_rejoins_only_when_the_round_wraps() {
             },
         });
     app.update();
+    let authority = hex_combat::authority_snapshot(app.world())
+        .expect("the combat contract must run through the renderer-free authority");
+    assert_eq!(
+        authority.pending_revivals.get(&UnitId(1)),
+        Some(&1),
+        "the restoration adapter must publish its delayed initiative fact"
+    );
+    assert!(
+        authority
+            .units
+            .get(&UnitId(1))
+            .is_some_and(|unit| !unit.downed),
+        "the restoration adapter must publish the revived unit"
+    );
     assert_eq!(
         app.world().resource::<TurnOrder>().position_of(UnitId(1)),
         None,
@@ -504,6 +535,7 @@ fn the_auto_policy_waits_for_a_player_decider() {
         count: 1,
         source: UnitId(1),
     };
+    publish_adapter_facts(&mut app);
     app.update();
 
     assert!(
@@ -547,6 +579,7 @@ fn the_auto_policy_uses_the_hostile_deciders_control_owner() {
         count: 1,
         source: UnitId(0),
     };
+    publish_adapter_facts(&mut app);
     app.update();
 
     assert!(
@@ -779,6 +812,7 @@ fn a_unit_with_every_hex_disabled_goes_down_and_leaves_the_order() {
         count: 2,
         source: UnitId(0),
     };
+    publish_adapter_facts(&mut app);
     app.world_mut()
         .resource_mut::<CommandQueue>()
         .push(IssuedCommand {
@@ -908,6 +942,7 @@ fn a_downed_units_lattice_can_still_be_restored() {
         let mut state = entity.get_mut::<LatticeState>().expect("a lattice");
         hex_lattice::apply_disables(&mut state, &[LatticeCoord::ORIGIN, LatticeCoord::new(1, 0)]);
     }
+    app.world_mut().entity_mut(defender).insert(Downed);
     app.world_mut()
         .resource_mut::<NextState<Mode>>()
         .set(Mode::Combat);

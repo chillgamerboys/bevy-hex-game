@@ -1,4 +1,4 @@
-//! Integration tests for persistent effects: lighting a fire, and collecting on it.
+//! Contract tests for persistent effects: lighting a fire, and collecting on it.
 //!
 //! These drive the real applier over the real command queue, with a hand-built content
 //! set standing in for `spells.ron`. What they prove is the part no unit test can: that
@@ -33,7 +33,7 @@ use hex_perception::{
     apply_observations, FactionMapKnowledge, FactionObservation, FactionObservations, ObservedUnit,
     SurfaceSnapshot, SurfaceSnapshots,
 };
-use hex_test_support::TestAppBuilder;
+use hex_test_support::{SyntheticArena, TestAppBuilder};
 use hex_units::{Downed, Faction, Standing, StandsOn, UnitRegistry};
 
 /// The level every unit in these tests stands on.
@@ -234,7 +234,10 @@ fn watch_seam(pending: Res<PendingDecision>, queue: Res<CommandQueue>, mut seam:
               IS the failure"
 )]
 fn test_app(burn_turns: u16) -> App {
-    let mut builder = TestAppBuilder::new().with_fixed_step(Duration::ZERO);
+    let mut builder = TestAppBuilder::new()
+        .with_fixed_step(Duration::ZERO)
+        .with_arena(SyntheticArena::flat_radius(12, GROUND))
+        .expect("the shared synthetic arena must be valid");
     let app = builder.app_mut();
     app.insert_resource(CombatSettings::default());
     app.add_plugins(hex_combat::plugin);
@@ -267,6 +270,24 @@ fn test_app(burn_turns: u16) -> App {
         .set(Screen::Gameplay);
     app.update();
     app
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "fixture facts must be accepted by the active combat authority"
+)]
+fn publish_adapter_facts(app: &mut App) {
+    hex_combat::publish_combat_adapter_facts(app.world_mut())
+        .expect("the fixture projection must be valid");
+}
+
+fn publish_downed_fixture(app: &mut App, entity: Entity, unit: UnitId) {
+    app.world_mut()
+        .entity_mut(entity)
+        .insert(Downed)
+        .remove::<Turn>();
+    app.world_mut().resource_mut::<TurnOrder>().remove(unit);
+    publish_adapter_facts(app);
 }
 
 fn spawn(
@@ -772,6 +793,7 @@ fn a_defence_reports_the_exact_damage_it_prevented() {
             .expect("the defender can afford its ward");
         assert!(apply_cast(&mut state, &plan, &tables));
     }
+    publish_adapter_facts(&mut app);
 
     cast_named(&mut app, UnitId(1), "Ember", fight.defender_pos);
     assert!(
@@ -965,7 +987,7 @@ fn an_observed_anchor_allows_area_spillover_into_unknown_space() {
 fn a_damage_cast_on_a_downed_unit_is_refused_before_payment() {
     let mut app = test_app(2);
     let fight = two_ember_casters(&mut app);
-    app.world_mut().entity_mut(fight.defender).insert(Downed);
+    publish_downed_fixture(&mut app, fight.defender, UnitId(2));
     let before = app
         .world()
         .get::<LatticeState>(fight.caster)
@@ -1015,7 +1037,7 @@ fn a_damage_cast_on_a_downed_unit_is_refused_before_payment() {
 fn a_non_damaging_reveal_can_still_inspect_a_downed_unit() {
     let mut app = test_app(2);
     let fight = two_scriers(&mut app);
-    app.world_mut().entity_mut(fight.defender).insert(Downed);
+    publish_downed_fixture(&mut app, fight.defender, UnitId(2));
     push(
         &mut app,
         GameCommand::Cast {
@@ -1068,6 +1090,7 @@ fn exact_disables_announce_the_stable_name_of_a_broken_enchantment() {
         count: 1,
         source: UnitId(1),
     };
+    publish_adapter_facts(&mut app);
     push(
         &mut app,
         GameCommand::ChooseDisables {
@@ -1209,6 +1232,7 @@ fn a_due_burn_waits_for_an_occupied_seam_rather_than_being_dropped() {
         count: 1,
         source: UnitId(2),
     };
+    publish_adapter_facts(&mut app);
     for _ in 0..6 {
         app.update();
     }
@@ -1422,9 +1446,8 @@ fn a_fight_ending_keeps_the_fires_it_started() {
 #[test]
 fn a_burn_on_a_lattice_less_unit_never_parks_an_unanswerable_decision() {
     let mut app = test_app(2);
-    let fight = two_casters(&mut app);
 
-    // The inert unit: no `LatticeSpec`, no `LatticeState`, but registered and standing.
+    // The inert unit joins the frozen roster without a lattice.
     let inert_coord = HexCoord::new_cubic(-1, 1, 0);
     let inert_pos = TilePos::new(inert_coord, GROUND);
     let inert = app
@@ -1442,6 +1465,7 @@ fn a_burn_on_a_lattice_less_unit_never_parks_an_unanswerable_decision() {
     app.world_mut()
         .resource_mut::<UnitRegistry>()
         .register(UnitId(3), inert);
+    let fight = two_casters(&mut app);
 
     kindle(&mut app, UnitId(1), inert_pos);
 
@@ -1463,6 +1487,7 @@ fn a_burn_on_a_lattice_less_unit_never_parks_an_unanswerable_decision() {
     app.world_mut()
         .entity_mut(fight.defender)
         .remove::<LatticeState>();
+    publish_adapter_facts(&mut app);
 
     run_until_acting(&mut app, UnitId(2));
     for _ in 0..8 {
@@ -1509,7 +1534,10 @@ fn a_second_turn_from_a_downing_wrap_ticks_a_burn_again() {
     // Hand the turn on, then drop the unit holding it — the wrap that grants the front
     // unit a second turn without counting a round.
     run_until_acting(&mut app, UnitId(2));
-    app.world_mut().entity_mut(fight.defender).remove::<Turn>();
+    app.world_mut()
+        .entity_mut(fight.defender)
+        .insert(Downed)
+        .remove::<Turn>();
     app.world_mut()
         .resource_mut::<TurnOrder>()
         .remove(UnitId(2));
