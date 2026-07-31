@@ -215,6 +215,22 @@ class GameplayScopeTests(unittest.TestCase):
         self.assertEqual(command[command.index("--test") + 1], "gameplay_app")
         self.assertIn("hex_game/test-support", command)
 
+    def test_app_preflight_compiles_default_feature_library_tests(self) -> None:
+        command = self.config["concerns"]["app"]["preflight_command"]
+        self.assertEqual(
+            command,
+            [
+                "cargo",
+                "test",
+                "--package",
+                "hex_game",
+                "--lib",
+                "--no-run",
+                "--profile",
+                "ci",
+            ],
+        )
+
     def test_residual_excludes_every_owned_gameplay_partition(self) -> None:
         command = self.config["concerns"]["residual"]["command"]
         expression = command[command.index("-E") + 1]

@@ -36,6 +36,10 @@ readable without adding another linker invocation.
 
 The app partition runs `hex_gameplay_model`'s inline pure tests together with
 `hex_game/tests/gameplay_app.rs`, the default-off gameplay-owned application target.
+Before enabling `test-support`, it also compiles the default-feature `hex_game`
+library-test target in package isolation. That preflight prevents workspace feature
+unification from hiding a test-only field or import that the ordinary shipping-shaped
+crate cannot compile.
 `hex_game/tests/game_content_contracts.rs` is the separately selectable shared
 shipped-content seam, and the `hex_game` library target retains inline
 scenario/loading contracts that require private composition details. Those shared

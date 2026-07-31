@@ -77,6 +77,16 @@
     },
     "app": {
       "description": "Headless gameplay application and UI behavior.",
+      "preflight_command": [
+        "cargo",
+        "test",
+        "--package",
+        "hex_game",
+        "--lib",
+        "--no-run",
+        "--profile",
+        "ci"
+      ],
       "command": [
         "cargo",
         "nextest",

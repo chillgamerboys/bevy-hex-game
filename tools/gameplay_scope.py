@@ -110,6 +110,15 @@ def load_config(path: pathlib.Path = DEFAULT_CONFIG) -> dict[str, Any]:
             raise ScopeConfigurationError(
                 f"concern {concern} command must be non-empty strings"
             )
+        preflight = definition.get("preflight_command")
+        if preflight is not None and (
+            not isinstance(preflight, list)
+            or not preflight
+            or not all(isinstance(value, str) and value for value in preflight)
+        ):
+            raise ScopeConfigurationError(
+                f"concern {concern} preflight_command must be non-empty strings"
+            )
         environment = definition.get("environment", {})
         if not isinstance(environment, dict) or not all(
             isinstance(key, str)
@@ -413,7 +422,15 @@ def main() -> int:
                 raise ScopeConfigurationError(
                     f"unknown concern: {arguments.concern}"
                 )
-            print(shlex.join(definition["command"]))
+            commands = [
+                *(
+                    [definition["preflight_command"]]
+                    if "preflight_command" in definition
+                    else []
+                ),
+                definition["command"],
+            ]
+            print(" && ".join(shlex.join(command) for command in commands))
             return 0
         if arguments.subcommand == "run":
             definition = config["concerns"].get(arguments.concern)
@@ -421,30 +438,43 @@ def main() -> int:
                 raise ScopeConfigurationError(
                     f"unknown concern: {arguments.concern}"
                 )
-            command = definition["command"]
+            commands = [
+                *(
+                    [definition["preflight_command"]]
+                    if "preflight_command" in definition
+                    else []
+                ),
+                definition["command"],
+            ]
             environment = os.environ.copy()
             environment.update(definition.get("environment", {}))
-            print(
-                f"scope command [{arguments.concern}]: {shlex.join(command)}",
-                flush=True,
-            )
             started = time.monotonic()
-            result = subprocess.run(
-                command,
-                cwd=REPOSITORY_ROOT,
-                env=environment,
-                check=False,
-            )
+            returncode = 0
+            for index, command in enumerate(commands):
+                label = "preflight" if index < len(commands) - 1 else "command"
+                print(
+                    f"scope {label} [{arguments.concern}]: {shlex.join(command)}",
+                    flush=True,
+                )
+                result = subprocess.run(
+                    command,
+                    cwd=REPOSITORY_ROOT,
+                    env=environment,
+                    check=False,
+                )
+                returncode = result.returncode
+                if returncode != 0:
+                    break
             timing = {
                 "concern": arguments.concern,
                 "elapsed_seconds": round(time.monotonic() - started, 3),
-                "exit_code": result.returncode,
+                "exit_code": returncode,
             }
             rendered_timing = json.dumps(timing, sort_keys=True)
             print(f"scope timing: {rendered_timing}")
             if arguments.timing_out is not None:
                 write_output(arguments.timing_out, rendered_timing + "\n")
-            return result.returncode
+            return returncode
         if arguments.subcommand == "selected-tests":
             decision = classify(
                 changed_paths(arguments.base, arguments.head), config
