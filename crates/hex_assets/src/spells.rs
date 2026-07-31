@@ -337,6 +337,16 @@ const MAX_TIER: usize = 6;
 /// so this is where an implausible number has to be caught.
 const MAX_SHAPE_EXTENT: u8 = 16;
 
+/// Largest authored anchor range accepted by exact trajectory enumeration.
+///
+/// A technical allocation/work guardrail, not a balance ruling.
+pub const MAX_TARGET_RANGE: u8 = 16;
+
+/// Largest authored arc rise accepted by exact trajectory enumeration.
+///
+/// A technical traversal guardrail, not a balance ruling.
+pub const MAX_ARC_RISE: u8 = 16;
+
 /// The largest number of voxels an authored path may list.
 const MAX_PATH_VOXELS: usize = 64;
 
@@ -422,11 +432,24 @@ impl SpellFile {
                     spell.targeting.range
                 ));
             }
+            if spell.targeting.range > MAX_TARGET_RANGE {
+                return Err(format!(
+                    "spell '{name}' targeting range is {}; the technical maximum is {MAX_TARGET_RANGE}",
+                    spell.targeting.range
+                ));
+            }
             validate_shape(name, &spell.targeting.shape)?;
             if matches!(spell.targeting.trajectory, Trajectory::Arc { rise: 0 }) {
                 return Err(format!(
                     "spell '{name}' trajectory Arc.rise must be at least 1"
                 ));
+            }
+            if let Trajectory::Arc { rise } = spell.targeting.trajectory {
+                if rise > MAX_ARC_RISE {
+                    return Err(format!(
+                        "spell '{name}' trajectory Arc.rise is {rise}; the technical maximum is {MAX_ARC_RISE}"
+                    ));
+                }
             }
             validate_effects(name, spell)?;
         }
@@ -1021,6 +1044,61 @@ mod tests {
             .trajectory = Trajectory::Arc { rise: 0 };
         let error = file.validate().expect_err("a zero-rise arc is ambiguous");
         assert!(error.contains("Arc.rise must be at least 1"), "{error}");
+    }
+
+    #[test]
+    fn trajectory_range_and_rise_guardrails_reject_pathological_content() {
+        let mut distant = test_file();
+        distant
+            .spells
+            .get_mut("Ember")
+            .expect("the fixture contains Ember")
+            .targeting
+            .range = MAX_TARGET_RANGE + 1;
+        let error = distant
+            .validate()
+            .expect_err("trajectory range above the technical bound must fail");
+        assert!(error.contains("technical maximum"), "{error}");
+
+        let mut towering = test_file();
+        towering
+            .spells
+            .get_mut("Ember")
+            .expect("the fixture contains Ember")
+            .targeting
+            .trajectory = Trajectory::Arc {
+            rise: MAX_ARC_RISE + 1,
+        };
+        let error = towering
+            .validate()
+            .expect_err("arc rise above the technical bound must fail");
+        assert!(error.contains("technical maximum"), "{error}");
+    }
+
+    #[test]
+    fn invalid_trajectory_reload_keeps_the_last_valid_spellbook() {
+        let valid = test_file();
+        let mut app = App::new();
+        app.add_systems(Update, build_spellbook);
+        app.insert_resource(valid.clone());
+        app.update();
+        assert!(app.world().resource::<SpellBook>().matches_source(&valid));
+
+        let mut invalid = ember();
+        invalid.targeting.range = u8::MAX;
+        let encoded = format!(
+            "(spells:{{\"Ember\":{}}})",
+            ron::to_string(&invalid).expect("the raw invalid spell serializes")
+        );
+        assert!(
+            ron::from_str::<SpellFile>(&encoded).is_err(),
+            "the asset loader must reject the candidate before resource replacement"
+        );
+        app.update();
+        assert!(
+            app.world().resource::<SpellBook>().matches_source(&valid),
+            "a rejected reload must leave the accepted book live"
+        );
     }
 
     #[test]

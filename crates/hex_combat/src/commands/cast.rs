@@ -758,7 +758,7 @@ mod tests {
             targeting: TargetingSpec {
                 range: 2,
                 shape,
-                needs_los: false,
+                trajectory: hex_assets::Trajectory::Direct,
             },
             effects: vec![Effect::SpawnWall {
                 substance: "stone".to_owned(),

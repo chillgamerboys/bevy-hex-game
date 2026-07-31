@@ -9,7 +9,7 @@
 use hex_assets::Trajectory;
 use hex_core::{HexCoord, Level, TilePos};
 
-use crate::TerrainOccupancy;
+use crate::{KnownTerrainOccupancy, TerrainOccupancy};
 
 /// Resolves the selected surface into the endpoint a trajectory actually reaches.
 ///
@@ -130,6 +130,22 @@ pub fn trajectory_is_clear(
         .all(|pos| !terrain.contains(pos))
 }
 
+/// Whether faction-authorized known material leaves this trajectory clear.
+///
+/// Presentation, target cycling, and AI use this optimistic projection. Full world
+/// occupancy remains exclusive to the authoritative command application boundary.
+#[must_use]
+pub fn known_trajectory_is_clear(
+    trajectory: Trajectory,
+    source: TilePos,
+    destination: TilePos,
+    terrain: &KnownTerrainOccupancy,
+) -> bool {
+    trajectory_voxels(trajectory, source, destination)
+        .into_iter()
+        .all(|pos| !terrain.contains(pos))
+}
+
 /// Chooses a source/destination-symmetric horizontal midpoint and raises it.
 fn arc_apex(source: TilePos, destination: TilePos, rise: u8) -> TilePos {
     let horizontal_source = TilePos::new(source.coord, 0);
@@ -233,6 +249,35 @@ mod tests {
     fn occupied(voxels: impl IntoIterator<Item = TilePos>) -> TerrainOccupancy {
         TerrainOccupancy::from_runs(voxels.into_iter().map(|pos| (pos, RunBottom(pos.level))))
             .expect("single-voxel runs are valid")
+    }
+
+    #[test]
+    fn hidden_world_occupancy_cannot_change_authorized_trajectory_legality() {
+        let source = at(0, 0, 2);
+        let destination = at(3, 0, 2);
+        let hidden = at(1, 0, 2);
+        let clear_world = TerrainOccupancy::default();
+        let blocked_world = occupied([hidden]);
+        let same_knowledge = KnownTerrainOccupancy::default();
+
+        assert!(trajectory_is_clear(
+            Trajectory::Direct,
+            source,
+            destination,
+            &clear_world,
+        ));
+        assert!(!trajectory_is_clear(
+            Trajectory::Direct,
+            source,
+            destination,
+            &blocked_world,
+        ));
+        assert!(known_trajectory_is_clear(
+            Trajectory::Direct,
+            source,
+            destination,
+            &same_knowledge,
+        ));
     }
 
     #[test]

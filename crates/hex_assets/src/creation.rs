@@ -443,8 +443,11 @@ pub fn creator_spell_issues(saved: &SavedSpell, elements: &ElementCatalog) -> Ve
     ) {
         issues.push("creator spells must target Self or Single".to_owned());
     }
-    if saved.spell.targeting.range > 16 {
-        issues.push("creator spell range cannot exceed 16".to_owned());
+    if saved.spell.targeting.range > crate::MAX_TARGET_RANGE {
+        issues.push(format!(
+            "creator spell range cannot exceed {}",
+            crate::MAX_TARGET_RANGE
+        ));
     }
 
     for requirement in &saved.spell.requirements {

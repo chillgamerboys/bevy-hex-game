@@ -49,8 +49,10 @@ use hex_core::{
 };
 use hex_lattice::{castable, CastBlocked, CellKind, LatticeSpec, LatticeState};
 use hex_perception::{FactionKnowledge, FactionMapKnowledge};
-use hex_units::{targeting, trajectory_destination, trajectory_is_clear, volumes};
-use hex_units::{Downed, Faction, Player, Selected, StandsOn, TerrainOccupancy, UnitRegistry};
+use hex_units::{
+    known_trajectory_is_clear, targeting, trajectory_destination, volumes, Downed, Faction,
+    KnownTerrainOccupancy, Player, Selected, StandsOn, UnitRegistry,
+};
 
 use crate::menus::widgets::element_color;
 
@@ -636,7 +638,6 @@ fn resolve_aim_input(
     chooses: Query<(&Interaction, &AimsSpell), Changed<Interaction>>,
     controls: Query<(&Interaction, &AimControl), Changed<Interaction>>,
     knowledge: Option<Res<FactionMapKnowledge>>,
-    terrain: Option<Res<TerrainOccupancy>>,
     active_units: Query<&UnitId, Without<Downed>>,
 ) {
     if pending.is_open() {
@@ -666,12 +667,13 @@ fn resolve_aim_input(
                 return;
             };
             let player = knowledge.faction(Faction::Player);
+            let known_terrain = known_terrain(player);
             let targets = targets_in_range(
                 &readout,
                 &caster,
                 row,
                 player,
-                terrain.as_deref(),
+                &known_terrain,
                 &active_units,
             );
             let fallback = (player.state(caster.standing) == KnowledgeState::Observed
@@ -680,7 +682,7 @@ fn resolve_aim_input(
                     caster.standing,
                     caster.standing,
                     row.creates_terrain,
-                    terrain.as_deref(),
+                    &known_terrain,
                 ))
             .then_some(caster.standing);
             let Some(anchor) = targets.first().copied().or(fallback) else {
@@ -697,12 +699,14 @@ fn resolve_aim_input(
             let Some(knowledge) = knowledge.as_deref() else {
                 return;
             };
+            let player = knowledge.faction(Faction::Player);
+            let known_terrain = known_terrain(player);
             let targets = targets_in_range(
                 &readout,
                 &caster,
                 row,
-                knowledge.faction(Faction::Player),
-                terrain.as_deref(),
+                player,
+                &known_terrain,
                 &active_units,
             );
             Some(Aim {
@@ -843,7 +847,7 @@ fn targets_in_range(
     caster: &Caster,
     row: &SpellRow,
     knowledge: &FactionKnowledge,
-    terrain: Option<&TerrainOccupancy>,
+    terrain: &KnownTerrainOccupancy,
     active_units: &Query<&UnitId, Without<Downed>>,
 ) -> Vec<TilePos> {
     if matches!(row.shape, TargetShape::SelfCast) {
@@ -891,17 +895,24 @@ fn trajectory_available(
     standing: TilePos,
     target: TilePos,
     creates_terrain: bool,
-    terrain: Option<&TerrainOccupancy>,
+    terrain: &KnownTerrainOccupancy,
 ) -> bool {
     matches!(trajectory, Trajectory::None)
-        || terrain.is_some_and(|terrain| {
-            trajectory_is_clear(
-                trajectory,
-                standing.above(),
-                trajectory_destination(target, creates_terrain),
-                terrain,
-            )
-        })
+        || known_trajectory_is_clear(
+            trajectory,
+            standing.above(),
+            trajectory_destination(target, creates_terrain),
+            terrain,
+        )
+}
+
+fn known_terrain(knowledge: &FactionKnowledge) -> KnownTerrainOccupancy {
+    KnownTerrainOccupancy::from_observed_surfaces(
+        knowledge
+            .surfaces()
+            .filter(|(_, known)| known.state() == KnowledgeState::Observed)
+            .map(|(position, _)| position),
+    )
 }
 
 /// The entry after `current` in a cycle, wrapping.
@@ -1128,6 +1139,30 @@ mod tests {
         );
         assert!(in_range(high, low, 3, 5), "five levels up buys the hex");
         assert!(!in_range(low, high, 3, 5), "the low ground gains nothing");
+    }
+
+    #[test]
+    fn target_cycle_trajectory_filter_ignores_unknown_material() {
+        let standing = at(0, 0, 1);
+        let target = at(3, 0, 1);
+        let blocker = at(1, 0, 2);
+        let hidden = KnownTerrainOccupancy::default();
+        let observed = KnownTerrainOccupancy::from_observed_surfaces([blocker]);
+
+        assert!(trajectory_available(
+            Trajectory::Direct,
+            standing,
+            target,
+            false,
+            &hidden,
+        ));
+        assert!(!trajectory_available(
+            Trajectory::Direct,
+            standing,
+            target,
+            false,
+            &observed,
+        ));
     }
 
     /// Every rung the applier refuses a cast on is a rung the panel refuses to offer
@@ -1371,11 +1406,11 @@ mod tests {
     /// The failure without this is invisible and expensive: the cast is *legal*, so the
     /// applier charges for it — the mana goes, the turn goes — and the only trace is a
     /// `warn!` a release build does not show a console for. Several shipped spells are in
-    /// that state, so this is the live case rather than a hypothetical one.
+    /// that state, so this is a live case rather than a hypothetical one.
     #[test]
     fn a_spell_with_nothing_built_is_blocked_rather_than_offered() {
         let (_, spells) = shipped_content();
-        let undeliverable = ["Earthen Wall", "Daylight"];
+        let undeliverable = ["Daylight"];
         for name in undeliverable {
             let id = spells.id(name).expect("the test names a shipped spell");
             let definition = spells.spell(id).expect("a shipped spell has a definition");
@@ -1393,6 +1428,7 @@ mod tests {
             "Renewal",
             "Scrying Eye",
             "Stone Shaper",
+            "Earthen Wall",
         ] {
             let Some(id) = spells.id(name) else { continue };
             let definition = spells.spell(id).expect("a shipped spell has a definition");

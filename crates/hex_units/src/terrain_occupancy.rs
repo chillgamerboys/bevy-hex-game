@@ -9,7 +9,7 @@
 //! No rendered span, transform, level height, or saturated headroom participates in
 //! this projection.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use bevy::prelude::*;
@@ -47,6 +47,32 @@ impl std::error::Error for InvalidTerrainRun {}
 #[derive(Resource, Debug, Default, Clone, PartialEq, Eq)]
 pub struct TerrainOccupancy {
     columns: BTreeMap<HexCoord, Vec<(Level, Level)>>,
+}
+
+/// Faction-authorized material voxels for non-authoritative trajectory consumers.
+///
+/// Only exact surface positions explicitly present in current faction knowledge enter
+/// this projection. It never expands a run, consults [`TerrainOccupancy`], or infers
+/// hidden voxels from spans, transforms, level height, or headroom.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct KnownTerrainOccupancy {
+    voxels: BTreeSet<TilePos>,
+}
+
+impl KnownTerrainOccupancy {
+    /// Builds authorized occupancy from currently observed material positions.
+    #[must_use]
+    pub fn from_observed_surfaces(surfaces: impl IntoIterator<Item = TilePos>) -> Self {
+        Self {
+            voxels: surfaces.into_iter().collect(),
+        }
+    }
+
+    /// Whether this faction explicitly knows material at `pos` right now.
+    #[must_use]
+    pub fn contains(&self, pos: TilePos) -> bool {
+        self.voxels.contains(&pos)
+    }
 }
 
 impl TerrainOccupancy {
@@ -168,6 +194,18 @@ fn rebuild_terrain_occupancy(
 mod tests {
     use super::*;
 
+    #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    enum TestSystems {
+        Act,
+    }
+
+    #[derive(Resource, Default)]
+    struct SeenOccupancy(Vec<bool>);
+
+    fn observe_occupancy(terrain: Res<TerrainOccupancy>, mut seen: ResMut<SeenOccupancy>) {
+        seen.0.push(terrain.contains(at(1, 0, 2)));
+    }
+
     fn at(q: i32, r: i32, level: Level) -> TilePos {
         TilePos::new(HexCoord::from_axial(q, r), level)
     }
@@ -267,6 +305,34 @@ mod tests {
     }
 
     #[test]
+    fn downstream_actor_sees_same_frame_addition_and_removal() {
+        let mut app = App::new();
+        plugin(&mut app);
+        app.init_resource::<SeenOccupancy>();
+        app.configure_sets(
+            Update,
+            TestSystems::Act.after(TerrainOccupancySystems::Publish),
+        );
+        app.add_systems(Update, observe_occupancy.in_set(TestSystems::Act));
+        app.world_mut().spawn((HexTile, at(0, 0, 1), RunBottom(0)));
+        app.update();
+
+        let added = app
+            .world_mut()
+            .spawn((HexTile, at(1, 0, 2), RunBottom(2)))
+            .id();
+        app.update();
+        app.world_mut().despawn(added);
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<SeenOccupancy>().0,
+            vec![false, true, false],
+            "a consumer ordered after publication must never see prior-frame occupancy"
+        );
+    }
+
+    #[test]
     fn malformed_entity_publication_withdraws_the_projection() {
         let mut app = App::new();
         plugin(&mut app);
@@ -290,5 +356,16 @@ mod tests {
             !app.world().contains_resource::<TerrainOccupancy>(),
             "a tile without RunBottom must withdraw the complete projection"
         );
+    }
+
+    #[test]
+    fn authorized_occupancy_contains_only_explicit_observed_surface_voxels() {
+        let known =
+            KnownTerrainOccupancy::from_observed_surfaces([at(0, 0, 2), at(0, 0, 7), at(1, 0, 4)]);
+
+        assert!(known.contains(at(0, 0, 2)));
+        assert!(known.contains(at(0, 0, 7)));
+        assert!(!known.contains(at(0, 0, 1)));
+        assert!(!known.contains(at(0, 0, 6)));
     }
 }

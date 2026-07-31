@@ -41,8 +41,8 @@ use hex_core::{Headroom, HexSpan, HexTile, KnowledgeState, Pause, TilePos};
 use hex_perception::FactionMapKnowledge;
 use hex_units::Faction;
 use hex_units::{
-    resolve_creation_volume, trajectory_destination, trajectory_is_clear, volumes,
-    TerrainOccupancy, TerrainRevision,
+    known_trajectory_is_clear, resolve_creation_volume, trajectory_destination, volumes,
+    KnownTerrainOccupancy, TerrainRevision,
 };
 
 use super::{facing_toward, in_range, Aim, Aiming, CastReadout};
@@ -151,7 +151,6 @@ pub(super) struct DrawKey {
     trajectory: Trajectory,
     creates_terrain: bool,
     knowledge_available: bool,
-    terrain_available: bool,
 }
 
 /// What is currently on the ground.
@@ -169,7 +168,6 @@ pub(super) fn redraw_preview(
     mut materials: ResMut<Assets<StandardMaterial>>,
     revision: Res<TerrainRevision>,
     knowledge: Option<Res<FactionMapKnowledge>>,
-    terrain: Option<Res<TerrainOccupancy>>,
     tiles: TileQuery,
     drawn: Query<Entity, DrawnPreview>,
 ) {
@@ -177,7 +175,6 @@ pub(super) fn redraw_preview(
     let knowledge_changed = knowledge
         .as_ref()
         .is_some_and(|knowledge| knowledge.is_changed());
-    let terrain_changed = terrain.as_ref().is_some_and(|terrain| terrain.is_changed());
 
     let wanted = aiming
         .0
@@ -199,9 +196,8 @@ pub(super) fn redraw_preview(
                 .row(&aim.spell)
                 .is_some_and(|row| row.creates_terrain),
             knowledge_available: knowledge.is_some(),
-            terrain_available: terrain.is_some(),
         });
-    if drawn_key.0 == wanted && !knowledge_changed && !terrain_changed {
+    if drawn_key.0 == wanted && !knowledge_changed {
         return;
     }
     for marker in &drawn {
@@ -232,6 +228,13 @@ pub(super) fn redraw_preview(
     let player_knowledge = knowledge
         .as_deref()
         .map(|knowledge| knowledge.faction(Faction::Player));
+    let known_terrain = KnownTerrainOccupancy::from_observed_surfaces(
+        player_knowledge
+            .into_iter()
+            .flat_map(|knowledge| knowledge.surfaces())
+            .filter(|(_, known)| known.state() == KnowledgeState::Observed)
+            .map(|(position, _)| position),
+    );
     let surfaces: Vec<(TilePos, f32)> = tiles
         .iter()
         .filter(|(pos, _, headroom)| {
@@ -250,7 +253,7 @@ pub(super) fn redraw_preview(
         &row.shape,
         row.trajectory,
         row.creates_terrain,
-        terrain.as_deref(),
+        &known_terrain,
     );
     for (pos, top) in &anchors {
         commands.spawn((
@@ -346,7 +349,7 @@ fn legal_anchors(
     shape: &TargetShape,
     trajectory: Trajectory,
     creates_terrain: bool,
-    terrain: Option<&TerrainOccupancy>,
+    terrain: &KnownTerrainOccupancy,
 ) -> Vec<(TilePos, f32)> {
     surfaces
         .iter()
@@ -356,14 +359,12 @@ fn legal_anchors(
         })
         .filter(|(pos, _)| {
             matches!(trajectory, Trajectory::None)
-                || terrain.is_some_and(|terrain| {
-                    trajectory_is_clear(
-                        trajectory,
-                        from.above(),
-                        trajectory_destination(*pos, creates_terrain),
-                        terrain,
-                    )
-                })
+                || known_trajectory_is_clear(
+                    trajectory,
+                    from.above(),
+                    trajectory_destination(*pos, creates_terrain),
+                    terrain,
+                )
         })
         .copied()
         .collect()
@@ -476,7 +477,7 @@ pub(super) fn clear_preview(
 
 #[cfg(test)]
 mod tests {
-    use hex_core::{HexCoord, RunBottom};
+    use hex_core::HexCoord;
 
     use super::*;
 
@@ -485,13 +486,13 @@ mod tests {
     }
 
     #[test]
-    fn legal_anchor_paint_uses_the_same_exact_trajectory_contract() {
+    fn legal_anchor_paint_uses_only_faction_authorized_trajectory_material() {
         let from = at(0, 0, 1);
         let target = at(3, 0, 1);
         let surfaces = [(target, 1.0)];
         let blocker = at(1, 0, 2);
-        let terrain =
-            TerrainOccupancy::from_runs([(blocker, RunBottom(blocker.level))]).expect("wall");
+        let observed = KnownTerrainOccupancy::from_observed_surfaces([blocker]);
+        let hidden = KnownTerrainOccupancy::default();
 
         assert!(legal_anchors(
             &surfaces,
@@ -501,7 +502,7 @@ mod tests {
             &TargetShape::Single,
             Trajectory::Direct,
             false,
-            Some(&terrain),
+            &observed,
         )
         .is_empty());
         assert_eq!(
@@ -513,7 +514,7 @@ mod tests {
                 &TargetShape::Single,
                 Trajectory::Arc { rise: 3 },
                 false,
-                Some(&terrain),
+                &observed,
             ),
             surfaces
         );
@@ -526,9 +527,23 @@ mod tests {
                 &TargetShape::Single,
                 Trajectory::None,
                 false,
-                None,
+                &hidden,
             ),
             surfaces
+        );
+        assert_eq!(
+            legal_anchors(
+                &surfaces,
+                from,
+                3,
+                5,
+                &TargetShape::Single,
+                Trajectory::Direct,
+                false,
+                &hidden,
+            ),
+            surfaces,
+            "an unknown world blocker must not remove a preview marker"
         );
     }
 }

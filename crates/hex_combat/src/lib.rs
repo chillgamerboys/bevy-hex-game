@@ -170,7 +170,9 @@ pub fn plugin(app: &mut App) {
     app.configure_sets(
         Update,
         (
-            CombatSystems::Act.after(PerceptionSystems::PublishKnowledge),
+            CombatSystems::Act
+                .after(PerceptionSystems::PublishKnowledge)
+                .after(hex_units::TerrainOccupancySystems::Publish),
             CombatSystems::Apply.after(hex_units::TerrainOccupancySystems::Publish),
             CombatSystems::Resolve,
             CombatSystems::Advance,

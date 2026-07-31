@@ -856,7 +856,9 @@ Each spell by name:
   the spell covers once it gets there), and `trajectory`: `Direct`, `Arc(rise: N)`,
   or `None`. `Direct` tests a straight exact-voxel segment, `Arc` rises `N` integer
   levels above the higher endpoint, and `None` deliberately ignores material
-  obstruction. Direct and arc casts fail closed if exact terrain occupancy is absent.
+  obstruction. Direct and arc authority fails closed if exact terrain occupancy is
+  absent; preview, target cycling, and AI use only currently Observed material facts.
+  Both authored `range` and `Arc.rise` have a technical maximum of 16.
   Old creator saves using `needs_los: true/false` migrate on read to `Direct`/`None`;
   newly written content always uses `trajectory`, and defining both is rejected.
 

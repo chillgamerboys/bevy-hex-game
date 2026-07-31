@@ -280,8 +280,13 @@ or saturated `Headroom`. A blocked cast exposes only a generic refusal because t
 obstruction itself may be hidden.
 
 Authoritative casting checks the trajectory after observation and before payment.
-Preview anchors and AI legal-action enumeration use the same primitive and fail closed
-when a material-sensitive trajectory has no occupancy projection.
+Faction-facing preview anchors, target cycling, and AI legal-action enumeration use
+the same geometry over a separate authorized projection containing only exact material
+surface positions that are currently Observed. Remembered or Unknown material cannot
+change those choices; authority may still refuse against full physical truth. The
+RecordInput target cycle intentionally uses the last published faction knowledge after
+a same-frame edit, then redraws after the next knowledge publication. Authored target
+range and `Arc.rise` are both capped at 16 as a technical traversal guardrail.
 
 **Effect volumes remain geometric.** A sphere next to a cave wall may include voxels
 inside the rock and the chamber beyond it after its trajectory reaches the anchor.

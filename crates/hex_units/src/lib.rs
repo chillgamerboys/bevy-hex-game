@@ -63,9 +63,12 @@ pub use targeting::{either_in_reach, high_ground_bonus, in_reach};
 pub use terrain_creation::{
     resolve_creation_volume, validate_creation_volume, CreationBody, TerrainCreationBlock,
 };
-pub use terrain_occupancy::{InvalidTerrainRun, TerrainOccupancy, TerrainOccupancySystems};
+pub use terrain_occupancy::{
+    InvalidTerrainRun, KnownTerrainOccupancy, TerrainOccupancy, TerrainOccupancySystems,
+};
 pub use trajectories::{
-    supercover, trajectory_destination, trajectory_is_clear, trajectory_voxels,
+    known_trajectory_is_clear, supercover, trajectory_destination, trajectory_is_clear,
+    trajectory_voxels,
 };
 pub use units::{
     Archetype, Downed, Enemy, MovingTo, Party, Player, StandsOn, StopMovingAt, UnitAllocator,
