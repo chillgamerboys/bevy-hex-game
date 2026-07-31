@@ -1157,6 +1157,7 @@ impl CombatState {
         let Some(index) = self.order.iter().position(|candidate| *candidate == unit) else {
             return;
         };
+        let held_the_turn = self.current() == Some(unit);
         self.order.remove(index);
         if self.order.is_empty() {
             self.current = 0;
@@ -1164,6 +1165,12 @@ impl CombatState {
             self.current = self.current.saturating_sub(1);
         } else if self.current >= self.order.len() {
             self.current = 0;
+        }
+        if held_the_turn {
+            // Removing the current actor slides the index onto its successor. That
+            // successor did not pass through `advance_if_finished`, so it has no turn
+            // until this explicit handoff. The ECS projection follows the same rule.
+            self.grant_current_turn();
         }
     }
 
@@ -1823,6 +1830,66 @@ mod tests {
                 outcome: EncounterOutcome::Victory
             }
         )));
+    }
+
+    #[test]
+    fn downing_the_current_decider_grants_its_successor_a_turn() {
+        let cell = LatticeCoord::ORIGIN;
+        let spec = LatticeSpec::default().with(cell, CellKind::Blank);
+        let mut sim = CombatState::start_with_session(
+            rules(4),
+            corridor(3),
+            ElementNames::default(),
+            [
+                CombatUnit::new(
+                    UnitId(0),
+                    PlayerSeat(0),
+                    Faction::Player,
+                    position(0, 0),
+                    20,
+                )
+                .with_lattice(
+                    spec.clone(),
+                    LatticeState::new(&spec, &LatticeStats::default()),
+                    LatticeStats::default(),
+                ),
+                CombatUnit::new(
+                    UnitId(1),
+                    PlayerSeat(0),
+                    Faction::Hostile,
+                    position(1, 0),
+                    10,
+                ),
+                CombatUnit::new(UnitId(2), PlayerSeat(0), Faction::Player, position(2, 0), 5),
+            ],
+            PendingDecision::ChooseDisables {
+                decider: UnitId(0),
+                count: 1,
+                source: UnitId(1),
+            },
+            BTreeMap::new(),
+        )
+        .expect("fixture state");
+
+        sim.apply(IssuedCommand {
+            seat: PlayerSeat(0),
+            command: GameCommand::ChooseDisables {
+                unit: UnitId(0),
+                cells: vec![cell],
+            },
+        })
+        .expect("the pending decision should resolve");
+
+        assert!(sim.units.get(&UnitId(0)).is_some_and(|unit| unit.downed));
+        assert_eq!(sim.current(), Some(UnitId(1)));
+        assert_eq!(
+            sim.units.get(&UnitId(1)).and_then(|unit| unit.turn),
+            Some(Turn {
+                movement_left: 4,
+                acted: false,
+            }),
+            "removing the turn holder must not strand the initiative order"
+        );
     }
 
     #[test]

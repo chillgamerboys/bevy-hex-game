@@ -1979,19 +1979,6 @@ mod tests {
         })
     }
 
-    fn finish_presentations(app: &mut App) {
-        let moving = {
-            let world = app.world_mut();
-            let mut moving = world.query_filtered::<Entity, With<hex_anim::Transformation>>();
-            moving.iter(world).collect::<Vec<_>>()
-        };
-        for entity in moving {
-            app.world_mut()
-                .entity_mut(entity)
-                .remove::<hex_anim::Transformation>();
-        }
-    }
-
     fn player_turn_command(app: &mut App, actor: UnitId) -> Option<GameCommand> {
         let (standing, body, turn) = {
             let world = app.world_mut();
@@ -2092,8 +2079,9 @@ mod tests {
         let mut last_progress = (0, 0, 0, 0, 0, 0);
         let mut last_progress_round = 0;
         let mut stalled = false;
+        let mut frames_executed = 0;
         for _ in 0..4_000 {
-            finish_presentations(&mut app);
+            frames_executed += 1;
             if app
                 .world()
                 .resource::<EncounterResolution>()
@@ -2139,10 +2127,89 @@ mod tests {
             app.update();
         }
         let outcome = app.world().resource::<EncounterResolution>().outcome();
+        let bound_diagnostic = {
+            let moving = {
+                let world = app.world_mut();
+                let mut moving = world.query_filtered::<&UnitId, With<hex_units::MovingTo>>();
+                moving.iter(world).copied().collect::<Vec<_>>()
+            };
+            let busy = {
+                let world = app.world_mut();
+                let mut busy = world.query_filtered::<&UnitId, With<hex_core::Busy>>();
+                busy.iter(world).copied().collect::<Vec<_>>()
+            };
+            let authority = hex_combat::authority_snapshot(app.world()).map(|state| {
+                (
+                    state.current(),
+                    state
+                        .units
+                        .values()
+                        .map(|actor| {
+                            (
+                                actor.id,
+                                actor.faction,
+                                actor.turn,
+                                actor.busy,
+                                actor.motion.is_some(),
+                                actor.downed,
+                                actor.position,
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                    state
+                        .events
+                        .iter()
+                        .rev()
+                        .take(5)
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                )
+            });
+            let player_turns = {
+                let world = app.world_mut();
+                let mut players = world.query_filtered::<
+                    (&UnitId, Option<&Turn>, Has<hex_core::Busy>, Has<Downed>),
+                    With<Player>,
+                >();
+                players
+                    .iter(world)
+                    .map(|(id, turn, busy, downed)| (*id, turn.copied(), busy, downed))
+                    .collect::<Vec<_>>()
+            };
+            let order = app.world().resource::<TurnOrder>();
+            let summary = app.world().resource::<CombatSummary>();
+            format!(
+                "frames={frames_executed} round={} current={:?} progress={:?} \
+                 last_progress_round={last_progress_round} pending={:?} queue_empty={} mode={:?} \
+                 pause={:?} moving={moving:?} busy={busy:?} authority={authority:?} \
+                 player_turns={player_turns:?} \
+                 virtual_delta={:?} virtual_elapsed={:?}",
+                order.round,
+                order.current(),
+                (
+                    summary.moves,
+                    summary.strikes,
+                    summary.applied_disables,
+                    summary.restored_cells,
+                    summary.downings,
+                    summary.revivals,
+                ),
+                app.world().resource::<PendingDecision>(),
+                app.world().resource::<CommandQueue>().is_empty(),
+                app.world().resource::<State<Mode>>().get(),
+                app.world().get_resource::<State<Pause>>().map(State::get),
+                app.world()
+                    .resource::<bevy::time::Time<bevy::time::Virtual>>()
+                    .delta(),
+                app.world()
+                    .resource::<bevy::time::Time<bevy::time::Virtual>>()
+                    .elapsed(),
+            )
+        };
         assert!(
             outcome.is_some() || stalled,
             "the deterministic player policy neither resolved nor reached the bounded \
-             no-progress gate"
+             no-progress gate: {bound_diagnostic}"
         );
         assert!(
             app.world().resource::<CommandQueue>().is_empty(),
