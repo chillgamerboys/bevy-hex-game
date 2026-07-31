@@ -14,6 +14,7 @@ hex_anim = { path = "crates/hex_anim" }
 hex_ai = { path = "crates/hex_ai" }
 hex_combat_core = { path = "crates/hex_combat_core" }
 hex_combat = { path = "crates/hex_combat" }
+hex_gameplay_model = { path = "crates/hex_gameplay_model" }
 hex_world = { path = "crates/hex_world" }
 hex_units = { path = "crates/hex_units" }
 hex_map = { path = "crates/hex_map" }

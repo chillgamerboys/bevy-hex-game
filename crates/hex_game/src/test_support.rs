@@ -112,6 +112,7 @@ pub struct SandboxReentrySnapshot {
 pub fn sandbox_reentry_snapshot(report: CombatLabReport) -> SandboxReentrySnapshot {
     let mut app = App::new();
     app.init_resource::<combat_lab::CombatLabState>()
+        .init_resource::<combat_lab::FrozenSandboxOverlay>()
         .insert_resource(combat_lab::CombatLabSandboxRequest {
             report,
             overlay: None,

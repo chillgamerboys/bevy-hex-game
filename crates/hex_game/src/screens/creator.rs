@@ -4,6 +4,7 @@
 //! Runtime ids are deliberately absent here.
 
 use std::collections::BTreeSet;
+use std::ops::{Deref, DerefMut};
 
 use bevy::input_focus::tab_navigation::TabIndex;
 use bevy::prelude::*;
@@ -17,6 +18,9 @@ use hex_assets::{
     SpellReference, SubstanceTable, TargetShape, MAX_CREATION_NAME_CHARS,
 };
 use hex_core::{LatticeCoord, Screen};
+use hex_gameplay_model::{
+    CreatorDestination, CreatorEntry, CreatorNavigation, CreatorSurface as CreatorTab, EditHistory,
+};
 
 use crate::creation_presentation::{CharacterBuildSummary, SpellBuildSummary};
 use crate::creation_store::CreationStore;
@@ -28,15 +32,6 @@ use crate::menus::widgets::{
 use crate::storage::StoragePaths;
 
 use super::{despawn_screen, screen_root};
-
-const HISTORY_LIMIT: usize = 100;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-enum CreatorTab {
-    #[default]
-    Characters,
-    Spells,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum CreatorView {
@@ -54,7 +49,7 @@ enum CreatorSnapshot {
 
 #[derive(Resource, Debug, Default)]
 pub(crate) struct CreatorSession {
-    tab: CreatorTab,
+    navigation: CreatorNavigation,
     view: CreatorView,
     character: Option<SavedCharacter>,
     spell: Option<SavedSpell>,
@@ -67,11 +62,22 @@ pub(crate) struct CreatorSession {
     notice: String,
     confirm_delete: bool,
     confirm_reset: bool,
-    undo: Vec<CreatorSnapshot>,
-    redo: Vec<CreatorSnapshot>,
-    return_to_combat_lab: bool,
-    return_to_character_creator: bool,
+    history: EditHistory<CreatorSnapshot>,
     revision: u64,
+}
+
+impl Deref for CreatorSession {
+    type Target = CreatorNavigation;
+
+    fn deref(&self) -> &Self::Target {
+        &self.navigation
+    }
+}
+
+impl DerefMut for CreatorSession {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.navigation
+    }
 }
 
 /// Explicit entry intent keeps top-level navigation separate from gameplay returns.
@@ -89,22 +95,14 @@ impl CreatorSession {
 
     fn remember_character(&mut self) {
         if let Some(character) = &self.character {
-            self.undo
-                .push(CreatorSnapshot::Character(character.clone()));
-            if self.undo.len() > HISTORY_LIMIT {
-                self.undo.remove(0);
-            }
-            self.redo.clear();
+            self.history
+                .remember(CreatorSnapshot::Character(character.clone()));
         }
     }
 
     fn remember_spell(&mut self) {
         if let Some(spell) = &self.spell {
-            self.undo.push(CreatorSnapshot::Spell(spell.clone()));
-            if self.undo.len() > HISTORY_LIMIT {
-                self.undo.remove(0);
-            }
-            self.redo.clear();
+            self.history.remember(CreatorSnapshot::Spell(spell.clone()));
         }
     }
 }
@@ -274,25 +272,21 @@ fn initialize_session(
 }
 
 fn apply_entry_request(session: &mut CreatorSession, request: CreatorEntryRequest) {
-    match request {
+    let entry = match request {
         CreatorEntryRequest::CharacterLibrary => {
-            session.tab = CreatorTab::Characters;
             session.view = CreatorView::Hub;
-            session.return_to_combat_lab = false;
-            session.return_to_character_creator = false;
+            CreatorEntry::CharacterLibrary
         }
         CreatorEntryRequest::SpellLibrary => {
-            session.tab = CreatorTab::Spells;
             session.view = CreatorView::Hub;
-            session.return_to_combat_lab = false;
-            session.return_to_character_creator = false;
+            CreatorEntry::SpellLibrary
         }
         CreatorEntryRequest::SpellFromCharacter => {
-            session.tab = CreatorTab::Spells;
             session.view = CreatorView::Hub;
-            session.return_to_character_creator = true;
+            CreatorEntry::SpellFromCharacter
         }
-    }
+    };
+    session.navigation.enter(entry);
 }
 
 fn handle_escape(
@@ -305,16 +299,15 @@ fn handle_escape(
         CreatorTab::Spells => session.spell_dirty,
     };
     if keys.just_pressed(KeyCode::Escape) && !dirty {
-        if session.tab == CreatorTab::Spells && session.return_to_character_creator {
-            session.tab = CreatorTab::Characters;
+        let destination = session.navigation.back();
+        if destination == CreatorDestination::CharacterEditor {
             session.view = CreatorView::Character;
-            session.return_to_character_creator = false;
             next.set(Screen::CharacterCreator);
         } else {
-            next.set(if session.return_to_combat_lab {
-                Screen::CombatLab
-            } else {
-                Screen::Title
+            next.set(match destination {
+                CreatorDestination::CombatLab => Screen::CombatLab,
+                CreatorDestination::Title => Screen::Title,
+                CreatorDestination::CharacterEditor => Screen::CharacterCreator,
             });
         }
     }
@@ -1911,17 +1904,18 @@ fn handle_actions(
                     session.view = CreatorView::Hub;
                     session.active_tool = None;
                     session.erase_tool = false;
-                } else if session.tab == CreatorTab::Spells && session.return_to_character_creator {
-                    session.tab = CreatorTab::Characters;
-                    session.view = CreatorView::Character;
-                    session.return_to_character_creator = false;
-                    next.set(Screen::CharacterCreator);
                 } else {
-                    next.set(if session.return_to_combat_lab {
-                        Screen::CombatLab
+                    let destination = session.navigation.back();
+                    if destination == CreatorDestination::CharacterEditor {
+                        session.view = CreatorView::Character;
+                        next.set(Screen::CharacterCreator);
                     } else {
-                        Screen::Title
-                    });
+                        next.set(match destination {
+                            CreatorDestination::CombatLab => Screen::CombatLab,
+                            CreatorDestination::Title => Screen::Title,
+                            CreatorDestination::CharacterEditor => Screen::CharacterCreator,
+                        });
+                    }
                 }
             }
             CreatorAction::OpenSpellCreator => {
@@ -2555,40 +2549,42 @@ fn build_local_test(
 }
 
 fn undo(session: &mut CreatorSession) {
-    let Some(snapshot) = session.undo.pop() else {
+    let character = session.character.clone();
+    let spell = session.spell.clone();
+    let Some(snapshot) = session.history.try_undo(|previous| match previous {
+        CreatorSnapshot::Character(_) => character.map(CreatorSnapshot::Character),
+        CreatorSnapshot::Spell(_) => spell.map(CreatorSnapshot::Spell),
+    }) else {
         return;
     };
     match snapshot {
         CreatorSnapshot::Character(previous) => {
-            if let Some(current) = session.character.replace(previous) {
-                session.redo.push(CreatorSnapshot::Character(current));
-            }
+            session.character = Some(previous);
             session.character_dirty = true;
         }
         CreatorSnapshot::Spell(previous) => {
-            if let Some(current) = session.spell.replace(previous) {
-                session.redo.push(CreatorSnapshot::Spell(current));
-            }
+            session.spell = Some(previous);
             session.spell_dirty = true;
         }
     }
 }
 
 fn redo(session: &mut CreatorSession) {
-    let Some(snapshot) = session.redo.pop() else {
+    let character = session.character.clone();
+    let spell = session.spell.clone();
+    let Some(snapshot) = session.history.try_redo(|next| match next {
+        CreatorSnapshot::Character(_) => character.map(CreatorSnapshot::Character),
+        CreatorSnapshot::Spell(_) => spell.map(CreatorSnapshot::Spell),
+    }) else {
         return;
     };
     match snapshot {
         CreatorSnapshot::Character(next) => {
-            if let Some(current) = session.character.replace(next) {
-                session.undo.push(CreatorSnapshot::Character(current));
-            }
+            session.character = Some(next);
             session.character_dirty = true;
         }
         CreatorSnapshot::Spell(next) => {
-            if let Some(current) = session.spell.replace(next) {
-                session.undo.push(CreatorSnapshot::Spell(current));
-            }
+            session.spell = Some(next);
             session.spell_dirty = true;
         }
     }
@@ -2752,10 +2748,8 @@ mod tests {
 
     #[test]
     fn spell_management_preserves_a_combat_lab_return_route() {
-        let mut session = CreatorSession {
-            return_to_combat_lab: true,
-            ..default()
-        };
+        let mut session = CreatorSession::default();
+        session.navigation.return_to_combat_lab = true;
         apply_entry_request(&mut session, CreatorEntryRequest::SpellFromCharacter);
         assert!(session.return_to_combat_lab);
         assert!(session.return_to_character_creator);

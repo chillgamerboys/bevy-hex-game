@@ -13,6 +13,7 @@ hex_assets = { workspace = true }
 hex_objects = { workspace = true }
 hex_combat = { workspace = true }
 hex_core = { workspace = true }
+hex_gameplay_model = { workspace = true }
 hex_lattice = { workspace = true }
 hex_units = { workspace = true }
 hex_map = { workspace = true }

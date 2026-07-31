@@ -6,12 +6,13 @@ use std::io;
 use bevy::prelude::*;
 use hex_assets::{CombatRulesProfile, CombatSettings};
 use hex_combat::{CombatSummary, EncounterOutcome, MAX_COMBAT_SUMMARY_DETAILS};
-use hex_core::TilePos;
 use ron::ser::PrettyConfig;
 use serde::{Deserialize, Serialize};
 use xxhash_rust::xxh3::xxh3_64;
 
 use crate::storage::{read, write_atomic, StoragePaths};
+
+pub use hex_gameplay_model::{CombatLabReportDeployment, CombatLabReportId};
 
 /// Current serialized report schema.
 pub const COMBAT_LAB_REPORT_VERSION: u16 = 1;
@@ -79,15 +80,6 @@ pub struct CombatLabReportRosters {
     pub players: Vec<CombatLabReportRosterEntry>,
     /// Hostile side in exact spawn and UI order.
     pub hostiles: Vec<CombatLabReportRosterEntry>,
-}
-
-/// Exact resolved placement for both ordered rosters.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct CombatLabReportDeployment {
-    /// Player surfaces corresponding one-to-one with the player roster.
-    pub players: Vec<TilePos>,
-    /// Hostile surfaces corresponding one-to-one with the hostile roster.
-    pub hostiles: Vec<TilePos>,
 }
 
 /// Complete deterministic result of one Combat Lab run.
@@ -252,13 +244,6 @@ fn validate_roster(side: &str, roster: &[CombatLabReportRosterEntry]) -> Result<
     }
     Ok(())
 }
-
-/// Stable local identifier allocated only when a report is explicitly saved.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct CombatLabReportId(
-    /// Monotonic file-local numeric identity.
-    pub u64,
-);
 
 /// One explicitly saved local report.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -450,7 +435,7 @@ mod tests {
 
     use hex_assets::CombatRulesProfile;
     use hex_combat::CombatEvent;
-    use hex_core::HexCoord;
+    use hex_core::{HexCoord, TilePos};
 
     use super::*;
 
