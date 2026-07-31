@@ -1211,8 +1211,13 @@ impl CombatState {
     }
 
     /// Deterministic fingerprint of the complete serializable authority state.
-    #[must_use]
-    pub fn fingerprint(&self) -> u64 {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the authority ever stops satisfying its serializable
+    /// contract. Fingerprint failure is evidence failure and must not collapse to a
+    /// plausible sentinel value.
+    pub fn fingerprint(&self) -> Result<u64, String> {
         fingerprint(b"hex-combat-authority-v1", self)
     }
 }
@@ -1286,7 +1291,7 @@ impl CombatCase {
                 ));
             }
         }
-        Ok(CombatRunSnapshot::from_state(self.name.clone(), state))
+        CombatRunSnapshot::from_state(self.name.clone(), state)
     }
 }
 
@@ -1356,7 +1361,7 @@ pub struct CombatRunSnapshot {
 }
 
 impl CombatRunSnapshot {
-    fn from_state(case: String, state: CombatState) -> Self {
+    fn from_state(case: String, state: CombatState) -> Result<Self, String> {
         let current = state.current();
         let active = current
             .and_then(|unit| state.units.get(&unit))
@@ -1390,28 +1395,31 @@ impl CombatRunSnapshot {
             },
             CombatTermination::Outcome,
         );
-        Self {
+        Ok(Self {
             case,
             summary: state.metrics.clone(),
-            state_fingerprint: state.fingerprint(),
-            command_fingerprint: fingerprint(b"hex-combat-commands-v1", &state.commands),
+            state_fingerprint: state.fingerprint()?,
+            command_fingerprint: fingerprint(b"hex-combat-commands-v1", &state.commands)?,
             transcript_event_count: state.events.len(),
-            transcript_fingerprint: fingerprint(b"hex-combat-transcript-v1", &state.events),
+            transcript_fingerprint: fingerprint(b"hex-combat-transcript-v1", &state.events)?,
             termination,
             turn,
             lattices,
             positions,
             state,
-        }
+        })
     }
 }
 
-fn fingerprint(domain: &[u8], value: &impl Serialize) -> u64 {
+fn fingerprint(domain: &[u8], value: &impl Serialize) -> Result<u64, String> {
     let mut bytes = domain.to_vec();
-    if serde_json::to_writer(&mut bytes, value).is_err() {
-        bytes.extend_from_slice(b"<serialization-error>");
-    }
-    xxh3_64(&bytes)
+    serde_json::to_writer(&mut bytes, value).map_err(|error| {
+        format!(
+            "{} fingerprint serialization failed: {error}",
+            String::from_utf8_lossy(domain)
+        )
+    })?;
+    Ok(xxh3_64(&bytes))
 }
 
 #[cfg(test)]
