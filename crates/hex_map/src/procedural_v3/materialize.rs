@@ -78,7 +78,7 @@ impl MapPresentationProjection {
 
     /// Retains feature presentations whose exact authored support remains valid.
     ///
-    /// Terrain edits may remove presentation-only features such as tall grass.
+    /// Terrain edits may remove presentation-only features such as grass or cave flora.
     /// Blocking structures use the separate conservative edit guard instead.
     pub(crate) fn retain_features(&mut self, mut retain: impl FnMut(&PlannedFeature) -> bool) {
         self.features.retain(|_id, feature| retain(feature));
@@ -791,6 +791,7 @@ fn encode_features(
         encoder.tag(match feature.kind {
             FeatureKind::Tree => 0,
             FeatureKind::TallGrass => 1,
+            FeatureKind::CaveVegetation => 2,
         });
     }
     Ok(())
@@ -1205,6 +1206,7 @@ mod tests {
             .collect();
         let patch = ResolvedPatch {
             biome_region: BiomeRegionId(0),
+            rotation_turns: 0,
             mask: mask.clone(),
             edges,
         };
@@ -1214,6 +1216,7 @@ mod tests {
             footprint: mask.clone(),
             patches: BTreeMap::from([(PatchId(0), patch)]),
             shared_edges: BTreeMap::new(),
+            boundary_liquid_outlets: BTreeMap::new(),
         };
         let anchor = TilePos::new(anchor_coord, 0);
         let tree = TilePos::new(tree_coord, 0);

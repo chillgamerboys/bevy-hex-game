@@ -10,20 +10,32 @@ use std::fmt;
 use hex_core::{BiomeRegionId, HexCoord, Level};
 
 use crate::settings::{
-    ordered_simple_seam_lanes, seam_approaches_are_independent, EdgeLiquidSettings,
-    PatchEdgeContractSettings, PatchEdgesSettings, PatchMaskSettings, PatchSpec,
-    ProceduralV3Settings, SharedEdgeSettings, V3LayoutSettings, V3Ring7Settings,
-    MAX_PROCEDURAL_LEVEL, MAX_SEAM_PORT_WIDTH, MAX_WALKER_PORT_COUNT,
+    ordered_simple_seam_lanes, ring19_region_coord, seam_approaches_are_independent,
+    EdgeLiquidPortSettings, EdgeLiquidSettings, PatchEdgeContractSettings, PatchEdgesSettings,
+    PatchMaskSettings, PatchSpec, ProceduralV3Settings, Ring19BoundarySide, SharedEdgeSettings,
+    V3LayoutSettings, V3Ring19Settings, V3Ring7Settings, MAX_PROCEDURAL_LEVEL, MAX_SEAM_PORT_WIDTH,
+    MAX_WALKER_PORT_COUNT, V3_RING19_REGION_COUNT,
 };
 
 const RING_RADIUS: u32 = 33;
 const RING_PATCH_OFFSET: i32 = 22;
+const RING19_RADIUS: u32 = 55;
+pub(crate) const RING19_LOCAL_FRAME_SCALE: u32 = 12;
 
 /// Stable complete-world layout family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LayoutKind {
     Single,
     Ring7,
+    Ring19,
+}
+
+impl LayoutKind {
+    /// Whether this layout stitches multiple independently generated patches.
+    #[must_use]
+    pub(crate) const fn is_composite(self) -> bool {
+        matches!(self, Self::Ring7 | Self::Ring19)
+    }
 }
 
 /// Stable semantic patch slot. IDs also namespace V3 seed streams.
@@ -117,6 +129,15 @@ pub(crate) struct ResolvedWalkerPorts {
 }
 
 /// One directed hydrology relationship, stored once for both patches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResolvedLiquidElevation {
+    /// Legacy Single/Ring7 behavior: liquid may use the shared walker elevation band.
+    EdgeBand,
+    /// Ring19 behavior: both sides of the liquid seam use one exact level.
+    Exact(Level),
+}
+
+/// One directed hydrology relationship, stored once for both patches.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ResolvedLiquidPort {
     Dry,
@@ -124,7 +145,21 @@ pub(crate) enum ResolvedLiquidPort {
         source: PatchId,
         sink: PatchId,
         port: ResolvedPort,
+        elevation: ResolvedLiquidElevation,
     },
+}
+
+/// One exact directed liquid exit through the complete world's outer boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedBoundaryLiquidOutlet {
+    pub(crate) source: PatchId,
+    pub(crate) side: HexSide,
+    /// Exact inside-to-outside lane pairs.
+    pub(crate) lanes: BTreeSet<(HexCoord, HexCoord)>,
+    /// Exact protected cells leading inward from the boundary lanes.
+    pub(crate) inward_approach: BTreeSet<HexCoord>,
+    pub(crate) approach_depth: u32,
+    pub(crate) level: Level,
 }
 
 /// Exact resolved seam shared by two patches.
@@ -146,6 +181,8 @@ pub(crate) struct ResolvedEdgeContract {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedPatch {
     pub(crate) biome_region: BiomeRegionId,
+    /// Clockwise local-frame turns. Single and Ring7 always resolve to zero.
+    pub(crate) rotation_turns: u8,
     pub(crate) mask: BTreeSet<HexCoord>,
     pub(crate) edges: BTreeMap<HexSide, ResolvedEdgeReference>,
 }
@@ -158,13 +195,19 @@ pub(crate) struct ResolvedLayoutPlan {
     pub(crate) footprint: BTreeSet<HexCoord>,
     pub(crate) patches: BTreeMap<PatchId, ResolvedPatch>,
     pub(crate) shared_edges: BTreeMap<ResolvedEdgeId, ResolvedEdgeContract>,
+    pub(crate) boundary_liquid_outlets: BTreeMap<(PatchId, HexSide), ResolvedBoundaryLiquidOutlet>,
 }
 
 impl ResolvedLayoutPlan {
     /// Rechecks exact coverage, connectivity, references, and shared seam geometry.
     pub(crate) fn validate(&self) -> Result<(), LayoutValidationError> {
         let mut issues = Vec::new();
-        if !(12..=40).contains(&self.grid_radius) {
+        let radius_valid = match self.kind {
+            LayoutKind::Single => (12..=40).contains(&self.grid_radius),
+            LayoutKind::Ring7 => self.grid_radius == RING_RADIUS,
+            LayoutKind::Ring19 => self.grid_radius == RING19_RADIUS,
+        };
+        if !radius_valid {
             issues.push(LayoutIssue::UnsupportedRadius(self.grid_radius));
         }
         if self.footprint.is_empty() || !connected(&self.footprint) {
@@ -181,6 +224,7 @@ impl ResolvedLayoutPlan {
         let expected_patch_count = match self.kind {
             LayoutKind::Single => 1,
             LayoutKind::Ring7 => 7,
+            LayoutKind::Ring19 => 19,
         };
         if self.patches.len() != expected_patch_count {
             issues.push(LayoutIssue::PatchCount {
@@ -198,10 +242,54 @@ impl ResolvedLayoutPlan {
         {
             issues.push(LayoutIssue::InvalidRingFootprint);
         }
+        if self.kind == LayoutKind::Ring19
+            && (self.grid_radius != RING19_RADIUS
+                || self.footprint
+                    != HexCoord::ORIGIN
+                        .within_radius(RING19_RADIUS)
+                        .into_iter()
+                        .collect())
+        {
+            issues.push(LayoutIssue::InvalidRingFootprint);
+        }
+        if self.kind == LayoutKind::Ring19 && self.shared_edges.len() != 42 {
+            issues.push(LayoutIssue::SharedEdgeCount {
+                expected: 42,
+                actual: self.shared_edges.len(),
+            });
+        }
+        if self.kind == LayoutKind::Ring19 {
+            let boundary_sides = self
+                .patches
+                .values()
+                .flat_map(|patch| patch.edges.values())
+                .filter(|reference| matches!(reference, ResolvedEdgeReference::WorldBoundary))
+                .count();
+            if boundary_sides != 30 {
+                issues.push(LayoutIssue::BoundarySideCount {
+                    expected: 30,
+                    actual: boundary_sides,
+                });
+            }
+        }
 
         let mut covered = BTreeSet::new();
         let mut biome_regions = BTreeSet::new();
         for (id, patch) in &self.patches {
+            if self.kind == LayoutKind::Ring19
+                && (usize::try_from(id.0).map_or(true, |id| id >= V3_RING19_REGION_COUNT)
+                    || patch.biome_region.0 != id.0)
+            {
+                issues.push(LayoutIssue::InvalidRing19PatchIdentity(
+                    *id,
+                    patch.biome_region,
+                ));
+            }
+            if patch.rotation_turns > 5
+                || (self.kind != LayoutKind::Ring19 && patch.rotation_turns != 0)
+            {
+                issues.push(LayoutIssue::InvalidPatchRotation(*id, patch.rotation_turns));
+            }
             if patch.mask.is_empty() || !connected(&patch.mask) {
                 issues.push(LayoutIssue::DisconnectedPatch(*id));
             }
@@ -247,9 +335,17 @@ impl ResolvedLayoutPlan {
             if actual != expected {
                 issues.push(LayoutIssue::SharedReferenceMismatch(*edge_id));
             }
-            validate_resolved_edge(*edge_id, edge, &self.patches, &self.footprint, &mut issues);
+            validate_resolved_edge(
+                self.kind,
+                *edge_id,
+                edge,
+                &self.patches,
+                &self.footprint,
+                &mut issues,
+            );
         }
-        validate_liquid_graph(&self.patches, &self.shared_edges, &mut issues);
+        validate_boundary_liquid_outlets(self, &mut issues);
+        validate_liquid_graph(self, &mut issues);
         for edge_id in references.into_keys() {
             issues.push(LayoutIssue::MissingSharedEdge(edge_id));
         }
@@ -270,6 +366,7 @@ pub(crate) fn resolve_layout(
     let resolved = match &settings.layout {
         V3LayoutSettings::Single(patch) => resolve_single(grid_radius, patch)?,
         V3LayoutSettings::Ring7(ring) => resolve_ring(grid_radius, ring)?,
+        V3LayoutSettings::Ring19(ring) => resolve_ring19(grid_radius, ring)?,
     };
     resolved.validate()?;
     Ok(resolved)
@@ -306,6 +403,7 @@ fn resolve_single(
         id,
         ResolvedPatch {
             biome_region: BiomeRegionId(0),
+            rotation_turns: 0,
             mask: mask.clone(),
             edges,
         },
@@ -316,6 +414,7 @@ fn resolve_single(
         footprint: mask,
         patches,
         shared_edges: BTreeMap::new(),
+        boundary_liquid_outlets: BTreeMap::new(),
     })
 }
 
@@ -366,6 +465,7 @@ fn resolve_ring(
             id,
             ResolvedPatch {
                 biome_region: BiomeRegionId(id.0),
+                rotation_turns: 0,
                 mask: masks.get(&id).cloned().unwrap_or_default(),
                 edges,
             },
@@ -435,6 +535,306 @@ fn resolve_ring(
         footprint,
         patches,
         shared_edges,
+        boundary_liquid_outlets: BTreeMap::new(),
+    })
+}
+
+fn resolve_ring19(
+    grid_radius: u32,
+    ring: &V3Ring19Settings,
+) -> Result<ResolvedLayoutPlan, LayoutValidationError> {
+    if grid_radius != RING19_RADIUS {
+        return Err(LayoutValidationError::one(LayoutIssue::InvalidRingRadius(
+            grid_radius,
+        )));
+    }
+    if ring.regions.len() != V3_RING19_REGION_COUNT {
+        return Err(LayoutValidationError::one(LayoutIssue::PatchCount {
+            expected: V3_RING19_REGION_COUNT,
+            actual: ring.regions.len(),
+        }));
+    }
+    if !matches!(ring.seam_defaults.liquid, EdgeLiquidSettings::Dry) {
+        return Err(LayoutValidationError::one(
+            LayoutIssue::InvalidRing19Settings("seam_defaults.liquid must remain Dry".to_owned()),
+        ));
+    }
+
+    let footprint = HexCoord::ORIGIN
+        .within_radius(RING19_RADIUS)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let macro_centers = ring19_macro_centers();
+    let centers = scaled_centers(&macro_centers, RING_PATCH_OFFSET);
+    let masks = generated_nearest_masks(&footprint, &centers);
+    let seams = ring19_seams(&macro_centers);
+    if seams.len() != 42 {
+        return Err(LayoutValidationError::one(
+            LayoutIssue::InvalidRing19Settings(format!(
+                "fixed radius-two macro layout resolved {} seams instead of 42",
+                seams.len()
+            )),
+        ));
+    }
+
+    let mut patches = BTreeMap::new();
+    for id in centers.keys().copied() {
+        let edges = HexSide::ALL
+            .into_iter()
+            .map(|side| (side, ResolvedEdgeReference::WorldBoundary))
+            .collect();
+        patches.insert(
+            id,
+            ResolvedPatch {
+                biome_region: BiomeRegionId(id.0),
+                rotation_turns: ring
+                    .regions
+                    .get(usize::try_from(id.0).unwrap_or(usize::MAX))
+                    .map_or(0, |region| region.rotation_turns),
+                mask: masks.get(&id).cloned().unwrap_or_default(),
+                edges,
+            },
+        );
+    }
+
+    let seam_keys = seams
+        .iter()
+        .map(|(first, _, second, _)| ordered_patch_pair(*first, *second))
+        .collect::<BTreeSet<_>>();
+    let mut liquid_connections = BTreeMap::new();
+    for connection in &ring.liquid_connections {
+        let source = PatchId(u32::from(connection.source_region));
+        let sink = PatchId(u32::from(connection.sink_region));
+        let key = ordered_patch_pair(source, sink);
+        if source == sink
+            || !patches.contains_key(&source)
+            || !patches.contains_key(&sink)
+            || !seam_keys.contains(&key)
+        {
+            return Err(LayoutValidationError::one(
+                LayoutIssue::InvalidRing19Settings(format!(
+                    "liquid connection {} -> {} does not name one internal seam",
+                    connection.source_region, connection.sink_region
+                )),
+            ));
+        }
+        if liquid_connections.insert(key, connection).is_some() {
+            return Err(LayoutValidationError::one(
+                LayoutIssue::InvalidRing19Settings(format!(
+                    "internal seam {} <-> {} has more than one liquid connection",
+                    key.0 .0, key.1 .0
+                )),
+            ));
+        }
+    }
+
+    let mut shared_edges = BTreeMap::new();
+    for (index, (first_id, first_side, second_id, second_side)) in seams.into_iter().enumerate() {
+        let edge_id = ResolvedEdgeId(u32::try_from(index).unwrap_or(u32::MAX));
+        let key = ordered_patch_pair(first_id, second_id);
+        let connection = liquid_connections.get(&key).copied();
+        let mut first_settings = ring.seam_defaults.clone();
+        let mut second_settings = ring.seam_defaults.clone();
+        if let Some(connection) = connection {
+            let port = EdgeLiquidPortSettings {
+                width: connection.width,
+            };
+            if PatchId(u32::from(connection.source_region)) == first_id {
+                first_settings.liquid = EdgeLiquidSettings::Outlet(port);
+                second_settings.liquid = EdgeLiquidSettings::Inlet(port);
+            } else {
+                first_settings.liquid = EdgeLiquidSettings::Inlet(port);
+                second_settings.liquid = EdgeLiquidSettings::Outlet(port);
+            }
+        }
+        let first_authored = PatchEdgeContractSettings::Shared(first_settings);
+        let second_authored = PatchEdgeContractSettings::Shared(second_settings);
+        let mut contract = resolve_shared_edge(
+            first_id,
+            first_side,
+            &first_authored,
+            second_id,
+            second_side,
+            &second_authored,
+            &masks,
+        )?;
+        if let (Some(connection), ResolvedLiquidPort::Directed { elevation, .. }) =
+            (connection, &mut contract.liquid)
+        {
+            *elevation = ResolvedLiquidElevation::Exact(connection.level);
+        }
+        shared_edges.insert(edge_id, contract);
+
+        let Some(first_patch) = patches.get_mut(&first_id) else {
+            return Err(LayoutValidationError::one(LayoutIssue::MissingEdgePatch(
+                edge_id, first_id,
+            )));
+        };
+        first_patch
+            .edges
+            .insert(first_side, ResolvedEdgeReference::Shared(edge_id));
+        let Some(second_patch) = patches.get_mut(&second_id) else {
+            return Err(LayoutValidationError::one(LayoutIssue::MissingEdgePatch(
+                edge_id, second_id,
+            )));
+        };
+        second_patch
+            .edges
+            .insert(second_side, ResolvedEdgeReference::Shared(edge_id));
+    }
+
+    let mut reserved = BTreeMap::<PatchId, BTreeSet<HexCoord>>::new();
+    for edge in shared_edges.values() {
+        for (patch, approach) in &edge.protected_approaches {
+            reserved
+                .entry(*patch)
+                .or_default()
+                .extend(approach.iter().copied());
+        }
+    }
+    let mut boundary_liquid_outlets = BTreeMap::new();
+    let mut authored_outlets = ring.boundary_outlets.iter().collect::<Vec<_>>();
+    authored_outlets.sort_unstable();
+    for authored in authored_outlets {
+        let source = PatchId(u32::from(authored.source_region));
+        let side = ring19_boundary_side(authored.side);
+        let Some(patch) = patches.get(&source) else {
+            return Err(LayoutValidationError::one(
+                LayoutIssue::InvalidBoundaryLiquidOutlet(source, side),
+            ));
+        };
+        if !matches!(
+            patch.edges.get(&side),
+            Some(ResolvedEdgeReference::WorldBoundary)
+        ) || boundary_liquid_outlets.contains_key(&(source, side))
+        {
+            return Err(LayoutValidationError::one(
+                LayoutIssue::InvalidBoundaryLiquidOutlet(source, side),
+            ));
+        }
+        let Some(center) = centers.get(&source).copied() else {
+            return Err(LayoutValidationError::one(
+                LayoutIssue::InvalidBoundaryLiquidOutlet(source, side),
+            ));
+        };
+        let outlet = resolve_boundary_liquid_outlet(
+            source,
+            side,
+            authored.width,
+            authored.level,
+            ring.seam_defaults.approach_depth,
+            center,
+            &patch.mask,
+            &footprint,
+            reserved.get(&source),
+        )?;
+        reserved
+            .entry(source)
+            .or_default()
+            .extend(outlet.inward_approach.iter().copied());
+        boundary_liquid_outlets.insert((source, side), outlet);
+    }
+
+    Ok(ResolvedLayoutPlan {
+        kind: LayoutKind::Ring19,
+        grid_radius,
+        footprint,
+        patches,
+        shared_edges,
+        boundary_liquid_outlets,
+    })
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the exact boundary outlet is defined by its complete resolved contract"
+)]
+fn resolve_boundary_liquid_outlet(
+    source: PatchId,
+    side: HexSide,
+    width: u32,
+    level: Level,
+    approach_depth: u32,
+    patch_center: HexCoord,
+    mask: &BTreeSet<HexCoord>,
+    footprint: &BTreeSet<HexCoord>,
+    reserved: Option<&BTreeSet<HexCoord>>,
+) -> Result<ResolvedBoundaryLiquidOutlet, LayoutValidationError> {
+    if !(2..=MAX_SEAM_PORT_WIDTH).contains(&width) {
+        return Err(LayoutValidationError::one(
+            LayoutIssue::InvalidBoundaryLiquidOutlet(source, side),
+        ));
+    }
+    let boundary = mask
+        .iter()
+        .copied()
+        .filter_map(|inside| {
+            let outside = side.neighbor(inside);
+            (!footprint.contains(&outside)).then_some((inside, outside))
+        })
+        .collect::<BTreeSet<_>>();
+    let Some(ordered) = ordered_simple_seam_lanes(&boundary) else {
+        return Err(LayoutValidationError::one(
+            LayoutIssue::InvalidBoundaryLiquidOutlet(source, side),
+        ));
+    };
+    let mut boundary_anchor = patch_center;
+    while footprint.contains(&side.neighbor(boundary_anchor)) {
+        boundary_anchor = side.neighbor(boundary_anchor);
+    }
+    let width = usize::try_from(width).map_err(|_error| {
+        LayoutValidationError::one(LayoutIssue::InvalidBoundaryLiquidOutlet(source, side))
+    })?;
+    let candidate = ordered
+        .windows(width)
+        .filter_map(|window| {
+            let lanes = window.iter().copied().collect::<BTreeSet<_>>();
+            let inside = lanes
+                .iter()
+                .map(|(coord, _)| *coord)
+                .collect::<BTreeSet<_>>();
+            let inward_approach =
+                approach_corridor(&inside, mask, side.opposite(), approach_depth)?;
+            if boundary_outlet_touches_other_patch(&inside, &inward_approach, mask, footprint)
+                || reserved.is_some_and(|reserved| !reserved.is_disjoint(&inward_approach))
+            {
+                return None;
+            }
+            let maximum_anchor_distance = inside
+                .iter()
+                .map(|coord| coord.distance(boundary_anchor))
+                .max()
+                .unwrap_or_default();
+            let total_anchor_distance = inside
+                .iter()
+                .map(|coord| coord.distance(boundary_anchor))
+                .sum::<u32>();
+            Some((
+                maximum_anchor_distance,
+                total_anchor_distance,
+                lanes,
+                inward_approach,
+            ))
+        })
+        .min_by(|first, second| {
+            first
+                .0
+                .cmp(&second.0)
+                .then_with(|| first.1.cmp(&second.1))
+                .then_with(|| first.2.cmp(&second.2))
+        });
+    let Some((_, _, lanes, inward_approach)) = candidate else {
+        return Err(LayoutValidationError::one(
+            LayoutIssue::InvalidBoundaryLiquidOutlet(source, side),
+        ));
+    };
+    Ok(ResolvedBoundaryLiquidOutlet {
+        source,
+        side,
+        lanes,
+        inward_approach,
+        approach_depth,
+        level,
     })
 }
 
@@ -560,7 +960,12 @@ fn resolve_shared_edge(
                     LayoutIssue::InsufficientPortCapacity(first_id, second_id),
                 ));
             };
-            ResolvedLiquidPort::Directed { source, sink, port }
+            ResolvedLiquidPort::Directed {
+                source,
+                sink,
+                port,
+                elevation: ResolvedLiquidElevation::EdgeBand,
+            }
         }
     };
     let mut first_approaches = BTreeSet::new();
@@ -983,8 +1388,29 @@ fn approach_touches_other_patch(
     })
 }
 
+fn boundary_outlet_touches_other_patch(
+    inside: &BTreeSet<HexCoord>,
+    inward_approach: &BTreeSet<HexCoord>,
+    local_mask: &BTreeSet<HexCoord>,
+    footprint: &BTreeSet<HexCoord>,
+) -> bool {
+    inside.iter().any(|coord| {
+        coord
+            .neighbors()
+            .into_iter()
+            .any(|neighbor| footprint.contains(&neighbor) && !local_mask.contains(&neighbor))
+    }) || approach_touches_other_patch(inward_approach, inside, local_mask, footprint)
+}
+
 fn generated_ring_masks(footprint: &BTreeSet<HexCoord>) -> BTreeMap<PatchId, BTreeSet<HexCoord>> {
     let centers = ring_centers();
+    generated_nearest_masks(footprint, &centers)
+}
+
+fn generated_nearest_masks(
+    footprint: &BTreeSet<HexCoord>,
+    centers: &BTreeMap<PatchId, HexCoord>,
+) -> BTreeMap<PatchId, BTreeSet<HexCoord>> {
     let mut masks = centers
         .keys()
         .copied()
@@ -1029,6 +1455,83 @@ fn ring_centers() -> BTreeMap<PatchId, HexCoord> {
             HexCoord::new_cubic(0, -RING_PATCH_OFFSET, RING_PATCH_OFFSET),
         ),
     ])
+}
+
+fn ring19_macro_centers() -> BTreeMap<PatchId, HexCoord> {
+    (0..V3_RING19_REGION_COUNT)
+        .filter_map(|id| {
+            let slot = u8::try_from(id).ok()?;
+            let (x, y, z) = ring19_region_coord(slot)?;
+            Some((
+                PatchId(u32::try_from(id).unwrap_or(u32::MAX)),
+                HexCoord::new_cubic(x, y, z),
+            ))
+        })
+        .collect()
+}
+
+pub(crate) fn ring19_patch_center(id: PatchId) -> Option<HexCoord> {
+    let slot = u8::try_from(id.0).ok()?;
+    let (x, y, z) = ring19_region_coord(slot)?;
+    Some(HexCoord::new_cubic(
+        x * RING_PATCH_OFFSET,
+        y * RING_PATCH_OFFSET,
+        z * RING_PATCH_OFFSET,
+    ))
+}
+
+fn scaled_centers(
+    centers: &BTreeMap<PatchId, HexCoord>,
+    scale: i32,
+) -> BTreeMap<PatchId, HexCoord> {
+    centers
+        .iter()
+        .map(|(id, center)| {
+            let [x, y, z] = center.to_cubic_array();
+            (*id, HexCoord::new_cubic(x * scale, y * scale, z * scale))
+        })
+        .collect()
+}
+
+fn ring19_seams(
+    macro_centers: &BTreeMap<PatchId, HexCoord>,
+) -> Vec<(PatchId, HexSide, PatchId, HexSide)> {
+    let by_center = macro_centers
+        .iter()
+        .map(|(id, center)| (*center, *id))
+        .collect::<BTreeMap<_, _>>();
+    let mut seams = Vec::new();
+    for (first_id, center) in macro_centers {
+        for first_side in HexSide::ALL {
+            let Some(second_id) = by_center.get(&first_side.neighbor(*center)).copied() else {
+                continue;
+            };
+            if *first_id < second_id {
+                seams.push((*first_id, first_side, second_id, first_side.opposite()));
+            }
+        }
+    }
+    seams.sort_unstable_by_key(|(first, _, second, _)| (*first, *second));
+    seams
+}
+
+const fn ring19_boundary_side(side: Ring19BoundarySide) -> HexSide {
+    match side {
+        Ring19BoundarySide::East => HexSide::East,
+        Ring19BoundarySide::SouthEast => HexSide::SouthEast,
+        Ring19BoundarySide::SouthWest => HexSide::SouthWest,
+        Ring19BoundarySide::West => HexSide::West,
+        Ring19BoundarySide::NorthWest => HexSide::NorthWest,
+        Ring19BoundarySide::NorthEast => HexSide::NorthEast,
+    }
+}
+
+fn ordered_patch_pair(first: PatchId, second: PatchId) -> (PatchId, PatchId) {
+    if first < second {
+        (first, second)
+    } else {
+        (second, first)
+    }
 }
 
 fn ring_seams() -> [(PatchId, HexSide, PatchId, HexSide); 12] {
@@ -1219,6 +1722,7 @@ fn connected(mask: &BTreeSet<HexCoord>) -> bool {
 }
 
 fn validate_resolved_edge(
+    kind: LayoutKind,
     id: ResolvedEdgeId,
     edge: &ResolvedEdgeContract,
     patches: &BTreeMap<PatchId, ResolvedPatch>,
@@ -1318,43 +1822,143 @@ fn validate_resolved_edge(
     {
         issues.push(LayoutIssue::InvalidResolvedContract(id));
     }
-    if let ResolvedLiquidPort::Directed { source, sink, port } = &edge.liquid {
+    if let ResolvedLiquidPort::Directed {
+        source,
+        sink,
+        port,
+        elevation,
+    } = &edge.liquid
+    {
         let endpoints = BTreeSet::from([edge.first.0, edge.second.0]);
         let width_valid = u32::try_from(port.lanes.len())
             .is_ok_and(|width| (2..=MAX_SEAM_PORT_WIDTH).contains(&width));
+        let elevation_valid = match (kind, elevation) {
+            (LayoutKind::Ring19, ResolvedLiquidElevation::Exact(level)) => {
+                (3..=MAX_PROCEDURAL_LEVEL).contains(level)
+            }
+            (LayoutKind::Single | LayoutKind::Ring7, ResolvedLiquidElevation::EdgeBand) => true,
+            _ => false,
+        };
         if source == sink
             || !endpoints.contains(source)
             || !endpoints.contains(sink)
             || !width_valid
+            || !elevation_valid
         {
             issues.push(LayoutIssue::InvalidResolvedContract(id));
         }
     }
 }
 
-fn validate_liquid_graph(
-    patches: &BTreeMap<PatchId, ResolvedPatch>,
-    edges: &BTreeMap<ResolvedEdgeId, ResolvedEdgeContract>,
-    issues: &mut Vec<LayoutIssue>,
-) {
-    let mut outgoing = patches
+fn validate_boundary_liquid_outlets(layout: &ResolvedLayoutPlan, issues: &mut Vec<LayoutIssue>) {
+    if layout.kind != LayoutKind::Ring19 {
+        for (source, side) in layout.boundary_liquid_outlets.keys() {
+            issues.push(LayoutIssue::InvalidBoundaryLiquidOutlet(*source, *side));
+        }
+        return;
+    }
+    if layout.boundary_liquid_outlets.is_empty() {
+        issues.push(LayoutIssue::MissingBoundaryLiquidOutlet);
+        return;
+    }
+
+    let mut reserved = BTreeMap::<PatchId, BTreeSet<HexCoord>>::new();
+    for edge in layout.shared_edges.values() {
+        for (patch, approach) in &edge.protected_approaches {
+            reserved
+                .entry(*patch)
+                .or_default()
+                .extend(approach.iter().copied());
+        }
+    }
+
+    for ((source, side), outlet) in &layout.boundary_liquid_outlets {
+        let Some(patch) = layout.patches.get(source) else {
+            issues.push(LayoutIssue::InvalidBoundaryLiquidOutlet(*source, *side));
+            continue;
+        };
+        let inside = outlet
+            .lanes
+            .iter()
+            .map(|(inside, _)| *inside)
+            .collect::<BTreeSet<_>>();
+        let outside = outlet
+            .lanes
+            .iter()
+            .map(|(_, outside)| *outside)
+            .collect::<BTreeSet<_>>();
+        let width_valid = u32::try_from(outlet.lanes.len())
+            .is_ok_and(|width| (2..=MAX_SEAM_PORT_WIDTH).contains(&width));
+        let geometry_valid = outlet.source == *source
+            && outlet.side == *side
+            && matches!(
+                patch.edges.get(side),
+                Some(ResolvedEdgeReference::WorldBoundary)
+            )
+            && width_valid
+            && inside.len() == outlet.lanes.len()
+            && outside.len() == outlet.lanes.len()
+            && outlet.lanes.iter().all(|(inside, outside)| {
+                side.neighbor(*inside) == *outside
+                    && patch.mask.contains(inside)
+                    && !layout.footprint.contains(outside)
+            })
+            && ordered_simple_seam_lanes(&outlet.lanes).is_some()
+            && lane_approaches_are_independent(
+                inside.iter().copied(),
+                &patch.mask,
+                side.opposite(),
+                outlet.approach_depth,
+            )
+            && approach_corridor(&inside, &patch.mask, side.opposite(), outlet.approach_depth)
+                .is_some_and(|expected| expected == outlet.inward_approach)
+            && !boundary_outlet_touches_other_patch(
+                &inside,
+                &outlet.inward_approach,
+                &patch.mask,
+                &layout.footprint,
+            )
+            && (3..=MAX_PROCEDURAL_LEVEL).contains(&outlet.level)
+            && reserved
+                .get(source)
+                .is_none_or(|existing| existing.is_disjoint(&outlet.inward_approach));
+        if !geometry_valid {
+            issues.push(LayoutIssue::InvalidBoundaryLiquidOutlet(*source, *side));
+            continue;
+        }
+        reserved
+            .entry(*source)
+            .or_default()
+            .extend(outlet.inward_approach.iter().copied());
+    }
+}
+
+fn validate_liquid_graph(layout: &ResolvedLayoutPlan, issues: &mut Vec<LayoutIssue>) {
+    let mut outgoing = layout
+        .patches
         .keys()
         .copied()
         .map(|patch| (patch, BTreeSet::new()))
         .collect::<BTreeMap<_, _>>();
-    for edge in edges.values() {
+    let mut liquid_regions = BTreeSet::new();
+    for edge in layout.shared_edges.values() {
         let ResolvedLiquidPort::Directed { source, sink, .. } = edge.liquid else {
             continue;
         };
-        if source == sink || !patches.contains_key(&source) || !patches.contains_key(&sink) {
+        if source == sink
+            || !layout.patches.contains_key(&source)
+            || !layout.patches.contains_key(&sink)
+        {
             continue;
         }
+        liquid_regions.extend([source, sink]);
         if let Some(sinks) = outgoing.get_mut(&source) {
             sinks.insert(sink);
         }
     }
 
-    let mut indegree = patches
+    let mut indegree = layout
+        .patches
         .keys()
         .copied()
         .map(|patch| (patch, 0_usize))
@@ -1384,8 +1988,45 @@ fn validate_liquid_graph(
             }
         }
     }
-    if visited != patches.len() {
+    if visited != layout.patches.len() {
         issues.push(LayoutIssue::CyclicLiquidGraph);
+    }
+
+    if layout.kind != LayoutKind::Ring19 {
+        return;
+    }
+    let mut boundary_sources = BTreeSet::new();
+    for outlet in layout.boundary_liquid_outlets.values() {
+        if !boundary_sources.insert(outlet.source)
+            || outgoing
+                .get(&outlet.source)
+                .is_some_and(|sinks| !sinks.is_empty())
+        {
+            issues.push(LayoutIssue::MultipleLiquidOutlets(outlet.source));
+        }
+    }
+    for (source, sinks) in &outgoing {
+        if sinks.len() > 1 {
+            issues.push(LayoutIssue::MultipleLiquidOutlets(*source));
+        }
+    }
+    for origin in liquid_regions {
+        let mut current = origin;
+        let mut visited = BTreeSet::new();
+        while !boundary_sources.contains(&current) {
+            if !visited.insert(current) {
+                break;
+            }
+            let Some(next) = outgoing
+                .get(&current)
+                .and_then(|sinks| sinks.first())
+                .copied()
+            else {
+                issues.push(LayoutIssue::LiquidComponentWithoutBoundary(origin));
+                break;
+            };
+            current = next;
+        }
     }
 }
 
@@ -1452,11 +2093,16 @@ pub(crate) enum LayoutIssue {
     FootprintOutOfBounds,
     InvalidRingRadius(u32),
     InvalidRingFootprint,
+    InvalidRing19Settings(String),
     PatchCount { expected: usize, actual: usize },
+    SharedEdgeCount { expected: usize, actual: usize },
+    BoundarySideCount { expected: usize, actual: usize },
     DisconnectedPatch(PatchId),
     PatchOutsideFootprint(PatchId),
     OverlappingPatch(PatchId, HexCoord),
     DuplicateBiomeRegion(BiomeRegionId),
+    InvalidRing19PatchIdentity(PatchId, BiomeRegionId),
+    InvalidPatchRotation(PatchId, u8),
     IncompletePatchEdges(PatchId),
     IncompleteCoverage,
     SharedReferenceMismatch(ResolvedEdgeId),
@@ -1465,6 +2111,10 @@ pub(crate) enum LayoutIssue {
     InvalidBoundaryPairs(ResolvedEdgeId),
     InvalidProtectedApproach(ResolvedEdgeId, PatchId),
     InvalidResolvedContract(ResolvedEdgeId),
+    MissingBoundaryLiquidOutlet,
+    InvalidBoundaryLiquidOutlet(PatchId, HexSide),
+    MultipleLiquidOutlets(PatchId),
+    LiquidComponentWithoutBoundary(PatchId),
     GeneratedSingleMask,
     SharedSingleEdge(HexSide),
     MixedRingMasks,
@@ -1527,10 +2177,11 @@ impl std::error::Error for LayoutValidationError {}
 mod tests {
     use super::*;
     use crate::settings::{
-        EdgeElevationSettings, EdgeLiquidPortSettings, PatchEdgesSettings, V3CavesSettings,
-        V3EnvironmentSettings, V3ForestSettings, V3FortSettings, V3HillsSettings,
-        V3MountainsSettings, V3RecipeSettings, V3SkyIslandsSettings, V3WaterfallSettings,
-        WalkerPortSettings,
+        EdgeElevationSettings, EdgeLiquidPortSettings, PatchEdgesSettings,
+        Ring19BoundaryOutletSettings, Ring19LiquidConnectionSettings, Ring19RegionSettings,
+        V3CavesSettings, V3EnvironmentSettings, V3ForestSettings, V3FortSettings, V3HillsSettings,
+        V3MountainsSettings, V3RecipeSettings, V3Ring19Settings, V3SkyIslandsSettings,
+        V3WaterfallSettings, WalkerPortSettings,
     };
 
     fn world_edges() -> PatchEdgesSettings {
@@ -1611,8 +2262,8 @@ mod tests {
             caves: patch(
                 V3EnvironmentSettings::Rocky,
                 V3RecipeSettings::Caves(V3CavesSettings {
-                    surface_level: 15,
-                    cave_floor_level: 7,
+                    surface_level: 17,
+                    cave_floor_level: 6,
                     chamber_count: 8,
                 }),
             ),
@@ -1643,6 +2294,76 @@ mod tests {
         }
         ProceduralV3Settings {
             layout: V3LayoutSettings::Ring7(ring),
+        }
+    }
+
+    fn ring19_settings() -> ProceduralV3Settings {
+        let region = Ring19RegionSettings {
+            environment: V3EnvironmentSettings::TemperateGrassland,
+            recipe: V3RecipeSettings::Hills(V3HillsSettings {
+                valley_level: 17,
+                max_relief: 12,
+                hills_per_bank: 3,
+            }),
+            overlays: Vec::new(),
+            rotation_turns: 0,
+        };
+        let mut regions = vec![region; V3_RING19_REGION_COUNT];
+        for (slot, rotation) in [(2, 4), (6, 5), (10, 4), (12, 5), (15, 3)] {
+            regions
+                .get_mut(slot)
+                .expect("fixed Ring19 rotation slot")
+                .rotation_turns = rotation;
+        }
+        let liquid_connections = [
+            (16, 5, 29),
+            (5, 0, 16),
+            (17, 6, 29),
+            (6, 0, 16),
+            (18, 1, 16),
+            (1, 0, 16),
+            (0, 4, 16),
+            (4, 12, 16),
+        ]
+        .into_iter()
+        .map(
+            |(source_region, sink_region, level)| Ring19LiquidConnectionSettings {
+                source_region,
+                sink_region,
+                width: 3,
+                level,
+            },
+        )
+        .collect();
+        ProceduralV3Settings {
+            layout: V3LayoutSettings::Ring19(V3Ring19Settings {
+                regions,
+                seam_defaults: SharedEdgeSettings {
+                    elevation: EdgeElevationSettings {
+                        preferred: 17,
+                        min: 16,
+                        max: 18,
+                    },
+                    walker: WalkerPortSettings { count: 2, width: 2 },
+                    liquid: EdgeLiquidSettings::Dry,
+                    approach_depth: 3,
+                },
+                liquid_connections,
+                boundary_outlets: vec![
+                    Ring19BoundaryOutletSettings {
+                        source_region: 12,
+                        side: Ring19BoundarySide::SouthEast,
+                        width: 3,
+                        level: 3,
+                    },
+                    Ring19BoundaryOutletSettings {
+                        source_region: 15,
+                        side: Ring19BoundarySide::West,
+                        width: 3,
+                        level: 14,
+                    },
+                ],
+            }),
         }
     }
 
@@ -1700,6 +2421,238 @@ mod tests {
         assert_eq!(resolved.patches.len(), 1);
         assert!(resolved.shared_edges.is_empty());
         assert!(resolved.validate().is_ok());
+    }
+
+    #[test]
+    fn ring19_resolves_exact_masks_topology_hydrology_and_outlets() {
+        let settings = ring19_settings();
+        let first = resolve_layout(RING19_RADIUS, &settings).expect("fixed Ring19 layout");
+        let second = resolve_layout(RING19_RADIUS, &settings).expect("deterministic Ring19 layout");
+        assert_eq!(first, second);
+        let mut reordered = settings.clone();
+        let V3LayoutSettings::Ring19(reordered_ring) = &mut reordered.layout else {
+            unreachable!("fixed Ring19 settings");
+        };
+        reordered_ring.liquid_connections.reverse();
+        reordered_ring.boundary_outlets.reverse();
+        assert_eq!(
+            first,
+            resolve_layout(RING19_RADIUS, &reordered)
+                .expect("Ring19 graph list order is not semantic")
+        );
+        assert_eq!(first.footprint.len(), 9_241);
+        assert_eq!(first.patches.len(), V3_RING19_REGION_COUNT);
+        assert_eq!(first.shared_edges.len(), 42);
+        assert_eq!(
+            first
+                .patches
+                .values()
+                .map(|patch| patch.mask.len())
+                .collect::<Vec<_>>(),
+            [
+                505, 498, 491, 491, 491, 491, 484, 486, 488, 477, 488, 477, 488, 477, 488, 477,
+                488, 477, 479,
+            ]
+        );
+        assert_eq!(
+            first
+                .patches
+                .values()
+                .flat_map(|patch| patch.edges.values())
+                .filter(|edge| matches!(edge, ResolvedEdgeReference::WorldBoundary))
+                .count(),
+            30
+        );
+        assert_eq!(
+            first
+                .patches
+                .values()
+                .map(|patch| patch.rotation_turns)
+                .collect::<Vec<_>>(),
+            [0, 0, 4, 0, 0, 0, 5, 0, 0, 0, 4, 0, 5, 0, 0, 3, 0, 0, 0]
+        );
+        let actual_seams = first
+            .shared_edges
+            .iter()
+            .map(|(id, edge)| {
+                (
+                    id.0,
+                    (edge.first.0).0,
+                    edge.first.1,
+                    (edge.second.0).0,
+                    edge.second.1,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual_seams,
+            vec![
+                (0, 0, HexSide::NorthEast, 1, HexSide::SouthWest),
+                (1, 0, HexSide::East, 2, HexSide::West),
+                (2, 0, HexSide::SouthEast, 3, HexSide::NorthWest),
+                (3, 0, HexSide::SouthWest, 4, HexSide::NorthEast),
+                (4, 0, HexSide::West, 5, HexSide::East),
+                (5, 0, HexSide::NorthWest, 6, HexSide::SouthEast),
+                (6, 1, HexSide::SouthEast, 2, HexSide::NorthWest),
+                (7, 1, HexSide::West, 6, HexSide::East),
+                (8, 1, HexSide::NorthEast, 7, HexSide::SouthWest),
+                (9, 1, HexSide::East, 8, HexSide::West),
+                (10, 1, HexSide::NorthWest, 18, HexSide::SouthEast),
+                (11, 2, HexSide::SouthWest, 3, HexSide::NorthEast),
+                (12, 2, HexSide::NorthEast, 8, HexSide::SouthWest),
+                (13, 2, HexSide::East, 9, HexSide::West),
+                (14, 2, HexSide::SouthEast, 10, HexSide::NorthWest),
+                (15, 3, HexSide::West, 4, HexSide::East),
+                (16, 3, HexSide::East, 10, HexSide::West),
+                (17, 3, HexSide::SouthEast, 11, HexSide::NorthWest),
+                (18, 3, HexSide::SouthWest, 12, HexSide::NorthEast),
+                (19, 4, HexSide::NorthWest, 5, HexSide::SouthEast),
+                (20, 4, HexSide::SouthEast, 12, HexSide::NorthWest),
+                (21, 4, HexSide::SouthWest, 13, HexSide::NorthEast),
+                (22, 4, HexSide::West, 14, HexSide::East),
+                (23, 5, HexSide::NorthEast, 6, HexSide::SouthWest),
+                (24, 5, HexSide::SouthWest, 14, HexSide::NorthEast),
+                (25, 5, HexSide::West, 15, HexSide::East),
+                (26, 5, HexSide::NorthWest, 16, HexSide::SouthEast),
+                (27, 6, HexSide::West, 16, HexSide::East),
+                (28, 6, HexSide::NorthWest, 17, HexSide::SouthEast),
+                (29, 6, HexSide::NorthEast, 18, HexSide::SouthWest),
+                (30, 7, HexSide::SouthEast, 8, HexSide::NorthWest),
+                (31, 7, HexSide::West, 18, HexSide::East),
+                (32, 8, HexSide::SouthEast, 9, HexSide::NorthWest),
+                (33, 9, HexSide::SouthWest, 10, HexSide::NorthEast),
+                (34, 10, HexSide::SouthWest, 11, HexSide::NorthEast),
+                (35, 11, HexSide::West, 12, HexSide::East),
+                (36, 12, HexSide::West, 13, HexSide::East),
+                (37, 13, HexSide::NorthWest, 14, HexSide::SouthEast),
+                (38, 14, HexSide::NorthWest, 15, HexSide::SouthEast),
+                (39, 15, HexSide::NorthEast, 16, HexSide::SouthWest),
+                (40, 16, HexSide::NorthEast, 17, HexSide::SouthWest),
+                (41, 17, HexSide::East, 18, HexSide::West),
+            ]
+        );
+        let actual_boundary_sides = first
+            .patches
+            .iter()
+            .flat_map(|(id, patch)| {
+                patch.edges.iter().filter_map(move |(side, reference)| {
+                    matches!(reference, ResolvedEdgeReference::WorldBoundary)
+                        .then_some((id.0, *side))
+                })
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            actual_boundary_sides,
+            BTreeSet::from([
+                (7, HexSide::East),
+                (7, HexSide::NorthWest),
+                (7, HexSide::NorthEast),
+                (8, HexSide::East),
+                (8, HexSide::NorthEast),
+                (9, HexSide::East),
+                (9, HexSide::SouthEast),
+                (9, HexSide::NorthEast),
+                (10, HexSide::East),
+                (10, HexSide::SouthEast),
+                (11, HexSide::East),
+                (11, HexSide::SouthEast),
+                (11, HexSide::SouthWest),
+                (12, HexSide::SouthEast),
+                (12, HexSide::SouthWest),
+                (13, HexSide::SouthEast),
+                (13, HexSide::SouthWest),
+                (13, HexSide::West),
+                (14, HexSide::SouthWest),
+                (14, HexSide::West),
+                (15, HexSide::SouthWest),
+                (15, HexSide::West),
+                (15, HexSide::NorthWest),
+                (16, HexSide::West),
+                (16, HexSide::NorthWest),
+                (17, HexSide::West),
+                (17, HexSide::NorthWest),
+                (17, HexSide::NorthEast),
+                (18, HexSide::NorthWest),
+                (18, HexSide::NorthEast),
+            ])
+        );
+
+        let actual_liquid = first
+            .shared_edges
+            .values()
+            .filter_map(|edge| {
+                let ResolvedLiquidPort::Directed {
+                    source,
+                    sink,
+                    elevation: ResolvedLiquidElevation::Exact(level),
+                    ..
+                } = edge.liquid
+                else {
+                    return None;
+                };
+                Some((source.0, sink.0, level))
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            actual_liquid,
+            BTreeSet::from([
+                (16, 5, 29),
+                (5, 0, 16),
+                (17, 6, 29),
+                (6, 0, 16),
+                (18, 1, 16),
+                (1, 0, 16),
+                (0, 4, 16),
+                (4, 12, 16),
+            ])
+        );
+
+        let water = first
+            .boundary_liquid_outlets
+            .get(&(PatchId(12), HexSide::SouthEast))
+            .expect("slot 12 water outlet");
+        assert_eq!(water.level, 3);
+        assert_eq!(
+            water
+                .lanes
+                .iter()
+                .map(|(inside, _)| *inside)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                HexCoord::new_cubic(-23, 55, -32),
+                HexCoord::new_cubic(-22, 55, -33),
+                HexCoord::new_cubic(-21, 55, -34),
+            ])
+        );
+        let lava = first
+            .boundary_liquid_outlets
+            .get(&(PatchId(15), HexSide::West))
+            .expect("slot 15 lava outlet");
+        assert_eq!(lava.level, 14);
+        assert_eq!(
+            lava.lanes
+                .iter()
+                .map(|(inside, _)| *inside)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                HexCoord::new_cubic(-55, 0, 55),
+                HexCoord::new_cubic(-55, 1, 54),
+                HexCoord::new_cubic(-54, -1, 55),
+            ])
+        );
+        for outlet in first.boundary_liquid_outlets.values() {
+            let source_mask = &first
+                .patches
+                .get(&outlet.source)
+                .expect("outlet source patch")
+                .mask;
+            assert!(outlet.inward_approach.is_subset(source_mask));
+            assert!(outlet.lanes.iter().all(|(inside, outside)| {
+                source_mask.contains(inside)
+                    && !first.footprint.contains(outside)
+                    && *outside == outlet.side.neighbor(*inside)
+            }));
+        }
     }
 
     #[test]
@@ -1788,7 +2741,10 @@ mod tests {
         let Some(edge) = resolved.shared_edges.get(&ResolvedEdgeId(1)) else {
             panic!("center/waterfall seam should resolve");
         };
-        let ResolvedLiquidPort::Directed { source, sink, port } = &edge.liquid else {
+        let ResolvedLiquidPort::Directed {
+            source, sink, port, ..
+        } = &edge.liquid
+        else {
             panic!("the reciprocal liquid seam should resolve one directed port")
         };
         assert_eq!((*source, *sink), (PatchId(0), PatchId(2)));
@@ -1977,6 +2933,7 @@ mod tests {
             source,
             sink,
             port: wide_port,
+            elevation: ResolvedLiquidElevation::EdgeBand,
         };
         let all_ports: Vec<_> = edge
             .walker
@@ -2106,6 +3063,253 @@ mod tests {
                 .skip(index + 1)
                 .all(|other| ports_are_disjoint(port, other))
         }));
+    }
+
+    #[test]
+    fn exact_liquid_elevation_is_ring19_only_and_independent_of_walker_band() {
+        let mut settings = ring_settings();
+        let V3LayoutSettings::Ring7(ring) = &mut settings.layout else {
+            unreachable!("the fixture is Ring7");
+        };
+        set_liquid_flow(
+            ring,
+            PatchId(0),
+            HexSide::East,
+            PatchId(2),
+            HexSide::West,
+            3,
+        );
+        let mut resolved = resolve_layout(33, &settings).expect("legacy directed seam resolves");
+        let edge_id = ResolvedEdgeId(1);
+        let edge = resolved
+            .shared_edges
+            .get_mut(&edge_id)
+            .expect("center/waterfall seam");
+        let ResolvedLiquidPort::Directed { elevation, .. } = &mut edge.liquid else {
+            unreachable!("the fixture has directed liquid");
+        };
+        *elevation = ResolvedLiquidElevation::Exact(29);
+
+        assert!(
+            resolved.validate().is_err(),
+            "Ring7 must reject exact-level liquid authority"
+        );
+        let edge = resolved
+            .shared_edges
+            .get(&edge_id)
+            .expect("center/waterfall seam");
+        let mut issues = Vec::new();
+        validate_resolved_edge(
+            LayoutKind::Ring19,
+            edge_id,
+            edge,
+            &resolved.patches,
+            &resolved.footprint,
+            &mut issues,
+        );
+        assert!(
+            issues.is_empty(),
+            "Ring19 exact liquid level may sit outside the walker band: {issues:?}"
+        );
+
+        let mut legacy = edge.clone();
+        let ResolvedLiquidPort::Directed { elevation, .. } = &mut legacy.liquid else {
+            unreachable!("the fixture has directed liquid");
+        };
+        *elevation = ResolvedLiquidElevation::EdgeBand;
+        let mut issues = Vec::new();
+        validate_resolved_edge(
+            LayoutKind::Ring19,
+            edge_id,
+            &legacy,
+            &resolved.patches,
+            &resolved.footprint,
+            &mut issues,
+        );
+        assert!(
+            issues.contains(&LayoutIssue::InvalidResolvedContract(edge_id)),
+            "Ring19 must not fall back to a walker elevation band"
+        );
+    }
+
+    #[test]
+    fn ring7_rejects_injected_boundary_liquid_outlets() {
+        let mut resolved = resolve_layout(33, &ring_settings()).expect("valid Ring7 layout");
+        let source = PatchId(1);
+        let side = HexSide::NorthWest;
+        resolved.boundary_liquid_outlets.insert(
+            (source, side),
+            ResolvedBoundaryLiquidOutlet {
+                source,
+                side,
+                lanes: BTreeSet::new(),
+                inward_approach: BTreeSet::new(),
+                approach_depth: 1,
+                level: 3,
+            },
+        );
+
+        let error = resolved
+            .validate()
+            .expect_err("Ring7 must not acquire complete-world boundary outlets");
+        assert!(error
+            .issues()
+            .contains(&LayoutIssue::InvalidBoundaryLiquidOutlet(source, side)));
+    }
+
+    fn boundary_liquid_outlet_fixture() -> (ResolvedLayoutPlan, BTreeSet<HexCoord>) {
+        let mask = HexCoord::ORIGIN
+            .within_radius(2)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let inside = BTreeSet::from([HexCoord::from_axial(2, -1), HexCoord::from_axial(2, 0)]);
+        let lanes = inside
+            .iter()
+            .copied()
+            .map(|coord| (coord, HexSide::East.neighbor(coord)))
+            .collect::<BTreeSet<_>>();
+        let inward_approach = approach_corridor(&inside, &mask, HexSide::West, 2)
+            .expect("the exact boundary approach fits");
+        let edges = HexSide::ALL
+            .into_iter()
+            .map(|side| (side, ResolvedEdgeReference::WorldBoundary))
+            .collect();
+        let outlet = ResolvedBoundaryLiquidOutlet {
+            source: PatchId(0),
+            side: HexSide::East,
+            lanes,
+            inward_approach,
+            approach_depth: 2,
+            level: 16,
+        };
+        (
+            ResolvedLayoutPlan {
+                kind: LayoutKind::Ring19,
+                grid_radius: 55,
+                footprint: mask.clone(),
+                patches: BTreeMap::from([(
+                    PatchId(0),
+                    ResolvedPatch {
+                        biome_region: BiomeRegionId(0),
+                        rotation_turns: 0,
+                        mask,
+                        edges,
+                    },
+                )]),
+                shared_edges: BTreeMap::new(),
+                boundary_liquid_outlets: BTreeMap::from([((PatchId(0), HexSide::East), outlet)]),
+            },
+            inside,
+        )
+    }
+
+    #[test]
+    fn boundary_liquid_outlet_geometry_and_reservations_are_exact() {
+        let (mut layout, inside) = boundary_liquid_outlet_fixture();
+        let mut issues = Vec::new();
+        validate_boundary_liquid_outlets(&layout, &mut issues);
+        assert!(
+            issues.is_empty(),
+            "exact outlet should validate: {issues:?}"
+        );
+
+        let mut missing = layout.clone();
+        missing.boundary_liquid_outlets.clear();
+        let mut issues = Vec::new();
+        validate_boundary_liquid_outlets(&missing, &mut issues);
+        assert_eq!(issues, vec![LayoutIssue::MissingBoundaryLiquidOutlet]);
+
+        let mut wrong_level = layout.clone();
+        wrong_level
+            .boundary_liquid_outlets
+            .values_mut()
+            .next()
+            .expect("one outlet")
+            .level = 2;
+        let mut issues = Vec::new();
+        validate_boundary_liquid_outlets(&wrong_level, &mut issues);
+        assert!(issues.contains(&LayoutIssue::InvalidBoundaryLiquidOutlet(
+            PatchId(0),
+            HexSide::East
+        )));
+
+        let reserved_coord = *inside.first().expect("two boundary lanes");
+        layout.shared_edges.insert(
+            ResolvedEdgeId(99),
+            ResolvedEdgeContract {
+                first: (PatchId(0), HexSide::East),
+                second: (PatchId(1), HexSide::West),
+                elevation: ResolvedElevationBand {
+                    preferred: 16,
+                    min: 15,
+                    max: 17,
+                },
+                walker: ResolvedWalkerPorts {
+                    count: 0,
+                    width: 0,
+                    ports: Vec::new(),
+                },
+                liquid: ResolvedLiquidPort::Dry,
+                approach_depth: 1,
+                boundary_pairs: BTreeSet::new(),
+                protected_approaches: BTreeMap::from([(
+                    PatchId(0),
+                    BTreeSet::from([reserved_coord]),
+                )]),
+            },
+        );
+        let mut issues = Vec::new();
+        validate_boundary_liquid_outlets(&layout, &mut issues);
+        assert!(
+            issues.contains(&LayoutIssue::InvalidBoundaryLiquidOutlet(
+                PatchId(0),
+                HexSide::East
+            )),
+            "boundary liquid reservations must remain disjoint from seam reservations"
+        );
+    }
+
+    #[test]
+    fn boundary_liquid_outlet_lane_cannot_touch_another_patch() {
+        let (mut layout, _) = boundary_liquid_outlet_fixture();
+        layout.footprint.insert(HexCoord::from_axial(3, -2));
+
+        let mut issues = Vec::new();
+        validate_boundary_liquid_outlets(&layout, &mut issues);
+
+        assert!(
+            issues.contains(&LayoutIssue::InvalidBoundaryLiquidOutlet(
+                PatchId(0),
+                HexSide::East
+            )),
+            "a boundary outlet lane adjacent to another patch must fail revalidation"
+        );
+    }
+
+    #[test]
+    fn boundary_liquid_outlet_approach_cannot_touch_another_patch() {
+        let (mut layout, _) = boundary_liquid_outlet_fixture();
+        let foreign = HexCoord::from_axial(1, -2);
+        assert!(
+            layout
+                .patches
+                .get_mut(&PatchId(0))
+                .expect("fixture source patch")
+                .mask
+                .remove(&foreign),
+            "fixture foreign cell starts in the source mask"
+        );
+
+        let mut issues = Vec::new();
+        validate_boundary_liquid_outlets(&layout, &mut issues);
+
+        assert!(
+            issues.contains(&LayoutIssue::InvalidBoundaryLiquidOutlet(
+                PatchId(0),
+                HexSide::East
+            )),
+            "a boundary outlet approach adjacent to another patch must fail revalidation"
+        );
     }
 
     #[test]

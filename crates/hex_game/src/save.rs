@@ -23,6 +23,205 @@ use crate::storage::{read, write_atomic, StoragePaths};
 
 const RESUME_VERSION: u32 = 1;
 
+/// Build-bound inputs whose semantic changes invalidate the disposable resume slot.
+///
+/// Keep the asset paths beside their compiled contents: tests use the paths to prove
+/// that every dependency named by `scenarios.ron` participates in the digest.
+const SHIPPED_RESUME_INPUTS: &[(&str, &str)] = &[
+    (
+        "config/scenarios.ron",
+        include_str!("../../../assets/config/scenarios.ron"),
+    ),
+    (
+        "art/object_catalog.ron",
+        include_str!("../../../assets/art/object_catalog.ron"),
+    ),
+    (
+        "art/objects/plant/old-growth.ron",
+        include_str!("../../../assets/art/objects/plant/old-growth.ron"),
+    ),
+    (
+        "art/objects/plant/small-broadleaf.ron",
+        include_str!("../../../assets/art/objects/plant/small-broadleaf.ron"),
+    ),
+    (
+        "art/objects/plant/snowy-old-growth.ron",
+        include_str!("../../../assets/art/objects/plant/snowy-old-growth.ron"),
+    ),
+    (
+        "art/objects/plant/snowy-small-broadleaf.ron",
+        include_str!("../../../assets/art/objects/plant/snowy-small-broadleaf.ron"),
+    ),
+    (
+        "art/objects/plant/snowy-tall-narrow.ron",
+        include_str!("../../../assets/art/objects/plant/snowy-tall-narrow.ron"),
+    ),
+    (
+        "art/objects/plant/tall-narrow.ron",
+        include_str!("../../../assets/art/objects/plant/tall-narrow.ron"),
+    ),
+    (
+        "art/objects/prop/cave-lichen.ron",
+        include_str!("../../../assets/art/objects/prop/cave-lichen.ron"),
+    ),
+    (
+        "art/objects/prop/cave-moss.ron",
+        include_str!("../../../assets/art/objects/prop/cave-moss.ron"),
+    ),
+    (
+        "art/objects/prop/crystal-branched.ron",
+        include_str!("../../../assets/art/objects/prop/crystal-branched.ron"),
+    ),
+    (
+        "art/objects/prop/crystal-low-cluster.ron",
+        include_str!("../../../assets/art/objects/prop/crystal-low-cluster.ron"),
+    ),
+    (
+        "art/objects/prop/crystal-spire.ron",
+        include_str!("../../../assets/art/objects/prop/crystal-spire.ron"),
+    ),
+    (
+        "art/objects/prop/grass-tuft.ron",
+        include_str!("../../../assets/art/objects/prop/grass-tuft.ron"),
+    ),
+    (
+        "art/objects/prop/snowy-grass-tuft.ron",
+        include_str!("../../../assets/art/objects/prop/snowy-grass-tuft.ron"),
+    ),
+    (
+        "config/formations.ron",
+        include_str!("../../../assets/config/formations.ron"),
+    ),
+    (
+        "config/lattices.ron",
+        include_str!("../../../assets/config/lattices.ron"),
+    ),
+    (
+        "config/elements.ron",
+        include_str!("../../../assets/config/elements.ron"),
+    ),
+    (
+        "config/spells.ron",
+        include_str!("../../../assets/config/spells.ron"),
+    ),
+    (
+        "config/ai_profiles.ron",
+        include_str!("../../../assets/config/ai_profiles.ron"),
+    ),
+    (
+        "config/combat.ron",
+        include_str!("../../../assets/config/combat.ron"),
+    ),
+    (
+        "config/perception.ron",
+        include_str!("../../../assets/config/perception.ron"),
+    ),
+    (
+        "config/player.ron",
+        include_str!("../../../assets/config/player.ron"),
+    ),
+    (
+        "config/substances.ron",
+        include_str!("../../../assets/config/substances.ron"),
+    ),
+    (
+        "config/lighting.ron",
+        include_str!("../../../assets/config/lighting.ron"),
+    ),
+    (
+        "config/lighting/overcast.ron",
+        include_str!("../../../assets/config/lighting/overcast.ron"),
+    ),
+    (
+        "config/world.ron",
+        include_str!("../../../assets/config/world.ron"),
+    ),
+    (
+        "config/worlds/flat-combat.ron",
+        include_str!("../../../assets/config/worlds/flat-combat.ron"),
+    ),
+    (
+        "config/worlds/procedural-caves.ron",
+        include_str!("../../../assets/config/worlds/procedural-caves.ron"),
+    ),
+    (
+        "config/worlds/procedural-deep-forest.ron",
+        include_str!("../../../assets/config/worlds/procedural-deep-forest.ron"),
+    ),
+    (
+        "config/worlds/procedural-forest.ron",
+        include_str!("../../../assets/config/worlds/procedural-forest.ron"),
+    ),
+    (
+        "config/worlds/procedural-fort.ron",
+        include_str!("../../../assets/config/worlds/procedural-fort.ron"),
+    ),
+    (
+        "config/worlds/procedural-frozen.ron",
+        include_str!("../../../assets/config/worlds/procedural-frozen.ron"),
+    ),
+    (
+        "config/worlds/procedural-hills.ron",
+        include_str!("../../../assets/config/worlds/procedural-hills.ron"),
+    ),
+    (
+        "config/worlds/procedural-mountains.ron",
+        include_str!("../../../assets/config/worlds/procedural-mountains.ron"),
+    ),
+    (
+        "config/worlds/procedural-prairie.ron",
+        include_str!("../../../assets/config/worlds/procedural-prairie.ron"),
+    ),
+    (
+        "config/worlds/procedural-ring7.ron",
+        include_str!("../../../assets/config/worlds/procedural-ring7.ron"),
+    ),
+    (
+        "config/worlds/procedural-two-rings.ron",
+        include_str!("../../../assets/config/worlds/procedural-two-rings.ron"),
+    ),
+    (
+        "config/worlds/procedural-sky-islands.ron",
+        include_str!("../../../assets/config/worlds/procedural-sky-islands.ron"),
+    ),
+    (
+        "config/worlds/procedural-volcanic.ron",
+        include_str!("../../../assets/config/worlds/procedural-volcanic.ron"),
+    ),
+    (
+        "config/worlds/procedural-waterfall.ron",
+        include_str!("../../../assets/config/worlds/procedural-waterfall.ron"),
+    ),
+    (
+        "config/worlds/rolling-hills.ron",
+        include_str!("../../../assets/config/worlds/rolling-hills.ron"),
+    ),
+    (
+        "config/encounters/ability-lab.ron",
+        include_str!("../../../assets/config/encounters/ability-lab.ron"),
+    ),
+    (
+        "config/encounters/anchored-skirmish.ron",
+        include_str!("../../../assets/config/encounters/anchored-skirmish.ron"),
+    ),
+    (
+        "config/encounters/bridge-crossing.ron",
+        include_str!("../../../assets/config/encounters/bridge-crossing.ron"),
+    ),
+    (
+        "config/encounters/open-ground.ron",
+        include_str!("../../../assets/config/encounters/open-ground.ron"),
+    ),
+    (
+        "config/encounters/party-trial.ron",
+        include_str!("../../../assets/config/encounters/party-trial.ron"),
+    ),
+    (
+        "config/encounters/raider-mirror.ron",
+        include_str!("../../../assets/config/encounters/raider-mirror.ron"),
+    ),
+];
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 struct ResumeFile {
     format_version: u32,
@@ -485,37 +684,7 @@ fn scenario_digest(scenario: &Scenario) -> u64 {
     }
     // Coarse by design: this is a disposable slot, so any shipped gameplay or world
     // content change refuses it instead of pretending to migrate semantic ids.
-    for content in [
-        include_str!("../../../assets/config/scenarios.ron"),
-        include_str!("../../../assets/config/formations.ron"),
-        include_str!("../../../assets/config/lattices.ron"),
-        include_str!("../../../assets/config/elements.ron"),
-        include_str!("../../../assets/config/spells.ron"),
-        include_str!("../../../assets/config/ai_profiles.ron"),
-        include_str!("../../../assets/config/combat.ron"),
-        include_str!("../../../assets/config/perception.ron"),
-        include_str!("../../../assets/config/player.ron"),
-        include_str!("../../../assets/config/substances.ron"),
-        include_str!("../../../assets/config/lighting.ron"),
-        include_str!("../../../assets/config/lighting/overcast.ron"),
-        include_str!("../../../assets/config/world.ron"),
-        include_str!("../../../assets/config/worlds/flat-combat.ron"),
-        include_str!("../../../assets/config/worlds/procedural-caves.ron"),
-        include_str!("../../../assets/config/worlds/procedural-forest.ron"),
-        include_str!("../../../assets/config/worlds/procedural-frozen.ron"),
-        include_str!("../../../assets/config/worlds/procedural-hills.ron"),
-        include_str!("../../../assets/config/worlds/procedural-mountains.ron"),
-        include_str!("../../../assets/config/worlds/procedural-sky-islands.ron"),
-        include_str!("../../../assets/config/worlds/procedural-volcanic.ron"),
-        include_str!("../../../assets/config/worlds/procedural-waterfall.ron"),
-        include_str!("../../../assets/config/worlds/rolling-hills.ron"),
-        include_str!("../../../assets/config/encounters/ability-lab.ron"),
-        include_str!("../../../assets/config/encounters/anchored-skirmish.ron"),
-        include_str!("../../../assets/config/encounters/bridge-crossing.ron"),
-        include_str!("../../../assets/config/encounters/open-ground.ron"),
-        include_str!("../../../assets/config/encounters/party-trial.ron"),
-        include_str!("../../../assets/config/encounters/raider-mirror.ron"),
-    ] {
+    for (_, content) in SHIPPED_RESUME_INPUTS {
         fold(content.as_bytes());
     }
     digest
@@ -596,5 +765,52 @@ mod tests {
         let mut changed = original.clone();
         changed.encounter = "config/encounters/other.ron".to_owned();
         assert_ne!(scenario_digest(&original), scenario_digest(&changed));
+    }
+
+    #[test]
+    fn every_shipped_scenario_dependency_participates_in_resume_invalidation() {
+        let library: ScenarioLibrary =
+            ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
+                .expect("the shipped scenario library should parse");
+        let included: BTreeSet<&str> = SHIPPED_RESUME_INPUTS
+            .iter()
+            .map(|(path, _)| *path)
+            .collect();
+        assert_eq!(
+            included.len(),
+            SHIPPED_RESUME_INPUTS.len(),
+            "resume inputs must not repeat an asset path"
+        );
+
+        for scenario in library.scenarios {
+            for (kind, path) in [
+                ("world", scenario.world.as_str()),
+                ("lighting", scenario.lighting.as_str()),
+                ("encounter", scenario.encounter.as_str()),
+            ] {
+                assert!(
+                    included.contains(path),
+                    "{kind} dependency {path:?} for scenario {:?} is absent from \
+                     SHIPPED_RESUME_INPUTS",
+                    scenario.name
+                );
+            }
+        }
+
+        let objects: hex_assets::ObjectCatalogFile =
+            ron::from_str(include_str!("../../../assets/art/object_catalog.ron"))
+                .expect("the shipped object catalog should parse");
+        assert!(
+            included.contains("art/object_catalog.ron"),
+            "the object manifest itself must invalidate resumable worlds"
+        );
+        for id in objects.ids() {
+            let path = format!("art/objects/{id}.ron");
+            assert!(
+                included.contains(path.as_str()),
+                "object blueprint {path:?} can change generated blockers and must invalidate \
+                 resumable worlds"
+            );
+        }
     }
 }

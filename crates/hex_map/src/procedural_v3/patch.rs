@@ -9,9 +9,12 @@ use std::collections::BTreeSet;
 use hex_core::{BiomeRegionId, HexCoord, Level};
 
 use super::layout::{
-    HexSide, PatchId, ResolvedEdgeContract, ResolvedEdgeId, ResolvedEdgeReference,
-    ResolvedLayoutPlan, ResolvedLiquidPort, ResolvedPatch, ResolvedPort,
+    ring19_patch_center, HexSide, LayoutKind, PatchId, ResolvedBoundaryLiquidOutlet,
+    ResolvedEdgeContract, ResolvedEdgeId, ResolvedEdgeReference, ResolvedLayoutPlan,
+    ResolvedLiquidElevation, ResolvedLiquidPort, ResolvedPatch, ResolvedPort,
+    RING19_LOCAL_FRAME_SCALE,
 };
+use super::local_frame::LocalPatchFrame;
 use super::seed::SeedStreams;
 use super::V3GenerationError;
 
@@ -47,11 +50,31 @@ pub(crate) struct PatchSharedEdge<'a> {
     patch_is_first: bool,
 }
 
+/// One directed liquid seam projected into a patch's local orientation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PatchLiquidPort {
+    pub(crate) is_source: bool,
+    pub(crate) port: ResolvedPort,
+    pub(crate) elevation: ResolvedLiquidElevation,
+}
+
 impl<'a> PatchSharedEdge<'a> {
     /// Preferred surface level agreed by both neighboring patches.
     #[must_use]
     pub(crate) const fn preferred_level(&self) -> Level {
         self.contract.elevation.preferred
+    }
+
+    /// Lowest liquid or surface level admitted by this shared edge.
+    #[must_use]
+    pub(crate) const fn minimum_level(&self) -> Level {
+        self.contract.elevation.min
+    }
+
+    /// Highest liquid or surface level admitted by this shared edge.
+    #[must_use]
+    pub(crate) const fn maximum_level(&self) -> Level {
+        self.contract.elevation.max
     }
 
     /// Exact cells on this side which local decoration and hazards must preserve.
@@ -66,6 +89,24 @@ impl<'a> PatchSharedEdge<'a> {
             Some(coords) => coords,
             None => empty_coords(),
         }
+    }
+
+    /// Exact cells reserved only for this edge's ordinary-walker apertures.
+    #[must_use]
+    pub(crate) fn walker_protected_approaches(&self) -> BTreeSet<HexCoord> {
+        self.contract
+            .walker
+            .ports
+            .iter()
+            .flat_map(|port| {
+                if self.patch_is_first {
+                    port.first_approach.iter()
+                } else {
+                    port.second_approach.iter()
+                }
+            })
+            .copied()
+            .collect()
     }
 
     /// Walker apertures oriented from this patch to its neighbor.
@@ -95,8 +136,14 @@ impl<'a> PatchSharedEdge<'a> {
 
     /// Directed liquid aperture when this patch is the source or sink.
     #[must_use]
-    pub(crate) fn liquid_port(&self) -> Option<(bool, ResolvedPort)> {
-        let ResolvedLiquidPort::Directed { source, port, .. } = &self.contract.liquid else {
+    pub(crate) fn liquid_port(&self) -> Option<PatchLiquidPort> {
+        let ResolvedLiquidPort::Directed {
+            source,
+            port,
+            elevation,
+            ..
+        } = &self.contract.liquid
+        else {
             return None;
         };
         let patch = if self.patch_is_first {
@@ -104,11 +151,15 @@ impl<'a> PatchSharedEdge<'a> {
         } else {
             self.contract.second.0
         };
-        Some((*source == patch, orient_port(port, self.patch_is_first)))
+        Some(PatchLiquidPort {
+            is_source: *source == patch,
+            port: orient_port(port, self.patch_is_first),
+            elevation: *elevation,
+        })
     }
 }
 
-/// Stable recipe inputs for one patch of either a Single or Ring7 layout.
+/// Stable recipe inputs for one patch of a Single, Ring7, or Ring19 layout.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PatchRecipeContext<'a> {
     pub(crate) id: PatchId,
@@ -143,6 +194,50 @@ impl<'a> PatchRecipeContext<'a> {
         self.patch.biome_region
     }
 
+    /// Clockwise turns applied to recipe-local authored geometry.
+    #[must_use]
+    pub(crate) const fn rotation_turns(&self) -> u8 {
+        self.patch.rotation_turns
+    }
+
+    /// Stable recipe-local frame, resolved in constant time for fixed Ring19 slots.
+    pub(crate) fn local_frame(&self) -> Result<LocalPatchFrame, V3GenerationError> {
+        self.local_frame_with_rotation(self.rotation_turns())
+    }
+
+    /// Stable recipe-local frame with an explicit recipe-owned orientation.
+    pub(crate) fn local_frame_with_rotation(
+        &self,
+        rotation: u8,
+    ) -> Result<LocalPatchFrame, V3GenerationError> {
+        if self.layout.kind == LayoutKind::Ring19 {
+            let center = ring19_patch_center(self.id).ok_or_else(|| {
+                V3GenerationError::RecipeContract(format!(
+                    "Ring19 patch {} has no fixed local-frame centre",
+                    self.id.0
+                ))
+            })?;
+            if !self.patch.mask.contains(&center) {
+                return Err(V3GenerationError::RecipeContract(format!(
+                    "Ring19 patch {} does not contain its fixed local-frame centre {center:?}",
+                    self.id.0
+                )));
+            }
+            return Ok(LocalPatchFrame::from_resolved_ring19(
+                center,
+                RING19_LOCAL_FRAME_SCALE,
+                rotation,
+            ));
+        }
+        LocalPatchFrame::resolve_rotated(
+            &self.patch.mask,
+            self.layout.kind,
+            self.layout.grid_radius,
+            rotation,
+        )
+        .map_err(V3GenerationError::RecipeContract)
+    }
+
     /// All shared edges in clockwise side order.
     pub(crate) fn shared_edges(&self) -> impl Iterator<Item = PatchSharedEdge<'a>> + '_ {
         HexSide::ALL.into_iter().filter_map(|side| {
@@ -160,6 +255,15 @@ impl<'a> PatchRecipeContext<'a> {
         })
     }
 
+    /// Whether this exact patch side exits the complete resolved world.
+    #[must_use]
+    pub(crate) fn is_world_boundary(&self, side: HexSide) -> bool {
+        matches!(
+            self.patch.edges.get(&side),
+            Some(ResolvedEdgeReference::WorldBoundary)
+        )
+    }
+
     /// Union of exact approach cells which recipe-local features must not occupy.
     #[must_use]
     pub(crate) fn protected_approaches(&self) -> BTreeSet<HexCoord> {
@@ -167,7 +271,28 @@ impl<'a> PatchRecipeContext<'a> {
         for edge in self.shared_edges() {
             protected.extend(edge.protected_approaches().iter().copied());
         }
+        for outlet in self.boundary_liquid_outlets() {
+            protected.extend(outlet.inward_approach.iter().copied());
+        }
         protected
+    }
+
+    /// Union of approach cells reserved only for ordinary-walker seam apertures.
+    #[must_use]
+    pub(crate) fn walker_protected_approaches(&self) -> BTreeSet<HexCoord> {
+        self.shared_edges()
+            .flat_map(|edge| edge.walker_protected_approaches())
+            .collect()
+    }
+
+    /// Exact complete-world boundary liquid outlets owned by this patch.
+    pub(crate) fn boundary_liquid_outlets(
+        &self,
+    ) -> impl Iterator<Item = &'a ResolvedBoundaryLiquidOutlet> + '_ {
+        self.layout
+            .boundary_liquid_outlets
+            .values()
+            .filter(move |outlet| outlet.source == self.id)
     }
 
     /// Candidate streams namespaced by the stable patch slot.
@@ -246,6 +371,7 @@ mod tests {
                     PatchId(2),
                     ResolvedPatch {
                         biome_region: BiomeRegionId(2),
+                        rotation_turns: 0,
                         mask: BTreeSet::from([first_coord]),
                         edges: first_edges,
                     },
@@ -254,6 +380,7 @@ mod tests {
                     PatchId(5),
                     ResolvedPatch {
                         biome_region: BiomeRegionId(5),
+                        rotation_turns: 0,
                         mask: BTreeSet::from([second_coord]),
                         edges: second_edges,
                     },
@@ -283,6 +410,7 @@ mod tests {
                     ]),
                 },
             )]),
+            boundary_liquid_outlets: BTreeMap::new(),
         }
     }
 
@@ -317,6 +445,38 @@ mod tests {
             first.seed_streams(44, 3).stage("landform").sample(9),
             second.seed_streams(44, 3).stage("landform").sample(9)
         );
+    }
+
+    #[test]
+    fn boundary_liquid_approaches_join_full_but_not_walker_only_reservations() {
+        let mut layout = two_patch_layout();
+        layout.kind = LayoutKind::Ring19;
+        let boundary_approach = HexCoord::from_axial(-1, 0);
+        layout.boundary_liquid_outlets.insert(
+            (PatchId(2), HexSide::West),
+            ResolvedBoundaryLiquidOutlet {
+                source: PatchId(2),
+                side: HexSide::West,
+                lanes: BTreeSet::from([(
+                    HexCoord::ORIGIN,
+                    HexSide::West.neighbor(HexCoord::ORIGIN),
+                )]),
+                inward_approach: BTreeSet::from([boundary_approach]),
+                approach_depth: 1,
+                level: 3,
+            },
+        );
+        let context = PatchRecipeContext::resolve(&layout, PatchId(2)).expect("first patch");
+
+        assert_eq!(
+            context.walker_protected_approaches(),
+            BTreeSet::from([HexCoord::ORIGIN])
+        );
+        assert_eq!(
+            context.protected_approaches(),
+            BTreeSet::from([HexCoord::ORIGIN, boundary_approach])
+        );
+        assert_eq!(context.boundary_liquid_outlets().count(), 1);
     }
 
     #[test]

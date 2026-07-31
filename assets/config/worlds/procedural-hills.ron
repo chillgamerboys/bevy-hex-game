@@ -9,7 +9,7 @@
             environment: TemperateGrassland,
             recipe: Hills((
                 valley_level: 15,
-                max_relief: 8,
+                max_relief: 12,
                 hills_per_bank: 3,
             )),
             overlays: [],

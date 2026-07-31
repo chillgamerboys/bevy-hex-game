@@ -91,7 +91,7 @@
         (
             id: "volcanic-hills",
             display_name: "Volcanic Hills",
-            description: "Basalt ridges and lava divide the field around a cooled alternate crossing.",
+            description: "A towering volcano feeds descending lava beneath one elevated stairway bridge.",
             tags: ["Lava", "Bridge", "Hazards"],
             preview: "ui/combat-lab/volcanic-hills.png",
             scenario: "Volcanic Hills",
@@ -191,6 +191,40 @@
             ),
         ),
         (
+            id: "deep-forest",
+            display_name: "Deep Forest",
+            description: "Dense authored woodland preserves one winding trail and three irregular clearings.",
+            tags: ["Dense", "Woodland", "Trail"],
+            preview: "ui/combat-lab/deep-forest.png",
+            scenario: "Deep Forest",
+            fixed_seed: Some(1592598566),
+            player_region: (
+                center: Anchor("party_start"),
+                radius: 4,
+            ),
+            hostile_region: (
+                center: Anchor("hostile_start"),
+                radius: 4,
+            ),
+        ),
+        (
+            id: "prairie",
+            display_name: "Prairie",
+            description: "Open rolling grassland provides long sightlines and dense nonblocking vegetation.",
+            tags: ["Open", "Grassland", "Rolling"],
+            preview: "ui/combat-lab/prairie.png",
+            scenario: "Prairie",
+            fixed_seed: Some(1592598566),
+            player_region: (
+                center: Anchor("party_start"),
+                radius: 4,
+            ),
+            hostile_region: (
+                center: Anchor("hostile_start"),
+                radius: 4,
+            ),
+        ),
+        (
             id: "fort",
             display_name: "Fort",
             description: "A worked-stone stronghold with two gates, broad wall walks, towers, stairs, and a central keep.",
@@ -215,6 +249,23 @@
             preview: "ui/combat-lab/seven-regions.png",
             scenario: "Seven Regions",
             fixed_seed: Some(703700113),
+            player_region: (
+                center: Anchor("party_start"),
+                radius: 4,
+            ),
+            hostile_region: (
+                center: Anchor("hostile_start"),
+                radius: 4,
+            ),
+        ),
+        (
+            id: "two-rings",
+            display_name: "Two Rings",
+            description: "Nineteen connected regions form one mountain-fed watershed beside forests, prairies, caves, a fort, and a volcano.",
+            tags: ["Ring19", "Large", "Mixed"],
+            preview: "ui/combat-lab/two-rings.png",
+            scenario: "Two Rings",
+            fixed_seed: Some(1592598566),
             player_region: (
                 center: Anchor("party_start"),
                 radius: 4,

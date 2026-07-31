@@ -1,3 +1,5 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use bevy::input::mouse::MouseWheel;
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
@@ -6,7 +8,8 @@ use bevy::window::{CursorMoved, PrimaryWindow};
 
 use hex_assets::{to_color, CameraSettings, ResolvedLighting, Rgb};
 use hex_core::{
-    AppSystems, CameraFocusTarget, GameplaySetup, InputAction, InputBindings, MapViewHint, Screen,
+    config::HEX_CIRCUMRADIUS, AppSystems, CameraFocusTarget, GameplaySetup, HexSpan, HexTile,
+    InputAction, InputBindings, MapViewHint, Screen, TilePos,
 };
 
 use crate::{
@@ -18,10 +21,48 @@ use crate::{
 /// 1000-unit far plane and far outside the configured zoom range plus the terrain.
 const SKY_DOME_RADIUS: f32 = 500.0;
 
+/// Nearby yaw offsets considered when terrain leaves no room for the preferred
+/// minimum Character-camera radius.
+///
+/// Thirty-degree steps cover both hex faces and corners. Positive yaw wins an
+/// otherwise exact tie, so a symmetric enclosure cannot make the camera alternate
+/// between two equally good directions.
+const CHARACTER_CAMERA_YAW_OFFSETS: [f32; 11] = [
+    std::f32::consts::FRAC_PI_6,
+    -std::f32::consts::FRAC_PI_6,
+    std::f32::consts::FRAC_PI_3,
+    -std::f32::consts::FRAC_PI_3,
+    std::f32::consts::FRAC_PI_2,
+    -std::f32::consts::FRAC_PI_2,
+    2.0 * std::f32::consts::FRAC_PI_3,
+    -2.0 * std::f32::consts::FRAC_PI_3,
+    5.0 * std::f32::consts::FRAC_PI_6,
+    -5.0 * std::f32::consts::FRAC_PI_6,
+    std::f32::consts::PI,
+];
+
+/// Clearances within this world-unit tolerance are the same deterministic tie.
+const CHARACTER_CAMERA_CLEARANCE_TIE_EPSILON: f32 = 1e-5;
+
 /// Marks the sky-dome entity so `follow_camera` can pin it to the camera.
 #[derive(Component, Reflect)]
 #[reflect(Component)]
 pub(crate) struct SkyDome;
+
+/// Same-frame ordering for the public terrain projection and camera transforms.
+///
+/// Review tooling uses [`Self::FollowCharacter`] to establish an initial pose
+/// before Character-mode collision resolves it. The set carries presentation
+/// ordering only; it does not expose terrain ownership or gameplay visibility.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CameraSystems {
+    /// Refresh the cached public `HexTile`/`TilePos`/`HexSpan` projection.
+    RefreshObstructions,
+    /// Follow the selected character and keep the camera outside terrain.
+    FollowCharacter,
+    /// Pin camera-owned presentation, such as the sky dome, to the final pose.
+    FollowPresentation,
+}
 
 /// Registers the pan/orbit camera and the procedural sky.
 pub fn plugin(app: &mut App) {
@@ -31,6 +72,8 @@ pub fn plugin(app: &mut App) {
         .register_type::<SkyDome>()
         .init_resource::<CameraMode>()
         .init_resource::<SavedMapCamera>()
+        .init_resource::<CameraObstructionIndex>()
+        .init_resource::<CharacterCameraCollision>()
         .init_resource::<InputBindings>()
         // Spawned once at startup rather than per screen: it is the render target
         // the UI screens draw through, and the sky behind them.
@@ -49,7 +92,10 @@ pub fn plugin(app: &mut App) {
         // handle built once in `spawn_camera`, and rebuilding it per screen would
         // churn an asset to change one bool.
         .add_systems(OnEnter(Screen::Gameplay), show_sky)
-        .add_systems(OnExit(Screen::Gameplay), hide_sky)
+        .add_systems(
+            OnExit(Screen::Gameplay),
+            (hide_sky, clear_camera_obstruction_index),
+        )
         // Only the material push depends on the settings; the dome has to follow the
         // camera every frame regardless.
         .add_systems(
@@ -76,7 +122,11 @@ pub fn plugin(app: &mut App) {
         // hex_anim or hex_units, then updates GlobalTransform in the same frame.
         .add_systems(
             PostUpdate,
-            (follow_character_camera, follow_camera)
+            (
+                refresh_camera_obstruction_index.in_set(CameraSystems::RefreshObstructions),
+                follow_character_camera.in_set(CameraSystems::FollowCharacter),
+                follow_camera.in_set(CameraSystems::FollowPresentation),
+            )
                 .chain()
                 .before(TransformSystems::Propagate)
                 .run_if(in_state(Screen::Gameplay)),
@@ -138,6 +188,47 @@ impl CameraPose {
 
 #[derive(Resource, Debug, Default)]
 struct SavedMapCamera(Option<CameraPose>);
+
+/// One rendered terrain run in the camera's public obstruction projection.
+#[derive(Debug, Clone, Copy)]
+struct CameraObstruction {
+    center: Vec2,
+    span: HexSpan,
+}
+
+/// Cached presentation-only projection of public terrain geometry.
+///
+/// It intentionally contains no map-private storage or gameplay visibility facts.
+#[derive(Resource, Debug, Default)]
+struct CameraObstructionIndex {
+    spans_by_coord: BTreeMap<hex_core::HexCoord, Vec<HexSpan>>,
+    initialized: bool,
+    rebuilds: u64,
+}
+
+/// Transient radius used only while Character mode avoids terrain.
+///
+/// The camera's `Transform` retains any deterministic no-room yaw chosen by
+/// collision resolution. Keeping direction in the actual pose means subsequent
+/// frames and manual orbit input share one authority instead of fighting a second
+/// cached angle.
+#[derive(Resource, Debug, Default)]
+struct CharacterCameraCollision {
+    effective_radius: Option<f32>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CameraClearance {
+    radius: f32,
+    obstructed: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CharacterCameraPath {
+    yaw: f32,
+    direction: Vec3,
+    clearance: CameraClearance,
+}
 
 /// Spawn the game camera and the procedural sky dome.
 fn spawn_camera(
@@ -252,9 +343,14 @@ fn frame_gameplay_camera(
     frame_camera(cameras, eye, focus, what);
 }
 
-fn reset_camera_mode(mut mode: ResMut<CameraMode>, mut saved: ResMut<SavedMapCamera>) {
+fn reset_camera_mode(
+    mut mode: ResMut<CameraMode>,
+    mut saved: ResMut<SavedMapCamera>,
+    mut collision: ResMut<CharacterCameraCollision>,
+) {
     *mode = CameraMode::Map;
     saved.0 = None;
+    collision.effective_radius = None;
 }
 
 fn map_camera_active(mode: Res<CameraMode>) -> bool {
@@ -275,6 +371,7 @@ fn toggle_camera_mode(
     settings: Res<CameraSettings>,
     mut mode: ResMut<CameraMode>,
     mut saved: ResMut<SavedMapCamera>,
+    mut collision: ResMut<CharacterCameraCollision>,
     targets: Query<&Transform, (With<CameraFocusTarget>, Without<PanOrbitCamera>)>,
     mut cameras: Query<(&mut Transform, &mut PanOrbitCamera), Without<CameraFocusTarget>>,
 ) {
@@ -304,6 +401,7 @@ fn toggle_camera_mode(
 
             camera.focus = target.translation + Vec3::Y * settings.character_focus_height;
             camera.radius = settings.character_radius;
+            collision.effective_radius = Some(camera.radius);
             transform.translation = camera.focus
                 + Mat3::from_quat(transform.rotation).mul_vec3(Vec3::new(0.0, 0.0, camera.radius));
             *mode = CameraMode::Character;
@@ -312,6 +410,7 @@ fn toggle_camera_mode(
             if let Some(pose) = saved.0.take() {
                 pose.restore(&mut transform, &mut camera);
             }
+            collision.effective_radius = None;
             *mode = CameraMode::Map;
         }
     }
@@ -322,6 +421,9 @@ fn follow_character_camera(
     mut mode: ResMut<CameraMode>,
     mut saved: ResMut<SavedMapCamera>,
     settings: Res<CameraSettings>,
+    time: Res<Time>,
+    obstruction_index: Res<CameraObstructionIndex>,
+    mut collision: ResMut<CharacterCameraCollision>,
     targets: Query<&Transform, (With<CameraFocusTarget>, Without<PanOrbitCamera>)>,
     mut cameras: Query<(&mut Transform, &mut PanOrbitCamera), Without<CameraFocusTarget>>,
 ) {
@@ -335,17 +437,278 @@ fn follow_character_camera(
         if let Some(pose) = saved.0.take() {
             pose.restore(&mut transform, &mut camera);
         }
+        collision.effective_radius = None;
         *mode = CameraMode::Map;
         return;
     };
 
     let wanted_focus = target.translation + Vec3::Y * settings.character_focus_height;
-    let change = wanted_focus - camera.focus;
-    if change.length_squared() <= f32::EPSILON {
+    if wanted_focus.distance_squared(camera.focus) > f32::EPSILON {
+        camera.focus = wanted_focus;
+    }
+
+    let eye_direction = transform.rotation * Vec3::Z;
+    let path = obstruction_index.character_path(
+        wanted_focus,
+        eye_direction,
+        camera.radius,
+        settings.character_collision_margin,
+        settings.character_min_effective_radius,
+    );
+    if path.yaw.abs() > f32::EPSILON {
+        transform.rotation = Quat::from_rotation_y(path.yaw) * transform.rotation;
+    }
+    let previous = collision.effective_radius.unwrap_or(camera.radius);
+    let hysteresis = settings.character_collision_margin * 0.25;
+    let effective = resolve_effective_radius(
+        previous,
+        path.clearance.radius,
+        path.clearance.obstructed,
+        hysteresis,
+        settings.character_restoration_speed,
+        time.delta_secs(),
+    );
+    if collision
+        .effective_radius
+        .is_none_or(|radius| (radius - effective).abs() > f32::EPSILON)
+    {
+        collision.effective_radius = Some(effective);
+    }
+
+    let wanted_eye = wanted_focus + path.direction * effective;
+    if transform.translation.distance_squared(wanted_eye) > f32::EPSILON {
+        transform.translation = wanted_eye;
+    }
+}
+
+fn resolve_effective_radius(
+    previous: f32,
+    safe_radius: f32,
+    obstructed: bool,
+    hysteresis: f32,
+    restoration_speed: f32,
+    delta_seconds: f32,
+) -> f32 {
+    if safe_radius < previous {
+        safe_radius
+    } else if !obstructed || safe_radius - previous > hysteresis {
+        (previous + restoration_speed * delta_seconds).min(safe_radius)
+    } else {
+        previous
+    }
+}
+
+impl CameraObstructionIndex {
+    fn character_path(
+        &self,
+        focus: Vec3,
+        direction: Vec3,
+        desired_radius: f32,
+        margin: f32,
+        preferred_minimum_radius: f32,
+    ) -> CharacterCameraPath {
+        let direction = direction.normalize_or_zero();
+        let current = self.safe_radius(focus, direction, desired_radius, margin);
+        let mut best = CharacterCameraPath {
+            yaw: 0.0,
+            direction,
+            clearance: current,
+        };
+        if current.radius >= preferred_minimum_radius || direction.length_squared() <= f32::EPSILON
+        {
+            return best;
+        }
+
+        for yaw in CHARACTER_CAMERA_YAW_OFFSETS {
+            let candidate_direction = Quat::from_rotation_y(yaw) * direction;
+            let clearance = self.safe_radius(focus, candidate_direction, desired_radius, margin);
+            let candidate = CharacterCameraPath {
+                yaw,
+                direction: candidate_direction,
+                clearance,
+            };
+            if clearance.radius >= preferred_minimum_radius {
+                return candidate;
+            }
+            if clearance.radius > best.clearance.radius + CHARACTER_CAMERA_CLEARANCE_TIE_EPSILON {
+                best = candidate;
+            }
+        }
+        best
+    }
+
+    fn safe_radius(
+        &self,
+        focus: Vec3,
+        direction: Vec3,
+        desired_radius: f32,
+        margin: f32,
+    ) -> CameraClearance {
+        if !focus.is_finite()
+            || !direction.is_finite()
+            || !desired_radius.is_finite()
+            || desired_radius <= 0.0
+        {
+            return CameraClearance {
+                radius: desired_radius,
+                obstructed: false,
+            };
+        }
+        let direction = direction.normalize_or_zero();
+        if direction.length_squared() <= f32::EPSILON {
+            return CameraClearance {
+                radius: desired_radius,
+                obstructed: false,
+            };
+        }
+        let end = focus + direction * desired_radius;
+        let candidate_coords = hex_core::HexCoord::from_world(focus)
+            .line_between(hex_core::HexCoord::from_world(end))
+            .into_iter()
+            .flat_map(|coord| coord.within_radius(1))
+            .collect::<BTreeSet<_>>();
+        let hit = candidate_coords
+            .into_iter()
+            .filter_map(|coord| self.spans_by_coord.get(&coord).map(|spans| (coord, spans)))
+            .flat_map(|(coord, spans)| {
+                let center = coord.to_world(0.0).xz();
+                spans
+                    .iter()
+                    .copied()
+                    .map(move |span| CameraObstruction { center, span })
+            })
+            .filter_map(|obstruction| {
+                obstruction.first_hit_distance(focus, direction, desired_radius)
+            })
+            .min_by(f32::total_cmp);
+        hit.map_or(
+            CameraClearance {
+                radius: desired_radius,
+                obstructed: false,
+            },
+            |distance| CameraClearance {
+                // The minimum is a preferred usable distance, never permission to
+                // cross the closest hit. A no-room ray is handled by bounded yaw
+                // search above; a complete enclosure falls back to the best true
+                // margin-safe clearance, even when that is below the preference.
+                radius: (distance - margin).max(0.0).min(desired_radius),
+                obstructed: true,
+            },
+        )
+    }
+}
+
+impl CameraObstruction {
+    fn first_hit_distance(self, origin: Vec3, direction: Vec3, maximum: f32) -> Option<f32> {
+        let horizontal = circle_interval(
+            origin.xz(),
+            direction.xz(),
+            self.center,
+            HEX_CIRCUMRADIUS,
+            maximum,
+        )?;
+        let vertical = axis_interval(
+            origin.y,
+            direction.y,
+            self.span.bottom,
+            self.span.top,
+            maximum,
+        )?;
+        let enter = horizontal.0.max(vertical.0);
+        let exit = horizontal.1.min(vertical.1);
+        (enter <= exit).then_some(enter)
+    }
+}
+
+fn circle_interval(
+    origin: Vec2,
+    direction: Vec2,
+    center: Vec2,
+    radius: f32,
+    maximum: f32,
+) -> Option<(f32, f32)> {
+    let offset = origin - center;
+    let quadratic = direction.length_squared();
+    if quadratic <= f32::EPSILON {
+        return (offset.length_squared() <= radius * radius).then_some((0.0, maximum));
+    }
+    let linear = offset.dot(direction);
+    let constant = offset.length_squared() - radius * radius;
+    let discriminant = linear * linear - quadratic * constant;
+    if discriminant < 0.0 {
+        return None;
+    }
+    let root = discriminant.sqrt();
+    let enter = ((-linear - root) / quadratic).max(0.0);
+    let exit = ((-linear + root) / quadratic).min(maximum);
+    (enter <= exit).then_some((enter, exit))
+}
+
+fn axis_interval(
+    origin: f32,
+    direction: f32,
+    minimum: f32,
+    maximum_value: f32,
+    maximum_distance: f32,
+) -> Option<(f32, f32)> {
+    if direction.abs() <= f32::EPSILON {
+        return (minimum <= origin && origin <= maximum_value).then_some((0.0, maximum_distance));
+    }
+    let first = (minimum - origin) / direction;
+    let second = (maximum_value - origin) / direction;
+    let enter = first.min(second).max(0.0);
+    let exit = first.max(second).min(maximum_distance);
+    (enter <= exit).then_some((enter, exit))
+}
+
+fn refresh_camera_obstruction_index(
+    mut index: ResMut<CameraObstructionIndex>,
+    tiles: Query<(&TilePos, &HexSpan), With<HexTile>>,
+    changed_tiles: Query<
+        (),
+        (
+            With<HexTile>,
+            Or<(Added<HexTile>, Changed<TilePos>, Changed<HexSpan>)>,
+        ),
+    >,
+    mut removed_tiles: RemovedComponents<HexTile>,
+) {
+    let removed = removed_tiles.read().next().is_some();
+    if index.initialized && !removed && changed_tiles.is_empty() {
         return;
     }
-    camera.focus = wanted_focus;
-    transform.translation += change;
+
+    let mut spans_by_coord = BTreeMap::<_, Vec<_>>::new();
+    for (position, span) in &tiles {
+        spans_by_coord
+            .entry(position.coord)
+            .or_default()
+            .push(*span);
+    }
+    for spans in spans_by_coord.values_mut() {
+        spans.sort_by(|first, second| {
+            first
+                .bottom
+                .total_cmp(&second.bottom)
+                .then_with(|| first.top.total_cmp(&second.top))
+        });
+    }
+    index.spans_by_coord = spans_by_coord;
+    index.initialized = true;
+    index.rebuilds = index.rebuilds.saturating_add(1);
+}
+
+fn clear_camera_obstruction_index(
+    mut index: ResMut<CameraObstructionIndex>,
+    mut collision: ResMut<CharacterCameraCollision>,
+) {
+    if index.initialized || !index.spans_by_coord.is_empty() {
+        index.spans_by_coord.clear();
+        index.initialized = false;
+    }
+    if collision.effective_radius.is_some() {
+        collision.effective_radius = None;
+    }
 }
 
 /// Reveals the sky when the world does.
@@ -654,7 +1017,7 @@ fn get_primary_window_size(windows: &Query<&Window, With<PrimaryWindow>>) -> Vec
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use bevy::asset::AssetPlugin;
     use bevy::state::app::StatesPlugin;
@@ -683,6 +1046,9 @@ mod tests {
             gameplay_focus: (0.0, 6.0, 0.0),
             character_focus_height: 0.4,
             character_radius: 7.0,
+            character_collision_margin: 0.35,
+            character_min_effective_radius: 1.5,
+            character_restoration_speed: 8.0,
             character_pitch: 0.3,
             character_min_pitch: 0.05,
             character_max_pitch: 0.95,
@@ -747,6 +1113,56 @@ mod tests {
         );
     }
 
+    fn production_scale_obstruction_fixture() -> (CameraObstructionIndex, Vec3) {
+        let obstruction_coord = hex_core::HexCoord::from_axial(0, 1);
+        let direction = obstruction_coord.to_world(0.0).normalize();
+        let mut spans_by_coord = hex_core::HexCoord::ORIGIN
+            .within_radius(55)
+            .into_iter()
+            .map(|coord| (coord, vec![HexSpan::new(0.0, 0.4)]))
+            .collect::<BTreeMap<_, _>>();
+        spans_by_coord.insert(obstruction_coord, vec![HexSpan::new(0.0, 2.0)]);
+        assert_eq!(
+            spans_by_coord.len(),
+            9_241,
+            "the fixture must retain the exact Two Rings column count"
+        );
+        (
+            CameraObstructionIndex {
+                spans_by_coord,
+                initialized: true,
+                rebuilds: 1,
+            },
+            direction,
+        )
+    }
+
+    fn timed_character_queries(iterations: usize) -> (CharacterCameraPath, Vec<Duration>) {
+        let (index, direction) = production_scale_obstruction_fixture();
+        let expected = index.character_path(Vec3::Y, direction, 7.0, 0.35, 1.5);
+        let mut timings = Vec::with_capacity(iterations);
+        for _ in 0..iterations {
+            let started = Instant::now();
+            let path = index.character_path(Vec3::Y, direction, 7.0, 0.35, 1.5);
+            timings.push(started.elapsed());
+            assert!((path.yaw - expected.yaw).abs() < f32::EPSILON);
+            assert!((path.clearance.radius - expected.clearance.radius).abs() < f32::EPSILON);
+            assert!(path.direction.dot(expected.direction) > 0.9999);
+        }
+        assert_eq!(index.rebuilds, 1);
+        (expected, timings)
+    }
+
+    fn timing_percentile(timings: &mut [Duration], percentile: usize) -> Duration {
+        timings.sort_unstable();
+        let rank = timings
+            .len()
+            .saturating_mul(percentile)
+            .div_ceil(100)
+            .saturating_sub(1);
+        timings.get(rank).copied().unwrap_or_default()
+    }
+
     #[test]
     fn pitch_delta_clamps_to_angular_limits() {
         let min_pitch = 0.25;
@@ -792,6 +1208,301 @@ mod tests {
         let counts = app.world().resource::<CameraChangeCounts>();
         assert_eq!(counts.transforms, 0);
         assert_eq!(counts.controls, 0);
+    }
+
+    #[test]
+    fn public_tile_spans_bound_the_nearest_safe_character_radius() {
+        let obstruction_coord = hex_core::HexCoord::from_axial(-1, 2);
+        let index = CameraObstructionIndex {
+            spans_by_coord: BTreeMap::from([(obstruction_coord, vec![HexSpan::new(0.0, 2.0)])]),
+            initialized: true,
+            rebuilds: 1,
+        };
+
+        let clearance = index.safe_radius(Vec3::new(0.0, 1.0, 0.0), Vec3::Z, 7.0, 0.35);
+
+        assert!(clearance.obstructed);
+        assert!((clearance.radius - 1.65).abs() < 1e-5);
+        let clear = index.safe_radius(Vec3::new(0.0, 3.0, 0.0), Vec3::Z, 7.0, 0.35);
+        assert!(!clear.obstructed);
+        assert!(
+            (clear.radius - 7.0).abs() < f32::EPSILON,
+            "a vertically disjoint run must not obstruct the view segment"
+        );
+    }
+
+    #[test]
+    fn nearer_hit_is_never_overridden_by_preferred_minimum_radius() {
+        let obstruction_coord = hex_core::HexCoord::from_axial(0, 1);
+        let direction = obstruction_coord.to_world(0.0).normalize();
+        let index = CameraObstructionIndex {
+            spans_by_coord: BTreeMap::from([(obstruction_coord, vec![HexSpan::new(0.0, 2.0)])]),
+            initialized: true,
+            rebuilds: 1,
+        };
+
+        let clearance = index.safe_radius(Vec3::Y, direction, 7.0, 0.35);
+
+        assert!(clearance.obstructed);
+        assert!(
+            clearance.radius < 1.5,
+            "the actual margin-safe clearance must win over the preferred minimum"
+        );
+        assert!((clearance.radius - (3.0_f32.sqrt() - 1.35)).abs() < 1e-5);
+    }
+
+    #[test]
+    fn no_room_path_chooses_the_nearest_clear_yaw_with_a_stable_tie_break() {
+        let obstruction_coord = hex_core::HexCoord::from_axial(0, 1);
+        let direction = obstruction_coord.to_world(0.0).normalize();
+        let index = CameraObstructionIndex {
+            spans_by_coord: BTreeMap::from([(obstruction_coord, vec![HexSpan::new(0.0, 2.0)])]),
+            initialized: true,
+            rebuilds: 1,
+        };
+
+        let path = index.character_path(Vec3::Y, direction, 7.0, 0.35, 1.5);
+
+        assert!(
+            (path.yaw - std::f32::consts::FRAC_PI_3).abs() < f32::EPSILON,
+            "positive sixty degrees must win the equal-clearance yaw tie"
+        );
+        assert!(!path.clearance.obstructed);
+        assert!((path.clearance.radius - 7.0).abs() < f32::EPSILON);
+        let expected_direction = Quat::from_rotation_y(std::f32::consts::FRAC_PI_3) * direction;
+        assert!(path.direction.dot(expected_direction) > 0.9999);
+    }
+
+    #[test]
+    fn enclosed_path_uses_best_true_clearance_without_penetration() {
+        let origin = hex_core::HexCoord::ORIGIN;
+        let spans_by_coord = origin
+            .neighbors()
+            .into_iter()
+            .map(|coord| (coord, vec![HexSpan::new(0.0, 2.0)]))
+            .collect();
+        let direction = hex_core::HexCoord::from_axial(0, 1)
+            .to_world(0.0)
+            .normalize();
+        let index = CameraObstructionIndex {
+            spans_by_coord,
+            initialized: true,
+            rebuilds: 1,
+        };
+
+        let path = index.character_path(Vec3::Y, direction, 7.0, 0.35, 1.5);
+        let verified = index.safe_radius(Vec3::Y, path.direction, 7.0, 0.35);
+
+        assert!(path.clearance.obstructed);
+        assert!(
+            path.clearance.radius < 1.5,
+            "a full enclosure cannot honestly retain the preferred minimum"
+        );
+        assert!((path.clearance.radius - verified.radius).abs() < f32::EPSILON);
+        assert!(
+            (path.yaw - std::f32::consts::FRAC_PI_6).abs() < f32::EPSILON,
+            "the first equally best between-column yaw should remain stable"
+        );
+    }
+
+    #[test]
+    fn production_scale_obstruction_queries_are_deterministic() {
+        let (path, mut timings) = timed_character_queries(100);
+        let p95 = timing_percentile(&mut timings, 95);
+        let worst = timings.last().copied().unwrap_or_default();
+
+        assert!(
+            (path.yaw - std::f32::consts::FRAC_PI_3).abs() < f32::EPSILON,
+            "the production-scale index must preserve the focused yaw result"
+        );
+        eprintln!(
+            "9,241-column Character collision diagnostic (debug): p95={p95:?}, worst={worst:?}"
+        );
+    }
+
+    #[test]
+    #[ignore = "manual release-mode 9,241-column Character-camera timing diagnostic"]
+    fn production_scale_character_collision_release_timing() {
+        let (_path, mut timings) = timed_character_queries(10_000);
+        let p95 = timing_percentile(&mut timings, 95);
+        let worst = timings.last().copied().unwrap_or_default();
+
+        eprintln!(
+            "9,241-column Character collision diagnostic (release): p95={p95:?}, worst={worst:?}"
+        );
+        assert!(
+            p95 < Duration::from_millis(1),
+            "9,241-column Character collision p95 {p95:?} breached the 1 ms release budget"
+        );
+    }
+
+    #[test]
+    fn collision_snaps_inward_and_restores_with_hysteresis() {
+        assert!(
+            (resolve_effective_radius(6.0, 2.5, true, 0.1, 8.0, 0.25) - 2.5).abs() < f32::EPSILON,
+            "new obstructions must shorten the camera immediately"
+        );
+        assert!(
+            (resolve_effective_radius(2.5, 2.55, true, 0.1, 8.0, 0.25) - 2.5).abs() < f32::EPSILON,
+            "sub-margin clearance changes must not jitter the camera"
+        );
+        assert!(
+            (resolve_effective_radius(2.5, 7.0, false, 0.1, 8.0, 0.25) - 4.5).abs() < f32::EPSILON,
+            "a cleared obstruction should restore at the authored rate"
+        );
+    }
+
+    #[test]
+    fn ten_thousand_stable_frames_do_not_rebuild_or_republish_the_character_camera() {
+        let settings = camera_settings();
+        let focus = Vec3::Y * settings.character_focus_height;
+        let rotation =
+            Quat::from_rotation_x(-settings.character_pitch * std::f32::consts::FRAC_PI_2);
+        let eye = focus + rotation * Vec3::Z * settings.character_radius;
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(settings.clone())
+            .insert_resource(CameraMode::Character)
+            .init_resource::<SavedMapCamera>()
+            .init_resource::<CameraObstructionIndex>()
+            .insert_resource(CharacterCameraCollision {
+                effective_radius: Some(settings.character_radius),
+            })
+            .init_resource::<CameraChangeCounts>()
+            .add_systems(
+                PostUpdate,
+                (
+                    refresh_camera_obstruction_index,
+                    follow_character_camera,
+                    count_camera_changes,
+                )
+                    .chain(),
+            );
+        app.world_mut().spawn((
+            Transform::from_translation(eye).with_rotation(rotation),
+            PanOrbitCamera {
+                focus,
+                radius: settings.character_radius,
+            },
+        ));
+        app.world_mut().spawn((
+            Transform::from_translation(Vec3::ZERO),
+            CameraFocusTarget::new(TilePos::ORIGIN),
+        ));
+        let tile = app
+            .world_mut()
+            .spawn((
+                HexTile,
+                TilePos::new(hex_core::HexCoord::from_axial(20, 20), 0),
+                HexSpan::new(0.0, 0.4),
+            ))
+            .id();
+
+        app.update();
+        assert_eq!(app.world().resource::<CameraObstructionIndex>().rebuilds, 1);
+        *app.world_mut().resource_mut::<CameraChangeCounts>() = CameraChangeCounts::default();
+        for _ in 0..10_000 {
+            app.update();
+        }
+
+        let index = app.world().resource::<CameraObstructionIndex>();
+        assert_eq!(index.rebuilds, 1);
+        let counts = app.world().resource::<CameraChangeCounts>();
+        assert_eq!(counts.transforms, 0);
+        assert_eq!(counts.controls, 0);
+
+        app.world_mut()
+            .entity_mut(tile)
+            .insert(HexSpan::new(0.0, 0.8));
+        app.update();
+        assert_eq!(app.world().resource::<CameraObstructionIndex>().rebuilds, 2);
+        app.world_mut().entity_mut(tile).despawn();
+        app.update();
+        let index = app.world().resource::<CameraObstructionIndex>();
+        assert_eq!(index.rebuilds, 3);
+        assert!(index.spans_by_coord.is_empty());
+    }
+
+    #[test]
+    fn resolved_no_room_yaw_stays_stable_for_ten_thousand_frames() {
+        let settings = camera_settings();
+        let focus = Vec3::Y * settings.character_focus_height;
+        let obstruction_coord = hex_core::HexCoord::from_axial(0, 1);
+        let initial_direction = obstruction_coord.to_world(0.0).normalize();
+        let eye = focus + initial_direction * settings.character_radius;
+        let rotation = Transform::from_translation(eye)
+            .looking_at(focus, Vec3::Y)
+            .rotation;
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(settings.clone())
+            .insert_resource(CameraMode::Character)
+            .init_resource::<SavedMapCamera>()
+            .init_resource::<CameraObstructionIndex>()
+            .insert_resource(CharacterCameraCollision {
+                effective_radius: Some(settings.character_radius),
+            })
+            .init_resource::<CameraChangeCounts>()
+            .add_systems(
+                PostUpdate,
+                (
+                    refresh_camera_obstruction_index,
+                    follow_character_camera,
+                    count_camera_changes,
+                )
+                    .chain(),
+            );
+        let camera = app
+            .world_mut()
+            .spawn((
+                Transform::from_translation(eye).with_rotation(rotation),
+                PanOrbitCamera {
+                    focus,
+                    radius: settings.character_radius,
+                },
+            ))
+            .id();
+        app.world_mut().spawn((
+            Transform::from_translation(Vec3::ZERO),
+            CameraFocusTarget::new(TilePos::ORIGIN),
+        ));
+        app.world_mut().spawn((
+            HexTile,
+            TilePos::new(obstruction_coord, 0),
+            HexSpan::new(0.0, 2.0),
+        ));
+
+        app.update();
+        let settled_direction = app
+            .world()
+            .entity(camera)
+            .get::<Transform>()
+            .expect("the camera should keep its transform")
+            .rotation
+            * Vec3::Z;
+        assert!(
+            settled_direction.dot(initial_direction) < 0.75,
+            "the no-room ray should choose a nearby clear yaw"
+        );
+        assert_eq!(app.world().resource::<CameraObstructionIndex>().rebuilds, 1);
+        *app.world_mut().resource_mut::<CameraChangeCounts>() = CameraChangeCounts::default();
+
+        for _ in 0..10_000 {
+            app.update();
+        }
+
+        assert_eq!(app.world().resource::<CameraObstructionIndex>().rebuilds, 1);
+        let counts = app.world().resource::<CameraChangeCounts>();
+        assert_eq!(counts.transforms, 0);
+        assert_eq!(counts.controls, 0);
+        let final_direction = app
+            .world()
+            .entity(camera)
+            .get::<Transform>()
+            .expect("the camera should keep its transform")
+            .rotation
+            * Vec3::Z;
+        assert!(final_direction.dot(settled_direction) > 0.9999);
     }
 
     #[test]
@@ -863,6 +1574,7 @@ mod tests {
         app.insert_resource(camera_settings());
         app.init_resource::<CameraMode>();
         app.init_resource::<SavedMapCamera>();
+        app.init_resource::<CharacterCameraCollision>();
         app.add_systems(
             OnEnter(Screen::Gameplay),
             (reset_camera_mode, frame_gameplay_camera).chain(),
@@ -982,6 +1694,8 @@ mod tests {
         app.insert_resource(ButtonInput::<KeyCode>::default());
         app.init_resource::<CameraMode>();
         app.init_resource::<SavedMapCamera>();
+        app.init_resource::<CameraObstructionIndex>();
+        app.init_resource::<CharacterCameraCollision>();
         app.init_resource::<InputBindings>();
         app.add_systems(Update, toggle_camera_mode);
         app.add_systems(PostUpdate, follow_character_camera);
@@ -1078,6 +1792,45 @@ mod tests {
         assert_eq!(restored.0, original.0);
         assert_eq!(restored.1, original.1);
         assert!((restored.2 - original.2).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn character_camera_shortens_before_a_public_terrain_run() {
+        let target = Vec3::new(3.0, 2.0, -1.0);
+        let (mut app, camera, _) = prototype_camera_app(Some(target));
+
+        toggle_camera(&mut app);
+        let unobstructed = camera_pose(&app, camera);
+        let direction = (unobstructed.0.translation - unobstructed.1).normalize();
+        toggle_camera(&mut app);
+
+        let obstacle_center = unobstructed.1 + direction * 4.0;
+        let obstacle_coord = hex_core::HexCoord::from_world(obstacle_center);
+        let lower = unobstructed.1.y.min(obstacle_center.y) - 1.0;
+        let upper = unobstructed.1.y.max(obstacle_center.y) + 1.0;
+        *app.world_mut().resource_mut::<CameraObstructionIndex>() = CameraObstructionIndex {
+            spans_by_coord: BTreeMap::from([(obstacle_coord, vec![HexSpan::new(lower, upper)])]),
+            initialized: true,
+            rebuilds: 1,
+        };
+
+        toggle_camera(&mut app);
+
+        let shortened = camera_pose(&app, camera);
+        let effective = app
+            .world()
+            .resource::<CharacterCameraCollision>()
+            .effective_radius
+            .expect("Character mode should retain an effective radius");
+        assert!(effective < camera_settings().character_radius);
+        assert!(
+            (shortened.0.translation.distance(shortened.1) - effective).abs() < 1e-5,
+            "the rendered eye must use the collision-limited radius"
+        );
+        assert!(
+            (shortened.2 - camera_settings().character_radius).abs() < f32::EPSILON,
+            "collision must not overwrite the player's requested orbit radius"
+        );
     }
 
     #[test]

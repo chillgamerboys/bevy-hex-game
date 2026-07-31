@@ -18,6 +18,8 @@
     AwaitScreen("CombatLab"),
     Click(name: "Fort"),
     Settle(20),
+    Click(name: "Continue to Rosters"),
+    Click(name: "Continue to Rules"),
     Click(name: "Load Map & Deploy"),
     AwaitScreen("Gameplay"),
     AwaitTerrain,

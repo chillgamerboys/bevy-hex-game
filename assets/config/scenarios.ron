@@ -74,7 +74,7 @@
         (
             name: "Volcanic Hills",
             category: Map,
-            blurb: "A basalt and lava probe with a cooled alternate crossing.",
+            blurb: "A crater-fed lava descent crossed by one elevated stairway bridge.",
             world: "config/worlds/procedural-volcanic.ron",
             generation_seed: Some(444211238),
             encounter: "config/encounters/anchored-skirmish.ron",
@@ -120,6 +120,22 @@
             encounter: "config/encounters/anchored-skirmish.ron",
         ),
         (
+            name: "Deep Forest",
+            category: Map,
+            blurb: "Dense rolling woodland crossed by one winding trail and three irregular clearings.",
+            world: "config/worlds/procedural-deep-forest.ron",
+            generation_seed: Some(1592598566),
+            encounter: "config/encounters/anchored-skirmish.ron",
+        ),
+        (
+            name: "Prairie",
+            category: Map,
+            blurb: "Open rolling grassland covered in tall authored grass, without trees or a constructed road.",
+            world: "config/worlds/procedural-prairie.ron",
+            generation_seed: Some(1592598566),
+            encounter: "config/encounters/anchored-skirmish.ron",
+        ),
+        (
             name: "Fort",
             category: Map,
             blurb: "A worked-stone stronghold with two gates, broad wall walks, towers, stairs, and a central keep.",
@@ -133,6 +149,14 @@
             blurb: "One connected V3 world joining hills, mountains, waterfall, forest, fort, caves, and sky islands.",
             world: "config/worlds/procedural-ring7.ron",
             generation_seed: Some(703700113),
+            encounter: "config/encounters/anchored-skirmish.ron",
+        ),
+        (
+            name: "Two Rings",
+            category: Map,
+            blurb: "Nineteen connected regions join mountain-fed rivers, waterfalls, forests, prairies, a volcano, caves, and a fort.",
+            world: "config/worlds/procedural-two-rings.ron",
+            generation_seed: Some(1592598566),
             encounter: "config/encounters/anchored-skirmish.ron",
         ),
         (

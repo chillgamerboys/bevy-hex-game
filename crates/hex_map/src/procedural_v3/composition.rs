@@ -6,11 +6,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use hex_core::{HexCoord, InteriorRegionId, MapViewHint, SpecialMovementRegion, TilePos};
+use hex_core::{HexCoord, InteriorRegionId, Level, MapViewHint, SpecialMovementRegion, TilePos};
 
 use super::layout::{
     HexSide, LayoutKind, PatchId, ResolvedEdgeId, ResolvedEdgeReference, ResolvedLayoutPlan,
-    ResolvedLiquidPort, ResolvedPatch,
+    ResolvedLiquidElevation, ResolvedLiquidPort, ResolvedPatch,
 };
 use super::liquid::{LiquidBodyId, LiquidBodyPlan, LiquidFlowState, LiquidNode, LiquidPlan};
 use super::volume::{FillMaterialRole, SurfaceAccess, VolumeElement, VolumePlan};
@@ -20,10 +20,14 @@ use super::world::{
     StructurePlan, WorldIssueCode, WorldValidationIssue,
 };
 
-const PATCH_NAMESPACE_BITS: u32 = 4;
-const LOCAL_ID_BITS: u32 = u32::BITS - PATCH_NAMESPACE_BITS;
-const MAX_PATCH_ID: u32 = (1 << PATCH_NAMESPACE_BITS) - 1;
-const MAX_LOCAL_ID: u32 = (1 << LOCAL_ID_BITS) - 1;
+const LEGACY_PATCH_NAMESPACE_BITS: u32 = 4;
+const LEGACY_LOCAL_ID_BITS: u32 = u32::BITS - LEGACY_PATCH_NAMESPACE_BITS;
+const LEGACY_MAX_PATCH_ID: u32 = (1 << LEGACY_PATCH_NAMESPACE_BITS) - 1;
+const LEGACY_MAX_LOCAL_ID: u32 = (1 << LEGACY_LOCAL_ID_BITS) - 1;
+const RING19_PATCH_NAMESPACE_BITS: u32 = 5;
+const RING19_LOCAL_ID_BITS: u32 = u32::BITS - RING19_PATCH_NAMESPACE_BITS;
+const RING19_MAX_PATCH_ID: u32 = (1 << RING19_PATCH_NAMESPACE_BITS) - 1;
+const RING19_MAX_LOCAL_ID: u32 = (1 << RING19_LOCAL_ID_BITS) - 1;
 
 /// Complete semantic output owned by exactly one resolved V3 patch.
 #[derive(Debug, Clone)]
@@ -91,14 +95,102 @@ impl GeneratedPatchPlan {
         }
 
         let isolated = self.isolated_world_unchecked(layout, resolved_patch);
-        issues.extend(isolated.validate().into_iter().map(|issue| {
-            PatchValidationIssue::new(
-                self.patch_id,
-                PatchIssueCode::Semantic(issue.code),
-                issue.detail,
-            )
-        }));
+        issues.extend(
+            isolated
+                .validate_semantic_layers()
+                .into_iter()
+                .map(|issue| {
+                    PatchValidationIssue::new(
+                        self.patch_id,
+                        PatchIssueCode::Semantic(issue.code),
+                        issue.detail,
+                    )
+                }),
+        );
+        self.validate_boundary_liquid_outlets(layout, &mut issues);
         issues
+    }
+
+    fn validate_boundary_liquid_outlets(
+        &self,
+        layout: &ResolvedLayoutPlan,
+        issues: &mut Vec<PatchValidationIssue>,
+    ) {
+        for ((source, side), outlet) in layout
+            .boundary_liquid_outlets
+            .iter()
+            .filter(|((source, _), _)| *source == self.patch_id)
+        {
+            let declared_terminals = outlet
+                .lanes
+                .iter()
+                .map(|(inside, _)| TilePos::new(*inside, outlet.level))
+                .collect::<BTreeSet<_>>();
+            let actual_terminals = self
+                .liquids
+                .bodies
+                .values()
+                .flat_map(|plan| &plan.nodes)
+                .filter_map(|(position, node)| {
+                    (self.volume.mask.contains(&position.coord)
+                        && !layout.footprint.contains(&side.neighbor(position.coord))
+                        && node.state == LiquidFlowState::Still
+                        && node.downstream.is_none())
+                    .then_some(*position)
+                })
+                .collect::<BTreeSet<_>>();
+            if actual_terminals != declared_terminals {
+                issues.push(PatchValidationIssue::new(
+                    self.patch_id,
+                    PatchIssueCode::Semantic(WorldIssueCode::Liquid),
+                    format!(
+                        "boundary liquid outlet {source:?}/{side:?} terminals must exactly equal its declared lanes (actual {actual_terminals:?}, declared {declared_terminals:?})"
+                    ),
+                ));
+            }
+            for (inside_coord, outside_coord) in &outlet.lanes {
+                let inside = TilePos::new(*inside_coord, outlet.level);
+                let matches = self
+                    .liquids
+                    .bodies
+                    .iter()
+                    .filter_map(|(body, plan)| {
+                        plan.nodes.get(&inside).copied().map(|node| (*body, node))
+                    })
+                    .collect::<Vec<_>>();
+                let exact_terminal = matches.as_slice().first().is_some_and(|(_, node)| {
+                    matches.len() == 1
+                        && node.state == LiquidFlowState::Still
+                        && node.downstream.is_none()
+                });
+                if !exact_terminal {
+                    issues.push(PatchValidationIssue::new(
+                        self.patch_id,
+                        PatchIssueCode::Semantic(WorldIssueCode::Liquid),
+                        format!(
+                            "boundary liquid outlet {source:?}/{side:?} requires one exact Still terminal with no downstream at {inside:?}"
+                        ),
+                    ));
+                }
+                let outside_nodes = self
+                    .liquids
+                    .bodies
+                    .values()
+                    .flat_map(|plan| plan.nodes.keys())
+                    .filter(|position| position.coord == *outside_coord)
+                    .copied()
+                    .collect::<Vec<_>>();
+                if !outside_nodes.is_empty() {
+                    issues.push(PatchValidationIssue::new(
+                        self.patch_id,
+                        PatchIssueCode::Semantic(WorldIssueCode::Liquid),
+                        format!(
+                            "boundary liquid outlet {source:?}/{side:?} must not contain outside nodes at {outside_coord:?}: {outside_nodes:?}"
+                        ),
+                    ));
+                }
+            }
+        }
     }
 
     fn isolated_world_unchecked(
@@ -118,11 +210,13 @@ impl GeneratedPatchPlan {
                 self.patch_id,
                 ResolvedPatch {
                     biome_region: resolved_patch.biome_region,
+                    rotation_turns: 0,
                     mask: resolved_patch.mask.clone(),
                     edges,
                 },
             )]),
             shared_edges: BTreeMap::new(),
+            boundary_liquid_outlets: BTreeMap::new(),
         };
         GeneratedWorldPlan {
             layout: isolated_layout,
@@ -139,7 +233,11 @@ impl GeneratedPatchPlan {
         }
     }
 
-    fn namespace(mut self, namespace_names: bool) -> Result<Self, WorldCompositionError> {
+    fn namespace(
+        mut self,
+        layout_kind: LayoutKind,
+        namespace_names: bool,
+    ) -> Result<Self, WorldCompositionError> {
         let patch = self.patch_id;
 
         for column in self.volume.columns.values_mut() {
@@ -149,6 +247,7 @@ impl GeneratedPatchPlan {
                 };
                 if let Some(region) = mass.cutaway_for {
                     mass.cutaway_for = Some(InteriorRegionId(namespace_numeric(
+                        layout_kind,
                         patch,
                         region.0,
                         NamespaceKind::Interior,
@@ -159,98 +258,152 @@ impl GeneratedPatchPlan {
         for metadata in self.volume.surfaces.values_mut() {
             if let Some(region) = metadata.interior {
                 metadata.interior = Some(InteriorRegionId(namespace_numeric(
+                    layout_kind,
                     patch,
                     region.0,
                     NamespaceKind::Interior,
                 )?));
             }
             if let SurfaceAccess::SpecialMovement(region) = metadata.access {
-                metadata.access = SurfaceAccess::SpecialMovement(SpecialMovementRegion(
-                    namespace_numeric(patch, region.0, NamespaceKind::SpecialMovement)?,
-                ));
+                metadata.access =
+                    SurfaceAccess::SpecialMovement(SpecialMovementRegion(namespace_numeric(
+                        layout_kind,
+                        patch,
+                        region.0,
+                        NamespaceKind::SpecialMovement,
+                    )?));
             }
         }
 
         self.liquids.bodies = std::mem::take(&mut self.liquids.bodies)
             .into_iter()
             .map(|(id, body)| {
-                namespace_numeric(patch, id.0, NamespaceKind::Liquid)
+                namespace_numeric(layout_kind, patch, id.0, NamespaceKind::Liquid)
                     .map(|id| (LiquidBodyId(id), body))
             })
             .collect::<Result<_, _>>()?;
         self.features.by_id = std::mem::take(&mut self.features.by_id)
             .into_iter()
             .map(|(id, feature)| {
-                namespace_numeric(patch, id.0, NamespaceKind::Feature)
+                namespace_numeric(layout_kind, patch, id.0, NamespaceKind::Feature)
                     .map(|id| (FeatureId(id), feature))
             })
             .collect::<Result<_, _>>()?;
         if namespace_names {
-            self.features.protected_routes =
-                namespace_named_map(patch, std::mem::take(&mut self.features.protected_routes));
-            self.features.clearings =
-                namespace_named_map(patch, std::mem::take(&mut self.features.clearings));
+            self.features.protected_routes = namespace_named_map(
+                layout_kind,
+                patch,
+                std::mem::take(&mut self.features.protected_routes),
+            );
+            self.features.clearings = namespace_named_map(
+                layout_kind,
+                patch,
+                std::mem::take(&mut self.features.clearings),
+            );
         }
         self.structures.by_id = std::mem::take(&mut self.structures.by_id)
             .into_iter()
             .map(|(id, structure)| {
-                namespace_numeric(patch, id.0, NamespaceKind::Structure)
+                namespace_numeric(layout_kind, patch, id.0, NamespaceKind::Structure)
                     .map(|id| (StructureId(id), structure))
             })
             .collect::<Result<_, _>>()?;
         self.lights = std::mem::take(&mut self.lights)
             .into_iter()
             .map(|(id, light)| {
-                namespace_numeric(patch, id.0, NamespaceKind::Light).map(|id| (LightId(id), light))
+                namespace_numeric(layout_kind, patch, id.0, NamespaceKind::Light)
+                    .map(|id| (LightId(id), light))
             })
             .collect::<Result<_, _>>()?;
         self.interiors.by_id = std::mem::take(&mut self.interiors.by_id)
             .into_iter()
             .map(|(id, interior)| {
-                namespace_numeric(patch, id.0, NamespaceKind::Interior)
+                namespace_numeric(layout_kind, patch, id.0, NamespaceKind::Interior)
                     .map(|id| (InteriorRegionId(id), interior))
             })
             .collect::<Result<_, _>>()?;
         if namespace_names {
-            self.anchors = namespace_named_map(patch, std::mem::take(&mut self.anchors));
+            self.anchors =
+                namespace_named_map(layout_kind, patch, std::mem::take(&mut self.anchors));
         }
         Ok(self)
     }
 }
 
-fn namespace_named_map<T>(patch: PatchId, values: BTreeMap<String, T>) -> BTreeMap<String, T> {
+fn namespace_named_map<T>(
+    layout_kind: LayoutKind,
+    patch: PatchId,
+    values: BTreeMap<String, T>,
+) -> BTreeMap<String, T> {
     values
         .into_iter()
-        .map(|(name, value)| (namespace_name(patch, &name), value))
+        .map(|(name, value)| (namespace_name(layout_kind, patch, &name), value))
         .collect()
 }
 
-fn namespace_name(patch: PatchId, local: &str) -> String {
-    format!("{}_{}", patch_slug(patch), local)
+fn namespace_name(layout_kind: LayoutKind, patch: PatchId, local: &str) -> String {
+    format!("{}_{}", patch_slug(layout_kind, patch), local)
 }
 
-fn patch_slug(patch: PatchId) -> String {
-    match patch.0 {
-        0 => "center".to_owned(),
-        1 => "mountains".to_owned(),
-        2 => "waterfall".to_owned(),
-        3 => "forest".to_owned(),
-        4 => "fort".to_owned(),
-        5 => "caves".to_owned(),
-        6 => "sky_islands".to_owned(),
-        id => format!("patch_{id}"),
+fn patch_slug(layout_kind: LayoutKind, patch: PatchId) -> String {
+    match layout_kind {
+        LayoutKind::Ring19 => match patch.0 {
+            0 => "center".to_owned(),
+            1 => "frozen_hills".to_owned(),
+            2 => "forest_a".to_owned(),
+            3 => "prairie_a".to_owned(),
+            4 => "hills_downstream".to_owned(),
+            5 => "waterfall_b".to_owned(),
+            6 => "waterfall_a".to_owned(),
+            7 => "sky_islands".to_owned(),
+            8 => "deep_forest_a".to_owned(),
+            9 => "deep_forest_b".to_owned(),
+            10 => "forest_b".to_owned(),
+            11 => "prairie_b".to_owned(),
+            12 => "waterfall_outlet".to_owned(),
+            13 => "fort".to_owned(),
+            14 => "caves".to_owned(),
+            15 => "volcano".to_owned(),
+            16 => "mountains_a".to_owned(),
+            17 => "mountains_b".to_owned(),
+            18 => "mountains_c".to_owned(),
+            id => format!("region_{id:02}"),
+        },
+        LayoutKind::Single | LayoutKind::Ring7 => match patch.0 {
+            0 => "center".to_owned(),
+            1 => "mountains".to_owned(),
+            2 => "waterfall".to_owned(),
+            3 => "forest".to_owned(),
+            4 => "fort".to_owned(),
+            5 => "caves".to_owned(),
+            6 => "sky_islands".to_owned(),
+            id => format!("patch_{id}"),
+        },
     }
 }
 
 fn namespace_numeric(
+    layout_kind: LayoutKind,
     patch: PatchId,
     local: u32,
     kind: NamespaceKind,
 ) -> Result<u32, WorldCompositionError> {
-    if patch.0 > MAX_PATCH_ID || local > MAX_LOCAL_ID {
+    let (local_bits, maximum_patch, maximum_local) = match layout_kind {
+        LayoutKind::Single | LayoutKind::Ring7 => (
+            LEGACY_LOCAL_ID_BITS,
+            LEGACY_MAX_PATCH_ID,
+            LEGACY_MAX_LOCAL_ID,
+        ),
+        LayoutKind::Ring19 => (
+            RING19_LOCAL_ID_BITS,
+            RING19_MAX_PATCH_ID,
+            RING19_MAX_LOCAL_ID,
+        ),
+    };
+    if patch.0 > maximum_patch || local > maximum_local {
         return Err(WorldCompositionError::NamespaceOverflow { patch, kind, local });
     }
-    Ok((patch.0 << LOCAL_ID_BITS) | local)
+    Ok((patch.0 << local_bits) | local)
 }
 
 /// Recipe-independent category for a patch-local validation issue.
@@ -442,7 +595,7 @@ pub(crate) fn compose_world(
     let mut anchors = BTreeMap::new();
 
     for fragment in by_patch.into_values() {
-        let fragment = fragment.namespace(namespace_names)?;
+        let fragment = fragment.namespace(layout.kind, namespace_names)?;
         merge_map(
             &mut volume.columns,
             fragment.volume.columns,
@@ -493,7 +646,7 @@ pub(crate) fn compose_world(
         if !super::world::valid_stable_name(&alias) {
             return Err(WorldCompositionError::InvalidCanonicalAnchorName(alias));
         }
-        let namespaced = namespace_name(target.patch, &target.local_name);
+        let namespaced = namespace_name(layout.kind, target.patch, &target.local_name);
         let Some(position) = anchors.get(&namespaced).copied() else {
             return Err(WorldCompositionError::MissingCanonicalAnchor {
                 alias,
@@ -546,7 +699,13 @@ fn stitch_directed_liquid_seams(
 ) -> Result<(), WorldCompositionError> {
     let mut links = Vec::new();
     for (edge_id, edge) in &layout.shared_edges {
-        let ResolvedLiquidPort::Directed { source, sink, port } = &edge.liquid else {
+        let ResolvedLiquidPort::Directed {
+            source,
+            sink,
+            port,
+            elevation,
+        } = &edge.liquid
+        else {
             continue;
         };
         let source_is_first = *source == edge.first.0 && *sink == edge.second.0;
@@ -555,6 +714,7 @@ fn stitch_directed_liquid_seams(
             continue;
         }
 
+        let (minimum_level, maximum_level) = liquid_level_bounds(edge, *elevation);
         for (first_coord, second_coord) in &port.lanes {
             let (source_coord, sink_coord) = if source_is_first {
                 (*first_coord, *second_coord)
@@ -565,16 +725,16 @@ fn stitch_directed_liquid_seams(
                 *edge_id,
                 *source,
                 source_coord,
-                edge.elevation.min,
-                edge.elevation.max,
+                minimum_level,
+                maximum_level,
                 liquids,
             )?;
             let sink_endpoint = unique_liquid_endpoint(
                 *edge_id,
                 *sink,
                 sink_coord,
-                edge.elevation.min,
-                edge.elevation.max,
+                minimum_level,
+                maximum_level,
                 liquids,
             )?;
             validate_liquid_link(*edge_id, source_endpoint, sink_endpoint)?;
@@ -654,6 +814,16 @@ fn stitch_directed_liquid_seams(
         source.downstream = Some(link.sink.position);
     }
     Ok(())
+}
+
+const fn liquid_level_bounds(
+    edge: &super::layout::ResolvedEdgeContract,
+    elevation: ResolvedLiquidElevation,
+) -> (Level, Level) {
+    match elevation {
+        ResolvedLiquidElevation::EdgeBand => (edge.elevation.min, edge.elevation.max),
+        ResolvedLiquidElevation::Exact(level) => (level, level),
+    }
 }
 
 fn unique_liquid_endpoint(
@@ -990,7 +1160,7 @@ mod tests {
         assert_eq!(world.biome_regions.len(), world.volume.surfaces.len());
 
         for patch in layout.patches.keys().copied() {
-            let prefix = patch.0 << LOCAL_ID_BITS;
+            let prefix = patch.0 << LEGACY_LOCAL_ID_BITS;
             assert!(world.liquids.bodies.contains_key(&LiquidBodyId(prefix)));
             assert!(world.features.by_id.contains_key(&FeatureId(prefix)));
             assert!(world.structures.by_id.contains_key(&StructureId(prefix)));
@@ -1002,14 +1172,17 @@ mod tests {
             assert!(world
                 .features
                 .protected_routes
-                .contains_key(&namespace_name(patch, "main_route")));
-            assert!(world
-                .features
-                .clearings
-                .contains_key(&namespace_name(patch, "main_clearing")));
-            assert!(world
-                .anchors
-                .contains_key(&namespace_name(patch, "party_start")));
+                .contains_key(&namespace_name(LayoutKind::Ring7, patch, "main_route")));
+            assert!(world.features.clearings.contains_key(&namespace_name(
+                LayoutKind::Ring7,
+                patch,
+                "main_clearing"
+            )));
+            assert!(world.anchors.contains_key(&namespace_name(
+                LayoutKind::Ring7,
+                patch,
+                "party_start"
+            )));
         }
         assert_eq!(
             world.anchors.get("party_start"),
@@ -1028,8 +1201,8 @@ mod tests {
         )
         .expect("complete dry Ring7 fragments should compose");
         let patch = PatchId(5);
-        let interior = InteriorRegionId((patch.0 << LOCAL_ID_BITS) | 3);
-        let special = SpecialMovementRegion((patch.0 << LOCAL_ID_BITS) | 2);
+        let interior = InteriorRegionId((patch.0 << LEGACY_LOCAL_ID_BITS) | 3);
+        let special = SpecialMovementRegion((patch.0 << LEGACY_LOCAL_ID_BITS) | 2);
         let plan = world
             .interiors
             .by_id
@@ -1204,6 +1377,40 @@ mod tests {
     }
 
     #[test]
+    fn exact_liquid_bounds_do_not_reuse_the_walker_band() {
+        let layout = directed_ring7_layout();
+        let edge = layout
+            .shared_edges
+            .values()
+            .find(|edge| matches!(edge.liquid, ResolvedLiquidPort::Directed { .. }))
+            .expect("the fixture has a directed seam");
+        assert_eq!(
+            liquid_level_bounds(edge, ResolvedLiquidElevation::EdgeBand),
+            (edge.elevation.min, edge.elevation.max)
+        );
+        assert_eq!(
+            liquid_level_bounds(edge, ResolvedLiquidElevation::Exact(29)),
+            (29, 29)
+        );
+    }
+
+    #[test]
+    fn ring19_named_namespaces_do_not_reuse_ring7_semantics() {
+        assert_eq!(
+            namespace_name(LayoutKind::Ring19, PatchId(0), "party_start"),
+            "center_party_start"
+        );
+        assert_eq!(
+            namespace_name(LayoutKind::Ring19, PatchId(18), "party_start"),
+            "mountains_c_party_start"
+        );
+        assert_eq!(
+            namespace_name(LayoutKind::Ring19, PatchId(2), "party_start"),
+            "forest_a_party_start"
+        );
+    }
+
+    #[test]
     fn directed_liquid_seams_reject_missing_and_mismatched_endpoints() {
         let layout = directed_ring7_layout();
         let (edge_id, edge) = layout
@@ -1213,7 +1420,10 @@ mod tests {
                 matches!(edge.liquid, ResolvedLiquidPort::Directed { .. }).then_some((*id, edge))
             })
             .expect("the fixture has one directed seam");
-        let ResolvedLiquidPort::Directed { source, sink, port } = &edge.liquid else {
+        let ResolvedLiquidPort::Directed {
+            source, sink, port, ..
+        } = &edge.liquid
+        else {
             panic!("the selected seam should be directed");
         };
         let first_lane = *port.lanes.first().expect("the directed port has lanes");
@@ -1264,19 +1474,100 @@ mod tests {
     #[test]
     fn namespace_bounds_reject_aliasing_instead_of_truncating_ids() {
         assert_eq!(
-            namespace_numeric(PatchId(MAX_PATCH_ID + 1), 0, NamespaceKind::Feature),
+            namespace_numeric(
+                LayoutKind::Ring7,
+                PatchId(LEGACY_MAX_PATCH_ID + 1),
+                0,
+                NamespaceKind::Feature
+            ),
             Err(WorldCompositionError::NamespaceOverflow {
-                patch: PatchId(MAX_PATCH_ID + 1),
+                patch: PatchId(LEGACY_MAX_PATCH_ID + 1),
                 kind: NamespaceKind::Feature,
                 local: 0,
             })
         );
         assert_eq!(
-            namespace_numeric(PatchId(0), MAX_LOCAL_ID + 1, NamespaceKind::Structure),
+            namespace_numeric(
+                LayoutKind::Ring19,
+                PatchId(0),
+                RING19_MAX_LOCAL_ID + 1,
+                NamespaceKind::Structure
+            ),
             Err(WorldCompositionError::NamespaceOverflow {
                 patch: PatchId(0),
                 kind: NamespaceKind::Structure,
-                local: MAX_LOCAL_ID + 1,
+                local: RING19_MAX_LOCAL_ID + 1,
+            })
+        );
+    }
+
+    #[test]
+    fn ring7_numeric_and_named_namespaces_keep_the_legacy_encoding() {
+        assert_eq!(
+            namespace_numeric(LayoutKind::Ring7, PatchId(0), 42, NamespaceKind::Liquid),
+            Ok(42)
+        );
+        assert_eq!(
+            namespace_numeric(LayoutKind::Ring7, PatchId(6), 42, NamespaceKind::Feature),
+            Ok(0x6000_002a)
+        );
+        assert_eq!(
+            namespace_numeric(
+                LayoutKind::Ring7,
+                PatchId(6),
+                LEGACY_MAX_LOCAL_ID,
+                NamespaceKind::Interior
+            ),
+            Ok(0x6fff_ffff)
+        );
+
+        for (patch, expected) in [
+            (0, "center_party_start"),
+            (1, "mountains_party_start"),
+            (2, "waterfall_party_start"),
+            (3, "forest_party_start"),
+            (4, "fort_party_start"),
+            (5, "caves_party_start"),
+            (6, "sky_islands_party_start"),
+        ] {
+            assert_eq!(
+                namespace_name(LayoutKind::Ring7, PatchId(patch), "party_start"),
+                expected,
+                "update only with an explicit shipped Ring7 named-namespace decision"
+            );
+        }
+    }
+
+    #[test]
+    fn ring19_numeric_namespace_admits_patch_eighteen_without_aliasing() {
+        assert_eq!(
+            namespace_numeric(LayoutKind::Ring19, PatchId(18), 42, NamespaceKind::Liquid),
+            Ok(0x9000_002a)
+        );
+        assert_eq!(
+            namespace_numeric(
+                LayoutKind::Ring19,
+                PatchId(18),
+                RING19_MAX_LOCAL_ID,
+                NamespaceKind::Interior
+            ),
+            Ok(0x97ff_ffff)
+        );
+        assert_eq!(
+            namespace_numeric(LayoutKind::Ring19, PatchId(19), 0, NamespaceKind::Feature),
+            Ok(0x9800_0000)
+        );
+        assert_eq!(
+            namespace_numeric(
+                LayoutKind::Ring19,
+                PatchId(RING19_MAX_PATCH_ID + 1),
+                0,
+                NamespaceKind::Feature
+            ),
+            Err(WorldCompositionError::NamespaceOverflow {
+                patch: PatchId(RING19_MAX_PATCH_ID + 1),
+                kind: NamespaceKind::Feature,
+                local: 0,
             })
         );
     }
@@ -1323,7 +1614,10 @@ mod tests {
     fn directed_fragments(layout: &ResolvedLayoutPlan) -> Vec<GeneratedPatchPlan> {
         let mut fragments = complete_fragments(layout);
         for edge in layout.shared_edges.values() {
-            let ResolvedLiquidPort::Directed { source, sink, port } = &edge.liquid else {
+            let ResolvedLiquidPort::Directed {
+                source, sink, port, ..
+            } = &edge.liquid
+            else {
                 continue;
             };
             let source_is_first = *source == edge.first.0;
@@ -1682,8 +1976,8 @@ mod tests {
             caves: generated_patch(
                 V3EnvironmentSettings::Rocky,
                 V3RecipeSettings::Caves(V3CavesSettings {
-                    surface_level: 16,
-                    cave_floor_level: 7,
+                    surface_level: 17,
+                    cave_floor_level: 6,
                     chamber_count: 9,
                 }),
             ),

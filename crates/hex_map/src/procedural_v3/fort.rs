@@ -41,7 +41,7 @@ const CURTAIN_HEIGHT: i32 = 5;
 const TOWER_APRON_RISE: i32 = 1;
 const TOWER_CORE_RISE: i32 = 2;
 const KEEP_HEIGHT: i32 = 8;
-const GATE_CLEAR_LEVELS: i32 = 3;
+const GATE_CLEAR_LEVELS: i32 = 4;
 const BATTLEMENT_REGION: SpecialMovementRegion = SpecialMovementRegion(20);
 const KEEP_ROOF_REGION: SpecialMovementRegion = SpecialMovementRegion(21);
 
@@ -315,9 +315,14 @@ fn construct_patch_with_streams(
         ))]
     })?;
     let ground_level = patch_ground_level(patch.layout(), patch.id);
-    let rotation = streams.map_or(0, |streams| {
-        u8::try_from(streams.orientation.sample(0) % 6).unwrap_or_default()
-    });
+    let ring19 = patch.layout().kind == super::layout::LayoutKind::Ring19;
+    let rotation = if ring19 {
+        patch.rotation_turns()
+    } else {
+        streams.map_or(0, |streams| {
+            u8::try_from(streams.orientation.sample(0) % 6).unwrap_or_default()
+        })
+    };
     let keep_variant = streams.map_or(0, |streams| {
         u8::try_from(streams.keep.sample(0) % 3).unwrap_or_default()
     });
@@ -331,10 +336,11 @@ fn construct_patch_with_streams(
             &protected,
         )?
     } else {
+        let rotation_attempts = if ring19 { 1_u8 } else { 6_u8 };
         site_centers(&mask)
             .into_iter()
             .find_map(|center| {
-                (0..6_u8)
+                (0..rotation_attempts)
                     .map(|offset| rotation.saturating_add(offset) % 6)
                     .flat_map(|rotation| {
                         (0..3_u8).map(move |offset| {
@@ -530,7 +536,11 @@ impl FortTemplate {
         }
 
         for (index, tower_center) in tower_centers().into_iter().enumerate() {
-            for local in tower_center.within_radius(1) {
+            for local in tower_center
+                .within_radius(1)
+                .into_iter()
+                .filter(|local| local.distance(HexCoord::ORIGIN) == OUTER_WALL_RADIUS)
+            {
                 let rise = if local == tower_center {
                     TOWER_CORE_RISE
                 } else {
@@ -764,6 +774,14 @@ impl FortTemplate {
 }
 
 pub(crate) fn validate_fort(plan: &GeneratedWorldPlan) -> WorldValidation<FortMetrics> {
+    let ground_level = patch_ground_level(&plan.layout, PatchId(0));
+    validate_fort_at_ground(plan, ground_level)
+}
+
+pub(crate) fn validate_fort_at_ground(
+    plan: &GeneratedWorldPlan,
+    ground_level: i32,
+) -> WorldValidation<FortMetrics> {
     let mut issues = Vec::new();
     if !plan.liquids.bodies.is_empty()
         || !plan.features.by_id.is_empty()
@@ -778,7 +796,7 @@ pub(crate) fn validate_fort(plan: &GeneratedWorldPlan) -> WorldValidation<FortMe
         ));
     }
 
-    let Some(template) = detect_template(plan) else {
+    let Some(template) = detect_template_at_ground(plan, ground_level) else {
         return WorldValidation::Invalid(vec![recipe_issue(
             "Fort structures and actor anchors do not match a supported exact template",
         )]);
@@ -1008,10 +1026,14 @@ pub(crate) fn validate_fort(plan: &GeneratedWorldPlan) -> WorldValidation<FortMe
     })
 }
 
+#[cfg(test)]
 fn detect_template(plan: &GeneratedWorldPlan) -> Option<FortTemplate> {
+    detect_template_at_ground(plan, patch_ground_level(&plan.layout, PatchId(0)))
+}
+
+fn detect_template_at_ground(plan: &GeneratedWorldPlan, ground_level: i32) -> Option<FortTemplate> {
     let patch = plan.layout.patches.get(&PatchId(0))?;
     let protected = protected_approaches(&plan.layout, PatchId(0));
-    let ground_level = patch_ground_level(&plan.layout, PatchId(0));
     for center in site_centers(&patch.mask) {
         for rotation in 0..6 {
             for keep_variant in 0..3 {
@@ -1148,7 +1170,7 @@ fn protected_approaches(layout: &ResolvedLayoutPlan, patch: PatchId) -> BTreeSet
         .collect()
 }
 
-fn patch_ground_level(layout: &ResolvedLayoutPlan, patch: PatchId) -> i32 {
+pub(crate) fn patch_ground_level(layout: &ResolvedLayoutPlan, patch: PatchId) -> i32 {
     let mut preferred: Vec<_> = layout
         .shared_edges
         .values()
@@ -1393,6 +1415,9 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
         V3RecipeSettings::Waterfall(_) => "Waterfall",
         V3RecipeSettings::Forest(_) => "Forest",
         V3RecipeSettings::Fort(_) => "Fort",
+        V3RecipeSettings::Volcano(_) => "Volcano",
+        V3RecipeSettings::DeepForest(_) => "DeepForest",
+        V3RecipeSettings::Prairie(_) => "Prairie",
     }
 }
 
@@ -1514,7 +1539,31 @@ mod tests {
             assert!(plan
                 .volume
                 .surface_headroom(*floor)
-                .is_some_and(|headroom| headroom.0 >= 2));
+                .is_some_and(|headroom| headroom.0 >= GATE_CLEAR_LEVELS));
+        }
+    }
+
+    #[test]
+    fn six_small_turrets_keep_three_accessible_top_surfaces_each() {
+        let selected = generate(12, 0.4, &settings(), 91).expect("Fort should generate");
+        let plan = &selected.validated.plan;
+        let template = detect_template(plan).expect("Fort template should be detectable");
+        assert_eq!(template.tower_tops.len(), 18);
+
+        let graph = OrdinaryGraph::from_volume(&plan.volume, None);
+        let courtyard_access = graph.distances_from(template.hostile_start());
+        for center in tower_centers() {
+            let world_center = to_world(center, template.center, template.rotation);
+            let turret = template
+                .tower_tops
+                .iter()
+                .filter(|surface| surface.coord.distance(world_center) <= 1)
+                .copied()
+                .collect::<BTreeSet<_>>();
+            assert_eq!(turret.len(), 3);
+            assert!(turret
+                .iter()
+                .all(|surface| courtyard_access.contains_key(surface)));
         }
     }
 

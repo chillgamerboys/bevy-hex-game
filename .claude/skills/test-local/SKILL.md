@@ -25,11 +25,13 @@ python3 tools/gameplay_scope.py run contracts
 python3 tools/gameplay_scope.py run simulation
 python3 tools/gameplay_scope.py run app
 python3 tools/gameplay_scope.py run residual
+cargo nextest run --workspace --all-features --cargo-profile ci --profile ci -E 'package(hex_map)'
 cargo test --workspace --all-features --profile ci --doc
 ```
 
-Report each concern independently. `/test-local` is deliberately broad; `/test-quick`
-uses the scope selector for the edit loop.
+Report each concern independently. The explicit map command is the unchanged
+world-owned shard enabled beside the residual concern in CI. `/test-local` is
+deliberately broad; `/test-quick` uses the scope selector for the edit loop.
 
 ## Step 4 — Dependency audit
 

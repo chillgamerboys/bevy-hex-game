@@ -12,6 +12,8 @@ struct LiquidMaterialParams {
     flow_phase_scale: vec4<f32>,
     // x: highlight, y: foam, z: roughness reduction, w: cross-wave frequency.
     modulation: vec4<f32>,
+    // x: base emission, y: pulse amplitude, z: pulse rate, w: reserved.
+    emission: vec4<f32>,
     // Canonical palette-backed water-foam colour in linear RGB.
     foam_color: vec4<f32>,
 }
@@ -80,6 +82,16 @@ fn fragment(
         pbr_input.material.perceptual_roughness -
             ripple * roughness_reduction,
         0.089,
+        1.0,
+    );
+    let emission_pulse = 0.5 + 0.5 * sin(
+        TAU * liquid.flow_phase_scale.z * max(liquid.emission.z, 0.0),
+    );
+    let emission_strength =
+        max(liquid.emission.x, 0.0) +
+        max(liquid.emission.y, 0.0) * emission_pulse;
+    pbr_input.material.emissive = vec4<f32>(
+        liquid_color * emission_strength,
         1.0,
     );
     pbr_input.material.base_color = alpha_discard(

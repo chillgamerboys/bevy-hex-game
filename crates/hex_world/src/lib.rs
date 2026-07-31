@@ -18,7 +18,7 @@ pub mod sky;
 /// Procedural sky material.
 mod sky_material;
 
-pub use camera::{CameraMode, PanOrbitCamera};
+pub use camera::{CameraMode, CameraSystems, PanOrbitCamera};
 pub use sky::TimeOfDay;
 
 /// Enables a full-interior cutaway for one deterministic review capture.

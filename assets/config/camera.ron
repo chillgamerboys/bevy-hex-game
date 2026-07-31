@@ -7,6 +7,14 @@
     // Close third-person view around the selected character.
     character_focus_height: 0.4,
     character_radius: 7.0,
+    // Terrain collision affects only Character mode. The camera snaps inward before
+    // the closest public tile span, then restores smoothly once the view clears.
+    // The minimum is a preferred usable radius: a blocked ray first searches nearby
+    // yaw directions, while a complete enclosure may move closer rather than cross
+    // terrain.
+    character_collision_margin: 0.35,
+    character_min_effective_radius: 1.5,
+    character_restoration_speed: 8.0,
     // Fraction from level with the horizon (0.0) to straight down (1.0).
     character_pitch: 0.3,
     // The close view can approach the horizon to inspect terrain above the unit.

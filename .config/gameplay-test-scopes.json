@@ -107,7 +107,7 @@
       ]
     },
     "residual": {
-      "description": "All remaining workspace and cross-owner contract tests.",
+      "description": "All remaining non-map workspace and cross-owner contract tests.",
       "command": [
         "cargo",
         "nextest",
@@ -119,7 +119,7 @@
         "--profile",
         "ci",
         "-E",
-        "not (package(hex_core) | package(hex_lattice) | package(hex_ai) | package(hex_units) | package(hex_combat_core) | package(hex_combat) | package(hex_test_support) | package(hex_gameplay_model) | (package(hex_game) & binary(gameplay_app)))"
+        "not (package(hex_core) | package(hex_lattice) | package(hex_ai) | package(hex_units) | package(hex_combat_core) | package(hex_combat) | package(hex_test_support) | package(hex_gameplay_model) | package(hex_map) | (package(hex_game) & binary(gameplay_app)))"
       ]
     },
     "clippy": {

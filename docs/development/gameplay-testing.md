@@ -7,7 +7,9 @@ judge.
 
 This partition does not own `hex_map`, the map review runner, Forest or Waterfall
 walks, perception/map stress suites, or their acceptance criteria. Cross-owner
-scenario binaries continue to run in the residual workspace suite.
+scenario binaries continue to run in the residual workspace suite. The unchanged
+`hex_map` corpus runs beside it in the world-owned map shard whenever that residual
+concern is selected.
 
 ## Concern partitions
 
@@ -21,9 +23,10 @@ scenario binaries continue to run in the residual workspace suite.
 | Soak/performance | Long stalemates, stress corpora, bounded retention and performance | The scheduled stress workflow | Typed completion/timeout, fingerprints, timing and memory bounds | `.github/workflows/stress.yaml` | Scheduled/manual only |
 
 The required gameplay CI job publishes separate JUnit and timing evidence for the
-first four partitions. The residual workspace job keeps all other packages and the
-unchanged map/game-world contract binaries under the existing feature set, CI
-profile, and timeout.
+first four partitions. The residual workspace job keeps all other non-map packages
+and cross-owner game/world contract binaries under the existing feature set, CI
+profile, and timeout. The same residual decision also enables the separately
+budgeted, unchanged `hex_map` test shard.
 
 ## Integration target topology
 

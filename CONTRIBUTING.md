@@ -54,14 +54,17 @@ python3 tools/gameplay_scope.py run contracts
 python3 tools/gameplay_scope.py run simulation
 python3 tools/gameplay_scope.py run app
 python3 tools/gameplay_scope.py run residual
+cargo nextest run --workspace --all-features --cargo-profile ci --profile ci -E 'package(hex_map)'
 cargo test --workspace --all-features --profile ci --doc
 python3 tools/gameplay_scope.py run docs
 cargo build --workspace --profile ci
 ```
 
-CI runs the final build command on Linux, Windows, and macOS. Run it on your local
-platform; the CI matrix covers the other two. Markdown-only changes skip the Rust
-commands, but still need valid relative links.
+The explicit map command mirrors its separately budgeted, world-owned CI shard; it
+is part of the full local gate, not a gameplay concern command. CI runs the final
+build command on Linux, Windows, and macOS. Run it on your local platform; the CI
+matrix covers the other two. Markdown-only changes skip the Rust commands, but
+still need valid relative links.
 
 The gameplay commands are separated because their evidence has different authority:
 pure rules, focused ECS contracts, deterministic multi-turn snapshots, and headless

@@ -13,16 +13,18 @@ use hex_core::{BiomeRegionId, HexCoord, Level, MapViewHint, TilePos};
 use super::composition::{
     compose_world, GeneratedPatchPlan, PatchAnchorRef, WorldCompositionSettings,
 };
-use super::layout::{resolve_layout, PatchId, ResolvedLayoutPlan, ResolvedLiquidPort};
-use super::local_frame::LocalPatchFrame;
+use super::layout::{
+    resolve_layout, PatchId, ResolvedLayoutPlan, ResolvedLiquidElevation, ResolvedLiquidPort,
+};
 use super::patch::{PatchBuildMode, PatchRecipeContext};
 use super::selection::{
     run_recipe, CandidateAttemptError, CandidateContext, FallbackContext, RepairOutcome, V3Recipe,
     ValidatedWorldSelection, WorldValidation,
 };
 use super::traversal::OrdinaryGraph;
+use super::vegetation::CaveVegetationSet;
 use super::world::{GeneratedWorldPlan, WorldIssueCode, WorldValidationIssue};
-use super::{caves, forest, fort, hills, mountains, sky, waterfall, V3GenerationError};
+use super::V3GenerationError;
 use crate::procedural::Ring7Metrics as Ring7ReportMetrics;
 use crate::settings::{
     PatchSpec, ProceduralV3Settings, V3EnvironmentSettings, V3LayoutSettings, V3RecipeSettings,
@@ -49,6 +51,7 @@ struct Ring7Recipe<'a> {
     layout: ResolvedLayoutPlan,
     settings: &'a V3Ring7Settings,
     art_catalog: &'a RuntimeArtCatalog,
+    cave_vegetation: CaveVegetationSet,
     #[cfg(test)]
     _reject_candidates: bool,
 }
@@ -99,6 +102,8 @@ fn generate_with_options(
         )));
     }
     validate_resolved_hydrology(&layout)?;
+    let cave_vegetation = CaveVegetationSet::resolve(art_catalog, "Ring7 Caves")
+        .map_err(V3GenerationError::RecipeContract)?;
 
     run_recipe(
         &Ring7Recipe {
@@ -106,6 +111,7 @@ fn generate_with_options(
             layout,
             settings: ring,
             art_catalog,
+            cave_vegetation,
             #[cfg(test)]
             _reject_candidates,
         },
@@ -249,23 +255,36 @@ impl Ring7Recipe<'_> {
         for (id, spec) in specs {
             let patch = PatchRecipeContext::resolve(&self.layout, id)
                 .map_err(|error| vec![recipe_issue(error.to_string())])?;
-            let fragment =
-                construct_fragment(patch, spec, self.level_height, mode, self.art_catalog)
-                    .map_err(|issues| {
-                        issues
-                            .into_iter()
-                            .map(|issue| {
-                                recipe_issue(format!(
-                                    "patch {} {} construction {:?}: {}",
-                                    id.0,
-                                    recipe_name(&spec.recipe),
-                                    issue.code,
-                                    issue.detail
-                                ))
-                            })
-                            .collect::<Vec<_>>()
-                    })?;
-            validate_fragment(patch, spec, &fragment).map_err(|issues| {
+            let fragment = construct_fragment(
+                patch,
+                spec,
+                self.level_height,
+                mode,
+                self.art_catalog,
+                &self.cave_vegetation,
+            )
+            .map_err(|issues| {
+                issues
+                    .into_iter()
+                    .map(|issue| {
+                        recipe_issue(format!(
+                            "patch {} {} construction {:?}: {}",
+                            id.0,
+                            recipe_name(&spec.recipe),
+                            issue.code,
+                            issue.detail
+                        ))
+                    })
+                    .collect::<Vec<_>>()
+            })?;
+            validate_fragment(
+                patch,
+                spec,
+                &fragment,
+                self.art_catalog,
+                &self.cave_vegetation,
+            )
+            .map_err(|issues| {
                 issues
                     .into_iter()
                     .map(|issue| {
@@ -385,16 +404,29 @@ fn ring_specs(ring: &V3Ring7Settings) -> [(PatchId, &PatchSpec); 7] {
 }
 
 fn validate_resolved_hydrology(layout: &ResolvedLayoutPlan) -> Result<(), V3GenerationError> {
-    let actual = layout
-        .shared_edges
-        .values()
-        .filter_map(|edge| {
-            let ResolvedLiquidPort::Directed { source, sink, .. } = &edge.liquid else {
-                return None;
-            };
-            Some((*source, *sink))
-        })
-        .collect::<BTreeSet<_>>();
+    if !layout.boundary_liquid_outlets.is_empty() {
+        return Err(V3GenerationError::RecipeContract(
+            "Ring7 cannot own complete-world boundary liquid outlets".to_owned(),
+        ));
+    }
+    let mut actual = BTreeSet::new();
+    for edge in layout.shared_edges.values() {
+        let ResolvedLiquidPort::Directed {
+            source,
+            sink,
+            elevation,
+            ..
+        } = &edge.liquid
+        else {
+            continue;
+        };
+        if *elevation != ResolvedLiquidElevation::EdgeBand {
+            return Err(V3GenerationError::RecipeContract(
+                "Ring7 liquid seams must retain legacy edge-band elevation authority".to_owned(),
+            ));
+        }
+        actual.insert((*source, *sink));
+    }
     let expected = BTreeSet::from([(PatchId(2), PatchId(0)), (PatchId(0), PatchId(5))]);
     if actual != expected {
         return Err(V3GenerationError::RecipeContract(format!(
@@ -410,111 +442,34 @@ fn construct_fragment(
     level_height: f32,
     mode: PatchBuildMode,
     art_catalog: &RuntimeArtCatalog,
+    cave_vegetation: &CaveVegetationSet,
 ) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
-    match &spec.recipe {
-        V3RecipeSettings::Hills(settings) => {
-            hills::construct_patch(patch, settings, spec.environment, level_height, mode)
-        }
-        V3RecipeSettings::Mountains(settings) => {
-            mountains::construct_patch(patch, settings, level_height, mode)
-        }
-        V3RecipeSettings::Waterfall(settings) => {
-            waterfall::construct_patch(patch, settings, spec.environment, level_height, mode)
-        }
-        V3RecipeSettings::Forest(settings) => forest::construct_patch(
-            patch,
-            settings,
-            spec.environment,
-            level_height,
-            mode,
-            art_catalog,
-        ),
-        V3RecipeSettings::Fort(settings) => {
-            fort::construct_patch(patch, settings, level_height, mode)
-        }
-        V3RecipeSettings::Caves(settings) => {
-            caves::construct_patch(patch, settings, level_height, mode)
-        }
-        V3RecipeSettings::SkyIslands(settings) => {
-            sky::construct_patch(patch, settings, spec.environment, level_height, mode)
-        }
-    }
+    super::composite_patch::construct_fragment(
+        patch,
+        spec.environment,
+        &spec.recipe,
+        level_height,
+        mode,
+        art_catalog,
+        cave_vegetation,
+    )
 }
 
 fn validate_fragment(
     patch: PatchRecipeContext<'_>,
     spec: &PatchSpec,
     fragment: &GeneratedPatchPlan,
+    art_catalog: &RuntimeArtCatalog,
+    cave_vegetation: &CaveVegetationSet,
 ) -> Result<(), Vec<WorldValidationIssue>> {
-    let common = fragment.validate_against(patch.layout());
-    if !common.is_empty() {
-        return Err(common
-            .into_iter()
-            .map(|issue| {
-                recipe_issue(format!(
-                    "patch {} common validation {:?}: {}",
-                    issue.patch.0, issue.code, issue.detail
-                ))
-            })
-            .collect());
-    }
-
-    let validation = match &spec.recipe {
-        V3RecipeSettings::Waterfall(_) => waterfall::validate_patch(patch, fragment).map(|_| ()),
-        V3RecipeSettings::Forest(_) => forest::validate_patch(patch, fragment).map(|_| ()),
-        V3RecipeSettings::Hills(settings) => {
-            hills::validate_patch(patch, fragment, settings).map(|_| ())
-        }
-        V3RecipeSettings::Mountains(settings) => {
-            mountains::validate_patch(patch, fragment, settings).map(|_| ())
-        }
-        V3RecipeSettings::Fort(_) => validate_canonical(patch, fragment, fort::validate_fort),
-        V3RecipeSettings::Caves(settings) => {
-            caves::validate_caves_with_surface_sink(patch, fragment, settings).map(|_| ())
-        }
-        V3RecipeSettings::SkyIslands(settings) => {
-            validate_canonical(patch, fragment, |plan| sky::validate_sky(plan, settings))
-        }
-    };
-    match validation {
-        WorldValidation::Valid(()) => Ok(()),
-        WorldValidation::Invalid(issues) => Err(issues),
-    }
-}
-
-fn validate_canonical<M>(
-    patch: PatchRecipeContext<'_>,
-    fragment: &GeneratedPatchPlan,
-    validate: impl FnOnce(&GeneratedWorldPlan) -> WorldValidation<M>,
-) -> WorldValidation<()> {
-    let frame =
-        match LocalPatchFrame::resolve(patch.mask(), patch.layout().kind, patch.grid_radius()) {
-            Ok(frame) => frame,
-            Err(error) => {
-                return WorldValidation::Invalid(vec![recipe_issue(format!(
-                    "patch {} validation frame failed: {error}",
-                    patch.id.0
-                ))]);
-            }
-        };
-    let frame_center = frame.center();
-    let mut plan = match frame.canonical_local_world(fragment) {
-        Ok(plan) => plan,
-        Err(error) => {
-            return WorldValidation::Invalid(vec![recipe_issue(format!(
-                "patch {} validation projection around {frame_center:?} failed: {error}",
-                patch.id.0,
-            ))]);
-        }
-    };
-    plan.layout.grid_radius = plan
-        .layout
-        .footprint
-        .iter()
-        .map(|coord| HexCoord::ORIGIN.distance(*coord))
-        .max()
-        .unwrap_or_default();
-    validate(&plan).map(|_| ())
+    super::composite_patch::validate_fragment(
+        patch,
+        spec.environment,
+        &spec.recipe,
+        fragment,
+        art_catalog,
+        cave_vegetation,
+    )
 }
 
 fn validate_ring7(plan: &GeneratedWorldPlan) -> WorldValidation<Ring7Metrics> {
@@ -754,10 +709,22 @@ fn validate_directed_liquid_seams(
 ) -> u32 {
     let mut seam_count = 0_u32;
     for edge in plan.layout.shared_edges.values() {
-        let ResolvedLiquidPort::Directed { source, sink, port } = &edge.liquid else {
+        let ResolvedLiquidPort::Directed {
+            source,
+            sink,
+            port,
+            elevation,
+        } = &edge.liquid
+        else {
             continue;
         };
         seam_count = seam_count.saturating_add(1);
+        if *elevation != ResolvedLiquidElevation::EdgeBand {
+            issues.push(recipe_issue(
+                "Ring7 directed liquid seams must retain legacy edge-band elevation authority",
+            ));
+            continue;
+        }
         let source_is_first = *source == edge.first.0 && *sink == edge.second.0;
         for (first, second) in &port.lanes {
             let (source_coord, sink_coord) = if source_is_first {
@@ -860,24 +827,14 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
         V3RecipeSettings::Waterfall(_) => "Waterfall",
         V3RecipeSettings::Forest(_) => "Forest",
         V3RecipeSettings::Fort(_) => "Fort",
+        V3RecipeSettings::Volcano(_) => "Volcano",
+        V3RecipeSettings::DeepForest(_) => "DeepForest",
+        V3RecipeSettings::Prairie(_) => "Prairie",
     }
 }
 
 fn count_u32(value: usize) -> u32 {
     u32::try_from(value).unwrap_or(u32::MAX)
-}
-
-trait ValidationMap<M> {
-    fn map<N>(self, transform: impl FnOnce(M) -> N) -> WorldValidation<N>;
-}
-
-impl<M> ValidationMap<M> for WorldValidation<M> {
-    fn map<N>(self, transform: impl FnOnce(M) -> N) -> WorldValidation<N> {
-        match self {
-            WorldValidation::Valid(metrics) => WorldValidation::Valid(transform(metrics)),
-            WorldValidation::Invalid(issues) => WorldValidation::Invalid(issues),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -1006,18 +963,41 @@ mod tests {
         // while hardening the initial 0..32 audit. Keep the blocking CI corpus
         // focused; the ignored stress test below owns broad statistical coverage.
         const REGRESSION_SEEDS: [u64; 8] = [0, 7, 14, 17, 19, 23, 28, 31];
-        let fallback_seeds = REGRESSION_SEEDS
-            .into_iter()
-            .filter(|seed| {
-                generate(RING_RADIUS, 0.4, settings(), *seed, runtime_art_catalog())
-                    .expect("every Ring7 seed must produce a validated final world")
-                    .used_fallback
-            })
-            .collect::<Vec<_>>();
-        assert!(
-            fallback_seeds.is_empty(),
-            "fixed Ring7 corpus unexpectedly used fallback for seeds {fallback_seeds:?}"
-        );
+        for seed in REGRESSION_SEEDS {
+            let selected = generate(RING_RADIUS, 0.4, settings(), seed, runtime_art_catalog())
+                .expect("every Ring7 seed must produce a validated final world");
+            assert!(
+                !selected.used_fallback,
+                "fixed Ring7 seed {seed} unexpectedly used fallback: {:#?}",
+                selected.notes
+            );
+            assert!(
+                selected.valid_candidates >= 1,
+                "fixed Ring7 seed {seed} must retain at least one complete candidate"
+            );
+            let forest_old_growth = selected
+                .validated
+                .plan
+                .features
+                .by_id
+                .values()
+                .filter(|feature| {
+                    feature.object_id.as_str() == super::super::vegetation::OLD_GROWTH_ID
+                        && selected.validated.plan.biome_regions.get(&feature.root)
+                            == Some(&BiomeRegionId(3))
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                !forest_old_growth.is_empty(),
+                "fixed Ring7 seed {seed} must retain authored Old-Growth in Forest"
+            );
+            assert!(
+                forest_old_growth
+                    .iter()
+                    .all(|feature| feature.blocker_footprint.len() == 7),
+                "fixed Ring7 seed {seed} must retain exact seven-cell Old-Growth roots"
+            );
+        }
     }
 
     #[test]
@@ -1097,6 +1077,8 @@ mod tests {
             layout,
             settings: validate_recipe_settings(settings).expect("Ring7 settings should validate"),
             art_catalog: runtime_art_catalog(),
+            cave_vegetation: CaveVegetationSet::resolve(runtime_art_catalog(), "Ring7 test Caves")
+                .expect("tracked cave vegetation should resolve"),
             _reject_candidates: false,
         };
         let mut fragment = recipe
@@ -1230,7 +1212,31 @@ mod tests {
                 )),
                 include_str!(concat!(
                     env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/plant/snowy-old-growth.ron"
+                )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/plant/snowy-small-broadleaf.ron"
+                )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/plant/snowy-tall-narrow.ron"
+                )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/prop/cave-lichen.ron"
+                )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/prop/cave-moss.ron"
+                )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
                     "/../../assets/art/objects/prop/grass-tuft.ron"
+                )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/prop/snowy-grass-tuft.ron"
                 )),
                 include_str!(concat!(
                     env!("CARGO_MANIFEST_DIR"),

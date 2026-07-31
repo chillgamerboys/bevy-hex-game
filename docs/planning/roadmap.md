@@ -59,10 +59,12 @@ still belong to the crate they change. `docs` is whoever picks it up.
 | Creator and Combat Lab | Wave 6: versioned saved character/spell blueprints, immutable templates, Creator-local lattice tests, roster/deployment Sandbox, fixed fixture selector, frozen launches, and deterministic return/retry routing |
 | Tactical integrity and Combat Lab tuning | Wave 7: exact-surface occupancy, Channel, frozen rules profiles, canonical live/post-combat telemetry, comparable reports, deterministic fixtures, and a measured decision to retain the shipped four-hex movement default |
 | Gameplay foundation and scoped validation | Wave 8: one pure serializable combat authority projected through ECS/animation/UI, renderer-free gameplay screen models, concern-specific integration targets, and fail-closed dependency-scoped validation with unchanged broad owner gates <!-- linear: HEX-28 owner: shravan-kumaran --> |
-| V3 active recipe migration | Hills, Sky Islands, Mountains, Caves, Waterfall, Forest, and Fort all use the V3 semantic pipeline in shipped scenarios |
+| V3 active recipe migration | Hills, Sky Islands, Mountains, Caves, Waterfall, Forest, Fort, Volcano, Deep Forest, and Prairie all use the V3 semantic pipeline in shipped scenarios |
 | Forest authored objects | Forest publishes rotated vegetation `ObjectInstance`s while exact blockers and canopy cutaway remain separate world projections |
 | Structures and Fort | V3 Fort ships worked-stone walls, towers, gates, keep, wall walks, stairs, battlements, and validated defensive circulation |
 | Seven-region composition | Ring7 composes all seven V3 recipe variants in one connected radius-33 world with global routes, elevation seams, and hydrology |
+| Expanded biome set | Volcano, Deep Forest, and Prairie add distinct crater/lava, full-woodland, and open-grassland recipes while stable scenario and object identities remain compatible |
+| Nineteen-region composition | Ring19 composes the selectable radius-55 Two Rings map from 19 fixed logical regions, 42 physically redundant seams, one mountain-fed confluence/outlet water graph, and a separate volcano lava outlet |
 | Cave lighting and presentation | V3 Caves publishes deterministic gameplay lights over required routes plus authored emissive crystals and restrained presentation-only physical lights |
 
 ## Sequencing — independent lanes behind one contract
@@ -73,10 +75,12 @@ phase. It changed no behavior or existing `hex_units`/`hex_combat` systems; test
 harnesses only mirror the expanded shared setup chain. Both implementation lanes
 branched from updated `dev` after that contract merged.
 
-**Map lane:** every active shipped procedural scenario now uses V3 and `Ring7` is
-live. `RunBottom` is the next small world-owned contract; frozen V1/V2 removal remains
+**Map lane:** every active shipped procedural scenario now uses V3; `Ring7` and
+`Ring19` are live, and Two Rings is selectable without replacing Seven Regions.
+`RunBottom` is the next small world-owned contract; frozen V1/V2 removal remains
 independent cleanup. The map owner keeps semantic plans private and publishes exact
-shared consequences. Recipe PRs do not edit gameplay-owned crates.
+shared consequences. Recipe PRs do not edit gameplay-owned crates. Two Rings still
+requires the wave's final human visual and play approval before release.
 
 **Perception lane:** knowledge-safe casting and AI plus cave gameplay-light and
 physical presentation are live. Fog presentation → movement adapter →
@@ -85,9 +89,9 @@ engagement/ordinary-targeting/lost-contact adapters remain.
 `LocalMapKnowledge` from `hex_core`. Every adapter that changes an owned crate is
 isolated and reviewed by that owner.
 
-Headless perception remains independent of the map lane. The completed Forest, Fort,
-and `Ring7` work does not depend on combat integration, and Wave 7 does not reopen
-their private semantic plans.
+Headless perception remains independent of the map lane. The completed biome,
+vegetation, Ring7, and Ring19 work does not depend on combat integration, and Wave 7
+does not reopen their private semantic plans.
 
 Until topology-aware rebuilding exists, V3 authored liquid voxels and every lower
 voxel in their columns remain protected as one atomic semantic dependency. The
@@ -124,7 +128,7 @@ the whole wave lands on `dev` in one merge (CONTRIBUTING.md has the rules).
   Character Creator and Spell Creator entries plus one Combat Lab. Local records have
   stable IDs, atomic persistence, Draft/Ready and Map-ready diagnostics,
   dependency-safe deletion, and immutable packaged templates. Sandbox builds ordered
-  rosters on all thirteen distinct supported shipped maps, previews and describes
+  rosters on all sixteen distinct supported shipped maps, previews and describes
   each choice, resolves deployment, freezes content for Retry, and refuses resume
   writes. Fixed automated scenarios live behind one searchable stable-ID selector.
 - **Wave 7 — tactical integrity and tempo (delivered).** Combat Lab is now the
@@ -260,8 +264,8 @@ replay (D1) remain prerequisites for durable saves, but do not block this scaffo
 The casting contract those waves implement — the announce model, the legality ladder,
 volumes, and persistent effects — is [casting.md](../systems/casting.md).
 
-The complete V3 map contract, fixed `Ring7` roster, fingerprint policy, recipe
-stages, and removal gate live in
+The complete V3 map contract, fixed Ring7 and Ring19 rosters, fingerprint policy,
+recipe stages, and removal gate live in
 [world-generation-v3.md](../systems/world-generation-v3.md). Publication asks and
 fallbacks in both directions are [boundary.md](boundary.md); what crosses the boundary
 today, and its status, is [contracts.md](../contracts.md).
@@ -318,16 +322,19 @@ doubles the blast radius.
 
 ### V3 world program
 
-V3 replaces the recipe-per-map assumption with a patch-capable semantic
-world plan. `Single` keeps focused recipe iteration fast; `Ring7` composes a
-central Hills region and six fixed outer recipes inside one radius-33
-footprint. Shared edges, routes, elevation datums, and hydrology are resolved
-before patch interiors, so the system never tries to disguise incompatible
-maps with a material blend.
+V3 replaces the recipe-per-map assumption with a patch-capable semantic world plan.
+`Single` keeps focused recipe iteration fast; Ring7 composes a central Hills region
+and six fixed outer recipes inside one radius-33 footprint. Ring19 composes a centre,
+six first-ring regions, and twelve second-ring regions inside one radius-55
+footprint. Shared edges, routes, elevation datums, and hydrology are resolved before
+patch interiors, so the system never tries to disguise incompatible maps with a
+material blend.
 
-Waterfall establishes the liquid layer, Forest establishes surface features
-and exact blockers, and Fort establishes structures and circulation. They
-feed `Ring7`, then every existing recipe moves to the same V3 pipeline.
+Waterfall establishes the liquid layer, Forest establishes surface features and
+exact blockers, and Fort establishes structures and circulation. Deep Forest and
+Prairie reuse one vegetation authority at opposite density extremes, while Volcano
+owns the separate lava topology. Those recipes feed Ring7 and Ring19, then every
+existing recipe moves to the same V3 pipeline.
 V1/V2 remain frozen development oracles only until replacement review passes;
 they are removed rather than maintained as permanent compatibility paths.
 The decision-complete contract is

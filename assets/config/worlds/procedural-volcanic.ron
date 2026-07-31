@@ -1,4 +1,4 @@
-// Architecture probe: basalt hills, lava barrier, and a dry basalt causeway.
+// Off-centre crater massif, descending lava, and one elevated bridge.
 (
     grid_radius: 12,
     level_height: 0.4,
@@ -6,10 +6,11 @@
         generator_version: 3,
         layout: Single((
             environment: Volcanic,
-            recipe: Hills((
-                valley_level: 15,
-                max_relief: 8,
-                hills_per_bank: 3,
+            recipe: Volcano((
+                base_level: 15,
+                summit_relief: 20,
+                massif_coverage_percent: 25,
+                bridge_clearance: 4,
             )),
             overlays: [],
             mask: WholeWorld,

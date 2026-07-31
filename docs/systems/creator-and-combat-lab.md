@@ -95,15 +95,15 @@ Combat Lab has three tabs: Sandbox, Fixed Fixtures, and Saved Reports.
 
 ### Sandbox
 
-Sandbox offers all thirteen distinct shipped environments through the versioned
+Sandbox offers all sixteen distinct shipped maps through the versioned
 `combat_lab_maps.ron` catalog: Flat Arena, The Crossing, Procedural Hills, Rolling
-Hills, Frozen Hills, Volcanic Hills, Sky Islands, Mountains, Caves, Waterfall, and
-Forest, Fort, and Seven Regions. Duplicate scenario uses of Flat Arena and The
-Crossing do not create duplicate map choices. Each stable map record names its
-scenario, deterministic seed contract, renderer-generated preview, tactical
-description and tags, and separate Player and Hostile deployment regions. A region
-resolves from an authored cube coordinate or named map anchor plus a bounded footing
-radius. Both rosters are
+Hills, Frozen Hills, Volcanic Hills, Sky Islands, Mountains, Caves, Waterfall,
+Forest, Deep Forest, Prairie, Fort, Seven Regions, and Two Rings. Duplicate scenario
+uses of Flat Arena and The Crossing do not create duplicate map choices. Each stable
+map record names its scenario, deterministic seed contract, renderer-generated
+preview, tactical description and tags, and separate Player and Hostile deployment
+regions. A region resolves from an authored cube coordinate or named map anchor plus
+a bounded footing radius. Both rosters are
 fully editable and ordered, with one to six units per side. Choices come from packaged
 templates or saved Map-ready characters. Player units are human controlled; hostile
 units use the shipped `baseline-v1` AI. The setup and deployment are transient.

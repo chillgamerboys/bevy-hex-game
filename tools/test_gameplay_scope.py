@@ -243,6 +243,7 @@ class GameplayScopeTests(unittest.TestCase):
             "hex_combat",
             "hex_test_support",
             "hex_gameplay_model",
+            "hex_map",
         ):
             self.assertIn(f"package({package})", expression)
         self.assertIn("package(hex_game) & binary(gameplay_app)", expression)
@@ -269,14 +270,19 @@ class GameplayScopeTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("hex_gameplay_model", workflow)
 
-    def test_shipping_job_allows_a_cold_windows_link_to_finish(self) -> None:
+    def test_shipping_job_primes_cold_windows_dependencies(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "ci.yaml").read_text(
             encoding="utf-8"
         )
-        build_job = workflow.split("\n  build:\n", maxsplit=1)[1].split(
+        shipping_jobs = workflow.split("\n  build:\n", maxsplit=1)[1].split(
             "\n  coverage:\n", maxsplit=1
         )[0]
-        self.assertIn("timeout-minutes: 45", build_job)
+        self.assertIn("\n  windows_dependencies:\n", shipping_jobs)
+        self.assertIn("shared-key: windows-shipping", shipping_jobs)
+        self.assertIn("save-if: false", shipping_jobs)
+        self.assertIn(
+            "if: needs.changes.outputs.shipping == 'true'", shipping_jobs
+        )
 
 
 if __name__ == "__main__":

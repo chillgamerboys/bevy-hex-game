@@ -51,11 +51,11 @@ use hex_map::{
     LandformSettings, LayeredSkyIslandsSettings, LinkedIslandsSettings, MapSettings,
     MountainsSettings, PatchEdgeContractSettings, PatchEdgesSettings, PatchMaskSettings, PatchSpec,
     PerlinSettings, PerlinStepSettings, ProceduralRecipeMetrics, ProceduralSettings,
-    ProceduralV1Settings, ProceduralV2Settings, ProceduralV3Settings, Ring7Metrics,
+    ProceduralV1Settings, ProceduralV2Settings, ProceduralV3Settings, Ring19Metrics, Ring7Metrics,
     SkyIslandsSettings, SubstanceRun, TacticalMetrics, TacticalSettings, TerrainSettings,
     V2EnvironmentSettings, V2HillsSettings, V2RecipeSettings, V3CavesSettings,
-    V3EnvironmentSettings, V3ForestSettings, V3FortSettings, V3HillsSettings, V3LayoutSettings,
-    V3RecipeSettings, V3WaterfallSettings, VoxelMap,
+    V3DeepForestSettings, V3EnvironmentSettings, V3ForestSettings, V3FortSettings, V3HillsSettings,
+    V3LayoutSettings, V3RecipeSettings, V3WaterfallSettings, VoxelMap,
 };
 
 /// Radius used by the tests. Small enough to stay fast, large enough that the
@@ -220,7 +220,13 @@ fn runtime_art_catalog_without(omitted_object: Option<&str>) -> RuntimeArtCatalo
         include_str!("../../../assets/art/objects/plant/small-broadleaf.ron"),
         include_str!("../../../assets/art/objects/plant/tall-narrow.ron"),
         include_str!("../../../assets/art/objects/plant/old-growth.ron"),
+        include_str!("../../../assets/art/objects/plant/snowy-small-broadleaf.ron"),
+        include_str!("../../../assets/art/objects/plant/snowy-tall-narrow.ron"),
+        include_str!("../../../assets/art/objects/plant/snowy-old-growth.ron"),
+        include_str!("../../../assets/art/objects/prop/cave-lichen.ron"),
+        include_str!("../../../assets/art/objects/prop/cave-moss.ron"),
         include_str!("../../../assets/art/objects/prop/grass-tuft.ron"),
+        include_str!("../../../assets/art/objects/prop/snowy-grass-tuft.ron"),
         include_str!("../../../assets/art/objects/prop/crystal-low-cluster.ron"),
         include_str!("../../../assets/art/objects/prop/crystal-branched.ron"),
         include_str!("../../../assets/art/objects/prop/crystal-spire.ron"),
@@ -292,6 +298,7 @@ fn v2_hills_app() -> App {
 
 fn v3_hills_app() -> App {
     let mut app = procedural_app();
+    app.insert_resource(runtime_art_catalog());
     app.insert_resource(MapSettings {
         grid_radius: 12,
         level_height: 0.4,
@@ -319,8 +326,26 @@ fn v3_hills_app() -> App {
     app
 }
 
+fn v3_frozen_hills_app() -> App {
+    let mut app = v3_hills_app();
+    let mut settings = app.world_mut().resource_mut::<MapSettings>();
+    let TerrainSettings::Procedural(ProceduralSettings::V3(v3)) = &mut settings.terrain else {
+        unreachable!("V3 Hills fixture")
+    };
+    let V3LayoutSettings::Single(patch) = &mut v3.layout else {
+        unreachable!("Single Hills fixture")
+    };
+    patch.environment = V3EnvironmentSettings::Frozen;
+    let V3RecipeSettings::Hills(hills) = &mut patch.recipe else {
+        unreachable!("Hills fixture")
+    };
+    hills.max_relief = 12;
+    app
+}
+
 fn v3_waterfall_app() -> App {
     let mut app = procedural_app();
+    app.insert_resource(runtime_art_catalog());
     app.insert_resource(MapSettings {
         grid_radius: 12,
         level_height: 0.4,
@@ -342,6 +367,21 @@ fn v3_waterfall_app() -> App {
         })),
     });
     app.insert_resource(ResolvedMapSeed(771_203_419));
+    app
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "the tracked Volcano world is a compile-time integration fixture"
+)]
+fn v3_volcano_app() -> App {
+    let mut app = procedural_app();
+    let settings: MapSettings = ron::from_str(include_str!(
+        "../../../assets/config/worlds/procedural-volcanic.ron"
+    ))
+    .expect("tracked Volcano settings should parse");
+    app.insert_resource(settings);
+    app.insert_resource(ResolvedMapSeed(444_211_238));
     app
 }
 
@@ -369,6 +409,38 @@ fn v3_forest_app() -> App {
         })),
     });
     app.insert_resource(ResolvedMapSeed(381_654_729));
+    app
+}
+
+fn v3_deep_forest_app() -> App {
+    let mut app = procedural_app();
+    app.insert_resource(runtime_art_catalog());
+    app.insert_resource(MapSettings {
+        grid_radius: 12,
+        level_height: 0.4,
+        terrain: TerrainSettings::Procedural(ProceduralSettings::V3(ProceduralV3Settings {
+            layout: V3LayoutSettings::Single(PatchSpec {
+                environment: V3EnvironmentSettings::TemperateGrassland,
+                recipe: V3RecipeSettings::DeepForest(V3DeepForestSettings {
+                    base_level: 15,
+                    max_relief: 4,
+                    blocker_coverage_percent: 30,
+                    clearing_count: 3,
+                }),
+                overlays: Vec::new(),
+                mask: PatchMaskSettings::WholeWorld,
+                edges: PatchEdgesSettings {
+                    east: PatchEdgeContractSettings::WorldBoundary,
+                    south_east: PatchEdgeContractSettings::WorldBoundary,
+                    south_west: PatchEdgeContractSettings::WorldBoundary,
+                    west: PatchEdgeContractSettings::WorldBoundary,
+                    north_west: PatchEdgeContractSettings::WorldBoundary,
+                    north_east: PatchEdgeContractSettings::WorldBoundary,
+                },
+            }),
+        })),
+    });
+    app.insert_resource(ResolvedMapSeed(1_592_598_566));
     app
 }
 
@@ -505,6 +577,22 @@ fn v3_ring7_app() -> App {
     app
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "the tracked Two Rings review world is a compile-time integration fixture"
+)]
+fn v3_ring19_app() -> App {
+    let mut app = test_app();
+    let settings: MapSettings = ron::from_str(include_str!(
+        "../../../assets/config/worlds/procedural-two-rings.ron"
+    ))
+    .expect("tracked Two Rings settings should parse");
+    app.insert_resource(settings);
+    app.insert_resource(ResolvedMapSeed(1_592_598_566));
+    app.insert_resource(runtime_art_catalog());
+    app
+}
+
 #[test]
 fn ring7_recipe_metrics_are_public_reflected_and_exhaustive() {
     let recipe_metrics = ProceduralRecipeMetrics::Ring7(Ring7Metrics {
@@ -573,6 +661,93 @@ fn ring7_recipe_metrics_are_public_reflected_and_exhaustive() {
 }
 
 #[test]
+fn ring19_recipe_metrics_are_public_reflected_and_exhaustive() {
+    let recipe_metrics = ProceduralRecipeMetrics::Ring19(Ring19Metrics {
+        world_columns: 1,
+        biome_regions: 2,
+        reciprocal_seams: 3,
+        boundary_sides: 4,
+        ordinary_surfaces: 5,
+        reachable_surfaces: 6,
+        reachable_elevation_levels: 7,
+        relief: 8,
+        critical_route_steps: 9,
+        macro_edges: 10,
+        redundant_regions: 11,
+        directed_liquid_seams: 12,
+        boundary_liquid_outlets: 13,
+        liquid_cells: 14,
+        feature_instances: 15,
+        structures: 16,
+        gameplay_lights: 17,
+        interiors: 18,
+    });
+    let ProceduralRecipeMetrics::Ring19(Ring19Metrics {
+        world_columns,
+        biome_regions,
+        reciprocal_seams,
+        boundary_sides,
+        ordinary_surfaces,
+        reachable_surfaces,
+        reachable_elevation_levels,
+        relief,
+        critical_route_steps,
+        macro_edges,
+        redundant_regions,
+        directed_liquid_seams,
+        boundary_liquid_outlets,
+        liquid_cells,
+        feature_instances,
+        structures,
+        gameplay_lights,
+        interiors,
+    }) = recipe_metrics
+    else {
+        panic!("the Ring19 report must retain its exact aggregate metrics");
+    };
+    assert_eq!(
+        (
+            world_columns,
+            biome_regions,
+            reciprocal_seams,
+            boundary_sides,
+            ordinary_surfaces,
+            reachable_surfaces,
+            reachable_elevation_levels,
+            relief,
+            critical_route_steps,
+            macro_edges,
+            redundant_regions,
+            directed_liquid_seams,
+        ),
+        (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
+    );
+    assert_eq!(
+        (
+            boundary_liquid_outlets,
+            liquid_cells,
+            feature_instances,
+            structures,
+            gameplay_lights,
+            interiors,
+        ),
+        (13, 14, 15, 16, 17, 18)
+    );
+
+    let app = test_app();
+    let registry = app.world().resource::<AppTypeRegistry>().read();
+    for type_id in [
+        TypeId::of::<ProceduralRecipeMetrics>(),
+        TypeId::of::<Ring19Metrics>(),
+    ] {
+        assert!(
+            registry.get(type_id).is_some(),
+            "Ring19 report vocabulary is missing reflection registration"
+        );
+    }
+}
+
+#[test]
 fn v3_ring7_materializes_complete_world_and_reenters_deterministically() {
     const RADIUS_33_COLUMNS: usize = 1 + 3 * 33 * 34;
 
@@ -602,35 +777,48 @@ fn v3_ring7_materializes_complete_world_and_reenters_deterministically() {
     let report = app.world().resource::<GenerationReport>().clone();
     assert_eq!(report.generator_version, 3);
     assert_eq!(report.seed, 703_700_113);
+    assert_eq!(report.selected_candidate, Some(4));
     assert_eq!(report.candidates_evaluated, 8);
-    assert!(
-        report.valid_candidates >= 2,
-        "pinned Ring7 seed should retain multiple whole-world candidates: {:?}",
-        report.notes
-    );
-    assert!(report.selected_candidate.is_some());
+    assert_eq!(report.valid_candidates, 3);
     assert!(!report.used_fallback, "{:?}", report.notes);
     assert_eq!(report.repair_rounds, 0);
     assert!(report.repair_actions.is_empty());
-    assert_ne!(report.settings_fingerprint, 0);
-    assert!(
-        report
-            .semantic_plan_fingerprint
-            .is_some_and(|fingerprint| fingerprint != 0),
-        "V3 Ring7 should publish a distinct semantic identity"
+    assert_eq!(
+        report.settings_fingerprint, 11_463_780_561_406_126_783,
+        "update only with an explicit shipped Ring7 settings-identity decision"
     );
-    assert_ne!(report.map_fingerprint, 0);
+    assert_eq!(
+        report.semantic_plan_fingerprint,
+        Some(17_137_489_855_939_949_303),
+        "update only with an explicit shipped Ring7 semantic-plan decision"
+    );
+    assert_eq!(
+        report.map_fingerprint, 14_774_674_416_521_441_907,
+        "update only with an explicit shipped Ring7 materialized-map decision"
+    );
 
     let Some(ProceduralRecipeMetrics::Ring7(metrics)) = report.recipe_metrics.as_ref() else {
         panic!("V3 Ring7 should publish exact whole-world metrics");
     };
-    assert_eq!(metrics.ordinary_surfaces, metrics.reachable_surfaces);
-    assert!(metrics.reachable_elevation_levels > 1);
-    assert!(metrics.relief > 0);
-    assert!(metrics.critical_route_steps > 0);
-    assert_eq!(metrics.macro_edges, 12);
-    assert_eq!(metrics.redundant_regions, 7);
-    assert_eq!(metrics.directed_liquid_seams, 2);
+    assert_eq!(
+        metrics,
+        &Ring7Metrics {
+            ordinary_surfaces: 2_880,
+            reachable_surfaces: 2_880,
+            reachable_elevation_levels: 23,
+            relief: 22,
+            critical_route_steps: 28,
+            macro_edges: 12,
+            redundant_regions: 7,
+            directed_liquid_seams: 2,
+            liquid_cells: 227,
+            feature_instances: 382,
+            structures: 17,
+            gameplay_lights: 4,
+            interiors: 1,
+        },
+        "update only with an explicit shipped Ring7 aggregate-contract decision"
+    );
     assert!(metrics.liquid_cells > 0);
     assert!(metrics.feature_instances > 0);
     assert!(metrics.structures > 0);
@@ -788,6 +976,285 @@ fn v3_ring7_materializes_complete_world_and_reenters_deterministically() {
 }
 
 #[test]
+fn v3_ring19_materializes_complete_world_and_reenters_deterministically() {
+    const RADIUS_55_COLUMNS: usize = 1 + 3 * 55 * 56;
+
+    let mut app = v3_ring19_app();
+    enter_gameplay(&mut app);
+
+    assert!(
+        app.world().contains_resource::<TerrainReady>(),
+        "setup failed: {:?}",
+        app.world()
+            .get_resource::<GameplaySetupFailure>()
+            .map(|failure| failure.reason.as_str())
+    );
+    assert!(!app.world().contains_resource::<GameplaySetupFailure>());
+    assert_eq!(app.world().resource::<ResolvedMapSeed>().0, 1_592_598_566);
+    assert_eq!(
+        app.world().resource::<VoxelMap>().len(),
+        RADIUS_55_COLUMNS,
+        "Ring19 must materialize every horizontal column in its fixed radius-55 world"
+    );
+    let first_tile_count = tile_count(&mut app);
+    assert!(
+        first_tile_count > RADIUS_55_COLUMNS,
+        "Ring19 caves, structures, and sky islands should materialize stacked voxel runs"
+    );
+
+    let report = app.world().resource::<GenerationReport>().clone();
+    assert_eq!(report.generator_version, 3);
+    assert_eq!(report.seed, 1_592_598_566);
+    assert_eq!(report.selected_candidate, Some(0));
+    assert_eq!(report.candidates_evaluated, 8);
+    assert_eq!(report.valid_candidates, 1);
+    assert!(!report.used_fallback, "{:?}", report.notes);
+    assert_eq!(report.repair_rounds, 0);
+    assert!(report.repair_actions.is_empty());
+    assert_eq!(
+        report.settings_fingerprint, 2_347_243_186_379_186_390,
+        "update only with an explicit shipped Ring19 settings-identity decision"
+    );
+    assert_eq!(
+        report.semantic_plan_fingerprint,
+        Some(3_259_497_139_560_498_268),
+        "update only with an explicit shipped Ring19 semantic-plan decision"
+    );
+    assert_eq!(
+        report.map_fingerprint, 13_502_613_458_185_406_509,
+        "update only with an explicit shipped Ring19 materialized-map decision"
+    );
+
+    let Some(ProceduralRecipeMetrics::Ring19(metrics)) = report.recipe_metrics.as_ref() else {
+        panic!("V3 Ring19 should publish exact whole-world metrics");
+    };
+    assert_eq!(
+        metrics,
+        &Ring19Metrics {
+            world_columns: 9_241,
+            biome_regions: 19,
+            reciprocal_seams: 42,
+            boundary_sides: 30,
+            ordinary_surfaces: 7_222,
+            reachable_surfaces: 7_146,
+            reachable_elevation_levels: 26,
+            relief: 25,
+            critical_route_steps: 49,
+            macro_edges: 42,
+            redundant_regions: 19,
+            directed_liquid_seams: 8,
+            boundary_liquid_outlets: 2,
+            liquid_cells: 744,
+            feature_instances: 1_353,
+            structures: 23,
+            gameplay_lights: 5,
+            interiors: 1,
+        },
+        "update only with an explicit shipped Ring19 aggregate-contract decision"
+    );
+    assert!(metrics.liquid_cells > 0);
+    assert!(metrics.feature_instances > 0);
+    assert!(metrics.structures > 0);
+    assert!(metrics.gameplay_lights > 0);
+    assert!(metrics.interiors > 0);
+    assert_eq!(
+        report.metrics.reachable_surfaces,
+        metrics.reachable_surfaces
+    );
+    assert_eq!(report.metrics.barrier_cells, metrics.liquid_cells);
+
+    let anchors = app.world().resource::<MapAnchors>();
+    for name in ["party_start", "hostile_start", "conflict_center"] {
+        assert!(
+            anchors.get(&MapAnchorId::from(name)).is_some(),
+            "missing canonical Ring19 anchor {name}"
+        );
+    }
+    let first_anchors: BTreeMap<String, TilePos> = anchors
+        .iter()
+        .map(|(id, position)| (id.as_str().to_owned(), position))
+        .collect();
+    let first_biomes: BTreeMap<TilePos, BiomeRegionId> =
+        app.world().resource::<BiomeRegions>().iter().collect();
+    assert_eq!(
+        first_biomes
+            .values()
+            .copied()
+            .collect::<BTreeSet<BiomeRegionId>>(),
+        (0..19).map(BiomeRegionId).collect(),
+        "Ring19 should publish exact memberships for all nineteen patches"
+    );
+    assert!(first_biomes.len() >= RADIUS_55_COLUMNS);
+
+    let first_blockers = app
+        .world()
+        .resource::<TraversalBlockers>()
+        .iter()
+        .collect::<BTreeSet<_>>();
+    let first_special_regions: BTreeMap<TilePos, SpecialMovementRegion> = app
+        .world()
+        .resource::<SpecialMovementRegions>()
+        .iter()
+        .collect();
+    let first_interior_floors: BTreeMap<TilePos, InteriorRegionId> = app
+        .world()
+        .resource::<InteriorRegions>()
+        .surfaces()
+        .collect();
+    let first_interior_roofs: BTreeMap<TilePos, InteriorRegionId> = app
+        .world()
+        .resource::<InteriorRegions>()
+        .roof_voxels()
+        .collect();
+    let first_lights: BTreeMap<TilePos, GameplayLight> = {
+        let world = app.world_mut();
+        let mut lights = world.query::<(&TilePos, &GameplayLight)>();
+        lights
+            .iter(world)
+            .map(|(position, light)| (*position, *light))
+            .collect()
+    };
+    let first_objects = object_instance_snapshot(&mut app);
+    let first_view = *app.world().resource::<MapViewHint>();
+    assert!(first_view.is_valid());
+    assert!(!first_blockers.is_empty());
+    assert!(!first_special_regions.is_empty());
+    assert!(!first_interior_floors.is_empty());
+    assert!(!first_interior_roofs.is_empty());
+    assert!(!first_objects.is_empty());
+    assert_eq!(
+        first_lights.len(),
+        usize::try_from(metrics.gameplay_lights).unwrap_or(usize::MAX)
+    );
+    assert_eq!(
+        first_interior_floors
+            .values()
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .len(),
+        usize::try_from(metrics.interiors).unwrap_or(usize::MAX)
+    );
+    assert!(
+        first_lights
+            .keys()
+            .all(|position| first_interior_floors.contains_key(position)),
+        "every Ring19 gameplay light should be rooted on an exact cave floor"
+    );
+
+    app.world_mut()
+        .resource_mut::<NextState<Screen>>()
+        .set(Screen::Title);
+    app.update();
+    app.update();
+
+    assert_eq!(tile_count(&mut app), 0);
+    assert_eq!(
+        app.world_mut()
+            .query_filtered::<Entity, With<HexGrid>>()
+            .iter(app.world())
+            .count(),
+        0
+    );
+    for absent in [
+        app.world().contains_resource::<VoxelMap>(),
+        app.world().contains_resource::<MapAnchors>(),
+        app.world().contains_resource::<SpecialMovementRegions>(),
+        app.world().contains_resource::<InteriorRegions>(),
+        app.world().contains_resource::<TraversalBlockers>(),
+        app.world().contains_resource::<BiomeRegions>(),
+        app.world().contains_resource::<MapViewHint>(),
+        app.world().contains_resource::<GenerationReport>(),
+        app.world().contains_resource::<TerrainReady>(),
+    ] {
+        assert!(!absent);
+    }
+    let gameplay_light_count_after_exit = {
+        let world = app.world_mut();
+        let mut lights = world.query::<&GameplayLight>();
+        lights.iter(world).count()
+    };
+    assert_eq!(gameplay_light_count_after_exit, 0);
+    assert!(object_instance_snapshot(&mut app).is_empty());
+
+    enter_gameplay(&mut app);
+
+    assert!(app.world().contains_resource::<TerrainReady>());
+    assert!(!app.world().contains_resource::<GameplaySetupFailure>());
+    assert_eq!(tile_count(&mut app), first_tile_count);
+    let second_report = app.world().resource::<GenerationReport>();
+    assert_eq!(second_report.generator_version, report.generator_version);
+    assert_eq!(second_report.seed, report.seed);
+    assert_eq!(second_report.selected_candidate, report.selected_candidate);
+    assert_eq!(
+        second_report.candidates_evaluated,
+        report.candidates_evaluated
+    );
+    assert_eq!(second_report.valid_candidates, report.valid_candidates);
+    assert_eq!(second_report.repair_rounds, report.repair_rounds);
+    assert_eq!(second_report.repair_actions, report.repair_actions);
+    assert_eq!(second_report.used_fallback, report.used_fallback);
+    assert_eq!(
+        second_report.settings_fingerprint,
+        report.settings_fingerprint
+    );
+    assert_eq!(
+        second_report.semantic_plan_fingerprint,
+        report.semantic_plan_fingerprint
+    );
+    assert_eq!(second_report.map_fingerprint, report.map_fingerprint);
+    assert_eq!(second_report.metrics, report.metrics);
+    assert_eq!(second_report.recipe_metrics, report.recipe_metrics);
+    assert_eq!(second_report.notes, report.notes);
+    assert_eq!(*app.world().resource::<MapViewHint>(), first_view);
+
+    let second_anchors: BTreeMap<String, TilePos> = app
+        .world()
+        .resource::<MapAnchors>()
+        .iter()
+        .map(|(id, position)| (id.as_str().to_owned(), position))
+        .collect();
+    let second_biomes: BTreeMap<TilePos, BiomeRegionId> =
+        app.world().resource::<BiomeRegions>().iter().collect();
+    let second_blockers = app
+        .world()
+        .resource::<TraversalBlockers>()
+        .iter()
+        .collect::<BTreeSet<_>>();
+    let second_special_regions: BTreeMap<TilePos, SpecialMovementRegion> = app
+        .world()
+        .resource::<SpecialMovementRegions>()
+        .iter()
+        .collect();
+    let second_interior_floors: BTreeMap<TilePos, InteriorRegionId> = app
+        .world()
+        .resource::<InteriorRegions>()
+        .surfaces()
+        .collect();
+    let second_interior_roofs: BTreeMap<TilePos, InteriorRegionId> = app
+        .world()
+        .resource::<InteriorRegions>()
+        .roof_voxels()
+        .collect();
+    let second_lights: BTreeMap<TilePos, GameplayLight> = {
+        let world = app.world_mut();
+        let mut lights = world.query::<(&TilePos, &GameplayLight)>();
+        lights
+            .iter(world)
+            .map(|(position, light)| (*position, *light))
+            .collect()
+    };
+    let second_objects = object_instance_snapshot(&mut app);
+    assert_eq!(second_anchors, first_anchors);
+    assert_eq!(second_biomes, first_biomes);
+    assert_eq!(second_blockers, first_blockers);
+    assert_eq!(second_special_regions, first_special_regions);
+    assert_eq!(second_interior_floors, first_interior_floors);
+    assert_eq!(second_interior_roofs, first_interior_roofs);
+    assert_eq!(second_lights, first_lights);
+    assert_eq!(second_objects, first_objects);
+}
+
+#[test]
 fn procedural_setup_publishes_validated_resources_and_exact_anchors() {
     let mut app = procedural_app();
     enter_gameplay(&mut app);
@@ -820,6 +1287,37 @@ fn procedural_setup_publishes_validated_resources_and_exact_anchors() {
 }
 
 #[test]
+fn v3_frozen_hills_publishes_ice_without_an_optional_movement_region() {
+    let mut app = v3_frozen_hills_app();
+    enter_gameplay(&mut app);
+
+    assert!(
+        app.world().contains_resource::<TerrainReady>(),
+        "setup failed: {:?}",
+        app.world()
+            .get_resource::<GameplaySetupFailure>()
+            .map(|failure| failure.reason.as_str())
+    );
+    assert!(!app.world().contains_resource::<GameplaySetupFailure>());
+    assert!(
+        app.world().resource::<SpecialMovementRegions>().is_empty(),
+        "Frozen Hills ice is presentation geometry, not optional traversal authority"
+    );
+    let ice = app
+        .world()
+        .resource::<SubstanceTable>()
+        .id("ice")
+        .expect("Frozen Hills fixture should register ice");
+    assert!(
+        app.world()
+            .resource::<VoxelMap>()
+            .columns()
+            .any(|(_coord, column)| column.iter().any(|substance| substance == ice)),
+        "Frozen Hills dropped its visible shoreline ice caps"
+    );
+}
+
+#[test]
 fn v3_waterfall_publishes_exact_resources_and_report_identity() {
     let mut app = v3_waterfall_app();
     enter_gameplay(&mut app);
@@ -845,9 +1343,9 @@ fn v3_waterfall_publishes_exact_resources_and_report_identity() {
     assert_eq!(report.settings_fingerprint, 5_082_310_489_405_017_929);
     assert_eq!(
         report.semantic_plan_fingerprint,
-        Some(8_012_354_130_252_983_421)
+        Some(2_940_332_537_625_721_792)
     );
-    assert_eq!(report.map_fingerprint, 17_075_345_429_537_665_322);
+    assert_eq!(report.map_fingerprint, 18_345_439_249_093_579_610);
     assert_ne!(
         report.semantic_plan_fingerprint,
         Some(report.map_fingerprint),
@@ -858,7 +1356,7 @@ fn v3_waterfall_publishes_exact_resources_and_report_identity() {
     let Some(ProceduralRecipeMetrics::Waterfall(metrics)) = &report.recipe_metrics else {
         panic!("V3 Waterfall should publish exact recipe metrics");
     };
-    assert_eq!(metrics.fall_height, 11);
+    assert_eq!(metrics.fall_height, 13);
     assert_eq!(metrics.fall_nodes, 3);
     assert_eq!(metrics.bypass_steps, 11);
     assert_eq!(metrics.alternate_bypass_steps, 13);
@@ -885,7 +1383,28 @@ fn v3_waterfall_publishes_exact_resources_and_report_identity() {
     assert_eq!(app.world().resource::<VoxelMap>().len(), 469);
     assert_eq!(app.world().resource::<SpecialMovementRegions>().len(), 6);
     assert!(app.world().resource::<InteriorRegions>().is_empty());
-    assert!(app.world().resource::<TraversalBlockers>().is_empty());
+    let blockers = app
+        .world()
+        .resource::<TraversalBlockers>()
+        .iter()
+        .collect::<BTreeSet<_>>();
+    let roots = feature_roots(&mut app);
+    let tree_roots = roots
+        .iter()
+        .filter_map(|(_entity, kind, position, _parent)| {
+            (kind == "GeneratedTree").then_some(*position)
+        })
+        .collect::<BTreeSet<_>>();
+    let grass_roots = roots
+        .iter()
+        .filter_map(|(_entity, kind, position, _parent)| {
+            (kind == "GeneratedTallGrass").then_some(*position)
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(tree_roots.len(), 3);
+    assert!(tree_roots.is_subset(&blockers));
+    assert_eq!(blockers.len(), 3);
+    assert!(grass_roots.is_disjoint(&blockers));
     assert_eq!(app.world().resource::<BiomeRegions>().len(), 475);
     assert!(app.world().resource::<MapViewHint>().is_valid());
 }
@@ -907,22 +1426,22 @@ fn v3_forest_publishes_exact_features_blockers_and_routes() {
     assert_eq!(report.generator_version, 3);
     assert_eq!(report.seed, 381_654_729);
     assert_eq!(report.candidates_evaluated, 8);
-    assert_eq!(report.valid_candidates, 4);
+    assert_eq!(report.valid_candidates, 5);
     assert!(!report.used_fallback);
     assert_eq!(report.repair_rounds, 0);
     assert!(report.repair_actions.is_empty());
-    assert_eq!(report.notes.len(), 4);
+    assert_eq!(report.notes.len(), 3);
     assert!(report
         .notes
         .iter()
         .all(|note| note.starts_with("candidate ")));
-    assert_eq!(report.selected_candidate, Some(0));
+    assert_eq!(report.selected_candidate, Some(6));
     assert_eq!(report.settings_fingerprint, 2_658_105_648_444_344_100);
     assert_eq!(
         report.semantic_plan_fingerprint,
-        Some(18_228_041_691_196_337_561)
+        Some(3_116_162_104_822_374_845)
     );
-    assert_eq!(report.map_fingerprint, 9_451_210_891_195_990_324);
+    assert_eq!(report.map_fingerprint, 18_084_914_740_711_593_486);
     let Some(ProceduralRecipeMetrics::Forest(metrics)) = &report.recipe_metrics else {
         panic!("V3 Forest should publish exact recipe metrics");
     };
@@ -1014,6 +1533,8 @@ fn v3_forest_publishes_exact_features_blockers_and_routes() {
     );
     assert_eq!(app.world().resource::<VoxelMap>().len(), 469);
     assert_eq!(app.world().resource::<BiomeRegions>().len(), 469);
+    assert!(app.world().resource::<SpecialMovementRegions>().is_empty());
+    assert!(app.world().resource::<InteriorRegions>().is_empty());
     assert!(app.world().resource::<MapViewHint>().is_valid());
     for anchor in [
         "party_start",
@@ -1029,6 +1550,150 @@ fn v3_forest_publishes_exact_features_blockers_and_routes() {
             "missing Forest anchor {anchor}"
         );
     }
+}
+
+#[test]
+fn v3_deep_forest_publishes_dense_trees_and_reenters_deterministically() {
+    let mut app = v3_deep_forest_app();
+    enter_gameplay(&mut app);
+
+    assert!(
+        app.world().contains_resource::<TerrainReady>(),
+        "setup failed: {:?}",
+        app.world()
+            .get_resource::<GameplaySetupFailure>()
+            .map(|failure| failure.reason.as_str())
+    );
+    assert!(!app.world().contains_resource::<GameplaySetupFailure>());
+    let first_report = app.world().resource::<GenerationReport>().clone();
+    assert_eq!(first_report.generator_version, 3);
+    assert_eq!(first_report.seed, 1_592_598_566);
+    assert_eq!(first_report.candidates_evaluated, 8);
+    assert_eq!(first_report.valid_candidates, 8);
+    assert_eq!(first_report.selected_candidate, Some(0));
+    assert!(!first_report.used_fallback);
+    assert_eq!(first_report.repair_rounds, 0);
+    assert!(first_report.repair_actions.is_empty());
+    assert_eq!(first_report.settings_fingerprint, 6_246_604_390_469_913_222);
+    assert_eq!(
+        first_report.semantic_plan_fingerprint,
+        Some(1_319_216_151_194_471_912)
+    );
+    assert_eq!(first_report.map_fingerprint, 15_168_627_475_653_117_104);
+    let Some(ProceduralRecipeMetrics::DeepForest(metrics)) = &first_report.recipe_metrics else {
+        panic!("V3 Deep Forest should publish exact recipe metrics");
+    };
+    let metrics = *metrics;
+    assert_eq!(metrics.tree_roots, 105);
+    assert_eq!(metrics.tree_blocker_surfaces, 117);
+    assert_eq!(metrics.blocker_coverage_percent, 29);
+    assert_eq!(metrics.clearing_count, 3);
+    assert_eq!(metrics.clearing_surfaces, 30);
+    assert_eq!(metrics.protected_trail_surfaces, 38);
+    assert_eq!(metrics.ordinary_surfaces, 352);
+    assert_eq!(metrics.reachable_elevation_levels, 5);
+    assert_eq!(metrics.relief, 4);
+    assert_eq!(metrics.critical_route_steps, 27);
+    assert_eq!(
+        metrics.tree_blocker_surfaces,
+        u32::try_from(app.world().resource::<TraversalBlockers>().len()).unwrap_or(u32::MAX)
+    );
+    assert!(app.world().resource::<SpecialMovementRegions>().is_empty());
+    assert!(app.world().resource::<InteriorRegions>().is_empty());
+    for anchor in ["party_start", "hostile_start", "deep_forest_clearing"] {
+        assert!(
+            app.world()
+                .resource::<MapAnchors>()
+                .get(&MapAnchorId::from(anchor))
+                .is_some(),
+            "missing Deep Forest anchor {anchor}"
+        );
+    }
+
+    let first_roots = feature_roots(&mut app);
+    assert_eq!(
+        first_roots.len(),
+        usize::try_from(metrics.tree_roots).unwrap_or(usize::MAX)
+    );
+    assert!(first_roots
+        .iter()
+        .all(|(_entity, kind, _position, _parent)| kind == "GeneratedTree"));
+    let first_root_positions = first_roots
+        .iter()
+        .map(|(_entity, _kind, position, _parent)| *position)
+        .collect::<BTreeSet<_>>();
+    let first_blockers = app
+        .world()
+        .resource::<TraversalBlockers>()
+        .iter()
+        .collect::<BTreeSet<_>>();
+    let first_biomes = app
+        .world()
+        .resource::<BiomeRegions>()
+        .iter()
+        .collect::<BTreeMap<_, _>>();
+    let first_tile_count = tile_count(&mut app);
+
+    app.world_mut()
+        .resource_mut::<NextState<Screen>>()
+        .set(Screen::Title);
+    app.update();
+    app.update();
+
+    assert_eq!(tile_count(&mut app), 0);
+    assert!(feature_roots(&mut app).is_empty());
+    for absent in [
+        app.world().contains_resource::<VoxelMap>(),
+        app.world().contains_resource::<MapAnchors>(),
+        app.world().contains_resource::<SpecialMovementRegions>(),
+        app.world().contains_resource::<InteriorRegions>(),
+        app.world().contains_resource::<TraversalBlockers>(),
+        app.world().contains_resource::<BiomeRegions>(),
+        app.world().contains_resource::<MapViewHint>(),
+        app.world().contains_resource::<GenerationReport>(),
+        app.world().contains_resource::<TerrainReady>(),
+    ] {
+        assert!(!absent);
+    }
+
+    enter_gameplay(&mut app);
+    let second_report = app.world().resource::<GenerationReport>();
+    assert_eq!(second_report.seed, first_report.seed);
+    assert_eq!(
+        second_report.selected_candidate,
+        first_report.selected_candidate
+    );
+    assert_eq!(
+        second_report.settings_fingerprint,
+        first_report.settings_fingerprint
+    );
+    assert_eq!(
+        second_report.semantic_plan_fingerprint,
+        first_report.semantic_plan_fingerprint
+    );
+    assert_eq!(second_report.map_fingerprint, first_report.map_fingerprint);
+    assert_eq!(second_report.metrics, first_report.metrics);
+    assert_eq!(second_report.recipe_metrics, first_report.recipe_metrics);
+    assert_eq!(tile_count(&mut app), first_tile_count);
+    let second_roots = feature_roots(&mut app)
+        .iter()
+        .map(|(_entity, _kind, position, _parent)| *position)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(second_roots, first_root_positions);
+    assert_eq!(
+        app.world()
+            .resource::<TraversalBlockers>()
+            .iter()
+            .collect::<BTreeSet<_>>(),
+        first_blockers
+    );
+    assert_eq!(
+        app.world()
+            .resource::<BiomeRegions>()
+            .iter()
+            .collect::<BTreeMap<_, _>>(),
+        first_biomes
+    );
 }
 
 #[test]
@@ -1058,6 +1723,7 @@ fn v3_fort_publishes_worked_stone_structures_and_access_metrics() {
     assert_eq!(metrics.gate_count, 2);
     assert_eq!(metrics.stair_count, 2);
     assert_eq!(metrics.tower_count, 6);
+    assert_eq!(metrics.battlement_columns, 22);
     assert_eq!(metrics.independent_gate_routes, 2);
     assert_eq!(metrics.curtain_height, 5);
     assert_eq!(metrics.keep_height, 8);
@@ -1092,7 +1758,9 @@ fn v3_fort_publishes_worked_stone_structures_and_access_metrics() {
         .any(|(_coord, column)| column.iter().any(|substance| substance == worked_stone)));
     assert!(app.world().resource::<TraversalBlockers>().is_empty());
     assert!(app.world().resource::<InteriorRegions>().is_empty());
-    assert_eq!(app.world().resource::<SpecialMovementRegions>().len(), 23);
+    // Compact turrets release six alternating outer-ring cells back to the
+    // non-ordinary battlement pattern: 22 battlements plus seven keep-roof cells.
+    assert_eq!(app.world().resource::<SpecialMovementRegions>().len(), 29);
     assert!(app.world().resource::<MapViewHint>().is_valid());
 }
 
@@ -1459,6 +2127,9 @@ fn v3_caves_publish_exact_interiors_lights_anchors_and_cutaway_roofs() {
     let Some(ProceduralRecipeMetrics::Caves(CavesReportMetrics {
         chamber_count,
         gameplay_lights,
+        moss_roots,
+        lichen_roots,
+        vegetation_visual_voxels,
         optional_dark_floors,
         minimum_roof_thickness,
         ..
@@ -1467,9 +2138,33 @@ fn v3_caves_publish_exact_interiors_lights_anchors_and_cutaway_roofs() {
         panic!("V3 Caves should publish exact recipe metrics");
     };
     assert_eq!(chamber_count, 12);
+    assert_eq!(moss_roots, 2);
+    assert_eq!(lichen_roots, 2);
+    assert_eq!(vegetation_visual_voxels, 14);
     assert!(gameplay_lights > 0);
     assert!(optional_dark_floors > 0);
     assert!(minimum_roof_thickness >= 3);
+    assert!(app.world().resource::<TraversalBlockers>().is_empty());
+    let vegetation = cave_vegetation_instances(&mut app);
+    assert_eq!(vegetation.len(), 4);
+    assert_eq!(
+        vegetation
+            .values()
+            .filter(|(object, _rotation)| object == "prop/cave-moss")
+            .count(),
+        2
+    );
+    assert_eq!(
+        vegetation
+            .values()
+            .filter(|(object, _rotation)| object == "prop/cave-lichen")
+            .count(),
+        2
+    );
+    assert!(
+        vegetation.values().all(|(_object, rotation)| *rotation < 6),
+        "cave vegetation published an invalid authored rotation"
+    );
 
     let anchors = app.world().resource::<MapAnchors>();
     for name in [
@@ -1883,6 +2578,21 @@ fn tile_count(app: &mut App) -> usize {
         .count()
 }
 
+fn object_instance_snapshot(app: &mut App) -> BTreeSet<(String, TilePos, u8)> {
+    let world = app.world_mut();
+    let mut objects = world.query::<&ObjectInstance>();
+    objects
+        .iter(world)
+        .map(|instance| {
+            (
+                instance.object_id().as_str().to_owned(),
+                instance.origin(),
+                instance.rotation().steps(),
+            )
+        })
+        .collect()
+}
+
 #[expect(
     clippy::expect_used,
     reason = "invalid generated crystal hierarchy is a broken integration-test fixture"
@@ -1960,6 +2670,113 @@ fn cave_crystal_instances(app: &mut App) -> BTreeMap<TilePos, (String, u8)> {
     snapshots
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "invalid generated cave vegetation is a broken integration-test fixture"
+)]
+fn cave_vegetation_instances(app: &mut App) -> BTreeMap<TilePos, (String, u8)> {
+    let world = app.world_mut();
+    let mut query = world.query::<(
+        &Name,
+        &ObjectInstance,
+        Option<&HexTile>,
+        Option<&CanopyOccluder>,
+    )>();
+    query
+        .iter(world)
+        .filter(|(name, _instance, _tile, _canopy)| name.as_str() == "GeneratedCaveVegetation")
+        .map(|(_name, instance, tile, canopy)| {
+            assert!(
+                tile.is_none(),
+                "cave vegetation roots must not become terrain tiles"
+            );
+            assert!(
+                canopy.is_none(),
+                "grounded cave vegetation must not publish canopy occlusion"
+            );
+            let origin = instance.origin();
+            let floor_level = origin
+                .level
+                .checked_sub(1)
+                .expect("cave vegetation should sit one level above its exact footing");
+            (
+                TilePos::new(origin.coord, floor_level),
+                (
+                    instance.object_id().as_str().to_owned(),
+                    instance.rotation().steps(),
+                ),
+            )
+        })
+        .collect()
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "invalid generated cave vegetation is a broken integration-test fixture"
+)]
+fn cave_vegetation_non_root_visual(app: &mut App) -> (TilePos, TilePos) {
+    let instance = {
+        let world = app.world_mut();
+        let mut query = world.query::<(&Name, &ObjectInstance)>();
+        query
+            .iter(world)
+            .find(|(name, _instance)| name.as_str() == "GeneratedCaveVegetation")
+            .map(|(_name, instance)| instance.clone())
+            .expect("Caves should publish sparse vegetation")
+    };
+    let visual_origin = instance.origin();
+    let root = TilePos::new(
+        visual_origin.coord,
+        visual_origin
+            .level
+            .checked_sub(1)
+            .expect("cave vegetation should sit above its exact footing"),
+    );
+    let catalog = app.world().resource::<RuntimeArtCatalog>();
+    let blueprint = catalog
+        .object(instance.object_id())
+        .expect("generated cave vegetation must resolve through the accepted art catalog");
+    let mut non_root = None;
+    for placement in &blueprint.placements {
+        let rotated = instance
+            .rotation()
+            .rotate_voxel(placement.position, blueprint.origin)
+            .expect("validated object rotation should remain projectable");
+        let delta_q = rotated
+            .q
+            .checked_sub(blueprint.origin.q)
+            .expect("validated local coordinates should remain projectable");
+        let delta_r = rotated
+            .r
+            .checked_sub(blueprint.origin.r)
+            .expect("validated local coordinates should remain projectable");
+        let coord = HexCoord::from_axial(
+            root.coord
+                .x()
+                .checked_add(delta_q)
+                .expect("generated object q coordinate should remain in range"),
+            root.coord
+                .y()
+                .checked_add(delta_r)
+                .expect("generated object r coordinate should remain in range"),
+        );
+        let relative_level = rotated
+            .level
+            .checked_sub(blueprint.origin.level)
+            .expect("validated local levels should remain projectable");
+        let level = visual_origin
+            .level
+            .checked_add(relative_level)
+            .expect("generated object level should remain in range");
+        let visual = TilePos::new(coord, level);
+        if visual.coord != root.coord {
+            non_root = Some((root, visual));
+            break;
+        }
+    }
+    non_root.expect("tracked cave vegetation should occupy at least one non-root coordinate")
+}
+
 fn liquid_presentations(app: &mut App) -> Vec<(Entity, Entity, Pickable)> {
     let world = app.world_mut();
     let mut query = world.query::<(Entity, &Name, &ChildOf, &Pickable, Option<&HexTile>)>();
@@ -1989,7 +2806,10 @@ fn feature_roots(app: &mut App) -> Vec<(Entity, String, TilePos, Entity)> {
     query
         .iter(world)
         .filter(|(_entity, name, _instance, _parent, _tile)| {
-            matches!(name.as_str(), "GeneratedTree" | "GeneratedTallGrass")
+            matches!(
+                name.as_str(),
+                "GeneratedTree" | "GeneratedTallGrass" | "GeneratedCaveVegetation"
+            )
         })
         .map(|(entity, name, instance, parent, tile)| {
             assert!(
@@ -2001,7 +2821,7 @@ fn feature_roots(app: &mut App) -> Vec<(Entity, String, TilePos, Entity)> {
             let level = visual_origin
                 .level
                 .checked_sub(1)
-                .expect("Forest visual origins should sit above their exact footing");
+                .expect("generated visual origins should sit above their exact footing");
             (
                 entity,
                 name.as_str().to_owned(),
@@ -2144,6 +2964,101 @@ fn v3_waterfall_spawns_caps_and_a_non_shadowing_fall_curtain() {
     assert_eq!(
         curtains, 1,
         "the three adjacent fall lanes share one water curtain mesh"
+    );
+}
+
+#[test]
+fn v3_volcano_materializes_and_reenters_with_exact_lava_and_report_state() {
+    let mut app = v3_volcano_app();
+    enter_gameplay(&mut app);
+
+    assert!(
+        app.world().contains_resource::<TerrainReady>(),
+        "setup failed: {:?}",
+        app.world()
+            .get_resource::<GameplaySetupFailure>()
+            .map(|failure| failure.reason.as_str())
+    );
+    assert!(!app.world().contains_resource::<GameplaySetupFailure>());
+    let first_report = app.world().resource::<GenerationReport>().clone();
+    let Some(ProceduralRecipeMetrics::Volcano(metrics)) = first_report.recipe_metrics.as_ref()
+    else {
+        panic!("V3 Volcano should publish exact recipe metrics");
+    };
+    assert_eq!(metrics.summit_relief, 20);
+    assert!((20..=30).contains(&metrics.massif_coverage_percent));
+    assert!(metrics.fall_nodes >= 3);
+    assert!(metrics.maximum_fall_height >= 2);
+    assert_eq!(metrics.bridge_surfaces, 6);
+    assert!(metrics.bridge_clearance >= 4);
+    assert!(!first_report.used_fallback, "{:?}", first_report.notes);
+
+    let first_anchors: BTreeMap<String, TilePos> = app
+        .world()
+        .resource::<MapAnchors>()
+        .iter()
+        .map(|(id, position)| (id.as_str().to_owned(), position))
+        .collect();
+    for required in [
+        "party_start",
+        "hostile_start",
+        "conflict_center",
+        "bridge",
+        "crater_overlook",
+    ] {
+        assert!(first_anchors.contains_key(required), "missing {required}");
+    }
+    let first_tile_count = tile_count(&mut app);
+    let first_presentations = liquid_presentations(&mut app);
+    let first_caps = first_presentations
+        .iter()
+        .filter(|(entity, _, _)| {
+            app.world()
+                .get::<Name>(*entity)
+                .is_some_and(|name| name.as_str() == "LiquidCap")
+        })
+        .count();
+    let first_curtains = first_presentations.len().saturating_sub(first_caps);
+    assert!(first_caps >= metrics.lava_nodes as usize);
+    assert_eq!(
+        first_curtains, 1,
+        "all adjacent lava falls should share one curtain mesh"
+    );
+
+    app.world_mut()
+        .resource_mut::<NextState<Screen>>()
+        .set(Screen::Title);
+    app.update();
+    app.update();
+    assert_eq!(tile_count(&mut app), 0);
+    assert!(liquid_presentations(&mut app).is_empty());
+    assert!(!app.world().contains_resource::<GenerationReport>());
+    assert!(!app.world().contains_resource::<TerrainReady>());
+
+    enter_gameplay(&mut app);
+    assert_eq!(tile_count(&mut app), first_tile_count);
+    assert_eq!(
+        liquid_presentations(&mut app).len(),
+        first_presentations.len()
+    );
+    let second_report = app.world().resource::<GenerationReport>();
+    assert_eq!(
+        second_report.settings_fingerprint,
+        first_report.settings_fingerprint
+    );
+    assert_eq!(
+        second_report.semantic_plan_fingerprint,
+        first_report.semantic_plan_fingerprint
+    );
+    assert_eq!(second_report.map_fingerprint, first_report.map_fingerprint);
+    assert_eq!(second_report.recipe_metrics, first_report.recipe_metrics);
+    assert_eq!(
+        app.world()
+            .resource::<MapAnchors>()
+            .iter()
+            .map(|(id, position)| (id.as_str().to_owned(), position))
+            .collect::<BTreeMap<_, _>>(),
+        first_anchors
     );
 }
 
@@ -3301,6 +4216,95 @@ fn v3_caves_missing_crystal_asset_fails_before_any_world_publication() {
 }
 
 #[test]
+fn v3_caves_missing_vegetation_asset_fails_before_any_world_publication() {
+    let mut app = v3_caves_app_without_art_catalog();
+    app.insert_resource(runtime_art_catalog_without(Some("prop/cave-moss")));
+    enter_gameplay(&mut app);
+
+    assert!(!app.world().contains_resource::<TerrainReady>());
+    assert!(!app.world().contains_resource::<VoxelMap>());
+    assert!(!app.world().contains_resource::<MapAnchors>());
+    assert!(!app.world().contains_resource::<InteriorRegions>());
+    assert_eq!(tile_count(&mut app), 0);
+    assert!(cave_crystal_instances(&mut app).is_empty());
+    assert!(cave_vegetation_instances(&mut app).is_empty());
+    assert!(app
+        .world()
+        .resource::<GameplaySetupFailure>()
+        .reason
+        .contains("prop/cave-moss"));
+}
+
+#[test]
+fn terrain_edits_retire_cave_vegetation_with_invalidated_support() {
+    let mut app = v3_caves_app();
+    enter_gameplay(&mut app);
+    let before = cave_vegetation_instances(&mut app);
+    let target = *before
+        .keys()
+        .next()
+        .expect("Caves should publish sparse vegetation");
+
+    app.world_mut()
+        .write_message(TerrainEdit::Clear { pos: target });
+    app.update();
+    app.update();
+
+    let after = cave_vegetation_instances(&mut app);
+    assert_eq!(after.len(), before.len().saturating_sub(1));
+    assert!(!after.contains_key(&target));
+}
+
+#[test]
+fn clearing_non_root_support_retires_the_complete_cave_vegetation_feature() {
+    let mut app = v3_caves_app();
+    enter_gameplay(&mut app);
+    let before = cave_vegetation_instances(&mut app);
+    let (root, visual) = cave_vegetation_non_root_visual(&mut app);
+    let support = TilePos::new(visual.coord, root.level);
+    assert!(app
+        .world()
+        .resource::<SubstanceTable>()
+        .is_diggable(app.world().resource::<VoxelMap>().get(support)));
+
+    app.world_mut()
+        .write_message(TerrainEdit::Clear { pos: support });
+    app.update();
+    app.update();
+
+    assert!(app.world().resource::<VoxelMap>().get(support).is_air());
+    let after = cave_vegetation_instances(&mut app);
+    assert_eq!(after.len(), before.len().saturating_sub(1));
+    assert!(!after.contains_key(&root));
+}
+
+#[test]
+fn building_into_non_root_visual_cell_retires_the_complete_cave_vegetation_feature() {
+    let mut app = v3_caves_app();
+    enter_gameplay(&mut app);
+    let before = cave_vegetation_instances(&mut app);
+    let (root, visual) = cave_vegetation_non_root_visual(&mut app);
+    let stone = app
+        .world()
+        .resource::<SubstanceTable>()
+        .id("stone")
+        .expect("the fixture substance table should contain stone");
+    assert!(app.world().resource::<VoxelMap>().get(visual).is_air());
+
+    app.world_mut().write_message(TerrainEdit::Set {
+        pos: visual,
+        substance: stone,
+    });
+    app.update();
+    app.update();
+
+    assert_eq!(app.world().resource::<VoxelMap>().get(visual), stone);
+    let after = cave_vegetation_instances(&mut app);
+    assert_eq!(after.len(), before.len().saturating_sub(1));
+    assert!(!after.contains_key(&root));
+}
+
+#[test]
 fn v3_caves_teardown_and_reentry_preserve_exact_interiors_and_lights() {
     let mut app = v3_caves_app();
     enter_gameplay(&mut app);
@@ -3340,11 +4344,13 @@ fn v3_caves_teardown_and_reentry_preserve_exact_interiors_and_lights() {
             .collect()
     };
     let first_crystals = cave_crystal_instances(&mut app);
+    let first_vegetation = cave_vegetation_instances(&mut app);
 
     assert!(!first_floors.is_empty());
     assert!(!first_roofs.is_empty());
     assert!(!first_lights.is_empty());
     assert_eq!(first_crystals.len(), first_lights.len());
+    assert_eq!(first_vegetation.len(), 4);
     assert!(
         first_crystals
             .keys()
@@ -3373,6 +4379,7 @@ fn v3_caves_teardown_and_reentry_preserve_exact_interiors_and_lights() {
     };
     assert_eq!(light_count_after_exit, 0);
     assert!(cave_crystal_instances(&mut app).is_empty());
+    assert!(cave_vegetation_instances(&mut app).is_empty());
     let point_light_count_after_exit = {
         let world = app.world_mut();
         let mut lights = world.query::<&PointLight>();
@@ -3429,11 +4436,13 @@ fn v3_caves_teardown_and_reentry_preserve_exact_interiors_and_lights() {
             .collect()
     };
     let second_crystals = cave_crystal_instances(&mut app);
+    let second_vegetation = cave_vegetation_instances(&mut app);
     assert_eq!(second_anchors, first_anchors);
     assert_eq!(second_floors, first_floors);
     assert_eq!(second_roofs, first_roofs);
     assert_eq!(second_lights, first_lights);
     assert_eq!(second_crystals, first_crystals);
+    assert_eq!(second_vegetation, first_vegetation);
 }
 
 #[test]
