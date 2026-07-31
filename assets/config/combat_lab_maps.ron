@@ -30,11 +30,11 @@
             fixed_seed: None,
             player_region: (
                 center: Fixed((x: 0, y: 8, z: -8)),
-                radius: 4,
+                radius: 6,
             ),
             hostile_region: (
                 center: Fixed((x: 0, y: -8, z: 8)),
-                radius: 4,
+                radius: 6,
             ),
         ),
         (

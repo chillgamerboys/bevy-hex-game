@@ -71,6 +71,19 @@ needed to judge those surfaces.
 Forest, Waterfall, map review, and Alberto's map captures are outside this budget and
 remain unchanged.
 
+## Manual runtime sign-off
+
+The automated walk, an agent-operated native runtime review, and a named human
+playtest are distinct evidence. Gameplay runtime PRs record the human result in the
+structured PR fields together with the full final head SHA, reviewer, date, and exact
+route exercised. A later push makes that evidence stale and the required
+`Current-head manual runtime sign-off` check fails until the new head is played.
+
+Draft PRs may omit the sign-off while implementation is moving. A gameplay PR may not
+be marked ready or merged with a placeholder, a blocked result, a different commit,
+or an agent named as the human reviewer. A maintainer waiver describes an
+infrastructure exception; it does not convert a known gameplay failure into a pass.
+
 ## Anti-patterns
 
 - **Noun-only assertions:** proving an ID, label, node, fixture name, or tab exists

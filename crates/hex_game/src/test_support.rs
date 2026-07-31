@@ -198,6 +198,28 @@ pub fn tempo_movement_matrix(shipped: &CombatSettings) -> [u32; 3] {
     ]
 }
 
+/// Immutable observation of one real fixture-filter update and clear cycle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FixtureFilterSnapshot {
+    /// Stable fixture ids visible for the requested query.
+    pub visible: Vec<String>,
+    /// Stable fixture ids visible after clearing the same input entity.
+    pub visible_after_clear: Vec<String>,
+    /// Whether the original editable entity survived both updates.
+    pub input_survived: bool,
+}
+
+/// Exercises the production fixture-filter system without exposing screen state.
+#[must_use]
+pub fn fixture_filter_snapshot(query: &str) -> FixtureFilterSnapshot {
+    let (visible, visible_after_clear, input_survived) = combat_lab::observe_fixture_filter(query);
+    FixtureFilterSnapshot {
+        visible,
+        visible_after_clear,
+        input_survived,
+    }
+}
+
 /// Production gameplay UI registration exposed only to headless integration tests.
 pub struct HeadlessGameplayUiPlugin;
 

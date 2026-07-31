@@ -13,7 +13,24 @@
 - [ ] `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features` (unless Markdown-only)
 - [ ] `cargo build --workspace --profile ci` (unless Markdown-only; CI builds all three platforms)
 - [ ] Automated visual walk green — `/visual-walk` captured the screens and the agent read every frame
-- [ ] **A human ran the game and looked at it**
+
+### Manual runtime sign-off
+
+<!--
+Gameplay runtime changes may be marked ready only after a named human runs the
+release-shaped build at the exact final PR head. Any later push invalidates this
+sign-off. Agent-operated native review and visual-walk evidence are useful but do not
+replace the named human gate.
+-->
+
+- Agent-operated native review:
+
+Manual runtime result: <PASS or BLOCKED>
+Manual runtime commit: <full 40-character PR head SHA>
+Manual runtime reviewer: <named human>
+Manual runtime date: <YYYY-MM-DD>
+Manual runtime route: <affected scenarios and failure paths exercised>
+Manual runtime findings/waiver: <none, findings, or explicit maintainer waiver>
 
 ### Evidence by concern
 

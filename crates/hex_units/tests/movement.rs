@@ -29,9 +29,10 @@ use hex_assets::{
 };
 use hex_assets::{Substance, SubstanceFile, SubstanceTable};
 use hex_core::{
-    CommandQueue, GameCommand, GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexSpan,
-    HexTile, MapAnchorId, MapAnchors, Mode, PartyFormation, PartyMovementMode, Pause, Screen,
-    SubstanceId, TerrainReady, TilePos, TraversalBlockers, TraversalProfile, Turn, MAX_HEADROOM,
+    CommandQueue, GameCommand, GameplayPhase, GameplaySetup, GameplaySetupFailure, Headroom,
+    HexCoord, HexSpan, HexTile, MapAnchorId, MapAnchors, Mode, PartyFormation, PartyMovementMode,
+    Pause, Screen, SubstanceId, TerrainReady, TilePos, TraversalBlockers, TraversalProfile, Turn,
+    MAX_HEADROOM,
 };
 use hex_test_support::TestAppBuilder;
 use hex_units::{
@@ -1235,6 +1236,92 @@ fn a_formation_with_no_room_fails_setup_with_a_reason() {
     assert!(
         reason.contains("no free surface") && reason.contains("raider"),
         "the failure should name the entry that had nowhere to stand: {reason}"
+    );
+}
+
+/// Deployment preparation needs stable actor identities before the tester assigns
+/// exact surfaces, but its authored regions are not actor placements. A deliberately
+/// impossible spread-zero 6v6 must therefore stage on canonical live footing rather
+/// than fail before the Deployment screen can report region capacity.
+#[test]
+fn deployment_preparation_stages_a_full_roster_without_using_formation_capacity() {
+    let encounter = || Encounter {
+        name: "Crowded Deployment".to_owned(),
+        rosters: vec![
+            roster(
+                EncounterFaction::Player,
+                EncounterPlacement::Formation {
+                    center: FormationCenter::Fixed(CubeCoord { x: 0, y: 0, z: 0 }),
+                    spread: 0,
+                },
+                &[
+                    "hedge-mage",
+                    "raider",
+                    "wolf",
+                    "hedge-mage",
+                    "raider",
+                    "wolf",
+                ],
+            ),
+            roster(
+                EncounterFaction::Hostile,
+                EncounterPlacement::Formation {
+                    center: FormationCenter::Fixed(CubeCoord {
+                        x: ENEMY_START.x(),
+                        y: ENEMY_START.y(),
+                        z: ENEMY_START.z(),
+                    }),
+                    spread: 0,
+                },
+                &[
+                    "hedge-mage",
+                    "raider",
+                    "wolf",
+                    "hedge-mage",
+                    "raider",
+                    "wolf",
+                ],
+            ),
+        ],
+    };
+    let run = || {
+        let mut app = test_app();
+        app.insert_resource(GameplayPhase::Preparing);
+        app.insert_resource(encounter());
+        enter_gameplay(&mut app);
+        assert!(
+            !app.world().contains_resource::<GameplaySetupFailure>(),
+            "deployment staging must reach the exact-placement screen"
+        );
+        let placed = placed_units(&mut app);
+        assert_eq!(placed.len(), 12);
+        assert_eq!(
+            placed
+                .iter()
+                .map(|(_, position)| *position)
+                .collect::<BTreeSet<_>>()
+                .len(),
+            12,
+            "staging may not overlap bodies"
+        );
+        assert_eq!(app.world().resource::<Party>().members.len(), 6);
+        assert_eq!(
+            placed.first().map(|(_, position)| *position),
+            Some(TilePos::new(HexCoord::ORIGIN, GROUND_LEVEL)),
+            "the first player must retain its authored formation centre"
+        );
+        assert_eq!(
+            placed.get(6).map(|(_, position)| *position),
+            Some(TilePos::new(ENEMY_START, GROUND_LEVEL)),
+            "the first hostile must retain its authored formation centre"
+        );
+        placed
+    };
+
+    assert_eq!(
+        run(),
+        run(),
+        "hidden staging must be deterministic across fresh launches"
     );
 }
 
