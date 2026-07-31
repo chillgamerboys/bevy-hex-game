@@ -3,6 +3,7 @@ name = "hex_map"
 version.workspace = true
 edition.workspace = true
 publish = false
+autotests = false
 description = "Voxel storage, terrain generation, tile spawning, and map settings."
 
 # A leaf crate. Nothing depends on it except the binary, so gameplay, camera, sky,
@@ -28,3 +29,7 @@ ron = { workspace = true }
 
 [lints]
 workspace = true
+
+[[test]]
+name = "contracts"
+path = "tests/contracts.rs"
