@@ -66,6 +66,11 @@ pub struct TilePos {
     pub level: Level,
 }
 
+/// The run's lowest material voxel. Its topmost is the entity's [`TilePos`].
+#[derive(Component, Reflect, Debug, Copy, Clone, PartialEq, Eq)]
+#[reflect(Component)]
+pub struct RunBottom(pub Level);
+
 /// The most clear voxels ever counted above a surface.
 ///
 /// Air above the top of a column is unbounded, so the count has to stop somewhere.
@@ -243,7 +248,29 @@ impl TerrainEdit {
 
 #[cfg(test)]
 mod tests {
+    use bevy_ecs::reflect::ReflectComponent;
+    use bevy_reflect::GetTypeRegistration;
+
     use super::*;
+
+    #[test]
+    fn run_bottom_preserves_its_exact_level() {
+        let bottom = RunBottom(7);
+
+        assert_eq!(bottom.0, 7);
+        assert_eq!(bottom, RunBottom(7));
+        assert_ne!(bottom, RunBottom(6));
+    }
+
+    #[test]
+    fn run_bottom_reflection_includes_component_metadata() {
+        let registration = RunBottom::get_type_registration();
+
+        assert!(
+            registration.data::<ReflectComponent>().is_some(),
+            "RunBottom reflection must retain Bevy component metadata"
+        );
+    }
 
     #[test]
     fn vertical_neighbours_are_one_level_apart() {
