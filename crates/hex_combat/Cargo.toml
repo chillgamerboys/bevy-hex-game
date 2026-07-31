@@ -3,6 +3,7 @@ name = "hex_combat"
 version.workspace = true
 edition.workspace = true
 publish = false
+autotests = false
 description = "The gameplay loop: real time until something happens, then turns."
 
 # Depends on hex_units, which is a layer rather than a sibling -- a turn order is a
@@ -36,6 +37,10 @@ xxhash-rust = { workspace = true }
 
 [dev-dependencies]
 hex_test_support = { workspace = true }
+
+[[test]]
+name = "contracts"
+path = "tests/contracts.rs"
 
 [lints]
 workspace = true

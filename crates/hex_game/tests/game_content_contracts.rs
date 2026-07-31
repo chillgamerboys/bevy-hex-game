@@ -1,4 +1,5 @@
-//! Opens every shipped content file and checks that all cross-file references
+//! Shared game/content contracts: opens every shipped file and checks cross-file
+//! references.
 //! resolve. This is the hard CI gate for the content pipeline (HEX-7): at runtime a
 //! dangling reference is logged and the last valid [`ContentIndex`] is kept, but here
 //! it fails the build so shipped content can never drift out of sync.

@@ -11,8 +11,9 @@ pub mod outcomes;
 
 pub use authority::{
     ArenaSnapshot, CombatCase, CombatLattice, CombatMetrics, CombatMotion, CombatRunSnapshot,
-    CombatState, CombatTermination, CombatUnit, ControllerInput, ElementNames, LatticeSnapshot,
-    MovementProjectionError, RulesProfile, RunBounds, TurnStateSnapshot,
+    CombatState, CombatTermination, CombatUnit, CombatUnitProjection, ControllerInput,
+    ElementNames, LatticeSnapshot, MovementProjectionError, RulesProfile, RunBounds,
+    TurnStateSnapshot,
 };
 pub use outcomes::{
     CastBlockReason, CombatData, CombatEvent, CommandRefusal, EncounterOutcome, PartyMoveRefusal,

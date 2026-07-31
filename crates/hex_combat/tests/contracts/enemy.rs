@@ -1,4 +1,4 @@
-//! Integration tests for what an enemy does with its turn.
+//! Contract tests for what an enemy does with its turn.
 //!
 //! The AI is a placeholder, but "closes the distance and swings" is still a claim
 //! that can be wrong in specific ways — walking onto the player, overshooting its

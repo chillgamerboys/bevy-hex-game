@@ -26,7 +26,10 @@ use hex_assets::{
     FormationCenter, GameAssets, LatticeLibrary, PlayerSettings, RosteredUnit, SubstanceTable,
 };
 use hex_lattice::LatticeState;
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 pub use hex_core::Faction;
 use hex_core::{
@@ -37,7 +40,7 @@ use hex_core::{
 };
 
 use crate::movement::{route_with_occupancy, Body, Footing, MovementCrossings, Reach, Standing};
-use crate::pathing::reached_step_index;
+use crate::pathing::{leg_duration, reached_step_index};
 use crate::selection::Selected;
 use crate::{
     plan_formation_move_with_occupancy, FormationMember, FormationPlanError, UnitOccupancy,
@@ -136,6 +139,74 @@ impl MovingTo {
 
     fn complete(&self) -> bool {
         self.reconciled_step.saturating_add(1) >= self.path.len()
+    }
+
+    /// Returns exact route surfaces ordered by proximity to the domain clock's
+    /// current instant.
+    ///
+    /// `StandsOn` deliberately trails interpolation until a whole leg completes. That
+    /// is the truthful occupancy fact while walking, but it is not always the safest
+    /// place to freeze a converging party: a follower may just have reached the
+    /// leader's last published surface while the leader is already more than halfway
+    /// to the next one. Combat entry needs the same nearest-whole-step decision the
+    /// presentation used to provide, derived here from the authoritative route clock.
+    fn stopping_candidates(&self) -> Vec<Standing> {
+        if self.speed <= 0.0 {
+            return self.path.iter().rev().copied().collect();
+        }
+        let mut endpoint_time = 0.0;
+        let mut previous = None;
+        let mut candidates = self
+            .path
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, standing)| {
+                if let Some(previous) = previous {
+                    endpoint_time += leg_duration(previous, standing, self.speed);
+                }
+                previous = Some(standing);
+                (standing, (endpoint_time - self.elapsed).abs(), index)
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_by(|(_, distance_a, index_a), (_, distance_b, index_b)| {
+            distance_a
+                .total_cmp(distance_b)
+                .then_with(|| index_a.cmp(index_b))
+        });
+        candidates
+            .into_iter()
+            .map(|(standing, _, _)| standing)
+            .collect()
+    }
+}
+
+#[derive(Debug)]
+struct CombatStop {
+    entity: Entity,
+    unit: Option<UnitId>,
+    standing: Standing,
+    moving: Option<MovingTo>,
+    requested: Option<Standing>,
+}
+
+impl CombatStop {
+    fn candidates(&self) -> Vec<Standing> {
+        let mut candidates = Vec::new();
+        if let Some(requested) = self.requested {
+            candidates.push(requested);
+        }
+        if let Some(moving) = &self.moving {
+            for candidate in moving.stopping_candidates() {
+                if !candidates.contains(&candidate) {
+                    candidates.push(candidate);
+                }
+            }
+        }
+        if !candidates.contains(&self.standing) {
+            candidates.push(self.standing);
+        }
+        candidates
     }
 }
 
@@ -635,30 +706,68 @@ pub(crate) fn reconcile_movement(
 /// where the ambush happened, not deliver it to a destination chosen before anyone
 /// knew there was a fight.
 ///
-/// It remains on the last domain surface published through [`StandsOn`], unless the
-/// engagement system supplied an exact [`StopMovingAt`] crossing. Render interpolation
-/// never chooses the result; the transform merely snaps to the chosen domain surface.
+/// The engagement crossing wins for the unit that triggered combat. Other walkers
+/// choose the closest unoccupied surface on their committed route, in stable-id order.
+/// Formation routes may converge through the same chokepoint, so independently
+/// choosing each nearest step can otherwise freeze two members on one exact surface.
+/// Render interpolation never chooses the result; the transform merely snaps to the
+/// domain-owned answer.
 pub(crate) fn halt_on_combat(world: &mut World) {
-    let stops = {
-        let mut walking = world.query_filtered::<
-            (Entity, &StandsOn, Option<&StopMovingAt>),
-            Or<(With<MovingTo>, With<StopMovingAt>)>,
-        >();
+    let mut occupied = {
+        let mut positions = world.query::<(Entity, &StandsOn, Has<MovingTo>, Has<StopMovingAt>)>();
+        positions
+            .iter(world)
+            .filter_map(|(_, standing, moving, requested)| {
+                (!moving && !requested).then_some(standing.0.pos)
+            })
+            .collect::<BTreeSet<_>>()
+    };
+    let mut stops = {
+        let mut walking = world.query_filtered::<(
+            Entity,
+            Option<&UnitId>,
+            &StandsOn,
+            Option<&MovingTo>,
+            Option<&StopMovingAt>,
+        ), Or<(With<MovingTo>, With<StopMovingAt>)>>();
         walking
             .iter(world)
-            .map(|(entity, standing, requested)| {
-                let stopped = requested.map_or(standing.0, |requested| requested.0);
-                (entity, stopped)
+            .map(|(entity, unit, standing, moving, requested)| CombatStop {
+                entity,
+                unit: unit.copied(),
+                standing: standing.0,
+                moving: moving.cloned(),
+                requested: requested.map(|requested| requested.0),
             })
             .collect::<Vec<_>>()
     };
+    stops.sort_by_key(|stop| {
+        (
+            stop.requested.is_none(),
+            stop.unit.is_none(),
+            stop.unit,
+            stop.entity.to_bits(),
+        )
+    });
 
-    for (entity, stopped) in stops {
-        if let Some(mut transform) = world.get_mut::<Transform>(entity) {
+    for stop in stops {
+        let stopped = stop
+            .candidates()
+            .into_iter()
+            .find(|candidate| !occupied.contains(&candidate.pos))
+            .unwrap_or_else(|| {
+                error!(
+                    "combat cannot freeze {:?} on a unique exact route surface",
+                    stop.unit
+                );
+                stop.standing
+            });
+        occupied.insert(stopped.pos);
+        if let Some(mut transform) = world.get_mut::<Transform>(stop.entity) {
             transform.translation = stopped.world_position();
         }
         world
-            .entity_mut(entity)
+            .entity_mut(stop.entity)
             .insert(StandsOn(stopped))
             .remove::<MovingTo>()
             .remove::<StopMovingAt>()
@@ -1219,6 +1328,13 @@ fn spawn_unit(
 mod tests {
     use super::*;
 
+    fn standing(q: i32, r: i32) -> Standing {
+        Standing {
+            pos: TilePos::new(HexCoord::from_axial(q, r), 1),
+            span: HexSpan::from_ground(1.0),
+        }
+    }
+
     #[test]
     fn opposing_factions_are_hostile() {
         assert!(Faction::Player.is_hostile_to(Faction::Hostile));
@@ -1232,5 +1348,67 @@ mod tests {
     fn a_faction_is_not_hostile_to_itself() {
         assert!(!Faction::Player.is_hostile_to(Faction::Player));
         assert!(!Faction::Hostile.is_hostile_to(Faction::Hostile));
+    }
+
+    #[test]
+    fn combat_freezes_converging_routes_on_unique_domain_surfaces() {
+        let trigger_start = standing(-1, 0);
+        let shared = standing(0, 0);
+        let trigger_next = standing(1, 0);
+        let follower_start = standing(0, 1);
+        let speed = 1.0;
+        let elapsed = leg_duration(trigger_start, shared, speed);
+
+        let mut trigger_route = MovingTo::new(vec![trigger_start, shared, trigger_next], speed);
+        trigger_route.started = true;
+        trigger_route.elapsed = elapsed;
+        trigger_route.reconciled_step = 1;
+        let mut follower_route = MovingTo::new(vec![follower_start, shared, trigger_next], speed);
+        follower_route.started = true;
+        follower_route.elapsed = elapsed;
+        follower_route.reconciled_step = 1;
+
+        let mut world = World::new();
+        let trigger = world
+            .spawn((
+                UnitId(0),
+                StandsOn(shared),
+                trigger_route,
+                StopMovingAt::new(shared),
+                hex_core::Busy,
+                Transform::default(),
+            ))
+            .id();
+        let follower = world
+            .spawn((
+                UnitId(1),
+                StandsOn(shared),
+                follower_route,
+                hex_core::Busy,
+                Transform::default(),
+            ))
+            .id();
+
+        halt_on_combat(&mut world);
+
+        let trigger_stop = world.get::<StandsOn>(trigger).expect("trigger remains").0;
+        let follower_stop = world.get::<StandsOn>(follower).expect("follower remains").0;
+        assert_eq!(
+            trigger_stop, shared,
+            "the exact engagement crossing has priority"
+        );
+        assert_ne!(
+            follower_stop, shared,
+            "the follower must choose another committed route surface"
+        );
+        assert!(
+            [follower_start, trigger_next].contains(&follower_stop),
+            "the collision resolver moved the follower off its committed route"
+        );
+        for entity in [trigger, follower] {
+            assert!(world.get::<MovingTo>(entity).is_none());
+            assert!(world.get::<hex_core::Busy>(entity).is_none());
+            assert!(world.get::<Transformation>(entity).is_none());
+        }
     }
 }

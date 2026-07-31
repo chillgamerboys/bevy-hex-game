@@ -70,6 +70,23 @@ pub use summary::{
 };
 pub use turns::{Initiative, TurnOrder};
 
+/// Clones the canonical renderer-free combat state for read-only diagnostics.
+///
+/// This deliberately exposes no mutable authority handle. Behavioral tests may use
+/// it to prove that an in-combat assertion was not satisfied by a legacy fallback.
+pub fn authority_snapshot(world: &World) -> Result<hex_combat_core::CombatState, String> {
+    authority_host::snapshot(world)
+}
+
+/// Publishes a complete content-adapter projection to the combat authority.
+///
+/// This is an explicit synchronization token, not a mutable authority handle. The
+/// projection is adopted only after deferred ECS writes settle and passes the same
+/// exact-roster validation used by runtime content effects.
+pub fn publish_combat_adapter_facts(world: &mut World) -> Result<(), String> {
+    authority_host::publish_adapter_facts(world)
+}
+
 /// Combat-owned compatibility verdict for spells authored by the Wave 6 creator.
 ///
 /// Asset validation answers whether a spell is structurally coherent. This function

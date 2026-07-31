@@ -1,4 +1,4 @@
-//! Integration tests for the combat loop.
+//! Contract tests for the combat loop.
 //!
 //! Headless, with stand-in units rather than real ones — `hex_combat` consumes
 //! `Faction`, `StandsOn` and `Initiative`, and anything producing those will do. That
@@ -18,19 +18,35 @@ use hex_core::{
     CommandQueue, GameCommand, HexCoord, HexSpan, IssuedCommand, Mode, PlayerSeat, Screen, TilePos,
     Turn, UnitId,
 };
-use hex_test_support::TestAppBuilder;
+use hex_test_support::{SyntheticArena, TestAppBuilder};
 use hex_units::{Faction, Standing, StandsOn};
 
 /// Far enough apart that no fight starts on its own.
 const FAR: i32 = 12;
 
+#[expect(
+    clippy::expect_used,
+    reason = "invalid shared deterministic fixture data must fail during construction"
+)]
 fn test_app() -> App {
-    let mut builder = TestAppBuilder::new().with_fixed_step(Duration::ZERO);
+    let mut builder = TestAppBuilder::new()
+        .with_fixed_step(Duration::ZERO)
+        .with_arena(SyntheticArena::flat_radius(16, 1))
+        .expect("the shared synthetic arena must be valid");
     let app = builder.app_mut();
     // The shipped combat.ron values; production loads the file instead.
     app.insert_resource(hex_assets::CombatSettings::default());
     app.add_plugins(hex_combat::plugin);
     builder.build()
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "fixture facts must be accepted by the active combat authority"
+)]
+fn publish_adapter_facts(app: &mut App) {
+    hex_combat::publish_combat_adapter_facts(app.world_mut())
+        .expect("the fixture projection must be valid");
 }
 
 /// The stable id combat dealt this entity when the fight began.
@@ -217,6 +233,7 @@ fn retreating_ends_the_fight() {
     if let Some(mut standing) = app.world_mut().get_mut::<StandsOn>(player) {
         standing.0.pos = TilePos::new(far, 1);
     }
+    publish_adapter_facts(&mut app);
     app.update();
     app.update();
 
@@ -253,6 +270,7 @@ fn the_disengage_margin_stops_combat_flapping() {
     if let Some(mut standing) = app.world_mut().get_mut::<StandsOn>(player) {
         standing.0.pos = TilePos::new(HexCoord::new_cubic(5, -5, 0), 1);
     }
+    publish_adapter_facts(&mut app);
     app.update();
     app.update();
 

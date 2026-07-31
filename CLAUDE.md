@@ -365,12 +365,16 @@ to be out of date. Everything else under `docs/` describes contracts.
   unwrap, expect, panic, debug and print; slice indexing and the other restrictions
   remain denied.
 - **Headless integration tests** use dependency-limited fixtures from
-  `hex_test_support` and live in their owning gameplay crate. The single
-  `hex_combat_core/tests/simulation.rs` target owns multi-turn composition; the single
-  `hex_game/tests/gameplay_app.rs` target owns headless UI behavior behind
-  `test-support`. Map tests retain their separate world-owned infrastructure. None
-  can see anything visual — a black sky or a mistransformed tile still needs a human
-  looking at the window.
+  `hex_test_support` and live in their owning gameplay crate. Units and combat each
+  expose one explicit `contracts` target; concern modules live beneath that target
+  rather than creating another Bevy link. The single
+  `hex_combat_core/tests/simulation.rs` target owns multi-turn composition, and the
+  single `hex_game/tests/gameplay_app.rs` target owns gameplay UI behavior behind
+  `test-support`. `game_content_contracts` and the library's private
+  scenario/loading tests stay separately selectable in the residual shared seam.
+  Map tests retain their separate world-owned infrastructure. None can see anything
+  visual — a black sky or a mistransformed tile still needs a human looking at the
+  window.
 
 **Gaps in the engine and the toolchain** — `bevy_lint` unusable at 0.19, Bevy
 features untrimmed, animation still `Box<dyn Transformer>` — are recorded in

@@ -8,14 +8,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::prelude::*;
-use hex_assets::{CombatSettings, ElementCatalog, SubstanceTable};
+use hex_assets::{CombatSettings, ElementCatalog, SpellBook, SubstanceTable};
 use hex_combat_core::{
-    ArenaSnapshot, CombatLattice, CombatState, CombatUnit, CommandRefusal, ElementNames,
+    ArenaSnapshot, CombatLattice, CombatState, CombatUnit, CombatUnitProjection, ElementNames,
     RulesProfile,
 };
 use hex_core::{
-    Busy, ControlOwner, Faction, GameCommand, Headroom, HexSpan, HexTile, IssuedCommand,
-    KnowledgeState, PendingDecision, SubstanceId, TilePos, Turn, UnitId,
+    Busy, ControlOwner, Faction, GameCommand, Headroom, HexSpan, HexTile, KnowledgeState,
+    PendingDecision, SubstanceId, TilePos, Turn, UnitId,
 };
 use hex_lattice::{LatticeSpec, LatticeState, LatticeStats};
 use hex_perception::FactionMapKnowledge;
@@ -27,52 +27,91 @@ use crate::{Initiative, TurnOrder};
 #[derive(Resource, Debug)]
 pub(crate) struct CombatAuthority {
     pub(crate) state: CombatState,
-    shadow_complete: bool,
+    published_events: usize,
+    published_round: u32,
+    adapter_pending: bool,
 }
 
 impl CombatAuthority {
-    pub(crate) fn shadow_complete(&self) -> bool {
-        self.shadow_complete
-    }
-
-    pub(crate) fn disable_shadow(&mut self, reason: &str) {
-        if self.shadow_complete {
-            warn!("combat authority shadow comparison disabled: {reason}");
-            self.shadow_complete = false;
-        }
-    }
-
-    /// Applies reducer-covered commands for migration-time field comparison.
-    ///
-    /// Content-resolved casting and restoration are cut over in the consolidation
-    /// lane. Encountering one disables later comparisons for this combat rather than
-    /// pretending that an incomplete shadow is authoritative.
-    pub(crate) fn apply_shadow(
-        &mut self,
-        issued: &IssuedCommand,
-    ) -> Option<Result<(), CommandRefusal>> {
-        if !self.shadow_complete {
-            return None;
-        }
-        let covered = matches!(
-            issued.command,
+    /// Whether this command is reduced entirely inside `hex_combat_core`.
+    pub(crate) fn handles(command: &GameCommand) -> bool {
+        matches!(
+            command,
             GameCommand::MoveAlong { .. }
                 | GameCommand::Strike { .. }
                 | GameCommand::EndTurn { .. }
                 | GameCommand::Channel { .. }
                 | GameCommand::ChooseDisables { .. }
+        )
+    }
+
+    /// Marks one content-dependent adapter transition for exact adoption after
+    /// deferred ECS writes settle.
+    pub(crate) fn mark_adapter_pending(&mut self) {
+        self.adapter_pending = true;
+    }
+
+    pub(crate) fn adapter_pending(&self) -> bool {
+        self.adapter_pending
+    }
+
+    pub(crate) fn finish_adapter_adoption(&mut self) {
+        self.adapter_pending = false;
+        self.published_round = self.state.round;
+    }
+
+    /// Drains authority events exactly once into the Bevy presentation stream.
+    pub(crate) fn drain_events(&mut self, output: &mut Vec<crate::CombatEvent>) {
+        assert!(
+            self.published_events <= self.state.events.len(),
+            "combat authority event transcript shrank after publication"
         );
-        if !covered {
-            self.shadow_complete = false;
-            return None;
+        if let Some(unpublished) = self.state.events.get(self.published_events..) {
+            output.extend(unpublished.iter().cloned());
         }
-        Some(self.state.apply(issued.clone()))
+        self.published_events = self.state.events.len();
+    }
+
+    /// Publishes each authority-owned round edge exactly once.
+    pub(crate) fn drain_rounds(&mut self, output: &mut Vec<hex_core::RoundElapsed>) {
+        output.extend((self.published_round..self.state.round).map(|_| hex_core::RoundElapsed));
+        self.published_round = self.state.round;
     }
 }
 
 /// Loud initialization failure retained for diagnostics and headless assertions.
 #[derive(Resource, Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CombatAuthorityFailure(pub(crate) String);
+
+/// Returns a read-only clone of the renderer-free authority for contract tests and
+/// diagnostics. Callers cannot mutate combat through this observation seam.
+pub(crate) fn snapshot(world: &World) -> Result<CombatState, String> {
+    if let Some(authority) = world.get_resource::<CombatAuthority>() {
+        return Ok(authority.state.clone());
+    }
+    Err(world.get_resource::<CombatAuthorityFailure>().map_or_else(
+        || "combat authority is not active".to_owned(),
+        |failure| failure.0.clone(),
+    ))
+}
+
+/// Marks a complete ECS projection for validated adoption at the next settled
+/// boundary.
+///
+/// Content adapters and contract fixtures call this after publishing domain facts
+/// that are intentionally resolved outside the pure command reducer. The authority
+/// still validates the exact roster, identities, order, and mutable projection before
+/// accepting it.
+pub(crate) fn publish_adapter_facts(world: &mut World) -> Result<(), String> {
+    if let Some(mut authority) = world.get_resource_mut::<CombatAuthority>() {
+        authority.mark_adapter_pending();
+        return Ok(());
+    }
+    Err(world.get_resource::<CombatAuthorityFailure>().map_or_else(
+        || "combat authority is not active".to_owned(),
+        |failure| failure.0.clone(),
+    ))
+}
 
 type TileFacts<'w, 's> = Query<
     'w,
@@ -134,30 +173,38 @@ fn initialize(
     mut commands: Commands,
     settings: Option<Res<CombatSettings>>,
     elements: Option<Res<ElementCatalog>>,
+    spells: Option<Res<SpellBook>>,
     substances: Option<Res<SubstanceTable>>,
     blockers: Option<Res<hex_core::TraversalBlockers>>,
     spatial: Option<Res<FactionMapKnowledge>>,
     tiles: TileFacts,
     units: UnitFacts,
     order: Res<TurnOrder>,
+    pending: Res<PendingDecision>,
+    revivals: Res<crate::turns::PendingRevivals>,
 ) {
     commands.remove_resource::<CombatAuthority>();
     commands.remove_resource::<CombatAuthorityFailure>();
     let result = freeze(
         settings.as_deref(),
         elements.as_deref(),
+        spells.as_deref(),
         substances.as_deref(),
         blockers.as_deref(),
         spatial.as_deref(),
         &tiles,
         &units,
         &order,
+        &pending,
+        &revivals,
     );
     match result {
         Ok(state) => {
             commands.insert_resource(CombatAuthority {
                 state,
-                shadow_complete: true,
+                published_events: 0,
+                published_round: 0,
+                adapter_pending: false,
             });
         }
         Err(reason) => {
@@ -174,9 +221,6 @@ fn reconcile_domain_movement(
     let Some(authority) = authority.as_deref_mut() else {
         return;
     };
-    if !authority.shadow_complete {
-        return;
-    }
     for (unit, standing) in &positions {
         let moving = authority
             .state
@@ -184,13 +228,17 @@ fn reconcile_domain_movement(
             .get(unit)
             .is_some_and(|actor| actor.motion.is_some());
         if moving {
-            if let Err(error) = authority.state.reach_movement(*unit, standing.0.pos) {
+            let result = authority.state.reach_movement(*unit, standing.0.pos);
+            if result.is_err() {
                 error!(
                     "ECS movement projection left the committed authority route for \
-                     {unit:?} at {:?}: {error:?}",
-                    standing.0.pos
+                     {unit:?} at {:?}: {result:?}",
+                    standing.0.pos,
                 );
-                authority.disable_shadow("movement projection left its committed route");
+                assert!(
+                    result.is_ok(),
+                    "movement projection left its committed authority route"
+                );
                 break;
             }
         }
@@ -214,23 +262,58 @@ fn assert_equivalent_projections(
     mut authority: Option<ResMut<CombatAuthority>>,
     order: Res<TurnOrder>,
     pending: Res<PendingDecision>,
+    revivals: Res<crate::turns::PendingRevivals>,
     units: ProjectionFacts,
+    mut events: MessageWriter<crate::CombatEvent>,
+    mut rounds: MessageWriter<hex_core::RoundElapsed>,
 ) {
     let Some(authority) = authority.as_deref_mut() else {
         return;
     };
-    if !authority.shadow_complete {
-        return;
+    if authority.adapter_pending {
+        let projection = units
+            .iter()
+            .map(
+                |(id, standing, turn, busy, downed, lattice)| CombatUnitProjection {
+                    id: *id,
+                    position: standing.0.pos,
+                    turn: turn.copied(),
+                    busy,
+                    downed,
+                    lattice: lattice.cloned(),
+                },
+            )
+            .collect::<Vec<_>>();
+        let result = authority.state.adopt_projection(
+            order.order().to_vec(),
+            order.current(),
+            order.round,
+            pending.clone(),
+            revivals.snapshot(),
+            projection,
+        );
+        if result.is_err() {
+            error!("content adapter published an invalid combat projection: {result:?}");
+            assert!(
+                result.is_ok(),
+                "content adapter published an invalid combat projection"
+            );
+        }
+        authority.finish_adapter_adoption();
     }
+    authority.state.settle_outcome();
     let state = &authority.state;
     assert_eq!(state.order, order.order(), "initiative order projection");
     assert_eq!(state.current(), order.current(), "current turn projection");
     assert_eq!(state.round, order.round, "round projection");
     assert_eq!(state.pending, *pending, "pending decision projection");
     for (id, standing, turn, busy, downed, lattice) in &units {
-        let Some(actor) = state.units.get(id) else {
-            error!("ECS projected unknown combat unit {id:?}");
-            authority.disable_shadow("ECS projected a unit absent from the authority roster");
+        let actor = state.units.get(id);
+        assert!(
+            actor.is_some(),
+            "ECS projected unit {id:?} outside the authority roster"
+        );
+        let Some(actor) = actor else {
             return;
         };
         assert_eq!(actor.position, standing.0.pos, "{id:?} exact position");
@@ -243,6 +326,12 @@ fn assert_equivalent_projections(
             "{id:?} lattice projection"
         );
     }
+    let mut published = Vec::new();
+    authority.drain_events(&mut published);
+    events.write_batch(published);
+    let mut elapsed = Vec::new();
+    authority.drain_rounds(&mut elapsed);
+    rounds.write_batch(elapsed);
 }
 
 fn clear(mut commands: Commands) {
@@ -257,16 +346,20 @@ fn clear(mut commands: Commands) {
 fn freeze(
     settings: Option<&CombatSettings>,
     elements: Option<&ElementCatalog>,
+    spells: Option<&SpellBook>,
     substances: Option<&SubstanceTable>,
     blockers: Option<&hex_core::TraversalBlockers>,
     spatial: Option<&FactionMapKnowledge>,
     tiles: &TileFacts,
     units: &UnitFacts,
     order: &TurnOrder,
+    pending: &PendingDecision,
+    revivals: &crate::turns::PendingRevivals,
 ) -> Result<CombatState, String> {
     let settings = settings.ok_or("CombatSettings is unavailable")?;
     let substances = substances.ok_or("SubstanceTable is unavailable")?;
     let mut bodies = Vec::new();
+    let mut unit_bodies = BTreeMap::new();
     let mut roster = Vec::new();
     for (
         id,
@@ -288,6 +381,7 @@ fn freeze(
                 bodies.push(body);
             }
         }
+        unit_bodies.insert(*id, body.copied());
         let lattice = match (spec, lattice, lattice_stats) {
             (Some(spec), Some(state), Some(stats)) => Some(CombatLattice {
                 spec: spec.clone(),
@@ -324,17 +418,31 @@ fn freeze(
         .map(|(position, ..)| **position)
         .collect::<BTreeSet<_>>();
     let mut links = BTreeSet::new();
+    let mut links_by_body = Vec::new();
     for body in bodies {
         let footing = Footing::from_tiles(all_tiles.iter().copied(), substances, body, blockers);
+        let mut body_links = BTreeSet::new();
         for from in footing.standings() {
             for neighbor in from.pos.coord.neighbors() {
                 for to in footing.steps_from(from, neighbor) {
                     links.insert((from.pos, to.pos));
+                    body_links.insert((from.pos, to.pos));
                 }
             }
         }
+        links_by_body.push((body, body_links));
     }
     let mut arena = ArenaSnapshot::new(surfaces, links)?;
+    for (&unit, body) in &unit_bodies {
+        let links = body
+            .and_then(|body| {
+                links_by_body
+                    .iter()
+                    .find(|(candidate, _)| *candidate == body)
+            })
+            .map_or_else(BTreeSet::new, |(_, links)| links.clone());
+        arena = arena.with_unit_links(unit, links)?;
+    }
     if let Some(spatial) = spatial {
         for faction in [Faction::Player, Faction::Hostile] {
             let observed = spatial
@@ -360,7 +468,19 @@ fn freeze(
 
     let rules = RulesProfile::new("runtime", settings.movement_per_turn)?
         .with_strike_disable_count(settings.strike_disables);
-    let state = CombatState::start(rules, arena, ElementNames::new(element_names), roster)?;
+    let spell_names = spells
+        .into_iter()
+        .flat_map(SpellBook::iter)
+        .map(|(id, name, _)| (id, name.to_owned()));
+    let names = ElementNames::new(element_names).with_spells(spell_names);
+    let state = CombatState::start_with_session(
+        rules,
+        arena,
+        names,
+        roster,
+        pending.clone(),
+        revivals.snapshot(),
+    )?;
     if state.order != order.order()
         || state.current() != order.current()
         || state.round != order.round

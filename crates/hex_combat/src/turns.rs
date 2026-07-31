@@ -89,6 +89,10 @@ impl PendingRevivals {
     pub(crate) fn schedule(&mut self, unit: UnitId, round: u32) {
         self.0.insert(unit, round);
     }
+
+    pub(crate) fn snapshot(&self) -> BTreeMap<UnitId, u32> {
+        self.0.clone()
+    }
 }
 
 impl TurnOrder {
@@ -114,6 +118,16 @@ impl TurnOrder {
     #[must_use]
     pub fn position_of(&self, unit: UnitId) -> Option<usize> {
         self.order.iter().position(|u| *u == unit)
+    }
+
+    /// Projects the pure authority's current order without deriving any rule.
+    pub(crate) fn project(&mut self, order: &[UnitId], current: Option<UnitId>, round: u32) {
+        self.order.clear();
+        self.order.extend_from_slice(order);
+        self.current = current
+            .and_then(|unit| self.position_of(unit))
+            .unwrap_or_default();
+        self.round = round;
     }
 
     /// Moves to the next unit, wrapping and counting a round.

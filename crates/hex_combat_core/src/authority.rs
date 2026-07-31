@@ -58,17 +58,35 @@ impl RulesProfile {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct ElementNames {
     by_id: BTreeMap<hex_core::ElementId, String>,
+    spell_by_id: BTreeMap<hex_core::SpellId, String>,
 }
 
 impl ElementNames {
     /// Creates an explicit id-to-name table.
     #[must_use]
     pub fn new(by_id: BTreeMap<hex_core::ElementId, String>) -> Self {
-        Self { by_id }
+        Self {
+            by_id,
+            spell_by_id: BTreeMap::new(),
+        }
+    }
+
+    /// Attaches stable spell names used when a disabled cell breaks an enchantment.
+    #[must_use]
+    pub fn with_spells(
+        mut self,
+        spell_by_id: impl IntoIterator<Item = (hex_core::SpellId, String)>,
+    ) -> Self {
+        self.spell_by_id = spell_by_id.into_iter().collect();
+        self
     }
 
     fn name(&self, id: hex_core::ElementId) -> Option<&str> {
         self.by_id.get(&id).map(String::as_str)
+    }
+
+    fn spell_name(&self, id: hex_core::SpellId) -> Option<&str> {
+        self.spell_by_id.get(&id).map(String::as_str)
     }
 }
 
@@ -81,6 +99,7 @@ impl ElementNames {
 pub struct ArenaSnapshot {
     surfaces: BTreeSet<TilePos>,
     links: BTreeSet<(TilePos, TilePos)>,
+    unit_links: BTreeMap<UnitId, BTreeSet<(TilePos, TilePos)>>,
     observed: BTreeMap<Faction, BTreeSet<TilePos>>,
 }
 
@@ -108,8 +127,30 @@ impl ArenaSnapshot {
         Ok(Self {
             surfaces,
             links,
+            unit_links: BTreeMap::new(),
             observed: BTreeMap::new(),
         })
+    }
+
+    /// Overrides traversal edges for one stable unit.
+    ///
+    /// Runtime hosts publish body-specific footing here so a small unit's
+    /// crawlspace does not authorize a larger unit to follow it.
+    pub fn with_unit_links(
+        mut self,
+        unit: UnitId,
+        links: impl IntoIterator<Item = (TilePos, TilePos)>,
+    ) -> Result<Self, String> {
+        let links = links.into_iter().collect::<BTreeSet<_>>();
+        for (from, to) in &links {
+            if from == to || !self.surfaces.contains(from) || !self.surfaces.contains(to) {
+                return Err(format!(
+                    "unit {unit:?} traversal names an invalid arena edge: {from:?} -> {to:?}"
+                ));
+            }
+        }
+        self.unit_links.insert(unit, links);
+        Ok(self)
     }
 
     /// Publishes the exact currently observed surfaces for one faction.
@@ -132,12 +173,17 @@ impl ArenaSnapshot {
             .is_some_and(|surfaces| surfaces.contains(&position))
     }
 
-    fn validates_path(&self, path: &[TilePos]) -> bool {
+    fn links_for(&self, unit: UnitId) -> &BTreeSet<(TilePos, TilePos)> {
+        self.unit_links.get(&unit).unwrap_or(&self.links)
+    }
+
+    fn validates_path(&self, unit: UnitId, path: &[TilePos]) -> bool {
+        let links = self.links_for(unit);
         !path.is_empty()
             && path.iter().all(|position| self.surfaces.contains(position))
             && path
                 .windows(2)
-                .all(|edge| matches!(edge, [from, to] if self.links.contains(&(*from, *to))))
+                .all(|edge| matches!(edge, [from, to] if links.contains(&(*from, *to))))
     }
 }
 
@@ -200,6 +246,28 @@ pub struct CombatUnit {
     pub downed: bool,
     /// Optional lattice. Harnesses may omit it for movement-only combatants.
     pub lattice: Option<CombatLattice>,
+}
+
+/// Explicit ECS facts accepted at a content-dependent adapter boundary.
+///
+/// Reducer-covered commands never use this type. It exists for commands whose
+/// authored spell/effect resolution still belongs to the Bevy host: the host
+/// publishes the complete resulting domain facts back to the authority before any
+/// later command may run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CombatUnitProjection {
+    /// Stable unit identity.
+    pub id: UnitId,
+    /// Exact occupied surface.
+    pub position: TilePos,
+    /// Current turn budget, if this unit owns one.
+    pub turn: Option<Turn>,
+    /// Domain command gate.
+    pub busy: bool,
+    /// Whether the unit has left initiative.
+    pub downed: bool,
+    /// Mutable lattice state. The fixed spec and stats remain frozen.
+    pub lattice: Option<LatticeState>,
 }
 
 impl CombatUnit {
@@ -310,6 +378,8 @@ pub struct CombatState {
     current: usize,
     /// Zero-based completed round count.
     pub round: u32,
+    /// Revived units waiting for an exact round boundary before rejoining initiative.
+    pub pending_revivals: BTreeMap<UnitId, u32>,
     /// Canonical aggregate summary.
     pub metrics: CombatMetrics,
     /// One defender choice suspending further simulation commands.
@@ -329,6 +399,29 @@ impl CombatState {
         arena: ArenaSnapshot,
         elements: ElementNames,
         units: impl IntoIterator<Item = CombatUnit>,
+    ) -> Result<Self, String> {
+        Self::start_with_session(
+            rules,
+            arena,
+            elements,
+            units,
+            PendingDecision::None,
+            BTreeMap::new(),
+        )
+    }
+
+    /// Starts combat while adopting already-published session facts.
+    ///
+    /// Runtime normally supplies no pending choice or revival at entry. This explicit
+    /// constructor exists for restored sessions and fixture-owned contract state; the
+    /// facts are validated against the same frozen roster before becoming authority.
+    pub fn start_with_session(
+        rules: RulesProfile,
+        arena: ArenaSnapshot,
+        elements: ElementNames,
+        units: impl IntoIterator<Item = CombatUnit>,
+        pending: PendingDecision,
+        pending_revivals: BTreeMap<UnitId, u32>,
     ) -> Result<Self, String> {
         for observed in arena.observed.values().flatten() {
             if !arena.surfaces.contains(observed) {
@@ -363,7 +456,7 @@ impl CombatState {
         }
         let mut order: Vec<_> = by_id
             .values()
-            .filter(|unit| !unit.downed)
+            .filter(|unit| !unit.downed && !pending_revivals.contains_key(&unit.id))
             .map(|unit| unit.id)
             .collect();
         order.sort_by_key(|id| {
@@ -378,14 +471,49 @@ impl CombatState {
             order,
             current: 0,
             round: 0,
+            pending_revivals,
             metrics: CombatMetrics::default(),
-            pending: PendingDecision::None,
+            pending,
             commands: Vec::new(),
             events: Vec::new(),
             outcome: None,
         };
+        state.validate_session_facts()?;
         state.grant_current_turn();
         Ok(state)
+    }
+
+    fn validate_session_facts(&self) -> Result<(), String> {
+        let known = |unit| self.units.contains_key(&unit);
+        match self.pending {
+            PendingDecision::None => {}
+            PendingDecision::ChooseDisables {
+                decider, source, ..
+            } => {
+                if !known(decider) || !known(source) {
+                    return Err(
+                        "pending disable decision names a unit outside the roster".to_owned()
+                    );
+                }
+            }
+            PendingDecision::ChooseRestores {
+                decider, target, ..
+            } => {
+                if !known(decider) || !known(target) {
+                    return Err(
+                        "pending restoration decision names a unit outside the roster".to_owned(),
+                    );
+                }
+            }
+        }
+        if self
+            .pending_revivals
+            .keys()
+            .any(|unit| !self.units.contains_key(unit))
+        {
+            return Err("pending revival names a unit outside the roster".to_owned());
+        }
+        Ok(())
     }
 
     /// Stable identity currently allowed to act.
@@ -416,6 +544,166 @@ impl CombatState {
                 Err(refusal)
             }
         }
+    }
+
+    /// Adopts one complete, explicit projection after a content-dependent host
+    /// adapter has resolved a command.
+    ///
+    /// This is not a second command reducer: it accepts no intent and derives no
+    /// gameplay rule. The adapter must publish every mutable fact, and malformed or
+    /// partial projections fail closed before replacing authority state.
+    pub fn adopt_projection(
+        &mut self,
+        order: Vec<UnitId>,
+        current: Option<UnitId>,
+        round: u32,
+        pending: PendingDecision,
+        pending_revivals: BTreeMap<UnitId, u32>,
+        units: impl IntoIterator<Item = CombatUnitProjection>,
+    ) -> Result<(), String> {
+        let checkpoint = self.clone();
+        let result = self.adopt_projection_inner(
+            order,
+            current,
+            round,
+            pending,
+            pending_revivals,
+            units.into_iter().collect(),
+        );
+        if result.is_err() {
+            *self = checkpoint;
+        }
+        result
+    }
+
+    fn adopt_projection_inner(
+        &mut self,
+        order: Vec<UnitId>,
+        current: Option<UnitId>,
+        round: u32,
+        pending: PendingDecision,
+        pending_revivals: BTreeMap<UnitId, u32>,
+        units: Vec<CombatUnitProjection>,
+    ) -> Result<(), String> {
+        let projections = units
+            .into_iter()
+            .map(|projection| (projection.id, projection))
+            .collect::<BTreeMap<_, _>>();
+        if projections.len() != self.units.len()
+            || projections
+                .keys()
+                .any(|unit| !self.units.contains_key(unit))
+        {
+            return Err("adapter projection does not name the exact frozen roster".to_owned());
+        }
+        let mut ordered = BTreeSet::new();
+        for unit in &order {
+            let projection = projections
+                .get(unit)
+                .ok_or_else(|| format!("adapter order names unknown unit {unit:?}"))?;
+            if projection.downed || !ordered.insert(*unit) {
+                return Err(format!(
+                    "adapter order duplicates or retains downed unit {unit:?}"
+                ));
+            }
+        }
+        let current_index = match current {
+            Some(unit) => order
+                .iter()
+                .position(|candidate| *candidate == unit)
+                .ok_or_else(|| format!("adapter current unit {unit:?} is outside its order"))?,
+            None if order.is_empty() => 0,
+            None => return Err("adapter omitted current unit for a non-empty order".to_owned()),
+        };
+        let mut positions = BTreeSet::new();
+        for projection in projections.values() {
+            if !self.arena.surfaces.contains(&projection.position) {
+                return Err(format!(
+                    "adapter unit {:?} stands outside the frozen arena at {:?}",
+                    projection.id, projection.position
+                ));
+            }
+            if !positions.insert(projection.position) {
+                return Err(format!(
+                    "adapter projection duplicates exact surface {:?}",
+                    projection.position
+                ));
+            }
+            let in_order = ordered.contains(&projection.id);
+            let awaiting_revival = pending_revivals.contains_key(&projection.id);
+            if projection.downed {
+                if in_order || awaiting_revival {
+                    return Err(format!(
+                        "downed adapter unit {:?} remains active or awaits revival",
+                        projection.id
+                    ));
+                }
+            } else if in_order == awaiting_revival {
+                return Err(format!(
+                    "live adapter unit {:?} must be in initiative or await revival, exclusively",
+                    projection.id
+                ));
+            }
+            if projection.turn.is_some() != (current == Some(projection.id)) {
+                return Err(format!(
+                    "adapter turn marker disagrees for unit {:?}",
+                    projection.id
+                ));
+            }
+        }
+
+        for (id, projection) in projections {
+            let actor = self
+                .units
+                .get_mut(&id)
+                .ok_or_else(|| format!("adapter projected unknown unit {id:?}"))?;
+            match (&mut actor.lattice, projection.lattice) {
+                (Some(lattice), Some(state)) => lattice.state = state,
+                (lattice @ Some(_), None) => *lattice = None,
+                (None, None) => {}
+                _ => {
+                    return Err(format!(
+                        "adapter introduced a lattice for unit {id:?} without frozen facts"
+                    ));
+                }
+            }
+            actor.position = projection.position;
+            actor.turn = projection.turn;
+            actor.busy = projection.busy;
+            if !projection.busy {
+                actor.motion = None;
+            }
+            actor.downed = projection.downed;
+        }
+        self.order = order;
+        self.current = current_index;
+        self.round = round;
+        self.pending = pending;
+        self.pending_revivals = pending_revivals;
+        Ok(())
+    }
+
+    /// Settles terminal state after an external adapter projection is complete.
+    ///
+    /// Hosts call this after the current command drain so a refusal already in that
+    /// drain retains its canonical ordering ahead of the terminal outcome.
+    pub fn settle_outcome(&mut self) {
+        self.detect_outcome();
+    }
+
+    /// Records a successfully resolved adapter command in the canonical transcript.
+    pub fn record_adapter_success(&mut self, issued: IssuedCommand) {
+        self.metrics.record_success(&issued.command);
+        self.commands.push(issued);
+    }
+
+    /// Records a refused adapter command without mutating domain state.
+    pub fn record_adapter_refusal(&mut self, issued: IssuedCommand, refusal: CommandRefusal) {
+        self.metrics.record_refusal();
+        self.events.push(CombatEvent::CommandRefused {
+            command: issued.command,
+            refusal,
+        });
     }
 
     /// Publishes one reached surface for a validated in-flight route.
@@ -532,7 +820,10 @@ impl CombatState {
 
     fn apply_move(&mut self, unit: UnitId, path: &[TilePos]) -> Result<(), CommandRefusal> {
         let actor = self.validate_actor(unit)?;
-        if path.first().copied() != Some(actor.position) || !self.arena.validates_path(path) {
+        if path.len() < 2
+            || path.first().copied() != Some(actor.position)
+            || !self.arena.validates_path(unit, path)
+        {
             return Err(CommandRefusal::InvalidPath);
         }
         let cost = u32::try_from(path.len().saturating_sub(1)).unwrap_or(u32::MAX);
@@ -543,8 +834,18 @@ impl CombatState {
         let occupancy = UnitOccupancy::from_positions(
             self.units
                 .values()
-                .filter(|unit| !unit.downed)
-                .map(|unit| (unit.id, unit.position)),
+                .filter_map(|actor| {
+                    (!actor.downed).then_some(
+                        std::iter::once((actor.id, actor.position)).chain(
+                            actor
+                                .motion
+                                .iter()
+                                .flat_map(|motion| motion.path.iter().copied())
+                                .map(|position| (actor.id, position)),
+                        ),
+                    )
+                })
+                .flatten(),
         );
         occupancy
             .validate_route(path, unit)
@@ -564,7 +865,18 @@ impl CombatState {
     }
 
     fn apply_end_turn(&mut self, unit: UnitId) -> Result<(), CommandRefusal> {
-        let _ = self.validate_actor(unit)?;
+        let actor = self.units.get(&unit).ok_or(CommandRefusal::UnknownUnit)?;
+        if actor.downed {
+            return Err(CommandRefusal::ActingUnitDowned { unit });
+        }
+        if self.current() != Some(unit) {
+            return Err(CommandRefusal::NotCurrentTurn {
+                current: self.current(),
+            });
+        }
+        if actor.turn.is_none() {
+            return Err(CommandRefusal::NoTurn);
+        }
         let actor = self
             .units
             .get_mut(&unit)
@@ -591,14 +903,9 @@ impl CombatState {
         if !actor.faction.is_hostile_to(target_unit.faction) {
             return Err(CommandRefusal::TargetNotHostile { target });
         }
-        if !self
-            .arena
-            .links
-            .contains(&(actor.position, target_unit.position))
-            || !self
-                .arena
-                .links
-                .contains(&(target_unit.position, actor.position))
+        let links = self.arena.links_for(unit);
+        if !links.contains(&(actor.position, target_unit.position))
+            || !links.contains(&(target_unit.position, actor.position))
         {
             return Err(CommandRefusal::TargetOutOfMeleeReach { target });
         }
@@ -711,7 +1018,7 @@ impl CombatState {
         for record in broken {
             self.events.push(CombatEvent::EnchantmentBroken {
                 unit,
-                spell: None,
+                spell: self.elements.spell_name(record.spell).map(str::to_owned),
                 burned_mana: record.burned_mana,
                 trigger: record.trigger,
             });
@@ -810,6 +1117,7 @@ impl CombatState {
             if self.current >= self.order.len() {
                 self.current = 0;
                 self.round = self.round.saturating_add(1);
+                self.insert_due_revivals();
             }
         }
         self.grant_current_turn();
@@ -820,10 +1128,36 @@ impl CombatState {
         });
     }
 
+    fn insert_due_revivals(&mut self) {
+        let due = self
+            .pending_revivals
+            .iter()
+            .filter_map(|(&unit, &round)| (round <= self.round).then_some(unit))
+            .collect::<Vec<_>>();
+        for unit in &due {
+            self.pending_revivals.remove(unit);
+            let active = self.units.get(unit).is_some_and(|actor| !actor.downed);
+            if active && !self.order.contains(unit) {
+                self.order.push(*unit);
+            }
+        }
+        if !due.is_empty() {
+            self.order.sort_by_key(|unit| {
+                let initiative = self.units.get(unit).map_or(0, |actor| actor.initiative);
+                (Reverse(initiative), *unit)
+            });
+            self.current = self
+                .current()
+                .and_then(|unit| self.order.iter().position(|candidate| *candidate == unit))
+                .unwrap_or_default();
+        }
+    }
+
     fn remove_from_order(&mut self, unit: UnitId) {
         let Some(index) = self.order.iter().position(|candidate| *candidate == unit) else {
             return;
         };
+        let held_the_turn = self.current() == Some(unit);
         self.order.remove(index);
         if self.order.is_empty() {
             self.current = 0;
@@ -831,6 +1165,12 @@ impl CombatState {
             self.current = self.current.saturating_sub(1);
         } else if self.current >= self.order.len() {
             self.current = 0;
+        }
+        if held_the_turn {
+            // Removing the current actor slides the index onto its successor. That
+            // successor did not pass through `advance_if_finished`, so it has no turn
+            // until this explicit handoff. The ECS projection follows the same rule.
+            self.grant_current_turn();
         }
     }
 
@@ -851,8 +1191,10 @@ impl CombatState {
             None
         };
         if let Some(outcome) = outcome {
-            self.outcome = Some(outcome);
-            self.events.push(CombatEvent::EncounterResolved { outcome });
+            if self.outcome != Some(outcome) {
+                self.outcome = Some(outcome);
+                self.events.push(CombatEvent::EncounterResolved { outcome });
+            }
         }
     }
 
@@ -1369,6 +1711,61 @@ mod tests {
     }
 
     #[test]
+    fn invalid_adapter_projection_is_transactional() {
+        let mut sim = state(
+            vec![
+                CombatUnit::new(
+                    UnitId(0),
+                    PlayerSeat(0),
+                    Faction::Player,
+                    position(0, 0),
+                    20,
+                ),
+                CombatUnit::new(
+                    UnitId(1),
+                    PlayerSeat(0),
+                    Faction::Hostile,
+                    position(4, 0),
+                    10,
+                ),
+            ],
+            3,
+        );
+        let before = sim.clone();
+        let current_turn = sim.units.get(&UnitId(0)).and_then(|unit| unit.turn);
+        let invalid = sim.adopt_projection(
+            sim.order.clone(),
+            sim.current(),
+            sim.round,
+            sim.pending.clone(),
+            BTreeMap::new(),
+            [
+                CombatUnitProjection {
+                    id: UnitId(0),
+                    position: position(1, 0),
+                    turn: current_turn,
+                    busy: false,
+                    downed: false,
+                    lattice: None,
+                },
+                CombatUnitProjection {
+                    id: UnitId(1),
+                    position: position(3, 0),
+                    turn: None,
+                    busy: false,
+                    downed: false,
+                    lattice: Some(LatticeState::default()),
+                },
+            ],
+        );
+        assert!(invalid.is_err());
+        assert_eq!(
+            sim, before,
+            "a late invalid unit must not leave earlier adapter mutations behind"
+        );
+    }
+
+    #[test]
     fn strike_decision_downs_the_last_hostile_and_resolves_victory() {
         let cell = LatticeCoord::ORIGIN;
         let spec = LatticeSpec::default().with(cell, CellKind::Blank);
@@ -1433,6 +1830,66 @@ mod tests {
                 outcome: EncounterOutcome::Victory
             }
         )));
+    }
+
+    #[test]
+    fn downing_the_current_decider_grants_its_successor_a_turn() {
+        let cell = LatticeCoord::ORIGIN;
+        let spec = LatticeSpec::default().with(cell, CellKind::Blank);
+        let mut sim = CombatState::start_with_session(
+            rules(4),
+            corridor(3),
+            ElementNames::default(),
+            [
+                CombatUnit::new(
+                    UnitId(0),
+                    PlayerSeat(0),
+                    Faction::Player,
+                    position(0, 0),
+                    20,
+                )
+                .with_lattice(
+                    spec.clone(),
+                    LatticeState::new(&spec, &LatticeStats::default()),
+                    LatticeStats::default(),
+                ),
+                CombatUnit::new(
+                    UnitId(1),
+                    PlayerSeat(0),
+                    Faction::Hostile,
+                    position(1, 0),
+                    10,
+                ),
+                CombatUnit::new(UnitId(2), PlayerSeat(0), Faction::Player, position(2, 0), 5),
+            ],
+            PendingDecision::ChooseDisables {
+                decider: UnitId(0),
+                count: 1,
+                source: UnitId(1),
+            },
+            BTreeMap::new(),
+        )
+        .expect("fixture state");
+
+        sim.apply(IssuedCommand {
+            seat: PlayerSeat(0),
+            command: GameCommand::ChooseDisables {
+                unit: UnitId(0),
+                cells: vec![cell],
+            },
+        })
+        .expect("the pending decision should resolve");
+
+        assert!(sim.units.get(&UnitId(0)).is_some_and(|unit| unit.downed));
+        assert_eq!(sim.current(), Some(UnitId(1)));
+        assert_eq!(
+            sim.units.get(&UnitId(1)).and_then(|unit| unit.turn),
+            Some(Turn {
+                movement_left: 4,
+                acted: false,
+            }),
+            "removing the turn holder must not strand the initiative order"
+        );
     }
 
     #[test]
