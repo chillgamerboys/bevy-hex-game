@@ -505,6 +505,232 @@ pub enum LatticeDemoIntent {
     Reset,
 }
 
+/// Creator workspace selected beneath the Character/Spell library route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CreatorWorkspace {
+    /// Library and packaged-template overview.
+    #[default]
+    Hub,
+    /// Character lattice/stat editor.
+    Character,
+    /// Spell requirements/effects editor.
+    Spell,
+}
+
+/// Effect template added by one Creator action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CreatorEffectKind {
+    /// Disable lattice cells.
+    Disable,
+    /// Apply a damage-over-time effect.
+    Burn,
+    /// Restore disabled lattice cells.
+    Restore,
+    /// Reveal hidden information.
+    Reveal,
+}
+
+/// Editable Creator text field.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CreatorNameField {
+    /// Character display name.
+    Character,
+    /// Spell display name.
+    Spell,
+}
+
+/// Immutable persistence facts shown by the Creator.
+#[derive(Debug, Clone, Default)]
+pub struct CreatorLibraryView {
+    /// Saved character and spell records.
+    pub file: hex_assets::CreationLibraryFile,
+    /// Last persistence error, when present.
+    pub error: Option<String>,
+}
+
+/// Immutable Creator presentation snapshot.
+#[derive(Resource, Debug, Clone)]
+pub struct CreatorScreenView {
+    /// Whether either Creator route is active.
+    pub active: bool,
+    /// Exact screen that owns this projection.
+    pub screen: hex_core::Screen,
+    /// Character or Spell library surface.
+    pub tab: hex_gameplay_model::CreatorSurface,
+    /// Library hub or focused editor.
+    pub workspace: CreatorWorkspace,
+    /// Current character draft.
+    pub character: Option<hex_assets::SavedCharacter>,
+    /// Current spell draft.
+    pub spell: Option<hex_assets::SavedSpell>,
+    /// Inspected lattice cell.
+    pub selected_cell: Option<hex_core::LatticeCoord>,
+    /// Active lattice authoring tool.
+    pub active_tool: Option<hex_assets::CreationCellKind>,
+    /// Whether the erase tool is active.
+    pub erase_tool: bool,
+    /// Discrete lattice zoom setting.
+    pub zoom_step: i8,
+    /// Whether the character draft differs from persistence.
+    pub character_dirty: bool,
+    /// Whether the spell draft differs from persistence.
+    pub spell_dirty: bool,
+    /// Player-facing validation or persistence notice.
+    pub notice: String,
+    /// Whether destructive record deletion awaits confirmation.
+    pub confirm_delete: bool,
+    /// Whether library reset awaits confirmation.
+    pub confirm_reset: bool,
+    /// Frozen saved-library presentation.
+    pub library: CreatorLibraryView,
+    /// Accepted element catalog.
+    pub elements: Option<hex_assets::ElementCatalog>,
+    /// Accepted combined spell catalog.
+    pub spell_book: Option<hex_assets::SpellBook>,
+    /// Accepted shipped spell source.
+    pub spell_file: Option<hex_assets::SpellFile>,
+    /// Accepted lattice source.
+    pub lattice_file: Option<hex_assets::LatticeFile>,
+    /// Packaged Creator templates.
+    pub presets: Option<hex_assets::CreationPresetCatalog>,
+    /// Canonical character validation issues.
+    pub character_issues: Vec<String>,
+    /// Canonical spell validation issues.
+    pub spell_issues: Vec<String>,
+    /// Shipped spells admitted by combat deployability checks.
+    pub deployable_shipped_spells: Vec<String>,
+    /// Custom spells admitted by validation and deployability checks.
+    pub deployable_custom_spells: Vec<hex_assets::CustomSpellId>,
+}
+
+impl Default for CreatorScreenView {
+    fn default() -> Self {
+        Self {
+            active: false,
+            screen: hex_core::Screen::CharacterCreator,
+            tab: hex_gameplay_model::CreatorSurface::Characters,
+            workspace: CreatorWorkspace::Hub,
+            character: None,
+            spell: None,
+            selected_cell: None,
+            active_tool: None,
+            erase_tool: false,
+            zoom_step: 0,
+            character_dirty: false,
+            spell_dirty: false,
+            notice: String::new(),
+            confirm_delete: false,
+            confirm_reset: false,
+            library: CreatorLibraryView::default(),
+            elements: None,
+            spell_book: None,
+            spell_file: None,
+            lattice_file: None,
+            presets: None,
+            character_issues: Vec::new(),
+            spell_issues: Vec::new(),
+            deployable_shipped_spells: Vec::new(),
+            deployable_custom_spells: Vec::new(),
+        }
+    }
+}
+
+/// Typed Creator actions interpreted by the application composition root.
+#[derive(Component, Debug, Clone, PartialEq)]
+pub enum CreatorIntent {
+    /// Navigate to the canonical previous Creator destination.
+    Back,
+    /// Open the Spell Creator from a character workspace.
+    OpenSpellCreator,
+    /// Create a blank character draft.
+    NewCharacter,
+    /// Create a blank spell draft.
+    NewSpell,
+    /// Open one saved character.
+    SelectCharacter(hex_assets::CustomCharacterId),
+    /// Open one saved spell.
+    SelectSpell(hex_assets::CustomSpellId),
+    /// Duplicate the active character.
+    DuplicateCharacter,
+    /// Duplicate the active spell.
+    DuplicateSpell,
+    /// Duplicate one packaged character template.
+    DuplicatePackagedCharacter(String),
+    /// Duplicate one packaged spell template.
+    DuplicatePackagedSpell(String),
+    /// Validate and persist the character draft.
+    SaveCharacter,
+    /// Validate and persist the spell draft.
+    SaveSpell,
+    /// Request or confirm character deletion.
+    DeleteCharacter,
+    /// Request or confirm spell deletion.
+    DeleteSpell,
+    /// Inspect one authored lattice cell.
+    SelectCell(hex_core::LatticeCoord),
+    /// Add the active tool at a lattice coordinate.
+    AddCell(hex_core::LatticeCoord),
+    /// Select the inspection tool.
+    InspectTool,
+    /// Select one lattice authoring tool.
+    ChooseTool(hex_assets::CreationCellKind),
+    /// Select the erase tool.
+    ChooseErase,
+    /// Adjust lattice zoom by a discrete delta.
+    Zoom(i8),
+    /// Reset lattice zoom to fit.
+    FitLattice,
+    /// Remove the selected lattice cell.
+    RemoveCell,
+    /// Adjust one character mana stat.
+    AdjustStat {
+        /// Stable element name.
+        element: String,
+        /// Channelling when true, capacity otherwise.
+        channelling: bool,
+        /// Signed discrete adjustment.
+        delta: i8,
+    },
+    /// Add a spell requirement.
+    AddRequirement,
+    /// Remove one spell requirement.
+    RemoveRequirement(usize),
+    /// Cycle one requirement's element.
+    CycleRequirement(usize),
+    /// Adjust one requirement's mana.
+    AdjustRequirement(usize, i8),
+    /// Select enchantment or evocation casting.
+    SetEnchantment(bool),
+    /// Select single-target or self-cast targeting.
+    SetSingleTarget(bool),
+    /// Adjust spell range.
+    AdjustRange(i8),
+    /// Adjust enchantment defense.
+    AdjustDefense(i8),
+    /// Add one effect template.
+    AddEffect(CreatorEffectKind),
+    /// Remove one ordered effect.
+    RemoveEffect(usize),
+    /// Move one ordered effect.
+    MoveEffect(usize, i8),
+    /// Adjust one effect magnitude.
+    AdjustEffect(usize, i8),
+    /// Undo the latest draft edit.
+    Undo,
+    /// Redo the latest undone edit.
+    Redo,
+    /// Restore the persisted draft.
+    DiscardChanges,
+    /// Open the isolated lattice test with the unsaved draft.
+    LocalTest,
+    /// Open Combat Lab with the saved character.
+    TestOnMap,
+    /// Request or confirm full library reset.
+    ResetLibrary,
+    /// Replace one draft name.
+    SetName(CreatorNameField, String),
+}
+
 /// Typed gameplay-lattice inputs emitted by presentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LatticeIntent {
@@ -698,6 +924,8 @@ pub enum UiIntent {
     Outcome(OutcomeIntent),
     /// Act on the isolated Lattice Demo.
     LatticeDemo(LatticeDemoIntent),
+    /// Act on Character or Spell Creator presentation.
+    Creator(CreatorIntent),
     /// Navigate back through the current screen's canonical route.
     Back,
     /// Cycle one Settings value.

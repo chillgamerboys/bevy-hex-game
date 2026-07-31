@@ -10,6 +10,7 @@ mod action_rail;
 mod casting_panel;
 mod combat_log;
 mod creation_presentation;
+mod creator;
 mod focus;
 mod gameplay_frame;
 mod gameplay_lattices;
@@ -41,13 +42,15 @@ pub use layout::{
 pub use model::{
     ActionAffordance, ActionAvailability, ActionPriority, BadgeKind, CastingAimView, CastingIntent,
     CastingPanelContentView, CastingPanelView, CastingSpellView, CombatLogLineView, CombatLogView,
-    DecisionChoiceView, FormationSlotView, GameplayAction, GameplayChromeView, GameplayHudView,
-    GameplayLatticesView, InitiativeEntryView, InitiativeSide, InitiativeView, LabStatisticsIntent,
-    LabStatisticsView, LatticeDemoIntent, LatticeDemoSpellView, LatticeDemoView, LatticeIntent,
-    OutcomeAction, OutcomeActionView, OutcomeCompareChoiceView, OutcomeIntent, OutcomeReportView,
-    OwnLatticeView, PartyIntent, PartyMemberView, PartyView, PauseView, ResumeView,
-    TargetLatticeStateView, TargetLatticeView, TargetPulseView, TitleIntent, TitleScenarioView,
-    TitleView, UiIntent, UiSetting, UiSettingRow, UiSettingsView, UnitBadgeView, UnitBadgesView,
+    CreatorEffectKind, CreatorIntent, CreatorLibraryView, CreatorNameField, CreatorScreenView,
+    CreatorWorkspace, DecisionChoiceView, FormationSlotView, GameplayAction, GameplayChromeView,
+    GameplayHudView, GameplayLatticesView, InitiativeEntryView, InitiativeSide, InitiativeView,
+    LabStatisticsIntent, LabStatisticsView, LatticeDemoIntent, LatticeDemoSpellView,
+    LatticeDemoView, LatticeIntent, OutcomeAction, OutcomeActionView, OutcomeCompareChoiceView,
+    OutcomeIntent, OutcomeReportView, OwnLatticeView, PartyIntent, PartyMemberView, PartyView,
+    PauseView, ResumeView, TargetLatticeStateView, TargetLatticeView, TargetPulseView, TitleIntent,
+    TitleScenarioView, TitleView, UiIntent, UiSetting, UiSettingRow, UiSettingsView, UnitBadgeView,
+    UnitBadgesView,
 };
 pub use scale::{
     resolve_auto_scale, resolve_ui_metrics, resolve_viewport_class, ResolvedUiMetrics, UiScaleMode,
@@ -101,6 +104,7 @@ impl Plugin for UiPlugin {
         .init_resource::<LabStatisticsView>()
         .init_resource::<OutcomeReportView>()
         .init_resource::<LatticeDemoView>()
+        .init_resource::<CreatorScreenView>()
         .init_resource::<InitiativeView>()
         .init_resource::<TitleView>()
         .init_resource::<TargetPulseView>()
@@ -123,7 +127,11 @@ impl Plugin for UiPlugin {
             title::plugin,
             unit_badges::plugin,
         ))
-        .add_plugins((outcome_report::plugin, lattice_demo::plugin));
+        .add_plugins((
+            outcome_report::plugin,
+            lattice_demo::plugin,
+            creator::plugin,
+        ));
     }
 }
 
