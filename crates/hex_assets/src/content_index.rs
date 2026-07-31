@@ -5,9 +5,10 @@
 //! single file cannot see the others. [`ContentIndex`] is where the references
 //! *between* files are resolved: every element a spell requires must exist in the
 //! [`ElementCatalog`], and every substance a spell's effect names must exist in the
-//! [`SubstanceTable`]. A dangling reference is reported loudly and the last valid
-//! index is kept — the same last-valid-on-bad-reload behaviour the settings loader
-//! has.
+//! [`SubstanceTable`]. Construction effects additionally require the world-owned
+//! substance policy to admit spell conjuration. A dangling or non-conjurable reference
+//! is reported loudly and the last valid index is kept — the same
+//! last-valid-on-bad-reload behaviour the settings loader has.
 //!
 //! It is rebuilt only outside [`Screen::Gameplay`], like the tables it draws on, so
 //! resolved ids never shift under a live world. It also holds the spell requirements
@@ -49,6 +50,14 @@ pub enum ContentError {
         /// The substance name that did not resolve.
         substance: String,
     },
+    /// A construction effect names a defined substance the world does not admit.
+    #[error("spell '{spell}' effect names substance '{substance}', which is not conjurable")]
+    NonConjurableSubstance {
+        /// The spell with the refused construction effect.
+        spell: String,
+        /// The defined but non-conjurable substance.
+        substance: String,
+    },
 }
 
 /// A spell with its cross-file references resolved to ids.
@@ -81,9 +90,10 @@ impl ContentIndex {
     /// Resolves every cross-file reference, or returns every failure found.
     ///
     /// Pure and table-only, so the shipped-content test can call it without an
-    /// [`App`]. Substance references are checked for existence but not stored: effects
-    /// are applied downstream against the live [`SubstanceTable`], keeping names —
-    /// not session-local ids — as the durable form.
+    /// [`App`]. Substance references are checked for existence and world-owned
+    /// conjuration admission but are not stored: effects are applied downstream
+    /// against the live [`SubstanceTable`], keeping names — not session-local ids —
+    /// as the durable form.
     pub fn build(
         elements: &ElementCatalog,
         spells: &SpellBook,
@@ -105,11 +115,18 @@ impl ContentIndex {
             }
             for effect in &spell.effects {
                 if let Some(substance) = effect.substance() {
-                    if substances.id(substance).is_none() {
-                        errors.push(ContentError::UnknownSubstance {
+                    match substances.id(substance) {
+                        None => errors.push(ContentError::UnknownSubstance {
                             spell: name.to_owned(),
                             substance: substance.to_owned(),
-                        });
+                        }),
+                        Some(id) if !substances.is_conjurable(id) => {
+                            errors.push(ContentError::NonConjurableSubstance {
+                                spell: name.to_owned(),
+                                substance: substance.to_owned(),
+                            });
+                        }
+                        Some(_) => {}
                     }
                 }
             }
@@ -431,6 +448,10 @@ mod tests {
     }
 
     fn substances() -> SubstanceTable {
+        substances_with_stone_admission(true)
+    }
+
+    fn substances_with_stone_admission(conjurable: bool) -> SubstanceTable {
         let stone_swatch = SwatchId::new("test/stone").expect("the test swatch id should be valid");
         let palette = ArtPalette::new(BTreeMap::from([(
             stone_swatch.clone(),
@@ -446,7 +467,7 @@ mod tests {
         map.insert("air".to_owned(), Substance::invisible(false, false));
         map.insert(
             "stone".to_owned(),
-            Substance::from_swatch(stone_swatch, true, true),
+            Substance::from_swatch(stone_swatch, true, true).with_conjurable(conjurable),
         );
         SubstanceTable::from_file(&SubstanceFile { substances: map }, &palette)
             .expect("the test substances should resolve through the palette")
@@ -555,6 +576,30 @@ mod tests {
             error,
             ContentError::UnknownSubstance { substance, .. } if substance == "adamant"
         )));
+    }
+
+    #[test]
+    fn a_defined_but_non_conjurable_substance_fails() {
+        let book = book(vec![(
+            "Protected Wall",
+            spell(
+                vec![gem("Earth")],
+                vec![Effect::SpawnWall {
+                    substance: "stone".to_owned(),
+                }],
+            ),
+        )]);
+        let errors =
+            ContentIndex::build(&elements(), &book, &substances_with_stone_admission(false))
+                .expect_err("existence alone must not admit a construction material");
+
+        assert_eq!(
+            errors,
+            vec![ContentError::NonConjurableSubstance {
+                spell: "Protected Wall".to_owned(),
+                substance: "stone".to_owned(),
+            }]
+        );
     }
 
     /// A failed rebuild must keep the previous valid index, not clear it.

@@ -36,6 +36,8 @@ pub mod pathing;
 pub mod selection;
 /// Who can be reached from where, and what height is worth.
 pub mod targeting;
+/// Exact material occupancy derived from published integer run bounds.
+pub mod terrain_occupancy;
 /// The units themselves: the player, enemies, and click-to-move.
 pub mod units;
 /// Turning a spell's shape into the exact voxels it reaches.
@@ -54,6 +56,7 @@ pub use selection::{
     HoveredSurface, PathOverlay, RangeOverlay, Selected, TerrainRevision, UnitRing,
 };
 pub use targeting::{either_in_reach, high_ground_bonus, in_reach};
+pub use terrain_occupancy::{InvalidTerrainRun, TerrainOccupancy, TerrainOccupancySystems};
 pub use units::{
     Archetype, Downed, Enemy, MovingTo, Party, Player, StandsOn, StopMovingAt, UnitAllocator,
     UnitRegistry,
@@ -70,6 +73,7 @@ pub use units::{
 pub fn plugin(app: &mut App) {
     app.add_plugins((
         hex_anim::plugin,
+        terrain_occupancy::plugin,
         movement::plugin,
         units::plugin,
         selection::plugin,
