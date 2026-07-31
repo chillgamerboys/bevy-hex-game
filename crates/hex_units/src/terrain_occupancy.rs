@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use bevy::prelude::*;
-use hex_core::{HexCoord, HexTile, Level, RunBottom, TilePos};
+use hex_core::{HexCoord, HexTile, Level, PerceptionSystems, RunBottom, TilePos};
 
 /// Ordering hook for systems that need the latest exact material occupancy.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -116,7 +116,12 @@ impl TerrainOccupancy {
 pub(crate) fn plugin(app: &mut App) {
     app.init_resource::<TerrainOccupancy>().add_systems(
         Update,
-        rebuild_terrain_occupancy.in_set(TerrainOccupancySystems::Publish),
+        rebuild_terrain_occupancy
+            .in_set(TerrainOccupancySystems::Publish)
+            // Terrain edits rebuild tile entities before perception republishes
+            // knowledge. Waiting for that boundary guarantees deferred despawns and
+            // spawns are visible before gameplay projects the new complete run set.
+            .after(PerceptionSystems::PublishKnowledge),
     );
 }
 

@@ -95,21 +95,18 @@
             casting: Enchantment(defense: 0),
             mana: Fixed,
             co_castable: false,
-            targeting: (range: 2, shape: Single, needs_los: true),
+            targeting: (range: 2, shape: Column(height: 2), needs_los: true),
             effects: [SpawnWall(substance: "stone")],
         ),
 
-        // Terrain-shaping evocation: place and clear voxels by substance name.
+        // Terrain-shaping evocation: place one voxel above the selected surface.
         "Stone Shaper": (
             requirements: [(element: "Earth", mana: 1)],
             casting: Evocation,
             mana: Fixed,
             co_castable: false,
             targeting: (range: 2, shape: Single, needs_los: false),
-            effects: [
-                SetTerrain(substance: "stone"),
-                ClearTerrain,
-            ],
+            effects: [SetTerrain(substance: "stone")],
         ),
 
         // Divination: reveals the complete live lattice for a round-scaled duration.

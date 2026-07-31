@@ -174,7 +174,7 @@ pub fn plugin(app: &mut App) {
         Update,
         (
             CombatSystems::Act.after(PerceptionSystems::PublishKnowledge),
-            CombatSystems::Apply,
+            CombatSystems::Apply.after(hex_units::TerrainOccupancySystems::Publish),
             CombatSystems::Resolve,
             CombatSystems::Advance,
         )

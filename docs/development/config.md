@@ -896,7 +896,7 @@ Each spell by name:
   without a programmer, which is deliberate:
 
   `DisableHexes`, `Burn`, `RestoreHexes`, `ModifyIncomingDisables`, `Reveal`,
-  `Illuminate`, `SetTerrain`, `ClearTerrain`, `SpawnWall`, `Displace`.
+  `Illuminate`, `SetTerrain`, `SpawnWall`, `Displace`.
 
   `SetTerrain` and `SpawnWall` name a substance from `substances.ron`.
 

@@ -519,6 +519,7 @@ mod tests {
             color: Color::WHITE,
             range: 3,
             shape: TargetShape::Single,
+            creates_terrain: false,
         }
     }
 

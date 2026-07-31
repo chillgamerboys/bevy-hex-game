@@ -3,12 +3,12 @@
 //! # What this owns, and what it refuses
 //!
 //! `docs/systems/casting.md` specifies five rungs, checked in order. This file does
-//! **1 to 3**: whose turn it is (the funnel's existing gate), whether the lattice can
-//! pay ([`castable`]), and whether the target is in range and the shape resolves. Rungs
-//! 4 and 5 — what a spell does to *terrain*, and announcing it to the world — belong to
-//! terrain magic, which is blocked on a fact about voxel occupancy the world lane has
-//! not published yet. Effects that need them are refused by name rather than silently
-//! skipped.
+//! **1 to 5** for permanent terrain construction: whose turn it is (the funnel's
+//! existing gate), whether the lattice can pay ([`castable`]), whether the target is in
+//! range and the shape resolves, whether exact published occupancy admits the complete
+//! creation volume, and emitting low-level [`TerrainEdit::Set`] requests. Elemental
+//! material response and enchantment-bound terrain remain refused by name rather than
+//! silently skipped.
 //!
 //! # Casting is committing
 //!
@@ -21,9 +21,13 @@
 use bevy::prelude::*;
 
 use hex_assets::{CastingAxis, Effect, Spell, TargetShape};
-use hex_core::{KnowledgeExpiry, KnowledgeState, LatticeCoord, PendingDecision, TilePos, UnitId};
+use hex_core::{
+    KnowledgeExpiry, KnowledgeState, LatticeCoord, PendingDecision, TerrainEdit, TilePos, UnitId,
+};
 use hex_lattice::{apply_cast, castable, CastBlocked, CellKind, LatticeSpec, LatticeState};
-use hex_units::{targeting, volumes};
+use hex_units::{
+    resolve_creation_volume, targeting, validate_creation_volume, volumes, CreationBody,
+};
 
 use crate::{CastBlockReason, CombatData, CombatEvent, CommandRefusal, UnitData};
 
@@ -39,6 +43,7 @@ use super::{presentation, ActorQuery, Verb};
 )]
 pub(super) fn apply(
     ctx: &mut Verb,
+    terrain_edits: &mut MessageWriter<TerrainEdit>,
     commands: &mut Commands,
     actors: &mut ActorQuery,
     lattices: &mut LatticeQuery,
@@ -197,6 +202,13 @@ pub(super) fn apply(
         }
     }
 
+    // Terrain creation is the only effect whose full gameplay legality can change
+    // whether the cast commits. Resolve it before payment, from the observed surface
+    // to the air above it, and retain the exact low-level edits for emission only after
+    // the lattice plan succeeds.
+    let creation_edits =
+        plan_terrain_creation(ctx, actors, spell_name, spec, standing.pos, target, facing)?;
+
     // --- rung 2: the lattice -----------------------------------------------
 
     let cell = {
@@ -254,6 +266,7 @@ pub(super) fn apply(
         spell: spell_name.to_owned(),
         target,
     });
+    terrain_edits.write_batch(creation_edits);
 
     // --- effects -----------------------------------------------------------
 
@@ -328,9 +341,7 @@ pub(super) fn apply(
                 });
             }
             Effect::Illuminate { .. } => refusals.push("Illuminate waits on the perception lane"),
-            Effect::SetTerrain { .. } | Effect::ClearTerrain | Effect::SpawnWall { .. } => {
-                refusals.push("terrain effects wait on RunBottom and the announce path");
-            }
+            Effect::SetTerrain { .. } | Effect::SpawnWall { .. } => {}
             Effect::Burn { turns } => {
                 let Some(defender) = target_unit else {
                     // Same rule as `DisableHexes` above: a spell that reaches nobody is
@@ -529,13 +540,98 @@ pub fn delivers_anything(spell: &Spell) -> bool {
         Effect::Burn { .. } => true,
         // Everything below is refused by name in the match above; see the reasons there.
         Effect::Reveal { .. } => true,
+        Effect::SetTerrain { .. } | Effect::SpawnWall { .. } => {
+            // The built edit path is permanent. Enchantment manifestations promise
+            // removal when their binding breaks, and no voxel provenance/removal
+            // ledger exists yet, so those remain fail-closed rather than becoming
+            // immortal "bound" terrain.
+            matches!(spell.casting, CastingAxis::Evocation)
+        }
         Effect::Illuminate { .. }
-        | Effect::SetTerrain { .. }
-        | Effect::ClearTerrain
-        | Effect::SpawnWall { .. }
         | Effect::ModifyIncomingDisables { .. }
         | Effect::Displace { .. } => false,
     })
+}
+
+/// Resolves and validates every creation effect before a cast is paid for.
+///
+/// Detailed obstruction data never crosses into [`CommandRefusal`]: the resolved
+/// volume may extend into hidden space, so identifying its blocker would disclose
+/// authoritative terrain or a hidden unit.
+fn plan_terrain_creation(
+    ctx: &Verb,
+    actors: &ActorQuery,
+    spell_name: &str,
+    spell: &Spell,
+    caster: TilePos,
+    selected_surface: TilePos,
+    facing: Option<hex_core::Sextant>,
+) -> Result<Vec<TerrainEdit>, CommandRefusal> {
+    if !spell
+        .effects
+        .iter()
+        .any(|effect| matches!(effect, Effect::SetTerrain { .. } | Effect::SpawnWall { .. }))
+    {
+        return Ok(Vec::new());
+    }
+
+    let Some(table) = ctx.table else {
+        return Err(CommandRefusal::MissingCombatData {
+            data: CombatData::SubstanceTable,
+        });
+    };
+    let Some(terrain) = ctx.terrain else {
+        return Err(CommandRefusal::MissingCombatData {
+            data: CombatData::TerrainOccupancy,
+        });
+    };
+    let Some(volume) =
+        resolve_creation_volume(&spell.targeting.shape, caster, selected_surface, facing)
+    else {
+        return Err(CommandRefusal::ShapeUnresolved {
+            spell: spell_name.to_owned(),
+            target: selected_surface,
+        });
+    };
+    let bodies: Vec<_> = ctx
+        .registry
+        .iter()
+        .filter_map(|(unit, entity)| {
+            let (standing, body, ..) = actors.get(entity).ok()?;
+            Some(CreationBody {
+                unit,
+                support: standing?.0.pos,
+                body: *body?,
+            })
+        })
+        .collect();
+    if validate_creation_volume(&volume, terrain, bodies).is_err() {
+        return Err(CommandRefusal::TerrainCreationBlocked {
+            spell: spell_name.to_owned(),
+        });
+    }
+
+    let mut edits = Vec::new();
+    for effect in &spell.effects {
+        let substance = match effect {
+            Effect::SetTerrain { substance } | Effect::SpawnWall { substance } => substance,
+            _ => continue,
+        };
+        let Some(substance) = table.id(substance).filter(|id| table.is_conjurable(*id)) else {
+            // Content admission normally makes this unreachable. Fail closed anyway
+            // rather than letting a stale or hand-built harness bypass world policy.
+            return Err(CommandRefusal::TerrainCreationBlocked {
+                spell: spell_name.to_owned(),
+            });
+        };
+        edits.extend(
+            volume
+                .iter()
+                .copied()
+                .map(|pos| TerrainEdit::Set { pos, substance }),
+        );
+    }
+    Ok(edits)
 }
 
 /// The unit standing on `pos`, if any.

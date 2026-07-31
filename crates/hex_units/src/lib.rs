@@ -36,6 +36,8 @@ pub mod pathing;
 pub mod selection;
 /// Who can be reached from where, and what height is worth.
 pub mod targeting;
+/// Spell-created terrain placement and legality.
+pub mod terrain_creation;
 /// Exact material occupancy derived from published integer run bounds.
 pub mod terrain_occupancy;
 /// The units themselves: the player, enemies, and click-to-move.
@@ -56,6 +58,9 @@ pub use selection::{
     HoveredSurface, PathOverlay, RangeOverlay, Selected, TerrainRevision, UnitRing,
 };
 pub use targeting::{either_in_reach, high_ground_bonus, in_reach};
+pub use terrain_creation::{
+    resolve_creation_volume, validate_creation_volume, CreationBody, TerrainCreationBlock,
+};
 pub use terrain_occupancy::{InvalidTerrainRun, TerrainOccupancy, TerrainOccupancySystems};
 pub use units::{
     Archetype, Downed, Enemy, MovingTo, Party, Player, StandsOn, StopMovingAt, UnitAllocator,

@@ -176,7 +176,7 @@ mod tests {
         substances.insert("air".to_owned(), Substance::invisible(false, false));
         substances.insert(
             name.to_owned(),
-            Substance::from_swatch(swatch_id(name), true, true),
+            Substance::from_swatch(swatch_id(name), true, true).with_conjurable(name == "stone"),
         );
         SubstanceFile { substances }
     }

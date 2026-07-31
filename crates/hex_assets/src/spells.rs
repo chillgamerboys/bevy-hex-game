@@ -197,8 +197,6 @@ pub enum Effect {
         /// The substance to place, by name (resolved against the substance table).
         substance: String,
     },
-    /// Clear the terrain voxel at the target (turning it to air).
-    ClearTerrain,
     /// Conjure a wall of a named substance.
     SpawnWall {
         /// The substance the wall is made of, by name.
@@ -447,6 +445,37 @@ fn validate_shape(name: &str, shape: &TargetShape) -> Result<(), String> {
 /// Checks a spell's effects have sane fields and that the spell does *something*.
 fn validate_effects(name: &str, spell: &Spell) -> Result<(), String> {
     let mut exact_cell_decisions = 0_u8;
+    let creation_effects = spell
+        .effects
+        .iter()
+        .filter(|effect| matches!(effect, Effect::SetTerrain { .. } | Effect::SpawnWall { .. }))
+        .count();
+    if creation_effects > 0 && creation_effects != spell.effects.len() {
+        return Err(format!(
+            "spell '{name}' mixes terrain creation with another effect; the initial \
+             creation slice requires one placement volume and no second effect volume"
+        ));
+    }
+    if creation_effects > 1 {
+        return Err(format!(
+            "spell '{name}' has multiple terrain-creation effects; one cast may publish \
+             one material over one placement volume"
+        ));
+    }
+    if creation_effects > 0
+        && !matches!(
+            spell.targeting.shape,
+            TargetShape::Single
+                | TargetShape::Sphere { .. }
+                | TargetShape::Column { .. }
+                | TargetShape::Path { .. }
+        )
+    {
+        return Err(format!(
+            "spell '{name}' creates terrain with a shape that is not anchored to the \
+             selected surface"
+        ));
+    }
     for effect in &spell.effects {
         let zero = |field: &str| format!("spell '{name}' effect {field} must be at least 1");
         match effect {
@@ -688,7 +717,6 @@ fn fingerprint_effect(encoder: &mut FingerprintEncoder, effect: &Effect) {
             encoder.u8(6);
             encoder.string(substance);
         }
-        Effect::ClearTerrain => encoder.u8(7),
         Effect::SpawnWall { substance } => {
             encoder.u8(8);
             encoder.string(substance);
@@ -808,7 +836,8 @@ mod tests {
                 seen.insert(std::mem::discriminant(effect));
             }
         }
-        // The ten variants of Effect (ClearTerrain has no fields, so build it directly).
+        // Every spell-authored effect variant. Destruction is `TerrainImpact`, not a
+        // spell-side clear instruction.
         let all = [
             Effect::DisableHexes {
                 count: 1,
@@ -822,7 +851,6 @@ mod tests {
             Effect::SetTerrain {
                 substance: "stone".to_owned(),
             },
-            Effect::ClearTerrain,
             Effect::SpawnWall {
                 substance: "stone".to_owned(),
             },
@@ -951,6 +979,55 @@ mod tests {
             .expect_err("one cast cannot overwrite damage with restoration");
         assert!(
             error.contains("multiple exact-cell decision effects"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn terrain_creation_cannot_mix_effect_volumes_or_use_a_caster_relative_shape() {
+        let mut file = test_file();
+        let mut mixed = ember();
+        mixed.effects = vec![
+            Effect::SetTerrain {
+                substance: "stone".to_owned(),
+            },
+            Effect::Burn { turns: 1 },
+        ];
+        file.spells.insert("Mixed".to_owned(), mixed);
+        let error = file.validate().expect_err("mixed effect volumes must fail");
+        assert!(error.contains("mixes terrain creation"), "{error}");
+
+        let mut file = test_file();
+        let mut directed = ember();
+        directed.effects = vec![Effect::SetTerrain {
+            substance: "stone".to_owned(),
+        }];
+        directed.targeting.shape = TargetShape::Line {
+            length: 2,
+            width: 0,
+        };
+        file.spells.insert("Directed".to_owned(), directed);
+        let error = file
+            .validate()
+            .expect_err("creation needs a selected-surface anchor");
+        assert!(error.contains("not anchored"), "{error}");
+
+        let mut file = test_file();
+        let mut duplicate = ember();
+        duplicate.effects = vec![
+            Effect::SetTerrain {
+                substance: "stone".to_owned(),
+            },
+            Effect::SpawnWall {
+                substance: "stone".to_owned(),
+            },
+        ];
+        file.spells.insert("Duplicate".to_owned(), duplicate);
+        let error = file
+            .validate()
+            .expect_err("one cast cannot publish two construction materials");
+        assert!(
+            error.contains("multiple terrain-creation effects"),
             "{error}"
         );
     }

@@ -434,9 +434,10 @@ The first implementation also ships with explicit limitations:
   but has no mechanical effect.
 - **Paid-on-resistance is provisional.** The first wave charges mana and the action
   after a legal announcement even if every material resists.
-- **No-undermining is provisional.** The first wave rejects terrain creation through
-  a unit and edits to its supporting surface until falling and footing reconciliation
-  exist.
+- **No-undermining is provisional.** Permanent evocation construction now rejects its
+  complete volume before payment when it intersects existing material, a unit body,
+  or a unit's supporting surface. Destructive terrain impacts still wait for falling
+  and footing reconciliation.
 - **Downed-first death is provisional.** A fully disabled unit initially leaves the
   turn order and retains its lattice. Renewal restores it into the next round and Rest
   recovers it after combat; functional death and permadeath remain open.

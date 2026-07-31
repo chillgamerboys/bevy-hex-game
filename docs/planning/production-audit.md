@@ -303,7 +303,7 @@ knobs), `progression.ron`, `encounters/*.ron`.
 
 **Effects are a closed enum of primitives** — `DisableHexes{count,targeted}`,
 `Burn`, `RestoreHexes`, `ModifyIncomingDisables`, `Reveal`, `Illuminate`,
-`SetTerrain`/`ClearTerrain`/`SpawnWall` (substance by name), `Displace` — and
+`SetTerrain`/`SpawnWall` (substance by name), `Displace` — and
 deliberately not a scripting engine: the lint wall exists to make runtime
 failure unrepresentable and a script interpreter manufactures it; a closed
 vocabulary can be bounds-validated at parse; the no-randomness and no-HP

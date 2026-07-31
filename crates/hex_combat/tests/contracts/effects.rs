@@ -25,8 +25,8 @@ use hex_combat::{
 };
 use hex_core::{
     CommandQueue, ControlOwner, EffectEnd, EffectPayload, GameCommand, Headroom, HexCoord, HexSpan,
-    IssuedCommand, LatticeCoord, LightDomain, Mode, PendingDecision, PlayerSeat, Screen,
-    SubstanceId, TilePos, Turn, UnitId,
+    IssuedCommand, LatticeCoord, LightDomain, Mode, PendingDecision, PlayerSeat, RunBottom, Screen,
+    SubstanceId, TerrainEdit, TilePos, TraversalProfile, Turn, UnitId,
 };
 use hex_lattice::{apply_cast, castable, CellKind, LatticeSpec, LatticeState, LatticeStats};
 use hex_perception::{
@@ -34,7 +34,7 @@ use hex_perception::{
     SurfaceSnapshot, SurfaceSnapshots,
 };
 use hex_test_support::{SyntheticArena, TestAppBuilder};
-use hex_units::{Downed, Faction, Standing, StandsOn, UnitRegistry};
+use hex_units::{Body, Downed, Faction, Standing, StandsOn, TerrainOccupancy, UnitRegistry};
 
 /// The level every unit in these tests stands on.
 const GROUND: hex_core::Level = 1;
@@ -108,7 +108,7 @@ fn spells(burn_turns: u16) -> SpellBook {
             casting: CastingAxis::Enchantment { defense: 1 },
             mana: ManaAxis::Fixed,
             co_castable: false,
-            targeting: single,
+            targeting: single.clone(),
             effects: Vec::new(),
         },
     );
@@ -146,6 +146,42 @@ fn spells(burn_turns: u16) -> SpellBook {
                 needs_los: false,
             },
             effects: vec![Effect::Burn { turns: burn_turns }],
+        },
+    );
+    by_name.insert(
+        "Stone Shaper".to_owned(),
+        Spell {
+            requirements: vec![GemRequirement {
+                element: "Fire".to_owned(),
+                mana: 1,
+            }],
+            casting: CastingAxis::Evocation,
+            mana: ManaAxis::Fixed,
+            co_castable: false,
+            targeting: single.clone(),
+            effects: vec![Effect::SetTerrain {
+                substance: "stone".to_owned(),
+            }],
+        },
+    );
+    by_name.insert(
+        "Earthen Wall".to_owned(),
+        Spell {
+            requirements: vec![GemRequirement {
+                element: "Fire".to_owned(),
+                mana: 1,
+            }],
+            casting: CastingAxis::Evocation,
+            mana: ManaAxis::Fixed,
+            co_castable: false,
+            targeting: TargetingSpec {
+                range: 3,
+                shape: TargetShape::Column { height: 2 },
+                needs_los: false,
+            },
+            effects: vec![Effect::SpawnWall {
+                substance: "stone".to_owned(),
+            }],
         },
     );
     SpellBook::from_file(&SpellFile { spells: by_name })
@@ -213,6 +249,16 @@ fn capture_events(mut events: MessageReader<CombatEvent>, mut captured: ResMut<C
     captured.0.extend(events.read().cloned());
 }
 
+#[derive(Resource, Default)]
+struct CapturedTerrainEdits(Vec<TerrainEdit>);
+
+fn capture_terrain_edits(
+    mut edits: MessageReader<TerrainEdit>,
+    mut captured: ResMut<CapturedTerrainEdits>,
+) {
+    captured.0.extend(edits.read().cloned());
+}
+
 /// Samples the seam between deciding and applying.
 fn watch_seam(pending: Res<PendingDecision>, queue: Res<CommandQueue>, mut seam: ResMut<Seam>) {
     if !pending.is_open() {
@@ -245,14 +291,25 @@ fn test_app(burn_turns: u16) -> App {
 
     let catalog = elements();
     let book = spells(burn_turns);
-    let index = ContentIndex::build(&catalog, &book, &SubstanceTable::default())
-        .expect("the fixture content resolves");
+    let substances = app.world().resource::<SubstanceTable>().clone();
+    let index =
+        ContentIndex::build(&catalog, &book, &substances).expect("the fixture content resolves");
     app.insert_resource(catalog);
     app.insert_resource(book);
     app.insert_resource(index);
+    app.insert_resource(
+        TerrainOccupancy::from_runs(
+            HexCoord::ORIGIN
+                .within_radius(12)
+                .into_iter()
+                .map(|coord| (TilePos::new(coord, GROUND), RunBottom(GROUND))),
+        )
+        .expect("the synthetic floor publishes valid exact runs"),
+    );
 
     app.init_resource::<Seam>();
     app.init_resource::<CapturedEvents>();
+    app.init_resource::<CapturedTerrainEdits>();
     app.add_systems(
         Update,
         watch_seam
@@ -262,6 +319,10 @@ fn test_app(burn_turns: u16) -> App {
     app.add_systems(
         Update,
         capture_events.after(hex_combat::CombatSystems::Advance),
+    );
+    app.add_systems(
+        Update,
+        capture_terrain_edits.after(hex_combat::CombatSystems::Apply),
     );
 
     let mut app = builder.build();
@@ -310,6 +371,7 @@ fn spawn(
                 pos: TilePos::new(coord, GROUND),
                 span: HexSpan::new(0.0, 1.0),
             }),
+            Body::new(TraversalProfile::WALKER),
             Initiative(initiative),
             spec,
             state,
@@ -323,11 +385,19 @@ fn spawn(
 }
 
 /// Gives the combat adapter an explicit world-owned observation snapshot.
+fn publish_spatial_knowledge(app: &mut App) {
+    publish_spatial_knowledge_with_surfaces(app, []);
+}
+
+/// Publishes ordinary unit observations plus explicitly observed empty surfaces.
 #[expect(
     clippy::expect_used,
     reason = "duplicate test identities or surfaces invalidate the fixture"
 )]
-fn publish_spatial_knowledge(app: &mut App) {
+fn publish_spatial_knowledge_with_surfaces(
+    app: &mut App,
+    extra_surfaces: impl IntoIterator<Item = TilePos>,
+) {
     let rows: Vec<(UnitId, Faction, TilePos, HexSpan)> = {
         let world = app.world_mut();
         let mut query = world.query::<(&UnitId, &Faction, &StandsOn)>();
@@ -336,17 +406,29 @@ fn publish_spatial_knowledge(app: &mut App) {
             .map(|(id, faction, standing)| (*id, *faction, standing.0.pos, standing.0.span))
             .collect()
     };
-    let current =
-        SurfaceSnapshots::try_from_iter(rows.iter().map(|&(_, _, pos, span)| SurfaceSnapshot {
-            pos,
-            span,
-            substance: SubstanceId(0),
-            headroom: Headroom(2),
-            is_solid: true,
-            blocked: false,
-            domain: LightDomain::Exterior,
-        }))
-        .expect("test units occupy unique surfaces");
+    let extras: Vec<_> = extra_surfaces.into_iter().collect();
+    let current = SurfaceSnapshots::try_from_iter(
+        rows.iter()
+            .map(|&(_, _, pos, span)| SurfaceSnapshot {
+                pos,
+                span,
+                substance: SubstanceId(0),
+                headroom: Headroom(2),
+                is_solid: true,
+                blocked: false,
+                domain: LightDomain::Exterior,
+            })
+            .chain(extras.iter().copied().map(|pos| SurfaceSnapshot {
+                pos,
+                span: HexSpan::new(0.0, 1.0),
+                substance: SubstanceId(1),
+                headroom: Headroom(2),
+                is_solid: true,
+                blocked: false,
+                domain: LightDomain::Exterior,
+            })),
+    )
+    .expect("test units and extra surfaces occupy unique positions");
     let observe_all = || {
         let mut observation = FactionObservation::new();
         for &(id, faction, pos, _) in &rows {
@@ -359,6 +441,9 @@ fn publish_spatial_knowledge(app: &mut App) {
                     provides_sight: true,
                 })
                 .expect("test unit ids are unique");
+        }
+        for &pos in &extras {
+            observation.insert_surface(pos);
         }
         observation
     };
@@ -520,6 +605,47 @@ fn two_wildfire_casters(app: &mut App) -> Fight {
     }
 }
 
+/// A terrain-capable caster, one hostile keeping combat live, and one observed empty
+/// build surface between them.
+fn terrain_caster(app: &mut App, spell: &str) -> (Fight, TilePos) {
+    let catalog = app.world().resource::<ElementCatalog>().clone();
+    let book = app.world().resource::<SpellBook>().clone();
+    let defender_coord = HexCoord::from_axial(2, 0);
+    let build_surface = TilePos::new(HexCoord::from_axial(1, 0), GROUND);
+
+    let caster = spawn(
+        app,
+        UnitId(1),
+        Faction::Player,
+        HexCoord::ORIGIN,
+        20,
+        lattice_casting(&book, &catalog, spell, "Fire", 2),
+    );
+    let defender = spawn(
+        app,
+        UnitId(2),
+        Faction::Hostile,
+        defender_coord,
+        10,
+        lattice_casting(&book, &catalog, "Ward", "Metal", 3),
+    );
+    publish_spatial_knowledge_with_surfaces(app, [build_surface]);
+
+    app.world_mut()
+        .resource_mut::<NextState<Mode>>()
+        .set(Mode::Combat);
+    app.update();
+
+    (
+        Fight {
+            caster,
+            defender,
+            defender_pos: TilePos::new(defender_coord, GROUND),
+        },
+        build_surface,
+    )
+}
+
 fn push(app: &mut App, command: GameCommand) {
     app.world_mut()
         .resource_mut::<CommandQueue>()
@@ -531,6 +657,10 @@ fn push(app: &mut App, command: GameCommand) {
 
 fn take_events(app: &mut App) -> Vec<CombatEvent> {
     std::mem::take(&mut app.world_mut().resource_mut::<CapturedEvents>().0)
+}
+
+fn take_terrain_edits(app: &mut App) -> Vec<TerrainEdit> {
+    std::mem::take(&mut app.world_mut().resource_mut::<CapturedTerrainEdits>().0)
 }
 
 /// Casts "Kindle" at `target` and yields the rest of the caster's turn.
@@ -981,6 +1111,147 @@ fn an_observed_anchor_allows_area_spillover_into_unknown_space() {
             turns: 2,
         }
     )));
+}
+
+#[test]
+fn terrain_creation_emits_exact_air_voxels_only_after_legality_and_payment() {
+    let mut app = test_app(2);
+    let (_fight, build_surface) = terrain_caster(&mut app, "Stone Shaper");
+    let stone = app
+        .world()
+        .resource::<SubstanceTable>()
+        .id("stone")
+        .expect("the fixture defines stone");
+
+    cast_named(&mut app, UnitId(1), "Stone Shaper", build_surface);
+
+    assert_eq!(
+        take_terrain_edits(&mut app),
+        vec![TerrainEdit::Set {
+            pos: build_surface.above(),
+            substance: stone,
+        }]
+    );
+    assert!(
+        take_events(&mut app)
+            .iter()
+            .all(|event| !matches!(event, CombatEvent::CommandRefused { .. })),
+        "an empty observed placement should commit"
+    );
+}
+
+#[test]
+fn an_earthen_wall_publishes_two_complete_voxels_above_the_selected_surface() {
+    let mut app = test_app(2);
+    let (_fight, build_surface) = terrain_caster(&mut app, "Earthen Wall");
+    let stone = app
+        .world()
+        .resource::<SubstanceTable>()
+        .id("stone")
+        .expect("the fixture defines stone");
+
+    cast_named(&mut app, UnitId(1), "Earthen Wall", build_surface);
+
+    assert_eq!(
+        take_terrain_edits(&mut app),
+        vec![
+            TerrainEdit::Set {
+                pos: build_surface.above(),
+                substance: stone,
+            },
+            TerrainEdit::Set {
+                pos: build_surface.above().above(),
+                substance: stone,
+            },
+        ]
+    );
+}
+
+#[test]
+fn material_or_a_unit_body_blocks_creation_before_mana_or_action_is_spent() {
+    let mut app = test_app(2);
+    let (fight, build_surface) = terrain_caster(&mut app, "Stone Shaper");
+    let command = GameCommand::Cast {
+        unit: UnitId(1),
+        spell: "Stone Shaper".to_owned(),
+        target: build_surface,
+        facing: None,
+        mana: None,
+    };
+    let mana_before = app
+        .world()
+        .get::<LatticeState>(fight.caster)
+        .expect("the caster has a lattice")
+        .total_gem_mana();
+    let occupied = build_surface.above();
+    app.insert_resource(
+        TerrainOccupancy::from_runs(
+            HexCoord::ORIGIN
+                .within_radius(12)
+                .into_iter()
+                .map(|coord| (TilePos::new(coord, GROUND), RunBottom(GROUND)))
+                .chain([(occupied, RunBottom(occupied.level))]),
+        )
+        .expect("the occupied placement fixture is exact"),
+    );
+
+    push(&mut app, command.clone());
+    app.update();
+    assert_eq!(
+        take_events(&mut app),
+        vec![CombatEvent::CommandRefused {
+            command: command.clone(),
+            refusal: CommandRefusal::TerrainCreationBlocked {
+                spell: "Stone Shaper".to_owned(),
+            },
+        }]
+    );
+    assert!(take_terrain_edits(&mut app).is_empty());
+    assert_eq!(
+        app.world()
+            .get::<LatticeState>(fight.caster)
+            .expect("the refused caster keeps its lattice")
+            .total_gem_mana(),
+        mana_before
+    );
+    assert!(
+        !app.world()
+            .get::<Turn>(fight.caster)
+            .expect("the refused caster keeps its turn")
+            .acted
+    );
+
+    // Restore empty terrain, then target the hostile's exact supporting surface. The
+    // proposed voxel above it intersects the hostile's body and must fail through the
+    // same non-disclosing refusal.
+    app.insert_resource(
+        TerrainOccupancy::from_runs(
+            HexCoord::ORIGIN
+                .within_radius(12)
+                .into_iter()
+                .map(|coord| (TilePos::new(coord, GROUND), RunBottom(GROUND))),
+        )
+        .expect("the empty-air fixture is exact"),
+    );
+    let body_command = GameCommand::Cast {
+        unit: UnitId(1),
+        spell: "Stone Shaper".to_owned(),
+        target: fight.defender_pos,
+        facing: None,
+        mana: None,
+    };
+    push(&mut app, body_command.clone());
+    app.update();
+    assert_eq!(
+        take_events(&mut app),
+        vec![CombatEvent::CommandRefused {
+            command: body_command,
+            refusal: CommandRefusal::TerrainCreationBlocked {
+                spell: "Stone Shaper".to_owned(),
+            },
+        }]
+    );
+    assert!(take_terrain_edits(&mut app).is_empty());
 }
 
 #[test]

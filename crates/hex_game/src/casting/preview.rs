@@ -40,7 +40,7 @@ use hex_assets::{GameAssets, TargetShape};
 use hex_core::{Headroom, HexSpan, HexTile, KnowledgeState, Pause, TilePos};
 use hex_perception::FactionMapKnowledge;
 use hex_units::Faction;
-use hex_units::{volumes, TerrainRevision};
+use hex_units::{resolve_creation_volume, volumes, TerrainRevision};
 
 use super::{facing_toward, in_range, Aim, Aiming, CastReadout};
 
@@ -145,6 +145,7 @@ pub(super) struct DrawKey {
     range: u32,
     levels_per_bonus: u32,
     shape: TargetShape,
+    creates_terrain: bool,
     knowledge_available: bool,
 }
 
@@ -184,6 +185,9 @@ pub(super) fn redraw_preview(
             shape: readout
                 .row(&aim.spell)
                 .map_or(TargetShape::Single, |row| row.shape.clone()),
+            creates_terrain: readout
+                .row(&aim.spell)
+                .is_some_and(|row| row.creates_terrain),
             knowledge_available: knowledge.is_some(),
         });
     if drawn_key.0 == wanted && !knowledge_changed {
@@ -254,7 +258,12 @@ pub(super) fn redraw_preview(
 
     let facing = volumes::needs_facing(&row.shape)
         .then(|| facing_toward(key.from.coord, key.aim.anchor.coord));
-    let voxels = volumes::resolve(&row.shape, key.from, key.aim.anchor, facing).unwrap_or_default();
+    let voxels = if row.creates_terrain {
+        resolve_creation_volume(&row.shape, key.from, key.aim.anchor, facing)
+    } else {
+        volumes::resolve(&row.shape, key.from, key.aim.anchor, facing)
+    }
+    .unwrap_or_default();
     let mut painted = 0;
     for (pos, top) in &surfaces {
         // A resolver hands back its volume sorted and deduplicated — the canonical form

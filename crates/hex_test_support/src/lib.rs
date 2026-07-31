@@ -144,7 +144,7 @@ pub fn fixture_assets() -> Result<(ArtPalette, SubstanceTable), String> {
             ("air".to_owned(), Substance::invisible(false, false)),
             (
                 "stone".to_owned(),
-                Substance::from_swatch(stone_id, true, true),
+                Substance::from_swatch(stone_id, true, true).with_conjurable(true),
             ),
         ]
         .into_iter()

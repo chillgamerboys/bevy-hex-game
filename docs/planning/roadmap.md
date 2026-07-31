@@ -28,7 +28,7 @@ still belong to the crate they change. `docs` is whoever picks it up.
 
 | Epic | Scope | Owner |
 |---|---|---|
-| Terrain magic | after boundary asks G/H/L are agreed: canonical exact-voxel `TerrainImpact` announcements using runtime `ElementId`, map-approved conjuration through `TerrainEdit::Set`, 3D volume shapes, the casting legality ladder, and deterministic `TerrainImpactOutcome` consumption; feature destruction remains deferred | combat | <!-- linear: HEX-19 owner: shravan-kumaran -->
+| Terrain magic | permanent evocation construction now uses exact `RunBottom` occupancy, map-approved substances, and `TerrainEdit::Set`; remaining work is canonical exact-voxel `TerrainImpact` announcements using runtime `ElementId`, Alberto-owned material responses, deterministic `TerrainImpactOutcome` consumption, and the boundary-I breach decision. Enchantment-bound terrain and feature destruction remain deferred | combat | <!-- linear: HEX-19 owner: shravan-kumaran -->
 | Trajectories and lingering effects | obstruction, area-unit resolution, area-lingering zones, and dispel; obstruction remains a `RunBottom`/line-of-sight satellite rather than a complete-party combat gate | combat | <!-- linear: HEX-24 owner: shravan-kumaran -->
 | Magic outside combat | general real-time casting and its input model; Rest has moved into outcomes/recovery and does not settle this deferred question | combat | <!-- linear: HEX-25 owner: shravan-kumaran -->
 | Co-casting and rituals | variable-mana group casting after Wave 7 supplies a real Channel action and evidence for initiative and action economy | combat | <!-- linear: HEX-26 owner: shravan-kumaran -->
