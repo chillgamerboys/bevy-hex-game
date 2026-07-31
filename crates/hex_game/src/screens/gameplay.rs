@@ -33,12 +33,13 @@ use super::{despawn_screen, DespawnOnExit};
 use crate::combat_reports::{
     CombatLabReport, CombatLabReportStore, CombatLabReportTermination, CurrentCombatLabReport,
 };
-use crate::menus::widgets::{
-    blurb, fine, heading, row_button, UiAssets, ACCENT, ACCENT_EDGE, EDGE, LABEL, PANEL_BG,
-};
 use crate::readouts::{region, GameplayUiContext, HudElement, HudRegion, HudSetup, UiUnitIdentity};
 use crate::scenarios::ActiveScenario;
 use crate::storage::StoragePaths;
+use hex_ui::{
+    blurb, fine, heading, row_button, ActionAffordance, ActionAvailability, ActionPriority,
+    GameplayAction, GameplayHudView, UiAssets, ACCENT, ACCENT_EDGE, EDGE, LABEL, PANEL_BG,
+};
 
 pub(crate) fn plugin(app: &mut App) {
     app.init_resource::<InputBindings>();
@@ -59,7 +60,8 @@ pub(crate) fn plugin(app: &mut App) {
     );
     app.add_systems(
         Update,
-        update_hud
+        (publish_hud_view, handle_gameplay_ui_intents)
+            .chain()
             .after(GameplaySystems::UiContext)
             .run_if(in_state(Screen::Gameplay))
             .run_if(resource_equals(GameplayPhase::Active)),
@@ -116,7 +118,6 @@ pub(crate) fn plugin(app: &mut App) {
             reset_pause,
             reset_mode,
             reset_outcome_report,
-            spawn_hud.in_set(HudSetup::Panels),
             spawn_party_strip.in_set(HudSetup::Panels),
             spawn_lab_statistics.in_set(HudSetup::Panels),
         ),
@@ -124,9 +125,58 @@ pub(crate) fn plugin(app: &mut App) {
     app.add_systems(OnExit(Screen::Gameplay), despawn_screen(Screen::Gameplay));
 }
 
-/// Marks the HUD line so it can be rewritten as the mode changes.
-#[derive(Component)]
-struct HudText;
+fn handle_gameplay_ui_intents(
+    mut intents: MessageReader<hex_ui::UiIntent>,
+    mode: Res<State<Mode>>,
+    order: Res<TurnOrder>,
+    pending: Res<PendingDecision>,
+    registry: Res<UnitRegistry>,
+    owners: Query<(Option<&ControlOwner>, &hex_units::Faction)>,
+    mut queue: ResMut<CommandQueue>,
+    mut next_pause: ResMut<NextState<Pause>>,
+) {
+    for intent in intents.read() {
+        let hex_ui::UiIntent::Gameplay(action) = intent else {
+            continue;
+        };
+        match action {
+            GameplayAction::Channel => crate::casting::panel::queue_current_player_command(
+                true,
+                &order,
+                &pending,
+                &registry,
+                &owners,
+                &mut queue,
+                |unit| GameCommand::Channel { unit },
+            ),
+            GameplayAction::EndTurn => crate::casting::panel::queue_current_player_command(
+                true,
+                &order,
+                &pending,
+                &registry,
+                &owners,
+                &mut queue,
+                |unit| GameCommand::EndTurn { unit },
+            ),
+            GameplayAction::Pause => next_pause.set(Pause(true)),
+            GameplayAction::Rest if *mode.get() == Mode::Exploring => {
+                let player = registry.iter().find_map(|(unit, entity)| {
+                    owners.get(entity).ok().and_then(|(owner, faction)| {
+                        (*faction == hex_units::Faction::Player)
+                            .then(|| (unit, owner.copied().unwrap_or_default().0))
+                    })
+                });
+                if let Some((unit, seat)) = player {
+                    queue.push(IssuedCommand {
+                        seat,
+                        command: GameCommand::Rest { unit },
+                    });
+                }
+            }
+            GameplayAction::Rest | GameplayAction::ConfirmDecision => {}
+        }
+    }
+}
 
 #[derive(Component)]
 struct PartyStrip;
@@ -270,7 +320,7 @@ fn spawn_lab_statistics(
                         Text::new("Waiting for canonical combat statistics…"),
                         TextFont {
                             font: assets.body.clone().into(),
-                            ..TextFont::from_font_size(13.0)
+                            ..TextFont::from_font_size(18.0)
                         },
                         TextColor(LABEL),
                     ));
@@ -591,7 +641,7 @@ fn spawn_party_strip(
                                 Text::new(format!("ALLY {} · —", index + 1)),
                                 TextFont {
                                     font: assets.body.clone().into(),
-                                    ..TextFont::from_font_size(14.0)
+                                    ..TextFont::from_font_size(18.0)
                                 },
                                 TextColor(LABEL),
                             ));
@@ -644,7 +694,7 @@ fn spawn_party_strip(
                         Text::new("GROUP MOVEMENT"),
                         TextFont {
                             font: assets.body.clone().into(),
-                            ..TextFont::from_font_size(14.0)
+                            ..TextFont::from_font_size(18.0)
                         },
                         TextColor(LABEL),
                     ));
@@ -667,7 +717,7 @@ fn spawn_party_strip(
                         Text::new("REST PARTY · R"),
                         TextFont {
                             font: assets.body.clone().into(),
-                            ..TextFont::from_font_size(14.0)
+                            ..TextFont::from_font_size(18.0)
                         },
                         TextColor(LABEL),
                     ));
@@ -703,7 +753,7 @@ fn spawn_party_strip(
                                     Text::new(preset.name.clone()),
                                     TextFont {
                                         font: assets.body.clone().into(),
-                                        ..TextFont::from_font_size(14.0)
+                                        ..TextFont::from_font_size(18.0)
                                     },
                                     TextColor(LABEL),
                                 ));
@@ -751,7 +801,7 @@ fn spawn_party_strip(
                                 Text::new("⬡"),
                                 TextFont {
                                     font: assets.body.clone().into(),
-                                    ..TextFont::from_font_size(14.0)
+                                    ..TextFont::from_font_size(18.0)
                                 },
                                 TextColor(LABEL),
                             ));
@@ -987,46 +1037,6 @@ fn update_party_strip(
                 };
             }
         }
-    }
-}
-
-/// Controls are otherwise undiscoverable — there is no manual and no tutorial.
-fn spawn_hud(mut commands: Commands, assets: Res<UiAssets>, regions: Query<(Entity, &HudRegion)>) {
-    let actions = region(HudRegion::Actions, &regions);
-    let hud = commands
-        .spawn((
-            Name::new("Gameplay HUD"),
-            HudElement,
-            Node {
-                position_type: PositionType::Absolute,
-                bottom: Val::Px(0.0),
-                left: Val::Px(0.0),
-                right: Val::Px(0.0),
-                min_height: Val::Px(28.0),
-                padding: UiRect::axes(Val::Px(10.0), Val::Px(5.0)),
-                border_radius: BorderRadius::all(Val::Px(4.0)),
-                ..default()
-            },
-            BackgroundColor(PANEL_BG),
-            // Without this the HUD swallows clicks on any tile behind it, and
-            // click-to-move silently stops working along the bottom edge.
-            Pickable::IGNORE,
-        ))
-        .with_children(|parent| {
-            parent.spawn((
-                HudText,
-                Text::new(exploring_hint()),
-                TextFont {
-                    font: assets.body.clone().into(),
-                    ..TextFont::from_font_size(14.0)
-                },
-                TextColor(LABEL),
-                Pickable::IGNORE,
-            ));
-        })
-        .id();
-    if let Some(actions) = actions {
-        commands.entity(actions).add_child(hud);
     }
 }
 
@@ -1648,67 +1658,124 @@ fn handle_outcome_actions(
     }
 }
 
-fn exploring_hint() -> String {
-    "EXPLORING · click to move · formation at right · H hide HUD · ESC pause".to_owned()
-}
-
-/// Rewrites the hint line to say what the game is doing and whose turn it is.
-///
-/// This compact summary complements the lattice panels, initiative list, and combat
-/// log by keeping the current mode, round, and action budget visible at a glance.
-fn update_hud(
+/// Publishes authoritative game facts to the presentation-only action rail.
+fn publish_hud_view(
     mode: Res<State<Mode>>,
     order: Res<TurnOrder>,
     pending: Res<PendingDecision>,
     context: Res<GameplayUiContext>,
     acting: Query<(Has<Player>, &Turn)>,
-    party: Query<(&LatticeSpec, &LatticeState), With<Player>>,
-    mut hud: Query<&mut Text, With<HudText>>,
+    mut view: ResMut<GameplayHudView>,
 ) {
-    let Ok(mut text) = hud.single_mut() else {
-        return;
-    };
-
-    let wanted = match mode.get() {
-        Mode::Exploring => exploring_hint(),
+    let next = match mode.get() {
+        Mode::Exploring => GameplayHudView {
+            phase: GameplayPhase::Active,
+            actor: context.acting.as_ref().map(|actor| actor.unit),
+            actor_label: context
+                .acting
+                .as_ref()
+                .map_or_else(|| "Party".to_owned(), UiUnitIdentity::label),
+            round: "Exploring".to_owned(),
+            movement_remaining: 0,
+            action_remaining: true,
+            required_prompt: Some(
+                "Choose: click a reachable surface to move, or use a party action.".to_owned(),
+            ),
+            actions: vec![
+                ActionAffordance {
+                    action: GameplayAction::Rest,
+                    label: "Rest party".to_owned(),
+                    shortcut: Some("R".to_owned()),
+                    availability: ActionAvailability::Enabled,
+                    priority: ActionPriority::Primary,
+                },
+                ActionAffordance {
+                    action: GameplayAction::Pause,
+                    label: "Pause".to_owned(),
+                    shortcut: Some("Esc".to_owned()),
+                    availability: ActionAvailability::Enabled,
+                    priority: ActionPriority::Secondary,
+                },
+            ],
+        },
         Mode::Combat => {
             // How much movement is left, spelled out. Without it a click refused for
             // being out of range is indistinguishable from a click that did not
             // register — which is precisely the complaint the tinted range answers,
             // and the number is what confirms the tint rather than merely repeating it.
-            let (whose, player_turn, budget) = match acting.single() {
-                Ok((true, turn)) => (
-                    "YOUR TURN",
-                    true,
-                    format!(
-                        "MOVE {} · ACTION {}",
-                        turn.movement_left,
-                        if turn.acted { "SPENT" } else { "READY" }
-                    ),
-                ),
-                Ok((false, _)) => ("ENEMY TURN", false, "PLAYER ACTIONS LOCKED".to_owned()),
-                Err(_) => ("COMBAT UPDATING", false, String::new()),
+            let (player_turn, movement_remaining, action_remaining) = match acting.single() {
+                Ok((true, turn)) => (true, turn.movement_left, !turn.acted),
+                Ok((false, _)) | Err(_) => (false, 0, false),
             };
             let actor = context
                 .acting
                 .as_ref()
-                .map_or_else(|| "NO ACTIVE UNIT".to_owned(), UiUnitIdentity::label);
-            let action = decision_context_hint(&context, &pending)
-                .unwrap_or_else(|| combat_action_hint(player_turn, &pending).to_owned());
-            format!(
-                "ROUND {} · {} · {} · {}{} · {}",
-                order.round + 1,
-                whose,
-                actor,
-                budget,
-                lattice_readout(&party),
-                action
-            )
+                .map_or_else(|| "No active unit".to_owned(), UiUnitIdentity::label);
+            let required_prompt = Some(
+                decision_context_hint(&context, &pending)
+                    .unwrap_or_else(|| combat_action_hint(player_turn, &pending).to_owned()),
+            );
+            let availability = if player_turn && !pending.is_open() {
+                ActionAvailability::Enabled
+            } else {
+                ActionAvailability::Disabled {
+                    reason: if pending.is_open() {
+                        "Resolve the required lattice choice first".to_owned()
+                    } else {
+                        "Enemy turn".to_owned()
+                    },
+                }
+            };
+            let mut actions = vec![
+                ActionAffordance {
+                    action: GameplayAction::Channel,
+                    label: "Channel".to_owned(),
+                    shortcut: None,
+                    availability: if action_remaining {
+                        availability.clone()
+                    } else {
+                        ActionAvailability::Disabled {
+                            reason: "Action already spent".to_owned(),
+                        }
+                    },
+                    priority: ActionPriority::Primary,
+                },
+                ActionAffordance {
+                    action: GameplayAction::EndTurn,
+                    label: "End turn".to_owned(),
+                    shortcut: Some("Space".to_owned()),
+                    availability,
+                    priority: ActionPriority::Primary,
+                },
+            ];
+            if pending.is_open() {
+                actions.insert(
+                    0,
+                    ActionAffordance {
+                        action: GameplayAction::ConfirmDecision,
+                        label: "Confirm choice".to_owned(),
+                        shortcut: Some("Enter".to_owned()),
+                        availability: ActionAvailability::Disabled {
+                            reason: "Choose the required cells in the lattice".to_owned(),
+                        },
+                        priority: ActionPriority::Required,
+                    },
+                );
+            }
+            GameplayHudView {
+                phase: GameplayPhase::Active,
+                actor: context.acting.as_ref().map(|actor| actor.unit),
+                actor_label: actor,
+                round: format!("Round {}", order.round + 1),
+                movement_remaining,
+                action_remaining,
+                required_prompt,
+                actions,
+            }
         }
     };
-
-    if text.0 != wanted {
-        text.0 = wanted;
+    if *view != next {
+        *view = next;
     }
 }
 
@@ -1772,44 +1839,6 @@ fn toggle_reveal_all(
         reveal.0 = !reveal.0;
         info!("reveal-all {}", if reveal.0 { "on" } else { "off" });
     }
-}
-
-/// Your party's hexes still standing, out of the hexes it started with.
-///
-/// A **sum across the party**, not one unit's lattice, and the label says "party" for
-/// that reason: every shipped encounter fields one player unit today, so an unqualified
-/// count would read correctly by accident and then quietly become an aggregate the first
-/// time somebody adds a second line to a roster — which the encounter files openly invite.
-/// Per-unit readouts are the casting-UX ticket's, not this one's.
-///
-/// Read straight off the components rather than through
-/// [`FactionLatticeKnowledge`](hex_combat::FactionLatticeKnowledge): a faction's knowledge of *itself*
-/// is not the question that store answers. It exists to gate what you know about a
-/// **hostile** lattice, where seeing a unit reveals nothing about its contents — and
-/// routing your own hexes through it would either need a self-view nothing publishes, or
-/// teach the next reader that `view()` is how you look at anything, which is exactly the
-/// confusion the two-channel split exists to prevent.
-///
-/// Empty while nothing carries a lattice, so a party of one inert unit reads exactly as
-/// it did before this — no readout rather than a zero.
-fn lattice_readout(party: &Query<(&LatticeSpec, &LatticeState), With<Player>>) -> String {
-    let mut live = 0_usize;
-    let mut total = 0_usize;
-    for (spec, state) in party {
-        // The spec is what says which cells exist; the state only says which of them
-        // are down. Counting the state alone would miss every cell that has never been
-        // touched, which early in a fight is all of them.
-        for (coord, _) in spec.cells() {
-            total += 1;
-            if !state.is_disabled(coord) {
-                live += 1;
-            }
-        }
-    }
-    if total == 0 {
-        return String::new();
-    }
-    format!("   ·   party {live}/{total} hexes")
 }
 
 /// Entering gameplay always starts unpaused, so a pause left set from a previous
@@ -1898,40 +1927,6 @@ mod tests {
             summary,
         )
         .expect("fixture report evidence")
-    }
-
-    /// Every layer of the full-width HUD must let world picks pass through.
-    ///
-    /// Pickability is per entity, so ignoring only the backing node still leaves its
-    /// text able to swallow tile clicks.
-    #[test]
-    fn gameplay_hud_does_not_block_tile_clicks() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.insert_resource(UiAssets {
-            display: Handle::default(),
-            body: Handle::default(),
-            hex_cell: Handle::default(),
-        });
-        app.add_systems(Startup, spawn_hud);
-        app.update();
-
-        let mut roots = app
-            .world_mut()
-            .query_filtered::<&Pickable, With<BackgroundColor>>();
-        assert!(
-            roots
-                .iter(app.world())
-                .any(|pickable| *pickable == Pickable::IGNORE),
-            "the HUD backing node blocks world picks"
-        );
-
-        let mut labels = app.world_mut().query_filtered::<&Pickable, With<HudText>>();
-        assert_eq!(
-            labels.iter(app.world()).next(),
-            Some(&Pickable::IGNORE),
-            "the HUD text blocks world picks"
-        );
     }
 
     #[test]

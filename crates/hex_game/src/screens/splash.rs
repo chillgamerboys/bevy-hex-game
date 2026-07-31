@@ -7,31 +7,21 @@
 use bevy::prelude::*;
 use hex_core::Screen;
 
-use crate::menus::widgets::{display, UiAssets};
-
-use super::{despawn_screen, screen_root};
-
 const SPLASH_SECONDS: f32 = 0.8;
 
 pub(super) fn plugin(app: &mut App) {
-    app.add_systems(OnEnter(Screen::Splash), spawn_splash);
+    app.add_systems(OnEnter(Screen::Splash), start_splash_timer);
     app.add_systems(Update, advance_to_title.run_if(in_state(Screen::Splash)));
-    app.add_systems(OnExit(Screen::Splash), despawn_screen(Screen::Splash));
 }
 
 #[derive(Resource)]
 struct SplashTimer(Timer);
 
-fn spawn_splash(mut commands: Commands, assets: Res<UiAssets>) {
+fn start_splash_timer(mut commands: Commands) {
     commands.insert_resource(SplashTimer(Timer::from_seconds(
         SPLASH_SECONDS,
         TimerMode::Once,
     )));
-    commands
-        .spawn(screen_root(Screen::Splash, "Splash Screen"))
-        .with_children(|parent| {
-            parent.spawn(display(&assets, "Hex Game"));
-        });
 }
 
 fn advance_to_title(

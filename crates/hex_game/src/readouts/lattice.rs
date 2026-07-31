@@ -16,11 +16,11 @@ use crate::menus::lattice_view::{
     known_cell_view, live_cell_view, spawn_lattice_cells, CellInteraction, LatticeCellView,
     LatticeScale,
 };
-use crate::menus::widgets::{blurb, fine, heading, panel, row_button, UiAssets, EDGE, PANEL_BG};
 use crate::readouts::{
     region, GameplayUiContext, HudElement, HudRegion, HudSetup, InspectorRole, TargetProvenance,
     READ_ONLY_HUD,
 };
+use hex_ui::{blurb, fine, heading, panel, row_button, UiAssets, EDGE, PANEL_BG};
 
 const PULSE_COLOR: Color = Color::srgba(0.25, 0.10, 0.06, 0.9);
 #[derive(Resource, Default, Debug, PartialEq)]

@@ -22,7 +22,7 @@
 //! frame" rather than "fall through to the map" — the buttons are the only children that
 //! handle anything, and the frame catches the rest.
 //!
-//! The text helpers in [`widgets`](crate::menus::widgets) already carry that marker, so
+//! The text helpers in [`hex_ui`] already carry that marker, so
 //! only the raw nodes here add it. Adding it twice is not harmless: a bundle with two
 //! of one component panics on spawn.
 
@@ -32,11 +32,11 @@ use hex_combat::TurnOrder;
 use hex_core::{CommandQueue, ControlOwner, GameCommand, IssuedCommand, Mode, PendingDecision};
 use hex_units::{Faction, UnitRegistry};
 
-use crate::menus::widgets::{blurb, fine, heading, row_button, UiAssets, EDGE, LABEL, PANEL_BG};
 use crate::readouts::{
     region, spawn_decision_controls, DecisionHud, DisableSelection, GameplayUiContext, HudElement,
     HudRegion,
 };
+use hex_ui::{blurb, fine, heading, row_button, UiAssets, EDGE, LABEL, PANEL_BG};
 
 use super::preview::AimVolume;
 use super::{AimControl, Aiming, AimsSpell, CastReadout, SpellRow};
@@ -322,7 +322,7 @@ fn spawn_row(
                             Text::new(row.name.clone()),
                             TextFont {
                                 font: assets.body.clone().into(),
-                                ..TextFont::from_font_size(14.0)
+                                ..TextFont::from_font_size(18.0)
                             },
                             TextColor(LABEL),
                             Pickable::IGNORE,
@@ -376,8 +376,10 @@ pub(super) fn channel_from_button(
     owners: Query<(Option<&ControlOwner>, &Faction)>,
     mut queue: ResMut<CommandQueue>,
 ) {
-    issue_current_player_command(
-        &clicks,
+    queue_current_player_command(
+        clicks
+            .iter()
+            .any(|interaction| *interaction == Interaction::Pressed),
         &order,
         &pending,
         &registry,
@@ -395,8 +397,10 @@ pub(super) fn end_turn_from_button(
     owners: Query<(Option<&ControlOwner>, &Faction)>,
     mut queue: ResMut<CommandQueue>,
 ) {
-    issue_current_player_command(
-        &clicks,
+    queue_current_player_command(
+        clicks
+            .iter()
+            .any(|interaction| *interaction == Interaction::Pressed),
         &order,
         &pending,
         &registry,
@@ -406,8 +410,8 @@ pub(super) fn end_turn_from_button(
     );
 }
 
-fn issue_current_player_command<M: Component>(
-    clicks: &Query<&Interaction, (Changed<Interaction>, With<M>)>,
+pub(crate) fn queue_current_player_command(
+    requested: bool,
     order: &TurnOrder,
     pending: &PendingDecision,
     registry: &UnitRegistry,
@@ -415,11 +419,7 @@ fn issue_current_player_command<M: Component>(
     queue: &mut CommandQueue,
     command: impl FnOnce(hex_core::UnitId) -> GameCommand,
 ) {
-    if pending.is_open()
-        || !clicks
-            .iter()
-            .any(|interaction| *interaction == Interaction::Pressed)
-    {
+    if pending.is_open() || !requested {
         return;
     }
     let Some(unit) = order.current() else {

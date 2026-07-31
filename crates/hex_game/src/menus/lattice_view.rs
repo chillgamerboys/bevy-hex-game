@@ -10,7 +10,7 @@ use hex_assets::{ElementCatalog, SpellBook};
 use hex_core::LatticeCoord;
 use hex_lattice::{CellKind, LatticeState, LatticeStats};
 
-use super::widgets::{element_color, OwnColors, UiAssets, FUSION_COLOR, LABEL};
+use hex_ui::{element_color, OwnColors, UiAssets, FUSION_COLOR, LABEL};
 
 /// Pixel width of one hex cell sprite (pointy-top, so height runs longer).
 const CELL_SIZE: f32 = 62.0;

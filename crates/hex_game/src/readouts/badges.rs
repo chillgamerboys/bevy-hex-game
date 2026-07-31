@@ -6,8 +6,8 @@ use hex_core::{GameplaySystems, Screen, UnitId};
 use hex_units::UnitRegistry;
 use hex_world::PanOrbitCamera;
 
-use crate::menus::widgets::{UiAssets, ACCENT, DANGER, LABEL, PANEL_BG};
 use crate::screens::DespawnOnExit;
+use hex_ui::{UiAssets, ACCENT, DANGER, LABEL, PANEL_BG};
 
 use super::{GameplayUiContext, HudElement};
 
@@ -117,7 +117,7 @@ fn spawn_badge(
             Text::new(label),
             TextFont {
                 font: assets.body.clone().into(),
-                ..TextFont::from_font_size(13.0)
+                ..TextFont::from_font_size(18.0)
             },
             TextColor(LABEL),
             Pickable::IGNORE,

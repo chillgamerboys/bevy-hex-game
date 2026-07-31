@@ -38,7 +38,7 @@ use crate::casting::blocked_reason;
 use crate::menus::lattice_view::{
     live_cell_view, spawn_lattice_cells, CellInteraction, LatticeScale,
 };
-use crate::menus::widgets::{
+use hex_ui::{
     blurb, display, divider, fine, heading, label, panel, small_button, UiAssets,
     SMALL_BUTTON_WIDTH,
 };

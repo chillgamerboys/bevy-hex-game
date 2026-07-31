@@ -1,4 +1,4 @@
-//! Game application setup, plugin wiring, screens, and menus.
+//! Game application composition and domain-to-presentation adapters.
 //!
 //! Everything the game does hangs off `AppPlugin` here, so the composition of the
 //! app is readable end to end without chasing plugin groups. This is also the only
@@ -125,6 +125,7 @@ impl Plugin for AppPlugin {
         );
 
         app.add_plugins(MeshPickingPlugin);
+        app.add_plugins(hex_ui::UiPlugin);
         app.add_systems(Startup, log_app_identity);
 
         // Frame-time + entity-count collectors are cheap and stay on in every

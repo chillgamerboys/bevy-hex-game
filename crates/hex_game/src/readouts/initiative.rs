@@ -6,8 +6,8 @@ use hex_combat::{CombatSystems, TurnOrder};
 use hex_core::{AppSystems, GameplaySystems, Screen, UnitId};
 use hex_units::{Faction, UnitRegistry};
 
-use crate::menus::widgets::{heading, panel, UiAssets, ACCENT, LABEL};
 use crate::readouts::{region, GameplayUiContext, HudElement, HudRegion, HudSetup, READ_ONLY_HUD};
+use hex_ui::{heading, panel, UiAssets, ACCENT, LABEL};
 
 #[derive(Resource, Default, Debug, PartialEq, Eq)]
 struct InitiativeReadout(Vec<InitiativeEntry>);
@@ -178,7 +178,7 @@ fn rebuild(
                 Text::new(format!("{marker} {side} · {}", entry.name)),
                 TextFont {
                     font: assets.body.clone().into(),
-                    ..TextFont::from_font_size(if dense { 11.0 } else { 13.0 })
+                    ..TextFont::from_font_size(18.0)
                 },
                 TextColor(if entry.current { ACCENT } else { LABEL }),
                 Node {

@@ -11,28 +11,8 @@ use bevy::prelude::*;
 
 pub(crate) mod lattice_view;
 mod pause;
-pub mod widgets;
 
 pub(super) fn plugin(app: &mut App) {
-    app.add_plugins((pause::plugin, widgets::plugin));
+    app.add_plugins(pause::plugin);
     app.add_systems(Update, lattice_view::paint_interactions);
-}
-
-/// A full-screen overlay that dims whatever is behind it.
-pub fn overlay_root(name: &'static str) -> impl Bundle {
-    (
-        Name::new(name),
-        Node {
-            position_type: PositionType::Absolute,
-            width: Val::Percent(100.0),
-            height: Val::Percent(100.0),
-            align_items: AlignItems::Center,
-            justify_content: JustifyContent::Center,
-            flex_direction: FlexDirection::Column,
-            row_gap: Val::Px(12.0),
-            ..default()
-        },
-        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.6)),
-        GlobalZIndex(1),
-    )
 }

@@ -34,8 +34,7 @@ transforms, movement, screen/state transitions → walk.
 ```bash
 cargo build -p hex_game --features visual-walk --profile ci
 OUT=.context/visual-walks/pr-<N>   # or /tmp for uncommitted work
-HEX_WALK_SCRIPT=walks/menus.ron    HEX_WALK_OUT=$OUT cargo run -p hex_game --features visual-walk
-HEX_WALK_SCRIPT=walks/gameplay.ron HEX_WALK_OUT=$OUT cargo run -p hex_game --features visual-walk
+HEX_WALK_SCRIPT=walks/gameplay_ui.ron HEX_WALK_OUT=$OUT cargo run -p hex_game --features visual-walk
 ```
 
 Run the scripts relevant to the diff (menus.ron for UI/screen changes,

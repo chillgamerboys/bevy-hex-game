@@ -52,13 +52,10 @@ use hex_perception::{FactionKnowledge, FactionMapKnowledge};
 use hex_units::{targeting, volumes};
 use hex_units::{Downed, Faction, Player, Selected, StandsOn, UnitRegistry};
 
-use crate::menus::widgets::element_color;
+use hex_ui::element_color;
 
-mod panel;
+pub(crate) mod panel;
 mod preview;
-
-#[cfg(feature = "visual-walk")]
-pub(crate) use preview::AnchorMarker;
 
 /// Height-per-range-bonus when `combat.ron` has not loaded.
 ///
@@ -893,7 +890,7 @@ mod tests {
     use hex_core::Level;
 
     use super::*;
-    use crate::menus::widgets::{FUSION_COLOR, GEM_COLOR};
+    use hex_ui::{FUSION_COLOR, GEM_COLOR};
 
     fn shipped_content() -> (ElementCatalog, SpellBook) {
         let element_file: ElementFile = ron::from_str(include_str!(concat!(

@@ -1,0 +1,68 @@
+// The sole gameplay-owned screenshot acceptance route.
+//
+// Every capture answers a presentation question only: hierarchy, legibility,
+// responsive composition, focus, or overlap. Rules, decisions, combat effects,
+// persistence, exact deployment, and report identity use typed state snapshots.
+[
+    AwaitScreen("Title"),
+    Settle(8),
+    Capture("ui-01-title"),
+
+    Click(name: "Settings"),
+    AwaitScreen("Settings"),
+    Settle(4),
+    Capture("ui-02-settings"),
+    Click(name: "Back"),
+
+    AwaitScreen("Title"),
+    Click(name: "Character Creator"),
+    AwaitScreen("CharacterCreator"),
+    Settle(4),
+    Capture("ui-03-character-creator"),
+    Click(name: "Title"),
+
+    AwaitScreen("Title"),
+    Click(name: "Spell Creator"),
+    AwaitScreen("SpellCreator"),
+    Settle(4),
+    Capture("ui-04-spell-creator"),
+    Click(name: "Title"),
+
+    AwaitScreen("Title"),
+    Click(name: "Combat Lab"),
+    AwaitScreen("CombatLab"),
+    Settle(4),
+    Capture("ui-05-combat-lab"),
+    Click(name: "Fixed Fixtures"),
+    Settle(4),
+    Capture("ui-06-fixtures"),
+
+    StartFixture(id: "channel-attrition"),
+    AwaitScreen("Gameplay"),
+    AwaitTerrain,
+    Settle(8),
+    Capture("ui-07-live-action-rail"),
+
+    StartFixture(id: "tempo-matrix", profile: Some("shipped")),
+    AwaitScreen("Gameplay"),
+    AwaitTerrain,
+    PresentFixtureReport,
+    AwaitButton("Retry Exact"),
+    Settle(4),
+    Capture("ui-08-report-overview"),
+    Click(name: "Units"),
+    Settle(2),
+    Capture("ui-09-report-units"),
+    Click(name: "Save Report"),
+    Click(name: "Retry Exact"),
+
+    AwaitScreen("Gameplay"),
+    AwaitTerrain,
+    PresentFixtureReport,
+    AwaitButton("Retry Exact"),
+    Click(name: "Save Report"),
+    Click(name: "Compare"),
+    Click(name: "Report 1"),
+    Settle(2),
+    Capture("ui-10-report-compare"),
+]

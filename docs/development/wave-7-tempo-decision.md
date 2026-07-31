@@ -49,9 +49,7 @@ as a mechanical result.
 
 ## Presentation review
 
-One presentation-only Wave 7 walk replaces the former three scripts:
-`walks/wave7_combat_lab.ron`. It opens report UI from fixture-owned canonical data
-without solving combat, and reviews at most ten frames covering the live drawer,
-Overview, dense Units, Compare, edited Rules, exact Deployment/repositioning, Rules
-re-entry, and 6v6 deployment/live readability. Those frames are evidence only for
-layout and legibility.
+Wave 7's presentation evidence was consolidated again during the UI foundation into
+the sole gameplay-owned `walks/gameplay_ui.ron`. The historical logical claims remain
+in deterministic simulation and app snapshots. The walk opens presentation states
+without solving combat and its frames are evidence only for layout and legibility.

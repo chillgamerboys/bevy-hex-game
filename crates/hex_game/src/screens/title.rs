@@ -24,11 +24,11 @@ use bevy::ui_widgets::ScrollArea;
 use hex_assets::{Scenario, ScenarioCategory, ScenarioLibrary};
 use hex_core::{GameplaySetupFailure, InputAction, InputBindings, ResolvedMapSeed, Screen};
 
-use crate::menus::widgets::{
+use crate::scenarios::ScenarioToLoad;
+use hex_ui::{
     blurb, button, display, fine, heading, label, small_button, UiAssets, ACCENT_EDGE, BLURB_SIZE,
     DANGER,
 };
-use crate::scenarios::ScenarioToLoad;
 
 use super::creator::CreatorEntryRequest;
 use super::{despawn_screen, screen_root};
@@ -283,77 +283,73 @@ fn category_label(category: ScenarioCategory) -> &'static str {
 }
 
 fn spawn_action_column(deck: &mut ChildSpawnerCommands, assets: &UiAssets) {
-    deck.spawn((
-        Name::new("Actions Column"),
-        ActionColumn,
-        crate::menus::widgets::panel(),
-    ))
-    .insert(Node {
-        min_width: Val::Px(0.0),
-        height: Val::Percent(100.0),
-        flex_basis: Val::Px(0.0),
-        flex_grow: 1.0,
-        flex_shrink: 1.0,
-        flex_direction: FlexDirection::Column,
-        row_gap: Val::Px(10.0),
-        padding: UiRect::all(Val::Px(14.0)),
-        border: UiRect::all(Val::Px(1.0)),
-        border_radius: BorderRadius::all(Val::Px(10.0)),
-        ..default()
-    })
-    .with_children(|column| {
-        column.spawn(heading(assets, "actions"));
-        for (name, blurb_text, action) in [
-            (
-                "Continue",
-                "Resume the last explicitly saved exploration state.",
-                0_u8,
-            ),
-            (
-                "New Game",
-                "Begin the integrated Party Trial scenario.",
-                1_u8,
-            ),
-            (
-                "Settings",
-                "Display, presentation, and volume scaffolding.",
-                2_u8,
-            ),
-            ("Quit", "Exit the pre-alpha build.", 3_u8),
-        ] {
-            let mut entity = column.spawn(button(name));
-            entity
-                .insert(scenario_card_node())
-                .insert(BorderColor::all(ACCENT_EDGE))
-                .with_children(|button| {
-                    button.spawn(label(assets, name));
-                    let mut supporting = button.spawn((
-                        blurb(assets, blurb_text),
-                        Node {
-                            width: Val::Percent(100.0),
-                            ..default()
-                        },
-                    ));
-                    if action == 0 {
-                        supporting.insert(ContinueStatusText);
+    deck.spawn((Name::new("Actions Column"), ActionColumn, hex_ui::panel()))
+        .insert(Node {
+            min_width: Val::Px(0.0),
+            height: Val::Percent(100.0),
+            flex_basis: Val::Px(0.0),
+            flex_grow: 1.0,
+            flex_shrink: 1.0,
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(10.0),
+            padding: UiRect::all(Val::Px(14.0)),
+            border: UiRect::all(Val::Px(1.0)),
+            border_radius: BorderRadius::all(Val::Px(10.0)),
+            ..default()
+        })
+        .with_children(|column| {
+            column.spawn(heading(assets, "actions"));
+            for (name, blurb_text, action) in [
+                (
+                    "Continue",
+                    "Resume the last explicitly saved exploration state.",
+                    0_u8,
+                ),
+                (
+                    "New Game",
+                    "Begin the integrated Party Trial scenario.",
+                    1_u8,
+                ),
+                (
+                    "Settings",
+                    "Display, presentation, and volume scaffolding.",
+                    2_u8,
+                ),
+                ("Quit", "Exit the pre-alpha build.", 3_u8),
+            ] {
+                let mut entity = column.spawn(button(name));
+                entity
+                    .insert(scenario_card_node())
+                    .insert(BorderColor::all(ACCENT_EDGE))
+                    .with_children(|button| {
+                        button.spawn(label(assets, name));
+                        let mut supporting = button.spawn((
+                            blurb(assets, blurb_text),
+                            Node {
+                                width: Val::Percent(100.0),
+                                ..default()
+                            },
+                        ));
+                        if action == 0 {
+                            supporting.insert(ContinueStatusText);
+                        }
+                    });
+                match action {
+                    0 => {
+                        entity.insert(ContinuesGame);
                     }
-                });
-            match action {
-                0 => {
-                    entity.insert(ContinuesGame);
-                }
-                1 => {
-                    entity.insert(StartsNewGame);
-                }
-                2 => {
-                    entity.insert(OpensSettings);
-                }
-                _ => {
-                    entity.insert(QuitsGame);
+                    1 => {
+                        entity.insert(StartsNewGame);
+                    }
+                    2 => {
+                        entity.insert(OpensSettings);
+                    }
+                    _ => {
+                        entity.insert(QuitsGame);
+                    }
                 }
             }
-        }
-    });
+        });
 }
 
 fn spawn_category_column(
@@ -364,7 +360,7 @@ fn spawn_category_column(
     deck.spawn((
         Name::new(format!("{} Scenario Column", category_label(category))),
         ScenarioColumn(category),
-        crate::menus::widgets::panel(),
+        hex_ui::panel(),
     ))
     .insert(Node {
         min_width: Val::Px(0.0),

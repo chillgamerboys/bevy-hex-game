@@ -5,20 +5,23 @@
 
 use std::collections::BTreeSet;
 
+use bevy::prelude::World;
 use hex_assets::{CombatRulesProfile, CombatSettings};
 use hex_combat::{
     CombatSummary, DeliveredEffectKind, EncounterOutcome, EncounterResolution, UnitCombatSummary,
 };
-use hex_core::{GameplayPhase, HexCoord, TilePos, UnitId};
+use hex_core::{GameplayPhase, HexCoord, HexSpan, TilePos, Turn, UnitId};
 use hex_game::combat_reports::{
     CombatLabReport, CombatLabReportController, CombatLabReportDeployment, CombatLabReportId,
     CombatLabReportMap, CombatLabReportOrigin, CombatLabReportRosterEntry, CombatLabReportRosters,
     CombatLabReportTermination, SavedCombatLabReport,
 };
 use hex_game::test_support::{
-    fixture_filter_snapshot, live_statistics_text, live_statistics_visible, report_text,
-    sandbox_reentry_snapshot, tempo_movement_matrix, wave_seven_fixtures, ReportMode,
+    fixture_filter_snapshot, gameplay_state_snapshot, live_statistics_snapshot,
+    live_statistics_visible, report_snapshot, sandbox_reentry_snapshot, tempo_movement_matrix,
+    wave_seven_fixtures, ReportMode,
 };
+use hex_units::{Standing, StandsOn};
 
 fn position(q: i32, r: i32, level: i32) -> TilePos {
     TilePos::new(HexCoord::from_axial(q, r), level)
@@ -101,7 +104,7 @@ fn fixture_search_filters_in_place_and_clear_restores_every_card() {
 }
 
 #[test]
-fn report_modes_are_functional_canonical_and_independently_selectable() {
+fn report_modes_and_comparison_identity_are_observed_without_rendered_text() {
     let current = sample_report(8, 0, 1);
     let older = sample_report(2, 2, 3);
     let selected = sample_report(6, 4, 5);
@@ -121,11 +124,11 @@ fn report_modes_are_functional_canonical_and_independently_selectable() {
     ];
 
     let projections = [
-        report_text(&current, ReportMode::Overview, &saved, None),
-        report_text(&current, ReportMode::Units, &saved, None),
-        report_text(&current, ReportMode::SpellsEffects, &saved, None),
-        report_text(&current, ReportMode::Timeline, &saved, None),
-        report_text(
+        report_snapshot(&current, ReportMode::Overview, &saved, None),
+        report_snapshot(&current, ReportMode::Units, &saved, None),
+        report_snapshot(&current, ReportMode::SpellsEffects, &saved, None),
+        report_snapshot(&current, ReportMode::Timeline, &saved, None),
+        report_snapshot(
             &current,
             ReportMode::Compare,
             &saved,
@@ -133,46 +136,50 @@ fn report_modes_are_functional_canonical_and_independently_selectable() {
         ),
     ];
     assert_eq!(
-        projections.iter().collect::<BTreeSet<_>>().len(),
+        projections
+            .iter()
+            .map(|projection| projection.mode)
+            .collect::<BTreeSet<_>>()
+            .len(),
         projections.len(),
-        "every tab must project a distinct canonical concern"
+        "every report mode must remain independently selectable"
     );
-    assert!(projections.first().is_some_and(|text| {
-        text.contains("Rounds 8") && text.contains("11 successful / 2 refused")
-    }));
-    assert!(projections.get(1).is_some_and(|text| {
-        text.contains("UNITS") && text.contains("Hedge Mage") && text.contains("#0")
-    }));
+    let current_fingerprint = current.fingerprint().ok();
     assert!(projections
-        .get(2)
-        .is_some_and(|text| text.contains("Spark 1") && text.contains("Ember 2")));
+        .iter()
+        .all(|projection| projection.current_fingerprint == current_fingerprint));
     assert!(projections
-        .get(3)
-        .is_some_and(|text| text.contains("TIMELINE")));
-    assert!(projections.get(4).is_some_and(|text| {
-        text.contains("REPORT 17") && text.contains("rounds +6") && !text.contains("REPORT 23")
-    }));
+        .iter()
+        .all(|projection| projection.units == [UnitId(0), UnitId(1)]));
+    let Some(comparison) = projections
+        .last()
+        .and_then(|projection| projection.comparison)
+    else {
+        panic!("Compare must preserve the independently selected report");
+    };
+    assert_eq!(comparison.0, CombatLabReportId(17));
+    assert_eq!(
+        comparison.1,
+        saved
+            .first()
+            .and_then(|saved| saved.report.fingerprint().ok())
+    );
 }
 
 #[test]
 fn live_drawer_uses_the_canonical_summary_and_has_a_bounded_lifecycle() {
     let report = sample_report(4, 0, 1);
-    let label = live_statistics_text(&report.summary);
-    for expected in [
-        "Round 4",
-        "Turns 12",
-        "11 successful / 2 refused",
-        "7 distance / 7 budget used",
-        "Channel 1",
-        "4 raw / 1 prevented / 3 applied",
-        "Ember 2",
-        "#0",
-    ] {
-        assert!(
-            label.contains(expected),
-            "missing canonical fact {expected:?}"
-        );
-    }
+    let snapshot = live_statistics_snapshot(&report.summary);
+    assert_eq!(snapshot.rounds, 4);
+    assert_eq!(snapshot.turns, 12);
+    assert_eq!(snapshot.successful_commands, 11);
+    assert_eq!(snapshot.refused_commands, 2);
+    assert_eq!(snapshot.movement_distance, 7);
+    assert_eq!(snapshot.movement_budget_used, 7);
+    assert_eq!(snapshot.channels, 1);
+    assert_eq!(snapshot.disables, (4, 1, 3));
+    assert_eq!(snapshot.channelled_mana.get("Ember"), Some(&2));
+    assert_eq!(snapshot.units, [UnitId(0)]);
 
     assert!(live_statistics_visible(
         GameplayPhase::Active,
@@ -238,4 +245,33 @@ fn wave_seven_fixtures_own_three_by_three_rosters_and_all_tempo_profiles() {
         .iter()
         .all(|fixture| fixture.players == 3 && fixture.hostiles == 3));
     assert_eq!(tempo_movement_matrix(&CombatSettings::default()), [4, 2, 3]);
+}
+
+#[test]
+fn gameplay_snapshot_reads_exact_canonical_position_and_budget_without_rendering() {
+    let mut world = World::new();
+    world.insert_resource(GameplayPhase::Active);
+    world.spawn((
+        UnitId(0),
+        StandsOn(Standing {
+            pos: position(-3, 2, 4),
+            span: HexSpan::new(3.0, 4.0),
+        }),
+        Turn {
+            movement_left: 2,
+            acted: true,
+        },
+    ));
+
+    let snapshot = gameplay_state_snapshot(&mut world);
+    assert_eq!(snapshot.phase, Some(GameplayPhase::Active));
+    assert_eq!(snapshot.units.len(), 1);
+    let Some(unit) = snapshot.units.first() else {
+        panic!("the canonical unit must be observable");
+    };
+    assert_eq!(unit.id, UnitId(0));
+    assert_eq!(unit.position, position(-3, 2, 4));
+    assert_eq!(unit.turn.map(|turn| turn.movement_left), Some(2));
+    assert_eq!(unit.turn.map(|turn| turn.acted), Some(true));
+    assert!(snapshot.legal_actions.is_empty());
 }

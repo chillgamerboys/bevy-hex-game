@@ -25,11 +25,11 @@ use hex_gameplay_model::{
 use crate::creation_presentation::{CharacterBuildSummary, SpellBuildSummary};
 use crate::creation_store::CreationStore;
 use crate::menus::lattice_view::short_name;
-use crate::menus::widgets::{
+use crate::storage::StoragePaths;
+use hex_ui::{
     blurb, display, element_color, fine, heading, label, panel, panel_node, row_button, UiAssets,
     ACCENT, ACCENT_EDGE, DANGER, EDGE, FUSION_COLOR, LABEL,
 };
-use crate::storage::StoragePaths;
 
 use super::{despawn_screen, screen_root};
 
@@ -1406,7 +1406,7 @@ fn colored_tool_button(
     parent
         .spawn((row_button(text.clone(), 200.0), action))
         .insert((
-            crate::menus::widgets::OwnColors,
+            hex_ui::OwnColors,
             BackgroundColor(brighten(color, if selected { 0.26 } else { 0.0 })),
             BorderColor::all(if selected { ACCENT } else { EDGE }),
         ))
@@ -1445,7 +1445,7 @@ fn spawn_spell_tab(
                 let color = elements.map_or(Color::srgba(0.16, 0.45, 0.52, 0.96), |elements| {
                     element_color(elements.id(&requirement.element), elements)
                 });
-                left.spawn(crate::menus::widgets::panel())
+                left.spawn(hex_ui::panel())
                     .insert((
                         Node {
                             width: Val::Percent(100.0),
@@ -1626,7 +1626,7 @@ fn spawn_spell_tab(
             form.spawn(label(assets, summary.sentence.clone()));
             for (index, effect) in saved.spell.effects.iter().enumerate() {
                 let effect_text = crate::creation_presentation::effect_summary(effect);
-                form.spawn(crate::menus::widgets::panel())
+                form.spawn(hex_ui::panel())
                     .insert((
                         Node {
                             width: Val::Percent(100.0),

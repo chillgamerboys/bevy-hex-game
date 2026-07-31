@@ -87,12 +87,80 @@ pub(crate) fn plugin(app: &mut App) {
         // the simulation and remains available while a decision is open.
         .add_systems(
             Update,
-            (toggle_hud, apply_hud_visibility)
+            (toggle_hud, apply_hud_visibility, apply_responsive_hud)
                 .chain()
                 .in_set(AppSystems::RecordInput)
                 .run_if(in_state(Screen::Gameplay))
                 .run_if(resource_equals(GameplayPhase::Active)),
         );
+}
+
+fn apply_responsive_hud(
+    metrics: Res<hex_ui::ResolvedUiMetrics>,
+    mut regions: Query<(&HudRegion, &mut Node)>,
+) {
+    if !metrics.is_changed() {
+        return;
+    }
+    for (region, mut node) in &mut regions {
+        match (metrics.viewport, region) {
+            (hex_ui::UiViewportClass::Compact, HudRegion::Party) => {
+                node.left = Val::Px(8.0);
+                node.width = Val::Px(180.0);
+            }
+            (hex_ui::UiViewportClass::Compact, HudRegion::Turn) => {
+                node.left = Val::Px(196.0);
+                node.right = Val::Px(268.0);
+            }
+            (hex_ui::UiViewportClass::Compact, HudRegion::Inspector) => {
+                node.right = Val::Px(8.0);
+                node.width = Val::Px(252.0);
+                node.bottom = Val::Px(144.0);
+            }
+            (hex_ui::UiViewportClass::Compact, HudRegion::Actions) => {
+                node.left = Val::Px(196.0);
+                node.right = Val::Px(268.0);
+                node.bottom = Val::Px(144.0);
+                node.height = Val::Auto;
+            }
+            (hex_ui::UiViewportClass::Compact, HudRegion::Events) => {
+                node.left = Val::Px(196.0);
+                node.right = Val::Px(268.0);
+                node.bottom = Val::Px(390.0);
+            }
+            (hex_ui::UiViewportClass::Standard, HudRegion::Actions) => {
+                node.bottom = Val::Px(140.0);
+                node.height = Val::Auto;
+            }
+            (hex_ui::UiViewportClass::Standard, HudRegion::Events) => {
+                node.bottom = Val::Px(390.0);
+            }
+            (hex_ui::UiViewportClass::Wide, HudRegion::Party) => {
+                node.left = Val::Px(16.0);
+                node.width = Val::Px(260.0);
+            }
+            (hex_ui::UiViewportClass::Wide, HudRegion::Turn) => {
+                node.left = Val::Px(288.0);
+                node.right = Val::Px(360.0);
+            }
+            (hex_ui::UiViewportClass::Wide, HudRegion::Inspector) => {
+                node.right = Val::Px(16.0);
+                node.width = Val::Px(332.0);
+            }
+            (hex_ui::UiViewportClass::Wide, HudRegion::Actions) => {
+                node.left = Val::Px(288.0);
+                node.right = Val::Px(360.0);
+                node.bottom = Val::Px(144.0);
+                node.height = Val::Auto;
+            }
+            (hex_ui::UiViewportClass::Wide, HudRegion::Events) => {
+                node.left = Val::Px(288.0);
+                node.right = Val::Px(360.0);
+                node.bottom = Val::Px(400.0);
+            }
+            _ => {}
+        }
+    }
 }
 
 fn spawn_safe_frame(mut commands: Commands) {

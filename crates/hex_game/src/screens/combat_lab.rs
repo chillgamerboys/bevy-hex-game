@@ -37,12 +37,12 @@ use crate::combat_reports::{
 use crate::creation_presentation::CharacterBuildSummary;
 use crate::creation_store::CreationStore;
 use crate::menus::lattice_view::short_name;
-use crate::menus::widgets::{
+use crate::scenarios::{ScenarioContractStatus, ScenarioToLoad};
+use crate::storage::StoragePaths;
+use hex_ui::{
     blurb, display, element_color, fine, heading, label, panel, panel_node, row_button, UiAssets,
     DANGER, FUSION_COLOR, LABEL,
 };
-use crate::scenarios::{ScenarioContractStatus, ScenarioToLoad};
-use crate::storage::StoragePaths;
 
 use super::{despawn_screen, screen_root, screen_root_node};
 
@@ -1681,7 +1681,7 @@ fn spawn_fixture_selector(
                 },
                 TextFont {
                     font: assets.body.clone().into(),
-                    ..TextFont::from_font_size(17.0)
+                    ..TextFont::from_font_size(18.0)
                 },
                 TextColor(Color::WHITE),
                 BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.08)),
@@ -1849,7 +1849,7 @@ fn spawn_saved_reports(
                                     },
                                     TextFont {
                                         font: assets.body.clone().into(),
-                                        ..TextFont::from_font_size(15.0)
+                                        ..TextFont::from_font_size(18.0)
                                     },
                                     TextColor(Color::WHITE),
                                     BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.08)),
@@ -1870,7 +1870,7 @@ fn spawn_saved_reports(
                                     },
                                     TextFont {
                                         font: assets.body.clone().into(),
-                                        ..TextFont::from_font_size(14.0)
+                                        ..TextFont::from_font_size(18.0)
                                     },
                                     TextColor(LABEL),
                                     BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.05)),

@@ -15,8 +15,8 @@ use hex_perception::FactionMapKnowledge;
 use hex_units::{Faction, Player, StandsOn, UnitRegistry};
 
 use super::lattice::{set_pulse_color, RetainedTarget, TargetPanel};
-use crate::menus::widgets::{blurb, panel, UiAssets, DANGER, LABEL};
 use crate::readouts::{region, HudElement, HudRegion, HudSetup, READ_ONLY_HUD};
+use hex_ui::{blurb, panel, UiAssets, DANGER, LABEL};
 
 const CAPACITY: usize = 64;
 const FEED_LINES: usize = 3;
@@ -773,7 +773,7 @@ fn rebuild(
                 Text::new(line.text.clone()),
                 TextFont {
                     font: assets.body.clone().into(),
-                    ..TextFont::from_font_size(13.0)
+                    ..TextFont::from_font_size(18.0)
                 },
                 TextColor(if line.danger { DANGER } else { LABEL }),
                 Pickable::IGNORE,
