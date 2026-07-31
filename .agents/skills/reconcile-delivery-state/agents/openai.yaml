@@ -1,0 +1,4 @@
+interface:
+  display_name: "Reconcile Delivery State"
+  short_description: "Align shipped code, docs, PRs, and Linear"
+  default_prompt: "Use $reconcile-delivery-state to audit this delivery, align repository state, and recommend or apply Linear updates when available."

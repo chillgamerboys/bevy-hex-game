@@ -164,13 +164,19 @@ an explicit maintainer waiver. A timeout is never silently called a pass.
 The wave lands on `dev` with a merge commit. Promotion from `dev` to `main` remains a
 separate deliberate action.
 
+Before the final gate, reconcile implementation, status/design/roadmap documents,
+contracts, and—when available—ticket descriptions using
+[delivery-state reconciliation](delivery-state.md). Documentation corrections belong
+in the candidate. Linear is strongly advised for visibility but is not a merge gate.
+
 After the wave merge:
 
 1. confirm the merge commit and post-merge `dev` checks;
 2. close source PRs as superseded, linking the wave PR;
 3. retarget any still-open child PR before deleting its former base;
 4. delete the wave and merged source branches only after no open PR depends on them;
-5. update tickets based on delivered outcomes, not on incidental leaf-PR state; and
+5. recommend or apply ticket updates based on delivered outcomes, not on incidental
+   leaf-PR state, and leave a visible warning if Linear was unavailable; and
 6. leave a short reconciliation note for protected or ongoing branches that must now
    merge updated `dev`.
 

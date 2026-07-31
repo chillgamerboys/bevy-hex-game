@@ -17,6 +17,10 @@ Read `AGENTS.md`, `CLAUDE.md`, and
 shared crate is involved. Read the relevant system and design docs for the requested
 behavior.
 
+Strongly prefer `$reconcile-delivery-state` first when the plan begins from existing
+tickets, roadmap state, or claimed delivered work. Linear is a soft coordination
+signal: if unavailable, warn and continue from repository/GitHub evidence.
+
 ## 1. Map the outcome and concerns
 
 State one shippable outcome and explicit exclusions. List the concerns needed to
@@ -27,6 +31,11 @@ reach it, then identify for each concern:
 - strict dependencies;
 - whether it is meaningful to review or ship alone; and
 - the runtime paths that prove it works.
+
+Record relevant ticket references and their verified current/residual scope when
+Linear is available. For broad roadmap or architecture work, inspect every
+non-completed Hex Game ticket rather than only the current branch's references. If
+that inventory cannot run, put the skipped reconciliation in the handoff.
 
 Group work by authority and shared concern, not merely by file or ticket. If two lanes
 would implement the same authority, make that one concern with one owner.

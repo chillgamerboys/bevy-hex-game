@@ -88,6 +88,11 @@ After each semantic group:
 Do not demand a separate full workspace run after every mechanically integrated leaf.
 Escalate validation when a semantic group becomes coherent.
 
+Before the final gate, strongly prefer `$reconcile-delivery-state` on the candidate.
+Include status, roadmap, design, contract, and ticket-description corrections in the
+wave. Keep partial epics open even when a leaf merges. Missing Linear access is a
+visible warning and handoff item, never a merge blocker.
+
 ## 5. Gate the wave
 
 On the final candidate, run the complete checks listed in
@@ -109,7 +114,9 @@ When authorized and all required evidence is green:
 3. close leaf PRs as superseded with a link to the wave;
 4. retarget every open child before deleting its parent;
 5. delete source and wave branches only after nothing depends on them;
-6. update delivered ticket states; and
+6. recommend or apply delivered, partial, and obsolete ticket updates through
+   `$reconcile-delivery-state`, re-fetching modified issues when Linear is available;
+   and
 7. provide reconciliation instructions for protected ongoing branches.
 
 Never merge the wave directly to `main`. Promotion is separate.
