@@ -332,8 +332,29 @@ fn emit_intents(
 mod tests {
     use bevy::input_focus::tab_navigation::{TabGroup, TabIndex};
     use bevy::input_focus::InputFocus;
+    use hex_core::AppSystems;
 
     use super::*;
+
+    #[derive(Resource, Default)]
+    struct RequiredChoiceTransition(bool);
+
+    fn activate_required_choice_for_render(
+        mut transition: ResMut<RequiredChoiceTransition>,
+        mut hud: ResMut<crate::GameplayHudView>,
+        mut chrome: ResMut<GameplayChromeView>,
+    ) {
+        if !transition.0 {
+            return;
+        }
+        transition.0 = false;
+        *hud = required_hud();
+        *chrome = GameplayChromeView {
+            shown: true,
+            decision_required: true,
+            encounter_complete: false,
+        };
+    }
 
     #[derive(Resource, Default)]
     struct Received(Vec<DevTimeIntent>);
@@ -711,7 +732,12 @@ mod tests {
     #[test]
     fn required_choice_hides_ultra_constrained_controls_and_preserves_their_entities() {
         let mut app = App::new();
-        app.add_plugins(crate::test_support::HeadlessUiPlugin::new(1280, 720));
+        app.add_plugins(crate::test_support::HeadlessUiPlugin::new(1280, 720))
+            .init_resource::<RequiredChoiceTransition>()
+            .add_systems(
+                Update,
+                activate_required_choice_for_render.in_set(AppSystems::Update),
+            );
         app.world_mut()
             .insert_resource(crate::UiScalePreference(crate::UiScaleMode::Percent200));
         app.world_mut()
@@ -731,15 +757,8 @@ mod tests {
             .copied()
             .expect("available time controls must be focusable");
         app.insert_resource(InputFocus::from_entity(focused));
-        app.insert_resource(required_hud());
-        *app.world_mut().resource_mut::<GameplayChromeView>() = GameplayChromeView {
-            shown: true,
-            decision_required: true,
-            encounter_complete: false,
-        };
-        for _ in 0..4 {
-            app.update();
-        }
+        app.world_mut().resource_mut::<RequiredChoiceTransition>().0 = true;
+        app.update();
 
         let required = crate::test_support::ui_tree_snapshot(app.world_mut());
         assert!(required

@@ -17,7 +17,8 @@ pub(super) fn plugin(app: &mut App) {
     .add_systems(
         Update,
         (apply_responsive_layout, apply_visibility)
-            .after(AppSystems::RecordInput)
+            .in_set(crate::UiSystems::Render)
+            .after(AppSystems::Update)
             .run_if(in_state(Screen::Gameplay)),
     );
 }
