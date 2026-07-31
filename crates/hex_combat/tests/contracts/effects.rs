@@ -18,7 +18,7 @@ use bevy::prelude::*;
 
 use hex_assets::{
     CastingAxis, CombatSettings, ContentIndex, Effect, ElementCatalog, ElementFile, GemRequirement,
-    ManaAxis, Spell, SpellBook, SpellFile, SubstanceTable, TargetShape, TargetingSpec,
+    ManaAxis, Spell, SpellBook, SpellFile, SubstanceTable, TargetShape, TargetingSpec, Trajectory,
 };
 use hex_combat::{
     CombatEvent, CommandRefusal, FactionLatticeKnowledge, Initiative, PersistentEffects, TurnOrder,
@@ -64,7 +64,7 @@ fn spells(burn_turns: u16) -> SpellBook {
     let single = TargetingSpec {
         range: 3,
         shape: TargetShape::Single,
-        needs_los: false,
+        trajectory: Trajectory::None,
     };
     let mut by_name = HashMap::default();
     by_name.insert(
@@ -125,7 +125,7 @@ fn spells(burn_turns: u16) -> SpellBook {
             targeting: TargetingSpec {
                 range: 3,
                 shape: TargetShape::Single,
-                needs_los: false,
+                trajectory: Trajectory::None,
             },
             effects: vec![Effect::Reveal { tier: 1 }],
         },
@@ -143,7 +143,7 @@ fn spells(burn_turns: u16) -> SpellBook {
             targeting: TargetingSpec {
                 range: 3,
                 shape: TargetShape::Sphere { radius: 2 },
-                needs_los: false,
+                trajectory: Trajectory::None,
             },
             effects: vec![Effect::Burn { turns: burn_turns }],
         },
@@ -177,13 +177,40 @@ fn spells(burn_turns: u16) -> SpellBook {
             targeting: TargetingSpec {
                 range: 3,
                 shape: TargetShape::Column { height: 2 },
-                needs_los: false,
+                trajectory: Trajectory::None,
             },
             effects: vec![Effect::SpawnWall {
                 substance: "stone".to_owned(),
             }],
         },
     );
+    for (name, trajectory) in [
+        ("Direct Ember", Trajectory::Direct),
+        ("Arcing Ember", Trajectory::Arc { rise: 3 }),
+        ("Phase Ember", Trajectory::None),
+    ] {
+        by_name.insert(
+            name.to_owned(),
+            Spell {
+                requirements: vec![GemRequirement {
+                    element: "Fire".to_owned(),
+                    mana: 1,
+                }],
+                casting: CastingAxis::Evocation,
+                mana: ManaAxis::Fixed,
+                co_castable: false,
+                targeting: TargetingSpec {
+                    range: 3,
+                    shape: TargetShape::Single,
+                    trajectory,
+                },
+                effects: vec![Effect::DisableHexes {
+                    count: 1,
+                    targeted: false,
+                }],
+            },
+        );
+    }
     SpellBook::from_file(&SpellFile { spells: by_name })
 }
 
@@ -644,6 +671,41 @@ fn terrain_caster(app: &mut App, spell: &str) -> (Fight, TilePos) {
         },
         build_surface,
     )
+}
+
+fn trajectory_caster(app: &mut App, spell: &str) -> Fight {
+    let catalog = app.world().resource::<ElementCatalog>().clone();
+    let book = app.world().resource::<SpellBook>().clone();
+    let defender_coord = HexCoord::from_axial(3, 0);
+
+    let caster = spawn(
+        app,
+        UnitId(1),
+        Faction::Player,
+        HexCoord::ORIGIN,
+        20,
+        lattice_casting(&book, &catalog, spell, "Fire", 2),
+    );
+    let defender = spawn(
+        app,
+        UnitId(2),
+        Faction::Hostile,
+        defender_coord,
+        10,
+        lattice_casting(&book, &catalog, "Ward", "Metal", 3),
+    );
+    publish_spatial_knowledge(app);
+
+    app.world_mut()
+        .resource_mut::<NextState<Mode>>()
+        .set(Mode::Combat);
+    app.update();
+
+    Fight {
+        caster,
+        defender,
+        defender_pos: TilePos::new(defender_coord, GROUND),
+    }
 }
 
 fn push(app: &mut App, command: GameCommand) {
@@ -1110,6 +1172,99 @@ fn an_observed_anchor_allows_area_spillover_into_unknown_space() {
             target: UnitId(2),
             turns: 2,
         }
+    )));
+}
+
+#[test]
+fn a_blocked_direct_trajectory_refuses_before_payment_without_disclosing_the_voxel() {
+    let mut app = test_app(2);
+    let fight = trajectory_caster(&mut app, "Direct Ember");
+    let blocker = TilePos::new(HexCoord::from_axial(1, 0), GROUND + 1);
+    app.insert_resource(
+        TerrainOccupancy::from_runs(
+            HexCoord::ORIGIN
+                .within_radius(12)
+                .into_iter()
+                .map(|coord| (TilePos::new(coord, GROUND), RunBottom(GROUND)))
+                .chain([(blocker, RunBottom(blocker.level))]),
+        )
+        .expect("the exact wall fixture is valid"),
+    );
+    let command = GameCommand::Cast {
+        unit: UnitId(1),
+        spell: "Direct Ember".to_owned(),
+        target: fight.defender_pos,
+        facing: None,
+        mana: None,
+    };
+    let mana_before = app
+        .world()
+        .get::<LatticeState>(fight.caster)
+        .expect("the caster has a lattice")
+        .total_gem_mana();
+
+    push(&mut app, command.clone());
+    app.update();
+
+    assert_eq!(
+        take_events(&mut app),
+        vec![CombatEvent::CommandRefused {
+            command,
+            refusal: CommandRefusal::TrajectoryBlocked {
+                spell: "Direct Ember".to_owned(),
+            },
+        }]
+    );
+    assert_eq!(
+        app.world()
+            .get::<LatticeState>(fight.caster)
+            .expect("the refused caster keeps its lattice")
+            .total_gem_mana(),
+        mana_before
+    );
+    assert!(
+        !app.world()
+            .get::<Turn>(fight.caster)
+            .expect("the refused caster keeps its turn")
+            .acted
+    );
+}
+
+#[test]
+fn an_authored_arc_clears_the_same_wall_that_blocks_a_direct_cast() {
+    let mut app = test_app(2);
+    let fight = trajectory_caster(&mut app, "Arcing Ember");
+    let blocker = TilePos::new(HexCoord::from_axial(1, 0), GROUND + 1);
+    app.insert_resource(
+        TerrainOccupancy::from_runs(
+            HexCoord::ORIGIN
+                .within_radius(12)
+                .into_iter()
+                .map(|coord| (TilePos::new(coord, GROUND), RunBottom(GROUND)))
+                .chain([(blocker, RunBottom(blocker.level))]),
+        )
+        .expect("the exact wall fixture is valid"),
+    );
+
+    cast_named(&mut app, UnitId(1), "Arcing Ember", fight.defender_pos);
+
+    let events = take_events(&mut app);
+    assert!(
+        events.iter().all(|event| !matches!(
+            event,
+            CombatEvent::CommandRefused {
+                refusal: CommandRefusal::TrajectoryBlocked { .. },
+                ..
+            }
+        )),
+        "the authored rise should carry the trajectory over the exact wall: {events:?}"
+    );
+    assert!(events.iter().any(|event| matches!(
+        event,
+        CombatEvent::Cast {
+            spell,
+            ..
+        } if spell == "Arcing Ember"
     )));
 }
 

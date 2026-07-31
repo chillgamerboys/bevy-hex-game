@@ -17,7 +17,7 @@ use hex_ai::{
 };
 use hex_assets::{
     AiProfileCatalog, CastingAxis, CombatSettings, ContentIndex, Effect, ElementCatalog, SpellBook,
-    SubstanceTable, TargetShape,
+    SubstanceTable, TargetShape, Trajectory,
 };
 use hex_core::{
     Busy, CommandQueue, ControlOwner, GameCommand, GameplaySetup, GameplaySetupFailure,
@@ -27,8 +27,8 @@ use hex_core::{
 use hex_lattice::{castable, CellKind, LatticeSpec, LatticeState, LatticeStats};
 use hex_perception::{FactionKnowledge, FactionMapKnowledge, SurfaceSnapshot};
 use hex_units::{
-    targeting, volumes, Body, Downed, Enemy, Faction, Footing, Player, Reach, StandsOn,
-    UnitOccupancy, UnitRegistry,
+    targeting, trajectory_destination, trajectory_is_clear, volumes, Body, Downed, Enemy, Faction,
+    Footing, Player, Reach, StandsOn, TerrainOccupancy, UnitOccupancy, UnitRegistry,
 };
 use xxhash_rust::xxh3::xxh3_64;
 
@@ -236,6 +236,7 @@ struct AiWorld<'w> {
     elements: Option<Res<'w, ElementCatalog>>,
     combat: Option<Res<'w, CombatSettings>>,
     spatial: Option<Res<'w, FactionMapKnowledge>>,
+    terrain: Option<Res<'w, TerrainOccupancy>>,
     knowledge: Res<'w, FactionLatticeKnowledge>,
     effects: Res<'w, PersistentEffects>,
 }
@@ -335,6 +336,7 @@ fn drive_ai(
                             world.content.as_deref(),
                             world.elements.as_deref(),
                             world.combat.as_deref(),
+                            world.terrain.as_deref(),
                         ),
                         None,
                     )
@@ -609,6 +611,7 @@ fn enumerate_turn_actions(
     content: Option<&ContentIndex>,
     elements: Option<&ElementCatalog>,
     combat: Option<&CombatSettings>,
+    terrain: Option<&TerrainOccupancy>,
 ) -> Vec<GameCommand> {
     let id = *actor.1;
     let Some(turn) = actor.5 else {
@@ -729,6 +732,17 @@ fn enumerate_turn_actions(
                 &[None]
             };
             for target in spell_anchors {
+                if !trajectory_available(
+                    spell.targeting.trajectory,
+                    actor.2 .0.pos,
+                    target,
+                    spell.effects.iter().any(|effect| {
+                        matches!(effect, Effect::SetTerrain { .. } | Effect::SpawnWall { .. })
+                    }),
+                    terrain,
+                ) {
+                    continue;
+                }
                 if damages_downed(spell, target, units, &authorized_units) {
                     continue;
                 }
@@ -749,6 +763,24 @@ fn enumerate_turn_actions(
         }
     }
     commands
+}
+
+fn trajectory_available(
+    trajectory: Trajectory,
+    standing: TilePos,
+    target: TilePos,
+    creates_terrain: bool,
+    terrain: Option<&TerrainOccupancy>,
+) -> bool {
+    matches!(trajectory, Trajectory::None)
+        || terrain.is_some_and(|terrain| {
+            trajectory_is_clear(
+                trajectory,
+                standing.above(),
+                trajectory_destination(target, creates_terrain),
+                terrain,
+            )
+        })
 }
 
 fn damages_downed(
@@ -1112,7 +1144,7 @@ fn tile_key(pos: &TilePos) -> String {
 mod tests {
     use super::*;
     use hex_ai::{AiGroupId, AiProfile};
-    use hex_core::HexCoord;
+    use hex_core::{HexCoord, RunBottom};
 
     #[test]
     fn legal_sets_ignore_input_order() {
@@ -1154,6 +1186,41 @@ mod tests {
         let low = TilePos::new(HexCoord::ORIGIN, 1);
         let high = TilePos::new(HexCoord::ORIGIN, 2);
         assert_ne!(tile_key(&low), tile_key(&high));
+    }
+
+    #[test]
+    fn ai_legality_filters_material_trajectories_with_the_shared_voxel_rule() {
+        let standing = TilePos::new(HexCoord::ORIGIN, 1);
+        let target = TilePos::new(HexCoord::from_axial(3, 0), 1);
+        let blocker = TilePos::new(HexCoord::from_axial(1, 0), 2);
+        let terrain =
+            TerrainOccupancy::from_runs([(blocker, RunBottom(blocker.level))]).expect("wall");
+
+        assert!(!trajectory_available(
+            Trajectory::Direct,
+            standing,
+            target,
+            false,
+            Some(&terrain),
+        ));
+        assert!(trajectory_available(
+            Trajectory::Arc { rise: 3 },
+            standing,
+            target,
+            false,
+            Some(&terrain),
+        ));
+        assert!(trajectory_available(
+            Trajectory::None,
+            standing,
+            target,
+            false,
+            None,
+        ));
+        assert!(
+            !trajectory_available(Trajectory::Direct, standing, target, false, None),
+            "material-sensitive AI casts fail closed without exact occupancy"
+        );
     }
 
     #[test]

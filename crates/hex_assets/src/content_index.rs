@@ -418,7 +418,8 @@ mod tests {
     use crate::art_palette::{ArtPalette, PaletteSwatch, SrgbColor, SwatchId};
     use crate::elements::{ElementFile, FusionInput};
     use crate::spells::{
-        CastingAxis, Effect, GemRequirement, ManaAxis, Spell, SpellFile, TargetShape, TargetingSpec,
+        CastingAxis, Effect, GemRequirement, ManaAxis, Spell, SpellFile, TargetShape,
+        TargetingSpec, Trajectory,
     };
     use crate::substances::{Substance, SubstanceFile};
 
@@ -482,7 +483,7 @@ mod tests {
             targeting: TargetingSpec {
                 range: 1,
                 shape: TargetShape::Single,
-                needs_los: false,
+                trajectory: Trajectory::None,
             },
             effects,
         }

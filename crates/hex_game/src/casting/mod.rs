@@ -39,7 +39,7 @@
 use bevy::prelude::*;
 use hex_assets::{
     CastingAxis, CombatSettings, ContentIndex, ElementCatalog, ManaAxis, Spell, SpellBook,
-    TargetShape,
+    TargetShape, Trajectory,
 };
 use hex_combat::TurnOrder;
 use hex_core::{
@@ -49,8 +49,8 @@ use hex_core::{
 };
 use hex_lattice::{castable, CastBlocked, CellKind, LatticeSpec, LatticeState};
 use hex_perception::{FactionKnowledge, FactionMapKnowledge};
-use hex_units::{targeting, volumes};
-use hex_units::{Downed, Faction, Player, Selected, StandsOn, UnitRegistry};
+use hex_units::{targeting, trajectory_destination, trajectory_is_clear, volumes};
+use hex_units::{Downed, Faction, Player, Selected, StandsOn, TerrainOccupancy, UnitRegistry};
 
 use crate::menus::widgets::element_color;
 
@@ -111,6 +111,7 @@ pub fn plugin(app: &mut App) {
             .chain()
             .after(resolve_aim_input)
             .after(GameplaySystems::UiContext)
+            .after(hex_units::TerrainOccupancySystems::Publish)
             .in_set(PausableSystems)
             .run_if(in_state(Screen::Gameplay)),
     );
@@ -176,6 +177,8 @@ pub struct SpellRow {
     pub range: u32,
     /// The shape whose volume the preview resolves.
     pub shape: TargetShape,
+    /// How exact material occupancy between caster and anchor affects this spell.
+    pub trajectory: Trajectory,
     /// Whether the shape begins in the air above the selected surface.
     pub creates_terrain: bool,
 }
@@ -594,6 +597,7 @@ fn spell_row(
         color: element_color(element.and_then(|name| elements.id(name)), elements),
         range: u32::from(definition.targeting.range),
         shape: definition.targeting.shape.clone(),
+        trajectory: definition.targeting.trajectory,
         creates_terrain: definition.effects.iter().any(|effect| {
             matches!(
                 effect,
@@ -632,6 +636,7 @@ fn resolve_aim_input(
     chooses: Query<(&Interaction, &AimsSpell), Changed<Interaction>>,
     controls: Query<(&Interaction, &AimControl), Changed<Interaction>>,
     knowledge: Option<Res<FactionMapKnowledge>>,
+    terrain: Option<Res<TerrainOccupancy>>,
     active_units: Query<&UnitId, Without<Downed>>,
 ) {
     if pending.is_open() {
@@ -661,9 +666,23 @@ fn resolve_aim_input(
                 return;
             };
             let player = knowledge.faction(Faction::Player);
-            let targets = targets_in_range(&readout, &caster, row, player, &active_units);
-            let fallback = (player.state(caster.standing) == KnowledgeState::Observed)
-                .then_some(caster.standing);
+            let targets = targets_in_range(
+                &readout,
+                &caster,
+                row,
+                player,
+                terrain.as_deref(),
+                &active_units,
+            );
+            let fallback = (player.state(caster.standing) == KnowledgeState::Observed
+                && trajectory_available(
+                    row.trajectory,
+                    caster.standing,
+                    caster.standing,
+                    row.creates_terrain,
+                    terrain.as_deref(),
+                ))
+            .then_some(caster.standing);
             let Some(anchor) = targets.first().copied().or(fallback) else {
                 return;
             };
@@ -683,6 +702,7 @@ fn resolve_aim_input(
                 &caster,
                 row,
                 knowledge.faction(Faction::Player),
+                terrain.as_deref(),
                 &active_units,
             );
             Some(Aim {
@@ -823,13 +843,21 @@ fn targets_in_range(
     caster: &Caster,
     row: &SpellRow,
     knowledge: &FactionKnowledge,
+    terrain: Option<&TerrainOccupancy>,
     active_units: &Query<&UnitId, Without<Downed>>,
 ) -> Vec<TilePos> {
     if matches!(row.shape, TargetShape::SelfCast) {
-        return (knowledge.state(caster.standing) == KnowledgeState::Observed)
-            .then_some(caster.standing)
-            .into_iter()
-            .collect();
+        return (knowledge.state(caster.standing) == KnowledgeState::Observed
+            && trajectory_available(
+                row.trajectory,
+                caster.standing,
+                caster.standing,
+                row.creates_terrain,
+                terrain,
+            ))
+        .then_some(caster.standing)
+        .into_iter()
+        .collect();
     }
     let mut ranked: Vec<(bool, u32, TilePos)> = knowledge
         .units()
@@ -838,6 +866,13 @@ fn targets_in_range(
         .filter(|(_, pos)| {
             knowledge.state(*pos) == KnowledgeState::Observed
                 && in_range(caster.standing, *pos, row.range, readout.levels_per_bonus)
+                && trajectory_available(
+                    row.trajectory,
+                    caster.standing,
+                    *pos,
+                    row.creates_terrain,
+                    terrain,
+                )
         })
         .map(|(faction, pos)| {
             (
@@ -849,6 +884,24 @@ fn targets_in_range(
         .collect();
     ranked.sort_unstable();
     ranked.into_iter().map(|(_, _, pos)| pos).collect()
+}
+
+fn trajectory_available(
+    trajectory: Trajectory,
+    standing: TilePos,
+    target: TilePos,
+    creates_terrain: bool,
+    terrain: Option<&TerrainOccupancy>,
+) -> bool {
+    matches!(trajectory, Trajectory::None)
+        || terrain.is_some_and(|terrain| {
+            trajectory_is_clear(
+                trajectory,
+                standing.above(),
+                trajectory_destination(target, creates_terrain),
+                terrain,
+            )
+        })
 }
 
 /// The entry after `current` in a cycle, wrapping.

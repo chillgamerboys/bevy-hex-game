@@ -418,11 +418,13 @@ The binding parts are:
 
 The first implementation also ships with explicit limitations:
 
-- **Volumes are geometric, not obstruction-aware.** A sphere next to a cave
-  wall fills voxels inside the rock and the chamber beyond it. Clipping waits on the
-  same line-of-sight work that the live `RunBottom`
-  ([boundary.md](boundary.md) ask C) publication enables, and `needs_los` on spell
-  content is parsed but unenforced until then.
+- **Trajectories are obstruction-aware; effect volumes are not clipped.** `Direct`
+  and authored-rise `Arc` casts test exact material occupancy with one
+  direction-symmetric integer supercover, while `None` deliberately bypasses it.
+  Authoritative casting, preview anchors, and AI enumeration share that primitive and
+  fail closed without occupancy. A sphere may still include rock and the chamber
+  beyond it after its anchor is reached; per-voxel volume clipping and
+  obstruction-aware sight remain later work.
 - **A breached cave roof will not admit daylight.** Terrain edits already keep the
   interior *roof* projection current, but interior **membership** is never re-derived,
   so a chamber you blow open still counts as inside. Live perception therefore

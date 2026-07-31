@@ -18,7 +18,7 @@
             casting: Evocation,
             mana: Fixed,
             co_castable: false,
-            targeting: (range: 3, shape: Single, needs_los: true),
+            targeting: (range: 3, shape: Single, trajectory: Direct),
             effects: [
                 DisableHexes(count: 1, targeted: false),
                 Burn(turns: 2),
@@ -38,7 +38,7 @@
             casting: Evocation,
             mana: Fixed,
             co_castable: false,
-            targeting: (range: 4, shape: Sphere(radius: 2), needs_los: true),
+            targeting: (range: 4, shape: Sphere(radius: 2), trajectory: Direct),
             effects: [
                 DisableHexes(count: 3, targeted: false),
                 Displace(distance: 1),
@@ -54,7 +54,7 @@
             casting: Evocation,
             mana: Fixed,
             co_castable: false,
-            targeting: (range: 4, shape: Single, needs_los: true),
+            targeting: (range: 4, shape: Single, trajectory: Direct),
             effects: [DisableHexes(count: 2, targeted: false)],
         ),
 
@@ -68,7 +68,7 @@
             casting: Evocation,
             mana: Variable,
             co_castable: true,
-            targeting: (range: 2, shape: Line(length: 2, width: 0), needs_los: true),
+            targeting: (range: 2, shape: Line(length: 2, width: 0), trajectory: Direct),
             effects: [Burn(turns: 2)],
         ),
 
@@ -82,7 +82,7 @@
             casting: Enchantment(defense: 2),
             mana: Fixed,
             co_castable: false,
-            targeting: (range: 0, shape: SelfCast, needs_los: false),
+            targeting: (range: 0, shape: SelfCast, trajectory: None),
             effects: [],
         ),
 
@@ -95,7 +95,7 @@
             casting: Enchantment(defense: 0),
             mana: Fixed,
             co_castable: false,
-            targeting: (range: 2, shape: Column(height: 2), needs_los: true),
+            targeting: (range: 2, shape: Column(height: 2), trajectory: Direct),
             effects: [SpawnWall(substance: "stone")],
         ),
 
@@ -105,7 +105,7 @@
             casting: Evocation,
             mana: Fixed,
             co_castable: false,
-            targeting: (range: 2, shape: Single, needs_los: false),
+            targeting: (range: 2, shape: Single, trajectory: None),
             effects: [SetTerrain(substance: "stone")],
         ),
 
@@ -115,7 +115,7 @@
             casting: Evocation,
             mana: Fixed,
             co_castable: false,
-            targeting: (range: 6, shape: Single, needs_los: false),
+            targeting: (range: 6, shape: Single, trajectory: None),
             effects: [Reveal(tier: 1)],
         ),
 
@@ -128,7 +128,7 @@
             casting: Evocation,
             mana: Fixed,
             co_castable: false,
-            targeting: (range: 3, shape: Sphere(radius: 3), needs_los: false),
+            targeting: (range: 3, shape: Sphere(radius: 3), trajectory: None),
             effects: [Illuminate(radius: 3)],
         ),
 
@@ -141,7 +141,7 @@
             casting: Evocation,
             mana: Fixed,
             co_castable: false,
-            targeting: (range: 3, shape: Single, needs_los: true),
+            targeting: (range: 3, shape: Single, trajectory: Direct),
             effects: [
                 RestoreHexes(count: 2),
                 ModifyIncomingDisables(amount: 1),

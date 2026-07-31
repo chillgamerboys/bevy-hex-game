@@ -294,8 +294,9 @@ session-local): `elements.ron` (wheel + elements + fusion recipes, DAG
 validation), `spells.ron` (requirements multiset ≤ 6; casting axis
 evocation/enchantment-with-upkeep; mana axis fixed/variable; `co_castable` —
 "ritual" = variable + co-castable, separating the axes per the design's own
-naming note; `TargetingSpec { range, shape, needs_los }` reusing
-`hex_units::targeting`'s height-advantage geometry), `lattices.ron` (enemy
+naming note; `TargetingSpec { range, shape, trajectory }` reusing
+`hex_units::targeting`'s height-advantage geometry and the exact integer-voxel
+`Direct`/`Arc`/`None` obstruction vocabulary), `lattices.ron` (enemy
 archetypes as cube-coordinate entries — the file **is** `LatticeSpec`'s
 serde format, so the future in-game lattice editor round-trips for free; the
 editor never rewrites hand-commented shipped files), `combat.ron` (policy

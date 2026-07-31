@@ -175,11 +175,14 @@ encounter-owned exact `TilePos` overlay. No current system depends on it.
 
 ## C — Run bottoms (exact occupancy: casting legality, line-of-sight, cover)
 
-**Need**: `needs_los` spells and cover want column occupancy. Tiles publish
+**Need**: material-sensitive spell trajectories and cover want column occupancy. Tiles publish
 their run's top (`TilePos`) and world extent (`HexSpan`) but not the run's
 bottom **level**, and gameplay must not divide by `level_height` to recover
 it (that reintroduces the dependency the split exists to prevent);
-`Headroom` saturates, so occupancy can't be reconstructed exactly.
+`Headroom` saturates, so occupancy can't be reconstructed exactly. The published
+bounds now feed one gameplay-owned exact occupancy projection and deterministic
+trajectory supercover; obstruction-aware sight remains later work and must reuse that
+primitive rather than introduce a second ray.
 
 Initial spatial perception is deliberately obstruction-agnostic and does not need
 this component. Gameplay lights are radial within one light domain; sight uses exact

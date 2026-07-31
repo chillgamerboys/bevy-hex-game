@@ -519,6 +519,7 @@ mod tests {
             color: Color::WHITE,
             range: 3,
             shape: TargetShape::Single,
+            trajectory: hex_assets::Trajectory::None,
             creates_terrain: false,
         }
     }

@@ -36,11 +36,14 @@ use bevy::picking::events::{Click, Pointer};
 use bevy::picking::Pickable;
 use bevy::prelude::*;
 
-use hex_assets::{GameAssets, TargetShape};
+use hex_assets::{GameAssets, TargetShape, Trajectory};
 use hex_core::{Headroom, HexSpan, HexTile, KnowledgeState, Pause, TilePos};
 use hex_perception::FactionMapKnowledge;
 use hex_units::Faction;
-use hex_units::{resolve_creation_volume, volumes, TerrainRevision};
+use hex_units::{
+    resolve_creation_volume, trajectory_destination, trajectory_is_clear, volumes,
+    TerrainOccupancy, TerrainRevision,
+};
 
 use super::{facing_toward, in_range, Aim, Aiming, CastReadout};
 
@@ -145,8 +148,10 @@ pub(super) struct DrawKey {
     range: u32,
     levels_per_bonus: u32,
     shape: TargetShape,
+    trajectory: Trajectory,
     creates_terrain: bool,
     knowledge_available: bool,
+    terrain_available: bool,
 }
 
 /// What is currently on the ground.
@@ -164,6 +169,7 @@ pub(super) fn redraw_preview(
     mut materials: ResMut<Assets<StandardMaterial>>,
     revision: Res<TerrainRevision>,
     knowledge: Option<Res<FactionMapKnowledge>>,
+    terrain: Option<Res<TerrainOccupancy>>,
     tiles: TileQuery,
     drawn: Query<Entity, DrawnPreview>,
 ) {
@@ -171,6 +177,7 @@ pub(super) fn redraw_preview(
     let knowledge_changed = knowledge
         .as_ref()
         .is_some_and(|knowledge| knowledge.is_changed());
+    let terrain_changed = terrain.as_ref().is_some_and(|terrain| terrain.is_changed());
 
     let wanted = aiming
         .0
@@ -185,12 +192,16 @@ pub(super) fn redraw_preview(
             shape: readout
                 .row(&aim.spell)
                 .map_or(TargetShape::Single, |row| row.shape.clone()),
+            trajectory: readout
+                .row(&aim.spell)
+                .map_or(Trajectory::None, |row| row.trajectory),
             creates_terrain: readout
                 .row(&aim.spell)
                 .is_some_and(|row| row.creates_terrain),
             knowledge_available: knowledge.is_some(),
+            terrain_available: terrain.is_some(),
         });
-    if drawn_key.0 == wanted && !knowledge_changed {
+    if drawn_key.0 == wanted && !knowledge_changed && !terrain_changed {
         return;
     }
     for marker in &drawn {
@@ -237,6 +248,9 @@ pub(super) fn redraw_preview(
         row.range,
         readout.levels_per_bonus,
         &row.shape,
+        row.trajectory,
+        row.creates_terrain,
+        terrain.as_deref(),
     );
     for (pos, top) in &anchors {
         commands.spawn((
@@ -330,12 +344,26 @@ fn legal_anchors(
     range: u32,
     levels_per_bonus: u32,
     shape: &TargetShape,
+    trajectory: Trajectory,
+    creates_terrain: bool,
+    terrain: Option<&TerrainOccupancy>,
 ) -> Vec<(TilePos, f32)> {
     surfaces
         .iter()
         .filter(|(pos, _)| match shape {
             TargetShape::SelfCast => *pos == from,
             _ => in_range(from, *pos, range, levels_per_bonus),
+        })
+        .filter(|(pos, _)| {
+            matches!(trajectory, Trajectory::None)
+                || terrain.is_some_and(|terrain| {
+                    trajectory_is_clear(
+                        trajectory,
+                        from.above(),
+                        trajectory_destination(*pos, creates_terrain),
+                        terrain,
+                    )
+                })
         })
         .copied()
         .collect()
@@ -444,4 +472,63 @@ pub(super) fn clear_preview(
     }
     drawn_key.0 = None;
     *volume = AimVolume::default();
+}
+
+#[cfg(test)]
+mod tests {
+    use hex_core::{HexCoord, RunBottom};
+
+    use super::*;
+
+    fn at(q: i32, r: i32, level: i32) -> TilePos {
+        TilePos::new(HexCoord::from_axial(q, r), level)
+    }
+
+    #[test]
+    fn legal_anchor_paint_uses_the_same_exact_trajectory_contract() {
+        let from = at(0, 0, 1);
+        let target = at(3, 0, 1);
+        let surfaces = [(target, 1.0)];
+        let blocker = at(1, 0, 2);
+        let terrain =
+            TerrainOccupancy::from_runs([(blocker, RunBottom(blocker.level))]).expect("wall");
+
+        assert!(legal_anchors(
+            &surfaces,
+            from,
+            3,
+            5,
+            &TargetShape::Single,
+            Trajectory::Direct,
+            false,
+            Some(&terrain),
+        )
+        .is_empty());
+        assert_eq!(
+            legal_anchors(
+                &surfaces,
+                from,
+                3,
+                5,
+                &TargetShape::Single,
+                Trajectory::Arc { rise: 3 },
+                false,
+                Some(&terrain),
+            ),
+            surfaces
+        );
+        assert_eq!(
+            legal_anchors(
+                &surfaces,
+                from,
+                3,
+                5,
+                &TargetShape::Single,
+                Trajectory::None,
+                false,
+                None,
+            ),
+            surfaces
+        );
+    }
 }

@@ -260,15 +260,33 @@ fabricate world-space occupancy to paint the air volume.
 
 ### Obstruction
 
-**Volumes are geometric in 0.3** — a sphere next to a cave wall fills voxels inside
-the rock and the chamber beyond it. This is wrong, it is documented as wrong, and it is
-bounded: obstruction-aware clipping arrives with the same line-of-sight work that
-the live `RunBottom` publication enables, and `needs_los` on `TargetingSpec`
-(**built**, parsed) is unenforced until then.
+`TargetingSpec::trajectory` is a closed vocabulary:
 
-When that lands, sight and spell trajectories should share **one** raycast primitive.
-Two independently-written line algorithms that disagree about grazing a corner is a bug
-nobody will find for months.
+- `Direct` follows a straight centre-to-centre segment;
+- `Arc { rise }` follows two segments through a deterministic apex exactly `rise`
+  integer levels above the higher endpoint;
+- `None` deliberately ignores material obstruction.
+
+Direct and arc traversal uses one direction-symmetric integer 3D supercover in
+`hex_units`. Every closed voxel prism the segment touches counts, including exact
+face, edge, and corner grazes. The source and destination endpoints are excluded; all
+other touched material blocks. The source is the caster's lowest body voxel
+(`standing.above()`). An ordinary spell ends in the body/air voxel above the selected
+surface; otherwise a level shot across flat ground would enter the floor before it
+arrived. Terrain construction instead ends at the selected material surface because
+that surface authorizes the separate placement volume above it. Occupancy comes only
+from the exact `RunBottom` projection — never `HexSpan`, transforms, `level_height`,
+or saturated `Headroom`. A blocked cast exposes only a generic refusal because the
+obstruction itself may be hidden.
+
+Authoritative casting checks the trajectory after observation and before payment.
+Preview anchors and AI legal-action enumeration use the same primitive and fail closed
+when a material-sensitive trajectory has no occupancy projection.
+
+**Effect volumes remain geometric.** A sphere next to a cave wall may include voxels
+inside the rock and the chamber beyond it after its trajectory reaches the anchor.
+Per-voxel clipping remains later work. Obstruction-aware sight must reuse this
+supercover rather than grow an independently rounded ray.
 
 ## The command
 

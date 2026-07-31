@@ -97,7 +97,7 @@ pub use settings::{
 };
 pub use spells::{
     CastingAxis, Effect, GemRequirement, ManaAxis, Spell, SpellBook, SpellFile, TargetShape,
-    TargetingSpec, VoxelOffset,
+    TargetingSpec, Trajectory, VoxelOffset,
 };
 pub use substances::{Substance, SubstanceFile, SubstanceTable, SubstanceTableError};
 

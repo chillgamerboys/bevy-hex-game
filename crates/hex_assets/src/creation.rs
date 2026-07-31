@@ -13,7 +13,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AxialPair, CastingAxis, Effect, ElementCatalog, LatticeFile, ManaAxis, Spell, SpellBook,
-    SpellFile, TargetShape, TargetingSpec, UnvalidatedArchetype, UnvalidatedCell, UnvalidatedEntry,
+    SpellFile, TargetShape, TargetingSpec, Trajectory, UnvalidatedArchetype, UnvalidatedCell,
+    UnvalidatedEntry,
 };
 use crate::{LoadSettings, CONFIG_EXTENSIONS};
 
@@ -232,7 +233,7 @@ impl SavedSpell {
                 targeting: TargetingSpec {
                     range: 3,
                     shape: TargetShape::Single,
-                    needs_los: false,
+                    trajectory: Trajectory::None,
                 },
                 effects: Vec::new(),
             },
@@ -435,9 +436,6 @@ pub fn creator_spell_issues(saved: &SavedSpell, elements: &ElementCatalog) -> Ve
     }
     if saved.spell.co_castable {
         issues.push("co-casting is not supported by the creator".to_owned());
-    }
-    if saved.spell.targeting.needs_los {
-        issues.push("creator spells cannot require line of sight yet".to_owned());
     }
     if !matches!(
         saved.spell.targeting.shape,

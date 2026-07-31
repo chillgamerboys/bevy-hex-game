@@ -25,7 +25,7 @@
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use hex_core::{HexCoord, Level, Screen, SpellId};
-use serde::{Deserialize, Serialize};
+use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 
 use crate::fingerprint::FingerprintEncoder;
 use crate::{LoadSettings, CONFIG_EXTENSIONS};
@@ -129,14 +129,79 @@ pub enum TargetShape {
 
 /// Where a spell can be cast, reusing `hex_units::targeting`'s height-advantage
 /// geometry at cast time. Pure data here.
-#[derive(Reflect, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TargetingSpec {
     /// Base range in hexes, before any high-ground bonus.
     pub range: u8,
     /// The shape the spell covers.
     pub shape: TargetShape,
-    /// Whether an unobstructed line of sight to the target is required.
-    pub needs_los: bool,
+    /// How material occupancy between caster and target affects the cast.
+    pub trajectory: Trajectory,
+}
+
+/// How a spell travels from its caster to the selected anchor.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Trajectory {
+    /// A straight exact-voxel segment, blocked by touched intervening material.
+    Direct,
+    /// A two-segment arch through a deterministic apex.
+    Arc {
+        /// Exact levels the apex rises above the higher endpoint.
+        rise: u8,
+    },
+    /// Deliberately ignores material obstruction.
+    None,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UnvalidatedTargetingSpec {
+    range: u8,
+    shape: TargetShape,
+    #[serde(default, deserialize_with = "present_value")]
+    trajectory: Option<Trajectory>,
+    // Read-only migration seam for creator saves and external content authored before
+    // the trajectory vocabulary. Serialization always writes `trajectory`, so this is
+    // not a second live authority.
+    #[serde(default, deserialize_with = "present_value")]
+    needs_los: Option<bool>,
+}
+
+fn present_value<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+impl<'de> Deserialize<'de> for TargetingSpec {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = UnvalidatedTargetingSpec::deserialize(deserializer)?;
+        let trajectory = match (raw.trajectory, raw.needs_los) {
+            (Some(trajectory), None) => trajectory,
+            (None, Some(true)) => Trajectory::Direct,
+            (None, Some(false)) => Trajectory::None,
+            (Some(_), Some(_)) => {
+                return Err(D::Error::custom(
+                    "targeting cannot define both trajectory and legacy needs_los",
+                ));
+            }
+            (None, None) => {
+                return Err(D::Error::custom(
+                    "targeting must define trajectory (or legacy needs_los)",
+                ));
+            }
+        };
+        Ok(Self {
+            range: raw.range,
+            shape: raw.shape,
+            trajectory,
+        })
+    }
 }
 
 /// One primitive effect a spell applies when it resolves. A closed vocabulary
@@ -353,6 +418,11 @@ impl SpellFile {
                 ));
             }
             validate_shape(name, &spell.targeting.shape)?;
+            if matches!(spell.targeting.trajectory, Trajectory::Arc { rise: 0 }) {
+                return Err(format!(
+                    "spell '{name}' trajectory Arc.rise must be at least 1"
+                ));
+            }
             validate_effects(name, spell)?;
         }
         Ok(())
@@ -643,7 +713,14 @@ fn spell_file_fingerprint(file: &SpellFile) -> u64 {
         encoder.bool(spell.co_castable);
         encoder.u8(spell.targeting.range);
         fingerprint_shape(&mut encoder, &spell.targeting.shape);
-        encoder.bool(spell.targeting.needs_los);
+        match spell.targeting.trajectory {
+            Trajectory::Direct => encoder.u8(0),
+            Trajectory::Arc { rise } => {
+                encoder.u8(1);
+                encoder.u8(rise);
+            }
+            Trajectory::None => encoder.u8(2),
+        }
         encoder.usize(spell.effects.len());
         for effect in &spell.effects {
             fingerprint_effect(&mut encoder, effect);
@@ -764,7 +841,7 @@ mod tests {
         TargetingSpec {
             range: 3,
             shape: TargetShape::Single,
-            needs_los: true,
+            trajectory: Trajectory::Direct,
         }
     }
 
@@ -805,7 +882,7 @@ mod tests {
                         length: 2,
                         width: 0,
                     },
-                    needs_los: true,
+                    trajectory: Trajectory::Direct,
                 },
                 effects: vec![Effect::Burn { turns: 2 }],
             },
@@ -915,6 +992,39 @@ mod tests {
         assert!(
             file.validate().is_err(),
             "a self-cast with range 2 is a contradiction in the file"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_a_zero_rise_arc_instead_of_aliasing_direct() {
+        let mut file = test_file();
+        file.spells
+            .get_mut("Ember")
+            .expect("the fixture contains Ember")
+            .targeting
+            .trajectory = Trajectory::Arc { rise: 0 };
+        let error = file.validate().expect_err("a zero-rise arc is ambiguous");
+        assert!(error.contains("Arc.rise must be at least 1"), "{error}");
+    }
+
+    #[test]
+    fn legacy_boolean_targeting_migrates_on_read_but_never_serializes_back() {
+        let direct: TargetingSpec =
+            ron::from_str("(range: 3, shape: Single, needs_los: true)").expect("legacy targeting");
+        let none: TargetingSpec =
+            ron::from_str("(range: 3, shape: Single, needs_los: false)").expect("legacy targeting");
+        assert_eq!(direct.trajectory, Trajectory::Direct);
+        assert_eq!(none.trajectory, Trajectory::None);
+
+        let serialized = ron::to_string(&direct).expect("new targeting serializes");
+        assert!(serialized.contains("trajectory:Direct"), "{serialized}");
+        assert!(!serialized.contains("needs_los"), "{serialized}");
+        assert!(
+            ron::from_str::<TargetingSpec>(
+                "(range: 3, shape: Single, trajectory: Direct, needs_los: true)"
+            )
+            .is_err(),
+            "two trajectory authorities must be rejected"
         );
     }
 

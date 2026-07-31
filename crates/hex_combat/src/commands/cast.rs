@@ -26,7 +26,8 @@ use hex_core::{
 };
 use hex_lattice::{apply_cast, castable, CastBlocked, CellKind, LatticeSpec, LatticeState};
 use hex_units::{
-    resolve_creation_volume, targeting, validate_creation_volume, volumes, CreationBody,
+    resolve_creation_volume, targeting, trajectory_destination, trajectory_is_clear,
+    validate_creation_volume, volumes, CreationBody,
 };
 
 use crate::{CastBlockReason, CombatData, CombatEvent, CommandRefusal, UnitData};
@@ -194,6 +195,23 @@ pub(super) fn apply(
             spell: spell_name.to_owned(),
             target,
         });
+    }
+    if !matches!(spec.targeting.trajectory, hex_assets::Trajectory::None) {
+        let Some(terrain) = ctx.terrain else {
+            return Err(CommandRefusal::MissingCombatData {
+                data: CombatData::TerrainOccupancy,
+            });
+        };
+        if !trajectory_is_clear(
+            spec.targeting.trajectory,
+            standing.pos.above(),
+            trajectory_destination(target, creates_terrain(spec)),
+            terrain,
+        ) {
+            return Err(CommandRefusal::TrajectoryBlocked {
+                spell: spell_name.to_owned(),
+            });
+        }
     }
     let target_unit = unit_standing_on(ctx, actors, target);
     if let Some((target, _, true)) = target_unit {
@@ -632,6 +650,13 @@ fn plan_terrain_creation(
         );
     }
     Ok(edits)
+}
+
+fn creates_terrain(spell: &Spell) -> bool {
+    spell
+        .effects
+        .iter()
+        .any(|effect| matches!(effect, Effect::SetTerrain { .. } | Effect::SpawnWall { .. }))
 }
 
 /// The unit standing on `pos`, if any.

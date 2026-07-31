@@ -40,6 +40,8 @@ pub mod targeting;
 pub mod terrain_creation;
 /// Exact material occupancy derived from published integer run bounds.
 pub mod terrain_occupancy;
+/// Exact material obstruction along spell trajectories.
+pub mod trajectories;
 /// The units themselves: the player, enemies, and click-to-move.
 pub mod units;
 /// Turning a spell's shape into the exact voxels it reaches.
@@ -62,6 +64,9 @@ pub use terrain_creation::{
     resolve_creation_volume, validate_creation_volume, CreationBody, TerrainCreationBlock,
 };
 pub use terrain_occupancy::{InvalidTerrainRun, TerrainOccupancy, TerrainOccupancySystems};
+pub use trajectories::{
+    supercover, trajectory_destination, trajectory_is_clear, trajectory_voxels,
+};
 pub use units::{
     Archetype, Downed, Enemy, MovingTo, Party, Player, StandsOn, StopMovingAt, UnitAllocator,
     UnitRegistry,

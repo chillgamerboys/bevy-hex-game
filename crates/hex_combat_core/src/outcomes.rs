@@ -268,6 +268,14 @@ pub enum CommandRefusal {
         /// The unobserved anchor.
         target: TilePos,
     },
+    /// Material intersected the spell's authored trajectory.
+    ///
+    /// The exact voxel is deliberately absent because an intervening blocker may be
+    /// hidden from the caster's faction.
+    TrajectoryBlocked {
+        /// The stable spell name from the command.
+        spell: String,
+    },
     /// A terrain-creation effect intersected material, unit support, or a unit body.
     ///
     /// The detailed obstruction is deliberately absent: an area may extend into
@@ -622,6 +630,9 @@ mod tests {
             CommandRefusal::TargetUnobserved {
                 spell: "Ember".to_owned(),
                 target,
+            },
+            CommandRefusal::TrajectoryBlocked {
+                spell: "Ember".to_owned(),
             },
             CommandRefusal::TerrainCreationBlocked {
                 spell: "Stone Shaper".to_owned(),
