@@ -4,8 +4,9 @@ use bevy::prelude::*;
 use hex_core::Screen;
 
 use crate::{
-    blurb, fine, heading, panel, row_button, DevTimeIntent, DevTimeView, HudElement,
-    ResolvedUiMetrics, UiAssets, UiHudSetup, UiIntent, UiRegionRole, UiSystems, UiViewportClass,
+    blurb, fine, heading, layout::is_ultra_constrained, panel, row_button, DevTimeIntent,
+    DevTimeView, HudElement, ResolvedUiMetrics, UiAssets, UiHudSetup, UiIntent, UiRegionRole,
+    UiSystems, UiViewportClass,
 };
 
 const CONTROLS: [(&str, &str, DevTimeIntent); 6] = [
@@ -79,14 +80,14 @@ fn spawn_panel(
             Pickable::IGNORE,
             GlobalZIndex(3),
         ))
-        .insert(panel_node(metrics.viewport))
+        .insert(panel_node(*metrics))
         .with_children(|panel| {
             panel.spawn((DevTimeHeading, heading(&assets, "DEV · TIME")));
             panel.spawn((DevTimeStatus, blurb(&assets, "Checking cyclic time…")));
             panel.spawn((
                 Name::new("Dev Time Controls"),
                 DevTimeControls::default(),
-                controls_node(metrics.viewport),
+                controls_node(*metrics),
                 Pickable::IGNORE,
             ));
         })
@@ -102,7 +103,7 @@ fn panel_parent(viewport: UiViewportClass, inspector: Entity, frame: Option<Enti
     }
 }
 
-fn panel_node(viewport: UiViewportClass) -> Node {
+fn panel_node(metrics: ResolvedUiMetrics) -> Node {
     let mut node = Node {
         width: Val::Percent(100.0),
         flex_direction: FlexDirection::Column,
@@ -112,20 +113,44 @@ fn panel_node(viewport: UiViewportClass) -> Node {
         border_radius: BorderRadius::all(Val::Px(10.0)),
         ..default()
     };
-    if viewport == UiViewportClass::Compact {
+    if metrics.viewport == UiViewportClass::Compact {
         node.position_type = PositionType::Absolute;
-        node.top = Val::Px(8.0);
-        node.right = Val::Px(8.0);
-        node.width = Val::Px(256.0);
-        node.height = Val::Px(120.0);
         node.row_gap = Val::Px(4.0);
-        node.padding = UiRect::all(Val::Px(6.0));
+        if uses_ultra_middle_band(metrics) {
+            node.top = Val::Px(138.0);
+            node.right = Val::Px(12.0);
+            node.left = Val::Px(196.0);
+            node.width = Val::Px(metrics.effective_size.x - 208.0);
+            node.height = Val::Px(82.0);
+            node.row_gap = Val::Px(2.0);
+            node.padding = UiRect::all(Val::Px(4.0));
+        } else if is_ultra_constrained(metrics) {
+            node.top = Val::Px(8.0);
+            node.left = Val::Px(8.0);
+            node.width = Val::Px(180.0);
+            node.height = Val::Px(128.0);
+            node.padding = UiRect::all(Val::Px(4.0));
+        } else {
+            node.top = Val::Px(8.0);
+            node.right = Val::Px(8.0);
+            node.width = Val::Px(256.0);
+            node.height = Val::Px(120.0);
+            node.padding = UiRect::all(Val::Px(6.0));
+        }
     }
     node
 }
 
-fn controls_node(viewport: UiViewportClass) -> Node {
-    let gap = if viewport == UiViewportClass::Compact {
+fn uses_ultra_middle_band(metrics: ResolvedUiMetrics) -> bool {
+    is_ultra_constrained(metrics)
+        && metrics.effective_size.x >= 620.0
+        && metrics.effective_size.y >= 352.0
+}
+
+fn controls_node(metrics: ResolvedUiMetrics) -> Node {
+    let gap = if uses_ultra_middle_band(metrics) {
+        2.0
+    } else if metrics.viewport == UiViewportClass::Compact {
         4.0
     } else {
         6.0
@@ -194,10 +219,10 @@ fn reconcile_layout(
         if current_parent.parent() != wanted_parent {
             commands.entity(wanted_parent).add_child(panel);
         }
-        *node = panel_node(metrics.viewport);
+        *node = panel_node(*metrics);
     }
     if let Ok(mut node) = roots.single_mut() {
-        *node = controls_node(metrics.viewport);
+        *node = controls_node(*metrics);
     }
     if let Ok(mut node) = headings.single_mut() {
         node.display = if metrics.viewport == UiViewportClass::Compact {
@@ -206,7 +231,11 @@ fn reconcile_layout(
             Display::Flex
         };
     }
-    let (width, height) = if metrics.viewport == UiViewportClass::Compact {
+    let (width, height) = if uses_ultra_middle_band(*metrics) {
+        (132.0, 22.0)
+    } else if is_ultra_constrained(*metrics) {
+        (82.0, 28.0)
+    } else if metrics.viewport == UiViewportClass::Compact {
         (76.0, 36.0)
     } else {
         (96.0, 48.0)
@@ -214,7 +243,9 @@ fn reconcile_layout(
     for mut node in &mut controls {
         node.width = Val::Px(width);
         node.height = Val::Px(height);
-        node.padding = if metrics.viewport == UiViewportClass::Compact {
+        node.padding = if is_ultra_constrained(*metrics) {
+            UiRect::axes(Val::Px(3.0), Val::Px(1.0))
+        } else if metrics.viewport == UiViewportClass::Compact {
             UiRect::axes(Val::Px(4.0), Val::Px(2.0))
         } else {
             UiRect::axes(Val::Px(10.0), Val::Px(4.0))
@@ -527,16 +558,17 @@ mod tests {
     }
 
     #[test]
-    fn compact_controls_stay_in_the_reserved_strip_at_two_hundred_percent_scale() {
+    fn ultra_constrained_controls_use_the_free_left_column() {
         let metrics =
-            crate::resolve_ui_metrics(Vec2::new(1280.0, 720.0), crate::UiScaleMode::Percent200);
+            crate::resolve_ui_metrics(Vec2::new(960.0, 540.0), crate::UiScaleMode::Percent200);
         assert_eq!(metrics.viewport, UiViewportClass::Compact);
-        let panel = panel_node(metrics.viewport);
+        assert!(!uses_ultra_middle_band(metrics));
+        let panel = panel_node(metrics);
         let Val::Px(width) = panel.width else {
             panic!("the compact panel must have a bounded width");
         };
-        let Val::Px(right) = panel.right else {
-            panic!("the compact panel must have a bounded right inset");
+        let Val::Px(left) = panel.left else {
+            panic!("the ultra-constrained panel must have a bounded left inset");
         };
         let Val::Px(top) = panel.top else {
             panic!("the compact panel must have a bounded top inset");
@@ -544,12 +576,128 @@ mod tests {
         let Val::Px(height) = panel.height else {
             panic!("the compact panel must have a bounded height");
         };
-        let left = metrics.effective_size.x - right - width;
-        let reserved_strip_left = metrics.effective_size.x - 268.0;
+        let mut actions = Node::default();
+        crate::layout::constrain_region_to_canvas(metrics, UiRegionRole::Actions, &mut actions);
+        let Val::Px(actions_left) = actions.left else {
+            panic!("the action region must have a bounded left inset");
+        };
         let action_rail_top = metrics.effective_size.y - 12.0 - 116.0;
-        assert!(left >= reserved_strip_left);
+        assert!(left + width < actions_left);
         assert!(top + height <= action_rail_top);
-        assert!(3.0 * 76.0 + 2.0 * 4.0 <= width - 14.0);
+        assert!(2.0 * 82.0 + 4.0 <= width - 8.0);
+    }
+
+    #[test]
+    fn common_two_hundred_percent_canvas_uses_the_gap_between_actions_and_rail() {
+        let metrics =
+            crate::resolve_ui_metrics(Vec2::new(1280.0, 720.0), crate::UiScaleMode::Percent200);
+        assert!(uses_ultra_middle_band(metrics));
+        let panel = panel_node(metrics);
+        assert_eq!(panel.left, Val::Px(196.0));
+        assert_eq!(panel.right, Val::Px(12.0));
+        assert_eq!(panel.top, Val::Px(138.0));
+        assert_eq!(panel.height, Val::Px(82.0));
+        let panel_width = metrics.effective_size.x - 196.0 - 12.0;
+        assert!(3.0 * 132.0 + 2.0 * 2.0 <= panel_width - 8.0);
+        assert!(138.0 + 82.0 <= metrics.effective_size.y - 12.0 - 116.0);
+    }
+
+    #[test]
+    fn compact_panel_and_controls_fit_without_covering_primary_gameplay_surfaces() {
+        for logical_size in [
+            UVec2::new(960, 540),
+            UVec2::new(1280, 720),
+            UVec2::new(1920, 1080),
+        ] {
+            for mode in [crate::UiScaleMode::Auto, crate::UiScaleMode::Percent200] {
+                let mut app = App::new();
+                app.add_plugins(crate::test_support::HeadlessUiPlugin::new(
+                    logical_size.x,
+                    logical_size.y,
+                ));
+                app.world_mut()
+                    .insert_resource(crate::UiScalePreference(mode));
+                app.world_mut()
+                    .insert_resource(DevTimeView::Available { hours: 12.0 });
+                app.world_mut().insert_resource(crate::GameplayChromeView {
+                    shown: true,
+                    decision_required: false,
+                    encounter_complete: false,
+                });
+                app.world_mut()
+                    .resource_mut::<NextState<Screen>>()
+                    .set(Screen::Gameplay);
+                for _ in 0..8 {
+                    app.update();
+                }
+
+                let snapshot = crate::test_support::ui_tree_snapshot(app.world_mut());
+                if snapshot.metrics.viewport != UiViewportClass::Compact {
+                    continue;
+                }
+                let panel = snapshot
+                    .nodes
+                    .iter()
+                    .find(|node| node.name == "Dev Time Panel")
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "the development time panel must be visible at {logical_size:?} in {mode:?}"
+                        )
+                    });
+                assert!(panel.size.cmpgt(Vec2::ZERO).all());
+                assert!(
+                    !panel.overflows,
+                    "the panel must fit at {logical_size:?} in {mode:?}: {panel:?}"
+                );
+                let panel_min = panel.center - panel.size * 0.5;
+                let panel_max = panel.center + panel.size * 0.5;
+                assert!(panel_min.cmpge(Vec2::ZERO).all());
+                assert!(
+                    panel_max.cmple(snapshot.metrics.effective_size).all(),
+                    "the panel must remain on canvas at {logical_size:?} in {mode:?}: panel={panel:?}, metrics={:?}",
+                    snapshot.metrics
+                );
+
+                for control_name in CONTROLS.map(|(name, _, _)| name) {
+                    let control = snapshot
+                        .nodes
+                        .iter()
+                        .find(|node| node.name == control_name)
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "{control_name:?} must be visible at {logical_size:?} in {mode:?}"
+                            )
+                        });
+                    assert!(control.size.cmpgt(Vec2::ZERO).all());
+                    assert!(
+                        !control.overflows,
+                        "{control_name:?} must fit at {logical_size:?} in {mode:?}: {control:?}"
+                    );
+                    let control_min = control.center - control.size * 0.5;
+                    let control_max = control.center + control.size * 0.5;
+                    assert!(control_min.cmpge(panel_min).all());
+                    assert!(control_max.cmple(panel_max).all());
+                }
+
+                for primary_name in [
+                    "Party HUD Region",
+                    "Turn HUD Region",
+                    "Actions HUD Region",
+                    "Casting Panel",
+                    "Primary Action Rail",
+                ] {
+                    let Some(primary) =
+                        snapshot.nodes.iter().find(|node| node.name == primary_name)
+                    else {
+                        continue;
+                    };
+                    assert!(
+                        !overlaps(panel, primary),
+                        "the development panel must not cover {primary_name:?} at {logical_size:?} in {mode:?}: panel={panel:?}, primary={primary:?}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -649,5 +797,19 @@ mod tests {
             }
         }
         false
+    }
+
+    fn overlaps(
+        left: &crate::test_support::UiNodeObservation,
+        right: &crate::test_support::UiNodeObservation,
+    ) -> bool {
+        let left_min = left.center - left.size * 0.5;
+        let left_max = left.center + left.size * 0.5;
+        let right_min = right.center - right.size * 0.5;
+        let right_max = right.center + right.size * 0.5;
+        left_min.x < right_max.x
+            && left_max.x > right_min.x
+            && left_min.y < right_max.y
+            && left_max.y > right_min.y
     }
 }
