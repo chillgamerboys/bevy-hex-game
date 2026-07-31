@@ -8,10 +8,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::prelude::*;
-use hex_assets::{CombatSettings, ElementCatalog, SpellBook, SubstanceTable};
+use hex_assets::{
+    CastingAxis, CombatSettings, ContentIndex, Effect, ElementCatalog, SpellBook, SubstanceTable,
+    TargetShape,
+};
 use hex_combat_core::{
     ArenaSnapshot, CombatLattice, CombatState, CombatUnit, CombatUnitProjection, ElementNames,
-    RulesProfile,
+    FrozenCasting, FrozenCombatContent, FrozenEffect, FrozenRequirement, FrozenSpell,
+    FrozenTargeting, RulesProfile,
 };
 use hex_core::{
     Busy, ControlOwner, Faction, GameCommand, Headroom, HexSpan, HexTile, KnowledgeState,
@@ -34,7 +38,7 @@ pub(crate) struct CombatAuthority {
 
 impl CombatAuthority {
     /// Whether this command is reduced entirely inside `hex_combat_core`.
-    pub(crate) fn handles(command: &GameCommand) -> bool {
+    pub(crate) fn handles(&self, command: &GameCommand) -> bool {
         matches!(
             command,
             GameCommand::MoveAlong { .. }
@@ -174,6 +178,7 @@ fn initialize(
     settings: Option<Res<CombatSettings>>,
     elements: Option<Res<ElementCatalog>>,
     spells: Option<Res<SpellBook>>,
+    content: Option<Res<ContentIndex>>,
     substances: Option<Res<SubstanceTable>>,
     blockers: Option<Res<hex_core::TraversalBlockers>>,
     spatial: Option<Res<FactionMapKnowledge>>,
@@ -189,6 +194,7 @@ fn initialize(
         settings.as_deref(),
         elements.as_deref(),
         spells.as_deref(),
+        content.as_deref(),
         substances.as_deref(),
         blockers.as_deref(),
         spatial.as_deref(),
@@ -347,6 +353,7 @@ fn freeze(
     settings: Option<&CombatSettings>,
     elements: Option<&ElementCatalog>,
     spells: Option<&SpellBook>,
+    content: Option<&ContentIndex>,
     substances: Option<&SubstanceTable>,
     blockers: Option<&hex_core::TraversalBlockers>,
     spatial: Option<&FactionMapKnowledge>,
@@ -467,16 +474,25 @@ fn freeze(
     }
 
     let rules = RulesProfile::new("runtime", settings.movement_per_turn)?
-        .with_strike_disable_count(settings.strike_disables);
+        .with_strike_disable_count(settings.strike_disables)
+        .with_cast_policy(
+            settings.levels_per_bonus_range,
+            settings.divination_rounds_per_tier,
+        );
     let spell_names = spells
         .into_iter()
         .flat_map(SpellBook::iter)
         .map(|(id, name, _)| (id, name.to_owned()));
     let names = ElementNames::new(element_names).with_spells(spell_names);
-    let state = CombatState::start_with_session(
+    let frozen_content = match (elements, spells, content) {
+        (Some(elements), Some(spells), Some(content)) => freeze_content(elements, spells, content)?,
+        _ => FrozenCombatContent::default(),
+    };
+    let state = CombatState::start_with_content_and_session(
         rules,
         arena,
         names,
+        frozen_content,
         roster,
         pending.clone(),
         revivals.snapshot(),
@@ -496,4 +512,76 @@ fn freeze(
         ));
     }
     Ok(state)
+}
+
+fn freeze_content(
+    elements: &ElementCatalog,
+    spells: &SpellBook,
+    content: &ContentIndex,
+) -> Result<FrozenCombatContent, String> {
+    let frozen_spells = spells
+        .iter()
+        .filter_map(|(id, name, spell)| {
+            let targeting = match spell.targeting.shape {
+                TargetShape::SelfCast => FrozenTargeting::SelfOnly,
+                TargetShape::Single => FrozenTargeting::ExactSurface {
+                    range: u32::from(spell.targeting.range),
+                },
+                _ => return None,
+            };
+            let effects = spell
+                .effects
+                .iter()
+                .map(|effect| match *effect {
+                    Effect::DisableHexes {
+                        count,
+                        targeted: false,
+                    } => Some(FrozenEffect::DisableHexes {
+                        count: u16::from(count),
+                    }),
+                    Effect::Burn { turns } => Some(FrozenEffect::Burn { turns }),
+                    Effect::RestoreHexes { count } => Some(FrozenEffect::RestoreHexes {
+                        count: u16::from(count),
+                    }),
+                    Effect::Reveal { tier } => Some(FrozenEffect::Reveal {
+                        tier: u32::from(tier),
+                    }),
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()?;
+            let requirements = content
+                .requirements(id)?
+                .iter()
+                .map(|&(element, mana)| FrozenRequirement { element, mana })
+                .collect();
+            let casting = match content.casting(id)? {
+                CastingAxis::Evocation => FrozenCasting::Evocation,
+                CastingAxis::Enchantment { defense } => FrozenCasting::Enchantment { defense },
+            };
+            Some(FrozenSpell {
+                id,
+                name: name.to_owned(),
+                requirements,
+                casting,
+                targeting,
+                effects,
+            })
+        })
+        .collect::<Vec<_>>();
+    let fusions = (0..elements.len())
+        .filter_map(|raw| {
+            let raw = u16::try_from(raw).ok()?;
+            let id = hex_core::ElementId(raw);
+            elements.recipe(id).map(|recipe| {
+                (
+                    id,
+                    recipe
+                        .iter()
+                        .map(|&(element, mana)| FrozenRequirement { element, mana })
+                        .collect(),
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    FrozenCombatContent::new(frozen_spells, fusions)
 }

@@ -13,11 +13,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use hex_combat_core::{
     ArenaSnapshot, CombatCase, CombatEvent, CombatState, CombatTermination, CombatUnit,
-    ControllerInput, ElementNames, RulesProfile, RunBounds,
+    ControllerInput, ElementNames, FrozenCombatContent, RulesProfile, RunBounds,
 };
 use hex_core::{
-    ElementId, Faction, GameCommand, HexCoord, IssuedCommand, LatticeCoord, PlayerSeat, SpellId,
-    TilePos, UnitId,
+    combat_lab_fixture, ElementId, Faction, GameCommand, HexCoord, IssuedCommand, LatticeCoord,
+    PlayerSeat, SpellId, TilePos, UnitId,
 };
 use hex_lattice::{
     apply_cast, castable, Casting, CellKind, FusionTable, LatticeSpec, LatticeState, LatticeStats,
@@ -36,117 +36,249 @@ fn profile(name: &str, movement_per_turn: u32) -> RulesProfile {
 
 fn arena_for(positions: impl IntoIterator<Item = TilePos>) -> ArenaSnapshot {
     let surfaces: BTreeSet<_> = positions.into_iter().collect();
-    ArenaSnapshot::new(surfaces.iter().copied(), [])
+    let links = surfaces
+        .iter()
+        .flat_map(|from| {
+            surfaces
+                .iter()
+                .filter(move |to| from.coord.distance(to.coord) == 1)
+                .map(move |to| (*from, *to))
+        })
+        .collect::<Vec<_>>();
+    ArenaSnapshot::new(surfaces.iter().copied(), links)
         .expect("fixture arena is valid")
         .with_observation(Faction::Player, surfaces.iter().copied())
         .with_observation(Faction::Hostile, surfaces)
 }
 
-fn roster_case(name: &str, rules: RulesProfile, side_size: usize, turns: u32) -> CombatCase {
-    let player_positions = [
-        position(-2, 0),
-        position(-2, 1),
-        position(-1, -1),
-        position(-3, 0),
-        position(-3, 1),
-        position(-2, -1),
-    ];
-    let hostile_positions = [
-        position(0, 0),
-        position(0, 1),
-        position(1, -1),
-        position(1, 0),
-        position(1, 1),
-        position(0, -1),
-    ];
+fn combatant(id: UnitId, faction: Faction, position: TilePos, initiative: u32) -> CombatUnit {
+    let spec = LatticeSpec::default().with(LatticeCoord::ORIGIN, CellKind::Blank);
+    let stats = LatticeStats::default();
+    let state = LatticeState::new(&spec, &stats);
+    CombatUnit::new(id, PlayerSeat(0), faction, position, initiative)
+        .with_lattice(spec, state, stats)
+}
+
+fn roster_case(name: &str, rules: RulesProfile, side_size: usize) -> CombatCase {
     let mut units = Vec::with_capacity(side_size.saturating_mul(2));
-    for (index, &position) in player_positions.iter().take(side_size).enumerate() {
-        units.push(CombatUnit::new(
+    for index in 0..side_size {
+        let lane = i32::try_from(index).unwrap_or(i32::MAX).saturating_mul(2);
+        units.push(combatant(
             UnitId(u64::try_from(index).unwrap_or(u64::MAX)),
-            PlayerSeat(0),
             Faction::Player,
-            position,
+            position(0, lane),
             100_u32.saturating_sub(u32::try_from(index).unwrap_or(u32::MAX)),
         ));
     }
-    for (index, &position) in hostile_positions.iter().take(side_size).enumerate() {
-        units.push(CombatUnit::new(
+    for index in 0..side_size {
+        let lane = i32::try_from(index).unwrap_or(i32::MAX).saturating_mul(2);
+        units.push(combatant(
             UnitId(
                 u64::try_from(side_size)
                     .unwrap_or(u64::MAX)
                     .saturating_add(u64::try_from(index).unwrap_or(u64::MAX)),
             ),
-            PlayerSeat(0),
             Faction::Hostile,
-            position,
+            position(2, lane),
             50_u32.saturating_sub(u32::try_from(index).unwrap_or(u32::MAX)),
         ));
     }
+    let surfaces = (0..side_size).flat_map(|index| {
+        let lane = i32::try_from(index).unwrap_or(i32::MAX).saturating_mul(2);
+        (0..=2).map(move |q| position(q, lane))
+    });
     CombatCase {
         name: name.to_owned(),
         rules,
-        arena: arena_for(units.iter().map(|unit| unit.position)),
+        arena: arena_for(surfaces),
         elements: ElementNames::default(),
+        content: FrozenCombatContent::default(),
         controllers: units
             .iter()
-            .map(|unit| (unit.id, ControllerInput::Scripted(unit.seat)))
+            .map(|unit| (unit.id, ControllerInput::Baseline { seat: unit.seat }))
             .collect(),
         units,
-        bounds: RunBounds {
-            max_commands: turns,
-        },
+        bounds: RunBounds::new(256, 128, 32).expect("fixture bounds"),
     }
 }
 
 #[test]
 fn shipped_tactical_and_custom_three_step_profiles_are_deterministic() {
-    for (name, rules, expected_budget) in [
-        ("shipped-3v3", profile("Shipped", 4), 4),
-        ("tactical-3v3", profile("Tactical", 2), 2),
-        ("custom-3v3", profile("Custom", 3), 3),
+    let fixture = combat_lab_fixture("tempo-matrix").expect("shared tempo fixture");
+    assert!(fixture.simulated);
+    assert!(fixture.profile_matrix);
+    assert_eq!(fixture.player_count, fixture.hostile_count);
+    let side_size = usize::from(fixture.player_count);
+    for (profile_name, rules, expected_budget) in [
+        ("shipped", profile("Shipped", 4), 4),
+        ("tactical", profile("Tactical", 2), 2),
+        ("custom", profile("Custom", 3), 3),
     ] {
-        let case = roster_case(name, rules, 3, 12);
+        let name = format!("{}-{profile_name}", fixture.id);
+        let case = roster_case(&name, rules, side_size);
         let first = case.run().expect("first canonical run");
         let second = case.run().expect("second canonical run");
         assert_eq!(first, second, "{name} diverged across identical runs");
+        assert_eq!(first.state.rules.movement_per_turn, expected_budget);
+        assert_eq!(
+            first.termination,
+            CombatTermination::Outcome(hex_combat_core::EncounterOutcome::Victory)
+        );
         assert_eq!(
             first
-                .turn
-                .active
-                .map(|turn| turn.movement_left)
-                .unwrap_or_default(),
-            expected_budget
+                .state
+                .commands
+                .iter()
+                .filter(|issued| matches!(issued.command, GameCommand::Strike { .. }))
+                .count(),
+            3
         );
-        assert_eq!(first.summary.turns, case.bounds.max_commands);
-        assert_eq!(first.summary.successful_commands, case.bounds.max_commands);
-        assert_eq!(first.summary.idle_turns, case.bounds.max_commands);
+        assert_eq!(
+            first
+                .state
+                .events
+                .iter()
+                .filter(|event| matches!(event, CombatEvent::Downed { .. }))
+                .count(),
+            3
+        );
+        assert!(first
+            .state
+            .commands
+            .iter()
+            .any(|issued| matches!(issued.command, GameCommand::MoveAlong { .. })));
         assert_eq!(first.positions.len(), 6);
-        assert!(matches!(
-            first.termination,
-            CombatTermination::BoundedNoProgress {
-                completed_turns,
-                no_progress_streak
-            } if completed_turns == case.bounds.max_commands
-                && no_progress_streak == case.bounds.max_commands
-        ));
     }
 }
 
 #[test]
 fn deterministic_six_by_six_run_has_exact_unique_occupancy_and_bounded_telemetry() {
-    let case = roster_case("shipped-6v6", profile("Shipped", 4), 6, 24);
+    let case = roster_case("shipped-6v6", profile("Shipped", 4), 6);
     let first = case.run().expect("first canonical run");
     let second = case.run().expect("second canonical run");
     assert_eq!(first, second, "the 6v6 canonical snapshots diverged");
-    assert_eq!(first.turn.order.len(), 12);
+    assert_eq!(
+        first.termination,
+        CombatTermination::Outcome(hex_combat_core::EncounterOutcome::Victory)
+    );
+    assert!(
+        first
+            .state
+            .commands
+            .iter()
+            .filter(|issued| matches!(issued.command, GameCommand::Strike { .. }))
+            .count()
+            >= 6
+    );
+    assert!((6..12).map(UnitId).all(|unit| first
+        .state
+        .units
+        .get(&unit)
+        .is_some_and(|actor| actor.downed)));
+    assert!(first
+        .state
+        .commands
+        .iter()
+        .any(|issued| matches!(issued.command, GameCommand::MoveAlong { .. })));
     assert_eq!(first.positions.len(), 12);
     let unique = first.positions.values().collect::<BTreeSet<_>>();
     assert_eq!(unique.len(), 12, "two bodies share an exact surface");
-    assert_eq!(first.summary.turns, 24);
     assert_ne!(first.state_fingerprint, 0);
     assert_ne!(first.command_fingerprint, 0);
     assert_ne!(first.transcript_fingerprint, 0);
-    assert_eq!(first.transcript_event_count, 24);
+    assert!(first.transcript_event_count > 24);
+}
+
+#[test]
+fn scripted_no_progress_replay_preserves_every_canonical_projection() {
+    let mut case = roster_case("scripted-no-progress-3v3", profile("Shipped", 4), 3);
+    case.controllers = case
+        .units
+        .iter()
+        .map(|unit| {
+            (
+                unit.id,
+                ControllerInput::Scripted {
+                    seat: unit.seat,
+                    commands: (0..12)
+                        .map(|_| GameCommand::EndTurn { unit: unit.id })
+                        .collect(),
+                },
+            )
+        })
+        .collect();
+    case.bounds = RunBounds::new(13, 13, 12).expect("no-progress bounds");
+
+    let first = case.run().expect("first exact replay");
+    let second = case.run().expect("second exact replay");
+    assert_eq!(first, second, "complete scripted snapshots diverged");
+    assert_eq!(first.state.commands, second.state.commands);
+    assert_eq!(first.state.events, second.state.events);
+    assert_eq!(first.positions, second.positions);
+    assert_eq!(first.lattices, second.lattices);
+    assert_eq!(first.turn, second.turn);
+    assert_eq!(first.termination, second.termination);
+    assert_eq!(
+        first.termination,
+        CombatTermination::NoProgressBoundReached {
+            completed_turns: 12,
+            no_progress_streak: 12,
+        }
+    );
+}
+
+#[test]
+fn baseline_controller_resolves_defender_choice_to_a_real_outcome() {
+    let left = position(0, 0);
+    let right = position(1, 0);
+    let arena = ArenaSnapshot::new([left, right], [(left, right), (right, left)])
+        .expect("fixture arena")
+        .with_observation(Faction::Player, [left, right])
+        .with_observation(Faction::Hostile, [left, right]);
+    let lattice = || {
+        let spec = LatticeSpec::default().with(LatticeCoord::ORIGIN, CellKind::Blank);
+        let stats = LatticeStats::default();
+        let state = LatticeState::new(&spec, &stats);
+        (spec, state, stats)
+    };
+    let (player_spec, player_state, player_stats) = lattice();
+    let (hostile_spec, hostile_state, hostile_stats) = lattice();
+    let units = vec![
+        CombatUnit::new(UnitId(0), PlayerSeat(0), Faction::Player, left, 20).with_lattice(
+            player_spec,
+            player_state,
+            player_stats,
+        ),
+        CombatUnit::new(UnitId(1), PlayerSeat(0), Faction::Hostile, right, 10).with_lattice(
+            hostile_spec,
+            hostile_state,
+            hostile_stats,
+        ),
+    ];
+    let case = CombatCase {
+        name: "baseline-outcome".to_owned(),
+        rules: profile("Shipped", 4),
+        arena,
+        elements: ElementNames::default(),
+        content: FrozenCombatContent::default(),
+        controllers: units
+            .iter()
+            .map(|unit| (unit.id, ControllerInput::Baseline { seat: unit.seat }))
+            .collect(),
+        units,
+        bounds: RunBounds::new(12, 8, 4).expect("bounds"),
+    };
+    let snapshot = case.run().expect("baseline run");
+    assert_eq!(
+        snapshot.termination,
+        CombatTermination::Outcome(hex_combat_core::EncounterOutcome::Victory)
+    );
+    assert_eq!(snapshot.summary.successful_commands, 2);
+    assert!(snapshot
+        .state
+        .events
+        .iter()
+        .any(|event| matches!(event, CombatEvent::Downed { unit: UnitId(1) })));
 }
 
 fn chokepoint() -> ArenaSnapshot {

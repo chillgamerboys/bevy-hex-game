@@ -1,6 +1,6 @@
 //! Human sandbox composition and scalable deterministic fixture selection.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::ecs::system::SystemParam;
 use bevy::picking::events::{Click, Pointer};
@@ -18,9 +18,9 @@ use hex_assets::{
     SpellBook, SpellFile, SpellReference, SubstanceTable,
 };
 use hex_core::{
-    GameplayPhase, GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexSpan, HexTile,
-    MapAnchorId, MapAnchors, ResolvedMapSeed, Screen, SubstanceId, TilePos, TraversalBlockers,
-    TraversalProfile,
+    combat_lab_fixture, GameplayPhase, GameplaySetup, GameplaySetupFailure, Headroom, HexCoord,
+    HexSpan, HexTile, MapAnchorId, MapAnchors, ResolvedMapSeed, Screen, SubstanceId, TilePos,
+    TraversalBlockers, TraversalProfile, COMBAT_LAB_FIXTURES,
 };
 use hex_gameplay_model::{
     CombatLabEdit, CombatLabModel, LabTab, RosterChoice as ModelRosterChoice, SandboxRestore,
@@ -39,7 +39,7 @@ use crate::creation_store::CreationStore;
 use crate::menus::lattice_view::short_name;
 use crate::menus::widgets::{
     blurb, display, element_color, fine, heading, label, panel, panel_node, row_button, UiAssets,
-    DANGER, FUSION_COLOR,
+    DANGER, FUSION_COLOR, LABEL,
 };
 use crate::scenarios::{ScenarioContractStatus, ScenarioToLoad};
 use crate::storage::StoragePaths;
@@ -358,23 +358,16 @@ struct SavedReportComparison;
 struct FixtureFilter;
 
 #[derive(Component)]
+struct ReportLabelInput(CombatLabReportId);
+
+#[derive(Component)]
+struct ReportNotesInput(CombatLabReportId);
+
+#[derive(Component)]
 struct FixtureCard {
     #[cfg(any(test, feature = "test-support"))]
     id: &'static str,
     searchable: String,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct FixtureDefinition {
-    id: &'static str,
-    name: &'static str,
-    tags: &'static str,
-    description: &'static str,
-    scenario: &'static str,
-    sandbox_map: &'static str,
-    map_seed: &'static str,
-    roster: &'static str,
-    profile_matrix: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -384,101 +377,15 @@ pub(crate) enum FixtureRulesVariant {
     CustomThreeStep,
 }
 
-const FIXTURES: [FixtureDefinition; 7] = [
-    FixtureDefinition {
-        id: "ability-lab",
-        name: "Ability Lab",
-        tags: "aiming reveal restore revival",
-        description: "A flat 2v1 for aiming, friendly damage, reveal, restoration, and revival.",
-        scenario: "Ability Lab",
-        sandbox_map: "flat-arena",
-        map_seed: "Flat Arena · authored",
-        roster: "2 Player · 1 Hostile",
-        profile_matrix: false,
-    },
-    FixtureDefinition {
-        id: "raider-mirror",
-        name: "Raider Mirror",
-        tags: "identity defense enchantment",
-        description: "Same archetype on both sides, with deterministic defensive enchantments.",
-        scenario: "Raider Mirror",
-        sandbox_map: "flat-arena",
-        map_seed: "Flat Arena · authored",
-        roster: "1 Player Raider · 1 Hostile Raider",
-        profile_matrix: false,
-    },
-    FixtureDefinition {
-        id: "creator-spell-matrix",
-        name: "Creator Spell Matrix",
-        tags: "creator disable burn reveal restore defense",
-        description: "Creator-format spell delivery against the flat deterministic roster.",
-        scenario: "Ability Lab",
-        sandbox_map: "flat-arena",
-        map_seed: "Flat Arena · authored",
-        roster: "Fixture Caster · Fixture Target",
-        profile_matrix: false,
-    },
-    FixtureDefinition {
-        id: "creator-roster-matrix",
-        name: "Creator Roster Matrix",
-        tags: "creator roster selection ordering",
-        description: "Mixed roster selection, stable unit ordering, and multi-unit combat.",
-        scenario: "Ability Lab",
-        sandbox_map: "flat-arena",
-        map_seed: "Flat Arena · authored",
-        roster: "2 Player · 2 Hostile creator records",
-        profile_matrix: false,
-    },
-    FixtureDefinition {
-        id: "occupancy-matrix",
-        name: "Occupancy Matrix",
-        tags: "occupancy chokepoint endpoint route stacked interruption ai",
-        description: "Party Trial on the authored Crossing for human/AI chokepoints, exact endpoints, route reservations, stacked bridge surfaces, and movement interruption.",
-        scenario: "Party Trial",
-        sandbox_map: "the-crossing",
-        map_seed: "The Crossing · authored",
-        roster: "3 Player · 3 Hostile",
-        profile_matrix: false,
-    },
-    FixtureDefinition {
-        id: "channel-attrition",
-        name: "Channel Attrition",
-        tags: "channel mana disabled enchantment full repeated ai downed",
-        description: "Ability Lab's deterministic lattices for depleted/full mana, disabled cells, enchantment locks, repeated Channel, AI selection, and downed refusal.",
-        scenario: "Ability Lab",
-        sandbox_map: "flat-arena",
-        map_seed: "Flat Arena · authored",
-        roster: "3 Player · 3 Hostile · preloaded lattice states",
-        profile_matrix: false,
-    },
-    FixtureDefinition {
-        id: "tempo-matrix",
-        name: "Tempo Matrix",
-        tags: "tempo profile shipped tactical custom party",
-        description: "The frozen 3v3 Party Trial baseline used repeatedly under Shipped, Tactical two-step, and bounded Custom profiles.",
-        scenario: "Party Trial",
-        sandbox_map: "the-crossing",
-        map_seed: "The Crossing · authored",
-        roster: "3 Player · 3 Hostile",
-        profile_matrix: true,
-    },
-];
-
 /// Scenario name behind a stable automated fixture id.
 #[cfg(feature = "visual-walk")]
 pub(crate) fn fixture_scenario_name(id: &str) -> Option<&'static str> {
-    FIXTURES
-        .iter()
-        .find(|fixture| fixture.id == id)
-        .map(|fixture| fixture.scenario)
+    combat_lab_fixture(id).map(|fixture| fixture.scenario)
 }
 
 #[cfg(feature = "visual-walk")]
 pub(crate) fn fixture_sandbox_map(id: &str) -> Option<&'static str> {
-    FIXTURES
-        .iter()
-        .find(|fixture| fixture.id == id)
-        .map(|fixture| fixture.sandbox_map)
+    combat_lab_fixture(id).map(|fixture| fixture.sandbox_map)
 }
 
 pub(crate) fn fixture_profile(
@@ -638,7 +545,12 @@ pub(super) fn plugin(app: &mut App) {
         )
         .add_systems(
             Update,
-            (sync_fixture_filter, handle_lab_actions, rebuild_lab)
+            (
+                sync_fixture_filter,
+                sync_report_annotations,
+                handle_lab_actions,
+                rebuild_lab,
+            )
                 .chain()
                 .run_if(in_state(Screen::CombatLab)),
         )
@@ -1795,7 +1707,7 @@ fn spawn_fixture_selector(
                 ))
                 .with_children(|list| {
                     let filter = state.fixture_filter.to_lowercase();
-                    for fixture in FIXTURES {
+                    for fixture in COMBAT_LAB_FIXTURES {
                         let searchable = format!(
                             "{} {} {} {} {} {}",
                             fixture.id,
@@ -1925,8 +1837,50 @@ fn spawn_saved_reports(
                                     assets,
                                     format!(
                                         "REPORT {} · {:?}",
-                                        saved.id.0, saved.report.outcome
+                                        saved.id.0, saved.report.termination
                                     ),
+                                ));
+                                card.spawn((
+                                    Name::new(format!("Report {} Label", saved.id.0)),
+                                    EditableText {
+                                        max_characters: Some(128),
+                                        visible_width: Some(32.0),
+                                        ..EditableText::new(&saved.label)
+                                    },
+                                    TextFont {
+                                        font: assets.body.clone().into(),
+                                        ..TextFont::from_font_size(15.0)
+                                    },
+                                    TextColor(Color::WHITE),
+                                    BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.08)),
+                                    Node {
+                                        width: Val::Percent(100.0),
+                                        min_height: Val::Px(36.0),
+                                        padding: UiRect::all(Val::Px(7.0)),
+                                        ..default()
+                                    },
+                                    ReportLabelInput(saved.id),
+                                ));
+                                card.spawn((
+                                    Name::new(format!("Report {} Notes", saved.id.0)),
+                                    EditableText {
+                                        max_characters: Some(2_048),
+                                        visible_width: Some(52.0),
+                                        ..EditableText::new(&saved.notes)
+                                    },
+                                    TextFont {
+                                        font: assets.body.clone().into(),
+                                        ..TextFont::from_font_size(14.0)
+                                    },
+                                    TextColor(LABEL),
+                                    BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.05)),
+                                    Node {
+                                        width: Val::Percent(100.0),
+                                        min_height: Val::Px(44.0),
+                                        padding: UiRect::all(Val::Px(7.0)),
+                                        ..default()
+                                    },
+                                    ReportNotesInput(saved.id),
                                 ));
                                 card.spawn(fine(
                                     assets,
@@ -2033,8 +1987,11 @@ fn spawn_saved_reports(
                     blurb(
                         assets,
                         format!(
-                        "Rounds {:+} · successful commands {:+} · refused commands {:+} · movement {:+} · Channel {:+} · applied disables {:+}",
+                        "Stops: {:?} → {:?}\nRounds {:+} · turns {:+} · successful commands {:+} · refused commands {:+} · movement {:+} · Channel {:+} · applied disables {:+} · no-progress current/max {:+}/{:+}\n{}",
+                        left.report.termination,
+                        right.report.termination,
                         signed_delta(right.report.summary.rounds, left.report.summary.rounds),
+                        signed_delta(right.report.summary.turns, left.report.summary.turns),
                         signed_delta(
                             right.report.summary.successful_commands,
                             left.report.summary.successful_commands,
@@ -2052,6 +2009,15 @@ fn spawn_saved_reports(
                             right.report.summary.applied_disables,
                             left.report.summary.applied_disables,
                         ),
+                        signed_delta(
+                            right.report.summary.no_progress_current,
+                            left.report.summary.no_progress_current,
+                        ),
+                        signed_delta(
+                            right.report.summary.no_progress_max,
+                            left.report.summary.no_progress_max,
+                        ),
+                        detailed_report_deltas(&left.report, &right.report),
                         ),
                     ),
                 ));
@@ -2068,17 +2034,132 @@ fn frozen_report_header(report: &crate::combat_reports::CombatLabReport) -> Stri
             .join(", ")
     };
     format!(
-        "{:?} [move {} · strike {} · engage {} · margin {} · levels {} · reveal {}] · P [{}] · H [{}]",
+        "{:?} [move {} · strike {} · initiative {} {:?} · {:?}/{:?}/{:?} · engage {} · margin {} · levels {} · reveal {}] · {} / seed {:?} / content {:016X} · P [{}] @ {:?} · H [{}] @ {:?}",
         report.profile.preset,
         report.profile.movement_per_turn,
         report.profile.strike_disables,
+        report.profile.default_initiative,
+        report.profile.initiative_policy,
+        report.profile.action_economy,
+        report.profile.channelling_trickle,
+        report.profile.rout_policy,
         report.profile.engage_range,
         report.profile.disengage_margin,
         report.profile.levels_per_bonus_range,
         report.profile.reveal_duration,
+        report.map.scenario,
+        report.map.resolved_seed,
+        report.content_revision,
         roster(&report.rosters.players),
+        report.deployment.players,
         roster(&report.rosters.hostiles),
+        report.deployment.hostiles,
     )
+}
+
+fn detailed_report_deltas(
+    left: &crate::combat_reports::CombatLabReport,
+    right: &crate::combat_reports::CombatLabReport,
+) -> String {
+    let units = left
+        .summary
+        .units
+        .keys()
+        .chain(right.summary.units.keys())
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let per_unit = units
+        .into_iter()
+        .map(|unit| {
+            let left_unit = left.summary.units.get(&unit);
+            let right_unit = right.summary.units.get(&unit);
+            format!(
+                "{unit:?}: turns {:+}, commands {:+}, move {:+}, disables {:+}, no-progress max {:+}",
+                signed_delta(unit_value(right_unit, |unit| unit.turns), unit_value(left_unit, |unit| unit.turns)),
+                signed_delta(
+                    unit_value(right_unit, |unit| unit.successful_commands),
+                    unit_value(left_unit, |unit| unit.successful_commands),
+                ),
+                signed_delta(
+                    unit_value(right_unit, |unit| unit.movement_distance),
+                    unit_value(left_unit, |unit| unit.movement_distance),
+                ),
+                signed_delta(
+                    unit_value(right_unit, |unit| unit.applied_disables),
+                    unit_value(left_unit, |unit| unit.applied_disables),
+                ),
+                signed_delta(
+                    unit_value(right_unit, |unit| unit.no_progress_max),
+                    unit_value(left_unit, |unit| unit.no_progress_max),
+                ),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let spells = left
+        .summary
+        .casts_by_spell
+        .keys()
+        .chain(right.summary.casts_by_spell.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|spell| {
+            format!(
+                "{spell} {:+}",
+                signed_delta(
+                    right
+                        .summary
+                        .casts_by_spell
+                        .get(&spell)
+                        .copied()
+                        .unwrap_or_default(),
+                    left.summary
+                        .casts_by_spell
+                        .get(&spell)
+                        .copied()
+                        .unwrap_or_default(),
+                )
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let effects = left
+        .summary
+        .delivered_effects
+        .keys()
+        .chain(right.summary.delivered_effects.keys())
+        .copied()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|effect| {
+            format!(
+                "{effect:?} {:+}",
+                signed_delta(
+                    right
+                        .summary
+                        .delivered_effects
+                        .get(&effect)
+                        .copied()
+                        .unwrap_or_default(),
+                    left.summary
+                        .delivered_effects
+                        .get(&effect)
+                        .copied()
+                        .unwrap_or_default(),
+                )
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("Per unit\n{per_unit}\nSpells: {spells}\nEffects: {effects}")
+}
+
+fn unit_value(
+    summary: Option<&hex_combat::UnitCombatSummary>,
+    field: fn(&hex_combat::UnitCombatSummary) -> u32,
+) -> u32 {
+    summary.map_or(0, field)
 }
 
 fn selected_compare_ids(
@@ -2151,6 +2232,48 @@ fn sync_fixture_filter(
     }
 }
 
+fn sync_report_annotations(
+    changed_labels: Query<(&ReportLabelInput, Ref<EditableText>), Changed<EditableText>>,
+    changed_notes: Query<(&ReportNotesInput, Ref<EditableText>), Changed<EditableText>>,
+    labels: Query<(&ReportLabelInput, &EditableText)>,
+    notes: Query<(&ReportNotesInput, &EditableText)>,
+    shipped: Option<Res<CombatSettings>>,
+    paths: Res<StoragePaths>,
+    mut store: ResMut<CombatLabReportStore>,
+) {
+    let Some(shipped) = shipped.as_deref() else {
+        return;
+    };
+    let mut changed = changed_labels
+        .iter()
+        .filter(|(_, text)| !text.is_added())
+        .map(|(input, _)| input.0)
+        .chain(
+            changed_notes
+                .iter()
+                .filter(|(_, text)| !text.is_added())
+                .map(|(input, _)| input.0),
+        )
+        .collect::<Vec<_>>();
+    changed.sort_unstable();
+    changed.dedup();
+    for id in changed {
+        let label = labels
+            .iter()
+            .find(|(input, _)| input.0 == id)
+            .map(|(_, text)| text.value().to_string())
+            .unwrap_or_default();
+        let notes = notes
+            .iter()
+            .find(|(input, _)| input.0 == id)
+            .map(|(_, text)| text.value().to_string())
+            .unwrap_or_default();
+        if let Err(error) = store.annotate(id, label, notes, shipped, &paths) {
+            store.error = Some(error);
+        }
+    }
+}
+
 #[cfg(feature = "test-support")]
 pub(crate) fn observe_fixture_filter(query: &str) -> (Vec<String>, Vec<String>, bool) {
     let mut app = App::new();
@@ -2160,7 +2283,7 @@ pub(crate) fn observe_fixture_filter(query: &str) -> (Vec<String>, Vec<String>, 
         .world_mut()
         .spawn((EditableText::new(query), FixtureFilter))
         .id();
-    for fixture in FIXTURES {
+    for fixture in COMBAT_LAB_FIXTURES {
         app.world_mut().spawn((
             Node::default(),
             FixtureCard {
@@ -2441,7 +2564,7 @@ fn handle_lab_actions(
                     state.bump();
                     continue;
                 };
-                let Some(fixture) = FIXTURES.iter().find(|fixture| fixture.id == id) else {
+                let Some(fixture) = combat_lab_fixture(id) else {
                     state.notice = format!("Unknown fixture {id:?}.");
                     state.bump();
                     continue;
@@ -3988,7 +4111,7 @@ mod tests {
             .filter(|(_, node)| node.display != Display::None)
             .map(|(card, _)| card.id)
             .collect::<Vec<_>>();
-        assert_eq!(mounted, FIXTURES.len());
+        assert_eq!(mounted, COMBAT_LAB_FIXTURES.len());
         assert_eq!(visible, vec!["tempo-matrix"]);
     }
 
@@ -4118,9 +4241,12 @@ mod tests {
                 launch.content_revision,
                 launch.rosters.clone(),
                 launch.deployment.clone(),
-                hex_combat::EncounterOutcome::Victory,
+                crate::combat_reports::CombatLabReportTermination::Outcome(
+                    hex_combat::EncounterOutcome::Victory,
+                ),
                 summary,
             )
+            .expect("fixture report evidence")
         };
         let first = CombatLabReportId(1);
         let store = CombatLabReportStore {
@@ -4130,10 +4256,14 @@ mod tests {
                 reports: vec![
                     crate::combat_reports::SavedCombatLabReport {
                         id: first,
+                        label: "first".to_owned(),
+                        notes: String::new(),
                         report: report(8),
                     },
                     crate::combat_reports::SavedCombatLabReport {
                         id: CombatLabReportId(2),
+                        label: "second".to_owned(),
+                        notes: String::new(),
                         report: report(6),
                     },
                 ],
@@ -4552,9 +4682,11 @@ mod tests {
 
     #[test]
     fn fixture_ids_are_unique_and_stable() {
-        let ids: std::collections::BTreeSet<_> =
-            FIXTURES.iter().map(|fixture| fixture.id).collect();
-        assert_eq!(ids.len(), FIXTURES.len());
+        let ids: std::collections::BTreeSet<_> = COMBAT_LAB_FIXTURES
+            .iter()
+            .map(|fixture| fixture.id)
+            .collect();
+        assert_eq!(ids.len(), COMBAT_LAB_FIXTURES.len());
         assert!(ids.contains("ability-lab"));
         assert!(ids.contains("creator-spell-matrix"));
         assert!(ids.contains("occupancy-matrix"));

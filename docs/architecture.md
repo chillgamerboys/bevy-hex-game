@@ -102,10 +102,14 @@ typed `CombatEvent` vocabulary as a successful transition.
 `hex_combat` is the Bevy host: it resolves live published contracts into frozen input,
 feeds human and AI commands to the authority, and projects state/events to ECS,
 animation, summaries, and UI. Reducer-covered verbs mutate only `CombatState`.
-Content-dependent Cast and restoration resolution are explicit host adapters: each
-publishes a complete projection back through transactional exact-roster validation
-before any later command may reduce. Missing authority refuses every combat command;
-there is no legacy fallback or retained shadow simulator.
+The pure workbench freezes supported active-combat Cast and restoration facts and
+reduces them, persistent effects, downing, revival, and outcomes without Bevy. The
+live ECS path still resolves Cast and restoration through explicit content adapters:
+each publishes a complete projection back through transactional exact-roster
+validation before any later command may reduce. Exploration Rest, party movement, and
+unsupported terrain/area spell effects remain outside the pure reducer. Missing
+authority refuses every combat command; there is no legacy fallback or retained
+shadow simulator.
 
 Movement completion is an explicit domain projection, not an animation query.
 `MovingTo` advances from the pausable virtual clock, publishes exact `TilePos`

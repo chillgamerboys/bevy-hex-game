@@ -307,6 +307,7 @@ fn apply_commands(
                 &mut commands,
                 &mut turn_order,
                 &mut stores.pending,
+                &mut stores.revivals,
                 &registry,
                 &mut units.actors,
                 &mut units.lattices,
@@ -330,7 +331,12 @@ fn apply_commands(
             drop_command(&mut emitted, &issued, refusal);
             continue;
         }
-        if in_combat && crate::authority_host::CombatAuthority::handles(&issued.command) {
+        if in_combat
+            && stores
+                .authority
+                .as_deref()
+                .is_some_and(|authority| authority.handles(&issued.command))
+        {
             let unit = issued.command.unit();
             let observed = issued.clone();
             let recorded = issued.command.clone();
@@ -414,6 +420,7 @@ fn apply_commands(
                     &mut commands,
                     &mut turn_order,
                     &mut stores.pending,
+                    &mut stores.revivals,
                     &registry,
                     &mut units.actors,
                     &mut units.lattices,
@@ -643,7 +650,42 @@ fn apply_commands(
             stores.rounds.write_batch(elapsed);
         }
     }
+    if let Some(authority) = stores.authority.as_deref() {
+        project_authority_reveals(&authority.state, &emitted, &mut stores.knowledge);
+    }
     stores.events.write_batch(emitted);
+}
+
+fn project_authority_reveals(
+    state: &hex_combat_core::CombatState,
+    events: &[CombatEvent],
+    knowledge: &mut crate::knowledge::FactionLatticeKnowledge,
+) {
+    for event in events {
+        let CombatEvent::Revealed {
+            viewer,
+            subject,
+            rounds,
+            ..
+        } = event
+        else {
+            continue;
+        };
+        let Some(lattice) = state
+            .units
+            .get(subject)
+            .and_then(|unit| unit.lattice.as_ref())
+        else {
+            continue;
+        };
+        let _ = knowledge.reveal(
+            *viewer,
+            *subject,
+            &lattice.spec,
+            &lattice.state,
+            hex_core::KnowledgeExpiry::Rounds(*rounds),
+        );
+    }
 }
 
 fn record_adapter_refusal(
@@ -652,7 +694,11 @@ fn record_adapter_refusal(
     issued: &IssuedCommand,
     refusal: &CommandRefusal,
 ) {
-    if !in_combat || crate::authority_host::CombatAuthority::handles(&issued.command) {
+    if !in_combat
+        || authority
+            .as_deref()
+            .is_some_and(|authority| authority.handles(&issued.command))
+    {
         return;
     }
     if let Some(authority) = authority {
@@ -669,12 +715,14 @@ fn project_authority_state(
     commands: &mut Commands,
     order: &mut TurnOrder,
     pending: &mut PendingDecision,
+    revivals: &mut crate::turns::PendingRevivals,
     registry: &UnitRegistry,
     actors: &mut ActorQuery,
     lattices: &mut cast::LatticeQuery,
 ) -> Result<(), String> {
     order.project(&state.order, state.current(), state.round);
     *pending = state.pending.clone();
+    revivals.project(&state.pending_revivals);
     for actor in state.units.values() {
         let entity = registry
             .entity_of(actor.id)
