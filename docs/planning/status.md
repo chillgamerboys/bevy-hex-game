@@ -256,6 +256,13 @@ entries. The exact list, measurements, branch matrix, and exclusions are recorde
 [foundation-hardening.md](foundation-hardening.md) rather than repeated as a brittle
 project-wide constant.
 
+The 2026-07-30 dev-integrated biome-wave checkpoint extends that complete gate to
+1,583 passing ordinary tests and 32 deliberate ignored stress/benchmark entries.
+Its release-mode Ring19 generation gate measures Two Rings at 3.250 seconds p95
+against Seven Regions at 1.234 seconds p95, or 2.63× inside the 3.5× budget.
+Automated final-SHA captures and the mandatory human visual/play review remain
+separate release gates.
+
 The standalone **Asset Workshop** is available through `cargo editor`. It loads the
 canonical palette, voxel-style, and object catalogs, starts with an unsaved
 calibration object, and provides palette/style editing plus hex-voxel object authoring

@@ -10,8 +10,9 @@ file is the record that travels with the repo.
 ## Wave 24 — feat(map): biome expansion and Two Rings (2026-07-30)
 
 - **PR**: #144 — `wave/alberto-biome-expansion`
-- **Outcome**: draft — documentation reconciled; combined automation and mandatory
-  human visual/play approval remain pending
+- **Outcome**: draft — documentation and the dev-integrated local combined gate are
+  green; platform checks, final-SHA captures, and mandatory human visual/play approval
+  remain pending
 - **Lenses triggered**: D1, D3, D4
 
 | Lens | File:line | Severity | Status |
@@ -22,9 +23,11 @@ file is the record that travels with the repo.
 
 **Notes**: Ring19 keeps Single/Ring7 numeric identities unchanged and uses a
 5-bit patch / 27-bit local namespace for slots 16–18. Two Rings is selectable beside
-Seven Regions, but the draft wave is not release-ready until its combined gate,
-captures, scripted walks, and human visual/play review pass. This entry does not
-record those pending checks as green.
+Seven Regions. The complete local gate passes 1,583 ordinary tests with 32 deliberate
+stress/benchmark skips. The release comparison measures Ring19 at 3.250 seconds p95
+against Ring7 at 1.234 seconds p95 (2.63×, within the 3.5× budget). The draft wave is
+not release-ready until platform checks, final-SHA captures, scripted walks, and human
+visual/play review pass; this entry does not record those pending checks as green.
 
 ## Wave 23 — chore(release): v0.4.0 (2026-07-30)
 
