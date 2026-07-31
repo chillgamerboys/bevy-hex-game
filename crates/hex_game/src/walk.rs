@@ -683,12 +683,29 @@ fn run_walk(
             }
         }
         WalkStep::AutoUntilPlayerTurn(wanted) => {
-            if players
+            // Turn changes, modal answers, and the action panel settle through
+            // different deferred systems. Accept only a complete actionable frame;
+            // otherwise a stale Turn or panel can advance into a missing button.
+            let wanted_turn_is_ready = players
                 .iter()
-                .any(|(unit, _, _, _, turn, ..)| unit.0 == wanted && turn.is_some())
-            {
-                state.advance();
+                .find(|(unit, ..)| unit.0 == wanted)
+                .is_some_and(|(unit, _, _, _, turn, _, _, busy)| {
+                    turn.is_some_and(|turn| !turn.acted) && !busy && !queue.holds_command_for(*unit)
+                });
+            let decision_is_open = combat
+                .pending
+                .as_deref()
+                .is_some_and(PendingDecision::is_open);
+            let action_panel_is_ready = buttons
+                .iter()
+                .any(|(_, name)| name.as_str().starts_with("End Turn"));
+            if wanted_turn_is_ready && !decision_is_open && action_panel_is_ready {
+                state.settled = state.settled.saturating_add(1);
+                if state.settled >= 2 {
+                    state.advance();
+                }
             } else {
+                state.settled = 0;
                 auto_player_input(
                     combat.pending.as_deref(),
                     &players,

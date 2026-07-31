@@ -39,7 +39,7 @@
 use bevy::prelude::*;
 use hex_assets::{
     CastingAxis, CombatSettings, ContentIndex, ElementCatalog, ManaAxis, Spell, SpellBook,
-    TargetShape,
+    TargetShape, Trajectory,
 };
 use hex_combat::TurnOrder;
 use hex_core::{
@@ -49,8 +49,10 @@ use hex_core::{
 };
 use hex_lattice::{castable, CastBlocked, CellKind, LatticeSpec, LatticeState};
 use hex_perception::{FactionKnowledge, FactionMapKnowledge};
-use hex_units::{targeting, volumes};
-use hex_units::{Downed, Faction, Player, Selected, StandsOn, UnitRegistry};
+use hex_units::{
+    known_trajectory_is_clear, targeting, trajectory_destination, volumes, Downed, Faction,
+    KnownTerrainOccupancy, Player, Selected, StandsOn, UnitRegistry,
+};
 
 use crate::menus::widgets::element_color;
 
@@ -111,6 +113,7 @@ pub fn plugin(app: &mut App) {
             .chain()
             .after(resolve_aim_input)
             .after(GameplaySystems::UiContext)
+            .after(hex_units::TerrainOccupancySystems::Publish)
             .in_set(PausableSystems)
             .run_if(in_state(Screen::Gameplay)),
     );
@@ -176,6 +179,10 @@ pub struct SpellRow {
     pub range: u32,
     /// The shape whose volume the preview resolves.
     pub shape: TargetShape,
+    /// How exact material occupancy between caster and anchor affects this spell.
+    pub trajectory: Trajectory,
+    /// Whether the shape begins in the air above the selected surface.
+    pub creates_terrain: bool,
 }
 
 /// The spell currently being aimed, if any.
@@ -592,6 +599,13 @@ fn spell_row(
         color: element_color(element.and_then(|name| elements.id(name)), elements),
         range: u32::from(definition.targeting.range),
         shape: definition.targeting.shape.clone(),
+        trajectory: definition.targeting.trajectory,
+        creates_terrain: definition.effects.iter().any(|effect| {
+            matches!(
+                effect,
+                hex_assets::Effect::SetTerrain { .. } | hex_assets::Effect::SpawnWall { .. }
+            )
+        }),
     }
 }
 
@@ -653,9 +667,24 @@ fn resolve_aim_input(
                 return;
             };
             let player = knowledge.faction(Faction::Player);
-            let targets = targets_in_range(&readout, &caster, row, player, &active_units);
-            let fallback = (player.state(caster.standing) == KnowledgeState::Observed)
-                .then_some(caster.standing);
+            let known_terrain = known_terrain(player);
+            let targets = targets_in_range(
+                &readout,
+                &caster,
+                row,
+                player,
+                &known_terrain,
+                &active_units,
+            );
+            let fallback = (player.state(caster.standing) == KnowledgeState::Observed
+                && trajectory_available(
+                    row.trajectory,
+                    caster.standing,
+                    caster.standing,
+                    row.creates_terrain,
+                    &known_terrain,
+                ))
+            .then_some(caster.standing);
             let Some(anchor) = targets.first().copied().or(fallback) else {
                 return;
             };
@@ -670,11 +699,14 @@ fn resolve_aim_input(
             let Some(knowledge) = knowledge.as_deref() else {
                 return;
             };
+            let player = knowledge.faction(Faction::Player);
+            let known_terrain = known_terrain(player);
             let targets = targets_in_range(
                 &readout,
                 &caster,
                 row,
-                knowledge.faction(Faction::Player),
+                player,
+                &known_terrain,
                 &active_units,
             );
             Some(Aim {
@@ -815,13 +847,21 @@ fn targets_in_range(
     caster: &Caster,
     row: &SpellRow,
     knowledge: &FactionKnowledge,
+    terrain: &KnownTerrainOccupancy,
     active_units: &Query<&UnitId, Without<Downed>>,
 ) -> Vec<TilePos> {
     if matches!(row.shape, TargetShape::SelfCast) {
-        return (knowledge.state(caster.standing) == KnowledgeState::Observed)
-            .then_some(caster.standing)
-            .into_iter()
-            .collect();
+        return (knowledge.state(caster.standing) == KnowledgeState::Observed
+            && trajectory_available(
+                row.trajectory,
+                caster.standing,
+                caster.standing,
+                row.creates_terrain,
+                terrain,
+            ))
+        .then_some(caster.standing)
+        .into_iter()
+        .collect();
     }
     let mut ranked: Vec<(bool, u32, TilePos)> = knowledge
         .units()
@@ -830,6 +870,13 @@ fn targets_in_range(
         .filter(|(_, pos)| {
             knowledge.state(*pos) == KnowledgeState::Observed
                 && in_range(caster.standing, *pos, row.range, readout.levels_per_bonus)
+                && trajectory_available(
+                    row.trajectory,
+                    caster.standing,
+                    *pos,
+                    row.creates_terrain,
+                    terrain,
+                )
         })
         .map(|(faction, pos)| {
             (
@@ -841,6 +888,31 @@ fn targets_in_range(
         .collect();
     ranked.sort_unstable();
     ranked.into_iter().map(|(_, _, pos)| pos).collect()
+}
+
+fn trajectory_available(
+    trajectory: Trajectory,
+    standing: TilePos,
+    target: TilePos,
+    creates_terrain: bool,
+    terrain: &KnownTerrainOccupancy,
+) -> bool {
+    matches!(trajectory, Trajectory::None)
+        || known_trajectory_is_clear(
+            trajectory,
+            standing.above(),
+            trajectory_destination(target, creates_terrain),
+            terrain,
+        )
+}
+
+fn known_terrain(knowledge: &FactionKnowledge) -> KnownTerrainOccupancy {
+    KnownTerrainOccupancy::from_observed_surfaces(
+        knowledge
+            .surfaces()
+            .filter(|(_, known)| known.state() == KnowledgeState::Observed)
+            .map(|(position, _)| position),
+    )
 }
 
 /// The entry after `current` in a cycle, wrapping.
@@ -1067,6 +1139,30 @@ mod tests {
         );
         assert!(in_range(high, low, 3, 5), "five levels up buys the hex");
         assert!(!in_range(low, high, 3, 5), "the low ground gains nothing");
+    }
+
+    #[test]
+    fn target_cycle_trajectory_filter_ignores_unknown_material() {
+        let standing = at(0, 0, 1);
+        let target = at(3, 0, 1);
+        let blocker = at(1, 0, 2);
+        let hidden = KnownTerrainOccupancy::default();
+        let observed = KnownTerrainOccupancy::from_observed_surfaces([blocker]);
+
+        assert!(trajectory_available(
+            Trajectory::Direct,
+            standing,
+            target,
+            false,
+            &hidden,
+        ));
+        assert!(!trajectory_available(
+            Trajectory::Direct,
+            standing,
+            target,
+            false,
+            &observed,
+        ));
     }
 
     /// Every rung the applier refuses a cast on is a rung the panel refuses to offer
@@ -1310,11 +1406,11 @@ mod tests {
     /// The failure without this is invisible and expensive: the cast is *legal*, so the
     /// applier charges for it — the mana goes, the turn goes — and the only trace is a
     /// `warn!` a release build does not show a console for. Several shipped spells are in
-    /// that state, so this is the live case rather than a hypothetical one.
+    /// that state, so this is a live case rather than a hypothetical one.
     #[test]
     fn a_spell_with_nothing_built_is_blocked_rather_than_offered() {
         let (_, spells) = shipped_content();
-        let undeliverable = ["Earthen Wall", "Stone Shaper", "Daylight"];
+        let undeliverable = ["Daylight"];
         for name in undeliverable {
             let id = spells.id(name).expect("the test names a shipped spell");
             let definition = spells.spell(id).expect("a shipped spell has a definition");
@@ -1325,7 +1421,15 @@ mod tests {
         }
         // The control, and the reason this is not just a ban on everything: the spells
         // the wave actually delivers stay castable.
-        for name in ["Ember", "Kindle", "Metal Shield", "Renewal", "Scrying Eye"] {
+        for name in [
+            "Ember",
+            "Kindle",
+            "Metal Shield",
+            "Renewal",
+            "Scrying Eye",
+            "Stone Shaper",
+            "Earthen Wall",
+        ] {
             let Some(id) = spells.id(name) else { continue };
             let definition = spells.spell(id).expect("a shipped spell has a definition");
             assert!(

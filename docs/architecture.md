@@ -63,9 +63,9 @@ compile-time blast radius is what makes that ownership manageable: gameplay, cam
 sky, screens and menus cannot import map internals.
 
 The boundary does not make malformed output harmless. Those crates consume the
-components the map publishes, so a wrong `TilePos`, `HexSpan` or `Headroom` can still
-break movement or presentation. Cargo protects the dependency graph; tests and visual
-review protect the component contract.
+components the map publishes, so a wrong `TilePos`, `RunBottom`, `HexSpan` or
+`Headroom` can still break movement or presentation. Cargo protects the dependency
+graph; tests and visual review protect the component contract.
 
 ### `hex_lattice` is the rules engine, built like `hex_core`
 
@@ -186,10 +186,11 @@ commented last.
 boundary, a crash — those are not taste and either owner should block on them.
 
 The map reaches the rest of the game only through shared `hex_core` components and
-resources. Tiles carry `HexTile`, `HexCoord`, `TilePos`, `HexSpan`, `SubstanceId`, and
-`Headroom`; exact resources publish anchors, interiors, blockers, biome membership,
-and view hints. Nothing outside `hex_map` references `VoxelMap` or generator internals,
-so terrain storage and generation can be replaced wholesale without anyone noticing.
+resources. Tiles carry `HexTile`, `HexCoord`, `TilePos`, `RunBottom`, `HexSpan`,
+`SubstanceId`, and `Headroom`; exact resources publish anchors, interiors, blockers,
+biome membership, and view hints. Nothing outside `hex_map` references `VoxelMap` or
+generator internals, so terrain storage and generation can be replaced wholesale
+without anyone noticing.
 
 `Headroom` is on that list because only the map can measure it: a run carries its own
 extent but knows nothing about what is stacked on it, so gameplay cannot tell a surface

@@ -101,9 +101,6 @@ pub fn creator_spell_deployability(spell: &Spell) -> Result<(), Vec<String>> {
     if spell.co_castable {
         issues.push("co-casting is not implemented".to_owned());
     }
-    if spell.targeting.needs_los {
-        issues.push("line-of-sight enforcement is not implemented".to_owned());
-    }
     if !matches!(
         spell.targeting.shape,
         TargetShape::SelfCast | TargetShape::Single
@@ -173,8 +170,10 @@ pub fn plugin(app: &mut App) {
     app.configure_sets(
         Update,
         (
-            CombatSystems::Act.after(PerceptionSystems::PublishKnowledge),
-            CombatSystems::Apply,
+            CombatSystems::Act
+                .after(PerceptionSystems::PublishKnowledge)
+                .after(hex_units::TerrainOccupancySystems::Publish),
+            CombatSystems::Apply.after(hex_units::TerrainOccupancySystems::Publish),
             CombatSystems::Resolve,
             CombatSystems::Advance,
         )
@@ -200,7 +199,7 @@ pub fn plugin(app: &mut App) {
 #[cfg(test)]
 mod creator_tests {
     use super::*;
-    use hex_assets::{CastingAxis, GemRequirement, TargetingSpec};
+    use hex_assets::{CastingAxis, GemRequirement, TargetingSpec, Trajectory};
 
     fn ready_spell(effect: Effect) -> Spell {
         Spell {
@@ -214,7 +213,7 @@ mod creator_tests {
             targeting: TargetingSpec {
                 range: 3,
                 shape: TargetShape::Single,
-                needs_los: false,
+                trajectory: Trajectory::None,
             },
             effects: vec![effect],
         }
@@ -242,14 +241,14 @@ mod creator_tests {
     }
 
     #[test]
-    fn creator_delivery_fails_closed_on_unimplemented_axes() {
+    fn creator_delivery_accepts_trajectories_but_rejects_unimplemented_axes() {
         let mut spell = ready_spell(Effect::Burn { turns: 1 });
-        spell.targeting.needs_los = true;
+        spell.targeting.trajectory = Trajectory::Direct;
         spell.co_castable = true;
         spell.mana = ManaAxis::Variable;
         let issues = creator_spell_deployability(&spell).expect_err("unsupported axes must fail");
-        assert!(issues.iter().any(|issue| issue.contains("line-of-sight")));
         assert!(issues.iter().any(|issue| issue.contains("co-casting")));
         assert!(issues.iter().any(|issue| issue.contains("variable mana")));
+        assert!(!issues.iter().any(|issue| issue.contains("trajectory")));
     }
 }

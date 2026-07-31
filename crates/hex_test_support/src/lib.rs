@@ -17,8 +17,8 @@ use hex_assets::{
     ArtPalette, PaletteSwatch, SrgbColor, Substance, SubstanceFile, SubstanceTable, SwatchId,
 };
 use hex_core::{
-    AppSystems, GameplaySetup, Headroom, HexCoord, HexSpan, HexTile, Mode, Pause, Screen,
-    SubstanceId, TilePos, MAX_HEADROOM,
+    AppSystems, GameplaySetup, Headroom, HexCoord, HexSpan, HexTile, Mode, Pause, RunBottom,
+    Screen, SubstanceId, TilePos, MAX_HEADROOM,
 };
 
 /// Stable synthetic stone id produced by [`fixture_assets`].
@@ -29,6 +29,8 @@ pub const STONE: SubstanceId = SubstanceId(1);
 pub struct SurfaceSpec {
     /// Exact standable surface.
     pub position: TilePos,
+    /// Inclusive bottom of this exact material run.
+    pub bottom: i32,
     /// Vertical material span below the surface.
     pub span: HexSpan,
     /// Clear levels above the surface.
@@ -47,6 +49,7 @@ impl SurfaceSpec {
     pub fn stone(position: TilePos) -> Self {
         Self {
             position,
+            bottom: position.level,
             span: HexSpan::new(position.level as f32, position.level as f32 + 1.0),
             headroom: MAX_HEADROOM,
             substance: STONE,
@@ -144,7 +147,7 @@ pub fn fixture_assets() -> Result<(ArtPalette, SubstanceTable), String> {
             ("air".to_owned(), Substance::invisible(false, false)),
             (
                 "stone".to_owned(),
-                Substance::from_swatch(stone_id, true, true),
+                Substance::from_swatch(stone_id, true, true).with_conjurable(true),
             ),
         ]
         .into_iter()
@@ -252,6 +255,7 @@ fn spawn_synthetic_arena(mut commands: Commands, arena: Res<SyntheticArena>) {
             HexTile,
             surface.position.coord,
             surface.position,
+            RunBottom(surface.bottom),
             surface.span,
             surface.substance,
             Headroom(surface.headroom),

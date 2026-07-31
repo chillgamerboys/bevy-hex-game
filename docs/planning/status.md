@@ -351,9 +351,11 @@ Further damage against an already downed target is refused before spending the a
 or mana, while non-damaging inspection such as Reveal can still reach the retained
 lattice.
 
-One thing a landed cast still cannot do: reach terrain, because rungs 4 and 5 of the
-ladder wait on `RunBottom` from the world lane. It refuses by name rather than silently
-doing nothing.
+Permanent construction now reaches terrain through exact inclusive `TilePos` and
+`RunBottom` occupancy. Evocations using `Single` or `Column` publish atomic
+`TerrainEdit::Set` batches for map-approved conjurable substances. Hidden material or
+units suppress an unsafe batch without changing acceptance or payment; elemental
+terrain announcements and response outcomes remain downstream.
 
 **A cast can now outlast itself.** `Burn` runs through the persistent-effect runtime
 (`hex_combat::effects`, vocabulary in `hex_core::effects`): a cast books a countdown in
@@ -424,10 +426,15 @@ The binding parts are:
 
 The first implementation also ships with explicit limitations:
 
-- **Volumes are geometric, not obstruction-aware.** A sphere next to a cave
-  wall fills voxels inside the rock and the chamber beyond it. Clipping waits on the
-  same line-of-sight work that `RunBottom` ([boundary.md](boundary.md) ask C) unlocks,
-  and `needs_los` on spell content is parsed but unenforced until then.
+- **Trajectories are obstruction-aware; effect volumes are not clipped.** `Direct`
+  and authored-rise `Arc` casts test exact material occupancy with one
+  direction-symmetric integer supercover, while `None` deliberately bypasses it.
+  Authoritative casting uses complete `RunBottom` occupancy; preview anchors, target
+  cycling, and AI use only explicitly Observed material positions, so Unknown terrain
+  cannot change faction-facing choices. Authored range and arc rise are technically
+  capped at 16. A sphere may still include rock and the chamber beyond it after its
+  anchor is reached; per-voxel volume clipping and obstruction-aware sight remain
+  later work.
 - **A breached cave roof will not admit daylight.** Terrain edits already keep the
   interior *roof* projection current, but interior **membership** is never re-derived,
   so a chamber you blow open still counts as inside. Live perception therefore
@@ -439,9 +446,11 @@ The first implementation also ships with explicit limitations:
   but has no mechanical effect.
 - **Paid-on-resistance is provisional.** The first wave charges mana and the action
   after a legal announcement even if every material resists.
-- **No-undermining is provisional.** The first wave rejects terrain creation through
-  a unit and edits to its supporting surface until falling and footing reconciliation
-  exist.
+- **No-undermining is provisional.** Permanent evocation construction checks its
+  complete volume and emits no edits when it intersects existing material, a unit body,
+  or a unit's supporting surface. The cast remains accepted and paid so hidden blockers
+  are not an oracle. Destructive terrain impacts still wait for falling and footing
+  reconciliation.
 - **Downed-first death is provisional.** A fully disabled unit initially leaves the
   turn order and retains its lattice. Renewal restores it into the next round and Rest
   recovers it after combat; functional death and permadeath remain open.
@@ -457,7 +466,8 @@ The first implementation also ships with explicit limitations:
   (`LatticeError::AreaEffectUnapplied`). The interface can only paint what a lattice can
   cast, so the preview cannot promise what the applier will not deliver. The refusal
   lifts the day the applier iterates the volume and queues one decision per unit inside
-  it; it is the same seam `RunBottom` and the announce path close for terrain.
+  it; the terrain side separately waits on the gameplay announcement and legality
+  adapters now that exact run bounds are published.
 - **Burn attributes one source per tick.** Several burns on one target come due as a
   single count and therefore a single decision, which has room for one `source`. The
   earliest-lit fire fills it. The rules never read `source`, so the imprecision is

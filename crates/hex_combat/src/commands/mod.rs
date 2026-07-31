@@ -43,10 +43,13 @@ use hex_assets::{
 };
 use hex_core::{
     Busy, CommandQueue, ControlOwner, GameCommand, IssuedCommand, Mode, PartyFormation,
-    PausableSystems, PendingDecision, Screen, TilePos, TraversalBlockers, Turn, UnitId,
+    PausableSystems, PendingDecision, Screen, TerrainEdit, TilePos, TraversalBlockers, Turn,
+    UnitId,
 };
 use hex_perception::FactionMapKnowledge;
-use hex_units::{Body, Downed, Faction, MovingTo, Party, StandsOn, UnitOccupancy, UnitRegistry};
+use hex_units::{
+    Body, Downed, Faction, MovingTo, Party, StandsOn, TerrainOccupancy, UnitOccupancy, UnitRegistry,
+};
 
 use crate::outcomes::{CombatEvent, CommandRefusal};
 use crate::turns::TurnOrder;
@@ -129,6 +132,8 @@ struct Verb<'a> {
     /// Casting fails closed when this is absent; no command may infer observation
     /// directly from authoritative terrain or unit entities.
     spatial: Option<&'a FactionMapKnowledge>,
+    /// Exact material occupancy projected from world-published run bounds.
+    terrain: Option<&'a TerrainOccupancy>,
     /// Structured outcomes accumulated in command order for presentation consumers.
     events: &'a mut Vec<CombatEvent>,
     /// Restored units waiting for a round boundary before initiative.
@@ -158,6 +163,8 @@ struct ResolutionStores<'w> {
     effects: ResMut<'w, crate::effects::PersistentEffects>,
     knowledge: ResMut<'w, crate::knowledge::FactionLatticeKnowledge>,
     spatial: Option<Res<'w, FactionMapKnowledge>>,
+    terrain: Option<Res<'w, TerrainOccupancy>>,
+    terrain_edits: MessageWriter<'w, TerrainEdit>,
     events: MessageWriter<'w, CombatEvent>,
     revivals: ResMut<'w, crate::turns::PendingRevivals>,
     summary: ResMut<'w, crate::CombatSummary>,
@@ -199,7 +206,8 @@ pub(crate) fn plugin(app: &mut App) {
         .register_type::<GameCommand>()
         .register_type::<IssuedCommand>()
         .register_type::<Busy>()
-        .register_type::<PendingDecision>();
+        .register_type::<PendingDecision>()
+        .add_message::<TerrainEdit>();
     app.add_systems(
         Update,
         (apply_commands
@@ -374,6 +382,7 @@ fn apply_commands(
                 effects: &mut stores.effects,
                 knowledge: &mut stores.knowledge,
                 spatial: stores.spatial.as_deref(),
+                terrain: stores.terrain.as_deref(),
                 events: &mut emitted,
                 revivals: &mut stores.revivals,
                 combat: combat.as_deref(),
@@ -490,6 +499,7 @@ fn apply_commands(
             effects: &mut stores.effects,
             knowledge: &mut stores.knowledge,
             spatial: stores.spatial.as_deref(),
+            terrain: stores.terrain.as_deref(),
             events: &mut emitted,
             revivals: &mut stores.revivals,
             combat: combat.as_deref(),
@@ -544,6 +554,7 @@ fn apply_commands(
                 ..
             } => cast::apply(
                 &mut verb,
+                &mut stores.terrain_edits,
                 &mut commands,
                 &mut units.actors,
                 &mut units.lattices,
