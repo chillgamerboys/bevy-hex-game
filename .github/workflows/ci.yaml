@@ -276,7 +276,10 @@ jobs:
     name: Build (${{ matrix.os }})
     needs: changes
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # A cold Windows ThinLTO link has crossed the old 30-minute ceiling even
+    # with lld-link. Keep the platform as a real gate instead of accumulating
+    # timeout waivers; Linux and macOS still finish as soon as their build does.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -298,9 +301,8 @@ jobs:
       # validate a workspace-only development binary in place of the game.
       #
       # The Windows runner's MSVC linker spent more than ten minutes in the final
-      # ThinLTO link and crossed this job's 30-minute ceiling. The runner ships
-      # LLVM's MSVC-compatible linker; selecting it changes no Cargo profile or
-      # package input and keeps the exact shipping build inside the same budget.
+      # ThinLTO link. The runner ships LLVM's MSVC-compatible linker; selecting
+      # it changes no Cargo profile or package input.
       - name: Record the Windows shipping linker
         if: runner.os == 'Windows' && needs.changes.outputs.shipping == 'true'
         shell: pwsh

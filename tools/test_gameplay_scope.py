@@ -253,6 +253,15 @@ class GameplayScopeTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("hex_gameplay_model", workflow)
 
+    def test_shipping_job_allows_a_cold_windows_link_to_finish(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yaml").read_text(
+            encoding="utf-8"
+        )
+        build_job = workflow.split("\n  build:\n", maxsplit=1)[1].split(
+            "\n  coverage:\n", maxsplit=1
+        )[0]
+        self.assertIn("timeout-minutes: 45", build_job)
+
 
 if __name__ == "__main__":
     unittest.main()
