@@ -1189,7 +1189,8 @@ fn settled_construction_replaces_stale_movement_authority_before_the_next_comman
         raised.coord,
         raised,
         RunBottom(build_surface.level),
-        HexSpan::new(raised.level as f32, raised.level as f32 + 1.0),
+        // The raised fixture merges material levels 1 and 2 into one exact run.
+        HexSpan::new(1.0, 3.0),
         STONE,
         Headroom(16),
     ));
