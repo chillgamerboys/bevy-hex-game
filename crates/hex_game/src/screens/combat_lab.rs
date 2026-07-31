@@ -307,17 +307,6 @@ struct DeploymentMarkerMaterials {
 #[derive(Component)]
 struct DeploymentHidden;
 
-/// Scenario name behind a stable automated fixture id.
-#[cfg(feature = "visual-walk")]
-pub(crate) fn fixture_scenario_name(id: &str) -> Option<&'static str> {
-    combat_lab_fixture(id).map(|fixture| fixture.scenario)
-}
-
-#[cfg(feature = "visual-walk")]
-pub(crate) fn fixture_sandbox_map(id: &str) -> Option<&'static str> {
-    combat_lab_fixture(id).map(|fixture| fixture.sandbox_map)
-}
-
 pub(crate) fn fixture_profile(
     variant: FixtureRulesVariant,
     shipped: &CombatSettings,
@@ -332,24 +321,6 @@ pub(crate) fn fixture_profile(
             profile
         }
     }
-}
-
-#[cfg(feature = "visual-walk")]
-pub(crate) fn walk_fixture_profile(
-    name: Option<&str>,
-    shipped: &CombatSettings,
-) -> Result<CombatRulesProfile, String> {
-    let variant = match name.unwrap_or("shipped") {
-        "shipped" => FixtureRulesVariant::Shipped,
-        "tactical" => FixtureRulesVariant::TacticalTwoStep,
-        "custom-three-step" => FixtureRulesVariant::CustomThreeStep,
-        other => {
-            return Err(format!(
-            "unknown fixture profile {other:?}; expected shipped, tactical, or custom-three-step"
-        ))
-        }
-    };
-    Ok(fixture_profile(variant, shipped))
 }
 
 pub(crate) fn fixed_fixture_encounter(id: &str) -> Option<Encounter> {
@@ -383,11 +354,6 @@ pub(crate) fn fixed_fixture_encounter(id: &str) -> Option<Encounter> {
         )),
         _ => None,
     }
-}
-
-#[cfg(feature = "visual-walk")]
-pub(crate) fn walk_fixture_encounter(id: &str) -> Option<Encounter> {
-    fixed_fixture_encounter(id)
 }
 
 /// Frozen creator content and encounter behind an automation fixture, if it uses one.

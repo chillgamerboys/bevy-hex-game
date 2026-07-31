@@ -150,14 +150,14 @@ fn ordinary_hud() -> GameplayHudView {
             ActionAffordance {
                 action: GameplayAction::Channel,
                 label: "Channel".to_owned(),
-                shortcut: Some("C".to_owned()),
+                shortcut: None,
                 availability: ActionAvailability::Enabled,
                 priority: ActionPriority::Primary,
             },
             ActionAffordance {
                 action: GameplayAction::EndTurn,
                 label: "End Turn".to_owned(),
-                shortcut: Some("Enter".to_owned()),
+                shortcut: Some("Space".to_owned()),
                 availability: ActionAvailability::Enabled,
                 priority: ActionPriority::Primary,
             },

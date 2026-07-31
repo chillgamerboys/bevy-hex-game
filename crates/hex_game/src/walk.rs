@@ -34,7 +34,6 @@ use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use hex_assets::ScenarioLibrary;
-use hex_combat::{CombatSummary, EncounterOutcome, EncounterResolution};
 use hex_core::{GameplaySetupFailure, HexTile, ResolvedMapSeed, Screen};
 use serde::Deserialize;
 
@@ -140,12 +139,6 @@ enum WalkStep {
     },
     /// Wait until a named button exists without activating it.
     AwaitButton(String),
-    /// Open a canonical fixture report for presentation review without solving combat.
-    ///
-    /// This feature-only step deliberately supplies a terminal result to the ordinary
-    /// report system. Logical outcome and metric evidence belongs to the deterministic
-    /// simulation target; the visual walk reviews only the resulting composition.
-    PresentFixtureReport,
     /// Install an authored immutable UI presentation state without solving combat.
     PresentUi(String),
     /// Select Auto or 200% UI scale for responsive presentation review.
@@ -157,12 +150,6 @@ enum WalkStep {
         name: String,
         #[serde(default)]
         seed: Option<u64>,
-    },
-    /// Launch an immutable Combat Lab fixture by stable machine id.
-    StartFixture {
-        id: String,
-        #[serde(default)]
-        profile: Option<String>,
     },
 }
 
@@ -212,9 +199,6 @@ fn validate_step(step: &WalkStep) -> Result<(), String> {
         WalkStep::StartScenario { name, .. } if name.trim().is_empty() => {
             Err("scenario name must not be empty".to_owned())
         }
-        WalkStep::StartFixture { id, .. } if id.trim().is_empty() => {
-            Err("fixture id must not be empty".to_owned())
-        }
         _ => Ok(()),
     }
 }
@@ -239,24 +223,8 @@ fn parse_screen(name: &str) -> Result<Screen, String> {
 fn parse_key(name: &str) -> Result<KeyCode, String> {
     match name {
         "Backspace" => Ok(KeyCode::Backspace),
-        "Escape" => Ok(KeyCode::Escape),
-        "Space" => Ok(KeyCode::Space),
-        "Enter" => Ok(KeyCode::Enter),
         "C" => Ok(KeyCode::KeyC),
-        // `Tab` and `Q` are casting's — step to the next target, and put the aim down.
-        // `Enter` confirms an aim, and the casting walk drives that through the panel's
-        // Confirm button instead: a `Click` that never finds its button stalls the walk
-        // and fails it, which is a stronger assertion than a key that can be pressed
-        // into a screen with no aiming UI on it at all.
-        "Tab" => Ok(KeyCode::Tab),
-        "KeyQ" => Ok(KeyCode::KeyQ),
-        "KeyH" => Ok(KeyCode::KeyH),
-        "KeyL" => Ok(KeyCode::KeyL),
-        "KeyR" => Ok(KeyCode::KeyR),
-        "F5" => Ok(KeyCode::F5),
-        _ => Err(format!(
-            "unknown key {name:?}; expected Backspace, Escape, Space, Enter, C, Tab, KeyQ, KeyH, KeyL, KeyR, or F5"
-        )),
+        _ => Err(format!("unknown key {name:?}; expected Backspace or C")),
     }
 }
 
@@ -318,21 +286,9 @@ struct WalkState {
 }
 
 #[derive(SystemParam)]
-struct WalkCombat<'w> {
-    resolution: Option<ResMut<'w, EncounterResolution>>,
-    summary: Option<ResMut<'w, CombatSummary>>,
-}
-
-#[derive(SystemParam)]
 struct WalkContent<'w> {
     failure: Option<Res<'w, GameplaySetupFailure>>,
     library: Option<Res<'w, ScenarioLibrary>>,
-    presets: Option<Res<'w, hex_assets::CreationPresetCatalog>>,
-    shipped_spells: Option<Res<'w, hex_assets::SpellFile>>,
-    base_lattices: Option<Res<'w, hex_assets::LatticeFile>>,
-    elements: Option<Res<'w, hex_assets::ElementCatalog>>,
-    substances: Option<Res<'w, hex_assets::SubstanceTable>>,
-    combat: Option<Res<'w, hex_assets::CombatSettings>>,
 }
 
 impl WalkState {
@@ -373,7 +329,6 @@ fn run_walk(
     mut state: ResMut<WalkState>,
     screen: Res<State<Screen>>,
     mut next: ResMut<NextState<Screen>>,
-    mut combat: WalkCombat,
     content: WalkContent,
     mut ui_scale: ResMut<hex_ui::UiScalePreference>,
     mut primary_window: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
@@ -553,17 +508,6 @@ fn run_walk(
                 state.advance();
             }
         }
-        WalkStep::PresentFixtureReport => {
-            let (Some(resolution), Some(summary)) = (
-                combat.resolution.as_deref_mut(),
-                combat.summary.as_deref_mut(),
-            ) else {
-                return;
-            };
-            resolution.0 = Some(EncounterOutcome::Victory);
-            summary.outcome = Some(EncounterOutcome::Victory);
-            state.advance();
-        }
         WalkStep::PresentUi(ref name) => {
             if let Err(reason) = hex_ui::apply_ui_review_fixture(&mut commands, name) {
                 error!("visual walk: {reason}");
@@ -612,97 +556,6 @@ fn run_walk(
             next.set(Screen::Loading);
             state.advance();
         }
-        WalkStep::StartFixture {
-            ref id,
-            ref profile,
-        } => {
-            let Some(combat_settings) = content.combat.as_deref() else {
-                return;
-            };
-            let Some(library) = content.library.as_deref() else {
-                return;
-            };
-            let Some(name) = crate::screens::combat_lab::fixture_scenario_name(id) else {
-                error!("visual walk: fixture {id:?} is not registered");
-                state.failed = true;
-                exit.write(AppExit::error());
-                return;
-            };
-            let Some(scenario) = library
-                .scenarios
-                .iter()
-                .find(|scenario| scenario.name == name)
-                .cloned()
-            else {
-                error!("visual walk: fixture {id:?} scenario {name:?} is missing");
-                state.failed = true;
-                exit.write(AppExit::error());
-                return;
-            };
-            let resolved_seed = scenario.generation_seed.map(ResolvedMapSeed);
-            let profile = match crate::screens::combat_lab::walk_fixture_profile(
-                profile.as_deref(),
-                combat_settings,
-            ) {
-                Ok(profile) => profile,
-                Err(reason) => {
-                    error!("visual walk: {reason}");
-                    state.failed = true;
-                    exit.write(AppExit::error());
-                    return;
-                }
-            };
-            // Direct fixture-to-fixture transitions do not pass through Combat
-            // Lab initialization, so explicitly retire the prior run's frozen
-            // launch and completed report before installing the next session.
-            commands.remove_resource::<crate::screens::combat_lab::CombatLabReportLaunch>();
-            commands.remove_resource::<crate::combat_reports::CurrentCombatLabReport>();
-            commands.insert_resource(crate::screens::combat_lab::CombatLabSession {
-                kind: crate::screens::combat_lab::CombatLabSessionKind::FixedFixture(id.clone()),
-                return_to: Screen::CombatLab,
-                profile,
-                shipped_combat: combat_settings.clone(),
-                report_map: crate::combat_reports::CombatLabReportMap {
-                    catalog_id: crate::screens::combat_lab::fixture_sandbox_map(id)
-                        .unwrap_or(id)
-                        .to_owned(),
-                    scenario: scenario.name.clone(),
-                    resolved_seed: resolved_seed.map(|seed| seed.0),
-                },
-                initial_state: (id == "channel-attrition").then_some(
-                    crate::screens::combat_lab::FixedFixtureInitialState::ChannelAttrition,
-                ),
-            });
-            let payload = match crate::screens::combat_lab::creator_fixture_payload(
-                id,
-                content.presets.as_deref(),
-                content.shipped_spells.as_deref(),
-                content.base_lattices.as_deref(),
-                content.elements.as_deref(),
-                content.substances.as_deref(),
-            ) {
-                Ok(payload) => payload,
-                Err(reason) => {
-                    error!("visual walk: fixture {id:?} is invalid: {reason}");
-                    state.failed = true;
-                    exit.write(AppExit::error());
-                    return;
-                }
-            };
-            let encounter_override = payload
-                .map(|(overlay, encounter)| {
-                    commands.insert_resource(overlay);
-                    encounter
-                })
-                .or_else(|| crate::screens::combat_lab::walk_fixture_encounter(id));
-            commands.insert_resource(ScenarioToLoad {
-                scenario,
-                resolved_seed,
-                encounter_override,
-            });
-            next.set(Screen::Loading);
-            state.advance();
-        }
     }
 }
 
@@ -718,11 +571,8 @@ mod tests {
         AwaitScreen("CombatLab"),
         Key("Backspace"),
         StartScenario(name: "The Crossing"),
-        StartFixture(id: "ability-lab"),
         AwaitTerrain,
-        Key("KeyR"),
         AwaitButton("Cast Ember"),
-        PresentFixtureReport,
         SetUiScale("200%"),
         PresentUi("required-decision"),
         Capture("02-crossing"),
@@ -731,7 +581,7 @@ mod tests {
     #[test]
     fn a_full_script_parses_with_every_step_kind() {
         let steps: Vec<WalkStep> = ron::from_str(FULL_SCRIPT).expect("script parses");
-        assert_eq!(steps.len(), 15);
+        assert_eq!(steps.len(), 12);
         assert_eq!(steps.first(), Some(&WalkStep::AwaitScreen("Title".into())));
         assert_eq!(
             steps.get(3),
@@ -747,13 +597,6 @@ mod tests {
                 seed: None
             })
         );
-        assert_eq!(
-            steps.get(7),
-            Some(&WalkStep::StartFixture {
-                id: "ability-lab".into(),
-                profile: None,
-            })
-        );
         for step in &steps {
             validate_step(step).expect("every step validates");
         }
@@ -761,9 +604,7 @@ mod tests {
 
     #[test]
     fn unknown_screens_and_keys_are_rejected_at_load() {
-        assert_eq!(parse_key("KeyH"), Ok(KeyCode::KeyH));
-        assert_eq!(parse_key("KeyL"), Ok(KeyCode::KeyL));
-        assert_eq!(parse_key("KeyR"), Ok(KeyCode::KeyR));
+        assert_eq!(parse_key("C"), Ok(KeyCode::KeyC));
         assert!(validate_step(&WalkStep::AwaitScreen("Menu".into())).is_err());
         assert!(validate_step(&WalkStep::Key("F13".into())).is_err());
         assert!(validate_step(&WalkStep::Capture(" ".into())).is_err());
@@ -876,7 +717,6 @@ mod tests {
         let mut checked = 0;
         let mut launches_default = false;
         let mut continues_save = false;
-        let mut launches_fixture = false;
         let mut launches_lab_sandbox = false;
         for script in ["../../walks/gameplay_ui.ron"] {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(script);
@@ -902,22 +742,10 @@ mod tests {
                 if matches!(step, WalkStep::Click { name, .. } if name == "Load Map & Deploy") {
                     launches_lab_sandbox = true;
                 }
-                if let WalkStep::StartFixture { id, .. } = step {
-                    assert!(
-                        crate::screens::combat_lab::fixture_scenario_name(id).is_some(),
-                        "{} starts unknown fixture {id:?}",
-                        path.display()
-                    );
-                    launches_fixture = true;
-                }
             }
         }
         assert!(
-            checked > 0
-                || launches_default
-                || continues_save
-                || launches_fixture
-                || launches_lab_sandbox,
+            checked > 0 || launches_default || continues_save || launches_lab_sandbox,
             "the UI walk must exercise at least one real application launch path"
         );
     }

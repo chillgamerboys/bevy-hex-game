@@ -176,7 +176,7 @@ fn spawn_action_column(deck: &mut ChildSpawnerCommands, assets: &UiAssets, resum
                 ),
                 (
                     "Settings",
-                    "Display, presentation, and volume scaffolding.",
+                    "Display, readable UI scale, presentation, and volume.",
                     TitleIntent::Settings,
                     true,
                 ),

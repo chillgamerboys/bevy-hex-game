@@ -310,6 +310,21 @@ mod tests {
     }
 
     #[test]
+    fn version_two_ui_scale_survives_a_restart_round_trip() {
+        let preferences = UserPreferences {
+            ui_scale: hex_ui::UiScaleMode::Percent200,
+            ..default()
+        };
+        let encoded = ron::ser::to_string(&preferences).expect("v2 preferences encode");
+        let restarted = ron::from_str::<UserPreferences>(&encoded)
+            .expect("v2 preferences decode")
+            .upgrade()
+            .expect("v2 preferences remain current");
+        assert_eq!(restarted.ui_scale, hex_ui::UiScaleMode::Percent200);
+        assert_eq!(restarted.version, PREFERENCES_VERSION);
+    }
+
+    #[test]
     fn audio_buses_apply_master_volume() {
         let preferences = UserPreferences {
             master_volume: 0.5,
