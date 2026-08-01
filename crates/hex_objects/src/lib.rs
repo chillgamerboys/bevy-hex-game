@@ -648,9 +648,14 @@ fn clear_tree_fade_materials(
             }
         }
         let mut entity = commands.entity(entity);
-        entity.remove::<AppliedTreeFade>();
+        // Map teardown may despawn the complete object hierarchy in this same
+        // `OnExit(Gameplay)` schedule. Cleanup is intentionally idempotent: a
+        // surviving tooling-owned chunk loses the presentation markers, while an
+        // already-despawned map chunk does not turn an ordinary exit into a command
+        // error.
+        entity.try_remove::<AppliedTreeFade>();
         if applied.added_not_shadow_caster {
-            entity.remove::<NotShadowCaster>();
+            entity.try_remove::<NotShadowCaster>();
         }
     }
     fade_assets.clear(&mut materials);

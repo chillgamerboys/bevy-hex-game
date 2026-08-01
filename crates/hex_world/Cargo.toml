@@ -6,6 +6,7 @@ publish = false
 description = "3D world presentation: sky and camera."
 
 [features]
+default = []
 # Headless production-plugin composition for the game crate's integration target.
 test-support = []
 
@@ -18,10 +19,6 @@ hex_core = { workspace = true }
 
 [dev-dependencies]
 hex_test_app = { workspace = true }
-
-[features]
-default = []
-test-support = []
 
 [lints]
 workspace = true
