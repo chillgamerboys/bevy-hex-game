@@ -56,10 +56,11 @@ fn spawn(mut commands: Commands, assets: Res<UiAssets>) {
 fn rebuild(
     mut commands: Commands,
     view: Res<LatticeDemoView>,
+    metrics: Res<ResolvedUiMetrics>,
     bodies: Query<Entity, With<Body>>,
     assets: Res<UiAssets>,
 ) {
-    if !view.is_changed() {
+    if !view.is_changed() && !metrics.is_changed() {
         return;
     }
     let Ok(body) = bodies.single() else { return };
@@ -81,6 +82,7 @@ fn rebuild(
                         &view.cells,
                         &assets,
                         LatticeScale::DEMO,
+                        metrics.control_scale,
                         "Demo",
                         |coord| Control(LatticeDemoIntent::ActivateCell(coord)),
                     );

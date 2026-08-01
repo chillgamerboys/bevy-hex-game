@@ -131,6 +131,15 @@ pub enum UiViewportClass {
     Wide,
 }
 
+/// Internal order for resolving semantic metrics before applying them to widgets.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum SemanticMetricsSystems {
+    /// Resolve the current preference and logical canvas into semantic factors.
+    Resolve,
+    /// Apply resolved factors to opted-in text and control geometry.
+    Apply,
+}
+
 /// Current logical canvas and semantic accessibility factors.
 #[derive(Resource, Debug, Clone, Copy, PartialEq)]
 pub struct ResolvedUiMetrics {
@@ -201,7 +210,18 @@ pub fn resolve_ui_metrics(logical_size: Vec2, mode: UiScaleMode) -> ResolvedUiMe
 pub(super) fn plugin(app: &mut App) {
     app.init_resource::<UiScalePreference>()
         .init_resource::<ResolvedUiMetrics>()
-        .add_systems(Update, apply_ui_scale);
+        .configure_sets(
+            Update,
+            (
+                SemanticMetricsSystems::Resolve,
+                SemanticMetricsSystems::Apply,
+            )
+                .chain(),
+        )
+        .add_systems(
+            Update,
+            apply_ui_scale.in_set(SemanticMetricsSystems::Resolve),
+        );
 }
 
 pub(crate) fn apply_ui_scale(

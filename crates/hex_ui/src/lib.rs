@@ -75,6 +75,10 @@ pub use theme::{
     ACCENT_EDGE, BLURB_SIZE, DANGER, DISPLAY_SIZE, EDGE, FINE_SIZE, FUSION_COLOR, GEM_COLOR, LABEL,
     LABEL_SIZE, MUTED, PANEL_BG, SCREEN_TITLE_SIZE, SMALL_BUTTON_WIDTH, TITLE_SIZE,
 };
+pub(crate) use theme::{
+    body_text_role, compact_glyph_role, owner_resolved_control_role, responsive_control_role,
+    supporting_text_role,
+};
 
 #[cfg(any(feature = "visual-review", feature = "test-support"))]
 pub use review::apply_ui_review_fixture;
@@ -1106,6 +1110,7 @@ pub mod test_support {
             physical_width: u32,
             physical_height: u32,
             scale_factor: f32,
+            mode: crate::UiScaleMode,
         ) -> UiTreeSnapshot {
             let library: hex_assets::ScenarioLibrary =
                 ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
@@ -1116,6 +1121,8 @@ pub mod test_support {
                 physical_height,
                 scale_factor,
             ));
+            app.world_mut()
+                .insert_resource(crate::UiScalePreference(mode));
             app.world_mut().insert_resource(crate::ScenarioBrowserView {
                 scenarios: library
                     .visible_scenarios()
@@ -1527,8 +1534,9 @@ pub mod test_support {
         }
 
         #[test]
-        fn production_scenario_catalog_has_one_outer_scroll_path() {
-            let snapshot = production_scenario_snapshot(1280, 720, 1.0);
+        fn production_scenario_catalog_scrolls_beneath_a_persistent_footer() {
+            let snapshot =
+                production_scenario_snapshot(960, 540, 1.0, crate::UiScaleMode::Percent200);
             assert!(
                 snapshot.layout_issues().is_empty(),
                 "the production scenario catalog must remain reachable: {:?}; immediate scenario nodes: {:?}",
@@ -1545,6 +1553,19 @@ pub mod test_support {
                 .find(|node| node.name == "Back")
                 .expect("scenario catalog has a Back control");
             assert!(back.fully_visible);
+            assert!(
+                back.center.y > snapshot.metrics.logical_size.y * 0.75,
+                "Back must remain in the persistent lower footer: {back:?}"
+            );
+            let catalog = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.name == "Scenario Catalog Viewport")
+                .expect("scenario catalog has a dedicated scroll viewport");
+            assert!(
+                catalog.fully_visible,
+                "catalog viewport must fit: {catalog:?}"
+            );
             let title = snapshot
                 .nodes
                 .iter()

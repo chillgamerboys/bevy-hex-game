@@ -5,9 +5,10 @@ use bevy::prelude::*;
 use hex_core::Screen;
 
 use crate::{
-    blurb, fine, heading, row_button, spawn_decision_controls, CastingIntent,
-    CastingPanelContentView, CastingPanelView, HudElement, RequiredActionSurface, UiAssets,
-    UiHudSetup, UiIntent, UiRegionRole, UiSystems, BLURB_SIZE, EDGE, LABEL, PANEL_BG,
+    blurb, body_text_role, fine, heading, owner_resolved_control_role, row_button,
+    spawn_decision_controls, CastingIntent, CastingPanelContentView, CastingPanelView, HudElement,
+    RequiredActionSurface, UiAssets, UiHudSetup, UiIntent, UiRegionRole, UiSystems, BLURB_SIZE,
+    EDGE, LABEL, PANEL_BG,
 };
 
 const CONTROL_WIDTH: f32 = 104.0;
@@ -176,7 +177,14 @@ fn rebuild(
                     }
                 } else {
                     for spell in spells {
-                        spawn_spell(rows, spell, unavailable.is_some(), stacked, &assets);
+                        spawn_spell(
+                            rows,
+                            spell,
+                            unavailable.is_some(),
+                            stacked,
+                            metrics.control_scale,
+                            &assets,
+                        );
                     }
                 }
             }
@@ -188,8 +196,10 @@ fn spawn_spell(
     spell: &crate::CastingSpellView,
     unavailable: bool,
     stacked: bool,
+    semantic_control_scale: f32,
     assets: &UiAssets,
 ) {
+    let semantic_control_scale = semantic_control_scale.max(1.0);
     rows.spawn((
         Name::new("Spell Row"),
         Node {
@@ -197,7 +207,7 @@ fn spawn_spell(
             flex_grow: if stacked { 0.0 } else { 1.0 },
             flex_shrink: if stacked { 0.0 } else { 1.0 },
             min_width: Val::Px(0.0),
-            min_height: Val::Px(74.0),
+            min_height: Val::Px(74.0 * semantic_control_scale),
             flex_direction: FlexDirection::Row,
             column_gap: Val::Px(4.0),
             align_items: AlignItems::Center,
@@ -209,7 +219,7 @@ fn spawn_spell(
         entry.spawn((
             Node {
                 width: Val::Px(SWATCH_WIDTH),
-                height: Val::Px(74.0),
+                height: Val::Px(74.0 * semantic_control_scale),
                 border_radius: BorderRadius::all(Val::Px(2.0)),
                 ..default()
             },
@@ -223,14 +233,16 @@ fn spawn_spell(
                     AccessibleLabel::new(format!("Cast {} · {}", spell.name, spell.cost)),
                     Button,
                     TabIndex(0),
+                    owner_resolved_control_role(),
                     CastingControl::Begin(spell.name.clone()),
-                    spell_button_node(stacked),
+                    spell_button_node(stacked, semantic_control_scale),
                     BorderColor::all(EDGE),
                     BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.08)),
                 ))
                 .with_children(|button| {
                     button.spawn((
                         Text::new(spell.name.clone()),
+                        body_text_role(),
                         TextFont {
                             font: assets.body.clone().into(),
                             ..TextFont::from_font_size(BLURB_SIZE)
@@ -249,7 +261,7 @@ fn spawn_spell(
                         spell.name,
                         spell.blocked.as_deref().unwrap_or(&spell.cost)
                     )),
-                    spell_button_node(stacked),
+                    spell_button_node(stacked, semantic_control_scale),
                     BorderColor::all(EDGE),
                     BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.04)),
                     Pickable::IGNORE,
@@ -272,18 +284,23 @@ fn spell_is_actionable(unavailable: bool, spell: &crate::CastingSpellView) -> bo
     !unavailable && spell.blocked.is_none()
 }
 
-fn spell_button_node(stacked: bool) -> Node {
+fn spell_button_node(stacked: bool, semantic_control_scale: f32) -> Node {
+    let semantic_control_scale = semantic_control_scale.max(1.0);
     Node {
         width: if stacked {
             Val::Percent(100.0)
         } else {
-            Val::Px(148.0)
+            Val::Px(148.0 * semantic_control_scale)
         },
-        max_width: if stacked { Val::Auto } else { Val::Px(148.0) },
+        max_width: if stacked {
+            Val::Auto
+        } else {
+            Val::Px(148.0 * semantic_control_scale)
+        },
         flex_grow: 1.0,
         height: Val::Auto,
-        min_height: Val::Px(74.0),
-        padding: UiRect::all(Val::Px(7.0)),
+        min_height: Val::Px(74.0 * semantic_control_scale),
+        padding: UiRect::all(Val::Px(7.0 * semantic_control_scale)),
         flex_direction: FlexDirection::Column,
         justify_content: JustifyContent::Center,
         row_gap: Val::Px(2.0),

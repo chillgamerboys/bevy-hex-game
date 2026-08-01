@@ -6,9 +6,9 @@ use bevy::ui_widgets::ScrollArea;
 use hex_core::Screen;
 
 use crate::{
-    action_rail_clearance, blurb, heading, row_button, DespawnOnExit, LabStatisticsIntent,
-    LabStatisticsView, ResolvedUiMetrics, UiAssets, UiIntent, UiSystems, UiViewportClass,
-    ACCENT_EDGE, LABEL,
+    action_rail_clearance, blurb, heading, row_button, supporting_text_role, DespawnOnExit,
+    LabStatisticsIntent, LabStatisticsView, ResolvedUiMetrics, UiAssets, UiIntent, UiSystems,
+    UiViewportClass, ACCENT_EDGE, LABEL,
 };
 
 #[derive(Component)]
@@ -84,6 +84,7 @@ fn spawn(mut commands: Commands, assets: Res<UiAssets>) {
                     body.spawn((
                         Summary,
                         Text::new("Waiting for canonical combat statistics…"),
+                        supporting_text_role(),
                         TextFont {
                             font: assets.body.clone().into(),
                             ..TextFont::from_font_size(18.0)

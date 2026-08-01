@@ -16,11 +16,11 @@ use hex_gameplay_model::{
 };
 
 use crate::{
-    blurb, display, element_color, fine, heading, label, panel, panel_node, row_button,
-    screen_root, screen_root_node, short_name, CharacterBuildSummary, CombatLabIntent,
-    CombatLabReportField, CombatLabReportsView, CombatLabRulesVariant, CombatLabScreenView,
-    CreatorLibraryView, ResolvedUiMetrics, UiAssets, UiIntent, UiSystems, UiViewportClass, DANGER,
-    FUSION_COLOR, LABEL,
+    blurb, body_text_role, compact_glyph_role, display, element_color, fine, heading, label, panel,
+    panel_node, responsive_control_role, row_button, screen_root, screen_root_node, short_name,
+    CharacterBuildSummary, CombatLabIntent, CombatLabReportField, CombatLabReportsView,
+    CombatLabRulesVariant, CombatLabScreenView, CreatorLibraryView, ResolvedUiMetrics, UiAssets,
+    UiIntent, UiSystems, UiViewportClass, DANGER, FUSION_COLOR, LABEL,
 };
 
 const MAX_ROSTER: usize = MAX_COMBAT_LAB_ROSTER;
@@ -1291,6 +1291,7 @@ fn spawn_mini_lattice(
                     ))
                     .with_child((
                         Text::new(text),
+                        compact_glyph_role(7.0),
                         TextFont {
                             font: assets.body.clone().into(),
                             ..TextFont::from_font_size(7.0)
@@ -1328,6 +1329,8 @@ fn spawn_fixture_selector(
                     visible_width: Some(32.0),
                     ..EditableText::new(&state.fixture_filter)
                 },
+                body_text_role(),
+                responsive_control_role(),
                 TextFont {
                     font: assets.body.clone().into(),
                     ..TextFont::from_font_size(18.0)
@@ -1513,6 +1516,8 @@ fn spawn_saved_reports(
                                         visible_width: Some(32.0),
                                         ..EditableText::new(&report.label)
                                     },
+                                    body_text_role(),
+                                    responsive_control_role(),
                                     TextFont {
                                         font: assets.body.clone().into(),
                                         ..TextFont::from_font_size(18.0)
@@ -1536,6 +1541,8 @@ fn spawn_saved_reports(
                                         visible_width: Some(52.0),
                                         ..EditableText::new(&report.notes)
                                     },
+                                    body_text_role(),
+                                    responsive_control_role(),
                                     TextFont {
                                         font: assets.body.clone().into(),
                                         ..TextFont::from_font_size(18.0)

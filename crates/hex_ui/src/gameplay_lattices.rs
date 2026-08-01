@@ -286,6 +286,7 @@ fn rebuild(
                     } else {
                         LatticeScale::PANEL
                     },
+                    metrics.control_scale,
                     "Compact Required",
                     OwnCell,
                 );
@@ -305,6 +306,7 @@ fn rebuild(
                 &own.cells,
                 &assets,
                 LatticeScale::PANEL,
+                metrics.control_scale,
                 "Own",
                 OwnCell,
             );
@@ -330,6 +332,7 @@ fn rebuild(
                         cells,
                         &assets,
                         LatticeScale::PANEL,
+                        metrics.control_scale,
                         "Target",
                         |_| (),
                     );
