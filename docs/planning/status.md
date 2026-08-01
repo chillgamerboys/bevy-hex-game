@@ -280,7 +280,8 @@ default-off
 **`visual-walk`** build drives the whole game through scripted RON walks — screens,
 clicks by `Name`, keys, scenario launches — photographing every step through an
 offscreen render target so an agent can read the frames; `/audit-pr` runs it as a
-mechanical gate. New Game reaches the 3v3 Party Trial in one click, while fixture walks
+structural and mechanical gate, with usability findings also blocking changes to UI
+or presentation. New Game reaches the 3v3 Party Trial in one click, while fixture walks
 launch Ability Lab and Raider Mirror by stable ID. The menus wear vendored
 Cinzel/Inter type over a
 design-token widget set; scenarios carry optional per-scenario lighting, and cyclic

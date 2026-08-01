@@ -178,7 +178,7 @@ receipt at `/tmp/audit-pr-receipt-{PR_NUM}.json` using the
     "2_test_full":             {"status": "pass", "summary": "local green, ship build green, visual walk manual", "findings": []},
     "3_audit_silent_failures": {"status": "pass", "summary": "0 candidates", "findings": []},
     "4_update_docs":           {"status": "pass", "summary": "no drift", "findings": []},
-    "5_visual_walk":           {"status": "pass", "review_policy": "blocking", "summary": "11 frames across 2 walks, 0 mechanical, 0 review findings", "findings": []}
+    "5_visual_walk":           {"status": "pass", "review_policy": "blocking", "summary": "10 frames across 1 walk, 0 mechanical, 0 review findings", "findings": []}
   },
   "environment": {
     "is_conductor_workspace": true,
