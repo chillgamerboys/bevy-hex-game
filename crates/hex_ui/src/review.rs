@@ -11,6 +11,7 @@ use crate::{
     ActionAffordance, ActionAvailability, ActionPriority, CastingAimView, CastingPanelContentView,
     CastingSpellView, CellInteraction, DecisionChoiceView, GameplayAction, LatticeCellView,
     OutcomeAction, OutcomeActionView, OutcomeCompareChoiceView, OwnLatticeView,
+    TargetLatticeStateView, TargetLatticeView,
 };
 
 #[derive(Resource, Default)]
@@ -92,7 +93,7 @@ pub fn apply_ui_review_fixture(commands: &mut Commands, name: &str) -> Result<()
                 expanded: false,
                 text: "Round 4 · live Combat Lab totals".to_owned(),
             });
-            review.lattices = Some(readout_lattices());
+            review.lattices = Some(populated_lattices());
         }
         "required-decision" => {
             review.hud = Some(required_hud());
@@ -151,7 +152,7 @@ pub fn apply_ui_review_fixture(commands: &mut Commands, name: &str) -> Result<()
         }
         "live-statistics" => {
             review.hud = Some(ordinary_hud());
-            review.lattices = Some(readout_lattices());
+            review.lattices = Some(populated_lattices());
             review.statistics = Some(LabStatisticsView {
                 present: true,
                 visible: true,
@@ -409,30 +410,52 @@ fn decision_lattices() -> GameplayLatticesView {
 }
 
 #[cfg(any(feature = "visual-review", feature = "test-support"))]
-fn readout_lattices() -> GameplayLatticesView {
-    let cell = |q, r, label: &str, detail: &str, color| LatticeCellView {
-        coord: hex_core::LatticeCoord::new(q, r),
-        label: label.to_owned(),
-        detail: detail.to_owned(),
-        color,
-        known_mana: Some(3),
-        known_locked: Some(false),
-        disabled: false,
-        selected: false,
-        interaction: CellInteraction::ReadOnly,
-    };
-    GameplayLatticesView {
-        own: Some(OwnLatticeView {
-            heading: "selected ally".to_owned(),
-            identity: "Hedge Mage · Player".to_owned(),
-            cells: vec![
-                cell(0, 0, "FIRE", "3 / 3", Color::srgb(0.58, 0.15, 0.45)),
-                cell(1, 0, "LIGHT", "3 / 3", Color::srgb(0.12, 0.44, 0.49)),
-                cell(0, 1, "WATER", "2 / 2", Color::srgb(0.12, 0.48, 0.24)),
-                cell(-1, 1, "EMBER", "tier 1", Color::srgb(0.28, 0.30, 0.35)),
-            ],
-            decision: None,
-        }),
-        target: None,
+fn populated_lattices() -> GameplayLatticesView {
+    let mut lattices = decision_lattices();
+    if let Some(own) = &mut lattices.own {
+        own.heading = "selected ally".to_owned();
+        own.decision = None;
+        let templates = own.cells.clone();
+        for (index, (template, (q, r))) in templates
+            .iter()
+            .cycle()
+            .zip([
+                (1, -1),
+                (0, -1),
+                (-1, 0),
+                (2, 0),
+                (2, -1),
+                (2, -2),
+                (1, -2),
+                (0, -2),
+                (-1, -1),
+            ])
+            .enumerate()
+        {
+            let mut cell = template.clone();
+            cell.coord = hex_core::LatticeCoord::new(q, r);
+            cell.label = format!("CELL {}", index + templates.len() + 1);
+            cell.selected = false;
+            cell.interaction = CellInteraction::ReadOnly;
+            own.cells.push(cell);
+        }
+        for cell in &mut own.cells {
+            cell.detail = "LIVE".to_owned();
+            cell.selected = false;
+            cell.interaction = CellInteraction::ReadOnly;
+        }
     }
+    let target_cells = lattices
+        .own
+        .as_ref()
+        .map_or_else(Vec::new, |own| own.cells.iter().take(8).cloned().collect());
+    lattices.target = Some(TargetLatticeView {
+        heading: "aim target".to_owned(),
+        identity: "Raider · Hostile".to_owned(),
+        state: TargetLatticeStateView::Known {
+            cells: target_cells,
+            unknown: Some(4),
+        },
+    });
+    lattices
 }

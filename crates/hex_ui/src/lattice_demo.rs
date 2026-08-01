@@ -5,7 +5,7 @@ use bevy::ui_widgets::ScrollArea;
 use hex_core::Screen;
 
 use crate::{
-    blurb, display, divider, fine, heading, label, panel, screen_root, small_button,
+    blurb, button, display, divider, fine, heading, label, panel, screen_root, small_button,
     spawn_lattice_cells, LatticeDemoIntent, LatticeDemoView, LatticeScale, ResolvedUiMetrics,
     UiAssets, UiIntent, UiSystems, UiViewportClass, SMALL_BUTTON_WIDTH,
 };
@@ -15,6 +15,9 @@ struct Body;
 
 #[derive(Component, Clone, Copy)]
 struct Control(LatticeDemoIntent);
+
+#[derive(Component)]
+struct BackControl;
 
 pub(super) fn plugin(app: &mut App) {
     app.add_systems(OnEnter(Screen::LatticeDemo), spawn)
@@ -33,6 +36,13 @@ fn spawn(mut commands: Commands, assets: Res<UiAssets>) {
         .spawn(screen_root(Screen::LatticeDemo, "Lattice Demo Screen"))
         .with_children(|parent| {
             parent.spawn(display(&assets, "The Lattice"));
+            parent
+                .spawn((
+                    button("Back"),
+                    BackControl,
+                    crate::UiVisibilityRequirement::Immediate,
+                ))
+                .with_child(label(&assets, "Back"));
             parent.spawn((
                 Name::new("Demo Body"),
                 Body,
@@ -75,15 +85,20 @@ fn rebuild(
             panels.spawn(blurb(&assets, "the content defined no demo lattice"));
         } else {
             if metrics.viewport == UiViewportClass::Compact {
-                spawn_controls(panels, &assets, &view);
+                spawn_controls(panels, &assets, &view, true);
                 spawn_lattice_panel(panels, &assets, &view, metrics.control_scale);
             } else {
                 spawn_lattice_panel(panels, &assets, &view, metrics.control_scale);
-                spawn_controls(panels, &assets, &view);
+                spawn_controls(panels, &assets, &view, false);
             }
             return;
         }
-        spawn_controls(panels, &assets, &view);
+        spawn_controls(
+            panels,
+            &assets,
+            &view,
+            metrics.viewport == UiViewportClass::Compact,
+        );
     });
 }
 
@@ -114,14 +129,31 @@ fn spawn_lattice_panel(
         });
 }
 
-fn spawn_controls(parent: &mut ChildSpawnerCommands, assets: &UiAssets, view: &LatticeDemoView) {
+fn spawn_controls(
+    parent: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    view: &LatticeDemoView,
+    compact: bool,
+) {
     parent
         .spawn((Name::new("Demo Controls"), panel()))
         .insert(Node {
             flex_direction: FlexDirection::Column,
             row_gap: Val::Px(10.0),
-            width: Val::Px(470.0),
-            max_width: Val::Percent(100.0),
+            // At high semantic scales the compact layout has ample horizontal
+            // room but very little vertical room. Let the primary-action row
+            // use that width so End Turn and Reset do not wrap and push the
+            // second spell below the initial viewport.
+            width: if compact {
+                Val::Percent(100.0)
+            } else {
+                Val::Px(470.0)
+            },
+            max_width: if compact {
+                Val::Px(760.0)
+            } else {
+                Val::Percent(100.0)
+            },
             padding: UiRect::all(Val::Px(18.0)),
             border: UiRect::all(Val::Px(1.0)),
             border_radius: BorderRadius::all(Val::Px(10.0)),
@@ -241,11 +273,144 @@ fn apply_layout(
 
 fn emit_intents(
     clicked: Query<(&Interaction, &Control), Changed<Interaction>>,
+    back: Query<&Interaction, (Changed<Interaction>, With<BackControl>)>,
     mut intents: MessageWriter<UiIntent>,
 ) {
     for (interaction, control) in &clicked {
         if *interaction == Interaction::Pressed {
             intents.write(UiIntent::LatticeDemo(control.0));
+        }
+    }
+    if back
+        .iter()
+        .any(|interaction| *interaction == Interaction::Pressed)
+    {
+        intents.write(UiIntent::Back);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Resource, Default)]
+    struct ReceivedBack(usize);
+
+    fn receive(mut intents: MessageReader<UiIntent>, mut received: ResMut<ReceivedBack>) {
+        for intent in intents.read() {
+            if matches!(intent, UiIntent::Back) {
+                received.0 += 1;
+            }
+        }
+    }
+
+    #[test]
+    fn one_back_press_emits_one_shared_navigation_intent() {
+        let mut app = App::new();
+        app.add_message::<UiIntent>()
+            .init_resource::<ReceivedBack>()
+            .add_systems(Update, (emit_intents, receive).chain());
+        let back = app.world_mut().spawn((Interaction::None, BackControl)).id();
+
+        app.update();
+        assert_eq!(app.world().resource::<ReceivedBack>().0, 0);
+        *app.world_mut()
+            .get_mut::<Interaction>(back)
+            .expect("the test Back control must retain Interaction") = Interaction::Pressed;
+        app.update();
+        app.update();
+
+        assert_eq!(app.world().resource::<ReceivedBack>().0, 1);
+    }
+
+    #[cfg(feature = "test-support")]
+    fn populated_demo_snapshot(
+        width: u32,
+        height: u32,
+        mode: crate::UiScaleMode,
+    ) -> crate::test_support::UiTreeSnapshot {
+        let mut app = App::new();
+        app.add_plugins(crate::test_support::HeadlessUiPlugin::new(width, height));
+        app.world_mut()
+            .insert_resource(crate::UiScalePreference(mode));
+        app.world_mut().insert_resource(crate::LatticeDemoView {
+            ready: true,
+            cells: [
+                (0, 0, "AIR"),
+                (1, 0, "FIRE"),
+                (0, 1, "WATER"),
+                (-1, 1, "EARTH"),
+            ]
+            .into_iter()
+            .map(|(q, r, label)| crate::LatticeCellView {
+                coord: hex_core::LatticeCoord::new(q, r),
+                label: label.to_owned(),
+                detail: "LIVE · 1 MANA".to_owned(),
+                color: Color::srgb(0.35, 0.62, 0.78),
+                known_mana: Some(1),
+                known_locked: Some(false),
+                disabled: false,
+                selected: false,
+                interaction: crate::CellInteraction::Actionable,
+            })
+            .collect(),
+            spells: vec![
+                crate::LatticeDemoSpellView {
+                    coord: hex_core::LatticeCoord::new(1, 0),
+                    name: "Ember".to_owned(),
+                    headline: "Ember · ready".to_owned(),
+                    kind: "Evocation".to_owned(),
+                    cost: Some(1),
+                    blocked: None,
+                },
+                crate::LatticeDemoSpellView {
+                    coord: hex_core::LatticeCoord::new(0, 1),
+                    name: "Lightning Bolt".to_owned(),
+                    headline: "Lightning Bolt · ready".to_owned(),
+                    kind: "Evocation".to_owned(),
+                    cost: Some(2),
+                    blocked: None,
+                },
+            ],
+            totals: "Mana 4 · disabled 0 · enchantments 0".to_owned(),
+            log: (1..=8)
+                .map(|index| format!("Bounded lattice event {index}"))
+                .collect(),
+        });
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::LatticeDemo);
+        for _ in 0..8 {
+            app.update();
+        }
+        crate::test_support::ui_tree_snapshot(app.world_mut())
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn compact_high_scale_keeps_every_primary_action_visible() {
+        let snapshot = populated_demo_snapshot(1280, 720, crate::UiScaleMode::Percent200);
+        for name in [
+            "Back",
+            "End Turn",
+            "Reset",
+            "Cast Ember",
+            "Cast Lightning Bolt",
+        ] {
+            let node = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.name == name)
+                .unwrap_or_else(|| panic!("missing primary Lattice Demo action {name:?}"));
+            assert_eq!(
+                node.visibility_requirement,
+                Some(crate::UiVisibilityRequirement::Immediate),
+                "{name} must remain an Immediate action"
+            );
+            assert!(
+                node.fully_visible,
+                "{name} must be visible without scrolling: {node:?}"
+            );
         }
     }
 }

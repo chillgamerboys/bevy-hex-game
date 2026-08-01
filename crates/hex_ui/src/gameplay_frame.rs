@@ -129,6 +129,7 @@ fn spawn_region(
 fn apply_responsive_layout(
     metrics: Res<ResolvedUiMetrics>,
     statistics: Res<crate::LabStatisticsView>,
+    chrome: Res<GameplayChromeView>,
     review: Option<Res<crate::review::UiReviewPresentation>>,
     added_regions: Query<(), Added<UiRegionRole>>,
     mut regions: Query<(&UiRegionRole, &mut Node)>,
@@ -136,6 +137,7 @@ fn apply_responsive_layout(
     let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
     if !metrics.is_changed()
         && !statistics.is_changed()
+        && !chrome.is_changed()
         && !review_changed
         && added_regions.is_empty()
     {
@@ -145,12 +147,12 @@ fn apply_responsive_layout(
         .as_ref()
         .and_then(|review| review.statistics.as_ref())
         .unwrap_or(statistics.as_ref());
+    let show_statistics = statistics.present && statistics.visible && !chrome.decision_required;
     for (role, mut node) in &mut regions {
         constrain_region_to_canvas(*metrics, *role, &mut node);
         if *role != UiRegionRole::Inspector
             || metrics.viewport == crate::UiViewportClass::Compact
-            || !statistics.present
-            || !statistics.visible
+            || !show_statistics
         {
             continue;
         }

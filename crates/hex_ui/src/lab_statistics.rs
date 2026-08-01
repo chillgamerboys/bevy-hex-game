@@ -7,8 +7,8 @@ use hex_core::Screen;
 
 use crate::{
     blurb, hud_heading, layout::is_ultra_constrained, row_button, supporting_text_role,
-    DespawnOnExit, LabStatisticsIntent, LabStatisticsView, ResolvedUiMetrics, UiAssets, UiIntent,
-    UiSystems, UiViewportClass, ACCENT_EDGE, LABEL,
+    DespawnOnExit, GameplayChromeView, LabStatisticsIntent, LabStatisticsView, ResolvedUiMetrics,
+    UiAssets, UiIntent, UiSystems, UiViewportClass, ACCENT_EDGE, LABEL,
 };
 
 #[derive(Component)]
@@ -28,7 +28,7 @@ pub(super) fn plugin(app: &mut App) {
         .add_systems(
             Update,
             (
-                (render, apply_layout).chain().in_set(UiSystems::Render),
+                (apply_layout, render).chain().in_set(UiSystems::Render),
                 emit_intents.in_set(UiSystems::EmitIntents),
             )
                 .run_if(in_state(Screen::Gameplay)),
@@ -109,7 +109,9 @@ fn spawn(mut commands: Commands, assets: Res<UiAssets>) {
 
 fn render(
     view: Res<LabStatisticsView>,
+    chrome: Res<GameplayChromeView>,
     review: Option<Res<crate::review::UiReviewPresentation>>,
+    added_drawers: Query<(), Added<Drawer>>,
     mut drawers: Query<&mut Visibility, With<Drawer>>,
     mut bodies: Query<&mut Visibility, (With<Body>, Without<Drawer>)>,
     mut summaries: Query<&mut Text, With<Summary>>,
@@ -117,22 +119,23 @@ fn render(
     mut labels: Query<&mut Text, (Without<Summary>, Without<Drawer>)>,
 ) {
     let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
-    if !view.is_changed() && !review_changed {
+    if !view.is_changed() && !chrome.is_changed() && !review_changed && added_drawers.is_empty() {
         return;
     }
     let view = review
         .as_ref()
         .and_then(|review| review.statistics.as_ref())
         .unwrap_or(view.as_ref());
+    let show_drawer = view.present && view.visible && !chrome.decision_required;
     for mut visibility in &mut drawers {
-        *visibility = if view.present && view.visible {
+        *visibility = if show_drawer {
             Visibility::Inherited
         } else {
             Visibility::Hidden
         };
     }
     for mut visibility in &mut bodies {
-        *visibility = if view.expanded {
+        *visibility = if show_drawer && view.expanded {
             Visibility::Inherited
         } else {
             Visibility::Hidden
@@ -163,7 +166,7 @@ fn apply_layout(
     review: Option<Res<crate::review::UiReviewPresentation>>,
     added: Query<(), Added<Drawer>>,
     mut drawers: Query<&mut Node, (With<Drawer>, Without<Body>)>,
-    mut bodies: Query<(&mut Node, &mut Visibility), (With<Body>, Without<Drawer>)>,
+    mut bodies: Query<&mut Node, (With<Body>, Without<Drawer>)>,
 ) {
     let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
     if !metrics.is_changed() && !view.is_changed() && !review_changed && added.is_empty() {
@@ -173,16 +176,11 @@ fn apply_layout(
         .as_ref()
         .and_then(|review| review.statistics.as_ref())
         .map_or(view.expanded, |view| view.expanded);
-    for (mut body, mut visibility) in &mut bodies {
+    for mut body in &mut bodies {
         body.display = if expanded {
             Display::Flex
         } else {
             Display::None
-        };
-        *visibility = if expanded {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
         };
     }
     for mut node in &mut drawers {
@@ -209,9 +207,8 @@ fn apply_layout(
                     node.flex_direction = FlexDirection::Row;
                     node.align_items = AlignItems::Center;
                     node.column_gap = Val::Px(7.0);
-                    for (mut body, mut visibility) in &mut bodies {
+                    for mut body in &mut bodies {
                         body.display = Display::None;
-                        *visibility = Visibility::Hidden;
                     }
                 } else {
                     node.left = Val::Auto;
