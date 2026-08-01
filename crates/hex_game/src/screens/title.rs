@@ -10,8 +10,8 @@ use bevy::prelude::*;
 use hex_assets::{Scenario, ScenarioLibrary};
 use hex_core::{GameplaySetupFailure, InputAction, InputBindings, ResolvedMapSeed, Screen};
 use hex_ui::{
-    ScenarioBrowserIntent, ScenarioBrowserView, TitleIntent, TitleScenarioView, TitleView,
-    UiIntent, UiSystems,
+    ScenarioBrowserIntent, ScenarioBrowserKind, ScenarioBrowserView, TitleIntent,
+    TitleScenarioView, TitleView, UiIntent, UiSystems,
 };
 
 use crate::scenarios::ScenarioToLoad;
@@ -21,6 +21,7 @@ use super::creator::CreatorEntryRequest;
 pub(super) fn plugin(app: &mut App) {
     app.init_resource::<InputBindings>()
         .init_resource::<SessionSeeds>()
+        .init_resource::<ScenarioBrowserRoute>()
         .add_systems(
             Update,
             handle_title_intents
@@ -52,6 +53,9 @@ struct SessionSeeds {
     overrides: HashMap<String, u64>,
     entropy: u64,
 }
+
+#[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct ScenarioBrowserRoute(ScenarioBrowserKind);
 
 impl Default for SessionSeeds {
     fn default() -> Self {
@@ -117,6 +121,7 @@ fn publish_title_view(failure: Option<Res<GameplaySetupFailure>>, mut view: ResM
 fn publish_scenario_view(
     library: Option<Res<ScenarioLibrary>>,
     seeds: Res<SessionSeeds>,
+    route: Res<ScenarioBrowserRoute>,
     mut view: ResMut<ScenarioBrowserView>,
     mut last_projection: Local<Option<String>>,
 ) {
@@ -125,6 +130,14 @@ fn publish_scenario_view(
         .map(|library| {
             library
                 .visible_scenarios()
+                .filter(|scenario| match route.0 {
+                    ScenarioBrowserKind::MapScenarios => {
+                        scenario.category == hex_assets::ScenarioCategory::Map
+                    }
+                    ScenarioBrowserKind::Demos => {
+                        scenario.category == hex_assets::ScenarioCategory::Demo
+                    }
+                })
                 .map(|scenario| TitleScenarioView {
                     scenario: scenario.clone(),
                     resolved_seed: seeds.resolved(scenario),
@@ -132,12 +145,15 @@ fn publish_scenario_view(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let projection = format!("{scenarios:?}");
+    let projection = format!("{:?}:{scenarios:?}", route.0);
     if last_projection.as_ref() == Some(&projection) {
         return;
     }
     *last_projection = Some(projection);
-    *view = ScenarioBrowserView { scenarios };
+    *view = ScenarioBrowserView {
+        kind: route.0,
+        scenarios,
+    };
 }
 
 fn handle_title_intents(
@@ -145,6 +161,7 @@ fn handle_title_intents(
     library: Option<Res<ScenarioLibrary>>,
     seeds: Res<SessionSeeds>,
     mut commands: Commands,
+    mut scenario_route: ResMut<ScenarioBrowserRoute>,
     mut next: ResMut<NextState<Screen>>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -172,12 +189,23 @@ fn handle_title_intents(
                 };
                 launch_scenario(&mut commands, &mut next, &seeds, scenario.clone());
             }
-            TitleIntent::Creators => {
+            TitleIntent::CharacterCreator => {
                 commands.insert_resource(CreatorEntryRequest::CharacterLibrary);
                 next.set(Screen::CharacterCreator);
             }
+            TitleIntent::SpellCreator => {
+                commands.insert_resource(CreatorEntryRequest::SpellLibrary);
+                next.set(Screen::SpellCreator);
+            }
             TitleIntent::CombatLab => next.set(Screen::CombatLab),
-            TitleIntent::Scenarios => next.set(Screen::Scenarios),
+            TitleIntent::MapScenarios => {
+                scenario_route.0 = ScenarioBrowserKind::MapScenarios;
+                next.set(Screen::Scenarios);
+            }
+            TitleIntent::Demos => {
+                scenario_route.0 = ScenarioBrowserKind::Demos;
+                next.set(Screen::Scenarios);
+            }
             TitleIntent::Settings => next.set(Screen::Settings),
             TitleIntent::Quit => {
                 exit.write(AppExit::Success);
@@ -321,8 +349,8 @@ mod tests {
     }
 
     #[test]
-    fn scenario_projection_lists_visible_maps_and_demos() {
-        let app = test_app_with(
+    fn scenario_projection_is_filtered_by_the_deliberate_title_route() {
+        let mut app = test_app_with(
             Some(ScenarioLibrary {
                 default_game: "Default".to_owned(),
                 scenarios: vec![
@@ -334,6 +362,8 @@ mod tests {
             }),
             Screen::Scenarios,
         );
+        app.world_mut().resource_mut::<ScenarioBrowserRoute>().0 = ScenarioBrowserKind::Demos;
+        app.update();
         let names = app
             .world()
             .resource::<ScenarioBrowserView>()
@@ -341,7 +371,23 @@ mod tests {
             .iter()
             .map(|entry| entry.scenario.name.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(names, ["Map One", "Focused Demo", "Map Two"]);
+        assert_eq!(names, ["Focused Demo"]);
+        assert_eq!(
+            app.world().resource::<ScenarioBrowserView>().kind,
+            ScenarioBrowserKind::Demos
+        );
+
+        app.world_mut().resource_mut::<ScenarioBrowserRoute>().0 =
+            ScenarioBrowserKind::MapScenarios;
+        app.update();
+        let names = app
+            .world()
+            .resource::<ScenarioBrowserView>()
+            .scenarios
+            .iter()
+            .map(|entry| entry.scenario.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["Map One", "Map Two"]);
     }
 
     #[test]
@@ -378,9 +424,11 @@ mod tests {
     #[test]
     fn primary_routes_remain_typed_navigation() {
         for (intent, expected) in [
-            (TitleIntent::Creators, Screen::CharacterCreator),
+            (TitleIntent::CharacterCreator, Screen::CharacterCreator),
+            (TitleIntent::SpellCreator, Screen::SpellCreator),
             (TitleIntent::CombatLab, Screen::CombatLab),
-            (TitleIntent::Scenarios, Screen::Scenarios),
+            (TitleIntent::MapScenarios, Screen::Scenarios),
+            (TitleIntent::Demos, Screen::Scenarios),
             (TitleIntent::Settings, Screen::Settings),
         ] {
             let mut app = test_app_with(Some(library()), Screen::Title);
@@ -390,6 +438,40 @@ mod tests {
                 NextState::Pending(screen) if *screen == expected
             ));
         }
+    }
+
+    #[test]
+    fn creator_routes_preserve_the_requested_library_identity() {
+        let mut character = test_app_with(Some(library()), Screen::Title);
+        send_title(&mut character, TitleIntent::CharacterCreator);
+        assert_eq!(
+            *character.world().resource::<CreatorEntryRequest>(),
+            CreatorEntryRequest::CharacterLibrary
+        );
+
+        let mut spell = test_app_with(Some(library()), Screen::Title);
+        send_title(&mut spell, TitleIntent::SpellCreator);
+        assert_eq!(
+            *spell.world().resource::<CreatorEntryRequest>(),
+            CreatorEntryRequest::SpellLibrary
+        );
+    }
+
+    #[test]
+    fn scenario_routes_preserve_the_requested_catalog_identity() {
+        let mut maps = test_app_with(Some(library()), Screen::Title);
+        send_title(&mut maps, TitleIntent::MapScenarios);
+        assert_eq!(
+            maps.world().resource::<ScenarioBrowserRoute>().0,
+            ScenarioBrowserKind::MapScenarios
+        );
+
+        let mut demos = test_app_with(Some(library()), Screen::Title);
+        send_title(&mut demos, TitleIntent::Demos);
+        assert_eq!(
+            demos.world().resource::<ScenarioBrowserRoute>().0,
+            ScenarioBrowserKind::Demos
+        );
     }
 
     #[test]

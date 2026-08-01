@@ -6,9 +6,9 @@ use bevy::ui_widgets::ScrollArea;
 use hex_core::Screen;
 
 use crate::{
-    action_rail_clearance, blurb, fine, heading, label, layout::is_ultra_constrained, row_button,
-    stacked_row_button, DeploymentIntent, DeploymentRosterEntryView, DeploymentView,
-    ResolvedUiMetrics, UiAssets, UiIntent, UiSystems, UiViewportClass, DANGER,
+    blurb, fine, heading, label, layout::is_ultra_constrained, row_button, stacked_row_button,
+    DeploymentIntent, DeploymentRosterEntryView, DeploymentView, ResolvedUiMetrics, UiAssets,
+    UiIntent, UiSystems, UiViewportClass, DANGER,
 };
 
 #[derive(Component)]
@@ -19,6 +19,9 @@ struct DeploymentSummary;
 
 #[derive(Component)]
 struct DeploymentSide;
+
+#[derive(Component)]
+struct DeploymentSides;
 
 #[derive(Component)]
 struct DeploymentActions;
@@ -92,8 +95,22 @@ fn render(
                     "CLICK BLUE for Player · CLICK RED for Hostile · solid tokens show placements",
                 ));
             });
-            spawn_side(hud, &assets, "PLAYER", true, &view.players);
-            spawn_side(hud, &assets, "HOSTILE", false, &view.hostiles);
+            hud.spawn((
+                Name::new("Deployment Roster Scroll"),
+                DeploymentSides,
+                Node {
+                    min_width: Val::Px(0.0),
+                    min_height: Val::Px(0.0),
+                    flex_grow: 1.0,
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(18.0),
+                    ..default()
+                },
+            ))
+            .with_children(|sides| {
+                spawn_side(sides, &assets, "PLAYER", true, &view.players);
+                spawn_side(sides, &assets, "HOSTILE", false, &view.hostiles);
+            });
             hud.spawn((
                 DeploymentActions,
                 Node {
@@ -184,6 +201,7 @@ fn spawn_side(
             );
             side.spawn((
                 stacked_row_button(text.clone(), 235.0),
+                crate::UiVisibilityRequirement::Scrollable,
                 DeploymentIntent::Select {
                     player,
                     index: entry.index,
@@ -205,10 +223,13 @@ fn deployment_button(
     text: &'static str,
     action: DeploymentIntent,
 ) {
-    let width = if matches!(action, DeploymentIntent::AutoPlace) {
-        330.0
-    } else {
-        250.0
+    let width = match action {
+        DeploymentIntent::Undo => 90.0,
+        DeploymentIntent::ClearPlayer | DeploymentIntent::ClearHostile => 150.0,
+        DeploymentIntent::AutoPlace => 270.0,
+        DeploymentIntent::Back => 170.0,
+        DeploymentIntent::StartCombat => 160.0,
+        DeploymentIntent::Select { .. } => unreachable!("roster selection uses its own card"),
     };
     parent
         .spawn((row_button(text, width), action))
@@ -249,6 +270,16 @@ fn apply_layout(
             Without<DeploymentActions>,
         ),
     >,
+    mut side_groups: Query<
+        (Entity, &mut Node),
+        (
+            With<DeploymentSides>,
+            Without<DeploymentRoot>,
+            Without<DeploymentSummary>,
+            Without<DeploymentSide>,
+            Without<DeploymentActions>,
+        ),
+    >,
     mut actions: Query<
         &mut Node,
         (
@@ -263,7 +294,11 @@ fn apply_layout(
         return;
     }
     let compact = metrics.viewport == UiViewportClass::Compact;
-    let stacked = compact || metrics.content_scale >= 1.5;
+    // The 1512-wide logical canvas produced by a Retina fullscreen window is
+    // nominally Standard, but cannot fit the three deployment columns and the
+    // persistent action region side-by-side. Treat deployment as a denser
+    // composition with its own content breakpoint.
+    let stacked = compact || metrics.logical_size.x < 1900.0 || metrics.content_scale >= 1.5;
     let ultra_constrained = is_ultra_constrained(*metrics);
     for (entity, mut node) in &mut roots {
         (node.left, node.right) = if stacked && metrics.content_scale >= 1.5 {
@@ -288,7 +323,10 @@ fn apply_layout(
         node.bottom = if ultra_constrained {
             Val::Px(8.0)
         } else if compact {
-            Val::Px(action_rail_clearance(metrics.viewport))
+            // Deployment projects an intentionally minimal 48px rail. Reserving
+            // the ordinary gameplay rail's full height would collapse the 6v6
+            // roster viewport to zero on short Compact canvases.
+            Val::Px(68.0)
         } else if stacked {
             Val::Px(68.0)
         } else {
@@ -304,6 +342,44 @@ fn apply_layout(
         } else {
             FlexDirection::Row
         };
+        node.overflow = Overflow::clip();
+        commands.entity(entity).remove::<ScrollArea>();
+    }
+    for mut node in &mut summary {
+        node.display = if ultra_constrained {
+            Display::None
+        } else {
+            Display::Flex
+        };
+        node.width = if stacked {
+            Val::Percent(100.0)
+        } else {
+            Val::Px(300.0)
+        };
+    }
+    for mut node in &mut sides {
+        node.width = if stacked {
+            Val::Percent(100.0)
+        } else {
+            Val::Px(245.0 * metrics.control_scale.max(1.0))
+        };
+    }
+    for (entity, mut node) in &mut side_groups {
+        node.width = if stacked {
+            Val::Percent(100.0)
+        } else {
+            Val::Auto
+        };
+        node.min_height = Val::Px(0.0);
+        node.flex_grow = 1.0;
+        node.height = if stacked { Val::Px(0.0) } else { Val::Auto };
+        node.flex_basis = if stacked { Val::Px(0.0) } else { Val::Auto };
+        node.flex_direction = if stacked {
+            FlexDirection::Column
+        } else {
+            FlexDirection::Row
+        };
+        node.row_gap = if stacked { Val::Px(8.0) } else { Val::ZERO };
         node.overflow = if stacked {
             Overflow::scroll_y()
         } else {
@@ -315,26 +391,13 @@ fn apply_layout(
             commands.entity(entity).remove::<ScrollArea>();
         }
     }
-    for mut node in &mut summary {
-        node.width = if stacked {
-            Val::Percent(100.0)
-        } else {
-            Val::Px(300.0)
-        };
-    }
-    for mut node in &mut sides {
-        node.width = if stacked {
-            Val::Percent(100.0)
-        } else {
-            Val::Px(245.0)
-        };
-    }
     for mut node in &mut actions {
         node.width = if stacked {
             Val::Percent(100.0)
         } else {
             Val::Px(340.0)
         };
+        node.flex_shrink = 0.0;
     }
 }
 

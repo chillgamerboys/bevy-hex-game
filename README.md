@@ -123,10 +123,10 @@ much of the larger design remain ahead. The exact boundary is recorded in the
 ### Play the current build
 
 The title screen keeps the primary application routes together: **Continue**, **New
-Game**, **Creators**, **Combat Lab**, **Scenarios**, **Settings**, and **Quit**. **New
-Game** launches Party Trial as the hidden integrated default. **Scenarios** opens the
-separate development catalog, grouped into scrollable **Maps** and focused **Demos**;
-**Creators** opens character and spell authoring, while **Combat Lab** provides a
+Game**, **Character Creator**, **Spell Creator**, **Combat Lab**, **Map Scenarios**,
+**Demos**, **Settings**, and **Quit**. **New Game** launches Party Trial as the hidden
+integrated default. **Map Scenarios** and **Demos** open separate filtered catalogs;
+the two Creator routes open their exact libraries directly, while **Combat Lab** provides a
 transient roster/deployment Sandbox across all sixteen shipped maps and a searchable
 fixed-fixture selector for Ability Lab, Raider Mirror, and creator-format matrices.
 **Continue** restores one explicitly saved exploration slot through the ordinary

@@ -1,6 +1,7 @@
 //! Isolated lattice-rules screen presentation.
 
 use bevy::prelude::*;
+use bevy::ui_widgets::ScrollArea;
 use hex_core::Screen;
 
 use crate::{
@@ -35,19 +36,20 @@ fn spawn(mut commands: Commands, assets: Res<UiAssets>) {
             parent.spawn((
                 Name::new("Demo Body"),
                 Body,
+                ScrollArea,
+                ScrollPosition::default(),
                 Node {
+                    width: Val::Percent(96.0),
+                    min_height: Val::Px(0.0),
+                    flex_basis: Val::Px(0.0),
+                    flex_grow: 1.0,
                     flex_direction: FlexDirection::Row,
                     column_gap: Val::Px(32.0),
                     row_gap: Val::Px(18.0),
                     align_items: AlignItems::Stretch,
                     max_width: Val::Percent(96.0),
-                    max_height: Val::Percent(82.0),
                     ..default()
                 },
-            ));
-            parent.spawn(blurb(
-                &assets,
-                "cast from the right panel · click a gem to strike it · BACKSPACE to return",
             ));
         });
 }
@@ -72,23 +74,44 @@ fn rebuild(
         if view.cells.is_empty() {
             panels.spawn(blurb(&assets, "the content defined no demo lattice"));
         } else {
-            panels
-                .spawn((Name::new("Lattice Panel"), panel()))
-                .with_children(|framed| {
-                    framed.spawn(heading(&assets, "the inscription"));
-                    spawn_lattice_cells(
-                        framed,
-                        &view.cells,
-                        &assets,
-                        LatticeScale::DEMO,
-                        metrics.control_scale,
-                        "Demo",
-                        |coord| Control(LatticeDemoIntent::ActivateCell(coord)),
-                    );
-                });
+            if metrics.viewport == UiViewportClass::Compact {
+                spawn_controls(panels, &assets, &view);
+                spawn_lattice_panel(panels, &assets, &view, metrics.control_scale);
+            } else {
+                spawn_lattice_panel(panels, &assets, &view, metrics.control_scale);
+                spawn_controls(panels, &assets, &view);
+            }
+            return;
         }
         spawn_controls(panels, &assets, &view);
     });
+}
+
+fn spawn_lattice_panel(
+    parent: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    view: &LatticeDemoView,
+    control_scale: f32,
+) {
+    parent
+        .spawn((Name::new("Lattice Panel"), panel()))
+        .with_children(|framed| {
+            framed.spawn(heading(assets, "the inscription"));
+            spawn_lattice_cells(
+                framed,
+                &view.cells,
+                assets,
+                LatticeScale::DEMO,
+                control_scale,
+                "Demo",
+                |coord| {
+                    (
+                        Control(LatticeDemoIntent::ActivateCell(coord)),
+                        crate::UiVisibilityRequirement::Scrollable,
+                    )
+                },
+            );
+        });
 }
 
 fn spawn_controls(parent: &mut ChildSpawnerCommands, assets: &UiAssets, view: &LatticeDemoView) {
@@ -106,6 +129,34 @@ fn spawn_controls(parent: &mut ChildSpawnerCommands, assets: &UiAssets, view: &L
         })
         .with_children(|controls| {
             controls.spawn(heading(assets, "spells"));
+            controls
+                .spawn((
+                    Name::new("Demo Actions"),
+                    Node {
+                        flex_direction: FlexDirection::Row,
+                        flex_wrap: FlexWrap::Wrap,
+                        column_gap: Val::Px(12.0),
+                        row_gap: Val::Px(8.0),
+                        ..default()
+                    },
+                ))
+                .with_children(|actions| {
+                    actions
+                        .spawn((
+                            small_button("End Turn"),
+                            Control(LatticeDemoIntent::EndTurn),
+                        ))
+                        .with_children(|action| {
+                            action.spawn(blurb(assets, "end turn"));
+                            action.spawn(fine(assets, "channel mana"));
+                        });
+                    actions
+                        .spawn((small_button("Reset"), Control(LatticeDemoIntent::Reset)))
+                        .with_children(|action| {
+                            action.spawn(blurb(assets, "reset"));
+                            action.spawn(fine(assets, "fresh state"));
+                        });
+                });
             for spell in &view.spells {
                 controls
                     .spawn((
@@ -159,32 +210,6 @@ fn spawn_controls(parent: &mut ChildSpawnerCommands, assets: &UiAssets, view: &L
             }
             controls.spawn(divider(430.0));
             controls.spawn(blurb(assets, view.totals.clone()));
-            controls
-                .spawn((
-                    Name::new("Demo Actions"),
-                    Node {
-                        flex_direction: FlexDirection::Row,
-                        column_gap: Val::Px(12.0),
-                        ..default()
-                    },
-                ))
-                .with_children(|actions| {
-                    actions
-                        .spawn((
-                            small_button("End Turn"),
-                            Control(LatticeDemoIntent::EndTurn),
-                        ))
-                        .with_children(|action| {
-                            action.spawn(blurb(assets, "end turn"));
-                            action.spawn(fine(assets, "channel mana"));
-                        });
-                    actions
-                        .spawn((small_button("Reset"), Control(LatticeDemoIntent::Reset)))
-                        .with_children(|action| {
-                            action.spawn(blurb(assets, "reset"));
-                            action.spawn(fine(assets, "fresh state"));
-                        });
-                });
             for line in &view.log {
                 controls.spawn(fine(assets, format!("· {line}")));
             }

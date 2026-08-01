@@ -25,6 +25,9 @@ struct PanelBody;
 #[derive(Component)]
 struct CastingPanel;
 
+#[derive(Component)]
+struct CastingHeading;
+
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
 enum CastingControl {
     Begin(String),
@@ -77,7 +80,7 @@ fn spawn_panel(
             FRAME,
         ))
         .with_children(|panel| {
-            panel.spawn(heading(&assets, "actions"));
+            panel.spawn((CastingHeading, heading(&assets, "actions")));
             panel.spawn((
                 Name::new("Casting Body"),
                 PanelBody,
@@ -105,8 +108,30 @@ fn rebuild(
     view: Res<CastingPanelView>,
     review: Option<Res<crate::review::UiReviewPresentation>>,
     metrics: Res<crate::ResolvedUiMetrics>,
-    mut panels: Query<&mut Node, (With<CastingPanel>, Without<PanelBody>)>,
-    mut bodies: Query<(Entity, &mut Node), (With<PanelBody>, Without<CastingPanel>)>,
+    mut panels: Query<
+        &mut Node,
+        (
+            With<CastingPanel>,
+            Without<PanelBody>,
+            Without<CastingHeading>,
+        ),
+    >,
+    mut bodies: Query<
+        (Entity, &mut Node),
+        (
+            With<PanelBody>,
+            Without<CastingPanel>,
+            Without<CastingHeading>,
+        ),
+    >,
+    mut headings: Query<
+        &mut Node,
+        (
+            With<CastingHeading>,
+            Without<CastingPanel>,
+            Without<PanelBody>,
+        ),
+    >,
     assets: Res<UiAssets>,
 ) {
     let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
@@ -126,6 +151,13 @@ fn rebuild(
     let promoted_to_rail = matches!(view.content, CastingPanelContentView::Decision { .. })
         && (metrics.viewport == crate::UiViewportClass::Compact || metrics.content_scale >= 1.5);
     let ultra_constrained = crate::layout::is_ultra_constrained(*metrics);
+    for mut heading in &mut headings {
+        heading.display = if ultra_constrained {
+            Display::None
+        } else {
+            Display::Flex
+        };
+    }
     let stacked = ultra_constrained || metrics.content_scale >= 1.5;
     panel.height = if stacked { Val::Auto } else { Val::Px(126.0) };
     panel.overflow = Overflow::default();
@@ -175,10 +207,11 @@ fn rebuild(
                     rows.spawn(blurb(&assets, reason.to_uppercase()));
                 }
                 if let Some(aiming) = aiming {
+                    // Keep the escape hatch ahead of explanatory copy on short
+                    // enlarged canvases. The action rail already carries the
+                    // current phase; cancellation must never be pushed below it.
+                    spawn_aim_controls(rows, &assets, aiming.controls_enabled);
                     rows.spawn(blurb(&assets, aiming.label.clone()));
-                    if aiming.controls_enabled {
-                        spawn_aim_controls(rows, &assets);
-                    }
                 } else {
                     for spell in spells {
                         spawn_spell(
@@ -237,6 +270,7 @@ fn spawn_spell(
                     AccessibleLabel::new(format!("Cast {} · {}", spell.name, spell.cost)),
                     Button,
                     TabIndex(0),
+                    crate::UiVisibilityRequirement::Scrollable,
                     owner_resolved_control_role(),
                     CastingControl::Begin(spell.name.clone()),
                     spell_button_node(stacked, semantic_control_scale),
@@ -314,7 +348,7 @@ fn spell_button_node(stacked: bool, semantic_control_scale: f32) -> Node {
     }
 }
 
-fn spawn_aim_controls(rows: &mut ChildSpawnerCommands, assets: &UiAssets) {
+fn spawn_aim_controls(rows: &mut ChildSpawnerCommands, assets: &UiAssets, controls_enabled: bool) {
     rows.spawn((
         Name::new("Aim Controls"),
         Node {
@@ -330,12 +364,36 @@ fn spawn_aim_controls(rows: &mut ChildSpawnerCommands, assets: &UiAssets) {
             ("Next Target", "next", "TAB", CastingControl::Next),
             ("Cancel Aim", "cancel", "Q", CastingControl::Cancel),
         ] {
-            controls
-                .spawn((row_button(name, CONTROL_WIDTH), control))
-                .with_children(|button| {
-                    button.spawn(blurb(assets, label));
-                    button.spawn(fine(assets, shortcut));
-                });
+            if controls_enabled || matches!(&control, CastingControl::Cancel) {
+                controls
+                    .spawn((row_button(name, CONTROL_WIDTH), control))
+                    .with_children(|button| {
+                        button.spawn(blurb(assets, label));
+                        button.spawn(fine(assets, shortcut));
+                    });
+            } else {
+                controls
+                    .spawn((
+                        Name::new(format!("{name} Disabled")),
+                        AccessibleLabel::new(format!("{label} unavailable")),
+                        Node {
+                            width: Val::Px(CONTROL_WIDTH),
+                            min_height: Val::Px(48.0),
+                            align_items: AlignItems::Center,
+                            justify_content: JustifyContent::Center,
+                            flex_direction: FlexDirection::Column,
+                            border: UiRect::all(Val::Px(1.0)),
+                            ..default()
+                        },
+                        BorderColor::all(EDGE),
+                        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.035)),
+                        Pickable::IGNORE,
+                    ))
+                    .with_children(|disabled| {
+                        disabled.spawn(blurb(assets, label));
+                        disabled.spawn(fine(assets, "UNAVAILABLE"));
+                    });
+            }
         }
     });
 }

@@ -56,12 +56,13 @@ cargo editor -- --project-root /path/to/bevy-hex-game
 ## First-run smoke test
 
 The title screen should show the complete primary route grid: **Continue**, **New
-Game**, **Creators**, **Combat Lab**, **Scenarios**, **Settings**, and **Quit**. On a
+Game**, **Character Creator**, **Spell Creator**, **Combat Lab**, **Map Scenarios**,
+**Demos**, **Settings**, and **Quit**. On a
 fresh data directory, Continue should clearly report that no exploration resume exists.
-Open **Scenarios** and verify its separate **Maps** and **Demos** catalog: Party Trial
-must be hidden, while Ability Lab and Raider Mirror appear as the focused demos.
-**Creators** should open the character library, with spell authoring reachable inside
-the Creator flow.
+Open **Map Scenarios** and **Demos** independently: Party Trial must be hidden from
+both, while Ability Lab and Raider Mirror appear only in Demos. Each Creator route
+must open its exact library directly; cross-navigation remains available inside the
+Creator workspaces.
 
 Choose **New Game**. It resolves the hidden Party Trial default through the loading
 screen. You should see the Crossing's hex-prism terrain, sky, a three-member player

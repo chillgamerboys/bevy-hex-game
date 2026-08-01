@@ -34,10 +34,15 @@ pub const READ_ONLY_HUD: Pickable = Pickable::IGNORE;
 #[must_use]
 pub const fn action_rail_clearance(viewport: UiViewportClass) -> f32 {
     match viewport {
-        UiViewportClass::Compact => 260.0,
+        UiViewportClass::Compact => 280.0,
         UiViewportClass::Standard => 252.0,
         UiViewportClass::Wide => 256.0,
     }
+}
+
+/// Vertical clearance required by the rail after semantic control growth.
+pub(crate) fn semantic_action_rail_clearance(metrics: crate::ResolvedUiMetrics) -> f32 {
+    action_rail_clearance(metrics.viewport) + 300.0 * (metrics.content_scale - 1.0).max(0.0)
 }
 
 /// Applies a complete, reversible layout for one responsive region.
@@ -140,8 +145,7 @@ pub(crate) fn constrain_region_to_canvas(
 ) {
     apply_region_layout(metrics.viewport, role, node);
     if role == UiRegionRole::Actions {
-        let semantic_clearance = action_rail_clearance(metrics.viewport)
-            + 300.0 * (metrics.content_scale - 1.0).max(0.0);
+        let semantic_clearance = semantic_action_rail_clearance(metrics);
         node.bottom = Val::Px(semantic_clearance);
         if metrics.content_scale >= 1.5 {
             let top = match metrics.viewport {
@@ -159,12 +163,12 @@ pub(crate) fn constrain_region_to_canvas(
         match role {
             UiRegionRole::Party | UiRegionRole::Turn => node.display = Display::None,
             UiRegionRole::Actions => {
-                let top = ultra_action_rail_height(metrics) + 16.0;
+                let top = ultra_action_rail_height(metrics) + 8.0;
                 node.top = Val::Px(top);
                 node.left = Val::Px(8.0);
                 node.right = Val::Px(8.0);
-                node.bottom = Val::Px(8.0);
-                node.height = Val::Px((metrics.logical_size.y - top - 8.0).max(44.0));
+                node.bottom = Val::ZERO;
+                node.height = Val::Px((metrics.logical_size.y - top).max(44.0));
             }
             UiRegionRole::Inspector | UiRegionRole::Events => {}
         }
@@ -173,12 +177,22 @@ pub(crate) fn constrain_region_to_canvas(
 
 pub(crate) fn is_ultra_constrained(metrics: crate::ResolvedUiMetrics) -> bool {
     metrics.viewport == UiViewportClass::Compact
-        && (metrics.effective_size.y < 520.0
+        && (metrics.effective_size.y <= 540.0
             || (metrics.content_scale >= 1.5 && metrics.effective_size.y < 700.0))
 }
 
 pub(crate) fn ultra_action_rail_height(metrics: crate::ResolvedUiMetrics) -> f32 {
-    205.0 + 380.0 * (metrics.control_scale - 1.0).max(0.0)
+    // Enlarged typography needs reflow, not an empty proportional slab. The
+    // rail contains two lines of essential copy and one required control; its
+    // controls grow only to 1.5x, so this bounded allowance keeps the command
+    // visible while returning most of the canvas to the actual decision.
+    let semantic_height = 205.0 + 110.0 * (metrics.control_scale - 1.0).max(0.0);
+    let narrow_wrap_allowance = if metrics.logical_size.x < 1100.0 && metrics.content_scale >= 1.5 {
+        95.0
+    } else {
+        0.0
+    };
+    semantic_height + narrow_wrap_allowance
 }
 
 /// Left edge reserved for the optional development-time controls on the
@@ -219,7 +233,10 @@ mod tests {
         assert_eq!(events.display, Display::None);
         assert_eq!(actions.display, Display::Flex);
         assert_eq!(actions.top, Val::Auto);
-        assert_eq!(actions.bottom, Val::Px(260.0));
+        assert_eq!(
+            actions.bottom,
+            Val::Px(action_rail_clearance(UiViewportClass::Compact))
+        );
         assert_eq!(actions.right, Val::Px(12.0));
     }
 
@@ -239,11 +256,11 @@ mod tests {
         constrain_region_to_canvas(metrics, UiRegionRole::Party, &mut party);
         constrain_region_to_canvas(metrics, UiRegionRole::Actions, &mut actions);
         assert_eq!(party.display, Display::None);
-        assert_eq!(actions.top, Val::Px(411.0));
+        assert_eq!(actions.top, Val::Px(363.0));
         assert_eq!(actions.left, Val::Px(8.0));
         assert_eq!(actions.right, Val::Px(8.0));
-        assert_eq!(actions.bottom, Val::Px(8.0));
-        assert_eq!(actions.height, Val::Px(121.0));
+        assert_eq!(actions.bottom, Val::ZERO);
+        assert_eq!(actions.height, Val::Px(177.0));
     }
 
     #[test]

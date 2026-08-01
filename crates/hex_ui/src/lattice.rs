@@ -138,6 +138,7 @@ pub fn spawn_lattice_cells<M: Bundle>(
                 if view.interaction == CellInteraction::Actionable {
                     cell.insert((
                         Button,
+                        crate::DefaultImmediateControl,
                         owner_resolved_control_role(),
                         AccessibleLabel::new(format!(
                             "{} · {} · lattice cell {}, {}",

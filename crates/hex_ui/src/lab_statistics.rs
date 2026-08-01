@@ -6,7 +6,7 @@ use bevy::ui_widgets::ScrollArea;
 use hex_core::Screen;
 
 use crate::{
-    action_rail_clearance, blurb, heading, row_button, supporting_text_role, DespawnOnExit,
+    blurb, heading, layout::is_ultra_constrained, row_button, supporting_text_role, DespawnOnExit,
     LabStatisticsIntent, LabStatisticsView, ResolvedUiMetrics, UiAssets, UiIntent, UiSystems,
     UiViewportClass, ACCENT_EDGE, LABEL,
 };
@@ -94,16 +94,16 @@ fn spawn(mut commands: Commands, assets: Res<UiAssets>) {
                         &assets,
                         "Totals are gameplay-owned · per-unit and timeline details open in the outcome report.",
                     ));
-                    body
-                        .spawn((
-                            row_button(
-                                "End experiment and save the current Combat Lab report",
-                                250.0,
-                            ),
-                            Control(LabStatisticsIntent::EndExperiment),
-                        ))
-                        .with_child(blurb(&assets, "End Experiment"));
                 });
+            drawer
+                .spawn((
+                    row_button(
+                        "End experiment and save the current Combat Lab report",
+                        250.0,
+                    ),
+                    Control(LabStatisticsIntent::EndExperiment),
+                ))
+                .with_child(blurb(&assets, "End Experiment"));
         });
 }
 
@@ -159,40 +159,91 @@ fn render(
 
 fn apply_layout(
     metrics: Res<ResolvedUiMetrics>,
+    view: Res<LabStatisticsView>,
+    review: Option<Res<crate::review::UiReviewPresentation>>,
     added: Query<(), Added<Drawer>>,
-    mut drawers: Query<&mut Node, With<Drawer>>,
+    mut drawers: Query<&mut Node, (With<Drawer>, Without<Body>)>,
+    mut bodies: Query<(&mut Node, &mut Visibility), (With<Body>, Without<Drawer>)>,
 ) {
     if !metrics.is_changed() && added.is_empty() {
         return;
     }
+    let expanded = review
+        .as_ref()
+        .and_then(|review| review.statistics.as_ref())
+        .map_or(view.expanded, |view| view.expanded);
+    for (mut body, mut visibility) in &mut bodies {
+        body.display = Display::Flex;
+        *visibility = if expanded {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
     for mut node in &mut drawers {
         match metrics.viewport {
             UiViewportClass::Compact => {
-                node.display = Display::None;
-                node.left = Val::Px(12.0);
-                node.right = Val::Px(12.0);
-                node.top = Val::Px(92.0);
-                node.bottom = Val::Px(action_rail_clearance(metrics.viewport));
-                node.width = Val::Auto;
-                node.max_height = Val::Auto;
+                node.display = Display::Flex;
+                let ultra = is_ultra_constrained(*metrics);
+                let top = if ultra {
+                    crate::layout::ultra_action_rail_height(*metrics) + 16.0
+                } else {
+                    92.0
+                };
+                node.top = Val::Px(top);
+                let bottom = if ultra {
+                    12.0
+                } else {
+                    crate::layout::semantic_action_rail_clearance(*metrics)
+                };
+                node.bottom = Val::Px(bottom);
+                if ultra {
+                    node.left = Val::Px(12.0);
+                    node.right = Val::Px(12.0);
+                    node.width = Val::Auto;
+                    node.flex_direction = FlexDirection::Row;
+                    node.align_items = AlignItems::Center;
+                    node.column_gap = Val::Px(7.0);
+                    for (mut body, mut visibility) in &mut bodies {
+                        body.display = Display::None;
+                        *visibility = Visibility::Hidden;
+                    }
+                } else {
+                    node.left = Val::Auto;
+                    node.right = Val::Px(12.0);
+                    node.width = Val::Px(250.0 * metrics.control_scale.max(1.0) + 20.0);
+                    node.flex_direction = FlexDirection::Column;
+                    node.align_items = AlignItems::Stretch;
+                    node.column_gap = Val::ZERO;
+                }
+                node.max_height = Val::Px((metrics.logical_size.y - top - bottom).max(0.0));
             }
             UiViewportClass::Standard => {
                 node.display = Display::Flex;
                 node.left = Val::Auto;
                 node.right = Val::Px(12.0);
-                node.top = Val::Px(92.0);
+                node.top = Val::Px(12.0);
                 node.bottom = Val::Auto;
+                // The expanded drawer owns the inspector region. Matching its
+                // complete width prevents the read-only lattice beneath it from
+                // peeking around the opaque replacement surface.
                 node.width = Val::Px(300.0);
                 node.max_height = Val::Px(520.0);
+                node.flex_direction = FlexDirection::Column;
+                node.align_items = AlignItems::Stretch;
+                node.column_gap = Val::ZERO;
             }
             UiViewportClass::Wide => {
                 node.display = Display::Flex;
                 node.left = Val::Auto;
                 node.right = Val::Px(16.0);
-                node.top = Val::Px(96.0);
+                node.top = Val::Px(16.0);
                 node.bottom = Val::Auto;
                 node.width = Val::Px(332.0);
                 node.max_height = Val::Px(560.0);
+                node.flex_direction = FlexDirection::Column;
+                node.align_items = AlignItems::Stretch;
+                node.column_gap = Val::ZERO;
             }
         }
     }
@@ -212,6 +263,7 @@ fn emit_intents(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::action_rail_clearance;
 
     #[test]
     fn drawer_is_secondary_on_compact_canvases() {

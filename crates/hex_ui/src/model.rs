@@ -1115,10 +1115,33 @@ pub struct TitleScenarioView {
     pub resolved_seed: Option<u64>,
 }
 
+/// Which development catalog the player deliberately opened from the title.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum ScenarioBrowserKind {
+    /// Map/world presentation scenarios.
+    #[default]
+    MapScenarios,
+    /// Focused gameplay demonstrations.
+    Demos,
+}
+
+impl ScenarioBrowserKind {
+    /// Player-facing screen title.
+    #[must_use]
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::MapScenarios => "Map Scenarios",
+            Self::Demos => "Demos",
+        }
+    }
+}
+
 /// Immutable development-scenario catalog supplied by the composition root.
 #[derive(Resource, Debug, Default, Clone)]
 pub struct ScenarioBrowserView {
-    /// Visible Maps and Demos in authored order.
+    /// Deliberately selected catalog; presentation never mixes categories.
+    pub kind: ScenarioBrowserKind,
+    /// Visible scenarios in authored order for exactly `kind`.
     pub scenarios: Vec<TitleScenarioView>,
 }
 
@@ -1155,12 +1178,16 @@ pub enum TitleIntent {
     Continue,
     /// Launch the independently configured default game.
     NewGame,
-    /// Open the shared Creator hub.
-    Creators,
+    /// Open the Character Creator library.
+    CharacterCreator,
+    /// Open the Spell Creator library.
+    SpellCreator,
     /// Open Combat Lab.
     CombatLab,
-    /// Open the development Map and Demo catalog.
-    Scenarios,
+    /// Open the map/world scenario catalog.
+    MapScenarios,
+    /// Open the focused gameplay demo catalog.
+    Demos,
     /// Open settings.
     Settings,
     /// Exit the application.

@@ -183,9 +183,10 @@ Party Trial is the 3v3 integration and human regression fixture; Ability Lab and
 Mirror remain its focused automated companions behind stable fixture IDs.
 
 The **Wave 5 pre-alpha app shell is live**. The title presents one responsive grid of
-primary application routes, while a separate Scenarios screen groups development Maps
-and focused Demos; New Game resolves the hidden Party Trial default, while Continue
-restores one explicit save made from paused exploration. That atomic, build-bound
+primary application routes, including independent Map Scenarios and Demos catalogs
+and direct Character Creator and Spell Creator entries; New Game resolves the hidden
+Party Trial default, while Continue restores one explicit save made from paused
+exploration. That atomic, build-bound
 resume captures scenario/content identity, generator identity, party lattices, and
 exploration positions, rejects corrupt or incompatible files visibly, and cannot be
 written during combat. Settings atomically persists window, presentation, and volume

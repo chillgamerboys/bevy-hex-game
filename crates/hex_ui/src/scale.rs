@@ -154,7 +154,8 @@ pub struct ResolvedUiMetrics {
     pub control_scale: f32,
     /// Lightly moderated factor applied to layout density and shared spacing.
     pub spacing_scale: f32,
-    /// Logical canvas adjusted only for semantic spacing pressure.
+    /// Logical canvas adjusted for the greater of semantic typography and
+    /// spacing pressure.
     pub effective_size: Vec2,
     /// Responsive class derived from [`Self::effective_size`].
     pub viewport: UiViewportClass,
@@ -196,7 +197,14 @@ pub fn resolve_ui_metrics(logical_size: Vec2, mode: UiScaleMode) -> ResolvedUiMe
     let heading_scale = (1.0 + 0.5 * delta).clamp(0.875, 1.5);
     let control_scale = (1.0 + 0.5 * delta).clamp(1.0, 1.5);
     let spacing_scale = (1.0 + 0.25 * delta).clamp(0.9375, 1.25);
-    let effective_size = logical_size / spacing_scale;
+    // Breakpoints have to account for the largest source of layout pressure.
+    // Spacing alone is not sufficient: at 200% a nominal 1920x1080 canvas
+    // otherwise remains Standard while its essential copy doubles, leaving the
+    // persistent side rails to consume most of the usable playfield. Reduced
+    // type still uses the spacing factor so it cannot turn an ordinary canvas
+    // into an unexpectedly denser Wide layout.
+    let density_scale = content_scale.max(spacing_scale);
+    let effective_size = logical_size / density_scale;
     ResolvedUiMetrics {
         logical_size,
         content_scale,
@@ -276,13 +284,14 @@ mod tests {
     }
 
     #[test]
-    fn two_hundred_percent_keeps_panel_density_moderated() {
+    fn two_hundred_percent_reflows_before_secondary_chrome_dominates() {
         let metrics = resolve_ui_metrics(Vec2::new(1920.0, 1080.0), UiScaleMode::Percent200);
         assert!((metrics.content_scale - 2.0).abs() <= f32::EPSILON);
         assert!((metrics.heading_scale - 1.5).abs() <= f32::EPSILON);
         assert!((metrics.control_scale - 1.5).abs() <= f32::EPSILON);
         assert!((metrics.spacing_scale - 1.25).abs() <= f32::EPSILON);
-        assert_eq!(metrics.viewport, UiViewportClass::Standard);
+        assert_eq!(metrics.effective_size, Vec2::new(960.0, 540.0));
+        assert_eq!(metrics.viewport, UiViewportClass::Compact);
     }
 
     #[test]

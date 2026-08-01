@@ -121,6 +121,10 @@ fn panel_parent(viewport: UiViewportClass, inspector: Entity, frame: Option<Enti
     }
 }
 
+fn panel_is_collapsed(metrics: ResolvedUiMetrics, decision_required: bool) -> bool {
+    is_ultra_constrained(metrics) && (decision_required || metrics.effective_size.y < 400.0)
+}
+
 fn panel_node(metrics: ResolvedUiMetrics, decision_required: bool) -> Node {
     let mut node = Node {
         width: Val::Percent(100.0),
@@ -154,7 +158,10 @@ fn panel_node(metrics: ResolvedUiMetrics, decision_required: bool) -> Node {
             node.padding = UiRect::all(Val::Px(6.0));
         }
     }
-    if is_ultra_constrained(metrics) && decision_required {
+    // Development tooling is secondary. At extreme semantic density there is
+    // not enough room for six legible 44px controls beside the action rail, so
+    // collapse the panel instead of clipping it or covering player actions.
+    if panel_is_collapsed(metrics, decision_required) {
         node.display = Display::None;
     }
     node
@@ -273,7 +280,7 @@ fn control_size(metrics: ResolvedUiMetrics) -> (f32, f32) {
 }
 
 fn ultra_primary_left(metrics: ResolvedUiMetrics, decision_required: bool) -> Option<f32> {
-    (is_ultra_constrained(metrics) && !decision_required).then_some(
+    (is_ultra_constrained(metrics) && !panel_is_collapsed(metrics, decision_required)).then_some(
         crate::layout::ultra_action_rail_left(metrics, decision_required),
     )
 }
@@ -664,8 +671,7 @@ mod tests {
 
     #[test]
     fn ultra_constrained_controls_use_the_free_left_column() {
-        let metrics =
-            crate::resolve_ui_metrics(Vec2::new(960.0, 540.0), crate::UiScaleMode::Percent200);
+        let metrics = crate::resolve_ui_metrics(Vec2::new(960.0, 540.0), crate::UiScaleMode::Auto);
         assert_eq!(metrics.viewport, UiViewportClass::Compact);
         let panel = panel_node(metrics, false);
         let Val::Px(width) = panel.width else {
@@ -691,7 +697,7 @@ mod tests {
     }
 
     #[test]
-    fn common_two_hundred_percent_canvas_uses_the_free_left_column() {
+    fn common_two_hundred_percent_canvas_collapses_secondary_controls() {
         let metrics =
             crate::resolve_ui_metrics(Vec2::new(1280.0, 720.0), crate::UiScaleMode::Percent200);
         let panel = panel_node(metrics, false);
@@ -699,11 +705,12 @@ mod tests {
         assert_eq!(panel.right, Val::Auto);
         assert_eq!(panel.top, Val::Px(8.0));
         assert_eq!(panel.width, Val::Px(180.0));
-        assert_eq!(panel.height, Val::Px(560.0));
+        assert_eq!(panel.height, Val::Px(344.0));
+        assert_eq!(panel.display, Display::None);
         let (control_width, control_height) = control_size(metrics);
         assert!(control_width <= 180.0 - 8.0);
         assert!(control_height >= 44.0);
-        assert_eq!(ultra_primary_left(metrics, false), Some(196.0));
+        assert_eq!(ultra_primary_left(metrics, false), None);
         assert_eq!(ultra_primary_left(metrics, true), None);
     }
 
@@ -755,15 +762,19 @@ mod tests {
                 if snapshot.metrics.viewport != UiViewportClass::Compact {
                     continue;
                 }
-                let panel = snapshot
+                let Some(panel) = snapshot
                     .nodes
                     .iter()
                     .find(|node| node.name == "Dev Time Panel")
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "the development time panel must be visible at {logical_size:?} in {mode:?}"
-                        )
-                    });
+                else {
+                    assert!(
+                        is_ultra_constrained(snapshot.metrics)
+                            && snapshot.metrics.effective_size.y < 400.0,
+                        "the development panel may collapse only when secondary tooling cannot fit at {logical_size:?} in {mode:?}: {:?}",
+                        snapshot.metrics
+                    );
+                    continue;
+                };
                 assert!(panel.size.cmpgt(Vec2::ZERO).all());
                 assert!(
                     !panel.overflows,
@@ -873,6 +884,8 @@ mod tests {
             decision_required: false,
             encounter_complete: false,
         };
+        app.world_mut()
+            .insert_resource(crate::UiScalePreference(crate::UiScaleMode::Auto));
         app.insert_resource(crate::GameplayHudView::default());
         for _ in 0..4 {
             app.update();

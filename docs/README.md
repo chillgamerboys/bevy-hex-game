@@ -21,6 +21,7 @@ doc or the code, not drift.
 | New to the codebase | [development/setup.md](development/setup.md), then [architecture.md](architecture.md) |
 | Dividing related work across branches or agents | [development/parallel-development.md](development/parallel-development.md) |
 | Adding or reviewing gameplay tests | [development/gameplay-testing.md](development/gameplay-testing.md) |
+| Adding or reviewing runtime UI paths | [development/ui-verification.md](development/ui-verification.md) |
 | Adding or reviewing map tests | [development/map-testing.md](development/map-testing.md) |
 | Taking ownership of the map | [development/onboarding.md](development/onboarding.md) |
 | Changing game values without writing Rust | [development/config.md](development/config.md) |
@@ -65,6 +66,7 @@ doc or the code, not drift.
 | [development/parallel-development.md](development/parallel-development.md) | Contributors, agents, integrators | Choosing independent, stacked, or wave topology; ownership lanes; combined review and cleanup | Both, jointly |
 | [development/delivery-state.md](development/delivery-state.md) | Contributors, agents, integrators | Reconciling implementation, repository docs, GitHub, and optional Linear state before planning or completion | Both, jointly |
 | [development/gameplay-testing.md](development/gameplay-testing.md) | Gameplay contributors and reviewers | Concern partitions, dependency ceilings, authoritative oracles, commands, budgets, and visual-evidence limits | Gameplay owner |
+| [development/ui-verification.md](development/ui-verification.md) | UI contributors and reviewers | Exhaustive player-task inventory, fail-closed fixtures, viewport tiers, and bounded visual selection | Shared presentation |
 | [development/map-testing.md](development/map-testing.md) | Map contributors and reviewers | Unit/generation/publication partitions, owner fixtures, corpus budgets, scope selection, and stress/visual boundaries | World owner |
 | [development/wave-7-tempo-decision.md](development/wave-7-tempo-decision.md) | Gameplay contributors and reviewers | Bounded evidence and rationale for retaining the shipped movement/action tempo during Wave 7 | Gameplay owner |
 | [development/onboarding.md](development/onboarding.md) | New map contributors | Map vocabulary, ownership boundaries, and first checks | World owner |

@@ -240,6 +240,7 @@ pub fn button(name: impl Into<String>) -> impl Bundle {
         AccessibleLabel::new(name),
         Button,
         TabIndex(0),
+        crate::DefaultImmediateControl,
         responsive_control_role(),
         Node {
             width: Val::Px(440.0),
@@ -280,7 +281,6 @@ pub fn stacked_row_button(name: impl Into<String>, width: f32) -> impl Bundle {
 /// Compact control whose exact dimensions are already resolved by its owner.
 ///
 /// Unlike semantic row buttons, this does not scale its box a second time.
-#[cfg(feature = "dev-tools")]
 pub(crate) fn fixed_row_button(name: impl Into<String>, width: f32, height: f32) -> impl Bundle {
     let name = name.into();
     (
@@ -288,6 +288,7 @@ pub(crate) fn fixed_row_button(name: impl Into<String>, width: f32, height: f32)
         AccessibleLabel::new(name),
         Button,
         TabIndex(0),
+        crate::DefaultImmediateControl,
         owner_resolved_control_role(),
         Node {
             width: Val::Px(width),
@@ -315,10 +316,15 @@ fn row_button_with_height(name: impl Into<String>, width: f32, height: f32) -> i
         AccessibleLabel::new(name),
         Button,
         TabIndex(0),
+        crate::DefaultImmediateControl,
         responsive_control_role(),
         Node {
-            width: Val::Px(width),
-            min_width: Val::Px(44.0),
+            // The requested width is the compact baseline, not a hard text
+            // clipping boundary. Semantic type can grow independently of
+            // control spacing, so the box must be allowed to grow with its
+            // label while flex parents retain responsibility for wrapping.
+            width: Val::Auto,
+            min_width: Val::Px(width.max(44.0)),
             height: Val::Auto,
             min_height: Val::Px(height.max(44.0)),
             flex_shrink: 0.0,

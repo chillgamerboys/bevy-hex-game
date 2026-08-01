@@ -6,10 +6,17 @@
     Settle(8),
     Capture("ui-01-title-compact-2x"),
 
-    Click(name: "Scenarios"),
+    Click(name: "Demos"),
     AwaitScreen("Scenarios"),
     Settle(4),
-    Capture("ui-02-scenarios-compact"),
+    Capture("ui-02-demos-compact"),
+    Click(name: "Back"),
+    AwaitScreen("Title"),
+
+    // Exercise the independently typed map route without spending another
+    // reviewed frame; the title capture already proves both routes are visible.
+    Click(name: "Map Scenarios"),
+    AwaitScreen("Scenarios"),
     Click(name: "Back"),
     AwaitScreen("Title"),
 
@@ -21,7 +28,15 @@
     Click(name: "Back"),
     AwaitScreen("Title"),
 
-    Click(name: "Creators"),
+    // Spell Creator is a first-class title route. Walk it before the sampled
+    // Character validation frame so discoverability cannot regress silently.
+    Click(name: "Spell Creator"),
+    AwaitScreen("SpellCreator"),
+    Settle(4),
+    Click(name: "Title"),
+    AwaitScreen("Title"),
+
+    Click(name: "Character Creator"),
     AwaitScreen("CharacterCreator"),
     Click(name: "New Blank Character"),
     Settle(4),
