@@ -44,8 +44,10 @@ When invoked, follow these steps:
 
    `update-docs` **WILL touch** only:
 
-   - CLAUDE.md `## Current state`: the test-count clause
-     ("… and NNN tests.") — update NNN to `$UNIT`.
+   - CLAUDE.md `## Current state`: a live test-count clause
+     ("… and NNN tests."), if one exists — update NNN to `$UNIT`.
+     The current document intentionally delegates exact counts to dated foundation
+     evidence, so an absent clause is valid and requires no edit.
 
    `update-docs` **WILL NOT touch**:
 
@@ -60,7 +62,7 @@ When invoked, follow these steps:
    it, **STOP and ask the operator** — don't unilaterally rewrite
    history.
 
-   Concrete anchor recipe:
+   Concrete anchor recipe (currently expected to produce no output):
 
    ```bash
    grep -nE 'and [0-9]+ tests' CLAUDE.md

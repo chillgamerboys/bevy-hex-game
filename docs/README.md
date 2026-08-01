@@ -46,6 +46,7 @@ doc or the code, not drift.
 |---|---|---|---|
 | [architecture.md](architecture.md) | Contributors, agents | Crate graph, ownership, conventions, states, settings, testing philosophy — and the reasoning behind each | Both, jointly |
 | [contracts.md](contracts.md) | Both owners | Every fact crossing the world/gameplay boundary, with its status: live, agreed, reserved, or asked | Both, jointly |
+| [systems/ui.md](systems/ui.md) | UI contributors and reviewers | Typed view/intent boundary, responsive presentation, semantic scaling, focus, and verification contracts | Shared presentation |
 | [systems/map.md](systems/map.md) | Anyone touching terrain | The voxel model: columns, runs, surfaces, headroom, and the rules everything else depends on | World owner |
 | [systems/world-generation-v3.md](systems/world-generation-v3.md) | Anyone building V3 terrain | Patch and edge contracts, private semantic layers, recipe order, determinism, migration, and removal of V1/V2 | World owner |
 | [systems/asset-workshop.md](systems/asset-workshop.md) | Artists and tooling contributors | Voxel-style and object schemas, editing behavior, persistence, review output, and the isolated editor boundary | Both, jointly |
@@ -60,8 +61,10 @@ doc or the code, not drift.
 | [design/visual-language.md](design/visual-language.md) | Artists, designers, rendering contributors | The canonical art palette, how it grows, and the boundary between colour, material, lighting, and UI | The designer; tooling is shared |
 | [development/setup.md](development/setup.md) | New contributors | Prerequisites, running the game, first-run verification, and platform setup | Whoever changes build or platform requirements |
 | [development/parallel-development.md](development/parallel-development.md) | Contributors, agents, integrators | Choosing independent, stacked, or wave topology; ownership lanes; combined review and cleanup | Both, jointly |
+| [development/delivery-state.md](development/delivery-state.md) | Contributors, agents, integrators | Reconciling implementation, repository docs, GitHub, and optional Linear state before planning or completion | Both, jointly |
 | [development/gameplay-testing.md](development/gameplay-testing.md) | Gameplay contributors and reviewers | Concern partitions, dependency ceilings, authoritative oracles, commands, budgets, and visual-evidence limits | Gameplay owner |
 | [development/map-testing.md](development/map-testing.md) | Map contributors and reviewers | Unit/generation/publication partitions, owner fixtures, corpus budgets, scope selection, and stress/visual boundaries | World owner |
+| [development/wave-7-tempo-decision.md](development/wave-7-tempo-decision.md) | Gameplay contributors and reviewers | Bounded evidence and rationale for retaining the shipped movement/action tempo during Wave 7 | Gameplay owner |
 | [development/onboarding.md](development/onboarding.md) | New map contributors | Map vocabulary, ownership boundaries, and first checks | World owner |
 | [development/config.md](development/config.md) | Designers, non-programmers | Changing the game through `assets/config/*.ron` without recompiling | Whoever adds or renames a setting |
 | [development/release.md](development/release.md) | Release contributors | Promotion, versioning, tagging, artifact verification, application identity, retained symbols, and reserved credential boundaries | Whoever changes packaging |
