@@ -358,7 +358,7 @@ tickets. Binding is encouraged, never required.
 
 Runs on macOS/Metal at 60 FPS, 3,400–4,100 entities in gameplay depending on the
 terrain seed. Bevy 0.19 and Rust 1.97.1 are pinned. The test count is intentionally
-not frozen here; the current foundation gate and its exact count are recorded in
+not frozen here; dated foundation checkpoints and their exact counts are recorded in
 [foundation-hardening.md](docs/planning/foundation-hardening.md). macOS is the primary
 dev machine; the WSL2 setup in the README belongs to another contributor and still
 works.
