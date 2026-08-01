@@ -736,12 +736,8 @@ fn prepare_capture_target(state: &mut WalkState) -> Result<bool, String> {
     }
 }
 
-fn align_shared_target_msaa(source: Msaa, target: &mut Msaa) -> bool {
-    if *target == source {
-        return false;
-    }
-    *target = source;
-    true
+fn shared_target_msaa_update(source: Msaa, target: Msaa) -> Option<Msaa> {
+    (target != source).then_some(source)
 }
 
 #[expect(
@@ -809,7 +805,9 @@ fn run_walk(
         *game_target = render_target.clone();
         let ui_camera = if let Ok((camera, mut target, mut ui_msaa)) = review_camera.single_mut() {
             *target = render_target.clone();
-            align_shared_target_msaa(*game_msaa, &mut ui_msaa);
+            if let Some(wanted) = shared_target_msaa_update(*game_msaa, *ui_msaa) {
+                *ui_msaa = wanted;
+            }
             camera
         } else {
             commands
@@ -844,7 +842,9 @@ fn run_walk(
     if let (Ok((_, game_msaa)), Ok((_, _, mut ui_msaa))) =
         (game_camera.single(), review_camera.single_mut())
     {
-        align_shared_target_msaa(*game_msaa, &mut ui_msaa);
+        if let Some(wanted) = shared_target_msaa_update(*game_msaa, *ui_msaa) {
+            *ui_msaa = wanted;
+        }
     }
 
     // UI roots spawn and despawn with every screen; keep pointing new ones at
@@ -1501,15 +1501,19 @@ mod tests {
 
     #[test]
     fn shared_target_ui_sampling_tracks_oit_and_restores_change_driven() {
-        let mut ui_msaa = Msaa::Sample4;
-        assert!(align_shared_target_msaa(Msaa::Off, &mut ui_msaa));
-        assert_eq!(ui_msaa, Msaa::Off);
-        assert!(
-            !align_shared_target_msaa(Msaa::Off, &mut ui_msaa),
+        assert_eq!(
+            shared_target_msaa_update(Msaa::Off, Msaa::Sample4),
+            Some(Msaa::Off)
+        );
+        assert_eq!(
+            shared_target_msaa_update(Msaa::Off, Msaa::Off),
+            None,
             "a stable OIT frame must not republish the sampling component"
         );
-        assert!(align_shared_target_msaa(Msaa::Sample4, &mut ui_msaa));
-        assert_eq!(ui_msaa, Msaa::Sample4);
+        assert_eq!(
+            shared_target_msaa_update(Msaa::Sample4, Msaa::Off),
+            Some(Msaa::Sample4)
+        );
     }
 
     #[test]
