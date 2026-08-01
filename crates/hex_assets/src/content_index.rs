@@ -412,7 +412,7 @@ fn publish_accepted_content_revision(
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use bevy::state::app::StatesPlugin;
+    use hex_test_app::HeadlessAppBuilder;
 
     use super::*;
     use crate::art_palette::{ArtPalette, PaletteSwatch, SrgbColor, SwatchId};
@@ -606,18 +606,19 @@ mod tests {
     /// A failed rebuild must keep the previous valid index, not clear it.
     #[test]
     fn a_bad_rebuild_keeps_the_last_valid_index() {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin));
-        app.insert_state(Screen::Title);
-        app.add_systems(
+        let mut builder = HeadlessAppBuilder::new()
+            .with_minimal_plugins()
+            .with_state_plugin();
+        builder.app_mut().insert_state(Screen::Title);
+        builder.app_mut().add_systems(
             Update,
             build_content_index.run_if(not(in_state(Screen::Gameplay))),
         );
 
         // A good index is built from valid tables.
-        app.insert_resource(elements());
-        app.insert_resource(substances());
-        app.insert_resource(book(vec![(
+        builder.app_mut().insert_resource(elements());
+        builder.app_mut().insert_resource(substances());
+        builder.app_mut().insert_resource(book(vec![(
             "Ember",
             spell(
                 vec![gem("Fire")],
@@ -627,6 +628,7 @@ mod tests {
                 }],
             ),
         )]));
+        let mut app = builder.build();
         app.update();
         assert_eq!(
             app.world().resource::<ContentIndex>().len(),
@@ -665,20 +667,22 @@ mod tests {
         let lattices = LatticeLibrary::build(&lattice_file, &elements, &spells)
             .expect("lattices should resolve");
 
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.insert_resource(element_file);
-        app.insert_resource(elements);
-        app.insert_resource(spell_file.clone());
-        app.insert_resource(spells);
-        app.insert_resource(substance_file);
-        app.insert_resource(palette);
-        app.insert_resource(substances);
-        app.insert_resource(lattice_file);
-        app.insert_resource(content);
-        app.insert_resource(lattices);
-        app.add_systems(Update, build_content_index);
-        app.add_systems(PostUpdate, publish_accepted_content_revision);
+        let mut builder = HeadlessAppBuilder::new().with_minimal_plugins();
+        builder.app_mut().insert_resource(element_file);
+        builder.app_mut().insert_resource(elements);
+        builder.app_mut().insert_resource(spell_file.clone());
+        builder.app_mut().insert_resource(spells);
+        builder.app_mut().insert_resource(substance_file);
+        builder.app_mut().insert_resource(palette);
+        builder.app_mut().insert_resource(substances);
+        builder.app_mut().insert_resource(lattice_file);
+        builder.app_mut().insert_resource(content);
+        builder.app_mut().insert_resource(lattices);
+        builder.app_mut().add_systems(Update, build_content_index);
+        builder
+            .app_mut()
+            .add_systems(PostUpdate, publish_accepted_content_revision);
+        let mut app = builder.build();
 
         app.update();
         assert!(

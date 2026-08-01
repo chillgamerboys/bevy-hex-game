@@ -3232,6 +3232,7 @@ dependencies = [
  "hex_ai",
  "hex_core",
  "hex_lattice",
+ "hex_test_app",
  "ron",
  "serde",
  "serde_json",
