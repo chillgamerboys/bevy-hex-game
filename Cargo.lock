@@ -3396,12 +3396,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "hex_test_app"
+version = "0.4.0"
+dependencies = [
+ "bevy",
+ "hex_core",
+]
+
+[[package]]
 name = "hex_test_support"
 version = "0.4.0"
 dependencies = [
  "bevy",
  "hex_assets",
  "hex_core",
+ "hex_test_app",
 ]
 
 [[package]]

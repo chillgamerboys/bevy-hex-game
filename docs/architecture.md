@@ -16,7 +16,8 @@ hex_core → hex_lattice → {hex_assets, hex_units, hex_combat}   (the pure rul
 hex_core → hex_anim ─────────────────────→ hex_units
 {Bevy, bevy-inspector-egui} → hex_dev ──────────────────────────────→ hex_game
 {Bevy, bevy_egui, hex_core, hex_assets} → hex_editor  (standalone tool)
-{Bevy, hex_core, hex_assets} → hex_test_support  (test-only shared contracts)
+{Bevy, hex_core} → hex_test_app → hex_test_support  (test-only app mechanics)
+{Bevy, hex_core, hex_assets} ───→ hex_test_support  (test-only shared fixtures)
 ```
 
 An arrow means "may depend on". **Cargo enforces this.** A `use` that crosses the
@@ -45,7 +46,8 @@ will, and no amount of documentation prevents it. A compiler error does.
 | `hex_dev` | World inspector. Behind the `dev` feature | Bevy, `bevy-inspector-egui` | gameplay |
 | `hex_game` | The binary: app setup, screens, menus, wiring | all of the above | shared |
 | `hex_editor` | Standalone palette, voxel-style, and object authoring; validated explicit writes, untracked recovery, and deterministic review packs | Bevy, `bevy_egui`, `hex_core`, `hex_assets` | shared tooling |
-| `hex_test_support` | Test-only deterministic app setup plus consumer-side synthetic exact-surface facts and fixture assets; no gameplay or world implementation | Bevy, `hex_core`, `hex_assets` | gameplay testing; neutral app shell is shared across owners |
+| `hex_test_app` | Capability-based deterministic Bevy app construction, plugin finalization, bounded settling, and shared state entry; no fixtures or owner implementation | Bevy, `hex_core` | shared testing |
+| `hex_test_support` | Test-only deterministic app setup plus consumer-side synthetic exact-surface facts and fixture assets; no gameplay or world implementation | Bevy, `hex_core`, `hex_assets`, `hex_test_app` | gameplay testing; neutral app shell is shared across owners |
 
 `hex_editor` is not a game screen and does not depend on runtime world or gameplay
 crates. Reusable art schemas and validation live in `hex_assets`; the editor owns only

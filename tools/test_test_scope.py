@@ -91,6 +91,13 @@ class TestScopeTests(unittest.TestCase):
             ("contracts", "app", "map_contracts", "clippy", "docs"),
         )
 
+    def test_neutral_app_harness_fails_closed_to_every_consumer(self) -> None:
+        decision = self.classify("crates/hex_test_app/src/lib.rs")
+
+        self.assertTrue(decision.full)
+        self.assertEqual(set(decision.concerns), set(self.config["all_concerns"]))
+        self.assertIn("shared-test-app", decision.matched_rules)
+
     def test_animation_change_keeps_its_inline_tests_in_residual(self) -> None:
         decision = self.classify("crates/hex_anim/src/lib.rs")
         self.assertFalse(decision.full)

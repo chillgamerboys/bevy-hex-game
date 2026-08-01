@@ -269,6 +269,12 @@
       "reason": "Map integration tests exercise the explicit headless publication target."
     },
     {
+      "name": "shared-test-app",
+      "patterns": ["crates/hex_test_app/**"],
+      "full": true,
+      "reason": "The neutral app harness is validation infrastructure shared across owner partitions."
+    },
+    {
       "name": "map-generation",
       "patterns": [
         "crates/hex_map/src/procedural.rs",

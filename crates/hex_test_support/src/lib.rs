@@ -10,20 +10,18 @@
 //! `hex_game`, `hex_map`, `hex_world`, or `hex_perception` here is an architecture
 //! violation.
 
-use std::fmt;
 use std::time::Duration;
 
-use bevy::app::PluginsState;
-use bevy::asset::AssetPlugin;
 use bevy::prelude::*;
-use bevy::state::app::StatesPlugin;
 use hex_assets::{
     ArtPalette, PaletteSwatch, SrgbColor, Substance, SubstanceFile, SubstanceTable, SwatchId,
 };
 use hex_core::{
-    AppSystems, GameplaySetup, Headroom, HexCoord, HexSpan, HexTile, Mode, Pause, RunBottom,
-    Screen, SubstanceId, TilePos, MAX_HEADROOM,
+    GameplaySetup, Headroom, HexCoord, HexSpan, HexTile, RunBottom, Screen, SubstanceId, TilePos,
+    MAX_HEADROOM,
 };
+use hex_test_app::HeadlessAppBuilder;
+pub use hex_test_app::{enter_gameplay, run_until, RunLimitExceeded};
 
 /// Stable synthetic stone id produced by [`fixture_assets`].
 pub const STONE: SubstanceId = SubstanceId(1);
@@ -164,7 +162,7 @@ pub fn fixture_assets() -> Result<(ArtPalette, SubstanceTable), String> {
 
 /// Builder for deterministic minimal Bevy apps used by owning headless tests.
 pub struct TestAppBuilder {
-    app: App,
+    inner: HeadlessAppBuilder,
 }
 
 impl Default for TestAppBuilder {
@@ -177,66 +175,30 @@ impl TestAppBuilder {
     /// Installs common states, schedules, input, assets, and a fixed 100 ms clock.
     #[must_use]
     pub fn new() -> Self {
-        let mut app = App::new();
-        app.add_plugins((
-            MinimalPlugins,
-            AssetPlugin::default(),
-            StatesPlugin,
-            bevy::input::InputPlugin,
-        ));
-        app.init_asset::<Mesh>();
-        app.init_asset::<StandardMaterial>();
-        app.init_state::<Screen>();
-        app.add_sub_state::<Mode>();
-        app.add_sub_state::<Pause>();
-        app.configure_sets(
-            Update,
-            (
-                AppSystems::TickTimers,
-                AppSystems::RecordInput,
-                AppSystems::Update,
-            )
-                .chain(),
-        );
-        app.configure_sets(
-            OnEnter(Screen::Gameplay),
-            (
-                GameplaySetup::Resources,
-                GameplaySetup::Terrain,
-                GameplaySetup::Actors,
-                GameplaySetup::Restore,
-                GameplaySetup::Perception,
-                GameplaySetup::View,
-                GameplaySetup::Finalize,
-            )
-                .chain(),
-        );
-        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
-            Duration::from_millis(100),
-        ));
-        Self { app }
+        Self {
+            inner: HeadlessAppBuilder::new().with_gameplay_shell(),
+        }
     }
 
     /// Gives the test access to the app before plugins are finalized.
     pub fn app_mut(&mut self) -> &mut App {
-        &mut self.app
+        self.inner.app_mut()
     }
 
     /// Selects the deterministic duration advanced by every app update.
     #[must_use]
     pub fn with_fixed_step(mut self, duration: Duration) -> Self {
-        self.app
-            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(duration));
+        self.inner = self.inner.with_fixed_step(duration);
         self
     }
 
     /// Publishes the standard synthetic palette, substances, and arena.
     pub fn with_arena(mut self, arena: SyntheticArena) -> Result<Self, String> {
         let (palette, substances) = fixture_assets()?;
-        self.app.insert_resource(palette);
-        self.app.insert_resource(substances);
-        self.app.insert_resource(arena);
-        self.app.add_systems(
+        self.inner.app_mut().insert_resource(palette);
+        self.inner.app_mut().insert_resource(substances);
+        self.inner.app_mut().insert_resource(arena);
+        self.inner.app_mut().add_systems(
             OnEnter(Screen::Gameplay),
             spawn_synthetic_arena.in_set(GameplaySetup::Terrain),
         );
@@ -244,12 +206,8 @@ impl TestAppBuilder {
     }
 
     /// Finalizes plugins and returns the runnable app.
-    pub fn build(mut self) -> App {
-        while self.app.plugins_state() != PluginsState::Cleaned {
-            self.app.finish();
-            self.app.cleanup();
-        }
-        self.app
+    pub fn build(self) -> App {
+        self.inner.build()
     }
 }
 
@@ -264,53 +222,6 @@ fn spawn_synthetic_arena(mut commands: Commands, arena: Res<SyntheticArena>) {
             surface.substance,
             Headroom(surface.headroom),
         ));
-    }
-}
-
-/// Enters gameplay through the same state transition used by production.
-pub fn enter_gameplay(app: &mut App) {
-    app.world_mut()
-        .resource_mut::<NextState<Screen>>()
-        .set(Screen::Gameplay);
-    app.update();
-    app.update();
-}
-
-/// Bounded execution failure from [`run_until`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RunLimitExceeded {
-    /// Number of frames the caller permitted.
-    pub frames: usize,
-}
-
-impl fmt::Display for RunLimitExceeded {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "condition did not become true within {} deterministic frames",
-            self.frames
-        )
-    }
-}
-
-impl std::error::Error for RunLimitExceeded {}
-
-/// Advances a deterministic app until `done` observes success or `frames` expire.
-pub fn run_until(
-    app: &mut App,
-    frames: usize,
-    mut done: impl FnMut(&mut World) -> bool,
-) -> Result<usize, RunLimitExceeded> {
-    for frame in 0..frames {
-        if done(app.world_mut()) {
-            return Ok(frame);
-        }
-        app.update();
-    }
-    if done(app.world_mut()) {
-        Ok(frames)
-    } else {
-        Err(RunLimitExceeded { frames })
     }
 }
 
