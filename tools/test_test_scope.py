@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import pathlib
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -28,6 +30,39 @@ class TestScopeTests(unittest.TestCase):
 
     def classify(self, *paths: str):
         return test_scope.classify(paths, self.config)
+
+    def assert_cli_rejects_config(self, config: dict, expected: str) -> None:
+        """Malformed manifests fail with a concise configuration error."""
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "test-scopes.json"
+            path.write_text(json.dumps(config), encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(MODULE_PATH),
+                    "--config",
+                    str(path),
+                    "plan",
+                    "--path",
+                    "README.md",
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(expected, result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def fresh_config(self) -> dict:
+        """Return an independent mutable copy of the checked-in manifest."""
+
+        return json.loads(
+            (ROOT / ".config" / "test-scopes.json").read_text(encoding="utf-8")
+        )
 
     def test_lattice_change_selects_rules_contracts_and_simulation(self) -> None:
         decision = self.classify("crates/hex_lattice/src/cast.rs")
@@ -198,6 +233,41 @@ class TestScopeTests(unittest.TestCase):
         decision = self.classify()
         self.assertTrue(decision.full)
         self.assertTrue(decision.code)
+
+    def test_empty_command_arrays_are_rejected_without_a_traceback(self) -> None:
+        cases = (
+            (
+                lambda config: config["concerns"]["map_unit"].update(command=[]),
+                "concern map_unit command must be non-empty strings",
+            ),
+            (
+                lambda config: config["partition_checks"]["map"].update(
+                    full_command=[]
+                ),
+                "partition check map has invalid full_command",
+            ),
+            (
+                lambda config: config["partition_checks"]["map"].update(
+                    all_tests_command=[]
+                ),
+                "partition check map has invalid all_tests_command",
+            ),
+        )
+        for mutate, expected in cases:
+            with self.subTest(expected=expected):
+                config = self.fresh_config()
+                mutate(config)
+                self.assert_cli_rejects_config(config, expected)
+
+    def test_non_boolean_documentation_flag_is_rejected_without_a_traceback(
+        self,
+    ) -> None:
+        config = self.fresh_config()
+        config["rules"][-1]["documentation_only"] = "false"
+        self.assert_cli_rejects_config(
+            config,
+            "documentation_only must be a boolean",
+        )
 
     def test_mixed_diff_unions_concerns(self) -> None:
         decision = self.classify(
