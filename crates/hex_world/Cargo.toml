@@ -19,5 +19,9 @@ hex_core = { workspace = true }
 [dev-dependencies]
 hex_test_app = { workspace = true }
 
+[features]
+default = []
+test-support = []
+
 [lints]
 workspace = true

@@ -2705,6 +2705,83 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "test-support")]
+    #[test]
+    #[ignore = "manual release-mode shipped Two Rings Character-camera timing diagnostic"]
+    fn shipped_two_rings_character_collision_release_timing() {
+        let mut app = procedural_gameplay_app("Two Rings");
+        enter_screen(&mut app, Screen::Gameplay);
+        assert!(
+            app.world().contains_resource::<TerrainReady>(),
+            "Two Rings did not finish terrain generation: {:?}",
+            app.world()
+                .get_resource::<GameplaySetupFailure>()
+                .map(|failure| failure.reason.as_str())
+        );
+
+        let settings: hex_assets::CameraSettings =
+            ron::from_str(include_str!("../../../assets/config/camera.ron"))
+                .expect("the shipped camera settings should deserialize");
+        let mut supports = app
+            .world()
+            .resource::<MapAnchors>()
+            .iter()
+            .map(|(_id, position)| position)
+            .collect::<Vec<_>>();
+        supports.sort_unstable();
+        supports.dedup();
+        let projection = {
+            let world = app.world_mut();
+            let mut tiles = world.query_filtered::<(&TilePos, &HexSpan), With<HexTile>>();
+            tiles
+                .iter(world)
+                .map(|(position, span)| (*position, *span))
+                .collect::<Vec<_>>()
+        };
+
+        let profile = hex_world::camera::test_support::profile_character_collision(
+            &projection,
+            &supports,
+            &settings,
+            10_000,
+        )
+        .expect("the shipped public terrain projection should support camera diagnostics");
+
+        assert_eq!(
+            profile.columns, 9_241,
+            "the camera diagnostic must use every shipped Two Rings column"
+        );
+        assert!(
+            profile.spans >= profile.columns,
+            "each public column should publish at least one exact material run"
+        );
+        assert_eq!(profile.supports, supports.len());
+        assert_ne!(
+            profile.result_checksum, 0,
+            "the timed collision results must remain observable"
+        );
+        eprintln!(
+            "shipped Two Rings Character collision diagnostic (release): \
+             columns={}, spans={}, supports={}, queries={}, index_build={:?}, \
+             index_rebuild_p95={:?}, index_rebuild_worst={:?}, query_p95={:?}, \
+             query_worst={:?}",
+            profile.columns,
+            profile.spans,
+            profile.supports,
+            profile.queries,
+            profile.index_build,
+            profile.index_rebuild_p95,
+            profile.index_rebuild_worst,
+            profile.query_p95,
+            profile.query_worst,
+        );
+        assert!(
+            profile.query_p95 < std::time::Duration::from_millis(1),
+            "shipped Two Rings Character collision p95 {:?} breached the 1 ms release budget",
+            profile.query_p95
+        );
+    }
+
     #[test]
     fn volcanic_hills_scenario_uses_the_native_volcano_contract() {
         let mut app = procedural_gameplay_app("Volcanic Hills");

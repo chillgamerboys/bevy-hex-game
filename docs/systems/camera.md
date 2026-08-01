@@ -95,8 +95,11 @@ independent. Gameplay exit clears collision indexes, adaptive pose state, fade
 timelines, temporary material clones, and OIT ownership.
 
 Focused tests cover prism faces/corners and stacked spans, player-yaw preservation,
-immediate adaptation and damped recovery, 9,241-column terrain performance, a
-2,048-render-chunk tree-fade performance gate, 10,000 unchanged frames,
-whole-tree/material isolation, review-only roofs, and 100 gameplay lifecycles. Rendered
-all-map traversal and human motion/readability review remain the final presentation
-gate.
+immediate adaptation and damped recovery, a synthetic flat radius-55 lower-level
+benchmark, a 2,048-render-chunk tree-fade performance gate, 10,000 unchanged frames,
+whole-tree/material isolation, review-only roofs, and 100 gameplay lifecycles. An
+ignored release composition diagnostic generates the pinned shipped Two Rings
+scenario, builds and repeatedly rebuilds the camera index from its public
+`HexTile`/`TilePos`/`HexSpan` projection, and keeps steady Character collision below
+1 ms p95 across exact published anchors and six yaws. Rendered all-map traversal and
+human motion/readability review remain the final presentation gate.
