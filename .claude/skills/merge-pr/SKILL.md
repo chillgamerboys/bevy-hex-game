@@ -205,8 +205,10 @@ State can change between audit and merge — these checks are fast
    Detection-and-recovery beats a surprise mid-flight failure.
 
 4. **Mergeable per GitHub.** Same JSON:
-   - `mergeable: MERGEABLE` required; `CONFLICTING` → STOP "resolve
-     conflicts via `git pull origin dev --rebase`."
+   - `mergeable: MERGEABLE` required; `CONFLICTING` → STOP "fetch the
+     PR's actual base, merge `origin/<baseRefName>` additively into the published
+     head, resolve and validate the conflicts, then push the merge commit; never
+     rebase or force-push a published/shared branch."
    - `mergeStateStatus: CLEAN` is the happy path. `UNSTABLE` (checks
      pending) → ⚠ warn but proceed. `BLOCKED` → STOP "branch
      protection blocks merge (failing checks / required reviews)."
