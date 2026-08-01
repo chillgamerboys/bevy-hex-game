@@ -567,6 +567,29 @@ fn resolve_effective_radius(
 }
 
 impl CameraObstructionIndex {
+    fn rebuild(&mut self, tiles: impl IntoIterator<Item = (TilePos, HexSpan)>) {
+        let mut spans_by_coord = BTreeMap::<_, Vec<_>>::new();
+        for (position, span) in tiles {
+            spans_by_coord
+                .entry(position.coord)
+                .or_default()
+                .push(IndexedCameraSpan { position, span });
+        }
+        for spans in spans_by_coord.values_mut() {
+            spans.sort_by(|first, second| {
+                first
+                    .span
+                    .bottom
+                    .total_cmp(&second.span.bottom)
+                    .then_with(|| first.span.top.total_cmp(&second.span.top))
+                    .then_with(|| first.position.cmp(&second.position))
+            });
+        }
+        self.spans_by_coord = spans_by_coord;
+        self.initialized = true;
+        self.rebuilds = self.rebuilds.saturating_add(1);
+    }
+
     fn character_path(
         &self,
         focus: Vec3,
@@ -870,29 +893,7 @@ fn refresh_camera_obstruction_index(
         return;
     }
 
-    let mut spans_by_coord = BTreeMap::<_, Vec<_>>::new();
-    for (position, span) in &tiles {
-        spans_by_coord
-            .entry(position.coord)
-            .or_default()
-            .push(IndexedCameraSpan {
-                position: *position,
-                span: *span,
-            });
-    }
-    for spans in spans_by_coord.values_mut() {
-        spans.sort_by(|first, second| {
-            first
-                .span
-                .bottom
-                .total_cmp(&second.span.bottom)
-                .then_with(|| first.span.top.total_cmp(&second.span.top))
-                .then_with(|| first.position.cmp(&second.position))
-        });
-    }
-    index.spans_by_coord = spans_by_coord;
-    index.initialized = true;
-    index.rebuilds = index.rebuilds.saturating_add(1);
+    index.rebuild(tiles.iter().map(|(position, span)| (*position, *span)));
 }
 
 fn clear_camera_obstruction_index(
@@ -1234,6 +1235,184 @@ fn get_primary_window_size(windows: &Query<&Window, With<PrimaryWindow>>) -> Vec
     Vec2::new(window.width(), window.height())
 }
 
+#[cfg(feature = "test-support")]
+pub mod test_support {
+    //! Read-only timing diagnostics for composition tests.
+    //!
+    //! Callers supply the same public `TilePos`/`HexSpan` projection that the
+    //! production camera observes. This module never accepts map-private storage.
+
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::time::{Duration, Instant};
+
+    use bevy::prelude::{Quat, Vec3};
+    use hex_assets::CameraSettings;
+    use hex_core::{HexSpan, TilePos};
+
+    use super::{rotation_with_pitch, CameraObstructionIndex};
+
+    const INDEX_REBUILD_SAMPLES: usize = 32;
+
+    /// Timings and coverage facts from one Character-camera collision diagnostic.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct CharacterCollisionProfile {
+        /// Unique hex columns retained by the public-terrain index.
+        pub columns: usize,
+        /// Exact material runs retained across those columns.
+        pub spans: usize,
+        /// Unique exact support surfaces sampled at six yaw angles each.
+        pub supports: usize,
+        /// Number of steady collision queries timed.
+        pub queries: usize,
+        /// First construction of the camera obstruction index.
+        pub index_build: Duration,
+        /// Ninety-fifth percentile of repeated full index rebuilds.
+        pub index_rebuild_p95: Duration,
+        /// Slowest repeated full index rebuild.
+        pub index_rebuild_worst: Duration,
+        /// Ninety-fifth percentile of steady Character collision queries.
+        pub query_p95: Duration,
+        /// Slowest steady Character collision query.
+        pub query_worst: Duration,
+        /// Rolling result identity that keeps every timed query observable.
+        pub result_checksum: u64,
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct DiagnosticQuery {
+        focus: Vec3,
+        support: TilePos,
+        desired_rotation: Quat,
+    }
+
+    /// Profiles the production index and Character collision algorithm over a
+    /// caller-owned public terrain projection.
+    ///
+    /// `supports` should be representative exact surfaces, such as the shipped
+    /// map's published anchors. Every unique support is sampled at six yaw angles.
+    /// Generation, rendering, and projection collection are deliberately outside
+    /// the timed regions.
+    pub fn profile_character_collision(
+        projection: &[(TilePos, HexSpan)],
+        supports: &[TilePos],
+        settings: &CameraSettings,
+        query_count: usize,
+    ) -> Result<CharacterCollisionProfile, String> {
+        settings.validate()?;
+        if projection.is_empty() {
+            return Err("camera diagnostic requires at least one public terrain run".to_owned());
+        }
+        if query_count == 0 {
+            return Err("camera diagnostic requires at least one collision query".to_owned());
+        }
+
+        let spans_by_position = projection
+            .iter()
+            .copied()
+            .collect::<BTreeMap<TilePos, HexSpan>>();
+        if spans_by_position.len() != projection.len() {
+            return Err("camera diagnostic received duplicate public TilePos entries".to_owned());
+        }
+        let canonical_supports = supports.iter().copied().collect::<BTreeSet<_>>();
+        if canonical_supports.is_empty() {
+            return Err("camera diagnostic requires at least one exact support".to_owned());
+        }
+
+        let mut samples = Vec::with_capacity(canonical_supports.len().saturating_mul(6));
+        for support in &canonical_supports {
+            let span = spans_by_position.get(support).ok_or_else(|| {
+                format!(
+                    "camera diagnostic support {support:?} is absent from the public projection"
+                )
+            })?;
+            let focus =
+                support.coord.to_world(span.top) + Vec3::Y * settings.character_focus_height;
+            for turn in 0_u8..6 {
+                let yaw = f32::from(turn) * std::f32::consts::TAU / 6.0;
+                samples.push(DiagnosticQuery {
+                    focus,
+                    support: *support,
+                    desired_rotation: rotation_with_pitch(
+                        Quat::from_rotation_y(yaw),
+                        settings.character_pitch,
+                    ),
+                });
+            }
+        }
+
+        let started = Instant::now();
+        let mut index = CameraObstructionIndex::default();
+        index.rebuild(projection.iter().copied());
+        let index_build = started.elapsed();
+        let columns = index.spans_by_coord.len();
+
+        let mut rebuild_timings = Vec::with_capacity(INDEX_REBUILD_SAMPLES);
+        for _ in 0..INDEX_REBUILD_SAMPLES {
+            let started = Instant::now();
+            index.rebuild(projection.iter().copied());
+            rebuild_timings.push(started.elapsed());
+        }
+        let index_rebuild_p95 = percentile(&mut rebuild_timings, 95);
+        let index_rebuild_worst = rebuild_timings.last().copied().unwrap_or_default();
+
+        let mut query_timings = Vec::with_capacity(query_count);
+        let mut result_checksum = 0_u64;
+        for sample in samples.iter().cycle().take(query_count) {
+            let started = Instant::now();
+            let path = index.character_path(
+                sample.focus,
+                sample.support,
+                sample.desired_rotation,
+                settings.character_radius,
+                settings.character_probe_radius,
+                settings.character_collision_margin,
+                settings.character_min_effective_radius,
+                settings.character_min_pitch,
+                settings.character_adaptive_max_pitch,
+                settings.character_pitch_search_step,
+            );
+            let effective_rotation = rotation_with_pitch(sample.desired_rotation, path.pitch);
+            let clearance = index.safe_radius(
+                sample.focus,
+                sample.support,
+                effective_rotation * Vec3::Z,
+                settings.character_radius,
+                settings.character_probe_radius,
+                settings.character_collision_margin,
+            );
+            query_timings.push(started.elapsed());
+            result_checksum = result_checksum.rotate_left(9)
+                ^ u64::from(path.pitch.to_bits())
+                ^ (u64::from(clearance.radius.to_bits()) << 32);
+        }
+        let query_p95 = percentile(&mut query_timings, 95);
+        let query_worst = query_timings.last().copied().unwrap_or_default();
+
+        Ok(CharacterCollisionProfile {
+            columns,
+            spans: projection.len(),
+            supports: canonical_supports.len(),
+            queries: query_count,
+            index_build,
+            index_rebuild_p95,
+            index_rebuild_worst,
+            query_p95,
+            query_worst,
+            result_checksum,
+        })
+    }
+
+    fn percentile(timings: &mut [Duration], percentile: usize) -> Duration {
+        timings.sort_unstable();
+        let rank = timings
+            .len()
+            .saturating_mul(percentile)
+            .div_ceil(100)
+            .saturating_sub(1);
+        timings.get(rank).copied().unwrap_or_default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::{Duration, Instant};
@@ -1348,7 +1527,7 @@ mod tests {
         }
     }
 
-    fn production_scale_obstruction_fixture() -> (CameraObstructionIndex, Vec3) {
+    fn flat_radius_55_obstruction_fixture() -> (CameraObstructionIndex, Vec3) {
         let obstruction_coord = hex_core::HexCoord::from_axial(0, 1);
         let direction = obstruction_coord.to_world(0.0).normalize();
         let mut spans_by_coord = hex_core::HexCoord::ORIGIN
@@ -1363,7 +1542,7 @@ mod tests {
         assert_eq!(
             spans_by_coord.len(),
             9_241,
-            "the fixture must retain the exact Two Rings column count"
+            "a flat radius-55 fixture must contain 9,241 columns"
         );
         (
             CameraObstructionIndex {
@@ -1376,7 +1555,7 @@ mod tests {
     }
 
     fn timed_character_queries(iterations: usize) -> (CharacterCameraPath, Vec<Duration>) {
-        let (index, direction) = production_scale_obstruction_fixture();
+        let (index, direction) = flat_radius_55_obstruction_fixture();
         let desired_rotation = Transform::from_translation(direction)
             .looking_at(Vec3::ZERO, Vec3::Y)
             .rotation;
@@ -1910,30 +2089,32 @@ mod tests {
     }
 
     #[test]
-    fn production_scale_obstruction_queries_are_deterministic() {
+    fn flat_radius_55_obstruction_queries_are_deterministic() {
         let (path, mut timings) = timed_character_queries(100);
         let p95 = timing_percentile(&mut timings, 95);
         let worst = timings.last().copied().unwrap_or_default();
 
         assert!(path.pitch.is_finite());
         eprintln!(
-            "9,241-column Character collision diagnostic (debug): p95={p95:?}, worst={worst:?}"
+            "synthetic flat radius-55 Character collision diagnostic (debug): \
+             p95={p95:?}, worst={worst:?}"
         );
     }
 
     #[test]
-    #[ignore = "manual release-mode 9,241-column Character-camera timing diagnostic"]
-    fn production_scale_character_collision_release_timing() {
+    #[ignore = "manual release-mode synthetic radius-55 Character-camera timing diagnostic"]
+    fn flat_radius_55_character_collision_release_timing() {
         let (_path, mut timings) = timed_character_queries(10_000);
         let p95 = timing_percentile(&mut timings, 95);
         let worst = timings.last().copied().unwrap_or_default();
 
         eprintln!(
-            "9,241-column Character collision diagnostic (release): p95={p95:?}, worst={worst:?}"
+            "synthetic flat radius-55 Character collision diagnostic (release): \
+             p95={p95:?}, worst={worst:?}"
         );
         assert!(
             p95 < Duration::from_millis(1),
-            "9,241-column Character collision p95 {p95:?} breached the 1 ms release budget"
+            "synthetic flat radius-55 Character collision p95 {p95:?} breached the 1 ms release budget"
         );
     }
 
