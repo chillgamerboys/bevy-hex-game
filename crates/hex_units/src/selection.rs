@@ -642,10 +642,9 @@ fn clear_overlays(
 
 #[cfg(test)]
 mod tests {
-    use bevy::{state::app::StatesPlugin, MinimalPlugins};
-
     use super::*;
     use hex_core::{HexCoord, HexSpan};
+    use hex_test_app::HeadlessAppBuilder;
 
     fn standing_at(position: TilePos) -> StandsOn {
         StandsOn(Standing {
@@ -656,8 +655,11 @@ mod tests {
 
     #[test]
     fn camera_focus_target_tracks_selection_and_exact_surface_changes() {
-        let mut app = App::new();
-        app.add_systems(Update, reconcile_camera_focus_target);
+        let mut builder = HeadlessAppBuilder::new();
+        builder
+            .app_mut()
+            .add_systems(Update, reconcile_camera_focus_target);
+        let mut app = builder.build();
 
         let first_surface = TilePos::new(HexCoord::from_axial(2, -1), 7);
         let second_surface = TilePos::new(HexCoord::from_axial(-3, 2), 4);
@@ -728,11 +730,12 @@ mod tests {
 
     #[test]
     fn automatic_selection_publishes_focus_in_the_same_update() {
-        let mut app = App::new();
-        app.add_systems(
+        let mut builder = HeadlessAppBuilder::new();
+        builder.app_mut().add_systems(
             Update,
             (reconcile_selection, reconcile_camera_focus_target).chain(),
         );
+        let mut app = builder.build();
         let surface = TilePos::new(HexCoord::from_axial(1, -1), 3);
         let id = UnitId(3);
         let player = app
@@ -759,13 +762,16 @@ mod tests {
 
     #[test]
     fn number_keys_select_members_in_stable_party_order() {
-        let mut app = App::new();
-        app.init_resource::<ButtonInput<KeyCode>>()
+        let mut builder = HeadlessAppBuilder::new();
+        builder
+            .app_mut()
+            .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<InputBindings>()
             .add_systems(
                 Update,
                 (select_party_member_from_keys, reconcile_selection).chain(),
             );
+        let mut app = builder.build();
         let first_id = UnitId(4);
         let second_id = UnitId(8);
         let first = app.world_mut().spawn((Player, first_id, Selected)).id();
@@ -789,8 +795,11 @@ mod tests {
 
     #[test]
     fn combat_forces_selection_to_the_acting_player() {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin))
+        let mut builder = HeadlessAppBuilder::new()
+            .with_minimal_plugins()
+            .with_state_plugin();
+        builder
+            .app_mut()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<InputBindings>()
             .init_state::<Mode>()
@@ -798,6 +807,7 @@ mod tests {
                 Update,
                 (select_party_member_from_keys, reconcile_selection).chain(),
             );
+        let mut app = builder.build();
         let first_id = UnitId(4);
         let second_id = UnitId(8);
         let first = app.world_mut().spawn((Player, first_id, Selected)).id();

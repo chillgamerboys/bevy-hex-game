@@ -3222,6 +3222,7 @@ version = "0.4.0"
 dependencies = [
  "bevy",
  "hex_core",
+ "hex_test_app",
 ]
 
 [[package]]
@@ -3251,6 +3252,7 @@ dependencies = [
  "hex_core",
  "hex_lattice",
  "hex_perception",
+ "hex_test_app",
  "hex_test_support",
  "hex_units",
  "serde",
@@ -3427,6 +3429,7 @@ dependencies = [
  "hex_assets",
  "hex_core",
  "hex_lattice",
+ "hex_test_app",
  "hex_test_support",
  "ron",
  "serde",
