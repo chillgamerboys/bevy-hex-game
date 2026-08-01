@@ -10,6 +10,7 @@
     Capture("01-forest-character-start"),
     ClickAnchor(name: "forest_clearing", expected: (q: 9, r: -6, level: 15)),
     AwaitPartyIdle(max_frames: 1200),
+    AssertSelectedAt(expected: (q: 9, r: -6, level: 15)),
     Settle(45),
     Capture("02-forest-clearing-front"),
     OrbitCamera(yaw_turns: 0.33333334),

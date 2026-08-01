@@ -11,6 +11,7 @@
     Capture("01-fort-character-start"),
     ClickTile(q: 8, r: -4, level: Some(15)),
     AwaitPartyIdle(max_frames: 600),
+    AssertSelectedAt(expected: (q: 8, r: -4, level: 15)),
     Settle(45),
     Capture("02-fort-east-gate-front"),
     OrbitCamera(yaw_turns: 0.33333334),

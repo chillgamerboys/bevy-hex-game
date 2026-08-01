@@ -27,7 +27,7 @@
             scenario: "Rolling Hills",
             seed: None,
             points: [
-                (label: "open-ground approach", destination: Exact((q: 4, r: -3, level: 3)), azimuth_turns: [0.0, 0.33333334]),
+                (label: "combat-threshold approach", destination: Exact((q: 2, r: -1, level: 3)), azimuth_turns: [0.0, 0.33333334]),
             ],
         ),
         (
