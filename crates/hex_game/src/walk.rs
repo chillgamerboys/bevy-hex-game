@@ -45,10 +45,10 @@ use bevy::window::CursorMoved;
 use hex_assets::ScenarioCategory;
 use hex_assets::ScenarioLibrary;
 use hex_core::{
-    Busy, CommandQueue, GameplaySetupFailure, Headroom, HexCoord, HexTile, MapAnchorId, MapAnchors,
-    ResolvedMapSeed, Screen, TilePos,
+    Busy, CameraFocusTarget, CommandQueue, GameplaySetupFailure, Headroom, HexCoord, HexTile,
+    MapAnchorId, MapAnchors, ResolvedMapSeed, Screen, TilePos,
 };
-use hex_units::{MovingTo, Party, UnitRegistry};
+use hex_units::{MovingTo, Party, Selected, StandsOn, UnitRegistry};
 use serde::Deserialize;
 
 use crate::capture::write_png;
@@ -223,6 +223,13 @@ enum WalkStep {
     /// The script owns the frame limit so a stalled route fails deterministically
     /// instead of relying only on the runner's wall-clock watchdog.
     AwaitPartyIdle { max_frames: u32 },
+    /// Prove that the authoritative selection and its camera projection reached
+    /// one exact stack-safe surface before accepting visual evidence.
+    ///
+    /// This is deliberately separate from [`Self::AwaitPartyIdle`]: an ignored
+    /// click also leaves the party idle, so idleness alone cannot prove a route
+    /// was accepted or completed.
+    AssertSelectedAt { expected: CameraRouteTile },
     /// Wait until a named button exists without activating it.
     AwaitButton(String),
     /// Install an authored immutable UI presentation state without solving combat.
@@ -599,6 +606,16 @@ struct WalkContent<'w, 's> {
     registry: Option<Res<'w, UnitRegistry>>,
     queue: Option<Res<'w, CommandQueue>>,
     movement: Query<'w, 's, (Has<Busy>, Has<MovingTo>)>,
+    selected: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static StandsOn,
+            Option<&'static CameraFocusTarget>,
+        ),
+        With<Selected>,
+    >,
 }
 
 #[derive(SystemParam)]
@@ -635,6 +652,30 @@ impl WalkContent<'_, '_> {
             }
         }
         Some(true)
+    }
+
+    fn assert_selected_at(&self, expected: TilePos) -> Result<(), String> {
+        let (entity, standing, focus) = self.selected.single().map_err(|error| {
+            format!("visual walk needs exactly one selected unit before position proof: {error}")
+        })?;
+        if standing.0.pos != expected {
+            return Err(format!(
+                "selected unit {entity:?} stands at {:?}, not expected {expected:?}",
+                standing.0.pos
+            ));
+        }
+        let Some(focus) = focus else {
+            return Err(format!(
+                "selected unit {entity:?} reached {expected:?} without a camera focus projection"
+            ));
+        };
+        if focus.surface != expected {
+            return Err(format!(
+                "selected unit {entity:?} reached {expected:?}, but camera focus remains at {:?}",
+                focus.surface
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -927,6 +968,20 @@ fn run_walk(
                 );
                 state.failed = true;
                 exit.write(AppExit::error());
+            }
+        }
+        WalkStep::AssertSelectedAt { expected } => {
+            let expected = expected.position();
+            match content.assert_selected_at(expected) {
+                Ok(()) => {
+                    info!("visual walk proved selected unit and camera focus at {expected:?}");
+                    state.advance();
+                }
+                Err(reason) => {
+                    error!("visual walk rejected position evidence: {reason}");
+                    state.failed = true;
+                    exit.write(AppExit::error());
+                }
             }
         }
         WalkStep::Settle(frames) => {
@@ -1297,6 +1352,13 @@ mod tests {
         record.0 = content.party_is_idle();
     }
 
+    #[derive(Resource, Default, Debug)]
+    struct SelectedAtRecord(Option<Result<(), String>>);
+
+    fn record_selected_at(content: WalkContent, mut record: ResMut<SelectedAtRecord>) {
+        record.0 = Some(content.assert_selected_at(TilePos::ORIGIN));
+    }
+
     const FULL_SCRIPT: &str = r#"[
         AwaitScreen("Title"),
         Settle(30),
@@ -1310,6 +1372,7 @@ mod tests {
         ClickTile(q: 2, r: -2, level: Some(7)),
         ClickAnchor(name: "bridge", expected: (q: 0, r: 0, level: 16)),
         AwaitPartyIdle(max_frames: 600),
+        AssertSelectedAt(expected: (q: 0, r: 0, level: 16)),
         OrbitCamera(yaw_turns: 0.33333334, pitch_fraction: -0.1),
         AwaitButton("Cast Ember"),
         SetViewport(width: 3840, height: 2160, device_scale: 1.0),
@@ -1332,7 +1395,7 @@ mod tests {
     #[test]
     fn a_full_script_parses_with_every_step_kind() {
         let steps: Vec<WalkStep> = ron::from_str(FULL_SCRIPT).expect("script parses");
-        assert_eq!(steps.len(), 18);
+        assert_eq!(steps.len(), 19);
         assert_eq!(steps.first(), Some(&WalkStep::AwaitScreen("Title".into())));
         assert_eq!(
             steps.get(3),
@@ -1381,6 +1444,16 @@ mod tests {
         );
         assert_eq!(
             steps.get(12),
+            Some(&WalkStep::AssertSelectedAt {
+                expected: CameraRouteTile {
+                    q: 0,
+                    r: 0,
+                    level: 16,
+                },
+            })
+        );
+        assert_eq!(
+            steps.get(13),
             Some(&WalkStep::OrbitCamera {
                 yaw_turns: 0.33333334,
                 pitch_fraction: -0.1,
@@ -1853,6 +1926,60 @@ mod tests {
         app.world_mut().entity_mut(entity).remove::<Busy>();
         app.update();
         assert_eq!(app.world().resource::<PartyIdleRecord>().0, Some(true));
+    }
+
+    #[test]
+    fn selected_position_proof_requires_authority_and_camera_projection_to_agree() {
+        let mut app = App::new();
+        app.init_resource::<SelectedAtRecord>()
+            .add_systems(Update, record_selected_at);
+        let entity = app
+            .world_mut()
+            .spawn((
+                Selected,
+                StandsOn(hex_units::Standing {
+                    pos: TilePos::ORIGIN,
+                    span: hex_core::HexSpan::new(0.0, 1.0),
+                }),
+                CameraFocusTarget::new(TilePos::ORIGIN),
+            ))
+            .id();
+
+        app.update();
+        assert!(app
+            .world()
+            .resource::<SelectedAtRecord>()
+            .0
+            .as_ref()
+            .expect("position proof ran")
+            .is_ok());
+
+        let wrong = TilePos::new(HexCoord::from_axial(1, 0), 0);
+        app.world_mut()
+            .entity_mut(entity)
+            .insert(CameraFocusTarget::new(wrong));
+        app.update();
+        let reason = app
+            .world()
+            .resource::<SelectedAtRecord>()
+            .0
+            .as_ref()
+            .expect("position proof reran")
+            .as_ref()
+            .expect_err("stale camera focus must fail");
+        assert!(reason.contains("camera focus remains"), "{reason}");
+
+        app.world_mut().entity_mut(entity).remove::<Selected>();
+        app.update();
+        let reason = app
+            .world()
+            .resource::<SelectedAtRecord>()
+            .0
+            .as_ref()
+            .expect("missing-selection proof ran")
+            .as_ref()
+            .expect_err("missing selection must fail");
+        assert!(reason.contains("exactly one selected unit"), "{reason}");
     }
 
     #[test]
