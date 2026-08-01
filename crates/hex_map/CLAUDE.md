@@ -117,7 +117,7 @@ A tile's `Transform` has to match the rendered run described by its span:
 
 Gameplay reads `span.top` to place a piece on a surface. If the transform disagrees,
 pieces float or sink and **nothing errors** — the tiles still render. There is a test
-for this (`tests/spawning.rs::every_tile_transform_matches_its_span`); keep it
+for this (`tests/contracts/presentation.rs::every_tile_transform_matches_its_span`); keep it
 passing.
 
 ## Voxels, columns, and the rule about them

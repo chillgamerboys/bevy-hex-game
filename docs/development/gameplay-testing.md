@@ -107,6 +107,13 @@ Bevy, `hex_core`, and `hex_assets`. It may construct deterministic minimal apps,
 advance fixed time, settle within a bound, publish synthetic shared surfaces, load
 fixture palettes/settings/content, and observe shared positions/resources.
 
+The deterministic app shell, plugin finalization, and state-transition helpers are
+neutral infrastructure available to owning tests on either side of the gameplay/world
+boundary. Domain fixtures and acceptance criteria stay with their owner. In
+particular, `hex_map` publication tests may reuse the app shell but must exercise the
+real map plugin; using `SyntheticArena` there would replace the publisher under test
+with consumer-authored facts and invalidate the evidence.
+
 It must never depend on `hex_units`, `hex_combat`, `hex_game`, `hex_map`,
 `hex_world`, or `hex_perception`. Such an edge would let the fixture reconstruct
 private gameplay or world truth and turn a test helper into a second authority.

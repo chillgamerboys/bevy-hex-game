@@ -1,10 +1,14 @@
-//! Dependency-limited synthetic fixtures for gameplay-owned headless tests.
+//! Dependency-limited infrastructure for deterministic headless tests.
 //!
-//! This crate publishes the same shared surface components that gameplay consumes,
-//! without importing either the world systems that normally produce them or the
-//! gameplay systems under test. Its Cargo dependencies are the enforcement
-//! boundary: adding `hex_units`, `hex_combat`, `hex_game`, `hex_map`, `hex_world`,
-//! or `hex_perception` here is an architecture violation.
+//! The app shell is shared across owners; each owning test adds its system under test
+//! and retains its domain fixtures and acceptance criteria. Synthetic arenas publish
+//! the same shared surface components that gameplay consumes, without importing the
+//! world systems that normally produce them, and therefore belong only in consumer
+//! tests. A map-publication test must exercise `hex_map` instead of substituting one.
+//!
+//! Cargo dependencies are the enforcement boundary: adding `hex_units`, `hex_combat`,
+//! `hex_game`, `hex_map`, `hex_world`, or `hex_perception` here is an architecture
+//! violation.
 
 use std::fmt;
 use std::time::Duration;
@@ -158,7 +162,7 @@ pub fn fixture_assets() -> Result<(ArtPalette, SubstanceTable), String> {
     Ok((palette, table))
 }
 
-/// Builder for deterministic minimal Bevy apps used by gameplay tests.
+/// Builder for deterministic minimal Bevy apps used by owning headless tests.
 pub struct TestAppBuilder {
     app: App,
 }
