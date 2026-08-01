@@ -767,7 +767,7 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
 
-    use bevy::asset::{AssetId, AssetPlugin};
+    use bevy::asset::AssetId;
     use bevy::mesh::VertexAttributeValues;
     use bevy::prelude::Cuboid;
     use hex_assets::{
@@ -776,6 +776,7 @@ mod tests {
         VoxelStyleCatalog,
     };
     use hex_core::TilePos;
+    use hex_test_app::HeadlessAppBuilder;
 
     fn object_id(value: &str) -> ObjectAssetId {
         match ObjectAssetId::new(value) {
@@ -1034,21 +1035,21 @@ mod tests {
     }
 
     fn test_app(catalog: RuntimeArtCatalog) -> App {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
-        app.init_asset::<Mesh>();
-        app.init_asset::<StandardMaterial>();
-        let source = app
+        let mut builder = HeadlessAppBuilder::new()
+            .with_minimal_plugins()
+            .with_assets();
+        let source = builder
+            .app_mut()
             .world_mut()
             .resource_mut::<Assets<Mesh>>()
             .add(Mesh::from(Cuboid::new(1.0, 1.0, 1.0)));
-        app.insert_resource(GameAssets {
+        builder.app_mut().insert_resource(GameAssets {
             hex_tile: source,
             player_pieces: [Handle::default(), Handle::default()],
         });
-        app.insert_resource(catalog);
-        plugin(&mut app);
-        app
+        builder.app_mut().insert_resource(catalog);
+        plugin(builder.app_mut());
+        builder.build()
     }
 
     fn settle(app: &mut App) {
