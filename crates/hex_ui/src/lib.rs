@@ -178,6 +178,7 @@ pub mod test_support {
         tab_navigation::{TabGroup, TabIndex},
         InputFocus,
     };
+    use bevy::math::Affine2;
     use bevy::prelude::*;
     use bevy::ui_widgets::ScrollArea;
     use bevy::window::WindowResolution;
@@ -299,6 +300,8 @@ pub mod test_support {
         pub center: Vec2,
         /// Effective visible rectangle after inherited clipping and the canvas edge.
         pub visible_bounds: Option<Rect>,
+        /// Actual glyph bounds for a named text node, when text has been laid out.
+        pub rendered_text_bounds: Option<Rect>,
         /// Whether the complete node rectangle is currently visible.
         pub fully_visible: bool,
         /// First clipping ancestor, when inherited clipping reduces the visible rectangle.
@@ -519,12 +522,16 @@ pub mod test_support {
                         transform.affine().translation * inverse_scale
                     });
                 let bounds = Rect::from_center_size(center, size);
-                let visible_bounds = effective_visible_bounds(world, entity, bounds, metrics);
-                let fully_visible =
-                    rect_contains(Rect::from_corners(Vec2::ZERO, metrics.logical_size), bounds)
-                        && world.get::<CalculatedClip>(entity).is_none_or(|clip| {
-                            rect_contains(scale_rect(clip.clip, inverse_scale), bounds)
-                        });
+                let rendered_text_bounds = rendered_text_bounds(world, entity);
+                let presented_bounds = rendered_text_bounds.unwrap_or(bounds);
+                let visible_bounds =
+                    effective_visible_bounds(world, entity, presented_bounds, metrics);
+                let fully_visible = rect_contains(
+                    Rect::from_corners(Vec2::ZERO, metrics.logical_size),
+                    presented_bounds,
+                ) && world.get::<CalculatedClip>(entity).is_none_or(|clip| {
+                    rect_contains(scale_rect(clip.clip, inverse_scale), presented_bounds)
+                });
                 let focusable = world.get::<Button>(entity).is_some()
                     || world
                         .get::<TabIndex>(entity)
@@ -562,9 +569,10 @@ pub mod test_support {
                     }),
                     center,
                     visible_bounds,
+                    rendered_text_bounds,
                     fully_visible,
-                    clipped_by: first_clipping_ancestor(world, entity, bounds),
-                    scroll_reachable: scroll_reachable(world, entity, bounds, metrics),
+                    clipped_by: first_clipping_ancestor(world, entity, presented_bounds),
+                    scroll_reachable: scroll_reachable(world, entity, presented_bounds, metrics),
                     visibility_requirement: world
                         .get::<crate::UiVisibilityRequirement>(entity)
                         .copied()
@@ -617,6 +625,39 @@ pub mod test_support {
             transform.affine().translation * inverse_scale,
             computed.size() * inverse_scale,
         ))
+    }
+
+    fn rendered_text_bounds(world: &World, entity: Entity) -> Option<Rect> {
+        let computed = world.get::<ComputedNode>(entity)?;
+        let transform = world.get::<bevy::ui::UiGlobalTransform>(entity)?;
+        let layout = world.get::<bevy::text::TextLayoutInfo>(entity)?;
+        let local_to_world =
+            Affine2::from(*transform) * Affine2::from_translation(computed.content_box().min);
+        let inverse_scale = computed.inverse_scale_factor;
+        layout
+            .glyphs
+            .iter()
+            .map(|glyph| {
+                let half_size = glyph.atlas_info.rect.size() * 0.5;
+                let local_min = glyph.position - half_size;
+                let local_max = glyph.position + half_size;
+                let first = local_to_world.transform_point2(local_min) * inverse_scale;
+                [
+                    local_to_world.transform_point2(Vec2::new(local_max.x, local_min.y)),
+                    local_to_world.transform_point2(local_max),
+                    local_to_world.transform_point2(Vec2::new(local_min.x, local_max.y)),
+                ]
+                .into_iter()
+                .fold(Rect::from_corners(first, first), |mut bounds, point| {
+                    let point = point * inverse_scale;
+                    bounds.min = bounds.min.min(point);
+                    bounds.max = bounds.max.max(point);
+                    bounds
+                })
+            })
+            .reduce(|left, right| {
+                Rect::from_corners(left.min.min(right.min), left.max.max(right.max))
+            })
     }
 
     fn scale_rect(rect: Rect, scale: f32) -> Rect {
@@ -1490,8 +1531,13 @@ pub mod test_support {
             let snapshot = production_scenario_snapshot(1280, 720, 1.0);
             assert!(
                 snapshot.layout_issues().is_empty(),
-                "the production scenario catalog must remain reachable: {:?}",
-                snapshot.layout_issues()
+                "the production scenario catalog must remain reachable: {:?}; immediate scenario nodes: {:?}",
+                snapshot.layout_issues(),
+                snapshot
+                    .nodes
+                    .iter()
+                    .filter(|node| node.name.starts_with("Scenario Screen"))
+                    .collect::<Vec<_>>()
             );
             let back = snapshot
                 .nodes
@@ -1499,6 +1545,15 @@ pub mod test_support {
                 .find(|node| node.name == "Back")
                 .expect("scenario catalog has a Back control");
             assert!(back.fully_visible);
+            let title = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.name == "Scenario Screen Title")
+                .expect("scenario catalog has a named screen title");
+            assert!(
+                title.rendered_text_bounds.is_some() && title.fully_visible,
+                "the actual title glyphs must fit the initial canvas: {title:?}"
+            );
             for scenario in ["The Crossing", "Waterfall"] {
                 let node = snapshot
                     .nodes

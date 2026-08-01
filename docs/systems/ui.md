@@ -105,9 +105,10 @@ physical fullscreen client (1512×949 logical @2×) exercise the same contract.
 Primary controls must be fully visible immediately; secondary catalog/report content
 may instead prove complete scroll reachability. Every required control remains
 unobscured, accessible, and at least 44×44. `UiTreeSnapshot` intersects each node
-with the canvas and Bevy's inherited `CalculatedClip`; a nonzero `ComputedNode`
-inside a clipped ancestor is not treated as visible. The oracle also checks focus
-order and interactive overlap without inspecting pixels or rendered text.
+and named text node's actual glyph rectangles with the canvas and Bevy's inherited
+`CalculatedClip`; a nonzero `ComputedNode` whose glyphs or box cross a clipped edge
+is not treated as fully visible. The oracle also checks focus order and interactive
+overlap without interpreting the text or pixels as gameplay truth.
 The matrix uses the full production title catalog, populated Settings, Creator and
 Combat Lab setup projections, a 6v6 deployment, and the maximum ordinary gameplay
 action rail plus required, aiming, statistics, and report states. A half logical
