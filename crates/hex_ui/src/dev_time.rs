@@ -57,6 +57,12 @@ pub(super) fn plugin(app: &mut App) {
     )
     .add_systems(
         Update,
+        reserve_ultra_left_column
+            .after(UiSystems::Render)
+            .run_if(in_state(Screen::Gameplay)),
+    )
+    .add_systems(
+        Update,
         emit_intents
             .in_set(UiSystems::EmitIntents)
             .run_if(in_state(Screen::Gameplay)),
@@ -88,7 +94,14 @@ fn spawn_panel(
         .insert(panel_node(*metrics, chrome.decision_required))
         .with_children(|panel| {
             panel.spawn((DevTimeHeading, heading(&assets, "DEV · TIME")));
-            panel.spawn((DevTimeStatus, blurb(&assets, "Checking cyclic time…")));
+            panel.spawn((
+                DevTimeStatus,
+                Node {
+                    width: Val::Percent(100.0),
+                    ..default()
+                },
+                blurb(&assets, "Checking cyclic time…"),
+            ));
             panel.spawn((
                 Name::new("Dev Time Controls"),
                 DevTimeControls::default(),
@@ -121,25 +134,19 @@ fn panel_node(metrics: ResolvedUiMetrics, decision_required: bool) -> Node {
     if metrics.viewport == UiViewportClass::Compact {
         node.position_type = PositionType::Absolute;
         node.row_gap = Val::Px(4.0);
-        if uses_ultra_middle_band(metrics) {
-            node.top = Val::Px(138.0);
-            node.right = Val::Px(12.0);
-            node.left = Val::Px(196.0);
-            node.width = Val::Px(metrics.effective_size.x - 208.0);
-            node.height = Val::Px(82.0);
-            node.row_gap = Val::Px(2.0);
-            node.padding = UiRect::all(Val::Px(4.0));
-        } else if is_ultra_constrained(metrics) {
+        if is_ultra_constrained(metrics) {
             node.top = Val::Px(8.0);
+            node.right = Val::Auto;
             node.left = Val::Px(8.0);
             node.width = Val::Px(180.0);
-            node.height = Val::Px(128.0);
+            node.height = Val::Px(176.0);
+            node.row_gap = Val::Px(2.0);
             node.padding = UiRect::all(Val::Px(4.0));
         } else {
             node.top = Val::Px(8.0);
             node.right = Val::Px(8.0);
             node.width = Val::Px(256.0);
-            node.height = Val::Px(120.0);
+            node.height = Val::Px(136.0);
             node.padding = UiRect::all(Val::Px(6.0));
         }
     }
@@ -149,14 +156,8 @@ fn panel_node(metrics: ResolvedUiMetrics, decision_required: bool) -> Node {
     node
 }
 
-fn uses_ultra_middle_band(metrics: ResolvedUiMetrics) -> bool {
-    is_ultra_constrained(metrics)
-        && metrics.effective_size.x >= 620.0
-        && metrics.effective_size.y >= 352.0
-}
-
 fn controls_node(metrics: ResolvedUiMetrics) -> Node {
-    let gap = if uses_ultra_middle_band(metrics) {
+    let gap = if is_ultra_constrained(metrics) {
         2.0
     } else if metrics.viewport == UiViewportClass::Compact {
         4.0
@@ -256,14 +257,48 @@ fn reconcile_layout(
 }
 
 fn control_size(metrics: ResolvedUiMetrics) -> (f32, f32) {
-    if uses_ultra_middle_band(metrics) {
-        (132.0, 22.0)
-    } else if is_ultra_constrained(metrics) {
-        (82.0, 28.0)
+    if is_ultra_constrained(metrics) {
+        (82.0, 44.0)
     } else if metrics.viewport == UiViewportClass::Compact {
         (76.0, 36.0)
     } else {
         (96.0, 48.0)
+    }
+}
+
+fn ultra_primary_left(metrics: ResolvedUiMetrics, decision_required: bool) -> Option<f32> {
+    (is_ultra_constrained(metrics) && !decision_required).then_some(196.0)
+}
+
+fn reserve_ultra_left_column(
+    metrics: Res<ResolvedUiMetrics>,
+    chrome: Res<GameplayChromeView>,
+    mut primary_nodes: Query<
+        (
+            &mut Node,
+            Option<&UiRegionRole>,
+            Has<crate::action_rail::ActionRail>,
+        ),
+        Or<(With<UiRegionRole>, With<crate::action_rail::ActionRail>)>,
+    >,
+) {
+    if !is_ultra_constrained(*metrics) {
+        return;
+    }
+    let reserved_left = ultra_primary_left(*metrics, chrome.decision_required);
+    for (mut node, role, action_rail) in &mut primary_nodes {
+        let desired = if role == Some(&UiRegionRole::Actions) {
+            reserved_left.unwrap_or(8.0)
+        } else if action_rail {
+            reserved_left.unwrap_or(12.0)
+        } else {
+            continue;
+        };
+        let matches =
+            matches!(node.left, Val::Px(current) if (current - desired).abs() < f32::EPSILON);
+        if !matches {
+            node.left = Val::Px(desired);
+        }
     }
 }
 
@@ -305,14 +340,18 @@ fn rebuild(
 
     match view.as_ref() {
         DevTimeView::Available { hours } => {
-            **status = if metrics.viewport == UiViewportClass::Compact {
+            **status = if is_ultra_constrained(*metrics) {
+                format!("TIME · {hours:.1} h")
+            } else if metrics.viewport == UiViewportClass::Compact {
                 format!("DEV · TIME · {hours:.1} h")
             } else {
                 format!("CURRENT · {hours:.1} h")
             };
         }
         DevTimeView::Unavailable { reason } => {
-            **status = if metrics.viewport == UiViewportClass::Compact {
+            **status = if is_ultra_constrained(*metrics) {
+                format!("TIME · UNAVAILABLE\n{reason}")
+            } else if metrics.viewport == UiViewportClass::Compact {
                 format!("DEV · TIME · UNAVAILABLE\n{reason}")
             } else {
                 format!("UNAVAILABLE · {reason}")
@@ -616,7 +655,6 @@ mod tests {
         let metrics =
             crate::resolve_ui_metrics(Vec2::new(960.0, 540.0), crate::UiScaleMode::Percent200);
         assert_eq!(metrics.viewport, UiViewportClass::Compact);
-        assert!(!uses_ultra_middle_band(metrics));
         let panel = panel_node(metrics, false);
         let Val::Px(width) = panel.width else {
             panic!("the compact panel must have a bounded width");
@@ -630,30 +668,31 @@ mod tests {
         let Val::Px(height) = panel.height else {
             panic!("the compact panel must have a bounded height");
         };
-        let mut actions = Node::default();
-        crate::layout::constrain_region_to_canvas(metrics, UiRegionRole::Actions, &mut actions);
-        let Val::Px(actions_left) = actions.left else {
-            panic!("the action region must have a bounded left inset");
-        };
-        let action_rail_top = metrics.effective_size.y - 12.0 - 116.0;
+        let actions_left = ultra_primary_left(metrics, false)
+            .expect("the ordinary ultra-constrained layout must reserve the left column");
+        let (control_width, control_height) = control_size(metrics);
+        assert_eq!(left, 8.0);
         assert!(left + width < actions_left);
-        assert!(top + height <= action_rail_top);
-        assert!(2.0 * 82.0 + 4.0 <= width - 8.0);
+        assert!(top + height <= metrics.effective_size.y);
+        assert!(control_height >= 44.0);
+        assert!(2.0 * control_width + 2.0 <= width - 8.0);
     }
 
     #[test]
-    fn common_two_hundred_percent_canvas_uses_the_gap_between_actions_and_rail() {
+    fn common_two_hundred_percent_canvas_uses_the_free_left_column() {
         let metrics =
             crate::resolve_ui_metrics(Vec2::new(1280.0, 720.0), crate::UiScaleMode::Percent200);
-        assert!(uses_ultra_middle_band(metrics));
         let panel = panel_node(metrics, false);
-        assert_eq!(panel.left, Val::Px(196.0));
-        assert_eq!(panel.right, Val::Px(12.0));
-        assert_eq!(panel.top, Val::Px(138.0));
-        assert_eq!(panel.height, Val::Px(82.0));
-        let panel_width = metrics.effective_size.x - 196.0 - 12.0;
-        assert!(3.0 * 132.0 + 2.0 * 2.0 <= panel_width - 8.0);
-        assert!(138.0 + 82.0 <= metrics.effective_size.y - 12.0 - 116.0);
+        assert_eq!(panel.left, Val::Px(8.0));
+        assert_eq!(panel.right, Val::Auto);
+        assert_eq!(panel.top, Val::Px(8.0));
+        assert_eq!(panel.width, Val::Px(180.0));
+        assert_eq!(panel.height, Val::Px(176.0));
+        let (control_width, control_height) = control_size(metrics);
+        assert!(2.0 * control_width + 2.0 <= 180.0 - 8.0);
+        assert!(control_height >= 44.0);
+        assert_eq!(ultra_primary_left(metrics, false), Some(196.0));
+        assert_eq!(ultra_primary_left(metrics, true), None);
     }
 
     #[cfg(feature = "test-support")]
