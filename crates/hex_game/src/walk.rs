@@ -10,14 +10,16 @@
 //! hang. `HEX_WALK_VIEWPORT=1280x720@2` optionally selects an exact logical
 //! canvas and device scale; the default is 1920×1080@1.
 //!
-//! # Why clicks are injected as `Interaction::Pressed`
+//! # How clicks are injected
 //!
-//! `bevy_ui`'s focus system only resets a node's `Interaction` when it is not
+//! Named UI clicks use `Interaction::Pressed`. `bevy_ui`'s focus system only resets
+//! a node's `Interaction` when it is not
 //! `Pressed` — an injected press on a button the real cursor is nowhere near
 //! is deliberately left alone ("press sticks until release"). Every handler in
 //! this game reads `Changed<Interaction>` + `== Pressed`, so one injected
 //! insert is exactly one activation, exercised through the real button wiring
-//! rather than a state-bypass. The runner clears the press to
+//! rather than a state-bypass. Exact terrain clicks emit the ordinary primary
+//! `Pointer<Click>` after stack-safe surface resolution. The runner clears the UI press to
 //! `Interaction::None` on the following step for buttons that outlive their
 //! click. Keys go through `ButtonInput::press` from `PreUpdate`, after the
 //! input plugin's frame clear, so `just_pressed` is visible to every `Update`
@@ -27,14 +29,19 @@ use std::env;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use bevy::camera::{ClearColorConfig, ImageRenderTarget, RenderTarget};
+use bevy::camera::{ClearColorConfig, ImageRenderTarget, NormalizedRenderTarget, RenderTarget};
 use bevy::ecs::system::SystemParam;
 use bevy::input::InputSystems;
+use bevy::picking::backend::HitData;
+use bevy::picking::events::{Click, Pointer};
+use bevy::picking::pointer::{Location, PointerButton, PointerId};
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use hex_assets::ScenarioLibrary;
-use hex_core::{GameplaySetupFailure, HexTile, ResolvedMapSeed, Screen};
+use hex_core::{
+    GameplaySetupFailure, Headroom, HexCoord, HexTile, ResolvedMapSeed, Screen, TilePos,
+};
 use serde::Deserialize;
 
 use crate::capture::write_png;
@@ -177,6 +184,16 @@ enum WalkStep {
         #[serde(default)]
         index: usize,
     },
+    /// Click one exact exposed terrain entity through the ordinary picking observer path.
+    ///
+    /// Omitting `level` is accepted only when the coordinate has one exposed
+    /// surface. Stacked terrain must name its exact surface.
+    ClickTile {
+        q: i32,
+        r: i32,
+        #[serde(default)]
+        level: Option<hex_core::Level>,
+    },
     /// Wait until a named button exists without activating it.
     AwaitButton(String),
     /// Install an authored immutable UI presentation state without solving combat.
@@ -300,6 +317,74 @@ fn parse_viewport(viewport: &str) -> Result<hex_ui::ReviewViewport, String> {
     hex_ui::ReviewViewport::new(width, height, device_scale)
 }
 
+/// Resolves a script coordinate to the same exact entity the picking backend would
+/// have reported. `None` means terrain has not published any tile yet, so the step
+/// may continue waiting.
+fn resolve_tile_click_target<'a>(
+    tiles: impl Iterator<Item = (Entity, &'a TilePos, &'a Headroom)>,
+    coord: HexCoord,
+    level: Option<hex_core::Level>,
+) -> Result<Option<(Entity, TilePos)>, String> {
+    let mut saw_tile = false;
+    let mut at_coord = Vec::new();
+    for (entity, pos, headroom) in tiles {
+        saw_tile = true;
+        if pos.coord == coord && headroom.0 > 0 {
+            at_coord.push((entity, *pos));
+        }
+    }
+    if !saw_tile {
+        return Ok(None);
+    }
+
+    at_coord.sort_by_key(|&(entity, pos)| (pos, entity));
+    let available_levels: Vec<hex_core::Level> =
+        at_coord.iter().map(|(_, pos)| pos.level).collect();
+    let matches: Vec<(Entity, TilePos)> = at_coord
+        .into_iter()
+        .filter(|(_, pos)| level.is_none_or(|level| pos.level == level))
+        .collect();
+
+    match matches.as_slice() {
+        [(entity, pos)] => Ok(Some((*entity, *pos))),
+        [] if available_levels.is_empty() => Err(format!(
+            "ClickTile(q: {}, r: {}) names no published terrain coordinate",
+            coord.x(),
+            coord.y()
+        )),
+        [] => Err(format!(
+            "ClickTile(q: {}, r: {}, level: {level:?}) names no published run; available levels are {available_levels:?}",
+            coord.x(),
+            coord.y()
+        )),
+        _ if level.is_none() => Err(format!(
+            "ClickTile(q: {}, r: {}) is ambiguous across stacked levels {available_levels:?}; specify an exact level",
+            coord.x(),
+            coord.y()
+        )),
+        _ => Err(format!(
+            "ClickTile(q: {}, r: {}, level: {level:?}) matched duplicate published runs",
+            coord.x(),
+            coord.y()
+        )),
+    }
+}
+
+fn primary_tile_click(target: Entity, window: Entity) -> Option<Pointer<Click>> {
+    let target_window = bevy::window::WindowRef::Entity(window).normalize(Some(window))?;
+    let location = Location {
+        target: NormalizedRenderTarget::Window(target_window),
+        position: Vec2::ZERO,
+    };
+    let click = Click {
+        button: PointerButton::Primary,
+        hit: HitData::new(target, 0.0, None, None),
+        duration: Duration::from_millis(1),
+        count: 1,
+    };
+    Some(Pointer::new(PointerId::Mouse, location, click, target))
+}
+
 /// What the capture observer reports back to the runner.
 #[derive(Debug)]
 enum CaptureOutcome {
@@ -378,10 +463,10 @@ fn run_walk(
     mut next: ResMut<NextState<Screen>>,
     content: WalkContent,
     mut ui_scale: ResMut<hex_ui::UiScalePreference>,
-    mut primary_window: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
+    mut primary_window: Query<(Entity, &mut Window), With<bevy::window::PrimaryWindow>>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
     buttons: Query<(Entity, &Name), With<Button>>,
-    tiles: Query<Entity, With<HexTile>>,
+    tiles: Query<(Entity, &TilePos, &Headroom), With<HexTile>>,
     mut images: ResMut<Assets<Image>>,
     mut game_camera: Query<&mut RenderTarget, (With<Camera3d>, Without<WalkUiCamera>)>,
     mut review_camera: Query<(Entity, &mut RenderTarget), (With<WalkUiCamera>, Without<Camera3d>)>,
@@ -396,7 +481,7 @@ fn run_walk(
     // The Bevy image target owns capture pixels. Keep the ordinary window's
     // requested logical size aligned so the runtime semantic-metrics system sees
     // the same canvas without overriding the operating system's scale factor.
-    if let Ok(mut window) = primary_window.single_mut() {
+    if let Ok((_, mut window)) = primary_window.single_mut() {
         let logical = state.viewport.logical_size.as_vec2();
         if (window.width() - logical.x).abs() > 0.5 || (window.height() - logical.y).abs() > 0.5 {
             window.resolution.set(logical.x, logical.y);
@@ -626,6 +711,31 @@ fn run_walk(
             state.pressed = Some(entity);
             state.advance();
         }
+        WalkStep::ClickTile { q, r, level } => {
+            let coord = HexCoord::from_axial(q, r);
+            match resolve_tile_click_target(tiles.iter(), coord, level) {
+                Ok(None) => {}
+                Ok(Some((target, pos))) => {
+                    let Ok((window, _)) = primary_window.single() else {
+                        return;
+                    };
+                    let Some(click) = primary_tile_click(target, window) else {
+                        error!("visual walk could not normalize the primary window for {step:?}");
+                        state.failed = true;
+                        exit.write(AppExit::error());
+                        return;
+                    };
+                    info!("visual walk clicking terrain {pos:?} through pointer picking");
+                    commands.trigger(click);
+                    state.advance();
+                }
+                Err(reason) => {
+                    error!("visual walk refused {step:?}: {reason}");
+                    state.failed = true;
+                    exit.write(AppExit::error());
+                }
+            }
+        }
         WalkStep::AwaitButton(ref name) => {
             if buttons
                 .iter()
@@ -702,6 +812,29 @@ fn run_walk(
 mod tests {
     use super::*;
 
+    #[derive(Resource, Default)]
+    struct PointerRecord {
+        target: Option<Entity>,
+        primary: bool,
+    }
+
+    #[derive(Resource, Clone, Copy)]
+    struct PointerRequest {
+        target: Entity,
+        window: Entity,
+    }
+
+    fn issue_requested_pointer_click(mut commands: Commands, request: Res<PointerRequest>) {
+        if let Some(click) = primary_tile_click(request.target, request.window) {
+            commands.trigger(click);
+        }
+    }
+
+    fn record_pointer_click(click: On<Pointer<Click>>, mut record: ResMut<PointerRecord>) {
+        record.target = Some(click.event_target());
+        record.primary = click.button == PointerButton::Primary;
+    }
+
     const FULL_SCRIPT: &str = r#"[
         AwaitScreen("Title"),
         Settle(30),
@@ -711,6 +844,8 @@ mod tests {
         Key("Backspace"),
         StartScenario(name: "The Crossing"),
         AwaitTerrain,
+        ClickTile(q: 2, r: -2),
+        ClickTile(q: 2, r: -2, level: Some(7)),
         AwaitButton("Cast Ember"),
         SetViewport(width: 3840, height: 2160, device_scale: 1.0),
         SetUiScale(Percent200),
@@ -732,7 +867,7 @@ mod tests {
     #[test]
     fn a_full_script_parses_with_every_step_kind() {
         let steps: Vec<WalkStep> = ron::from_str(FULL_SCRIPT).expect("script parses");
-        assert_eq!(steps.len(), 13);
+        assert_eq!(steps.len(), 15);
         assert_eq!(steps.first(), Some(&WalkStep::AwaitScreen("Title".into())));
         assert_eq!(
             steps.get(3),
@@ -746,6 +881,22 @@ mod tests {
             Some(&WalkStep::StartScenario {
                 name: "The Crossing".into(),
                 seed: None
+            })
+        );
+        assert_eq!(
+            steps.get(8),
+            Some(&WalkStep::ClickTile {
+                q: 2,
+                r: -2,
+                level: None,
+            })
+        );
+        assert_eq!(
+            steps.get(9),
+            Some(&WalkStep::ClickTile {
+                q: 2,
+                r: -2,
+                level: Some(7),
             })
         );
         for step in &steps {
@@ -792,6 +943,91 @@ mod tests {
     }
 
     #[test]
+    fn tile_click_resolution_requires_an_exact_stacked_surface() {
+        let mut world = World::new();
+        let low = world.spawn_empty().id();
+        let high = world.spawn_empty().id();
+        let elsewhere = world.spawn_empty().id();
+        let coord = HexCoord::from_axial(4, -3);
+        let low_pos = TilePos::new(coord, 2);
+        let high_pos = TilePos::new(coord, 8);
+        let elsewhere_pos = TilePos::new(HexCoord::from_axial(5, -3), 2);
+        let open = Headroom(8);
+        let tiles = [
+            (low, low_pos, open),
+            (high, high_pos, open),
+            (elsewhere, elsewhere_pos, open),
+        ];
+
+        let ambiguous = resolve_tile_click_target(
+            tiles
+                .iter()
+                .map(|(entity, pos, headroom)| (*entity, pos, headroom)),
+            coord,
+            None,
+        )
+        .expect_err("a stacked coordinate without a level must be refused");
+        assert!(ambiguous.contains("stacked levels [2, 8]"));
+
+        assert_eq!(
+            resolve_tile_click_target(
+                tiles
+                    .iter()
+                    .map(|(entity, pos, headroom)| (*entity, pos, headroom)),
+                coord,
+                Some(8),
+            ),
+            Ok(Some((high, high_pos)))
+        );
+
+        let buried = Headroom(0);
+        assert_eq!(
+            resolve_tile_click_target(
+                [(low, &low_pos, &buried), (high, &high_pos, &open)].into_iter(),
+                coord,
+                None,
+            ),
+            Ok(Some((high, high_pos))),
+            "buried material runs are not pointer-clickable surfaces"
+        );
+    }
+
+    #[test]
+    fn tile_click_resolution_waits_only_before_any_terrain_exists() {
+        let coord = HexCoord::from_axial(1, 2);
+        assert_eq!(
+            resolve_tile_click_target(std::iter::empty(), coord, None),
+            Ok(None)
+        );
+
+        let mut world = World::new();
+        let entity = world.spawn_empty().id();
+        let pos = TilePos::new(HexCoord::ORIGIN, 1);
+        let open = Headroom(8);
+        let missing =
+            resolve_tile_click_target(std::iter::once((entity, &pos, &open)), coord, None)
+                .expect_err("a missing coordinate cannot appear after terrain publication");
+        assert!(missing.contains("names no published terrain coordinate"));
+    }
+
+    #[test]
+    fn tile_click_uses_the_real_primary_pointer_observer_path() {
+        let mut app = App::new();
+        let window = app.world_mut().spawn(Window::default()).id();
+        let target = app.world_mut().spawn_empty().id();
+        app.init_resource::<PointerRecord>()
+            .insert_resource(PointerRequest { target, window })
+            .add_observer(record_pointer_click)
+            .add_systems(Update, issue_requested_pointer_click);
+
+        app.update();
+
+        let record = app.world().resource::<PointerRecord>();
+        assert_eq!(record.target, Some(target));
+        assert!(record.primary);
+    }
+
+    #[test]
     fn every_screen_name_round_trips() {
         for name in [
             "Splash",
@@ -814,6 +1050,8 @@ mod tests {
             "../../walks/gameplay_ui.ron",
             "../../walks/waterfall.ron",
             "../../walks/forest.ron",
+            "../../walks/readme_party_trial.ron",
+            "../../walks/readme_creator_lab.ron",
         ] {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(script);
             let text = std::fs::read_to_string(&path)

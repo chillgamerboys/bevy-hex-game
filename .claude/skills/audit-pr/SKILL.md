@@ -248,7 +248,10 @@ a one-line summary.
 - Skipped steps still get an entry with
   `{"status": "skipped", "summary": "skipped — prior step failed", "findings": []}`
   so the receipt is fully populated and merge-pr can report which
-  step blocked.
+  step blocked. `5_visual_walk` is the one schema-specific exception: every
+  skipped visual walk, whether inapplicable or skipped after an earlier failure,
+  must include `"review_policy": "not_applicable"` so the strict reader can
+  distinguish a deliberate skip from a malformed legacy entry.
 
 **Failure handling:** if the write fails (e.g. a `/tmp` permission
 anomaly), log loud but do NOT fail the audit. The gate's value is the
