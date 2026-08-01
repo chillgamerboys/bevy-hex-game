@@ -40,6 +40,11 @@ OUT=.context/visual-walks/pr-<N>   # or /tmp for uncommitted work
 HEX_WALK_SCRIPT=walks/gameplay_ui.ron HEX_WALK_OUT=$OUT cargo run -p hex_game --features visual-walk
 ```
 
+The runner automatically assigns every configured walk a fresh disposable
+application-data root beneath `OUT`, before preferences or resume data load. An
+explicit `HEX_GAME_DATA_DIR` remains available for narrowly controlled fixtures,
+but a canonical review must never point it at the operator's normal data root.
+
 Run the scripts relevant to the diff. Gameplay UI uses the one bounded Bevy
 image-target route; map/world routes retain their owned scripts and acceptance
 criteria. Each run
@@ -81,6 +86,11 @@ Print a table: frame × verdict × finding. Then the receipt entry for
   `/merge-pr` like any failing step.
 
 Findings shape: `{step, png_path, check, message}`.
+
+The receipt entry also records `"review_policy": "blocking"` for UI/presentation
+diffs, `"advisory"` for other runtime diffs, or `"not_applicable"` when skipped.
+`warn` is valid only with the advisory policy; a blocking-policy review finding is
+always `fail`.
 
 ## When NOT to invoke
 

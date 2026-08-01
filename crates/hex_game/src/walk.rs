@@ -25,7 +25,7 @@
 
 use std::env;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bevy::camera::{ClearColorConfig, ImageRenderTarget, RenderTarget};
 use bevy::ecs::system::SystemParam;
@@ -44,8 +44,37 @@ const SCRIPT_ENV: &str = "HEX_WALK_SCRIPT";
 const OUT_ENV: &str = "HEX_WALK_OUT";
 const VIEWPORT_ENV: &str = "HEX_WALK_VIEWPORT";
 const UI_DEBUG_ENV: &str = "HEX_WALK_UI_DEBUG";
+const DATA_ENV: &str = "HEX_GAME_DATA_DIR";
 const STEP_TIMEOUT: Duration = Duration::from_secs(60);
 const WALK_TIME_SCALE: f32 = 12.0;
+
+/// Gives every configured walk a fresh storage root unless the caller explicitly
+/// supplied one. This runs before persistence plugins initialize `StoragePaths`.
+pub(super) fn isolate_storage(app: &mut App) {
+    if env::var_os(DATA_ENV).is_some() {
+        return;
+    }
+    let script = env::var_os(SCRIPT_ENV);
+    let out = env::var_os(OUT_ENV);
+    if script.is_none() && out.is_none() {
+        return;
+    }
+
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    let parent = out.map_or_else(env::temp_dir, PathBuf::from);
+    let root = isolated_storage_root(parent, std::process::id(), nonce);
+    info!(
+        "visual walk: isolating disposable application data at {}",
+        root.display()
+    );
+    app.insert_resource(crate::storage::StoragePaths::under(root));
+}
+
+fn isolated_storage_root(out: PathBuf, process_id: u32, nonce: u128) -> PathBuf {
+    out.join(format!(".game-data-{process_id}-{nonce}"))
+}
 
 /// Installs the walk runner only when its environment is present.
 pub(super) fn plugin(app: &mut App) {
@@ -688,6 +717,17 @@ mod tests {
         PresentUi("required-decision"),
         Capture("02-crossing"),
     ]"#;
+
+    #[test]
+    fn disposable_storage_root_is_unique_to_one_walk_process() {
+        let out = PathBuf::from("captures");
+        let first = isolated_storage_root(out.clone(), 42, 100);
+        let second = isolated_storage_root(out.clone(), 42, 101);
+
+        assert_eq!(first.parent(), Some(out.as_path()));
+        assert_ne!(first, second);
+        assert_eq!(first, out.join(".game-data-42-100"));
+    }
 
     #[test]
     fn a_full_script_parses_with_every_step_kind() {

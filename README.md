@@ -101,7 +101,7 @@ Party Trial.
 Regenerate readme_assets/party-trial-combat.png with:
 HEX_WALK_SCRIPT=walks/readme_party_trial.ron \
 HEX_WALK_OUT=.context/readme-captures/party-trial \
-HEX_WALK_SIZE=1280x720 \
+HEX_WALK_VIEWPORT=1280x720@1 \
 HEX_GAME_DATA_DIR=.context/readme-captures/party-trial-data \
 cargo run --release -p hex_game --features visual-walk
 cp .context/readme-captures/party-trial/party-trial-combat.png \
@@ -139,7 +139,7 @@ data is reported instead of partially loaded. New Game never overwrites it.
 Regenerate the Creator and deployment screenshots with:
 HEX_WALK_SCRIPT=walks/readme_creator_lab.ron \
 HEX_WALK_OUT=.context/readme-captures/creator-lab \
-HEX_WALK_SIZE=1280x720 \
+HEX_WALK_VIEWPORT=1280x720@1 \
 HEX_GAME_DATA_DIR=.context/readme-captures/creator-lab-data \
 cargo run --release -p hex_game --features visual-walk
 cp .context/readme-captures/creator-lab/character-creator.png \
