@@ -1,0 +1,23 @@
+// Real Character movement along the protected Deep Forest trail to a clearing.
+[
+    AwaitScreen("Title"),
+    StartScenario(name: "Deep Forest", seed: Some(1592598566)),
+    AwaitScreen("Gameplay"),
+    AwaitTerrain,
+    Key("H"),
+    Key("C"),
+    Settle(45),
+    Capture("01-deep-forest-character-start"),
+    ClickAnchor(name: "deep_forest_clearing", expected: (q: -6, r: -4, level: 15)),
+    AwaitPartyIdle(max_frames: 1800),
+    Settle(45),
+    Capture("02-deep-forest-clearing-front"),
+    OrbitCamera(yaw_turns: 0.33333334),
+    Settle(45),
+    Capture("03-deep-forest-clearing-side"),
+    OrbitCamera(yaw_turns: 0.33333334),
+    Settle(45),
+    Capture("04-deep-forest-clearing-rear"),
+    Key("Backspace"),
+    AwaitScreen("Title"),
+]

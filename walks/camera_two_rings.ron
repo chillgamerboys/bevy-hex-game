@@ -1,0 +1,32 @@
+// Real ordinary-network traversal through the central confluence, Waterfall B, and
+// the Mountains A handoff. The remaining sixteen region cards stay in the manifest
+// as explicit pending evidence; this script does not teleport or suppress combat.
+[
+    AwaitScreen("Title"),
+    StartScenario(name: "Two Rings", seed: Some(1592598566)),
+    AwaitScreen("Gameplay"),
+    AwaitTerrain,
+    Key("H"),
+    Key("C"),
+    Settle(60),
+    Capture("01-two-rings-center-start"),
+    ClickAnchor(name: "confluence_overlook", expected: (q: 0, r: 0, level: 18)),
+    AwaitPartyIdle(max_frames: 2400),
+    Settle(60),
+    Capture("02-two-rings-confluence-front"),
+    OrbitCamera(yaw_turns: 0.33333334),
+    Settle(45),
+    Capture("03-two-rings-confluence-side"),
+    ClickAnchor(name: "waterfall_b_fall_overlook", expected: (q: -24, r: 4, level: 26)),
+    AwaitPartyIdle(max_frames: 3600),
+    Settle(60),
+    Capture("04-two-rings-waterfall-b"),
+    ClickAnchor(name: "mountain_waterfall_overlook", expected: (q: -24, r: -13, level: 20)),
+    AwaitPartyIdle(max_frames: 3600),
+    Settle(60),
+    OrbitCamera(yaw_turns: 0.33333334),
+    Settle(45),
+    Capture("05-two-rings-mountains-a"),
+    Key("Backspace"),
+    AwaitScreen("Title"),
+]

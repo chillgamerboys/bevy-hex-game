@@ -53,11 +53,21 @@ names the stalled step or black frame. NEVER run while the operator has a
 game instance open (the two windows fight for nothing, but the operator's
 session must not be disturbed — check first).
 
+Each `Capture` owns a fresh shared 3D/UI image target and waits two complete render
+frames before screenshotting. The tooling UI camera tracks the 3D camera's MSAA so
+OIT tree fading cannot leave world pixels stale while UI pixels continue updating.
+Identical frames across movement or orbit are therefore a mechanical failure unless
+the script explicitly establishes that no visible state should change.
+
 A walk drives the REAL binary through the REAL wiring: named UI clicks are injected
 as `Interaction::Pressed`; `ClickTile` emits the ordinary primary `Pointer<Click>`
-after resolving one exact exposed surface; keys go through `ButtonInput`; and scenario
-launches use the same bypass as map-review. If a script's click target was renamed,
-fix the script in the same PR — scripts are part of the UI's contract now.
+after resolving one exact exposed surface; `ClickAnchor` first checks the published
+anchor against its authored exact position and then emits that same pointer click;
+`OrbitCamera` uses bounded cursor messages while the ordinary right mouse button is
+held; keys go through `ButtonInput`; and scenario launches use the same bypass as
+map-review. Route scripts may not mutate camera/unit state, teleport, suppress combat,
+or fake flight reachability. If a script's click target or anchor moved, fix and
+re-review the script in the same PR — scripts are part of the UI's contract now.
 
 ## Step 2 — Read every frame
 

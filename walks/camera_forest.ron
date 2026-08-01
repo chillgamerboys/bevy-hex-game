@@ -1,0 +1,23 @@
+// Real Character movement from the Forest actor anchor into its protected clearing.
+[
+    AwaitScreen("Title"),
+    StartScenario(name: "Forest", seed: Some(381654729)),
+    AwaitScreen("Gameplay"),
+    AwaitTerrain,
+    Key("H"),
+    Key("C"),
+    Settle(45),
+    Capture("01-forest-character-start"),
+    ClickAnchor(name: "forest_clearing", expected: (q: 9, r: -6, level: 15)),
+    AwaitPartyIdle(max_frames: 1200),
+    Settle(45),
+    Capture("02-forest-clearing-front"),
+    OrbitCamera(yaw_turns: 0.33333334),
+    Settle(45),
+    Capture("03-forest-clearing-side"),
+    OrbitCamera(yaw_turns: 0.33333334),
+    Settle(45),
+    Capture("04-forest-clearing-rear"),
+    Key("Backspace"),
+    AwaitScreen("Title"),
+]

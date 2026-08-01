@@ -1,0 +1,23 @@
+// Real dry-route movement from the high landing to the fall overlook.
+[
+    AwaitScreen("Title"),
+    StartScenario(name: "Waterfall", seed: Some(771203419)),
+    AwaitScreen("Gameplay"),
+    AwaitTerrain,
+    Key("H"),
+    Key("C"),
+    Settle(45),
+    Capture("01-waterfall-character-start"),
+    ClickAnchor(name: "fall_overlook", expected: (q: -2, r: 4, level: 23)),
+    AwaitPartyIdle(max_frames: 1800),
+    Settle(60),
+    Capture("02-waterfall-fall-front"),
+    OrbitCamera(yaw_turns: 0.33333334),
+    Settle(45),
+    Capture("03-waterfall-fall-side"),
+    OrbitCamera(yaw_turns: 0.33333334),
+    Settle(45),
+    Capture("04-waterfall-fall-rear"),
+    Key("Backspace"),
+    AwaitScreen("Title"),
+]

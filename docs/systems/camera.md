@@ -101,5 +101,12 @@ whole-tree/material isolation, review-only roofs, and 100 gameplay lifecycles. A
 ignored release composition diagnostic generates the pinned shipped Two Rings
 scenario, builds and repeatedly rebuilds the camera index from its public
 `HexTile`/`TilePos`/`HexSpan` projection, and keeps steady Character collision below
-1 ms p95 across exact published anchors and six yaws. Rendered all-map traversal and
-human motion/readability review remain the final presentation gate.
+1 ms p95 across its exact published anchors and six yaws.
+
+The tracked route manifest pins all 15 selectable Map scenarios to their exact seed
+and representative stack-safe destinations. Executable multi-azimuth Character walks
+currently cover Forest, Deep Forest, Caves, Fort, Waterfall, Mountains, and the ordinary
+connected ground route through the center, Waterfall B, and Mountains A of Two Rings.
+The remaining eight map scripts, 16 Two Rings regions, flight-gated Sky Island
+surfaces, and human motion/readability review remain explicit presentation evidence;
+the harness does not invent movement capabilities to reach them.
