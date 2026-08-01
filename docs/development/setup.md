@@ -67,8 +67,9 @@ party, and a matching hostile party approaching from the opposite bank.
 | Input | Action |
 |---|---|
 | Right-mouse drag | Orbit the camera around its focus |
-| `W` `A` `S` `D` | Pan the camera |
+| `W` `A` `S` `D` | Pan the camera in Map mode |
 | Mouse wheel | Zoom |
+| `C` | Toggle Map / Character camera modes |
 | Hover a hex tile | Preview the reachable area and route |
 | Left-click a hex tile | Move the piece along that route |
 | Click a spell row, then a lit target | Aim a cast |

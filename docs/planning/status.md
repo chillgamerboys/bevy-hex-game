@@ -276,10 +276,11 @@ Around the game sits its own verification tooling. The Creator's **local lattice
 test** isolates the magic ruleset and shared lattice renderer from a full fight. A
 default-off
 **`visual-walk`** build drives the whole game through scripted RON walks — screens,
-clicks by `Name`, keys, scenario launches — photographing every step through an
-offscreen render target so an agent can read the frames; `/audit-pr` runs it as a
-mechanical gate. New Game reaches the 3v3 Party Trial in one click, while fixture walks
-launch Ability Lab and Raider Mirror by stable ID. The menus wear vendored
+named UI clicks, exact stack-safe terrain clicks, bounded party-idle waits, keys, and
+scenario launches — photographing every step through an offscreen render target so
+an agent can read the frames; `/audit-pr` runs it as a mechanical gate. New Game
+reaches the 3v3 Party Trial in one click, while fixture walks launch Ability Lab and
+Raider Mirror by stable ID. The menus wear vendored
 Cinzel/Inter type over a
 design-token widget set; scenarios carry optional per-scenario lighting, and cyclic
 time-of-day is available to those that opt in. The title screen shows the workspace
@@ -315,9 +316,21 @@ variants, a nonblocking grass tuft and snowy variant, cave moss and lichen, and 
 nonblocking emissive crystal silhouettes. Terrain substances, liquids, construction
 metal, and unit presentation resolve exact palette swatches. Forest and Deep Forest
 publish generated vegetation as shared `ObjectInstance`s while retaining exact
-rotated blockers and composable canopy cutaway; Prairie publishes nonblocking grass.
+rotated blockers and stack-safe tree roots. Character mode fades an entire obstructing
+tree through isolated per-tree material clones; authored canopy masks remain art
+metadata. Prairie publishes nonblocking grass.
 Caves publishes authored crystal `ObjectInstance`s with presentation-only
 point-light children at its gameplay-light sites.
+
+Character camera mode keeps player-authored yaw and desired zoom while a conservative
+probe retracts against the public stacked-terrain projection and, only when necessary,
+searches upward first, then toward the horizon for low-ceiling clearance. Distance and
+pitch restore smoothly. Ordinary
+gameplay keeps cave roofs intact, while explicit map-review capture may still request a
+complete interior cutaway. Automated geometry, lifecycle, idle-churn, and release
+performance gates are live; dynamic multi-azimuth traversal of every selectable map
+and final human motion/readability approval remain pending. Map mode remains available
+without a scenario restriction.
 
 ## What is provisional
 

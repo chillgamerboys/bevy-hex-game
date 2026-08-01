@@ -74,7 +74,8 @@ freezes liquid presentation there; captures default to `0.0`, while launches wit
 capture keep live animation. `HEX_REVIEW_FOCUS_ANCHOR` relocates the selected actor to
 an exact generated anchor before framing and requires a capture.
 `HEX_REVIEW_CUTAWAY=full` exposes the selected cave interior for a review overview
-while ordinary gameplay keeps its local six-hex opening; it also requires a capture.
+while ordinary gameplay keeps every cave roof opaque and collision-active; it also
+requires a capture.
 `HEX_REVIEW_ILLUMINATION=overlay` adds exact Dark, Dim, and Bright cave-interior
 gameplay-tier caps to a capture without changing physical lighting, perception, fog,
 or picking.
@@ -87,9 +88,10 @@ the tool.
 ### Scripted visual walks
 
 The sibling default-off `visual-walk` feature drives the whole game through a RON
-step list — screens, button clicks by `Name`, keys, scenario launches — and
-photographs each step, so an agent can *look* at the frames (`/visual-walk` in the
-skill pipeline reads them; audit-pr runs it as Step 2.5):
+step list — screens, named UI buttons, exact stack-safe tile clicks, bounded party
+movement waits, keys, and scenario launches — and photographs each step, so an agent
+can *look* at the frames (`/visual-walk` in the skill pipeline reads them; audit-pr
+runs it as Step 2.5):
 
 ```sh
 HEX_WALK_SCRIPT=walks/gameplay_ui.ron \

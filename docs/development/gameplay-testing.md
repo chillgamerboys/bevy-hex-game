@@ -50,6 +50,17 @@ targets stay in the residual gate. The three packages set `autotests = false` an
 declare their integration targets explicitly, so adding a helper file cannot silently
 create a new expensive binary or escape its concern selector.
 
+## Scripted movement steps
+
+The default-off `visual-walk` runner may exercise ordinary map movement without a
+gameplay bypass. `ClickTile(q, r)` is valid only when that coordinate has exactly one
+exposed (`Headroom > 0`) surface. A stacked coordinate must use
+`ClickTile(q, r, level: Some(level))`; missing or duplicate exact surfaces fail the
+walk. `AwaitPartyIdle(max_frames)` waits on public party, registry, command-queue,
+`Busy`, and `MovingTo` facts. Its bound must be positive and exhaustion is a failing
+exit. These steps provide route evidence only when a map owner has authored and
+validated the waypoint sequence; a capture-only script is not a traversal test.
+
 ## Scope selection
 
 The concern filter is not the Cargo selector. Cargo packages, targets, and features
