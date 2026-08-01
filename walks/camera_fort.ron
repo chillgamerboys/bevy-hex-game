@@ -14,10 +14,12 @@
     AssertSelectedAt(expected: (q: 8, r: -4, level: 15)),
     Settle(45),
     Capture("02-fort-east-gate-front"),
-    OrbitCamera(yaw_turns: 0.33333334),
+    // Stay outside the curtain wall while reviewing both sides of the gate.
+    // The old ±120° eye positions are physically inside the wall shoulders.
+    OrbitCamera(yaw_turns: 0.16666667),
     Settle(45),
     Capture("03-fort-east-gate-side"),
-    OrbitCamera(yaw_turns: 0.33333334),
+    OrbitCamera(yaw_turns: -0.33333334),
     Settle(45),
     Capture("04-fort-east-gate-rear"),
     Key("Backspace"),

@@ -33,10 +33,12 @@ an independent effective radius, desired rotation, and effective pitch:
 2. Retract immediately before the first expanded public hex prism, retaining the
    configured collision margin.
 3. If same-yaw retraction falls below the configured preferred minimum radius, test
-   progressively higher pitches. The first pitch that restores that minimum wins;
-   if none succeeds, test back toward the horizon so low cave ceilings can retain a
-   readable radius. Otherwise the best true clearance wins. Obstructions that leave
-   the preferred minimum intact retract without an automatic pitch change.
+   the complete bounded set of progressively higher pitches, then test back toward
+   the horizon so low cave ceilings can retain a readable radius. The pitch with the
+   greatest true clearance wins; equal clearances prefer the smallest deviation from
+   the player-authored pitch, with the upward-first search order as the final stable
+   tie-break. Obstructions that leave the preferred minimum intact retract without an
+   automatic pitch change.
 4. Restore radius and pitch smoothly after clearance, settling exactly inside small
    hysteresis bands.
 
@@ -119,4 +121,7 @@ the direct route legitimately enters combat; it never suppresses that combat.
 Standalone and Two Rings upper Sky Island surfaces remain flight-gated, so the
 evidence proves only their grounded bridges. Human motion/readability review remains
 an explicit presentation gate; the harness does not invent movement capabilities or
-treat static frames as play-feel approval.
+treat static frames as play-feel approval. Review cards use route-readable open-side
+azimuths; deliberately blocked yaws remain collision/yaw-preservation test cases and
+must be swept during the human gate to confirm immediate safe retraction and smooth
+recovery after the player rotates clear.

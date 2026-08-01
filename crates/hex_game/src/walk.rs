@@ -1690,6 +1690,88 @@ mod tests {
     }
 
     #[test]
+    fn obstructed_route_cards_use_explicit_open_side_azimuths() {
+        let manifest: CameraRouteManifest =
+            ron::from_str(include_str!("../../../walks/camera_routes.ron"))
+                .expect("the camera route manifest parses");
+        let expected_manifest = [
+            ("Mountains", "stream overlook", vec![0.0, -1.0 / 6.0]),
+            ("Mountains", "low bypass", vec![-1.0 / 3.0]),
+            (
+                "Waterfall",
+                "fall overlook",
+                vec![0.0, -1.0 / 6.0, -1.0 / 3.0],
+            ),
+            (
+                "Fort",
+                "east gate approach",
+                vec![0.0, 1.0 / 6.0, -1.0 / 6.0],
+            ),
+            ("Two Rings", "central confluence", vec![0.0, 1.0 / 6.0]),
+            ("Two Rings", "waterfall B", vec![1.0 / 6.0, -1.0 / 6.0]),
+            (
+                "Two Rings",
+                "mountains A water",
+                vec![-1.0 / 6.0, -1.0 / 12.0],
+            ),
+            ("Two Rings", "mountains B pass", vec![1.0 / 3.0, -1.0 / 3.0]),
+            ("Two Rings", "mountains C stream", vec![0.0, -1.0 / 6.0]),
+            ("Two Rings", "frozen bridge", vec![0.0, 1.0 / 3.0]),
+        ];
+        for (scenario, label, expected) in expected_manifest {
+            let actual = manifest
+                .routes
+                .iter()
+                .find(|route| route.scenario == scenario)
+                .and_then(|route| route.points.iter().find(|point| point.label == label))
+                .unwrap_or_else(|| panic!("missing {scenario:?} route point {label:?}"));
+            assert_eq!(actual.azimuth_turns, expected, "{scenario} {label}");
+        }
+
+        let expected_gestures = [
+            (
+                "../../walks/camera_mountains.ron",
+                vec![-1.0 / 6.0, 1.0 / 6.0, -1.0 / 3.0],
+            ),
+            (
+                "../../walks/camera_waterfall.ron",
+                vec![-1.0 / 6.0, -1.0 / 6.0],
+            ),
+            ("../../walks/camera_fort.ron", vec![1.0 / 6.0, -1.0 / 3.0]),
+            (
+                "../../walks/camera_two_rings.ron",
+                vec![1.0 / 6.0, -1.0 / 3.0, 1.0 / 12.0],
+            ),
+            (
+                "../../walks/camera_two_rings_mountains.ron",
+                vec![
+                    1.0 / 3.0,
+                    1.0 / 3.0,
+                    1.0 / 3.0,
+                    -1.0 / 6.0,
+                    1.0 / 6.0,
+                    1.0 / 3.0,
+                ],
+            ),
+        ];
+        for (script_path, expected) in expected_gestures {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(script_path);
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
+            let steps: Vec<WalkStep> = ron::from_str(&text)
+                .unwrap_or_else(|error| panic!("cannot parse {}: {error}", path.display()));
+            let actual = steps
+                .iter()
+                .filter_map(|step| match step {
+                    WalkStep::OrbitCamera { yaw_turns, .. } => Some(*yaw_turns),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected, "{}", path.display());
+        }
+    }
+
+    #[test]
     fn critical_camera_scripts_use_only_manifested_real_movement_destinations() {
         let manifest: CameraRouteManifest =
             ron::from_str(include_str!("../../../walks/camera_routes.ron"))

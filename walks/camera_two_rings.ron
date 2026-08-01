@@ -15,7 +15,9 @@
     AssertSelectedAt(expected: (q: 0, r: 0, level: 18)),
     Settle(60),
     Capture("02-two-rings-confluence-front"),
-    OrbitCamera(yaw_turns: 0.33333334),
+    // Carry +60° into Waterfall B, then cross to -60°. These open-side
+    // obliques keep the fall and Mountains A handoff visible without clipping.
+    OrbitCamera(yaw_turns: 0.16666667),
     Settle(45),
     Capture("03-two-rings-confluence-side"),
     ClickAnchor(name: "waterfall_b_fall_overlook", expected: (q: -24, r: 4, level: 26)),
@@ -31,7 +33,9 @@
     AssertSelectedAt(expected: (q: -24, r: -13, level: 20)),
     Settle(60),
     Capture("06-two-rings-mountains-a-front"),
-    OrbitCamera(yaw_turns: 0.33333334),
+    // Nudge toward the second open-side oblique instead of crossing through the
+    // massif. Wider turns at this ledge correctly force a safety retraction.
+    OrbitCamera(yaw_turns: 0.083333336),
     Settle(45),
     Capture("07-two-rings-mountains-a-side"),
     Key("Backspace"),

@@ -5,6 +5,8 @@
 // the walk must fail until its new view has been reviewed. Authored destinations use
 // Exact. Sky Islands deliberately names only its ordinary ground bridge; the upper
 // surfaces remain flight-gated and are not fake-walked by this manifest.
+// `azimuth_turns` are absolute offsets from the scenario's authored launch yaw;
+// executable `OrbitCamera` gestures are relative and cumulative.
 (
     schema_version: 1,
     routes: [
@@ -57,8 +59,8 @@
             scenario: "Mountains",
             seed: Some(129704046),
             points: [
-                (label: "stream overlook", destination: Anchor(name: "stream_fall_overlook", expected: (q: -11, r: 9, level: 19)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
-                (label: "low bypass", destination: Anchor(name: "low_bypass", expected: (q: -12, r: 6, level: 19)), azimuth_turns: [0.0, 0.33333334]),
+                (label: "stream overlook", destination: Anchor(name: "stream_fall_overlook", expected: (q: -11, r: 9, level: 19)), azimuth_turns: [0.0, -0.16666667]),
+                (label: "low bypass", destination: Anchor(name: "low_bypass", expected: (q: -12, r: 6, level: 19)), azimuth_turns: [-0.33333334]),
                 (label: "high pass", destination: Anchor(name: "high_pass", expected: (q: 6, r: 0, level: 31)), azimuth_turns: [0.0, -0.33333334]),
             ],
         ),
@@ -74,7 +76,7 @@
             scenario: "Waterfall",
             seed: Some(771203419),
             points: [
-                (label: "fall overlook", destination: Anchor(name: "fall_overlook", expected: (q: -2, r: 4, level: 23)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
+                (label: "fall overlook", destination: Anchor(name: "fall_overlook", expected: (q: -2, r: 4, level: 23)), azimuth_turns: [0.0, -0.16666667, -0.33333334]),
                 (label: "basin overlook", destination: Anchor(name: "basin_overlook", expected: (q: 4, r: 4, level: 18)), azimuth_turns: [0.0, 0.33333334]),
             ],
         ),
@@ -104,7 +106,7 @@
             scenario: "Fort",
             seed: Some(640367719),
             points: [
-                (label: "east gate approach", destination: Exact((q: 8, r: -4, level: 15)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
+                (label: "east gate approach", destination: Exact((q: 8, r: -4, level: 15)), azimuth_turns: [0.0, 0.16666667, -0.16666667]),
                 (label: "courtyard", destination: Anchor(name: "fort_courtyard", expected: (q: 0, r: 0, level: 15)), azimuth_turns: [0.0, 0.33333334]),
                 (label: "wall walk", destination: Anchor(name: "fort_wall_walk", expected: (q: -7, r: 2, level: 20)), azimuth_turns: [0.0, -0.33333334]),
             ],
@@ -122,12 +124,12 @@
             scenario: "Two Rings",
             seed: Some(1592598566),
             points: [
-                (label: "central confluence", destination: Anchor(name: "confluence_overlook", expected: (q: 0, r: 0, level: 18)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
-                (label: "frozen bridge", destination: Anchor(name: "frozen_hills_bridge", expected: (q: 22, r: -22, level: 18)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
+                (label: "central confluence", destination: Anchor(name: "confluence_overlook", expected: (q: 0, r: 0, level: 18)), azimuth_turns: [0.0, 0.16666667]),
+                (label: "frozen bridge", destination: Anchor(name: "frozen_hills_bridge", expected: (q: 22, r: -22, level: 18)), azimuth_turns: [0.0, 0.33333334]),
                 (label: "forest A gradient", destination: Anchor(name: "vegetation_gradient_overlook", expected: (q: 19, r: 6, level: 15)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
                 (label: "prairie A", destination: Anchor(name: "prairie_a_prairie_overlook", expected: (q: 0, r: 22, level: 17)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
                 (label: "downstream bridge", destination: Anchor(name: "hills_downstream_bridge", expected: (q: -22, r: 22, level: 18)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
-                (label: "waterfall B", destination: Anchor(name: "waterfall_b_fall_overlook", expected: (q: -24, r: 4, level: 26)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
+                (label: "waterfall B", destination: Anchor(name: "waterfall_b_fall_overlook", expected: (q: -24, r: 4, level: 26)), azimuth_turns: [0.16666667, -0.16666667]),
                 (label: "waterfall A", destination: Anchor(name: "waterfall_a_fall_overlook", expected: (q: -4, r: -20, level: 26)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
                 (label: "sky-island ground bridge", destination: Anchor(name: "sky_islands_bridge", expected: (q: 48, r: -48, level: 18)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
                 (label: "deep forest A", destination: Anchor(name: "deep_forest_a_deep_forest_clearing", expected: (q: 39, r: -27, level: 16)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
@@ -138,9 +140,9 @@
                 (label: "fort courtyard", destination: Anchor(name: "fort_fort_courtyard", expected: (q: -45, r: 44, level: 17)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
                 (label: "cave root", destination: Anchor(name: "caves_conflict_center", expected: (q: -44, r: 22, level: 9)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
                 (label: "volcano bridge", destination: Anchor(name: "volcano_bridge", expected: (q: -44, r: 0, level: 18)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
-                (label: "mountains A water", destination: Anchor(name: "mountain_waterfall_overlook", expected: (q: -24, r: -13, level: 20)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
-                (label: "mountains B pass", destination: Anchor(name: "mountains_b_high_pass", expected: (q: 10, r: -55, level: 21)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
-                (label: "mountains C stream", destination: Anchor(name: "mountains_c_stream_fall_overlook", expected: (q: 19, r: -51, level: 20)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
+                (label: "mountains A water", destination: Anchor(name: "mountain_waterfall_overlook", expected: (q: -24, r: -13, level: 20)), azimuth_turns: [-0.16666667, -0.083333336]),
+                (label: "mountains B pass", destination: Anchor(name: "mountains_b_high_pass", expected: (q: 10, r: -55, level: 21)), azimuth_turns: [0.33333334, -0.33333334]),
+                (label: "mountains C stream", destination: Anchor(name: "mountains_c_stream_fall_overlook", expected: (q: 19, r: -51, level: 20)), azimuth_turns: [0.0, -0.16666667]),
             ],
         ),
     ],

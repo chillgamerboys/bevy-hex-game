@@ -227,6 +227,41 @@ struct CharacterCameraPath {
     pitch: f32,
 }
 
+/// Deterministic best-clearance accumulator for one bounded same-yaw pitch search.
+struct CharacterCameraPathSearch {
+    desired_pitch: f32,
+    best: CharacterCameraPath,
+    best_radius: f32,
+}
+
+impl CharacterCameraPathSearch {
+    fn new(desired_pitch: f32, initial_radius: f32) -> Self {
+        Self {
+            desired_pitch,
+            best: CharacterCameraPath {
+                pitch: desired_pitch,
+            },
+            best_radius: initial_radius,
+        }
+    }
+
+    fn retain(&mut self, candidate: CharacterCameraPath, radius: f32) {
+        let radius_order = radius.total_cmp(&self.best_radius);
+        let candidate_offset = (candidate.pitch - self.desired_pitch).abs();
+        let best_offset = (self.best.pitch - self.desired_pitch).abs();
+        if radius_order.is_gt()
+            || (radius_order.is_eq() && candidate_offset.total_cmp(&best_offset).is_lt())
+        {
+            self.best = candidate;
+            self.best_radius = radius;
+        }
+    }
+
+    fn finish(self) -> CharacterCameraPath {
+        self.best
+    }
+}
+
 /// Spawn the game camera and the procedural sky dome.
 fn spawn_camera(
     mut commands: Commands,
@@ -613,17 +648,22 @@ impl CameraObstructionIndex {
             probe_radius,
             margin,
         );
-        let mut best = CharacterCameraPath {
+        let direct = CharacterCameraPath {
             pitch: desired_pitch,
         };
-        let mut best_radius = current.radius;
         if !current.obstructed
             || current.radius >= preferred_minimum_radius
             || direction.length_squared() <= f32::EPSILON
         {
-            return best;
+            return direct;
         }
-        let target_radius = preferred_minimum_radius;
+        // The minimum radius decides when adaptation is necessary; it is not the
+        // search objective. Returning the first sample that merely crossed that
+        // threshold could leave the camera pressed against the selected unit even
+        // when a slightly different same-yaw pitch restored the complete boom.
+        // Compare the complete bounded search instead, maximizing honest clearance
+        // and using the smallest authored-pitch deviation as a deterministic tie.
+        let mut search = CharacterCameraPathSearch::new(desired_pitch, current.radius);
 
         let maximum_pitch = adaptive_max_pitch.max(desired_pitch);
         let upward_range = maximum_pitch - desired_pitch;
@@ -649,13 +689,7 @@ impl CameraObstructionIndex {
                     margin,
                 );
                 let candidate = CharacterCameraPath { pitch };
-                if clearance.radius >= target_radius {
-                    return candidate;
-                }
-                if clearance.radius > best_radius {
-                    best = candidate;
-                    best_radius = clearance.radius;
-                }
+                search.retain(candidate, clearance.radius);
                 if pitch >= maximum_pitch {
                     break;
                 }
@@ -664,8 +698,9 @@ impl CameraObstructionIndex {
         }
 
         // Raising the eye clears walls and nearby vegetation, but it is the wrong
-        // response beneath a low roof. If no upward sample restores the preferred
-        // radius, search back toward the horizon at the same player-authored yaw.
+        // response beneath a low roof. Include the bounded search back toward the
+        // horizon so its true clearance competes with every upward sample at the
+        // same player-authored yaw.
         let minimum_pitch = adaptive_min_pitch.min(desired_pitch);
         let downward_range = desired_pitch - minimum_pitch;
         if downward_range > f32::EPSILON {
@@ -690,20 +725,14 @@ impl CameraObstructionIndex {
                     margin,
                 );
                 let candidate = CharacterCameraPath { pitch };
-                if clearance.radius >= target_radius {
-                    return candidate;
-                }
-                if clearance.radius > best_radius {
-                    best = candidate;
-                    best_radius = clearance.radius;
-                }
+                search.retain(candidate, clearance.radius);
                 if pitch <= minimum_pitch {
                     break;
                 }
                 pitch = (pitch - bounded_step).max(minimum_pitch);
             }
         }
-        best
+        search.finish()
     }
 
     fn safe_radius(
@@ -1974,6 +2003,136 @@ mod tests {
     }
 
     #[test]
+    fn pitch_search_keeps_a_later_full_clearance_over_the_first_usable_sample() {
+        let desired_pitch = 0.3;
+        let mut search = CharacterCameraPathSearch::new(desired_pitch, 0.202_f32);
+
+        search.retain(CharacterCameraPath { pitch: 0.45 }, 1.987);
+        search.retain(CharacterCameraPath { pitch: 0.55 }, 7.0);
+
+        assert!((search.finish().pitch - 0.55).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn two_obstructions_keep_searching_until_the_complete_boom_is_clear() {
+        let support = TilePos::new(hex_core::HexCoord::ORIGIN, 18);
+        let focus = Vec3::new(0.0, 8.0, 0.0);
+        let near = hex_core::HexCoord::from_axial(-1, 0);
+        let far = hex_core::HexCoord::from_axial(-2, 1);
+        let index = CameraObstructionIndex {
+            spans_by_coord: BTreeMap::from([
+                (
+                    near,
+                    vec![IndexedCameraSpan {
+                        position: TilePos::new(near, 19),
+                        span: HexSpan::new(5.6, 8.0),
+                    }],
+                ),
+                (
+                    far,
+                    vec![IndexedCameraSpan {
+                        position: TilePos::new(far, 23),
+                        span: HexSpan::new(7.6, 9.6),
+                    }],
+                ),
+            ]),
+            initialized: true,
+            rebuilds: 1,
+        };
+        let yaw = 5.036_368_f32;
+        let horizontal = Vec3::new(yaw.sin(), 0.0, yaw.cos());
+        let desired = rotation_facing(horizontal, 0.3);
+        let first_usable = index.safe_radius(
+            focus,
+            support,
+            rotation_with_pitch(desired, 0.45) * Vec3::Z,
+            7.0,
+            0.4,
+            0.35,
+        );
+        let full_clearance = index.safe_radius(
+            focus,
+            support,
+            rotation_with_pitch(desired, 0.55) * Vec3::Z,
+            7.0,
+            0.4,
+            0.35,
+        );
+
+        assert!(first_usable.radius >= 1.5 && first_usable.radius < 7.0);
+        assert!((full_clearance.radius - 7.0).abs() < f32::EPSILON);
+
+        let path = index.character_path(
+            focus, support, desired, 7.0, 0.4, 0.35, 1.5, 0.05, 0.75, 0.05,
+        );
+        assert!((path.pitch - 0.55).abs() < 1e-5);
+    }
+
+    #[test]
+    fn equal_clearance_prefers_the_nearest_pitch_then_retains_search_order() {
+        let desired_pitch = 0.3;
+        let mut search = CharacterCameraPathSearch::new(desired_pitch, 0.2);
+
+        search.retain(CharacterCameraPath { pitch: 0.55 }, 7.0);
+        search.retain(CharacterCameraPath { pitch: 0.05 }, 7.0);
+        assert!(
+            (search.best.pitch - 0.55).abs() < f32::EPSILON,
+            "equal opposite offsets retain the upward-first bounded search order"
+        );
+
+        search.retain(CharacterCameraPath { pitch: 0.1 }, 7.0);
+        assert!((search.finish().pitch - 0.1).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn low_roof_search_continues_past_a_barely_usable_downward_pitch() {
+        let support = TilePos::new(hex_core::HexCoord::ORIGIN, 6);
+        let focus = Vec3::new(0.0, 3.2, 0.0);
+        let roof = (0..=2)
+            .map(|q| {
+                let coord = hex_core::HexCoord::from_axial(q, 0);
+                (
+                    coord,
+                    vec![IndexedCameraSpan {
+                        position: TilePos::new(coord, 16),
+                        span: HexSpan::new(4.4, 6.8),
+                    }],
+                )
+            })
+            .collect();
+        let index = CameraObstructionIndex {
+            spans_by_coord: roof,
+            initialized: true,
+            rebuilds: 1,
+        };
+        let desired = rotation_facing(Vec3::X, 0.3);
+        let first_usable = index.safe_radius(
+            focus,
+            support,
+            rotation_with_pitch(desired, 0.25) * Vec3::Z,
+            7.0,
+            0.4,
+            0.35,
+        );
+        let full_clearance = index.safe_radius(
+            focus,
+            support,
+            rotation_with_pitch(desired, 0.1) * Vec3::Z,
+            7.0,
+            0.4,
+            0.35,
+        );
+
+        assert!(first_usable.radius >= 1.5 && first_usable.radius < 7.0);
+        assert!((full_clearance.radius - 7.0).abs() < f32::EPSILON);
+
+        let path = index.character_path(
+            focus, support, desired, 7.0, 0.4, 0.35, 1.5, 0.05, 0.75, 0.05,
+        );
+        assert!((path.pitch - 0.1).abs() < 1e-5);
+    }
+
+    #[test]
     fn obstructed_path_preserves_yaw_and_searches_upward() {
         let obstruction_coord = hex_core::HexCoord::from_axial(0, 1);
         let direction = obstruction_coord.to_world(0.0).normalize();
@@ -2011,6 +2170,10 @@ mod tests {
         let clearance =
             index.safe_radius(Vec3::Y, TilePos::ORIGIN, resolved * Vec3::Z, 7.0, 0.4, 0.35);
         assert!(clearance.radius >= 1.5);
+        assert!(
+            (clearance.radius - 7.0).abs() < f32::EPSILON,
+            "adaptive pitch must keep searching after the first barely usable clearance"
+        );
     }
 
     #[test]
