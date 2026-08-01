@@ -104,9 +104,9 @@ scenario, builds and repeatedly rebuilds the camera index from its public
 1 ms p95 across its exact published anchors and six yaws.
 
 The tracked route manifest pins all 15 selectable Map scenarios to their exact seed
-and representative stack-safe destinations. Executable multi-azimuth Character walks
-currently cover Forest, Deep Forest, Caves, Fort, Waterfall, Mountains, and the ordinary
-connected ground route through the center, Waterfall B, and Mountains A of Two Rings.
-The remaining eight map scripts, 16 Two Rings regions, flight-gated Sky Island
-surfaces, and human motion/readability review remain explicit presentation evidence;
-the harness does not invent movement capabilities to reach them.
+and representative stack-safe destinations. Every selectable Map has an executable
+multi-azimuth Character walk using ordinary pointer movement and bounded party-idle
+waiting. Sky Islands exercises only its reachable ordinary ground bridge; the harness
+does not invent flight to reach its upper surfaces. Sixteen additional Two Rings
+region routes and human motion/readability review remain explicit presentation
+evidence.

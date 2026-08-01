@@ -1255,12 +1255,23 @@ mod tests {
     use super::*;
 
     const CAMERA_ROUTE_SCRIPTS: &[(&str, &str)] = &[
+        ("../../walks/camera_crossing.ron", "The Crossing"),
+        (
+            "../../walks/camera_procedural_hills.ron",
+            "Procedural Hills",
+        ),
+        ("../../walks/camera_rolling_hills.ron", "Rolling Hills"),
+        ("../../walks/camera_frozen_hills.ron", "Frozen Hills"),
+        ("../../walks/camera_volcanic_hills.ron", "Volcanic Hills"),
+        ("../../walks/camera_sky_islands.ron", "Sky Islands"),
+        ("../../walks/camera_mountains.ron", "Mountains"),
+        ("../../walks/camera_caves.ron", "Caves"),
+        ("../../walks/camera_waterfall.ron", "Waterfall"),
         ("../../walks/camera_forest.ron", "Forest"),
         ("../../walks/camera_deep_forest.ron", "Deep Forest"),
-        ("../../walks/camera_caves.ron", "Caves"),
+        ("../../walks/camera_prairie.ron", "Prairie"),
         ("../../walks/camera_fort.ron", "Fort"),
-        ("../../walks/camera_waterfall.ron", "Waterfall"),
-        ("../../walks/camera_mountains.ron", "Mountains"),
+        ("../../walks/camera_seven_regions.ron", "Seven Regions"),
         ("../../walks/camera_two_rings.ron", "Two Rings"),
     ];
 
@@ -1599,6 +1610,24 @@ mod tests {
         let manifest: CameraRouteManifest =
             ron::from_str(include_str!("../../../walks/camera_routes.ron"))
                 .expect("the camera route manifest parses");
+        let scripted_scenarios = CAMERA_ROUTE_SCRIPTS
+            .iter()
+            .map(|(_, scenario)| *scenario)
+            .collect::<std::collections::BTreeSet<_>>();
+        let manifested_scenarios = manifest
+            .routes
+            .iter()
+            .map(|route| route.scenario.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            CAMERA_ROUTE_SCRIPTS.len(),
+            scripted_scenarios.len(),
+            "camera script scenarios repeat"
+        );
+        assert_eq!(
+            scripted_scenarios, manifested_scenarios,
+            "every manifested Map needs exactly one executable camera script"
+        );
         for &(script_path, scenario_name) in CAMERA_ROUTE_SCRIPTS {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(script_path);
             let text = std::fs::read_to_string(&path)

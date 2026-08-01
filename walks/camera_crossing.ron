@@ -1,0 +1,23 @@
+// Real Character movement from the western approach onto the authored bridge deck.
+[
+    AwaitScreen("Title"),
+    StartScenario(name: "The Crossing", seed: None),
+    AwaitScreen("Gameplay"),
+    AwaitTerrain,
+    Key("H"),
+    Key("C"),
+    Settle(45),
+    Capture("01-crossing-character-start"),
+    ClickTile(q: 0, r: 0, level: Some(16)),
+    AwaitPartyIdle(max_frames: 1200),
+    Settle(45),
+    Capture("02-crossing-bridge-front"),
+    OrbitCamera(yaw_turns: 0.33333334),
+    Settle(45),
+    Capture("03-crossing-bridge-side"),
+    OrbitCamera(yaw_turns: 0.33333334),
+    Settle(45),
+    Capture("04-crossing-bridge-rear"),
+    Key("Backspace"),
+    AwaitScreen("Title"),
+]
