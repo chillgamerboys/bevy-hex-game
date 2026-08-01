@@ -2908,21 +2908,46 @@ pub mod test_support {
                 end.fully_visible,
                 "the final drawer action must be usable: {end:?}"
             );
-            let drawer = snapshot
+            let _drawer = snapshot
                 .nodes
                 .iter()
                 .find(|node| node.name == "Combat Lab Live Statistics Drawer")
                 .and_then(|node| node.visible_bounds)
                 .expect("the expanded statistics drawer must be visible");
-            let own_lattice = snapshot
+            assert!(
+                snapshot
+                    .nodes
+                    .iter()
+                    .all(|node| node.name != "Own Lattice Panel"),
+                "the expanded drawer must be the inspector region's sole presentation owner"
+            );
+
+            app.world_mut()
+                .resource_mut::<crate::review::UiReviewPresentation>()
+                .statistics
+                .as_mut()
+                .expect("the fixture owns Lab statistics")
+                .expanded = false;
+            for _ in 0..8 {
+                app.update();
+            }
+            let collapsed = ui_tree_snapshot(app.world_mut());
+            let collapsed_drawer = collapsed
+                .nodes
+                .iter()
+                .find(|node| node.name == "Combat Lab Live Statistics Drawer")
+                .and_then(|node| node.visible_bounds)
+                .expect("the collapsed drawer controls remain visible");
+            let own_lattice = collapsed
                 .nodes
                 .iter()
                 .find(|node| node.name == "Own Lattice Panel")
                 .and_then(|node| node.visible_bounds)
-                .expect("the inspector lattice must remain structurally mounted beneath it");
+                .expect("collapsing statistics must restore the inspector lattice");
+            let overlap = collapsed_drawer.intersect(own_lattice);
             assert!(
-                rect_contains(drawer, own_lattice),
-                "the expanded drawer must fully replace the read-only inspector instead of partially overlapping it: drawer={drawer:?}, inspector={own_lattice:?}"
+                overlap.width() <= 0.5 || overlap.height() <= 0.5,
+                "collapsed controls must reserve space above the restored lattice: drawer={collapsed_drawer:?}, inspector={own_lattice:?}, overlap={overlap:?}"
             );
         }
 
@@ -3262,6 +3287,47 @@ pub mod test_support {
         }
 
         #[test]
+        fn combat_lab_statistics_and_lattice_have_one_inspector_owner_at_retina_size() {
+            let collapsed = gameplay_fixture_snapshot(
+                3024,
+                1964,
+                2.0,
+                crate::UiScaleMode::Auto,
+                "casting-list",
+            );
+            let bounds = |name: &str| {
+                collapsed
+                    .nodes
+                    .iter()
+                    .find(|node| node.name == name)
+                    .and_then(|node| node.visible_bounds)
+                    .unwrap_or_else(|| panic!("{name} must be visible in the collapsed Lab state"))
+            };
+            let drawer = bounds("Combat Lab Live Statistics Drawer");
+            let lattice = bounds("Lattice Readout Stack");
+            let overlap = drawer.intersect(lattice);
+            assert!(
+                overlap.width() <= 0.5 || overlap.height() <= 0.5,
+                "collapsed statistics must reserve inspector space above the lattice: drawer {drawer:?}, lattice {lattice:?}, overlap {overlap:?}"
+            );
+
+            let expanded = gameplay_fixture_snapshot(
+                3024,
+                1964,
+                2.0,
+                crate::UiScaleMode::Auto,
+                "live-statistics",
+            );
+            assert!(
+                expanded
+                    .nodes
+                    .iter()
+                    .all(|node| node.name != "Lattice Readout Stack"),
+                "expanded statistics must replace, rather than cover, the inspector lattice"
+            );
+        }
+
+        #[test]
         fn gameplay_presentation_states_pass_the_complete_structural_matrix() {
             for fixture in [
                 "normal-gameplay",
@@ -3290,6 +3356,40 @@ pub mod test_support {
                                 .filter(|node| node.name.contains("Action Rail"))
                                 .collect::<Vec<_>>()
                         );
+                        if fixture == "casting-list"
+                            && snapshot.metrics.viewport != crate::UiViewportClass::Compact
+                        {
+                            let surface = |name: &str| {
+                                snapshot
+                                    .nodes
+                                    .iter()
+                                    .find(|node| node.name == name)
+                                    .and_then(|node| node.visible_bounds)
+                                    .unwrap_or_else(|| {
+                                        panic!(
+                                            "{name} must be present for the collapsed inspector contract at {physical_size:?} / {scale_factor}× in {mode:?}"
+                                        )
+                                    })
+                            };
+                            let drawer = surface("Combat Lab Live Statistics Drawer");
+                            let lattice = surface("Lattice Readout Stack");
+                            let overlap = drawer.intersect(lattice);
+                            assert!(
+                                overlap.width() <= 0.5 || overlap.height() <= 0.5,
+                                "collapsed inspector surfaces overlap at {physical_size:?} / {scale_factor}× in {mode:?}: drawer={drawer:?}, lattice={lattice:?}, overlap={overlap:?}"
+                            );
+                        }
+                        if fixture == "live-statistics"
+                            && snapshot.metrics.viewport != crate::UiViewportClass::Compact
+                        {
+                            assert!(
+                                snapshot
+                                    .nodes
+                                    .iter()
+                                    .all(|node| node.name != "Lattice Readout Stack"),
+                                "expanded statistics must exclusively own the inspector at {physical_size:?} / {scale_factor}× in {mode:?}"
+                            );
+                        }
                     }
                 }
             }

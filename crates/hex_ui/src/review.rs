@@ -92,6 +92,7 @@ pub fn apply_ui_review_fixture(commands: &mut Commands, name: &str) -> Result<()
                 expanded: false,
                 text: "Round 4 · live Combat Lab totals".to_owned(),
             });
+            review.lattices = Some(readout_lattices());
         }
         "required-decision" => {
             review.hud = Some(required_hud());
@@ -150,6 +151,7 @@ pub fn apply_ui_review_fixture(commands: &mut Commands, name: &str) -> Result<()
         }
         "live-statistics" => {
             review.hud = Some(ordinary_hud());
+            review.lattices = Some(readout_lattices());
             review.statistics = Some(LabStatisticsView {
                 present: true,
                 visible: true,
@@ -401,6 +403,35 @@ fn decision_lattices() -> GameplayLatticesView {
                 owed: 3,
                 restoring: false,
             }),
+        }),
+        target: None,
+    }
+}
+
+#[cfg(any(feature = "visual-review", feature = "test-support"))]
+fn readout_lattices() -> GameplayLatticesView {
+    let cell = |q, r, label: &str, detail: &str, color| LatticeCellView {
+        coord: hex_core::LatticeCoord::new(q, r),
+        label: label.to_owned(),
+        detail: detail.to_owned(),
+        color,
+        known_mana: Some(3),
+        known_locked: Some(false),
+        disabled: false,
+        selected: false,
+        interaction: CellInteraction::ReadOnly,
+    };
+    GameplayLatticesView {
+        own: Some(OwnLatticeView {
+            heading: "selected ally".to_owned(),
+            identity: "Hedge Mage · Player".to_owned(),
+            cells: vec![
+                cell(0, 0, "FIRE", "3 / 3", Color::srgb(0.58, 0.15, 0.45)),
+                cell(1, 0, "LIGHT", "3 / 3", Color::srgb(0.12, 0.44, 0.49)),
+                cell(0, 1, "WATER", "2 / 2", Color::srgb(0.12, 0.48, 0.24)),
+                cell(-1, 1, "EMBER", "tier 1", Color::srgb(0.28, 0.30, 0.35)),
+            ],
+            decision: None,
         }),
         target: None,
     }

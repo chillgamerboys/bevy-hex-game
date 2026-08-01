@@ -165,7 +165,8 @@ fn apply_layout(
     mut drawers: Query<&mut Node, (With<Drawer>, Without<Body>)>,
     mut bodies: Query<(&mut Node, &mut Visibility), (With<Body>, Without<Drawer>)>,
 ) {
-    if !metrics.is_changed() && added.is_empty() {
+    let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
+    if !metrics.is_changed() && !view.is_changed() && !review_changed && added.is_empty() {
         return;
     }
     let expanded = review
@@ -255,6 +256,15 @@ fn apply_layout(
             }
         }
     }
+}
+
+/// Vertical space occupied by the two collapsed Lab controls plus a gutter.
+/// The inspector-region owner uses the same fact so a lattice never renders
+/// beneath an opaque drawer that happens to be collapsed.
+pub(crate) fn collapsed_drawer_clearance(metrics: ResolvedUiMetrics) -> f32 {
+    let control_scale = metrics.control_scale.max(1.0);
+    // Drawer padding (20) + two 48px controls + row gap (7) + surface gutter (8).
+    35.0 + 96.0 * control_scale
 }
 
 fn emit_intents(
