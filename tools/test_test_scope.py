@@ -1,9 +1,11 @@
-"""Tests for the fail-closed gameplay scope selector."""
+"""Tests for the fail-closed repository scope selector."""
 
 from __future__ import annotations
 
 import importlib.util
+import json
 import pathlib
+import subprocess
 import sys
 import tempfile
 import tomllib
@@ -11,24 +13,57 @@ import unittest
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-MODULE_PATH = ROOT / "tools" / "gameplay_scope.py"
-SPEC = importlib.util.spec_from_file_location("gameplay_scope", MODULE_PATH)
+MODULE_PATH = ROOT / "tools" / "test_scope.py"
+SPEC = importlib.util.spec_from_file_location("test_scope", MODULE_PATH)
 if SPEC is None or SPEC.loader is None:
-    raise RuntimeError("cannot load gameplay_scope")
-gameplay_scope = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = gameplay_scope
-SPEC.loader.exec_module(gameplay_scope)
+    raise RuntimeError("cannot load test_scope")
+test_scope = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = test_scope
+SPEC.loader.exec_module(test_scope)
 
 
-class GameplayScopeTests(unittest.TestCase):
+class TestScopeTests(unittest.TestCase):
     """The selector chooses the required concern closure and fails closed."""
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.config = gameplay_scope.load_config()
+        cls.config = test_scope.load_config()
 
     def classify(self, *paths: str):
-        return gameplay_scope.classify(paths, self.config)
+        return test_scope.classify(paths, self.config)
+
+    def assert_cli_rejects_config(self, config: dict, expected: str) -> None:
+        """Malformed manifests fail with a concise configuration error."""
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "test-scopes.json"
+            path.write_text(json.dumps(config), encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(MODULE_PATH),
+                    "--config",
+                    str(path),
+                    "plan",
+                    "--path",
+                    "README.md",
+                ],
+                cwd=ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(expected, result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def fresh_config(self) -> dict:
+        """Return an independent mutable copy of the checked-in manifest."""
+
+        return json.loads(
+            (ROOT / ".config" / "test-scopes.json").read_text(encoding="utf-8")
+        )
 
     def test_lattice_change_selects_rules_contracts_and_simulation(self) -> None:
         decision = self.classify("crates/hex_lattice/src/cast.rs")
@@ -96,8 +131,15 @@ class GameplayScopeTests(unittest.TestCase):
         self.assertFalse(decision.full)
         self.assertEqual(
             decision.concerns,
-            ("contracts", "app", "clippy", "docs"),
+            ("contracts", "app", "map_contracts", "clippy", "docs"),
         )
+
+    def test_neutral_app_harness_fails_closed_to_every_consumer(self) -> None:
+        decision = self.classify("crates/hex_test_app/src/lib.rs")
+
+        self.assertTrue(decision.full)
+        self.assertEqual(set(decision.concerns), set(self.config["all_concerns"]))
+        self.assertIn("shared-test-app", decision.matched_rules)
 
     def test_animation_change_keeps_its_inline_tests_in_residual(self) -> None:
         decision = self.classify("crates/hex_anim/src/lib.rs")
@@ -131,8 +173,46 @@ class GameplayScopeTests(unittest.TestCase):
         self.assertTrue(decision.full)
         self.assertEqual(decision.concerns, tuple(self.config["all_concerns"]))
 
-    def test_map_change_retains_full_owner_coverage(self) -> None:
+    def test_map_generation_selects_corpus_and_publication_contracts(self) -> None:
         decision = self.classify("crates/hex_map/src/procedural_v3/ring7.rs")
+        self.assertFalse(decision.full)
+        self.assertEqual(
+            decision.concerns,
+            ("map_generation", "map_contracts", "clippy", "docs", "shipping"),
+        )
+
+    def test_map_contract_test_change_is_narrow(self) -> None:
+        decision = self.classify(
+            "crates/hex_map/tests/contracts/publication.rs"
+        )
+        self.assertFalse(decision.full)
+        self.assertEqual(decision.concerns, ("map_contracts", "clippy"))
+
+    def test_map_publication_selects_unit_and_contract_evidence(self) -> None:
+        decision = self.classify("crates/hex_map/src/grid.rs")
+        self.assertFalse(decision.full)
+        self.assertEqual(
+            decision.concerns,
+            ("map_unit", "map_contracts", "clippy", "docs", "shipping"),
+        )
+
+    def test_map_foundation_selects_every_map_partition(self) -> None:
+        decision = self.classify("crates/hex_map/src/voxel.rs")
+        self.assertFalse(decision.full)
+        self.assertEqual(
+            decision.concerns,
+            (
+                "map_unit",
+                "map_generation",
+                "map_contracts",
+                "clippy",
+                "docs",
+                "shipping",
+            ),
+        )
+
+    def test_other_world_crate_retains_full_gate(self) -> None:
+        decision = self.classify("crates/hex_world/src/camera.rs")
         self.assertTrue(decision.full)
 
     def test_markdown_only_change_does_not_select_rust_code(self) -> None:
@@ -162,6 +242,41 @@ class GameplayScopeTests(unittest.TestCase):
         self.assertTrue(decision.full)
         self.assertTrue(decision.code)
 
+    def test_empty_command_arrays_are_rejected_without_a_traceback(self) -> None:
+        cases = (
+            (
+                lambda config: config["concerns"]["map_unit"].update(command=[]),
+                "concern map_unit command must be non-empty strings",
+            ),
+            (
+                lambda config: config["partition_checks"]["map"].update(
+                    full_command=[]
+                ),
+                "partition check map has invalid full_command",
+            ),
+            (
+                lambda config: config["partition_checks"]["map"].update(
+                    all_tests_command=[]
+                ),
+                "partition check map has invalid all_tests_command",
+            ),
+        )
+        for mutate, expected in cases:
+            with self.subTest(expected=expected):
+                config = self.fresh_config()
+                mutate(config)
+                self.assert_cli_rejects_config(config, expected)
+
+    def test_non_boolean_documentation_flag_is_rejected_without_a_traceback(
+        self,
+    ) -> None:
+        config = self.fresh_config()
+        config["rules"][-1]["documentation_only"] = "false"
+        self.assert_cli_rejects_config(
+            config,
+            "documentation_only must be a boolean",
+        )
+
     def test_mixed_diff_unions_concerns(self) -> None:
         decision = self.classify(
             "crates/hex_lattice/src/cast.rs",
@@ -181,13 +296,33 @@ class GameplayScopeTests(unittest.TestCase):
             ),
         )
 
+    def test_mixed_gameplay_and_map_diff_unions_owner_closures(self) -> None:
+        decision = self.classify(
+            "crates/hex_lattice/src/cast.rs",
+            "crates/hex_map/src/grid.rs",
+        )
+        self.assertFalse(decision.full)
+        self.assertEqual(
+            decision.concerns,
+            (
+                "rules",
+                "contracts",
+                "simulation",
+                "map_unit",
+                "map_contracts",
+                "clippy",
+                "docs",
+                "shipping",
+            ),
+        )
+
     def test_scope_infrastructure_change_runs_everything(self) -> None:
-        decision = self.classify(".config/gameplay-test-scopes.json")
+        decision = self.classify(".config/test-scopes.json")
         self.assertTrue(decision.full)
 
     def test_push_gate_promotes_a_narrow_decision_to_full(self) -> None:
         narrow = self.classify("crates/hex_lattice/src/cast.rs")
-        decision = gameplay_scope.force_full(narrow, self.config["all_concerns"])
+        decision = test_scope.force_full(narrow, self.config["all_concerns"])
         self.assertTrue(decision.full)
         self.assertTrue(decision.code)
         self.assertEqual(decision.concerns, tuple(self.config["all_concerns"]))
@@ -221,7 +356,11 @@ class GameplayScopeTests(unittest.TestCase):
         self.assertIn("--lib", command)
         self.assertIn("--test", command)
         self.assertEqual(command[command.index("--test") + 1], "gameplay_app")
-        self.assertIn("hex_game/test-support", command)
+        features = command[command.index("--features") + 1].split(",")
+        self.assertEqual(
+            set(features),
+            {"hex_game/test-support", "hex_ui/dev-tools"},
+        )
 
     def test_app_preflight_compiles_default_feature_library_tests(self) -> None:
         command = self.config["concerns"]["app"]["preflight_command"]
@@ -238,6 +377,43 @@ class GameplayScopeTests(unittest.TestCase):
                 "ci",
             ],
         )
+
+    def test_game_test_support_forwards_ui_test_support(self) -> None:
+        manifest = tomllib.loads(
+            (ROOT / "crates" / "hex_game" / "Cargo.toml").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertIn(
+            "hex_ui/test-support",
+            manifest["features"]["test-support"],
+        )
+
+    def test_map_commands_select_package_and_target_before_filters(self) -> None:
+        unit = self.config["concerns"]["map_unit"]["command"]
+        generation = self.config["concerns"]["map_generation"]["command"]
+        contracts = self.config["concerns"]["map_contracts"]["command"]
+        for command in (unit, generation, contracts):
+            self.assertNotIn("--workspace", command)
+            self.assertEqual(command[command.index("--package") + 1], "hex_map")
+        self.assertIn("--lib", unit)
+        self.assertIn("--lib", generation)
+        self.assertEqual(contracts[contracts.index("--test") + 1], "contracts")
+
+    def test_map_partition_contract_freezes_current_evidence(self) -> None:
+        partition = self.config["partition_checks"]["map"]
+        self.assertEqual(
+            partition["expected_counts"],
+            {"map_unit": 94, "map_generation": 384, "map_contracts": 61},
+        )
+        self.assertEqual(partition["expected_ignored"], 25)
+
+    def test_map_commands_share_the_optimized_test_profile(self) -> None:
+        for concern in ("map_unit", "map_generation", "map_contracts"):
+            command = self.config["concerns"][concern]["command"]
+            self.assertEqual(
+                command[command.index("--cargo-profile") + 1], "map-test"
+            )
 
     def test_hex_ui_manifest_enforces_the_presentation_dependency_ceiling(self) -> None:
         manifest = tomllib.loads(
@@ -277,17 +453,26 @@ class GameplayScopeTests(unittest.TestCase):
     def test_local_test_order_contains_only_test_concerns(self) -> None:
         self.assertEqual(
             self.config["local_test_order"],
-            ["rules", "contracts", "simulation", "app", "residual"],
+            [
+                "rules",
+                "contracts",
+                "simulation",
+                "app",
+                "map_unit",
+                "map_generation",
+                "map_contracts",
+                "residual",
+            ],
         )
 
     def test_repository_relative_paths_are_required(self) -> None:
-        with self.assertRaises(gameplay_scope.ScopeConfigurationError):
+        with self.assertRaises(test_scope.ScopeConfigurationError):
             self.classify("../outside")
 
     def test_artifact_output_creates_its_parent_directory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output = pathlib.Path(directory) / "nested" / "timing.json"
-            gameplay_scope.write_output(output, "{}\n")
+            test_scope.write_output(output, "{}\n")
             self.assertEqual(output.read_text(encoding="utf-8"), "{}\n")
 
     def test_manual_runtime_gate_tracks_the_screen_model_crate(self) -> None:
@@ -309,6 +494,27 @@ class GameplayScopeTests(unittest.TestCase):
         self.assertIn(
             "if: needs.changes.outputs.shipping == 'true'", shipping_jobs
         )
+
+    def test_map_ci_uses_canonical_partitions_not_workspace_filtering(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yaml").read_text(
+            encoding="utf-8"
+        )
+        map_job = workflow.split("\n  map_tests:\n", maxsplit=1)[1].split(
+            "\n  docs:\n", maxsplit=1
+        )[0]
+        self.assertIn("name: Map partitions", map_job)
+        self.assertIn("tools/test_scope.py run map_unit", map_job)
+        self.assertIn("tools/test_scope.py run map_generation", map_job)
+        self.assertIn("tools/test_scope.py run map_contracts", map_job)
+        self.assertIn("tools/test_scope.py check-partitions map", map_job)
+        self.assertNotIn("--workspace", map_job)
+        self.assertNotIn("outputs.residual", map_job)
+
+    def test_gameplay_scope_wrapper_preserves_the_old_entry_point(self) -> None:
+        wrapper = (ROOT / "tools" / "gameplay_scope.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("from test_scope import main", wrapper)
 
 
 if __name__ == "__main__":

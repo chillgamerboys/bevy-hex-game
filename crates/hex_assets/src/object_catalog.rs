@@ -998,9 +998,9 @@ mod tests {
         ConnectivityPolicy, EffectPart, ObjectBounds, ObjectPart, ObjectPlacement, PaletteSwatch,
         VoxelSurfaceMode, OBJECT_BLUEPRINT_SCHEMA_VERSION,
     };
-    use bevy::asset::{AssetLoadError, AssetLoadFailedEvent, AssetPath, AssetPlugin};
+    use bevy::asset::{AssetLoadError, AssetLoadFailedEvent, AssetPath};
     use bevy::reflect::ReflectRef;
-    use bevy::MinimalPlugins;
+    use hex_test_app::HeadlessAppBuilder;
 
     fn id(value: &str) -> ObjectAssetId {
         ObjectAssetId::new(value).expect("fixture id should use stable-id syntax")
@@ -1229,28 +1229,34 @@ mod tests {
     }
 
     fn resolver_app() -> (App, Handle<ObjectBlueprint>) {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+        let mut builder = HeadlessAppBuilder::new()
+            .with_minimal_plugins()
+            .with_asset_plugin();
+        builder
+            .app_mut()
             .init_asset::<ObjectBlueprint>()
             .init_resource::<SettingsRegistry>()
             .init_resource::<RuntimeArtCatalogStatus>()
             .add_systems(Update, resolve_runtime_art_catalog);
-        app.world_mut()
+        builder
+            .app_mut()
+            .world_mut()
             .resource_mut::<SettingsRegistry>()
             .mark_pending::<RuntimeArtCatalog>();
-        app.insert_resource(palette([0.2, 0.4, 0.6]));
-        app.insert_resource(styles("effect/core"));
+        builder.app_mut().insert_resource(palette([0.2, 0.4, 0.6]));
+        builder.app_mut().insert_resource(styles("effect/core"));
         let manifest = manifest();
-        app.insert_resource(manifest.clone());
-        let handle = app
+        builder.app_mut().insert_resource(manifest.clone());
+        let handle = builder
+            .app_mut()
             .world_mut()
             .resource_mut::<Assets<ObjectBlueprint>>()
             .add(blueprint());
-        app.insert_resource(ObjectBlueprintHandles {
+        builder.app_mut().insert_resource(ObjectBlueprintHandles {
             manifest,
             handles: BTreeMap::from([(id("effect/glow"), handle.clone())]),
         });
-        (app, handle)
+        (builder.build(), handle)
     }
 
     fn report_object_load_failure(app: &mut App, handle: &Handle<ObjectBlueprint>) {

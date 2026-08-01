@@ -376,9 +376,8 @@ fn apply_settings_choice<T: Asset + Resource + Clone>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::asset::AssetPlugin;
     use bevy::ecs::system::RunSystemOnce;
-    use bevy::MinimalPlugins;
+    use hex_test_app::HeadlessAppBuilder;
 
     /// A settings type that exists only here.
     #[derive(Asset, Resource, Reflect, Debug, Clone, Deserialize, PartialEq)]
@@ -392,9 +391,10 @@ mod tests {
     const NOWHERE: &str = "config/does-not-exist.ron";
 
     fn test_app() -> App {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
-        app
+        HeadlessAppBuilder::new()
+            .with_minimal_plugins()
+            .with_asset_plugin()
+            .build()
     }
 
     /// Hands `Probe` to the asset system as though the file had just parsed.

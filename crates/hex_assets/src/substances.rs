@@ -534,10 +534,17 @@ fn build_table_when_loaded(
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use bevy::state::app::StatesPlugin;
-
     use super::*;
     use crate::{PaletteSwatch, SrgbColor};
+    use hex_test_app::HeadlessAppBuilder;
+
+    fn app_at(screen: Screen) -> App {
+        let mut builder = HeadlessAppBuilder::new()
+            .with_minimal_plugins()
+            .with_state_plugin();
+        builder.app_mut().insert_state(screen);
+        builder.build()
+    }
 
     fn swatch_id(name: &str) -> SwatchId {
         SwatchId::new(format!("test/{name}")).expect("test swatch ids should be valid")
@@ -852,9 +859,7 @@ mod tests {
         );
         let palette = test_palette();
 
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin));
-        app.insert_state(Screen::Gameplay);
+        let mut app = app_at(Screen::Gameplay);
         app.insert_resource(
             SubstanceTable::from_file(&original, &palette)
                 .expect("the original table should resolve"),
@@ -895,9 +900,7 @@ mod tests {
             .insert(swatch_id("stone"), test_swatch("Stone", [0.2, 0.3, 0.4]))
             .expect("the replacement swatch should be valid");
 
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin));
-        app.insert_state(Screen::Gameplay);
+        let mut app = app_at(Screen::Gameplay);
         app.insert_resource(original_table);
         app.insert_resource(file);
         app.insert_resource(palette);
@@ -941,9 +944,7 @@ mod tests {
         let original =
             SubstanceTable::from_file(&file, &palette).expect("the original table should resolve");
 
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin));
-        app.insert_state(Screen::Title);
+        let mut app = app_at(Screen::Title);
         app.insert_resource(original);
         app.insert_resource(file);
         app.insert_resource(palette);
@@ -1046,9 +1047,7 @@ mod tests {
         let original =
             SubstanceTable::from_file(&file, &palette).expect("the original table should resolve");
 
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin));
-        app.insert_state(Screen::Title);
+        let mut app = app_at(Screen::Title);
         app.insert_resource(original);
         app.insert_resource(file);
         app.insert_resource(palette);
@@ -1122,9 +1121,7 @@ mod tests {
         let palette = test_palette();
         let original =
             SubstanceTable::from_file(&file, &palette).expect("the original table should resolve");
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin));
-        app.insert_state(Screen::Title);
+        let mut app = app_at(Screen::Title);
         app.insert_resource(original);
         app.insert_resource(file);
         app.insert_resource(palette);
@@ -1168,9 +1165,7 @@ mod tests {
         let palette = test_palette();
         let original =
             SubstanceTable::from_file(&file, &palette).expect("the original table should resolve");
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin));
-        app.insert_state(Screen::Title);
+        let mut app = app_at(Screen::Title);
         app.insert_resource(original);
         app.insert_resource(file);
         app.insert_resource(palette);
@@ -1214,9 +1209,7 @@ mod tests {
         let palette = test_palette();
         let original =
             SubstanceTable::from_file(&file, &palette).expect("the original table should resolve");
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin));
-        app.insert_state(Screen::Title);
+        let mut app = app_at(Screen::Title);
         app.insert_resource(original);
         app.insert_resource(file.clone());
         app.insert_resource(palette.clone());
@@ -1262,9 +1255,7 @@ mod tests {
 
         let original =
             SubstanceTable::from_file(&file, &palette).expect("the original table should resolve");
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin));
-        app.insert_state(Screen::Title);
+        let mut app = app_at(Screen::Title);
         app.insert_resource(original);
         app.insert_resource(file.clone());
         app.insert_resource(palette.clone());
@@ -1313,9 +1304,7 @@ mod tests {
         let palette = test_palette();
         let original =
             SubstanceTable::from_file(&file, &palette).expect("the original table should resolve");
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin));
-        app.insert_state(Screen::Title);
+        let mut app = app_at(Screen::Title);
         app.insert_resource(original);
         app.insert_resource(file.clone());
         app.insert_resource(palette.clone());
@@ -1347,9 +1336,7 @@ mod tests {
 
         let original =
             SubstanceTable::from_file(&file, &palette).expect("the original table should resolve");
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin));
-        app.insert_state(Screen::Title);
+        let mut app = app_at(Screen::Title);
         app.insert_resource(original);
         app.insert_resource(file.clone());
         app.insert_resource(palette.clone());
@@ -1395,9 +1382,7 @@ mod tests {
             .swatch = Some(swatch_id("unknown"));
         let palette = test_palette();
 
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin));
-        app.insert_state(Screen::Title);
+        let mut app = app_at(Screen::Title);
         app.insert_resource(file);
         app.insert_resource(palette);
         register_table_builder(&mut app);

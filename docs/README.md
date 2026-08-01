@@ -21,6 +21,7 @@ doc or the code, not drift.
 | New to the codebase | [development/setup.md](development/setup.md), then [architecture.md](architecture.md) |
 | Dividing related work across branches or agents | [development/parallel-development.md](development/parallel-development.md) |
 | Adding or reviewing gameplay tests | [development/gameplay-testing.md](development/gameplay-testing.md) |
+| Adding or reviewing map tests | [development/map-testing.md](development/map-testing.md) |
 | Taking ownership of the map | [development/onboarding.md](development/onboarding.md) |
 | Changing game values without writing Rust | [development/config.md](development/config.md) |
 | Deciding what a mechanic should do | [design/game.md](design/game.md) |
@@ -60,6 +61,7 @@ doc or the code, not drift.
 | [development/setup.md](development/setup.md) | New contributors | Prerequisites, running the game, first-run verification, and platform setup | Whoever changes build or platform requirements |
 | [development/parallel-development.md](development/parallel-development.md) | Contributors, agents, integrators | Choosing independent, stacked, or wave topology; ownership lanes; combined review and cleanup | Both, jointly |
 | [development/gameplay-testing.md](development/gameplay-testing.md) | Gameplay contributors and reviewers | Concern partitions, dependency ceilings, authoritative oracles, commands, budgets, and visual-evidence limits | Gameplay owner |
+| [development/map-testing.md](development/map-testing.md) | Map contributors and reviewers | Unit/generation/publication partitions, owner fixtures, corpus budgets, scope selection, and stress/visual boundaries | World owner |
 | [development/onboarding.md](development/onboarding.md) | New map contributors | Map vocabulary, ownership boundaries, and first checks | World owner |
 | [development/config.md](development/config.md) | Designers, non-programmers | Changing the game through `assets/config/*.ron` without recompiling | Whoever adds or renames a setting |
 | [development/release.md](development/release.md) | Release contributors | Promotion, versioning, tagging, artifact verification, application identity, retained symbols, and reserved credential boundaries | Whoever changes packaging |

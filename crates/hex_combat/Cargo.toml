@@ -36,6 +36,7 @@ serde_json = "1"
 xxhash-rust = { workspace = true }
 
 [dev-dependencies]
+hex_test_app = { workspace = true }
 hex_test_support = { workspace = true }
 
 [[test]]

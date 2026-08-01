@@ -42,6 +42,9 @@ jobs:
       contracts: ${{ steps.filter.outputs.contracts }}
       simulation: ${{ steps.filter.outputs.simulation }}
       app: ${{ steps.filter.outputs.app }}
+      map_unit: ${{ steps.filter.outputs.map_unit }}
+      map_generation: ${{ steps.filter.outputs.map_generation }}
+      map_contracts: ${{ steps.filter.outputs.map_contracts }}
       residual: ${{ steps.filter.outputs.residual }}
       clippy: ${{ steps.filter.outputs.clippy }}
       docs: ${{ steps.filter.outputs.docs }}
@@ -70,26 +73,26 @@ jobs:
           echo "changed files:"
           printf '%s\n' "$changed"
           printf '%s\n' "$changed" > changed-files.txt
-          python3 tools/gameplay_scope.py plan \
+          python3 tools/test_scope.py plan \
             --paths-file changed-files.txt \
             "${force_full[@]}" \
-            --json-out gameplay-scope.json \
+            --json-out test-scope.json \
             --github-output "$GITHUB_OUTPUT"
           {
-            echo '### Gameplay scope decision'
+            echo '### Test scope decision'
             echo
             echo '```json'
-            cat gameplay-scope.json
+            cat test-scope.json
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Test the fail-closed selector
-        run: python3 -m unittest tools/test_gameplay_scope.py
+        run: python3 -m unittest tools/test_test_scope.py
       - name: Upload scope decision
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: gameplay-scope-decision
-          path: gameplay-scope.json
+          name: test-scope-decision
+          path: test-scope.json
           if-no-files-found: error
 
   # Formatting and licensing need no Bevy build, so they report in seconds
@@ -177,7 +180,7 @@ jobs:
         run: |
           set -o pipefail
           {
-            time python3 tools/gameplay_scope.py run residual \
+            time python3 tools/test_scope.py run residual \
               --timing-out residual-timing.json
             # Nextest deliberately does not execute doctests.
             time cargo test --workspace --all-features --profile ci --doc
@@ -193,50 +196,67 @@ jobs:
             target/nextest/ci/junit.xml
           if-no-files-found: error
 
-  # Fixed-seed generation corpora dominate ordinary-test runtime. Run the map
-  # package separately so both shards retain meaningful headroom beneath the
-  # 30-minute ceiling while preserving every PR seed.
+  # Map concerns share one job so the three logical partitions reuse the same
+  # optimized hex_map build. Package and target selection happens before nextest
+  # filters; every PR seed remains ordinary evidence.
   map_tests:
-    name: Map tests
+    name: Map partitions
     needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
-        if: needs.changes.outputs.residual == 'true'
+        if: needs.changes.outputs.map_unit == 'true' || needs.changes.outputs.map_generation == 'true' || needs.changes.outputs.map_contracts == 'true'
       - uses: dtolnay/rust-toolchain@stable
-        if: needs.changes.outputs.residual == 'true'
+        if: needs.changes.outputs.map_unit == 'true' || needs.changes.outputs.map_generation == 'true' || needs.changes.outputs.map_contracts == 'true'
       - uses: Swatinem/rust-cache@v2
-        if: needs.changes.outputs.residual == 'true'
+        if: needs.changes.outputs.map_unit == 'true' || needs.changes.outputs.map_generation == 'true' || needs.changes.outputs.map_contracts == 'true'
       - uses: taiki-e/install-action@nextest
-        if: needs.changes.outputs.residual == 'true'
+        if: needs.changes.outputs.map_unit == 'true' || needs.changes.outputs.map_generation == 'true' || needs.changes.outputs.map_contracts == 'true'
       - name: Install Linux dependencies
-        if: needs.changes.outputs.residual == 'true'
+        if: needs.changes.outputs.map_unit == 'true' || needs.changes.outputs.map_generation == 'true' || needs.changes.outputs.map_contracts == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
             libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
-      - name: Run map tests with per-test timing
-        if: needs.changes.outputs.residual == 'true'
+      - name: Map unit contracts
+        if: needs.changes.outputs.map_unit == 'true'
         shell: bash
         run: |
           set -o pipefail
-          {
-            time cargo nextest run \
-              --workspace \
-              --all-features \
-              --cargo-profile ci \
-              --profile ci \
-              -E 'package(hex_map)'
-          } 2>&1 | tee map-test-timing.log
-      - name: Upload map-test timing artifacts
-        if: always() && needs.changes.outputs.residual == 'true'
+          python3 tools/test_scope.py run map_unit \
+            --timing-out map-unit-timing.json \
+            2>&1 | tee map-unit-timing.log
+      - name: Map generation contracts
+        if: needs.changes.outputs.map_generation == 'true'
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 tools/test_scope.py run map_generation \
+            --timing-out map-generation-timing.json \
+            2>&1 | tee map-generation-timing.log
+      - name: Map publication contracts
+        if: needs.changes.outputs.map_contracts == 'true'
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 tools/test_scope.py run map_contracts \
+            --timing-out map-contracts-timing.json \
+            2>&1 | tee map-contracts-timing.log
+      - name: Verify exhaustive map partitions
+        if: needs.changes.outputs.full == 'true'
+        run: python3 tools/test_scope.py check-partitions map
+      - name: Upload map timing artifacts
+        if: always() && (needs.changes.outputs.map_unit == 'true' || needs.changes.outputs.map_generation == 'true' || needs.changes.outputs.map_contracts == 'true')
         uses: actions/upload-artifact@v4
         with:
           name: map-test-timings
           path: |
-            map-test-timing.log
-            target/nextest/ci/junit.xml
+            map-*-timing.log
+            map-*-timing.json
+            target/nextest/map-unit/junit.xml
+            target/nextest/map-generation/junit.xml
+            target/nextest/map-contracts/junit.xml
           if-no-files-found: error
 
   # Rustdoc is a separate bounded deliverable. Keeping it in the test job caused
@@ -295,8 +315,8 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          python3 tools/gameplay_scope.py check-graph rules
-          python3 tools/gameplay_scope.py run rules \
+          python3 tools/test_scope.py check-graph rules
+          python3 tools/test_scope.py run rules \
             --timing-out gameplay-rules-timing.json \
             2>&1 | tee gameplay-rules-timing.log
       - name: Gameplay contracts
@@ -304,7 +324,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          python3 tools/gameplay_scope.py run contracts \
+          python3 tools/test_scope.py run contracts \
             --timing-out gameplay-contracts-timing.json \
             2>&1 | tee gameplay-contracts-timing.log
       - name: Gameplay simulation
@@ -312,8 +332,8 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          python3 tools/gameplay_scope.py check-graph simulation
-          python3 tools/gameplay_scope.py run simulation \
+          python3 tools/test_scope.py check-graph simulation
+          python3 tools/test_scope.py run simulation \
             --timing-out gameplay-simulation-timing.json \
             2>&1 | tee gameplay-simulation-timing.log
       - name: Gameplay app
@@ -321,7 +341,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          python3 tools/gameplay_scope.py run app \
+          python3 tools/test_scope.py run app \
             --timing-out gameplay-app-timing.json \
             2>&1 | tee gameplay-app-timing.log
       - name: Upload gameplay timing artifacts
