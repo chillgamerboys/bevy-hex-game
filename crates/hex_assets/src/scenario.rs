@@ -1,4 +1,4 @@
-//! The scenarios offered on the title screen.
+//! The scenarios offered in the development Scenarios catalog.
 //!
 //! A scenario is a **world plus the units standing on it**: pick one and you get that
 //! terrain with those pieces, without editing a file or restarting.
@@ -31,7 +31,7 @@ pub struct ScenarioLibrary {
     ///
     /// The entry remains in `scenarios` so it uses the same validated world,
     /// lighting, encounter, and seed vocabulary as every development fixture. The
-    /// title screen resolves it independently and does not also list it in a lane.
+    /// title screen resolves it independently and the Scenarios catalog omits it.
     pub default_game: String,
     /// The scenarios, in the order they are listed.
     pub scenarios: Vec<Scenario>,
@@ -95,7 +95,7 @@ pub struct Scenario {
     pub encounter: String,
 }
 
-/// The development title-screen lane a non-default scenario can inhabit.
+/// The Scenarios catalog section a non-default scenario can inhabit.
 #[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
 pub enum ScenarioCategory {
     /// Worlds whose terrain or traversal is the main attraction.
@@ -214,7 +214,7 @@ mod tests {
         }
     }
 
-    /// Two scenarios with the same name are indistinguishable on the title screen.
+    /// Two scenarios with the same name are indistinguishable in the catalog.
     #[test]
     fn scenario_names_are_unique() {
         let library: ScenarioLibrary =

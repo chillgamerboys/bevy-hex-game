@@ -127,8 +127,8 @@ the whole wave lands on `dev` in one merge (CONTRIBUTING.md has the rules).
   promising save compatibility or live storefront, signing, telemetry, or crash
   reporting. Engine upkeep remains parked for the Bevy 0.20 window and is not a Wave 5
   gate.
-- **Wave 6 — creator and combat lab (delivered).** The Demos lane now owns separate
-  Character Creator and Spell Creator entries plus one Combat Lab. Local records have
+- **Wave 6 — creator and combat lab (delivered).** The primary title routes now expose
+  one Creator workspace for character and spell authoring plus one Combat Lab. Local records have
   stable IDs, atomic persistence, Draft/Ready and Map-ready diagnostics,
   dependency-safe deletion, and immutable packaged templates. Sandbox builds ordered
   rosters on all sixteen distinct supported shipped maps, previews and describes
