@@ -1720,6 +1720,7 @@ mod tests {
                 .iter()
                 .find(|route| route.scenario == scenario_name)
                 .unwrap_or_else(|| panic!("{scenario_name} is absent from the manifest"));
+            let require_exact_arrival_proof = scenario_name != "Two Rings";
             let launches = steps
                 .iter()
                 .filter_map(|step| match step {
@@ -1747,6 +1748,8 @@ mod tests {
             );
 
             let mut movement_steps = 0_usize;
+            let mut pending_proof = None;
+            let mut saw_idle_after_click = false;
             for step in &steps {
                 let destination = match step {
                     WalkStep::ClickAnchor { name, expected } => {
@@ -1782,8 +1785,57 @@ mod tests {
                         "{} uses {destination:?}, absent from its stale-checked manifest",
                         path.display()
                     );
+                    if require_exact_arrival_proof {
+                        assert!(
+                            pending_proof.is_none(),
+                            "{} clicks another destination before proving the previous movement",
+                            path.display()
+                        );
+                        pending_proof = Some(match destination {
+                            CameraRouteDestination::Anchor { expected, .. }
+                            | CameraRouteDestination::Exact(expected) => expected,
+                        });
+                        saw_idle_after_click = false;
+                    }
+                    continue;
+                }
+
+                match step {
+                    WalkStep::AwaitPartyIdle { .. } if pending_proof.is_some() => {
+                        saw_idle_after_click = true;
+                    }
+                    WalkStep::AssertSelectedAt { expected } if require_exact_arrival_proof => {
+                        let clicked = pending_proof.take().unwrap_or_else(|| {
+                            panic!(
+                                "{} proves a position without a pending movement",
+                                path.display()
+                            )
+                        });
+                        assert!(
+                            saw_idle_after_click,
+                            "{} proves {clicked:?} before awaiting party idle",
+                            path.display()
+                        );
+                        assert_eq!(
+                            *expected,
+                            clicked,
+                            "{} proves a different surface than it clicked",
+                            path.display()
+                        );
+                    }
+                    WalkStep::Capture(name) => assert!(
+                        pending_proof.is_none(),
+                        "{} captures {name:?} before proving its movement destination",
+                        path.display()
+                    ),
+                    _ => {}
                 }
             }
+            assert!(
+                pending_proof.is_none(),
+                "{} ends with an unproved movement destination",
+                path.display()
+            );
             assert!(
                 movement_steps > 0,
                 "{scenario_name} has no real movement leg"

@@ -104,9 +104,10 @@ scenario, builds and repeatedly rebuilds the camera index from its public
 1 ms p95 across its exact published anchors and six yaws.
 
 The tracked route manifest pins all 15 selectable Map scenarios to their exact seed
-and representative stack-safe destinations. Every selectable Map has an executable
-multi-azimuth Character walk using ordinary pointer movement and bounded party-idle
-waiting. Sky Islands exercises only its reachable ordinary ground bridge; the harness
-does not invent flight to reach its upper surfaces. Sixteen additional Two Rings
-region routes and human motion/readability review remain explicit presentation
-evidence.
+and representative stack-safe destinations. Every standalone selectable Map has an
+executable multi-azimuth Character walk using ordinary pointer movement and bounded
+party-idle waiting, followed by an exact check that the selected unit's authoritative
+footing and the camera-focus surface both equal the requested destination. Sky Islands
+exercises only its reachable ordinary ground bridge; the harness does not invent
+flight to reach its upper surfaces. Two Rings region routes and human
+motion/readability review remain explicit presentation evidence.

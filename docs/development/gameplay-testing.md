@@ -61,7 +61,10 @@ requires it to equal the authored exact `TilePos` before emitting that same prim
 pointer click; an anchor move therefore invalidates stale evidence instead of silently
 reviewing a new route. `AwaitPartyIdle(max_frames)` waits on public party, registry,
 command-queue, `Busy`, and `MovingTo` facts. Its bound must be positive and exhaustion
-is a failing exit.
+is a failing exit. After that wait, `AssertSelectedAt(q, r, level)` requires exactly
+one selected unit, its authoritative `StandsOn`, and `CameraFocusTarget.surface` to
+match the expected `TilePos`. An ignored or interrupted pointer click therefore
+cannot qualify later captures as route evidence.
 
 `OrbitCamera(yaw_turns, pitch_fraction)` injects a bounded, multi-frame held-right-
 button cursor drag. It never writes `PanOrbitCamera` or Character collision state.

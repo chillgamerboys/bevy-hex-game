@@ -1,4 +1,5 @@
-// Real Character movement across the authored open-ground approach.
+// Real Character movement to the last ordinary surface before combat interrupts
+// exploration. The hostile-side coordinate (4, -3, 3) is not fake-walked.
 [
     AwaitScreen("Title"),
     StartScenario(name: "Rolling Hills", seed: None),
@@ -8,8 +9,9 @@
     Key("C"),
     Settle(45),
     Capture("01-rolling-hills-character-start"),
-    ClickTile(q: 4, r: -3, level: Some(3)),
+    ClickTile(q: 2, r: -1, level: Some(3)),
     AwaitPartyIdle(max_frames: 1200),
+    AssertSelectedAt(expected: (q: 2, r: -1, level: 3)),
     Settle(45),
     Capture("02-rolling-hills-approach-front"),
     OrbitCamera(yaw_turns: 0.33333334),
