@@ -1,13 +1,12 @@
 # Creator and Combat Lab
 
-Wave 6 replaces the old title-screen Lattice Demo with three vertically stacked entries
-in the existing **Demos** column: **Character Creator**, **Spell Creator**, and
-**Combat Lab**. Character and spell libraries have independent screens and workspaces;
-the character workspace links directly to spell management when an inscription needs
-work. The lattice
+Wave 6 replaces the old title-screen Lattice Demo with the **Creators** and **Combat
+Lab** primary routes. Creators enters the character library; character and spell
+libraries retain independent screens and workspaces, and the character workspace
+links directly to spell management when an inscription needs work. The lattice
 mechanics sandbox still exists, but only as a local test launched from the Creator.
-Ability Lab and Raider Mirror are fixtures selected inside Combat Lab rather than
-separate title cards.
+Ability Lab and Raider Mirror retain stable fixtures inside Combat Lab and also appear
+as focused entries in the separate Scenarios catalog.
 
 This document owns the creation-library, creator, sandbox, deployment, fixture, and
 launch-snapshot contracts. `hex_assets` owns serializable content, `hex_combat` owns

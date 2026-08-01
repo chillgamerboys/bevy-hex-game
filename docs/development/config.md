@@ -559,11 +559,12 @@ has somewhere obvious to go.
 ## Configuring a scenario
 
 A scenario names a world, a sky, and an encounter. The library's `default_game`
-names the entry launched by New Game; that entry is hidden from the development lanes.
-Every other scenario chooses the independently scrollable `Map` or `Demo` lane through
-`category`. Wave 6 does not expose scenario-backed demos as title cards: the Demos
-lane contains only **Character Creator**, **Spell Creator**, and **Combat Lab**. Focused combat
-scenarios are selected by stable fixture ID inside Combat Lab.
+names the entry launched by New Game; that entry is hidden from the development
+catalog. Every other scenario chooses the independently scrollable `Map` or `Demo`
+column on the separate **Scenarios** screen through `category`. Ability Lab and Raider
+Mirror appear there as focused Demos and also retain stable fixture IDs inside Combat
+Lab. Creator-format automation matrices remain Combat Lab fixtures rather than
+scenarios.
 
 Immutable creator-format templates and automation records live in
 `creation_presets.ron`. `HumanTemplate` records appear as duplicable Creator choices;
@@ -571,7 +572,7 @@ Immutable creator-format templates and automation records live in
 belong to the per-user data directory's `creations.ron`, not the shipped asset tree.
 
 `combat_lab_maps.ron` owns the deployable Sandbox map list independently from the
-title-screen scenario lanes. Its `schema_version` is checked on load. Every distinct
+Scenarios-screen catalog. Its `schema_version` is checked on load. Every distinct
 supported shipped environment appears once. Each entry has a stable ID, display name,
 tactical description and tags, renderer-generated preview asset, scenario, optional
 fixed generation seed, and one deployment region per side. A region center is either
@@ -617,9 +618,9 @@ reproducible seed here:
 ),
 ```
 
-The title screen shows the resolved seed beside every visible generated scenario. Its
-`reroll` button changes only the current session, and the exact replacement seed is
-shown and logged so a useful or broken map can be reproduced. It never edits
+The Scenarios screen shows the resolved seed beside every visible generated scenario.
+Its `reroll` button changes only the current session, and the exact replacement seed
+is shown and logged so a useful or broken map can be reproduced. It never edits
 `scenarios.ron`; restarting returns to the configured seed.
 
 It is called `lighting` rather than `sky` because it also sets **the sun's angle and
