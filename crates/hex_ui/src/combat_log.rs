@@ -4,8 +4,8 @@ use bevy::prelude::*;
 use hex_core::Screen;
 
 use crate::{
-    blurb, panel, CombatLogView, HudElement, UiAssets, UiHudSetup, UiRegionRole, BLURB_SIZE,
-    DANGER, LABEL, READ_ONLY_HUD,
+    blurb, panel, supporting_text_role, CombatLogView, HudElement, UiAssets, UiHudSetup,
+    UiRegionRole, BLURB_SIZE, DANGER, LABEL, READ_ONLY_HUD,
 };
 
 #[derive(Component)]
@@ -22,7 +22,12 @@ pub(super) fn plugin(app: &mut App) {
         OnEnter(Screen::Gameplay),
         spawn_panel.in_set(UiHudSetup::Panels),
     )
-    .add_systems(Update, rebuild.run_if(in_state(Screen::Gameplay)));
+    .add_systems(
+        Update,
+        rebuild
+            .in_set(crate::UiSystems::Render)
+            .run_if(in_state(Screen::Gameplay)),
+    );
 }
 
 fn spawn_panel(
@@ -91,6 +96,7 @@ fn rebuild(
         for line in &view.lines {
             rows.spawn((
                 Text::new(line.text.clone()),
+                supporting_text_role(),
                 TextFont {
                     font: assets.body.clone().into(),
                     ..TextFont::from_font_size(BLURB_SIZE)

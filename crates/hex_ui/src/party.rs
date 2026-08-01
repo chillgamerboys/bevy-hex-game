@@ -5,7 +5,8 @@ use bevy::prelude::*;
 use hex_core::Screen;
 
 use crate::{
-    blurb, heading, HudElement, PartyIntent, PartyView, UiAssets, UiHudSetup, UiIntent,
+    blurb, body_text_role, heading, owner_resolved_control_role, responsive_control_role,
+    HudElement, PartyIntent, PartyView, ResolvedUiMetrics, UiAssets, UiHudSetup, UiIntent,
     UiRegionRole, UiSystems, ACCENT, ACCENT_EDGE, BLURB_SIZE, EDGE, LABEL, PANEL_BG,
 };
 
@@ -28,7 +29,11 @@ pub(super) fn plugin(app: &mut App) {
     )
     .add_systems(
         Update,
-        (rebuild, emit_intents.in_set(UiSystems::EmitIntents)).run_if(in_state(Screen::Gameplay)),
+        (
+            rebuild.in_set(UiSystems::Render),
+            emit_intents.in_set(UiSystems::EmitIntents),
+        )
+            .run_if(in_state(Screen::Gameplay)),
     );
 }
 
@@ -92,7 +97,16 @@ fn spawn_panels(
                 &assets,
                 "Select an ally, then choose a slot. Occupied slots swap.",
             ));
-            root.spawn((FormationBody, Node::default(), Pickable::IGNORE));
+            root.spawn((
+                FormationBody,
+                Node {
+                    width: Val::Percent(100.0),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(8.0),
+                    ..default()
+                },
+                Pickable::IGNORE,
+            ));
         })
         .id();
     if let Some(region) = region(UiRegionRole::Party, &regions) {
@@ -115,9 +129,10 @@ fn rebuild(
     party_bodies: Query<Entity, With<PartyBody>>,
     formation_bodies: Query<Entity, With<FormationBody>>,
     mut formation_panels: Query<&mut Node, With<FormationPanel>>,
+    metrics: Res<ResolvedUiMetrics>,
     assets: Res<UiAssets>,
 ) {
-    if !view.is_changed() {
+    if !view.is_changed() && !metrics.is_changed() {
         return;
     }
     if let Ok(mut panel) = formation_panels.single_mut() {
@@ -210,7 +225,7 @@ fn rebuild(
                     }
                 });
             formation.spawn(blurb(&assets, "ASSIGNMENT GRID · ◆ anchor"));
-            spawn_slot_grid(formation, &view, &assets);
+            spawn_slot_grid(formation, &view, &assets, metrics.control_scale.max(1.0));
         });
     }
 }
@@ -225,6 +240,7 @@ fn control_button(
         AccessibleLabel::new(accessible),
         Button,
         TabIndex(0),
+        responsive_control_role(),
         Node {
             width,
             min_height: Val::Px(48.0),
@@ -239,6 +255,7 @@ fn control_button(
 fn body_text(assets: &UiAssets, text: impl Into<String>) -> impl Bundle {
     (
         Text::new(text),
+        body_text_role(),
         TextFont {
             font: assets.body.clone().into(),
             ..TextFont::from_font_size(BLURB_SIZE)
@@ -252,15 +269,24 @@ fn body_text(assets: &UiAssets, text: impl Into<String>) -> impl Bundle {
     clippy::cast_precision_loss,
     reason = "formation offsets are content-limited to a six-cell miniature"
 )]
-fn spawn_slot_grid(parent: &mut ChildSpawnerCommands, view: &PartyView, assets: &UiAssets) {
+fn spawn_slot_grid(
+    parent: &mut ChildSpawnerCommands,
+    view: &PartyView,
+    assets: &UiAssets,
+    semantic_control_scale: f32,
+) {
+    const SLOT_STEP: i32 = 48;
+    const ROW_OFFSET: i32 = SLOT_STEP / 2;
+
     let positions: Vec<_> = view
         .slots
         .iter()
         .map(|slot| {
             (
                 slot,
-                (slot.offset.x() * 20 + slot.offset.y() * 10) as f32,
-                (slot.offset.y() * 18) as f32,
+                (slot.offset.x() * SLOT_STEP + slot.offset.y() * ROW_OFFSET) as f32
+                    * semantic_control_scale,
+                (slot.offset.y() * SLOT_STEP) as f32 * semantic_control_scale,
             )
         })
         .collect();
@@ -279,8 +305,8 @@ fn spawn_slot_grid(parent: &mut ChildSpawnerCommands, view: &PartyView, assets: 
         .spawn((
             Name::new("Formation mini-grid"),
             Node {
-                width: Val::Px(max_x - min_x + 44.0),
-                height: Val::Px(max_y - min_y + 44.0),
+                width: Val::Px(max_x - min_x + 44.0 * semantic_control_scale),
+                height: Val::Px(max_y - min_y + 44.0 * semantic_control_scale),
                 position_type: PositionType::Relative,
                 align_self: AlignSelf::Center,
                 ..default()
@@ -289,7 +315,7 @@ fn spawn_slot_grid(parent: &mut ChildSpawnerCommands, view: &PartyView, assets: 
         ))
         .with_children(|grid| {
             for (slot, x, y) in positions {
-                let label = if slot.anchor { "◆" } else { "⬡" };
+                let label = if slot.anchor { "◆" } else { "◇" };
                 grid.spawn((
                     Name::new(format!(
                         "Formation Slot ({}, {})",
@@ -304,13 +330,14 @@ fn spawn_slot_grid(parent: &mut ChildSpawnerCommands, view: &PartyView, assets: 
                     )),
                     Button,
                     TabIndex(0),
+                    owner_resolved_control_role(),
                     PartyControl(PartyIntent::AssignSlot(slot.offset)),
                     Node {
                         position_type: PositionType::Absolute,
                         left: Val::Px(x - min_x),
                         top: Val::Px(y - min_y),
-                        width: Val::Px(44.0),
-                        height: Val::Px(44.0),
+                        width: Val::Px(44.0 * semantic_control_scale),
+                        height: Val::Px(44.0 * semantic_control_scale),
                         align_items: AlignItems::Center,
                         justify_content: JustifyContent::Center,
                         border: UiRect::all(Val::Px(1.0)),
@@ -337,5 +364,61 @@ fn emit_intents(
         if *interaction == Interaction::Pressed {
             intents.write(UiIntent::Party(control.0.clone()));
         }
+    }
+}
+
+#[cfg(all(test, feature = "test-support"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn live_six_member_formation_controls_fit_the_standard_inspector() {
+        let mut app = App::new();
+        app.add_plugins(crate::test_support::HeadlessUiPlugin::new(1920, 1080));
+        app.world_mut()
+            .insert_resource(crate::UiScalePreference(crate::UiScaleMode::Auto));
+        app.world_mut().insert_resource(PartyView {
+            members: (0..6)
+                .map(|slot| crate::PartyMemberView {
+                    slot,
+                    label: format!("ALLY {} · formation member", slot + 1),
+                    active: slot == 0,
+                    selected: slot == 0,
+                })
+                .collect(),
+            formation_visible: true,
+            movement_mode: "GROUP MOVE · G".to_owned(),
+            presets: ["Column", "Compact", "Wedge"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+            slots: [(-1, 1), (0, -1), (0, 0), (0, 1), (1, -1), (1, 0)]
+                .into_iter()
+                .map(|(q, r)| crate::FormationSlotView {
+                    offset: hex_core::HexCoord::from_axial(q, r),
+                    anchor: q == 0 && r == 0,
+                })
+                .collect(),
+        });
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Gameplay);
+
+        for _ in 0..8 {
+            app.update();
+        }
+
+        let snapshot = crate::test_support::ui_tree_snapshot(app.world_mut());
+        assert!(
+            snapshot.layout_issues().is_empty(),
+            "live formation controls must remain reachable: {:?}",
+            snapshot.layout_issues()
+        );
+        let grid = snapshot
+            .nodes
+            .iter()
+            .find(|node| node.name == "Formation mini-grid")
+            .expect("the live formation grid must be presented");
+        assert!(grid.fully_visible, "formation grid must fit: {grid:?}");
     }
 }

@@ -2,6 +2,7 @@
 
 use bevy::input_focus::tab_navigation::TabGroup;
 use bevy::prelude::*;
+use bevy::ui_widgets::ScrollArea;
 use hex_core::{AppSystems, Screen};
 
 use crate::{
@@ -108,6 +109,9 @@ fn spawn_region(
     mut node: Node,
     viewport: crate::UiViewportClass,
 ) {
+    if role == UiRegionRole::Actions {
+        node.overflow = Overflow::scroll_y();
+    }
     constrain_region_to_canvas(
         ResolvedUiMetrics {
             viewport,
@@ -116,7 +120,10 @@ fn spawn_region(
         role,
         &mut node,
     );
-    frame.spawn((Name::new(name), role, node, Pickable::IGNORE));
+    let mut region = frame.spawn((Name::new(name), role, node, Pickable::IGNORE));
+    if role == UiRegionRole::Actions {
+        region.insert((ScrollArea, ScrollPosition::default()));
+    }
 }
 
 fn apply_responsive_layout(

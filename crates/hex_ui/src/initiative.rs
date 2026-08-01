@@ -4,8 +4,8 @@ use bevy::prelude::*;
 use hex_core::Screen;
 
 use crate::{
-    heading, panel, HudElement, InitiativeSide, InitiativeView, UiAssets, UiHudSetup, UiRegionRole,
-    ACCENT, BLURB_SIZE, LABEL, READ_ONLY_HUD,
+    body_text_role, heading, panel, HudElement, InitiativeSide, InitiativeView, UiAssets,
+    UiHudSetup, UiRegionRole, ACCENT, BLURB_SIZE, LABEL, READ_ONLY_HUD,
 };
 
 #[derive(Component)]
@@ -22,7 +22,12 @@ pub(super) fn plugin(app: &mut App) {
         OnEnter(Screen::Gameplay),
         spawn_panel.in_set(UiHudSetup::Panels),
     )
-    .add_systems(Update, rebuild.run_if(in_state(Screen::Gameplay)));
+    .add_systems(
+        Update,
+        rebuild
+            .in_set(crate::UiSystems::Render)
+            .run_if(in_state(Screen::Gameplay)),
+    );
 }
 
 fn spawn_panel(
@@ -106,6 +111,7 @@ fn rebuild(
             rows.spawn((
                 Name::new(format!("Initiative Unit {}", entry.unit.0)),
                 Text::new(entry_label(entry, dense)),
+                body_text_role(),
                 TextFont {
                     font: assets.body.clone().into(),
                     ..TextFont::from_font_size(BLURB_SIZE)

@@ -6,9 +6,9 @@ use bevy::ui_widgets::ScrollArea;
 use hex_core::Screen;
 
 use crate::{
-    action_rail_clearance, blurb, heading, row_button, DespawnOnExit, LabStatisticsIntent,
-    LabStatisticsView, ResolvedUiMetrics, UiAssets, UiIntent, UiSystems, UiViewportClass,
-    ACCENT_EDGE, LABEL,
+    action_rail_clearance, blurb, heading, row_button, supporting_text_role, DespawnOnExit,
+    LabStatisticsIntent, LabStatisticsView, ResolvedUiMetrics, UiAssets, UiIntent, UiSystems,
+    UiViewportClass, ACCENT_EDGE, LABEL,
 };
 
 #[derive(Component)]
@@ -28,8 +28,7 @@ pub(super) fn plugin(app: &mut App) {
         .add_systems(
             Update,
             (
-                render,
-                apply_layout,
+                (render, apply_layout).chain().in_set(UiSystems::Render),
                 emit_intents.in_set(UiSystems::EmitIntents),
             )
                 .run_if(in_state(Screen::Gameplay)),
@@ -53,14 +52,14 @@ fn spawn(mut commands: Commands, assets: Res<UiAssets>) {
                 ..default()
             },
             BorderColor::all(ACCENT_EDGE),
-            BackgroundColor(Color::srgba(0.02, 0.03, 0.045, 0.96)),
+            BackgroundColor(Color::srgba(0.02, 0.03, 0.045, 1.0)),
             GlobalZIndex(12),
             Visibility::Hidden,
         ))
         .with_children(|drawer| {
             drawer
                 .spawn((
-                    row_button("Expand or collapse live Combat Lab statistics", 210.0),
+                    row_button("Expand or collapse live Combat Lab statistics", 250.0),
                     Control(LabStatisticsIntent::Toggle),
                 ))
                 .with_child(blurb(&assets, "Statistics · Collapse"));
@@ -69,6 +68,7 @@ fn spawn(mut commands: Commands, assets: Res<UiAssets>) {
                     Name::new("Combat Lab Statistics Body"),
                     Body,
                     ScrollArea,
+                    ScrollPosition::default(),
                     Node {
                         min_height: Val::Px(0.0),
                         flex_grow: 1.0,
@@ -83,6 +83,7 @@ fn spawn(mut commands: Commands, assets: Res<UiAssets>) {
                     body.spawn((
                         Summary,
                         Text::new("Waiting for canonical combat statistics…"),
+                        supporting_text_role(),
                         TextFont {
                             font: assets.body.clone().into(),
                             ..TextFont::from_font_size(18.0)
@@ -97,7 +98,7 @@ fn spawn(mut commands: Commands, assets: Res<UiAssets>) {
                         .spawn((
                             row_button(
                                 "End experiment and save the current Combat Lab report",
-                                190.0,
+                                250.0,
                             ),
                             Control(LabStatisticsIntent::EndExperiment),
                         ))
@@ -178,20 +179,20 @@ fn apply_layout(
             UiViewportClass::Standard => {
                 node.display = Display::Flex;
                 node.left = Val::Auto;
-                node.right = Val::Px(320.0);
-                node.top = Val::Px(200.0);
+                node.right = Val::Px(12.0);
+                node.top = Val::Px(92.0);
                 node.bottom = Val::Auto;
-                node.width = Val::Px(480.0);
-                node.max_height = Val::Px(340.0);
+                node.width = Val::Px(300.0);
+                node.max_height = Val::Px(520.0);
             }
             UiViewportClass::Wide => {
                 node.display = Display::Flex;
                 node.left = Val::Auto;
-                node.right = Val::Px(360.0);
-                node.top = Val::Px(160.0);
+                node.right = Val::Px(16.0);
+                node.top = Val::Px(96.0);
                 node.bottom = Val::Auto;
-                node.width = Val::Px(520.0);
-                node.max_height = Val::Px(440.0);
+                node.width = Val::Px(332.0);
+                node.max_height = Val::Px(560.0);
             }
         }
     }

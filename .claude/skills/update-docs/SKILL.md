@@ -1,6 +1,6 @@
 ---
 name: update-docs
-description: Audit documentation for stale test counts and status claims. Extracts the current count from the workspace test suite, propagates it to the Documentation Map anchors mechanically, and commits any fixes. Atomic — historical baselines and human-observed numbers are NEVER overwritten. Runs automatically as step 4 of /audit-pr.
+description: Audit documentation for stale test-count anchors, status claims, and index coverage. Verifies the current workspace suite, updates an optional live count mechanically when one exists, and commits allowlisted fixes. Atomic — historical baselines and human-observed numbers are NEVER overwritten. Runs automatically as step 4 of /audit-pr.
 ---
 
 When invoked, follow these steps:
@@ -44,8 +44,10 @@ When invoked, follow these steps:
 
    `update-docs` **WILL touch** only:
 
-   - CLAUDE.md `## Current state`: the test-count clause
-     ("… and NNN tests.") — update NNN to `$UNIT`.
+   - CLAUDE.md `## Current state`: a live test-count clause
+     ("… and NNN tests."), if one exists — update NNN to `$UNIT`.
+     The current document intentionally delegates exact counts to dated foundation
+     evidence, so an absent clause is valid and requires no edit.
 
    `update-docs` **WILL NOT touch**:
 
@@ -60,7 +62,7 @@ When invoked, follow these steps:
    it, **STOP and ask the operator** — don't unilaterally rewrite
    history.
 
-   Concrete anchor recipe:
+   Concrete anchor recipe (currently expected to produce no output):
 
    ```bash
    grep -nE 'and [0-9]+ tests' CLAUDE.md
@@ -168,8 +170,9 @@ removing tracked docs.
 
 **Active anchors:**
 
-- `CLAUDE.md` — the "… and NNN tests." clause in `## Current state`
-  (exact count, maintained mechanically from `$UNIT`).
+- `CLAUDE.md` — the optional "… and NNN tests." clause in `## Current state`.
+  When present, it is maintained mechanically from `$UNIT`; its intentional absence
+  is valid because exact counts currently live only in dated evidence.
 
 - `docs/planning/status.md` — status claims (report-only beyond
   counts; it is the designated drift doc).
@@ -208,13 +211,13 @@ If nothing drifted, `findings: []` and step status `pass`.
 **Test command fails:** stop. Don't update counts. Surface the test
 failure to the user.
 
-**Counts diverge across docs:** the source of truth is the summed
-test output, not the existing doc values. If two docs disagree, both
-get `$UNIT`. Don't average them.
+**Live counts diverge:** the source of truth is the summed test output, not existing
+doc values. Every allowlisted live anchor gets `$UNIT`; dated or historical counts
+remain untouched. Don't average them.
 
-**Doctests:** `cargo test` emits separate `test result:` lines for
-doctests — the summing grep includes them by design. The CLAUDE.md
-count therefore means "tests the suite runs", not "#[test] fns".
+**Doctests:** `cargo test` emits separate `test result:` lines for doctests — the
+summing grep includes them by design. Any live count therefore means "tests the
+suite runs", not "#[test] fns".
 
 **Grep false positives:** historical text ("more than 180 tests" in
 an old commit message) is fine — only the CLAUDE.md anchor line is

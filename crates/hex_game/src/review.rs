@@ -603,6 +603,7 @@ fn capture_timeout_diagnostic(
         match screen {
             Screen::Splash
             | Screen::Title
+            | Screen::Scenarios
             | Screen::Settings
             | Screen::LatticeDemo
             | Screen::CharacterCreator

@@ -1106,7 +1106,7 @@ pub struct PauseView {
     pub notice: Option<String>,
 }
 
-/// One immutable scenario card on the title screen.
+/// One immutable scenario card in the development catalog.
 #[derive(Debug, Clone)]
 pub struct TitleScenarioView {
     /// Exact launch input represented by the card.
@@ -1115,11 +1115,16 @@ pub struct TitleScenarioView {
     pub resolved_seed: Option<u64>,
 }
 
+/// Immutable development-scenario catalog supplied by the composition root.
+#[derive(Resource, Debug, Default, Clone)]
+pub struct ScenarioBrowserView {
+    /// Visible Maps and Demos in authored order.
+    pub scenarios: Vec<TitleScenarioView>,
+}
+
 /// Immutable title-screen projection supplied by the composition root.
 #[derive(Resource, Debug, Default, Clone)]
 pub struct TitleView {
-    /// Development scenarios in authored order. The renderer groups them by category.
-    pub scenarios: Vec<TitleScenarioView>,
     /// Setup failure carried back from gameplay, if one exists.
     pub setup_failure: Option<String>,
 }
@@ -1150,20 +1155,27 @@ pub enum TitleIntent {
     Continue,
     /// Launch the independently configured default game.
     NewGame,
-    /// Launch one visible development scenario.
-    StartScenario(Scenario),
-    /// Replace one generated scenario's session seed.
-    RerollScenario(Scenario),
-    /// Open character authoring.
-    CharacterCreator,
-    /// Open spell authoring.
-    SpellCreator,
+    /// Open the shared Creator hub.
+    Creators,
     /// Open Combat Lab.
     CombatLab,
+    /// Open the development Map and Demo catalog.
+    Scenarios,
     /// Open settings.
     Settings,
     /// Exit the application.
     Quit,
+}
+
+/// Typed intentions emitted by the development scenario catalog.
+#[derive(Debug, Clone)]
+pub enum ScenarioBrowserIntent {
+    /// Launch the exact visible scenario snapshot.
+    Start(Scenario),
+    /// Replace one generated scenario's session seed.
+    Reroll(Scenario),
+    /// Return to the title.
+    Back,
 }
 
 impl Default for PauseView {
@@ -1222,6 +1234,8 @@ pub enum UiIntent {
     AdjustSetting(UiSetting),
     /// Activate a title-screen route or exact scenario card.
     Title(TitleIntent),
+    /// Act on the development scenario catalog.
+    Scenarios(ScenarioBrowserIntent),
 }
 
 #[cfg(test)]

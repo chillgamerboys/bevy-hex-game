@@ -56,11 +56,14 @@ pub use model::{
     LabStatisticsView, LatticeDemoIntent, LatticeDemoSpellView, LatticeDemoView, LatticeIntent,
     OutcomeAction, OutcomeActionView, OutcomeCompareChoiceView, OutcomeIntent, OutcomeReportView,
     OwnLatticeView, PartyIntent, PartyMemberView, PartyView, PauseView, ResumeView,
-    TargetLatticeStateView, TargetLatticeView, TargetPulseView, TitleIntent, TitleScenarioView,
-    TitleView, UiIntent, UiSetting, UiSettingRow, UiSettingsView, UnitBadgeView, UnitBadgesView,
+    ScenarioBrowserIntent, ScenarioBrowserView, TargetLatticeStateView, TargetLatticeView,
+    TargetPulseView, TitleIntent, TitleScenarioView, TitleView, UiIntent, UiSetting, UiSettingRow,
+    UiSettingsView, UnitBadgeView, UnitBadgesView,
 };
 #[cfg(feature = "dev-tools")]
 pub use model::{DevTimeIntent, DevTimeView};
+#[cfg(any(feature = "visual-review", feature = "test-support"))]
+pub use scale::ReviewViewport;
 pub use scale::{
     resolve_auto_scale, resolve_ui_metrics, resolve_viewport_class, ResolvedUiMetrics, UiScaleMode,
     UiScalePreference, UiViewportClass,
@@ -71,6 +74,10 @@ pub use theme::{
     row_button, screen_title, small_button, stacked_row_button, OwnColors, UiAssets, ACCENT,
     ACCENT_EDGE, BLURB_SIZE, DANGER, DISPLAY_SIZE, EDGE, FINE_SIZE, FUSION_COLOR, GEM_COLOR, LABEL,
     LABEL_SIZE, MUTED, PANEL_BG, SCREEN_TITLE_SIZE, SMALL_BUTTON_WIDTH, TITLE_SIZE,
+};
+pub(crate) use theme::{
+    body_text_role, compact_glyph_role, owner_resolved_control_role, responsive_control_role,
+    supporting_text_role,
 };
 
 #[cfg(any(feature = "visual-review", feature = "test-support"))]
@@ -98,6 +105,15 @@ pub enum UiHudSetup {
     Panels,
 }
 
+/// Initial-view requirement consumed by the structural presentation oracle.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UiVisibilityRequirement {
+    /// The control must be fully visible before any scrolling or drawer changes.
+    Immediate,
+    /// The control may begin offscreen when an operable scroll owner can reveal it.
+    Scrollable,
+}
+
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app.configure_sets(
@@ -121,6 +137,7 @@ impl Plugin for UiPlugin {
         .init_resource::<DeploymentView>()
         .init_resource::<InitiativeView>()
         .init_resource::<TitleView>()
+        .init_resource::<ScenarioBrowserView>()
         .init_resource::<TargetPulseView>()
         .init_resource::<UnitBadgesView>()
         .init_resource::<ResumeView>()
@@ -165,6 +182,7 @@ pub mod test_support {
         tab_navigation::{TabGroup, TabIndex},
         InputFocus,
     };
+    use bevy::math::Affine2;
     use bevy::prelude::*;
     use bevy::ui_widgets::ScrollArea;
     use bevy::window::WindowResolution;
@@ -286,12 +304,16 @@ pub mod test_support {
         pub center: Vec2,
         /// Effective visible rectangle after inherited clipping and the canvas edge.
         pub visible_bounds: Option<Rect>,
+        /// Actual glyph bounds for a named text node, when text has been laid out.
+        pub rendered_text_bounds: Option<Rect>,
         /// Whether the complete node rectangle is currently visible.
         pub fully_visible: bool,
         /// First clipping ancestor, when inherited clipping reduces the visible rectangle.
         pub clipped_by: Option<String>,
         /// Whether the complete node can be brought into view through its scroll ancestors.
         pub scroll_reachable: bool,
+        /// Whether this control must be visible immediately or may use scrolling.
+        pub visibility_requirement: crate::UiVisibilityRequirement,
         /// Accessible label supplied to assistive technology.
         pub accessible_label: Option<String>,
         /// Explicit tab order, when this node is focusable.
@@ -345,9 +367,43 @@ pub mod test_support {
         #[must_use]
         pub fn layout_issues(&self) -> Vec<String> {
             let mut issues = Vec::new();
+            for node in self.nodes.iter().filter(|node| {
+                !node.focusable
+                    && node.visibility_requirement == crate::UiVisibilityRequirement::Immediate
+            }) {
+                if node.size.x <= 0.5 || node.size.y <= 0.5 {
+                    issues.push(format!("{} has zero layout area", node.name));
+                } else if !node.fully_visible {
+                    issues.push(format!(
+                        "{} is required presentation but is not fully visible in the initial viewport",
+                        node.name
+                    ));
+                }
+                if node.overflows {
+                    issues.push(format!(
+                        "{} has presentation content outside its box",
+                        node.name
+                    ));
+                }
+            }
             for node in self.nodes.iter().filter(|node| node.focusable) {
                 if node.size.x <= 0.5 || node.size.y <= 0.5 {
                     issues.push(format!("{} has zero layout area", node.name));
+                } else if node.visibility_requirement == crate::UiVisibilityRequirement::Immediate
+                    && !node.fully_visible
+                {
+                    issues.push(format!(
+                        "{} is a primary control but is not fully visible in the initial viewport; box {:.1}×{:.1} at ({:.1}, {:.1}), visible {:?}{}",
+                        node.name,
+                        node.size.x,
+                        node.size.y,
+                        node.center.x,
+                        node.center.y,
+                        node.visible_bounds,
+                        node.clipped_by
+                            .as_deref()
+                            .map_or_else(String::new, |clip| format!(" (clipped by {clip})")),
+                    ));
                 } else if !node.scroll_reachable {
                     issues.push(format!(
                         "{} is clipped or off-canvas without a reachable scroll path{}; box {:.1}×{:.1} at ({:.1}, {:.1})",
@@ -374,6 +430,16 @@ pub mod test_support {
                     issues.push(format!(
                         "{} is {:.1}×{:.1}, below the 44×44 target minimum",
                         node.name, node.size.x, node.size.y
+                    ));
+                }
+                if node.overflows {
+                    issues.push(format!(
+                        "{} has interactive content outside its box; content {:.1}×{:.1} versus box {:.1}×{:.1}",
+                        node.name,
+                        node.content_size.x,
+                        node.content_size.y,
+                        node.size.x,
+                        node.size.y,
                     ));
                 }
                 if let Some(overlap) = node.obscured_by_action_rail {
@@ -460,13 +526,16 @@ pub mod test_support {
                         transform.affine().translation * inverse_scale
                     });
                 let bounds = Rect::from_center_size(center, size);
-                let visible_bounds = effective_visible_bounds(world, entity, bounds, metrics);
+                let rendered_text_bounds = rendered_text_bounds(world, entity);
+                let presented_bounds = rendered_text_bounds.unwrap_or(bounds);
+                let visible_bounds =
+                    effective_visible_bounds(world, entity, presented_bounds, metrics);
                 let fully_visible = rect_contains(
-                    Rect::from_corners(Vec2::ZERO, metrics.effective_size),
-                    bounds,
-                ) && world
-                    .get::<CalculatedClip>(entity)
-                    .is_none_or(|clip| rect_contains(scale_rect(clip.clip, inverse_scale), bounds));
+                    Rect::from_corners(Vec2::ZERO, metrics.logical_size),
+                    presented_bounds,
+                ) && world.get::<CalculatedClip>(entity).is_none_or(|clip| {
+                    rect_contains(scale_rect(clip.clip, inverse_scale), presented_bounds)
+                });
                 let focusable = world.get::<Button>(entity).is_some()
                     || world
                         .get::<TabIndex>(entity)
@@ -479,19 +548,22 @@ pub mod test_support {
                 // A true modal owns the interaction and paint plane above the rail.
                 // The rail must not cover ordinary gameplay/drawer controls, but
                 // geometrically intersecting a higher-z modal is not occlusion.
-                let obscured_by_action_rail =
-                    if active_modal.is_none() && focusable && in_active_scope {
-                        action_rail.and_then(|(rail, rail_bounds)| {
-                            if is_descendant_or_self(world, entity, rail) {
-                                None
-                            } else {
-                                non_empty_intersection(bounds, rail_bounds)
-                                    .map(|overlap| overlap.size())
-                            }
-                        })
-                    } else {
-                        None
-                    };
+                let obscured_by_action_rail = if active_modal.is_none()
+                    && focusable
+                    && in_active_scope
+                {
+                    action_rail.and_then(|(rail, rail_bounds)| {
+                        if is_descendant_or_self(world, entity, rail) {
+                            None
+                        } else {
+                            visible_bounds
+                                .and_then(|visible| non_empty_intersection(visible, rail_bounds))
+                                .map(|overlap| overlap.size())
+                        }
+                    })
+                } else {
+                    None
+                };
                 Some(UiNodeObservation {
                     name: name.as_str().to_owned(),
                     visible: visible_bounds.is_some(),
@@ -501,17 +573,27 @@ pub mod test_support {
                     }),
                     center,
                     visible_bounds,
+                    rendered_text_bounds,
                     fully_visible,
-                    clipped_by: first_clipping_ancestor(world, entity, bounds),
-                    scroll_reachable: scroll_reachable(world, entity, bounds, metrics),
+                    clipped_by: first_clipping_ancestor(world, entity, presented_bounds),
+                    scroll_reachable: scroll_reachable(world, entity, presented_bounds, metrics),
+                    visibility_requirement: world
+                        .get::<crate::UiVisibilityRequirement>(entity)
+                        .copied()
+                        .unwrap_or(crate::UiVisibilityRequirement::Scrollable),
                     accessible_label: world
                         .get::<AccessibleLabel>(entity)
                         .map(|label| label.0.clone()),
                     tab_index: world.get::<TabIndex>(entity).map(|index| index.0),
                     overflows: computed.is_some_and(|node| {
-                        let epsilon = 0.5;
-                        node.content_size().x > node.size().x + epsilon
-                            || node.content_size().y > node.size().y + epsilon
+                        // Yoga text measurement can extend a few logical pixels
+                        // beyond the border box for glyph overhang and borders.
+                        // Keep the tolerance logical so 1× and Retina inputs use
+                        // the same oracle; larger layout overflow still fails.
+                        let epsilon = 10.0;
+                        let content = node.content_size() * node.inverse_scale_factor;
+                        let size = node.size() * node.inverse_scale_factor;
+                        content.x > size.x + epsilon || content.y > size.y + epsilon
                     }),
                     focused: focused == Some(entity),
                     focusable,
@@ -549,6 +631,39 @@ pub mod test_support {
         ))
     }
 
+    fn rendered_text_bounds(world: &World, entity: Entity) -> Option<Rect> {
+        let computed = world.get::<ComputedNode>(entity)?;
+        let transform = world.get::<bevy::ui::UiGlobalTransform>(entity)?;
+        let layout = world.get::<bevy::text::TextLayoutInfo>(entity)?;
+        let local_to_world =
+            Affine2::from(*transform) * Affine2::from_translation(computed.content_box().min);
+        let inverse_scale = computed.inverse_scale_factor;
+        layout
+            .glyphs
+            .iter()
+            .map(|glyph| {
+                let half_size = glyph.atlas_info.rect.size() * 0.5;
+                let local_min = glyph.position - half_size;
+                let local_max = glyph.position + half_size;
+                let first = local_to_world.transform_point2(local_min) * inverse_scale;
+                [
+                    local_to_world.transform_point2(Vec2::new(local_max.x, local_min.y)),
+                    local_to_world.transform_point2(local_max),
+                    local_to_world.transform_point2(Vec2::new(local_min.x, local_max.y)),
+                ]
+                .into_iter()
+                .fold(Rect::from_corners(first, first), |mut bounds, point| {
+                    let point = point * inverse_scale;
+                    bounds.min = bounds.min.min(point);
+                    bounds.max = bounds.max.max(point);
+                    bounds
+                })
+            })
+            .reduce(|left, right| {
+                Rect::from_corners(left.min.min(right.min), left.max.max(right.max))
+            })
+    }
+
     fn scale_rect(rect: Rect, scale: f32) -> Rect {
         Rect::from_corners(rect.min * scale, rect.max * scale)
     }
@@ -572,7 +687,7 @@ pub mod test_support {
         bounds: Rect,
         metrics: ResolvedUiMetrics,
     ) -> Option<Rect> {
-        let canvas = Rect::from_corners(Vec2::ZERO, metrics.effective_size);
+        let canvas = Rect::from_corners(Vec2::ZERO, metrics.logical_size);
         let canvas_visible = non_empty_intersection(bounds, canvas)?;
         let Some(computed) = world.get::<ComputedNode>(entity) else {
             return Some(canvas_visible);
@@ -621,8 +736,8 @@ pub mod test_support {
         if bounds.width() <= 0.5 || bounds.height() <= 0.5 {
             return false;
         }
-        axis_reachable(world, entity, bounds, metrics.effective_size, true)
-            && axis_reachable(world, entity, bounds, metrics.effective_size, false)
+        axis_reachable(world, entity, bounds, metrics.logical_size, true)
+            && axis_reachable(world, entity, bounds, metrics.logical_size, false)
     }
 
     fn axis_reachable(
@@ -841,6 +956,35 @@ pub mod test_support {
 
         use super::*;
 
+        fn all_scale_modes() -> [crate::UiScaleMode; 7] {
+            [
+                crate::UiScaleMode::Auto,
+                crate::UiScaleMode::Percent75,
+                crate::UiScaleMode::Percent100,
+                crate::UiScaleMode::Percent125,
+                crate::UiScaleMode::Percent150,
+                crate::UiScaleMode::Percent175,
+                crate::UiScaleMode::Percent200,
+            ]
+        }
+
+        fn structural_canvases() -> [(UVec2, f32); 12] {
+            [
+                (UVec2::new(960, 540), 1.0),
+                (UVec2::new(1280, 720), 1.0),
+                (UVec2::new(1512, 949), 1.0),
+                (UVec2::new(1920, 1080), 1.0),
+                (UVec2::new(2560, 1440), 1.0),
+                (UVec2::new(3840, 2160), 1.0),
+                (UVec2::new(1920, 1080), 2.0),
+                (UVec2::new(2560, 1440), 2.0),
+                (UVec2::new(3024, 1898), 2.0),
+                (UVec2::new(3840, 2160), 2.0),
+                (UVec2::new(5120, 2880), 2.0),
+                (UVec2::new(7680, 4320), 2.0),
+            ]
+        }
+
         fn required_cell(q: i32, r: i32) -> crate::LatticeCellView {
             crate::LatticeCellView {
                 coord: hex_core::LatticeCoord::new(q, r),
@@ -946,6 +1090,28 @@ pub mod test_support {
             physical_height: u32,
             scale_factor: f32,
         ) -> UiTreeSnapshot {
+            let mut app = App::new();
+            app.add_plugins(HeadlessUiPlugin::with_scale_factor(
+                physical_width,
+                physical_height,
+                scale_factor,
+            ));
+            app.world_mut().insert_resource(crate::TitleView::default());
+            app.world_mut()
+                .resource_mut::<NextState<hex_core::Screen>>()
+                .set(hex_core::Screen::Title);
+            for _ in 0..8 {
+                app.update();
+            }
+            ui_tree_snapshot(app.world_mut())
+        }
+
+        fn production_scenario_snapshot(
+            physical_width: u32,
+            physical_height: u32,
+            scale_factor: f32,
+            mode: crate::UiScaleMode,
+        ) -> UiTreeSnapshot {
             let library: hex_assets::ScenarioLibrary =
                 ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
                     .expect("the production scenario catalog must parse");
@@ -955,7 +1121,9 @@ pub mod test_support {
                 physical_height,
                 scale_factor,
             ));
-            app.world_mut().insert_resource(crate::TitleView {
+            app.world_mut()
+                .insert_resource(crate::UiScalePreference(mode));
+            app.world_mut().insert_resource(crate::ScenarioBrowserView {
                 scenarios: library
                     .visible_scenarios()
                     .cloned()
@@ -964,11 +1132,10 @@ pub mod test_support {
                         scenario,
                     })
                     .collect(),
-                setup_failure: None,
             });
             app.world_mut()
                 .resource_mut::<NextState<hex_core::Screen>>()
-                .set(hex_core::Screen::Title);
+                .set(hex_core::Screen::Scenarios);
             for _ in 0..8 {
                 app.update();
             }
@@ -1026,10 +1193,13 @@ pub mod test_support {
                 .insert_resource(crate::UiScalePreference(mode));
             match screen {
                 hex_core::Screen::Title => {
+                    app.world_mut().insert_resource(crate::TitleView::default());
+                }
+                hex_core::Screen::Scenarios => {
                     let library: hex_assets::ScenarioLibrary =
                         ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
                             .expect("the production scenario catalog must parse");
-                    app.world_mut().insert_resource(crate::TitleView {
+                    app.world_mut().insert_resource(crate::ScenarioBrowserView {
                         scenarios: library
                             .visible_scenarios()
                             .cloned()
@@ -1038,7 +1208,6 @@ pub mod test_support {
                                 scenario,
                             })
                             .collect(),
-                        setup_failure: None,
                     });
                 }
                 hex_core::Screen::Settings => {
@@ -1184,7 +1353,7 @@ pub mod test_support {
 
         #[test]
         fn headless_plugin_lays_out_required_compact_controls_without_a_renderer() {
-            let snapshot = required_choice_snapshot(1920, 1080, crate::UiScaleMode::Percent200);
+            let snapshot = required_choice_snapshot(1280, 720, crate::UiScaleMode::Percent200);
             assert_eq!(snapshot.metrics.viewport, crate::UiViewportClass::Compact);
             for required in [
                 "Compact Required Lattice Summary",
@@ -1230,11 +1399,12 @@ pub mod test_support {
             for logical_size in [
                 UVec2::new(960, 540),
                 UVec2::new(1280, 720),
+                UVec2::new(1512, 949),
                 UVec2::new(1920, 1080),
                 UVec2::new(2560, 1440),
                 UVec2::new(3840, 2160),
             ] {
-                for mode in [crate::UiScaleMode::Auto, crate::UiScaleMode::Percent200] {
+                for mode in all_scale_modes() {
                     let snapshot = required_choice_snapshot(logical_size.x, logical_size.y, mode);
                     let prefix = if snapshot.metrics.viewport == crate::UiViewportClass::Compact {
                         "Compact Required"
@@ -1269,7 +1439,7 @@ pub mod test_support {
                         let max = node.center + half;
                         assert!(
                             min.cmpge(Vec2::ZERO).all()
-                                && max.cmple(snapshot.metrics.effective_size).all(),
+                                && max.cmple(snapshot.metrics.logical_size).all(),
                             "{required:?} must remain on canvas at {logical_size:?} in {mode:?}: {node:?}"
                         );
                     }
@@ -1299,9 +1469,19 @@ pub mod test_support {
 
         #[test]
         fn retina_mappings_use_physical_pixels_and_os_scale_as_separate_inputs() {
-            for (physical_size, scale_factor, expected_logical_size) in [
-                (UVec2::new(1280, 720), 2.0, Vec2::new(640.0, 360.0)),
-                (UVec2::new(3024, 1898), 2.0, Vec2::new(1512.0, 949.0)),
+            for (physical_size, scale_factor, expected_logical_size, expected_viewport) in [
+                (
+                    UVec2::new(2560, 1440),
+                    2.0,
+                    Vec2::new(1280.0, 720.0),
+                    crate::UiViewportClass::Compact,
+                ),
+                (
+                    UVec2::new(3024, 1898),
+                    2.0,
+                    Vec2::new(1512.0, 949.0),
+                    crate::UiViewportClass::Standard,
+                ),
             ] {
                 let snapshot = required_choice_snapshot_at_scale(
                     physical_size.x,
@@ -1309,8 +1489,8 @@ pub mod test_support {
                     scale_factor,
                     crate::UiScaleMode::Auto,
                 );
-                assert_eq!(snapshot.metrics.effective_size, expected_logical_size);
-                assert_eq!(snapshot.metrics.viewport, crate::UiViewportClass::Compact);
+                assert_eq!(snapshot.metrics.logical_size, expected_logical_size);
+                assert_eq!(snapshot.metrics.viewport, expected_viewport);
                 assert!(
                     snapshot.layout_issues().is_empty(),
                     "required UI must remain structurally reachable at {physical_size:?} / {scale_factor}×: {:?}",
@@ -1320,57 +1500,96 @@ pub mod test_support {
         }
 
         #[test]
-        fn production_title_catalog_is_reachable_in_compact_retina_windows() {
+        fn primary_title_routes_are_initially_visible_in_compact_retina_windows() {
             for (physical_size, scale_factor) in
-                [(UVec2::new(1280, 720), 2.0), (UVec2::new(3024, 1898), 2.0)]
+                [(UVec2::new(1280, 720), 1.0), (UVec2::new(2560, 1440), 2.0)]
             {
                 let snapshot =
                     production_title_snapshot(physical_size.x, physical_size.y, scale_factor);
                 assert_eq!(snapshot.metrics.viewport, crate::UiViewportClass::Compact);
                 assert!(
                     snapshot.layout_issues().is_empty(),
-                    "the full title catalog must remain reachable at {physical_size:?} / {scale_factor}×: {:?}",
+                    "primary title routes must remain visible at {physical_size:?} / {scale_factor}×: {:?}",
                     snapshot.layout_issues()
                 );
                 for required in [
+                    "Continue",
                     "New Game",
-                    "Character Creator",
+                    "Creators",
                     "Combat Lab",
-                    "The Crossing",
-                    "Waterfall",
+                    "Scenarios",
+                    "Settings",
+                    "Quit",
                 ] {
                     let Some(node) = snapshot.nodes.iter().find(|node| node.name == required)
                     else {
                         panic!("full production title is missing {required:?}");
                     };
                     assert!(
-                        node.scroll_reachable,
-                        "{required:?} must be reachable at {physical_size:?} / {scale_factor}×: {node:?}"
+                        node.fully_visible,
+                        "{required:?} must be initially visible at {physical_size:?} / {scale_factor}×: {node:?}"
                     );
                 }
-                let y = |name: &str| {
-                    snapshot
-                        .nodes
-                        .iter()
-                        .find(|node| node.name == name)
-                        .map_or(f32::MAX, |node| node.center.y)
-                };
-                assert!(y("New Game") < y("Character Creator"));
-                assert!(y("Character Creator") < y("The Crossing"));
+            }
+        }
+
+        #[test]
+        fn production_scenario_catalog_scrolls_beneath_a_persistent_footer() {
+            let snapshot =
+                production_scenario_snapshot(960, 540, 1.0, crate::UiScaleMode::Percent200);
+            assert!(
+                snapshot.layout_issues().is_empty(),
+                "the production scenario catalog must remain reachable: {:?}; immediate scenario nodes: {:?}",
+                snapshot.layout_issues(),
+                snapshot
+                    .nodes
+                    .iter()
+                    .filter(|node| node.name.starts_with("Scenario Screen"))
+                    .collect::<Vec<_>>()
+            );
+            let back = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.name == "Back")
+                .expect("scenario catalog has a Back control");
+            assert!(back.fully_visible);
+            assert!(
+                back.center.y > snapshot.metrics.logical_size.y * 0.75,
+                "Back must remain in the persistent lower footer: {back:?}"
+            );
+            let catalog = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.name == "Scenario Catalog Viewport")
+                .expect("scenario catalog has a dedicated scroll viewport");
+            assert!(
+                catalog.fully_visible,
+                "catalog viewport must fit: {catalog:?}"
+            );
+            let title = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.name == "Scenario Screen Title")
+                .expect("scenario catalog has a named screen title");
+            let title_glyphs = title
+                .rendered_text_bounds
+                .expect("the scenario title glyphs must be laid out");
+            assert!(
+                title.fully_visible && title_glyphs.min.y >= 8.0,
+                "the actual title glyphs must fit the initial canvas: {title:?}"
+            );
+            for scenario in ["The Crossing", "Waterfall"] {
+                let node = snapshot
+                    .nodes
+                    .iter()
+                    .find(|node| node.name == scenario)
+                    .unwrap_or_else(|| panic!("production catalog is missing {scenario}"));
+                assert!(node.scroll_reachable);
             }
         }
 
         #[test]
         fn gameplay_presentation_states_pass_the_complete_structural_matrix() {
-            let physical_sizes = [
-                (UVec2::new(960, 540), 1.0),
-                (UVec2::new(1280, 720), 1.0),
-                (UVec2::new(1920, 1080), 1.0),
-                (UVec2::new(2560, 1440), 1.0),
-                (UVec2::new(3840, 2160), 1.0),
-                (UVec2::new(1280, 720), 2.0),
-                (UVec2::new(3024, 1898), 2.0),
-            ];
             for fixture in [
                 "normal-gameplay",
                 "required-decision",
@@ -1378,8 +1597,8 @@ pub mod test_support {
                 "live-statistics",
                 "dense-report-compare",
             ] {
-                for (physical_size, scale_factor) in physical_sizes {
-                    for mode in [crate::UiScaleMode::Auto, crate::UiScaleMode::Percent200] {
+                for (physical_size, scale_factor) in structural_canvases() {
+                    for mode in all_scale_modes() {
                         let snapshot = gameplay_fixture_snapshot(
                             physical_size.x,
                             physical_size.y,
@@ -1389,8 +1608,13 @@ pub mod test_support {
                         );
                         assert!(
                             snapshot.layout_issues().is_empty(),
-                            "{fixture} must remain reachable at {physical_size:?} / {scale_factor}× in {mode:?}: {:?}",
-                            snapshot.layout_issues()
+                            "{fixture} must remain reachable at {physical_size:?} / {scale_factor}× in {mode:?}: {:?}; rail nodes: {:?}",
+                            snapshot.layout_issues(),
+                            snapshot
+                                .nodes
+                                .iter()
+                                .filter(|node| node.name.contains("Action Rail"))
+                                .collect::<Vec<_>>()
                         );
                     }
                 }
@@ -1399,19 +1623,11 @@ pub mod test_support {
 
         #[test]
         fn setup_and_deployment_surfaces_pass_the_complete_structural_matrix() {
-            let physical_sizes = [
-                (UVec2::new(960, 540), 1.0),
-                (UVec2::new(1280, 720), 1.0),
-                (UVec2::new(1920, 1080), 1.0),
-                (UVec2::new(2560, 1440), 1.0),
-                (UVec2::new(3840, 2160), 1.0),
-                (UVec2::new(1280, 720), 2.0),
-                (UVec2::new(3024, 1898), 2.0),
-            ];
-            for (physical_size, scale_factor) in physical_sizes {
-                for mode in [crate::UiScaleMode::Auto, crate::UiScaleMode::Percent200] {
+            for (physical_size, scale_factor) in structural_canvases() {
+                for mode in all_scale_modes() {
                     for screen in [
                         hex_core::Screen::Title,
+                        hex_core::Screen::Scenarios,
                         hex_core::Screen::Settings,
                         hex_core::Screen::CharacterCreator,
                         hex_core::Screen::CombatLab,

@@ -2,7 +2,7 @@
 [
     AwaitScreen("Title"),
     Settle(45),
-    Click(name: "Character Creator"),
+    Click(name: "Creators"),
     AwaitScreen("CharacterCreator"),
     Settle(20),
     Click(name: "Wolf Template"),

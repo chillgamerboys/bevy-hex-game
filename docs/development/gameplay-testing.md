@@ -188,13 +188,12 @@ rosters remain legible, drawers overlap, and a responsive surface adapts. They d
 prove occupancy, action accounting, tempo, determinism, state restoration, or report
 identity.
 
-A scoped gameplay acceptance run reviews no more than ten frames. Six deterministic
-offscreen frames cover Creator validation, Combat Lab setup/deployment, aiming and a
-disabled action, the live statistics drawer, and the 4K dense Compare report. Four
-native macOS window-only frames cover cold Compact title, Standard settings,
-fullscreen Auto gameplay, and a restarted 200% required decision. Default-off
-presentation fixtures create visual state without solving combat. Before any
-capture, the live `UiTreeSnapshot` oracle rejects zero-area targets, inherited
+A scoped gameplay acceptance run reviews exactly ten deterministic Bevy
+image-target frames. They cover the Compact title and scenario catalog, Settings,
+Creator validation, Combat Lab setup/deployment, maximum gameplay actions, a 200%
+required decision, the statistics drawer, and the 4K dense Compare report.
+Default-off presentation fixtures create visual state without solving combat.
+Before any capture, the live `UiTreeSnapshot` oracle rejects zero-area targets, inherited
 clipping, off-canvas placement, unreachable scroll content, overlap, missing labels,
 invalid focus order, and targets below 44×44. The runner contains no combat-solving
 verbs.
@@ -204,7 +203,7 @@ remain unchanged.
 
 ## Manual runtime sign-off
 
-The automated walk, an agent-operated native runtime review, and a named human
+The automated Bevy visual walk, an agent frame review, and a named human
 playtest are distinct evidence. Gameplay runtime PRs record the human result in the
 structured PR fields together with the full final head SHA, reviewer, date, and exact
 route exercised. A later push makes that evidence stale and the required

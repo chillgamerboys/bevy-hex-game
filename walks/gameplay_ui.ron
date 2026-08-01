@@ -1,13 +1,31 @@
-// The six deterministic offscreen frames in the gameplay UI acceptance route.
-// Native macOS review owns the other four checkpoints. Every Capture first runs
-// the live UiTreeSnapshot structural oracle; pixels remain presentation evidence.
+// Ten deterministic Bevy image-target frames. Every Capture first runs the live
+// UiTreeSnapshot structural oracle; pixels remain presentation evidence only.
 [
     AwaitScreen("Title"),
-    Click(name: "Character Creator"),
+    SetViewport(width: 1280, height: 720, device_scale: 2.0),
+    Settle(8),
+    Capture("ui-01-title-compact-2x"),
+
+    Click(name: "Scenarios"),
+    AwaitScreen("Scenarios"),
+    Settle(4),
+    Capture("ui-02-scenarios-compact"),
+    Click(name: "Back"),
+    AwaitScreen("Title"),
+
+    SetViewport(width: 1920, height: 1080, device_scale: 1.0),
+    Click(name: "Settings"),
+    AwaitScreen("Settings"),
+    Settle(4),
+    Capture("ui-03-settings-standard"),
+    Click(name: "Back"),
+    AwaitScreen("Title"),
+
+    Click(name: "Creators"),
     AwaitScreen("CharacterCreator"),
     Click(name: "New Blank Character"),
     Settle(4),
-    Capture("ui-01-creator-validation"),
+    Capture("ui-04-creator-validation"),
     Click(name: "Discard Changes"),
     Click(name: "Library"),
     Click(name: "Title"),
@@ -16,27 +34,33 @@
     Click(name: "Combat Lab"),
     AwaitScreen("CombatLab"),
     Settle(4),
-    Capture("ui-02-combat-lab-setup"),
+    Capture("ui-05-combat-lab-setup"),
     Click(name: "Continue to Rosters"),
     Click(name: "Continue to Rules"),
     Click(name: "Load Map & Deploy"),
     AwaitScreen("Gameplay"),
     AwaitTerrain,
     Settle(6),
-    Capture("ui-03-deployment"),
+    Capture("ui-06-deployment"),
     Click(name: "Deterministic Auto-place"),
     Click(name: "Start Combat"),
 
     PresentUi("aiming-disabled"),
     Settle(4),
-    Capture("ui-04-aiming-disabled"),
+    Capture("ui-07-maximum-actions-aiming-disabled"),
 
+    SetUiScale(Percent200),
+    PresentUi("required-decision"),
+    Settle(6),
+    Capture("ui-08-required-decision-200"),
+
+    SetUiScale(Auto),
     PresentUi("live-statistics"),
     Settle(4),
-    Capture("ui-05-live-statistics"),
+    Capture("ui-09-live-statistics"),
 
-    SetViewport("3840x2160"),
+    SetViewport(width: 3840, height: 2160, device_scale: 1.0),
     PresentUi("dense-report-compare"),
     Settle(6),
-    Capture("ui-06-dense-report-compare-4k"),
+    Capture("ui-10-dense-report-compare-4k"),
 ]

@@ -20,8 +20,7 @@ pub(super) fn plugin(app: &mut App) {
         .add_systems(
             Update,
             (
-                rebuild,
-                apply_layout,
+                (rebuild, apply_layout).chain().in_set(UiSystems::Render),
                 emit_intents.in_set(UiSystems::EmitIntents),
             )
                 .run_if(in_state(Screen::LatticeDemo)),
@@ -56,10 +55,11 @@ fn spawn(mut commands: Commands, assets: Res<UiAssets>) {
 fn rebuild(
     mut commands: Commands,
     view: Res<LatticeDemoView>,
+    metrics: Res<ResolvedUiMetrics>,
     bodies: Query<Entity, With<Body>>,
     assets: Res<UiAssets>,
 ) {
-    if !view.is_changed() {
+    if !view.is_changed() && !metrics.is_changed() {
         return;
     }
     let Ok(body) = bodies.single() else { return };
@@ -81,6 +81,7 @@ fn rebuild(
                         &view.cells,
                         &assets,
                         LatticeScale::DEMO,
+                        metrics.control_scale,
                         "Demo",
                         |coord| Control(LatticeDemoIntent::ActivateCell(coord)),
                     );

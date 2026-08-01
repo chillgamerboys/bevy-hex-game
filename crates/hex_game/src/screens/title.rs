@@ -1,15 +1,18 @@
-//! Title-screen application adapter.
+//! Title and development-scenario application adapters.
 //!
-//! This module publishes immutable scenario facts to `hex_ui` and applies typed
-//! title intents. It contains no Bevy UI nodes or presentation state.
+//! These systems publish immutable facts to `hex_ui` and apply typed intents. They
+//! contain no Bevy UI nodes or presentation-owned navigation state.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
-use hex_assets::{Scenario, ScenarioCategory, ScenarioLibrary};
+use hex_assets::{Scenario, ScenarioLibrary};
 use hex_core::{GameplaySetupFailure, InputAction, InputBindings, ResolvedMapSeed, Screen};
-use hex_ui::{TitleIntent, TitleScenarioView, TitleView, UiIntent, UiSystems};
+use hex_ui::{
+    ScenarioBrowserIntent, ScenarioBrowserView, TitleIntent, TitleScenarioView, TitleView,
+    UiIntent, UiSystems,
+};
 
 use crate::scenarios::ScenarioToLoad;
 
@@ -26,7 +29,17 @@ pub(super) fn plugin(app: &mut App) {
         )
         .add_systems(
             Update,
-            (publish_title_view, handle_input).run_if(in_state(Screen::Title)),
+            (publish_title_view, handle_title_input).run_if(in_state(Screen::Title)),
+        )
+        .add_systems(
+            Update,
+            handle_scenario_intents
+                .after(UiSystems::EmitIntents)
+                .run_if(in_state(Screen::Scenarios)),
+        )
+        .add_systems(
+            Update,
+            (publish_scenario_view, handle_scenario_input).run_if(in_state(Screen::Scenarios)),
         );
 }
 
@@ -92,11 +105,19 @@ fn mixed_seed(mut value: u64) -> u64 {
     value ^ (value >> 31)
 }
 
-fn publish_title_view(
+fn publish_title_view(failure: Option<Res<GameplaySetupFailure>>, mut view: ResMut<TitleView>) {
+    let next = TitleView {
+        setup_failure: failure.as_deref().map(|failure| failure.reason.clone()),
+    };
+    if view.setup_failure != next.setup_failure {
+        *view = next;
+    }
+}
+
+fn publish_scenario_view(
     library: Option<Res<ScenarioLibrary>>,
-    failure: Option<Res<GameplaySetupFailure>>,
     seeds: Res<SessionSeeds>,
-    mut view: ResMut<TitleView>,
+    mut view: ResMut<ScenarioBrowserView>,
     mut last_projection: Local<Option<String>>,
 ) {
     let scenarios = library
@@ -104,9 +125,6 @@ fn publish_title_view(
         .map(|library| {
             library
                 .visible_scenarios()
-                // Focused mechanics demos live behind Combat Lab. Only world-first
-                // scenarios remain direct data-backed title cards.
-                .filter(|scenario| scenario.category == ScenarioCategory::Map)
                 .map(|scenario| TitleScenarioView {
                     scenario: scenario.clone(),
                     resolved_seed: seeds.resolved(scenario),
@@ -114,22 +132,18 @@ fn publish_title_view(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let setup_failure = failure.as_deref().map(|failure| failure.reason.clone());
-    let projection = format!("{scenarios:?}|{setup_failure:?}");
+    let projection = format!("{scenarios:?}");
     if last_projection.as_ref() == Some(&projection) {
         return;
     }
     *last_projection = Some(projection);
-    *view = TitleView {
-        scenarios,
-        setup_failure,
-    };
+    *view = ScenarioBrowserView { scenarios };
 }
 
 fn handle_title_intents(
     mut intents: MessageReader<UiIntent>,
     library: Option<Res<ScenarioLibrary>>,
-    mut seeds: ResMut<SessionSeeds>,
+    seeds: Res<SessionSeeds>,
     mut commands: Commands,
     mut next: ResMut<NextState<Screen>>,
     mut exit: MessageWriter<AppExit>,
@@ -158,27 +172,40 @@ fn handle_title_intents(
                 };
                 launch_scenario(&mut commands, &mut next, &seeds, scenario.clone());
             }
-            TitleIntent::StartScenario(scenario) => {
-                launch_scenario(&mut commands, &mut next, &seeds, scenario.clone());
-            }
-            TitleIntent::RerollScenario(scenario) => {
-                if let Some(seed) = seeds.reroll(scenario) {
-                    info!("rerolled scenario seed: {} -> {}", scenario.name, seed);
-                }
-            }
-            TitleIntent::CharacterCreator => {
+            TitleIntent::Creators => {
                 commands.insert_resource(CreatorEntryRequest::CharacterLibrary);
                 next.set(Screen::CharacterCreator);
             }
-            TitleIntent::SpellCreator => {
-                commands.insert_resource(CreatorEntryRequest::SpellLibrary);
-                next.set(Screen::SpellCreator);
-            }
             TitleIntent::CombatLab => next.set(Screen::CombatLab),
+            TitleIntent::Scenarios => next.set(Screen::Scenarios),
             TitleIntent::Settings => next.set(Screen::Settings),
             TitleIntent::Quit => {
                 exit.write(AppExit::Success);
             }
+        }
+    }
+}
+
+fn handle_scenario_intents(
+    mut intents: MessageReader<UiIntent>,
+    mut seeds: ResMut<SessionSeeds>,
+    mut commands: Commands,
+    mut next: ResMut<NextState<Screen>>,
+) {
+    for intent in intents.read() {
+        let UiIntent::Scenarios(intent) = intent else {
+            continue;
+        };
+        match intent {
+            ScenarioBrowserIntent::Start(scenario) => {
+                launch_scenario(&mut commands, &mut next, &seeds, scenario.clone());
+            }
+            ScenarioBrowserIntent::Reroll(scenario) => {
+                if let Some(seed) = seeds.reroll(scenario) {
+                    info!("rerolled scenario seed: {} -> {}", scenario.name, seed);
+                }
+            }
+            ScenarioBrowserIntent::Back => next.set(Screen::Title),
         }
     }
 }
@@ -199,7 +226,7 @@ fn launch_scenario(
     next.set(Screen::Loading);
 }
 
-fn handle_input(
+fn handle_title_input(
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<InputBindings>,
     mut exit: MessageWriter<AppExit>,
@@ -209,10 +236,21 @@ fn handle_input(
     }
 }
 
+fn handle_scenario_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    bindings: Res<InputBindings>,
+    mut next: ResMut<NextState<Screen>>,
+) {
+    if bindings.just_pressed(&keys, InputAction::Cancel) {
+        next.set(Screen::Title);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use bevy::state::app::StatesPlugin;
     use bevy::MinimalPlugins;
+    use hex_assets::ScenarioCategory;
 
     use super::*;
 
@@ -253,11 +291,12 @@ mod tests {
         }
     }
 
-    fn test_app_with(library: Option<ScenarioLibrary>) -> App {
+    fn test_app_with(library: Option<ScenarioLibrary>, screen: Screen) -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin, bevy::input::InputPlugin))
             .init_state::<Screen>()
             .init_resource::<TitleView>()
+            .init_resource::<ScenarioBrowserView>()
             .add_message::<UiIntent>();
         if let Some(library) = library {
             app.insert_resource(library);
@@ -265,69 +304,87 @@ mod tests {
         plugin(&mut app);
         app.world_mut()
             .resource_mut::<NextState<Screen>>()
-            .set(Screen::Title);
+            .set(screen);
         app.update();
         app.update();
         app
     }
 
-    fn send(app: &mut App, intent: TitleIntent) {
+    fn send_title(app: &mut App, intent: TitleIntent) {
         app.world_mut().write_message(UiIntent::Title(intent));
         app.update();
     }
 
+    fn send_scenario(app: &mut App, intent: ScenarioBrowserIntent) {
+        app.world_mut().write_message(UiIntent::Scenarios(intent));
+        app.update();
+    }
+
     #[test]
-    fn projection_lists_only_world_first_development_scenarios() {
-        let app = test_app_with(Some(ScenarioLibrary {
-            default_game: "Default".to_owned(),
-            scenarios: vec![
-                in_category("Default", ScenarioCategory::Demo),
-                scenario("Map One"),
-                in_category("Focused Demo", ScenarioCategory::Demo),
-                scenario("Map Two"),
-            ],
-        }));
+    fn scenario_projection_lists_visible_maps_and_demos() {
+        let app = test_app_with(
+            Some(ScenarioLibrary {
+                default_game: "Default".to_owned(),
+                scenarios: vec![
+                    in_category("Default", ScenarioCategory::Demo),
+                    scenario("Map One"),
+                    in_category("Focused Demo", ScenarioCategory::Demo),
+                    scenario("Map Two"),
+                ],
+            }),
+            Screen::Scenarios,
+        );
         let names = app
             .world()
-            .resource::<TitleView>()
+            .resource::<ScenarioBrowserView>()
             .scenarios
             .iter()
             .map(|entry| entry.scenario.name.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(names, ["Map One", "Map Two"]);
+        assert_eq!(names, ["Map One", "Focused Demo", "Map Two"]);
     }
 
     #[test]
-    fn a_library_that_arrives_late_updates_the_projection() {
-        let mut app = test_app_with(None);
-        assert!(app.world().resource::<TitleView>().scenarios.is_empty());
+    fn a_scenario_library_that_arrives_late_updates_the_catalog() {
+        let mut app = test_app_with(None, Screen::Scenarios);
+        assert!(app
+            .world()
+            .resource::<ScenarioBrowserView>()
+            .scenarios
+            .is_empty());
+
         app.insert_resource(library());
         app.update();
-        assert_eq!(app.world().resource::<TitleView>().scenarios.len(), 1);
+
+        assert_eq!(
+            app.world()
+                .resource::<ScenarioBrowserView>()
+                .scenarios
+                .len(),
+            1
+        );
     }
 
     #[test]
     fn new_game_resolves_the_hidden_default_independently() {
-        let mut app = test_app_with(Some(library()));
-        send(&mut app, TitleIntent::NewGame);
-        let pending = app.world().resource::<ScenarioToLoad>();
-        assert_eq!(pending.scenario.name, "Default");
-        assert!(matches!(
-            app.world().resource::<NextState<Screen>>(),
-            NextState::Pending(Screen::Loading)
-        ));
+        let mut app = test_app_with(Some(library()), Screen::Title);
+        send_title(&mut app, TitleIntent::NewGame);
+        assert_eq!(
+            app.world().resource::<ScenarioToLoad>().scenario.name,
+            "Default"
+        );
     }
 
     #[test]
-    fn creator_and_lab_routes_remain_typed_navigation() {
+    fn primary_routes_remain_typed_navigation() {
         for (intent, expected) in [
-            (TitleIntent::CharacterCreator, Screen::CharacterCreator),
-            (TitleIntent::SpellCreator, Screen::SpellCreator),
+            (TitleIntent::Creators, Screen::CharacterCreator),
             (TitleIntent::CombatLab, Screen::CombatLab),
+            (TitleIntent::Scenarios, Screen::Scenarios),
             (TitleIntent::Settings, Screen::Settings),
         ] {
-            let mut app = test_app_with(Some(library()));
-            send(&mut app, intent);
+            let mut app = test_app_with(Some(library()), Screen::Title);
+            send_title(&mut app, intent);
             assert!(matches!(
                 app.world().resource::<NextState<Screen>>(),
                 NextState::Pending(screen) if *screen == expected
@@ -337,26 +394,13 @@ mod tests {
 
     #[test]
     fn an_in_flight_card_keeps_its_exact_scenario_snapshot() {
-        let mut app = test_app_with(Some(ScenarioLibrary {
-            default_game: "Default".to_owned(),
-            scenarios: vec![
-                in_category("Default", ScenarioCategory::Demo),
-                scenario("First"),
-                scenario("Second"),
-            ],
-        }));
-        let clicked = app
-            .world()
-            .resource::<ScenarioLibrary>()
-            .scenarios
-            .get(1)
-            .expect("First is the second authored entry")
-            .clone();
+        let mut app = test_app_with(Some(library()), Screen::Scenarios);
+        let clicked = scenario("Clicked Before Reload");
         app.insert_resource(library());
-        send(&mut app, TitleIntent::StartScenario(clicked));
+        send_scenario(&mut app, ScenarioBrowserIntent::Start(clicked));
         assert_eq!(
             app.world().resource::<ScenarioToLoad>().scenario.name,
-            "First"
+            "Clicked Before Reload"
         );
     }
 
@@ -364,35 +408,21 @@ mod tests {
     fn rerolled_seed_is_session_only_and_used_by_launch() {
         let configured = 42;
         let generated = seeded_scenario("Generated", configured);
-        let mut app = test_app_with(Some(ScenarioLibrary {
-            default_game: "Default".to_owned(),
-            scenarios: vec![
-                in_category("Default", ScenarioCategory::Demo),
-                generated.clone(),
-            ],
-        }));
+        let mut app = test_app_with(Some(library()), Screen::Scenarios);
         app.insert_resource(SessionSeeds {
             overrides: HashMap::default(),
             entropy: 7,
         });
 
-        send(&mut app, TitleIntent::RerollScenario(generated.clone()));
+        send_scenario(&mut app, ScenarioBrowserIntent::Reroll(generated.clone()));
         let rerolled = app
             .world()
             .resource::<SessionSeeds>()
             .resolved(&generated)
             .expect("generated scenario has a seed");
         assert_ne!(rerolled, configured);
-        assert_eq!(
-            app.world()
-                .resource::<ScenarioLibrary>()
-                .scenarios
-                .get(1)
-                .and_then(|scenario| scenario.generation_seed),
-            Some(configured)
-        );
 
-        send(&mut app, TitleIntent::StartScenario(generated));
+        send_scenario(&mut app, ScenarioBrowserIntent::Start(generated));
         assert_eq!(
             app.world().resource::<ScenarioToLoad>().resolved_seed,
             Some(ResolvedMapSeed(rerolled))

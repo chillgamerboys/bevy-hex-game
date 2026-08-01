@@ -373,11 +373,6 @@
       "name": "gameplay-visual",
       "patterns": [
         "walks/gameplay_ui.ron",
-        "walks/gameplay_ui_native.ron",
-        "walks/gameplay_ui_native_prepare_200.ron",
-        "walks/gameplay_ui_native_restart_200.ron",
-        "tools/capture_macos_game_window.sh",
-        "tools/run_gameplay_ui_native_review_macos.sh",
         "walks/gameplay.ron",
         "walks/menus.ron",
         "walks/ability_lab.ron",

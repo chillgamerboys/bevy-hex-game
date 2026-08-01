@@ -12,20 +12,19 @@
 - [ ] Residual workspace tests and doctests (unless Markdown-only)
 - [ ] `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features` (unless Markdown-only)
 - [ ] `cargo build --workspace --profile ci` (unless Markdown-only; CI builds all three platforms)
-- [ ] Structural UI oracle and six-frame offscreen walk green; agent read every frame
-- [ ] Four-checkpoint native macOS route recorded at this exact head (when UI/runtime applies)
+- [ ] Structural UI oracle and scoped Bevy image-target walk green; agent read every frame
 
 ### Manual runtime sign-off
 
 <!--
 Gameplay runtime changes may be marked ready only after a named human runs the
 release-shaped build at the exact final PR head. Any later push invalidates this
-sign-off. Agent-operated native review and visual-walk evidence are useful but do not
+sign-off. Agent-operated Bevy frame review and visual-walk evidence are useful but do not
 replace the named human gate. Source lanes targeting wave/* defer this evidence to
 the combined wave PR into dev; do not copy a sign-off from a lane or older wave head.
 -->
 
-- Agent-operated native review:
+- Agent-operated Bevy visual review:
 
 Manual runtime result: <PASS or BLOCKED>
 Manual runtime commit: <full 40-character PR head SHA>

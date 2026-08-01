@@ -15,7 +15,8 @@ use hex_core::{LatticeCoord, Screen};
 use hex_gameplay_model::CreatorSurface as CreatorTab;
 
 use crate::{
-    blurb, display, effect_summary, element_color, fine, heading, label, panel, panel_node,
+    blurb, body_text_role, compact_glyph_role, display, effect_summary, element_color, fine,
+    heading, label, owner_resolved_control_role, panel, panel_node, responsive_control_role,
     row_button, screen_root, short_name, CharacterBuildSummary, CreatorEffectKind, CreatorIntent,
     CreatorLibraryView, CreatorNameField, CreatorScreenView, CreatorWorkspace, OwnColors,
     ResolvedUiMetrics, SpellBuildSummary, UiAssets, UiIntent, UiSystems, UiViewportClass, ACCENT,
@@ -44,8 +45,9 @@ pub(super) fn plugin(app: &mut App) {
     app.add_systems(
         Update,
         (
-            render,
-            apply_creator_layout,
+            (render, apply_creator_layout)
+                .chain()
+                .in_set(UiSystems::Render),
             emit_actions.in_set(UiSystems::EmitIntents),
             emit_name_changes.in_set(UiSystems::EmitIntents),
         )
@@ -203,9 +205,10 @@ fn render(
     mut commands: Commands,
     roots: Query<Entity, With<CreatorRoot>>,
     view: Res<CreatorScreenView>,
+    metrics: Res<ResolvedUiMetrics>,
     assets: Res<UiAssets>,
 ) {
-    if !view.is_changed() {
+    if !view.is_changed() && !metrics.is_changed() {
         return;
     }
     for root in &roots {
@@ -224,6 +227,7 @@ fn render(
         view.spell_file.as_ref(),
         view.lattice_file.as_ref(),
         view.presets.as_ref(),
+        metrics.control_scale,
     );
 }
 
@@ -260,6 +264,7 @@ fn spawn_creator_ui(
     spell_file: Option<&SpellFile>,
     lattice_file: Option<&LatticeFile>,
     presets: Option<&CreationPresetCatalog>,
+    semantic_control_scale: f32,
 ) {
     let screen = match session.tab {
         CreatorTab::Characters => Screen::CharacterCreator,
@@ -305,15 +310,17 @@ fn spawn_creator_ui(
                         CreatorHeaderActions,
                         Node {
                             flex_direction: FlexDirection::Row,
+                            flex_wrap: FlexWrap::Wrap,
                             column_gap: Val::Px(8.0),
+                            row_gap: Val::Px(6.0),
                             align_items: AlignItems::Center,
                             ..default()
                         },
                     ))
                     .with_children(|actions| {
                         if session.workspace != CreatorWorkspace::Hub {
-                            action_button(actions, assets, "Undo", CreatorIntent::Undo, 90.0);
-                            action_button(actions, assets, "Redo", CreatorIntent::Redo, 90.0);
+                            action_button(actions, assets, "Undo", CreatorIntent::Undo, 160.0);
+                            action_button(actions, assets, "Redo", CreatorIntent::Redo, 160.0);
                         }
                         if store.error.is_some() {
                             action_button(
@@ -325,7 +332,7 @@ fn spawn_creator_ui(
                                     "Reset Library"
                                 },
                                 CreatorIntent::ResetLibrary,
-                                140.0,
+                                220.0,
                             );
                         }
                         let current_dirty = match session.tab {
@@ -338,7 +345,7 @@ fn spawn_creator_ui(
                                 assets,
                                 "Discard Changes",
                                 CreatorIntent::DiscardChanges,
-                                150.0,
+                                260.0,
                             );
                         }
                         action_button(
@@ -350,7 +357,7 @@ fn spawn_creator_ui(
                                 "Library"
                             },
                             CreatorIntent::Back,
-                            100.0,
+                            180.0,
                         );
                     });
             });
@@ -389,6 +396,7 @@ fn spawn_creator_ui(
                     spell_book,
                     lattice_file,
                     presets,
+                    semantic_control_scale,
                 ),
                 CreatorWorkspace::Spell => spawn_spell_tab(
                     body, assets, session, store, elements, spell_book, spell_file, presets,
@@ -701,6 +709,8 @@ fn name_input(
             visible_width: Some(24.0),
             ..EditableText::new(value)
         },
+        body_text_role(),
+        responsive_control_role(),
         TextFont {
             font: assets.body.clone().into(),
             ..TextFont::from_font_size(18.0)
@@ -711,6 +721,7 @@ fn name_input(
         Node {
             width: Val::Percent(100.0),
             min_height: Val::Px(44.0),
+            flex_shrink: 0.0,
             padding: UiRect::all(Val::Px(9.0)),
             border: UiRect::all(Val::Px(1.0)),
             ..default()
@@ -732,6 +743,7 @@ fn spawn_character_tab(
     spell_book: Option<&SpellBook>,
     _lattice_file: Option<&LatticeFile>,
     _presets: Option<&CreationPresetCatalog>,
+    semantic_control_scale: f32,
 ) {
     let Some(character) = &session.character else {
         body.spawn(blurb(assets, "No character draft."));
@@ -940,6 +952,7 @@ fn spawn_character_tab(
                                 session.zoom_step,
                                 elements,
                                 &store.file,
+                                semantic_control_scale,
                             );
                         });
                 });
@@ -1094,7 +1107,7 @@ fn spawn_character_actions(
                 assets,
                 "Duplicate",
                 CreatorIntent::DuplicateCharacter,
-                120.0,
+                220.0,
             );
             action_button(
                 actions,
@@ -1142,6 +1155,7 @@ fn spawn_lattice_cells(
     zoom_step: i8,
     elements: Option<&ElementCatalog>,
     library: &hex_assets::CreationLibraryFile,
+    semantic_control_scale: f32,
 ) {
     let occupied: BTreeSet<LatticeCoord> =
         character.cells.iter().map(CreationCell::coord).collect();
@@ -1154,7 +1168,8 @@ fn spawn_lattice_cells(
                 .filter(|neighbor| !occupied.contains(neighbor)),
         );
     }
-    let scale = lattice_scale(zoom_step);
+    let intrinsic_scale = lattice_scale(zoom_step);
+    let scale = intrinsic_scale * semantic_control_scale.max(1.0);
     for cell in &character.cells {
         let coord = cell.coord();
         let (left, top) = lattice_pixel(coord, scale);
@@ -1168,6 +1183,7 @@ fn spawn_lattice_cells(
                 Name::new(format!("Creator Cell {},{}", coord.q(), coord.r())),
                 crate::lattice::TessellatedControl,
                 Button,
+                owner_resolved_control_role(),
                 CreatorIntent::SelectCell(coord),
                 ImageNode {
                     image: assets.hex_cell.clone(),
@@ -1189,9 +1205,10 @@ fn spawn_lattice_cells(
             .with_children(|hex| {
                 hex.spawn((
                     Text::new(resolved_cell_label(&cell.kind, library)),
+                    compact_glyph_role((11.0 * intrinsic_scale).max(9.0)),
                     TextFont {
                         font: assets.body.clone().into(),
-                        ..TextFont::from_font_size((11.0 * scale).max(9.0))
+                        ..TextFont::from_font_size((11.0 * intrinsic_scale).max(9.0))
                     },
                     TextColor(LABEL),
                     Pickable::IGNORE,
@@ -1204,9 +1221,10 @@ fn spawn_lattice_cells(
                     } else {
                         ""
                     }),
+                    compact_glyph_role((8.0 * intrinsic_scale).max(7.0)),
                     TextFont {
                         font: assets.body.clone().into(),
-                        ..TextFont::from_font_size((8.0 * scale).max(7.0))
+                        ..TextFont::from_font_size((8.0 * intrinsic_scale).max(7.0))
                     },
                     TextColor(if selected_cell { ACCENT } else { LABEL }),
                     Pickable::IGNORE,
@@ -1221,6 +1239,7 @@ fn spawn_lattice_cells(
                     Name::new(format!("Add Cell {},{}", coord.q(), coord.r())),
                     crate::lattice::TessellatedControl,
                     Button,
+                    owner_resolved_control_role(),
                     CreatorIntent::AddCell(coord),
                     ImageNode {
                         image: assets.hex_cell.clone(),
@@ -1653,7 +1672,7 @@ fn spawn_spell_tab(
                     assets,
                     "Duplicate",
                     CreatorIntent::DuplicateSpell,
-                    120.0,
+                    220.0,
                 );
                 action_button(
                     actions,

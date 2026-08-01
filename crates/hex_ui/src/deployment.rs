@@ -27,8 +27,7 @@ pub(super) fn plugin(app: &mut App) {
     app.add_systems(
         Update,
         (
-            render,
-            apply_layout,
+            (render, apply_layout).chain().in_set(UiSystems::Render),
             emit_actions.in_set(UiSystems::EmitIntents),
         )
             .run_if(in_state(Screen::Gameplay)),
@@ -206,8 +205,13 @@ fn deployment_button(
     text: &'static str,
     action: DeploymentIntent,
 ) {
+    let width = if matches!(action, DeploymentIntent::AutoPlace) {
+        330.0
+    } else {
+        250.0
+    };
     parent
-        .spawn((row_button(text, 166.0), action))
+        .spawn((row_button(text, width), action))
         .with_child(label(assets, text));
 }
 
@@ -259,18 +263,25 @@ fn apply_layout(
         return;
     }
     let compact = metrics.viewport == UiViewportClass::Compact;
+    let stacked = compact || metrics.content_scale >= 1.5;
     let ultra_constrained = is_ultra_constrained(*metrics);
     for (entity, mut node) in &mut roots {
-        (node.left, node.right) = match metrics.viewport {
-            UiViewportClass::Compact if ultra_constrained => (Val::Px(8.0), Val::Px(8.0)),
-            UiViewportClass::Compact => (Val::Px(196.0), Val::Px(12.0)),
-            UiViewportClass::Standard => (Val::Px(244.0), Val::Px(320.0)),
-            UiViewportClass::Wide => (Val::Px(288.0), Val::Px(360.0)),
+        (node.left, node.right) = if stacked && metrics.content_scale >= 1.5 {
+            (Val::Px(12.0), Val::Px(12.0))
+        } else {
+            match metrics.viewport {
+                UiViewportClass::Compact if ultra_constrained => (Val::Px(8.0), Val::Px(8.0)),
+                UiViewportClass::Compact => (Val::Px(196.0), Val::Px(12.0)),
+                UiViewportClass::Standard => (Val::Px(244.0), Val::Px(320.0)),
+                UiViewportClass::Wide => (Val::Px(288.0), Val::Px(360.0)),
+            }
         };
         node.top = Val::Px(if ultra_constrained {
             68.0
         } else if compact {
             12.0
+        } else if stacked {
+            68.0
         } else {
             18.0
         });
@@ -278,46 +289,48 @@ fn apply_layout(
             Val::Px(8.0)
         } else if compact {
             Val::Px(action_rail_clearance(metrics.viewport))
+        } else if stacked {
+            Val::Px(68.0)
         } else {
             Val::Auto
         };
-        node.min_height = if compact {
+        node.min_height = if stacked {
             Val::Px(0.0)
         } else {
             Val::Px(126.0)
         };
-        node.flex_direction = if compact {
+        node.flex_direction = if stacked {
             FlexDirection::Column
         } else {
             FlexDirection::Row
         };
-        node.overflow = if compact {
+        node.overflow = if stacked {
             Overflow::scroll_y()
         } else {
             Overflow::default()
         };
-        if compact {
+        if stacked {
             commands.entity(entity).insert(ScrollArea);
         } else {
             commands.entity(entity).remove::<ScrollArea>();
         }
     }
     for mut node in &mut summary {
-        node.width = if compact {
+        node.width = if stacked {
             Val::Percent(100.0)
         } else {
             Val::Px(300.0)
         };
     }
     for mut node in &mut sides {
-        node.width = if compact {
+        node.width = if stacked {
             Val::Percent(100.0)
         } else {
             Val::Px(245.0)
         };
     }
     for mut node in &mut actions {
-        node.width = if compact {
+        node.width = if stacked {
             Val::Percent(100.0)
         } else {
             Val::Px(340.0)
