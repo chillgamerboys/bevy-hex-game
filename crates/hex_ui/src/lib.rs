@@ -2896,6 +2896,22 @@ pub mod test_support {
                 end.fully_visible,
                 "the final drawer action must be usable: {end:?}"
             );
+            let drawer = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.name == "Combat Lab Live Statistics Drawer")
+                .and_then(|node| node.visible_bounds)
+                .expect("the expanded statistics drawer must be visible");
+            let own_lattice = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.name == "Own Lattice Panel")
+                .and_then(|node| node.visible_bounds)
+                .expect("the inspector lattice must remain structurally mounted beneath it");
+            assert!(
+                rect_contains(drawer, own_lattice),
+                "the expanded drawer must fully replace the read-only inspector instead of partially overlapping it: drawer={drawer:?}, inspector={own_lattice:?}"
+            );
         }
 
         #[test]

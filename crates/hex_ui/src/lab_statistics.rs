@@ -222,9 +222,12 @@ fn apply_layout(
                 node.display = Display::Flex;
                 node.left = Val::Auto;
                 node.right = Val::Px(12.0);
-                node.top = Val::Px(92.0);
+                node.top = Val::Px(12.0);
                 node.bottom = Val::Auto;
-                node.width = Val::Px(250.0 * metrics.control_scale.max(1.0) + 20.0);
+                // The expanded drawer owns the inspector region. Matching its
+                // complete width prevents the read-only lattice beneath it from
+                // peeking around the opaque replacement surface.
+                node.width = Val::Px(300.0);
                 node.max_height = Val::Px(520.0);
                 node.flex_direction = FlexDirection::Column;
                 node.align_items = AlignItems::Stretch;
@@ -234,9 +237,9 @@ fn apply_layout(
                 node.display = Display::Flex;
                 node.left = Val::Auto;
                 node.right = Val::Px(16.0);
-                node.top = Val::Px(96.0);
+                node.top = Val::Px(16.0);
                 node.bottom = Val::Auto;
-                node.width = Val::Px(250.0 * metrics.control_scale.max(1.0) + 20.0);
+                node.width = Val::Px(332.0);
                 node.max_height = Val::Px(560.0);
                 node.flex_direction = FlexDirection::Column;
                 node.align_items = AlignItems::Stretch;
