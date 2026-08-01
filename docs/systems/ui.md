@@ -109,9 +109,9 @@ and named text node's actual glyph rectangles with the canvas and Bevy's inherit
 `CalculatedClip`; a nonzero `ComputedNode` whose glyphs or box cross a clipped edge
 is not treated as fully visible. The oracle also checks focus order and interactive
 overlap without interpreting the text or pixels as gameplay truth.
-The matrix uses the full production title catalog, populated Settings, Creator and
-Combat Lab setup projections, a 6v6 deployment, and the maximum ordinary gameplay
-action rail plus required, aiming, statistics, and report states. A half logical
+The matrix uses the full production title routes and Scenarios catalog, populated
+Settings, Creator and Combat Lab setup projections, a 6v6 deployment, and the maximum
+ordinary gameplay action rail plus required, aiming, statistics, and report states. A half logical
 pixel is the only target-size tolerance, accounting for physical-pixel rounding at
 fractional Auto scales.
 
