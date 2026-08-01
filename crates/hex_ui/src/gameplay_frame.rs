@@ -128,14 +128,43 @@ fn spawn_region(
 
 fn apply_responsive_layout(
     metrics: Res<ResolvedUiMetrics>,
+    statistics: Res<crate::LabStatisticsView>,
+    chrome: Res<GameplayChromeView>,
+    review: Option<Res<crate::review::UiReviewPresentation>>,
     added_regions: Query<(), Added<UiRegionRole>>,
     mut regions: Query<(&UiRegionRole, &mut Node)>,
 ) {
-    if !metrics.is_changed() && added_regions.is_empty() {
+    let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
+    if !metrics.is_changed()
+        && !statistics.is_changed()
+        && !chrome.is_changed()
+        && !review_changed
+        && added_regions.is_empty()
+    {
         return;
     }
+    let statistics = review
+        .as_ref()
+        .and_then(|review| review.statistics.as_ref())
+        .unwrap_or(statistics.as_ref());
+    let show_statistics = statistics.present && statistics.visible && !chrome.decision_required;
     for (role, mut node) in &mut regions {
         constrain_region_to_canvas(*metrics, *role, &mut node);
+        if *role != UiRegionRole::Inspector
+            || metrics.viewport == crate::UiViewportClass::Compact
+            || !show_statistics
+        {
+            continue;
+        }
+        if statistics.expanded {
+            // Expanded statistics are the sole owner of the secondary inspector
+            // region. Do not keep painting an unreachable lattice underneath.
+            node.display = Display::None;
+        } else if let Val::Px(top) = node.top {
+            // Collapsed controls remain independently actionable above the
+            // lattice, so reserve their semantic height instead of covering it.
+            node.top = Val::Px(top + crate::lab_statistics::collapsed_drawer_clearance(*metrics));
+        }
     }
 }
 

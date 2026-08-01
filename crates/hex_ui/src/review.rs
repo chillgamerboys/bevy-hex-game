@@ -93,6 +93,7 @@ pub fn apply_ui_review_fixture(commands: &mut Commands, name: &str) -> Result<()
                 expanded: false,
                 text: "Round 4 · live Combat Lab totals".to_owned(),
             });
+            review.lattices = Some(populated_lattices());
         }
         "required-decision" => {
             review.hud = Some(required_hud());

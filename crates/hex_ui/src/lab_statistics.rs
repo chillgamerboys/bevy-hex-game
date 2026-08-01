@@ -8,7 +8,7 @@ use hex_core::Screen;
 use crate::{
     blurb, hud_heading, layout::is_ultra_constrained, row_button, supporting_text_role,
     DespawnOnExit, GameplayChromeView, LabStatisticsIntent, LabStatisticsView, ResolvedUiMetrics,
-    UiAssets, UiIntent, UiRegionRole, UiSystems, UiViewportClass, ACCENT_EDGE, LABEL,
+    UiAssets, UiIntent, UiSystems, UiViewportClass, ACCENT_EDGE, LABEL,
 };
 
 #[derive(Component)]
@@ -111,22 +111,15 @@ fn render(
     view: Res<LabStatisticsView>,
     chrome: Res<GameplayChromeView>,
     review: Option<Res<crate::review::UiReviewPresentation>>,
-    added_regions: Query<(), Added<UiRegionRole>>,
     added_drawers: Query<(), Added<Drawer>>,
     mut drawers: Query<&mut Visibility, With<Drawer>>,
-    mut bodies: Query<&mut Visibility, (With<Body>, Without<Drawer>, Without<UiRegionRole>)>,
-    mut regions: Query<(&UiRegionRole, &mut Visibility), (Without<Drawer>, Without<Body>)>,
+    mut bodies: Query<&mut Visibility, (With<Body>, Without<Drawer>)>,
     mut summaries: Query<&mut Text, With<Summary>>,
     buttons: Query<(&Control, &Children)>,
     mut labels: Query<&mut Text, (Without<Summary>, Without<Drawer>)>,
 ) {
     let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
-    if !view.is_changed()
-        && !chrome.is_changed()
-        && !review_changed
-        && added_regions.is_empty()
-        && added_drawers.is_empty()
-    {
+    if !view.is_changed() && !chrome.is_changed() && !review_changed && added_drawers.is_empty() {
         return;
     }
     let view = review
@@ -134,16 +127,6 @@ fn render(
         .and_then(|review| review.statistics.as_ref())
         .unwrap_or(view.as_ref());
     let show_drawer = view.present && view.visible && !chrome.decision_required;
-    let replaces_inspector = show_drawer && view.expanded;
-    for (role, mut visibility) in &mut regions {
-        if *role == UiRegionRole::Inspector {
-            *visibility = if replaces_inspector {
-                Visibility::Hidden
-            } else {
-                Visibility::Inherited
-            };
-        }
-    }
     for mut visibility in &mut drawers {
         *visibility = if show_drawer {
             Visibility::Inherited
@@ -270,6 +253,15 @@ fn apply_layout(
             }
         }
     }
+}
+
+/// Vertical space occupied by the two collapsed Lab controls plus a gutter.
+/// The inspector-region owner uses the same fact so a lattice never renders
+/// beneath an opaque drawer that happens to be collapsed.
+pub(crate) fn collapsed_drawer_clearance(metrics: ResolvedUiMetrics) -> f32 {
+    let control_scale = metrics.control_scale.max(1.0);
+    // Drawer padding (20) + two 48px controls + row gap (7) + surface gutter (8).
+    35.0 + 96.0 * control_scale
 }
 
 fn emit_intents(
