@@ -340,10 +340,11 @@ Conventional Commits — `/release` computes the version bump from them.
 merge without a green receipt for the current HEAD.
 Test tiers: `/test-quick` (fmt+clippy+tests) → `/test-local` (+deny, doc,
 links) → `/test-full` (+ship build; the visual walk stays manual).
-Gameplay tests are partitioned by concern in
-[`docs/development/gameplay-testing.md`](docs/development/gameplay-testing.md);
-logical combat evidence comes from rules/contracts/simulation/app data, while a
-scoped gameplay visual run is capped at ten reviewed presentation frames.
+Gameplay and map tests are partitioned by concern in
+[`docs/development/gameplay-testing.md`](docs/development/gameplay-testing.md) and
+[`docs/development/map-testing.md`](docs/development/map-testing.md); logical combat
+evidence comes from rules/contracts/simulation/app data, while map logic uses
+unit/generation/publication data and retains its existing visual criteria.
 Standalone audits: `/audit-diff`, `/audit-silent-failures`, `/update-docs`,
 `/visual-walk` (the scripted capture walk — audit-pr's Step 2.5; the agent
 reads the frames, and the human walk still owns motion and taste).

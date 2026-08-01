@@ -465,9 +465,10 @@ asks for is looking at the window.
 
 ## Testing
 
-Testing is partitioned by the authority needed for the claim. The complete gameplay
-matrix, commands, dependency ceilings, budgets, and anti-patterns are the
-[gameplay testing contract](development/gameplay-testing.md).
+Testing is partitioned by the authority needed for the claim. The complete matrices,
+commands, dependency ceilings, budgets, and anti-patterns are the
+[gameplay](development/gameplay-testing.md) and
+[map](development/map-testing.md) testing contracts.
 
 **Pure unit tests** live beside behavior throughout the workspace and do not need a GPU:
 coordinate round-tripping, the cube invariant, lattice properties, content validation,

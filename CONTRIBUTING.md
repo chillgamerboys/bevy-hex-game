@@ -46,33 +46,33 @@ Run the same Rust checks CI runs:
 ```sh
 cargo fmt --all --check
 cargo deny check
-python3 tools/gameplay_scope.py plan --base origin/dev --head HEAD
-python3 tools/gameplay_scope.py check-graph rules
-python3 tools/gameplay_scope.py run clippy
-python3 tools/gameplay_scope.py run rules
-python3 tools/gameplay_scope.py run contracts
-python3 tools/gameplay_scope.py run simulation
-python3 tools/gameplay_scope.py run app
-python3 tools/gameplay_scope.py run residual
-cargo nextest run --workspace --all-features --cargo-profile ci --profile ci -E 'package(hex_map)'
+python3 tools/test_scope.py plan --base origin/dev --head HEAD
+python3 tools/test_scope.py check-graph rules
+python3 tools/test_scope.py check-partitions map
+python3 tools/test_scope.py run clippy
+python3 tools/test_scope.py run rules
+python3 tools/test_scope.py run contracts
+python3 tools/test_scope.py run simulation
+python3 tools/test_scope.py run app
+python3 tools/test_scope.py run map_unit
+python3 tools/test_scope.py run map_generation
+python3 tools/test_scope.py run map_contracts
+python3 tools/test_scope.py run residual
 cargo test --workspace --all-features --profile ci --doc
-python3 tools/gameplay_scope.py run docs
+python3 tools/test_scope.py run docs
 cargo build --workspace --profile ci
 ```
 
-The explicit map command mirrors its separately budgeted, world-owned CI shard; it
-is part of the full local gate, not a gameplay concern command. CI runs the final
-build command on Linux, Windows, and macOS. Run it on your local platform; the CI
-matrix covers the other two. Markdown-only changes skip the Rust commands, but
-still need valid relative links.
+CI runs the final build command on Linux, Windows, and macOS. Run it on your local
+platform; the CI matrix covers the other two. Markdown-only changes skip the Rust
+commands, but still need valid relative links.
 
-The gameplay commands are separated because their evidence has different authority:
-pure rules, focused ECS contracts, deterministic multi-turn snapshots, and headless
-game/UI behavior. Their exact Cargo package, target, and feature selections live in
-`.config/gameplay-test-scopes.json`; do not duplicate or broaden them in a new
-workflow. See the
-[gameplay testing contract](docs/development/gameplay-testing.md) before adding a
-helper, integration binary, screenshot, soak, or balance claim.
+The concern commands are separated because their evidence has different authority.
+Their exact Cargo package, target, and feature selections live in
+`.config/test-scopes.json`; do not duplicate or broaden them in a new workflow. See
+the [gameplay](docs/development/gameplay-testing.md) and
+[map](docs/development/map-testing.md) testing contracts before adding a helper,
+integration binary, screenshot, soak, or balance claim.
 
 **Then run the affected application.** This is not optional, and it is not covered by
 the above. Several failure modes here produce a clean log and a wrong window: missing
