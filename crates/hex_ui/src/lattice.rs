@@ -5,7 +5,7 @@
 //! source is the boundary that prevents a hostile readout from reaching around
 //! `FactionLatticeKnowledge` for more information.
 
-use crate::{OwnColors, UiAssets, LABEL};
+use crate::{compact_glyph_role, owner_resolved_control_role, OwnColors, UiAssets, LABEL};
 use bevy::input_focus::tab_navigation::TabIndex;
 use bevy::prelude::*;
 use hex_core::LatticeCoord;
@@ -84,10 +84,13 @@ pub fn spawn_lattice_cells<M: Bundle>(
     views: &[LatticeCellView],
     assets: &UiAssets,
     scale: LatticeScale,
+    semantic_control_scale: f32,
     name_prefix: &str,
     mut marker: impl FnMut(LatticeCoord) -> M,
 ) {
-    let Some((min, max)) = bounds(views, scale) else {
+    let semantic_control_scale = semantic_control_scale.max(1.0);
+    let resolved_scale = LatticeScale(scale.0 * semantic_control_scale);
+    let Some((min, max)) = bounds(views, resolved_scale) else {
         return;
     };
 
@@ -95,15 +98,15 @@ pub fn spawn_lattice_cells<M: Bundle>(
         .spawn((
             Name::new(format!("{name_prefix} Lattice")),
             Node {
-                width: Val::Px(max.0 - min.0 + CELL_SIZE * scale.0),
-                height: Val::Px(max.1 - min.1 + CELL_HEIGHT * scale.0),
+                width: Val::Px(max.0 - min.0 + CELL_SIZE * resolved_scale.0),
+                height: Val::Px(max.1 - min.1 + CELL_HEIGHT * resolved_scale.0),
                 ..default()
             },
             Pickable::IGNORE,
         ))
         .with_children(|lattice| {
             for view in views {
-                let (x, y) = cell_position(view.coord, scale);
+                let (x, y) = cell_position(view.coord, resolved_scale);
                 let mut cell = lattice.spawn((
                     Name::new(format!(
                         "{name_prefix} Cell ({}, {})",
@@ -121,8 +124,8 @@ pub fn spawn_lattice_cells<M: Bundle>(
                         position_type: PositionType::Absolute,
                         left: Val::Px(x - min.0),
                         top: Val::Px(y - min.1),
-                        width: Val::Px(CELL_SIZE * scale.0),
-                        height: Val::Px(CELL_HEIGHT * scale.0),
+                        width: Val::Px(CELL_SIZE * resolved_scale.0),
+                        height: Val::Px(CELL_HEIGHT * resolved_scale.0),
                         align_items: AlignItems::Center,
                         justify_content: JustifyContent::Center,
                         flex_direction: FlexDirection::Column,
@@ -135,6 +138,7 @@ pub fn spawn_lattice_cells<M: Bundle>(
                 if view.interaction == CellInteraction::Actionable {
                     cell.insert((
                         Button,
+                        owner_resolved_control_role(),
                         AccessibleLabel::new(format!(
                             "{} · {} · lattice cell {}, {}",
                             view.label,
@@ -148,20 +152,24 @@ pub fn spawn_lattice_cells<M: Bundle>(
                     cell.insert(Pickable::IGNORE);
                 }
                 cell.with_children(|cell| {
+                    let label_size = (11.0 * scale.0).max(9.0);
                     cell.spawn((
                         Text::new(view.label.clone()),
+                        compact_glyph_role(label_size),
                         TextFont {
                             font: assets.body.clone().into(),
-                            ..TextFont::from_font_size((11.0 * scale.0).max(9.0))
+                            ..TextFont::from_font_size(label_size)
                         },
                         TextColor(LABEL),
                         Pickable::IGNORE,
                     ));
+                    let detail_size = (10.0 * scale.0).max(8.0);
                     cell.spawn((
                         Text::new(view.detail.clone()),
+                        compact_glyph_role(detail_size),
                         TextFont {
                             font: assets.body.clone().into(),
-                            ..TextFont::from_font_size((10.0 * scale.0).max(8.0))
+                            ..TextFont::from_font_size(detail_size)
                         },
                         TextColor(Color::srgba(1.0, 1.0, 1.0, 0.75)),
                         Pickable::IGNORE,
@@ -271,6 +279,7 @@ mod tests {
                     &[view(CellInteraction::ReadOnly, false)],
                     &assets,
                     LatticeScale::PANEL,
+                    1.0,
                     "Target",
                     |_| (),
                 );

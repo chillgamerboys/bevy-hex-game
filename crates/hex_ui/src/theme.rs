@@ -38,7 +38,7 @@ pub const BLURB_SIZE: f32 = 18.0;
 /// Optional metadata size at 100% scale.
 pub const FINE_SIZE: f32 = 16.0;
 
-#[derive(Component, Clone, Copy)]
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
 enum SemanticText {
     Display,
     ScreenTitle,
@@ -46,11 +46,23 @@ enum SemanticText {
     Body,
     Supporting,
     Metadata,
+    /// A redundant label constrained inside a diagram cell.
+    ///
+    /// These labels intentionally remain below the 18-pixel essential-text floor:
+    /// lattice cells and miniature arena tokens expose their complete meaning through
+    /// an accessible control label or adjacent body copy. They still grow with the
+    /// moderated control scale so the accessibility preference is never ignored.
+    CompactGlyph {
+        base_size: f32,
+    },
 }
 
-#[derive(Component)]
-struct SemanticControl {
-    applied_scale: f32,
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+enum SemanticControl {
+    /// Shared target geometry scales from the node's current authored dimensions.
+    Responsive { applied_scale: f32 },
+    /// The owning renderer resolves a tessellated or otherwise coupled geometry.
+    OwnerResolved,
 }
 
 /// Opts a control out of shared interaction paint because it owns state colors.
@@ -78,7 +90,7 @@ pub(super) fn plugin(app: &mut App) {
     app.add_systems(
         Update,
         (
-            apply_semantic_metrics.after(crate::scale::apply_ui_scale),
+            apply_semantic_metrics.in_set(crate::scale::SemanticMetricsSystems::Apply),
             paint_interactions,
         ),
     );
@@ -190,6 +202,36 @@ fn text_bundle(
     )
 }
 
+/// Applies essential body typography to a custom text entity.
+#[must_use]
+pub(crate) const fn body_text_role() -> impl Bundle {
+    SemanticText::Body
+}
+
+/// Applies supporting typography to a custom text entity.
+#[must_use]
+pub(crate) const fn supporting_text_role() -> impl Bundle {
+    SemanticText::Supporting
+}
+
+/// Marks a compact diagram glyph that is redundant with an accessible label or copy.
+#[must_use]
+pub(crate) const fn compact_glyph_role(base_size: f32) -> impl Bundle {
+    SemanticText::CompactGlyph { base_size }
+}
+
+/// Opts custom control geometry into moderated semantic target scaling.
+#[must_use]
+pub(crate) const fn responsive_control_role() -> impl Bundle {
+    SemanticControl::Responsive { applied_scale: 1.0 }
+}
+
+/// Marks control geometry whose owner already scales the coupled layout as a unit.
+#[must_use]
+pub(crate) const fn owner_resolved_control_role() -> impl Bundle {
+    SemanticControl::OwnerResolved
+}
+
 /// Standard full-width menu action.
 #[must_use]
 pub fn button(name: impl Into<String>) -> impl Bundle {
@@ -199,7 +241,7 @@ pub fn button(name: impl Into<String>) -> impl Bundle {
         AccessibleLabel::new(name),
         Button,
         TabIndex(0),
-        SemanticControl { applied_scale: 1.0 },
+        responsive_control_role(),
         Node {
             width: Val::Px(440.0),
             min_height: Val::Px(48.0),
@@ -247,6 +289,7 @@ pub(crate) fn fixed_row_button(name: impl Into<String>, width: f32, height: f32)
         AccessibleLabel::new(name),
         Button,
         TabIndex(0),
+        owner_resolved_control_role(),
         Node {
             width: Val::Px(width),
             min_width: Val::Px(44.0),
@@ -273,7 +316,7 @@ fn row_button_with_height(name: impl Into<String>, width: f32, height: f32) -> i
         AccessibleLabel::new(name),
         Button,
         TabIndex(0),
-        SemanticControl { applied_scale: 1.0 },
+        responsive_control_role(),
         Node {
             width: Val::Px(width),
             min_width: Val::Px(44.0),
@@ -348,35 +391,264 @@ fn paint_interactions(
 
 fn apply_semantic_metrics(
     metrics: Res<crate::ResolvedUiMetrics>,
-    mut text: Query<(&SemanticText, &mut TextFont)>,
-    mut controls: Query<(&mut Node, &mut SemanticControl)>,
+    mut text: Query<(Ref<SemanticText>, Mut<TextFont>)>,
+    mut controls: Query<(Mut<Node>, Mut<SemanticControl>)>,
 ) {
+    let metrics_changed = metrics.is_changed();
     for (role, mut font) in &mut text {
-        let size = match role {
+        if !metrics_changed && !role.is_changed() && !font.is_changed() {
+            continue;
+        }
+        let size = match *role {
             SemanticText::Display => DISPLAY_SIZE * metrics.heading_scale,
             SemanticText::ScreenTitle => SCREEN_TITLE_SIZE * metrics.heading_scale,
             SemanticText::Heading => TITLE_SIZE * metrics.heading_scale,
             SemanticText::Body => (LABEL_SIZE * metrics.content_scale).max(18.0),
             SemanticText::Supporting => (BLURB_SIZE * metrics.content_scale).max(18.0),
             SemanticText::Metadata => FINE_SIZE * metrics.content_scale,
+            SemanticText::CompactGlyph { base_size } => base_size * metrics.control_scale.max(1.0),
         };
-        font.font_size = FontSize::Px(size);
+        let wanted = FontSize::Px(size);
+        if font.font_size != wanted {
+            font.font_size = wanted;
+        }
     }
     let next_scale = metrics.control_scale.max(1.0);
     for (mut node, mut control) in &mut controls {
-        let previous_scale = control.applied_scale.max(1.0);
+        if !metrics_changed && !control.is_changed() && !node.is_changed() {
+            continue;
+        }
+        let SemanticControl::Responsive { applied_scale } = *control else {
+            continue;
+        };
+        let previous_scale = applied_scale.max(1.0);
         let ratio = next_scale / previous_scale;
-        node.min_width = match node.min_width {
+        let min_width = match node.min_width {
             Val::Px(current) => Val::Px((current * ratio).max(44.0 * next_scale)),
             other => other,
         };
-        node.min_height = match node.min_height {
+        let min_height = match node.min_height {
             Val::Px(current) => Val::Px((current * ratio).max(44.0 * next_scale)),
             _ => Val::Px(44.0 * next_scale),
         };
-        if let Val::Px(current) = node.height {
-            node.height = Val::Px(current * ratio);
+        if node.min_width != min_width {
+            node.min_width = min_width;
         }
-        control.applied_scale = next_scale;
+        if node.min_height != min_height {
+            node.min_height = min_height;
+        }
+        if let Val::Px(current) = node.height {
+            let height = Val::Px(current * ratio);
+            if node.height != height {
+                node.height = height;
+            }
+        }
+        if let SemanticControl::Responsive { applied_scale } = &mut *control {
+            if (*applied_scale - next_scale).abs() > f32::EPSILON {
+                *applied_scale = next_scale;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn metrics(mode: crate::UiScaleMode) -> crate::ResolvedUiMetrics {
+        crate::resolve_ui_metrics(Vec2::new(1920.0, 1080.0), mode)
+    }
+
+    #[test]
+    fn semantic_metrics_resize_actual_custom_text_and_node_components() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(metrics(crate::UiScaleMode::Percent100))
+            .add_systems(Update, apply_semantic_metrics);
+        let text = app
+            .world_mut()
+            .spawn((body_text_role(), TextFont::from_font_size(18.0)))
+            .id();
+        let control = app
+            .world_mut()
+            .spawn((
+                responsive_control_role(),
+                Node {
+                    min_height: Val::Px(58.0),
+                    ..default()
+                },
+            ))
+            .id();
+
+        app.update();
+        assert_eq!(
+            app.world().get::<TextFont>(text).map(|font| font.font_size),
+            Some(FontSize::Px(20.0))
+        );
+        assert_eq!(
+            app.world().get::<Node>(control).map(|node| node.min_height),
+            Some(Val::Px(58.0))
+        );
+
+        *app.world_mut().resource_mut::<crate::ResolvedUiMetrics>() =
+            metrics(crate::UiScaleMode::Percent200);
+        app.update();
+        assert_eq!(
+            app.world().get::<TextFont>(text).map(|font| font.font_size),
+            Some(FontSize::Px(40.0))
+        );
+        assert_eq!(
+            app.world().get::<Node>(control).map(|node| node.min_height),
+            Some(Val::Px(87.0))
+        );
+    }
+
+    #[test]
+    fn widgets_added_after_a_scale_change_receive_current_metrics() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(metrics(crate::UiScaleMode::Percent200))
+            .add_systems(Update, apply_semantic_metrics);
+        app.update();
+
+        let text = app
+            .world_mut()
+            .spawn((body_text_role(), TextFont::from_font_size(18.0)))
+            .id();
+        let control = app
+            .world_mut()
+            .spawn((
+                responsive_control_role(),
+                Node {
+                    min_height: Val::Px(44.0),
+                    ..default()
+                },
+            ))
+            .id();
+        app.update();
+
+        assert_eq!(
+            app.world().get::<TextFont>(text).map(|font| font.font_size),
+            Some(FontSize::Px(40.0))
+        );
+        assert_eq!(
+            app.world().get::<Node>(control).map(|node| node.min_height),
+            Some(Val::Px(66.0))
+        );
+    }
+
+    #[derive(Resource, Default)]
+    struct SemanticWriteCount(usize);
+
+    fn count_semantic_writes(
+        fonts: Query<(), (Changed<TextFont>, With<SemanticText>)>,
+        nodes: Query<(), (Changed<Node>, With<SemanticControl>)>,
+        mut count: ResMut<SemanticWriteCount>,
+    ) {
+        let writes = fonts.iter().count() + nodes.iter().count();
+        if writes > 0 {
+            count.0 += writes;
+        }
+    }
+
+    #[test]
+    fn ten_thousand_stable_updates_do_not_rewrite_semantic_components() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(metrics(crate::UiScaleMode::Percent200))
+            .init_resource::<SemanticWriteCount>()
+            .add_systems(
+                Update,
+                (
+                    apply_semantic_metrics,
+                    count_semantic_writes.after(apply_semantic_metrics),
+                ),
+            );
+        app.world_mut()
+            .spawn((body_text_role(), TextFont::from_font_size(18.0)));
+        app.world_mut().spawn((
+            responsive_control_role(),
+            Node {
+                min_height: Val::Px(48.0),
+                ..default()
+            },
+        ));
+        app.update();
+        app.world_mut().resource_mut::<SemanticWriteCount>().0 = 0;
+
+        for _ in 0..10_000 {
+            app.update();
+        }
+
+        assert_eq!(app.world().resource::<SemanticWriteCount>().0, 0);
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn semantic_scale_changes_a_custom_controls_computed_size() {
+        let mut app = App::new();
+        app.add_plugins(crate::test_support::HeadlessUiPlugin::new(1920, 1080));
+        app.world_mut()
+            .insert_resource(crate::UiScalePreference(crate::UiScaleMode::Percent100));
+        let control = app
+            .world_mut()
+            .spawn((
+                Name::new("Representative Custom Control"),
+                Button,
+                responsive_control_role(),
+                Node {
+                    width: Val::Px(240.0),
+                    min_height: Val::Px(48.0),
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::Center,
+                    ..default()
+                },
+            ))
+            .id();
+        let text = app
+            .world_mut()
+            .spawn((
+                Text::new("Custom action"),
+                body_text_role(),
+                TextFont::from_font_size(18.0),
+            ))
+            .id();
+        app.world_mut().entity_mut(control).add_child(text);
+
+        for _ in 0..4 {
+            app.update();
+        }
+        let baseline = app
+            .world()
+            .get::<ComputedNode>(control)
+            .map(ComputedNode::size)
+            .expect("custom control must participate in UI layout");
+        assert_eq!(
+            app.world().get::<TextFont>(text).map(|font| font.font_size),
+            Some(FontSize::Px(20.0))
+        );
+
+        app.world_mut()
+            .insert_resource(crate::UiScalePreference(crate::UiScaleMode::Percent200));
+        for _ in 0..4 {
+            app.update();
+        }
+        let enlarged = app
+            .world()
+            .get::<ComputedNode>(control)
+            .map(ComputedNode::size)
+            .expect("custom control must remain in UI layout");
+        assert_eq!(
+            app.world().get::<Node>(control).map(|node| node.min_height),
+            Some(Val::Px(72.0))
+        );
+        assert_eq!(
+            app.world().get::<TextFont>(text).map(|font| font.font_size),
+            Some(FontSize::Px(40.0))
+        );
+        assert!(
+            enlarged.y > baseline.y,
+            "computed control height must grow: {baseline:?} -> {enlarged:?}"
+        );
     }
 }

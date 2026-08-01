@@ -5,7 +5,8 @@ use bevy::prelude::*;
 use hex_core::Screen;
 
 use crate::{
-    blurb, heading, HudElement, PartyIntent, PartyView, UiAssets, UiHudSetup, UiIntent,
+    blurb, body_text_role, heading, owner_resolved_control_role, responsive_control_role,
+    HudElement, PartyIntent, PartyView, ResolvedUiMetrics, UiAssets, UiHudSetup, UiIntent,
     UiRegionRole, UiSystems, ACCENT, ACCENT_EDGE, BLURB_SIZE, EDGE, LABEL, PANEL_BG,
 };
 
@@ -115,9 +116,10 @@ fn rebuild(
     party_bodies: Query<Entity, With<PartyBody>>,
     formation_bodies: Query<Entity, With<FormationBody>>,
     mut formation_panels: Query<&mut Node, With<FormationPanel>>,
+    metrics: Res<ResolvedUiMetrics>,
     assets: Res<UiAssets>,
 ) {
-    if !view.is_changed() {
+    if !view.is_changed() && !metrics.is_changed() {
         return;
     }
     if let Ok(mut panel) = formation_panels.single_mut() {
@@ -210,7 +212,7 @@ fn rebuild(
                     }
                 });
             formation.spawn(blurb(&assets, "ASSIGNMENT GRID · ◆ anchor"));
-            spawn_slot_grid(formation, &view, &assets);
+            spawn_slot_grid(formation, &view, &assets, metrics.control_scale.max(1.0));
         });
     }
 }
@@ -225,6 +227,7 @@ fn control_button(
         AccessibleLabel::new(accessible),
         Button,
         TabIndex(0),
+        responsive_control_role(),
         Node {
             width,
             min_height: Val::Px(48.0),
@@ -239,6 +242,7 @@ fn control_button(
 fn body_text(assets: &UiAssets, text: impl Into<String>) -> impl Bundle {
     (
         Text::new(text),
+        body_text_role(),
         TextFont {
             font: assets.body.clone().into(),
             ..TextFont::from_font_size(BLURB_SIZE)
@@ -252,15 +256,20 @@ fn body_text(assets: &UiAssets, text: impl Into<String>) -> impl Bundle {
     clippy::cast_precision_loss,
     reason = "formation offsets are content-limited to a six-cell miniature"
 )]
-fn spawn_slot_grid(parent: &mut ChildSpawnerCommands, view: &PartyView, assets: &UiAssets) {
+fn spawn_slot_grid(
+    parent: &mut ChildSpawnerCommands,
+    view: &PartyView,
+    assets: &UiAssets,
+    semantic_control_scale: f32,
+) {
     let positions: Vec<_> = view
         .slots
         .iter()
         .map(|slot| {
             (
                 slot,
-                (slot.offset.x() * 20 + slot.offset.y() * 10) as f32,
-                (slot.offset.y() * 18) as f32,
+                (slot.offset.x() * 20 + slot.offset.y() * 10) as f32 * semantic_control_scale,
+                (slot.offset.y() * 18) as f32 * semantic_control_scale,
             )
         })
         .collect();
@@ -279,8 +288,8 @@ fn spawn_slot_grid(parent: &mut ChildSpawnerCommands, view: &PartyView, assets: 
         .spawn((
             Name::new("Formation mini-grid"),
             Node {
-                width: Val::Px(max_x - min_x + 44.0),
-                height: Val::Px(max_y - min_y + 44.0),
+                width: Val::Px(max_x - min_x + 44.0 * semantic_control_scale),
+                height: Val::Px(max_y - min_y + 44.0 * semantic_control_scale),
                 position_type: PositionType::Relative,
                 align_self: AlignSelf::Center,
                 ..default()
@@ -304,13 +313,14 @@ fn spawn_slot_grid(parent: &mut ChildSpawnerCommands, view: &PartyView, assets: 
                     )),
                     Button,
                     TabIndex(0),
+                    owner_resolved_control_role(),
                     PartyControl(PartyIntent::AssignSlot(slot.offset)),
                     Node {
                         position_type: PositionType::Absolute,
                         left: Val::Px(x - min_x),
                         top: Val::Px(y - min_y),
-                        width: Val::Px(44.0),
-                        height: Val::Px(44.0),
+                        width: Val::Px(44.0 * semantic_control_scale),
+                        height: Val::Px(44.0 * semantic_control_scale),
                         align_items: AlignItems::Center,
                         justify_content: JustifyContent::Center,
                         border: UiRect::all(Val::Px(1.0)),

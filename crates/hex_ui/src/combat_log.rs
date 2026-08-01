@@ -4,8 +4,8 @@ use bevy::prelude::*;
 use hex_core::Screen;
 
 use crate::{
-    blurb, panel, CombatLogView, HudElement, UiAssets, UiHudSetup, UiRegionRole, BLURB_SIZE,
-    DANGER, LABEL, READ_ONLY_HUD,
+    blurb, panel, supporting_text_role, CombatLogView, HudElement, UiAssets, UiHudSetup,
+    UiRegionRole, BLURB_SIZE, DANGER, LABEL, READ_ONLY_HUD,
 };
 
 #[derive(Component)]
@@ -91,6 +91,7 @@ fn rebuild(
         for line in &view.lines {
             rows.spawn((
                 Text::new(line.text.clone()),
+                supporting_text_role(),
                 TextFont {
                     font: assets.body.clone().into(),
                     ..TextFont::from_font_size(BLURB_SIZE)

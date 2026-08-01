@@ -9,9 +9,9 @@ use hex_core::Screen;
 
 use crate::{
     blurb, button, despawn_screen, display, fine, heading, label, panel, screen_root,
-    stacked_row_button, ResolvedUiMetrics, ResumeView, ScenarioBrowserIntent, ScenarioBrowserView,
-    TitleIntent, TitleScenarioView, TitleView, UiAssets, UiIntent, UiSystems, UiViewportClass,
-    ACCENT_EDGE, BLURB_SIZE, DANGER,
+    stacked_row_button, supporting_text_role, ResolvedUiMetrics, ResumeView, ScenarioBrowserIntent,
+    ScenarioBrowserView, TitleIntent, TitleScenarioView, TitleView, UiAssets, UiIntent, UiSystems,
+    UiViewportClass, ACCENT_EDGE, BLURB_SIZE, DANGER,
 };
 
 const TITLE_ACTIONS_MAX_WIDTH: f32 = 960.0;
@@ -32,6 +32,12 @@ struct TitleControl(TitleIntent);
 
 #[derive(Component)]
 struct ScenarioSurface;
+
+#[derive(Component)]
+struct ScenarioCatalogViewport;
+
+#[derive(Component)]
+struct ScenarioIntroduction;
 
 #[derive(Component)]
 struct ScenarioDeck;
@@ -120,6 +126,7 @@ fn render_title(
         root.spawn((
             Name::new("Gameplay Setup Failure"),
             Text::new(reason.clone()),
+            supporting_text_role(),
             TextFont {
                 font: assets.body.clone().into(),
                 ..TextFont::from_font_size(BLURB_SIZE)
@@ -260,13 +267,11 @@ fn spawn_scenarios(mut commands: Commands, assets: Res<UiAssets>, view: Res<Scen
         .spawn((
             screen_root(Screen::Scenarios, "Scenarios Screen"),
             ScenarioSurface,
-            ScrollArea,
-            ScrollPosition::default(),
         ))
         .insert(Node {
             padding: UiRect::all(Val::Px(14.0)),
             justify_content: JustifyContent::FlexStart,
-            overflow: Overflow::scroll_y(),
+            overflow: Overflow::clip_y(),
             ..crate::screen_root_node()
         })
         .with_children(|root| render_scenarios(root, &assets, &view));
@@ -306,6 +311,7 @@ fn render_scenarios(
     ));
     root.spawn((
         Name::new("Scenario Screen Introduction"),
+        ScenarioIntroduction,
         blurb(
             assets,
             "Development Maps and focused Demos. New Game remains the canonical campaign route.",
@@ -317,46 +323,63 @@ fn render_scenarios(
         crate::UiVisibilityRequirement::Immediate,
     ));
     root.spawn((
+        Name::new("Scenario Catalog Viewport"),
+        ScenarioCatalogViewport,
+        ScrollArea,
+        ScrollPosition::default(),
+        Node {
+            width: Val::Percent(100.0),
+            min_height: Val::Px(0.0),
+            flex_grow: 1.0,
+            overflow: Overflow::scroll_y(),
+            ..default()
+        },
+    ))
+    .with_children(|viewport| {
+        viewport
+            .spawn((
+                Name::new("Scenario Catalog"),
+                ScenarioDeck,
+                Node {
+                    width: Val::Percent(96.0),
+                    max_width: Val::Px(SCENARIO_DECK_MAX_WIDTH),
+                    flex_shrink: 0.0,
+                    align_self: AlignSelf::Center,
+                    display: Display::Grid,
+                    grid_template_columns: RepeatedGridTrack::flex(2, 1.0),
+                    column_gap: Val::Px(SURFACE_GAP),
+                    row_gap: Val::Px(SURFACE_GAP),
+                    align_items: AlignItems::Start,
+                    ..default()
+                },
+            ))
+            .with_children(|deck| {
+                spawn_scenario_column(
+                    deck,
+                    assets,
+                    "Maps",
+                    ScenarioColumnRole::Maps,
+                    view.scenarios
+                        .iter()
+                        .filter(|entry| entry.scenario.category == ScenarioCategory::Map),
+                );
+                spawn_scenario_column(
+                    deck,
+                    assets,
+                    "Demos",
+                    ScenarioColumnRole::Demos,
+                    view.scenarios
+                        .iter()
+                        .filter(|entry| entry.scenario.category == ScenarioCategory::Demo),
+                );
+            });
+    });
+    root.spawn((
         button("Back"),
         ScenarioControl(ScenarioBrowserIntent::Back),
         crate::UiVisibilityRequirement::Immediate,
     ))
     .with_child(label(assets, "Back to title"));
-    root.spawn((
-        Name::new("Scenario Catalog"),
-        ScenarioDeck,
-        Node {
-            width: Val::Percent(96.0),
-            max_width: Val::Px(SCENARIO_DECK_MAX_WIDTH),
-            flex_shrink: 0.0,
-            display: Display::Grid,
-            grid_template_columns: RepeatedGridTrack::flex(2, 1.0),
-            column_gap: Val::Px(SURFACE_GAP),
-            row_gap: Val::Px(SURFACE_GAP),
-            align_items: AlignItems::Start,
-            ..default()
-        },
-    ))
-    .with_children(|deck| {
-        spawn_scenario_column(
-            deck,
-            assets,
-            "Maps",
-            ScenarioColumnRole::Maps,
-            view.scenarios
-                .iter()
-                .filter(|entry| entry.scenario.category == ScenarioCategory::Map),
-        );
-        spawn_scenario_column(
-            deck,
-            assets,
-            "Demos",
-            ScenarioColumnRole::Demos,
-            view.scenarios
-                .iter()
-                .filter(|entry| entry.scenario.category == ScenarioCategory::Demo),
-        );
-    });
 }
 
 fn spawn_scenario_column<'a>(
@@ -445,11 +468,26 @@ fn apply_scenario_layout(
         (&ScenarioColumnRole, &mut Node),
         (With<ScenarioColumn>, Without<ScenarioDeck>),
     >,
+    mut introductions: Query<
+        &mut Node,
+        (
+            With<ScenarioIntroduction>,
+            Without<ScenarioDeck>,
+            Without<ScenarioColumn>,
+        ),
+    >,
 ) {
     if !metrics.is_changed() && added.is_empty() {
         return;
     }
     let compact = metrics.viewport == UiViewportClass::Compact;
+    for mut node in &mut introductions {
+        node.display = if compact && metrics.content_scale >= 1.5 {
+            Display::None
+        } else {
+            Display::Flex
+        };
+    }
     for mut node in &mut decks {
         node.grid_template_columns = if compact {
             RepeatedGridTrack::flex(1, 1.0)
