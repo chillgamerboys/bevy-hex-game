@@ -17,6 +17,7 @@ use bevy::prelude::*;
 use bevy::transform::TransformPlugin;
 use bevy::transform::TransformSystems;
 
+use hex_assets::CameraSettings;
 use hex_core::{
     CameraFocusTarget, CutawayOccluder, InteriorRegionId, InteriorRegions, PresentationOcclusion,
     PresentationOcclusionReason, PresentationSystems, Screen, TreeFadeAmount, TreeOccluder,
@@ -24,8 +25,9 @@ use hex_core::{
 
 use crate::camera::{CameraMode, PanOrbitCamera};
 
-/// Small conservative margin around each transformed render-chunk bound.
-const TREE_INTERSECTION_PADDING: f32 = 0.08;
+/// Small conservative margin around each transformed render-chunk bound in addition
+/// to the camera's configured near-plane probe radius.
+const TREE_BOUNDS_PADDING: f32 = 0.08;
 /// Lowest opacity used while a tree blocks the close camera.
 const TREE_FADED_OPACITY: f32 = 0.2;
 /// Time used to ease a newly obstructing tree out of the view.
@@ -136,6 +138,7 @@ fn reconcile_interior_cutaway(
 /// Fades a complete exact tree when any of its chunks blocks the focus corridor.
 fn reconcile_tree_fades(
     mode: Res<CameraMode>,
+    settings: Res<CameraSettings>,
     targets: Query<&CameraFocusTarget>,
     cameras: Query<(&PanOrbitCamera, &GlobalTransform), Without<CameraFocusTarget>>,
     time: Res<Time>,
@@ -186,7 +189,13 @@ fn reconcile_tree_fades(
     for (tree, transform, bounds, _fade) in trees.p0().iter() {
         present.insert(tree.0);
         if corridor.is_some_and(|(_target, start, end)| {
-            tree_chunk_intersects_focus_segment(start, end, transform, bounds)
+            tree_chunk_intersects_focus_corridor(
+                start,
+                end,
+                settings.character_probe_radius,
+                transform,
+                bounds,
+            )
         }) {
             blocked.insert(tree.0);
         }
@@ -268,18 +277,24 @@ fn set_reason(
     }
 }
 
-fn tree_chunk_intersects_focus_segment(
+fn tree_chunk_intersects_focus_corridor(
     start: Vec3,
     end: Vec3,
+    corridor_radius: f32,
     transform: &GlobalTransform,
     bounds: Option<&Aabb>,
 ) -> bool {
-    if !start.is_finite() || !end.is_finite() {
+    if !start.is_finite()
+        || !end.is_finite()
+        || !corridor_radius.is_finite()
+        || corridor_radius < 0.0
+    {
         return false;
     }
     let (mut minimum, mut maximum) = transformed_world_bounds(transform, bounds);
-    minimum -= Vec3::splat(TREE_INTERSECTION_PADDING);
-    maximum += Vec3::splat(TREE_INTERSECTION_PADDING);
+    let padding = corridor_radius + TREE_BOUNDS_PADDING;
+    minimum -= Vec3::splat(padding);
+    maximum += Vec3::splat(padding);
     let direction = end - start;
     let mut enter: f32 = 0.0;
     let mut exit: f32 = 1.0;
@@ -420,11 +435,38 @@ mod tests {
         TilePos::new(HexCoord::from_axial(x, y), level)
     }
 
+    fn camera_settings() -> CameraSettings {
+        CameraSettings {
+            gameplay_eye: (0.0, 48.0, 42.0),
+            gameplay_focus: (0.0, 6.0, 0.0),
+            character_focus_height: 0.4,
+            character_radius: 7.0,
+            character_probe_radius: 0.4,
+            character_collision_margin: 0.35,
+            character_min_effective_radius: 1.5,
+            character_restoration_speed: 8.0,
+            character_pitch: 0.3,
+            character_min_pitch: 0.05,
+            character_max_pitch: 0.95,
+            character_adaptive_max_pitch: 0.75,
+            character_pitch_search_step: 0.05,
+            character_pitch_restoration_speed: 0.8,
+            pan_speed: 0.4,
+            pan_speed_offset: 10.0,
+            min_pitch: 0.25,
+            max_pitch: 0.95,
+            min_zoom: 5.0,
+            max_zoom: 70.0,
+            zoom_sensitivity: 0.2,
+        }
+    }
+
     fn test_app(target: TilePos, region: InteriorRegionId) -> (App, Entity, Entity) {
         let mut builder = HeadlessAppBuilder::new().with_minimal_plugins();
         builder.app_mut().add_plugins(TransformPlugin);
         builder
             .app_mut()
+            .insert_resource(camera_settings())
             .init_resource::<CameraMode>()
             .init_resource::<TreeFadeTimelines>()
             .add_systems(
@@ -765,7 +807,7 @@ mod tests {
     }
 
     #[test]
-    fn transformed_chunk_bounds_drive_corridor_intersection() {
+    fn transformed_chunk_bounds_and_probe_drive_corridor_intersection() {
         let start = Vec3::ZERO;
         let end = Vec3::Z * 4.0;
         let on_segment = GlobalTransform::from(
@@ -782,17 +824,36 @@ mod tests {
             half_extents: Vec3A::splat(0.25),
         };
 
-        assert!(tree_chunk_intersects_focus_segment(
+        assert!(tree_chunk_intersects_focus_corridor(
             start,
             end,
+            0.4,
             &on_segment,
             Some(&bounds)
         ));
-        assert!(!tree_chunk_intersects_focus_segment(
+        assert!(!tree_chunk_intersects_focus_corridor(
             start,
             end,
+            0.4,
             &off_segment,
             Some(&bounds)
+        ));
+
+        let off_axis_near_plane =
+            GlobalTransform::from(Transform::from_translation(Vec3::new(0.65, 0.0, 2.0)));
+        assert!(tree_chunk_intersects_focus_corridor(
+            start,
+            end,
+            0.4,
+            &off_axis_near_plane,
+            Some(&bounds),
+        ));
+        assert!(!tree_chunk_intersects_focus_corridor(
+            start,
+            end,
+            0.0,
+            &off_axis_near_plane,
+            Some(&bounds),
         ));
     }
 
