@@ -5,6 +5,10 @@ edition.workspace = true
 publish = false
 description = "3D world presentation: sky and camera."
 
+[features]
+# Headless production-plugin composition for the game crate's integration target.
+test-support = []
+
 # Must NOT depend on hex_units. The two talk through components and states
 # defined in hex_core; cargo is what enforces that.
 [dependencies]
