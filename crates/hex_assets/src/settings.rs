@@ -15,6 +15,9 @@ use bevy::prelude::*;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize};
 
+/// Keeps adaptive pitch search bounded to at most 200 authored increments.
+const MIN_CHARACTER_PITCH_SEARCH_STEP: f32 = 0.005;
+
 /// A colour written as `(r, g, b)` in sRGB, each component 0.0–1.0.
 ///
 /// A plain tuple rather than Bevy's `Color`, whose serialized form is an
@@ -38,13 +41,16 @@ pub struct CameraSettings {
     pub character_focus_height: f32,
     /// Initial orbit radius when entering the close character view.
     pub character_radius: f32,
+    /// Radius of the conservative camera probe used to protect the near plane.
+    pub character_probe_radius: f32,
     /// Clearance kept between the close camera and the first obstructing terrain run.
     pub character_collision_margin: f32,
     /// Preferred smallest usable radius while avoiding terrain.
     ///
-    /// Character-camera collision first searches nearby yaw directions that can
-    /// retain this radius. A complete enclosure may require a smaller radius so
-    /// the camera never crosses an actual terrain hit.
+    /// When same-yaw retraction falls below this radius, Character-camera collision
+    /// searches higher pitches first, then toward the horizon for low ceilings. A
+    /// complete enclosure may require a smaller radius so the camera never crosses
+    /// an actual terrain hit.
     pub character_min_effective_radius: f32,
     /// World units per second used when restoring the close camera after an
     /// obstruction clears.
@@ -55,6 +61,13 @@ pub struct CameraSettings {
     pub character_min_pitch: f32,
     /// Furthest the close view may tilt toward straight down, 0.0–1.0.
     pub character_max_pitch: f32,
+    /// Highest pitch collision avoidance tests before searching toward the horizon,
+    /// 0.0–1.0.
+    pub character_adaptive_max_pitch: f32,
+    /// Pitch-fraction increment used by both collision-avoidance search directions.
+    pub character_pitch_search_step: f32,
+    /// Pitch fractions per second used when restoring the player-authored pitch.
+    pub character_pitch_restoration_speed: f32,
     /// WASD pan speed, scaled by zoom distance so panning feels the same when
     /// zoomed out as when zoomed in.
     pub pan_speed: f32,
@@ -74,6 +87,13 @@ pub struct CameraSettings {
 }
 
 impl CameraSettings {
+    /// Largest supported conservative Character-camera probe, in world units.
+    ///
+    /// This bounds the spatial-neighbour expansion used by the public-terrain
+    /// camera index while still permitting a probe as wide as one voxel's full
+    /// corner-to-corner diameter.
+    pub const MAX_CHARACTER_PROBE_RADIUS: f32 = 2.0;
+
     /// Checks camera geometry and controls before settings replace the active asset.
     pub fn validate(&self) -> Result<(), String> {
         validate_finite_vec3("gameplay_eye", self.gameplay_eye)?;
@@ -95,6 +115,18 @@ impl CameraSettings {
         validate_nonnegative("character_focus_height", self.character_focus_height)?;
         if !self.character_radius.is_finite() || self.character_radius <= 0.0 {
             return Err("character_radius must be positive and finite".to_owned());
+        }
+        if !self.character_probe_radius.is_finite()
+            || self.character_probe_radius <= 0.0
+            || self.character_probe_radius > Self::MAX_CHARACTER_PROBE_RADIUS
+        {
+            return Err(format!(
+                "character_probe_radius must be finite and within 0.0..={}",
+                Self::MAX_CHARACTER_PROBE_RADIUS
+            ));
+        }
+        if self.character_probe_radius > self.character_focus_height {
+            return Err("character_probe_radius must not exceed character_focus_height".to_owned());
         }
         validate_nonnegative(
             "character_collision_margin",
@@ -129,6 +161,31 @@ impl CameraSettings {
                     .to_owned(),
             );
         }
+        validate_unit_interval(
+            "character_adaptive_max_pitch",
+            self.character_adaptive_max_pitch,
+        )?;
+        if !(self.character_min_pitch..=self.character_max_pitch)
+            .contains(&self.character_adaptive_max_pitch)
+        {
+            return Err(
+                "character_adaptive_max_pitch must be within character_min_pitch..=character_max_pitch"
+                    .to_owned(),
+            );
+        }
+        if !self.character_pitch_search_step.is_finite()
+            || self.character_pitch_search_step < MIN_CHARACTER_PITCH_SEARCH_STEP
+            || self.character_pitch_search_step > 1.0
+        {
+            return Err(
+                "character_pitch_search_step must be finite and within 0.005..=1.0".to_owned(),
+            );
+        }
+        if !self.character_pitch_restoration_speed.is_finite()
+            || self.character_pitch_restoration_speed <= 0.0
+        {
+            return Err("character_pitch_restoration_speed must be positive and finite".to_owned());
+        }
 
         validate_nonnegative("pan_speed", self.pan_speed)?;
         validate_nonnegative("pan_speed_offset", self.pan_speed_offset)?;
@@ -162,12 +219,16 @@ struct UnvalidatedCameraSettings {
     gameplay_focus: (f32, f32, f32),
     character_focus_height: f32,
     character_radius: f32,
+    character_probe_radius: f32,
     character_collision_margin: f32,
     character_min_effective_radius: f32,
     character_restoration_speed: f32,
     character_pitch: f32,
     character_min_pitch: f32,
     character_max_pitch: f32,
+    character_adaptive_max_pitch: f32,
+    character_pitch_search_step: f32,
+    character_pitch_restoration_speed: f32,
     pan_speed: f32,
     pan_speed_offset: f32,
     min_pitch: f32,
@@ -188,12 +249,16 @@ impl<'de> Deserialize<'de> for CameraSettings {
             gameplay_focus: raw.gameplay_focus,
             character_focus_height: raw.character_focus_height,
             character_radius: raw.character_radius,
+            character_probe_radius: raw.character_probe_radius,
             character_collision_margin: raw.character_collision_margin,
             character_min_effective_radius: raw.character_min_effective_radius,
             character_restoration_speed: raw.character_restoration_speed,
             character_pitch: raw.character_pitch,
             character_min_pitch: raw.character_min_pitch,
             character_max_pitch: raw.character_max_pitch,
+            character_adaptive_max_pitch: raw.character_adaptive_max_pitch,
+            character_pitch_search_step: raw.character_pitch_search_step,
+            character_pitch_restoration_speed: raw.character_pitch_restoration_speed,
             pan_speed: raw.pan_speed,
             pan_speed_offset: raw.pan_speed_offset,
             min_pitch: raw.min_pitch,
@@ -1462,12 +1527,34 @@ mod tests {
         );
         assert!((camera.character_focus_height - 0.4).abs() < f32::EPSILON);
         assert!((camera.character_radius - 7.0).abs() < f32::EPSILON);
+        assert!((camera.character_probe_radius - 0.4).abs() < f32::EPSILON);
         assert!((camera.character_collision_margin - 0.35).abs() < f32::EPSILON);
         assert!((camera.character_min_effective_radius - 1.5).abs() < f32::EPSILON);
         assert!((camera.character_restoration_speed - 8.0).abs() < f32::EPSILON);
         assert!((camera.character_pitch - 0.3).abs() < f32::EPSILON);
         assert!((camera.character_min_pitch - 0.05).abs() < f32::EPSILON);
         assert!((camera.character_max_pitch - 0.95).abs() < f32::EPSILON);
+        assert!((camera.character_adaptive_max_pitch - 0.75).abs() < f32::EPSILON);
+        assert!((camera.character_pitch_search_step - 0.05).abs() < f32::EPSILON);
+        assert!((camera.character_pitch_restoration_speed - 0.8).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn a_non_default_bounded_camera_probe_is_valid() {
+        let alternate = CAMERA_RON
+            .replacen(
+                "character_focus_height: 0.4",
+                "character_focus_height: 2.0",
+                1,
+            )
+            .replacen(
+                "character_probe_radius: 0.4",
+                "character_probe_radius: 1.8",
+                1,
+            );
+        let camera: CameraSettings =
+            ron::from_str(&alternate).expect("a bounded wide probe should remain configurable");
+        assert!((camera.character_probe_radius - 1.8).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -1502,6 +1589,21 @@ mod tests {
                 "character_radius: 7.0",
                 "character_radius: 4.0",
                 "character_radius",
+            ),
+            (
+                "character_probe_radius: 0.4",
+                "character_probe_radius: 0.0",
+                "character_probe_radius",
+            ),
+            (
+                "character_probe_radius: 0.4",
+                "character_probe_radius: 2.1",
+                "character_probe_radius",
+            ),
+            (
+                "character_probe_radius: 0.4",
+                "character_probe_radius: 0.5",
+                "character_focus_height",
             ),
             (
                 "character_collision_margin: 0.35",
@@ -1547,6 +1649,26 @@ mod tests {
                 "character_min_pitch: 0.05",
                 "character_min_pitch: 0.96",
                 "character_min_pitch",
+            ),
+            (
+                "character_adaptive_max_pitch: 0.75",
+                "character_adaptive_max_pitch: 1.0",
+                "character_adaptive_max_pitch",
+            ),
+            (
+                "character_pitch_search_step: 0.05",
+                "character_pitch_search_step: 0.0",
+                "character_pitch_search_step",
+            ),
+            (
+                "character_pitch_search_step: 0.05",
+                "character_pitch_search_step: 0.000001",
+                "character_pitch_search_step",
+            ),
+            (
+                "character_pitch_restoration_speed: 0.8",
+                "character_pitch_restoration_speed: 0.0",
+                "character_pitch_restoration_speed",
             ),
             ("pan_speed: 0.4", "pan_speed: -0.1", "pan_speed"),
             (
