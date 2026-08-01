@@ -4,7 +4,7 @@ use bevy::ui_widgets::ScrollArea;
 use hex_core::Screen;
 
 use crate::{
-    blurb, fine, heading, layout::is_ultra_constrained, row_button, ActionAvailability,
+    blurb, fine, fixed_row_button, heading, layout::is_ultra_constrained, ActionAvailability,
     DespawnOnExit, GameplayAction, GameplayHudView, LatticeIntent, ResolvedUiMetrics, UiAssets,
     UiIntent, UiViewportClass, ACCENT, EDGE, PANEL_BG,
 };
@@ -41,6 +41,7 @@ fn spawn_action_rail(mut commands: Commands, assets: Res<UiAssets>) {
     commands
         .spawn((
             Name::new("Primary Action Rail"),
+            crate::UiVisibilityRequirement::Immediate,
             ActionRail,
             ScrollArea,
             ScrollPosition::default(),
@@ -87,6 +88,7 @@ fn refresh_action_rail(
     review: Option<Res<crate::review::UiReviewPresentation>>,
     metrics: Res<ResolvedUiMetrics>,
     assets: Res<UiAssets>,
+    added_rails: Query<(), Added<ActionRail>>,
     mut commands: Commands,
     mut rails: Query<
         (Entity, &mut Node, &mut BorderColor),
@@ -114,7 +116,12 @@ fn refresh_action_rail(
     >,
 ) {
     let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
-    if !view.is_changed() && !review_changed && !metrics.is_changed() {
+    if !action_rail_needs_refresh(
+        view.is_changed(),
+        review_changed,
+        metrics.is_changed(),
+        !added_rails.is_empty(),
+    ) {
         return;
     }
     let view = review
@@ -122,13 +129,20 @@ fn refresh_action_rail(
         .and_then(|review| review.hud.as_ref())
         .unwrap_or(view.as_ref());
     let condensed_semantic_rail = metrics.content_scale >= 1.5;
+    let minimal_deployment =
+        view.phase == hex_core::GameplayPhase::Deployment && view.actions.is_empty();
     if let Ok((_, mut node, mut border)) = rails.single_mut() {
         apply_action_rail_layout(
             *metrics,
             &mut node,
-            view.phase == hex_core::GameplayPhase::Deployment && view.actions.is_empty(),
+            minimal_deployment,
             view.required_prompt.is_some(),
         );
+        node.display = if minimal_deployment {
+            Display::None
+        } else {
+            Display::Flex
+        };
         *border = BorderColor::all(if view.required_prompt.is_some() {
             ACCENT
         } else {
@@ -139,8 +153,9 @@ fn refresh_action_rail(
         node.width = Val::Auto;
         node.min_width = Val::Auto;
         node.flex_shrink = 1.0;
-        node.display = if (is_ultra_constrained(*metrics)
-            && matches!(kind, ActionRailCopy::Heading | ActionRailCopy::Prompt))
+        node.display = if minimal_deployment
+            || (is_ultra_constrained(*metrics)
+                && matches!(kind, ActionRailCopy::Heading | ActionRailCopy::Prompt))
             || (condensed_semantic_rail
                 && matches!(kind, ActionRailCopy::Heading | ActionRailCopy::Prompt))
         {
@@ -196,7 +211,7 @@ fn refresh_action_rail(
             };
             let rail_content_width = (metrics.logical_size.x - left - 12.0 - 24.0).max(44.0);
             let column_count = if metrics.content_scale >= 1.5 {
-                offered.len().min(2)
+                offered.len().min(3)
             } else {
                 offered.len()
             }
@@ -223,8 +238,10 @@ fn refresh_action_rail(
             );
             match action.availability {
                 ActionAvailability::Enabled => {
-                    let mut control =
-                        root.spawn((row_button(name, action_width), ActionRailKey(action.action)));
+                    let mut control = root.spawn((
+                        fixed_row_button(name, action_width, 64.0 * metrics.control_scale.max(1.0)),
+                        ActionRailKey(action.action),
+                    ));
                     if immediate {
                         control.insert(crate::UiVisibilityRequirement::Immediate);
                     }
@@ -259,12 +276,29 @@ fn refresh_action_rail(
                     }
                     control.with_children(|disabled| {
                         disabled.spawn(blurb(&assets, action.label));
-                        disabled.spawn(fine(&assets, format!("Unavailable · {reason}")));
+                        let visible_reason = if metrics.content_scale >= 1.5 {
+                            reason
+                                .strip_prefix("Unavailable while ")
+                                .or_else(|| reason.strip_prefix("Unavailable because "))
+                                .unwrap_or(&reason)
+                        } else {
+                            &reason
+                        };
+                        disabled.spawn(fine(&assets, visible_reason.to_owned()));
                     });
                 }
             }
         }
     });
+}
+
+fn action_rail_needs_refresh(
+    view_changed: bool,
+    review_changed: bool,
+    metrics_changed: bool,
+    rail_added: bool,
+) -> bool {
+    view_changed || review_changed || metrics_changed || rail_added
 }
 
 fn action_rail_node(viewport: UiViewportClass) -> Node {
@@ -337,7 +371,7 @@ fn apply_action_rail_layout(
         node.top = Val::Auto;
         node.padding = UiRect::axes(Val::Px(18.0), Val::Px(12.0));
         node.row_gap = Val::Px(8.0);
-        node.min_height = Val::Px(116.0);
+        node.min_height = Val::Px(if minimal_deployment { 0.0 } else { 116.0 });
         node.height = Val::Auto;
         node.overflow = Overflow::default();
     }
@@ -379,6 +413,77 @@ mod tests {
     use crate::{resolve_ui_metrics, UiScaleMode};
 
     use super::*;
+
+    #[test]
+    fn refresh_gate_includes_a_new_action_rail() {
+        assert!(action_rail_needs_refresh(false, false, false, true));
+        assert!(!action_rail_needs_refresh(false, false, false, false));
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn gameplay_reentry_repopulates_a_new_rail_from_the_unchanged_hud_view() {
+        let mut app = App::new();
+        app.add_plugins(crate::test_support::HeadlessUiPlugin::default())
+            .add_systems(
+                OnExit(Screen::Gameplay),
+                crate::despawn_screen(Screen::Gameplay),
+            );
+        let expected_view = GameplayHudView {
+            actor_label: "Re-entry Ranger".to_owned(),
+            round: "Round 3".to_owned(),
+            movement_remaining: 2,
+            action_remaining: true,
+            actions: vec![crate::ActionAffordance {
+                action: GameplayAction::EndTurn,
+                label: "End turn".to_owned(),
+                shortcut: Some("Enter".to_owned()),
+                availability: ActionAvailability::Enabled,
+                priority: crate::ActionPriority::Primary,
+            }],
+            ..default()
+        };
+        app.world_mut().insert_resource(expected_view.clone());
+
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Gameplay);
+        for _ in 0..8 {
+            app.update();
+        }
+        assert_eq!(
+            presented_action_rail_actions(&mut app),
+            [GameplayAction::EndTurn]
+        );
+
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Loading);
+        for _ in 0..4 {
+            app.update();
+        }
+        assert!(presented_action_rail_actions(&mut app).is_empty());
+        assert_eq!(app.world().resource::<GameplayHudView>(), &expected_view);
+
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Gameplay);
+        for _ in 0..8 {
+            app.update();
+        }
+
+        assert_eq!(app.world().resource::<GameplayHudView>(), &expected_view);
+        assert_eq!(
+            presented_action_rail_actions(&mut app),
+            [GameplayAction::EndTurn]
+        );
+    }
+
+    #[cfg(feature = "test-support")]
+    fn presented_action_rail_actions(app: &mut App) -> Vec<GameplayAction> {
+        let mut query = app.world_mut().query::<&ActionRailKey>();
+        query.iter(app.world()).map(|action| action.0).collect()
+    }
 
     #[test]
     fn required_priority_is_reserved_for_blocking_choices() {

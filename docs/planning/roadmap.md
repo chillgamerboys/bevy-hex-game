@@ -54,7 +54,7 @@ still belong to the crate they change. `docs` is whoever picks it up.
 | Formation traversal | Wave 4: per-segment sextant rotation, deterministic bottleneck compression/reformation, and all-or-nothing exact-path `MoveParty` validation |
 | Outcomes and recovery | Wave 4: retained-world Victory/Defeat, exact same-seed Retry, caster-chosen Renewal restoration with next-round revival, and whole-party exploration Rest |
 | Party-combat checkpoint | Wave 4: deterministic 3v3 Party Trial summary/replay, focused Ability Lab and Raider Mirror walks, and the completed human Crossing playtest |
-| Pre-alpha app shell | Wave 5 foundation, now presented as a responsive primary-route title plus a separate Maps/Demos Scenarios catalog; Party Trial is the hidden New Game default and Close Quarters retired |
+| Pre-alpha app shell | Wave 5 foundation, now presented as a responsive primary-route title with independent Map Scenarios and Demos catalogs plus direct Character/Spell Creator routes; Party Trial is the hidden New Game default and Close Quarters retired |
 | Exploration resume | Wave 5 / HEX-15: one atomic, build/content-bound slot, saved only from quiescent paused exploration and restored before first perception <!-- linear: HEX-15 owner: shravan-kumaran --> |
 | Settings and seams | Wave 5 / HEX-16: persistent display and volume preferences, centralized fixed input actions, and empty music/SFX/UI buses <!-- linear: HEX-16 owner: shravan-kumaran --> |
 | Release artifact scaffold | Wave 5 / HEX-17: stable app identity, normalized packages, retained symbol material, and documented future credential slots with no live integrations <!-- linear: HEX-17 owner: shravan-kumaran --> |
@@ -285,12 +285,13 @@ today, and its status, is [contracts.md](../contracts.md).
 
 ### Pre-alpha app shell and default game
 
-The responsive title now keeps Continue, New Game, Creators, Combat Lab, Scenarios,
-Settings, and Quit together as primary routes. Scenarios opens a separate scrollable
-catalog with Maps and focused Demos. Party Trial is the one integrated default game
-and launches through New Game rather than appearing beside diagnostic fixtures.
+The responsive title now keeps Continue, New Game, Character Creator, Spell Creator,
+Combat Lab, Map Scenarios, Demos, Settings, and Quit together as primary routes. Map
+Scenarios and Demos open independently filtered scrollable catalogs. Party Trial is
+the one integrated default game and launches through New Game rather than appearing
+beside diagnostic fixtures.
 Ability Lab and Raider Mirror remain available by stable fixture ID inside Combat Lab
-and also appear as focused Scenarios entries; creator matrices remain Lab-only.
+and also appear in Demos; creator matrices remain Lab-only.
 Close Quarters and the Combat category remain retired. Starting a New Game never reads
 or overwrites the resume slot.
 

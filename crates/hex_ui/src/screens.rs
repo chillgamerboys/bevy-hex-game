@@ -294,6 +294,7 @@ fn spawn_settings_rows(
             .spawn((
                 button(format!("Setting {:?}", row.setting)),
                 SettingControl(row.setting),
+                crate::UiVisibilityRequirement::Scrollable,
             ))
             .with_child(label(assets, format!("{} · {}", row.label, row.value)));
     }

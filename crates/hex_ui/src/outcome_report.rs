@@ -67,23 +67,34 @@ fn render(
             overlay
                 .spawn((
                     Name::new("Encounter Outcome Panel"),
-                    ScrollArea,
-                    ScrollPosition::default(),
                     Node {
                         width: if view.body.is_some() {
                             Val::Percent(88.0)
                         } else {
                             Val::Px(430.0)
                         },
-                        max_width: Val::Px(1500.0),
-                        max_height: Val::Percent(90.0),
+                        height: if view.body.is_some() {
+                            Val::Percent(90.0)
+                        } else {
+                            Val::Auto
+                        },
+                        // Wide review and play canvases need a genuinely dense
+                        // report surface. A 1500px cap reduced the 4K report to
+                        // a narrow column even though the data is comparative
+                        // and benefits directly from horizontal room.
+                        max_width: Val::Px(2400.0),
+                        max_height: if view.body.is_some() {
+                            Val::Px(1500.0)
+                        } else {
+                            Val::Percent(90.0)
+                        },
                         padding: UiRect::all(Val::Px(28.0)),
                         flex_direction: FlexDirection::Column,
                         align_items: AlignItems::Center,
                         row_gap: Val::Px(16.0),
                         border: UiRect::all(Val::Px(1.0)),
                         border_radius: BorderRadius::all(Val::Px(10.0)),
-                        overflow: Overflow::scroll_y(),
+                        overflow: Overflow::clip(),
                         ..default()
                     },
                     BorderColor::all(Color::srgba(0.93, 0.79, 0.46, 0.5)),
@@ -91,25 +102,35 @@ fn render(
                 ))
                 .with_children(|panel| {
                     panel.spawn(heading(&assets, view.title.clone()));
-                    panel.spawn(blurb(&assets, view.detail.clone()));
                     if let Some(metadata) = &view.metadata {
-                        panel.spawn(fine(&assets, metadata.clone()));
                         spawn_tabs(panel, &assets, view);
                         panel
                             .spawn((
                                 Name::new("Outcome Report Body Scroll"),
+                                crate::UiVisibilityRequirement::Scrollable,
+                                ScrollArea,
+                                ScrollPosition::default(),
                                 Node {
                                     width: Val::Percent(100.0),
                                     min_height: Val::Px(0.0),
-                                    flex_grow: 0.0,
+                                    flex_basis: Val::Px(0.0),
+                                    flex_grow: 1.0,
                                     flex_direction: FlexDirection::Column,
+                                    row_gap: Val::Px(10.0),
+                                    overflow: Overflow::scroll_y(),
                                     ..default()
                                 },
                             ))
-                            .with_child(blurb(&assets, view.body.clone().unwrap_or_default()));
-                        if view.mode == hex_gameplay_model::ReportMode::Compare {
-                            spawn_comparisons(panel, &assets, view);
-                        }
+                            .with_children(|body| {
+                                body.spawn(blurb(&assets, view.detail.clone()));
+                                body.spawn(fine(&assets, metadata.clone()));
+                                body.spawn(blurb(&assets, view.body.clone().unwrap_or_default()));
+                                if view.mode == hex_gameplay_model::ReportMode::Compare {
+                                    spawn_comparisons(body, &assets, view);
+                                }
+                            });
+                    } else {
+                        panel.spawn(blurb(&assets, view.detail.clone()));
                     }
                     spawn_actions(panel, &assets, &view.actions);
                 });
@@ -137,12 +158,21 @@ fn spawn_tabs(parent: &mut ChildSpawnerCommands, assets: &UiAssets, view: &Outco
                     label.to_owned()
                 };
                 tabs.spawn((
-                    row_button(label, 220.0),
+                    row_button(label, report_tab_width(mode)),
                     Control(OutcomeIntent::SelectMode(mode)),
                 ))
                 .with_child(blurb(assets, text));
             }
         });
+}
+
+fn report_tab_width(mode: hex_gameplay_model::ReportMode) -> f32 {
+    match mode {
+        hex_gameplay_model::ReportMode::Overview => 140.0,
+        hex_gameplay_model::ReportMode::Units => 120.0,
+        hex_gameplay_model::ReportMode::SpellsEffects => 200.0,
+        hex_gameplay_model::ReportMode::Timeline | hex_gameplay_model::ReportMode::Compare => 140.0,
+    }
 }
 
 fn spawn_comparisons(
@@ -166,6 +196,7 @@ fn spawn_comparisons(
                 selectors
                     .spawn((
                         stacked_row_button(choice.label.clone(), 280.0),
+                        crate::UiVisibilityRequirement::Scrollable,
                         // Comparison identity remains readable at enlarged semantic
                         // type without relying on hover text or pixel inference.
                         Control(OutcomeIntent::CompareWith(choice.id)),

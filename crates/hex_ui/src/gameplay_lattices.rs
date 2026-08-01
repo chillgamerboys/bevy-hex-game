@@ -249,12 +249,12 @@ fn rebuild(
                 return;
             };
             commands.entity(body).with_children(|body| {
-                let ultra_constrained = metrics.effective_size.x < 700.0;
+                let ultra_constrained = crate::layout::is_ultra_constrained(*metrics);
                 body.spawn((
                     Name::new("Compact Required Lattice Summary"),
                     Node {
-                        width: Val::Px(if ultra_constrained { 120.0 } else { 188.0 }),
-                        min_width: Val::Px(if ultra_constrained { 120.0 } else { 188.0 }),
+                        width: Val::Px(if ultra_constrained { 160.0 } else { 188.0 }),
+                        min_width: Val::Px(if ultra_constrained { 160.0 } else { 188.0 }),
                         min_height: Val::Px(72.0),
                         height: Val::Auto,
                         flex_shrink: 0.0,

@@ -81,9 +81,12 @@ essential-text floor. Display, title, and heading type use
 geometry uses the same moderated growth above 100% but never shrinks below its
 authored baseline, preserving 44×44 logical-pixel targets. Spacing uses
 `1 + 0.25 × (content_scale - 1)`, capped at `1.25`. Layout is selected from the
-spacing-adjusted logical canvas:
+logical canvas divided by the greater of content and spacing scale. This matters at
+200%: a 1920×1080 window must reflow to Compact instead of keeping Standard side
+rails beside doubled essential copy. Below 100%, spacing remains the density limit so
+smaller type does not unexpectedly promote an ordinary canvas to Wide.
 
-| Class | Spacing-adjusted logical canvas | Behavior |
+| Class | Semantic-density-adjusted logical canvas | Behavior |
 |---|---|---|
 | Compact | below 1440×810 | one content column; drawers overlay/collapse; action rail remains full width |
 | Standard | at least 1440×810 and below 2400 px wide | primary content plus one secondary region |
@@ -112,7 +115,8 @@ and named text node's actual glyph rectangles with the canvas and Bevy's inherit
 `CalculatedClip`; a nonzero `ComputedNode` whose glyphs or box cross a clipped edge
 is not treated as fully visible. The oracle also checks focus order and interactive
 overlap without interpreting the text or pixels as gameplay truth.
-The matrix uses the full production title routes and Scenarios catalog, populated
+The matrix uses the full production title routes, the independently filtered Map
+Scenarios and Demos catalogs, populated
 Settings, Creator and Combat Lab setup projections, a 6v6 deployment, and the maximum
 ordinary gameplay action rail plus required, aiming, statistics, and report states. A half logical
 pixel is the only target-size tolerance, accounting for physical-pixel rounding at
@@ -178,6 +182,11 @@ the renderer resource and is persisted through the existing preferences writer.
 
 ## Testing oracle boundary
 
+The exhaustive player-task inventory, coverage tiers, and fail-closed control
+classification live in [Runtime UI verification](../development/ui-verification.md).
+That inventory is the acceptance source for route and fixture completeness; this
+section defines which oracle may prove each kind of fact.
+
 Use the cheapest authoritative oracle:
 
 - Pure view-model, scale, breakpoint, intent, and priority behavior stays inline in
@@ -218,9 +227,10 @@ cargo run -p hex_game --features visual-walk
 |---|---|---|---|
 | Splash/loading | understand progress | none | none |
 | Title | choose route | all primary routes initially visible | none |
-| Scenarios | choose a development fixture | Back | Maps and Demos catalog |
+| Map Scenarios | choose a map/world presentation fixture | Back | map-only catalog |
+| Demos | choose a focused gameplay demonstration | Back | demo-only catalog |
 | Settings | change one preference | Back | persistence notice |
-| Creators | finish the current authoring step | Back / Next / Confirm | optional details and history |
+| Character / Spell Creator | finish the current authoring step | Library / Save / Test where applicable | palettes, catalogs, validation, and history |
 | Combat Lab setup | choose fixture/profile and deploy | Back / Launch | fixture explanation and tuning |
 | Gameplay | act for the current unit | Now / Choose / Confirm rail | inspector, log, statistics |
 | Pause | resume, save, or leave | Resume | save notice |

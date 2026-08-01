@@ -56,9 +56,9 @@ pub use model::{
     LabStatisticsView, LatticeDemoIntent, LatticeDemoSpellView, LatticeDemoView, LatticeIntent,
     OutcomeAction, OutcomeActionView, OutcomeCompareChoiceView, OutcomeIntent, OutcomeReportView,
     OwnLatticeView, PartyIntent, PartyMemberView, PartyView, PauseView, ResumeView,
-    ScenarioBrowserIntent, ScenarioBrowserView, TargetLatticeStateView, TargetLatticeView,
-    TargetPulseView, TitleIntent, TitleScenarioView, TitleView, UiIntent, UiSetting, UiSettingRow,
-    UiSettingsView, UnitBadgeView, UnitBadgesView,
+    ScenarioBrowserIntent, ScenarioBrowserKind, ScenarioBrowserView, TargetLatticeStateView,
+    TargetLatticeView, TargetPulseView, TitleIntent, TitleScenarioView, TitleView, UiIntent,
+    UiSetting, UiSettingRow, UiSettingsView, UnitBadgeView, UnitBadgesView,
 };
 #[cfg(feature = "dev-tools")]
 pub use model::{DevTimeIntent, DevTimeView};
@@ -76,8 +76,8 @@ pub use theme::{
     LABEL_SIZE, MUTED, PANEL_BG, SCREEN_TITLE_SIZE, SMALL_BUTTON_WIDTH, TITLE_SIZE,
 };
 pub(crate) use theme::{
-    body_text_role, compact_glyph_role, owner_resolved_control_role, responsive_control_role,
-    supporting_text_role,
+    body_text_role, compact_glyph_role, fixed_row_button, owner_resolved_control_role,
+    responsive_control_role, supporting_text_role,
 };
 
 #[cfg(any(feature = "visual-review", feature = "test-support"))]
@@ -113,6 +113,11 @@ pub enum UiVisibilityRequirement {
     /// The control may begin offscreen when an operable scroll owner can reveal it.
     Scrollable,
 }
+
+/// Safe default carried by shared controls. A secondary surface must explicitly
+/// replace this with [`UiVisibilityRequirement::Scrollable`].
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct DefaultImmediateControl;
 
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
@@ -231,6 +236,426 @@ pub mod test_support {
         }
     }
 
+    /// One player task whose presentation must remain independently constructible.
+    ///
+    /// This is intentionally more granular than [`hex_core::Screen`]. A single
+    /// screen can contain several materially different tasks and responsive risks.
+    #[expect(
+        missing_docs,
+        reason = "variant meaning is documented by its public UiTaskContract"
+    )]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum UiTaskCase {
+        Splash,
+        Loading,
+        TitleCold,
+        TitleResume,
+        TitleFailure,
+        MapScenarios,
+        Demos,
+        Settings,
+        CharacterLibrary,
+        SpellLibrary,
+        CreatorLibraryRecovery,
+        CharacterInvalid,
+        CharacterReady,
+        CharacterConfirmDelete,
+        SpellInvalid,
+        SpellReady,
+        SpellConfirmDelete,
+        LatticeDemo,
+        LabMap,
+        LabRosters,
+        LabRostersMax,
+        LabRules,
+        LabFixtures,
+        LabReportsEmpty,
+        LabReportsPopulated,
+        DeploymentIncomplete,
+        DeploymentComplete,
+        Exploration,
+        PlayerTurnMaxActions,
+        HostileTurn,
+        Casting,
+        AimingBlocked,
+        DisableDecision,
+        RestoreDecision,
+        HudHiddenRequired,
+        LabStatistics,
+        Pause,
+        OrdinaryOutcome,
+        LabReportOverview,
+        LabReportUnits,
+        LabReportSpellsEffects,
+        LabReportTimeline,
+        LabReportCompare,
+    }
+
+    /// Static acceptance facts for one [`UiTaskCase`].
+    #[derive(Debug, Clone, Copy)]
+    pub struct UiTaskContract {
+        /// Stable diagnostic/fixture identity.
+        pub id: &'static str,
+        /// Bevy screen that owns the task.
+        pub screen: hex_core::Screen,
+        /// Controls that must be completely visible before scrolling.
+        pub immediate_controls: &'static [&'static str],
+        /// Representative secondary controls that must have a real scroll route.
+        pub scrollable_controls: &'static [&'static str],
+        /// Whether the case receives the exhaustive viewport/scale matrix.
+        pub exhaustive_layout: bool,
+    }
+
+    impl UiTaskCase {
+        /// Every known task case. Adding a task requires adding it here and to the
+        /// exhaustive contract match below.
+        pub const ALL: [Self; 43] = [
+            Self::Splash,
+            Self::Loading,
+            Self::TitleCold,
+            Self::TitleResume,
+            Self::TitleFailure,
+            Self::MapScenarios,
+            Self::Demos,
+            Self::Settings,
+            Self::CharacterLibrary,
+            Self::SpellLibrary,
+            Self::CreatorLibraryRecovery,
+            Self::CharacterInvalid,
+            Self::CharacterReady,
+            Self::CharacterConfirmDelete,
+            Self::SpellInvalid,
+            Self::SpellReady,
+            Self::SpellConfirmDelete,
+            Self::LatticeDemo,
+            Self::LabMap,
+            Self::LabRosters,
+            Self::LabRostersMax,
+            Self::LabRules,
+            Self::LabFixtures,
+            Self::LabReportsEmpty,
+            Self::LabReportsPopulated,
+            Self::DeploymentIncomplete,
+            Self::DeploymentComplete,
+            Self::Exploration,
+            Self::PlayerTurnMaxActions,
+            Self::HostileTurn,
+            Self::Casting,
+            Self::AimingBlocked,
+            Self::DisableDecision,
+            Self::RestoreDecision,
+            Self::HudHiddenRequired,
+            Self::LabStatistics,
+            Self::Pause,
+            Self::OrdinaryOutcome,
+            Self::LabReportOverview,
+            Self::LabReportUnits,
+            Self::LabReportSpellsEffects,
+            Self::LabReportTimeline,
+            Self::LabReportCompare,
+        ];
+
+        /// Fail-closed presentation contract for this task.
+        #[must_use]
+        pub const fn contract(self) -> UiTaskContract {
+            use hex_core::Screen;
+            match self {
+                Self::Splash => task("startup-splash", Screen::Splash, &[], &[], false),
+                Self::Loading => task("startup-loading", Screen::Loading, &[], &[], false),
+                Self::TitleCold => task("title-cold", Screen::Title, TITLE_CONTROLS, &[], true),
+                Self::TitleResume => {
+                    task("title-resume", Screen::Title, TITLE_CONTROLS, &[], false)
+                }
+                Self::TitleFailure => {
+                    task("title-failure", Screen::Title, TITLE_CONTROLS, &[], false)
+                }
+                Self::MapScenarios => task(
+                    "map-scenarios",
+                    Screen::Scenarios,
+                    &["Back"],
+                    &["The Crossing", "Waterfall"],
+                    true,
+                ),
+                Self::Demos => task(
+                    "demos",
+                    Screen::Scenarios,
+                    &["Back"],
+                    &["Ability Lab", "Raider Mirror"],
+                    true,
+                ),
+                Self::Settings => task(
+                    "settings",
+                    Screen::Settings,
+                    &["Back"],
+                    &["Setting UiScale", "Setting UiVolume"],
+                    false,
+                ),
+                Self::CharacterLibrary => task(
+                    "creator-character-library",
+                    Screen::CharacterCreator,
+                    &["New Blank Character", "Open Spell Creator", "Title"],
+                    &["Wolf Template"],
+                    true,
+                ),
+                Self::SpellLibrary => task(
+                    "creator-spell-library",
+                    Screen::SpellCreator,
+                    &["New Blank Spell", "Title"],
+                    &["Training Spark"],
+                    true,
+                ),
+                Self::CreatorLibraryRecovery => task(
+                    "creator-library-recovery",
+                    Screen::CharacterCreator,
+                    &["Open Spell Creator", "Confirm Reset", "Title"],
+                    &[],
+                    false,
+                ),
+                Self::CharacterInvalid => task(
+                    "creator-character-invalid",
+                    Screen::CharacterCreator,
+                    &["Library", "Save", "Open Spell Creator"],
+                    &["Erase"],
+                    true,
+                ),
+                Self::CharacterReady => task(
+                    "creator-character-ready",
+                    Screen::CharacterCreator,
+                    &["Library", "Save", "Local Test", "Test on Map"],
+                    &["Erase"],
+                    false,
+                ),
+                Self::CharacterConfirmDelete => task(
+                    "creator-character-confirm-delete",
+                    Screen::CharacterCreator,
+                    &["Library", "Save", "Open Spell Creator"],
+                    &["Confirm Delete"],
+                    false,
+                ),
+                Self::SpellInvalid => task(
+                    "creator-spell-invalid",
+                    Screen::SpellCreator,
+                    &["Library", "Save"],
+                    &["+ Reveal"],
+                    true,
+                ),
+                Self::SpellReady => task(
+                    "creator-spell-ready",
+                    Screen::SpellCreator,
+                    &["Library", "Save"],
+                    &["Delete"],
+                    false,
+                ),
+                Self::SpellConfirmDelete => task(
+                    "creator-spell-confirm-delete",
+                    Screen::SpellCreator,
+                    &["Library", "Save"],
+                    &["Confirm Delete"],
+                    false,
+                ),
+                Self::LatticeDemo => task(
+                    "lattice-demo",
+                    Screen::LatticeDemo,
+                    &["End Turn", "Reset", "Cast Lightning Bolt"],
+                    &[],
+                    false,
+                ),
+                Self::LabMap => task(
+                    "lab-map",
+                    Screen::CombatLab,
+                    LAB_TABS,
+                    &["Flat Arena"],
+                    true,
+                ),
+                Self::LabRosters => task(
+                    "lab-rosters",
+                    Screen::CombatLab,
+                    &["Back to Map", "Continue to Rules"],
+                    &["Add to roster"],
+                    false,
+                ),
+                Self::LabRostersMax => task(
+                    "lab-rosters-max",
+                    Screen::CombatLab,
+                    &["Back to Map", "Continue to Rules"],
+                    &["Remove"],
+                    true,
+                ),
+                Self::LabRules => task(
+                    "lab-rules",
+                    Screen::CombatLab,
+                    &["Back to Rosters", "Load Map & Deploy"],
+                    &["Reset to Shipped"],
+                    true,
+                ),
+                Self::LabFixtures => task(
+                    "lab-fixtures",
+                    Screen::CombatLab,
+                    LAB_TABS,
+                    &["Run Custom three-step"],
+                    false,
+                ),
+                Self::LabReportsEmpty => {
+                    task("lab-reports-empty", Screen::CombatLab, LAB_TABS, &[], false)
+                }
+                Self::LabReportsPopulated => task(
+                    "lab-reports-populated",
+                    Screen::CombatLab,
+                    LAB_TABS,
+                    &["Delete…", "Confirm Delete"],
+                    true,
+                ),
+                Self::DeploymentIncomplete => task(
+                    "deployment-incomplete",
+                    Screen::Gameplay,
+                    &["Undo", "Deterministic Auto-place", "Back to Rules"],
+                    &[],
+                    true,
+                ),
+                Self::DeploymentComplete => task(
+                    "deployment-complete",
+                    Screen::Gameplay,
+                    &["Start Combat", "Back to Rules"],
+                    &[],
+                    false,
+                ),
+                Self::Exploration => task(
+                    "gameplay-exploration",
+                    Screen::Gameplay,
+                    &[
+                        "Primary Action Rail",
+                        "Action Rail Rest",
+                        "Action Rail Pause",
+                    ],
+                    &[],
+                    false,
+                ),
+                Self::PlayerTurnMaxActions => task(
+                    "gameplay-player-turn-max",
+                    Screen::Gameplay,
+                    &[
+                        "Primary Action Rail",
+                        "Action Rail Channel",
+                        "Action Rail End Turn",
+                        "Action Rail Pause",
+                    ],
+                    &[],
+                    true,
+                ),
+                Self::HostileTurn => task(
+                    "gameplay-hostile-turn",
+                    Screen::Gameplay,
+                    &["Primary Action Rail"],
+                    &[],
+                    false,
+                ),
+                Self::Casting => task(
+                    "casting",
+                    Screen::Gameplay,
+                    &["Primary Action Rail"],
+                    &["Cast Lightning Bolt"],
+                    false,
+                ),
+                Self::AimingBlocked => task(
+                    "aiming-blocked",
+                    Screen::Gameplay,
+                    &["Primary Action Rail", "Cancel Aim"],
+                    &[],
+                    true,
+                ),
+                Self::DisableDecision => task(
+                    "decision-disable",
+                    Screen::Gameplay,
+                    &["Primary Action Rail", "Action Rail Confirm 2 / 3"],
+                    &[],
+                    true,
+                ),
+                Self::RestoreDecision => task(
+                    "decision-restore",
+                    Screen::Gameplay,
+                    &["Primary Action Rail", "Action Rail Confirm 2 / 3"],
+                    &[],
+                    false,
+                ),
+                Self::HudHiddenRequired => task(
+                    "hud-hidden-required",
+                    Screen::Gameplay,
+                    &["Primary Action Rail", "Action Rail Confirm 2 / 3"],
+                    &[],
+                    true,
+                ),
+                Self::LabStatistics => task(
+                    "lab-statistics",
+                    Screen::Gameplay,
+                    &[
+                        "Primary Action Rail",
+                        "End experiment and save the current Combat Lab report",
+                    ],
+                    &[],
+                    false,
+                ),
+                Self::Pause => task("pause", Screen::Gameplay, &["Resume"], &[], false),
+                Self::OrdinaryOutcome => task(
+                    "outcome-ordinary",
+                    Screen::Gameplay,
+                    &["Continue", "Retry"],
+                    &[],
+                    false,
+                ),
+                Self::LabReportOverview => report_task("report-overview", false),
+                Self::LabReportUnits => report_task("report-units", false),
+                Self::LabReportSpellsEffects => report_task("report-spells-effects", false),
+                Self::LabReportTimeline => report_task("report-timeline", false),
+                Self::LabReportCompare => report_task("report-compare", true),
+            }
+        }
+    }
+
+    const TITLE_CONTROLS: &[&str] = &[
+        "Continue",
+        "New Game",
+        "Character Creator",
+        "Spell Creator",
+        "Combat Lab",
+        "Map Scenarios",
+        "Demos",
+        "Settings",
+        "Quit",
+    ];
+    const LAB_TABS: &[&str] = &["Sandbox", "Fixed Fixtures", "Saved Reports", "Back"];
+
+    const fn task(
+        id: &'static str,
+        screen: hex_core::Screen,
+        immediate_controls: &'static [&'static str],
+        scrollable_controls: &'static [&'static str],
+        exhaustive_layout: bool,
+    ) -> UiTaskContract {
+        UiTaskContract {
+            id,
+            screen,
+            immediate_controls,
+            scrollable_controls,
+            exhaustive_layout,
+        }
+    }
+
+    const fn report_task(id: &'static str, exhaustive_layout: bool) -> UiTaskContract {
+        task(
+            id,
+            hex_core::Screen::Gameplay,
+            &[
+                "Overview",
+                "Units",
+                "Spells & Effects",
+                "Timeline",
+                "Compare",
+            ],
+            &["Outcome Report Body Scroll"],
+            exhaustive_layout,
+        )
+    }
+
     impl Plugin for HeadlessUiPlugin {
         fn build(&self, app: &mut App) {
             assert!(
@@ -313,7 +738,7 @@ pub mod test_support {
         /// Whether the complete node can be brought into view through its scroll ancestors.
         pub scroll_reachable: bool,
         /// Whether this control must be visible immediately or may use scrolling.
-        pub visibility_requirement: crate::UiVisibilityRequirement,
+        pub visibility_requirement: Option<crate::UiVisibilityRequirement>,
         /// Accessible label supplied to assistive technology.
         pub accessible_label: Option<String>,
         /// Explicit tab order, when this node is focusable.
@@ -369,7 +794,8 @@ pub mod test_support {
             let mut issues = Vec::new();
             for node in self.nodes.iter().filter(|node| {
                 !node.focusable
-                    && node.visibility_requirement == crate::UiVisibilityRequirement::Immediate
+                    && node.visibility_requirement
+                        == Some(crate::UiVisibilityRequirement::Immediate)
             }) {
                 if node.size.x <= 0.5 || node.size.y <= 0.5 {
                     issues.push(format!("{} has zero layout area", node.name));
@@ -387,9 +813,16 @@ pub mod test_support {
                 }
             }
             for node in self.nodes.iter().filter(|node| node.focusable) {
+                let Some(requirement) = node.visibility_requirement else {
+                    issues.push(format!(
+                        "{} is interactive but has no explicit immediate/scrollable visibility contract",
+                        node.name
+                    ));
+                    continue;
+                };
                 if node.size.x <= 0.5 || node.size.y <= 0.5 {
                     issues.push(format!("{} has zero layout area", node.name));
-                } else if node.visibility_requirement == crate::UiVisibilityRequirement::Immediate
+                } else if requirement == crate::UiVisibilityRequirement::Immediate
                     && !node.fully_visible
                 {
                     issues.push(format!(
@@ -580,7 +1013,11 @@ pub mod test_support {
                     visibility_requirement: world
                         .get::<crate::UiVisibilityRequirement>(entity)
                         .copied()
-                        .unwrap_or(crate::UiVisibilityRequirement::Scrollable),
+                        .or_else(|| {
+                            world
+                                .get::<crate::DefaultImmediateControl>(entity)
+                                .map(|_| crate::UiVisibilityRequirement::Immediate)
+                        }),
                     accessible_label: world
                         .get::<AccessibleLabel>(entity)
                         .map(|label| label.0.clone()),
@@ -1010,6 +1447,322 @@ pub mod test_support {
                 && left_max.y > right_min.y
         }
 
+        fn task_contract_issues(case: UiTaskCase, snapshot: &UiTreeSnapshot) -> Vec<String> {
+            let contract = case.contract();
+            let mut issues = snapshot.layout_issues();
+            for name in contract.immediate_controls {
+                let Some(node) = snapshot.nodes.iter().find(|node| node.name == *name) else {
+                    issues.push(format!("missing immediate control {name:?}"));
+                    continue;
+                };
+                if node.visibility_requirement != Some(crate::UiVisibilityRequirement::Immediate) {
+                    issues.push(format!("control {name:?} is not explicitly Immediate"));
+                }
+                if !node.fully_visible {
+                    issues.push(format!(
+                        "control {name:?} is not initially visible: {node:?}"
+                    ));
+                }
+            }
+            for name in contract.scrollable_controls {
+                let Some(node) = snapshot.nodes.iter().find(|node| node.name == *name) else {
+                    issues.push(format!("missing scrollable control {name:?}"));
+                    continue;
+                };
+                if node.visibility_requirement != Some(crate::UiVisibilityRequirement::Scrollable) {
+                    issues.push(format!(
+                        "control {name:?} did not explicitly opt into Scrollable"
+                    ));
+                }
+                if !node.scroll_reachable {
+                    issues.push(format!(
+                        "control {name:?} has no complete scroll route: {node:?}"
+                    ));
+                }
+            }
+            issues
+        }
+
+        fn assert_task_contract(case: UiTaskCase, snapshot: &UiTreeSnapshot) {
+            let issues = task_contract_issues(case, snapshot);
+            assert!(
+                issues.is_empty(),
+                "{} task contract failed: {issues:#?}",
+                case.contract().id
+            );
+        }
+
+        #[test]
+        fn task_registry_is_unique_and_exhaustively_classifies_every_screen() {
+            let ids = UiTaskCase::ALL
+                .into_iter()
+                .map(|case| case.contract().id)
+                .collect::<HashSet<_>>();
+            assert_eq!(ids.len(), UiTaskCase::ALL.len());
+
+            let expected_case_count = |screen| match screen {
+                hex_core::Screen::Splash => 1,
+                hex_core::Screen::Title => 3,
+                hex_core::Screen::Scenarios => 2,
+                hex_core::Screen::Settings => 1,
+                hex_core::Screen::LatticeDemo => 1,
+                hex_core::Screen::CharacterCreator => 5,
+                hex_core::Screen::SpellCreator => 4,
+                hex_core::Screen::CombatLab => 7,
+                hex_core::Screen::Loading => 1,
+                hex_core::Screen::Gameplay => 18,
+            };
+            for screen in [
+                hex_core::Screen::Splash,
+                hex_core::Screen::Title,
+                hex_core::Screen::Scenarios,
+                hex_core::Screen::Settings,
+                hex_core::Screen::LatticeDemo,
+                hex_core::Screen::CharacterCreator,
+                hex_core::Screen::SpellCreator,
+                hex_core::Screen::CombatLab,
+                hex_core::Screen::Loading,
+                hex_core::Screen::Gameplay,
+            ] {
+                assert_eq!(
+                    UiTaskCase::ALL
+                        .into_iter()
+                        .filter(|case| case.contract().screen == screen)
+                        .count(),
+                    expected_case_count(screen),
+                    "{screen:?} task coverage drifted"
+                );
+            }
+        }
+
+        #[test]
+        fn every_registered_task_constructs_a_populated_presentation_fixture() {
+            for case in UiTaskCase::ALL {
+                let snapshot = task_snapshot_at(case, 1280, 720, 1.0, crate::UiScaleMode::Auto);
+                assert!(
+                    !snapshot.nodes.is_empty(),
+                    "{} produced no observable presentation tree",
+                    case.contract().id
+                );
+            }
+        }
+
+        #[test]
+        fn every_task_passes_the_representative_viewport_and_scale_matrix() {
+            let viewports = [
+                (UVec2::new(1280, 720), 1.0, crate::UiScaleMode::Auto),
+                (UVec2::new(1920, 1080), 1.0, crate::UiScaleMode::Auto),
+                (UVec2::new(3840, 2160), 1.0, crate::UiScaleMode::Auto),
+                (UVec2::new(1280, 720), 1.0, crate::UiScaleMode::Percent200),
+                (UVec2::new(3024, 1898), 2.0, crate::UiScaleMode::Auto),
+            ];
+            let mut failures = Vec::new();
+            for case in UiTaskCase::ALL {
+                for (physical, device_scale, mode) in viewports {
+                    let snapshot =
+                        task_snapshot_at(case, physical.x, physical.y, device_scale, mode);
+                    let issues = task_contract_issues(case, &snapshot);
+                    if !issues.is_empty() {
+                        failures.push((case.contract().id, physical, device_scale, mode, issues));
+                    }
+                }
+            }
+            assert!(
+                failures.is_empty(),
+                "representative UI task matrix failures: {failures:#?}"
+            );
+        }
+
+        #[test]
+        fn startup_title_catalog_and_settings_tasks_satisfy_their_named_contracts() {
+            for (case, snapshot) in [
+                (
+                    UiTaskCase::Splash,
+                    simple_screen_snapshot(
+                        hex_core::Screen::Splash,
+                        1280,
+                        720,
+                        1.0,
+                        crate::UiScaleMode::Auto,
+                    ),
+                ),
+                (
+                    UiTaskCase::Loading,
+                    simple_screen_snapshot(
+                        hex_core::Screen::Loading,
+                        1280,
+                        720,
+                        1.0,
+                        crate::UiScaleMode::Auto,
+                    ),
+                ),
+                (
+                    UiTaskCase::TitleCold,
+                    title_case_snapshot(
+                        UiTaskCase::TitleCold,
+                        1280,
+                        720,
+                        1.0,
+                        crate::UiScaleMode::Auto,
+                    ),
+                ),
+                (
+                    UiTaskCase::TitleResume,
+                    title_case_snapshot(
+                        UiTaskCase::TitleResume,
+                        1280,
+                        720,
+                        1.0,
+                        crate::UiScaleMode::Auto,
+                    ),
+                ),
+                (
+                    UiTaskCase::TitleFailure,
+                    title_case_snapshot(
+                        UiTaskCase::TitleFailure,
+                        1280,
+                        720,
+                        1.0,
+                        crate::UiScaleMode::Auto,
+                    ),
+                ),
+                (
+                    UiTaskCase::MapScenarios,
+                    production_scenario_snapshot(
+                        1280,
+                        720,
+                        1.0,
+                        crate::UiScaleMode::Auto,
+                        crate::ScenarioBrowserKind::MapScenarios,
+                    ),
+                ),
+                (
+                    UiTaskCase::Demos,
+                    production_scenario_snapshot(
+                        1280,
+                        720,
+                        1.0,
+                        crate::UiScaleMode::Auto,
+                        crate::ScenarioBrowserKind::Demos,
+                    ),
+                ),
+                (
+                    UiTaskCase::Settings,
+                    setup_screen_snapshot(
+                        1280,
+                        720,
+                        1.0,
+                        crate::UiScaleMode::Auto,
+                        hex_core::Screen::Settings,
+                    ),
+                ),
+            ] {
+                assert_task_contract(case, &snapshot);
+            }
+        }
+
+        #[test]
+        fn every_creator_library_and_workspace_has_a_populated_task_contract() {
+            let mut failures = Vec::new();
+            for case in [
+                UiTaskCase::CharacterLibrary,
+                UiTaskCase::SpellLibrary,
+                UiTaskCase::CreatorLibraryRecovery,
+                UiTaskCase::CharacterInvalid,
+                UiTaskCase::CharacterReady,
+                UiTaskCase::CharacterConfirmDelete,
+                UiTaskCase::SpellInvalid,
+                UiTaskCase::SpellReady,
+                UiTaskCase::SpellConfirmDelete,
+            ] {
+                let snapshot =
+                    creator_case_snapshot(case, 1280, 720, 1.0, crate::UiScaleMode::Auto);
+                let issues = task_contract_issues(case, &snapshot);
+                if !issues.is_empty() {
+                    failures.push((case.contract().id, issues));
+                }
+            }
+            assert!(failures.is_empty(), "Creator task failures: {failures:#?}");
+        }
+
+        #[test]
+        fn every_combat_lab_setup_surface_has_a_populated_task_contract() {
+            let mut failures = Vec::new();
+            for case in [
+                UiTaskCase::LabMap,
+                UiTaskCase::LabRosters,
+                UiTaskCase::LabRostersMax,
+                UiTaskCase::LabRules,
+                UiTaskCase::LabFixtures,
+                UiTaskCase::LabReportsEmpty,
+                UiTaskCase::LabReportsPopulated,
+            ] {
+                let snapshot = lab_case_snapshot(case, 1280, 720, 1.0, crate::UiScaleMode::Auto);
+                let issues = task_contract_issues(case, &snapshot);
+                if !issues.is_empty() {
+                    failures.push((case.contract().id, issues));
+                }
+            }
+            assert!(
+                failures.is_empty(),
+                "Combat Lab task failures: {failures:#?}"
+            );
+        }
+
+        #[test]
+        fn every_gameplay_decision_pause_and_report_surface_has_a_populated_task_contract() {
+            let mut failures = Vec::new();
+            let lattice = lattice_demo_snapshot(1280, 720, 1.0, crate::UiScaleMode::Auto);
+            let lattice_issues = task_contract_issues(UiTaskCase::LatticeDemo, &lattice);
+            if !lattice_issues.is_empty() {
+                failures.push((UiTaskCase::LatticeDemo.contract().id, lattice_issues));
+            }
+            for (case, snapshot) in [
+                (
+                    UiTaskCase::DeploymentIncomplete,
+                    deployment_snapshot(1280, 720, 1.0, crate::UiScaleMode::Auto, false),
+                ),
+                (
+                    UiTaskCase::DeploymentComplete,
+                    deployment_snapshot(1280, 720, 1.0, crate::UiScaleMode::Auto, true),
+                ),
+            ] {
+                let issues = task_contract_issues(case, &snapshot);
+                if !issues.is_empty() {
+                    failures.push((case.contract().id, issues));
+                }
+            }
+            for case in [
+                UiTaskCase::Exploration,
+                UiTaskCase::PlayerTurnMaxActions,
+                UiTaskCase::HostileTurn,
+                UiTaskCase::Casting,
+                UiTaskCase::AimingBlocked,
+                UiTaskCase::DisableDecision,
+                UiTaskCase::RestoreDecision,
+                UiTaskCase::HudHiddenRequired,
+                UiTaskCase::LabStatistics,
+                UiTaskCase::Pause,
+                UiTaskCase::OrdinaryOutcome,
+                UiTaskCase::LabReportOverview,
+                UiTaskCase::LabReportUnits,
+                UiTaskCase::LabReportSpellsEffects,
+                UiTaskCase::LabReportTimeline,
+                UiTaskCase::LabReportCompare,
+            ] {
+                let snapshot =
+                    gameplay_case_snapshot(case, 1280, 720, 1.0, crate::UiScaleMode::Auto);
+                let issues = task_contract_issues(case, &snapshot);
+                if !issues.is_empty() {
+                    failures.push((case.contract().id, issues));
+                }
+            }
+            assert!(
+                failures.is_empty(),
+                "gameplay presentation task failures: {failures:#?}"
+            );
+        }
+
         fn required_choice_snapshot(
             width: u32,
             height: u32,
@@ -1106,11 +1859,512 @@ pub mod test_support {
             ui_tree_snapshot(app.world_mut())
         }
 
+        fn title_case_snapshot(
+            case: UiTaskCase,
+            physical_width: u32,
+            physical_height: u32,
+            scale_factor: f32,
+            mode: crate::UiScaleMode,
+        ) -> UiTreeSnapshot {
+            let mut app = App::new();
+            app.add_plugins(HeadlessUiPlugin::with_scale_factor(
+                physical_width,
+                physical_height,
+                scale_factor,
+            ));
+            app.world_mut()
+                .insert_resource(crate::UiScalePreference(mode));
+            match case {
+                UiTaskCase::TitleCold => {}
+                UiTaskCase::TitleResume => {
+                    app.world_mut().insert_resource(crate::ResumeView {
+                        available: true,
+                        message: "Continue the exact saved exploration session.".to_owned(),
+                    });
+                }
+                UiTaskCase::TitleFailure => {
+                    app.world_mut().insert_resource(crate::TitleView {
+                        setup_failure: Some(
+                            "The selected scenario could not be prepared; choose another route."
+                                .to_owned(),
+                        ),
+                    });
+                }
+                other => panic!("{other:?} is not a title task"),
+            }
+            app.world_mut()
+                .resource_mut::<NextState<hex_core::Screen>>()
+                .set(hex_core::Screen::Title);
+            for _ in 0..8 {
+                app.update();
+            }
+            ui_tree_snapshot(app.world_mut())
+        }
+
+        fn simple_screen_snapshot(
+            screen: hex_core::Screen,
+            physical_width: u32,
+            physical_height: u32,
+            scale_factor: f32,
+            mode: crate::UiScaleMode,
+        ) -> UiTreeSnapshot {
+            let mut app = App::new();
+            app.add_plugins(HeadlessUiPlugin::with_scale_factor(
+                physical_width,
+                physical_height,
+                scale_factor,
+            ));
+            app.world_mut()
+                .insert_resource(crate::UiScalePreference(mode));
+            app.world_mut()
+                .resource_mut::<NextState<hex_core::Screen>>()
+                .set(screen);
+            for _ in 0..8 {
+                app.update();
+            }
+            ui_tree_snapshot(app.world_mut())
+        }
+
+        fn creator_case_snapshot(
+            case: UiTaskCase,
+            width: u32,
+            height: u32,
+            scale_factor: f32,
+            mode: crate::UiScaleMode,
+        ) -> UiTreeSnapshot {
+            let screen = case.contract().screen;
+            assert!(matches!(
+                screen,
+                hex_core::Screen::CharacterCreator | hex_core::Screen::SpellCreator
+            ));
+            let element_file: hex_assets::ElementFile =
+                ron::from_str(include_str!("../../../assets/config/elements.ron"))
+                    .expect("the production element catalog must parse");
+            let elements = hex_assets::ElementCatalog::from_file(&element_file);
+            let spell_file: hex_assets::SpellFile =
+                ron::from_str(include_str!("../../../assets/config/spells.ron"))
+                    .expect("the production spell catalog must parse");
+            let spell_book = hex_assets::SpellBook::from_file(&spell_file);
+            let presets: hex_assets::CreationPresetCatalog =
+                ron::from_str(include_str!("../../../assets/config/creation_presets.ron"))
+                    .expect("the production Creator presets must parse");
+            let deployable_shipped_spells = spell_book
+                .iter()
+                .filter(|(_, _, spell)| {
+                    matches!(
+                        spell.targeting.shape,
+                        hex_assets::TargetShape::SelfCast | hex_assets::TargetShape::Single
+                    )
+                })
+                .map(|(_, name, _)| name.to_owned())
+                .collect::<Vec<_>>();
+
+            let mut view = crate::CreatorScreenView {
+                active: true,
+                screen,
+                elements: Some(elements),
+                spell_book: Some(spell_book),
+                spell_file: Some(spell_file),
+                presets: Some(presets.clone()),
+                deployable_shipped_spells,
+                ..default()
+            };
+            match case {
+                UiTaskCase::CharacterLibrary => {
+                    view.tab = hex_gameplay_model::CreatorSurface::Characters;
+                    view.workspace = crate::CreatorWorkspace::Hub;
+                }
+                UiTaskCase::SpellLibrary => {
+                    view.tab = hex_gameplay_model::CreatorSurface::Spells;
+                    view.workspace = crate::CreatorWorkspace::Hub;
+                }
+                UiTaskCase::CreatorLibraryRecovery => {
+                    view.tab = hex_gameplay_model::CreatorSurface::Characters;
+                    view.workspace = crate::CreatorWorkspace::Hub;
+                    view.library.error = Some(
+                        "The local Creator library could not be decoded. Reset it to continue."
+                            .to_owned(),
+                    );
+                    view.confirm_reset = true;
+                    view.notice =
+                        "Press Confirm Reset to replace the unreadable local library.".to_owned();
+                }
+                UiTaskCase::CharacterInvalid => {
+                    view.tab = hex_gameplay_model::CreatorSurface::Characters;
+                    view.workspace = crate::CreatorWorkspace::Character;
+                    view.character = Some(hex_assets::SavedCharacter::blank(
+                        hex_assets::CustomCharacterId(1),
+                        "Validation Fixture",
+                    ));
+                    view.character_dirty = true;
+                    view.character_issues = vec![
+                        "Add at least one elemental gem.".to_owned(),
+                        "Assign a positive mana capacity.".to_owned(),
+                    ];
+                }
+                UiTaskCase::CharacterReady => {
+                    view.tab = hex_gameplay_model::CreatorSurface::Characters;
+                    view.workspace = crate::CreatorWorkspace::Character;
+                    view.character = presets
+                        .characters
+                        .iter()
+                        .find(|record| record.audience == hex_assets::PresetAudience::HumanTemplate)
+                        .map(|record| record.character.clone());
+                }
+                UiTaskCase::CharacterConfirmDelete => {
+                    view.tab = hex_gameplay_model::CreatorSurface::Characters;
+                    view.workspace = crate::CreatorWorkspace::Character;
+                    view.character = presets
+                        .characters
+                        .iter()
+                        .find(|record| record.audience == hex_assets::PresetAudience::HumanTemplate)
+                        .map(|record| record.character.clone());
+                    view.confirm_delete = true;
+                    view.notice = "Press Confirm Delete to remove this saved character.".to_owned();
+                }
+                UiTaskCase::SpellInvalid => {
+                    view.tab = hex_gameplay_model::CreatorSurface::Spells;
+                    view.workspace = crate::CreatorWorkspace::Spell;
+                    view.spell = Some(hex_assets::SavedSpell::blank(
+                        hex_assets::CustomSpellId(1),
+                        "Validation Spell",
+                    ));
+                    view.spell_dirty = true;
+                    view.spell_issues = vec![
+                        "Add at least one ordered effect.".to_owned(),
+                        "Choose a payable elemental requirement.".to_owned(),
+                    ];
+                }
+                UiTaskCase::SpellReady => {
+                    view.tab = hex_gameplay_model::CreatorSurface::Spells;
+                    view.workspace = crate::CreatorWorkspace::Spell;
+                    view.spell = presets
+                        .spells
+                        .iter()
+                        .find(|record| record.audience == hex_assets::PresetAudience::HumanTemplate)
+                        .map(|record| record.spell.clone());
+                }
+                UiTaskCase::SpellConfirmDelete => {
+                    view.tab = hex_gameplay_model::CreatorSurface::Spells;
+                    view.workspace = crate::CreatorWorkspace::Spell;
+                    view.spell = presets
+                        .spells
+                        .iter()
+                        .find(|record| record.audience == hex_assets::PresetAudience::HumanTemplate)
+                        .map(|record| record.spell.clone());
+                    view.confirm_delete = true;
+                    view.notice = "Press Confirm Delete to remove this saved spell.".to_owned();
+                }
+                other => panic!("{other:?} is not a Creator task"),
+            }
+
+            let mut app = App::new();
+            app.add_plugins(HeadlessUiPlugin::with_scale_factor(
+                width,
+                height,
+                scale_factor,
+            ));
+            app.world_mut()
+                .insert_resource(crate::UiScalePreference(mode));
+            app.world_mut().insert_resource(view);
+            app.world_mut()
+                .resource_mut::<NextState<hex_core::Screen>>()
+                .set(screen);
+            for _ in 0..8 {
+                app.update();
+            }
+            ui_tree_snapshot(app.world_mut())
+        }
+
+        fn lab_case_snapshot(
+            case: UiTaskCase,
+            width: u32,
+            height: u32,
+            scale_factor: f32,
+            mode: crate::UiScaleMode,
+        ) -> UiTreeSnapshot {
+            let maps: hex_assets::CombatLabMapCatalog =
+                ron::from_str(include_str!("../../../assets/config/combat_lab_maps.ron"))
+                    .expect("the production Combat Lab map catalog must parse");
+            let element_file: hex_assets::ElementFile =
+                ron::from_str(include_str!("../../../assets/config/elements.ron"))
+                    .expect("the production element catalog must parse");
+            let elements = hex_assets::ElementCatalog::from_file(&element_file);
+            let spell_file: hex_assets::SpellFile =
+                ron::from_str(include_str!("../../../assets/config/spells.ron"))
+                    .expect("the production spell catalog must parse");
+            let spells = hex_assets::SpellBook::from_file(&spell_file);
+            let presets: hex_assets::CreationPresetCatalog =
+                ron::from_str(include_str!("../../../assets/config/creation_presets.ron"))
+                    .expect("the production Creator presets must parse");
+            let combat: hex_assets::CombatSettings =
+                ron::from_str(include_str!("../../../assets/config/combat.ron"))
+                    .expect("the production combat settings must parse");
+            let template = |name: &str| hex_gameplay_model::RosterChoice::Template(name.to_owned());
+            let map_ready_choices = ["wolf", "raider", "hedge-mage"]
+                .into_iter()
+                .map(template)
+                .collect::<Vec<_>>();
+            let mut view = crate::CombatLabScreenView {
+                active: true,
+                map: maps
+                    .maps
+                    .first()
+                    .map_or_else(String::new, |map| map.id.clone()),
+                library: crate::CreatorLibraryView {
+                    file: presets.library_for(hex_assets::PresetAudience::HumanTemplate),
+                    error: None,
+                },
+                elements: Some(elements),
+                spells: Some(spells),
+                presets: Some(presets),
+                maps: Some(maps),
+                combat: Some(combat.clone()),
+                map_ready_choices,
+                ..default()
+            };
+            match case {
+                UiTaskCase::LabMap => {}
+                UiTaskCase::LabRosters => {
+                    view.sandbox_step = hex_gameplay_model::SandboxStep::Rosters;
+                    view.players = vec![template("hedge-mage")];
+                    view.hostiles = vec![template("raider")];
+                }
+                UiTaskCase::LabRostersMax => {
+                    view.sandbox_step = hex_gameplay_model::SandboxStep::Rosters;
+                    view.players = (0..6).map(|_| template("hedge-mage")).collect();
+                    view.hostiles = (0..6).map(|_| template("raider")).collect();
+                }
+                UiTaskCase::LabRules => {
+                    view.sandbox_step = hex_gameplay_model::SandboxStep::Rules;
+                    view.players = vec![template("hedge-mage")];
+                    view.hostiles = vec![template("raider")];
+                    view.rules = Some(hex_assets::CombatRulesProfile::shipped(&combat));
+                }
+                UiTaskCase::LabFixtures => {
+                    view.tab = hex_gameplay_model::LabTab::Fixtures;
+                }
+                UiTaskCase::LabReportsEmpty => {
+                    view.tab = hex_gameplay_model::LabTab::Reports;
+                }
+                UiTaskCase::LabReportsPopulated => {
+                    let report = |id, pending_delete| crate::CombatLabReportCardView {
+                        id: hex_gameplay_model::CombatLabReportId(id),
+                        heading: format!("REPORT {id} · VICTORY"),
+                        label: format!("Profile {id}"),
+                        notes: "Frozen review notes".to_owned(),
+                        metadata: "Flat Arena · seed 77 · fingerprint 04C1B2F7".to_owned(),
+                        summary: "Rounds 8 · turns 24 · movement 19 · Channel 4".to_owned(),
+                        left_selected: id == 17,
+                        right_selected: id == 23,
+                        pending_delete,
+                    };
+                    view.tab = hex_gameplay_model::LabTab::Reports;
+                    view.pending_report_delete = Some(hex_gameplay_model::CombatLabReportId(17));
+                    view.reports = crate::CombatLabReportsView {
+                        error: Some("One older report could not be decoded.".to_owned()),
+                        reports: vec![report(17, true), report(23, false)],
+                        comparison: Some(crate::CombatLabComparisonView {
+                            heading: "COMPARE REPORT 17 ↔ REPORT 23".to_owned(),
+                            frozen: "Shipped ↔ Tactical two-step".to_owned(),
+                            deltas: "Rounds -2 · commands +3/-1 · Channel +2".to_owned(),
+                        }),
+                    };
+                }
+                other => panic!("{other:?} is not a Combat Lab task"),
+            }
+
+            let mut app = App::new();
+            app.add_plugins(HeadlessUiPlugin::with_scale_factor(
+                width,
+                height,
+                scale_factor,
+            ));
+            app.world_mut()
+                .insert_resource(crate::UiScalePreference(mode));
+            app.world_mut().insert_resource(view);
+            app.world_mut()
+                .resource_mut::<NextState<hex_core::Screen>>()
+                .set(hex_core::Screen::CombatLab);
+            for _ in 0..8 {
+                app.update();
+            }
+            ui_tree_snapshot(app.world_mut())
+        }
+
+        fn lattice_demo_snapshot(
+            physical_width: u32,
+            physical_height: u32,
+            scale_factor: f32,
+            mode: crate::UiScaleMode,
+        ) -> UiTreeSnapshot {
+            let mut app = App::new();
+            app.add_plugins(HeadlessUiPlugin::with_scale_factor(
+                physical_width,
+                physical_height,
+                scale_factor,
+            ));
+            app.world_mut()
+                .insert_resource(crate::UiScalePreference(mode));
+            app.world_mut().insert_resource(crate::LatticeDemoView {
+                ready: true,
+                cells: [
+                    (0, 0, "AIR"),
+                    (1, 0, "FIRE"),
+                    (0, 1, "WATER"),
+                    (-1, 1, "EARTH"),
+                ]
+                .into_iter()
+                .map(|(q, r, label)| crate::LatticeCellView {
+                    coord: hex_core::LatticeCoord::new(q, r),
+                    label: label.to_owned(),
+                    detail: "LIVE · 1 MANA".to_owned(),
+                    color: Color::srgb(0.35, 0.62, 0.78),
+                    known_mana: Some(1),
+                    known_locked: Some(false),
+                    disabled: false,
+                    selected: false,
+                    interaction: crate::CellInteraction::Actionable,
+                })
+                .collect(),
+                spells: vec![
+                    crate::LatticeDemoSpellView {
+                        coord: hex_core::LatticeCoord::new(1, 0),
+                        name: "Ember".to_owned(),
+                        headline: "Ember · ready".to_owned(),
+                        kind: "Evocation".to_owned(),
+                        cost: Some(1),
+                        blocked: None,
+                    },
+                    crate::LatticeDemoSpellView {
+                        coord: hex_core::LatticeCoord::new(0, 1),
+                        name: "Lightning Bolt".to_owned(),
+                        headline: "Lightning Bolt · ready".to_owned(),
+                        kind: "Evocation".to_owned(),
+                        cost: Some(2),
+                        blocked: None,
+                    },
+                ],
+                totals: "Mana 4 · disabled 0 · enchantments 0".to_owned(),
+                log: (1..=8)
+                    .map(|index| format!("Bounded lattice event {index}"))
+                    .collect(),
+            });
+            app.world_mut()
+                .resource_mut::<NextState<hex_core::Screen>>()
+                .set(hex_core::Screen::LatticeDemo);
+            for _ in 0..8 {
+                app.update();
+            }
+            ui_tree_snapshot(app.world_mut())
+        }
+
+        fn task_snapshot_at(
+            case: UiTaskCase,
+            physical_width: u32,
+            physical_height: u32,
+            scale_factor: f32,
+            mode: crate::UiScaleMode,
+        ) -> UiTreeSnapshot {
+            match case {
+                UiTaskCase::Splash => simple_screen_snapshot(
+                    hex_core::Screen::Splash,
+                    physical_width,
+                    physical_height,
+                    scale_factor,
+                    mode,
+                ),
+                UiTaskCase::Loading => simple_screen_snapshot(
+                    hex_core::Screen::Loading,
+                    physical_width,
+                    physical_height,
+                    scale_factor,
+                    mode,
+                ),
+                UiTaskCase::TitleCold | UiTaskCase::TitleResume | UiTaskCase::TitleFailure => {
+                    title_case_snapshot(case, physical_width, physical_height, scale_factor, mode)
+                }
+                UiTaskCase::MapScenarios => production_scenario_snapshot(
+                    physical_width,
+                    physical_height,
+                    scale_factor,
+                    mode,
+                    crate::ScenarioBrowserKind::MapScenarios,
+                ),
+                UiTaskCase::Demos => production_scenario_snapshot(
+                    physical_width,
+                    physical_height,
+                    scale_factor,
+                    mode,
+                    crate::ScenarioBrowserKind::Demos,
+                ),
+                UiTaskCase::Settings => setup_screen_snapshot(
+                    physical_width,
+                    physical_height,
+                    scale_factor,
+                    mode,
+                    hex_core::Screen::Settings,
+                ),
+                UiTaskCase::CharacterLibrary
+                | UiTaskCase::SpellLibrary
+                | UiTaskCase::CreatorLibraryRecovery
+                | UiTaskCase::CharacterInvalid
+                | UiTaskCase::CharacterReady
+                | UiTaskCase::CharacterConfirmDelete
+                | UiTaskCase::SpellInvalid
+                | UiTaskCase::SpellReady
+                | UiTaskCase::SpellConfirmDelete => {
+                    creator_case_snapshot(case, physical_width, physical_height, scale_factor, mode)
+                }
+                UiTaskCase::LatticeDemo => {
+                    lattice_demo_snapshot(physical_width, physical_height, scale_factor, mode)
+                }
+                UiTaskCase::LabMap
+                | UiTaskCase::LabRosters
+                | UiTaskCase::LabRostersMax
+                | UiTaskCase::LabRules
+                | UiTaskCase::LabFixtures
+                | UiTaskCase::LabReportsEmpty
+                | UiTaskCase::LabReportsPopulated => {
+                    lab_case_snapshot(case, physical_width, physical_height, scale_factor, mode)
+                }
+                UiTaskCase::DeploymentIncomplete => {
+                    deployment_snapshot(physical_width, physical_height, scale_factor, mode, false)
+                }
+                UiTaskCase::DeploymentComplete => {
+                    deployment_snapshot(physical_width, physical_height, scale_factor, mode, true)
+                }
+                UiTaskCase::Exploration
+                | UiTaskCase::PlayerTurnMaxActions
+                | UiTaskCase::HostileTurn
+                | UiTaskCase::Casting
+                | UiTaskCase::AimingBlocked
+                | UiTaskCase::DisableDecision
+                | UiTaskCase::RestoreDecision
+                | UiTaskCase::HudHiddenRequired
+                | UiTaskCase::LabStatistics
+                | UiTaskCase::Pause
+                | UiTaskCase::OrdinaryOutcome
+                | UiTaskCase::LabReportOverview
+                | UiTaskCase::LabReportUnits
+                | UiTaskCase::LabReportSpellsEffects
+                | UiTaskCase::LabReportTimeline
+                | UiTaskCase::LabReportCompare => gameplay_case_snapshot(
+                    case,
+                    physical_width,
+                    physical_height,
+                    scale_factor,
+                    mode,
+                ),
+            }
+        }
+
         fn production_scenario_snapshot(
             physical_width: u32,
             physical_height: u32,
             scale_factor: f32,
             mode: crate::UiScaleMode,
+            kind: crate::ScenarioBrowserKind,
         ) -> UiTreeSnapshot {
             let library: hex_assets::ScenarioLibrary =
                 ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
@@ -1124,8 +2378,20 @@ pub mod test_support {
             app.world_mut()
                 .insert_resource(crate::UiScalePreference(mode));
             app.world_mut().insert_resource(crate::ScenarioBrowserView {
+                kind,
                 scenarios: library
                     .visible_scenarios()
+                    .filter(|scenario| {
+                        scenario.category
+                            == match kind {
+                                crate::ScenarioBrowserKind::MapScenarios => {
+                                    hex_assets::ScenarioCategory::Map
+                                }
+                                crate::ScenarioBrowserKind::Demos => {
+                                    hex_assets::ScenarioCategory::Demo
+                                }
+                            }
+                    })
                     .cloned()
                     .map(|scenario| crate::TitleScenarioView {
                         resolved_seed: scenario.generation_seed,
@@ -1176,6 +2442,118 @@ pub mod test_support {
             ui_tree_snapshot(app.world_mut())
         }
 
+        fn gameplay_case_snapshot(
+            case: UiTaskCase,
+            physical_width: u32,
+            physical_height: u32,
+            scale_factor: f32,
+            mode: crate::UiScaleMode,
+        ) -> UiTreeSnapshot {
+            let fixture = match case {
+                UiTaskCase::Exploration => "normal-gameplay",
+                UiTaskCase::PlayerTurnMaxActions => "player-turn-max",
+                UiTaskCase::HostileTurn => "hostile-turn",
+                UiTaskCase::Casting => "casting-list",
+                UiTaskCase::AimingBlocked => "aiming-disabled",
+                UiTaskCase::DisableDecision | UiTaskCase::HudHiddenRequired => "required-decision",
+                UiTaskCase::RestoreDecision => "restore-decision",
+                UiTaskCase::LabStatistics => "live-statistics",
+                UiTaskCase::Pause => "player-turn-max",
+                UiTaskCase::OrdinaryOutcome => "ordinary-outcome",
+                UiTaskCase::LabReportOverview => "report-overview",
+                UiTaskCase::LabReportUnits => "report-units",
+                UiTaskCase::LabReportSpellsEffects => "report-spells-effects",
+                UiTaskCase::LabReportTimeline => "report-timeline",
+                UiTaskCase::LabReportCompare => "report-compare",
+                other => panic!("{other:?} is not a gameplay presentation task"),
+            };
+            let mut app = App::new();
+            app.add_plugins(HeadlessUiPlugin::with_scale_factor(
+                physical_width,
+                physical_height,
+                scale_factor,
+            ));
+            app.world_mut()
+                .insert_resource(crate::UiScalePreference(mode));
+            app.world_mut().insert_resource(crate::GameplayChromeView {
+                shown: case != UiTaskCase::HudHiddenRequired,
+                decision_required: matches!(
+                    case,
+                    UiTaskCase::DisableDecision
+                        | UiTaskCase::RestoreDecision
+                        | UiTaskCase::HudHiddenRequired
+                ),
+                encounter_complete: matches!(
+                    case,
+                    UiTaskCase::OrdinaryOutcome
+                        | UiTaskCase::LabReportOverview
+                        | UiTaskCase::LabReportUnits
+                        | UiTaskCase::LabReportSpellsEffects
+                        | UiTaskCase::LabReportTimeline
+                        | UiTaskCase::LabReportCompare
+                ),
+            });
+            if case == UiTaskCase::Exploration {
+                app.world_mut().insert_resource(crate::PartyView {
+                    members: (0..6)
+                        .map(|slot| crate::PartyMemberView {
+                            slot,
+                            label: format!(
+                                "{} · {}",
+                                if slot == 0 { "Hedge Mage" } else { "Ally" },
+                                if slot == 0 { "selected" } else { "ready" }
+                            ),
+                            active: slot == 0,
+                            selected: slot == 0,
+                        })
+                        .collect(),
+                    formation_visible: true,
+                    movement_mode: "GROUP · formation follows the selected anchor".to_owned(),
+                    presets: vec!["Column".to_owned(), "Wedge".to_owned()],
+                    slots: vec![
+                        crate::FormationSlotView {
+                            offset: hex_core::HexCoord::from_axial(0, 0),
+                            anchor: true,
+                        },
+                        crate::FormationSlotView {
+                            offset: hex_core::HexCoord::from_axial(1, 0),
+                            anchor: false,
+                        },
+                        crate::FormationSlotView {
+                            offset: hex_core::HexCoord::from_axial(0, 1),
+                            anchor: false,
+                        },
+                    ],
+                });
+            }
+            if case == UiTaskCase::Pause {
+                app.world_mut().insert_resource(crate::PauseView {
+                    hint: "Esc to resume".to_owned(),
+                    notice: Some("Exploration save is current.".to_owned()),
+                });
+            }
+            let mut queue = bevy::ecs::world::CommandQueue::default();
+            let mut commands = Commands::new(&mut queue, app.world());
+            crate::apply_ui_review_fixture(&mut commands, fixture)
+                .expect("every gameplay task must own a registered review fixture");
+            queue.apply(app.world_mut());
+            app.world_mut()
+                .resource_mut::<NextState<hex_core::Screen>>()
+                .set(hex_core::Screen::Gameplay);
+            for _ in 0..4 {
+                app.update();
+            }
+            if case == UiTaskCase::Pause {
+                app.world_mut()
+                    .resource_mut::<NextState<hex_core::Pause>>()
+                    .set(hex_core::Pause(true));
+            }
+            for _ in 0..4 {
+                app.update();
+            }
+            ui_tree_snapshot(app.world_mut())
+        }
+
         fn setup_screen_snapshot(
             physical_width: u32,
             physical_height: u32,
@@ -1200,8 +2578,12 @@ pub mod test_support {
                         ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
                             .expect("the production scenario catalog must parse");
                     app.world_mut().insert_resource(crate::ScenarioBrowserView {
+                        kind: crate::ScenarioBrowserKind::MapScenarios,
                         scenarios: library
                             .visible_scenarios()
+                            .filter(|scenario| {
+                                scenario.category == hex_assets::ScenarioCategory::Map
+                            })
                             .cloned()
                             .map(|scenario| crate::TitleScenarioView {
                                 resolved_seed: scenario.generation_seed,
@@ -1309,6 +2691,7 @@ pub mod test_support {
             physical_height: u32,
             scale_factor: f32,
             mode: crate::UiScaleMode,
+            complete: bool,
         ) -> UiTreeSnapshot {
             let mut app = App::new();
             app.add_plugins(HeadlessUiPlugin::with_scale_factor(
@@ -1324,7 +2707,16 @@ pub mod test_support {
                         index,
                         name: format!("{side} Unit {}", index + 1),
                         selected: index == 0,
-                        position: None,
+                        position: complete.then(|| {
+                            hex_core::TilePos::new(
+                                hex_core::HexCoord::from_axial(
+                                    i32::try_from(index)
+                                        .expect("deployment fixture index is bounded to six"),
+                                    0,
+                                ),
+                                0,
+                            )
+                        }),
                     })
                     .collect::<Vec<_>>()
             };
@@ -1334,7 +2726,7 @@ pub mod test_support {
                 notice: "Place every player and hostile on an exact legal surface.".to_owned(),
                 players: roster("Player"),
                 hostiles: roster("Hostile"),
-                complete: false,
+                complete,
             });
             app.world_mut().insert_resource(crate::GameplayHudView {
                 phase: hex_core::GameplayPhase::Deployment,
@@ -1391,6 +2783,118 @@ pub mod test_support {
             assert_eq!(
                 snapshot.action_priority,
                 Some(crate::ActionPriority::Required)
+            );
+        }
+
+        #[test]
+        fn enlarged_required_choice_collapses_redundant_gameplay_chrome() {
+            let snapshot = required_choice_snapshot(1920, 1080, crate::UiScaleMode::Percent200);
+            assert_eq!(snapshot.metrics.viewport, crate::UiViewportClass::Compact);
+            for redundant in ["Party HUD Region", "Turn HUD Region"] {
+                assert!(
+                    snapshot.nodes.iter().all(|node| node.name != redundant),
+                    "{redundant} must yield to the required choice at 200%"
+                );
+            }
+            for required in ["Primary Action Rail", "Compact Required Lattice Choice"] {
+                let node = snapshot
+                    .nodes
+                    .iter()
+                    .find(|node| node.name == required)
+                    .unwrap_or_else(|| panic!("missing required surface {required:?}"));
+                assert!(
+                    node.fully_visible,
+                    "{required:?} must remain usable: {node:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn deployment_does_not_reserve_an_empty_combat_action_rail() {
+            for complete in [false, true] {
+                let snapshot =
+                    deployment_snapshot(1920, 1080, 1.0, crate::UiScaleMode::Auto, complete);
+                assert!(
+                    snapshot
+                        .nodes
+                        .iter()
+                        .all(|node| node.name != "Primary Action Rail"),
+                    "deployment primary actions live in its setup surface; an empty combat rail must not cover the map"
+                );
+            }
+        }
+
+        #[test]
+        fn wide_dense_report_uses_the_available_comparison_canvas() {
+            let snapshot = gameplay_case_snapshot(
+                UiTaskCase::LabReportCompare,
+                3840,
+                2160,
+                1.0,
+                crate::UiScaleMode::Auto,
+            );
+            let panel = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.name == "Encounter Outcome Panel")
+                .expect("the dense report fixture must render its report panel");
+            assert!(
+                panel.size.x >= snapshot.metrics.logical_size.x * 0.55,
+                "the comparison report must not collapse into a narrow 4K column: {panel:?}"
+            );
+            assert!(
+                panel.size.y <= snapshot.metrics.logical_size.y * 0.75,
+                "a populated report should not reserve a nearly empty full-height 4K modal: {panel:?}"
+            );
+            assert!(
+                panel.fully_visible,
+                "the report must remain on-canvas: {panel:?}"
+            );
+        }
+
+        #[test]
+        fn statistics_drawer_restores_standard_layout_after_enlarged_ui() {
+            let mut app = App::new();
+            app.add_plugins(HeadlessUiPlugin::with_scale_factor(1920, 1080, 1.0));
+            app.world_mut().insert_resource(crate::GameplayChromeView {
+                shown: true,
+                ..default()
+            });
+            app.world_mut()
+                .insert_resource(crate::UiScalePreference(crate::UiScaleMode::Percent200));
+            let mut queue = bevy::ecs::world::CommandQueue::default();
+            let mut commands = Commands::new(&mut queue, app.world());
+            crate::apply_ui_review_fixture(&mut commands, "live-statistics")
+                .expect("the live statistics fixture must be registered");
+            queue.apply(app.world_mut());
+            app.world_mut()
+                .resource_mut::<NextState<hex_core::Screen>>()
+                .set(hex_core::Screen::Gameplay);
+            for _ in 0..8 {
+                app.update();
+            }
+
+            app.world_mut()
+                .insert_resource(crate::UiScalePreference(crate::UiScaleMode::Auto));
+            for _ in 0..8 {
+                app.update();
+            }
+
+            let snapshot = ui_tree_snapshot(app.world_mut());
+            assert_eq!(snapshot.metrics.viewport, crate::UiViewportClass::Standard);
+            assert!(
+                snapshot.layout_issues().is_empty(),
+                "the restored drawer must not retain Compact row geometry: {:?}",
+                snapshot.layout_issues()
+            );
+            let end = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.name == "End experiment and save the current Combat Lab report")
+                .expect("the expanded drawer must expose its final action");
+            assert!(
+                end.fully_visible,
+                "the final drawer action must be usable: {end:?}"
             );
         }
 
@@ -1515,9 +3019,11 @@ pub mod test_support {
                 for required in [
                     "Continue",
                     "New Game",
-                    "Creators",
+                    "Character Creator",
+                    "Spell Creator",
                     "Combat Lab",
-                    "Scenarios",
+                    "Map Scenarios",
+                    "Demos",
                     "Settings",
                     "Quit",
                 ] {
@@ -1535,8 +3041,13 @@ pub mod test_support {
 
         #[test]
         fn production_scenario_catalog_scrolls_beneath_a_persistent_footer() {
-            let snapshot =
-                production_scenario_snapshot(960, 540, 1.0, crate::UiScaleMode::Percent200);
+            let snapshot = production_scenario_snapshot(
+                960,
+                540,
+                1.0,
+                crate::UiScaleMode::Percent200,
+                crate::ScenarioBrowserKind::MapScenarios,
+            );
             assert!(
                 snapshot.layout_issues().is_empty(),
                 "the production scenario catalog must remain reachable: {:?}; immediate scenario nodes: {:?}",
@@ -1586,6 +3097,29 @@ pub mod test_support {
                     .unwrap_or_else(|| panic!("production catalog is missing {scenario}"));
                 assert!(node.scroll_reachable);
             }
+        }
+
+        #[test]
+        fn compact_retina_scenario_heading_keeps_display_glyphs_off_the_target_edge() {
+            let snapshot = production_scenario_snapshot(
+                2560,
+                1440,
+                2.0,
+                crate::UiScaleMode::Auto,
+                crate::ScenarioBrowserKind::Demos,
+            );
+            let title = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.name == "Scenario Screen Title")
+                .expect("the Demos catalog must have a display heading");
+            let glyphs = title
+                .rendered_text_bounds
+                .expect("the display heading must have measured glyphs");
+            assert!(
+                glyphs.min.y >= 32.0,
+                "the game-only Retina target needs visible air above Cinzel capitals: {title:?}"
+            );
         }
 
         #[test]
@@ -1645,12 +3179,18 @@ pub mod test_support {
                             snapshot.layout_issues()
                         );
                     }
-                    let snapshot =
-                        deployment_snapshot(physical_size.x, physical_size.y, scale_factor, mode);
+                    let snapshot = deployment_snapshot(
+                        physical_size.x,
+                        physical_size.y,
+                        scale_factor,
+                        mode,
+                        false,
+                    );
                     assert!(
                         snapshot.layout_issues().is_empty(),
-                        "6v6 deployment must remain reachable at {physical_size:?} / {scale_factor}× in {mode:?}: {:?}",
-                        snapshot.layout_issues()
+                        "6v6 deployment must remain reachable at {physical_size:?} / {scale_factor}× in {mode:?}: {:?}; deployment regions: {:?}",
+                        snapshot.layout_issues(),
+                        snapshot.nodes.iter().filter(|node| node.name.contains("Deployment") || node.name.contains("PLAYER") || node.name.contains("HOSTILE")).collect::<Vec<_>>()
                     );
                 }
             }
@@ -1702,6 +3242,7 @@ pub mod test_support {
                     Name::new("Confirm Choice"),
                     Button,
                     TabIndex(0),
+                    crate::DefaultImmediateControl,
                     AccessibleLabel::new("Confirm selected lattice cells"),
                     InheritedVisibility::VISIBLE,
                 ))
@@ -1711,6 +3252,7 @@ pub mod test_support {
                     Name::new("Choose Cell"),
                     Button,
                     TabIndex(0),
+                    crate::DefaultImmediateControl,
                     AccessibleLabel::new("Choose lattice cell"),
                     InheritedVisibility::VISIBLE,
                 ))
@@ -1719,6 +3261,7 @@ pub mod test_support {
                 Name::new("Orphaned Control"),
                 Button,
                 TabIndex(0),
+                crate::DefaultImmediateControl,
                 AccessibleLabel::new("Control without an active focus group"),
                 InheritedVisibility::VISIBLE,
             ));
@@ -1748,6 +3291,23 @@ pub mod test_support {
                 .layout_issues()
                 .iter()
                 .any(|issue| issue.contains("Orphaned Control is enabled but absent")));
+        }
+
+        #[test]
+        fn unclassified_interactive_controls_fail_closed() {
+            let mut world = World::new();
+            world.spawn((
+                Name::new("Unclassified Control"),
+                Button,
+                TabIndex(0),
+                AccessibleLabel::new("Unclassified control"),
+                InheritedVisibility::VISIBLE,
+            ));
+            let snapshot = ui_tree_snapshot(&mut world);
+            assert!(snapshot.layout_issues().iter().any(|issue| {
+                issue.contains("Unclassified Control")
+                    && issue.contains("no explicit immediate/scrollable")
+            }));
         }
 
         #[test]
@@ -1805,6 +3365,7 @@ pub mod test_support {
                     AccessibleLabel::new("Clipped scroll control"),
                     Button,
                     TabIndex(0),
+                    crate::UiVisibilityRequirement::Scrollable,
                     Node {
                         position_type: PositionType::Absolute,
                         left: Val::Px(0.0),

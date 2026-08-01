@@ -172,13 +172,17 @@ that balance is fun.
 
 ## Visual evidence policy
 
+The complete runtime task inventory and the pairwise/full-matrix split are defined in
+[Runtime UI verification](ui-verification.md). A visual route samples that contract;
+it does not define the set of UI paths that exist.
+
 Screenshots answer presentation questions: whether controls fit, labels read, dense
 rosters remain legible, drawers overlap, and a responsive surface adapts. They do not
 prove occupancy, action accounting, tempo, determinism, state restoration, or report
 identity.
 
 A scoped gameplay acceptance run reviews exactly ten deterministic Bevy
-image-target frames. They cover the Compact title and scenario catalog, Settings,
+image-target frames. They cover the Compact title and separate Map Scenario/Demo routes,
 Creator validation, Combat Lab setup/deployment, maximum gameplay actions, a 200%
 required decision, the statistics drawer, and the 4K dense Compare report.
 Default-off presentation fixtures create visual state without solving combat.

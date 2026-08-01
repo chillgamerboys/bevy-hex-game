@@ -240,6 +240,7 @@ fn control_button(
         AccessibleLabel::new(accessible),
         Button,
         TabIndex(0),
+        crate::DefaultImmediateControl,
         responsive_control_role(),
         Node {
             width,
@@ -330,6 +331,7 @@ fn spawn_slot_grid(
                     )),
                     Button,
                     TabIndex(0),
+                    crate::DefaultImmediateControl,
                     owner_resolved_control_role(),
                     PartyControl(PartyIntent::AssignSlot(slot.offset)),
                     Node {

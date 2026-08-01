@@ -4,7 +4,6 @@
 use bevy::prelude::*;
 use bevy::ui::InteractionDisabled;
 use bevy::ui_widgets::ScrollArea;
-use hex_assets::ScenarioCategory;
 use hex_core::Screen;
 
 use crate::{
@@ -41,15 +40,6 @@ struct ScenarioIntroduction;
 
 #[derive(Component)]
 struct ScenarioDeck;
-
-#[derive(Component)]
-struct ScenarioColumn;
-
-#[derive(Component, Clone, Copy)]
-enum ScenarioColumnRole {
-    Maps,
-    Demos,
-}
 
 #[derive(Component)]
 struct ScenarioControl(ScenarioBrowserIntent);
@@ -169,9 +159,15 @@ fn render_title(
                     true,
                 ),
                 (
-                    "Creators",
-                    "Build and revise characters, spells, and lattices.",
-                    TitleIntent::Creators,
+                    "Character Creator",
+                    "Build and revise characters and their lattices.",
+                    TitleIntent::CharacterCreator,
+                    true,
+                ),
+                (
+                    "Spell Creator",
+                    "Build and revise spells for character loadouts.",
+                    TitleIntent::SpellCreator,
                     true,
                 ),
                 (
@@ -181,9 +177,15 @@ fn render_title(
                     true,
                 ),
                 (
-                    "Scenarios",
-                    "Browse development Maps and focused Demos.",
-                    TitleIntent::Scenarios,
+                    "Map Scenarios",
+                    "Browse map and world presentation scenarios.",
+                    TitleIntent::MapScenarios,
+                    true,
+                ),
+                (
+                    "Demos",
+                    "Browse focused gameplay demonstrations.",
+                    TitleIntent::Demos,
                     true,
                 ),
                 (
@@ -267,11 +269,25 @@ fn apply_title_layout(
 fn spawn_scenarios(mut commands: Commands, assets: Res<UiAssets>, view: Res<ScenarioBrowserView>) {
     commands
         .spawn((
-            screen_root(Screen::Scenarios, "Scenarios Screen"),
+            screen_root(
+                Screen::Scenarios,
+                match view.kind {
+                    crate::ScenarioBrowserKind::MapScenarios => "Map Scenarios Screen",
+                    crate::ScenarioBrowserKind::Demos => "Demos Screen",
+                },
+            ),
             ScenarioSurface,
         ))
         .insert(Node {
-            padding: UiRect::all(Val::Px(14.0)),
+            // Put the first display line inside a real content inset. A margin
+            // on the text node alone does not protect Cinzel's ascender
+            // overhang from the render-target edge on Compact Retina canvases.
+            padding: UiRect {
+                left: Val::Px(14.0),
+                right: Val::Px(14.0),
+                top: Val::Px(72.0),
+                bottom: Val::Px(14.0),
+            },
             justify_content: JustifyContent::FlexStart,
             overflow: Overflow::clip_y(),
             ..crate::screen_root_node()
@@ -303,13 +319,9 @@ fn render_scenarios(
 ) {
     root.spawn((
         Name::new("Scenario Screen Title"),
-        display(assets, "Scenarios"),
+        display(assets, view.kind.title()),
         Node {
             flex_shrink: 0.0,
-            // Cinzel's capitals overhang their nominal line box. Keep enough
-            // logical inset that the glyph atlas stays clear of Retina canvas
-            // clipping as well as the Yoga node bounds.
-            margin: UiRect::top(Val::Px(40.0)),
             ..default()
         },
         crate::UiVisibilityRequirement::Immediate,
@@ -317,10 +329,14 @@ fn render_scenarios(
     root.spawn((
         Name::new("Scenario Screen Introduction"),
         ScenarioIntroduction,
-        blurb(
-            assets,
-            "Development Maps and focused Demos. New Game remains the canonical campaign route.",
-        ),
+        blurb(assets, match view.kind {
+            crate::ScenarioBrowserKind::MapScenarios => {
+                "Map and world presentation scenarios. New Game remains the canonical game route."
+            }
+            crate::ScenarioBrowserKind::Demos => {
+                "Focused gameplay demonstrations. New Game remains the canonical game route."
+            }
+        }),
         Node {
             flex_shrink: 0.0,
             ..default()
@@ -336,6 +352,8 @@ fn render_scenarios(
             width: Val::Percent(100.0),
             min_height: Val::Px(0.0),
             flex_grow: 1.0,
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::FlexStart,
             overflow: Overflow::scroll_y(),
             ..default()
         },
@@ -359,24 +377,7 @@ fn render_scenarios(
                 },
             ))
             .with_children(|deck| {
-                spawn_scenario_column(
-                    deck,
-                    assets,
-                    "Maps",
-                    ScenarioColumnRole::Maps,
-                    view.scenarios
-                        .iter()
-                        .filter(|entry| entry.scenario.category == ScenarioCategory::Map),
-                );
-                spawn_scenario_column(
-                    deck,
-                    assets,
-                    "Demos",
-                    ScenarioColumnRole::Demos,
-                    view.scenarios
-                        .iter()
-                        .filter(|entry| entry.scenario.category == ScenarioCategory::Demo),
-                );
+                spawn_scenario_column(deck, assets, view.kind.title(), view.scenarios.iter());
             });
     });
     root.spawn((
@@ -391,30 +392,24 @@ fn spawn_scenario_column<'a>(
     deck: &mut ChildSpawnerCommands,
     assets: &UiAssets,
     title: &'static str,
-    role: ScenarioColumnRole,
     entries: impl Iterator<Item = &'a TitleScenarioView>,
 ) {
-    deck.spawn((
-        Name::new(format!("{title} Scenario Column")),
-        ScenarioColumn,
-        role,
-        panel(),
-    ))
-    .insert(Node {
-        min_width: Val::Px(0.0),
-        flex_direction: FlexDirection::Column,
-        row_gap: Val::Px(10.0),
-        padding: UiRect::all(Val::Px(14.0)),
-        border: UiRect::all(Val::Px(1.0)),
-        border_radius: BorderRadius::all(Val::Px(10.0)),
-        ..default()
-    })
-    .with_children(|column| {
-        column.spawn(heading(assets, title));
-        for entry in entries {
-            spawn_scenario_card(column, assets, entry);
-        }
-    });
+    deck.spawn((Name::new(format!("{title} Scenario Column")), panel()))
+        .insert(Node {
+            min_width: Val::Px(0.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(10.0),
+            padding: UiRect::all(Val::Px(14.0)),
+            border: UiRect::all(Val::Px(1.0)),
+            border_radius: BorderRadius::all(Val::Px(10.0)),
+            ..default()
+        })
+        .with_children(|column| {
+            column.spawn(heading(assets, title));
+            for entry in entries {
+                spawn_scenario_card(column, assets, entry);
+            }
+        });
 }
 
 fn spawn_scenario_card(
@@ -436,6 +431,7 @@ fn spawn_scenario_card(
         row.spawn((
             button(entry.scenario.name.clone()),
             ScenarioControl(ScenarioBrowserIntent::Start(entry.scenario.clone())),
+            crate::UiVisibilityRequirement::Scrollable,
         ))
         .insert(BorderColor::all(ACCENT_EDGE))
         .insert(Node {
@@ -456,6 +452,7 @@ fn spawn_scenario_card(
             row.spawn((
                 stacked_row_button(format!("Reroll {}", entry.scenario.name), 220.0),
                 ScenarioControl(ScenarioBrowserIntent::Reroll(entry.scenario.clone())),
+                crate::UiVisibilityRequirement::Scrollable,
             ))
             .with_children(|control| {
                 control.spawn(blurb(assets, "reroll"));
@@ -468,19 +465,8 @@ fn spawn_scenario_card(
 fn apply_scenario_layout(
     metrics: Res<ResolvedUiMetrics>,
     added: Query<(), Added<ScenarioDeck>>,
-    mut decks: Query<&mut Node, (With<ScenarioDeck>, Without<ScenarioColumn>)>,
-    mut columns: Query<
-        (&ScenarioColumnRole, &mut Node),
-        (With<ScenarioColumn>, Without<ScenarioDeck>),
-    >,
-    mut introductions: Query<
-        &mut Node,
-        (
-            With<ScenarioIntroduction>,
-            Without<ScenarioDeck>,
-            Without<ScenarioColumn>,
-        ),
-    >,
+    mut decks: Query<&mut Node, With<ScenarioDeck>>,
+    mut introductions: Query<&mut Node, (With<ScenarioIntroduction>, Without<ScenarioDeck>)>,
 ) {
     if !metrics.is_changed() && added.is_empty() {
         return;
@@ -494,29 +480,7 @@ fn apply_scenario_layout(
         };
     }
     for mut node in &mut decks {
-        node.grid_template_columns = if compact {
-            RepeatedGridTrack::flex(1, 1.0)
-        } else {
-            RepeatedGridTrack::flex(2, 1.0)
-        };
-    }
-    for (role, mut node) in &mut columns {
-        node.grid_column = GridPlacement::start(if compact {
-            1
-        } else {
-            match role {
-                ScenarioColumnRole::Maps => 1,
-                ScenarioColumnRole::Demos => 2,
-            }
-        });
-        node.grid_row = GridPlacement::start(if compact {
-            match role {
-                ScenarioColumnRole::Maps => 1,
-                ScenarioColumnRole::Demos => 2,
-            }
-        } else {
-            1
-        });
+        node.grid_template_columns = RepeatedGridTrack::flex(1, 1.0);
     }
 }
 
@@ -551,19 +515,14 @@ mod tests {
         let intents = [
             TitleIntent::Continue,
             TitleIntent::NewGame,
-            TitleIntent::Creators,
+            TitleIntent::CharacterCreator,
+            TitleIntent::SpellCreator,
             TitleIntent::CombatLab,
-            TitleIntent::Scenarios,
+            TitleIntent::MapScenarios,
+            TitleIntent::Demos,
             TitleIntent::Settings,
             TitleIntent::Quit,
         ];
-        assert_eq!(intents.len(), 7);
-    }
-
-    #[test]
-    fn scenario_columns_keep_maps_before_demos_in_compact_order() {
-        let order = [ScenarioColumnRole::Maps, ScenarioColumnRole::Demos];
-        assert!(matches!(order.first(), Some(ScenarioColumnRole::Maps)));
-        assert!(matches!(order.last(), Some(ScenarioColumnRole::Demos)));
+        assert_eq!(intents.len(), 9);
     }
 }

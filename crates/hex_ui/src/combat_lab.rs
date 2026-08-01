@@ -16,11 +16,11 @@ use hex_gameplay_model::{
 };
 
 use crate::{
-    blurb, body_text_role, compact_glyph_role, display, element_color, fine, heading, label, panel,
-    panel_node, responsive_control_role, row_button, screen_root, screen_root_node, short_name,
-    CharacterBuildSummary, CombatLabIntent, CombatLabReportField, CombatLabReportsView,
-    CombatLabRulesVariant, CombatLabScreenView, CreatorLibraryView, ResolvedUiMetrics, UiAssets,
-    UiIntent, UiSystems, UiViewportClass, DANGER, FUSION_COLOR, LABEL,
+    blurb, body_text_role, compact_glyph_role, display, element_color, fine, fixed_row_button,
+    heading, label, panel, panel_node, responsive_control_role, row_button, screen_root,
+    screen_root_node, short_name, CharacterBuildSummary, CombatLabIntent, CombatLabReportField,
+    CombatLabReportsView, CombatLabRulesVariant, CombatLabScreenView, CreatorLibraryView,
+    ResolvedUiMetrics, UiAssets, UiIntent, UiSystems, UiViewportClass, DANGER, FUSION_COLOR, LABEL,
 };
 
 const MAX_ROSTER: usize = MAX_COMBAT_LAB_ROSTER;
@@ -138,6 +138,7 @@ fn emit_text_changes(
 }
 
 fn apply_lab_screen_layout(
+    mut commands: Commands,
     metrics: Res<ResolvedUiMetrics>,
     added_bodies: Query<(), Added<LabResponsiveBody>>,
     mut roots: Query<
@@ -171,7 +172,7 @@ fn apply_lab_screen_layout(
         ),
     >,
     mut inner_scrolls: Query<
-        &mut Node,
+        (Entity, &mut Node),
         (
             With<LabInnerScroll>,
             Without<LabResponsiveBody>,
@@ -180,6 +181,8 @@ fn apply_lab_screen_layout(
             Without<LabTabs>,
         ),
     >,
+    parents: Query<&ChildOf>,
+    responsive_bodies: Query<(), With<LabResponsiveBody>>,
     mut controls: Query<
         &mut Node,
         (
@@ -197,11 +200,7 @@ fn apply_lab_screen_layout(
     }
     let compact = metrics.viewport == UiViewportClass::Compact;
     for mut node in &mut roots {
-        node.overflow = if compact {
-            Overflow::scroll_y()
-        } else {
-            Overflow::clip_y()
-        };
+        node.overflow = Overflow::clip_y();
     }
     for mut node in &mut tabs {
         node.flex_wrap = if compact {
@@ -218,12 +217,12 @@ fn apply_lab_screen_layout(
             FlexDirection::Row
         };
         node.overflow = if compact {
-            Overflow::visible()
+            Overflow::scroll_y()
         } else {
             Overflow::default()
         };
-        node.height = if compact { Val::Auto } else { Val::Px(0.0) };
-        node.flex_grow = if compact { 0.0 } else { 1.0 };
+        node.height = Val::Px(0.0);
+        node.flex_grow = 1.0;
     }
     for (role, mut node) in &mut panels {
         node.width = if compact {
@@ -236,13 +235,23 @@ fn apply_lab_screen_layout(
         };
         node.height = Val::Auto;
     }
-    for mut node in &mut inner_scrolls {
-        node.flex_grow = if compact { 0.0 } else { 1.0 };
-        node.overflow = if compact {
-            Overflow::visible()
+    for (entity, mut node) in &mut inner_scrolls {
+        let nested_in_responsive_body = std::iter::successors(Some(entity), |current| {
+            parents.get(*current).ok().map(ChildOf::parent)
+        })
+        .any(|ancestor| responsive_bodies.contains(ancestor));
+        if compact && nested_in_responsive_body {
+            // Compact setup screens have one outer scroll owner. Nested list
+            // scrollers would make the visible slice reachable only through a
+            // competing wheel target and break keyboard scroll-into-view.
+            node.flex_grow = 0.0;
+            node.overflow = Overflow::visible();
+            commands.entity(entity).remove::<ScrollArea>();
         } else {
-            Overflow::scroll_y()
-        };
+            node.flex_grow = 1.0;
+            node.overflow = Overflow::scroll_y();
+            commands.entity(entity).insert(ScrollArea);
+        }
     }
     for mut node in &mut controls {
         node.max_width = if compact {
@@ -356,6 +365,38 @@ fn lab_button(
     let text = text.into();
     parent
         .spawn((row_button(text.clone(), width), action))
+        .with_child(label(assets, text));
+}
+
+fn scrollable_lab_button(
+    parent: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    text: impl Into<String>,
+    action: CombatLabIntent,
+    width: f32,
+) {
+    let text = text.into();
+    parent
+        .spawn((
+            row_button(text.clone(), width),
+            action,
+            crate::UiVisibilityRequirement::Scrollable,
+        ))
+        .with_child(label(assets, text));
+}
+
+fn scrollable_lab_glyph_button(
+    parent: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    text: &'static str,
+    action: CombatLabIntent,
+) {
+    parent
+        .spawn((
+            fixed_row_button(text, 48.0, 48.0),
+            action,
+            crate::UiVisibilityRequirement::Scrollable,
+        ))
         .with_child(label(assets, text));
 }
 
@@ -492,6 +533,7 @@ fn map_button(
         .spawn((
             row_button(map.display_name.clone(), 280.0),
             CombatLabIntent::SelectMap(map.id.clone()),
+            crate::UiVisibilityRequirement::Scrollable,
         ))
         .insert(BorderColor::all(if selected {
             Color::srgba(0.49, 0.68, 0.86, 1.0)
@@ -734,7 +776,7 @@ fn spawn_rules_setup(
                             (CombatRulesPreset::Custom, "Custom"),
                         ] {
                             let selected = profile.preset == preset;
-                            lab_button(
+                            scrollable_lab_button(
                                 presets,
                                 assets,
                                 if selected {
@@ -782,20 +824,18 @@ fn spawn_rules_setup(
                                     })
                                     .with_children(
                                         |stepper| {
-                                            lab_button(
+                                            scrollable_lab_glyph_button(
                                                 stepper,
                                                 assets,
                                                 "−",
                                                 CombatLabIntent::AdjustRule(field, -1),
-                                                46.0,
                                             );
                                             stepper.spawn(label(assets, value.to_string()));
-                                            lab_button(
+                                            scrollable_lab_glyph_button(
                                                 stepper,
                                                 assets,
                                                 "+",
                                                 CombatLabIntent::AdjustRule(field, 1),
-                                                46.0,
                                             );
                                             stepper.spawn(fine(
                                                 assets,
@@ -817,21 +857,21 @@ fn spawn_rules_setup(
                                     );
                                 });
                         }
-                    });
-                rules
-                    .spawn(Node {
-                        flex_direction: FlexDirection::Row,
-                        column_gap: Val::Px(7.0),
-                        ..default()
-                    })
-                    .with_children(|actions| {
-                        lab_button(
-                            actions,
-                            assets,
-                            "Reset to Shipped",
-                            CombatLabIntent::ResetRules,
-                            180.0,
-                        );
+                        fields
+                            .spawn(Node {
+                                flex_direction: FlexDirection::Row,
+                                column_gap: Val::Px(7.0),
+                                ..default()
+                            })
+                            .with_children(|actions| {
+                                scrollable_lab_button(
+                                    actions,
+                                    assets,
+                                    "Reset to Shipped",
+                                    CombatLabIntent::ResetRules,
+                                    180.0,
+                                );
+                            });
                     });
             });
     });
@@ -1175,14 +1215,14 @@ fn spawn_build_card(
             })
             .with_children(|actions| {
                 if let Some((_, up, down, remove)) = roster_actions {
-                    lab_button(actions, assets, "↑", up, 42.0);
-                    lab_button(actions, assets, "↓", down, 42.0);
-                    lab_button(actions, assets, "Remove", remove, 78.0);
+                    scrollable_lab_glyph_button(actions, assets, "↑", up);
+                    scrollable_lab_glyph_button(actions, assets, "↓", down);
+                    scrollable_lab_button(actions, assets, "Remove", remove, 78.0);
                 } else if let Some(add) = add_action {
-                    lab_button(actions, assets, "Add to roster", add, 132.0);
+                    scrollable_lab_button(actions, assets, "Add to roster", add, 132.0);
                 } else if !ready {
                     if let RosterChoice::Custom(id) = choice {
-                        lab_button(
+                        scrollable_lab_button(
                             actions,
                             assets,
                             "Edit in Creator",
@@ -1311,7 +1351,9 @@ fn spawn_fixture_selector(
     root.spawn(panel())
         .insert(Node {
             width: Val::Percent(88.0),
+            height: Val::Px(0.0),
             min_height: Val::Px(0.0),
+            flex_basis: Val::Px(0.0),
             flex_grow: 1.0,
             ..panel_node()
         })
@@ -1325,6 +1367,7 @@ fn spawn_fixture_selector(
                 Name::new("Fixture Search"),
                 AccessibleLabel::new("Search fixed Combat Lab fixtures"),
                 TabIndex(0),
+                crate::DefaultImmediateControl,
                 EditableText {
                     max_characters: Some(48),
                     visible_width: Some(32.0),
@@ -1340,8 +1383,8 @@ fn spawn_fixture_selector(
                 BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.08)),
                 Node {
                     width: Val::Percent(100.0),
-                    min_height: Val::Px(44.0),
-                    padding: UiRect::all(Val::Px(8.0)),
+                    min_height: Val::Px(60.0),
+                    padding: UiRect::axes(Val::Px(8.0), Val::ZERO),
                     ..default()
                 },
                 FixtureFilter,
@@ -1410,7 +1453,7 @@ fn spawn_fixture_selector(
                                         "Run Custom three-step",
                                     ),
                                 ] {
-                                    lab_button(
+                                    scrollable_lab_button(
                                         card,
                                         assets,
                                         label,
@@ -1422,7 +1465,7 @@ fn spawn_fixture_selector(
                                     );
                                 }
                             } else {
-                                lab_button(
+                                scrollable_lab_button(
                                     card,
                                     assets,
                                     "Run Fixture",
@@ -1461,7 +1504,9 @@ fn spawn_saved_reports(
     root.spawn(panel())
         .insert(Node {
             width: Val::Percent(96.0),
+            height: Val::Px(0.0),
             min_height: Val::Px(0.0),
+            flex_basis: Val::Px(0.0),
             flex_grow: 1.0,
             ..panel_node()
         })
@@ -1512,6 +1557,7 @@ fn spawn_saved_reports(
                                         report.id.0
                                     )),
                                     TabIndex(0),
+                                    crate::UiVisibilityRequirement::Scrollable,
                                     EditableText {
                                         max_characters: Some(128),
                                         visible_width: Some(32.0),
@@ -1537,6 +1583,7 @@ fn spawn_saved_reports(
                                     Name::new(format!("Report {} Notes", report.id.0)),
                                     AccessibleLabel::new(format!("Report {} notes", report.id.0)),
                                     TabIndex(0),
+                                    crate::UiVisibilityRequirement::Scrollable,
                                     EditableText {
                                         max_characters: Some(2_048),
                                         visible_width: Some(52.0),
@@ -1560,7 +1607,7 @@ fn spawn_saved_reports(
                                 ));
                                 card.spawn(fine(assets, report.metadata.clone()));
                                 card.spawn(blurb(assets, report.summary.clone()));
-                                lab_button(
+                                scrollable_lab_button(
                                     card,
                                     assets,
                                     if report.left_selected {
@@ -1571,7 +1618,7 @@ fn spawn_saved_reports(
                                     CombatLabIntent::SelectCompareLeft(report.id),
                                     140.0,
                                 );
-                                lab_button(
+                                scrollable_lab_button(
                                     card,
                                     assets,
                                     if report.right_selected {
@@ -1588,14 +1635,14 @@ fn spawn_saved_reports(
                                         "CONFIRM DELETE · this removes only this local report",
                                     ))
                                     .insert(TextColor(DANGER));
-                                    lab_button(
+                                    scrollable_lab_button(
                                         card,
                                         assets,
                                         "Confirm Delete",
                                         CombatLabIntent::ConfirmReportDelete(report.id),
                                         160.0,
                                     );
-                                    lab_button(
+                                    scrollable_lab_button(
                                         card,
                                         assets,
                                         "Cancel",
@@ -1603,7 +1650,7 @@ fn spawn_saved_reports(
                                         100.0,
                                     );
                                 } else {
-                                    lab_button(
+                                    scrollable_lab_button(
                                         card,
                                         assets,
                                         "Delete…",

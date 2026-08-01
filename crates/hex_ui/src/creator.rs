@@ -92,6 +92,7 @@ fn apply_creator_layout(
         return;
     }
     let compact = metrics.viewport == UiViewportClass::Compact;
+    let stacked_header = compact || metrics.logical_size.x < 2000.0 || metrics.content_scale > 1.0;
     for mut node in &mut roots {
         node.overflow = if compact {
             Overflow::scroll_y()
@@ -100,25 +101,33 @@ fn apply_creator_layout(
         };
     }
     for mut node in &mut headers {
-        node.flex_direction = if compact {
+        node.flex_direction = if stacked_header {
             FlexDirection::Column
         } else {
             FlexDirection::Row
         };
-        node.align_items = if compact {
+        node.align_items = if stacked_header {
             AlignItems::Stretch
         } else {
             AlignItems::Center
         };
-        node.row_gap = if compact { Val::Px(8.0) } else { Val::ZERO };
+        node.row_gap = if stacked_header {
+            Val::Px(8.0)
+        } else {
+            Val::ZERO
+        };
     }
     for mut node in &mut header_actions {
-        node.flex_wrap = if compact {
+        node.flex_wrap = if stacked_header {
             FlexWrap::Wrap
         } else {
             FlexWrap::NoWrap
         };
-        node.row_gap = if compact { Val::Px(6.0) } else { Val::ZERO };
+        node.row_gap = if stacked_header {
+            Val::Px(6.0)
+        } else {
+            Val::ZERO
+        };
     }
     for mut node in &mut bodies {
         node.display = if compact {
@@ -318,9 +327,47 @@ fn spawn_creator_ui(
                         },
                     ))
                     .with_children(|actions| {
+                        if session.tab == CreatorTab::Characters {
+                            action_button(
+                                actions,
+                                assets,
+                                "Open Spell Creator",
+                                CreatorIntent::OpenSpellCreator,
+                                210.0,
+                            );
+                        }
                         if session.workspace != CreatorWorkspace::Hub {
+                            action_button(
+                                actions,
+                                assets,
+                                "Save",
+                                match session.workspace {
+                                    CreatorWorkspace::Character => CreatorIntent::SaveCharacter,
+                                    CreatorWorkspace::Spell => CreatorIntent::SaveSpell,
+                                    CreatorWorkspace::Hub => {
+                                        unreachable!("the Creator hub has no active draft to save")
+                                    }
+                                },
+                                110.0,
+                            );
                             action_button(actions, assets, "Undo", CreatorIntent::Undo, 160.0);
                             action_button(actions, assets, "Redo", CreatorIntent::Redo, 160.0);
+                            if session.workspace == CreatorWorkspace::Character {
+                                action_button(
+                                    actions,
+                                    assets,
+                                    "Local Test",
+                                    CreatorIntent::LocalTest,
+                                    120.0,
+                                );
+                                action_button(
+                                    actions,
+                                    assets,
+                                    "Test on Map",
+                                    CreatorIntent::TestOnMap,
+                                    130.0,
+                                );
+                            }
                         }
                         if store.error.is_some() {
                             action_button(
@@ -445,15 +492,6 @@ fn spawn_creator_hub(
                     }
                 },
             ));
-            if session.tab == CreatorTab::Characters {
-                action_button(
-                    navigation,
-                    assets,
-                    "Open Spell Creator",
-                    CreatorIntent::OpenSpellCreator,
-                    190.0,
-                );
-            }
         });
 
     body.spawn((CreatorBodyPanel::Main, panel()))
@@ -529,7 +567,7 @@ fn spawn_creator_hub(
                                 .iter()
                                 .filter(|record| record.audience == PresetAudience::HumanTemplate)
                             {
-                                action_button(
+                                scrollable_action_button(
                                     shelf,
                                     assets,
                                     record.character.name.clone(),
@@ -600,7 +638,7 @@ fn spawn_creator_hub(
                                 .iter()
                                 .filter(|record| record.audience == PresetAudience::HumanTemplate)
                             {
-                                action_button(
+                                scrollable_action_button(
                                     shelf,
                                     assets,
                                     record.spell.name.clone(),
@@ -648,7 +686,11 @@ fn creator_record_card(
     ready: bool,
 ) {
     parent
-        .spawn((row_button(name.to_owned(), 520.0), action))
+        .spawn((
+            row_button(name.to_owned(), 520.0),
+            action,
+            crate::UiVisibilityRequirement::Scrollable,
+        ))
         .insert(Node {
             width: Val::Percent(100.0),
             min_height: Val::Px(70.0),
@@ -690,6 +732,23 @@ fn action_button(
         .with_child(label(assets, text));
 }
 
+fn scrollable_action_button(
+    parent: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    text: impl Into<String>,
+    action: CreatorIntent,
+    width: f32,
+) {
+    let text = text.into();
+    parent
+        .spawn((
+            row_button(text.clone(), width),
+            action,
+            crate::UiVisibilityRequirement::Scrollable,
+        ))
+        .with_child(label(assets, text));
+}
+
 fn name_input(
     parent: &mut ChildSpawnerCommands,
     assets: &UiAssets,
@@ -704,6 +763,7 @@ fn name_input(
         Name::new(accessible),
         AccessibleLabel::new(accessible),
         TabIndex(0),
+        crate::DefaultImmediateControl,
         EditableText {
             max_characters: Some(MAX_CREATION_NAME_CHARS),
             visible_width: Some(24.0),
@@ -852,13 +912,6 @@ fn spawn_character_tab(
                 }
             }
         }
-        action_button(
-            palette,
-            assets,
-            "Manage Spells",
-            CreatorIntent::OpenSpellCreator,
-            190.0,
-        );
         colored_tool_button(
             palette,
             assets,
@@ -911,13 +964,31 @@ fn spawn_character_tab(
                             ..default()
                         })
                         .with_children(|zoom| {
-                            action_button(zoom, assets, "Fit", CreatorIntent::FitLattice, 58.0);
-                            action_button(zoom, assets, "−", CreatorIntent::Zoom(-1), 44.0);
+                            scrollable_action_button(
+                                zoom,
+                                assets,
+                                "Fit",
+                                CreatorIntent::FitLattice,
+                                58.0,
+                            );
+                            scrollable_action_button(
+                                zoom,
+                                assets,
+                                "−",
+                                CreatorIntent::Zoom(-1),
+                                44.0,
+                            );
                             zoom.spawn(label(
                                 assets,
                                 format!("{}%", lattice_scale_percent(session.zoom_step)),
                             ));
-                            action_button(zoom, assets, "+", CreatorIntent::Zoom(1), 44.0);
+                            scrollable_action_button(
+                                zoom,
+                                assets,
+                                "+",
+                                CreatorIntent::Zoom(1),
+                                44.0,
+                            );
                         });
                 });
             spawn_character_actions(center, assets, session, &issues);
@@ -999,7 +1070,7 @@ fn spawn_character_tab(
                 "Palette tools paint directly. Inspect leaves cells unchanged.",
             ));
             if coord != LatticeCoord::ORIGIN {
-                action_button(
+                scrollable_action_button(
                     right,
                     assets,
                     "Remove Selected Cell",
@@ -1023,7 +1094,9 @@ fn spawn_character_tab(
                 right
                     .spawn(Node {
                         flex_direction: FlexDirection::Row,
+                        flex_wrap: FlexWrap::Wrap,
                         column_gap: Val::Px(4.0),
+                        row_gap: Val::Px(4.0),
                         ..default()
                     })
                     .with_children(|row| {
@@ -1033,7 +1106,7 @@ fn spawn_character_tab(
                             ("C−", true, -1),
                             ("C+", true, 1),
                         ] {
-                            action_button(
+                            scrollable_action_button(
                                 row,
                                 assets,
                                 text,
@@ -1101,15 +1174,14 @@ fn spawn_character_actions(
             },
         ))
         .with_children(|actions| {
-            action_button(actions, assets, "Save", CreatorIntent::SaveCharacter, 110.0);
-            action_button(
+            scrollable_action_button(
                 actions,
                 assets,
                 "Duplicate",
                 CreatorIntent::DuplicateCharacter,
                 220.0,
             );
-            action_button(
+            scrollable_action_button(
                 actions,
                 assets,
                 if session.confirm_delete {
@@ -1119,20 +1191,6 @@ fn spawn_character_actions(
                 },
                 CreatorIntent::DeleteCharacter,
                 140.0,
-            );
-            action_button(
-                actions,
-                assets,
-                "Local Test",
-                CreatorIntent::LocalTest,
-                120.0,
-            );
-            action_button(
-                actions,
-                assets,
-                "Test on Map",
-                CreatorIntent::TestOnMap,
-                130.0,
             );
             if !issues.is_empty() || session.character_dirty {
                 actions.spawn(fine(
@@ -1183,6 +1241,7 @@ fn spawn_lattice_cells(
                 Name::new(format!("Creator Cell {},{}", coord.q(), coord.r())),
                 crate::lattice::TessellatedControl,
                 Button,
+                crate::UiVisibilityRequirement::Scrollable,
                 owner_resolved_control_role(),
                 CreatorIntent::SelectCell(coord),
                 ImageNode {
@@ -1239,6 +1298,7 @@ fn spawn_lattice_cells(
                     Name::new(format!("Add Cell {},{}", coord.q(), coord.r())),
                     crate::lattice::TessellatedControl,
                     Button,
+                    crate::UiVisibilityRequirement::Scrollable,
                     owner_resolved_control_role(),
                     CreatorIntent::AddCell(coord),
                     ImageNode {
@@ -1354,7 +1414,11 @@ fn colored_tool_button(
 ) {
     let text = text.into();
     parent
-        .spawn((row_button(text.clone(), 200.0), action))
+        .spawn((
+            row_button(text.clone(), 200.0),
+            action,
+            crate::UiVisibilityRequirement::Scrollable,
+        ))
         .insert((
             OwnColors,
             BackgroundColor(brighten(color, if selected { 0.26 } else { 0.0 })),
@@ -1422,28 +1486,28 @@ fn spawn_spell_tab(
                             ..default()
                         })
                         .with_children(|row| {
-                            action_button(
+                            scrollable_action_button(
                                 row,
                                 assets,
                                 "Element",
                                 CreatorIntent::CycleRequirement(index),
                                 84.0,
                             );
-                            action_button(
+                            scrollable_action_button(
                                 row,
                                 assets,
                                 "−",
                                 CreatorIntent::AdjustRequirement(index, -1),
                                 42.0,
                             );
-                            action_button(
+                            scrollable_action_button(
                                 row,
                                 assets,
                                 "+",
                                 CreatorIntent::AdjustRequirement(index, 1),
                                 42.0,
                             );
-                            action_button(
+                            scrollable_action_button(
                                 row,
                                 assets,
                                 "Remove",
@@ -1454,7 +1518,7 @@ fn spawn_spell_tab(
                 });
         }
         if saved.spell.requirements.len() < 6 {
-            action_button(
+            scrollable_action_button(
                 left,
                 assets,
                 "+ Add Requirement",
@@ -1510,7 +1574,7 @@ fn spawn_spell_tab(
                 "Enchantment",
                 CreatorIntent::SetEnchantment(true),
                 enchantment,
-                120.0,
+                150.0,
             );
             let single = saved.spell.targeting.shape == TargetShape::Single;
             segmented_button(
@@ -1530,14 +1594,14 @@ fn spawn_spell_tab(
                 82.0,
             );
             if single {
-                action_button(
+                scrollable_action_button(
                     controls,
                     assets,
                     "Range −",
                     CreatorIntent::AdjustRange(-1),
                     84.0,
                 );
-                action_button(
+                scrollable_action_button(
                     controls,
                     assets,
                     "Range +",
@@ -1546,14 +1610,14 @@ fn spawn_spell_tab(
                 );
             }
             if enchantment {
-                action_button(
+                scrollable_action_button(
                     controls,
                     assets,
                     "Defense −",
                     CreatorIntent::AdjustDefense(-1),
                     100.0,
                 );
-                action_button(
+                scrollable_action_button(
                     controls,
                     assets,
                     "Defense +",
@@ -1605,35 +1669,35 @@ fn spawn_spell_tab(
                             ..default()
                         })
                         .with_children(|row| {
-                            action_button(
+                            scrollable_action_button(
                                 row,
                                 assets,
                                 "←",
                                 CreatorIntent::MoveEffect(index, -1),
                                 44.0,
                             );
-                            action_button(
+                            scrollable_action_button(
                                 row,
                                 assets,
                                 "→",
                                 CreatorIntent::MoveEffect(index, 1),
                                 44.0,
                             );
-                            action_button(
+                            scrollable_action_button(
                                 row,
                                 assets,
                                 "Value −",
                                 CreatorIntent::AdjustEffect(index, -1),
                                 76.0,
                             );
-                            action_button(
+                            scrollable_action_button(
                                 row,
                                 assets,
                                 "Value +",
                                 CreatorIntent::AdjustEffect(index, 1),
                                 76.0,
                             );
-                            action_button(
+                            scrollable_action_button(
                                 row,
                                 assets,
                                 "Remove",
@@ -1656,7 +1720,13 @@ fn spawn_spell_tab(
                     ("+ Restore", CreatorEffectKind::Restore),
                     ("+ Reveal", CreatorEffectKind::Reveal),
                 ] {
-                    action_button(row, assets, name, CreatorIntent::AddEffect(kind), 105.0);
+                    scrollable_action_button(
+                        row,
+                        assets,
+                        name,
+                        CreatorIntent::AddEffect(kind),
+                        105.0,
+                    );
                 }
             });
             form.spawn(Node {
@@ -1666,15 +1736,14 @@ fn spawn_spell_tab(
                 ..default()
             })
             .with_children(|actions| {
-                action_button(actions, assets, "Save", CreatorIntent::SaveSpell, 110.0);
-                action_button(
+                scrollable_action_button(
                     actions,
                     assets,
                     "Duplicate",
                     CreatorIntent::DuplicateSpell,
                     220.0,
                 );
-                action_button(
+                scrollable_action_button(
                     actions,
                     assets,
                     if session.confirm_delete {
@@ -1760,7 +1829,11 @@ fn segmented_button(
     width: f32,
 ) {
     parent
-        .spawn((row_button(text, width), action))
+        .spawn((
+            row_button(text, width),
+            action,
+            crate::UiVisibilityRequirement::Scrollable,
+        ))
         .insert(BorderColor::all(if selected { ACCENT } else { EDGE }))
         .with_child(label(
             assets,
