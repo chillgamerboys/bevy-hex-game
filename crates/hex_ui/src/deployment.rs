@@ -2,6 +2,7 @@
 
 use bevy::input_focus::tab_navigation::TabGroup;
 use bevy::prelude::*;
+use bevy::ui_widgets::ScrollArea;
 use hex_core::Screen;
 
 use crate::{
@@ -222,9 +223,10 @@ fn emit_actions(
 }
 
 fn apply_layout(
+    mut commands: Commands,
     metrics: Res<ResolvedUiMetrics>,
     added_roots: Query<(), Added<DeploymentRoot>>,
-    mut roots: Query<&mut Node, With<DeploymentRoot>>,
+    mut roots: Query<(Entity, &mut Node), With<DeploymentRoot>>,
     mut summary: Query<
         &mut Node,
         (
@@ -258,7 +260,7 @@ fn apply_layout(
     }
     let compact = metrics.viewport == UiViewportClass::Compact;
     let ultra_constrained = is_ultra_constrained(*metrics);
-    for mut node in &mut roots {
+    for (entity, mut node) in &mut roots {
         (node.left, node.right) = match metrics.viewport {
             UiViewportClass::Compact if ultra_constrained => (Val::Px(8.0), Val::Px(8.0)),
             UiViewportClass::Compact => (Val::Px(196.0), Val::Px(12.0)),
@@ -294,6 +296,11 @@ fn apply_layout(
         } else {
             Overflow::default()
         };
+        if compact {
+            commands.entity(entity).insert(ScrollArea);
+        } else {
+            commands.entity(entity).remove::<ScrollArea>();
+        }
     }
     for mut node in &mut summary {
         node.width = if compact {
