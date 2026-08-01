@@ -403,9 +403,8 @@ fn build_element_catalog(
 
 #[cfg(test)]
 mod tests {
-    use bevy::state::app::StatesPlugin;
-
     use super::*;
+    use hex_test_app::HeadlessAppBuilder;
 
     fn wheel() -> Vec<String> {
         ["Light", "Air", "Fire", "Metal", "Earth", "Water"]
@@ -584,12 +583,16 @@ mod tests {
             vec![fusion("Fire", 1), fusion("Water", 1)],
         );
 
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin));
-        app.insert_state(Screen::Gameplay);
-        app.insert_resource(ElementCatalog::from_file(&original));
-        app.insert_resource(replacement);
-        register_catalog_builder(&mut app);
+        let mut builder = HeadlessAppBuilder::new()
+            .with_minimal_plugins()
+            .with_state_plugin();
+        builder.app_mut().insert_state(Screen::Gameplay);
+        builder
+            .app_mut()
+            .insert_resource(ElementCatalog::from_file(&original));
+        builder.app_mut().insert_resource(replacement);
+        register_catalog_builder(builder.app_mut());
+        let mut app = builder.build();
 
         app.update();
         assert!(

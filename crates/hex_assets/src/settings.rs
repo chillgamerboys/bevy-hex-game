@@ -1400,6 +1400,7 @@ mod tests {
 
     use bevy::asset::{AssetLoadFailedEvent, AssetPlugin};
     use bevy::ecs::system::RunSystemOnce;
+    use hex_test_app::HeadlessAppBuilder;
 
     use crate::loader::{choose_settings, LoadSettings, SelectSettings, SettingsRegistry};
 
@@ -2121,19 +2122,20 @@ mod tests {
         fs::write(&lighting_path, LIGHTING_RON)
             .expect("the valid lighting fixture should be written");
 
-        let mut app = App::new();
-        app.add_plugins((
-            MinimalPlugins,
-            AssetPlugin {
+        let mut builder = HeadlessAppBuilder::new()
+            .with_minimal_plugins()
+            .with_asset_plugin_config(AssetPlugin {
                 file_path: root.path().to_string_lossy().into_owned(),
                 ..default()
-            },
-        ));
-        app.load_settings::<LightingSettings>("lighting.ron", &["ron"]);
-        app.init_resource::<SawLightingLoadFailure>();
-        app.add_systems(Update, record_lighting_load_failure);
-        app.finish();
-        app.cleanup();
+            });
+        builder
+            .app_mut()
+            .load_settings::<LightingSettings>("lighting.ron", &["ron"]);
+        builder.app_mut().init_resource::<SawLightingLoadFailure>();
+        builder
+            .app_mut()
+            .add_systems(Update, record_lighting_load_failure);
+        let mut app = builder.build();
 
         assert!(
             update_until(&mut app, |world| world
@@ -2180,19 +2182,20 @@ mod tests {
         fs::write(&lighting_path, LIGHTING_RON)
             .expect("the valid lighting fixture should be written");
 
-        let mut app = App::new();
-        app.add_plugins((
-            MinimalPlugins,
-            AssetPlugin {
+        let mut builder = HeadlessAppBuilder::new()
+            .with_minimal_plugins()
+            .with_asset_plugin_config(AssetPlugin {
                 file_path: root.path().to_string_lossy().into_owned(),
                 ..default()
-            },
-        ));
-        app.select_settings::<LightingSettings>(&["ron"]);
-        app.init_resource::<SawLightingLoadFailure>();
-        app.add_systems(Update, record_lighting_load_failure);
-        app.finish();
-        app.cleanup();
+            });
+        builder
+            .app_mut()
+            .select_settings::<LightingSettings>(&["ron"]);
+        builder.app_mut().init_resource::<SawLightingLoadFailure>();
+        builder
+            .app_mut()
+            .add_systems(Update, record_lighting_load_failure);
+        let mut app = builder.build();
 
         app.world_mut()
             .run_system_once(

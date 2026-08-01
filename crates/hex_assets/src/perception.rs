@@ -255,6 +255,7 @@ mod tests {
     use std::time::Duration;
 
     use bevy::asset::{AssetLoadFailedEvent, AssetPlugin};
+    use hex_test_app::HeadlessAppBuilder;
 
     use crate::loader::LoadSettings;
 
@@ -478,19 +479,22 @@ mod tests {
         fs::write(&perception_path, PERCEPTION_RON)
             .expect("the valid perception fixture should be written");
 
-        let mut app = App::new();
-        app.add_plugins((
-            MinimalPlugins,
-            AssetPlugin {
+        let mut builder = HeadlessAppBuilder::new()
+            .with_minimal_plugins()
+            .with_asset_plugin_config(AssetPlugin {
                 file_path: root.path().to_string_lossy().into_owned(),
                 ..default()
-            },
-        ));
-        app.load_settings::<PerceptionSettings>("perception.ron", &["ron"]);
-        app.init_resource::<SawPerceptionLoadFailure>();
-        app.add_systems(Update, record_perception_load_failure);
-        app.finish();
-        app.cleanup();
+            });
+        builder
+            .app_mut()
+            .load_settings::<PerceptionSettings>("perception.ron", &["ron"]);
+        builder
+            .app_mut()
+            .init_resource::<SawPerceptionLoadFailure>();
+        builder
+            .app_mut()
+            .add_systems(Update, record_perception_load_failure);
+        let mut app = builder.build();
 
         assert!(
             update_until(&mut app, |world| world
