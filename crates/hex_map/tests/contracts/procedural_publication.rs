@@ -249,26 +249,32 @@ fn v3_forest_publishes_exact_features_blockers_and_routes() {
         usize::try_from(metrics.tree_blocker_surfaces).unwrap_or(usize::MAX)
     );
     assert!(grass_roots.is_disjoint(&blockers));
-    let canopy_roots: BTreeSet<_> = {
+    let published_tree_roots: BTreeSet<_> = {
         let world = app.world_mut();
-        let mut canopies = world.query::<(
-            &CanopyOccluder,
+        let mut trees = world.query::<(
+            &TreeOccluder,
             Option<&PresentationOcclusion>,
             Option<&HexTile>,
         )>();
-        canopies
+        trees
             .iter(world)
-            .map(|(canopy, occlusion, tile)| {
-                assert!(tile.is_none(), "a tree canopy became terrain footing");
+            .map(|(tree, occlusion, tile)| {
+                assert!(tile.is_none(), "a rendered tree became terrain footing");
                 assert!(
                     occlusion.is_none_or(|occlusion| !occlusion.is_hidden()),
-                    "a freshly spawned canopy carried a stale cutaway reason"
+                    "a freshly spawned tree carried stale presentation occlusion"
                 );
-                canopy.0
+                tree.0
             })
             .collect()
     };
-    assert_eq!(canopy_roots, tree_roots);
+    assert_eq!(published_tree_roots, tree_roots);
+    let world = app.world_mut();
+    let mut canopies = world.query_filtered::<Option<&HexTile>, With<CanopyOccluder>>();
+    assert!(
+        canopies.iter(world).all(|tile| tile.is_none()),
+        "authored canopy chunks must never become terrain footing"
+    );
     assert_eq!(
         tree_roots.len(),
         usize::try_from(metrics.tree_roots).unwrap_or(usize::MAX)

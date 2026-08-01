@@ -21,11 +21,11 @@ use hex_assets::{
     to_color, GameAssets, HexObjectRotation, ObjectBlueprint, RuntimeArtCatalog, SubstanceTable,
 };
 use hex_core::{
-    BiomeRegions, CanopyOccluder, CutawayOccluder, GameplayLight, GameplaySetup,
-    GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile, InteriorRegionId,
-    InteriorRegions, MapAnchorId, MapAnchors, MapViewHint, PerceptionSystems,
-    PresentationOcclusion, ResolvedMapSeed, RunBottom, Screen, SpecialMovementRegions, SubstanceId,
-    TerrainEdit, TerrainReady, TilePos, TraversalBlockers, TraversalProfile,
+    BiomeRegions, CutawayOccluder, GameplayLight, GameplaySetup, GameplaySetupFailure, Headroom,
+    HexCoord, HexGrid, HexSpan, HexTile, InteriorRegionId, InteriorRegions, MapAnchorId,
+    MapAnchors, MapViewHint, PerceptionSystems, PresentationOcclusion, ResolvedMapSeed, RunBottom,
+    Screen, SpecialMovementRegions, SubstanceId, TerrainEdit, TerrainReady, TilePos,
+    TraversalBlockers, TraversalProfile, TreeOccluder,
 };
 
 use crate::crystal_render::{self, CrystalPresentationError};
@@ -57,7 +57,7 @@ pub fn plugin(app: &mut App) {
         .register_type::<Headroom>()
         .register_type::<InteriorRegionId>()
         .register_type::<CutawayOccluder>()
-        .register_type::<CanopyOccluder>()
+        .register_type::<TreeOccluder>()
         .register_type::<PresentationOcclusion>()
         .register_type::<GameplayLight>()
         .register_type::<TerrainReady>()

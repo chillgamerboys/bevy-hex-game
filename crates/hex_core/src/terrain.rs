@@ -115,11 +115,12 @@ impl FromIterator<(MapAnchorId, TilePos)> for MapAnchors {
 #[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct InteriorRegionId(pub u32);
 
-/// Marks one rendered terrain run segment as a roof an interior view may cut away.
+/// Marks one rendered terrain run segment as a roof review tooling may cut away.
 ///
-/// This component is a projection for live presentation queries. The exact positional
-/// source of truth remains the roof voxels in [`InteriorRegions`], so rebuilding or
-/// splitting terrain runs cannot change which generated material the metadata names.
+/// Ordinary gameplay keeps the roof visible. This component is a projection for
+/// explicit capture-tool queries. The exact positional source of truth remains the
+/// roof voxels in [`InteriorRegions`], so rebuilding or splitting terrain runs cannot
+/// change which generated material the metadata names.
 #[derive(Component, Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[reflect(Component)]
 pub struct CutawayOccluder(pub InteriorRegionId);

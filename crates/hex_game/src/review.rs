@@ -14,7 +14,7 @@
 //! generated anchor before framing. This keeps iteration tooling on the same loading
 //! and validation path as manual play while avoiding compositor-dependent screenshots.
 //! `HEX_REVIEW_CUTAWAY=full` exposes the complete active interior for cave overview
-//! captures while leaving the normal local cutaway unchanged.
+//! captures; ordinary gameplay keeps every cave roof intact.
 //! `HEX_REVIEW_ILLUMINATION=overlay` draws the authoritative Dark, Dim, and Bright
 //! gameplay tiers over exact interior surfaces for diagnostic cave captures.
 

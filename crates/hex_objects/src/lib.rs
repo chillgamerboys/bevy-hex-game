@@ -7,9 +7,9 @@
 //!
 //! Blend surfaces use Bevy's order-independent transparency. Bevy 0.19 requires
 //! OIT cameras to disable MSAA, so cutout materials temporarily behave as
-//! single-sample threshold masks while any Blend chunk is live. The renderer
-//! restores each camera's previous MSAA mode as soon as the final Blend chunk
-//! disappears, restoring true alpha-to-coverage for cutouts.
+//! single-sample threshold masks while any authored Blend chunk or camera-faded
+//! tree is live. The renderer restores each camera's previous MSAA mode as soon as
+//! the final blended presentation disappears, restoring true alpha-to-coverage.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::f32::consts::TAU;
@@ -24,13 +24,16 @@ use hex_assets::{
     GameAssets, HexObjectRotation, LocalVoxelCoord, ObjectAssetId, ObjectBlueprint, ObjectInstance,
     ResolvedVoxelStyle, RuntimeArtCatalog, VoxelStyleId, VoxelSurfaceMode,
 };
-use hex_core::{CanopyOccluder, HexCoord, PresentationOcclusion};
+use hex_core::{
+    CanopyOccluder, HexCoord, PresentationOcclusion, PresentationSystems, Screen, TreeFadeAmount,
+    TreeOccluder,
+};
 
 /// Marks a generated render child belonging to one authored object instance.
 ///
 /// Chunks are grouped by style and canopy membership. The grouping keeps entity
-/// counts independent of voxel count while retaining the exact authored cutaway
-/// boundary for a later world-presentation adapter.
+/// counts independent of voxel count while retaining the exact authored canopy
+/// boundary and whole-tree root used by world presentation.
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
 pub struct ObjectRenderChunk {
     style: VoxelStyleId,
@@ -53,8 +56,8 @@ impl ObjectRenderChunk {
 
 /// Marks a render chunk containing only exact authored canopy cells.
 ///
-/// The marker intentionally has no camera or visibility behavior. Forest and
-/// character-camera integration belongs to a later adapter.
+/// The marker is authored art metadata. Character-camera fading groups every tree
+/// chunk through `TreeOccluder` instead of treating the canopy as a separate object.
 #[derive(Component, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ObjectCanopyChunk;
 
@@ -63,6 +66,7 @@ struct RenderedObject {
     object_id: ObjectAssetId,
     catalog_fingerprint: u64,
     source_generation: u64,
+    tree_root: Option<TreeOccluder>,
     children: Vec<Entity>,
     failed: bool,
 }
@@ -114,6 +118,22 @@ struct ObjectOitCamera {
     preserve_oit: bool,
 }
 
+/// Per-entity material clone applied while one tree chunk is translucent.
+#[derive(Component, Debug, Clone)]
+struct AppliedTreeFade {
+    original: Handle<StandardMaterial>,
+    faded: Handle<StandardMaterial>,
+    original_alpha: f32,
+    amount: f32,
+    added_not_shadow_caster: bool,
+}
+
+/// Clone handles retained independently from disposable render entities.
+#[derive(Resource, Debug, Default)]
+struct TreeFadeMaterialAssets {
+    clones: BTreeMap<Entity, Handle<StandardMaterial>>,
+}
+
 #[derive(Resource, Debug, Default)]
 struct ObjectRenderCache {
     catalog_fingerprint: Option<u64>,
@@ -147,8 +167,18 @@ impl ObjectRenderCache {
 
 /// Registers authored-object mesh baking and instance reconciliation.
 pub fn plugin(app: &mut App) {
-    app.init_resource::<ObjectRenderCache>()
-        .add_systems(Update, (reconcile_objects, manage_object_oit).chain());
+    app.register_type::<CanopyOccluder>()
+        .register_type::<TreeFadeAmount>()
+        .init_resource::<ObjectRenderCache>()
+        .init_resource::<TreeFadeMaterialAssets>()
+        .add_systems(Update, reconcile_objects)
+        .add_systems(
+            PostUpdate,
+            (apply_tree_fade_materials, manage_object_oit)
+                .chain()
+                .in_set(PresentationSystems::ApplyMaterials),
+        )
+        .add_systems(OnExit(Screen::Gameplay), clear_tree_fade_materials);
 }
 
 fn reconcile_objects(
@@ -162,7 +192,7 @@ fn reconcile_objects(
         Ref<ObjectInstance>,
         Option<&RenderedObject>,
         Option<&Visibility>,
-        Option<&CanopyOccluder>,
+        Option<&TreeOccluder>,
     )>,
     stale_rendered: Query<&RenderedObject, Without<ObjectInstance>>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -209,7 +239,7 @@ fn reconcile_objects(
     let force_rebuild = catalog_changed || source_changed;
     let mut source_mesh = None;
 
-    for (entity, instance, rendered, visibility, canopy) in &instances {
+    for (entity, instance, rendered, visibility, tree) in &instances {
         if let Err(error) = instance.validate() {
             let already_reported = rendered.is_some_and(|rendered| {
                 rendered.failed
@@ -229,6 +259,7 @@ fn reconcile_objects(
                     object_id: instance.object_id().clone(),
                     catalog_fingerprint,
                     source_generation: cache.source_generation,
+                    tree_root: tree.copied(),
                     children: Vec::new(),
                     failed: true,
                 });
@@ -252,6 +283,7 @@ fn reconcile_objects(
                     || rendered.object_id != *instance.object_id()
                     || rendered.catalog_fingerprint != catalog_fingerprint
                     || rendered.source_generation != cache.source_generation
+                    || rendered.tree_root != tree.copied()
             });
         if !needs_rebuild {
             continue;
@@ -280,12 +312,13 @@ fn reconcile_objects(
                     entity,
                     instance.object_id(),
                     &cached,
-                    canopy.copied(),
+                    tree.copied(),
                 );
                 commands.entity(entity).insert(RenderedObject {
                     object_id: instance.object_id().clone(),
                     catalog_fingerprint,
                     source_generation: cache.source_generation,
+                    tree_root: tree.copied(),
                     children,
                     failed: false,
                 });
@@ -307,6 +340,7 @@ fn reconcile_objects(
                     object_id: instance.object_id().clone(),
                     catalog_fingerprint,
                     source_generation: cache.source_generation,
+                    tree_root: tree.copied(),
                     children: Vec::new(),
                     failed: true,
                 });
@@ -326,7 +360,7 @@ fn spawn_chunks(
     root: Entity,
     object_id: &ObjectAssetId,
     cached: &CachedObject,
-    canopy: Option<CanopyOccluder>,
+    tree: Option<TreeOccluder>,
 ) -> Vec<Entity> {
     let mut children = Vec::with_capacity(cached.chunks.len());
     for chunk in &cached.chunks {
@@ -345,10 +379,13 @@ fn spawn_chunks(
                 if chunk.key.canopy { " / canopy" } else { "" }
             )),
         ));
+        if let Some(tree) = tree {
+            entity.insert((tree, TreeFadeAmount::OPAQUE));
+        }
         if chunk.key.canopy {
             entity.insert(ObjectCanopyChunk);
-            if let Some(canopy) = canopy {
-                entity.insert((canopy, PresentationOcclusion::default()));
+            if let Some(tree) = tree {
+                entity.insert((CanopyOccluder(tree.0), PresentationOcclusion::default()));
             }
         }
         if !chunk.casts_shadows {
@@ -404,9 +441,126 @@ fn cached_object(
     Ok(cached)
 }
 
+fn apply_tree_fade_materials(
+    mut commands: Commands,
+    mut chunks: Query<
+        (
+            Entity,
+            Option<&TreeFadeAmount>,
+            &mut MeshMaterial3d<StandardMaterial>,
+            Option<&AppliedTreeFade>,
+            Has<NotShadowCaster>,
+        ),
+        Or<(Changed<TreeFadeAmount>, With<AppliedTreeFade>)>,
+    >,
+    mut removed_fades: RemovedComponents<AppliedTreeFade>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut fade_assets: ResMut<TreeFadeMaterialAssets>,
+) {
+    for entity in removed_fades.read() {
+        if let Some(handle) = fade_assets.clones.remove(&entity) {
+            drop(materials.remove(handle.id()));
+        }
+    }
+
+    for (entity, fade, mut handle, applied, no_shadow) in &mut chunks {
+        let amount = fade.copied().unwrap_or_default().amount();
+        if amount < 1.0 - f32::EPSILON {
+            if let Some(applied) = applied.filter(|applied| handle.0 == applied.faded) {
+                if applied.added_not_shadow_caster && !no_shadow {
+                    commands.entity(entity).insert(NotShadowCaster);
+                }
+                if (applied.amount - amount).abs() <= f32::EPSILON {
+                    continue;
+                }
+                if let Some(mut material) = materials.get_mut(&applied.faded) {
+                    material.base_color = material
+                        .base_color
+                        .with_alpha(applied.original_alpha * amount);
+                }
+                commands.entity(entity).insert(AppliedTreeFade {
+                    amount,
+                    ..applied.clone()
+                });
+                continue;
+            }
+
+            if let Some(applied) = applied {
+                drop(materials.remove(applied.faded.id()));
+                fade_assets.clones.remove(&entity);
+            }
+            let added_not_shadow_caster =
+                applied.is_some_and(|applied| applied.added_not_shadow_caster) || !no_shadow;
+            let original = handle.0.clone();
+            let Some(source) = materials.get(&original) else {
+                continue;
+            };
+            let original_alpha = source.base_color.alpha();
+            let mut faded = source.clone();
+            faded.base_color = faded.base_color.with_alpha(original_alpha * amount);
+            faded.alpha_mode = AlphaMode::Blend;
+            let faded = materials.add(faded);
+            handle.0 = faded.clone();
+            fade_assets.clones.insert(entity, faded.clone());
+            if !no_shadow {
+                commands.entity(entity).insert(NotShadowCaster);
+            }
+            commands.entity(entity).insert(AppliedTreeFade {
+                original,
+                faded,
+                original_alpha,
+                amount,
+                added_not_shadow_caster,
+            });
+            continue;
+        }
+
+        let Some(applied) = applied else {
+            continue;
+        };
+        handle.0 = applied.original.clone();
+        drop(materials.remove(applied.faded.id()));
+        fade_assets.clones.remove(&entity);
+        let mut entity = commands.entity(entity);
+        entity.remove::<AppliedTreeFade>();
+        if applied.added_not_shadow_caster {
+            entity.remove::<NotShadowCaster>();
+        }
+    }
+}
+
+fn clear_tree_fade_materials(
+    mut commands: Commands,
+    mut chunks: Query<(
+        Entity,
+        &mut MeshMaterial3d<StandardMaterial>,
+        Option<&mut TreeFadeAmount>,
+        &AppliedTreeFade,
+    )>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut fade_assets: ResMut<TreeFadeMaterialAssets>,
+) {
+    for (entity, mut handle, fade, applied) in &mut chunks {
+        handle.0 = applied.original.clone();
+        if let Some(mut fade) = fade {
+            if (fade.amount() - TreeFadeAmount::OPAQUE.amount()).abs() > f32::EPSILON {
+                *fade = TreeFadeAmount::OPAQUE;
+            }
+        }
+        let mut entity = commands.entity(entity);
+        entity.remove::<AppliedTreeFade>();
+        if applied.added_not_shadow_caster {
+            entity.remove::<NotShadowCaster>();
+        }
+    }
+    for (_, handle) in std::mem::take(&mut fade_assets.clones) {
+        drop(materials.remove(handle.id()));
+    }
+}
+
 fn manage_object_oit(
     mut commands: Commands,
-    translucent_chunks: Query<(), With<ObjectTranslucentChunk>>,
+    translucent_chunks: Query<(), Or<(With<ObjectTranslucentChunk>, With<AppliedTreeFade>)>>,
     mut cameras: Query<
         (
             Entity,
@@ -1037,7 +1191,9 @@ mod tests {
     fn test_app(catalog: RuntimeArtCatalog) -> App {
         let mut builder = HeadlessAppBuilder::new()
             .with_minimal_plugins()
+            .with_state_plugin()
             .with_assets();
+        builder.app_mut().init_state::<Screen>();
         let source = builder
             .app_mut()
             .world_mut()
@@ -1054,6 +1210,13 @@ mod tests {
 
     fn settle(app: &mut App) {
         app.update();
+        app.update();
+    }
+
+    fn enter(app: &mut App, screen: Screen) {
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(screen);
         app.update();
     }
 
@@ -1353,14 +1516,393 @@ mod tests {
     }
 
     #[test]
+    fn fading_one_tree_clones_materials_without_touching_shared_neighbours() {
+        let mut app = test_app(fixture_catalog(0.18));
+        let first_root = TilePos::new(HexCoord::ORIGIN, -1);
+        let second_root = TilePos::new(HexCoord::from_axial(3, 0), -1);
+        let first = app
+            .world_mut()
+            .spawn((
+                instance("plant/test", HexCoord::ORIGIN, 0, 0.4, 0),
+                TreeOccluder(first_root),
+            ))
+            .id();
+        let second = app
+            .world_mut()
+            .spawn((
+                instance("plant/test", HexCoord::from_axial(3, 0), 0, 0.4, 0),
+                TreeOccluder(second_root),
+            ))
+            .id();
+        settle(&mut app);
+        let first_before = chunk_handles(&app, first);
+        let second_before = chunk_handles(&app, second);
+        assert_eq!(
+            first_before
+                .iter()
+                .map(|(key, (_, material, _))| (key, material))
+                .collect::<Vec<_>>(),
+            second_before
+                .iter()
+                .map(|(key, (_, material, _))| (key, material))
+                .collect::<Vec<_>>()
+        );
+        let material_count = app.world().resource::<Assets<StandardMaterial>>().len();
+        let preexisting_non_shadow = first_before
+            .values()
+            .next()
+            .map(|(_, _, entity)| *entity)
+            .expect("the tree fixture should render at least one chunk");
+        app.world_mut()
+            .entity_mut(preexisting_non_shadow)
+            .insert(NotShadowCaster);
+
+        for child in child_entities(&app, first) {
+            app.world_mut()
+                .entity_mut(child)
+                .insert(TreeFadeAmount::new(0.2).expect("the fade fixture should be valid"));
+        }
+        app.update();
+
+        let first_faded = chunk_handles(&app, first);
+        let second_still_shared = chunk_handles(&app, second);
+        assert_eq!(second_still_shared, second_before);
+        assert_eq!(
+            app.world().resource::<Assets<StandardMaterial>>().len(),
+            material_count + first_faded.len()
+        );
+        for (key, (_, faded_id, entity)) in &first_faded {
+            let (_, original_id, _) = first_before
+                .get(key)
+                .expect("the original tree should retain every visual chunk");
+            assert_ne!(faded_id, original_id);
+            let materials = app.world().resource::<Assets<StandardMaterial>>();
+            let faded = materials
+                .get(*faded_id)
+                .expect("the per-tree clone should remain live");
+            let original = materials
+                .get(*original_id)
+                .expect("the globally shared source should remain live");
+            assert_eq!(faded.alpha_mode, AlphaMode::Blend);
+            assert!((faded.base_color.alpha() - original.base_color.alpha() * 0.2).abs() < 1e-5);
+            assert!(app.world().get::<AppliedTreeFade>(*entity).is_some());
+            assert!(
+                app.world().get::<NotShadowCaster>(*entity).is_some(),
+                "translucent camera-faded chunks must not retain opaque shadows"
+            );
+        }
+
+        let stable_handles = first_faded.clone();
+        app.update();
+        assert_eq!(chunk_handles(&app, first), stable_handles);
+        assert_eq!(
+            app.world().resource::<Assets<StandardMaterial>>().len(),
+            material_count + stable_handles.len(),
+            "stable interpolation must not allocate more clones"
+        );
+
+        for child in child_entities(&app, first) {
+            app.world_mut()
+                .entity_mut(child)
+                .insert(TreeFadeAmount::OPAQUE);
+        }
+        app.update();
+
+        assert_eq!(chunk_handles(&app, first), first_before);
+        assert_eq!(chunk_handles(&app, second), second_before);
+        assert_eq!(
+            app.world().resource::<Assets<StandardMaterial>>().len(),
+            material_count
+        );
+        for child in child_entities(&app, first) {
+            assert_eq!(
+                app.world().get::<NotShadowCaster>(child).is_some(),
+                child == preexisting_non_shadow,
+                "restoration must preserve exact prior shadow ownership"
+            );
+        }
+    }
+
+    #[test]
+    fn faded_tree_owns_oit_only_until_its_materials_restore() {
+        let mut app = test_app(fixture_catalog(0.18));
+        let camera = app
+            .world_mut()
+            .spawn((Camera3d::default(), Msaa::Sample4))
+            .id();
+        let root = app
+            .world_mut()
+            .spawn((
+                instance("plant/test", HexCoord::ORIGIN, 0, 0.4, 0),
+                TreeOccluder(TilePos::new(HexCoord::ORIGIN, -1)),
+            ))
+            .id();
+        settle(&mut app);
+
+        for child in child_entities(&app, root) {
+            app.world_mut()
+                .entity_mut(child)
+                .insert(TreeFadeAmount::new(0.2).expect("the fade fixture should be valid"));
+        }
+        app.update();
+        assert_eq!(app.world().get::<Msaa>(camera), Some(&Msaa::Off));
+        assert!(app
+            .world()
+            .get::<OrderIndependentTransparencySettings>(camera)
+            .is_some());
+
+        for child in child_entities(&app, root) {
+            app.world_mut()
+                .entity_mut(child)
+                .insert(TreeFadeAmount::OPAQUE);
+        }
+        app.update();
+        assert_eq!(app.world().get::<Msaa>(camera), Some(&Msaa::Sample4));
+        assert!(app
+            .world()
+            .get::<OrderIndependentTransparencySettings>(camera)
+            .is_none());
+    }
+
+    #[test]
+    fn catalog_reload_retires_active_tree_fade_materials() {
+        let mut app = test_app(fixture_catalog(0.18));
+        let camera = app
+            .world_mut()
+            .spawn((Camera3d::default(), Msaa::Sample4))
+            .id();
+        let root = app
+            .world_mut()
+            .spawn((
+                instance("plant/test", HexCoord::ORIGIN, 0, 0.4, 0),
+                TreeOccluder(TilePos::new(HexCoord::ORIGIN, -1)),
+            ))
+            .id();
+        settle(&mut app);
+
+        for child in child_entities(&app, root) {
+            app.world_mut()
+                .entity_mut(child)
+                .insert(TreeFadeAmount::new(0.2).expect("the fade fixture should be valid"));
+        }
+        app.update();
+
+        let faded = chunk_handles(&app, root);
+        let faded_entities: Vec<_> = faded.values().map(|(_, _, entity)| *entity).collect();
+        let faded_materials: Vec<_> = faded.values().map(|(_, material, _)| *material).collect();
+        assert_eq!(
+            app.world()
+                .resource::<TreeFadeMaterialAssets>()
+                .clones
+                .len(),
+            faded.len()
+        );
+        assert_eq!(app.world().get::<Msaa>(camera), Some(&Msaa::Off));
+
+        app.insert_resource(fixture_catalog(0.24));
+        app.update();
+
+        let rebuilt = chunk_handles(&app, root);
+        assert_eq!(rebuilt.len(), faded.len());
+        assert!(faded_entities
+            .iter()
+            .all(|entity| app.world().get_entity(*entity).is_err()));
+        assert!(app
+            .world()
+            .resource::<TreeFadeMaterialAssets>()
+            .clones
+            .is_empty());
+        let materials = app.world().resource::<Assets<StandardMaterial>>();
+        assert!(faded_materials
+            .iter()
+            .all(|material| materials.get(*material).is_none()));
+        for (_, _, child) in rebuilt.values() {
+            assert_eq!(
+                app.world()
+                    .get::<TreeFadeAmount>(*child)
+                    .map(|fade| fade.amount()),
+                Some(1.0)
+            );
+            assert!(app.world().get::<AppliedTreeFade>(*child).is_none());
+        }
+        assert_eq!(app.world().get::<Msaa>(camera), Some(&Msaa::Sample4));
+        assert!(app
+            .world()
+            .get::<OrderIndependentTransparencySettings>(camera)
+            .is_none());
+    }
+
+    #[test]
+    fn despawning_faded_chunks_retires_only_their_material_clones() {
+        let mut app = test_app(fixture_catalog(0.18));
+        let root = app
+            .world_mut()
+            .spawn((
+                instance("plant/test", HexCoord::ORIGIN, 0, 0.4, 0),
+                TreeOccluder(TilePos::new(HexCoord::ORIGIN, -1)),
+            ))
+            .id();
+        settle(&mut app);
+
+        for child in child_entities(&app, root) {
+            app.world_mut()
+                .entity_mut(child)
+                .insert(TreeFadeAmount::new(0.2).expect("the fade fixture should be valid"));
+        }
+        app.update();
+
+        let faded = chunk_handles(&app, root);
+        let Some((_, retired_material, retired_chunk)) = faded.values().next().copied() else {
+            unreachable!("the faded tree fixture should contain render chunks")
+        };
+        let clone_count = app
+            .world()
+            .resource::<TreeFadeMaterialAssets>()
+            .clones
+            .len();
+
+        app.world_mut().despawn(retired_chunk);
+        app.update();
+
+        assert!(app.world().get_entity(retired_chunk).is_err());
+        assert_eq!(
+            app.world()
+                .resource::<TreeFadeMaterialAssets>()
+                .clones
+                .len(),
+            clone_count - 1
+        );
+        assert!(app
+            .world()
+            .resource::<Assets<StandardMaterial>>()
+            .get(retired_material)
+            .is_none());
+        for (_, material, chunk) in faded.values() {
+            if *chunk == retired_chunk {
+                continue;
+            }
+            assert!(app.world().get::<AppliedTreeFade>(*chunk).is_some());
+            assert!(app
+                .world()
+                .resource::<Assets<StandardMaterial>>()
+                .get(*material)
+                .is_some());
+        }
+    }
+
+    #[test]
+    fn despawning_a_faded_tree_retires_all_clones_and_oit() {
+        let mut app = test_app(fixture_catalog(0.18));
+        let camera = app
+            .world_mut()
+            .spawn((Camera3d::default(), Msaa::Sample4))
+            .id();
+        let root = app
+            .world_mut()
+            .spawn((
+                instance("plant/test", HexCoord::ORIGIN, 0, 0.4, 0),
+                TreeOccluder(TilePos::new(HexCoord::ORIGIN, -1)),
+            ))
+            .id();
+        settle(&mut app);
+
+        for child in child_entities(&app, root) {
+            app.world_mut()
+                .entity_mut(child)
+                .insert(TreeFadeAmount::new(0.2).expect("the fade fixture should be valid"));
+        }
+        app.update();
+
+        let faded = chunk_handles(&app, root);
+        let faded_materials: Vec<_> = faded.values().map(|(_, material, _)| *material).collect();
+        assert_eq!(app.world().get::<Msaa>(camera), Some(&Msaa::Off));
+
+        app.world_mut().despawn(root);
+        app.update();
+
+        assert!(app.world().get_entity(root).is_err());
+        assert!(faded
+            .values()
+            .all(|(_, _, child)| app.world().get_entity(*child).is_err()));
+        assert!(app
+            .world()
+            .resource::<TreeFadeMaterialAssets>()
+            .clones
+            .is_empty());
+        let materials = app.world().resource::<Assets<StandardMaterial>>();
+        assert!(faded_materials
+            .iter()
+            .all(|material| materials.get(*material).is_none()));
+        assert_eq!(app.world().get::<Msaa>(camera), Some(&Msaa::Sample4));
+        assert!(app
+            .world()
+            .get::<OrderIndependentTransparencySettings>(camera)
+            .is_none());
+    }
+
+    #[test]
+    fn one_hundred_gameplay_exits_restore_tree_materials_without_leaks() {
+        let mut app = test_app(fixture_catalog(0.18));
+        let root = app
+            .world_mut()
+            .spawn((
+                instance("plant/test", HexCoord::ORIGIN, 0, 0.4, 0),
+                TreeOccluder(TilePos::new(HexCoord::ORIGIN, -1)),
+            ))
+            .id();
+        settle(&mut app);
+        let originals = chunk_handles(&app, root);
+        let material_count = app.world().resource::<Assets<StandardMaterial>>().len();
+
+        for cycle in 0..100 {
+            enter(&mut app, Screen::Gameplay);
+            for child in child_entities(&app, root) {
+                app.world_mut()
+                    .entity_mut(child)
+                    .insert(TreeFadeAmount::new(0.2).expect("the fade fixture should be valid"));
+            }
+            app.update();
+            assert!(
+                !app.world()
+                    .resource::<TreeFadeMaterialAssets>()
+                    .clones
+                    .is_empty(),
+                "cycle {cycle} did not create isolated fade materials"
+            );
+
+            enter(&mut app, Screen::Title);
+            assert_eq!(chunk_handles(&app, root), originals);
+            assert_eq!(
+                app.world().resource::<Assets<StandardMaterial>>().len(),
+                material_count,
+                "cycle {cycle} leaked a material clone"
+            );
+            assert!(app
+                .world()
+                .resource::<TreeFadeMaterialAssets>()
+                .clones
+                .is_empty());
+            for child in child_entities(&app, root) {
+                assert_eq!(
+                    app.world()
+                        .get::<TreeFadeAmount>(child)
+                        .map(|fade| fade.amount()),
+                    Some(1.0)
+                );
+                assert!(app.world().get::<AppliedTreeFade>(child).is_none());
+            }
+        }
+    }
+
+    #[test]
     fn chunk_materials_shadow_policy_picking_and_canopy_are_exact() {
         let mut app = test_app(fixture_catalog(0.18));
-        let canopy_root = TilePos::new(HexCoord::ORIGIN, -1);
+        let tree_root = TilePos::new(HexCoord::ORIGIN, -1);
         let plant = app
             .world_mut()
             .spawn((
                 instance("plant/test", HexCoord::ORIGIN, 0, 0.4, 0),
-                CanopyOccluder(canopy_root),
+                TreeOccluder(tree_root),
             ))
             .id();
         let effect = app
@@ -1382,9 +1924,22 @@ mod tests {
                 let is_canopy = app.world().get::<ObjectCanopyChunk>(*entity).is_some();
                 assert_eq!(
                     app.world()
+                        .get::<TreeOccluder>(*entity)
+                        .map(|marker| marker.0),
+                    Some(tree_root),
+                    "every render chunk must retain the exact whole-tree root"
+                );
+                assert_eq!(
+                    app.world()
+                        .get::<TreeFadeAmount>(*entity)
+                        .map(|fade| fade.amount()),
+                    Some(1.0)
+                );
+                assert_eq!(
+                    app.world()
                         .get::<CanopyOccluder>(*entity)
                         .map(|marker| marker.0),
-                    is_canopy.then_some(canopy_root)
+                    is_canopy.then_some(tree_root)
                 );
                 assert_eq!(
                     app.world().get::<PresentationOcclusion>(*entity).is_some(),

@@ -1,10 +1,12 @@
-//! Composable local cutaways for generated interiors and tree canopies.
+//! Composable review cutaways and adaptive tree fading.
 //!
 //! `hex_map` projects exact authored roof voxels onto disposable rendered runs as
-//! [`CutawayOccluder`] components and obstructing tree parts as
-//! [`CanopyOccluder`] components.
-//! Each cutaway owns only its [`PresentationOcclusionReason`]; one adapter applies the
-//! combined result to visibility, picking, and shadows without changing map semantics.
+//! [`CutawayOccluder`] components and publishes exact tree roots. `hex_objects`
+//! propagates each root as a [`TreeOccluder`] on every rendered tree chunk. Ordinary
+//! gameplay keeps cave roofs intact; explicit review tooling alone may expose a
+//! complete interior.
+
+use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::camera::primitives::Aabb;
 use bevy::camera::visibility::VisibilitySystems;
@@ -16,22 +18,37 @@ use bevy::transform::TransformPlugin;
 use bevy::transform::TransformSystems;
 
 use hex_core::{
-    CameraFocusTarget, CanopyOccluder, CutawayOccluder, HexCoord, InteriorRegionId,
-    InteriorRegions, PresentationOcclusion, PresentationOcclusionReason, Screen, TilePos,
+    CameraFocusTarget, CutawayOccluder, InteriorRegionId, InteriorRegions, PresentationOcclusion,
+    PresentationOcclusionReason, PresentationSystems, Screen, TreeFadeAmount, TreeOccluder,
 };
 
 use crate::camera::{CameraMode, PanOrbitCamera};
 
-/// Horizontal radius of the local roof opening, measured in hexes.
-const CUTAWAY_RADIUS_HEXES: u32 = 6;
-/// Canopies outside this selected-character neighbourhood never join the cutaway.
-const CANOPY_CUTAWAY_RADIUS_HEXES: u32 = 4;
-/// Small visual margin around the transformed canopy's unit-sphere bound.
-const CANOPY_INTERSECTION_PADDING: f32 = 0.08;
+/// Small conservative margin around each transformed render-chunk bound.
+const TREE_INTERSECTION_PADDING: f32 = 0.08;
+/// Lowest opacity used while a tree blocks the close camera.
+const TREE_FADED_OPACITY: f32 = 0.2;
+/// Time used to ease a newly obstructing tree out of the view.
+const TREE_FADE_IN_SECONDS: f32 = 0.12;
+/// Time a cleared tree remains faded before restoring.
+const TREE_FADE_HOLD_SECONDS: f32 = 0.2;
+/// Time used to restore a fully faded tree.
+const TREE_FADE_RESTORE_SECONDS: f32 = 0.3;
 
 /// Marker installed only by deterministic capture tooling to expose a whole interior.
 #[derive(Resource, Debug, Default)]
 struct FullCutawayReviewOverride;
+
+#[derive(Debug, Clone, Copy)]
+struct TreeFadeTimeline {
+    amount: f32,
+    clear_seconds: f32,
+}
+
+#[derive(Resource, Debug, Default)]
+struct TreeFadeTimelines {
+    roots: BTreeMap<hex_core::TilePos, TreeFadeTimeline>,
+}
 
 /// The exact presentation state to restore when the final occlusion reason clears.
 #[derive(Component, Debug, Clone, Copy)]
@@ -59,61 +76,55 @@ type OcclusionCandidateQuery<'w, 's> = Query<
     OcclusionCandidates,
 >;
 
-#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum CutawaySystems {
-    ResolveReasons,
-    ApplyPresentation,
-}
-
 pub(super) fn plugin(app: &mut App) {
+    app.init_resource::<TreeFadeTimelines>();
     app.configure_sets(
         PostUpdate,
         (
-            CutawaySystems::ResolveReasons,
-            CutawaySystems::ApplyPresentation,
+            PresentationSystems::ResolveCameraOcclusion,
+            PresentationSystems::ApplyMaterials,
+            PresentationSystems::ApplyVisibility,
         )
             .chain()
             .after(TransformSystems::Propagate)
+            .after(VisibilitySystems::CalculateBounds)
             .before(VisibilitySystems::VisibilityPropagate),
     )
     .add_systems(
         PostUpdate,
-        (reconcile_interior_cutaway, reconcile_canopy_cutaway)
+        (reconcile_interior_cutaway, reconcile_tree_fades)
             .chain()
-            .in_set(CutawaySystems::ResolveReasons)
+            .in_set(PresentationSystems::ResolveCameraOcclusion)
             .run_if(in_state(Screen::Gameplay)),
     )
     .add_systems(
         PostUpdate,
         apply_presentation_occlusion
-            .in_set(CutawaySystems::ApplyPresentation)
+            .in_set(PresentationSystems::ApplyVisibility)
             .run_if(in_state(Screen::Gameplay)),
-    );
+    )
+    .add_systems(OnExit(Screen::Gameplay), clear_tree_fade_timelines);
 }
 
 pub(super) fn install_full_review_override(app: &mut App) {
     app.init_resource::<FullCutawayReviewOverride>();
 }
 
-/// Owns only the interior-cutaway reason on exact projected roof runs.
+/// Owns only the explicit review-cutaway reason on exact projected roof runs.
 fn reconcile_interior_cutaway(
     interiors: Option<Res<InteriorRegions>>,
     full_review_override: Option<Res<FullCutawayReviewOverride>>,
-    targets: Query<(&CameraFocusTarget, &GlobalTransform)>,
-    mut candidates: Query<(
-        &TilePos,
-        Option<&CutawayOccluder>,
-        &mut PresentationOcclusion,
-    )>,
+    targets: Query<&CameraFocusTarget>,
+    mut candidates: Query<(Option<&CutawayOccluder>, &mut PresentationOcclusion)>,
 ) {
-    let active = active_cutaway(interiors.as_deref(), &targets);
+    let active = full_review_override
+        .is_some()
+        .then(|| active_cutaway(interiors.as_deref(), &targets))
+        .flatten();
 
-    for (position, occluder, occlusion) in &mut candidates {
-        let should_hide = active.is_some_and(|(region, centre)| {
-            occluder.is_some_and(|occluder| occluder.0 == region)
-                && (full_review_override.is_some()
-                    || position.coord.distance(centre) <= CUTAWAY_RADIUS_HEXES)
-        });
+    for (occluder, occlusion) in &mut candidates {
+        let should_hide =
+            active.is_some_and(|region| occluder.is_some_and(|occluder| occluder.0 == region));
         set_reason(
             occlusion,
             PresentationOcclusionReason::InteriorCutaway,
@@ -122,85 +133,124 @@ fn reconcile_interior_cutaway(
     }
 }
 
-/// Owns only the character-camera reason on nearby tree parts intersecting its focus ray.
-fn reconcile_canopy_cutaway(
+/// Fades a complete exact tree when any of its chunks blocks the focus corridor.
+fn reconcile_tree_fades(
     mode: Res<CameraMode>,
     targets: Query<&CameraFocusTarget>,
     cameras: Query<(&PanOrbitCamera, &GlobalTransform), Without<CameraFocusTarget>>,
-    mut canopies: Query<(
-        &CanopyOccluder,
-        &GlobalTransform,
-        Option<&Aabb>,
-        &mut PresentationOcclusion,
+    time: Res<Time>,
+    mut timelines: ResMut<TreeFadeTimelines>,
+    mut trees: ParamSet<(
+        Query<(
+            &TreeOccluder,
+            &GlobalTransform,
+            Option<&Aabb>,
+            &TreeFadeAmount,
+        )>,
+        Query<(&TreeOccluder, &mut TreeFadeAmount)>,
     )>,
     mut reported_invalid_cardinality: Local<Option<(usize, usize)>>,
 ) {
-    let active = if *mode != CameraMode::Character {
-        *reported_invalid_cardinality = None;
-        None
-    } else {
-        let cardinality = (targets.iter().count(), cameras.iter().count());
-        if cardinality == (1, 1) {
+    let corridor =
+        if *mode != CameraMode::Character {
             *reported_invalid_cardinality = None;
-            targets.single().ok().zip(cameras.single().ok())
+            None
         } else {
-            if reported_invalid_cardinality.as_ref() != Some(&cardinality) {
-                warn!(
-                    "canopy cutaway requires exactly one focus target and one orbit camera; found \
+            let cardinality = (targets.iter().count(), cameras.iter().count());
+            if cardinality == (1, 1) {
+                *reported_invalid_cardinality = None;
+                targets.single().ok().zip(cameras.single().ok()).map(
+                    |(target, (camera, transform))| {
+                        (target.surface, transform.translation(), camera.focus)
+                    },
+                )
+            } else {
+                if reported_invalid_cardinality.as_ref() != Some(&cardinality) {
+                    warn!(
+                    "tree fading requires exactly one focus target and one orbit camera; found \
                      {} targets and {} cameras",
                     cardinality.0, cardinality.1
                 );
-                *reported_invalid_cardinality = Some(cardinality);
+                    *reported_invalid_cardinality = Some(cardinality);
+                }
+                None
             }
-            None
-        }
-    };
+        };
 
-    for (canopy, transform, bounds, occlusion) in &mut canopies {
-        let should_hide = active.is_some_and(|(target, (camera, camera_transform))| {
-            let (centre, radius) = canopy_world_sphere(transform, bounds);
-            canopy.0.coord.distance(target.surface.coord) <= CANOPY_CUTAWAY_RADIUS_HEXES
-                && canopy_intersects_focus_segment(
-                    camera_transform.translation(),
-                    camera.focus,
-                    centre,
-                    radius,
-                )
+    if corridor.is_none() && timelines.roots.is_empty() {
+        return;
+    }
+
+    let mut present = BTreeSet::new();
+    let mut blocked = BTreeSet::new();
+    for (tree, transform, bounds, _fade) in trees.p0().iter() {
+        present.insert(tree.0);
+        if corridor.is_some_and(|(_target, start, end)| {
+            tree_chunk_intersects_focus_segment(start, end, transform, bounds)
+        }) {
+            blocked.insert(tree.0);
+        }
+    }
+
+    timelines.roots.retain(|root, _| present.contains(root));
+    for root in &blocked {
+        timelines.roots.entry(*root).or_insert(TreeFadeTimeline {
+            amount: 1.0,
+            clear_seconds: 0.0,
         });
-        set_reason(
-            occlusion,
-            PresentationOcclusionReason::CanopyCutaway,
-            should_hide,
-        );
+    }
+
+    let delta = time.delta_secs().max(0.0);
+    let mut completed = Vec::new();
+    for (root, timeline) in &mut timelines.roots {
+        advance_tree_fade_timeline(timeline, blocked.contains(root), delta);
+        if !blocked.contains(root) && timeline.amount >= 1.0 {
+            completed.push(*root);
+        }
+    }
+
+    for (tree, mut fade) in trees.p1().iter_mut() {
+        let amount = timelines
+            .roots
+            .get(&tree.0)
+            .map_or(1.0, |state| state.amount);
+        let Some(wanted) = TreeFadeAmount::new(amount) else {
+            continue;
+        };
+        if (fade.amount() - wanted.amount()).abs() > f32::EPSILON {
+            *fade = wanted;
+        }
+    }
+    for root in completed {
+        timelines.roots.remove(&root);
     }
 }
 
-fn canopy_world_sphere(transform: &GlobalTransform, bounds: Option<&Aabb>) -> (Vec3, f32) {
-    bounds.map_or_else(
-        || {
-            (
-                transform.translation(),
-                transform.scale().abs().max_element() + CANOPY_INTERSECTION_PADDING,
-            )
-        },
-        |bounds| {
-            let centre = transform.transform_point(bounds.center.into());
-            let radius = bounds.half_extents.length() * transform.scale().abs().max_element()
-                + CANOPY_INTERSECTION_PADDING;
-            (centre, radius)
-        },
-    )
+fn advance_tree_fade_timeline(timeline: &mut TreeFadeTimeline, blocked: bool, delta: f32) {
+    if blocked {
+        timeline.clear_seconds = 0.0;
+        let fade_rate = (1.0 - TREE_FADED_OPACITY) / TREE_FADE_IN_SECONDS;
+        timeline.amount = (timeline.amount - fade_rate * delta).max(TREE_FADED_OPACITY);
+        return;
+    }
+
+    let remaining_hold = (TREE_FADE_HOLD_SECONDS - timeline.clear_seconds).max(0.0);
+    let hold_delta = delta.min(remaining_hold);
+    timeline.clear_seconds += hold_delta;
+    let restore_delta = delta - hold_delta;
+    if restore_delta > 0.0 {
+        let restore_rate = (1.0 - TREE_FADED_OPACITY) / TREE_FADE_RESTORE_SECONDS;
+        timeline.amount = (timeline.amount + restore_rate * restore_delta).min(1.0);
+    }
 }
 
 fn active_cutaway(
     interiors: Option<&InteriorRegions>,
-    targets: &Query<(&CameraFocusTarget, &GlobalTransform)>,
-) -> Option<(InteriorRegionId, HexCoord)> {
+    targets: &Query<&CameraFocusTarget>,
+) -> Option<InteriorRegionId> {
     let interiors = interiors?;
-    let (target, transform) = targets.single().ok()?;
-    let region = interiors.get(target.surface)?;
-    let centre = HexCoord::from_world(transform.translation());
-    Some((region, centre))
+    let target = targets.single().ok()?;
+    interiors.get(target.surface)
 }
 
 fn set_reason(
@@ -218,24 +268,77 @@ fn set_reason(
     }
 }
 
-fn canopy_intersects_focus_segment(start: Vec3, end: Vec3, centre: Vec3, radius: f32) -> bool {
-    if !start.is_finite()
-        || !end.is_finite()
-        || !centre.is_finite()
-        || !radius.is_finite()
-        || radius <= 0.0
-    {
+fn tree_chunk_intersects_focus_segment(
+    start: Vec3,
+    end: Vec3,
+    transform: &GlobalTransform,
+    bounds: Option<&Aabb>,
+) -> bool {
+    if !start.is_finite() || !end.is_finite() {
         return false;
     }
-
-    let segment = end - start;
-    let length_squared = segment.length_squared();
-    if length_squared <= f32::EPSILON {
-        return start.distance_squared(centre) <= radius * radius;
+    let (mut minimum, mut maximum) = transformed_world_bounds(transform, bounds);
+    minimum -= Vec3::splat(TREE_INTERSECTION_PADDING);
+    maximum += Vec3::splat(TREE_INTERSECTION_PADDING);
+    let direction = end - start;
+    let mut enter: f32 = 0.0;
+    let mut exit: f32 = 1.0;
+    for (origin, delta, low, high) in [
+        (start.x, direction.x, minimum.x, maximum.x),
+        (start.y, direction.y, minimum.y, maximum.y),
+        (start.z, direction.z, minimum.z, maximum.z),
+    ] {
+        let Some((axis_enter, axis_exit)) = segment_axis_interval(origin, delta, low, high) else {
+            return false;
+        };
+        enter = enter.max(axis_enter);
+        exit = exit.min(axis_exit);
     }
-    let amount = ((centre - start).dot(segment) / length_squared).clamp(0.0, 1.0);
-    let nearest = start + segment * amount;
-    nearest.distance_squared(centre) <= radius * radius
+    enter <= exit
+}
+
+fn transformed_world_bounds(transform: &GlobalTransform, bounds: Option<&Aabb>) -> (Vec3, Vec3) {
+    let Some(bounds) = bounds else {
+        let half = Vec3::splat(transform.scale().abs().max_element());
+        return (
+            transform.translation() - half,
+            transform.translation() + half,
+        );
+    };
+    let centre: Vec3 = bounds.center.into();
+    let half: Vec3 = bounds.half_extents.into();
+    let mut minimum = Vec3::splat(f32::INFINITY);
+    let mut maximum = Vec3::splat(f32::NEG_INFINITY);
+    for x in [-1.0, 1.0] {
+        for y in [-1.0, 1.0] {
+            for z in [-1.0, 1.0] {
+                let point = transform.transform_point(centre + half * Vec3::new(x, y, z));
+                minimum = minimum.min(point);
+                maximum = maximum.max(point);
+            }
+        }
+    }
+    (minimum, maximum)
+}
+
+fn segment_axis_interval(
+    origin: f32,
+    direction: f32,
+    minimum: f32,
+    maximum: f32,
+) -> Option<(f32, f32)> {
+    if direction.abs() <= f32::EPSILON {
+        return (minimum <= origin && origin <= maximum).then_some((0.0, 1.0));
+    }
+    let first = (minimum - origin) / direction;
+    let second = (maximum - origin) / direction;
+    let enter = first.min(second).max(0.0);
+    let exit = first.max(second).min(1.0);
+    (enter <= exit).then_some((enter, exit))
+}
+
+fn clear_tree_fade_timelines(mut timelines: ResMut<TreeFadeTimelines>) {
+    timelines.roots.clear();
 }
 
 /// Applies the combined reason set and is the sole owner of concrete presentation state.
@@ -288,19 +391,25 @@ fn apply_presentation_occlusion(mut commands: Commands, mut candidates: Occlusio
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
     use super::*;
+    use hex_core::{HexCoord, TilePos};
     use hex_test_app::HeadlessAppBuilder;
 
     #[derive(Resource, Default)]
-    struct CutawayChangeCounts {
+    struct PresentationChangeCounts {
+        fades: usize,
         occlusions: usize,
         visibilities: usize,
     }
 
-    fn count_cutaway_changes(
+    fn count_presentation_changes(
+        fades: Query<Ref<TreeFadeAmount>>,
         candidates: Query<(Ref<PresentationOcclusion>, Ref<Visibility>)>,
-        mut counts: ResMut<CutawayChangeCounts>,
+        mut counts: ResMut<PresentationChangeCounts>,
     ) {
+        counts.fades += fades.iter().filter(|fade| fade.is_changed()).count();
         for (occlusion, visibility) in &candidates {
             counts.occlusions += usize::from(occlusion.is_changed());
             counts.visibilities += usize::from(visibility.is_changed());
@@ -311,25 +420,29 @@ mod tests {
         TilePos::new(HexCoord::from_axial(x, y), level)
     }
 
-    fn test_app(target: TilePos, region: InteriorRegionId) -> (App, Entity) {
+    fn test_app(target: TilePos, region: InteriorRegionId) -> (App, Entity, Entity) {
         let mut builder = HeadlessAppBuilder::new().with_minimal_plugins();
         builder.app_mut().add_plugins(TransformPlugin);
-        builder.app_mut().init_resource::<CameraMode>();
-        builder.app_mut().add_systems(
-            PostUpdate,
-            (
-                reconcile_interior_cutaway,
-                reconcile_canopy_cutaway,
-                apply_presentation_occlusion,
-            )
-                .chain()
-                .after(TransformSystems::Propagate),
-        );
+        builder
+            .app_mut()
+            .init_resource::<CameraMode>()
+            .init_resource::<TreeFadeTimelines>()
+            .add_systems(
+                PostUpdate,
+                (
+                    reconcile_interior_cutaway,
+                    reconcile_tree_fades,
+                    apply_presentation_occlusion,
+                )
+                    .chain()
+                    .after(TransformSystems::Propagate),
+            );
 
         let mut interiors = InteriorRegions::new();
         interiors.insert_surface(target, region);
         builder.app_mut().insert_resource(interiors);
 
+        let focus = target.coord.to_world(0.4);
         let target_entity = builder
             .app_mut()
             .world_mut()
@@ -338,14 +451,15 @@ mod tests {
                 CameraFocusTarget::new(target),
             ))
             .id();
-        builder.app_mut().world_mut().spawn((
-            Transform::from_xyz(0.0, 4.0, 7.0),
-            PanOrbitCamera {
-                focus: target.coord.to_world(0.4),
-                radius: 7.0,
-            },
-        ));
-        (builder.build(), target_entity)
+        let camera = builder
+            .app_mut()
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(0.0, 4.0, 7.0),
+                PanOrbitCamera { focus, radius: 7.0 },
+            ))
+            .id();
+        (builder.build(), target_entity, camera)
     }
 
     fn spawn_roof(app: &mut App, position: TilePos, region: InteriorRegionId) -> Entity {
@@ -360,84 +474,51 @@ mod tests {
     }
 
     fn assert_hidden(app: &App, entity: Entity) {
-        let roof = app.world().entity(entity);
-        assert_eq!(roof.get::<Visibility>(), Some(&Visibility::Hidden));
-        assert_eq!(roof.get::<Pickable>(), Some(&Pickable::IGNORE));
-        assert!(roof.contains::<NotShadowCaster>());
-        assert!(roof.contains::<AppliedPresentationOcclusion>());
+        let entity = app.world().entity(entity);
+        assert_eq!(entity.get::<Visibility>(), Some(&Visibility::Hidden));
+        assert_eq!(entity.get::<Pickable>(), Some(&Pickable::IGNORE));
+        assert!(entity.contains::<NotShadowCaster>());
+        assert!(entity.contains::<AppliedPresentationOcclusion>());
     }
 
     fn assert_ordinary(app: &App, entity: Entity) {
-        let roof = app.world().entity(entity);
-        assert_eq!(roof.get::<Visibility>(), Some(&Visibility::Inherited));
-        assert!(!roof.contains::<Pickable>());
-        assert!(!roof.contains::<NotShadowCaster>());
-        assert!(!roof.contains::<AppliedPresentationOcclusion>());
+        let entity = app.world().entity(entity);
+        assert_eq!(entity.get::<Visibility>(), Some(&Visibility::Inherited));
+        assert!(!entity.contains::<Pickable>());
+        assert!(!entity.contains::<NotShadowCaster>());
+        assert!(!entity.contains::<AppliedPresentationOcclusion>());
     }
 
     #[test]
-    fn hides_only_matching_roofs_inside_the_inclusive_radius() {
+    fn ordinary_gameplay_keeps_every_cave_roof_in_map_and_character_modes() {
         let target = position(0, 0, 7);
         let region = InteriorRegionId(2);
-        let other_region = InteriorRegionId(9);
-        let (mut app, _) = test_app(target, region);
+        let (mut app, _, _) = test_app(target, region);
         let near = spawn_roof(&mut app, position(0, 0, 13), region);
-        let boundary = spawn_roof(&mut app, position(6, 0, 13), region);
-        let outside = spawn_roof(&mut app, position(7, 0, 13), region);
-        let unrelated = spawn_roof(&mut app, position(1, 0, 13), other_region);
+        let distant = spawn_roof(&mut app, position(12, 0, 13), region);
 
         app.update();
-
-        assert_hidden(&app, near);
-        assert_hidden(&app, boundary);
-        assert_ordinary(&app, outside);
-        assert_ordinary(&app, unrelated);
-
-        app.world_mut().remove_resource::<InteriorRegions>();
-        app.update();
-
         assert_ordinary(&app, near);
-        assert_ordinary(&app, boundary);
-    }
+        assert_ordinary(&app, distant);
 
-    #[test]
-    fn one_hundred_idle_frames_do_not_republish_cutaway_state() {
-        let target = position(0, 0, 7);
-        let region = InteriorRegionId(2);
-        let (mut app, _) = test_app(target, region);
-        app.init_resource::<CutawayChangeCounts>().add_systems(
-            PostUpdate,
-            count_cutaway_changes.after(apply_presentation_occlusion),
-        );
-        let roof = spawn_roof(&mut app, position(0, 0, 13), region);
-
+        *app.world_mut().resource_mut::<CameraMode>() = CameraMode::Character;
         app.update();
-        assert_hidden(&app, roof);
-        *app.world_mut().resource_mut::<CutawayChangeCounts>() = CutawayChangeCounts::default();
-
-        for _ in 0..100 {
-            app.update();
-        }
-
-        assert_hidden(&app, roof);
-        let counts = app.world().resource::<CutawayChangeCounts>();
-        assert_eq!(counts.occlusions, 0);
-        assert_eq!(counts.visibilities, 0);
+        assert_ordinary(&app, near);
+        assert_ordinary(&app, distant);
     }
 
     #[test]
-    fn full_review_override_hides_the_whole_active_region_and_restores_normally() {
+    fn full_review_override_hides_the_whole_exact_region_and_restores_it() {
         let target = position(0, 0, 7);
         let region = InteriorRegionId(2);
         let other_region = InteriorRegionId(9);
-        let (mut app, _) = test_app(target, region);
+        let (mut app, _, _) = test_app(target, region);
         let near = spawn_roof(&mut app, position(1, 0, 13), region);
         let distant = spawn_roof(&mut app, position(12, 0, 13), region);
         let unrelated = spawn_roof(&mut app, position(12, 0, 13), other_region);
         install_full_review_override(&mut app);
 
         app.update();
-
         assert_hidden(&app, near);
         assert_hidden(&app, distant);
         assert_ordinary(&app, unrelated);
@@ -445,240 +526,282 @@ mod tests {
         app.world_mut()
             .remove_resource::<FullCutawayReviewOverride>();
         app.update();
-
-        assert_hidden(&app, near);
+        assert_ordinary(&app, near);
         assert_ordinary(&app, distant);
         assert_ordinary(&app, unrelated);
     }
 
     #[test]
-    fn exact_stacked_surface_selects_the_region_and_restores_the_old_one() {
+    fn full_review_uses_the_exact_stacked_surface_region() {
         let lower_surface = position(0, 0, 6);
         let upper_surface = position(0, 0, 15);
         let lower_region = InteriorRegionId(3);
         let upper_region = InteriorRegionId(4);
-        let (mut app, target) = test_app(lower_surface, lower_region);
+        let (mut app, target, _) = test_app(lower_surface, lower_region);
         app.world_mut()
             .resource_mut::<InteriorRegions>()
             .insert_surface(upper_surface, upper_region);
         let lower_roof = spawn_roof(&mut app, position(0, 0, 10), lower_region);
         let upper_roof = spawn_roof(&mut app, position(0, 0, 20), upper_region);
+        install_full_review_override(&mut app);
 
         app.update();
-
         assert_hidden(&app, lower_roof);
         assert_ordinary(&app, upper_roof);
 
         app.world_mut()
             .entity_mut(target)
             .get_mut::<CameraFocusTarget>()
-            .expect("the test target should have a focus projection")
+            .expect("the test target should retain its exact focus surface")
             .surface = upper_surface;
         app.update();
-
         assert_ordinary(&app, lower_roof);
         assert_hidden(&app, upper_roof);
     }
 
     #[test]
-    fn restoration_preserves_preexisting_visibility_picking_and_shadow_state() {
+    fn stable_review_cutaway_does_not_republish_state() {
         let target = position(0, 0, 7);
-        let region = InteriorRegionId(5);
-        let (mut app, target_entity) = test_app(target, region);
-        let previous_pickable = Pickable {
-            should_block_lower: false,
-            is_hoverable: true,
-        };
-        let roof = app
-            .world_mut()
-            .spawn((
-                position(0, 0, 13),
-                CutawayOccluder(region),
-                Visibility::Visible,
-                previous_pickable,
-                NotShadowCaster,
-                PresentationOcclusion::default(),
-            ))
-            .id();
+        let region = InteriorRegionId(2);
+        let (mut app, _, _) = test_app(target, region);
+        install_full_review_override(&mut app);
+        app.init_resource::<PresentationChangeCounts>().add_systems(
+            PostUpdate,
+            count_presentation_changes.after(apply_presentation_occlusion),
+        );
+        let roof = spawn_roof(&mut app, position(0, 0, 13), region);
 
         app.update();
         assert_hidden(&app, roof);
+        *app.world_mut().resource_mut::<PresentationChangeCounts>() =
+            PresentationChangeCounts::default();
 
-        app.world_mut()
-            .entity_mut(target_entity)
-            .remove::<CameraFocusTarget>();
-        app.update();
+        for _ in 0..100 {
+            app.update();
+        }
 
-        let restored = app.world().entity(roof);
-        assert_eq!(restored.get::<Visibility>(), Some(&Visibility::Visible));
-        assert_eq!(restored.get::<Pickable>(), Some(&previous_pickable));
-        assert!(restored.contains::<NotShadowCaster>());
-        assert!(!restored.contains::<AppliedPresentationOcclusion>());
+        let counts = app.world().resource::<PresentationChangeCounts>();
+        assert_eq!(counts.occlusions, 0);
+        assert_eq!(counts.visibilities, 0);
     }
 
-    #[test]
-    fn animated_transform_centres_the_window_while_surface_selects_the_region() {
-        let target = position(0, 0, 7);
-        let region = InteriorRegionId(6);
-        let (mut app, target_entity) = test_app(target, region);
-        let logical_surface_roof = spawn_roof(&mut app, position(0, 0, 13), region);
-        let rendered_position_roof = spawn_roof(&mut app, position(7, 0, 13), region);
-        app.world_mut()
-            .entity_mut(target_entity)
-            .get_mut::<Transform>()
-            .expect("the test target should have a transform")
-            .translation = position(7, 0, 7).coord.to_world(0.0);
-
-        app.update();
-
-        assert_ordinary(&app, logical_surface_roof);
-        assert_hidden(&app, rendered_position_roof);
-
-        app.world_mut()
-            .spawn((Transform::default(), CameraFocusTarget::new(target)));
-        app.update();
-
-        assert_ordinary(&app, rendered_position_roof);
-    }
-
-    fn spawn_canopy(app: &mut App, root: TilePos, translation: Vec3, radius: f32) -> Entity {
+    fn spawn_tree_chunk(
+        app: &mut App,
+        root: TilePos,
+        translation: Vec3,
+        half_extents: Vec3,
+    ) -> Entity {
         app.world_mut()
             .spawn((
-                Transform::from_translation(translation).with_scale(Vec3::splat(radius)),
-                Visibility::Inherited,
-                Pickable::IGNORE,
-                PresentationOcclusion::default(),
-                CanopyOccluder(root),
+                Transform::from_translation(translation),
+                Aabb {
+                    center: Vec3A::ZERO,
+                    half_extents: half_extents.into(),
+                },
+                TreeOccluder(root),
+                TreeFadeAmount::OPAQUE,
             ))
             .id()
     }
 
-    fn assert_canopy_ordinary(app: &App, entity: Entity) {
-        let canopy = app.world().entity(entity);
-        assert_eq!(
-            canopy.get::<Visibility>(),
-            Some(&Visibility::Inherited),
-            "canopy transform={:?}, occlusion={:?}",
-            canopy.get::<GlobalTransform>(),
-            canopy.get::<PresentationOcclusion>()
-        );
-        assert_eq!(canopy.get::<Pickable>(), Some(&Pickable::IGNORE));
-        assert!(!canopy.contains::<NotShadowCaster>());
-        assert!(!canopy.contains::<AppliedPresentationOcclusion>());
+    fn fade_amount(app: &App, entity: Entity) -> f32 {
+        app.world()
+            .entity(entity)
+            .get::<TreeFadeAmount>()
+            .expect("tree chunks should retain a fade request")
+            .amount()
     }
 
     #[test]
-    fn character_camera_hides_only_near_canopies_intersecting_its_focus_segment() {
+    fn one_blocking_chunk_fades_the_complete_exact_tree_only() {
         let target = position(0, 0, 7);
-        let (mut app, _) = test_app(target, InteriorRegionId(1));
+        let root = position(1, 0, 7);
+        let other_root = position(1, 0, 17);
+        let (mut app, _, _) = test_app(target, InteriorRegionId(1));
         *app.world_mut().resource_mut::<CameraMode>() = CameraMode::Character;
         let eye = Vec3::new(0.0, 4.0, 7.0);
         let focus = target.coord.to_world(0.4);
         let on_segment = eye.lerp(focus, 0.5);
-
-        let obstructing = spawn_canopy(&mut app, position(1, 0, 7), on_segment, 0.9);
-        let clear = spawn_canopy(
-            &mut app,
-            position(1, -1, 7),
-            on_segment + Vec3::X * 2.0,
-            0.9,
-        );
-        let distant = spawn_canopy(&mut app, position(5, 0, 7), on_segment, 0.9);
+        let blocking = spawn_tree_chunk(&mut app, root, on_segment, Vec3::splat(0.5));
+        let same_tree_clear =
+            spawn_tree_chunk(&mut app, root, on_segment + Vec3::X * 4.0, Vec3::splat(0.5));
+        let stacked_other = spawn_tree_chunk(&mut app, other_root, on_segment, Vec3::splat(0.5));
+        app.world_mut()
+            .resource_mut::<TreeFadeTimelines>()
+            .roots
+            .insert(
+                root,
+                TreeFadeTimeline {
+                    amount: TREE_FADED_OPACITY,
+                    clear_seconds: 0.0,
+                },
+            );
 
         app.update();
 
-        assert_hidden(&app, obstructing);
-        assert_canopy_ordinary(&app, clear);
-        assert_canopy_ordinary(&app, distant);
-
-        *app.world_mut().resource_mut::<CameraMode>() = CameraMode::Map;
-        app.update();
-
-        assert_canopy_ordinary(&app, obstructing);
+        assert!((fade_amount(&app, blocking) - TREE_FADED_OPACITY).abs() < f32::EPSILON);
+        assert!((fade_amount(&app, same_tree_clear) - TREE_FADED_OPACITY).abs() < f32::EPSILON);
+        assert!((fade_amount(&app, stacked_other) - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]
-    fn character_camera_uses_the_complete_authored_canopy_bounds() {
+    fn a_distant_tree_on_a_long_zoom_corridor_is_not_culled_by_its_root_distance() {
         let target = position(0, 0, 7);
-        let (mut app, _) = test_app(target, InteriorRegionId(1));
+        let root = position(0, 8, 7);
+        let (mut app, _, camera) = test_app(target, InteriorRegionId(1));
         *app.world_mut().resource_mut::<CameraMode>() = CameraMode::Character;
-        let eye = Vec3::new(0.0, 4.0, 7.0);
         let focus = target.coord.to_world(0.4);
-        let on_segment = eye.lerp(focus, 0.5);
-        let translation = on_segment + Vec3::X * 4.0;
-        let canopy = spawn_canopy(&mut app, position(1, 0, 7), translation, 1.0);
-        app.world_mut().entity_mut(canopy).insert(Aabb {
-            center: (-Vec3::X * 4.0).into(),
-            half_extents: Vec3A::splat(0.5),
-        });
-
-        app.update();
-
-        assert_hidden(&app, canopy);
-    }
-
-    #[test]
-    fn canopy_cutaway_tracks_camera_orbit_and_selected_surface() {
-        let target = position(0, 0, 7);
-        let (mut app, target_entity) = test_app(target, InteriorRegionId(1));
-        *app.world_mut().resource_mut::<CameraMode>() = CameraMode::Character;
-        let canopy = spawn_canopy(&mut app, position(1, 0, 7), Vec3::new(0.0, 2.2, 3.5), 1.0);
-
-        app.update();
-        assert_hidden(&app, canopy);
-
-        let camera = app
-            .world_mut()
-            .query_filtered::<Entity, With<PanOrbitCamera>>()
-            .single(app.world())
-            .expect("the test camera should exist");
+        let tree_base = root.coord.to_world(0.4);
+        let eye = tree_base * 2.0 + Vec3::Y * 4.0;
         app.world_mut()
             .entity_mut(camera)
-            .get_mut::<Transform>()
-            .expect("the camera should have a transform")
-            .translation = Vec3::new(8.0, 4.0, 7.0);
-        app.update();
-        assert_canopy_ordinary(&app, canopy);
+            .insert(Transform::from_translation(eye));
+        let tree = spawn_tree_chunk(&mut app, root, focus.lerp(eye, 0.5), Vec3::splat(0.5));
 
-        app.world_mut()
-            .entity_mut(target_entity)
-            .get_mut::<CameraFocusTarget>()
-            .expect("the selected target should have an exact surface")
-            .surface = position(9, 0, 7);
         app.update();
-        assert_canopy_ordinary(&app, canopy);
+
+        assert!(
+            app.world()
+                .resource::<TreeFadeTimelines>()
+                .roots
+                .contains_key(&root),
+            "every chunk on the actual corridor must participate at long zoom"
+        );
+        assert!((fade_amount(&app, tree) - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]
-    fn ambiguous_camera_wiring_disables_and_then_recovers_canopy_cutaway() {
+    fn tree_fade_holds_then_restores_over_the_authored_duration() {
+        let mut timeline = TreeFadeTimeline {
+            amount: 1.0,
+            clear_seconds: 0.0,
+        };
+        advance_tree_fade_timeline(&mut timeline, true, TREE_FADE_IN_SECONDS);
+        assert!((timeline.amount - TREE_FADED_OPACITY).abs() < f32::EPSILON);
+
+        advance_tree_fade_timeline(&mut timeline, false, TREE_FADE_HOLD_SECONDS);
+        assert!((timeline.amount - TREE_FADED_OPACITY).abs() < f32::EPSILON);
+
+        advance_tree_fade_timeline(&mut timeline, false, TREE_FADE_RESTORE_SECONDS * 0.5);
+        assert!((timeline.amount - 0.6).abs() < 1e-5);
+        advance_tree_fade_timeline(&mut timeline, false, TREE_FADE_RESTORE_SECONDS * 0.5);
+        assert!((timeline.amount - 1.0).abs() < 1e-5);
+
+        advance_tree_fade_timeline(&mut timeline, true, TREE_FADE_IN_SECONDS * 0.5);
+        assert!((timeline.amount - 0.6).abs() < 1e-5);
+        assert!(timeline.clear_seconds.abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn stable_faded_tree_does_not_republish_chunk_requests() {
         let target = position(0, 0, 7);
-        let (mut app, _) = test_app(target, InteriorRegionId(1));
+        let root = position(1, 0, 7);
+        let (mut app, _, _) = test_app(target, InteriorRegionId(1));
         *app.world_mut().resource_mut::<CameraMode>() = CameraMode::Character;
-        let canopy = spawn_canopy(&mut app, position(1, 0, 7), Vec3::new(0.0, 2.2, 3.5), 1.0);
+        let eye = Vec3::new(0.0, 4.0, 7.0);
+        let focus = target.coord.to_world(0.4);
+        let tree = spawn_tree_chunk(&mut app, root, eye.lerp(focus, 0.5), Vec3::splat(0.5));
+        app.world_mut()
+            .entity_mut(tree)
+            .insert(TreeFadeAmount::new(TREE_FADED_OPACITY).expect("valid opacity"));
+        app.world_mut()
+            .resource_mut::<TreeFadeTimelines>()
+            .roots
+            .insert(
+                root,
+                TreeFadeTimeline {
+                    amount: TREE_FADED_OPACITY,
+                    clear_seconds: 0.0,
+                },
+            );
+        app.init_resource::<PresentationChangeCounts>().add_systems(
+            PostUpdate,
+            count_presentation_changes.after(reconcile_tree_fades),
+        );
 
         app.update();
-        assert_hidden(&app, canopy);
+        *app.world_mut().resource_mut::<PresentationChangeCounts>() =
+            PresentationChangeCounts::default();
+        for _ in 0..10_000 {
+            app.update();
+        }
 
-        let duplicate = app
-            .world_mut()
-            .spawn((
-                Transform::from_xyz(0.0, 4.0, 7.0),
-                PanOrbitCamera::default(),
-            ))
-            .id();
-        app.update();
-        assert_canopy_ordinary(&app, canopy);
-
-        app.world_mut().despawn(duplicate);
-        app.update();
-        assert_hidden(&app, canopy);
+        assert_eq!(
+            app.world().resource::<PresentationChangeCounts>().fades,
+            0,
+            "a stable obstruction must not mark fade requests changed"
+        );
     }
 
     #[test]
-    fn fog_keeps_roof_hidden_after_the_interior_reason_clears() {
+    #[ignore = "manual release-mode 2,048-chunk Character tree-fade timing diagnostic"]
+    fn production_scale_tree_fade_release_timing() {
+        let target = position(0, 0, 7);
+        let (mut app, _, _) = test_app(target, InteriorRegionId(1));
+        *app.world_mut().resource_mut::<CameraMode>() = CameraMode::Character;
+        for index in 0..2_048 {
+            let root = position(index, 20, 7);
+            let translation = root.coord.to_world(8.0) + Vec3::Z * 40.0;
+            let _chunk = spawn_tree_chunk(&mut app, root, translation, Vec3::splat(0.5));
+        }
+        app.update();
+
+        let mut timings = Vec::with_capacity(200);
+        for _ in 0..200 {
+            let started = Instant::now();
+            app.update();
+            timings.push(started.elapsed());
+        }
+        timings.sort_unstable();
+        let p95 = timings.get(190).copied().unwrap_or_default();
+        let worst = timings.last().copied().unwrap_or_default();
+        eprintln!(
+            "2,048-chunk Character tree-fade diagnostic (release): p95={p95:?}, worst={worst:?}"
+        );
+        assert!(
+            p95 < Duration::from_millis(1),
+            "tree-fade reconciliation p95 {p95:?} breached the 1 ms release budget"
+        );
+    }
+
+    #[test]
+    fn transformed_chunk_bounds_drive_corridor_intersection() {
+        let start = Vec3::ZERO;
+        let end = Vec3::Z * 4.0;
+        let on_segment = GlobalTransform::from(
+            Transform::from_translation(Vec3::new(0.0, 0.0, 2.0))
+                .with_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_3))
+                .with_scale(Vec3::new(1.5, 0.75, 1.0)),
+        );
+        let off_segment = GlobalTransform::from(
+            Transform::from_translation(Vec3::new(2.0, 0.0, 2.0))
+                .with_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_3)),
+        );
+        let bounds = Aabb {
+            center: Vec3A::ZERO,
+            half_extents: Vec3A::splat(0.25),
+        };
+
+        assert!(tree_chunk_intersects_focus_segment(
+            start,
+            end,
+            &on_segment,
+            Some(&bounds)
+        ));
+        assert!(!tree_chunk_intersects_focus_segment(
+            start,
+            end,
+            &off_segment,
+            Some(&bounds)
+        ));
+    }
+
+    #[test]
+    fn fog_reason_remains_independent_from_review_cutaway() {
         let target = position(0, 0, 7);
         let region = InteriorRegionId(8);
-        let (mut app, _) = test_app(target, region);
+        let (mut app, _, _) = test_app(target, region);
+        install_full_review_override(&mut app);
         let roof = spawn_roof(&mut app, position(0, 0, 13), region);
         app.world_mut()
             .entity_mut(roof)
@@ -689,7 +812,8 @@ mod tests {
         app.update();
         assert_hidden(&app, roof);
 
-        app.world_mut().remove_resource::<InteriorRegions>();
+        app.world_mut()
+            .remove_resource::<FullCutawayReviewOverride>();
         app.update();
         assert_hidden(&app, roof);
         let reasons = app
@@ -710,37 +834,9 @@ mod tests {
     }
 
     #[test]
-    fn fog_keeps_canopy_hidden_after_character_mode_ends() {
-        let target = position(0, 0, 7);
-        let (mut app, _) = test_app(target, InteriorRegionId(1));
-        *app.world_mut().resource_mut::<CameraMode>() = CameraMode::Character;
-        let canopy = spawn_canopy(&mut app, position(1, 0, 7), Vec3::new(0.0, 2.2, 3.5), 1.0);
-        app.world_mut()
-            .entity_mut(canopy)
-            .get_mut::<PresentationOcclusion>()
-            .expect("the canopy should participate in occlusion")
-            .insert(PresentationOcclusionReason::Fog);
-
-        app.update();
-        assert_hidden(&app, canopy);
-
-        *app.world_mut().resource_mut::<CameraMode>() = CameraMode::Map;
-        app.update();
-        assert_hidden(&app, canopy);
-
-        app.world_mut()
-            .entity_mut(canopy)
-            .get_mut::<PresentationOcclusion>()
-            .expect("the canopy should retain its reason set")
-            .remove(PresentationOcclusionReason::Fog);
-        app.update();
-        assert_canopy_ordinary(&app, canopy);
-    }
-
-    #[test]
     fn removing_the_reason_set_restores_the_exact_previous_state() {
         let target = position(0, 0, 7);
-        let (mut app, _) = test_app(target, InteriorRegionId(1));
+        let (mut app, _, _) = test_app(target, InteriorRegionId(1));
         let previous_pickable = Pickable {
             should_block_lower: false,
             is_hoverable: true,
@@ -768,29 +864,5 @@ mod tests {
         assert_eq!(restored.get::<Pickable>(), Some(&previous_pickable));
         assert!(restored.contains::<NotShadowCaster>());
         assert!(!restored.contains::<AppliedPresentationOcclusion>());
-    }
-
-    #[test]
-    fn focus_segment_intersection_rejects_invalid_or_off_segment_bounds() {
-        let start = Vec3::ZERO;
-        let end = Vec3::Z * 4.0;
-        assert!(canopy_intersects_focus_segment(
-            start,
-            end,
-            Vec3::Z * 2.0,
-            0.5
-        ));
-        assert!(!canopy_intersects_focus_segment(
-            start,
-            end,
-            Vec3::new(1.0, 0.0, 2.0),
-            0.5
-        ));
-        assert!(!canopy_intersects_focus_segment(
-            start,
-            end,
-            Vec3::Z * 2.0,
-            f32::NAN
-        ));
     }
 }

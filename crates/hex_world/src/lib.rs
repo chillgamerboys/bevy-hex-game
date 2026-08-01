@@ -1,4 +1,4 @@
-//! Presentation of the world that is not the map: the sky, camera, and local cutaways.
+//! Presentation of the world that is not the map: sky, adaptive camera, and review cutaways.
 //!
 //! The hex grid used to live here. It moved to `hex_map`, which owns terrain
 //! generation, tile spawning, and map settings together — so the map can be worked
@@ -11,7 +11,7 @@ use bevy::prelude::*;
 
 /// Pan/orbit camera and the sky dome.
 pub mod camera;
-/// Local opaque-roof cutaways for generated interiors.
+/// Adaptive tree fading and explicit review-only interior cutaways.
 mod cutaway;
 /// Sun, ambient light, and sky colour.
 pub mod sky;
@@ -23,8 +23,7 @@ pub use sky::TimeOfDay;
 
 /// Enables a full-interior cutaway for one deterministic review capture.
 ///
-/// Ordinary gameplay does not call this function and retains the local six-hex
-/// opening around the selected unit.
+/// Ordinary gameplay does not call this function and retains every opaque roof.
 pub fn install_full_cutaway_review_override(app: &mut App) {
     cutaway::install_full_review_override(app);
 }

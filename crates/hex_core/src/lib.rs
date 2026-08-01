@@ -54,7 +54,10 @@ pub use perception::{
     KnowledgeState, KnownTraversal, LightDomain, LocalMapKnowledge, PerceptionSystems, SightBand,
     SightProfile,
 };
-pub use presentation::{CanopyOccluder, PresentationOcclusion, PresentationOcclusionReason};
+pub use presentation::{
+    CanopyOccluder, PresentationOcclusion, PresentationOcclusionReason, PresentationSystems,
+    TreeFadeAmount, TreeOccluder,
+};
 pub use setup::GameplaySetupFailure;
 pub use spatial::{BiomeRegionId, BiomeRegions, TraversalBlockers};
 pub use terrain::{
