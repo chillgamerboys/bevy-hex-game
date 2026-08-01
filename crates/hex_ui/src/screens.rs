@@ -43,8 +43,9 @@ pub(super) fn plugin(app: &mut App) {
         .add_systems(
             Update,
             (
-                refresh_settings,
-                apply_settings_layout,
+                (refresh_settings, apply_settings_layout)
+                    .chain()
+                    .in_set(UiSystems::Render),
                 handle_settings_controls,
             )
                 .run_if(in_state(Screen::Settings)),
@@ -54,7 +55,7 @@ pub(super) fn plugin(app: &mut App) {
         .add_systems(
             Update,
             (
-                refresh_pause,
+                refresh_pause.in_set(UiSystems::Render),
                 handle_pause_controls.in_set(UiSystems::EmitIntents),
             )
                 .run_if(in_state(hex_core::Pause(true))),

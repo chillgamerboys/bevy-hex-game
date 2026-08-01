@@ -87,12 +87,11 @@ pub(super) fn plugin(app: &mut App) {
         body: asset_server.load("fonts/Inter.ttf"),
         hex_cell: asset_server.load("ui/hex-cell.png"),
     });
-    app.add_systems(
-        Update,
-        (
-            apply_semantic_metrics.in_set(crate::scale::SemanticMetricsSystems::Apply),
-            paint_interactions,
-        ),
+    app.add_systems(Update, paint_interactions).add_systems(
+        PostUpdate,
+        apply_semantic_metrics
+            .in_set(crate::scale::SemanticMetricsSystems::Apply)
+            .before(bevy::ui::UiSystems::Prepare),
     );
 }
 
@@ -581,6 +580,80 @@ mod tests {
         }
 
         assert_eq!(app.world().resource::<SemanticWriteCount>().0, 0);
+    }
+
+    #[cfg(feature = "test-support")]
+    #[derive(Resource, Default)]
+    struct RenderSpawnedWidget {
+        control: Option<Entity>,
+        text: Option<Entity>,
+    }
+
+    #[cfg(feature = "test-support")]
+    fn spawn_semantic_widget_during_render(
+        mut commands: Commands,
+        mut spawned: ResMut<RenderSpawnedWidget>,
+    ) {
+        if spawned.control.is_some() {
+            return;
+        }
+        let text = commands
+            .spawn((
+                Text::new("Same-frame action"),
+                body_text_role(),
+                TextFont::from_font_size(18.0),
+            ))
+            .id();
+        let control = commands
+            .spawn((
+                Name::new("Same-frame semantic control"),
+                Button,
+                responsive_control_role(),
+                Node {
+                    width: Val::Px(240.0),
+                    min_height: Val::Px(48.0),
+                    ..default()
+                },
+            ))
+            .add_child(text)
+            .id();
+        spawned.control = Some(control);
+        spawned.text = Some(text);
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn update_spawned_widgets_scale_before_their_first_layout() {
+        let mut app = App::new();
+        app.add_plugins(crate::test_support::HeadlessUiPlugin::new(1920, 1080))
+            .insert_resource(crate::UiScalePreference(crate::UiScaleMode::Percent200))
+            .init_resource::<RenderSpawnedWidget>()
+            .add_systems(
+                Update,
+                spawn_semantic_widget_during_render.in_set(crate::UiSystems::Render),
+            );
+
+        app.update();
+
+        let spawned = app.world().resource::<RenderSpawnedWidget>();
+        let control = spawned
+            .control
+            .expect("render system must spawn its control");
+        let text = spawned.text.expect("render system must spawn its text");
+        assert_eq!(
+            app.world().get::<TextFont>(text).map(|font| font.font_size),
+            Some(FontSize::Px(40.0))
+        );
+        assert_eq!(
+            app.world().get::<Node>(control).map(|node| node.min_height),
+            Some(Val::Px(72.0))
+        );
+        assert!(
+            app.world()
+                .get::<ComputedNode>(control)
+                .is_some_and(|node| node.size().y >= 72.0),
+            "the first computed layout must use the scaled control geometry"
+        );
     }
 
     #[cfg(feature = "test-support")]

@@ -46,7 +46,11 @@ pub(super) fn plugin(app: &mut App) {
     )
     .add_systems(
         Update,
-        (rebuild, emit_intents.in_set(UiSystems::EmitIntents)).run_if(in_state(Screen::Gameplay)),
+        (
+            rebuild.in_set(UiSystems::Render),
+            emit_intents.in_set(UiSystems::EmitIntents),
+        )
+            .run_if(in_state(Screen::Gameplay)),
     );
 }
 

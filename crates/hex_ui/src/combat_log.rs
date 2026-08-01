@@ -22,7 +22,12 @@ pub(super) fn plugin(app: &mut App) {
         OnEnter(Screen::Gameplay),
         spawn_panel.in_set(UiHudSetup::Panels),
     )
-    .add_systems(Update, rebuild.run_if(in_state(Screen::Gameplay)));
+    .add_systems(
+        Update,
+        rebuild
+            .in_set(crate::UiSystems::Render)
+            .run_if(in_state(Screen::Gameplay)),
+    );
 }
 
 fn spawn_panel(

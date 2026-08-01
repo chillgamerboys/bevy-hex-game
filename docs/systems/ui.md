@@ -75,10 +75,13 @@ clamp(min(logical_width / 1920, logical_height / 1080), 1.0, 1.5)
 ```
 
 Manual 75%, 100%, 125%, 150%, 175%, and 200% choices replace Auto; they do not
-multiply it. Body and control type use that exact content scale. Display, title,
-heading, and control geometry use `1 + 0.5 × (content_scale - 1)`, capped at `1.5`;
-spacing uses `1 + 0.25 × (content_scale - 1)`, capped at `1.25`. Layout is selected
-from the spacing-adjusted logical canvas:
+multiply it. Body and supporting type use that content scale subject to the 18px
+essential-text floor. Display, title, and heading type use
+`1 + 0.5 × (content_scale - 1)`, capped at `1.5`. Control
+geometry uses the same moderated growth above 100% but never shrinks below its
+authored baseline, preserving 44×44 logical-pixel targets. Spacing uses
+`1 + 0.25 × (content_scale - 1)`, capped at `1.25`. Layout is selected from the
+spacing-adjusted logical canvas:
 
 | Class | Spacing-adjusted logical canvas | Behavior |
 |---|---|---|

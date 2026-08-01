@@ -21,7 +21,10 @@ pub(super) fn plugin(app: &mut App) {
     app.add_systems(OnEnter(Screen::Gameplay), spawn)
         .add_systems(
             Update,
-            (render, emit_intents.in_set(UiSystems::EmitIntents))
+            (
+                render.in_set(UiSystems::Render),
+                emit_intents.in_set(UiSystems::EmitIntents),
+            )
                 .run_if(in_state(Screen::Gameplay)),
         );
 }

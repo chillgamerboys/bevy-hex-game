@@ -60,6 +60,7 @@ pub(super) fn plugin(app: &mut App) {
             Update,
             (refresh_title, apply_title_layout)
                 .chain()
+                .in_set(UiSystems::Render)
                 .run_if(in_state(Screen::Title)),
         )
         .add_systems(
@@ -74,6 +75,7 @@ pub(super) fn plugin(app: &mut App) {
             Update,
             (refresh_scenarios, apply_scenario_layout)
                 .chain()
+                .in_set(UiSystems::Render)
                 .run_if(in_state(Screen::Scenarios)),
         )
         .add_systems(

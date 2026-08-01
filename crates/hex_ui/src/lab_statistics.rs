@@ -28,8 +28,7 @@ pub(super) fn plugin(app: &mut App) {
         .add_systems(
             Update,
             (
-                render,
-                apply_layout,
+                (render, apply_layout).chain().in_set(UiSystems::Render),
                 emit_intents.in_set(UiSystems::EmitIntents),
             )
                 .run_if(in_state(Screen::Gameplay)),

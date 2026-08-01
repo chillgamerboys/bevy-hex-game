@@ -45,7 +45,9 @@ pub(super) fn plugin(app: &mut App) {
     app.add_systems(
         Update,
         (
-            (render, apply_creator_layout).chain(),
+            (render, apply_creator_layout)
+                .chain()
+                .in_set(UiSystems::Render),
             emit_actions.in_set(UiSystems::EmitIntents),
             emit_name_changes.in_set(UiSystems::EmitIntents),
         )

@@ -149,7 +149,8 @@ pub struct ResolvedUiMetrics {
     pub content_scale: f32,
     /// Moderated factor applied to display, title, and heading typography.
     pub heading_scale: f32,
-    /// Moderated factor applied to minimum control targets.
+    /// Moderated factor applied to control geometry, never below the authored
+    /// baseline so interactive targets remain at least 44×44 logical pixels.
     pub control_scale: f32,
     /// Lightly moderated factor applied to layout density and shared spacing.
     pub spacing_scale: f32,
@@ -193,7 +194,7 @@ pub fn resolve_ui_metrics(logical_size: Vec2, mode: UiScaleMode) -> ResolvedUiMe
         .unwrap_or_else(|| resolve_auto_scale(logical_size));
     let delta = content_scale - 1.0;
     let heading_scale = (1.0 + 0.5 * delta).clamp(0.875, 1.5);
-    let control_scale = (1.0 + 0.5 * delta).clamp(0.875, 1.5);
+    let control_scale = (1.0 + 0.5 * delta).clamp(1.0, 1.5);
     let spacing_scale = (1.0 + 0.25 * delta).clamp(0.9375, 1.25);
     let effective_size = logical_size / spacing_scale;
     ResolvedUiMetrics {
@@ -212,11 +213,11 @@ pub(super) fn plugin(app: &mut App) {
         .init_resource::<ResolvedUiMetrics>()
         .configure_sets(
             Update,
-            (
-                SemanticMetricsSystems::Resolve,
-                SemanticMetricsSystems::Apply,
-            )
-                .chain(),
+            (SemanticMetricsSystems::Resolve, crate::UiSystems::Render).chain(),
+        )
+        .configure_sets(
+            PostUpdate,
+            SemanticMetricsSystems::Apply.before(bevy::ui::UiSystems::Prepare),
         )
         .add_systems(
             Update,
@@ -282,6 +283,15 @@ mod tests {
         assert!((metrics.control_scale - 1.5).abs() <= f32::EPSILON);
         assert!((metrics.spacing_scale - 1.25).abs() <= f32::EPSILON);
         assert_eq!(metrics.viewport, UiViewportClass::Standard);
+    }
+
+    #[test]
+    fn seventy_five_percent_preserves_control_target_baselines() {
+        let metrics = resolve_ui_metrics(Vec2::new(1920.0, 1080.0), UiScaleMode::Percent75);
+        assert!((metrics.content_scale - 0.75).abs() <= f32::EPSILON);
+        assert!((metrics.heading_scale - 0.875).abs() <= f32::EPSILON);
+        assert!((metrics.control_scale - 1.0).abs() <= f32::EPSILON);
+        assert!((metrics.spacing_scale - 0.9375).abs() <= f32::EPSILON);
     }
 
     #[test]

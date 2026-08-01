@@ -20,8 +20,7 @@ pub(super) fn plugin(app: &mut App) {
         .add_systems(
             Update,
             (
-                rebuild,
-                apply_layout,
+                (rebuild, apply_layout).chain().in_set(UiSystems::Render),
                 emit_intents.in_set(UiSystems::EmitIntents),
             )
                 .run_if(in_state(Screen::LatticeDemo)),

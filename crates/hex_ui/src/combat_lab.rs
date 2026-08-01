@@ -58,8 +58,9 @@ pub(super) fn plugin(app: &mut App) {
     app.add_systems(
         Update,
         (
-            render,
-            apply_lab_screen_layout,
+            (render, apply_lab_screen_layout)
+                .chain()
+                .in_set(UiSystems::Render),
             emit_actions.in_set(UiSystems::EmitIntents),
             emit_text_changes.in_set(UiSystems::EmitIntents),
         )
