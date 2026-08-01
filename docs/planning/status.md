@@ -331,9 +331,10 @@ searches upward first, then toward the horizon for low-ceiling clearance. Distan
 pitch restore smoothly. Ordinary
 gameplay keeps cave roofs intact, while explicit map-review capture may still request a
 complete interior cutaway. Automated geometry, lifecycle, idle-churn, and release
-performance gates are live; dynamic multi-azimuth traversal of every selectable map
-and final human motion/readability approval remain pending. Map mode remains available
-without a scenario restriction.
+performance gates are live. Seed-exact multi-azimuth walks now exercise ordinary
+pointer movement to a proved destination on every standalone selectable map and every
+Two Rings region; final human motion/readability approval remains pending. Map mode
+remains available without a scenario restriction.
 
 ## What is provisional
 

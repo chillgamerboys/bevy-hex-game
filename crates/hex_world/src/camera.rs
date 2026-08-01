@@ -841,17 +841,25 @@ impl CameraObstruction {
             return Some(enter);
         }
 
-        // A supporting floor whose probe-expanded top is merely tangent to (or
-        // below) the focus may be ignored while the sweep leaves it upward. This
-        // includes coplanar neighboring floor prisms during interpolated movement.
-        // The exact selected support is also safe while the sweep exits it. A wall,
-        // roof, raised step, or genuinely overlapping different run remains an
-        // immediate hit; dropping every zero-entry interval would tunnel through
-        // interiors when a large probe is configured.
-        let supporting_floor = self.span.top + probe_radius <= origin.y + f32::EPSILON;
-        let selected_floor = self.position == support && self.span.top <= origin.y + f32::EPSILON;
-        let exits_supporting_floor =
-            (supporting_floor || selected_floor) && direction.y >= -f32::EPSILON;
+        // A local run whose actual top is at or below the focus is floor-like while
+        // an upward sweep leaves it. "Local" is deliberately limited to the exact
+        // support and its ordinary one-step neighborhood; unrelated stacked runs
+        // remain obstructions even when an unusually wide probe reaches them. The
+        // probe expansion may overlap a local floor at distance zero even though the
+        // focus itself is not inside material. That happens while a unit interpolates
+        // onto a one-level-higher neighbor: the authoritative support remains the
+        // previous surface until the leg ends, while the smooth focus is already
+        // above the destination's real top.
+        //
+        // Ignore only that zero-entry, monotonically exiting overlap. A wall or roof
+        // whose real top remains above the focus, as well as every positive-distance
+        // hit, still obstructs. Validated settings also keep the probe radius no
+        // larger than the focus height, so an ordinary floor cannot contain the
+        // camera's target point.
+        let local_floor = self.position.coord.distance(support.coord) <= 1
+            && self.position.level.abs_diff(support.level) <= 1
+            && self.span.top <= origin.y + f32::EPSILON;
+        let exits_supporting_floor = local_floor && direction.y >= -f32::EPSILON;
         (!exits_supporting_floor).then_some(0.0)
     }
 }
@@ -1765,7 +1773,7 @@ mod tests {
     }
 
     #[test]
-    fn probe_ignores_the_support_it_starts_on_but_not_stacked_geometry() {
+    fn probe_exits_floor_like_zero_entry_but_not_walls_or_stacked_geometry() {
         let support = CameraObstruction {
             position: TilePos::ORIGIN,
             center: Vec2::ZERO,
@@ -1794,15 +1802,42 @@ mod tests {
             span: HexSpan::new(-0.4, 0.4),
             ..coplanar_floor
         };
-        assert_eq!(
-            raised_step.first_hit_distance(Vec3::Y * 0.4, TilePos::ORIGIN, direction, 7.0, 0.4,),
-            Some(0.0),
-            "a different run reaching the focus remains an immediate obstruction"
+        assert!(
+            raised_step
+                .first_hit_distance(Vec3::Y * 0.4, TilePos::ORIGIN, direction, 7.0, 0.4)
+                .is_none(),
+            "a floor whose real top reaches the focus must not become a probe-expansion wall"
         );
+        let wall_above_focus = CameraObstruction {
+            span: HexSpan::new(-0.4, 0.8),
+            ..coplanar_floor
+        };
         assert_eq!(
-            coplanar_floor.first_hit_distance(Vec3::Y * 0.4, TilePos::ORIGIN, direction, 7.0, 1.8,),
+            wall_above_focus.first_hit_distance(
+                Vec3::Y * 0.4,
+                TilePos::ORIGIN,
+                direction,
+                7.0,
+                0.4,
+            ),
             Some(0.0),
-            "a wide probe that overlaps a different run must not tunnel through it"
+            "a different run extending above the focus remains an immediate obstruction"
+        );
+        let unrelated_stacked_floor = CameraObstruction {
+            position: TilePos::new(hex_core::HexCoord::ORIGIN, -2),
+            span: HexSpan::new(-0.4, 0.0),
+            ..coplanar_floor
+        };
+        assert_eq!(
+            unrelated_stacked_floor.first_hit_distance(
+                Vec3::Y * 0.4,
+                TilePos::ORIGIN,
+                direction,
+                7.0,
+                0.4,
+            ),
+            Some(0.0),
+            "an unrelated stacked run must not inherit the local-floor exception"
         );
 
         for containing in [
@@ -1853,6 +1888,59 @@ mod tests {
                 .is_some(),
             "the near-plane probe must catch the expanded bridge underside"
         );
+    }
+
+    #[test]
+    fn interpolated_uphill_focus_exits_the_destination_floor_without_collapsing() {
+        let from = hex_core::HexCoord::ORIGIN;
+        let to = hex_core::HexCoord::from_axial(0, 1);
+        let level_height = 0.4;
+        let progress = 0.5;
+        let feet = from.to_world(0.0).lerp(to.to_world(level_height), progress);
+        let focus = feet + Vec3::Y * level_height;
+        let support = TilePos::new(from, 0);
+        let destination = TilePos::new(to, 1);
+        let index = CameraObstructionIndex {
+            spans_by_coord: BTreeMap::from([
+                (
+                    from,
+                    vec![IndexedCameraSpan {
+                        position: support,
+                        span: HexSpan::new(-level_height, 0.0),
+                    }],
+                ),
+                (
+                    to,
+                    vec![IndexedCameraSpan {
+                        position: destination,
+                        span: HexSpan::new(-level_height, level_height),
+                    }],
+                ),
+            ]),
+            initialized: true,
+            rebuilds: 1,
+        };
+        let direction = Vec3::new(0.0, 0.5, 1.0).normalize();
+
+        let clearance = index.safe_radius(focus, support, direction, 7.0, 0.4, 0.35);
+
+        assert!(!clearance.obstructed);
+        assert!((clearance.radius - 7.0).abs() < f32::EPSILON);
+
+        let wall = CameraObstructionIndex {
+            spans_by_coord: BTreeMap::from([(
+                to,
+                vec![IndexedCameraSpan {
+                    position: TilePos::new(to, 2),
+                    span: HexSpan::new(-level_height, focus.y + 0.1),
+                }],
+            )]),
+            initialized: true,
+            rebuilds: 1,
+        };
+        let blocked = wall.safe_radius(focus, support, direction, 7.0, 0.4, 0.35);
+        assert!(blocked.obstructed);
+        assert!(blocked.radius.abs() < f32::EPSILON);
     }
 
     #[test]

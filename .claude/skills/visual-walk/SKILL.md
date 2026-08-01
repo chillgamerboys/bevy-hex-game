@@ -53,7 +53,7 @@ names the stalled step or black frame. NEVER run while the operator has a
 game instance open (the two windows fight for nothing, but the operator's
 session must not be disturbed — check first).
 
-Each `Capture` owns a fresh shared 3D/UI image target and waits two complete render
+Each `Capture` owns a fresh shared 3D/UI image target and waits four complete render
 frames before screenshotting. The tooling UI camera tracks the 3D camera's MSAA so
 OIT tree fading cannot leave world pixels stale while UI pixels continue updating.
 Identical frames across movement or orbit are therefore a mechanical failure unless

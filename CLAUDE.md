@@ -106,7 +106,7 @@ legibility, and responsive composition only; gameplay correctness is proved by
 canonical state snapshots in the rules/contracts/simulation/app partitions. Each
 capture has an explicit logical canvas and device scale, and uses Bevy's
 `ImageRenderTarget` plus `Screenshot::image` without an operating-system capture API.
-Every capture replaces that shared 3D/UI image, gives both cameras two complete render
+Every capture replaces that shared 3D/UI image, gives both cameras four complete render
 frames, and mirrors the 3D camera's MSAA onto the dedicated UI camera. The last rule
 keeps OIT tree-fade captures compatible while restoring ordinary sampling when OIT
 leaves.
