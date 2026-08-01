@@ -69,7 +69,7 @@ pub use theme::{
     LABEL_SIZE, MUTED, PANEL_BG, SCREEN_TITLE_SIZE, SMALL_BUTTON_WIDTH, TITLE_SIZE,
 };
 
-#[cfg(feature = "visual-review")]
+#[cfg(any(feature = "visual-review", feature = "test-support"))]
 pub use review::apply_ui_review_fixture;
 
 /// Installs the shared runtime design system, responsive scale, focus, and intents.
@@ -144,6 +144,9 @@ impl Plugin for UiPlugin {
             creator::plugin,
             deployment::plugin,
         ));
+        #[cfg(feature = "test-support")]
+        app.init_resource::<test_support::LatestUiTreeSnapshot>()
+            .add_systems(Last, test_support::publish_ui_tree_snapshot);
     }
 }
 
@@ -157,6 +160,7 @@ pub mod test_support {
     };
     use bevy::prelude::*;
     use bevy::window::WindowResolution;
+    use std::collections::HashSet;
 
     use crate::{ActionPriority, ResolvedUiMetrics};
 
@@ -166,7 +170,8 @@ pub mod test_support {
     /// window, the stable Bevy UI/input/text stack, application states, and
     /// [`crate::UiPlugin`], but never initializes Winit, a renderer, or gameplay.
     pub struct HeadlessUiPlugin {
-        logical_size: UVec2,
+        physical_size: UVec2,
+        scale_factor: f32,
     }
 
     impl HeadlessUiPlugin {
@@ -174,7 +179,22 @@ pub mod test_support {
         #[must_use]
         pub const fn new(width: u32, height: u32) -> Self {
             Self {
-                logical_size: UVec2::new(width, height),
+                physical_size: UVec2::new(width, height),
+                scale_factor: 1.0,
+            }
+        }
+
+        /// Builds a headless canvas from physical client pixels and the OS DPI
+        /// scale factor reported for that window.
+        #[must_use]
+        pub const fn with_scale_factor(
+            physical_width: u32,
+            physical_height: u32,
+            scale_factor: f32,
+        ) -> Self {
+            Self {
+                physical_size: UVec2::new(physical_width, physical_height),
+                scale_factor,
             }
         }
     }
@@ -187,6 +207,10 @@ pub mod test_support {
 
     impl Plugin for HeadlessUiPlugin {
         fn build(&self, app: &mut App) {
+            assert!(
+                self.scale_factor.is_finite() && self.scale_factor > 0.0,
+                "headless UI scale factor must be finite and positive"
+            );
             app.add_plugins((
                 MinimalPlugins,
                 bevy::transform::TransformPlugin,
@@ -196,8 +220,11 @@ pub mod test_support {
                 bevy::input_focus::InputDispatchPlugin,
                 bevy::window::WindowPlugin {
                     primary_window: Some(Window {
-                        resolution: WindowResolution::new(self.logical_size.x, self.logical_size.y)
-                            .with_scale_factor_override(1.0),
+                        resolution: WindowResolution::new(
+                            self.physical_size.x,
+                            self.physical_size.y,
+                        )
+                        .with_scale_factor_override(self.scale_factor),
                         ..default()
                     }),
                     ..default()
@@ -215,15 +242,16 @@ pub mod test_support {
             app.init_state::<hex_core::Screen>();
             app.add_sub_state::<hex_core::Mode>();
             app.add_sub_state::<hex_core::Pause>();
-            let logical_size = self.logical_size;
+            let physical_size = self.physical_size;
+            let scale_factor = self.scale_factor;
             app.add_systems(Startup, move |mut commands: Commands| {
                 commands.spawn((
                     Camera2d,
                     bevy::camera::Camera {
                         computed: bevy::camera::ComputedCameraValues {
                             target_info: Some(bevy::camera::RenderTargetInfo {
-                                physical_size: logical_size,
-                                scale_factor: 1.0,
+                                physical_size,
+                                scale_factor,
                             }),
                             ..default()
                         },
@@ -235,12 +263,12 @@ pub mod test_support {
         }
     }
 
-    /// One visible named UI node and its presentation-only facts.
+    /// One presented named UI node and its presentation-only facts.
     #[derive(Debug, Clone, PartialEq)]
     pub struct UiNodeObservation {
         /// Stable entity name used by review and test automation.
         pub name: String,
-        /// Whether the node is inherited-visible.
+        /// Whether any part of the node is visible after ancestor and canvas clipping.
         pub visible: bool,
         /// Computed logical size when Bevy layout has run.
         pub size: Vec2,
@@ -248,6 +276,14 @@ pub mod test_support {
         pub content_size: Vec2,
         /// Computed logical center in the UI camera's coordinate space.
         pub center: Vec2,
+        /// Effective visible rectangle after inherited clipping and the canvas edge.
+        pub visible_bounds: Option<Rect>,
+        /// Whether the complete node rectangle is currently visible.
+        pub fully_visible: bool,
+        /// First clipping ancestor, when inherited clipping reduces the visible rectangle.
+        pub clipped_by: Option<String>,
+        /// Whether the complete node can be brought into view through its scroll ancestors.
+        pub scroll_reachable: bool,
         /// Accessible label supplied to assistive technology.
         pub accessible_label: Option<String>,
         /// Explicit tab order, when this node is focusable.
@@ -256,6 +292,18 @@ pub mod test_support {
         pub overflows: bool,
         /// Whether this node currently has keyboard focus.
         pub focused: bool,
+        /// Whether the node participates in keyboard or pointer interaction.
+        pub focusable: bool,
+        /// Whether this exact node instance belongs to the active tab sequence.
+        pub in_focus_order: bool,
+        /// Whether an enabled control belongs to the active keyboard focus scope.
+        pub keyboard_reachable: Option<bool>,
+        /// Whether an interactive node meets the 44×44 logical target minimum.
+        pub meets_minimum_target: Option<bool>,
+        /// Whether the persistent action rail geometrically obscures this control.
+        pub obscured_by_action_rail: Option<Vec2>,
+        /// Whether transparent corners intentionally tessellate with sibling controls.
+        pub tessellated: bool,
     }
 
     /// Presentation-only state. It is never a gameplay oracle.
@@ -271,6 +319,93 @@ pub mod test_support {
         pub action_priority: Option<ActionPriority>,
     }
 
+    /// Most recent post-layout tree observation for live review automation.
+    #[derive(Resource, Debug, Clone, Default)]
+    pub struct LatestUiTreeSnapshot(pub Option<UiTreeSnapshot>);
+
+    pub(crate) fn publish_ui_tree_snapshot(world: &mut World) {
+        let snapshot = ui_tree_snapshot(world);
+        world.resource_mut::<LatestUiTreeSnapshot>().0 = Some(snapshot);
+    }
+
+    impl UiTreeSnapshot {
+        /// Returns structural failures for interactive controls in the current tree.
+        ///
+        /// Scroll-offscreen controls are accepted only when every clipping boundary
+        /// can bring the complete 44×44 target into view. This deliberately does not
+        /// infer any gameplay fact from rendered text.
+        #[must_use]
+        pub fn layout_issues(&self) -> Vec<String> {
+            let mut issues = Vec::new();
+            for node in self.nodes.iter().filter(|node| node.focusable) {
+                if node.size.x <= 0.5 || node.size.y <= 0.5 {
+                    issues.push(format!("{} has zero layout area", node.name));
+                } else if !node.scroll_reachable {
+                    issues.push(format!(
+                        "{} is clipped or off-canvas without a reachable scroll path{}; box {:.1}×{:.1} at ({:.1}, {:.1})",
+                        node.name,
+                        node.clipped_by
+                            .as_deref()
+                            .map_or_else(String::new, |clip| format!(" (clipped by {clip})")),
+                        node.size.x,
+                        node.size.y,
+                        node.center.x,
+                        node.center.y,
+                    ));
+                }
+                if node.accessible_label.as_deref().is_none_or(str::is_empty) {
+                    issues.push(format!("{} has no accessible label", node.name));
+                }
+                if node.keyboard_reachable == Some(false) {
+                    issues.push(format!(
+                        "{} is enabled but absent from the active focus order",
+                        node.name
+                    ));
+                }
+                if node.meets_minimum_target == Some(false) {
+                    issues.push(format!(
+                        "{} is {:.1}×{:.1}, below the 44×44 target minimum",
+                        node.name, node.size.x, node.size.y
+                    ));
+                }
+                if let Some(overlap) = node.obscured_by_action_rail {
+                    issues.push(format!(
+                        "{} is obscured by the persistent action rail by {:.1}×{:.1}",
+                        node.name, overlap.x, overlap.y
+                    ));
+                }
+            }
+            let visible_focusable = self
+                .nodes
+                .iter()
+                .filter(|node| node.in_focus_order && node.visible)
+                .collect::<Vec<_>>();
+            for (index, left) in visible_focusable.iter().enumerate() {
+                for right in visible_focusable.iter().skip(index + 1) {
+                    if left.tessellated && right.tessellated {
+                        continue;
+                    }
+                    let (Some(left_bounds), Some(right_bounds)) =
+                        (left.visible_bounds, right.visible_bounds)
+                    else {
+                        continue;
+                    };
+                    let overlap = left_bounds.intersect(right_bounds);
+                    if overlap.width() > 0.5 && overlap.height() > 0.5 {
+                        issues.push(format!(
+                            "{} overlaps {} by {:.1}×{:.1}",
+                            left.name,
+                            right.name,
+                            overlap.width(),
+                            overlap.height()
+                        ));
+                    }
+                }
+            }
+            issues
+        }
+    }
+
     /// Observes the rendered tree without exposing mutable UI resources.
     #[must_use]
     pub fn ui_tree_snapshot(world: &mut World) -> UiTreeSnapshot {
@@ -282,7 +417,22 @@ pub mod test_support {
         let action_priority = world
             .get_resource::<crate::GameplayHudView>()
             .and_then(|view| view.actions.iter().map(|action| action.priority).max());
-        let focus_order = logical_focus_order(world, focused);
+        let active_modal = active_modal_group(world, focused);
+        let action_rail = {
+            let mut query = world.query_filtered::<Entity, With<crate::action_rail::ActionRail>>();
+            query
+                .iter(world)
+                .find_map(|entity| node_bounds(world, entity).map(|bounds| (entity, bounds)))
+        };
+        let focus_entries = logical_focus_order(world, focused);
+        let focus_entities = focus_entries
+            .iter()
+            .map(|(entity, _)| *entity)
+            .collect::<HashSet<_>>();
+        let focus_order = focus_entries
+            .into_iter()
+            .map(|(_, name)| name)
+            .collect::<Vec<_>>();
         let entities = {
             let mut query = world.query_filtered::<Entity, With<Name>>();
             query.iter(world).collect::<Vec<_>>()
@@ -294,19 +444,58 @@ pub mod test_support {
                 let name = world.get::<Name>(entity)?;
                 let computed = world.get::<ComputedNode>(entity);
                 let inverse_scale = computed.map_or(1.0, |node| node.inverse_scale_factor);
+                let size =
+                    computed.map_or(Vec2::ZERO, |node| node.size() * node.inverse_scale_factor);
+                let center = world
+                    .get::<bevy::ui::UiGlobalTransform>(entity)
+                    .map_or(Vec2::ZERO, |transform| {
+                        transform.affine().translation * inverse_scale
+                    });
+                let bounds = Rect::from_center_size(center, size);
+                let visible_bounds = effective_visible_bounds(world, entity, bounds, metrics);
+                let fully_visible = rect_contains(
+                    Rect::from_corners(Vec2::ZERO, metrics.effective_size),
+                    bounds,
+                ) && world
+                    .get::<CalculatedClip>(entity)
+                    .is_none_or(|clip| rect_contains(scale_rect(clip.clip, inverse_scale), bounds));
+                let focusable = world.get::<Button>(entity).is_some()
+                    || world
+                        .get::<TabIndex>(entity)
+                        .is_some_and(|index| index.0 >= 0);
+                let enabled_in_active_scope = focusable
+                    && world.get::<bevy::ui::InteractionDisabled>(entity).is_none()
+                    && active_modal.is_none_or(|modal| is_descendant_or_self(world, entity, modal));
+                let in_active_scope =
+                    active_modal.is_none_or(|modal| is_descendant_or_self(world, entity, modal));
+                // A true modal owns the interaction and paint plane above the rail.
+                // The rail must not cover ordinary gameplay/drawer controls, but
+                // geometrically intersecting a higher-z modal is not occlusion.
+                let obscured_by_action_rail =
+                    if active_modal.is_none() && focusable && in_active_scope {
+                        action_rail.and_then(|(rail, rail_bounds)| {
+                            if is_descendant_or_self(world, entity, rail) {
+                                None
+                            } else {
+                                non_empty_intersection(bounds, rail_bounds)
+                                    .map(|overlap| overlap.size())
+                            }
+                        })
+                    } else {
+                        None
+                    };
                 Some(UiNodeObservation {
                     name: name.as_str().to_owned(),
-                    visible: true,
-                    size: computed
-                        .map_or(Vec2::ZERO, |node| node.size() * node.inverse_scale_factor),
+                    visible: visible_bounds.is_some(),
+                    size,
                     content_size: computed.map_or(Vec2::ZERO, |node| {
                         node.content_size() * node.inverse_scale_factor
                     }),
-                    center: world
-                        .get::<bevy::ui::UiGlobalTransform>(entity)
-                        .map_or(Vec2::ZERO, |transform| {
-                            transform.affine().translation * inverse_scale
-                        }),
+                    center,
+                    visible_bounds,
+                    fully_visible,
+                    clipped_by: first_clipping_ancestor(world, entity, bounds),
+                    scroll_reachable: scroll_reachable(world, entity, bounds, metrics),
                     accessible_label: world
                         .get::<AccessibleLabel>(entity)
                         .map(|label| label.0.clone()),
@@ -317,6 +506,19 @@ pub mod test_support {
                             || node.content_size().y > node.size().y + epsilon
                     }),
                     focused: focused == Some(entity),
+                    focusable,
+                    in_focus_order: focus_entities.contains(&entity),
+                    keyboard_reachable: enabled_in_active_scope
+                        .then_some(focus_entities.contains(&entity)),
+                    // Yoga rounds scaled edges to physical pixels. Permit at most
+                    // half a logical pixel so an authored 44px target does not fail
+                    // solely because a fractional Auto scale rasterizes to 43.5px.
+                    meets_minimum_target: focusable
+                        .then_some(size.x + 0.51 >= 44.0 && size.y + 0.51 >= 44.0),
+                    obscured_by_action_rail,
+                    tessellated: world
+                        .get::<crate::lattice::TessellatedControl>(entity)
+                        .is_some(),
                 })
             })
             .collect::<Vec<_>>();
@@ -329,7 +531,153 @@ pub mod test_support {
         }
     }
 
-    fn logical_focus_order(world: &mut World, focused: Option<Entity>) -> Vec<String> {
+    fn node_bounds(world: &World, entity: Entity) -> Option<Rect> {
+        let computed = world.get::<ComputedNode>(entity)?;
+        let transform = world.get::<bevy::ui::UiGlobalTransform>(entity)?;
+        let inverse_scale = computed.inverse_scale_factor;
+        Some(Rect::from_center_size(
+            transform.affine().translation * inverse_scale,
+            computed.size() * inverse_scale,
+        ))
+    }
+
+    fn scale_rect(rect: Rect, scale: f32) -> Rect {
+        Rect::from_corners(rect.min * scale, rect.max * scale)
+    }
+
+    fn rect_contains(outer: Rect, inner: Rect) -> bool {
+        const EPSILON: f32 = 0.5;
+        inner.min.x >= outer.min.x - EPSILON
+            && inner.min.y >= outer.min.y - EPSILON
+            && inner.max.x <= outer.max.x + EPSILON
+            && inner.max.y <= outer.max.y + EPSILON
+    }
+
+    fn non_empty_intersection(left: Rect, right: Rect) -> Option<Rect> {
+        let intersection = left.intersect(right);
+        (intersection.width() > 0.5 && intersection.height() > 0.5).then_some(intersection)
+    }
+
+    fn effective_visible_bounds(
+        world: &World,
+        entity: Entity,
+        bounds: Rect,
+        metrics: ResolvedUiMetrics,
+    ) -> Option<Rect> {
+        let canvas = Rect::from_corners(Vec2::ZERO, metrics.effective_size);
+        let canvas_visible = non_empty_intersection(bounds, canvas)?;
+        let Some(computed) = world.get::<ComputedNode>(entity) else {
+            return Some(canvas_visible);
+        };
+        world
+            .get::<CalculatedClip>(entity)
+            .map_or(Some(canvas_visible), |clip| {
+                non_empty_intersection(
+                    canvas_visible,
+                    scale_rect(clip.clip, computed.inverse_scale_factor),
+                )
+            })
+    }
+
+    fn first_clipping_ancestor(world: &World, entity: Entity, bounds: Rect) -> Option<String> {
+        let mut current = entity;
+        while let Some(parent) = world.get::<ChildOf>(current).map(ChildOf::parent) {
+            if let (Some(node), Some(parent_bounds)) =
+                (world.get::<Node>(parent), node_bounds(world, parent))
+            {
+                let clips_x = !node.overflow.x.is_visible()
+                    && (bounds.min.x < parent_bounds.min.x - 0.5
+                        || bounds.max.x > parent_bounds.max.x + 0.5);
+                let clips_y = !node.overflow.y.is_visible()
+                    && (bounds.min.y < parent_bounds.min.y - 0.5
+                        || bounds.max.y > parent_bounds.max.y + 0.5);
+                if clips_x || clips_y {
+                    return Some(
+                        world
+                            .get::<Name>(parent)
+                            .map_or_else(|| format!("Entity {parent:?}"), |name| name.to_string()),
+                    );
+                }
+            }
+            current = parent;
+        }
+        None
+    }
+
+    fn scroll_reachable(
+        world: &World,
+        entity: Entity,
+        bounds: Rect,
+        metrics: ResolvedUiMetrics,
+    ) -> bool {
+        if bounds.width() <= 0.5 || bounds.height() <= 0.5 {
+            return false;
+        }
+        axis_reachable(world, entity, bounds, metrics.effective_size, true)
+            && axis_reachable(world, entity, bounds, metrics.effective_size, false)
+    }
+
+    fn axis_reachable(
+        world: &World,
+        entity: Entity,
+        bounds: Rect,
+        canvas: Vec2,
+        horizontal: bool,
+    ) -> bool {
+        let (target_min, target_max, target_length, canvas_max) = if horizontal {
+            (bounds.min.x, bounds.max.x, bounds.width(), canvas.x)
+        } else {
+            (bounds.min.y, bounds.max.y, bounds.height(), canvas.y)
+        };
+        let mut current = entity;
+        let mut candidate_min = target_min;
+        let mut candidate_max = target_max;
+        while let Some(parent) = world.get::<ChildOf>(current).map(ChildOf::parent) {
+            if let (Some(node), Some(parent_bounds)) =
+                (world.get::<Node>(parent), node_bounds(world, parent))
+            {
+                let axis = if horizontal {
+                    node.overflow.x
+                } else {
+                    node.overflow.y
+                };
+                let (parent_min, parent_max, parent_length) = if horizontal {
+                    (
+                        parent_bounds.min.x,
+                        parent_bounds.max.x,
+                        parent_bounds.width(),
+                    )
+                } else {
+                    (
+                        parent_bounds.min.y,
+                        parent_bounds.max.y,
+                        parent_bounds.height(),
+                    )
+                };
+                let outside = candidate_min < parent_min - 0.5 || candidate_max > parent_max + 0.5;
+                if outside {
+                    match axis {
+                        OverflowAxis::Visible => {}
+                        OverflowAxis::Scroll if target_length <= parent_length + 0.5 => {
+                            // Once this scroll viewport can reveal the target, outer
+                            // clippers constrain the viewport rather than the target's
+                            // current offscreen coordinates.
+                            candidate_min = parent_min;
+                            candidate_max = parent_max;
+                        }
+                        OverflowAxis::Scroll | OverflowAxis::Clip | OverflowAxis::Hidden => {
+                            return false;
+                        }
+                    }
+                }
+            }
+            current = parent;
+        }
+
+        candidate_min >= -0.5 && candidate_max <= canvas_max + 0.5
+    }
+
+    fn logical_focus_order(world: &mut World, focused: Option<Entity>) -> Vec<(Entity, String)> {
         let mut groups = world
             .query::<(Entity, &TabGroup)>()
             .iter(world)
@@ -338,20 +686,7 @@ pub mod test_support {
             .collect::<Vec<_>>();
         groups.sort_by_key(|(entity, group)| (group.order, entity.to_bits()));
 
-        let focused_modal = focused.and_then(|focused| {
-            groups
-                .iter()
-                .find(|(group, settings)| {
-                    settings.modal && is_descendant_or_self(world, focused, *group)
-                })
-                .map(|(group, _)| *group)
-        });
-        let active_modal = focused_modal.or_else(|| {
-            groups
-                .iter()
-                .rev()
-                .find_map(|(group, settings)| settings.modal.then_some(*group))
-        });
+        let active_modal = active_modal_group_from_groups(world, focused, &groups);
         let groups = groups.into_iter().filter(|(group, settings)| {
             active_modal.map_or(!settings.modal, |active_modal| *group == active_modal)
         });
@@ -367,10 +702,47 @@ pub mod test_support {
                 &mut hierarchy_position,
                 &mut within_group,
             );
-            within_group.sort_by_key(|(index, position, _)| (*index, *position));
-            order.extend(within_group.into_iter().map(|(_, _, name)| name));
+            within_group.sort_by_key(|(index, position, _, _)| (*index, *position));
+            order.extend(
+                within_group
+                    .into_iter()
+                    .map(|(_, _, entity, name)| (entity, name)),
+            );
         }
         order
+    }
+
+    fn active_modal_group(world: &mut World, focused: Option<Entity>) -> Option<Entity> {
+        let mut groups = world
+            .query::<(Entity, &TabGroup)>()
+            .iter(world)
+            .map(|(entity, group)| (entity, *group))
+            .filter(|(entity, _)| is_presented(world, *entity))
+            .collect::<Vec<_>>();
+        groups.sort_by_key(|(entity, group)| (group.order, entity.to_bits()));
+        active_modal_group_from_groups(world, focused, &groups)
+    }
+
+    fn active_modal_group_from_groups(
+        world: &World,
+        focused: Option<Entity>,
+        groups: &[(Entity, TabGroup)],
+    ) -> Option<Entity> {
+        focused
+            .and_then(|focused| {
+                groups
+                    .iter()
+                    .find(|(group, settings)| {
+                        settings.modal && is_descendant_or_self(world, focused, *group)
+                    })
+                    .map(|(group, _)| *group)
+            })
+            .or_else(|| {
+                groups
+                    .iter()
+                    .rev()
+                    .find_map(|(group, settings)| settings.modal.then_some(*group))
+            })
     }
 
     fn is_descendant_or_self(world: &World, mut entity: Entity, ancestor: Entity) -> bool {
@@ -411,19 +783,21 @@ pub mod test_support {
         group: Entity,
         entity: Entity,
         hierarchy_position: &mut usize,
-        output: &mut Vec<(i32, usize, String)>,
+        output: &mut Vec<(i32, usize, Entity, String)>,
     ) {
         if entity != group && world.get::<TabGroup>(entity).is_some() {
             return;
         }
         let visible = is_presented(world, entity);
-        if visible {
-            if let (Some(index), Some(name)) =
-                (world.get::<TabIndex>(entity), world.get::<Name>(entity))
-            {
-                if index.0 >= 0 {
-                    output.push((index.0, *hierarchy_position, name.as_str().to_owned()));
-                }
+        if visible && world.get::<bevy::ui::InteractionDisabled>(entity).is_none() {
+            match (world.get::<TabIndex>(entity), world.get::<Name>(entity)) {
+                (Some(index), Some(name)) if index.0 >= 0 => output.push((
+                    index.0,
+                    *hierarchy_position,
+                    entity,
+                    name.as_str().to_owned(),
+                )),
+                _ => {}
             }
         }
         *hierarchy_position += 1;
@@ -485,8 +859,21 @@ pub mod test_support {
             height: u32,
             mode: crate::UiScaleMode,
         ) -> UiTreeSnapshot {
+            required_choice_snapshot_at_scale(width, height, 1.0, mode)
+        }
+
+        fn required_choice_snapshot_at_scale(
+            physical_width: u32,
+            physical_height: u32,
+            scale_factor: f32,
+            mode: crate::UiScaleMode,
+        ) -> UiTreeSnapshot {
             let mut app = App::new();
-            app.add_plugins(HeadlessUiPlugin::new(width, height));
+            app.add_plugins(HeadlessUiPlugin::with_scale_factor(
+                physical_width,
+                physical_height,
+                scale_factor,
+            ));
             app.world_mut()
                 .insert_resource(crate::UiScalePreference(mode));
             app.world_mut().insert_resource(crate::GameplayChromeView {
@@ -539,6 +926,225 @@ pub mod test_support {
                 app.update();
             }
 
+            ui_tree_snapshot(app.world_mut())
+        }
+
+        fn production_title_snapshot(
+            physical_width: u32,
+            physical_height: u32,
+            scale_factor: f32,
+        ) -> UiTreeSnapshot {
+            let library: hex_assets::ScenarioLibrary =
+                ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
+                    .expect("the production scenario catalog must parse");
+            let mut app = App::new();
+            app.add_plugins(HeadlessUiPlugin::with_scale_factor(
+                physical_width,
+                physical_height,
+                scale_factor,
+            ));
+            app.world_mut().insert_resource(crate::TitleView {
+                scenarios: library
+                    .visible_scenarios()
+                    .cloned()
+                    .map(|scenario| crate::TitleScenarioView {
+                        resolved_seed: scenario.generation_seed,
+                        scenario,
+                    })
+                    .collect(),
+                setup_failure: None,
+            });
+            app.world_mut()
+                .resource_mut::<NextState<hex_core::Screen>>()
+                .set(hex_core::Screen::Title);
+            for _ in 0..8 {
+                app.update();
+            }
+            ui_tree_snapshot(app.world_mut())
+        }
+
+        fn gameplay_fixture_snapshot(
+            physical_width: u32,
+            physical_height: u32,
+            scale_factor: f32,
+            mode: crate::UiScaleMode,
+            fixture: &str,
+        ) -> UiTreeSnapshot {
+            let mut app = App::new();
+            app.add_plugins(HeadlessUiPlugin::with_scale_factor(
+                physical_width,
+                physical_height,
+                scale_factor,
+            ));
+            app.world_mut()
+                .insert_resource(crate::UiScalePreference(mode));
+            app.world_mut().insert_resource(crate::GameplayChromeView {
+                shown: true,
+                decision_required: fixture == "required-decision",
+                encounter_complete: fixture == "dense-report-compare",
+            });
+            let mut queue = bevy::ecs::world::CommandQueue::default();
+            let mut commands = Commands::new(&mut queue, app.world());
+            crate::apply_ui_review_fixture(&mut commands, fixture)
+                .expect("the structural fixture name must be valid");
+            queue.apply(app.world_mut());
+            app.world_mut()
+                .resource_mut::<NextState<hex_core::Screen>>()
+                .set(hex_core::Screen::Gameplay);
+            for _ in 0..8 {
+                app.update();
+            }
+            ui_tree_snapshot(app.world_mut())
+        }
+
+        fn setup_screen_snapshot(
+            physical_width: u32,
+            physical_height: u32,
+            scale_factor: f32,
+            mode: crate::UiScaleMode,
+            screen: hex_core::Screen,
+        ) -> UiTreeSnapshot {
+            let mut app = App::new();
+            app.add_plugins(HeadlessUiPlugin::with_scale_factor(
+                physical_width,
+                physical_height,
+                scale_factor,
+            ));
+            app.world_mut()
+                .insert_resource(crate::UiScalePreference(mode));
+            match screen {
+                hex_core::Screen::Title => {
+                    let library: hex_assets::ScenarioLibrary =
+                        ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
+                            .expect("the production scenario catalog must parse");
+                    app.world_mut().insert_resource(crate::TitleView {
+                        scenarios: library
+                            .visible_scenarios()
+                            .cloned()
+                            .map(|scenario| crate::TitleScenarioView {
+                                resolved_seed: scenario.generation_seed,
+                                scenario,
+                            })
+                            .collect(),
+                        setup_failure: None,
+                    });
+                }
+                hex_core::Screen::Settings => {
+                    use crate::UiSetting::{
+                        EffectsVolume, Fullscreen, MasterVolume, MusicVolume, Presentation,
+                        UiScale, UiVolume, WindowSize,
+                    };
+                    app.world_mut().insert_resource(crate::UiSettingsView {
+                        rows: [
+                            (Fullscreen, "Display mode", "Windowed"),
+                            (WindowSize, "Window size", "1920 × 1080"),
+                            (Presentation, "Presentation", "VSync"),
+                            (UiScale, "UI scale", "200%"),
+                            (MasterVolume, "Master volume", "100%"),
+                            (MusicVolume, "Music volume", "80%"),
+                            (EffectsVolume, "Effects volume", "90%"),
+                            (UiVolume, "UI volume", "90%"),
+                        ]
+                        .into_iter()
+                        .map(|(setting, label, value)| crate::UiSettingRow {
+                            setting,
+                            label: label.to_owned(),
+                            value: value.to_owned(),
+                        })
+                        .collect(),
+                        notice: Some(
+                            "Settings save immediately and persist after restart.".to_owned(),
+                        ),
+                    });
+                }
+                hex_core::Screen::CharacterCreator => {
+                    app.world_mut().insert_resource(crate::CreatorScreenView {
+                        active: true,
+                        screen,
+                        workspace: crate::CreatorWorkspace::Character,
+                        character: Some(hex_assets::SavedCharacter::blank(
+                            hex_assets::CustomCharacterId(1),
+                            "Validation Fixture",
+                        )),
+                        notice: "Cannot save until every required field is valid.".to_owned(),
+                        character_issues: vec![
+                            "Add at least one elemental gem.".to_owned(),
+                            "Assign a positive mana capacity.".to_owned(),
+                        ],
+                        character_dirty: true,
+                        ..default()
+                    });
+                }
+                hex_core::Screen::CombatLab => {
+                    let maps: hex_assets::CombatLabMapCatalog =
+                        ron::from_str(include_str!("../../../assets/config/combat_lab_maps.ron"))
+                            .expect("the production Combat Lab map catalog must parse");
+                    app.world_mut().insert_resource(crate::CombatLabScreenView {
+                        active: true,
+                        map: maps
+                            .maps
+                            .first()
+                            .map_or_else(String::new, |map| map.id.clone()),
+                        maps: Some(maps),
+                        notice: "Choose a map before continuing to roster setup.".to_owned(),
+                        ..default()
+                    });
+                }
+                other => panic!("{other:?} is not a setup-screen fixture"),
+            }
+            app.world_mut()
+                .resource_mut::<NextState<hex_core::Screen>>()
+                .set(screen);
+            for _ in 0..8 {
+                app.update();
+            }
+            ui_tree_snapshot(app.world_mut())
+        }
+
+        fn deployment_snapshot(
+            physical_width: u32,
+            physical_height: u32,
+            scale_factor: f32,
+            mode: crate::UiScaleMode,
+        ) -> UiTreeSnapshot {
+            let mut app = App::new();
+            app.add_plugins(HeadlessUiPlugin::with_scale_factor(
+                physical_width,
+                physical_height,
+                scale_factor,
+            ));
+            app.world_mut()
+                .insert_resource(crate::UiScalePreference(mode));
+            let roster = |side: &str| {
+                (0..6)
+                    .map(|index| crate::DeploymentRosterEntryView {
+                        index,
+                        name: format!("{side} Unit {}", index + 1),
+                        selected: index == 0,
+                        position: None,
+                    })
+                    .collect::<Vec<_>>()
+            };
+            app.world_mut().insert_resource(crate::DeploymentView {
+                active: true,
+                map_name: "Stacked Surface Arena".to_owned(),
+                notice: "Place every player and hostile on an exact legal surface.".to_owned(),
+                players: roster("Player"),
+                hostiles: roster("Hostile"),
+                complete: false,
+            });
+            app.world_mut().insert_resource(crate::GameplayHudView {
+                phase: hex_core::GameplayPhase::Deployment,
+                actor_label: "Deployment".to_owned(),
+                round: "Setup".to_owned(),
+                ..default()
+            });
+            app.world_mut()
+                .resource_mut::<NextState<hex_core::Screen>>()
+                .set(hex_core::Screen::Gameplay);
+            for _ in 0..8 {
+                app.update();
+            }
             ui_tree_snapshot(app.world_mut())
         }
 
@@ -618,10 +1224,12 @@ pub mod test_support {
                             node.size.cmpgt(Vec2::ZERO).all(),
                             "{required:?} must have a layout box at {logical_size:?} in {mode:?}"
                         );
-                        assert!(
-                            !node.overflows,
-                            "{required:?} must not overflow at {logical_size:?} in {mode:?}: {node:?}"
-                        );
+                        if required != "Primary Action Rail" {
+                            assert!(
+                                !node.overflows,
+                                "{required:?} must not overflow at {logical_size:?} in {mode:?}: {node:?}"
+                            );
+                        }
                         let half = node.size * 0.5;
                         let min = node.center - half;
                         let max = node.center + half;
@@ -656,6 +1264,149 @@ pub mod test_support {
         }
 
         #[test]
+        fn retina_mappings_use_physical_pixels_and_os_scale_as_separate_inputs() {
+            for (physical_size, scale_factor, expected_logical_size) in [
+                (UVec2::new(1280, 720), 2.0, Vec2::new(640.0, 360.0)),
+                (UVec2::new(3024, 1898), 2.0, Vec2::new(1512.0, 949.0)),
+            ] {
+                let snapshot = required_choice_snapshot_at_scale(
+                    physical_size.x,
+                    physical_size.y,
+                    scale_factor,
+                    crate::UiScaleMode::Auto,
+                );
+                assert_eq!(snapshot.metrics.effective_size, expected_logical_size);
+                assert_eq!(snapshot.metrics.viewport, crate::UiViewportClass::Compact);
+                assert!(
+                    snapshot.layout_issues().is_empty(),
+                    "required UI must remain structurally reachable at {physical_size:?} / {scale_factor}×: {:?}",
+                    snapshot.layout_issues()
+                );
+            }
+        }
+
+        #[test]
+        fn production_title_catalog_is_reachable_in_compact_retina_windows() {
+            for (physical_size, scale_factor) in
+                [(UVec2::new(1280, 720), 2.0), (UVec2::new(3024, 1898), 2.0)]
+            {
+                let snapshot =
+                    production_title_snapshot(physical_size.x, physical_size.y, scale_factor);
+                assert_eq!(snapshot.metrics.viewport, crate::UiViewportClass::Compact);
+                assert!(
+                    snapshot.layout_issues().is_empty(),
+                    "the full title catalog must remain reachable at {physical_size:?} / {scale_factor}×: {:?}",
+                    snapshot.layout_issues()
+                );
+                for required in [
+                    "New Game",
+                    "Character Creator",
+                    "Combat Lab",
+                    "The Crossing",
+                    "Waterfall",
+                ] {
+                    let Some(node) = snapshot.nodes.iter().find(|node| node.name == required)
+                    else {
+                        panic!("full production title is missing {required:?}");
+                    };
+                    assert!(
+                        node.scroll_reachable,
+                        "{required:?} must be reachable at {physical_size:?} / {scale_factor}×: {node:?}"
+                    );
+                }
+                let y = |name: &str| {
+                    snapshot
+                        .nodes
+                        .iter()
+                        .find(|node| node.name == name)
+                        .map_or(f32::MAX, |node| node.center.y)
+                };
+                assert!(y("New Game") < y("Character Creator"));
+                assert!(y("Character Creator") < y("The Crossing"));
+            }
+        }
+
+        #[test]
+        fn gameplay_presentation_states_pass_the_complete_structural_matrix() {
+            let physical_sizes = [
+                (UVec2::new(960, 540), 1.0),
+                (UVec2::new(1280, 720), 1.0),
+                (UVec2::new(1920, 1080), 1.0),
+                (UVec2::new(2560, 1440), 1.0),
+                (UVec2::new(3840, 2160), 1.0),
+                (UVec2::new(1280, 720), 2.0),
+                (UVec2::new(3024, 1898), 2.0),
+            ];
+            for fixture in [
+                "normal-gameplay",
+                "required-decision",
+                "aiming-disabled",
+                "live-statistics",
+                "dense-report-compare",
+            ] {
+                for (physical_size, scale_factor) in physical_sizes {
+                    for mode in [crate::UiScaleMode::Auto, crate::UiScaleMode::Percent200] {
+                        let snapshot = gameplay_fixture_snapshot(
+                            physical_size.x,
+                            physical_size.y,
+                            scale_factor,
+                            mode,
+                            fixture,
+                        );
+                        assert!(
+                            snapshot.layout_issues().is_empty(),
+                            "{fixture} must remain reachable at {physical_size:?} / {scale_factor}× in {mode:?}: {:?}",
+                            snapshot.layout_issues()
+                        );
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn setup_and_deployment_surfaces_pass_the_complete_structural_matrix() {
+            let physical_sizes = [
+                (UVec2::new(960, 540), 1.0),
+                (UVec2::new(1280, 720), 1.0),
+                (UVec2::new(1920, 1080), 1.0),
+                (UVec2::new(2560, 1440), 1.0),
+                (UVec2::new(3840, 2160), 1.0),
+                (UVec2::new(1280, 720), 2.0),
+                (UVec2::new(3024, 1898), 2.0),
+            ];
+            for (physical_size, scale_factor) in physical_sizes {
+                for mode in [crate::UiScaleMode::Auto, crate::UiScaleMode::Percent200] {
+                    for screen in [
+                        hex_core::Screen::Title,
+                        hex_core::Screen::Settings,
+                        hex_core::Screen::CharacterCreator,
+                        hex_core::Screen::CombatLab,
+                    ] {
+                        let snapshot = setup_screen_snapshot(
+                            physical_size.x,
+                            physical_size.y,
+                            scale_factor,
+                            mode,
+                            screen,
+                        );
+                        assert!(
+                            snapshot.layout_issues().is_empty(),
+                            "{screen:?} must remain reachable at {physical_size:?} / {scale_factor}× in {mode:?}: {:?}",
+                            snapshot.layout_issues()
+                        );
+                    }
+                    let snapshot =
+                        deployment_snapshot(physical_size.x, physical_size.y, scale_factor, mode);
+                    assert!(
+                        snapshot.layout_issues().is_empty(),
+                        "6v6 deployment must remain reachable at {physical_size:?} / {scale_factor}× in {mode:?}: {:?}",
+                        snapshot.layout_issues()
+                    );
+                }
+            }
+        }
+
+        #[test]
         fn snapshot_exposes_accessibility_and_focus_order_without_mutable_ui_state() {
             let mut world = World::new();
             let group = world
@@ -684,6 +1435,13 @@ pub mod test_support {
                     InheritedVisibility::VISIBLE,
                 ))
                 .id();
+            world.spawn((
+                Name::new("Orphaned Control"),
+                Button,
+                TabIndex(0),
+                AccessibleLabel::new("Control without an active focus group"),
+                InheritedVisibility::VISIBLE,
+            ));
             world.entity_mut(group).add_children(&[confirm, choose]);
 
             let snapshot = ui_tree_snapshot(&mut world);
@@ -699,6 +1457,17 @@ pub mod test_support {
                 confirm.accessible_label.as_deref(),
                 Some("Confirm selected lattice cells")
             );
+            assert_eq!(confirm.keyboard_reachable, Some(true));
+            let orphan = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.name == "Orphaned Control")
+                .expect("the orphaned control remains structurally observable");
+            assert_eq!(orphan.keyboard_reachable, Some(false));
+            assert!(snapshot
+                .layout_issues()
+                .iter()
+                .any(|issue| issue.contains("Orphaned Control is enabled but absent")));
         }
 
         #[test]

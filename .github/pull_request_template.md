@@ -12,7 +12,8 @@
 - [ ] Residual workspace tests and doctests (unless Markdown-only)
 - [ ] `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features` (unless Markdown-only)
 - [ ] `cargo build --workspace --profile ci` (unless Markdown-only; CI builds all three platforms)
-- [ ] Automated visual walk green — `/visual-walk` captured the screens and the agent read every frame
+- [ ] Structural UI oracle and six-frame offscreen walk green; agent read every frame
+- [ ] Four-checkpoint native macOS route recorded at this exact head (when UI/runtime applies)
 
 ### Manual runtime sign-off
 

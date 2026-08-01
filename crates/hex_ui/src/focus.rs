@@ -70,9 +70,11 @@ fn sync_focusability(world: &mut World) {
 
     let focused = world.resource::<InputFocus>().get();
     if focused.is_some_and(|entity| {
-        world
-            .get::<TabIndex>(entity)
-            .is_some_and(|index| index.0 < 0)
+        world.get_entity(entity).is_err()
+            || world
+                .get::<TabIndex>(entity)
+                .is_none_or(|index| index.0 < 0)
+            || !is_reachable(world, entity)
     }) {
         world.resource_mut::<InputFocus>().clear();
     }
@@ -172,5 +174,39 @@ mod tests {
         app.world_mut().get_mut::<Node>(root).unwrap().display = Display::Flex;
         app.update();
         assert_eq!(app.world().get::<TabIndex>(button), Some(&TabIndex(0)));
+    }
+
+    #[test]
+    fn despawned_focus_is_cleared_before_a_rebuilt_control_can_receive_activation() {
+        let mut app = App::new();
+        app.init_resource::<InputFocus>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .add_systems(PreUpdate, activate_focused_button)
+            .add_systems(PostUpdate, (prepare_buttons, sync_focusability).chain());
+        let button = app
+            .world_mut()
+            .spawn((Name::new("Old Action"), Button, TabIndex(0)))
+            .id();
+        app.update();
+        app.insert_resource(InputFocus::from_entity(button));
+
+        app.world_mut().despawn(button);
+        app.update();
+        assert_eq!(app.world().resource::<InputFocus>().get(), None);
+
+        let replacement = app
+            .world_mut()
+            .spawn((Name::new("New Action"), Button, TabIndex(0)))
+            .id();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Enter);
+        app.update();
+
+        assert_ne!(
+            app.world().get::<Interaction>(replacement),
+            Some(&Interaction::Pressed),
+            "a key meant for a despawned focused action must not activate its replacement"
+        );
     }
 }

@@ -25,6 +25,22 @@ struct CategoryDeck;
 #[derive(Component)]
 struct CategoryColumn;
 
+#[derive(Component, Clone, Copy)]
+enum CategoryRole {
+    Maps,
+    Demos,
+    Actions,
+}
+
+#[derive(Component)]
+struct ScenarioList;
+
+#[derive(Component)]
+struct TitleFooter;
+
+#[derive(Component)]
+struct TitleVersion;
+
 #[derive(Component)]
 struct TitleControl(TitleIntent);
 
@@ -52,7 +68,12 @@ fn spawn_title(
     resume: Res<ResumeView>,
 ) {
     commands
-        .spawn((screen_root(Screen::Title, "Title Screen"), TitleSurface))
+        .spawn((
+            screen_root(Screen::Title, "Title Screen"),
+            TitleSurface,
+            ScrollArea,
+            ScrollPosition::default(),
+        ))
         .with_children(|root| render_title(root, &assets, &view, &resume));
 }
 
@@ -106,7 +127,9 @@ fn render_title(
             flex_basis: Val::Px(0.0),
             flex_grow: 1.0,
             flex_shrink: 1.0,
-            flex_direction: FlexDirection::Row,
+            display: Display::Grid,
+            grid_template_columns: RepeatedGridTrack::flex(3, 1.0),
+            grid_template_rows: RepeatedGridTrack::flex(1, 1.0),
             column_gap: Val::Px(CATEGORY_GAP),
             align_items: AlignItems::Stretch,
             ..default()
@@ -121,6 +144,7 @@ fn render_title(
                 .iter()
                 .filter(|entry| entry.scenario.category == ScenarioCategory::Map),
             false,
+            CategoryRole::Maps,
         );
         spawn_category_column(
             deck,
@@ -130,10 +154,12 @@ fn render_title(
                 .iter()
                 .filter(|entry| entry.scenario.category == ScenarioCategory::Demo),
             true,
+            CategoryRole::Demos,
         );
         spawn_action_column(deck, assets, resume);
     });
     root.spawn((
+        TitleFooter,
         Node {
             margin: UiRect::bottom(Val::Px(4.0)),
             ..default()
@@ -145,6 +171,7 @@ fn render_title(
     ));
     root.spawn((
         Name::new("Version"),
+        TitleVersion,
         Node {
             position_type: PositionType::Absolute,
             right: Val::Px(12.0),
@@ -157,34 +184,39 @@ fn render_title(
 }
 
 fn spawn_action_column(deck: &mut ChildSpawnerCommands, assets: &UiAssets, resume: &ResumeView) {
-    deck.spawn((Name::new("Actions Column"), CategoryColumn, panel()))
-        .insert(category_column_node())
-        .with_children(|column| {
-            column.spawn(heading(assets, "actions"));
-            for (name, supporting, intent, enabled) in [
-                (
-                    "Continue",
-                    resume.message.as_str(),
-                    TitleIntent::Continue,
-                    resume.available,
-                ),
-                (
-                    "New Game",
-                    "Begin the integrated Party Trial scenario.",
-                    TitleIntent::NewGame,
-                    true,
-                ),
-                (
-                    "Settings",
-                    "Display, readable UI scale, presentation, and volume.",
-                    TitleIntent::Settings,
-                    true,
-                ),
-                ("Quit", "Exit the pre-alpha build.", TitleIntent::Quit, true),
-            ] {
-                spawn_card_button(column, assets, name, supporting, intent, enabled);
-            }
-        });
+    deck.spawn((
+        Name::new("Actions Column"),
+        CategoryColumn,
+        CategoryRole::Actions,
+        panel(),
+    ))
+    .insert(category_column_node(CategoryRole::Actions))
+    .with_children(|column| {
+        column.spawn(heading(assets, "actions"));
+        for (name, supporting, intent, enabled) in [
+            (
+                "Continue",
+                resume.message.as_str(),
+                TitleIntent::Continue,
+                resume.available,
+            ),
+            (
+                "New Game",
+                "Begin the integrated Party Trial scenario.",
+                TitleIntent::NewGame,
+                true,
+            ),
+            (
+                "Settings",
+                "Display, readable UI scale, presentation, and volume.",
+                TitleIntent::Settings,
+                true,
+            ),
+            ("Quit", "Exit the pre-alpha build.", TitleIntent::Quit, true),
+        ] {
+            spawn_card_button(column, assets, name, supporting, intent, enabled);
+        }
+    });
 }
 
 fn spawn_category_column<'a>(
@@ -193,19 +225,22 @@ fn spawn_category_column<'a>(
     title: &'static str,
     entries: impl Iterator<Item = &'a TitleScenarioView>,
     include_tools: bool,
+    role: CategoryRole,
 ) {
     deck.spawn((
         Name::new(format!("{title} Scenario Column")),
         CategoryColumn,
+        role,
         panel(),
     ))
-    .insert(category_column_node())
+    .insert(category_column_node(role))
     .with_children(|column| {
         column.spawn(heading(assets, title));
         column
             .spawn((
                 Name::new(format!("{title} Scenario List")),
                 ScrollArea,
+                ScenarioList,
                 Node {
                     width: Val::Percent(100.0),
                     min_height: Val::Px(0.0),
@@ -230,7 +265,7 @@ fn spawn_category_column<'a>(
     });
 }
 
-fn category_column_node() -> Node {
+fn category_column_node(role: CategoryRole) -> Node {
     Node {
         min_width: Val::Px(0.0),
         height: Val::Percent(100.0),
@@ -242,6 +277,12 @@ fn category_column_node() -> Node {
         padding: UiRect::all(Val::Px(14.0)),
         border: UiRect::all(Val::Px(1.0)),
         border_radius: BorderRadius::all(Val::Px(10.0)),
+        grid_column: GridPlacement::start(match role {
+            CategoryRole::Maps => 1,
+            CategoryRole::Demos => 2,
+            CategoryRole::Actions => 3,
+        }),
+        grid_row: GridPlacement::start(1),
         ..default()
     }
 }
@@ -359,26 +400,74 @@ fn apply_title_layout(
     metrics: Res<ResolvedUiMetrics>,
     added_decks: Query<(), Added<CategoryDeck>>,
     added_columns: Query<(), Added<CategoryColumn>>,
-    mut decks: Query<&mut Node, With<CategoryDeck>>,
-    mut columns: Query<&mut Node, (With<CategoryColumn>, Without<CategoryDeck>)>,
+    added_lists: Query<(), Added<ScenarioList>>,
+    mut surfaces: Query<&mut Node, (With<TitleSurface>, Without<CategoryDeck>)>,
+    mut decks: Query<&mut Node, (With<CategoryDeck>, Without<TitleSurface>)>,
+    mut columns: Query<
+        (&CategoryRole, &mut Node),
+        (
+            With<CategoryColumn>,
+            Without<CategoryDeck>,
+            Without<ScenarioList>,
+            Without<TitleSurface>,
+        ),
+    >,
+    mut lists: Query<
+        &mut Node,
+        (
+            With<ScenarioList>,
+            Without<CategoryDeck>,
+            Without<CategoryColumn>,
+            Without<TitleSurface>,
+        ),
+    >,
+    mut optional_copy: Query<
+        &mut Node,
+        (
+            Or<(With<TitleFooter>, With<TitleVersion>)>,
+            Without<TitleSurface>,
+            Without<CategoryDeck>,
+            Without<CategoryColumn>,
+            Without<ScenarioList>,
+        ),
+    >,
 ) {
-    if !metrics.is_changed() && added_decks.is_empty() && added_columns.is_empty() {
+    if !metrics.is_changed()
+        && added_decks.is_empty()
+        && added_columns.is_empty()
+        && added_lists.is_empty()
+    {
         return;
     }
     let compact = metrics.viewport == UiViewportClass::Compact;
-    for mut node in &mut decks {
-        node.flex_direction = if compact {
-            FlexDirection::Column
-        } else {
-            FlexDirection::Row
-        };
+    for mut node in &mut surfaces {
         node.overflow = if compact {
             Overflow::scroll_y()
         } else {
-            Overflow::default()
+            Overflow::clip_y()
         };
     }
-    for mut node in &mut columns {
+    for mut node in &mut decks {
+        node.grid_template_columns = if compact {
+            RepeatedGridTrack::flex(1, 1.0)
+        } else {
+            RepeatedGridTrack::flex(3, 1.0)
+        };
+        node.grid_template_rows = if compact {
+            Vec::new()
+        } else {
+            RepeatedGridTrack::flex(1, 1.0)
+        };
+        node.grid_auto_rows = if compact {
+            vec![GridTrack::auto()]
+        } else {
+            Vec::new()
+        };
+        node.flex_basis = if compact { Val::Auto } else { Val::Px(0.0) };
+        node.flex_grow = if compact { 0.0 } else { 1.0 };
+        node.overflow = Overflow::default();
+    }
+    for (role, mut node) in &mut columns {
         node.width = if compact {
             Val::Percent(100.0)
         } else {
@@ -391,6 +480,40 @@ fn apply_title_layout(
         };
         node.flex_basis = if compact { Val::Auto } else { Val::Px(0.0) };
         node.flex_grow = if compact { 0.0 } else { 1.0 };
+        node.grid_column = GridPlacement::start(if compact {
+            1
+        } else {
+            match role {
+                CategoryRole::Maps => 1,
+                CategoryRole::Demos => 2,
+                CategoryRole::Actions => 3,
+            }
+        });
+        node.grid_row = GridPlacement::start(if compact {
+            match role {
+                CategoryRole::Actions => 1,
+                CategoryRole::Demos => 2,
+                CategoryRole::Maps => 3,
+            }
+        } else {
+            1
+        });
+    }
+    for mut node in &mut lists {
+        node.flex_basis = if compact { Val::Auto } else { Val::Px(0.0) };
+        node.flex_grow = if compact { 0.0 } else { 1.0 };
+        node.overflow = if compact {
+            Overflow::default()
+        } else {
+            Overflow::scroll_y()
+        };
+    }
+    for mut node in &mut optional_copy {
+        node.display = if compact {
+            Display::None
+        } else {
+            Display::Flex
+        };
     }
 }
 

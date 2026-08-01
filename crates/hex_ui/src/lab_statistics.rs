@@ -1,5 +1,6 @@
 //! Live Combat Lab statistics presentation.
 
+use bevy::input_focus::tab_navigation::TabGroup;
 use bevy::prelude::*;
 use bevy::ui_widgets::ScrollArea;
 use hex_core::Screen;
@@ -40,6 +41,7 @@ fn spawn(mut commands: Commands, assets: Res<UiAssets>) {
         .spawn((
             Name::new("Combat Lab Live Statistics Drawer"),
             Drawer,
+            TabGroup::new(15),
             DespawnOnExit(Screen::Gameplay),
             Node {
                 position_type: PositionType::Absolute,

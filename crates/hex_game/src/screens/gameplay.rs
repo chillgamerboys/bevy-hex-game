@@ -18,9 +18,9 @@ use hex_combat::{
     TurnOrder, UnitCombatSummary,
 };
 use hex_core::{
-    Busy, CommandQueue, ControlOwner, GameCommand, GameplayPhase, GameplaySystems, InputAction,
-    InputBindings, IssuedCommand, Mode, PartyFormation, PartyMovementMode, Pause, PendingDecision,
-    Screen, UnitId,
+    AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, GameplayPhase, GameplaySystems,
+    InputAction, InputBindings, IssuedCommand, Mode, PartyFormation, PartyMovementMode, Pause,
+    PendingDecision, Screen, UnitId,
 };
 use hex_lattice::{LatticeSpec, LatticeState, LatticeStats};
 use hex_units::{Archetype, Downed, Party, Player, Selected, UnitRegistry};
@@ -64,7 +64,9 @@ pub(crate) fn plugin(app: &mut App) {
     app.add_systems(
         Update,
         publish_hud_view
+            .in_set(AppSystems::Update)
             .after(GameplaySystems::UiContext)
+            .before(hex_ui::UiSystems::Render)
             .run_if(in_state(Screen::Gameplay)),
     );
     app.add_systems(

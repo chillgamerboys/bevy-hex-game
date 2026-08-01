@@ -31,10 +31,10 @@ impl LatticeScale {
     pub const DEMO: Self = Self(1.0);
 
     /// Compact cells in gameplay side panels.
-    pub const PANEL: Self = Self(0.65);
+    pub const PANEL: Self = Self(0.72);
 
     /// Smallest actionable cells for an ultra-constrained required-choice surface.
-    pub const TIGHT: Self = Self(0.5);
+    pub const TIGHT: Self = Self(0.72);
 }
 
 /// Whether a projected cell participates in UI picking.
@@ -45,6 +45,11 @@ pub enum CellInteraction {
     /// Cell that can be focused and activated.
     Actionable,
 }
+
+/// Marks intentionally tessellated hex controls. Their rectangular Bevy node
+/// bounds meet at transparent corners without visually obscuring a sibling.
+#[derive(Component)]
+pub(crate) struct TessellatedControl;
 
 /// Everything the renderer is allowed to know about one cell.
 ///
@@ -106,6 +111,7 @@ pub fn spawn_lattice_cells<M: Bundle>(
                         view.coord.r()
                     )),
                     OwnColors,
+                    TessellatedControl,
                     ImageNode {
                         image: assets.hex_cell.clone(),
                         color: styled_color(view, Interaction::None),

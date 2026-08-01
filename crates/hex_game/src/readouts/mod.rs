@@ -53,14 +53,23 @@ pub(crate) fn plugin(app: &mut App) {
         // the simulation and remains available while a decision is open.
         .add_systems(
             Update,
-            (
-                toggle_hud.run_if(resource_equals(GameplayPhase::Active)),
-                publish_hud_view,
-            )
-                .chain()
+            toggle_hud
+                .run_if(resource_equals(GameplayPhase::Active))
                 .in_set(AppSystems::RecordInput)
                 .run_if(in_state(Screen::Gameplay)),
         );
+    add_chrome_publisher(app);
+}
+
+fn add_chrome_publisher(app: &mut App) {
+    app.add_systems(
+        Update,
+        publish_hud_view
+            .in_set(AppSystems::Update)
+            .after(GameplaySystems::UiContext)
+            .before(hex_ui::UiSystems::Render)
+            .run_if(in_state(Screen::Gameplay)),
+    );
 }
 
 fn reset_hud(mut hud: ResMut<HudVisibility>) {
@@ -98,9 +107,32 @@ fn publish_hud_view(
 
 #[cfg(test)]
 mod tests {
+    use bevy::state::app::StatesPlugin;
     use bevy::MinimalPlugins;
 
     use super::*;
+
+    #[derive(Resource, Default)]
+    struct RenderedChrome(hex_ui::GameplayChromeView);
+
+    fn activate_required_choice(mut selection: ResMut<lattice::DisableSelection>) {
+        selection.decision = Some(lattice::DisableDecision {
+            decider: hex_core::UnitId(3),
+            target: hex_core::UnitId(3),
+            owed: 1,
+            restoring: false,
+            live: vec![hex_core::LatticeCoord::ORIGIN],
+        });
+    }
+
+    fn reconcile_ui_context() {}
+
+    fn capture_rendered_chrome(
+        view: Res<hex_ui::GameplayChromeView>,
+        mut rendered: ResMut<RenderedChrome>,
+    ) {
+        rendered.0 = *view;
+    }
 
     #[test]
     fn read_only_hud_surfaces_pass_world_picks_through() {
@@ -147,6 +179,49 @@ mod tests {
         let view = app.world().resource::<hex_ui::GameplayChromeView>();
         assert!(!view.shown);
         assert!(view.decision_required);
+    }
+
+    #[test]
+    fn a_choice_activated_during_update_reaches_the_same_frame_render() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .init_state::<Screen>()
+            .insert_state(Screen::Gameplay)
+            .init_resource::<HudVisibility>()
+            .init_resource::<GameplayPhase>()
+            .init_resource::<lattice::DisableSelection>()
+            .init_resource::<hex_ui::GameplayChromeView>()
+            .init_resource::<RenderedChrome>()
+            .configure_sets(
+                Update,
+                (AppSystems::RecordInput, AppSystems::Update).chain(),
+            )
+            .configure_sets(
+                Update,
+                GameplaySystems::UiContext.in_set(AppSystems::Update),
+            )
+            .add_systems(
+                Update,
+                activate_required_choice
+                    .in_set(AppSystems::Update)
+                    .before(GameplaySystems::UiContext),
+            )
+            .add_systems(
+                Update,
+                reconcile_ui_context.in_set(GameplaySystems::UiContext),
+            );
+        add_chrome_publisher(&mut app);
+        app.add_systems(
+            Update,
+            capture_rendered_chrome.in_set(hex_ui::UiSystems::Render),
+        );
+
+        app.update();
+
+        assert!(
+            app.world().resource::<RenderedChrome>().0.decision_required,
+            "a choice activated during gameplay reconciliation must suppress competing controls before UI rendering in the same frame"
+        );
     }
 
     #[test]

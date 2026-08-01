@@ -89,9 +89,18 @@ Compact                         Standard / Wide
 ```
 
 Structural tests cover 960×540, 1280×720, 1920×1080, 2560×1440, and
-3840×2160 in Auto and 200% modes. Required controls must remain visible,
-unobscured, and reachable. The matrix uses `UiTreeSnapshot` bounds and focus order;
-it does not inspect pixels or rendered text.
+3840×2160 in Auto and 200% modes. Explicit Retina cases keep physical client size
+separate from OS scale, including 1280×720 @2× and the observed 3024×1898 @2×
+fullscreen client. Required controls must remain visible or scroll-reachable,
+unobscured, accessible, and at least 44×44. `UiTreeSnapshot` intersects each node
+with the canvas and Bevy's inherited `CalculatedClip`; a nonzero `ComputedNode`
+inside a clipped ancestor is not treated as visible. The oracle also checks focus
+order and interactive overlap without inspecting pixels or rendered text.
+The matrix uses the full production title catalog, populated Settings, Creator and
+Combat Lab setup projections, a 6v6 deployment, and the maximum ordinary gameplay
+action rail plus required, aiming, statistics, and report states. A half logical
+pixel is the only target-size tolerance, accounting for physical-pixel rounding at
+fractional Auto scales.
 
 ## Typography, spacing, and contrast
 
@@ -161,9 +170,12 @@ Use the cheapest authoritative oracle:
   `UiTreeSnapshot` reads presentation structure only.
 - Deterministic combat and balance evidence belongs to the rules, contracts, and
   simulation partitions.
-- `walks/gameplay_ui.ron` is the sole gameplay presentation walk and reviews at most
-  ten frames. It may judge layout, hierarchy, legibility, focus, contrast, and
-  responsive reflow only.
+- The scoped presentation route reviews exactly six deterministic offscreen frames
+  from `walks/gameplay_ui.ron` and four native macOS window-only checkpoints. Every
+  `Capture` first passes the live structural oracle. The native wrapper uses an
+  isolated `HEX_GAME_DATA_DIR`, records physical/logical size, OS/UI scale, viewport
+class, window mode, bounds, and commit SHA, and includes a persisted restart.
+Window capture also rejects an empty or black image before writing evidence metadata.
 
 A screenshot must never prove legality, budgets, decisions, damage, Channel,
 outcomes, persistence, deployment, or report identity. The visual runner therefore
@@ -172,6 +184,26 @@ tests prove their canonical facts.
 
 Forest, Waterfall, map-review, V3, and world-owned captures remain outside this
 contract and are unchanged.
+
+Local commands:
+
+```sh
+mkdir -p .context/ui-review
+ui_review_data="$(mktemp -d .context/ui-review/data.XXXXXX)"
+HEX_GAME_DATA_DIR="$ui_review_data" \
+HEX_WALK_SCRIPT=walks/gameplay_ui.ron \
+HEX_WALK_OUT=.context/ui-review/offscreen \
+cargo run -p hex_game --features visual-walk
+
+tools/run_gameplay_ui_native_review_macos.sh
+```
+
+Native capture uses the actual `Hex Game` CoreGraphics window ID with
+`screencapture -l`; it does not photograph the desktop or rely on Bevy's unreadable
+macOS/Metal primary-window screenshot path. The wrapper fails before launch when
+macOS Screen & System Audio Recording permission is unavailable. Enable Conductor
+(and its terminal host if macOS lists one) under System Settings → Privacy & Security,
+then fully restart Conductor before rerunning.
 
 ## Screen audit
 

@@ -1,4 +1,6 @@
+use bevy::input_focus::tab_navigation::TabGroup;
 use bevy::prelude::*;
+use bevy::ui_widgets::ScrollArea;
 use hex_core::Screen;
 
 use crate::{
@@ -40,6 +42,9 @@ fn spawn_action_rail(mut commands: Commands, assets: Res<UiAssets>) {
         .spawn((
             Name::new("Primary Action Rail"),
             ActionRail,
+            ScrollArea,
+            ScrollPosition::default(),
+            TabGroup::new(10),
             DespawnOnExit(Screen::Gameplay),
             action_rail_node(UiViewportClass::Standard),
             BorderColor::all(ACCENT),
@@ -93,7 +98,11 @@ fn refresh_action_rail(
         .and_then(|review| review.hud.as_ref())
         .unwrap_or(view.as_ref());
     if let Ok((_, mut node, mut border)) = rails.single_mut() {
-        apply_action_rail_layout(*metrics, &mut node);
+        apply_action_rail_layout(
+            *metrics,
+            &mut node,
+            view.phase == hex_core::GameplayPhase::Deployment && view.actions.is_empty(),
+        );
         *border = BorderColor::all(if view.required_prompt.is_some() {
             ACCENT
         } else {
@@ -190,14 +199,27 @@ fn action_rail_node(viewport: UiViewportClass) -> Node {
     node
 }
 
-fn apply_action_rail_layout(metrics: ResolvedUiMetrics, node: &mut Node) {
+fn apply_action_rail_layout(metrics: ResolvedUiMetrics, node: &mut Node, minimal_deployment: bool) {
     apply_action_rail_insets(metrics.viewport, node);
     if is_ultra_constrained(metrics) {
+        node.top = Val::Px(8.0);
+        node.bottom = Val::Auto;
         node.padding = UiRect::axes(Val::Px(10.0), Val::Px(6.0));
         node.row_gap = Val::Px(4.0);
+        node.min_height = Val::Px(if minimal_deployment { 48.0 } else { 64.0 });
+        node.height = Val::Px(if minimal_deployment { 48.0 } else { 64.0 });
+        node.overflow = if minimal_deployment {
+            Overflow::default()
+        } else {
+            Overflow::scroll_y()
+        };
     } else {
+        node.top = Val::Auto;
         node.padding = UiRect::axes(Val::Px(18.0), Val::Px(12.0));
         node.row_gap = Val::Px(8.0);
+        node.min_height = Val::Px(116.0);
+        node.height = Val::Auto;
+        node.overflow = Overflow::default();
     }
 }
 

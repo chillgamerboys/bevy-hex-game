@@ -2,12 +2,13 @@
 
 use bevy::input_focus::tab_navigation::TabIndex;
 use bevy::prelude::*;
+use bevy::ui_widgets::ScrollArea;
 use hex_core::Screen;
 
 use crate::{
-    blurb, fine, heading, row_button, spawn_decision_controls, stacked_row_button, CastingIntent,
-    CastingPanelContentView, CastingPanelView, GameplayAction, HudElement, RequiredActionSurface,
-    UiAssets, UiHudSetup, UiIntent, UiRegionRole, UiSystems, BLURB_SIZE, EDGE, LABEL, PANEL_BG,
+    blurb, fine, heading, row_button, spawn_decision_controls, CastingIntent,
+    CastingPanelContentView, CastingPanelView, HudElement, RequiredActionSurface, UiAssets,
+    UiHudSetup, UiIntent, UiRegionRole, UiSystems, BLURB_SIZE, EDGE, LABEL, PANEL_BG,
 };
 
 const CONTROL_WIDTH: f32 = 104.0;
@@ -30,8 +31,6 @@ enum CastingControl {
     Confirm,
     Next,
     Cancel,
-    Channel,
-    EndTurn,
 }
 
 pub(super) fn plugin(app: &mut App) {
@@ -54,6 +53,8 @@ fn spawn_panel(
         .spawn((
             Name::new("Casting Panel"),
             CastingPanel,
+            ScrollArea,
+            ScrollPosition::default(),
             RequiredActionSurface,
             HudElement,
             Node {
@@ -102,8 +103,8 @@ fn rebuild(
     view: Res<CastingPanelView>,
     review: Option<Res<crate::review::UiReviewPresentation>>,
     metrics: Res<crate::ResolvedUiMetrics>,
-    mut panels: Query<&mut Node, With<CastingPanel>>,
-    bodies: Query<Entity, With<PanelBody>>,
+    mut panels: Query<&mut Node, (With<CastingPanel>, Without<PanelBody>)>,
+    mut bodies: Query<(Entity, &mut Node), (With<PanelBody>, Without<CastingPanel>)>,
     assets: Res<UiAssets>,
 ) {
     let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
@@ -122,6 +123,17 @@ fn rebuild(
     // casting region competes with that required surface at enlarged scales.
     let promoted_to_rail = metrics.viewport == crate::UiViewportClass::Compact
         && matches!(view.content, CastingPanelContentView::Decision { .. });
+    let ultra_constrained = crate::layout::is_ultra_constrained(*metrics);
+    panel.height = Val::Px(if ultra_constrained {
+        (metrics.effective_size.y - 88.0).max(44.0)
+    } else {
+        126.0
+    });
+    panel.overflow = if ultra_constrained {
+        Overflow::scroll_y()
+    } else {
+        Overflow::default()
+    };
     panel.display = if view.visible && !promoted_to_rail {
         Display::Flex
     } else {
@@ -130,19 +142,30 @@ fn rebuild(
     if !view.visible || promoted_to_rail {
         return;
     }
-    let Ok(body) = bodies.single() else { return };
+    let Ok((body, mut body_node)) = bodies.single_mut() else {
+        return;
+    };
+    body_node.flex_direction = if ultra_constrained {
+        FlexDirection::Column
+    } else {
+        FlexDirection::Row
+    };
+    body_node.align_items = if ultra_constrained {
+        AlignItems::Stretch
+    } else {
+        AlignItems::Center
+    };
+    body_node.flex_grow = if ultra_constrained { 0.0 } else { 1.0 };
+    body_node.row_gap = Val::Px(if ultra_constrained { 4.0 } else { 0.0 });
     commands.entity(body).despawn_related::<Children>();
     commands
         .entity(body)
         .with_children(|rows| match &view.content {
             CastingPanelContentView::Message {
                 text,
-                turn_controls,
+                turn_controls: _,
             } => {
                 rows.spawn(blurb(&assets, text.clone()));
-                if *turn_controls {
-                    spawn_turn_controls(rows, &assets);
-                }
             }
             CastingPanelContentView::Decision { prompt, choice } => {
                 rows.spawn(blurb(&assets, prompt.clone()));
@@ -166,25 +189,8 @@ fn rebuild(
                         spawn_spell(rows, spell, unavailable.is_some(), &assets);
                     }
                 }
-                spawn_turn_controls(rows, &assets);
             }
         });
-}
-
-fn spawn_turn_controls(rows: &mut ChildSpawnerCommands, assets: &UiAssets) {
-    rows.spawn((stacked_row_button("Channel", 94.0), CastingControl::Channel))
-        .with_children(|button| {
-            button.spawn(blurb(assets, "channel"));
-            button.spawn(fine(assets, "restore mana"));
-        });
-    rows.spawn((
-        stacked_row_button("End Turn", 94.0),
-        CastingControl::EndTurn,
-    ))
-    .with_children(|button| {
-        button.spawn(blurb(assets, "end turn"));
-        button.spawn(fine(assets, "SPACE"));
-    });
 }
 
 fn spawn_spell(
@@ -199,6 +205,7 @@ fn spawn_spell(
             flex_basis: Val::Px(0.0),
             flex_grow: 1.0,
             min_width: Val::Px(0.0),
+            min_height: Val::Px(74.0),
             flex_direction: FlexDirection::Row,
             column_gap: Val::Px(4.0),
             align_items: AlignItems::Center,
@@ -328,8 +335,6 @@ fn emit_intents(
             CastingControl::Confirm => UiIntent::Casting(CastingIntent::Confirm),
             CastingControl::Next => UiIntent::Casting(CastingIntent::NextTarget),
             CastingControl::Cancel => UiIntent::Casting(CastingIntent::Cancel),
-            CastingControl::Channel => UiIntent::Gameplay(GameplayAction::Channel),
-            CastingControl::EndTurn => UiIntent::Gameplay(GameplayAction::EndTurn),
         });
     }
 }

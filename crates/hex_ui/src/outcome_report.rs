@@ -64,6 +64,8 @@ fn render(
             overlay
                 .spawn((
                     Name::new("Encounter Outcome Panel"),
+                    ScrollArea,
+                    ScrollPosition::default(),
                     Node {
                         width: if view.body.is_some() {
                             Val::Percent(88.0)
@@ -78,6 +80,7 @@ fn render(
                         row_gap: Val::Px(16.0),
                         border: UiRect::all(Val::Px(1.0)),
                         border_radius: BorderRadius::all(Val::Px(10.0)),
+                        overflow: Overflow::scroll_y(),
                         ..default()
                     },
                     BorderColor::all(Color::srgba(0.93, 0.79, 0.46, 0.5)),
@@ -92,12 +95,10 @@ fn render(
                         panel
                             .spawn((
                                 Name::new("Outcome Report Body Scroll"),
-                                ScrollArea,
                                 Node {
                                     width: Val::Percent(100.0),
                                     min_height: Val::Px(0.0),
-                                    flex_grow: 1.0,
-                                    overflow: Overflow::scroll_y(),
+                                    flex_grow: 0.0,
                                     flex_direction: FlexDirection::Column,
                                     ..default()
                                 },
