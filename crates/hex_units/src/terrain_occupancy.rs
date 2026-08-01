@@ -193,6 +193,13 @@ fn rebuild_terrain_occupancy(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hex_test_app::HeadlessAppBuilder;
+
+    fn occupancy_app() -> HeadlessAppBuilder {
+        let mut builder = HeadlessAppBuilder::new();
+        plugin(builder.app_mut());
+        builder
+    }
 
     #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
     enum TestSystems {
@@ -276,8 +283,7 @@ mod tests {
 
     #[test]
     fn entity_replacement_republishes_the_complete_stack() {
-        let mut app = App::new();
-        plugin(&mut app);
+        let mut app = occupancy_app().build();
         app.world_mut().spawn((HexTile, at(0, 0, 1), RunBottom(0)));
         let platform = app
             .world_mut()
@@ -306,14 +312,16 @@ mod tests {
 
     #[test]
     fn downstream_actor_sees_same_frame_addition_and_removal() {
-        let mut app = App::new();
-        plugin(&mut app);
-        app.init_resource::<SeenOccupancy>();
-        app.configure_sets(
+        let mut builder = occupancy_app();
+        builder.app_mut().init_resource::<SeenOccupancy>();
+        builder.app_mut().configure_sets(
             Update,
             TestSystems::Act.after(TerrainOccupancySystems::Publish),
         );
-        app.add_systems(Update, observe_occupancy.in_set(TestSystems::Act));
+        builder
+            .app_mut()
+            .add_systems(Update, observe_occupancy.in_set(TestSystems::Act));
+        let mut app = builder.build();
         app.world_mut().spawn((HexTile, at(0, 0, 1), RunBottom(0)));
         app.update();
 
@@ -334,8 +342,7 @@ mod tests {
 
     #[test]
     fn malformed_entity_publication_withdraws_the_projection() {
-        let mut app = App::new();
-        plugin(&mut app);
+        let mut app = occupancy_app().build();
         app.world_mut().spawn((HexTile, at(0, 0, 2), RunBottom(3)));
         app.update();
 
@@ -347,8 +354,7 @@ mod tests {
 
     #[test]
     fn incomplete_entity_publication_withdraws_the_projection() {
-        let mut app = App::new();
-        plugin(&mut app);
+        let mut app = occupancy_app().build();
         app.world_mut().spawn((HexTile, at(0, 0, 2)));
         app.update();
 

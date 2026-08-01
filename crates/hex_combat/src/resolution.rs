@@ -88,16 +88,18 @@ fn reset_resolution(mut resolution: ResMut<EncounterResolution>) {
 mod tests {
     use super::*;
     use hex_core::{PausableSystems, UnitId};
+    use hex_test_app::HeadlessAppBuilder;
 
     fn app_with_detection() -> App {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
+        let mut builder = HeadlessAppBuilder::new().with_minimal_plugins();
+        builder
+            .app_mut()
             .init_resource::<PendingDecision>()
             .init_resource::<CommandQueue>()
             .init_resource::<EncounterResolution>()
             .add_message::<CombatEvent>()
             .add_systems(Update, detect_outcome);
-        app
+        builder.build()
     }
 
     #[test]
@@ -146,12 +148,14 @@ mod tests {
 
     #[test]
     fn a_retained_outcome_blocks_pausable_simulation() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
+        let mut builder = HeadlessAppBuilder::new().with_minimal_plugins();
+        builder
+            .app_mut()
             .init_resource::<Mutations>()
             .init_resource::<EncounterResolution>()
             .configure_sets(Update, PausableSystems.run_if(encounter_unresolved))
             .add_systems(Update, mutate.in_set(PausableSystems));
+        let mut app = builder.build();
         app.update();
         assert_eq!(app.world().resource::<Mutations>().0, 1);
 
