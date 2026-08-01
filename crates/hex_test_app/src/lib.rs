@@ -52,6 +52,16 @@ impl HeadlessAppBuilder {
         self
     }
 
+    /// Installs an explicitly configured asset plugin.
+    ///
+    /// This keeps file-backed tests authoritative when they need a temporary
+    /// asset root or another non-default asset-server setting.
+    #[must_use]
+    pub fn with_asset_plugin_config(mut self, plugin: AssetPlugin) -> Self {
+        self.app.add_plugins(plugin);
+        self
+    }
+
     /// Initializes the mesh/material stores used by headless presentation tests.
     #[must_use]
     pub fn with_render_assets(mut self) -> Self {
@@ -249,6 +259,19 @@ mod tests {
 
         assert!(!app.world().contains_resource::<State<Screen>>());
         assert!(!app.world().contains_resource::<Assets<Mesh>>());
+    }
+
+    #[test]
+    fn configured_asset_plugin_installs_the_asset_server() {
+        let app = HeadlessAppBuilder::new()
+            .with_minimal_plugins()
+            .with_asset_plugin_config(AssetPlugin {
+                file_path: "test-assets".to_owned(),
+                ..default()
+            })
+            .build();
+
+        assert!(app.world().contains_resource::<AssetServer>());
     }
 
     #[test]
