@@ -22,7 +22,17 @@ pub(crate) struct StoragePaths {
 
 impl Default for StoragePaths {
     fn default() -> Self {
-        let root = data_root();
+        Self::under(data_root())
+    }
+}
+
+impl StoragePaths {
+    /// Builds the complete storage projection beneath one explicit root.
+    ///
+    /// Runtime defaults and disposable tooling sessions share the filenames;
+    /// only the owning root differs.
+    pub(crate) fn under(root: impl AsRef<Path>) -> Self {
+        let root = root.as_ref();
         Self {
             preferences: root.join("preferences.ron"),
             resume: root.join("resume.ron"),
@@ -92,12 +102,8 @@ mod tests {
     #[test]
     fn explicit_data_directory_has_stable_filenames() {
         let root = PathBuf::from("chosen-root");
-        let paths = StoragePaths {
-            preferences: root.join("preferences.ron"),
-            resume: root.join("resume.ron"),
-            creations: root.join("creations.ron"),
-            combat_reports: root.join("combat-reports.ron"),
-        };
+        let paths = StoragePaths::under(&root);
+        assert_eq!(paths.preferences.parent(), Some(root.as_path()));
         assert_eq!(
             paths.preferences.file_name(),
             Some(OsStr::new("preferences.ron"))

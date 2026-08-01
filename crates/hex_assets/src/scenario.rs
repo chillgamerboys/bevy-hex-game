@@ -46,7 +46,7 @@ impl ScenarioLibrary {
             .find(|scenario| scenario.name == self.default_game)
     }
 
-    /// Development scenarios visible in the Maps and Demos lanes.
+    /// Development scenarios visible in the Scenarios catalog's Maps and Demos sections.
     pub fn visible_scenarios(&self) -> impl Iterator<Item = &Scenario> {
         self.scenarios
             .iter()
@@ -57,9 +57,9 @@ impl ScenarioLibrary {
 /// One playable setup: a world, and where the units start on it.
 #[derive(Reflect, Debug, Clone)]
 pub struct Scenario {
-    /// What the title screen calls it.
+    /// Player-facing name used by the Scenarios catalog and loading flow.
     pub name: String,
-    /// Which framed title-screen column owns this scenario.
+    /// Which Scenarios catalog section owns this scenario.
     pub category: ScenarioCategory,
     /// One line under the name, saying what is interesting about it.
     pub blurb: String,
@@ -77,7 +77,7 @@ pub struct Scenario {
     pub lighting: String,
     /// Reproducible terrain seed for a generated world.
     ///
-    /// Authored scenarios omit this. The title screen can replace a configured seed
+    /// Authored scenarios omit this. The Scenarios catalog can replace a configured seed
     /// for the current process, but never writes that replacement back to this asset.
     pub generation_seed: Option<u64>,
     /// Optional time of day at which this scenario starts, in `[0, 24)`.
@@ -242,7 +242,7 @@ mod tests {
             library
                 .visible_scenarios()
                 .all(|scenario| scenario.name != default.name),
-            "the default must not also appear in a development lane"
+            "the default must not also appear in the development catalog"
         );
     }
 

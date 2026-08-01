@@ -142,6 +142,12 @@ impl Plugin for AppPlugin {
         #[cfg(any(debug_assertions, feature = "dev", feature = "map-review"))]
         app.add_plugins(bevy::diagnostic::LogDiagnosticsPlugin::default());
 
+        // A scripted walk must never inherit the operator's preferences, resume,
+        // creations, or combat reports. Install its disposable root before any
+        // persistence-owning plugin initializes `StoragePaths`.
+        #[cfg(feature = "visual-walk")]
+        walk::isolate_storage(app);
+
         // Order the shared `Update` phases once, here. Systems that participate in
         // cross-crate timing opt into these sets; self-contained state, UI and
         // presentation systems can run outside them.
