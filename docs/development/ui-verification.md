@@ -78,11 +78,11 @@ real Bevy scroll owner that can bring the complete 44x44 target into view.
 | Gameplay | player combat turn/max actions | complete Now/Choose rail | inspector/log/lattices | budgets and Channel state from authority resources; `presented_actions` checks labels/refusal copy only, while command contracts prove legality |
 | Gameplay | hostile turn | required rail status; no illegal player action | inspector/log | turn owner from authority state; presented refusal/absence from `presented_actions`; command rejection from owning contracts |
 | Casting | spell list mixed enabled/blocked | Cancel and legal spell actions | spell detail | presented cost/blocked copy from the app snapshot; legality and refusal authority stay in owning command contracts |
-| Casting | aiming legal/blocked | Confirm when legal, Cancel/cycle as applicable | target detail | exact target and refusal are canonical, never pixel-derived |
+| Casting | aiming blocked | Cancel/cycle; Confirm visibly refused | target detail | exact target and refusal are canonical, never pixel-derived |
 | Decision | disable partial/complete | required cells and Confirm/refusal | lattice detail | owed/chosen cells and one-action accounting are canonical |
 | Decision | restore partial/complete | required cells and Confirm/refusal | lattice detail | owed/chosen cells and restoration are canonical |
 | Gameplay chrome | HUD hidden ordinary/required | action rail remains visible; HUD toggle | lattice and statistics hide together; a blocking lattice is promoted into the rail | hiding chrome cannot leave statistics behind or hide/mutate a blocking decision |
-| Gameplay chrome | target lattice opaque/known/absent; log empty/dense | action rail | lattice/log drawer | visibility does not reconstruct hidden gameplay truth |
+| Gameplay chrome | target lattice known/absent; log empty/dense | action rail | lattice/log drawer | visibility does not reconstruct hidden gameplay truth |
 | Combat Lab live | statistics collapsed/expanded/manual end | action rail | lattice first, then expand/collapse, statistics body, and End Experiment in the single Inspector scroll flow | typed toggle, actual wheel/Tab scrolling, drawer lifecycle, and report fingerprint from gameplay snapshot |
 | Pause | ordinary/save success/save failure | Resume and applicable save/leave actions | notice | focus is trapped and typed pause/save actions retain state |
 | Outcome | ordinary victory/defeat | return/retry actions | outcome summary | canonical encounter outcome chooses presentation |
@@ -128,6 +128,12 @@ same surface—for example the saved-report fixture contains an error, compariso
 pending delete confirmation together. A branch may be grouped only when its named
 control and presentation are simultaneously observable; mutually exclusive layouts
 require separate task cases.
+
+Two mutually exclusive presentation branches remain explicit follow-up debt rather
+than part of the exhaustive matrix: legal aiming with enabled confirmation, and the
+fully opaque target-lattice projection. Their gameplay authority stays covered by the
+owning command/knowledge contracts, but this document does not claim viewport/scale
+coverage for their distinct geometry until each receives a populated `UiTaskCase`.
 
 ## Required review evidence
 
