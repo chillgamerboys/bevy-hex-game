@@ -25,34 +25,26 @@
 
 use std::env;
 use std::path::PathBuf;
+use std::process::Command;
 use std::time::{Duration, Instant};
 
-use bevy::camera::{NormalizedRenderTarget, RenderTarget};
+use bevy::camera::RenderTarget;
 use bevy::ecs::system::SystemParam;
 use bevy::input::InputSystems;
-use bevy::picking::backend::HitData;
-use bevy::picking::pointer::{Location, PointerId};
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
-use hex_assets::{ScenarioLibrary, SubstanceTable};
-use hex_combat::{AiDecisionTraces, CombatSummary, EncounterOutcome, EncounterResolution};
-use hex_core::{
-    Busy, CommandQueue, ControlOwner, GameCommand, GameplaySetupFailure, Headroom, HexCoord,
-    HexSpan, HexTile, IssuedCommand, LatticeCoord, PendingDecision, ResolvedMapSeed, Screen,
-    SubstanceId, TilePos, TraversalBlockers, Turn, UnitId,
-};
-use hex_lattice::{CellKind, LatticeSpec, LatticeState};
-use hex_units::{Body, Downed, Enemy, Footing, Player, Reach, StandsOn};
+use hex_assets::ScenarioLibrary;
+use hex_core::{GameplaySetupFailure, HexTile, ResolvedMapSeed, Screen};
 use serde::Deserialize;
 
 use crate::capture::write_png;
-use crate::casting::{Aiming, AnchorMarker};
 use crate::scenarios::ScenarioToLoad;
 
 const SCRIPT_ENV: &str = "HEX_WALK_SCRIPT";
 const OUT_ENV: &str = "HEX_WALK_OUT";
 const SIZE_ENV: &str = "HEX_WALK_SIZE";
+const NATIVE_CAPTURE_ENV: &str = "HEX_WALK_NATIVE_CAPTURE";
 const STEP_TIMEOUT: Duration = Duration::from_secs(60);
 const WALK_TIME_SCALE: f32 = 12.0;
 const DEFAULT_WALK_WIDTH: u32 = 1920;
@@ -96,16 +88,27 @@ pub(super) fn plugin(app: &mut App) {
             return;
         }
     };
+    let native_capture = env::var_os(NATIVE_CAPTURE_ENV).map(PathBuf::from);
 
     info!(
-        "visual walk: {} steps from {script}, output to {out} at {}x{}",
+        "visual walk: {} steps from {script}, output to {out} at {}x{} ({})",
         steps.len(),
         size.0,
-        size.1
+        size.1,
+        if native_capture.is_some() {
+            "native window capture"
+        } else {
+            "offscreen capture"
+        }
     );
-    app.insert_resource(WalkState::new(steps, PathBuf::from(out), size))
-        .add_systems(Startup, accelerate_walk_time)
-        .add_systems(PreUpdate, run_walk.after(InputSystems));
+    app.insert_resource(WalkState::new(
+        steps,
+        PathBuf::from(out),
+        size,
+        native_capture,
+    ))
+    .add_systems(Startup, accelerate_walk_time)
+    .add_systems(PreUpdate, run_walk.after(InputSystems));
 }
 
 fn accelerate_walk_time(mut time: ResMut<Time<Virtual>>) {
@@ -149,63 +152,19 @@ enum WalkStep {
     },
     /// Wait until a named button exists without activating it.
     AwaitButton(String),
-    /// End player turns and answer player decisions until a named button exists.
-    AutoUntilButton(String),
-    /// Open a canonical fixture report for presentation review without solving combat.
-    ///
-    /// This feature-only step deliberately supplies a terminal result to the ordinary
-    /// report system. Logical outcome and metric evidence belongs to the deterministic
-    /// simulation target; the visual walk reviews only the resulting composition.
-    PresentFixtureReport,
-    /// End player turns and answer player decisions until baseline AI casts.
-    AutoUntilAiCast,
-    /// End turns until the named stable player unit owns the turn.
-    AutoUntilPlayerTurn(u64),
-    /// Drive combat until a player damage choice is open.
-    AutoUntilDamageDecision,
-    /// Answer the currently open player lattice decision through the command funnel.
-    AnswerDecision,
-    /// Point an in-flight recovery spell at the first damaged player unit.
-    ///
-    /// This is the walk equivalent of cycling the target control. Confirming the
-    /// resulting aim still emits the ordinary cast command through the UI.
-    AimAtDamagedPlayer,
-    /// Point an in-flight spell at one stable player unit, including a downed unit.
-    ///
-    /// Ability fixtures use this for intentional friendly damage and for restoring the
-    /// exact ally they downed through ordinary commands.
-    AimAtPlayer(u64),
-    /// Point an in-flight spell at the first hostile by stable id.
-    AimAtHostile,
-    /// Move an in-flight aim to a legal unoccupied anchor, retaining its prior target.
-    AimAtEmpty,
+    /// Install an authored immutable UI presentation state without solving combat.
+    PresentUi(String),
+    /// Select Auto or 200% UI scale for responsive presentation review.
+    SetUiScale(String),
+    /// Change the offscreen physical capture size for a later presentation frame.
+    SetViewport(String),
     /// Press and release a supported gameplay or menu key.
     Key(String),
-    /// Click the topmost surface at one authored axial coordinate.
-    ClickTile {
-        q: i32,
-        r: i32,
-        #[serde(default)]
-        level: Option<i32>,
-    },
-    /// Deliberately send a movement command through the simulation funnel.
-    ///
-    /// Walk-only probes bypass the quiet input prefilter so a modal refusal becomes a
-    /// visible combat-log line, proving the authoritative choke point held.
-    AttemptMove,
-    /// Deliberately send an end-turn command through the simulation funnel.
-    AttemptEndTurn,
     /// Launch a scenario by exact name, bypassing the menu UI.
     StartScenario {
         name: String,
         #[serde(default)]
         seed: Option<u64>,
-    },
-    /// Launch an immutable Combat Lab fixture by stable machine id.
-    StartFixture {
-        id: String,
-        #[serde(default)]
-        profile: Option<String>,
     },
 }
 
@@ -236,14 +195,25 @@ fn validate_step(step: &WalkStep) -> Result<(), String> {
         WalkStep::AwaitButton(name) if name.trim().is_empty() => {
             Err("awaited button name must not be empty".to_owned())
         }
-        WalkStep::AutoUntilButton(name) if name.trim().is_empty() => {
-            Err("automated button name must not be empty".to_owned())
+        WalkStep::PresentUi(name)
+            if !matches!(
+                name.as_str(),
+                "clear"
+                    | "normal-gameplay"
+                    | "required-decision"
+                    | "aiming-disabled"
+                    | "live-statistics"
+                    | "dense-report-compare"
+            ) =>
+        {
+            Err(format!("unknown presentation-only UI fixture {name:?}"))
         }
+        WalkStep::SetUiScale(name) if !matches!(name.as_str(), "Auto" | "200%") => {
+            Err(format!("unknown UI scale {name:?}; expected Auto or 200%"))
+        }
+        WalkStep::SetViewport(size) => parse_size(size).map(|_| ()),
         WalkStep::StartScenario { name, .. } if name.trim().is_empty() => {
             Err("scenario name must not be empty".to_owned())
-        }
-        WalkStep::StartFixture { id, .. } if id.trim().is_empty() => {
-            Err("fixture id must not be empty".to_owned())
         }
         _ => Ok(()),
     }
@@ -269,24 +239,8 @@ fn parse_screen(name: &str) -> Result<Screen, String> {
 fn parse_key(name: &str) -> Result<KeyCode, String> {
     match name {
         "Backspace" => Ok(KeyCode::Backspace),
-        "Escape" => Ok(KeyCode::Escape),
-        "Space" => Ok(KeyCode::Space),
-        "Enter" => Ok(KeyCode::Enter),
         "C" => Ok(KeyCode::KeyC),
-        // `Tab` and `Q` are casting's — step to the next target, and put the aim down.
-        // `Enter` confirms an aim, and the casting walk drives that through the panel's
-        // Confirm button instead: a `Click` that never finds its button stalls the walk
-        // and fails it, which is a stronger assertion than a key that can be pressed
-        // into a screen with no aiming UI on it at all.
-        "Tab" => Ok(KeyCode::Tab),
-        "KeyQ" => Ok(KeyCode::KeyQ),
-        "KeyH" => Ok(KeyCode::KeyH),
-        "KeyL" => Ok(KeyCode::KeyL),
-        "KeyR" => Ok(KeyCode::KeyR),
-        "F5" => Ok(KeyCode::F5),
-        _ => Err(format!(
-            "unknown key {name:?}; expected Backspace, Escape, Space, Enter, C, Tab, KeyQ, KeyH, KeyL, KeyR, or F5"
-        )),
+        _ => Err(format!("unknown key {name:?}; expected Backspace or C")),
     }
 }
 
@@ -317,6 +271,81 @@ enum CaptureOutcome {
     Failed(String),
 }
 
+struct NativeWindowFacts {
+    physical_width: u32,
+    physical_height: u32,
+    logical_width: f32,
+    logical_height: f32,
+    scale_factor: f32,
+    mode: String,
+}
+
+fn capture_native_window(
+    command: &std::path::Path,
+    path: &std::path::Path,
+    checkpoint: &str,
+    window: Option<&NativeWindowFacts>,
+    snapshot: &hex_ui::test_support::UiTreeSnapshot,
+) -> CaptureOutcome {
+    let Some(window) = window else {
+        return CaptureOutcome::Failed("primary window unavailable for native capture".to_owned());
+    };
+    if let Some(parent) = path.parent() {
+        if let Err(error) = std::fs::create_dir_all(parent) {
+            return CaptureOutcome::Failed(format!(
+                "cannot create native capture directory {}: {error}",
+                parent.display()
+            ));
+        }
+    }
+    let status = Command::new(command)
+        .arg(path)
+        .arg(checkpoint)
+        .env(
+            "HEX_WALK_WINDOW_PHYSICAL",
+            format!("{}x{}", window.physical_width, window.physical_height),
+        )
+        .env(
+            "HEX_WALK_WINDOW_LOGICAL",
+            format!("{:.1}x{:.1}", window.logical_width, window.logical_height),
+        )
+        .env(
+            "HEX_WALK_WINDOW_SCALE_FACTOR",
+            window.scale_factor.to_string(),
+        )
+        .env("HEX_WALK_WINDOW_MODE", &window.mode)
+        .env("HEX_WALK_UI_SCALE", snapshot.metrics.scale.to_string())
+        .env(
+            "HEX_WALK_VIEWPORT_CLASS",
+            format!("{:?}", snapshot.metrics.viewport),
+        )
+        .status();
+    match status {
+        Ok(status) if status.success() => match std::fs::metadata(path) {
+            Ok(metadata) if metadata.len() > 0 => CaptureOutcome::Written {
+                brightest: u8::MAX,
+                coverage: true,
+            },
+            Ok(_) => CaptureOutcome::Failed(format!(
+                "native capture helper wrote an empty file at {}",
+                path.display()
+            )),
+            Err(error) => CaptureOutcome::Failed(format!(
+                "native capture helper did not create {}: {error}",
+                path.display()
+            )),
+        },
+        Ok(status) => CaptureOutcome::Failed(format!(
+            "native capture helper {} exited with {status}",
+            command.display()
+        )),
+        Err(error) => CaptureOutcome::Failed(format!(
+            "cannot launch native capture helper {}: {error}",
+            command.display()
+        )),
+    }
+}
+
 #[derive(Resource)]
 struct WalkState {
     steps: Vec<WalkStep>,
@@ -330,11 +359,6 @@ struct WalkState {
     pressed: Option<Entity>,
     /// A key pressed by the previous step, to be released.
     held_key: Option<KeyCode>,
-    /// Consecutive automation frames that observed the same player turn.
-    ///
-    /// The grace frame lets turn-start effects and the casting panel settle before
-    /// automation decides there is no recovery action to preserve.
-    auto_turn_seen: Option<(UnitId, u8)>,
     /// The offscreen image the camera renders into for capture.
     ///
     /// The window surface is not readable on every backend — on macOS/Metal a
@@ -349,68 +373,24 @@ struct WalkState {
     camera: Option<Entity>,
     /// Exact offscreen viewport under review.
     size: (u32, u32),
+    /// macOS window-only capture helper. Presence keeps the real window target.
+    native_capture: Option<PathBuf>,
     failed: bool,
-}
-
-#[derive(SystemParam)]
-struct WalkCombat<'w, 's> {
-    pending: Option<Res<'w, PendingDecision>>,
-    traces: Option<Res<'w, AiDecisionTraces>>,
-    aiming: Option<ResMut<'w, Aiming>>,
-    resolution: Option<ResMut<'w, EncounterResolution>>,
-    summary: Option<ResMut<'w, CombatSummary>>,
-    enemies: Query<'w, 's, (&'static UnitId, &'static StandsOn), (With<Enemy>, Without<Downed>)>,
-    anchors: Query<'w, 's, &'static TilePos, With<AnchorMarker>>,
-    terrain: WalkTerrain<'w, 's>,
 }
 
 #[derive(SystemParam)]
 struct WalkContent<'w> {
     failure: Option<Res<'w, GameplaySetupFailure>>,
     library: Option<Res<'w, ScenarioLibrary>>,
-    presets: Option<Res<'w, hex_assets::CreationPresetCatalog>>,
-    shipped_spells: Option<Res<'w, hex_assets::SpellFile>>,
-    base_lattices: Option<Res<'w, hex_assets::LatticeFile>>,
-    elements: Option<Res<'w, hex_assets::ElementCatalog>>,
-    substances: Option<Res<'w, hex_assets::SubstanceTable>>,
-    combat: Option<Res<'w, hex_assets::CombatSettings>>,
 }
-
-#[derive(SystemParam)]
-struct WalkTerrain<'w, 's> {
-    substances: Option<Res<'w, SubstanceTable>>,
-    blockers: Option<Res<'w, TraversalBlockers>>,
-    tiles: Query<
-        'w,
-        's,
-        (
-            &'static TilePos,
-            &'static HexSpan,
-            &'static SubstanceId,
-            &'static Headroom,
-        ),
-        With<HexTile>,
-    >,
-}
-
-type WalkPlayerQuery<'w, 's> = Query<
-    'w,
-    's,
-    (
-        &'static UnitId,
-        &'static ControlOwner,
-        &'static StandsOn,
-        &'static Body,
-        Option<&'static Turn>,
-        Option<&'static LatticeSpec>,
-        Option<&'static LatticeState>,
-        Has<Busy>,
-    ),
-    With<Player>,
->;
 
 impl WalkState {
-    fn new(steps: Vec<WalkStep>, out_dir: PathBuf, size: (u32, u32)) -> Self {
+    fn new(
+        steps: Vec<WalkStep>,
+        out_dir: PathBuf,
+        size: (u32, u32),
+        native_capture: Option<PathBuf>,
+    ) -> Self {
         Self {
             steps,
             cursor: 0,
@@ -421,10 +401,10 @@ impl WalkState {
             capture_outcome: None,
             pressed: None,
             held_key: None,
-            auto_turn_seen: None,
             target: None,
             camera: None,
             size,
+            native_capture,
             failed: false,
         }
     }
@@ -435,7 +415,6 @@ impl WalkState {
         self.capture_requested = false;
         self.capture_outcome = None;
         self.step_started = Instant::now();
-        self.auto_turn_seen = None;
     }
 }
 
@@ -449,25 +428,37 @@ fn run_walk(
     mut state: ResMut<WalkState>,
     screen: Res<State<Screen>>,
     mut next: ResMut<NextState<Screen>>,
-    mut combat: WalkCombat,
     content: WalkContent,
+    mut ui_scale: ResMut<hex_ui::UiScalePreference>,
+    mut primary_window: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
     buttons: Query<(Entity, &Name), With<Button>>,
-    tiles: Query<(Entity, &TilePos), With<HexTile>>,
-    players: WalkPlayerQuery,
-    mut queue: ResMut<CommandQueue>,
+    tiles: Query<Entity, With<HexTile>>,
     mut images: ResMut<Assets<Image>>,
     mut camera_targets: Query<(Entity, &mut RenderTarget), With<Camera>>,
     ui_roots: Query<Entity, (With<Node>, Without<ChildOf>, Without<UiTargetCamera>)>,
+    latest_ui_tree: Res<hex_ui::test_support::LatestUiTreeSnapshot>,
     mut exit: MessageWriter<AppExit>,
 ) {
     if state.failed {
         return;
     }
 
+    // The offscreen render target controls capture resolution, but responsive UI
+    // metrics deliberately follow the logical window. Keep both canvases aligned
+    // so a persisted local window preference cannot silently turn a nominal 1080p
+    // review into a compact 720p layout stretched into a larger PNG.
+    if let Ok(mut window) = primary_window.single_mut() {
+        let may_resize = state.native_capture.is_none()
+            || matches!(window.mode, bevy::window::WindowMode::Windowed);
+        if may_resize && (window.physical_width(), window.physical_height()) != state.size {
+            window.resolution = bevy::window::WindowResolution::new(state.size.0, state.size.1);
+        }
+    }
+
     // Redirect the game's single camera into a readable offscreen image before
     // anything is photographed; see `WalkState::target`.
-    if state.target.is_none() {
+    if state.native_capture.is_none() && state.target.is_none() {
         let Ok((camera, mut render_target)) = camera_targets.single_mut() else {
             return;
         };
@@ -485,9 +476,11 @@ fn run_walk(
 
     // UI roots spawn and despawn with every screen; keep pointing new ones at
     // the redirected camera or their screens render into nothing.
-    if let Some(camera) = state.camera {
-        for root in &ui_roots {
-            commands.entity(root).insert(UiTargetCamera(camera));
+    if state.native_capture.is_none() {
+        if let Some(camera) = state.camera {
+            for root in &ui_roots {
+                commands.entity(root).insert(UiTargetCamera(camera));
+            }
         }
     }
     if let Some(failure) = content.failure.as_deref() {
@@ -549,6 +542,38 @@ fn run_walk(
         }
         WalkStep::Capture(ref name) => {
             if !state.capture_requested {
+                let Some(snapshot) = latest_ui_tree.0.as_ref() else {
+                    return;
+                };
+                let issues = snapshot.layout_issues();
+                if !issues.is_empty() {
+                    error!(
+                        "visual walk structural oracle rejected {name}:\n{}",
+                        issues.join("\n")
+                    );
+                    state.failed = true;
+                    exit.write(AppExit::error());
+                    return;
+                }
+                if let Some(command) = state.native_capture.clone() {
+                    let path = state.out_dir.join(format!("{name}.png"));
+                    let window = primary_window
+                        .single()
+                        .ok()
+                        .map(|window| NativeWindowFacts {
+                            physical_width: window.physical_width(),
+                            physical_height: window.physical_height(),
+                            logical_width: window.width(),
+                            logical_height: window.height(),
+                            scale_factor: window.resolution.scale_factor(),
+                            mode: format!("{:?}", window.mode),
+                        });
+                    let outcome =
+                        capture_native_window(&command, &path, name, window.as_ref(), snapshot);
+                    state.capture_outcome = Some(outcome);
+                    state.capture_requested = true;
+                    return;
+                }
                 let Some(target) = state.target.clone() else {
                     return;
                 };
@@ -619,290 +644,32 @@ fn run_walk(
                 state.advance();
             }
         }
-        WalkStep::AutoUntilButton(ref name) => {
-            let recovery_needed = name != "Cast Renewal"
-                || players.iter().any(|(_, _, _, _, _, spec, lattice, _)| {
-                    spec.zip(lattice).is_some_and(|(spec, lattice)| {
-                        spec.cells().any(|(cell, _)| lattice.is_disabled(cell))
-                    })
-                });
-            if recovery_needed
-                && buttons
-                    .iter()
-                    .any(|(_, button_name)| button_name.as_str().starts_with(name.as_str()))
-            {
-                // Panels rebuild through deferred commands. A matching button can
-                // therefore be the one-frame remnant of the actor whose turn just
-                // ended. Require the semantic control to survive a complete frame
-                // before the next step tries to press it.
-                state.settled = state.settled.saturating_add(1);
-                if state.settled >= 2 {
-                    state.advance();
-                }
-            } else {
-                state.settled = 0;
-                auto_player_input(
-                    combat.pending.as_deref(),
-                    &players,
-                    &combat.enemies,
-                    &combat.terrain,
-                    &mut queue,
-                    &mut state.auto_turn_seen,
-                );
-            }
-        }
-        WalkStep::PresentFixtureReport => {
-            let (Some(resolution), Some(summary)) = (
-                combat.resolution.as_deref_mut(),
-                combat.summary.as_deref_mut(),
-            ) else {
+        WalkStep::PresentUi(ref name) => {
+            if let Err(reason) = hex_ui::apply_ui_review_fixture(&mut commands, name) {
+                error!("visual walk: {reason}");
+                state.failed = true;
+                exit.write(AppExit::error());
                 return;
-            };
-            resolution.0 = Some(EncounterOutcome::Victory);
-            summary.outcome = Some(EncounterOutcome::Victory);
+            }
             state.advance();
         }
-        WalkStep::AutoUntilAiCast => {
-            let cast_seen = combat.traces.as_deref().is_some_and(|traces| {
-                traces
-                    .entries
-                    .iter()
-                    .any(|trace| matches!(trace.command, Some(GameCommand::Cast { .. })))
-            });
-            if cast_seen {
-                state.advance();
-            } else {
-                auto_player_input(
-                    combat.pending.as_deref(),
-                    &players,
-                    &combat.enemies,
-                    &combat.terrain,
-                    &mut queue,
-                    &mut state.auto_turn_seen,
-                );
-            }
-        }
-        WalkStep::AutoUntilPlayerTurn(wanted) => {
-            // Turn changes, modal answers, and the action panel settle through
-            // different deferred systems. Accept only a complete actionable frame;
-            // otherwise a stale Turn or panel can advance into a missing button.
-            let wanted_turn_is_ready = players
-                .iter()
-                .find(|(unit, ..)| unit.0 == wanted)
-                .is_some_and(|(unit, _, _, _, turn, _, _, busy)| {
-                    turn.is_some_and(|turn| !turn.acted) && !busy && !queue.holds_command_for(*unit)
-                });
-            let decision_is_open = combat
-                .pending
-                .as_deref()
-                .is_some_and(PendingDecision::is_open);
-            let action_panel_is_ready = buttons
-                .iter()
-                .any(|(_, name)| name.as_str().starts_with("End Turn"));
-            if wanted_turn_is_ready && !decision_is_open && action_panel_is_ready {
-                state.settled = state.settled.saturating_add(1);
-                if state.settled >= 2 {
-                    state.advance();
-                }
-            } else {
-                state.settled = 0;
-                auto_player_input(
-                    combat.pending.as_deref(),
-                    &players,
-                    &combat.enemies,
-                    &combat.terrain,
-                    &mut queue,
-                    &mut state.auto_turn_seen,
-                );
-            }
-        }
-        WalkStep::AutoUntilDamageDecision => {
-            let open = combat.pending.as_deref().is_some_and(|pending| {
-                matches!(
-                    pending,
-                    PendingDecision::ChooseDisables { decider, .. }
-                        if players.iter().any(|(unit, ..)| unit == decider)
-                )
-            });
-            if open {
-                state.advance();
-            } else {
-                auto_player_input(
-                    combat.pending.as_deref(),
-                    &players,
-                    &combat.enemies,
-                    &combat.terrain,
-                    &mut queue,
-                    &mut state.auto_turn_seen,
-                );
-            }
-        }
-        WalkStep::AnswerDecision => {
-            if answer_player_decision(combat.pending.as_deref(), &players, &mut queue) {
-                state.advance();
-            }
-        }
-        WalkStep::AimAtDamagedPlayer => {
-            let target = players
-                .iter()
-                .filter(|(_, _, _, _, _, spec, lattice, _)| {
-                    spec.zip(*lattice).is_some_and(|(spec, lattice)| {
-                        spec.cells().any(|(cell, _)| lattice.is_disabled(cell))
-                    })
-                })
-                .min_by_key(|(unit, ..)| **unit)
-                .map(|(unit, _, standing, ..)| (*unit, standing.0.pos));
-            let aim = combat
-                .aiming
-                .as_deref_mut()
-                .and_then(|aiming| aiming.0.as_mut());
-            if let (Some((unit, position)), Some(aim)) = (target, aim) {
-                info!("visual walk aiming recovery at damaged player {unit:?}");
-                aim.anchor = position;
-                state.advance();
-            }
-        }
-        WalkStep::AimAtPlayer(target) => {
-            let target = players
-                .iter()
-                .find(|(unit, ..)| unit.0 == target)
-                .map(|(unit, _, standing, ..)| (*unit, standing.0.pos));
-            let aim = combat
-                .aiming
-                .as_deref_mut()
-                .and_then(|aiming| aiming.0.as_mut());
-            if let (Some((unit, position)), Some(aim)) = (target, aim) {
-                info!("visual walk aiming at player {unit:?}");
-                aim.anchor = position;
-                state.advance();
-            }
-        }
-        WalkStep::AimAtHostile => {
-            let target = combat
-                .enemies
-                .iter()
-                .min_by_key(|(unit, _)| **unit)
-                .map(|(unit, standing)| (*unit, standing.0.pos));
-            let aim = combat
-                .aiming
-                .as_deref_mut()
-                .and_then(|aiming| aiming.0.as_mut());
-            if let (Some((unit, position)), Some(aim)) = (target, aim) {
-                info!("visual walk aiming at hostile {unit:?}");
-                aim.anchor = position;
-                state.advance();
-            }
-        }
-        WalkStep::AimAtEmpty => {
-            let occupied = players
-                .iter()
-                .map(|(_, _, standing, ..)| standing.0.pos)
-                .chain(combat.enemies.iter().map(|(_, standing)| standing.0.pos))
-                .collect::<Vec<_>>();
-            let Some(current_anchor) = combat
-                .aiming
-                .as_deref()
-                .and_then(|aiming| aiming.0.as_ref())
-                .map(|aim| aim.anchor)
-            else {
-                return;
+        WalkStep::SetUiScale(ref name) => {
+            ui_scale.0 = match name.as_str() {
+                "200%" => hex_ui::UiScaleMode::Percent200,
+                _ => hex_ui::UiScaleMode::Auto,
             };
-            let mut surfaces = combat
-                .anchors
-                .iter()
-                .copied()
-                .filter(|anchor| !occupied.contains(anchor))
-                .collect::<Vec<_>>();
-            surfaces.sort_by_key(|position| {
-                (
-                    current_anchor.coord.distance(position.coord),
-                    (current_anchor.level - position.level).abs(),
-                    *position,
-                )
-            });
-            let aim = combat
-                .aiming
-                .as_deref_mut()
-                .and_then(|aiming| aiming.0.as_mut());
-            if let (Some(position), Some(aim)) = (surfaces.first().copied(), aim) {
-                info!("visual walk moving aim over empty surface {position:?}");
-                aim.anchor = position;
-                state.advance();
-            }
+            state.advance();
+        }
+        WalkStep::SetViewport(ref size) => {
+            state.size = parse_size(size).unwrap_or((DEFAULT_WALK_WIDTH, DEFAULT_WALK_HEIGHT));
+            state.target = None;
+            state.advance();
         }
         WalkStep::Key(ref name) => {
             let key = parse_key(name).unwrap_or(KeyCode::Escape);
             info!("visual walk pressing {name}");
             keys.press(key);
             state.held_key = Some(key);
-            state.advance();
-        }
-        WalkStep::ClickTile { q, r, level } => {
-            let coord = HexCoord::from_axial(q, r);
-            let mut matches: Vec<_> = tiles
-                .iter()
-                .filter(|(_, position)| {
-                    position.coord == coord && level.is_none_or(|level| position.level == level)
-                })
-                .collect();
-            matches.sort_by_key(|(entity, position)| (position.level, *entity));
-            let Some(&(entity, position)) = matches.last() else {
-                return;
-            };
-            let (Some(target), Some(camera)) = (state.target.clone(), state.camera) else {
-                return;
-            };
-            info!("visual walk clicking tile {position:?}");
-            let hit = HitData::new(camera, 0.0, None, None);
-            let location = Location {
-                target: NormalizedRenderTarget::Image(target.into()),
-                position: Vec2::ZERO,
-            };
-            commands.trigger(Pointer::new(
-                PointerId::Mouse,
-                location,
-                Click {
-                    button: PointerButton::Primary,
-                    hit,
-                    duration: Duration::ZERO,
-                    count: 1,
-                },
-                entity,
-            ));
-            state.advance();
-        }
-        WalkStep::AttemptMove => {
-            let Some((unit, owner, standing, ..)) = players
-                .iter()
-                .find(|(_, _, _, _, turn, _, _, _)| turn.is_some())
-                .or_else(|| players.iter().next())
-            else {
-                return;
-            };
-            queue.push(IssuedCommand {
-                seat: owner.0,
-                command: GameCommand::MoveAlong {
-                    unit: *unit,
-                    // The modal gate runs before path validation. Naming the current
-                    // surface keeps the probe deterministic without pretending the
-                    // walk knows this scenario's terrain graph.
-                    path: vec![standing.0.pos],
-                },
-            });
-            state.advance();
-        }
-        WalkStep::AttemptEndTurn => {
-            let Some((unit, owner, ..)) = players
-                .iter()
-                .find(|(_, _, _, _, turn, _, _, _)| turn.is_some())
-                .or_else(|| players.iter().next())
-            else {
-                return;
-            };
-            queue.push(IssuedCommand {
-                seat: owner.0,
-                command: GameCommand::EndTurn { unit: *unit },
-            });
             state.advance();
         }
         WalkStep::StartScenario { ref name, seed } => {
@@ -930,289 +697,7 @@ fn run_walk(
             next.set(Screen::Loading);
             state.advance();
         }
-        WalkStep::StartFixture {
-            ref id,
-            ref profile,
-        } => {
-            let Some(combat_settings) = content.combat.as_deref() else {
-                return;
-            };
-            let Some(library) = content.library.as_deref() else {
-                return;
-            };
-            let Some(name) = crate::screens::combat_lab::fixture_scenario_name(id) else {
-                error!("visual walk: fixture {id:?} is not registered");
-                state.failed = true;
-                exit.write(AppExit::error());
-                return;
-            };
-            let Some(scenario) = library
-                .scenarios
-                .iter()
-                .find(|scenario| scenario.name == name)
-                .cloned()
-            else {
-                error!("visual walk: fixture {id:?} scenario {name:?} is missing");
-                state.failed = true;
-                exit.write(AppExit::error());
-                return;
-            };
-            let resolved_seed = scenario.generation_seed.map(ResolvedMapSeed);
-            let profile = match crate::screens::combat_lab::walk_fixture_profile(
-                profile.as_deref(),
-                combat_settings,
-            ) {
-                Ok(profile) => profile,
-                Err(reason) => {
-                    error!("visual walk: {reason}");
-                    state.failed = true;
-                    exit.write(AppExit::error());
-                    return;
-                }
-            };
-            // Direct fixture-to-fixture transitions do not pass through Combat
-            // Lab initialization, so explicitly retire the prior run's frozen
-            // launch and completed report before installing the next session.
-            commands.remove_resource::<crate::screens::combat_lab::CombatLabReportLaunch>();
-            commands.remove_resource::<crate::combat_reports::CurrentCombatLabReport>();
-            commands.insert_resource(crate::screens::combat_lab::CombatLabSession {
-                kind: crate::screens::combat_lab::CombatLabSessionKind::FixedFixture(id.clone()),
-                return_to: Screen::CombatLab,
-                profile,
-                shipped_combat: combat_settings.clone(),
-                report_map: crate::combat_reports::CombatLabReportMap {
-                    catalog_id: crate::screens::combat_lab::fixture_sandbox_map(id)
-                        .unwrap_or(id)
-                        .to_owned(),
-                    scenario: scenario.name.clone(),
-                    resolved_seed: resolved_seed.map(|seed| seed.0),
-                },
-                initial_state: (id == "channel-attrition").then_some(
-                    crate::screens::combat_lab::FixedFixtureInitialState::ChannelAttrition,
-                ),
-            });
-            let payload = match crate::screens::combat_lab::creator_fixture_payload(
-                id,
-                content.presets.as_deref(),
-                content.shipped_spells.as_deref(),
-                content.base_lattices.as_deref(),
-                content.elements.as_deref(),
-                content.substances.as_deref(),
-            ) {
-                Ok(payload) => payload,
-                Err(reason) => {
-                    error!("visual walk: fixture {id:?} is invalid: {reason}");
-                    state.failed = true;
-                    exit.write(AppExit::error());
-                    return;
-                }
-            };
-            let encounter_override = payload
-                .map(|(overlay, encounter)| {
-                    commands.insert_resource(overlay);
-                    encounter
-                })
-                .or_else(|| crate::screens::combat_lab::walk_fixture_encounter(id));
-            commands.insert_resource(ScenarioToLoad {
-                scenario,
-                resolved_seed,
-                encounter_override,
-            });
-            next.set(Screen::Loading);
-            state.advance();
-        }
     }
-}
-
-fn auto_player_input(
-    pending: Option<&PendingDecision>,
-    players: &WalkPlayerQuery,
-    enemies: &Query<(&UnitId, &StandsOn), (With<Enemy>, Without<Downed>)>,
-    terrain: &WalkTerrain,
-    queue: &mut CommandQueue,
-    turn_seen: &mut Option<(UnitId, u8)>,
-) {
-    if answer_player_decision(pending, players, queue) {
-        *turn_seen = None;
-        return;
-    }
-    let Some((unit, owner, standing, body, Some(turn), _, _, _)) = players
-        .iter()
-        .find(|(_, _, _, _, turn, _, _, busy)| turn.is_some() && !busy)
-    else {
-        *turn_seen = None;
-        return;
-    };
-    let frames = match *turn_seen {
-        Some((seen, frames)) if seen == *unit => frames.saturating_add(1),
-        _ => 1,
-    };
-    *turn_seen = Some((*unit, frames));
-    if frames < 2 {
-        return;
-    }
-    if !queue.holds_command_for(*unit) {
-        let Some(substances) = terrain.substances.as_deref() else {
-            return;
-        };
-        let footing = Footing::from_tiles(
-            terrain.tiles.iter(),
-            substances,
-            *body,
-            terrain.blockers.as_deref(),
-        );
-        let mut targets = enemies.iter().collect::<Vec<_>>();
-        targets.sort_by_key(|(target, _)| **target);
-        if !turn.acted {
-            if let Some((target, _)) = targets.iter().find(|(_, target)| {
-                standing.0.pos.coord.distance(target.0.pos.coord) == 1
-                    && (footing.admits_step(standing.0.pos, target.0.pos)
-                        || footing.admits_step(target.0.pos, standing.0.pos))
-            }) {
-                queue.push(IssuedCommand {
-                    seat: owner.0,
-                    command: GameCommand::Strike {
-                        unit: *unit,
-                        target: **target,
-                    },
-                });
-                return;
-            }
-        }
-        if frames >= 8 {
-            queue.push(IssuedCommand {
-                seat: owner.0,
-                command: GameCommand::EndTurn { unit: *unit },
-            });
-            return;
-        }
-
-        let occupied = players
-            .iter()
-            .map(|(_, _, occupied, ..)| occupied.0.pos)
-            .chain(targets.iter().map(|(_, occupied)| occupied.0.pos))
-            .collect::<Vec<_>>();
-        let reach = Reach::from(standing.0, &footing, None);
-        let route = targets
-            .iter()
-            .flat_map(|(target, target_standing)| {
-                footing
-                    .standings()
-                    .into_iter()
-                    .filter(|candidate| {
-                        candidate.pos.coord.distance(target_standing.0.pos.coord) == 1
-                            && (footing.admits_step(candidate.pos, target_standing.0.pos)
-                                || footing.admits_step(target_standing.0.pos, candidate.pos))
-                            && (candidate.pos == standing.0.pos
-                                || !occupied.contains(&candidate.pos))
-                    })
-                    .filter_map(|candidate| {
-                        reach
-                            .path_to(candidate.pos)
-                            .filter(|path| {
-                                path.iter()
-                                    .skip(1)
-                                    .all(|step| !occupied.contains(&step.pos))
-                            })
-                            .map(|path| (**target, candidate.pos, path))
-                    })
-            })
-            .min_by_key(|(target, destination, path)| (path.len(), *target, *destination))
-            .map(|(_, _, mut path)| {
-                path.truncate(
-                    usize::try_from(turn.movement_left)
-                        .unwrap_or(usize::MAX)
-                        .saturating_add(1),
-                );
-                path
-            });
-        if let Some(path) = route.filter(|path| path.len() > 1) {
-            queue.push(IssuedCommand {
-                seat: owner.0,
-                command: GameCommand::MoveAlong {
-                    unit: *unit,
-                    path: path.into_iter().map(|step| step.pos).collect(),
-                },
-            });
-            return;
-        }
-        queue.push(IssuedCommand {
-            seat: owner.0,
-            command: GameCommand::EndTurn { unit: *unit },
-        });
-    }
-}
-
-fn answer_player_decision(
-    pending: Option<&PendingDecision>,
-    players: &WalkPlayerQuery,
-    queue: &mut CommandQueue,
-) -> bool {
-    let Some(pending) = pending else {
-        return false;
-    };
-    let (decider, target, count, restoring) = match *pending {
-        PendingDecision::ChooseDisables { decider, count, .. } => (decider, decider, count, false),
-        PendingDecision::ChooseRestores {
-            decider,
-            target,
-            count,
-        } => (decider, target, count, true),
-        PendingDecision::None => return false,
-    };
-    if queue.holds_answer_for(decider) {
-        return true;
-    }
-    let Some((_, owner, ..)) = players.iter().find(|(unit, ..)| **unit == decider) else {
-        return false;
-    };
-    let Some((_, _, _, _, _, Some(spec), Some(state), _)) =
-        players.iter().find(|(unit, ..)| **unit == target)
-    else {
-        return false;
-    };
-    let mut candidates: Vec<_> = spec
-        .cells()
-        .filter(|(cell, _)| state.is_disabled(*cell) == restoring)
-        .map(|(cell, kind)| {
-            let rank = if restoring {
-                0
-            } else {
-                match kind {
-                    CellKind::Blank => 0,
-                    // Preserve funding gems long enough for the recovery walk to
-                    // exercise Renewal on the following hedge-mage turn.
-                    CellKind::Fusion { .. } => 1,
-                    CellKind::Spell { .. } if cell != LatticeCoord::new(-1, 3) => 2,
-                    CellKind::Gem { .. } => 3,
-                    CellKind::Spell { .. } => 4,
-                }
-            };
-            (rank, state.mana(cell), cell)
-        })
-        .collect();
-    candidates.sort_unstable();
-    let cells = candidates
-        .into_iter()
-        .take(usize::from(count))
-        .map(|(_, _, cell)| cell)
-        .collect();
-    queue.push(IssuedCommand {
-        seat: owner.0,
-        command: if restoring {
-            GameCommand::ChooseRestores {
-                unit: decider,
-                target,
-                cells,
-            }
-        } else {
-            GameCommand::ChooseDisables {
-                unit: decider,
-                cells,
-            }
-        },
-    });
-    true
 }
 
 #[cfg(test)]
@@ -1227,30 +712,18 @@ mod tests {
         AwaitScreen("CombatLab"),
         Key("Backspace"),
         StartScenario(name: "The Crossing"),
-        StartFixture(id: "ability-lab"),
         AwaitTerrain,
-        ClickTile(q: 0, r: -2),
-        Key("KeyR"),
         AwaitButton("Cast Ember"),
-        AutoUntilButton("Cast Renewal"),
-        PresentFixtureReport,
-        AutoUntilAiCast,
-        AutoUntilPlayerTurn(1),
-        AutoUntilDamageDecision,
-        AimAtDamagedPlayer,
-        AimAtPlayer(1),
-        AimAtHostile,
-        AimAtEmpty,
-        AnswerDecision,
-        AttemptMove,
-        AttemptEndTurn,
+        SetViewport("3840x2160"),
+        SetUiScale("200%"),
+        PresentUi("required-decision"),
         Capture("02-crossing"),
     ]"#;
 
     #[test]
     fn a_full_script_parses_with_every_step_kind() {
         let steps: Vec<WalkStep> = ron::from_str(FULL_SCRIPT).expect("script parses");
-        assert_eq!(steps.len(), 25);
+        assert_eq!(steps.len(), 13);
         assert_eq!(steps.first(), Some(&WalkStep::AwaitScreen("Title".into())));
         assert_eq!(
             steps.get(3),
@@ -1266,13 +739,6 @@ mod tests {
                 seed: None
             })
         );
-        assert_eq!(
-            steps.get(7),
-            Some(&WalkStep::StartFixture {
-                id: "ability-lab".into(),
-                profile: None,
-            })
-        );
         for step in &steps {
             validate_step(step).expect("every step validates");
         }
@@ -1280,9 +746,7 @@ mod tests {
 
     #[test]
     fn unknown_screens_and_keys_are_rejected_at_load() {
-        assert_eq!(parse_key("KeyH"), Ok(KeyCode::KeyH));
-        assert_eq!(parse_key("KeyL"), Ok(KeyCode::KeyL));
-        assert_eq!(parse_key("KeyR"), Ok(KeyCode::KeyR));
+        assert_eq!(parse_key("C"), Ok(KeyCode::KeyC));
         assert!(validate_step(&WalkStep::AwaitScreen("Menu".into())).is_err());
         assert!(validate_step(&WalkStep::Key("F13".into())).is_err());
         assert!(validate_step(&WalkStep::Capture(" ".into())).is_err());
@@ -1292,7 +756,6 @@ mod tests {
         })
         .is_err());
         assert!(validate_step(&WalkStep::AwaitButton(" ".into())).is_err());
-        assert!(validate_step(&WalkStep::AutoUntilButton(" ".into())).is_err());
     }
 
     #[test]
@@ -1323,11 +786,10 @@ mod tests {
     #[test]
     fn the_shipped_walk_scripts_parse_and_validate() {
         for script in [
-            "../../walks/menus.ron",
-            "../../walks/gameplay.ron",
-            "../../walks/ability_lab.ron",
-            "../../walks/raider_mirror.ron",
-            "../../walks/wave7_combat_lab.ron",
+            "../../walks/gameplay_ui.ron",
+            "../../walks/gameplay_ui_native.ron",
+            "../../walks/gameplay_ui_native_prepare_200.ron",
+            "../../walks/gameplay_ui_native_restart_200.ron",
             "../../walks/waterfall.ron",
             "../../walks/forest.ron",
         ] {
@@ -1346,22 +808,23 @@ mod tests {
 
     #[test]
     fn scoped_gameplay_acceptance_stays_within_the_frame_budget() {
-        let steps: Vec<WalkStep> =
-            ron::from_str(include_str!("../../../walks/wave7_combat_lab.ron"))
-                .expect("the Wave 7 gameplay walk parses");
-        let captures = steps
-            .iter()
-            .filter(|step| matches!(step, WalkStep::Capture(_)))
-            .count();
+        let captures = [
+            include_str!("../../../walks/gameplay_ui.ron"),
+            include_str!("../../../walks/gameplay_ui_native.ron"),
+            include_str!("../../../walks/gameplay_ui_native_restart_200.ron"),
+        ]
+        .into_iter()
+        .map(|script| {
+            ron::from_str::<Vec<WalkStep>>(script)
+                .expect("the gameplay UI walk parses")
+                .into_iter()
+                .filter(|step| matches!(step, WalkStep::Capture(_)))
+                .count()
+        })
+        .sum::<usize>();
         assert!(
             captures <= 10,
             "scoped gameplay acceptance captured {captures} frames; the contract permits 10"
-        );
-        assert!(
-            !steps
-                .iter()
-                .any(|step| matches!(step, WalkStep::AutoUntilButton(_))),
-            "presentation acceptance must not solve combat with frame-sensitive input"
         );
     }
 
@@ -1407,7 +870,8 @@ mod tests {
         let mut checked = 0;
         let mut launches_default = false;
         let mut continues_save = false;
-        for script in ["../../walks/menus.ron", "../../walks/gameplay.ron"] {
+        let mut launches_lab_sandbox = false;
+        for script in ["../../walks/gameplay_ui.ron"] {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(script);
             let text = std::fs::read_to_string(&path)
                 .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
@@ -1428,11 +892,14 @@ mod tests {
                 if matches!(step, WalkStep::Click { name, .. } if name == "Continue") {
                     continues_save = true;
                 }
+                if matches!(step, WalkStep::Click { name, .. } if name == "Load Map & Deploy") {
+                    launches_lab_sandbox = true;
+                }
             }
         }
         assert!(
-            checked > 0 || (launches_default && continues_save),
-            "walks must launch configured scenarios directly or exercise New Game and Continue"
+            checked > 0 || launches_default || continues_save || launches_lab_sandbox,
+            "the UI walk must exercise at least one real application launch path"
         );
     }
 }

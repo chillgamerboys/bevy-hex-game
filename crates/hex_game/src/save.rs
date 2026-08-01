@@ -4,7 +4,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use bevy::ui::InteractionDisabled;
 use hex_assets::{Scenario, ScenarioLibrary};
 use hex_combat::EncounterResolution;
 use hex_core::{
@@ -14,11 +13,11 @@ use hex_core::{
 };
 use hex_lattice::LatticeState;
 use hex_map::{MapSettings, TerrainSettings};
+use hex_ui::{ResumeView, TitleIntent, UiIntent, UiSystems};
 use hex_units::{Downed, Faction, MovingTo, Selected, Standing, StandsOn};
 use serde::{Deserialize, Serialize};
 
 use crate::scenarios::{ActiveScenario, ScenarioToLoad};
-use crate::screens::title::{ContinueStatusText, ContinuesGame};
 use crate::storage::{read, write_atomic, StoragePaths};
 
 const RESUME_VERSION: u32 = 1;
@@ -263,11 +262,10 @@ pub(crate) fn plugin(app: &mut App) {
     app.init_resource::<StoragePaths>()
         .init_resource::<ResumeStatus>()
         .init_resource::<ResumeNotice>()
+        .init_resource::<ResumeView>()
         .add_systems(Startup, load_resume)
-        .add_systems(
-            Update,
-            (sync_continue_button, continue_game, save_exploration),
-        )
+        .add_systems(Update, (sync_continue_view, save_exploration))
+        .add_systems(Update, continue_game.after(UiSystems::EmitIntents))
         .add_systems(
             OnEnter(Screen::Gameplay),
             restore_pending_resume.in_set(GameplaySetup::Restore),
@@ -330,13 +328,8 @@ fn validate_resume(resume: &ResumeFile) -> Result<(), String> {
     Ok(())
 }
 
-fn sync_continue_button(
-    status: Res<ResumeStatus>,
-    mut commands: Commands,
-    buttons: Query<Entity, With<ContinuesGame>>,
-    mut text: Query<&mut Text, With<ContinueStatusText>>,
-) {
-    if !status.is_changed() && buttons.is_empty() {
+fn sync_continue_view(status: Res<ResumeStatus>, mut view: ResMut<ResumeView>) {
+    if !status.is_changed() {
         return;
     }
     let (enabled, message) = match status.as_ref() {
@@ -350,28 +343,25 @@ fn sync_continue_button(
         ),
         ResumeStatus::Invalid(reason) => (false, reason.clone()),
     };
-    for button in &buttons {
-        if enabled {
-            commands.entity(button).remove::<InteractionDisabled>();
-        } else {
-            commands.entity(button).insert(InteractionDisabled);
-        }
-    }
-    for mut text in &mut text {
-        text.0.clone_from(&message);
+    let next = ResumeView {
+        available: enabled,
+        message,
+    };
+    if *view != next {
+        *view = next;
     }
 }
 
 fn continue_game(
-    clicked: Query<&Interaction, (Changed<Interaction>, With<ContinuesGame>)>,
+    mut intents: MessageReader<UiIntent>,
     mut status: ResMut<ResumeStatus>,
     library: Option<Res<ScenarioLibrary>>,
     mut commands: Commands,
     mut next: ResMut<NextState<Screen>>,
 ) {
-    if !clicked
-        .iter()
-        .any(|interaction| *interaction == Interaction::Pressed)
+    if !intents
+        .read()
+        .any(|intent| matches!(intent, UiIntent::Title(TitleIntent::Continue)))
     {
         return;
     }

@@ -1,0 +1,42 @@
+// The six deterministic offscreen frames in the gameplay UI acceptance route.
+// Native macOS review owns the other four checkpoints. Every Capture first runs
+// the live UiTreeSnapshot structural oracle; pixels remain presentation evidence.
+[
+    AwaitScreen("Title"),
+    Click(name: "Character Creator"),
+    AwaitScreen("CharacterCreator"),
+    Click(name: "New Blank Character"),
+    Settle(4),
+    Capture("ui-01-creator-validation"),
+    Click(name: "Discard Changes"),
+    Click(name: "Library"),
+    Click(name: "Title"),
+
+    AwaitScreen("Title"),
+    Click(name: "Combat Lab"),
+    AwaitScreen("CombatLab"),
+    Settle(4),
+    Capture("ui-02-combat-lab-setup"),
+    Click(name: "Continue to Rosters"),
+    Click(name: "Continue to Rules"),
+    Click(name: "Load Map & Deploy"),
+    AwaitScreen("Gameplay"),
+    AwaitTerrain,
+    Settle(6),
+    Capture("ui-03-deployment"),
+    Click(name: "Deterministic Auto-place"),
+    Click(name: "Start Combat"),
+
+    PresentUi("aiming-disabled"),
+    Settle(4),
+    Capture("ui-04-aiming-disabled"),
+
+    PresentUi("live-statistics"),
+    Settle(4),
+    Capture("ui-05-live-statistics"),
+
+    SetViewport("3840x2160"),
+    PresentUi("dense-report-compare"),
+    Settle(6),
+    Capture("ui-06-dense-report-compare-4k"),
+]

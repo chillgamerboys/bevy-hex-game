@@ -191,30 +191,28 @@ summary fingerprint covers the aggregates plus both bounded detail windows; thei
 rolling fingerprints continue to cover facts that aged out. It resets with the
 gameplay session.
 
-The automated UI suite deliberately does not use the authored Crossing:
+Typed gameplay tests deliberately do not use screenshots as their combat oracle:
 
 - **Ability Lab** is a flat 2v1 with one player hedge-mage, one player wolf, and one
   hostile raider. Two allies are the minimum honest fixture for friendly damage,
-  downing, Renewal, and next-round revival. The same walk covers Scrying Eye,
-  aim/pin/confirm, damage decisions, refusal history, and the wolf's no-spell turn.
+  downing, Renewal, and next-round revival. The app/contracts partitions cover
+  Scrying Eye, aim/pin/confirm, damage decisions, refusal history, and the wolf's
+  no-spell turn through canonical state.
 - **Raider Mirror** is a flat 1v1 with the same archetype on opposite factions. It is
-  the focused regression fixture for a hostile raider ever being presented as the
-  selected or active allied raider.
+  the focused state regression for a hostile raider ever being selected or presented
+  as the active allied raider.
 
-Both use `config/worlds/flat-combat.ron`, whose empty Perlin recipe produces one
-connected level surface. Run both walks at the minimum review size:
+Both retain their typed fixture identities, but their behavior runs through the
+concern partitions rather than frame-sensitive walk automation:
 
 ```sh
-HEX_WALK_SCRIPT=walks/ability_lab.ron \
-HEX_WALK_OUT=.context/walks/ability-lab-1280 \
-HEX_WALK_SIZE=1280x720 \
-cargo run --release --features visual-walk
-
-HEX_WALK_SCRIPT=walks/raider_mirror.ron \
-HEX_WALK_OUT=.context/walks/raider-mirror-1280 \
-HEX_WALK_SIZE=1280x720 \
-cargo run --release --features visual-walk
+python3 tools/gameplay_scope.py run contracts
+python3 tools/gameplay_scope.py run simulation
+python3 tools/gameplay_scope.py run app
 ```
+
+`walks/gameplay_ui.ron` may present these surfaces, but its frames prove only UI
+composition and legibility.
 
 The shipped **Party Trial** remains the full 3v3 integration and human test: matching
 hedge-mage, raider, and wolf rosters approach the authored Crossing from opposite

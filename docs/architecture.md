@@ -11,6 +11,7 @@ hex_core → hex_assets → hex_objects ─────────────�
 hex_core → hex_ai → {hex_assets, hex_units, hex_combat}   (contracts, controllers, host)
 {hex_core, hex_lattice} → hex_combat_core → hex_combat   (pure combat authority)
 {bevy_ecs, hex_core} → hex_gameplay_model → hex_game  (pure screen behavior)
+{Bevy, hex_core, hex_assets, hex_gameplay_model} → hex_ui → hex_game  (runtime presentation)
 hex_core → {hex_assets, hex_units} → hex_perception → {hex_combat, hex_game}
 hex_core → hex_lattice → {hex_assets, hex_units, hex_combat}   (the pure rules engine)
 hex_core → hex_anim ─────────────────────→ hex_units
@@ -35,6 +36,7 @@ will, and no amount of documentation prevents it. A compiler error does.
 | `hex_ai` | Authorized observations, canonical legal-action requests, profile/controller identities, and replaceable algorithm traits; no legality or simulation mutation | `hex_core`, Bevy sub-crates | gameplay |
 | `hex_combat_core` | Frozen combat inputs, serializable state, the command reducer, typed outcomes, canonical snapshots and bounded simulation | `hex_core`, `hex_lattice`, `bevy_ecs` derive support only | gameplay |
 | `hex_gameplay_model` | Pure Combat Lab and Creator state transitions, report selection, launch routing, navigation, and edit history | `hex_core`, `bevy_ecs` derive support only | gameplay |
+| `hex_ui` | Runtime UI rendering, immutable presentation models, typed UI intentions, responsive scale, semantic styling, focus/accessibility, and presentation-only observations | Bevy, `hex_core`, `hex_assets`, `hex_gameplay_model`; never gameplay/world implementations | shared presentation |
 | `hex_assets` | Generic asset loading plus domain-owned RON schema and settings modules | `hex_core`, `hex_lattice` | loader infrastructure: gameplay; each schema/settings module and its content: that domain's owner |
 | `hex_objects` | Palette-backed rendering of static authored voxel objects | `hex_core`, `hex_assets` | shared presentation |
 | `hex_map` | **The map**: voxel storage, terrain generation, tile spawning, map settings | `hex_core`, `hex_assets` | world |
@@ -44,7 +46,7 @@ will, and no amount of documentation prevents it. A compiler error does.
 | `hex_perception` | Authoritative illumination, faction sight, and remembered map knowledge | `hex_core`, `hex_assets`, `hex_units` | world |
 | `hex_combat` | The loop: modes, turn order, algorithm-neutral AI host and legal-action enumeration, persistent effects, and faction lattice knowledge | `hex_core`, `hex_ai`, `hex_assets`, `hex_anim`, `hex_units`, `hex_lattice`, `hex_perception` | gameplay |
 | `hex_dev` | World inspector. Behind the `dev` feature | Bevy, `bevy-inspector-egui` | gameplay |
-| `hex_game` | The binary: app setup, screens, menus, wiring | all of the above | shared |
+| `hex_game` | Thin executable library and composition root: observes authority, builds immutable UI view models, applies typed intents, and wires plugins | all runtime crates | shared |
 | `hex_editor` | Standalone palette, voxel-style, and object authoring; validated explicit writes, untracked recovery, and deterministic review packs | Bevy, `bevy_egui`, `hex_core`, `hex_assets` | shared tooling |
 | `hex_test_app` | Capability-based deterministic Bevy app construction, plugin finalization, bounded settling, and shared state entry; no fixtures or owner implementation | Bevy, `hex_core` | shared testing |
 | `hex_test_support` | Test-only deterministic app setup plus consumer-side synthetic exact-surface facts and fixture assets; no gameplay or world implementation | Bevy, `hex_core`, `hex_assets`, `hex_test_app` | gameplay testing; neutral app shell is shared across owners |
@@ -144,6 +146,11 @@ Two roles, named so the arrangement survives a change of people:
 `hex_game` is **shared** — it is wiring, screens, scenarios and review tooling, and
 whoever needs a change makes it. `scenario.rs` and `scenarios.ron` sit in the same
 shared middle, flagged to the other side when a change touches their domain.
+
+`hex_ui` is also shared presentation, but its dependency ceiling is strict. Domain
+facts flow into it as immutable view models and player actions flow out as typed
+intent. The complete contract, responsive model, and testing oracle are in
+[systems/ui.md](systems/ui.md).
 
 `hex_assets` is split by concern rather than guarded as one person's directory.
 Generic mechanisms — loader traits, load tracking, common registration patterns, and

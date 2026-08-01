@@ -12,29 +12,43 @@ use hex_assets::{
 
 /// Compact, factual description of one spell.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SpellBuildSummary {
-    pub(crate) name: String,
-    pub(crate) requirements: Vec<String>,
-    pub(crate) casting: String,
-    pub(crate) targeting: String,
-    pub(crate) effects: Vec<String>,
-    pub(crate) sentence: String,
-    pub(crate) issues: Vec<String>,
+pub struct SpellBuildSummary {
+    /// Player-facing spell name.
+    pub name: String,
+    /// Ordered mana requirement labels.
+    pub requirements: Vec<String>,
+    /// Casting-axis summary.
+    pub casting: String,
+    /// Target shape and range summary.
+    pub targeting: String,
+    /// Ordered effect summaries.
+    pub effects: Vec<String>,
+    /// Compact targeting-and-outcome sentence.
+    pub sentence: String,
+    /// Current validation issues.
+    pub issues: Vec<String>,
 }
 
 /// Compact, factual description of one character.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CharacterBuildSummary {
-    pub(crate) name: String,
-    pub(crate) cells: usize,
-    pub(crate) attunement: Vec<String>,
-    pub(crate) spells: Vec<SpellBuildSummary>,
-    pub(crate) capabilities: Vec<String>,
-    pub(crate) issues: Vec<String>,
+pub struct CharacterBuildSummary {
+    /// Player-facing character name.
+    pub name: String,
+    /// Number of occupied lattice cells.
+    pub cells: usize,
+    /// Non-zero attunement and channelling labels.
+    pub attunement: Vec<String>,
+    /// Spells resolved from the character lattice.
+    pub spells: Vec<SpellBuildSummary>,
+    /// Unique derived combat capabilities.
+    pub capabilities: Vec<String>,
+    /// Current validation issues.
+    pub issues: Vec<String>,
 }
 
 impl SpellBuildSummary {
-    pub(crate) fn from_saved(saved: &SavedSpell, elements: Option<&ElementCatalog>) -> Self {
+    /// Derives a presentation summary from a saved spell.
+    pub fn from_saved(saved: &SavedSpell, elements: Option<&ElementCatalog>) -> Self {
         let issues = elements.map_or_else(
             || vec!["Element catalog is still loading.".to_owned()],
             |elements| creator_spell_issues(saved, elements),
@@ -42,7 +56,8 @@ impl SpellBuildSummary {
         Self::from_spell(saved.name.clone(), &saved.spell, issues)
     }
 
-    pub(crate) fn from_spell(name: impl Into<String>, spell: &Spell, issues: Vec<String>) -> Self {
+    /// Derives a presentation summary from a resolved spell and known issues.
+    pub fn from_spell(name: impl Into<String>, spell: &Spell, issues: Vec<String>) -> Self {
         let requirements = spell
             .requirements
             .iter()
@@ -88,7 +103,8 @@ impl SpellBuildSummary {
 }
 
 impl CharacterBuildSummary {
-    pub(crate) fn from_saved(
+    /// Derives a presentation summary from a saved character and referenced content.
+    pub fn from_saved(
         character: &SavedCharacter,
         library: &CreationLibraryFile,
         elements: Option<&ElementCatalog>,
@@ -140,11 +156,13 @@ impl CharacterBuildSummary {
         }
     }
 
-    pub(crate) fn ready(&self) -> bool {
+    /// Returns whether no validation issue blocks deployment.
+    pub fn ready(&self) -> bool {
         self.issues.is_empty()
     }
 
-    pub(crate) fn compact_line(&self) -> String {
+    /// Returns the compact cell-and-capability line used by cards.
+    pub fn compact_line(&self) -> String {
         format!(
             "{} cells · {}",
             self.cells,
@@ -179,7 +197,8 @@ fn resolve_spell(
     }
 }
 
-pub(crate) fn effect_summary(effect: &Effect) -> String {
+/// Produces a compact, non-authoritative label for one authored spell effect.
+pub fn effect_summary(effect: &Effect) -> String {
     match effect {
         Effect::DisableHexes { count, .. } => format!("Disable {count}"),
         Effect::Burn { turns } => format!("Burn {turns} turns"),

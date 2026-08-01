@@ -1,6 +1,6 @@
 // README-only capture of the integrated New Game scenario reaching 3v3 combat.
-// Focused automated combat coverage remains in ability_lab.ron and
-// raider_mirror.ron; this script exists to keep the public screenshot reproducible.
+// Focused combat coverage lives in typed rules, contracts, simulation, and app
+// snapshots; this script exists only to keep the public screenshot reproducible.
 [
     AwaitScreen("Title"),
     StartScenario(name: "Party Trial"),

@@ -10,14 +10,16 @@ other gate does: **an agent actually looks at the game.**
 
 Two tiers, and the split is the contract:
 
-- **Mechanical tier (hard fail):** the walk stalls, a capture comes back
-  black, the wrong screen is visible, a panel is entirely missing, text
-  renders as nothing. These are `fail` — they block the merge exactly like a
-  failing test.
-- **Review tier (warn):** overlap, overflow, misalignment, cramped or dead
-  space, illegible contrast, inconsistent sizing — anything a reader of the
-  PNG can point at. These are findings the human decides on; they never flip
-  the receipt off green by themselves.
+- **Structural tier (hard fail):** before every capture, the live UI tree checks
+  effective bounds, inherited clipping, scroll reachability, accessible labels,
+  focus order, interactive overlap, and 44×44 targets. A nonzero node inside a
+  clipped ancestor is not visible. Structural findings block capture and merge.
+- **Mechanical tier (hard fail):** the walk stalls, a capture comes back black,
+  the wrong screen is visible, a panel is entirely missing, or text renders as
+  nothing. These block the merge exactly like a failing test.
+- **Review tier (warn):** hierarchy, cramped or dead space, visual contrast, and
+  inconsistent styling that no geometry oracle can judge remain human-readable
+  findings. They never flip the receipt off green by themselves.
 - **Not covered:** motion (movement speed, animation feel), sub-pixel seams,
   and final taste. The human walk owns those — this skill narrows the
   human's job, it does not replace it.
@@ -34,12 +36,15 @@ transforms, movement, screen/state transitions → walk.
 ```bash
 cargo build -p hex_game --features visual-walk --profile ci
 OUT=.context/visual-walks/pr-<N>   # or /tmp for uncommitted work
-HEX_WALK_SCRIPT=walks/menus.ron    HEX_WALK_OUT=$OUT cargo run -p hex_game --features visual-walk
-HEX_WALK_SCRIPT=walks/gameplay.ron HEX_WALK_OUT=$OUT cargo run -p hex_game --features visual-walk
+HEX_WALK_SCRIPT=walks/gameplay_ui.ron HEX_WALK_OUT=$OUT cargo run -p hex_game --features visual-walk
+
+# UI/runtime PRs also run the real Retina/fullscreen window and persisted restart.
+tools/run_gameplay_ui_native_review_macos.sh .context/visual-walks/pr-<N>-native
 ```
 
-Run the scripts relevant to the diff (menus.ron for UI/screen changes,
-gameplay.ron for world/lighting/camera changes; both when unsure). Each run
+Run the scripts relevant to the diff. Gameplay UI uses the six-frame offscreen
+route plus the four-checkpoint native wrapper; map/world routes retain their owned
+scripts and acceptance criteria. Each run
 must exit 0 — a nonzero exit is a mechanical `fail`; the process's own log
 names the stalled step or black frame. NEVER run while the operator has a
 game instance open (the two windows fight for nothing, but the operator's
@@ -58,7 +63,8 @@ step's intent (the script comments say what each frame should show). For
 each frame record: `ok`, or a finding
 `{step, png_path, check: mechanical|review, message}`.
 
-Checklist per frame — the known silent failure modes first (blue window,
+Do not review a PNG the structural oracle rejected. Checklist per accepted frame —
+the known silent failure modes first (blue window,
 black sky from the down-looking camera, missing HUD, pause overlay absent),
 then the review tier (alignment, overflow, contrast, spacing, hierarchy).
 Say what is GOOD too when it is — the operator uses this to calibrate trust.
@@ -69,7 +75,7 @@ Print a table: frame × verdict × finding. Then the receipt entry for
 `/audit-pr` (this skill is its Step 2.5, key `5_visual_walk`):
 
 - All frames ok → `"status": "pass"`, summary like
-  `"11 frames across 2 walks, 0 mechanical, 0 review findings"`.
+  `"10 frames across offscreen/native routes, 0 structural, 0 mechanical, 0 review findings"`.
 - Review findings only → `"status": "warn"` + the findings array. Green
   overall; the human sees the list in the PR body / merge report.
 - Any mechanical failure → `"status": "fail"` + findings. This blocks
@@ -91,7 +97,7 @@ Findings shape: `{step, png_path, check, message}`.
 
 - New screen or interaction worth photographing → extend `walks/*.ron` (and
   add a step comment saying what the frame should show).
-- New mechanical check (e.g. a frame-diff for frozen detection) → add to the
+- New mechanical or geometry check → add to the
   harness (`crates/hex_game/src/walk.rs`) first, then note it here.
 - If the walk scripts' click names drift from the UI, the walk fails loudly —
   fix the script with the UI change, never delete the step.

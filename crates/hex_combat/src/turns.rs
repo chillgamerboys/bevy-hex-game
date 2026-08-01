@@ -32,7 +32,10 @@
 //! press being silently lost to the animation.
 
 use bevy::platform::collections::HashMap;
-use bevy::prelude::*;
+use bevy::{
+    input_focus::{tab_navigation::TabIndex, InputFocus},
+    prelude::*,
+};
 use std::collections::BTreeMap;
 
 use hex_assets::CombatSettings;
@@ -462,13 +465,19 @@ fn end_combat(
 fn end_turn_on_space(
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<InputBindings>,
+    focus: Option<Res<InputFocus>>,
+    focusable_controls: Query<(), With<TabIndex>>,
     turn_order: Res<TurnOrder>,
     registry: Res<UnitRegistry>,
     pending: Res<PendingDecision>,
     owners: Query<(Option<&ControlOwner>, &Faction)>,
     mut queue: ResMut<CommandQueue>,
 ) {
-    if !bindings.just_pressed(&keys, InputAction::EndTurn) || pending.is_open() {
+    let focus_owns_shortcuts = focus
+        .as_deref()
+        .and_then(InputFocus::get)
+        .is_some_and(|entity| focusable_controls.contains(entity));
+    if !raw_end_turn_requested(&keys, &bindings, focus_owns_shortcuts) || pending.is_open() {
         return;
     }
     let Some(current) = turn_order.current() else {
@@ -488,6 +497,14 @@ fn end_turn_on_space(
         seat,
         command: GameCommand::EndTurn { unit: current },
     });
+}
+
+fn raw_end_turn_requested(
+    keys: &ButtonInput<KeyCode>,
+    bindings: &InputBindings,
+    focus_owns_shortcuts: bool,
+) -> bool {
+    !focus_owns_shortcuts && bindings.just_pressed(keys, InputAction::EndTurn)
 }
 
 /// Passes the turn on when the acting unit is done.
@@ -648,6 +665,15 @@ fn lattice_is_fully_disabled(spec: &LatticeSpec, state: &LatticeState) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn focused_ui_owns_space_instead_of_double_ending_the_turn() {
+        let mut keys = ButtonInput::default();
+        keys.press(KeyCode::Space);
+        let bindings = InputBindings::default();
+        assert!(raw_end_turn_requested(&keys, &bindings, false));
+        assert!(!raw_end_turn_requested(&keys, &bindings, true));
+    }
 
     fn order_of(units: &[UnitId]) -> TurnOrder {
         TurnOrder {

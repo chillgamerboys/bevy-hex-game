@@ -12,7 +12,8 @@
 - [ ] Residual workspace tests and doctests (unless Markdown-only)
 - [ ] `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features` (unless Markdown-only)
 - [ ] `cargo build --workspace --profile ci` (unless Markdown-only; CI builds all three platforms)
-- [ ] Automated visual walk green — `/visual-walk` captured the screens and the agent read every frame
+- [ ] Structural UI oracle and six-frame offscreen walk green; agent read every frame
+- [ ] Four-checkpoint native macOS route recorded at this exact head (when UI/runtime applies)
 
 ### Manual runtime sign-off
 
@@ -33,6 +34,14 @@ Manual runtime date: <YYYY-MM-DD>
 Manual runtime route: <affected scenarios and failure paths exercised>
 Manual runtime findings/waiver: <none, findings, or explicit maintainer waiver>
 
+<!--
+For the UI foundation/follow-ups, record all applicable checkpoints explicitly:
+1280x720 compact; 1920x1080 standard; high-resolution fullscreen Auto; 200% scale
+plus restart persistence; Creator validation; Combat Lab setup, deployment, live
+drawer, and Compare report; movement, casting, Channel, blocked actions, required
+lattice decision, HUD hiding, and pause.
+-->
+
 ### Evidence by concern
 
 - Pure rules:
@@ -43,9 +52,11 @@ Manual runtime findings/waiver: <none, findings, or explicit maintainer waiver>
 - Scheduled/manual soak or performance (when applicable):
 
 <!--
-Screenshots are not evidence of exact occupancy, action accounting, tempo,
-determinism, report identity, or state restoration. Cite canonical snapshots and
-named metrics for those claims. A timeout or no-progress bound is a typed result,
+Screenshots are UI evidence only: layout, hierarchy, legibility, focus visibility,
+contrast, responsive reflow, and presentation state. They are not evidence of
+legality, budgets, decisions, damage, Channel, outcomes, persistence, deployment,
+report identity, exact occupancy, tempo, or determinism. Cite canonical snapshots
+and named metrics for those claims. A timeout or no-progress bound is a typed result,
 not a pass.
 -->
 

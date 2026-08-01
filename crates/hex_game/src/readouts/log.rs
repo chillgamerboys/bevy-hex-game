@@ -5,7 +5,6 @@ use std::{
     time::Duration,
 };
 
-use bevy::picking::Pickable;
 use bevy::prelude::*;
 use hex_assets::{ElementCatalog, SpellBook};
 use hex_combat::{CombatEvent, CombatSystems, CommandRefusal, FactionLatticeKnowledge};
@@ -14,9 +13,8 @@ use hex_lattice::{CellKind, LatticeSpec};
 use hex_perception::FactionMapKnowledge;
 use hex_units::{Faction, Player, StandsOn, UnitRegistry};
 
-use super::lattice::{set_pulse_color, RetainedTarget, TargetPanel};
-use crate::menus::widgets::{blurb, panel, UiAssets, DANGER, LABEL};
-use crate::readouts::{region, HudElement, HudRegion, HudSetup, READ_ONLY_HUD};
+use super::lattice::RetainedTarget;
+use hex_ui::{CombatLogLineView, CombatLogView, TargetPulseView};
 
 const CAPACITY: usize = 64;
 const FEED_LINES: usize = 3;
@@ -86,15 +84,6 @@ impl DamagePulse {
     }
 }
 
-#[derive(Component)]
-struct LogBody;
-
-#[derive(Component)]
-struct LogPanel;
-
-#[derive(Component)]
-struct LogHeading;
-
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
 struct LogExpanded(bool);
 
@@ -102,10 +91,7 @@ pub(super) fn plugin(app: &mut App) {
     app.init_resource::<CombatLog>()
         .init_resource::<DamagePulse>()
         .init_resource::<LogExpanded>()
-        .add_systems(
-            OnEnter(Screen::Gameplay),
-            (spawn_panel, reset).in_set(HudSetup::Panels),
-        )
+        .add_systems(OnEnter(Screen::Gameplay), reset)
         // Not pausable. Bevy messages age out after two frames, so pausing on
         // the resolution frame must not erase the outcome from history.
         .add_systems(
@@ -118,52 +104,11 @@ pub(super) fn plugin(app: &mut App) {
         )
         .add_systems(
             Update,
-            (toggle_history, rebuild, pulse_panel)
+            (toggle_history, publish_view, pulse_panel)
                 .chain()
                 .after(ingest)
                 .run_if(in_state(Screen::Gameplay)),
         );
-}
-
-fn spawn_panel(
-    mut commands: Commands,
-    assets: Res<UiAssets>,
-    regions: Query<(Entity, &HudRegion)>,
-) {
-    let panel = commands
-        .spawn((
-            Name::new("Combat Log Panel"),
-            LogPanel,
-            HudElement,
-            panel(),
-            READ_ONLY_HUD,
-        ))
-        .insert(Node {
-            width: Val::Percent(100.0),
-            flex_direction: FlexDirection::Column,
-            padding: UiRect::all(Val::Px(8.0)),
-            border: UiRect::all(Val::Px(1.0)),
-            border_radius: BorderRadius::all(Val::Px(8.0)),
-            row_gap: Val::Px(3.0),
-            ..default()
-        })
-        .with_children(|panel| {
-            panel.spawn((LogHeading, blurb(&assets, "RECENT EVENTS · L HISTORY")));
-            panel.spawn((
-                Name::new("Combat Log Body"),
-                LogBody,
-                Node {
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(3.0),
-                    ..default()
-                },
-                Pickable::IGNORE,
-            ));
-        })
-        .id();
-    if let Some(events) = region(HudRegion::Events, &regions) {
-        commands.entity(events).add_child(panel);
-    }
 }
 
 fn reset(
@@ -749,39 +694,27 @@ fn refusal_label(refusal: &CommandRefusal) -> &'static str {
     }
 }
 
-fn rebuild(
-    mut commands: Commands,
-    log: Res<CombatLog>,
-    expanded: Res<LogExpanded>,
-    bodies: Query<Entity, With<LogBody>>,
-    mut headings: Query<&mut Text, With<LogHeading>>,
-    assets: Res<UiAssets>,
-) {
+fn publish_view(log: Res<CombatLog>, expanded: Res<LogExpanded>, mut view: ResMut<CombatLogView>) {
     if !log.is_changed() && !expanded.is_changed() {
         return;
     }
-    if let Ok(mut heading) = headings.single_mut() {
-        heading.0 = if expanded.0 {
+    let next = CombatLogView {
+        heading: if expanded.0 {
             format!("COMBAT HISTORY · {} EVENTS · L CLOSE", log.lines.len())
         } else {
             "RECENT EVENTS · L HISTORY".to_owned()
-        };
+        },
+        lines: visible_lines(&log, expanded.0)
+            .into_iter()
+            .map(|line| CombatLogLineView {
+                text: line.text.clone(),
+                danger: line.danger,
+            })
+            .collect(),
+    };
+    if *view != next {
+        *view = next;
     }
-    let Ok(body) = bodies.single() else { return };
-    commands.entity(body).despawn_related::<Children>();
-    commands.entity(body).with_children(|rows| {
-        for line in visible_lines(&log, expanded.0) {
-            rows.spawn((
-                Text::new(line.text.clone()),
-                TextFont {
-                    font: assets.body.clone().into(),
-                    ..TextFont::from_font_size(13.0)
-                },
-                TextColor(if line.danger { DANGER } else { LABEL }),
-                Pickable::IGNORE,
-            ));
-        }
-    });
 }
 
 fn visible_lines(log: &CombatLog, expanded: bool) -> Vec<&LogLine> {
@@ -800,11 +733,13 @@ fn pulse_panel(
     time: Res<Time>,
     focus: Res<RetainedTarget>,
     mut pulse: ResMut<DamagePulse>,
-    mut panels: Query<&mut BackgroundColor, With<TargetPanel>>,
+    mut view: ResMut<TargetPulseView>,
 ) {
     let live = pulse.tick(time.delta());
-    let active = live && pulse.target == focus.unit;
-    set_pulse_color(active, &mut panels);
+    let next = TargetPulseView(live && pulse.target == focus.unit);
+    if *view != next {
+        *view = next;
+    }
 }
 
 #[cfg(test)]

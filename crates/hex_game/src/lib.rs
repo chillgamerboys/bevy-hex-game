@@ -1,4 +1,4 @@
-//! Game application setup, plugin wiring, screens, and menus.
+//! Game application composition and domain-to-presentation adapters.
 //!
 //! Everything the game does hangs off `AppPlugin` here, so the composition of the
 //! app is readable end to end without chasing plugin groups. This is also the only
@@ -27,8 +27,9 @@ mod casting;
 pub mod combat_reports;
 #[cfg(feature = "dev")]
 mod content_debug;
-mod creation_presentation;
 mod creation_store;
+#[cfg(feature = "dev")]
+mod dev_time_controls;
 mod menus;
 mod preferences;
 mod readouts;
@@ -125,6 +126,7 @@ impl Plugin for AppPlugin {
         );
 
         app.add_plugins(MeshPickingPlugin);
+        app.add_plugins(hex_ui::UiPlugin);
         app.add_systems(Startup, log_app_identity);
 
         // Frame-time + entity-count collectors are cheap and stay on in every
@@ -234,7 +236,11 @@ impl Plugin for AppPlugin {
         app.add_plugins(walk::plugin);
 
         #[cfg(feature = "dev")]
-        app.add_plugins((hex_dev::plugin, content_debug::plugin));
+        app.add_plugins((
+            hex_dev::plugin,
+            content_debug::plugin,
+            dev_time_controls::plugin,
+        ));
     }
 }
 

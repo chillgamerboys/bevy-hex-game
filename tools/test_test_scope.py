@@ -8,6 +8,7 @@ import pathlib
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 
 
@@ -81,6 +82,13 @@ class TestScopeTests(unittest.TestCase):
 
     def test_gameplay_screen_model_change_selects_app_and_shipping(self) -> None:
         decision = self.classify("crates/hex_gameplay_model/src/combat_lab.rs")
+        self.assertFalse(decision.full)
+        self.assertEqual(
+            decision.concerns, ("app", "clippy", "docs", "shipping")
+        )
+
+    def test_gameplay_visual_change_does_not_select_map_corpora(self) -> None:
+        decision = self.classify("walks/gameplay_ui.ron")
         self.assertFalse(decision.full)
         self.assertEqual(
             decision.concerns, ("app", "clippy", "docs", "shipping")
@@ -344,11 +352,15 @@ class TestScopeTests(unittest.TestCase):
             for index, value in enumerate(command)
             if index > 0 and command[index - 1] == "--package"
         ]
-        self.assertEqual(packages, ["hex_gameplay_model", "hex_game"])
+        self.assertEqual(packages, ["hex_gameplay_model", "hex_ui", "hex_game"])
         self.assertIn("--lib", command)
         self.assertIn("--test", command)
         self.assertEqual(command[command.index("--test") + 1], "gameplay_app")
-        self.assertIn("hex_game/test-support", command)
+        features = command[command.index("--features") + 1].split(",")
+        self.assertEqual(
+            set(features),
+            {"hex_game/test-support", "hex_ui/dev-tools"},
+        )
 
     def test_app_preflight_compiles_default_feature_library_tests(self) -> None:
         command = self.config["concerns"]["app"]["preflight_command"]
@@ -364,6 +376,17 @@ class TestScopeTests(unittest.TestCase):
                 "--profile",
                 "ci",
             ],
+        )
+
+    def test_game_test_support_forwards_ui_test_support(self) -> None:
+        manifest = tomllib.loads(
+            (ROOT / "crates" / "hex_game" / "Cargo.toml").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertIn(
+            "hex_ui/test-support",
+            manifest["features"]["test-support"],
         )
 
     def test_map_commands_select_package_and_target_before_filters(self) -> None:
@@ -392,6 +415,23 @@ class TestScopeTests(unittest.TestCase):
                 command[command.index("--cargo-profile") + 1], "map-test"
             )
 
+    def test_hex_ui_manifest_enforces_the_presentation_dependency_ceiling(self) -> None:
+        manifest = tomllib.loads(
+            (ROOT / "crates" / "hex_ui" / "Cargo.toml").read_text(encoding="utf-8")
+        )
+        allowed = {"bevy", "hex_assets", "hex_core", "hex_gameplay_model", "serde"}
+        self.assertEqual(set(manifest["dependencies"]), allowed)
+        forbidden = {
+            "hex_game",
+            "hex_combat",
+            "hex_units",
+            "hex_lattice",
+            "hex_map",
+            "hex_world",
+            "hex_perception",
+        }
+        self.assertTrue(forbidden.isdisjoint(manifest["dependencies"]))
+
     def test_residual_excludes_every_owned_gameplay_partition(self) -> None:
         command = self.config["concerns"]["residual"]["command"]
         expression = command[command.index("-E") + 1]
@@ -404,6 +444,7 @@ class TestScopeTests(unittest.TestCase):
             "hex_combat",
             "hex_test_support",
             "hex_gameplay_model",
+            "hex_ui",
             "hex_map",
         ):
             self.assertIn(f"package({package})", expression)
