@@ -57,8 +57,8 @@ sparse authored moss and lichen, and deterministic Bright gameplay lights that c
 the required network while leaving optional branches dark.
 
 Two Rings is mechanically selectable and covered by deterministic generation,
-spawning, regeneration, and re-entry checks. Its mandatory human visual and play
-approval remains pending, so the development wave is not yet a release candidate.
+spawning, regeneration, and re-entry checks. Alberto approved its visual, motion,
+and play feel at the exact reviewed head before the development wave landed.
 
 Authoritative spatial perception now runs headlessly every gameplay frame.
 `hex_world` publishes a renderer-independent Bright or Dim exterior tier;

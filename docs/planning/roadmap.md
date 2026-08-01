@@ -83,8 +83,8 @@ branched from updated `dev` after that contract merged.
 `Ring19` are live, and Two Rings is selectable without replacing Seven Regions.
 `RunBottom` publication is live; frozen V1/V2 removal remains independent cleanup.
 The map owner keeps semantic plans private and publishes exact shared consequences.
-Recipe PRs do not edit gameplay-owned crates. Two Rings still requires the wave's
-final human visual and play approval before release.
+Recipe PRs do not edit gameplay-owned crates. Two Rings received the wave's final
+human visual and play approval before landing.
 
 **Perception lane:** knowledge-safe casting and AI plus cave gameplay-light and
 physical presentation are live. Fog presentation → movement adapter →
