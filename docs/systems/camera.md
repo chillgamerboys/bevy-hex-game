@@ -105,8 +105,14 @@ scenario, builds and repeatedly rebuilds the camera index from its public
 
 The tracked route manifest pins all 15 selectable Map scenarios to their exact seed
 and representative stack-safe destinations. Executable multi-azimuth Character walks
-currently cover Forest, Deep Forest, Caves, Fort, Waterfall, Mountains, and the ordinary
-connected ground route through the center, Waterfall B, and Mountains A of Two Rings.
-The remaining eight map scripts, 16 Two Rings regions, flight-gated Sky Island
-surfaces, and human motion/readability review remain explicit presentation evidence;
-the harness does not invent movement capabilities to reach them.
+cover Forest, Deep Forest, Caves, Fort, Waterfall, Mountains, and five seed-pinned Two
+Rings groups. Together the composite groups cover one ordinary-network destination in
+all 19 regions, require at least two captured azimuths after exact selected-unit and
+camera-focus proof, and keep each review card to at most ten frames. The woodland
+group restarts the same exact scenario and follows the Waterfall A/Frozen Hills detour
+because the direct route legitimately enters combat; it never suppresses that combat.
+
+Upper Sky Island surfaces remain flight-gated, so the Two Rings evidence proves only
+the region's grounded bridge. Human motion/readability review remains an explicit
+presentation gate; the harness does not invent movement capabilities or treat static
+frames as play-feel approval.
