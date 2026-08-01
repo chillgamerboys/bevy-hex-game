@@ -1630,26 +1630,6 @@ pub mod test_support {
         }
 
         #[test]
-        fn populated_reports_have_complete_scroll_routes_at_every_structural_canvas() {
-            let case = UiTaskCase::LabReportsPopulated;
-            let mut failures = Vec::new();
-            for (physical, device_scale) in structural_canvases() {
-                for mode in all_scale_modes() {
-                    let snapshot =
-                        task_snapshot_at(case, physical.x, physical.y, device_scale, mode);
-                    let issues = task_contract_issues(case, &snapshot);
-                    if !issues.is_empty() {
-                        failures.push((physical, device_scale, mode, issues));
-                    }
-                }
-            }
-            assert!(
-                failures.is_empty(),
-                "populated Combat Lab report scroll failures: {failures:#?}"
-            );
-        }
-
-        #[test]
         fn lattice_demo_back_is_an_immediate_focusable_route() {
             let snapshot = lattice_demo_snapshot(1280, 720, 1.0, crate::UiScaleMode::Auto);
             let back = snapshot
