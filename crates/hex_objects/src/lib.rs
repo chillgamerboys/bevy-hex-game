@@ -14,7 +14,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::f32::consts::TAU;
 
-use bevy::asset::AssetEvent;
+use bevy::asset::{AssetEvent, AssetId};
 use bevy::core_pipeline::oit::OrderIndependentTransparencySettings;
 use bevy::light::NotShadowCaster;
 use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
@@ -25,8 +25,8 @@ use hex_assets::{
     ResolvedVoxelStyle, RuntimeArtCatalog, VoxelStyleId, VoxelSurfaceMode,
 };
 use hex_core::{
-    CanopyOccluder, HexCoord, PresentationOcclusion, PresentationSystems, Screen, TreeFadeAmount,
-    TreeOccluder,
+    CanopyOccluder, HexCoord, PresentationOcclusion, PresentationSystems, Screen, TilePos,
+    TreeFadeAmount, TreeOccluder,
 };
 
 /// Marks a generated render child belonging to one authored object instance.
@@ -118,20 +118,104 @@ struct ObjectOitCamera {
     preserve_oit: bool,
 }
 
-/// Per-entity material clone applied while one tree chunk is translucent.
+/// Per-chunk binding to a clone shared by one exact tree and source material.
 #[derive(Component, Debug, Clone)]
 struct AppliedTreeFade {
     original: Handle<StandardMaterial>,
     faded: Handle<StandardMaterial>,
-    original_alpha: f32,
     amount: f32,
     added_not_shadow_caster: bool,
 }
 
-/// Clone handles retained independently from disposable render entities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct TreeFadeMaterialKey {
+    root: TilePos,
+    source: AssetId<StandardMaterial>,
+}
+
+#[derive(Debug)]
+struct TreeFadeMaterialClone {
+    handle: Handle<StandardMaterial>,
+    original_alpha: f32,
+    amount: f32,
+    users: BTreeSet<Entity>,
+}
+
+/// Per-tree material clones retained independently from disposable render chunks.
 #[derive(Resource, Debug, Default)]
 struct TreeFadeMaterialAssets {
-    clones: BTreeMap<Entity, Handle<StandardMaterial>>,
+    clones: BTreeMap<TreeFadeMaterialKey, TreeFadeMaterialClone>,
+    entities: BTreeMap<Entity, TreeFadeMaterialKey>,
+}
+
+impl TreeFadeMaterialAssets {
+    fn release(&mut self, entity: Entity, materials: &mut Assets<StandardMaterial>) {
+        let Some(key) = self.entities.remove(&entity) else {
+            return;
+        };
+        let remove_clone = self.clones.get_mut(&key).is_some_and(|clone| {
+            clone.users.remove(&entity);
+            clone.users.is_empty()
+        });
+        if remove_clone {
+            if let Some(clone) = self.clones.remove(&key) {
+                drop(materials.remove(clone.handle.id()));
+            }
+        }
+    }
+
+    fn acquire(
+        &mut self,
+        entity: Entity,
+        key: TreeFadeMaterialKey,
+        source: &Handle<StandardMaterial>,
+        amount: f32,
+        materials: &mut Assets<StandardMaterial>,
+    ) -> Option<Handle<StandardMaterial>> {
+        if self
+            .entities
+            .get(&entity)
+            .is_some_and(|current| *current != key)
+        {
+            self.release(entity, materials);
+        }
+
+        let clone = match self.clones.entry(key) {
+            std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                let source_material = materials.get(source)?.clone();
+                let original_alpha = source_material.base_color.alpha();
+                let mut faded = source_material;
+                faded.base_color = faded.base_color.with_alpha(original_alpha * amount);
+                faded.alpha_mode = AlphaMode::Blend;
+                let handle = materials.add(faded);
+                entry.insert(TreeFadeMaterialClone {
+                    handle,
+                    original_alpha,
+                    amount,
+                    users: BTreeSet::new(),
+                })
+            }
+        };
+        clone.users.insert(entity);
+        self.entities.insert(entity, key);
+        if (clone.amount - amount).abs() > f32::EPSILON {
+            if let Some(mut material) = materials.get_mut(&clone.handle) {
+                material.base_color = material
+                    .base_color
+                    .with_alpha(clone.original_alpha * amount);
+            }
+            clone.amount = amount;
+        }
+        Some(clone.handle.clone())
+    }
+
+    fn clear(&mut self, materials: &mut Assets<StandardMaterial>) {
+        self.entities.clear();
+        for (_, clone) in std::mem::take(&mut self.clones) {
+            drop(materials.remove(clone.handle.id()));
+        }
+    }
 }
 
 #[derive(Resource, Debug, Default)]
@@ -446,6 +530,7 @@ fn apply_tree_fade_materials(
     mut chunks: Query<
         (
             Entity,
+            Option<&TreeOccluder>,
             Option<&TreeFadeAmount>,
             &mut MeshMaterial3d<StandardMaterial>,
             Option<&AppliedTreeFade>,
@@ -458,27 +543,45 @@ fn apply_tree_fade_materials(
     mut fade_assets: ResMut<TreeFadeMaterialAssets>,
 ) {
     for entity in removed_fades.read() {
-        if let Some(handle) = fade_assets.clones.remove(&entity) {
-            drop(materials.remove(handle.id()));
-        }
+        fade_assets.release(entity, &mut materials);
     }
 
-    for (entity, fade, mut handle, applied, no_shadow) in &mut chunks {
+    for (entity, tree, fade, mut handle, applied, no_shadow) in &mut chunks {
         let amount = fade.copied().unwrap_or_default().amount();
         if amount < 1.0 - f32::EPSILON {
+            let Some(tree) = tree else {
+                if let Some(applied) = applied {
+                    handle.0 = applied.original.clone();
+                    fade_assets.release(entity, &mut materials);
+                    let mut entity = commands.entity(entity);
+                    entity.remove::<AppliedTreeFade>();
+                    if applied.added_not_shadow_caster {
+                        entity.remove::<NotShadowCaster>();
+                    }
+                }
+                continue;
+            };
             if let Some(applied) = applied.filter(|applied| handle.0 == applied.faded) {
                 if applied.added_not_shadow_caster && !no_shadow {
                     commands.entity(entity).insert(NotShadowCaster);
                 }
-                if (applied.amount - amount).abs() <= f32::EPSILON {
+                let key = TreeFadeMaterialKey {
+                    root: tree.0,
+                    source: applied.original.id(),
+                };
+                if (applied.amount - amount).abs() <= f32::EPSILON
+                    && fade_assets.entities.get(&entity) == Some(&key)
+                {
                     continue;
                 }
-                if let Some(mut material) = materials.get_mut(&applied.faded) {
-                    material.base_color = material
-                        .base_color
-                        .with_alpha(applied.original_alpha * amount);
-                }
+                let Some(faded) =
+                    fade_assets.acquire(entity, key, &applied.original, amount, &mut materials)
+                else {
+                    continue;
+                };
+                handle.0 = faded.clone();
                 commands.entity(entity).insert(AppliedTreeFade {
+                    faded,
                     amount,
                     ..applied.clone()
                 });
@@ -486,29 +589,27 @@ fn apply_tree_fade_materials(
             }
 
             if let Some(applied) = applied {
-                drop(materials.remove(applied.faded.id()));
-                fade_assets.clones.remove(&entity);
+                handle.0 = applied.original.clone();
+                fade_assets.release(entity, &mut materials);
             }
             let added_not_shadow_caster =
                 applied.is_some_and(|applied| applied.added_not_shadow_caster) || !no_shadow;
             let original = handle.0.clone();
-            let Some(source) = materials.get(&original) else {
+            let key = TreeFadeMaterialKey {
+                root: tree.0,
+                source: original.id(),
+            };
+            let Some(faded) = fade_assets.acquire(entity, key, &original, amount, &mut materials)
+            else {
                 continue;
             };
-            let original_alpha = source.base_color.alpha();
-            let mut faded = source.clone();
-            faded.base_color = faded.base_color.with_alpha(original_alpha * amount);
-            faded.alpha_mode = AlphaMode::Blend;
-            let faded = materials.add(faded);
             handle.0 = faded.clone();
-            fade_assets.clones.insert(entity, faded.clone());
             if !no_shadow {
                 commands.entity(entity).insert(NotShadowCaster);
             }
             commands.entity(entity).insert(AppliedTreeFade {
                 original,
                 faded,
-                original_alpha,
                 amount,
                 added_not_shadow_caster,
             });
@@ -519,8 +620,7 @@ fn apply_tree_fade_materials(
             continue;
         };
         handle.0 = applied.original.clone();
-        drop(materials.remove(applied.faded.id()));
-        fade_assets.clones.remove(&entity);
+        fade_assets.release(entity, &mut materials);
         let mut entity = commands.entity(entity);
         entity.remove::<AppliedTreeFade>();
         if applied.added_not_shadow_caster {
@@ -553,9 +653,7 @@ fn clear_tree_fade_materials(
             entity.remove::<NotShadowCaster>();
         }
     }
-    for (_, handle) in std::mem::take(&mut fade_assets.clones) {
-        drop(materials.remove(handle.id()));
-    }
+    fade_assets.clear(&mut materials);
 }
 
 fn manage_object_oit(
@@ -920,8 +1018,8 @@ fn rotation_quat(rotation: HexObjectRotation) -> Quat {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+    use std::time::{Duration, Instant};
 
-    use bevy::asset::AssetId;
     use bevy::mesh::VertexAttributeValues;
     use bevy::prelude::Cuboid;
     use hex_assets::{
@@ -1247,6 +1345,16 @@ mod tests {
             .collect()
     }
 
+    fn unique_material_count(
+        chunks: &BTreeMap<(VoxelStyleId, bool), (AssetId<Mesh>, AssetId<StandardMaterial>, Entity)>,
+    ) -> usize {
+        chunks
+            .values()
+            .map(|(_, material, _)| *material)
+            .collect::<BTreeSet<_>>()
+            .len()
+    }
+
     fn mesh_positions(mesh: &Mesh) -> &[[f32; 3]] {
         let Some(VertexAttributeValues::Float32x3(positions)) =
             mesh.attribute(Mesh::ATTRIBUTE_POSITION)
@@ -1566,10 +1674,20 @@ mod tests {
 
         let first_faded = chunk_handles(&app, first);
         let second_still_shared = chunk_handles(&app, second);
+        let per_tree_materials = unique_material_count(&first_before);
         assert_eq!(second_still_shared, second_before);
         assert_eq!(
             app.world().resource::<Assets<StandardMaterial>>().len(),
-            material_count + first_faded.len()
+            material_count + per_tree_materials
+        );
+        assert_eq!(
+            first_faded
+                .get(&(style_id("plant/leaf"), false))
+                .map(|(_, material, _)| *material),
+            first_faded
+                .get(&(style_id("plant/leaf"), true))
+                .map(|(_, material, _)| *material),
+            "canopy partitions sharing one source material should share one exact-tree clone"
         );
         for (key, (_, faded_id, entity)) in &first_faded {
             let (_, original_id, _) = first_before
@@ -1597,7 +1715,7 @@ mod tests {
         assert_eq!(chunk_handles(&app, first), stable_handles);
         assert_eq!(
             app.world().resource::<Assets<StandardMaterial>>().len(),
-            material_count + stable_handles.len(),
+            material_count + per_tree_materials,
             "stable interpolation must not allocate more clones"
         );
 
@@ -1695,7 +1813,7 @@ mod tests {
                 .resource::<TreeFadeMaterialAssets>()
                 .clones
                 .len(),
-            faded.len()
+            unique_material_count(&faded)
         );
         assert_eq!(app.world().get::<Msaa>(camera), Some(&Msaa::Off));
 
@@ -1733,7 +1851,7 @@ mod tests {
     }
 
     #[test]
-    fn despawning_faded_chunks_retires_only_their_material_clones() {
+    fn despawning_one_chunk_retains_a_clone_shared_by_the_same_tree() {
         let mut app = test_app(fixture_catalog(0.18));
         let root = app
             .world_mut()
@@ -1752,9 +1870,17 @@ mod tests {
         app.update();
 
         let faded = chunk_handles(&app, root);
-        let Some((_, retired_material, retired_chunk)) = faded.values().next().copied() else {
-            unreachable!("the faded tree fixture should contain render chunks")
+        let Some((_, retired_material, retired_chunk)) =
+            faded.get(&(style_id("plant/leaf"), false)).copied()
+        else {
+            unreachable!("the faded tree fixture should contain its non-canopy leaf chunk")
         };
+        let Some((_, shared_material, shared_chunk)) =
+            faded.get(&(style_id("plant/leaf"), true)).copied()
+        else {
+            unreachable!("the faded tree fixture should contain its canopy leaf chunk")
+        };
+        assert_eq!(retired_material, shared_material);
         let clone_count = app
             .world()
             .resource::<TreeFadeMaterialAssets>()
@@ -1770,13 +1896,14 @@ mod tests {
                 .resource::<TreeFadeMaterialAssets>()
                 .clones
                 .len(),
-            clone_count - 1
+            clone_count
         );
         assert!(app
             .world()
             .resource::<Assets<StandardMaterial>>()
             .get(retired_material)
-            .is_none());
+            .is_some());
+        assert!(app.world().get::<AppliedTreeFade>(shared_chunk).is_some());
         for (_, material, chunk) in faded.values() {
             if *chunk == retired_chunk {
                 continue;
@@ -1892,6 +2019,96 @@ mod tests {
                 assert!(app.world().get::<AppliedTreeFade>(child).is_none());
             }
         }
+    }
+
+    #[test]
+    #[ignore = "manual release-mode 2,048-chunk tree-fade material activation diagnostic"]
+    fn production_scale_tree_fade_material_activation_release_timing() {
+        const TREE_COUNT: usize = 512;
+        const ACTIVE_TREE_COUNT: usize = 64;
+        const CHUNKS_PER_TREE: usize = 4;
+
+        let mut app = test_app(fixture_catalog(0.18));
+        let sources = {
+            let mut materials = app.world_mut().resource_mut::<Assets<StandardMaterial>>();
+            [
+                materials.add(StandardMaterial::from(Color::srgb(0.28, 0.16, 0.08))),
+                materials.add(StandardMaterial::from(Color::srgb(0.18, 0.46, 0.16))),
+            ]
+        };
+        let mut chunks = Vec::with_capacity(TREE_COUNT * CHUNKS_PER_TREE);
+        let mut active_chunks = Vec::with_capacity(ACTIVE_TREE_COUNT * CHUNKS_PER_TREE);
+        for q in 0_i32..32 {
+            for r in 0_i32..16 {
+                let tree_index = chunks.len() / CHUNKS_PER_TREE;
+                let tree = TreeOccluder(TilePos::new(HexCoord::from_axial(q, r), 0));
+                for source in sources.iter().cycle().take(CHUNKS_PER_TREE) {
+                    let entity = app
+                        .world_mut()
+                        .spawn((MeshMaterial3d(source.clone()), tree, TreeFadeAmount::OPAQUE))
+                        .id();
+                    chunks.push(entity);
+                    if tree_index < ACTIVE_TREE_COUNT {
+                        active_chunks.push(entity);
+                    }
+                }
+            }
+        }
+        assert_eq!(chunks.len(), 2_048);
+        app.update();
+
+        let mut activation = Vec::with_capacity(100);
+        let mut release = Vec::with_capacity(100);
+        for _ in 0..100 {
+            for entity in &active_chunks {
+                app.world_mut().entity_mut(*entity).insert(
+                    TreeFadeAmount::new(0.2).expect("the benchmark opacity should be valid"),
+                );
+            }
+            let started = Instant::now();
+            app.update();
+            activation.push(started.elapsed());
+            assert_eq!(
+                app.world()
+                    .resource::<TreeFadeMaterialAssets>()
+                    .clones
+                    .len(),
+                ACTIVE_TREE_COUNT * sources.len(),
+                "each active exact tree should own one clone per shared source material"
+            );
+
+            for entity in &active_chunks {
+                app.world_mut()
+                    .entity_mut(*entity)
+                    .insert(TreeFadeAmount::OPAQUE);
+            }
+            let started = Instant::now();
+            app.update();
+            release.push(started.elapsed());
+            assert!(app
+                .world()
+                .resource::<TreeFadeMaterialAssets>()
+                .clones
+                .is_empty());
+        }
+
+        activation.sort_unstable();
+        release.sort_unstable();
+        let activation_p95 = activation.get(95).copied().unwrap_or_default();
+        let activation_worst = activation.last().copied().unwrap_or_default();
+        let release_p95 = release.get(95).copied().unwrap_or_default();
+        let release_worst = release.last().copied().unwrap_or_default();
+        eprintln!(
+            "2,048-chunk / 64-tree material diagnostic (release): activation p95={activation_p95:?}, worst={activation_worst:?}; release p95={release_p95:?}, worst={release_worst:?}"
+        );
+        assert!(
+            activation_p95 < Duration::from_micros(16_700),
+            "tree-fade material activation p95 {activation_p95:?} breached one frame"
+        );
+        assert!(
+            release_p95 < Duration::from_micros(16_700),
+            "tree-fade material release p95 {release_p95:?} breached one frame"
+        );
     }
 
     #[test]
