@@ -108,6 +108,15 @@ and representative stack-safe destinations. Every standalone selectable Map has 
 executable multi-azimuth Character walk using ordinary pointer movement and bounded
 party-idle waiting, followed by an exact check that the selected unit's authoritative
 footing and the camera-focus surface both equal the requested destination. Sky Islands
-exercises only its reachable ordinary ground bridge; the harness does not invent
-flight to reach its upper surfaces. Two Rings region routes and human
-motion/readability review remain explicit presentation evidence.
+exercises only its reachable ordinary ground bridge.
+
+Five seed-pinned Two Rings groups cover one ordinary-network destination in all 19
+regions, require at least two captured azimuths after exact selected-unit and
+camera-focus proof, and keep each review card to at most ten frames. The woodland group
+restarts the same exact scenario and follows the Waterfall A/Frozen Hills detour because
+the direct route legitimately enters combat; it never suppresses that combat.
+
+Standalone and Two Rings upper Sky Island surfaces remain flight-gated, so the
+evidence proves only their grounded bridges. Human motion/readability review remains
+an explicit presentation gate; the harness does not invent movement capabilities or
+treat static frames as play-feel approval.

@@ -264,7 +264,7 @@ enum WalkStep {
 }
 
 /// Stack-safe position serialized by camera-route evidence.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CameraRouteTile {
     q: i32,
@@ -419,7 +419,7 @@ struct CameraRoutePoint {
 }
 
 #[cfg(test)]
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 enum CameraRouteDestination {
     Anchor {
         name: String,
@@ -1333,6 +1333,14 @@ mod tests {
         ("../../walks/camera_two_rings.ron", "Two Rings"),
     ];
 
+    const TWO_RINGS_ROUTE_SCRIPTS: &[&str] = &[
+        "../../walks/camera_two_rings.ron",
+        "../../walks/camera_two_rings_mountains.ron",
+        "../../walks/camera_two_rings_woodlands.ron",
+        "../../walks/camera_two_rings_prairies.ron",
+        "../../walks/camera_two_rings_west.ron",
+    ];
+
     #[derive(Resource, Default)]
     struct PointerRecord {
         target: Option<Entity>,
@@ -1844,6 +1852,184 @@ mod tests {
                 step,
                 WalkStep::AwaitPartyIdle { max_frames } if *max_frames > 0
             )));
+        }
+    }
+
+    #[test]
+    fn grouped_two_rings_walks_review_every_region_from_a_proved_destination() {
+        let manifest: CameraRouteManifest =
+            ron::from_str(include_str!("../../../walks/camera_routes.ron"))
+                .expect("the camera route manifest parses");
+        let route = manifest
+            .routes
+            .iter()
+            .find(|route| route.scenario == "Two Rings")
+            .expect("Two Rings is present in the route manifest");
+        let expected = route
+            .points
+            .iter()
+            .map(|point| point.destination.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(expected.len(), 19, "Ring19 needs one point per region");
+
+        let mut reviewed_counts = std::collections::BTreeMap::new();
+        for script_path in TWO_RINGS_ROUTE_SCRIPTS {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(script_path);
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
+            let steps: Vec<WalkStep> = ron::from_str(&text)
+                .unwrap_or_else(|error| panic!("cannot parse {}: {error}", path.display()));
+            for step in &steps {
+                validate_step(step)
+                    .unwrap_or_else(|error| panic!("{} invalid: {error}", path.display()));
+            }
+            let launches = steps
+                .iter()
+                .filter_map(|step| match step {
+                    WalkStep::StartScenario { name, seed } => Some((name.as_str(), *seed)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                !launches.is_empty(),
+                "{} has no exact Two Rings launch",
+                path.display()
+            );
+            assert!(
+                launches
+                    .iter()
+                    .all(|(name, seed)| *name == "Two Rings" && *seed == route.seed),
+                "{} must restart only the exact seed-pinned Two Rings scenario",
+                path.display()
+            );
+            let captures = steps
+                .iter()
+                .filter(|step| matches!(step, WalkStep::Capture(_)))
+                .count();
+            assert!(
+                captures <= 10,
+                "{} exceeds the ten-frame review budget",
+                path.display()
+            );
+            let mut pending_destination = None;
+            let mut saw_idle_after_click = false;
+            let mut last_proved_destination = None;
+            for step in &steps {
+                let destination = match step {
+                    WalkStep::ClickAnchor { name, expected } => {
+                        Some(CameraRouteDestination::Anchor {
+                            name: name.clone(),
+                            expected: *expected,
+                        })
+                    }
+                    WalkStep::ClickTile {
+                        q,
+                        r,
+                        level: Some(level),
+                    } => Some(CameraRouteDestination::Exact(CameraRouteTile {
+                        q: *q,
+                        r: *r,
+                        level: *level,
+                    })),
+                    _ => None,
+                };
+                if let Some(destination) = destination {
+                    assert!(
+                        pending_destination.is_none(),
+                        "{} starts a second movement before proving the first destination",
+                        path.display()
+                    );
+                    assert!(
+                        route
+                            .points
+                            .iter()
+                            .any(|point| point.destination == destination),
+                        "{} uses {destination:?}, absent from the stale-checked Two Rings manifest",
+                        path.display()
+                    );
+                    pending_destination = Some(destination);
+                    saw_idle_after_click = false;
+                    last_proved_destination = None;
+                    continue;
+                }
+
+                match step {
+                    WalkStep::AwaitPartyIdle { .. } if pending_destination.is_some() => {
+                        saw_idle_after_click = true;
+                    }
+                    WalkStep::AssertSelectedAt { expected } => {
+                        let destination = pending_destination.take().unwrap_or_else(|| {
+                            panic!(
+                                "{} proves a position without a pending movement",
+                                path.display()
+                            )
+                        });
+                        assert!(
+                            saw_idle_after_click,
+                            "{} proves {destination:?} before awaiting party idle",
+                            path.display()
+                        );
+                        let clicked = match destination {
+                            CameraRouteDestination::Anchor { expected, .. }
+                            | CameraRouteDestination::Exact(expected) => expected,
+                        };
+                        assert_eq!(
+                            *expected,
+                            clicked,
+                            "{} proves a different surface than it clicked",
+                            path.display()
+                        );
+                        last_proved_destination = Some(destination);
+                    }
+                    WalkStep::Capture(name) => {
+                        assert!(
+                            pending_destination.is_none(),
+                            "{} captures {name:?} before proving its movement destination",
+                            path.display()
+                        );
+                        if let Some(destination) = &last_proved_destination {
+                            *reviewed_counts.entry(destination.clone()).or_insert(0usize) += 1;
+                        }
+                    }
+                    WalkStep::StartScenario { .. } => {
+                        assert!(
+                            pending_destination.is_none(),
+                            "{} changes scenarios before proving its movement destination",
+                            path.display()
+                        );
+                        last_proved_destination = None;
+                    }
+                    WalkStep::Key(key) if key == "Backspace" => {
+                        assert!(
+                            pending_destination.is_none(),
+                            "{} changes scenarios before proving its movement destination",
+                            path.display()
+                        );
+                        last_proved_destination = None;
+                    }
+                    _ => {}
+                }
+            }
+            assert!(
+                pending_destination.is_none(),
+                "{} ends with an unproved movement destination",
+                path.display()
+            );
+        }
+
+        let actual = reviewed_counts
+            .keys()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            actual, expected,
+            "grouped Two Rings walks must capture every stale-checked region destination"
+        );
+        for (destination, captures) in reviewed_counts {
+            assert!(
+                captures >= 2,
+                "Two Rings destination {destination:?} needs two reviewed azimuths, found {captures}"
+            );
         }
     }
 

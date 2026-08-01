@@ -61,10 +61,21 @@ requires it to equal the authored exact `TilePos` before emitting that same prim
 pointer click; an anchor move therefore invalidates stale evidence instead of silently
 reviewing a new route. `AwaitPartyIdle(max_frames)` waits on public party, registry,
 command-queue, `Busy`, and `MovingTo` facts. Its bound must be positive and exhaustion
-is a failing exit. After that wait, `AssertSelectedAt(q, r, level)` requires exactly
-one selected unit, its authoritative `StandsOn`, and `CameraFocusTarget.surface` to
-match the expected `TilePos`. An ignored or interrupted pointer click therefore
-cannot qualify later captures as route evidence.
+is a failing exit. After that wait,
+`AssertSelectedAt(expected: (q: ..., r: ..., level: ...))` requires exactly one
+selected unit, its authoritative `StandsOn`, and `CameraFocusTarget.surface` to match
+the expected `TilePos`. An ignored or interrupted pointer click therefore cannot
+qualify later captures as route evidence.
+
+Idleness alone is not proof that a pointer request was accepted: an ignored click can
+also leave the party idle. Route evidence therefore follows every movement and
+`AwaitPartyIdle` with `AssertSelectedAt(expected)`, which checks both the selected
+unit's authoritative `StandsOn` and the exact `CameraFocusTarget.surface` before any
+destination capture. Large composite walks may restart the same exact seed and use
+stale-checked intermediate destinations when ordinary combat would otherwise interrupt
+a route; they still may not suppress combat. Five grouped Two Rings walks cover one
+ordinary-network destination in all 19 regions. The Sky Islands case intentionally
+stops at its grounded bridge because upper surfaces require flight.
 
 `OrbitCamera(yaw_turns, pitch_fraction)` injects a bounded, multi-frame held-right-
 button cursor drag. It never writes `PanOrbitCamera` or Character collision state.
