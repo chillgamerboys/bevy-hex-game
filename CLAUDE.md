@@ -372,8 +372,9 @@ to be out of date. Everything else under `docs/` describes contracts.
   `println!`, float `==` and undocumented public items are all denied. Tests may
   unwrap, expect, panic, debug and print; slice indexing and the other restrictions
   remain denied.
-- **Headless integration tests** use dependency-limited fixtures from
-  `hex_test_support` and live in their owning gameplay crate. Units and combat each
+- **Headless integration tests** use capability-based app mechanics from
+  `hex_test_app` and dependency-limited fixtures from `hex_test_support`, then live
+  in their owning crate. Units and combat each
   expose one explicit `contracts` target; concern modules live beneath that target
   rather than creating another Bevy link. The single
   `hex_combat_core/tests/simulation.rs` target owns multi-turn composition, and the

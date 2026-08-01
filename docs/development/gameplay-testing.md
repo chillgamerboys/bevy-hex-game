@@ -102,10 +102,17 @@ unchanged and continue on their owning changes and broad gates.
 
 ## Shared support boundary
 
-`hex_test_support` is test-only infrastructure. Its Cargo dependency ceiling is
-Bevy, `hex_core`, and `hex_assets`. It may construct deterministic minimal apps,
-advance fixed time, settle within a bound, publish synthetic shared surfaces, load
-fixture palettes/settings/content, and observe shared positions/resources.
+`hex_test_app` is the lowest test-only infrastructure tier. Its Cargo dependency
+ceiling is Bevy and `hex_core`; callers explicitly opt into assets, states, input,
+shared schedules, and deterministic time so absence tests do not receive hidden
+capabilities. It owns plugin finalization, bounded settling, and state-entry mechanics,
+but no fixture or owner implementation.
+
+`hex_test_support` builds on that neutral tier. Its Cargo dependency ceiling adds
+`hex_assets`; it may publish synthetic shared surfaces, load fixture
+palettes/settings/content, and observe shared positions/resources. Its existing
+`TestAppBuilder` remains the complete compatibility shell for gameplay and map
+contracts.
 
 The deterministic app shell, plugin finalization, and state-transition helpers are
 neutral infrastructure available to owning tests on either side of the gameplay/world

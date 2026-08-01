@@ -1,0 +1,15 @@
+[package]
+name = "hex_test_app"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "Capability-based deterministic Bevy app construction for owning tests."
+
+# This is the lowest shared test tier. It may know the shared app vocabulary, but
+# never an asset schema, producer, consumer, renderer adapter, or game binary.
+[dependencies]
+bevy = { workspace = true }
+hex_core = { workspace = true }
+
+[lints]
+workspace = true
