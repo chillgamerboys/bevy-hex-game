@@ -4,20 +4,24 @@
 //! Compiled only with the default-off `visual-walk` feature. Setting
 //! `HEX_WALK_SCRIPT` to a RON step list and `HEX_WALK_OUT` to an output
 //! directory runs the walk on launch: the runner advances one step at a time
-//! (waiting for screens, settling frames, injecting clicks and keys, capturing
-//! PNGs) and exits with success only if every step completed. A per-step
+//! (waiting for screens, settling frames, injecting UI or exact terrain clicks and
+//! keys, waiting for bounded party movement, capturing PNGs) and exits with success
+//! only if every step completed. A per-step
 //! watchdog turns a stall into a diagnostic and a failing exit instead of a
 //! hang. `HEX_WALK_SIZE=1280x720` optionally selects an exact review viewport;
 //! the default is 1920×1080.
 //!
-//! # Why clicks are injected as `Interaction::Pressed`
+//! # How clicks are injected
 //!
-//! `bevy_ui`'s focus system only resets a node's `Interaction` when it is not
+//! Named UI clicks use `Interaction::Pressed`. `bevy_ui`'s focus system only resets
+//! a node's `Interaction` when it is not
 //! `Pressed` — an injected press on a button the real cursor is nowhere near
 //! is deliberately left alone ("press sticks until release"). Every handler in
 //! this game reads `Changed<Interaction>` + `== Pressed`, so one injected
 //! insert is exactly one activation, exercised through the real button wiring
-//! rather than a state-bypass. The runner clears the press to
+//! rather than a state-bypass. Exact terrain clicks instead emit the ordinary
+//! primary `Pointer<Click>` after stack-safe surface resolution. The runner clears
+//! each named-button press to
 //! `Interaction::None` on the following step for buttons that outlive their
 //! click. Keys go through `ButtonInput::press` from `PreUpdate`, after the
 //! input plugin's frame clear, so `just_pressed` is visible to every `Update`
@@ -28,14 +32,21 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use bevy::camera::RenderTarget;
+use bevy::camera::{NormalizedRenderTarget, RenderTarget};
 use bevy::ecs::system::SystemParam;
 use bevy::input::InputSystems;
+use bevy::picking::backend::HitData;
+use bevy::picking::events::{Click, Pointer};
+use bevy::picking::pointer::{Location, PointerButton, PointerId};
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use hex_assets::ScenarioLibrary;
-use hex_core::{GameplaySetupFailure, HexTile, ResolvedMapSeed, Screen};
+use hex_core::{
+    Busy, CommandQueue, GameplaySetupFailure, Headroom, HexCoord, HexTile, ResolvedMapSeed, Screen,
+    TilePos,
+};
+use hex_units::{MovingTo, Party, UnitRegistry};
 use serde::Deserialize;
 
 use crate::capture::write_png;
@@ -150,6 +161,22 @@ enum WalkStep {
         #[serde(default)]
         index: usize,
     },
+    /// Click one exact terrain entity through the ordinary picking observer path.
+    ///
+    /// Omitting `level` is accepted only when the coordinate has one exposed
+    /// surface. Stacked terrain must name its exact surface instead of letting
+    /// the runner guess which entity a real pointer would have hit.
+    ClickTile {
+        q: i32,
+        r: i32,
+        #[serde(default)]
+        level: Option<hex_core::Level>,
+    },
+    /// Wait for every registered party member's domain movement to finish.
+    ///
+    /// The script owns the frame limit so a stalled route fails deterministically
+    /// instead of relying only on the runner's wall-clock watchdog.
+    AwaitPartyIdle { max_frames: u32 },
     /// Wait until a named button exists without activating it.
     AwaitButton(String),
     /// Install an authored immutable UI presentation state without solving combat.
@@ -191,6 +218,9 @@ fn validate_step(step: &WalkStep) -> Result<(), String> {
         }
         WalkStep::Click { name, .. } if name.trim().is_empty() => {
             Err("click name must not be empty".to_owned())
+        }
+        WalkStep::AwaitPartyIdle { max_frames: 0 } => {
+            Err("AwaitPartyIdle max_frames must be positive".to_owned())
         }
         WalkStep::AwaitButton(name) if name.trim().is_empty() => {
             Err("awaited button name must not be empty".to_owned())
@@ -240,7 +270,8 @@ fn parse_key(name: &str) -> Result<KeyCode, String> {
     match name {
         "Backspace" => Ok(KeyCode::Backspace),
         "C" => Ok(KeyCode::KeyC),
-        _ => Err(format!("unknown key {name:?}; expected Backspace or C")),
+        "H" => Ok(KeyCode::KeyH),
+        _ => Err(format!("unknown key {name:?}; expected Backspace, C, or H")),
     }
 }
 
@@ -346,6 +377,82 @@ fn capture_native_window(
     }
 }
 
+/// Resolves a script coordinate to the same exact entity the picking backend would
+/// have reported.
+///
+/// `None` means terrain has not published any tile yet, so the step may keep waiting.
+/// Every other absence is a script error: once terrain exists, waiting cannot make a
+/// missing coordinate or level appear. An omitted level is intentionally strict — a
+/// coordinate is not a surface, and choosing one exposed run from a stack would make the
+/// scripted click mean something a real pointer did not establish.
+fn resolve_tile_click_target<'a>(
+    tiles: impl Iterator<Item = (Entity, &'a TilePos, &'a Headroom)>,
+    coord: HexCoord,
+    level: Option<hex_core::Level>,
+) -> Result<Option<(Entity, TilePos)>, String> {
+    let mut saw_tile = false;
+    let mut at_coord = Vec::new();
+    for (entity, pos, headroom) in tiles {
+        saw_tile = true;
+        if pos.coord == coord && headroom.0 > 0 {
+            at_coord.push((entity, *pos));
+        }
+    }
+    if !saw_tile {
+        return Ok(None);
+    }
+
+    at_coord.sort_by_key(|&(entity, pos)| (pos, entity));
+    let available_levels: Vec<hex_core::Level> =
+        at_coord.iter().map(|(_, pos)| pos.level).collect();
+    let matches: Vec<(Entity, TilePos)> = at_coord
+        .into_iter()
+        .filter(|(_, pos)| level.is_none_or(|level| pos.level == level))
+        .collect();
+
+    match matches.as_slice() {
+        [(entity, pos)] => Ok(Some((*entity, *pos))),
+        [] if available_levels.is_empty() => Err(format!(
+            "ClickTile(q: {}, r: {}) names no published terrain coordinate",
+            coord.x(),
+            coord.y()
+        )),
+        [] => Err(format!(
+            "ClickTile(q: {}, r: {}, level: {level:?}) names no published run; available levels are {available_levels:?}",
+            coord.x(),
+            coord.y()
+        )),
+        _ if level.is_none() => Err(format!(
+            "ClickTile(q: {}, r: {}) is ambiguous across stacked levels {available_levels:?}; specify an exact level",
+            coord.x(),
+            coord.y()
+        )),
+        _ => Err(format!(
+            "ClickTile(q: {}, r: {}, level: {level:?}) matched duplicate published runs",
+            coord.x(),
+            coord.y()
+        )),
+    }
+}
+
+/// Builds the exact primary-button pointer event emitted after picking has selected a
+/// tile entity. The location is deliberately irrelevant: the target and `HitData`
+/// are already the picking result, matching the focused movement contract helper.
+fn primary_tile_click(target: Entity, window: Entity) -> Option<Pointer<Click>> {
+    let target_window = bevy::window::WindowRef::Entity(window).normalize(Some(window))?;
+    let location = Location {
+        target: NormalizedRenderTarget::Window(target_window),
+        position: Vec2::ZERO,
+    };
+    let click = Click {
+        button: PointerButton::Primary,
+        hit: HitData::new(target, 0.0, None, None),
+        duration: Duration::from_millis(1),
+        count: 1,
+    };
+    Some(Pointer::new(PointerId::Mouse, location, click, target))
+}
+
 #[derive(Resource)]
 struct WalkState {
     steps: Vec<WalkStep>,
@@ -379,9 +486,43 @@ struct WalkState {
 }
 
 #[derive(SystemParam)]
-struct WalkContent<'w> {
+struct WalkContent<'w, 's> {
     failure: Option<Res<'w, GameplaySetupFailure>>,
     library: Option<Res<'w, ScenarioLibrary>>,
+    party: Option<Res<'w, Party>>,
+    registry: Option<Res<'w, UnitRegistry>>,
+    queue: Option<Res<'w, CommandQueue>>,
+    movement: Query<'w, 's, (Has<Busy>, Has<MovingTo>)>,
+}
+
+impl WalkContent<'_, '_> {
+    /// `None` means party facts are not ready yet. `Some(false)` means at least one
+    /// stable party member still has a queued command or live domain route.
+    fn party_is_idle(&self) -> Option<bool> {
+        let (Some(party), Some(registry), Some(queue)) = (
+            self.party.as_deref(),
+            self.registry.as_deref(),
+            self.queue.as_deref(),
+        ) else {
+            return None;
+        };
+        if party.members.is_empty() {
+            return None;
+        }
+        for member in &party.members {
+            if queue.holds_command_for(*member) {
+                return Some(false);
+            }
+            let entity = registry.entity_of(*member)?;
+            let Ok((busy, moving)) = self.movement.get(entity) else {
+                return None;
+            };
+            if busy || moving {
+                return Some(false);
+            }
+        }
+        Some(true)
+    }
 }
 
 impl WalkState {
@@ -430,10 +571,10 @@ fn run_walk(
     mut next: ResMut<NextState<Screen>>,
     content: WalkContent,
     mut ui_scale: ResMut<hex_ui::UiScalePreference>,
-    mut primary_window: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
+    mut primary_window: Query<(Entity, &mut Window), With<bevy::window::PrimaryWindow>>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
     buttons: Query<(Entity, &Name), With<Button>>,
-    tiles: Query<Entity, With<HexTile>>,
+    tiles: Query<(Entity, &TilePos, &Headroom), With<HexTile>>,
     mut images: ResMut<Assets<Image>>,
     mut camera_targets: Query<(Entity, &mut RenderTarget), With<Camera>>,
     ui_roots: Query<Entity, (With<Node>, Without<ChildOf>, Without<UiTargetCamera>)>,
@@ -448,7 +589,7 @@ fn run_walk(
     // metrics deliberately follow the logical window. Keep both canvases aligned
     // so a persisted local window preference cannot silently turn a nominal 1080p
     // review into a compact 720p layout stretched into a larger PNG.
-    if let Ok(mut window) = primary_window.single_mut() {
+    if let Ok((_, mut window)) = primary_window.single_mut() {
         let may_resize = state.native_capture.is_none()
             || matches!(window.mode, bevy::window::WindowMode::Windowed);
         if may_resize && (window.physical_width(), window.physical_height()) != state.size {
@@ -534,6 +675,19 @@ fn run_walk(
                 state.advance();
             }
         }
+        WalkStep::AwaitPartyIdle { max_frames } => {
+            state.settled = state.settled.saturating_add(1);
+            if content.party_is_idle() == Some(true) {
+                state.advance();
+            } else if state.settled >= max_frames {
+                error!(
+                    "visual walk exhausted AwaitPartyIdle after {max_frames} frames; party facts: {:?}",
+                    content.party_is_idle()
+                );
+                state.failed = true;
+                exit.write(AppExit::error());
+            }
+        }
         WalkStep::Settle(frames) => {
             state.settled += 1;
             if state.settled >= frames {
@@ -557,17 +711,18 @@ fn run_walk(
                 }
                 if let Some(command) = state.native_capture.clone() {
                     let path = state.out_dir.join(format!("{name}.png"));
-                    let window = primary_window
-                        .single()
-                        .ok()
-                        .map(|window| NativeWindowFacts {
-                            physical_width: window.physical_width(),
-                            physical_height: window.physical_height(),
-                            logical_width: window.width(),
-                            logical_height: window.height(),
-                            scale_factor: window.resolution.scale_factor(),
-                            mode: format!("{:?}", window.mode),
-                        });
+                    let window =
+                        primary_window
+                            .single()
+                            .ok()
+                            .map(|(_, window)| NativeWindowFacts {
+                                physical_width: window.physical_width(),
+                                physical_height: window.physical_height(),
+                                logical_width: window.width(),
+                                logical_height: window.height(),
+                                scale_factor: window.resolution.scale_factor(),
+                                mode: format!("{:?}", window.mode),
+                            });
                     let outcome =
                         capture_native_window(&command, &path, name, window.as_ref(), snapshot);
                     state.capture_outcome = Some(outcome);
@@ -635,6 +790,31 @@ fn run_walk(
             commands.entity(entity).insert(Interaction::Pressed);
             state.pressed = Some(entity);
             state.advance();
+        }
+        WalkStep::ClickTile { q, r, level } => {
+            let coord = HexCoord::from_axial(q, r);
+            match resolve_tile_click_target(tiles.iter(), coord, level) {
+                Ok(None) => {}
+                Ok(Some((target, pos))) => {
+                    let Ok((window, _)) = primary_window.single() else {
+                        return;
+                    };
+                    let Some(click) = primary_tile_click(target, window) else {
+                        error!("visual walk could not normalize the primary window for {step:?}");
+                        state.failed = true;
+                        exit.write(AppExit::error());
+                        return;
+                    };
+                    info!("visual walk clicking terrain {pos:?} through pointer picking");
+                    commands.trigger(click);
+                    state.advance();
+                }
+                Err(reason) => {
+                    error!("visual walk refused {step:?}: {reason}");
+                    state.failed = true;
+                    exit.write(AppExit::error());
+                }
+            }
         }
         WalkStep::AwaitButton(ref name) => {
             if buttons
@@ -704,6 +884,36 @@ fn run_walk(
 mod tests {
     use super::*;
 
+    #[derive(Resource, Default)]
+    struct PointerRecord {
+        target: Option<Entity>,
+        primary: bool,
+    }
+
+    #[derive(Resource, Clone, Copy)]
+    struct PointerRequest {
+        target: Entity,
+        window: Entity,
+    }
+
+    fn issue_requested_pointer_click(mut commands: Commands, request: Res<PointerRequest>) {
+        if let Some(click) = primary_tile_click(request.target, request.window) {
+            commands.trigger(click);
+        }
+    }
+
+    fn record_pointer_click(click: On<Pointer<Click>>, mut record: ResMut<PointerRecord>) {
+        record.target = Some(click.event_target());
+        record.primary = click.button == PointerButton::Primary;
+    }
+
+    #[derive(Resource, Default, Debug, PartialEq, Eq)]
+    struct PartyIdleRecord(Option<bool>);
+
+    fn record_party_idle(content: WalkContent, mut record: ResMut<PartyIdleRecord>) {
+        record.0 = content.party_is_idle();
+    }
+
     const FULL_SCRIPT: &str = r#"[
         AwaitScreen("Title"),
         Settle(30),
@@ -713,6 +923,9 @@ mod tests {
         Key("Backspace"),
         StartScenario(name: "The Crossing"),
         AwaitTerrain,
+        ClickTile(q: 2, r: -2),
+        ClickTile(q: 2, r: -2, level: Some(7)),
+        AwaitPartyIdle(max_frames: 600),
         AwaitButton("Cast Ember"),
         SetViewport("3840x2160"),
         SetUiScale("200%"),
@@ -723,7 +936,7 @@ mod tests {
     #[test]
     fn a_full_script_parses_with_every_step_kind() {
         let steps: Vec<WalkStep> = ron::from_str(FULL_SCRIPT).expect("script parses");
-        assert_eq!(steps.len(), 13);
+        assert_eq!(steps.len(), 16);
         assert_eq!(steps.first(), Some(&WalkStep::AwaitScreen("Title".into())));
         assert_eq!(
             steps.get(3),
@@ -739,6 +952,26 @@ mod tests {
                 seed: None
             })
         );
+        assert_eq!(
+            steps.get(8),
+            Some(&WalkStep::ClickTile {
+                q: 2,
+                r: -2,
+                level: None,
+            })
+        );
+        assert_eq!(
+            steps.get(9),
+            Some(&WalkStep::ClickTile {
+                q: 2,
+                r: -2,
+                level: Some(7),
+            })
+        );
+        assert_eq!(
+            steps.get(10),
+            Some(&WalkStep::AwaitPartyIdle { max_frames: 600 })
+        );
         for step in &steps {
             validate_step(step).expect("every step validates");
         }
@@ -747,6 +980,7 @@ mod tests {
     #[test]
     fn unknown_screens_and_keys_are_rejected_at_load() {
         assert_eq!(parse_key("C"), Ok(KeyCode::KeyC));
+        assert_eq!(parse_key("H"), Ok(KeyCode::KeyH));
         assert!(validate_step(&WalkStep::AwaitScreen("Menu".into())).is_err());
         assert!(validate_step(&WalkStep::Key("F13".into())).is_err());
         assert!(validate_step(&WalkStep::Capture(" ".into())).is_err());
@@ -756,6 +990,9 @@ mod tests {
         })
         .is_err());
         assert!(validate_step(&WalkStep::AwaitButton(" ".into())).is_err());
+        assert!(validate_step(&WalkStep::AwaitPartyIdle { max_frames: 0 }).is_err());
+        validate_step(&WalkStep::AwaitPartyIdle { max_frames: 1 })
+            .expect("a positive frame bound is valid");
     }
 
     #[test]
@@ -765,6 +1002,144 @@ mod tests {
         for invalid in ["", "1280", "1280X720", "x720", "1280x", "0x720", "1280x0"] {
             assert!(parse_size(invalid).is_err(), "{invalid:?} should fail");
         }
+    }
+
+    #[test]
+    fn tile_click_resolution_requires_an_exact_stacked_surface() {
+        let mut world = World::new();
+        let low = world.spawn_empty().id();
+        let high = world.spawn_empty().id();
+        let elsewhere = world.spawn_empty().id();
+        let coord = HexCoord::from_axial(4, -3);
+        let low_pos = TilePos::new(coord, 2);
+        let high_pos = TilePos::new(coord, 8);
+        let elsewhere_pos = TilePos::new(HexCoord::from_axial(5, -3), 2);
+        let open = Headroom(8);
+        let tiles = [
+            (low, low_pos, open),
+            (high, high_pos, open),
+            (elsewhere, elsewhere_pos, open),
+        ];
+
+        let ambiguous = resolve_tile_click_target(
+            tiles
+                .iter()
+                .map(|(entity, pos, headroom)| (*entity, pos, headroom)),
+            coord,
+            None,
+        )
+        .expect_err("a stacked coordinate without a level must be refused");
+        assert!(ambiguous.contains("stacked levels [2, 8]"));
+
+        assert_eq!(
+            resolve_tile_click_target(
+                tiles
+                    .iter()
+                    .map(|(entity, pos, headroom)| (*entity, pos, headroom)),
+                coord,
+                Some(8),
+            ),
+            Ok(Some((high, high_pos)))
+        );
+        let missing_level = resolve_tile_click_target(
+            tiles
+                .iter()
+                .map(|(entity, pos, headroom)| (*entity, pos, headroom)),
+            coord,
+            Some(7),
+        )
+        .expect_err("a missing exact level must not fall back to another run");
+        assert!(missing_level.contains("available levels are [2, 8]"));
+
+        let buried = Headroom(0);
+        assert_eq!(
+            resolve_tile_click_target(
+                [(low, &low_pos, &buried), (high, &high_pos, &open)].into_iter(),
+                coord,
+                None,
+            ),
+            Ok(Some((high, high_pos))),
+            "buried material runs are not pointer-clickable surfaces"
+        );
+    }
+
+    #[test]
+    fn tile_click_resolution_waits_only_before_any_terrain_exists() {
+        let coord = HexCoord::from_axial(1, 2);
+        assert_eq!(
+            resolve_tile_click_target(std::iter::empty(), coord, None),
+            Ok(None)
+        );
+
+        let mut world = World::new();
+        let entity = world.spawn_empty().id();
+        let pos = TilePos::new(HexCoord::ORIGIN, 1);
+        let open = Headroom(8);
+        let missing =
+            resolve_tile_click_target(std::iter::once((entity, &pos, &open)), coord, None)
+                .expect_err("a missing coordinate cannot appear after terrain publication");
+        assert!(missing.contains("names no published terrain coordinate"));
+    }
+
+    #[test]
+    fn tile_click_uses_the_real_primary_pointer_observer_path() {
+        let mut app = App::new();
+        let window = app.world_mut().spawn(Window::default()).id();
+        let target = app.world_mut().spawn_empty().id();
+        app.init_resource::<PointerRecord>()
+            .insert_resource(PointerRequest { target, window })
+            .add_observer(record_pointer_click)
+            .add_systems(Update, issue_requested_pointer_click);
+
+        app.update();
+
+        let record = app.world().resource::<PointerRecord>();
+        assert_eq!(record.target, Some(target));
+        assert!(record.primary);
+    }
+
+    #[test]
+    fn party_idle_uses_stable_party_domain_facts_and_the_command_queue() {
+        let mut app = App::new();
+        app.init_resource::<Party>()
+            .init_resource::<UnitRegistry>()
+            .init_resource::<CommandQueue>()
+            .init_resource::<PartyIdleRecord>()
+            .add_systems(Update, record_party_idle);
+
+        app.update();
+        assert_eq!(
+            app.world().resource::<PartyIdleRecord>().0,
+            None,
+            "an empty party is not ready rather than vacuously idle"
+        );
+
+        let member = hex_core::UnitId(17);
+        let entity = app.world_mut().spawn_empty().id();
+        app.world_mut().resource_mut::<Party>().members.push(member);
+        app.world_mut()
+            .resource_mut::<UnitRegistry>()
+            .register(member, entity);
+        app.update();
+        assert_eq!(app.world().resource::<PartyIdleRecord>().0, Some(true));
+
+        app.world_mut()
+            .resource_mut::<CommandQueue>()
+            .push(hex_core::IssuedCommand {
+                seat: hex_core::PlayerSeat::default(),
+                command: hex_core::GameCommand::EndTurn { unit: member },
+            });
+        app.update();
+        assert_eq!(app.world().resource::<PartyIdleRecord>().0, Some(false));
+
+        let _ = app.world_mut().resource_mut::<CommandQueue>().pop();
+        app.world_mut().entity_mut(entity).insert(Busy);
+        app.update();
+        assert_eq!(app.world().resource::<PartyIdleRecord>().0, Some(false));
+
+        app.world_mut().entity_mut(entity).remove::<Busy>();
+        app.update();
+        assert_eq!(app.world().resource::<PartyIdleRecord>().0, Some(true));
     }
 
     #[test]
@@ -792,6 +1167,7 @@ mod tests {
             "../../walks/gameplay_ui_native_restart_200.ron",
             "../../walks/waterfall.ron",
             "../../walks/forest.ron",
+            "../../walks/readme_party_trial.ron",
         ] {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(script);
             let text = std::fs::read_to_string(&path)
