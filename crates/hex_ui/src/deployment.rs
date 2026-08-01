@@ -1,12 +1,13 @@
 //! Combat Lab deployment presentation.
 
+use bevy::input_focus::tab_navigation::TabGroup;
 use bevy::prelude::*;
 use hex_core::Screen;
 
 use crate::{
-    action_rail_clearance, blurb, fine, heading, label, row_button, stacked_row_button,
-    DeploymentIntent, DeploymentRosterEntryView, DeploymentView, ResolvedUiMetrics, UiAssets,
-    UiIntent, UiSystems, UiViewportClass, DANGER,
+    action_rail_clearance, blurb, fine, heading, label, layout::is_ultra_constrained, row_button,
+    stacked_row_button, DeploymentIntent, DeploymentRosterEntryView, DeploymentView,
+    ResolvedUiMetrics, UiAssets, UiIntent, UiSystems, UiViewportClass, DANGER,
 };
 
 #[derive(Component)]
@@ -53,6 +54,10 @@ fn render(
         .spawn((
             Name::new("Combat Lab Deployment HUD"),
             DeploymentRoot,
+            TabGroup {
+                order: 20,
+                modal: true,
+            },
             Node {
                 position_type: PositionType::Absolute,
                 left: Val::Px(22.0),
@@ -252,14 +257,24 @@ fn apply_layout(
         return;
     }
     let compact = metrics.viewport == UiViewportClass::Compact;
+    let ultra_constrained = is_ultra_constrained(*metrics);
     for mut node in &mut roots {
         (node.left, node.right) = match metrics.viewport {
+            UiViewportClass::Compact if ultra_constrained => (Val::Px(8.0), Val::Px(8.0)),
             UiViewportClass::Compact => (Val::Px(196.0), Val::Px(12.0)),
             UiViewportClass::Standard => (Val::Px(244.0), Val::Px(320.0)),
             UiViewportClass::Wide => (Val::Px(288.0), Val::Px(360.0)),
         };
-        node.top = Val::Px(if compact { 12.0 } else { 18.0 });
-        node.bottom = if compact {
+        node.top = Val::Px(if ultra_constrained {
+            68.0
+        } else if compact {
+            12.0
+        } else {
+            18.0
+        });
+        node.bottom = if ultra_constrained {
+            Val::Px(8.0)
+        } else if compact {
             Val::Px(action_rail_clearance(metrics.viewport))
         } else {
             Val::Auto

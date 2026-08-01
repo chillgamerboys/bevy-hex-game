@@ -34,9 +34,9 @@ pub const READ_ONLY_HUD: Pickable = Pickable::IGNORE;
 #[must_use]
 pub const fn action_rail_clearance(viewport: UiViewportClass) -> f32 {
     match viewport {
-        UiViewportClass::Compact => 230.0,
-        UiViewportClass::Standard => 196.0,
-        UiViewportClass::Wide => 200.0,
+        UiViewportClass::Compact => 260.0,
+        UiViewportClass::Standard => 252.0,
+        UiViewportClass::Wide => 256.0,
     }
 }
 
@@ -146,9 +146,11 @@ pub(crate) fn constrain_region_to_canvas(
         match role {
             UiRegionRole::Party | UiRegionRole::Turn => node.display = Display::None,
             UiRegionRole::Actions => {
-                node.top = Val::Px(8.0);
-                node.bottom = Val::Auto;
-                node.height = Val::Px(116.0);
+                node.top = Val::Px(80.0);
+                node.left = Val::Px(8.0);
+                node.right = Val::Px(8.0);
+                node.bottom = Val::Px(8.0);
+                node.height = Val::Px((metrics.effective_size.y - 88.0).max(44.0));
             }
             UiRegionRole::Inspector | UiRegionRole::Events => {}
         }
@@ -184,7 +186,7 @@ mod tests {
         assert_eq!(events.display, Display::None);
         assert_eq!(actions.display, Display::Flex);
         assert_eq!(actions.top, Val::Auto);
-        assert_eq!(actions.bottom, Val::Px(230.0));
+        assert_eq!(actions.bottom, Val::Px(260.0));
         assert_eq!(actions.right, Val::Px(12.0));
     }
 
@@ -200,8 +202,11 @@ mod tests {
         constrain_region_to_canvas(metrics, UiRegionRole::Party, &mut party);
         constrain_region_to_canvas(metrics, UiRegionRole::Actions, &mut actions);
         assert_eq!(party.display, Display::None);
-        assert_eq!(actions.top, Val::Px(8.0));
-        assert_eq!(actions.bottom, Val::Auto);
+        assert_eq!(actions.top, Val::Px(80.0));
+        assert_eq!(actions.left, Val::Px(8.0));
+        assert_eq!(actions.right, Val::Px(8.0));
+        assert_eq!(actions.bottom, Val::Px(8.0));
+        assert_eq!(actions.height, Val::Px(182.0));
     }
 
     #[test]

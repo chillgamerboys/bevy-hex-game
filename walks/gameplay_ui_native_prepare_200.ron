@@ -1,0 +1,13 @@
+// Persistence phase. It intentionally captures nothing and exits after saving 200%.
+[
+    AwaitScreen("Title"),
+    Click(name: "Settings"),
+    AwaitScreen("Settings"),
+    Click(name: "Setting UiScale"),
+    Click(name: "Setting UiScale"),
+    Click(name: "Setting UiScale"),
+    Click(name: "Setting UiScale"),
+    Click(name: "Setting UiScale"),
+    Click(name: "Setting UiScale"),
+    Settle(12),
+]

@@ -6,7 +6,7 @@ use crate::{
     CastingPanelView, GameplayHudView, GameplayLatticesView, LabStatisticsView, OutcomeReportView,
 };
 
-#[cfg(feature = "visual-review")]
+#[cfg(any(feature = "visual-review", feature = "test-support"))]
 use crate::{
     ActionAffordance, ActionAvailability, ActionPriority, CastingAimView, CastingPanelContentView,
     CastingSpellView, CellInteraction, DecisionChoiceView, GameplayAction, LatticeCellView,
@@ -22,7 +22,7 @@ pub(crate) struct UiReviewPresentation {
     pub(crate) outcome: Option<OutcomeReportView>,
 }
 
-#[cfg(feature = "visual-review")]
+#[cfg(any(feature = "visual-review", feature = "test-support"))]
 /// Installs one authored presentation-only fixture without mutating gameplay state.
 ///
 /// The visual-walk feature is the only caller. Logical behavior remains covered by
@@ -74,6 +74,14 @@ pub fn apply_ui_review_fixture(commands: &mut Commands, name: &str) -> Result<()
         }
         "live-statistics" => {
             review.hud = Some(ordinary_hud());
+            review.casting = Some(CastingPanelView {
+                visible: true,
+                content: CastingPanelContentView::Spells {
+                    unavailable: None,
+                    spells: production_spell_catalog(),
+                    aiming: None,
+                },
+            });
             review.statistics = Some(LabStatisticsView {
                 present: true,
                 visible: true,
@@ -136,7 +144,7 @@ pub fn apply_ui_review_fixture(commands: &mut Commands, name: &str) -> Result<()
     Ok(())
 }
 
-#[cfg(feature = "visual-review")]
+#[cfg(any(feature = "visual-review", feature = "test-support"))]
 fn ordinary_hud() -> GameplayHudView {
     GameplayHudView {
         phase: hex_core::GameplayPhase::Active,
@@ -161,11 +169,57 @@ fn ordinary_hud() -> GameplayHudView {
                 availability: ActionAvailability::Enabled,
                 priority: ActionPriority::Primary,
             },
+            ActionAffordance {
+                action: GameplayAction::Rest,
+                label: "Rest".to_owned(),
+                shortcut: Some("R".to_owned()),
+                availability: ActionAvailability::Disabled {
+                    reason: "Unavailable while enemies are nearby".to_owned(),
+                },
+                priority: ActionPriority::Primary,
+            },
+            ActionAffordance {
+                action: GameplayAction::Pause,
+                label: "Pause".to_owned(),
+                shortcut: Some("Escape".to_owned()),
+                availability: ActionAvailability::Enabled,
+                priority: ActionPriority::Primary,
+            },
         ],
     }
 }
 
-#[cfg(feature = "visual-review")]
+#[cfg(any(feature = "visual-review", feature = "test-support"))]
+fn production_spell_catalog() -> Vec<CastingSpellView> {
+    [
+        ("Ember", "1 Fire · range 3", Color::srgb(0.91, 0.36, 0.25)),
+        (
+            "Lightning Bolt",
+            "2 Air · range 4",
+            Color::srgb(0.55, 0.78, 0.98),
+        ),
+        (
+            "Renewal",
+            "2 Water · restore 3",
+            Color::srgb(0.35, 0.76, 0.58),
+        ),
+        (
+            "Scrying Eye",
+            "1 Air · reveal 4",
+            Color::srgb(0.66, 0.62, 0.93),
+        ),
+    ]
+    .into_iter()
+    .map(|(name, cost, color)| CastingSpellView {
+        name: name.to_owned(),
+        cost: cost.to_owned(),
+        blocked: None,
+        color,
+    })
+    .collect()
+}
+
+#[cfg(any(feature = "visual-review", feature = "test-support"))]
 fn required_hud() -> GameplayHudView {
     GameplayHudView {
         required_prompt: Some(
@@ -185,7 +239,7 @@ fn required_hud() -> GameplayHudView {
     }
 }
 
-#[cfg(feature = "visual-review")]
+#[cfg(any(feature = "visual-review", feature = "test-support"))]
 fn decision_lattices() -> GameplayLatticesView {
     let cell = |q, r, label: &str, selected| LatticeCellView {
         coord: hex_core::LatticeCoord::new(q, r),

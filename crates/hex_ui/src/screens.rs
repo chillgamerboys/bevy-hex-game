@@ -3,7 +3,8 @@ use hex_core::Screen;
 
 use crate::{
     blurb, button, despawn_screen, display, fine, heading, label, panel, screen_root, screen_title,
-    GameplayAction, PauseView, UiAssets, UiIntent, UiSetting, UiSettingsView, UiSystems,
+    GameplayAction, PauseView, ResolvedUiMetrics, UiAssets, UiIntent, UiSetting, UiSettingsView,
+    UiSystems, UiViewportClass,
 };
 
 #[derive(Component)]
@@ -17,6 +18,9 @@ struct SettingsBack;
 
 #[derive(Component)]
 struct SettingsSurface;
+
+#[derive(Component)]
+struct SettingsRoot;
 
 #[derive(Component)]
 struct PauseOverlay;
@@ -38,7 +42,12 @@ pub(super) fn plugin(app: &mut App) {
         .add_systems(OnEnter(Screen::Settings), spawn_settings)
         .add_systems(
             Update,
-            (refresh_settings, handle_settings_controls).run_if(in_state(Screen::Settings)),
+            (
+                refresh_settings,
+                apply_settings_layout,
+                handle_settings_controls,
+            )
+                .run_if(in_state(Screen::Settings)),
         )
         .add_systems(OnExit(Screen::Settings), despawn_screen(Screen::Settings));
     app.add_systems(OnEnter(hex_core::Pause(true)), spawn_pause)
@@ -127,7 +136,12 @@ fn spawn_loading(mut commands: Commands, assets: Res<UiAssets>) {
 
 fn spawn_settings(mut commands: Commands, assets: Res<UiAssets>, view: Res<UiSettingsView>) {
     commands
-        .spawn(screen_root(Screen::Settings, "Settings Screen"))
+        .spawn((
+            screen_root(Screen::Settings, "Settings Screen"),
+            SettingsRoot,
+            bevy::ui_widgets::ScrollArea,
+            ScrollPosition::default(),
+        ))
         .with_children(|root| {
             root.spawn(screen_title(&assets, "Settings"));
             root.spawn(blurb(
@@ -150,11 +164,57 @@ fn spawn_settings(mut commands: Commands, assets: Res<UiAssets>, view: Res<UiSet
                 .with_children(|surface| {
                     spawn_settings_rows(surface, &assets, &view);
                 });
+            root.spawn((button("Back"), SettingsBack))
+                .with_child(label(&assets, "Back to title"));
             root.spawn((
                 SettingNotice,
                 blurb(&assets, view.notice.clone().unwrap_or_default()),
             ));
         });
+}
+
+fn apply_settings_layout(
+    metrics: Res<ResolvedUiMetrics>,
+    added: Query<(), Added<SettingsSurface>>,
+    mut roots: Query<&mut Node, (With<SettingsRoot>, Without<SettingsSurface>)>,
+    mut surfaces: Query<&mut Node, (With<SettingsSurface>, Without<SettingsRoot>)>,
+    mut controls: Query<
+        &mut Node,
+        (
+            Or<(With<SettingControl>, With<SettingsBack>)>,
+            Without<SettingsRoot>,
+            Without<SettingsSurface>,
+        ),
+    >,
+) {
+    if !metrics.is_changed() && added.is_empty() {
+        return;
+    }
+    let compact = metrics.viewport == UiViewportClass::Compact;
+    for mut node in &mut roots {
+        node.overflow = if compact {
+            Overflow::scroll_y()
+        } else {
+            Overflow::clip_y()
+        };
+    }
+    for mut node in &mut surfaces {
+        node.max_height = if compact {
+            Val::Auto
+        } else {
+            Val::Percent(78.0)
+        };
+        node.overflow = if compact {
+            Overflow::visible()
+        } else {
+            Overflow::scroll_y()
+        };
+    }
+    for mut node in &mut controls {
+        node.width = Val::Percent(100.0);
+        node.max_width = Val::Px(440.0);
+        node.min_width = Val::Px(0.0);
+    }
 }
 
 fn refresh_settings(
@@ -206,9 +266,6 @@ fn spawn_settings_rows(
             ))
             .with_child(label(assets, format!("{} · {}", row.label, row.value)));
     }
-    surface
-        .spawn((button("Back"), SettingsBack))
-        .with_child(label(assets, "Back to title"));
 }
 
 fn handle_settings_controls(

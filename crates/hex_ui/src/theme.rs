@@ -187,6 +187,7 @@ fn row_button_with_height(name: impl Into<String>, width: f32, height: f32) -> i
             width: Val::Px(width),
             min_width: Val::Px(44.0),
             height: Val::Px(height),
+            min_height: Val::Px(44.0),
             align_items: AlignItems::Center,
             justify_content: JustifyContent::Center,
             flex_direction: FlexDirection::Column,

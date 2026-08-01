@@ -3,6 +3,7 @@
 use bevy::input_focus::tab_navigation::TabIndex;
 use bevy::prelude::*;
 use bevy::text::EditableText;
+use bevy::ui::InteractionDisabled;
 use bevy::ui_widgets::ScrollArea;
 use hex_assets::{
     CombatLabMapCatalog, CombatLabMapDefinition, CombatLabRegionCenter, CombatRuleField,
@@ -29,7 +30,13 @@ type RosterChoice = ModelRosterChoice<hex_assets::CustomCharacterId>;
 struct LabRoot;
 
 #[derive(Component)]
+struct LabTabs;
+
+#[derive(Component)]
 struct LabResponsiveBody;
+
+#[derive(Component)]
+struct LabInnerScroll;
 
 #[derive(Component, Debug, Clone, Copy)]
 enum LabBodyPanel {
@@ -132,13 +139,77 @@ fn emit_text_changes(
 fn apply_lab_screen_layout(
     metrics: Res<ResolvedUiMetrics>,
     added_bodies: Query<(), Added<LabResponsiveBody>>,
-    mut bodies: Query<&mut Node, With<LabResponsiveBody>>,
-    mut panels: Query<(&LabBodyPanel, &mut Node), Without<LabResponsiveBody>>,
+    mut roots: Query<
+        &mut Node,
+        (
+            With<LabRoot>,
+            Without<LabTabs>,
+            Without<LabResponsiveBody>,
+            Without<LabBodyPanel>,
+            Without<LabInnerScroll>,
+        ),
+    >,
+    mut tabs: Query<
+        &mut Node,
+        (
+            With<LabTabs>,
+            Without<LabRoot>,
+            Without<LabResponsiveBody>,
+            Without<LabBodyPanel>,
+            Without<LabInnerScroll>,
+        ),
+    >,
+    mut bodies: Query<&mut Node, (With<LabResponsiveBody>, Without<LabRoot>, Without<LabTabs>)>,
+    mut panels: Query<
+        (&LabBodyPanel, &mut Node),
+        (
+            Without<LabResponsiveBody>,
+            Without<LabRoot>,
+            Without<LabTabs>,
+            Without<LabInnerScroll>,
+        ),
+    >,
+    mut inner_scrolls: Query<
+        &mut Node,
+        (
+            With<LabInnerScroll>,
+            Without<LabResponsiveBody>,
+            Without<LabBodyPanel>,
+            Without<LabRoot>,
+            Without<LabTabs>,
+        ),
+    >,
+    mut controls: Query<
+        &mut Node,
+        (
+            Or<(With<CombatLabIntent>, With<InteractionDisabled>)>,
+            Without<LabRoot>,
+            Without<LabTabs>,
+            Without<LabResponsiveBody>,
+            Without<LabBodyPanel>,
+            Without<LabInnerScroll>,
+        ),
+    >,
 ) {
     if !metrics.is_changed() && added_bodies.is_empty() {
         return;
     }
     let compact = metrics.viewport == UiViewportClass::Compact;
+    for mut node in &mut roots {
+        node.overflow = if compact {
+            Overflow::scroll_y()
+        } else {
+            Overflow::clip_y()
+        };
+    }
+    for mut node in &mut tabs {
+        node.flex_wrap = if compact {
+            FlexWrap::Wrap
+        } else {
+            FlexWrap::NoWrap
+        };
+        node.row_gap = if compact { Val::Px(6.0) } else { Val::ZERO };
+    }
     for mut node in &mut bodies {
         node.flex_direction = if compact {
             FlexDirection::Column
@@ -146,10 +217,12 @@ fn apply_lab_screen_layout(
             FlexDirection::Row
         };
         node.overflow = if compact {
-            Overflow::scroll_y()
+            Overflow::visible()
         } else {
             Overflow::default()
         };
+        node.height = if compact { Val::Auto } else { Val::Px(0.0) };
+        node.flex_grow = if compact { 0.0 } else { 1.0 };
     }
     for (role, mut node) in &mut panels {
         node.width = if compact {
@@ -160,6 +233,23 @@ fn apply_lab_screen_layout(
                 LabBodyPanel::Main => Val::Auto,
             }
         };
+        node.height = Val::Auto;
+    }
+    for mut node in &mut inner_scrolls {
+        node.flex_grow = if compact { 0.0 } else { 1.0 };
+        node.overflow = if compact {
+            Overflow::visible()
+        } else {
+            Overflow::scroll_y()
+        };
+    }
+    for mut node in &mut controls {
+        node.max_width = if compact {
+            Val::Percent(100.0)
+        } else {
+            Val::Auto
+        };
+        node.min_width = if compact { Val::Px(0.0) } else { Val::Auto };
     }
 }
 
@@ -177,7 +267,12 @@ fn spawn_lab_ui(
     asset_server: &AssetServer,
 ) {
     commands
-        .spawn((screen_root(Screen::CombatLab, "Combat Lab Screen"), LabRoot))
+        .spawn((
+            screen_root(Screen::CombatLab, "Combat Lab Screen"),
+            LabRoot,
+            ScrollArea,
+            ScrollPosition::default(),
+        ))
         .insert(Node {
             padding: UiRect::all(Val::Px(18.0)),
             justify_content: JustifyContent::FlexStart,
@@ -185,11 +280,14 @@ fn spawn_lab_ui(
         })
         .with_children(|root| {
             root.spawn(display(assets, "Combat Lab"));
-            root.spawn(Node {
-                flex_direction: FlexDirection::Row,
-                column_gap: Val::Px(8.0),
-                ..default()
-            })
+            root.spawn((
+                LabTabs,
+                Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(8.0),
+                    ..default()
+                },
+            ))
             .with_children(|tabs| {
                 lab_button(
                     tabs,
@@ -239,6 +337,7 @@ fn spawn_lab_ui(
                             spawn_rules_setup(root, assets, state, maps, combat);
                         }
                     }
+                    spawn_sandbox_footer(root, assets, state, maps, combat);
                 }
                 LabTab::Fixtures => spawn_fixture_selector(root, assets, state),
                 LabTab::Reports => spawn_saved_reports(root, assets, state, reports),
@@ -257,6 +356,124 @@ fn lab_button(
     parent
         .spawn((row_button(text.clone(), width), action))
         .with_child(label(assets, text));
+}
+
+fn disabled_lab_button(
+    parent: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    text: impl Into<String>,
+    reason: impl Into<String>,
+    width: f32,
+) {
+    let text = text.into();
+    parent
+        .spawn((row_button(text.clone(), width), InteractionDisabled))
+        .insert(BorderColor::all(Color::srgba(0.35, 0.36, 0.39, 0.72)))
+        .with_children(|button| {
+            button.spawn(label(assets, text));
+            button.spawn(fine(assets, reason.into()));
+        });
+}
+
+fn spawn_sandbox_footer(
+    root: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    state: &CombatLabScreenView,
+    maps: Option<&CombatLabMapCatalog>,
+    shipped: Option<&CombatSettings>,
+) {
+    root.spawn((
+        Name::new("Combat Lab Step Actions"),
+        Node {
+            width: Val::Percent(96.0),
+            min_height: Val::Px(52.0),
+            flex_shrink: 0.0,
+            flex_direction: FlexDirection::Row,
+            flex_wrap: FlexWrap::Wrap,
+            justify_content: JustifyContent::FlexEnd,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(8.0),
+            row_gap: Val::Px(6.0),
+            ..default()
+        },
+    ))
+    .with_children(|footer| match state.sandbox_step {
+        SandboxStep::Map => {
+            if maps.is_some_and(|catalog| catalog.get(&state.map).is_some()) {
+                lab_button(
+                    footer,
+                    assets,
+                    "Continue to Rosters",
+                    CombatLabIntent::ShowSandboxStep(SandboxStep::Rosters),
+                    220.0,
+                );
+            } else {
+                disabled_lab_button(
+                    footer,
+                    assets,
+                    "Continue to Rosters",
+                    "Choose a loaded map",
+                    220.0,
+                );
+            }
+        }
+        SandboxStep::Rosters => {
+            lab_button(
+                footer,
+                assets,
+                "Back to Map",
+                CombatLabIntent::ShowSandboxStep(SandboxStep::Map),
+                170.0,
+            );
+            let ready = !state.players.is_empty()
+                && !state.hostiles.is_empty()
+                && state.players.len() <= MAX_ROSTER
+                && state.hostiles.len() <= MAX_ROSTER;
+            if ready {
+                lab_button(
+                    footer,
+                    assets,
+                    "Continue to Rules",
+                    CombatLabIntent::ShowSandboxStep(SandboxStep::Rules),
+                    230.0,
+                );
+            } else {
+                disabled_lab_button(
+                    footer,
+                    assets,
+                    "Continue to Rules",
+                    "Each side needs 1–6 Map-ready characters",
+                    300.0,
+                );
+            }
+        }
+        SandboxStep::Rules => {
+            lab_button(
+                footer,
+                assets,
+                "Back to Rosters",
+                CombatLabIntent::ShowSandboxStep(SandboxStep::Rosters),
+                190.0,
+            );
+            if shipped.is_some() {
+                lab_button(
+                    footer,
+                    assets,
+                    "Load Map & Deploy",
+                    CombatLabIntent::PrepareDeployment,
+                    210.0,
+                );
+            } else {
+                disabled_lab_button(
+                    footer,
+                    assets,
+                    "Load Map & Deploy",
+                    "Combat rules are still loading",
+                    250.0,
+                );
+            }
+        }
+    });
 }
 
 fn map_button(
@@ -371,6 +588,7 @@ fn spawn_map_setup(
                     "The selected map and resolved seed are frozen into every run and report.",
                 ));
                 list.spawn((
+                    LabInnerScroll,
                     ScrollArea,
                     Node {
                         min_height: Val::Px(0.0),
@@ -422,13 +640,6 @@ fn spawn_map_setup(
                             deployment_summary(record)
                         ),
                     ));
-                    lab_button(
-                        preview,
-                        assets,
-                        "Continue to Rosters",
-                        CombatLabIntent::ShowSandboxStep(SandboxStep::Rosters),
-                        220.0,
-                    );
                 } else {
                     preview
                         .spawn(blurb(assets, "The packaged map catalog is still loading."))
@@ -499,13 +710,6 @@ fn spawn_rules_setup(
                         ),
                     ));
                 }
-                lab_button(
-                    summary,
-                    assets,
-                    "Back to Rosters",
-                    CombatLabIntent::ShowSandboxStep(SandboxStep::Rosters),
-                    190.0,
-                );
             });
         body.spawn((panel(), LabBodyPanel::Main))
             .insert(Node {
@@ -544,6 +748,7 @@ fn spawn_rules_setup(
                     });
                 rules
                     .spawn((
+                        LabInnerScroll,
                         ScrollArea,
                         Node {
                             min_height: Val::Px(0.0),
@@ -626,13 +831,6 @@ fn spawn_rules_setup(
                             CombatLabIntent::ResetRules,
                             180.0,
                         );
-                        lab_button(
-                            actions,
-                            assets,
-                            "Load Map & Deploy",
-                            CombatLabIntent::PrepareDeployment,
-                            210.0,
-                        );
                     });
             });
     });
@@ -699,13 +897,6 @@ fn spawn_sandbox_setup(
                         .spawn(blurb(assets, "The packaged map catalog is still loading."))
                         .insert(TextColor(DANGER));
                 }
-                lab_button(
-                    map_panel,
-                    assets,
-                    "Back to Map",
-                    CombatLabIntent::ShowSandboxStep(SandboxStep::Map),
-                    170.0,
-                );
             });
 
         body.spawn((panel(), LabBodyPanel::Main))
@@ -754,19 +945,11 @@ fn spawn_sandbox_setup(
                             &state.map_ready_choices,
                         );
                     });
-                let ready = !state.players.is_empty()
-                    && !state.hostiles.is_empty()
-                    && state.players.len() <= MAX_ROSTER
-                    && state.hostiles.len() <= MAX_ROSTER;
-                if ready {
-                    lab_button(
-                        rosters,
-                        assets,
-                        "Continue to Rules",
-                        CombatLabIntent::ShowSandboxStep(SandboxStep::Rules),
-                        230.0,
-                    );
-                } else {
+                if state.players.is_empty()
+                    || state.hostiles.is_empty()
+                    || state.players.len() > MAX_ROSTER
+                    || state.hostiles.len() > MAX_ROSTER
+                {
                     rosters
                         .spawn(blurb(assets, "Each side needs 1–6 Map-ready characters."))
                         .insert(TextColor(DANGER));
@@ -803,6 +986,7 @@ fn spawn_roster_column(
             column.spawn(heading(assets, title));
             column
                 .spawn((
+                    LabInnerScroll,
                     ScrollArea,
                     Node {
                         min_height: Val::Px(0.0),
@@ -1160,6 +1344,7 @@ fn spawn_fixture_selector(
             ));
             fixture_panel
                 .spawn((
+                    LabInnerScroll,
                     ScrollArea,
                     Node {
                         min_height: Val::Px(0.0),
@@ -1296,6 +1481,7 @@ fn spawn_saved_reports(
             }
             history
                 .spawn((
+                    LabInnerScroll,
                     ScrollArea,
                     Node {
                         min_height: Val::Px(0.0),
@@ -1535,6 +1721,13 @@ mod tests {
         let mut commands = Commands::new(&mut queue, &world);
         commands.spawn(Node::default()).with_children(|root| {
             spawn_rules_setup(
+                root,
+                &assets(),
+                &state,
+                None,
+                Some(&CombatSettings::default()),
+            );
+            spawn_sandbox_footer(
                 root,
                 &assets(),
                 &state,

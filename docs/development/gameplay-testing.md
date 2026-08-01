@@ -163,13 +163,16 @@ rosters remain legible, drawers overlap, and a responsive surface adapts. They d
 prove occupancy, action accounting, tempo, determinism, state restoration, or report
 identity.
 
-A scoped gameplay acceptance run reviews no more than ten frames. Capture both
-resolutions only for surfaces whose responsive behavior is under review.
-`walks/gameplay_ui.ron` is the sole gameplay-owned presentation walk. It uses
-default-off presentation fixtures for title/settings, Creator validation, Combat Lab
-setup/deployment, the live action rail and drawer, a required decision, aiming and a
-disabled action, dense report/Compare, and only targeted compact/4K duplicates.
-The runner contains no combat-solving verbs.
+A scoped gameplay acceptance run reviews no more than ten frames. Six deterministic
+offscreen frames cover Creator validation, Combat Lab setup/deployment, aiming and a
+disabled action, the live statistics drawer, and the 4K dense Compare report. Four
+native macOS window-only frames cover cold Compact title, Standard settings,
+fullscreen Auto gameplay, and a restarted 200% required decision. Default-off
+presentation fixtures create visual state without solving combat. Before any
+capture, the live `UiTreeSnapshot` oracle rejects zero-area targets, inherited
+clipping, off-canvas placement, unreachable scroll content, overlap, missing labels,
+invalid focus order, and targets below 44×44. The runner contains no combat-solving
+verbs.
 
 Forest, Waterfall, map review, and Alberto's map captures are outside this budget and
 remain unchanged.

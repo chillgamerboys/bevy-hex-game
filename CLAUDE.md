@@ -97,13 +97,15 @@ HEX_WALK_OUT=.context/visual-walks/local \
 cargo run -p hex_game --features visual-walk
 ```
 
-Exit code is the mechanical verdict: any stalled step or black frame fails the
-run. `walks/gameplay_ui.ron` is the sole gameplay-owned presentation walk and stays
-within ten reviewed frames. It reviews hierarchy, layout, focus, legibility, and
-responsive composition only; gameplay correctness is proved by canonical state
-snapshots in the rules/contracts/simulation/app partitions. The capture goes
-through an offscreen render target (the window surface is not readable on
-macOS/Metal), with every UI root pointed at the redirected camera.
+Exit code is the mechanical verdict: any stalled step, structural UI failure, or
+black frame fails the run. The scoped gameplay route contains six deterministic
+offscreen frames plus four native macOS checkpoints, never more than ten reviewed
+images. It reviews hierarchy, layout, focus, legibility, and responsive composition
+only; gameplay correctness is proved by canonical state snapshots in the
+rules/contracts/simulation/app partitions. Offscreen capture redirects the camera
+because the primary window is unreadable on macOS/Metal. The native wrapper
+`tools/run_gameplay_ui_native_review_macos.sh` instead preserves the real window and
+captures its exact CoreGraphics window ID for Retina/fullscreen/restart evidence.
 
 ## Workspace
 
