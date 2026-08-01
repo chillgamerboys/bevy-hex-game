@@ -64,7 +64,10 @@ const WALK_TIME_SCALE: f32 = 12.0;
 const MAX_ORBIT_YAW_TURNS: f32 = 0.5;
 const MAX_ORBIT_PITCH_FRACTION: f32 = 1.0;
 /// Full render frames allowed after both cameras move to a fresh image target.
-const CAPTURE_TARGET_SETTLE_FRAMES: u8 = 2;
+///
+/// Four frames let the asynchronous UI glyph atlas settle on Metal. Two frames
+/// occasionally captured a complete 3D pass with only part of the UI text uploaded.
+const CAPTURE_TARGET_SETTLE_FRAMES: u8 = 4;
 
 /// Gives every configured walk a fresh storage root unless the caller explicitly
 /// supplied one. This runs before persistence plugins initialize `StoragePaths`.
