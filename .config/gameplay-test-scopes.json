@@ -94,6 +94,8 @@
         "--package",
         "hex_gameplay_model",
         "--package",
+        "hex_ui",
+        "--package",
         "hex_game",
         "--features",
         "hex_game/test-support",
@@ -119,7 +121,7 @@
         "--profile",
         "ci",
         "-E",
-        "not (package(hex_core) | package(hex_lattice) | package(hex_ai) | package(hex_units) | package(hex_combat_core) | package(hex_combat) | package(hex_test_support) | package(hex_gameplay_model) | package(hex_map) | (package(hex_game) & binary(gameplay_app)))"
+        "not (package(hex_core) | package(hex_lattice) | package(hex_ai) | package(hex_units) | package(hex_combat_core) | package(hex_combat) | package(hex_test_support) | package(hex_gameplay_model) | package(hex_ui) | package(hex_map) | (package(hex_game) & binary(gameplay_app)))"
       ]
     },
     "clippy": {
@@ -231,6 +233,31 @@
       "patterns": ["crates/hex_gameplay_model/**"],
       "concerns": ["app", "clippy", "docs", "shipping"],
       "reason": "Pure gameplay screen models are consumed by headless UI behavior and the shipping application."
+    },
+    {
+      "name": "runtime-ui",
+      "patterns": ["crates/hex_ui/**"],
+      "concerns": ["app", "clippy", "docs", "shipping"],
+      "reason": "Presentation-only UI changes use pure view tests, the one headless app target, and shipping compilation without selecting map corpora."
+    },
+    {
+      "name": "gameplay-visual",
+      "patterns": [
+        "walks/gameplay_ui.ron",
+        "walks/gameplay_ui_native.ron",
+        "walks/gameplay_ui_native_prepare_200.ron",
+        "walks/gameplay_ui_native_restart_200.ron",
+        "tools/capture_macos_game_window.sh",
+        "tools/run_gameplay_ui_native_review_macos.sh",
+        "walks/gameplay.ron",
+        "walks/menus.ron",
+        "walks/ability_lab.ron",
+        "walks/raider_mirror.ron",
+        "walks/wave7_combat_lab.ron",
+        "walks/readme_party_trial.ron"
+      ],
+      "concerns": ["app", "clippy", "docs", "shipping"],
+      "reason": "Gameplay-owned visual scripts prove presentation only; behavior remains in typed app and simulation oracles."
     },
     {
       "name": "combat-authority",

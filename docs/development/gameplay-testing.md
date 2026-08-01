@@ -18,7 +18,7 @@ concern is selected.
 | Pure rules | Value objects, lattice transformations, compact AI policy | Owning crate dependencies only | Return values and immutable state | `python3 tools/gameplay_scope.py run rules` | 60 s total |
 | ECS contracts | Focused commands, effects, movement, turns, occupancy and Channel seams | `hex_test_support`, then the owning gameplay crate dependencies | Components, resources, messages and exact positions | `python3 tools/gameplay_scope.py run contracts` | 60 s per test |
 | Deterministic simulation | Multi-turn composition, tempo profiles, 3v3/6v6, canonical summaries and bounded no-progress | `hex_combat_core` over `hex_core` + `hex_lattice`; never Bevy App, `hex_test_support`, renderer, viewport, wall clock, asset server, ECS entity, perception implementation, or map generator | Full `CombatRunSnapshot` equality across two runs plus named metric assertions | `python3 tools/gameplay_scope.py run simulation` | 60 s |
-| Game/UI behavior | Pure Combat Lab/Creator transitions plus Bevy wiring, re-entry and drawer lifecycle | `hex_gameplay_model` for state/launch/navigation truth; `hex_game` with default-off `test-support` only for Bevy lifecycle | Pure state equality, then immutable app observations and projected text/state | `python3 tools/gameplay_scope.py run app` | 60 s |
+| Game/UI behavior | Pure Combat Lab/Creator transitions plus Bevy wiring, re-entry and drawer lifecycle | `hex_gameplay_model` for state/launch/navigation truth; `hex_ui` for rendering; `hex_game` with default-off `test-support` only for Bevy lifecycle | Pure state equality, `GameplayStateSnapshot` for canonical facts, and `UiTreeSnapshot` for presentation structure | `python3 tools/gameplay_scope.py run app` | 60 s |
 | Visual smoke | Layout, legibility, overlap, responsive composition and presentation regressions | Release-shaped game with `visual-walk`; no `dev` or `test-support` | Reviewed frames plus the human motion/feel walk | Run the one scoped gameplay walk through `/visual-walk` | At most 10 reviewed gameplay frames |
 | Soak/performance | Long stalemates, stress corpora, bounded retention and performance | The scheduled stress workflow | Typed completion/timeout, fingerprints, timing and memory bounds | `.github/workflows/stress.yaml` | Scheduled/manual only |
 
@@ -37,7 +37,7 @@ module. `hex_units/tests/contracts.rs` links every focused unit/ECS contract onc
 Their concern modules live below a directory with the target name so ownership stays
 readable without adding another linker invocation.
 
-The app partition runs `hex_gameplay_model`'s inline pure tests together with
+The app partition runs `hex_gameplay_model` and `hex_ui` inline tests together with
 `hex_game/tests/gameplay_app.rs`, the default-off gameplay-owned application target.
 Before enabling `test-support`, it also compiles the default-feature `hex_game`
 library-test target in package isolation. That preflight prevents workspace feature
@@ -112,10 +112,16 @@ It must never depend on `hex_units`, `hex_combat`, `hex_game`, `hex_map`,
 private gameplay or world truth and turn a test helper into a second authority.
 Owning tests add their system under test on top of the support app.
 
-`hex_game` exposes its headless UI observation harness only behind `test-support`.
-That feature returns immutable facts and formatted canonical projections; it does
-not expose mutable screen resources. The shipping binary has no feature dependency
-on the harness.
+`hex_game` exposes `GameplayStateSnapshot` only behind `test-support`. It observes
+canonical screen/phase/mode, turn and budgets, pending decisions, command state,
+exact positions, lattice summaries, outcome, and report fingerprints. `hex_ui`
+separately exposes `UiTreeSnapshot` for visible regions, focus/accessibility,
+computed bounds/overflow, and action priority. Neither feature exposes mutable
+screen state, and the shipping binary has no feature dependency on either harness.
+`hex_game` also re-exports `HeadlessUiPlugin`, which installs the real presentation
+schedules on a synthetic window without Winit or a renderer. Use it only with
+`UiTreeSnapshot` presentation assertions; canonical behavior still comes from
+`GameplayStateSnapshot` and the owning rules or simulation target.
 
 `hex_gameplay_model` owns renderer-free Combat Lab and Creator transitions. It may
 depend on `bevy_ecs` derive support and `hex_core`, but not on assets, combat, units,
@@ -157,11 +163,16 @@ rosters remain legible, drawers overlap, and a responsive surface adapts. They d
 prove occupancy, action accounting, tempo, determinism, state restoration, or report
 identity.
 
-A scoped gameplay acceptance run reviews no more than ten frames. Capture both
-resolutions only for surfaces whose responsive behavior is under review. Wave 7
-allocates that budget to Rules, edited Deployment, live HUD/drawer, one dense report
-mode, Compare, 6v6 readability, and the smallest number of responsive duplicates
-needed to judge those surfaces.
+A scoped gameplay acceptance run reviews no more than ten frames. Six deterministic
+offscreen frames cover Creator validation, Combat Lab setup/deployment, aiming and a
+disabled action, the live statistics drawer, and the 4K dense Compare report. Four
+native macOS window-only frames cover cold Compact title, Standard settings,
+fullscreen Auto gameplay, and a restarted 200% required decision. Default-off
+presentation fixtures create visual state without solving combat. Before any
+capture, the live `UiTreeSnapshot` oracle rejects zero-area targets, inherited
+clipping, off-canvas placement, unreachable scroll content, overlap, missing labels,
+invalid focus order, and targets below 44×44. The runner contains no combat-solving
+verbs.
 
 Forest, Waterfall, map review, and Alberto's map captures are outside this budget and
 remain unchanged.

@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 publish = false
 autotests = false
-description = "The game binary: app setup, plugin wiring, screens and menus."
+description = "Thin launcher library and composition root for gameplay, world, and runtime UI."
 
 [dependencies]
 bevy = { workspace = true }
@@ -14,6 +14,7 @@ hex_objects = { workspace = true }
 hex_combat = { workspace = true }
 hex_core = { workspace = true }
 hex_gameplay_model = { workspace = true }
+hex_ui = { workspace = true }
 hex_lattice = { workspace = true }
 hex_units = { workspace = true }
 hex_map = { workspace = true }
@@ -45,9 +46,9 @@ map-review = []
 # Scripted visual walk: drive the screens from a RON step list and photograph
 # each one, so an agent or a human can review the frames. Same release-shaped
 # philosophy as map-review.
-visual-walk = []
+visual-walk = ["hex_ui/visual-review", "hex_ui/test-support"]
 # Headless game/UI observation helpers. Never enabled by the shipping build.
-test-support = []
+test-support = ["hex_ui/test-support"]
 
 [[test]]
 name = "game_content_contracts"

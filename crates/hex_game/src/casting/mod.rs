@@ -36,7 +36,10 @@
 //! earns its keep is range: stepping away can carry an anchor out of reach exactly as
 //! stepping toward it brings one in.
 
-use bevy::prelude::*;
+use bevy::{
+    input_focus::{tab_navigation::TabIndex, InputFocus},
+    prelude::*,
+};
 use hex_assets::{
     CastingAxis, CombatSettings, ContentIndex, ElementCatalog, ManaAxis, Spell, SpellBook,
     TargetShape, Trajectory,
@@ -54,13 +57,10 @@ use hex_units::{
     KnownTerrainOccupancy, Player, Selected, StandsOn, UnitRegistry,
 };
 
-use crate::menus::widgets::element_color;
+use hex_ui::element_color;
 
-mod panel;
+pub(crate) mod panel;
 mod preview;
-
-#[cfg(feature = "visual-walk")]
-pub(crate) use preview::AnchorMarker;
 
 /// Height-per-range-bonus when `combat.ron` has not loaded.
 ///
@@ -84,10 +84,6 @@ pub fn plugin(app: &mut App) {
     app.add_observer(preview::on_anchor_clicked);
 
     app.add_systems(
-        OnEnter(Screen::Gameplay),
-        panel::spawn_panel.in_set(crate::readouts::HudSetup::Panels),
-    );
-    app.add_systems(
         OnExit(Screen::Gameplay),
         (forget_aim, preview::clear_preview),
     );
@@ -95,9 +91,7 @@ pub fn plugin(app: &mut App) {
         Update,
         (
             refresh_readout,
-            resolve_aim_input,
-            panel::channel_from_button,
-            panel::end_turn_from_button,
+            resolve_aim_input.after(hex_ui::UiSystems::EmitIntents),
         )
             .chain()
             .in_set(AppSystems::RecordInput)
@@ -109,7 +103,7 @@ pub fn plugin(app: &mut App) {
     // there is anything to paint.
     app.add_systems(
         Update,
-        (preview::redraw_preview, panel::rebuild_panel)
+        (preview::redraw_preview, panel::publish_view)
             .chain()
             .after(resolve_aim_input)
             .after(GameplaySystems::UiContext)
@@ -212,25 +206,6 @@ pub struct Aim {
     pub spell: String,
     /// The one positional anchor the cast will name.
     pub anchor: TilePos,
-}
-
-/// Marks the button that starts aiming a named spell.
-///
-/// Carries the name rather than a row index, because entity order is not stable across
-/// UI rebuilds and this panel is rebuilt wholesale — the same reason the lattice demo's
-/// cast buttons carry their spell's coordinate.
-#[derive(Component, Debug, Clone)]
-struct AimsSpell(String);
-
-/// Marks one of the three buttons that act on the aim in flight.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-enum AimControl {
-    /// Emit the cast.
-    Confirm,
-    /// Point at the next unit in range.
-    Next,
-    /// Put the spell down.
-    Cancel,
 }
 
 /// The words the interface uses for a blocked cast.
@@ -635,15 +610,20 @@ fn resolve_aim_input(
     pending: Res<PendingDecision>,
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<InputBindings>,
-    chooses: Query<(&Interaction, &AimsSpell), Changed<Interaction>>,
-    controls: Query<(&Interaction, &AimControl), Changed<Interaction>>,
+    focus: Option<Res<InputFocus>>,
+    focusable_controls: Query<(), With<TabIndex>>,
+    mut intents: MessageReader<hex_ui::UiIntent>,
     knowledge: Option<Res<FactionMapKnowledge>>,
     active_units: Query<&UnitId, Without<Downed>>,
 ) {
     if pending.is_open() {
         return;
     }
-    let Some(request) = requested(&keys, &bindings, &chooses, &controls) else {
+    let focus_owns_shortcuts = focus
+        .as_deref()
+        .and_then(InputFocus::get)
+        .is_some_and(|entity| focusable_controls.contains(entity));
+    let Some(request) = requested(&keys, &bindings, focus_owns_shortcuts, &mut intents) else {
         return;
     };
     let Some(caster) = readout.caster else {
@@ -756,27 +736,31 @@ enum AimRequest {
 fn requested(
     keys: &ButtonInput<KeyCode>,
     bindings: &InputBindings,
-    chooses: &Query<(&Interaction, &AimsSpell), Changed<Interaction>>,
-    controls: &Query<(&Interaction, &AimControl), Changed<Interaction>>,
+    focus_owns_shortcuts: bool,
+    intents: &mut MessageReader<hex_ui::UiIntent>,
 ) -> Option<AimRequest> {
-    for (interaction, spell) in chooses {
-        if *interaction == Interaction::Pressed {
-            return Some(AimRequest::Choose(spell.0.clone()));
-        }
-    }
-    for (interaction, control) in controls {
-        if *interaction == Interaction::Pressed {
-            return Some(match control {
-                AimControl::Confirm => AimRequest::Confirm,
-                AimControl::Next => AimRequest::Next,
-                AimControl::Cancel => AimRequest::Cancel,
+    for intent in intents.read() {
+        if let hex_ui::UiIntent::Casting(intent) = intent {
+            return Some(match intent {
+                hex_ui::CastingIntent::Begin(spell) => AimRequest::Choose(spell.clone()),
+                hex_ui::CastingIntent::Confirm => AimRequest::Confirm,
+                hex_ui::CastingIntent::NextTarget => AimRequest::Next,
+                hex_ui::CastingIntent::Cancel => AimRequest::Cancel,
             });
         }
     }
-    if bindings.just_pressed(keys, InputAction::Confirm) {
+    raw_aim_request(keys, bindings, focus_owns_shortcuts)
+}
+
+fn raw_aim_request(
+    keys: &ButtonInput<KeyCode>,
+    bindings: &InputBindings,
+    focus_owns_shortcuts: bool,
+) -> Option<AimRequest> {
+    if !focus_owns_shortcuts && bindings.just_pressed(keys, InputAction::Confirm) {
         return Some(AimRequest::Confirm);
     }
-    if bindings.just_pressed(keys, InputAction::NextTarget) {
+    if !focus_owns_shortcuts && bindings.just_pressed(keys, InputAction::NextTarget) {
         return Some(AimRequest::Next);
     }
     if bindings.just_pressed(keys, InputAction::CancelCast) {
@@ -965,7 +949,25 @@ mod tests {
     use hex_core::Level;
 
     use super::*;
-    use crate::menus::widgets::{FUSION_COLOR, GEM_COLOR};
+
+    #[test]
+    fn focused_ui_owns_enter_and_tab_without_hiding_the_explicit_cancel_key() {
+        let bindings = InputBindings::default();
+
+        for key in [KeyCode::Enter, KeyCode::Tab] {
+            let mut keys = ButtonInput::default();
+            keys.press(key);
+            assert!(raw_aim_request(&keys, &bindings, true).is_none());
+        }
+
+        let mut keys = ButtonInput::default();
+        keys.press(KeyCode::KeyQ);
+        assert!(matches!(
+            raw_aim_request(&keys, &bindings, true),
+            Some(AimRequest::Cancel)
+        ));
+    }
+    use hex_ui::{FUSION_COLOR, GEM_COLOR};
 
     fn shipped_content() -> (ElementCatalog, SpellBook) {
         let element_file: ElementFile = ron::from_str(include_str!(concat!(

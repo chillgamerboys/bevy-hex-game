@@ -1,0 +1,24 @@
+[package]
+name = "hex_ui"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "Responsive runtime presentation and typed UI contracts for the hex game."
+
+[dependencies]
+bevy = { workspace = true }
+hex_assets = { workspace = true }
+hex_core = { workspace = true }
+hex_gameplay_model = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+ron = { workspace = true }
+
+[features]
+default = []
+test-support = []
+visual-review = []
+
+[lints]
+workspace = true

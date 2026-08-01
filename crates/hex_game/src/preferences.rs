@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::storage::{read, write_atomic, StoragePaths};
 
-const PREFERENCES_VERSION: u32 = 1;
+const PREFERENCES_VERSION: u32 = 2;
 
 /// Persisted frame-presentation choice.
 #[derive(Serialize, Deserialize, Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +58,8 @@ pub(crate) struct UserPreferences {
     pub(crate) window_width: u32,
     pub(crate) window_height: u32,
     pub(crate) presentation: FramePresentation,
+    #[serde(default)]
+    pub(crate) ui_scale: hex_ui::UiScaleMode,
     pub(crate) master_volume: f32,
     pub(crate) music_volume: f32,
     pub(crate) effects_volume: f32,
@@ -72,6 +74,7 @@ impl Default for UserPreferences {
             window_width: 1280,
             window_height: 720,
             presentation: FramePresentation::Vsync,
+            ui_scale: hex_ui::UiScaleMode::Auto,
             master_volume: 1.0,
             music_volume: 0.8,
             effects_volume: 0.8,
@@ -81,6 +84,20 @@ impl Default for UserPreferences {
 }
 
 impl UserPreferences {
+    fn upgrade(mut self) -> Result<Self, String> {
+        match self.version {
+            1 => {
+                self.version = PREFERENCES_VERSION;
+                self.ui_scale = hex_ui::UiScaleMode::Auto;
+                Ok(self)
+            }
+            PREFERENCES_VERSION => Ok(self),
+            version => Err(format!(
+                "preferences version {version} is incompatible with {PREFERENCES_VERSION}"
+            )),
+        }
+    }
+
     fn validate(&self) -> Result<(), String> {
         if self.version != PREFERENCES_VERSION {
             return Err(format!(
@@ -157,6 +174,7 @@ fn load_preferences(
         Ok(text) => match ron::from_str::<UserPreferences>(&text)
             .map_err(|error| error.to_string())
             .and_then(|loaded| {
+                let loaded = loaded.upgrade()?;
                 loaded.validate()?;
                 Ok(loaded)
             }) {
@@ -196,6 +214,7 @@ fn adopt_authored_presentation(
 fn apply_preferences(
     preferences: Res<UserPreferences>,
     mut buses: ResMut<AudioBusVolumes>,
+    mut ui_scale: ResMut<hex_ui::UiScalePreference>,
     mut windows: Query<&mut Window>,
 ) {
     if !preferences.is_changed() {
@@ -204,6 +223,7 @@ fn apply_preferences(
     buses.music = preferences.master_volume * preferences.music_volume;
     buses.effects = preferences.master_volume * preferences.effects_volume;
     buses.ui = preferences.master_volume * preferences.ui_volume;
+    ui_scale.0 = preferences.ui_scale;
     for mut window in &mut windows {
         window.mode = if preferences.fullscreen {
             WindowMode::BorderlessFullscreen(MonitorSelection::Current)
@@ -263,6 +283,45 @@ mod tests {
             ..default()
         };
         assert!(preferences.validate().is_err());
+    }
+
+    #[test]
+    fn version_one_preferences_upgrade_without_losing_values() {
+        let text = r#"(
+            version: 1,
+            fullscreen: true,
+            window_width: 1600,
+            window_height: 900,
+            presentation: Mailbox,
+            master_volume: 0.5,
+            music_volume: 0.4,
+            effects_volume: 0.3,
+            ui_volume: 0.2,
+        )"#;
+        let loaded = ron::from_str::<UserPreferences>(text)
+            .expect("v1 shape remains readable")
+            .upgrade()
+            .expect("v1 upgrades");
+        assert_eq!(loaded.version, PREFERENCES_VERSION);
+        assert!(loaded.fullscreen);
+        assert_eq!(loaded.window_width, 1600);
+        assert_eq!(loaded.ui_scale, hex_ui::UiScaleMode::Auto);
+        assert!((loaded.master_volume - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn version_two_ui_scale_survives_a_restart_round_trip() {
+        let preferences = UserPreferences {
+            ui_scale: hex_ui::UiScaleMode::Percent200,
+            ..default()
+        };
+        let encoded = ron::ser::to_string(&preferences).expect("v2 preferences encode");
+        let restarted = ron::from_str::<UserPreferences>(&encoded)
+            .expect("v2 preferences decode")
+            .upgrade()
+            .expect("v2 preferences remain current");
+        assert_eq!(restarted.ui_scale, hex_ui::UiScaleMode::Percent200);
+        assert_eq!(restarted.version, PREFERENCES_VERSION);
     }
 
     #[test]

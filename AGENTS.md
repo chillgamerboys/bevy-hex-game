@@ -44,7 +44,9 @@ and optional Codex setup are in
   domain content and schema. The gameplay owner controls `hex_core`, `hex_units`,
   `hex_combat`, `hex_lattice`, `hex_anim`, and generic asset-loader infrastructure.
 - `hex_game` is shared integration; `hex_objects` and `hex_editor` are shared
-  presentation/tooling without gameplay authority.
+  presentation/tooling without gameplay authority. `hex_ui` is shared runtime
+  presentation behind a strict dependency ceiling: Bevy, `hex_core`, `hex_assets`,
+  `hex_gameplay_model`, and serialization support only.
 - A wave may contain both owners' work, but it does not erase ownership. Keep
   owner-specific changes in identifiable commits and treat cross-owner behavior
   changes as explicit decisions.

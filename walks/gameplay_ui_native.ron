@@ -1,0 +1,37 @@
+// Native macOS phase: three window-only checkpoints using real fullscreen/DPI.
+[
+    AwaitScreen("Title"),
+    Settle(12),
+    Capture("ui-native-01-cold-compact-title"),
+
+    Click(name: "Settings"),
+    AwaitScreen("Settings"),
+    Click(name: "Setting Fullscreen"),
+    Settle(90),
+    // On the observed 3024×1898 @2× client, 75% yields a Standard effective canvas.
+    Click(name: "Setting UiScale"),
+    Settle(12),
+    Capture("ui-native-02-standard-settings"),
+
+    // Restore Auto before the fullscreen gameplay checkpoint.
+    Click(name: "Setting UiScale"),
+    Click(name: "Setting UiScale"),
+    Click(name: "Setting UiScale"),
+    Click(name: "Setting UiScale"),
+    Click(name: "Setting UiScale"),
+    Click(name: "Setting UiScale"),
+    Click(name: "Back"),
+    AwaitScreen("Title"),
+    Click(name: "Combat Lab"),
+    AwaitScreen("CombatLab"),
+    Click(name: "Continue to Rosters"),
+    Click(name: "Continue to Rules"),
+    Click(name: "Load Map & Deploy"),
+    AwaitScreen("Gameplay"),
+    AwaitTerrain,
+    Click(name: "Deterministic Auto-place"),
+    Click(name: "Start Combat"),
+    PresentUi("normal-gameplay"),
+    Settle(12),
+    Capture("ui-native-03-fullscreen-auto-gameplay"),
+]

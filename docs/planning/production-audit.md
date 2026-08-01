@@ -325,8 +325,10 @@ yet (experimental, editor-styled).
 
 ### 10. Crates *not* created
 
-No `hex_ui`, no `hex_save`: boundaries that isolate nothing for two people.
-Revisit when the lattice-builder screen or a server binary exists.
+No `hex_save`. The earlier recommendation against `hex_ui` was superseded by the
+runtime UI foundation after the gameplay surfaces accumulated enough shared scaling,
+focus, accessibility, action-hierarchy, and test-oracle policy to form a real
+dependency boundary. See [`docs/systems/ui.md`](../systems/ui.md).
 
 ---
 

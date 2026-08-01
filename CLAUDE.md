@@ -92,18 +92,20 @@ photographs each step, so an agent can *look* at the frames (`/visual-walk` in t
 skill pipeline reads them; audit-pr runs it as Step 2.5):
 
 ```sh
-HEX_WALK_SCRIPT=walks/menus.ron \
+HEX_WALK_SCRIPT=walks/gameplay_ui.ron \
 HEX_WALK_OUT=.context/visual-walks/local \
 cargo run -p hex_game --features visual-walk
 ```
 
-Exit code is the mechanical verdict: any stalled step or black frame fails the
-run. `walks/menus.ron` covers the title, Settings, both Creators, Combat Lab, and
-return routing;
-`walks/gameplay.ron` covers New Game, save/Continue restore, and the pause overlay.
-Ability Lab and Raider Mirror provide the focused combat walks. The capture goes
-through an offscreen render target (the window surface is not readable on
-macOS/Metal), with every UI root pointed at the redirected camera.
+Exit code is the mechanical verdict: any stalled step, structural UI failure, or
+black frame fails the run. The scoped gameplay route contains six deterministic
+offscreen frames plus four native macOS checkpoints, never more than ten reviewed
+images. It reviews hierarchy, layout, focus, legibility, and responsive composition
+only; gameplay correctness is proved by canonical state snapshots in the
+rules/contracts/simulation/app partitions. Offscreen capture redirects the camera
+because the primary window is unreadable on macOS/Metal. The native wrapper
+`tools/run_gameplay_ui_native_review_macos.sh` instead preserves the real window and
+captures its exact CoreGraphics window ID for Retina/fullscreen/restart evidence.
 
 ## Workspace
 
@@ -114,6 +116,7 @@ hex_core → hex_assets → hex_objects ─────────────�
 hex_core → hex_ai → {hex_assets, hex_units, hex_combat}   (contracts, controllers, host)
 {hex_core, hex_lattice} → hex_combat_core → hex_combat   (pure combat authority)
 {bevy_ecs, hex_core} → hex_gameplay_model → hex_game  (pure screen behavior)
+{Bevy, hex_core, hex_assets, hex_gameplay_model} → hex_ui → hex_game  (runtime presentation)
 hex_core → {hex_assets, hex_units} → hex_perception → {hex_combat, hex_game}
 hex_core → hex_lattice → {hex_assets, hex_units, hex_combat}   (pure rules engine)
 hex_core → hex_anim ─────────────────────→ hex_units

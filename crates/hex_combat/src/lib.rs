@@ -53,7 +53,7 @@ pub mod summary;
 pub mod turns;
 
 pub use ai::{AiAlgorithmRegistry, AiDecisionTraces, MAX_AI_DECISION_TRACES};
-pub use commands::{delivers_anything, UNDELIVERABLE};
+pub use commands::{channel_refusal, delivers_anything, ChannelReadiness, UNDELIVERABLE};
 pub use effects::PersistentEffects;
 pub use hex_core::Turn;
 pub use knowledge::{
