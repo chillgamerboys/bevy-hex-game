@@ -45,23 +45,47 @@ impl HeadlessAppBuilder {
         self
     }
 
-    /// Installs the asset plugin and the mesh/material stores used by headless ECS tests.
+    /// Installs Bevy's asset server and task-backed asset infrastructure.
     #[must_use]
-    pub fn with_assets(mut self) -> Self {
+    pub fn with_asset_plugin(mut self) -> Self {
         self.app.add_plugins(AssetPlugin::default());
+        self
+    }
+
+    /// Initializes the mesh/material stores used by headless presentation tests.
+    #[must_use]
+    pub fn with_render_assets(mut self) -> Self {
         self.app.init_asset::<Mesh>();
         self.app.init_asset::<StandardMaterial>();
         self
     }
 
-    /// Installs the shared screen, mode, and pause state vocabulary.
+    /// Installs both the asset plugin and common headless render-asset stores.
     #[must_use]
-    pub fn with_states(mut self) -> Self {
+    pub fn with_assets(self) -> Self {
+        self.with_asset_plugin().with_render_assets()
+    }
+
+    /// Installs Bevy's state-transition plugin without initializing a state.
+    #[must_use]
+    pub fn with_state_plugin(mut self) -> Self {
         self.app.add_plugins(StatesPlugin);
+        self
+    }
+
+    /// Initializes the shared screen, mode, and pause state vocabulary.
+    #[must_use]
+    pub fn with_gameplay_states(mut self) -> Self {
         self.app.init_state::<Screen>();
         self.app.add_sub_state::<Mode>();
         self.app.add_sub_state::<Pause>();
         self
+    }
+
+    /// Installs the state plugin and initializes the shared gameplay state vocabulary.
+    #[must_use]
+    pub fn with_states(self) -> Self {
+        self.with_state_plugin().with_gameplay_states()
     }
 
     /// Installs Bevy's input resources without a window or renderer.
@@ -213,6 +237,18 @@ mod tests {
             &Screen::Splash
         );
         assert!(app.world().contains_resource::<Assets<Mesh>>());
+    }
+
+    #[test]
+    fn infrastructure_plugins_do_not_imply_gameplay_or_render_stores() {
+        let app = HeadlessAppBuilder::new()
+            .with_minimal_plugins()
+            .with_asset_plugin()
+            .with_state_plugin()
+            .build();
+
+        assert!(!app.world().contains_resource::<State<Screen>>());
+        assert!(!app.world().contains_resource::<Assets<Mesh>>());
     }
 
     #[test]
