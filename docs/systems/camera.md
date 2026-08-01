@@ -99,4 +99,10 @@ immediate adaptation and damped recovery, 9,241-column terrain performance, a
 2,048-render-chunk tree-fade performance gate, 10,000 unchanged frames,
 whole-tree/material isolation, review-only roofs, and 100 gameplay lifecycles. Rendered
 all-map traversal and human motion/readability review remain the final presentation
-gate.
+gate. The tracked route manifest pins all 15 selectable Map scenarios to their exact
+seed and representative stack-safe destinations. Executable multi-azimuth Character
+walks currently cover Forest, Deep Forest, Caves, Fort, Waterfall, Mountains, and the
+ordinary connected ground route through the center, Waterfall B, and Mountains A of
+Two Rings. The remaining eight map scripts, 16 Two Rings regions, and flight-gated Sky
+Island surfaces remain explicit rendered-evidence work; the harness does not invent
+movement capabilities to reach them.

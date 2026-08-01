@@ -2234,6 +2234,101 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_right_drag_authors_yaw_and_clamps_character_pitch() {
+        let mut builder = HeadlessAppBuilder::new()
+            .with_minimal_plugins()
+            .with_input();
+        builder.app_mut().add_message::<CursorMoved>();
+        builder.app_mut().insert_resource(camera_settings());
+        builder.app_mut().insert_resource(CameraMode::Character);
+        builder
+            .app_mut()
+            .init_resource::<CharacterCameraCollision>();
+        builder.app_mut().add_systems(Update, orbit_camera);
+        let window = builder
+            .app_mut()
+            .world_mut()
+            .spawn((
+                Window {
+                    resolution: bevy::window::WindowResolution::new(1_200, 800),
+                    ..default()
+                },
+                PrimaryWindow,
+            ))
+            .id();
+        let initial_rotation =
+            Quat::from_rotation_y(0.4) * rotation_at_pitch(0.3 * std::f32::consts::FRAC_PI_2);
+        let focus = Vec3::ZERO;
+        let radius = 7.0;
+        let camera = builder
+            .app_mut()
+            .world_mut()
+            .spawn((
+                PanOrbitCamera { focus, radius },
+                Transform {
+                    translation: focus
+                        + Mat3::from_quat(initial_rotation).mul_vec3(Vec3::new(0.0, 0.0, radius)),
+                    rotation: initial_rotation,
+                    ..default()
+                },
+            ))
+            .id();
+        let mut app = builder.build();
+
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Right);
+        app.world_mut().write_message(CursorMoved {
+            window,
+            position: Vec2::new(600.0, 400.0),
+            delta: None,
+        });
+        app.update();
+        app.world_mut().write_message(CursorMoved {
+            window,
+            position: Vec2::new(200.0, 800.0),
+            delta: Some(Vec2::new(-400.0, 400.0)),
+        });
+        app.update();
+
+        let transform = app
+            .world()
+            .entity(camera)
+            .get::<Transform>()
+            .expect("the ordinary orbit target should retain its transform");
+        let initial_heading = (initial_rotation * Vec3::NEG_Z).xz().normalize();
+        let authored_heading = (transform.rotation * Vec3::NEG_Z).xz().normalize();
+        assert!(
+            (initial_heading.dot(authored_heading) + 0.5).abs() < 1e-4,
+            "one-third-turn right drag should author a 120-degree yaw"
+        );
+        assert_pitch(
+            transform.rotation,
+            camera_settings().character_max_pitch * std::f32::consts::FRAC_PI_2,
+        );
+        assert!(
+            (transform.rotation * Vec3::Y).y > 0.0,
+            "bounded Character pitch must never turn the camera upside down"
+        );
+        let desired = app
+            .world()
+            .resource::<CharacterCameraCollision>()
+            .desired_rotation
+            .expect("ordinary Character input should publish the player-authored rotation");
+        assert!(desired.dot(transform.rotation).abs() > 0.9999);
+        let authored_radius = app
+            .world()
+            .entity(camera)
+            .get::<PanOrbitCamera>()
+            .expect("orbit state should remain present")
+            .radius;
+        assert!(
+            (authored_radius - radius).abs() < f32::EPSILON,
+            "an azimuth gesture must not mutate desired zoom"
+        );
+    }
+
+    #[test]
     fn gameplay_entry_frames_the_map_every_time() {
         let mut builder = HeadlessAppBuilder::new()
             .with_minimal_plugins()
