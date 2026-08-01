@@ -17,6 +17,9 @@ mod cutaway;
 pub mod sky;
 /// Procedural sky material.
 mod sky_material;
+#[cfg(feature = "test-support")]
+/// Default-off helpers that compose production presentation plugins headlessly.
+pub mod test_support;
 
 pub use camera::{CameraMode, CameraSystems, PanOrbitCamera};
 pub use sky::TimeOfDay;
