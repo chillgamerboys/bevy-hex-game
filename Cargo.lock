@@ -3392,6 +3392,7 @@ dependencies = [
  "bevy_state",
  "hex_assets",
  "hex_core",
+ "hex_test_app",
  "hex_units",
 ]
 
@@ -3436,6 +3437,7 @@ dependencies = [
  "bevy",
  "hex_assets",
  "hex_core",
+ "hex_test_app",
 ]
 
 [[package]]

@@ -652,11 +652,11 @@ mod tests {
 
     use bevy_ecs::reflect::{AppTypeRegistry, ReflectResource};
     use bevy_platform::collections::HashMap;
-    use bevy_state::app::StatesPlugin;
     use hex_assets::{
         ArtPalette, PaletteSwatch, SightPreset, SrgbColor, Substance, SubstanceFile, SwatchId,
     };
     use hex_core::{HexCoord, InteriorRegionId, KnowledgeState, SightProfile, TraversalProfile};
+    use hex_test_app::HeadlessAppBuilder;
     use hex_units::Standing;
 
     use super::*;
@@ -701,10 +701,9 @@ mod tests {
     }
 
     fn runtime_app(exterior: IlluminationLevel) -> (App, TestSubstances) {
-        let mut app = App::new();
-        app.add_plugins(StatesPlugin);
-        app.init_state::<Screen>();
-        app.configure_sets(
+        let mut builder = HeadlessAppBuilder::new().with_state_plugin();
+        builder.app_mut().init_state::<Screen>();
+        builder.app_mut().configure_sets(
             Update,
             (
                 PerceptionSystems::PublishAmbient,
@@ -715,12 +714,14 @@ mod tests {
             )
                 .chain(),
         );
-        app.insert_resource(PerceptionUpdatesEnabled(true));
-        app.configure_sets(
+        builder
+            .app_mut()
+            .insert_resource(PerceptionUpdatesEnabled(true));
+        builder.app_mut().configure_sets(
             Update,
             PausableSystems.run_if(|enabled: Res<PerceptionUpdatesEnabled>| enabled.0),
         );
-        app.configure_sets(
+        builder.app_mut().configure_sets(
             OnEnter(Screen::Gameplay),
             (
                 PerceptionSystems::PublishAmbient,
@@ -732,14 +733,18 @@ mod tests {
                 .chain(),
         );
         let (table, substances) = test_table();
-        app.insert_resource(table);
-        app.insert_resource(PerceptionSettings::default());
-        app.insert_resource(ExteriorIllumination::new(exterior));
-        app.insert_resource(InteriorRegions::new());
-        app.insert_resource(TraversalBlockers::new());
-        app.insert_resource(TerrainReady);
-        app.add_plugins(plugin);
-        (app, substances)
+        builder.app_mut().insert_resource(table);
+        builder
+            .app_mut()
+            .insert_resource(PerceptionSettings::default());
+        builder
+            .app_mut()
+            .insert_resource(ExteriorIllumination::new(exterior));
+        builder.app_mut().insert_resource(InteriorRegions::new());
+        builder.app_mut().insert_resource(TraversalBlockers::new());
+        builder.app_mut().insert_resource(TerrainReady);
+        builder.app_mut().add_plugins(plugin);
+        (builder.build(), substances)
     }
 
     fn pos(q: i32, r: i32, level: i32) -> TilePos {

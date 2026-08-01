@@ -1019,10 +1019,8 @@ fn get_primary_window_size(windows: &Query<&Window, With<PrimaryWindow>>) -> Vec
 mod tests {
     use std::time::{Duration, Instant};
 
-    use bevy::asset::AssetPlugin;
-    use bevy::state::app::StatesPlugin;
-
     use super::*;
+    use hex_test_app::HeadlessAppBuilder;
 
     #[derive(Resource, Default)]
     struct CameraChangeCounts {
@@ -1187,13 +1185,15 @@ mod tests {
 
     #[test]
     fn one_hundred_idle_frames_do_not_republish_camera_components() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
+        let mut builder = HeadlessAppBuilder::new().with_minimal_plugins();
+        builder
+            .app_mut()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<InputBindings>()
             .init_resource::<CameraChangeCounts>()
             .insert_resource(camera_settings())
             .add_systems(Update, (pan_camera, count_camera_changes).chain());
+        let mut app = builder.build();
         app.world_mut().spawn((
             Transform::from_xyz(0.0, 20.0, 10.0),
             PanOrbitCamera::default(),
@@ -1359,8 +1359,9 @@ mod tests {
         let rotation =
             Quat::from_rotation_x(-settings.character_pitch * std::f32::consts::FRAC_PI_2);
         let eye = focus + rotation * Vec3::Z * settings.character_radius;
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
+        let mut builder = HeadlessAppBuilder::new().with_minimal_plugins();
+        builder
+            .app_mut()
             .insert_resource(settings.clone())
             .insert_resource(CameraMode::Character)
             .init_resource::<SavedMapCamera>()
@@ -1378,6 +1379,7 @@ mod tests {
                 )
                     .chain(),
             );
+        let mut app = builder.build();
         app.world_mut().spawn((
             Transform::from_translation(eye).with_rotation(rotation),
             PanOrbitCamera {
@@ -1433,8 +1435,9 @@ mod tests {
         let rotation = Transform::from_translation(eye)
             .looking_at(focus, Vec3::Y)
             .rotation;
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
+        let mut builder = HeadlessAppBuilder::new().with_minimal_plugins();
+        builder
+            .app_mut()
             .insert_resource(settings.clone())
             .insert_resource(CameraMode::Character)
             .init_resource::<SavedMapCamera>()
@@ -1452,6 +1455,7 @@ mod tests {
                 )
                     .chain(),
             );
+        let mut app = builder.build();
         let camera = app
             .world_mut()
             .spawn((
@@ -1568,17 +1572,21 @@ mod tests {
 
     #[test]
     fn gameplay_entry_frames_the_map_every_time() {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin));
-        app.init_state::<Screen>();
-        app.insert_resource(camera_settings());
-        app.init_resource::<CameraMode>();
-        app.init_resource::<SavedMapCamera>();
-        app.init_resource::<CharacterCameraCollision>();
-        app.add_systems(
+        let mut builder = HeadlessAppBuilder::new()
+            .with_minimal_plugins()
+            .with_state_plugin();
+        builder.app_mut().init_state::<Screen>();
+        builder.app_mut().insert_resource(camera_settings());
+        builder.app_mut().init_resource::<CameraMode>();
+        builder.app_mut().init_resource::<SavedMapCamera>();
+        builder
+            .app_mut()
+            .init_resource::<CharacterCameraCollision>();
+        builder.app_mut().add_systems(
             OnEnter(Screen::Gameplay),
             (reset_camera_mode, frame_gameplay_camera).chain(),
         );
+        let mut app = builder.build();
         let entity = app
             .world_mut()
             .spawn((
@@ -1624,11 +1632,12 @@ mod tests {
 
     #[test]
     fn generated_view_published_in_resources_wins_in_view() {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin));
-        app.init_state::<Screen>();
-        app.insert_resource(camera_settings());
-        app.configure_sets(
+        let mut builder = HeadlessAppBuilder::new()
+            .with_minimal_plugins()
+            .with_state_plugin();
+        builder.app_mut().init_state::<Screen>();
+        builder.app_mut().insert_resource(camera_settings());
+        builder.app_mut().configure_sets(
             OnEnter(Screen::Gameplay),
             (
                 GameplaySetup::Resources,
@@ -1640,14 +1649,15 @@ mod tests {
             )
                 .chain(),
         );
-        app.add_systems(
+        builder.app_mut().add_systems(
             OnEnter(Screen::Gameplay),
             publish_generated_view.in_set(GameplaySetup::Resources),
         );
-        app.add_systems(
+        builder.app_mut().add_systems(
             OnEnter(Screen::Gameplay),
             frame_gameplay_camera.in_set(GameplaySetup::View),
         );
+        let mut app = builder.build();
         let entity = app
             .world_mut()
             .spawn((
@@ -1668,12 +1678,18 @@ mod tests {
 
     #[test]
     fn invalid_generated_view_uses_camera_settings() {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin));
-        app.init_state::<Screen>();
-        app.insert_resource(camera_settings());
-        app.insert_resource(MapViewHint::new((0.0, 0.0, 0.0), (0.0, 0.0, 0.0)));
-        app.add_systems(OnEnter(Screen::Gameplay), frame_gameplay_camera);
+        let mut builder = HeadlessAppBuilder::new()
+            .with_minimal_plugins()
+            .with_state_plugin();
+        builder.app_mut().init_state::<Screen>();
+        builder.app_mut().insert_resource(camera_settings());
+        builder
+            .app_mut()
+            .insert_resource(MapViewHint::new((0.0, 0.0, 0.0), (0.0, 0.0, 0.0)));
+        builder
+            .app_mut()
+            .add_systems(OnEnter(Screen::Gameplay), frame_gameplay_camera);
+        let mut app = builder.build();
         let entity = app
             .world_mut()
             .spawn((
@@ -1688,21 +1704,27 @@ mod tests {
     }
 
     fn prototype_camera_app(target: Option<Vec3>) -> (App, Entity, Option<Entity>) {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.insert_resource(camera_settings());
-        app.insert_resource(ButtonInput::<KeyCode>::default());
-        app.init_resource::<CameraMode>();
-        app.init_resource::<SavedMapCamera>();
-        app.init_resource::<CameraObstructionIndex>();
-        app.init_resource::<CharacterCameraCollision>();
-        app.init_resource::<InputBindings>();
-        app.add_systems(Update, toggle_camera_mode);
-        app.add_systems(PostUpdate, follow_character_camera);
+        let mut builder = HeadlessAppBuilder::new().with_minimal_plugins();
+        builder.app_mut().insert_resource(camera_settings());
+        builder
+            .app_mut()
+            .insert_resource(ButtonInput::<KeyCode>::default());
+        builder.app_mut().init_resource::<CameraMode>();
+        builder.app_mut().init_resource::<SavedMapCamera>();
+        builder.app_mut().init_resource::<CameraObstructionIndex>();
+        builder
+            .app_mut()
+            .init_resource::<CharacterCameraCollision>();
+        builder.app_mut().init_resource::<InputBindings>();
+        builder.app_mut().add_systems(Update, toggle_camera_mode);
+        builder
+            .app_mut()
+            .add_systems(PostUpdate, follow_character_camera);
 
         let eye = Vec3::new(0.0, 48.0, 42.0);
         let focus = Vec3::new(0.0, 6.0, 0.0);
-        let camera = app
+        let camera = builder
+            .app_mut()
             .world_mut()
             .spawn((
                 Transform::from_translation(eye).looking_at(focus, Vec3::Y),
@@ -1713,14 +1735,16 @@ mod tests {
             ))
             .id();
         let target = target.map(|translation| {
-            app.world_mut()
+            builder
+                .app_mut()
+                .world_mut()
                 .spawn((
                     Transform::from_translation(translation),
                     CameraFocusTarget::new(hex_core::TilePos::ORIGIN),
                 ))
                 .id()
         });
-        (app, camera, target)
+        (builder.build(), camera, target)
     }
 
     fn toggle_camera(app: &mut App) {
@@ -1914,15 +1938,20 @@ mod tests {
 
     #[test]
     fn wasd_pan_runs_only_in_map_mode() {
-        let mut app = App::new();
-        app.insert_resource(camera_settings());
-        app.insert_resource(ButtonInput::<KeyCode>::default());
+        let mut builder = HeadlessAppBuilder::new();
+        builder.app_mut().insert_resource(camera_settings());
+        builder
+            .app_mut()
+            .insert_resource(ButtonInput::<KeyCode>::default());
         let mut time = Time::<()>::default();
         time.advance_by(Duration::from_secs(1));
-        app.insert_resource(time);
-        app.init_resource::<CameraMode>();
-        app.init_resource::<InputBindings>();
-        app.add_systems(Update, pan_camera.run_if(map_camera_active));
+        builder.app_mut().insert_resource(time);
+        builder.app_mut().init_resource::<CameraMode>();
+        builder.app_mut().init_resource::<InputBindings>();
+        builder
+            .app_mut()
+            .add_systems(Update, pan_camera.run_if(map_camera_active));
+        let mut app = builder.build();
         let camera = app
             .world_mut()
             .spawn((
@@ -2043,19 +2072,20 @@ mod tests {
     /// windowing for `CursorMoved`, assets for the dome mesh and its material. A
     /// missing message or resource is a panic, not a skipped system.
     fn sky_app() -> App {
-        let mut app = App::new();
-        app.add_plugins((
-            MinimalPlugins,
-            AssetPlugin::default(),
-            StatesPlugin,
-            bevy::input::InputPlugin,
-            bevy::window::WindowPlugin::default(),
-        ));
-        app.init_asset::<Mesh>();
-        app.add_plugins(crate::sky_material::plugin);
-        app.init_state::<Screen>();
-        app.insert_resource(camera_settings());
-        app.add_plugins(super::plugin);
+        let mut builder = HeadlessAppBuilder::new()
+            .with_minimal_plugins()
+            .with_asset_plugin()
+            .with_state_plugin()
+            .with_input();
+        builder
+            .app_mut()
+            .add_plugins(bevy::window::WindowPlugin::default());
+        builder.app_mut().init_asset::<Mesh>();
+        builder.app_mut().add_plugins(crate::sky_material::plugin);
+        builder.app_mut().init_state::<Screen>();
+        builder.app_mut().insert_resource(camera_settings());
+        builder.app_mut().add_plugins(super::plugin);
+        let mut app = builder.build();
         // `spawn_camera` is on `Startup`, so the dome does not exist until a frame has
         // run.
         app.update();
@@ -2077,19 +2107,20 @@ mod tests {
     /// crash once already, on this very screen.
     #[test]
     fn the_title_screen_survives_missing_settings() {
-        let mut app = App::new();
-        app.add_plugins((
-            MinimalPlugins,
-            AssetPlugin::default(),
-            StatesPlugin,
-            bevy::input::InputPlugin,
-            bevy::window::WindowPlugin::default(),
-        ));
-        app.init_asset::<Mesh>();
-        app.add_plugins(crate::sky_material::plugin);
-        app.init_state::<Screen>();
+        let mut builder = HeadlessAppBuilder::new()
+            .with_minimal_plugins()
+            .with_asset_plugin()
+            .with_state_plugin()
+            .with_input();
+        builder
+            .app_mut()
+            .add_plugins(bevy::window::WindowPlugin::default());
+        builder.app_mut().init_asset::<Mesh>();
+        builder.app_mut().add_plugins(crate::sky_material::plugin);
+        builder.app_mut().init_state::<Screen>();
         // No `CameraSettings` on purpose.
-        app.add_plugins(super::plugin);
+        builder.app_mut().add_plugins(super::plugin);
+        let mut app = builder.build();
 
         enter(&mut app, Screen::Title);
     }
