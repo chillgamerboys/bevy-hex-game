@@ -22,6 +22,10 @@ const CELL_STEP: f32 = 66.0;
 /// Vertical distance between rows: three quarters of the hex height.
 const ROW_STEP: f32 = 56.0;
 
+/// One logical pixel absorbs Yoga's edge rounding so the final absolute cell
+/// remains inside its declared lattice box at fractional semantic scales.
+const LAYOUT_ROUNDING_PAD: f32 = 1.0;
+
 /// Geometry scale for a lattice surface.
 #[derive(Clone, Copy)]
 pub struct LatticeScale(f32);
@@ -98,8 +102,10 @@ pub fn spawn_lattice_cells<M: Bundle>(
         .spawn((
             Name::new(format!("{name_prefix} Lattice")),
             Node {
-                width: Val::Px(max.0 - min.0 + CELL_SIZE * resolved_scale.0),
-                height: Val::Px(max.1 - min.1 + CELL_HEIGHT * resolved_scale.0),
+                width: Val::Px(max.0 - min.0 + CELL_SIZE * resolved_scale.0 + LAYOUT_ROUNDING_PAD),
+                height: Val::Px(
+                    max.1 - min.1 + CELL_HEIGHT * resolved_scale.0 + LAYOUT_ROUNDING_PAD,
+                ),
                 ..default()
             },
             Pickable::IGNORE,

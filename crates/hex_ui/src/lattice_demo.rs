@@ -13,6 +13,9 @@ use crate::{
 #[derive(Component)]
 struct Body;
 
+#[derive(Component)]
+struct ControlsHeading;
+
 #[derive(Component, Clone, Copy)]
 struct Control(LatticeDemoIntent);
 
@@ -160,7 +163,7 @@ fn spawn_controls(
             ..default()
         })
         .with_children(|controls| {
-            controls.spawn(heading(assets, "spells"));
+            controls.spawn((ControlsHeading, heading(assets, "spells")));
             controls
                 .spawn((
                     Name::new("Demo Actions"),
@@ -251,7 +254,8 @@ fn spawn_controls(
 fn apply_layout(
     metrics: Res<ResolvedUiMetrics>,
     added: Query<(), Added<Body>>,
-    mut bodies: Query<&mut Node, With<Body>>,
+    mut bodies: Query<&mut Node, (With<Body>, Without<ControlsHeading>)>,
+    mut headings: Query<&mut Node, (With<ControlsHeading>, Without<Body>)>,
 ) {
     if !metrics.is_changed() && added.is_empty() {
         return;
@@ -267,6 +271,17 @@ fn apply_layout(
             Overflow::scroll_y()
         } else {
             Overflow::default()
+        };
+    }
+    for mut node in &mut headings {
+        // "The Lattice" already identifies this compact screen. Keeping the
+        // redundant subsection title ahead of four primary actions consumes a
+        // complete text row at 200%, pushing the final cast out of the initial
+        // viewport. Standard and Wide retain the desktop section hierarchy.
+        node.display = if metrics.viewport == UiViewportClass::Compact {
+            Display::None
+        } else {
+            Display::Flex
         };
     }
 }
@@ -325,12 +340,17 @@ mod tests {
 
     #[cfg(feature = "test-support")]
     fn populated_demo_snapshot(
-        width: u32,
-        height: u32,
+        physical_width: u32,
+        physical_height: u32,
+        device_scale: f32,
         mode: crate::UiScaleMode,
     ) -> crate::test_support::UiTreeSnapshot {
         let mut app = App::new();
-        app.add_plugins(crate::test_support::HeadlessUiPlugin::new(width, height));
+        app.add_plugins(crate::test_support::HeadlessUiPlugin::with_scale_factor(
+            physical_width,
+            physical_height,
+            device_scale,
+        ));
         app.world_mut()
             .insert_resource(crate::UiScalePreference(mode));
         app.world_mut().insert_resource(crate::LatticeDemoView {
@@ -389,28 +409,36 @@ mod tests {
     #[cfg(feature = "test-support")]
     #[test]
     fn compact_high_scale_keeps_every_primary_action_visible() {
-        let snapshot = populated_demo_snapshot(1280, 720, crate::UiScaleMode::Percent200);
-        for name in [
-            "Back",
-            "End Turn",
-            "Reset",
-            "Cast Ember",
-            "Cast Lightning Bolt",
-        ] {
-            let node = snapshot
-                .nodes
-                .iter()
-                .find(|node| node.name == name)
-                .unwrap_or_else(|| panic!("missing primary Lattice Demo action {name:?}"));
-            assert_eq!(
-                node.visibility_requirement,
-                Some(crate::UiVisibilityRequirement::Immediate),
-                "{name} must remain an Immediate action"
+        for (physical_width, physical_height, device_scale) in [(960, 540, 1.0), (1920, 1080, 2.0)]
+        {
+            let snapshot = populated_demo_snapshot(
+                physical_width,
+                physical_height,
+                device_scale,
+                crate::UiScaleMode::Percent200,
             );
-            assert!(
-                node.fully_visible,
-                "{name} must be visible without scrolling: {node:?}"
-            );
+            for name in [
+                "Back",
+                "End Turn",
+                "Reset",
+                "Cast Ember",
+                "Cast Lightning Bolt",
+            ] {
+                let node = snapshot
+                    .nodes
+                    .iter()
+                    .find(|node| node.name == name)
+                    .unwrap_or_else(|| panic!("missing primary Lattice Demo action {name:?}"));
+                assert_eq!(
+                    node.visibility_requirement,
+                    Some(crate::UiVisibilityRequirement::Immediate),
+                    "{name} must remain an Immediate action"
+                );
+                assert!(
+                    node.fully_visible,
+                    "{name} must be visible at {physical_width}×{physical_height} / {device_scale}×: {node:?}"
+                );
+            }
         }
     }
 }

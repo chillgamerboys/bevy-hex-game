@@ -51,16 +51,27 @@ actions. Blocking decisions take `Required` priority and show their progress. Th
 rail is outside the HUD visibility tree, so hiding inspectors or the HUD cannot hide
 the required action.
 
-Party and turn state are primary information. Inspector, event log, and Combat Lab
-statistics are secondary drawers. A responsive region presents at most one secondary
-drawer; compact layouts collapse secondary information before they reduce action
-visibility.
+Party and turn state are primary information. The selected unit's lattice is
+persistent Inspector context, not a replaceable drawer. In Combat Lab sessions,
+statistics are a secondary surface ordered below that lattice; collapsing or
+expanding statistics must never hide, move, or cover the lattice. The event log and
+other optional inspectors remain secondary drawers. The Inspector is one persistent
+vertical scroll owner at every viewport and scale: own/target lattice readouts come
+first and statistics follow them in the same flow. Statistics can never be visible
+without that lattice. On an ultra-constrained blocking decision, the required lattice
+is promoted into the persistent action rail and the ordinary Inspector and statistics
+both hide; this avoids presenting two independently focusable copies of the same
+required choice. Redundant world badges yield so no secondary surface can cover a
+primary action.
 
 Builds with the default-off `dev` feature add a `DEV · TIME` panel to the gameplay
 Inspector region. `hex_ui` renders only the immutable current-hour or unavailable
 projection and emits typed half-hour/preset intents; the `hex_game` adapter remains
 responsible for changing the existing session clock. Static lighting exposes a reason
 instead of controls, and shipping builds contain neither the panel nor its adapter.
+On Compact Combat Lab canvases, live statistics take precedence over this
+development-only panel inside the same Inspector flow so the two secondary surfaces
+cannot compete for space.
 
 ## Responsive model
 
@@ -88,9 +99,17 @@ smaller type does not unexpectedly promote an ordinary canvas to Wide.
 
 | Class | Semantic-density-adjusted logical canvas | Behavior |
 |---|---|---|
-| Compact | below 1440×810 | one content column; drawers overlay/collapse; action rail remains full width |
+| Compact | below 1440×810 | persistent scrollable Inspector with lattice first and secondary content below; blocking lattice choices promote into the always-visible action rail |
 | Standard | at least 1440×810 and below 2400 px wide | primary content plus one secondary region |
 | Wide | at least 2400 px wide | bounded primary content with one persistent secondary region |
+
+Compact setup and Creator pages use one vertical page-scroll owner. The Character
+Creator lattice is the sole exception that needs a bounded two-axis pan surface: its
+custom Bevy-native handler consumes only motion the canvas can use, then bubbles the
+remaining vertical delta to the page at its boundary. Keyboard focus first reveals a
+cell inside that canvas and then reveals the canvas inside the outer page. Idle nested
+ScrollArea components are forbidden because Bevy 0.19 consumes wheel events before
+checking whether that child can move.
 
 Representative structure:
 
@@ -108,6 +127,10 @@ Structural tests cover 960×540, 1280×720, 1512×949, 1920×1080, 2560×1440, a
 3840×2160 at 1× and 2× device scale in every semantic UI scale mode. Device pixels
 remain separate from logical layout, so 1280×720 @2× and the observed 3024×1898
 physical fullscreen client (1512×949 logical @2×) exercise the same contract.
+The reported 2582×1494 outer window includes native title-bar chrome; its Bevy client
+is approximately 2582×1442 physical, or 1291×721 logical at 2×. Tests use that client
+canvas directly and cover both 699px and 700px effective-height boundary cases so
+native chrome cannot silently select an untested layout.
 Primary controls must be fully visible immediately; secondary catalog/report content
 may instead prove complete scroll reachability. Every required control remains
 unobscured, accessible, and at least 44×44. `UiTreeSnapshot` intersects each node
@@ -192,20 +215,27 @@ Use the cheapest authoritative oracle:
 - Pure view-model, scale, breakpoint, intent, and priority behavior stays inline in
   `hex_ui`.
 - Game and UI wiring uses the existing `gameplay_app` integration target with
-  `test-support`. `GameplayStateSnapshot` reads canonical resources/components;
-  `UiTreeSnapshot` reads presentation structure only.
+  `test-support`. `GameplayStateSnapshot` reads authority resources/components and
+  labels its copied HUD affordances `presented_actions`; those affordances prove
+  adapter parity, not command legality. `UiTreeSnapshot` reads presentation structure
+  only.
 - Deterministic combat and balance evidence belongs to the rules, contracts, and
   simulation partitions.
 - The scoped presentation route reviews exactly ten deterministic Bevy image-target
-  frames from `walks/gameplay_ui.ron`. Every `Capture` first passes the live
-  structural oracle. A typed review viewport supplies logical size and device scale;
-  Bevy renders into an `ImageRenderTarget` and captures it with `Screenshot::image`.
-  No operating-system capture API or primary-window screenshot participates.
+  frames from `walks/gameplay_ui.ron`. Every gameplay `ReviewCapture` declares an
+  exact `UiTaskCase` and passes that task's live named-control contract before a PNG
+  can be written; merely reaching the right screen is insufficient. A typed review
+  viewport supplies logical size and device scale; Bevy renders into an
+  `ImageRenderTarget` and captures it with `Screenshot::image`. Diagnostic UI
+  overlays are rejected on this acceptance route. No operating-system capture API
+  or primary-window screenshot participates. Generic world-owner `Capture` steps
+  remain unchanged.
 
 A screenshot must never prove legality, budgets, decisions, damage, Channel,
-outcomes, persistence, deployment, or report identity. The visual runner therefore
-has no combat-solving verbs; presentation fixtures open authored states while typed
-tests prove their canonical facts.
+outcomes, persistence, deployment, or report identity. The scoped gameplay visual
+script therefore uses no combat-solving steps; presentation fixtures open authored
+states while typed tests prove their canonical facts. Generic world-owned walks keep
+their existing driver verbs and acceptance criteria.
 
 Forest, Waterfall, map-review, V3, and world-owned captures remain outside this
 contract and are unchanged.

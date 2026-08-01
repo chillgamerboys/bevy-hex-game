@@ -96,7 +96,7 @@ pub(super) fn plugin(app: &mut App) {
     clippy::too_many_arguments,
     reason = "the context intentionally records every distinct gameplay role"
 )]
-pub(super) fn refresh(
+pub(crate) fn refresh(
     mut context: ResMut<GameplayUiContext>,
     mode: Res<State<Mode>>,
     order: Res<TurnOrder>,

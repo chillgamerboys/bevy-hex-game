@@ -109,7 +109,7 @@ fn spawn_region(
     mut node: Node,
     viewport: crate::UiViewportClass,
 ) {
-    if role == UiRegionRole::Actions {
+    if matches!(role, UiRegionRole::Inspector | UiRegionRole::Actions) {
         node.overflow = Overflow::scroll_y();
     }
     constrain_region_to_canvas(
@@ -120,64 +120,76 @@ fn spawn_region(
         role,
         &mut node,
     );
-    let mut region = frame.spawn((Name::new(name), role, node, Pickable::IGNORE));
-    if role == UiRegionRole::Actions {
+    let picking = if matches!(role, UiRegionRole::Inspector | UiRegionRole::Actions) {
+        // A ScrollArea must itself participate in picking so wheel/trackpad input
+        // over read-only descendants can target it and be consumed before the
+        // world camera. Read-only, non-scrollable HUD regions remain transparent.
+        Pickable::default()
+    } else {
+        Pickable::IGNORE
+    };
+    let mut region = frame.spawn((Name::new(name), role, node, picking));
+    if matches!(role, UiRegionRole::Inspector | UiRegionRole::Actions) {
         region.insert((ScrollArea, ScrollPosition::default()));
     }
 }
 
 fn apply_responsive_layout(
     metrics: Res<ResolvedUiMetrics>,
-    statistics: Res<crate::LabStatisticsView>,
     chrome: Res<GameplayChromeView>,
+    lattices: Res<crate::GameplayLatticesView>,
     review: Option<Res<crate::review::UiReviewPresentation>>,
     added_regions: Query<(), Added<UiRegionRole>>,
     mut regions: Query<(&UiRegionRole, &mut Node)>,
 ) {
     let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
     if !metrics.is_changed()
-        && !statistics.is_changed()
         && !chrome.is_changed()
+        && !lattices.is_changed()
         && !review_changed
         && added_regions.is_empty()
     {
         return;
     }
-    let statistics = review
+    let lattices = review
         .as_ref()
-        .and_then(|review| review.statistics.as_ref())
-        .unwrap_or(statistics.as_ref());
-    let show_statistics = statistics.present && statistics.visible && !chrome.decision_required;
+        .and_then(|review| review.lattices.as_ref())
+        .unwrap_or(lattices.as_ref());
+    let chrome = review
+        .as_ref()
+        .map_or(*chrome, |review| review.effective_chrome(*chrome));
+    let promoted_decision =
+        crate::gameplay_lattices::compact_decision_visible(*metrics, &chrome, lattices);
     for (role, mut node) in &mut regions {
         constrain_region_to_canvas(*metrics, *role, &mut node);
-        if *role != UiRegionRole::Inspector
-            || metrics.viewport == crate::UiViewportClass::Compact
-            || !show_statistics
-        {
-            continue;
-        }
-        if statistics.expanded {
-            // Expanded statistics are the sole owner of the secondary inspector
-            // region. Do not keep painting an unreachable lattice underneath.
-            node.display = Display::None;
-        } else if let Val::Px(top) = node.top {
-            // Collapsed controls remain independently actionable above the
-            // lattice, so reserve their semantic height instead of covering it.
-            node.top = Val::Px(top + crate::lab_statistics::collapsed_drawer_clearance(*metrics));
+        if *role == UiRegionRole::Inspector {
+            // Remove an empty hidden Inspector from both layout and picking.
+            // A non-ultra required choice still uses this region; an ultra one
+            // owns a promoted lattice surface in the persistent action region.
+            node.display = if (!chrome.shown && !chrome.decision_required) || promoted_decision {
+                Display::None
+            } else {
+                Display::Flex
+            };
         }
     }
 }
 
 fn apply_visibility(
     view: Res<GameplayChromeView>,
+    review: Option<Res<crate::review::UiReviewPresentation>>,
     added_roots: Query<(), Added<HudElement>>,
     mut roots: Query<(&mut Visibility, Has<RequiredActionSurface>), With<HudElement>>,
 ) {
-    if !view.is_changed() && added_roots.is_empty() {
+    let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
+    if !view.is_changed() && !review_changed && added_roots.is_empty() {
         return;
     }
+    let view = review
+        .as_ref()
+        .map_or(*view, |review| review.effective_chrome(*view));
     for (mut visibility, required_action) in &mut roots {
-        let wanted = if view.encounter_complete && required_action {
+        let wanted = if view.encounter_complete {
             Visibility::Hidden
         } else if view.shown || (required_action && view.decision_required) {
             Visibility::Inherited
@@ -231,6 +243,10 @@ mod tests {
             .resource_mut::<GameplayChromeView>()
             .encounter_complete = true;
         app.update();
+        assert_eq!(
+            app.world().get::<Visibility>(ordinary),
+            Some(&Visibility::Hidden)
+        );
         assert_eq!(
             app.world().get::<Visibility>(required),
             Some(&Visibility::Hidden)

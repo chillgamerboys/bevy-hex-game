@@ -11,7 +11,7 @@ use crate::{
     EDGE, LABEL, PANEL_BG,
 };
 
-const CONTROL_WIDTH: f32 = 104.0;
+const CONTROL_WIDTH: f32 = 116.0;
 const SWATCH_WIDTH: f32 = 5.0;
 
 const FRAME: Pickable = Pickable {
@@ -106,7 +106,6 @@ fn spawn_panel(
 fn rebuild(
     mut commands: Commands,
     view: Res<CastingPanelView>,
-    statistics: Res<crate::LabStatisticsView>,
     review: Option<Res<crate::review::UiReviewPresentation>>,
     metrics: Res<crate::ResolvedUiMetrics>,
     mut panels: Query<
@@ -136,7 +135,7 @@ fn rebuild(
     assets: Res<UiAssets>,
 ) {
     let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
-    if !view.is_changed() && !statistics.is_changed() && !review_changed && !metrics.is_changed() {
+    if !view.is_changed() && !review_changed && !metrics.is_changed() {
         return;
     }
     let view = review
@@ -154,31 +153,11 @@ fn rebuild(
     // independently sized surfaces compete at intermediate semantic scales.
     let promoted_to_rail = matches!(view.content, CastingPanelContentView::Decision { .. });
     let ultra_constrained = crate::layout::is_ultra_constrained(*metrics);
-    let statistics = review
-        .as_ref()
-        .and_then(|review| review.statistics.as_ref())
-        .unwrap_or(statistics.as_ref());
-    // At the most constrained semantic scale the collapsed Lab drawer and the
-    // casting region share the only remaining strip below the action rail.
-    // Reserve just the drawer's compact row before laying out primary spell
-    // controls. The Actions region is a real ScrollArea, so additional spells
-    // remain reachable without allowing the secondary drawer to cover them.
-    panel.top = if ultra_constrained && statistics.present && statistics.visible {
-        Val::Px(104.0)
-    } else {
-        Val::ZERO
-    };
-    panel.right = if !ultra_constrained
-        && metrics.viewport == crate::UiViewportClass::Compact
-        && statistics.present
-        && statistics.visible
-    {
-        // The Compact drawer is 250 semantic control pixels plus its padding.
-        // Keep a small gutter so its opaque edge never covers the final spell.
-        Val::Px(250.0 * metrics.control_scale.max(1.0) + 28.0)
-    } else {
-        Val::ZERO
-    };
+    // The Actions region already reserves the Inspector lane. Do not reserve it
+    // again here: doing so needlessly squeezed the production spell catalog on
+    // Compact Retina canvases.
+    panel.top = Val::ZERO;
+    panel.right = Val::ZERO;
     for mut heading in &mut headings {
         // "Actions" repeats the persistent rail's role and costs a full HUD
         // row. Spell labels already make this strip unambiguous.
@@ -192,7 +171,7 @@ fn rebuild(
     panel.height = if stacked {
         Val::Auto
     } else {
-        Val::Px(crate::layout::semantic_action_region_height(*metrics) - 4.0)
+        Val::Px(crate::layout::action_region_height(*metrics) - 4.0)
     };
     panel.overflow = Overflow::default();
     panel.display = if view.visible && !promoted_to_rail {
@@ -410,9 +389,18 @@ fn spawn_aim_controls(rows: &mut ChildSpawnerCommands, assets: &UiAssets, contro
                     .spawn((
                         Name::new(format!("{name} Disabled")),
                         AccessibleLabel::new(format!("{label} unavailable")),
+                        // Disabled aiming controls still communicate why the
+                        // action cannot be taken. Keep them in the structural
+                        // oracle even though they intentionally leave the tab
+                        // order, so their visible copy cannot overflow again.
+                        crate::UiVisibilityRequirement::Immediate,
+                        crate::UiTextMustFit,
+                        crate::responsive_control_role(),
                         Node {
-                            width: Val::Px(CONTROL_WIDTH),
+                            width: Val::Auto,
+                            min_width: Val::Px(CONTROL_WIDTH),
                             min_height: Val::Px(48.0),
+                            flex_shrink: 0.0,
                             align_items: AlignItems::Center,
                             justify_content: JustifyContent::Center,
                             flex_direction: FlexDirection::Column,
@@ -425,7 +413,7 @@ fn spawn_aim_controls(rows: &mut ChildSpawnerCommands, assets: &UiAssets, contro
                     ))
                     .with_children(|disabled| {
                         disabled.spawn(blurb(assets, label));
-                        disabled.spawn(fine(assets, "UNAVAILABLE"));
+                        disabled.spawn(fine(assets, "BLOCKED"));
                     });
             }
         }

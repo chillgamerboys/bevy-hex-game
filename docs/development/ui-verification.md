@@ -75,15 +75,15 @@ real Bevy scroll owner that can bring the complete 44x44 target into view.
 | Deployment | incomplete 1v1 | Undo, auto-place, clear, Back to Rules; Start disabled with reason | roster rows | exact positions and completeness come from gameplay snapshot |
 | Deployment | complete and maximum 6v6 | Start Combat, Back to Rules | roster rows | launch keeps exact roster/profile/map positions |
 | Gameplay | exploration party/formation | action rail; Group/Solo, Rest and formation actions | party/inspector detail | canonical mode, selection, formation and position snapshot |
-| Gameplay | player combat turn/max actions | complete Now/Choose rail | inspector/log/lattices | legal actions, budgets, Channel and refusals from gameplay snapshot |
-| Gameplay | hostile turn | required rail status; no illegal player action | inspector/log | turn owner and refusal reasons from gameplay snapshot |
-| Casting | spell list mixed enabled/blocked | Cancel and legal spell actions | spell detail | legality/cost/blocked reason from gameplay snapshot |
+| Gameplay | player combat turn/max actions | complete Now/Choose rail | inspector/log/lattices | budgets and Channel state from authority resources; `presented_actions` checks labels/refusal copy only, while command contracts prove legality |
+| Gameplay | hostile turn | required rail status; no illegal player action | inspector/log | turn owner from authority state; presented refusal/absence from `presented_actions`; command rejection from owning contracts |
+| Casting | spell list mixed enabled/blocked | Cancel and legal spell actions | spell detail | presented cost/blocked copy from the app snapshot; legality and refusal authority stay in owning command contracts |
 | Casting | aiming legal/blocked | Confirm when legal, Cancel/cycle as applicable | target detail | exact target and refusal are canonical, never pixel-derived |
 | Decision | disable partial/complete | required cells and Confirm/refusal | lattice detail | owed/chosen cells and one-action accounting are canonical |
 | Decision | restore partial/complete | required cells and Confirm/refusal | lattice detail | owed/chosen cells and restoration are canonical |
-| Gameplay chrome | HUD hidden ordinary/required | action rail remains visible; HUD toggle | hidden secondary regions | hiding chrome cannot hide or mutate a blocking decision |
+| Gameplay chrome | HUD hidden ordinary/required | action rail remains visible; HUD toggle | lattice and statistics hide together; a blocking lattice is promoted into the rail | hiding chrome cannot leave statistics behind or hide/mutate a blocking decision |
 | Gameplay chrome | target lattice opaque/known/absent; log empty/dense | action rail | lattice/log drawer | visibility does not reconstruct hidden gameplay truth |
-| Combat Lab live | statistics collapsed/expanded/manual end | expand/collapse; End Experiment | statistics body | drawer lifecycle and report fingerprint from gameplay snapshot |
+| Combat Lab live | statistics collapsed/expanded/manual end | action rail | lattice first, then expand/collapse, statistics body, and End Experiment in the single Inspector scroll flow | typed toggle, actual wheel/Tab scrolling, drawer lifecycle, and report fingerprint from gameplay snapshot |
 | Pause | ordinary/save success/save failure | Resume and applicable save/leave actions | notice | focus is trapped and typed pause/save actions retain state |
 | Outcome | ordinary victory/defeat | return/retry actions | outcome summary | canonical encounter outcome chooses presentation |
 | Lab outcome | Overview/Units/Spells & Effects/Timeline/Compare | report mode and Retry/Copy/Tune/Return actions | one-axis report body and comparisons | frozen identity, modes, comparison and launch routes remain canonical |
@@ -91,18 +91,21 @@ real Bevy scroll owner that can bring the complete 44x44 target into view.
 
 ## Coverage tiers and runtime budget
 
-Comprehensive does not mean multiplying every task by every viewport and scale.
-The suite uses four complementary tiers:
+Comprehensive layout coverage stays headless and structural; it does not multiply
+screenshots or renderer launches. The suite uses five complementary tiers:
 
 1. Pure tests exhaust every scale mode, breakpoint boundary, priority rule, and
    renderer-free Creator/Combat Lab transition.
-2. Every task case runs a representative structural set: Compact 1280x720 Auto,
-   Standard 1920x1080 Auto, Wide 3840x2160 Auto, Compact 1280x720 at 200%, and the
-   observed 1512x949 logical Retina fullscreen canvas. Named primary controls must
-   be immediate; named secondary controls must be scroll-reachable.
-3. Maximum-content/high-risk cases run the complete size, device-scale, and semantic
-   scale matrix. This includes title, both catalogs, Creator workspaces, Lab 6v6
-   setup, deployment, maximum action rail, required decision, and dense Compare.
+2. Every populated interactive task runs the complete physical-size, device-scale,
+   and seven-mode semantic-scale matrix in the single headless hex_ui test binary.
+   This includes intermediate 125%, 150%, and 175% modes; endpoint-only sampling is
+   insufficient. Splash and Loading alone remain representative smoke states.
+   Named primary controls must be immediate; named secondary controls must be
+   scroll-reachable through an attainable range.
+3. Real-input regressions complement that matrix for scroll ownership and focus:
+   cursor plus wheel/trackpad events, Tab/Shift-Tab, nested-scroll boundary handoff,
+   and visible focus rings. Static geometry cannot prove that Bevy will deliver an
+   input event to the intended owner.
 4. Responsive state is also tested as a transition. At minimum, enlarged Compact UI
    must return to Auto/Standard without retaining old flex direction, scroll
    ownership, insets, visibility, or control scale. Fresh-app matrix passes do not
@@ -114,7 +117,11 @@ The machine contract fails when a focusable control has no explicit visibility
 classification. Shared controls default to `Immediate`; a secondary surface must
 opt a control into `Scrollable` at the point where the real scroll owner is created.
 This makes a missing annotation a false failure instead of allowing a primary action
-to disappear as a false pass.
+to disappear as a false pass. These lightweight components are runtime semantic
+metadata: they keep the authored hierarchy self-describing in shipping builds, while
+the default-off observation harness is the only code that reads them as an oracle.
+Unnamed interactive entities also fail closed, and the named controls in each task
+contract declare their relative keyboard focus order.
 
 One `UiTaskCase` may intentionally populate several closely coupled branches on the
 same surface—for example the saved-report fixture contains an error, comparison, and
@@ -126,8 +133,11 @@ require separate task cases.
 
 The structural run reports each task-case ID, viewport, scale mode, missing named
 control, and exact clipping/scroll ancestor. The visual route reports the same case
-ID before writing its PNG. A walk step that merely completes, a non-black image, or
-`coverage: true` cannot satisfy the route.
+ID before writing its PNG. Gameplay acceptance uses typed `ReviewCapture` steps;
+generic `Capture` remains available to unchanged world-owner walks. Enabling UI-debug
+overlays rejects gameplay acceptance captures, so diagnostic outlines cannot become
+green evidence. A walk step that merely completes, a non-black image, or `coverage:
+true` cannot satisfy the route.
 
 The ten-image budget selects the riskiest presentation states; it is not the list of
 everything tested. Map-owned Forest, Waterfall, V3, and map-review routes remain

@@ -157,17 +157,27 @@ fn refresh_action_rail(
         match kind {
             ActionRailCopy::Heading => {}
             ActionRailCopy::Summary => {
-                let summary = format!(
-                    "{} · {} · Move {} · Action {}",
-                    view.round,
-                    view.actor_label,
-                    view.movement_remaining,
-                    if view.action_remaining {
-                        "ready"
-                    } else {
-                        "spent"
-                    }
-                );
+                let action_state = if view.action_remaining {
+                    "ready"
+                } else {
+                    "spent"
+                };
+                let summary = if is_ultra_constrained(*metrics) && metrics.content_scale >= 1.5 {
+                    let actor = view
+                        .actor_label
+                        .strip_suffix(" · Player")
+                        .or_else(|| view.actor_label.strip_suffix(" · Hostile"))
+                        .unwrap_or(&view.actor_label);
+                    format!(
+                        "{} · {actor}\nMove {} · Action {action_state}",
+                        view.round, view.movement_remaining
+                    )
+                } else {
+                    format!(
+                        "{} · {} · Move {} · Action {action_state}",
+                        view.round, view.actor_label, view.movement_remaining
+                    )
+                };
                 text.0 = if decision_required {
                     view.required_prompt
                         .as_deref()
@@ -195,12 +205,13 @@ fn refresh_action_rail(
         offered.sort_by_key(|action| std::cmp::Reverse(action.priority));
         let sole_action = offered.len() == 1;
         let ordinary_action_width = if metrics.viewport == UiViewportClass::Compact {
-            let left = if is_ultra_constrained(*metrics) {
-                crate::layout::ultra_action_rail_left(*metrics, view.required_prompt.is_some())
-            } else {
+            let left = 12.0;
+            let right = if is_ultra_constrained(*metrics) && decision_required {
                 12.0
+            } else {
+                crate::layout::center_right_inset(*metrics)
             };
-            let rail_content_width = (metrics.logical_size.x - left - 12.0 - 24.0).max(44.0);
+            let rail_content_width = (metrics.logical_size.x - left - right - 24.0).max(44.0);
             let column_count = if metrics.content_scale >= 1.5 {
                 offered.len().min(3)
             } else {
@@ -315,11 +326,14 @@ fn apply_action_rail_layout(
     decision_required: bool,
 ) {
     apply_action_rail_insets(metrics.viewport, node);
+    node.right = Val::Px(crate::layout::center_right_inset(metrics));
     if is_ultra_constrained(metrics) {
-        node.left = Val::Px(crate::layout::ultra_action_rail_left(
-            metrics,
-            decision_required,
-        ));
+        node.left = Val::Px(12.0);
+        if decision_required {
+            // The ordinary Inspector is hidden while its required lattice is
+            // promoted into this rail, so the blocking choice may use the lane.
+            node.right = Val::Px(12.0);
+        }
     }
     let left = match node.left {
         Val::Px(left) => left,
@@ -329,11 +343,7 @@ fn apply_action_rail_layout(
         Val::Px(right) => right,
         _ => 0.0,
     };
-    let horizontal_insets = match metrics.viewport {
-        UiViewportClass::Compact => left + right,
-        UiViewportClass::Standard => 564.0,
-        UiViewportClass::Wide => 640.0,
-    };
+    let horizontal_insets = left + right;
     node.width = Val::Px((metrics.logical_size.x - horizontal_insets).max(44.0));
     node.flex_direction = FlexDirection::Column;
     node.align_items = AlignItems::Stretch;

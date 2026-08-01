@@ -11,7 +11,7 @@
 - [ ] Gameplay rules, contracts, simulation, and app partitions (report each concern below)
 - [ ] Residual workspace tests and doctests (unless Markdown-only)
 - [ ] `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features` (unless Markdown-only)
-- [ ] `cargo build --workspace --profile ci` (unless Markdown-only; CI builds all three platforms)
+- [ ] `cargo build --package hex_game --release` (unless Markdown-only; CI builds the shipping package on all three platforms)
 - [ ] Structural UI oracle and scoped Bevy image-target walk green; agent read every frame
 
 ### Manual runtime sign-off
