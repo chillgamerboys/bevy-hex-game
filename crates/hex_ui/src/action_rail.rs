@@ -4,7 +4,7 @@ use bevy::ui_widgets::ScrollArea;
 use hex_core::Screen;
 
 use crate::{
-    blurb, fine, fixed_row_button, heading, layout::is_ultra_constrained, ActionAvailability,
+    blurb, fine, fixed_row_button, hud_heading, layout::is_ultra_constrained, ActionAvailability,
     DespawnOnExit, GameplayAction, GameplayHudView, LatticeIntent, ResolvedUiMetrics, UiAssets,
     UiIntent, UiViewportClass, ACCENT, EDGE, PANEL_BG,
 };
@@ -56,7 +56,7 @@ fn spawn_action_rail(mut commands: Commands, assets: Res<UiAssets>) {
             rail.spawn((
                 Name::new("Action Rail Heading"),
                 ActionRailCopy::Heading,
-                heading(&assets, "Now"),
+                hud_heading(&assets, "Now"),
             ));
             rail.spawn((
                 Name::new("Action Rail Summary"),
@@ -128,36 +128,27 @@ fn refresh_action_rail(
         .as_ref()
         .and_then(|review| review.hud.as_ref())
         .unwrap_or(view.as_ref());
-    let condensed_semantic_rail = metrics.content_scale >= 1.5;
+    let decision_required = view
+        .actions
+        .iter()
+        .any(|action| action.priority == crate::ActionPriority::Required);
     let minimal_deployment =
         view.phase == hex_core::GameplayPhase::Deployment && view.actions.is_empty();
     if let Ok((_, mut node, mut border)) = rails.single_mut() {
-        apply_action_rail_layout(
-            *metrics,
-            &mut node,
-            minimal_deployment,
-            view.required_prompt.is_some(),
-        );
+        apply_action_rail_layout(*metrics, &mut node, minimal_deployment, decision_required);
         node.display = if minimal_deployment {
             Display::None
         } else {
             Display::Flex
         };
-        *border = BorderColor::all(if view.required_prompt.is_some() {
-            ACCENT
-        } else {
-            EDGE
-        });
+        *border = BorderColor::all(if decision_required { ACCENT } else { EDGE });
     }
     for (kind, mut text, mut node) in &mut copy {
         node.width = Val::Auto;
         node.min_width = Val::Auto;
         node.flex_shrink = 1.0;
         node.display = if minimal_deployment
-            || (is_ultra_constrained(*metrics)
-                && matches!(kind, ActionRailCopy::Heading | ActionRailCopy::Prompt))
-            || (condensed_semantic_rail
-                && matches!(kind, ActionRailCopy::Heading | ActionRailCopy::Prompt))
+            || matches!(kind, ActionRailCopy::Heading | ActionRailCopy::Prompt)
         {
             Display::None
         } else {
@@ -177,7 +168,7 @@ fn refresh_action_rail(
                         "spent"
                     }
                 );
-                text.0 = if condensed_semantic_rail {
+                text.0 = if decision_required {
                     view.required_prompt
                         .as_deref()
                         .map_or(summary.clone(), |prompt| format!("{summary}\n{prompt}"))
@@ -238,18 +229,23 @@ fn refresh_action_rail(
             );
             match action.availability {
                 ActionAvailability::Enabled => {
+                    let control_height = if metrics.content_scale >= 1.5 {
+                        60.0
+                    } else {
+                        52.0
+                    } * metrics.control_scale.max(1.0);
                     let mut control = root.spawn((
-                        fixed_row_button(name, action_width, 64.0 * metrics.control_scale.max(1.0)),
+                        fixed_row_button(name, action_width, control_height),
                         ActionRailKey(action.action),
                     ));
                     if immediate {
                         control.insert(crate::UiVisibilityRequirement::Immediate);
                     }
                     control.with_children(|button| {
-                        button.spawn(blurb(&assets, action.label));
-                        if let Some(shortcut) = action.shortcut {
-                            button.spawn(fine(&assets, shortcut));
-                        }
+                        let label = action.shortcut.map_or(action.label.clone(), |shortcut| {
+                            format!("{} · {shortcut}", action.label)
+                        });
+                        button.spawn(blurb(&assets, label));
                     });
                 }
                 ActionAvailability::Disabled { reason } => {
@@ -276,14 +272,10 @@ fn refresh_action_rail(
                     }
                     control.with_children(|disabled| {
                         disabled.spawn(blurb(&assets, action.label));
-                        let visible_reason = if metrics.content_scale >= 1.5 {
-                            reason
-                                .strip_prefix("Unavailable while ")
-                                .or_else(|| reason.strip_prefix("Unavailable because "))
-                                .unwrap_or(&reason)
-                        } else {
-                            &reason
-                        };
+                        let visible_reason = reason
+                            .strip_prefix("Unavailable while ")
+                            .or_else(|| reason.strip_prefix("Unavailable because "))
+                            .unwrap_or(&reason);
                         disabled.spawn(fine(&assets, visible_reason.to_owned()));
                     });
                 }
@@ -304,10 +296,10 @@ fn action_rail_needs_refresh(
 fn action_rail_node(viewport: UiViewportClass) -> Node {
     let mut node = Node {
         position_type: PositionType::Absolute,
-        min_height: Val::Px(116.0),
-        padding: UiRect::axes(Val::Px(18.0), Val::Px(12.0)),
+        min_height: Val::Px(92.0),
+        padding: UiRect::axes(Val::Px(14.0), Val::Px(8.0)),
         flex_direction: FlexDirection::Column,
-        row_gap: Val::Px(8.0),
+        row_gap: Val::Px(5.0),
         border: UiRect::all(Val::Px(2.0)),
         border_radius: BorderRadius::all(Val::Px(10.0)),
         ..default()
@@ -369,9 +361,15 @@ fn apply_action_rail_layout(
         };
     } else {
         node.top = Val::Auto;
-        node.padding = UiRect::axes(Val::Px(18.0), Val::Px(12.0));
-        node.row_gap = Val::Px(8.0);
-        node.min_height = Val::Px(if minimal_deployment { 0.0 } else { 116.0 });
+        node.padding = UiRect::axes(Val::Px(14.0), Val::Px(8.0));
+        node.row_gap = Val::Px(5.0);
+        node.min_height = Val::Px(if minimal_deployment {
+            0.0
+        } else if decision_required {
+            116.0
+        } else {
+            92.0
+        });
         node.height = Val::Auto;
         node.overflow = Overflow::default();
     }

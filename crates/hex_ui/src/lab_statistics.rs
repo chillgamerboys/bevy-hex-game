@@ -6,9 +6,9 @@ use bevy::ui_widgets::ScrollArea;
 use hex_core::Screen;
 
 use crate::{
-    blurb, heading, layout::is_ultra_constrained, row_button, supporting_text_role, DespawnOnExit,
-    GameplayChromeView, LabStatisticsIntent, LabStatisticsView, ResolvedUiMetrics, UiAssets,
-    UiIntent, UiRegionRole, UiSystems, UiViewportClass, ACCENT_EDGE, LABEL,
+    blurb, hud_heading, layout::is_ultra_constrained, row_button, supporting_text_role,
+    DespawnOnExit, GameplayChromeView, LabStatisticsIntent, LabStatisticsView, ResolvedUiMetrics,
+    UiAssets, UiIntent, UiRegionRole, UiSystems, UiViewportClass, ACCENT_EDGE, LABEL,
 };
 
 #[derive(Component)]
@@ -79,7 +79,7 @@ fn spawn(mut commands: Commands, assets: Res<UiAssets>) {
                     },
                 ))
                 .with_children(|body| {
-                    body.spawn(heading(&assets, "LIVE COMBAT LAB STATISTICS"));
+                    body.spawn(hud_heading(&assets, "LIVE COMBAT LAB STATISTICS"));
                     body.spawn((
                         Summary,
                         Text::new("Waiting for canonical combat statistics…"),
@@ -179,15 +179,26 @@ fn render(
 
 fn apply_layout(
     metrics: Res<ResolvedUiMetrics>,
+    view: Res<LabStatisticsView>,
+    review: Option<Res<crate::review::UiReviewPresentation>>,
     added: Query<(), Added<Drawer>>,
     mut drawers: Query<&mut Node, (With<Drawer>, Without<Body>)>,
     mut bodies: Query<&mut Node, (With<Body>, Without<Drawer>)>,
 ) {
-    if !metrics.is_changed() && added.is_empty() {
+    let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
+    if !metrics.is_changed() && !view.is_changed() && !review_changed && added.is_empty() {
         return;
     }
+    let expanded = review
+        .as_ref()
+        .and_then(|review| review.statistics.as_ref())
+        .map_or(view.expanded, |view| view.expanded);
     for mut body in &mut bodies {
-        body.display = Display::Flex;
+        body.display = if expanded {
+            Display::Flex
+        } else {
+            Display::None
+        };
     }
     for mut node in &mut drawers {
         match metrics.viewport {
@@ -200,12 +211,12 @@ fn apply_layout(
                     92.0
                 };
                 node.top = Val::Px(top);
-                let bottom = if ultra {
+                let bottom = if ultra || !expanded {
                     12.0
                 } else {
                     crate::layout::semantic_action_rail_clearance(*metrics)
                 };
-                node.bottom = Val::Px(bottom);
+                node.bottom = if expanded { Val::Px(bottom) } else { Val::Auto };
                 if ultra {
                     node.left = Val::Px(12.0);
                     node.right = Val::Px(12.0);
@@ -224,7 +235,11 @@ fn apply_layout(
                     node.align_items = AlignItems::Stretch;
                     node.column_gap = Val::ZERO;
                 }
-                node.max_height = Val::Px((metrics.logical_size.y - top - bottom).max(0.0));
+                node.max_height = if expanded {
+                    Val::Px((metrics.logical_size.y - top - bottom).max(0.0))
+                } else {
+                    Val::Auto
+                };
             }
             UiViewportClass::Standard => {
                 node.display = Display::Flex;

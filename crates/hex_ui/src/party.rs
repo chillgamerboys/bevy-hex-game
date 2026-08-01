@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use hex_core::Screen;
 
 use crate::{
-    blurb, body_text_role, heading, owner_resolved_control_role, responsive_control_role,
+    blurb, hud_heading, hud_text_role, owner_resolved_control_role, responsive_control_role,
     HudElement, PartyIntent, PartyView, ResolvedUiMetrics, UiAssets, UiHudSetup, UiIntent,
     UiRegionRole, UiSystems, ACCENT, ACCENT_EDGE, BLURB_SIZE, EDGE, LABEL, PANEL_BG,
 };
@@ -59,7 +59,7 @@ fn spawn_panels(
             BackgroundColor(PANEL_BG),
         ))
         .with_children(|root| {
-            root.spawn(heading(&assets, "party"));
+            root.spawn(hud_heading(&assets, "party"));
             root.spawn(blurb(&assets, "ALLIES · keys 1–6"));
             root.spawn((
                 PartyBody,
@@ -92,7 +92,7 @@ fn spawn_panels(
             BackgroundColor(PANEL_BG),
         ))
         .with_children(|root| {
-            root.spawn(heading(&assets, "formation"));
+            root.spawn(hud_heading(&assets, "formation"));
             root.spawn(blurb(
                 &assets,
                 "Select an ally, then choose a slot. Occupied slots swap.",
@@ -256,7 +256,7 @@ fn control_button(
 fn body_text(assets: &UiAssets, text: impl Into<String>) -> impl Bundle {
     (
         Text::new(text),
-        body_text_role(),
+        hud_text_role(),
         TextFont {
             font: assets.body.clone().into(),
             ..TextFont::from_font_size(BLURB_SIZE)

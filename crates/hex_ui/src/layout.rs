@@ -34,15 +34,22 @@ pub const READ_ONLY_HUD: Pickable = Pickable::IGNORE;
 #[must_use]
 pub const fn action_rail_clearance(viewport: UiViewportClass) -> f32 {
     match viewport {
-        UiViewportClass::Compact => 280.0,
-        UiViewportClass::Standard => 252.0,
-        UiViewportClass::Wide => 256.0,
+        UiViewportClass::Compact => 180.0,
+        UiViewportClass::Standard => 164.0,
+        UiViewportClass::Wide => 168.0,
     }
 }
 
 /// Vertical clearance required by the rail after semantic control growth.
 pub(crate) fn semantic_action_rail_clearance(metrics: crate::ResolvedUiMetrics) -> f32 {
-    action_rail_clearance(metrics.viewport) + 300.0 * (metrics.content_scale - 1.0).max(0.0)
+    action_rail_clearance(metrics.viewport) + 160.0 * (metrics.content_scale - 1.0).max(0.0)
+}
+
+/// Height needed by the horizontal casting strip as semantic controls grow.
+/// Enlarged text wraps before a simple proportional control scale would account
+/// for it, while Auto at ordinary desktop sizes keeps the compact baseline.
+pub(crate) fn semantic_action_region_height(metrics: crate::ResolvedUiMetrics) -> f32 {
+    92.0 + 160.0 * (metrics.control_scale - 1.0).max(0.0)
 }
 
 /// Applies a complete, reversible layout for one responsive region.
@@ -74,7 +81,7 @@ pub fn apply_region_layout(viewport: UiViewportClass, role: UiRegionRole, node: 
             node.left = Val::Px(196.0);
             node.right = Val::Px(12.0);
             node.bottom = Val::Px(action_rail_clearance(viewport));
-            node.height = Val::Px(132.0);
+            node.height = Val::Px(92.0);
         }
         (UiViewportClass::Standard, UiRegionRole::Party) => {
             node.top = Val::Px(12.0);
@@ -98,12 +105,12 @@ pub fn apply_region_layout(viewport: UiViewportClass, role: UiRegionRole, node: 
             node.left = Val::Px(244.0);
             node.right = Val::Px(320.0);
             node.bottom = Val::Px(action_rail_clearance(viewport));
-            node.height = Val::Px(132.0);
+            node.height = Val::Px(92.0);
         }
         (UiViewportClass::Standard, UiRegionRole::Events) => {
             node.left = Val::Px(244.0);
             node.right = Val::Px(320.0);
-            node.bottom = Val::Px(390.0);
+            node.bottom = Val::Px(264.0);
         }
         (UiViewportClass::Wide, UiRegionRole::Party) => {
             node.top = Val::Px(16.0);
@@ -127,12 +134,12 @@ pub fn apply_region_layout(viewport: UiViewportClass, role: UiRegionRole, node: 
             node.left = Val::Px(288.0);
             node.right = Val::Px(360.0);
             node.bottom = Val::Px(action_rail_clearance(viewport));
-            node.height = Val::Px(132.0);
+            node.height = Val::Px(92.0);
         }
         (UiViewportClass::Wide, UiRegionRole::Events) => {
             node.left = Val::Px(288.0);
             node.right = Val::Px(360.0);
-            node.bottom = Val::Px(400.0);
+            node.bottom = Val::Px(268.0);
         }
     }
 }
@@ -147,6 +154,13 @@ pub(crate) fn constrain_region_to_canvas(
     if role == UiRegionRole::Actions {
         let semantic_clearance = semantic_action_rail_clearance(metrics);
         node.bottom = Val::Px(semantic_clearance);
+        node.height = Val::Px(semantic_action_region_height(metrics));
+        if metrics.viewport == UiViewportClass::Compact
+            && metrics.content_scale > 1.0
+            && metrics.content_scale < 1.5
+        {
+            node.height = Val::Px(132.0_f32.max(semantic_action_region_height(metrics)));
+        }
         if metrics.content_scale >= 1.5 {
             let top = match metrics.viewport {
                 UiViewportClass::Compact | UiViewportClass::Standard => 92.0,

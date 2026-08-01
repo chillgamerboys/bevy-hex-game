@@ -359,7 +359,9 @@ impl Default for LabStatisticsView {
         Self {
             present: false,
             visible: false,
-            expanded: true,
+            // Statistics are secondary to the battlefield. Start collapsed so
+            // entering Combat Lab never hides actors or primary commands.
+            expanded: false,
             text: "Waiting for canonical combat statistics…".to_owned(),
         }
     }
@@ -1290,5 +1292,13 @@ mod tests {
             return;
         };
         assert!(!reason.trim().is_empty());
+    }
+
+    #[test]
+    fn live_statistics_start_as_collapsed_secondary_chrome() {
+        let view = LabStatisticsView::default();
+        assert!(!view.present);
+        assert!(!view.visible);
+        assert!(!view.expanded);
     }
 }

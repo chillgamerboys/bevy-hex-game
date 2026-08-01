@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use hex_core::Screen;
 
 use crate::{
-    blurb, body_text_role, fine, heading, owner_resolved_control_role, row_button,
+    blurb, fine, hud_heading, hud_text_role, owner_resolved_control_role, row_button,
     spawn_decision_controls, CastingIntent, CastingPanelContentView, CastingPanelView, HudElement,
     RequiredActionSurface, UiAssets, UiHudSetup, UiIntent, UiRegionRole, UiSystems, BLURB_SIZE,
     EDGE, LABEL, PANEL_BG,
@@ -67,7 +67,7 @@ fn spawn_panel(
                 top: Val::Px(0.0),
                 left: Val::Px(0.0),
                 right: Val::Px(0.0),
-                height: Val::Px(126.0),
+                height: Val::Px(88.0),
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(4.0),
                 padding: UiRect::axes(Val::Px(9.0), Val::Px(6.0)),
@@ -80,7 +80,7 @@ fn spawn_panel(
             FRAME,
         ))
         .with_children(|panel| {
-            panel.spawn((CastingHeading, heading(&assets, "actions")));
+            panel.spawn((CastingHeading, hud_heading(&assets, "actions")));
             panel.spawn((
                 Name::new("Casting Body"),
                 PanelBody,
@@ -106,6 +106,7 @@ fn spawn_panel(
 fn rebuild(
     mut commands: Commands,
     view: Res<CastingPanelView>,
+    statistics: Res<crate::LabStatisticsView>,
     review: Option<Res<crate::review::UiReviewPresentation>>,
     metrics: Res<crate::ResolvedUiMetrics>,
     mut panels: Query<
@@ -135,7 +136,7 @@ fn rebuild(
     assets: Res<UiAssets>,
 ) {
     let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
-    if !view.is_changed() && !review_changed && !metrics.is_changed() {
+    if !view.is_changed() && !statistics.is_changed() && !review_changed && !metrics.is_changed() {
         return;
     }
     let view = review
@@ -148,18 +149,51 @@ fn rebuild(
     // On the compact canvas a blocking decision is promoted into the persistent
     // action rail. Repeating its full prompt and controls in the fixed-height
     // casting region competes with that required surface at enlarged scales.
-    let promoted_to_rail = matches!(view.content, CastingPanelContentView::Decision { .. })
-        && (metrics.viewport == crate::UiViewportClass::Compact || metrics.content_scale >= 1.5);
+    // Required choices have one canonical presentation owner: the persistent
+    // rail. Repeating their controls here wastes world space and lets two
+    // independently sized surfaces compete at intermediate semantic scales.
+    let promoted_to_rail = matches!(view.content, CastingPanelContentView::Decision { .. });
     let ultra_constrained = crate::layout::is_ultra_constrained(*metrics);
+    let statistics = review
+        .as_ref()
+        .and_then(|review| review.statistics.as_ref())
+        .unwrap_or(statistics.as_ref());
+    // At the most constrained semantic scale the collapsed Lab drawer and the
+    // casting region share the only remaining strip below the action rail.
+    // Reserve just the drawer's compact row before laying out primary spell
+    // controls. The Actions region is a real ScrollArea, so additional spells
+    // remain reachable without allowing the secondary drawer to cover them.
+    panel.top = if ultra_constrained && statistics.present && statistics.visible {
+        Val::Px(104.0)
+    } else {
+        Val::ZERO
+    };
+    panel.right = if !ultra_constrained
+        && metrics.viewport == crate::UiViewportClass::Compact
+        && statistics.present
+        && statistics.visible
+    {
+        // The Compact drawer is 250 semantic control pixels plus its padding.
+        // Keep a small gutter so its opaque edge never covers the final spell.
+        Val::Px(250.0 * metrics.control_scale.max(1.0) + 28.0)
+    } else {
+        Val::ZERO
+    };
     for mut heading in &mut headings {
-        heading.display = if ultra_constrained {
-            Display::None
-        } else {
-            Display::Flex
-        };
+        // "Actions" repeats the persistent rail's role and costs a full HUD
+        // row. Spell labels already make this strip unambiguous.
+        heading.display = Display::None;
     }
-    let stacked = ultra_constrained || metrics.content_scale >= 1.5;
-    panel.height = if stacked { Val::Auto } else { Val::Px(126.0) };
+    // Semantic enlargement must not turn a wide spell strip into a tall stack.
+    // Stack only when the effective canvas is genuinely narrow.
+    let stacked = ultra_constrained
+        || (metrics.viewport == crate::UiViewportClass::Compact
+            && metrics.effective_size.x < 900.0);
+    panel.height = if stacked {
+        Val::Auto
+    } else {
+        Val::Px(crate::layout::semantic_action_region_height(*metrics) - 4.0)
+    };
     panel.overflow = Overflow::default();
     panel.display = if view.visible && !promoted_to_rail {
         Display::Flex
@@ -244,7 +278,7 @@ fn spawn_spell(
             flex_grow: if stacked { 0.0 } else { 1.0 },
             flex_shrink: if stacked { 0.0 } else { 1.0 },
             min_width: Val::Px(0.0),
-            min_height: Val::Px(74.0 * semantic_control_scale),
+            min_height: Val::Px(52.0 * semantic_control_scale),
             flex_direction: FlexDirection::Row,
             column_gap: Val::Px(4.0),
             align_items: AlignItems::Center,
@@ -256,7 +290,7 @@ fn spawn_spell(
         entry.spawn((
             Node {
                 width: Val::Px(SWATCH_WIDTH),
-                height: Val::Px(74.0 * semantic_control_scale),
+                height: Val::Px(52.0 * semantic_control_scale),
                 border_radius: BorderRadius::all(Val::Px(2.0)),
                 ..default()
             },
@@ -280,7 +314,7 @@ fn spawn_spell(
                 .with_children(|button| {
                     button.spawn((
                         Text::new(spell.name.clone()),
-                        body_text_role(),
+                        hud_text_role(),
                         TextFont {
                             font: assets.body.clone().into(),
                             ..TextFont::from_font_size(BLURB_SIZE)
@@ -337,7 +371,7 @@ fn spell_button_node(stacked: bool, semantic_control_scale: f32) -> Node {
         },
         flex_grow: 1.0,
         height: Val::Auto,
-        min_height: Val::Px(74.0 * semantic_control_scale),
+        min_height: Val::Px(52.0 * semantic_control_scale),
         padding: UiRect::all(Val::Px(7.0 * semantic_control_scale)),
         flex_direction: FlexDirection::Column,
         justify_content: JustifyContent::Center,
