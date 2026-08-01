@@ -124,8 +124,12 @@ def load_config(path: pathlib.Path = DEFAULT_CONFIG) -> dict[str, Any]:
             )
         for command_name in ("full_command", "all_tests_command"):
             partition_command = definition.get(command_name)
-            if not isinstance(partition_command, list) or not all(
-                isinstance(value, str) and value for value in partition_command
+            if (
+                not isinstance(partition_command, list)
+                or not partition_command
+                or not all(
+                    isinstance(value, str) and value for value in partition_command
+                )
             ):
                 raise ScopeConfigurationError(
                     f"partition check {name} has invalid {command_name}"
@@ -139,8 +143,10 @@ def load_config(path: pathlib.Path = DEFAULT_CONFIG) -> dict[str, Any]:
         if not isinstance(definition, dict):
             raise ScopeConfigurationError(f"concern {concern} must be an object")
         command = definition.get("command")
-        if not isinstance(command, list) or not all(
-            isinstance(value, str) and value for value in command
+        if (
+            not isinstance(command, list)
+            or not command
+            or not all(isinstance(value, str) and value for value in command)
         ):
             raise ScopeConfigurationError(
                 f"concern {concern} command must be non-empty strings"
@@ -185,6 +191,11 @@ def load_config(path: pathlib.Path = DEFAULT_CONFIG) -> dict[str, Any]:
         selected = rule.get("concerns", [])
         if not isinstance(full, bool) or not isinstance(selected, list):
             raise ScopeConfigurationError(f"rule {name} selection is invalid")
+        documentation_only = rule.get("documentation_only", False)
+        if not isinstance(documentation_only, bool):
+            raise ScopeConfigurationError(
+                f"rule {name} documentation_only must be a boolean"
+            )
         unknown = set(selected) - set(all_concerns)
         if unknown:
             raise ScopeConfigurationError(
