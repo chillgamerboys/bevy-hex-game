@@ -139,6 +139,19 @@ pub(crate) fn constrain_region_to_canvas(
     node: &mut Node,
 ) {
     apply_region_layout(metrics.viewport, role, node);
+    if role == UiRegionRole::Actions {
+        let semantic_clearance = action_rail_clearance(metrics.viewport)
+            + 300.0 * (metrics.content_scale - 1.0).max(0.0);
+        node.bottom = Val::Px(semantic_clearance);
+        if metrics.content_scale >= 1.5 {
+            let top = match metrics.viewport {
+                UiViewportClass::Compact | UiViewportClass::Standard => 92.0,
+                UiViewportClass::Wide => 96.0,
+            };
+            node.top = Val::Px(top);
+            node.height = Val::Px((metrics.logical_size.y - semantic_clearance - top).max(44.0));
+        }
+    }
     if metrics.viewport != UiViewportClass::Compact {
         return;
     }
@@ -146,11 +159,12 @@ pub(crate) fn constrain_region_to_canvas(
         match role {
             UiRegionRole::Party | UiRegionRole::Turn => node.display = Display::None,
             UiRegionRole::Actions => {
-                node.top = Val::Px(80.0);
+                let top = ultra_action_rail_height(metrics) + 16.0;
+                node.top = Val::Px(top);
                 node.left = Val::Px(8.0);
                 node.right = Val::Px(8.0);
                 node.bottom = Val::Px(8.0);
-                node.height = Val::Px((metrics.effective_size.y - 88.0).max(44.0));
+                node.height = Val::Px((metrics.logical_size.y - top - 8.0).max(44.0));
             }
             UiRegionRole::Inspector | UiRegionRole::Events => {}
         }
@@ -159,7 +173,26 @@ pub(crate) fn constrain_region_to_canvas(
 
 pub(crate) fn is_ultra_constrained(metrics: crate::ResolvedUiMetrics) -> bool {
     metrics.viewport == UiViewportClass::Compact
-        && metrics.effective_size.y < action_rail_clearance(metrics.viewport) + 132.0
+        && (metrics.effective_size.y < 520.0
+            || (metrics.content_scale >= 1.5 && metrics.effective_size.y < 700.0))
+}
+
+pub(crate) fn ultra_action_rail_height(metrics: crate::ResolvedUiMetrics) -> f32 {
+    205.0 + 380.0 * (metrics.control_scale - 1.0).max(0.0)
+}
+
+/// Left edge reserved for the optional development-time controls on the
+/// shortest Compact canvases. Enlarged semantic UI and blocking choices own
+/// the complete width because required actions take priority over tooling.
+pub(crate) fn ultra_action_rail_left(
+    metrics: crate::ResolvedUiMetrics,
+    decision_required: bool,
+) -> f32 {
+    if is_ultra_constrained(metrics) && !decision_required {
+        196.0
+    } else {
+        12.0
+    }
 }
 
 #[cfg(test)]
@@ -193,7 +226,11 @@ mod tests {
     #[test]
     fn ultra_constrained_canvas_keeps_actions_onscreen_and_collapses_duplicate_context() {
         let metrics = crate::ResolvedUiMetrics {
-            scale: 2.0,
+            logical_size: Vec2::new(960.0, 540.0),
+            content_scale: 2.0,
+            heading_scale: 1.5,
+            control_scale: 1.5,
+            spacing_scale: 1.25,
             effective_size: Vec2::new(480.0, 270.0),
             viewport: UiViewportClass::Compact,
         };
@@ -202,11 +239,11 @@ mod tests {
         constrain_region_to_canvas(metrics, UiRegionRole::Party, &mut party);
         constrain_region_to_canvas(metrics, UiRegionRole::Actions, &mut actions);
         assert_eq!(party.display, Display::None);
-        assert_eq!(actions.top, Val::Px(80.0));
+        assert_eq!(actions.top, Val::Px(411.0));
         assert_eq!(actions.left, Val::Px(8.0));
         assert_eq!(actions.right, Val::Px(8.0));
         assert_eq!(actions.bottom, Val::Px(8.0));
-        assert_eq!(actions.height, Val::Px(182.0));
+        assert_eq!(actions.height, Val::Px(121.0));
     }
 
     #[test]

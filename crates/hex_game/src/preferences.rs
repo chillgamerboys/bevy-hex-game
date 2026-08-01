@@ -1,7 +1,7 @@
 //! Persistent display preferences and replaceable audio/input seams.
 
 use bevy::prelude::*;
-use bevy::window::{MonitorSelection, PresentMode, WindowMode, WindowResolution};
+use bevy::window::{MonitorSelection, PresentMode, WindowMode};
 use hex_assets::{DisplaySettings, PresentModeSetting};
 use serde::{Deserialize, Serialize};
 
@@ -211,6 +211,10 @@ fn adopt_authored_presentation(
     };
 }
 
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "validated logical window dimensions are at most 3840×2160 and therefore exactly representable as f32"
+)]
 fn apply_preferences(
     preferences: Res<UserPreferences>,
     mut buses: ResMut<AudioBusVolumes>,
@@ -231,8 +235,10 @@ fn apply_preferences(
             WindowMode::Windowed
         };
         if !preferences.fullscreen {
-            window.resolution =
-                WindowResolution::new(preferences.window_width, preferences.window_height);
+            window.resolution.set(
+                preferences.window_width as f32,
+                preferences.window_height as f32,
+            );
         }
         window.present_mode = preferences.presentation.into();
     }

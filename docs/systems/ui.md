@@ -65,21 +65,25 @@ instead of controls, and shipping builds contain neither the panel nor its adapt
 ## Responsive model
 
 The world camera always renders at native resolution. Bevy's global `UiScale`
-changes UI only and leaves operating-system DPI scaling authoritative.
+remains `1.0`, and operating-system DPI scaling stays authoritative. Semantic
+tokens scale UI content without scaling the entire Bevy layout tree.
 
 Auto scale is:
 
 ```text
-clamp(min(logical_width / 1920, logical_height / 1080), 1.0, 2.0)
+clamp(min(logical_width / 1920, logical_height / 1080), 1.0, 1.5)
 ```
 
 Manual 75%, 100%, 125%, 150%, 175%, and 200% choices replace Auto; they do not
-multiply it. Layout is selected from the effective post-scale canvas:
+multiply it. Body and control type use that exact content scale. Display, title,
+heading, and control geometry use `1 + 0.5 × (content_scale - 1)`, capped at `1.5`;
+spacing uses `1 + 0.25 × (content_scale - 1)`, capped at `1.25`. Layout is selected
+from the spacing-adjusted logical canvas:
 
-| Class | Effective canvas | Behavior |
+| Class | Spacing-adjusted logical canvas | Behavior |
 |---|---|---|
-| Compact | below 1600×900 | one content column; drawers overlay/collapse; action rail remains full width |
-| Standard | 1600×900 through 2399 px wide | primary content plus one secondary region |
+| Compact | below 1440×810 | one content column; drawers overlay/collapse; action rail remains full width |
+| Standard | at least 1440×810 and below 2400 px wide | primary content plus one secondary region |
 | Wide | at least 2400 px wide | bounded primary content with one persistent secondary region |
 
 Representative structure:
@@ -94,10 +98,12 @@ Compact                         Standard / Wide
 └──────────────┘                └──────────────────────────────┘
 ```
 
-Structural tests cover 960×540, 1280×720, 1920×1080, 2560×1440, and
-3840×2160 in Auto and 200% modes. Explicit Retina cases keep physical client size
-separate from OS scale, including 1280×720 @2× and the observed 3024×1898 @2×
-fullscreen client. Required controls must remain visible or scroll-reachable,
+Structural tests cover 960×540, 1280×720, 1512×949, 1920×1080, 2560×1440, and
+3840×2160 at 1× and 2× device scale in every semantic UI scale mode. Device pixels
+remain separate from logical layout, so 1280×720 @2× and the observed 3024×1898
+physical fullscreen client (1512×949 logical @2×) exercise the same contract.
+Primary controls must be fully visible immediately; secondary catalog/report content
+may instead prove complete scroll reachability. Every required control remains
 unobscured, accessible, and at least 44×44. `UiTreeSnapshot` intersects each node
 with the canvas and Bevy's inherited `CalculatedClip`; a nonzero `ComputedNode`
 inside a clipped ancestor is not treated as visible. The oracle also checks focus
@@ -121,7 +127,7 @@ At 100% scale the semantic type tokens are:
 | Supporting | 18 | guidance and validation detail |
 | Metadata | 16 | optional, nonessential annotations only |
 
-Essential text must be at least 18 physical pixels at 1080p. Pointer targets are at
+Essential text must be at least 18 logical pixels. Pointer targets are at
 least 44×44 logical pixels. Layout uses semantic gaps and panel padding rather than
 screen-specific offsets where a shared token applies.
 
@@ -154,9 +160,10 @@ A true modal uses a Bevy `TabGroup` so focus cannot escape until its blocking ch
 is resolved. Informational drawers are not modals and do not trap focus. Controller
 navigation and remapping are intentionally deferred.
 
-This foundation uses Bevy's stable
-[`UiScale`](https://bevy.org/examples/ui-user-interface/ui-scaling/), tab navigation,
-focus, and accessibility components. Experimental widgets and BSN are outside this
+This foundation uses Bevy's stable tab navigation, focus, accessibility, image
+render targets, and screenshot components. The global `UiScale` remains 1.0;
+semantic typography, control, and spacing tokens provide accessibility scaling
+without doubling whole panels. Experimental widgets and BSN are outside this
 stabilization change.
 
 ## Preferences
@@ -176,12 +183,11 @@ Use the cheapest authoritative oracle:
   `UiTreeSnapshot` reads presentation structure only.
 - Deterministic combat and balance evidence belongs to the rules, contracts, and
   simulation partitions.
-- The scoped presentation route reviews exactly six deterministic offscreen frames
-  from `walks/gameplay_ui.ron` and four native macOS window-only checkpoints. Every
-  `Capture` first passes the live structural oracle. The native wrapper uses an
-  isolated `HEX_GAME_DATA_DIR`, records physical/logical size, OS/UI scale, viewport
-class, window mode, bounds, and commit SHA, and includes a persisted restart.
-Window capture also rejects an empty or black image before writing evidence metadata.
+- The scoped presentation route reviews exactly ten deterministic Bevy image-target
+  frames from `walks/gameplay_ui.ron`. Every `Capture` first passes the live
+  structural oracle. A typed review viewport supplies logical size and device scale;
+  Bevy renders into an `ImageRenderTarget` and captures it with `Screenshot::image`.
+  No operating-system capture API or primary-window screenshot participates.
 
 A screenshot must never prove legality, budgets, decisions, damage, Channel,
 outcomes, persistence, deployment, or report identity. The visual runner therefore
@@ -198,25 +204,17 @@ mkdir -p .context/ui-review
 ui_review_data="$(mktemp -d .context/ui-review/data.XXXXXX)"
 HEX_GAME_DATA_DIR="$ui_review_data" \
 HEX_WALK_SCRIPT=walks/gameplay_ui.ron \
-HEX_WALK_OUT=.context/ui-review/offscreen \
+HEX_WALK_OUT=.context/ui-review/bevy \
 cargo run -p hex_game --features visual-walk
-
-tools/run_gameplay_ui_native_review_macos.sh
 ```
-
-Native capture uses the actual `Hex Game` CoreGraphics window ID with
-`screencapture -l`; it does not photograph the desktop or rely on Bevy's unreadable
-macOS/Metal primary-window screenshot path. The wrapper fails before launch when
-macOS Screen & System Audio Recording permission is unavailable. Enable Conductor
-(and its terminal host if macOS lists one) under System Settings → Privacy & Security,
-then fully restart Conductor before rerunning.
 
 ## Screen audit
 
 | Surface | Primary task | Persistent action | Secondary content |
 |---|---|---|---|
 | Splash/loading | understand progress | none | none |
-| Title | choose route | selected route | development scenario lists |
+| Title | choose route | all primary routes initially visible | none |
+| Scenarios | choose a development fixture | Back | Maps and Demos catalog |
 | Settings | change one preference | Back | persistence notice |
 | Creators | finish the current authoring step | Back / Next / Confirm | optional details and history |
 | Combat Lab setup | choose fixture/profile and deploy | Back / Launch | fixture explanation and tuning |

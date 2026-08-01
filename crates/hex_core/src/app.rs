@@ -24,6 +24,8 @@ pub enum Screen {
     Splash,
     /// Main menu.
     Title,
+    /// Scrollable development Map and Demo catalog reached from the title.
+    Scenarios,
     /// Persistent pre-alpha display and volume preferences.
     Settings,
     /// Interactive sandbox for the lattice ruleset, reached from the title menu.

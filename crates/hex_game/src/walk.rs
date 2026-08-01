@@ -7,8 +7,8 @@
 //! (waiting for screens, settling frames, injecting clicks and keys, capturing
 //! PNGs) and exits with success only if every step completed. A per-step
 //! watchdog turns a stall into a diagnostic and a failing exit instead of a
-//! hang. `HEX_WALK_SIZE=1280x720` optionally selects an exact review viewport;
-//! the default is 1920×1080.
+//! hang. `HEX_WALK_VIEWPORT=1280x720@2` optionally selects an exact logical
+//! canvas and device scale; the default is 1920×1080@1.
 //!
 //! # Why clicks are injected as `Interaction::Pressed`
 //!
@@ -25,10 +25,9 @@
 
 use std::env;
 use std::path::PathBuf;
-use std::process::Command;
 use std::time::{Duration, Instant};
 
-use bevy::camera::RenderTarget;
+use bevy::camera::{ClearColorConfig, ImageRenderTarget, RenderTarget};
 use bevy::ecs::system::SystemParam;
 use bevy::input::InputSystems;
 use bevy::prelude::*;
@@ -43,12 +42,10 @@ use crate::scenarios::ScenarioToLoad;
 
 const SCRIPT_ENV: &str = "HEX_WALK_SCRIPT";
 const OUT_ENV: &str = "HEX_WALK_OUT";
-const SIZE_ENV: &str = "HEX_WALK_SIZE";
-const NATIVE_CAPTURE_ENV: &str = "HEX_WALK_NATIVE_CAPTURE";
+const VIEWPORT_ENV: &str = "HEX_WALK_VIEWPORT";
+const UI_DEBUG_ENV: &str = "HEX_WALK_UI_DEBUG";
 const STEP_TIMEOUT: Duration = Duration::from_secs(60);
 const WALK_TIME_SCALE: f32 = 12.0;
-const DEFAULT_WALK_WIDTH: u32 = 1920;
-const DEFAULT_WALK_HEIGHT: u32 = 1080;
 
 /// Installs the walk runner only when its environment is present.
 pub(super) fn plugin(app: &mut App) {
@@ -74,41 +71,42 @@ pub(super) fn plugin(app: &mut App) {
             return;
         }
     };
-    let size = match env::var(SIZE_ENV) {
-        Ok(size) => match parse_size(&size) {
-            Ok(size) => size,
+    let viewport = match env::var(VIEWPORT_ENV) {
+        Ok(viewport) => match parse_viewport(&viewport) {
+            Ok(viewport) => viewport,
             Err(error) => {
                 install_config_error(app, error);
                 return;
             }
         },
-        Err(env::VarError::NotPresent) => (DEFAULT_WALK_WIDTH, DEFAULT_WALK_HEIGHT),
+        Err(env::VarError::NotPresent) => hex_ui::ReviewViewport::DEFAULT,
         Err(error) => {
-            install_config_error(app, format!("cannot read {SIZE_ENV}: {error}"));
+            install_config_error(app, format!("cannot read {VIEWPORT_ENV}: {error}"));
             return;
         }
     };
-    let native_capture = env::var_os(NATIVE_CAPTURE_ENV).map(PathBuf::from);
 
     info!(
-        "visual walk: {} steps from {script}, output to {out} at {}x{} ({})",
+        "visual walk: {} steps from {script}, output to {out} at {}x{}@{}",
         steps.len(),
-        size.0,
-        size.1,
-        if native_capture.is_some() {
-            "native window capture"
-        } else {
-            "offscreen capture"
-        }
+        viewport.logical_size.x,
+        viewport.logical_size.y,
+        viewport.device_scale,
     );
-    app.insert_resource(WalkState::new(
-        steps,
-        PathBuf::from(out),
-        size,
-        native_capture,
-    ))
-    .add_systems(Startup, accelerate_walk_time)
-    .add_systems(PreUpdate, run_walk.after(InputSystems));
+    if env::var_os(UI_DEBUG_ENV).is_some() {
+        let mut options = app
+            .world_mut()
+            .resource_mut::<bevy::ui_render::prelude::GlobalUiDebugOptions>();
+        options.enabled = true;
+        options.show_hidden = true;
+        options.show_clipped = true;
+        options.outline_padding_box = true;
+        options.outline_content_box = true;
+        options.outline_scrollbars = true;
+    }
+    app.insert_resource(WalkState::new(steps, PathBuf::from(out), viewport))
+        .add_systems(Startup, accelerate_walk_time)
+        .add_systems(PreUpdate, run_walk.after(InputSystems));
 }
 
 fn accelerate_walk_time(mut time: ResMut<Time<Virtual>>) {
@@ -142,7 +140,7 @@ enum WalkStep {
     AwaitTerrain,
     /// Let this many frames pass before the next step.
     Settle(u32),
-    /// Photograph the primary window into `<out>/<name>.png`.
+    /// Photograph the current Bevy image target into `<out>/<name>.png`.
     Capture(String),
     /// Press the `index`-th button whose `Name` starts with `name`.
     Click {
@@ -154,10 +152,14 @@ enum WalkStep {
     AwaitButton(String),
     /// Install an authored immutable UI presentation state without solving combat.
     PresentUi(String),
-    /// Select Auto or 200% UI scale for responsive presentation review.
-    SetUiScale(String),
-    /// Change the offscreen physical capture size for a later presentation frame.
-    SetViewport(String),
+    /// Select one semantic UI scale for responsive presentation review.
+    SetUiScale(hex_ui::UiScaleMode),
+    /// Change the logical canvas and device scale for later presentation frames.
+    SetViewport {
+        width: u32,
+        height: u32,
+        device_scale: f32,
+    },
     /// Press and release a supported gameplay or menu key.
     Key(String),
     /// Launch a scenario by exact name, bypassing the menu UI.
@@ -208,10 +210,11 @@ fn validate_step(step: &WalkStep) -> Result<(), String> {
         {
             Err(format!("unknown presentation-only UI fixture {name:?}"))
         }
-        WalkStep::SetUiScale(name) if !matches!(name.as_str(), "Auto" | "200%") => {
-            Err(format!("unknown UI scale {name:?}; expected Auto or 200%"))
-        }
-        WalkStep::SetViewport(size) => parse_size(size).map(|_| ()),
+        WalkStep::SetViewport {
+            width,
+            height,
+            device_scale,
+        } => hex_ui::ReviewViewport::new(*width, *height, *device_scale).map(|_| ()),
         WalkStep::StartScenario { name, .. } if name.trim().is_empty() => {
             Err("scenario name must not be empty".to_owned())
         }
@@ -223,6 +226,7 @@ fn parse_screen(name: &str) -> Result<Screen, String> {
     match name {
         "Splash" => Ok(Screen::Splash),
         "Title" => Ok(Screen::Title),
+        "Scenarios" => Ok(Screen::Scenarios),
         "Settings" => Ok(Screen::Settings),
         "LatticeDemo" => Ok(Screen::LatticeDemo),
         "CharacterCreator" => Ok(Screen::CharacterCreator),
@@ -231,7 +235,7 @@ fn parse_screen(name: &str) -> Result<Screen, String> {
         "Loading" => Ok(Screen::Loading),
         "Gameplay" => Ok(Screen::Gameplay),
         _ => Err(format!(
-            "unknown screen {name:?}; expected Splash, Title, Settings, CharacterCreator, SpellCreator, CombatLab, LatticeDemo, Loading, or Gameplay"
+            "unknown screen {name:?}; expected Splash, Title, Scenarios, Settings, CharacterCreator, SpellCreator, CombatLab, LatticeDemo, Loading, or Gameplay"
         )),
     }
 }
@@ -244,24 +248,27 @@ fn parse_key(name: &str) -> Result<KeyCode, String> {
     }
 }
 
-fn parse_size(size: &str) -> Result<(u32, u32), String> {
-    let invalid = || format!("{SIZE_ENV} must be WIDTHxHEIGHT with two positive integers");
+fn parse_viewport(viewport: &str) -> Result<hex_ui::ReviewViewport, String> {
+    let invalid = || format!("{VIEWPORT_ENV} must be WIDTHxHEIGHT@SCALE");
+    let Some((size, device_scale)) = viewport.split_once('@') else {
+        return Err(invalid());
+    };
     let Some((width, height)) = size.split_once('x') else {
         return Err(invalid());
     };
-    if height.contains('x') {
+    if height.contains('x') || device_scale.contains('@') {
         return Err(invalid());
     }
     let width = width
         .parse::<u32>()
-        .map_err(|error| format!("{SIZE_ENV} width is invalid: {error}"))?;
+        .map_err(|error| format!("{VIEWPORT_ENV} width is invalid: {error}"))?;
     let height = height
         .parse::<u32>()
-        .map_err(|error| format!("{SIZE_ENV} height is invalid: {error}"))?;
-    if width == 0 || height == 0 {
-        return Err(invalid());
-    }
-    Ok((width, height))
+        .map_err(|error| format!("{VIEWPORT_ENV} height is invalid: {error}"))?;
+    let device_scale = device_scale
+        .parse::<f32>()
+        .map_err(|error| format!("{VIEWPORT_ENV} device scale is invalid: {error}"))?;
+    hex_ui::ReviewViewport::new(width, height, device_scale)
 }
 
 /// What the capture observer reports back to the runner.
@@ -269,81 +276,6 @@ fn parse_size(size: &str) -> Result<(u32, u32), String> {
 enum CaptureOutcome {
     Written { brightest: u8, coverage: bool },
     Failed(String),
-}
-
-struct NativeWindowFacts {
-    physical_width: u32,
-    physical_height: u32,
-    logical_width: f32,
-    logical_height: f32,
-    scale_factor: f32,
-    mode: String,
-}
-
-fn capture_native_window(
-    command: &std::path::Path,
-    path: &std::path::Path,
-    checkpoint: &str,
-    window: Option<&NativeWindowFacts>,
-    snapshot: &hex_ui::test_support::UiTreeSnapshot,
-) -> CaptureOutcome {
-    let Some(window) = window else {
-        return CaptureOutcome::Failed("primary window unavailable for native capture".to_owned());
-    };
-    if let Some(parent) = path.parent() {
-        if let Err(error) = std::fs::create_dir_all(parent) {
-            return CaptureOutcome::Failed(format!(
-                "cannot create native capture directory {}: {error}",
-                parent.display()
-            ));
-        }
-    }
-    let status = Command::new(command)
-        .arg(path)
-        .arg(checkpoint)
-        .env(
-            "HEX_WALK_WINDOW_PHYSICAL",
-            format!("{}x{}", window.physical_width, window.physical_height),
-        )
-        .env(
-            "HEX_WALK_WINDOW_LOGICAL",
-            format!("{:.1}x{:.1}", window.logical_width, window.logical_height),
-        )
-        .env(
-            "HEX_WALK_WINDOW_SCALE_FACTOR",
-            window.scale_factor.to_string(),
-        )
-        .env("HEX_WALK_WINDOW_MODE", &window.mode)
-        .env("HEX_WALK_UI_SCALE", snapshot.metrics.scale.to_string())
-        .env(
-            "HEX_WALK_VIEWPORT_CLASS",
-            format!("{:?}", snapshot.metrics.viewport),
-        )
-        .status();
-    match status {
-        Ok(status) if status.success() => match std::fs::metadata(path) {
-            Ok(metadata) if metadata.len() > 0 => CaptureOutcome::Written {
-                brightest: u8::MAX,
-                coverage: true,
-            },
-            Ok(_) => CaptureOutcome::Failed(format!(
-                "native capture helper wrote an empty file at {}",
-                path.display()
-            )),
-            Err(error) => CaptureOutcome::Failed(format!(
-                "native capture helper did not create {}: {error}",
-                path.display()
-            )),
-        },
-        Ok(status) => CaptureOutcome::Failed(format!(
-            "native capture helper {} exited with {status}",
-            command.display()
-        )),
-        Err(error) => CaptureOutcome::Failed(format!(
-            "cannot launch native capture helper {}: {error}",
-            command.display()
-        )),
-    }
 }
 
 #[derive(Resource)]
@@ -359,24 +291,17 @@ struct WalkState {
     pressed: Option<Entity>,
     /// A key pressed by the previous step, to be released.
     held_key: Option<KeyCode>,
-    /// The offscreen image the camera renders into for capture.
-    ///
-    /// The window surface is not readable on every backend — on macOS/Metal a
-    /// `Screenshot::primary_window()` comes back black — so the walk redirects
-    /// the game's single camera into a target image exactly as the map-review
-    /// harness does. `bevy_ui` only follows a *window*-targeting camera by
-    /// default, so the runner also tags every UI root with `UiTargetCamera`
-    /// pointing at the redirected camera; frames then show everything a
-    /// player would see.
+    /// The Bevy image target the game and UI render into for capture.
     target: Option<Handle<Image>>,
     /// The camera entity the UI roots must be pointed at.
     camera: Option<Entity>,
-    /// Exact offscreen viewport under review.
-    size: (u32, u32),
-    /// macOS window-only capture helper. Presence keeps the real window target.
-    native_capture: Option<PathBuf>,
+    /// Exact logical canvas and raster density under review.
+    viewport: hex_ui::ReviewViewport,
     failed: bool,
 }
+
+#[derive(Component)]
+struct WalkUiCamera;
 
 #[derive(SystemParam)]
 struct WalkContent<'w> {
@@ -385,12 +310,7 @@ struct WalkContent<'w> {
 }
 
 impl WalkState {
-    fn new(
-        steps: Vec<WalkStep>,
-        out_dir: PathBuf,
-        size: (u32, u32),
-        native_capture: Option<PathBuf>,
-    ) -> Self {
+    fn new(steps: Vec<WalkStep>, out_dir: PathBuf, viewport: hex_ui::ReviewViewport) -> Self {
         Self {
             steps,
             cursor: 0,
@@ -403,8 +323,7 @@ impl WalkState {
             held_key: None,
             target: None,
             camera: None,
-            size,
-            native_capture,
+            viewport,
             failed: false,
         }
     }
@@ -435,8 +354,9 @@ fn run_walk(
     buttons: Query<(Entity, &Name), With<Button>>,
     tiles: Query<Entity, With<HexTile>>,
     mut images: ResMut<Assets<Image>>,
-    mut camera_targets: Query<(Entity, &mut RenderTarget), With<Camera>>,
-    ui_roots: Query<Entity, (With<Node>, Without<ChildOf>, Without<UiTargetCamera>)>,
+    mut game_camera: Query<&mut RenderTarget, (With<Camera3d>, Without<WalkUiCamera>)>,
+    mut review_camera: Query<(Entity, &mut RenderTarget), (With<WalkUiCamera>, Without<Camera3d>)>,
+    ui_roots: Query<(Entity, Option<&UiTargetCamera>), (With<Node>, Without<ChildOf>)>,
     latest_ui_tree: Res<hex_ui::test_support::LatestUiTreeSnapshot>,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -444,43 +364,73 @@ fn run_walk(
         return;
     }
 
-    // The offscreen render target controls capture resolution, but responsive UI
-    // metrics deliberately follow the logical window. Keep both canvases aligned
-    // so a persisted local window preference cannot silently turn a nominal 1080p
-    // review into a compact 720p layout stretched into a larger PNG.
+    // The Bevy image target owns capture pixels. Keep the ordinary window's
+    // requested logical size aligned so the runtime semantic-metrics system sees
+    // the same canvas without overriding the operating system's scale factor.
     if let Ok(mut window) = primary_window.single_mut() {
-        let may_resize = state.native_capture.is_none()
-            || matches!(window.mode, bevy::window::WindowMode::Windowed);
-        if may_resize && (window.physical_width(), window.physical_height()) != state.size {
-            window.resolution = bevy::window::WindowResolution::new(state.size.0, state.size.1);
+        let logical = state.viewport.logical_size.as_vec2();
+        if (window.width() - logical.x).abs() > 0.5 || (window.height() - logical.y).abs() > 0.5 {
+            window.resolution.set(logical.x, logical.y);
         }
     }
 
-    // Redirect the game's single camera into a readable offscreen image before
-    // anything is photographed; see `WalkState::target`.
-    if state.native_capture.is_none() && state.target.is_none() {
-        let Ok((camera, mut render_target)) = camera_targets.single_mut() else {
+    // Redirect the game's single camera into an explicitly scaled Bevy image.
+    if state.target.is_none() {
+        let Ok(mut game_target) = game_camera.single_mut() else {
+            return;
+        };
+        let Ok(physical_size) = state.viewport.physical_size() else {
+            error!("visual walk viewport became invalid");
+            state.failed = true;
+            exit.write(AppExit::error());
             return;
         };
         let image = Image::new_target_texture(
-            state.size.0,
-            state.size.1,
-            TextureFormat::Rgba8UnormSrgb,
+            physical_size.x,
+            physical_size.y,
+            TextureFormat::Bgra8UnormSrgb,
             None,
         );
         let handle = images.add(image);
-        *render_target = RenderTarget::Image(handle.clone().into());
+        let render_target = RenderTarget::Image(ImageRenderTarget {
+            handle: handle.clone(),
+            scale_factor: state.viewport.device_scale,
+        });
+        *game_target = render_target.clone();
+        let ui_camera = if let Ok((camera, mut target)) = review_camera.single_mut() {
+            *target = render_target.clone();
+            camera
+        } else {
+            commands
+                .spawn((
+                    Name::new("Visual Walk UI Camera"),
+                    WalkUiCamera,
+                    Camera2d,
+                    Camera {
+                        order: 1,
+                        clear_color: ClearColorConfig::None,
+                        ..default()
+                    },
+                    render_target,
+                ))
+                .id()
+        };
         state.target = Some(handle);
-        state.camera = Some(camera);
+        state.camera = Some(ui_camera);
     }
 
     // UI roots spawn and despawn with every screen; keep pointing new ones at
     // the redirected camera or their screens render into nothing.
-    if state.native_capture.is_none() {
-        if let Some(camera) = state.camera {
-            for root in &ui_roots {
+    if let Some(camera) = state.camera {
+        let mut retargeted = false;
+        for (root, target) in &ui_roots {
+            if target.is_none_or(|target| target.entity() != camera) {
                 commands.entity(root).insert(UiTargetCamera(camera));
+                retargeted = true;
             }
+        }
+        if retargeted {
+            return;
         }
     }
     if let Some(failure) = content.failure.as_deref() {
@@ -555,38 +505,49 @@ fn run_walk(
                     exit.write(AppExit::error());
                     return;
                 }
-                if let Some(command) = state.native_capture.clone() {
-                    let path = state.out_dir.join(format!("{name}.png"));
-                    let window = primary_window
-                        .single()
-                        .ok()
-                        .map(|window| NativeWindowFacts {
-                            physical_width: window.physical_width(),
-                            physical_height: window.physical_height(),
-                            logical_width: window.width(),
-                            logical_height: window.height(),
-                            scale_factor: window.resolution.scale_factor(),
-                            mode: format!("{:?}", window.mode),
-                        });
-                    let outcome =
-                        capture_native_window(&command, &path, name, window.as_ref(), snapshot);
-                    state.capture_outcome = Some(outcome);
-                    state.capture_requested = true;
+                let expected_logical = state.viewport.logical_size.as_vec2();
+                if (snapshot.metrics.logical_size - expected_logical)
+                    .abs()
+                    .max_element()
+                    > 0.5
+                {
                     return;
                 }
                 let Some(target) = state.target.clone() else {
                     return;
                 };
+                let Ok(expected_physical) = state.viewport.physical_size() else {
+                    state.capture_outcome = Some(CaptureOutcome::Failed(
+                        "review viewport physical size is invalid".to_owned(),
+                    ));
+                    state.capture_requested = true;
+                    return;
+                };
                 let path = state.out_dir.join(format!("{name}.png"));
                 info!("visual walk capturing {}", path.display());
-                commands.spawn(Screenshot::image(target)).observe(
+                let mut screenshot = Screenshot::image(target.clone());
+                // Bevy's convenience constructor defaults image targets to 1×.
+                // Preserve the reviewed target's device scale so the screenshot
+                // render-graph key matches the cameras' ImageRenderTarget.
+                screenshot.0 = RenderTarget::Image(ImageRenderTarget {
+                    handle: target,
+                    scale_factor: state.viewport.device_scale,
+                });
+                commands.spawn(screenshot).observe(
                     move |captured: On<ScreenshotCaptured>, mut state: ResMut<WalkState>| {
-                        let outcome = match write_png(&captured.image, &path) {
-                            Ok(stats) => CaptureOutcome::Written {
-                                brightest: stats.brightest,
-                                coverage: stats.has_coverage,
-                            },
-                            Err(error) => CaptureOutcome::Failed(error),
+                        let outcome = if captured.image.size() != expected_physical {
+                            CaptureOutcome::Failed(format!(
+                                "capture size {:?} did not match review target {expected_physical:?}",
+                                captured.image.size()
+                            ))
+                        } else {
+                            match write_png(&captured.image, &path) {
+                                Ok(stats) => CaptureOutcome::Written {
+                                    brightest: stats.brightest,
+                                    coverage: stats.has_coverage,
+                                },
+                                Err(error) => CaptureOutcome::Failed(error),
+                            }
                         };
                         state.capture_outcome = Some(outcome);
                     },
@@ -653,18 +614,26 @@ fn run_walk(
             }
             state.advance();
         }
-        WalkStep::SetUiScale(ref name) => {
-            ui_scale.0 = match name.as_str() {
-                "200%" => hex_ui::UiScaleMode::Percent200,
-                _ => hex_ui::UiScaleMode::Auto,
-            };
+        WalkStep::SetUiScale(mode) => {
+            ui_scale.0 = mode;
             state.advance();
         }
-        WalkStep::SetViewport(ref size) => {
-            state.size = parse_size(size).unwrap_or((DEFAULT_WALK_WIDTH, DEFAULT_WALK_HEIGHT));
-            state.target = None;
-            state.advance();
-        }
+        WalkStep::SetViewport {
+            width,
+            height,
+            device_scale,
+        } => match hex_ui::ReviewViewport::new(width, height, device_scale) {
+            Ok(viewport) => {
+                state.viewport = viewport;
+                state.target = None;
+                state.advance();
+            }
+            Err(error) => {
+                error!("visual walk viewport is invalid: {error}");
+                state.failed = true;
+                exit.write(AppExit::error());
+            }
+        },
         WalkStep::Key(ref name) => {
             let key = parse_key(name).unwrap_or(KeyCode::Escape);
             info!("visual walk pressing {name}");
@@ -714,8 +683,8 @@ mod tests {
         StartScenario(name: "The Crossing"),
         AwaitTerrain,
         AwaitButton("Cast Ember"),
-        SetViewport("3840x2160"),
-        SetUiScale("200%"),
+        SetViewport(width: 3840, height: 2160, device_scale: 1.0),
+        SetUiScale(Percent200),
         PresentUi("required-decision"),
         Capture("02-crossing"),
     ]"#;
@@ -759,11 +728,26 @@ mod tests {
     }
 
     #[test]
-    fn capture_size_is_explicit_and_positive() {
-        assert_eq!(parse_size("1280x720"), Ok((1280, 720)));
-        assert_eq!(parse_size("1920x1080"), Ok((1920, 1080)));
-        for invalid in ["", "1280", "1280X720", "x720", "1280x", "0x720", "1280x0"] {
-            assert!(parse_size(invalid).is_err(), "{invalid:?} should fail");
+    fn review_viewport_is_explicit_and_positive() {
+        assert_eq!(
+            parse_viewport("1280x720@2"),
+            hex_ui::ReviewViewport::new(1280, 720, 2.0)
+        );
+        assert_eq!(
+            parse_viewport("1920x1080@1"),
+            hex_ui::ReviewViewport::new(1920, 1080, 1.0)
+        );
+        for invalid in [
+            "",
+            "1280x720",
+            "1280X720@1",
+            "x720@1",
+            "1280x@1",
+            "0x720@1",
+            "1280x0@1",
+            "1280x720@0",
+        ] {
+            assert!(parse_viewport(invalid).is_err(), "{invalid:?} should fail");
         }
     }
 
@@ -772,6 +756,7 @@ mod tests {
         for name in [
             "Splash",
             "Title",
+            "Scenarios",
             "CharacterCreator",
             "CombatLab",
             "LatticeDemo",
@@ -787,9 +772,6 @@ mod tests {
     fn the_shipped_walk_scripts_parse_and_validate() {
         for script in [
             "../../walks/gameplay_ui.ron",
-            "../../walks/gameplay_ui_native.ron",
-            "../../walks/gameplay_ui_native_prepare_200.ron",
-            "../../walks/gameplay_ui_native_restart_200.ron",
             "../../walks/waterfall.ron",
             "../../walks/forest.ron",
         ] {
@@ -808,23 +790,19 @@ mod tests {
 
     #[test]
     fn scoped_gameplay_acceptance_stays_within_the_frame_budget() {
-        let captures = [
-            include_str!("../../../walks/gameplay_ui.ron"),
-            include_str!("../../../walks/gameplay_ui_native.ron"),
-            include_str!("../../../walks/gameplay_ui_native_restart_200.ron"),
-        ]
-        .into_iter()
-        .map(|script| {
-            ron::from_str::<Vec<WalkStep>>(script)
-                .expect("the gameplay UI walk parses")
-                .into_iter()
-                .filter(|step| matches!(step, WalkStep::Capture(_)))
-                .count()
-        })
-        .sum::<usize>();
-        assert!(
-            captures <= 10,
-            "scoped gameplay acceptance captured {captures} frames; the contract permits 10"
+        let captures = [include_str!("../../../walks/gameplay_ui.ron")]
+            .into_iter()
+            .map(|script| {
+                ron::from_str::<Vec<WalkStep>>(script)
+                    .expect("the gameplay UI walk parses")
+                    .into_iter()
+                    .filter(|step| matches!(step, WalkStep::Capture(_)))
+                    .count()
+            })
+            .sum::<usize>();
+        assert_eq!(
+            captures, 10,
+            "scoped gameplay acceptance must capture exactly 10 frames"
         );
     }
 

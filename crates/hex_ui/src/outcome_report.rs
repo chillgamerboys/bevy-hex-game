@@ -5,8 +5,8 @@ use bevy::ui_widgets::ScrollArea;
 use hex_core::Screen;
 
 use crate::{
-    blurb, fine, heading, overlay_root, row_button, DespawnOnExit, OutcomeAction, OutcomeIntent,
-    OutcomeReportView, UiAssets, UiIntent, UiSystems,
+    blurb, fine, heading, overlay_root, row_button, stacked_row_button, DespawnOnExit,
+    OutcomeAction, OutcomeIntent, OutcomeReportView, UiAssets, UiIntent, UiSystems,
 };
 
 const OUTCOME_PANEL_BG: Color = Color::srgb(0.02, 0.03, 0.045);
@@ -134,7 +134,7 @@ fn spawn_tabs(parent: &mut ChildSpawnerCommands, assets: &UiAssets, view: &Outco
                     label.to_owned()
                 };
                 tabs.spawn((
-                    row_button(label, 155.0),
+                    row_button(label, 220.0),
                     Control(OutcomeIntent::SelectMode(mode)),
                 ))
                 .with_child(blurb(assets, text));
@@ -162,7 +162,9 @@ fn spawn_comparisons(
             for choice in &view.comparisons {
                 selectors
                     .spawn((
-                        row_button(choice.label.clone(), 150.0),
+                        stacked_row_button(choice.label.clone(), 280.0),
+                        // Comparison identity remains readable at enlarged semantic
+                        // type without relying on hover text or pixel inference.
                         Control(OutcomeIntent::CompareWith(choice.id)),
                     ))
                     .with_child(blurb(assets, choice.label.clone()));

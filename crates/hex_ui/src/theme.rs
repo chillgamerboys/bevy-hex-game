@@ -38,6 +38,21 @@ pub const BLURB_SIZE: f32 = 18.0;
 /// Optional metadata size at 100% scale.
 pub const FINE_SIZE: f32 = 16.0;
 
+#[derive(Component, Clone, Copy)]
+enum SemanticText {
+    Display,
+    ScreenTitle,
+    Heading,
+    Body,
+    Supporting,
+    Metadata,
+}
+
+#[derive(Component)]
+struct SemanticControl {
+    applied_scale: f32,
+}
+
 /// Opts a control out of shared interaction paint because it owns state colors.
 #[derive(Component)]
 pub struct OwnColors;
@@ -60,7 +75,13 @@ pub(super) fn plugin(app: &mut App) {
         body: asset_server.load("fonts/Inter.ttf"),
         hex_cell: asset_server.load("ui/hex-cell.png"),
     });
-    app.add_systems(Update, paint_interactions);
+    app.add_systems(
+        Update,
+        (
+            apply_semantic_metrics.after(crate::scale::apply_ui_scale),
+            paint_interactions,
+        ),
+    );
 }
 
 /// Resolves an element's presentation tint from authored wheel order.
@@ -81,37 +102,73 @@ pub fn element_color(element: Option<ElementId>, elements: &ElementCatalog) -> C
 /// Display title.
 #[must_use]
 pub fn display(assets: &UiAssets, text: impl Into<String>) -> impl Bundle {
-    text_bundle(assets.display.clone(), text, DISPLAY_SIZE, LABEL)
+    text_bundle(
+        assets.display.clone(),
+        text,
+        DISPLAY_SIZE,
+        LABEL,
+        SemanticText::Display,
+    )
 }
 
 /// Top-level screen title.
 #[must_use]
 pub fn screen_title(assets: &UiAssets, text: impl Into<String>) -> impl Bundle {
-    text_bundle(assets.display.clone(), text, SCREEN_TITLE_SIZE, LABEL)
+    text_bundle(
+        assets.display.clone(),
+        text,
+        SCREEN_TITLE_SIZE,
+        LABEL,
+        SemanticText::ScreenTitle,
+    )
 }
 
 /// Section heading.
 #[must_use]
 pub fn heading(assets: &UiAssets, text: impl Into<String>) -> impl Bundle {
-    text_bundle(assets.display.clone(), text, TITLE_SIZE, ACCENT)
+    text_bundle(
+        assets.display.clone(),
+        text,
+        TITLE_SIZE,
+        ACCENT,
+        SemanticText::Heading,
+    )
 }
 
 /// Essential body or control text.
 #[must_use]
 pub fn label(assets: &UiAssets, text: impl Into<String>) -> impl Bundle {
-    text_bundle(assets.body.clone(), text, LABEL_SIZE, LABEL)
+    text_bundle(
+        assets.body.clone(),
+        text,
+        LABEL_SIZE,
+        LABEL,
+        SemanticText::Body,
+    )
 }
 
 /// Supporting text.
 #[must_use]
 pub fn blurb(assets: &UiAssets, text: impl Into<String>) -> impl Bundle {
-    text_bundle(assets.body.clone(), text, BLURB_SIZE, MUTED)
+    text_bundle(
+        assets.body.clone(),
+        text,
+        BLURB_SIZE,
+        MUTED,
+        SemanticText::Supporting,
+    )
 }
 
 /// Optional metadata text.
 #[must_use]
 pub fn fine(assets: &UiAssets, text: impl Into<String>) -> impl Bundle {
-    text_bundle(assets.body.clone(), text, FINE_SIZE, MUTED)
+    text_bundle(
+        assets.body.clone(),
+        text,
+        FINE_SIZE,
+        MUTED,
+        SemanticText::Metadata,
+    )
 }
 
 fn text_bundle(
@@ -119,8 +176,10 @@ fn text_bundle(
     text: impl Into<String>,
     size: f32,
     color: Color,
+    role: SemanticText,
 ) -> impl Bundle {
     (
+        role,
         Text::new(text),
         TextFont {
             font: font.into(),
@@ -140,6 +199,7 @@ pub fn button(name: impl Into<String>) -> impl Bundle {
         AccessibleLabel::new(name),
         Button,
         TabIndex(0),
+        SemanticControl { applied_scale: 1.0 },
         Node {
             width: Val::Px(440.0),
             min_height: Val::Px(48.0),
@@ -176,7 +236,11 @@ pub fn stacked_row_button(name: impl Into<String>, width: f32) -> impl Bundle {
     row_button_with_height(name, width, 74.0)
 }
 
-fn row_button_with_height(name: impl Into<String>, width: f32, height: f32) -> impl Bundle {
+/// Compact control whose exact dimensions are already resolved by its owner.
+///
+/// Unlike semantic row buttons, this does not scale its box a second time.
+#[cfg(feature = "dev-tools")]
+pub(crate) fn fixed_row_button(name: impl Into<String>, width: f32, height: f32) -> impl Bundle {
     let name = name.into();
     (
         Name::new(name.clone()),
@@ -188,6 +252,34 @@ fn row_button_with_height(name: impl Into<String>, width: f32, height: f32) -> i
             min_width: Val::Px(44.0),
             height: Val::Px(height),
             min_height: Val::Px(44.0),
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(2.0),
+            padding: UiRect::axes(Val::Px(4.0), Val::Px(2.0)),
+            border: UiRect::all(Val::Px(1.0)),
+            border_radius: BorderRadius::all(Val::Px(6.0)),
+            ..default()
+        },
+        BorderColor::all(EDGE),
+        BackgroundColor(RESTING),
+    )
+}
+
+fn row_button_with_height(name: impl Into<String>, width: f32, height: f32) -> impl Bundle {
+    let name = name.into();
+    (
+        Name::new(name.clone()),
+        AccessibleLabel::new(name),
+        Button,
+        TabIndex(0),
+        SemanticControl { applied_scale: 1.0 },
+        Node {
+            width: Val::Px(width),
+            min_width: Val::Px(44.0),
+            height: Val::Auto,
+            min_height: Val::Px(height.max(44.0)),
+            flex_shrink: 0.0,
             align_items: AlignItems::Center,
             justify_content: JustifyContent::Center,
             flex_direction: FlexDirection::Column,
@@ -251,5 +343,40 @@ fn paint_interactions(
             Interaction::Hovered => HOVERED,
             Interaction::None => RESTING,
         };
+    }
+}
+
+fn apply_semantic_metrics(
+    metrics: Res<crate::ResolvedUiMetrics>,
+    mut text: Query<(&SemanticText, &mut TextFont)>,
+    mut controls: Query<(&mut Node, &mut SemanticControl)>,
+) {
+    for (role, mut font) in &mut text {
+        let size = match role {
+            SemanticText::Display => DISPLAY_SIZE * metrics.heading_scale,
+            SemanticText::ScreenTitle => SCREEN_TITLE_SIZE * metrics.heading_scale,
+            SemanticText::Heading => TITLE_SIZE * metrics.heading_scale,
+            SemanticText::Body => (LABEL_SIZE * metrics.content_scale).max(18.0),
+            SemanticText::Supporting => (BLURB_SIZE * metrics.content_scale).max(18.0),
+            SemanticText::Metadata => FINE_SIZE * metrics.content_scale,
+        };
+        font.font_size = FontSize::Px(size);
+    }
+    let next_scale = metrics.control_scale.max(1.0);
+    for (mut node, mut control) in &mut controls {
+        let previous_scale = control.applied_scale.max(1.0);
+        let ratio = next_scale / previous_scale;
+        node.min_width = match node.min_width {
+            Val::Px(current) => Val::Px((current * ratio).max(44.0 * next_scale)),
+            other => other,
+        };
+        node.min_height = match node.min_height {
+            Val::Px(current) => Val::Px((current * ratio).max(44.0 * next_scale)),
+            _ => Val::Px(44.0 * next_scale),
+        };
+        if let Val::Px(current) = node.height {
+            node.height = Val::Px(current * ratio);
+        }
+        control.applied_scale = next_scale;
     }
 }

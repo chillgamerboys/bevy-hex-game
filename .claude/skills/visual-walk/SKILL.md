@@ -1,6 +1,6 @@
 ---
 name: visual-walk
-description: Run the scripted visual walk — build with the visual-walk feature, drive the game through its screens from walks/*.ron, capture PNGs, then READ every frame and judge it. Mechanical failures (stalled step, black frame, missing screen) are hard fails; layout and taste findings are warns for the human. Step 2.5 of /audit-pr, receipt key 5_visual_walk. Local-only — CI has no GPU.
+description: Run the scripted visual walk — build with the visual-walk feature, drive the game through its screens from walks/*.ron, capture PNGs, then READ every frame and judge it. Structural and mechanical failures always fail; usability findings also block UI/presentation PRs. Step 2.5 of /audit-pr, receipt key 5_visual_walk. Local-only — CI has no GPU.
 ---
 
 When invoked, follow these steps. The point of this skill is the part no
@@ -17,9 +17,10 @@ Two tiers, and the split is the contract:
 - **Mechanical tier (hard fail):** the walk stalls, a capture comes back black,
   the wrong screen is visible, a panel is entirely missing, or text renders as
   nothing. These block the merge exactly like a failing test.
-- **Review tier (warn):** hierarchy, cramped or dead space, visual contrast, and
+- **Review tier:** hierarchy, cramped or dead space, visual contrast, and
   inconsistent styling that no geometry oracle can judge remain human-readable
-  findings. They never flip the receipt off green by themselves.
+  findings. They block UI/presentation PRs; other runtime changes may record them
+  as warnings for the human.
 - **Not covered:** motion (movement speed, animation feel), sub-pixel seams,
   and final taste. The human walk owns those — this skill narrows the
   human's job, it does not replace it.
@@ -37,14 +38,11 @@ transforms, movement, screen/state transitions → walk.
 cargo build -p hex_game --features visual-walk --profile ci
 OUT=.context/visual-walks/pr-<N>   # or /tmp for uncommitted work
 HEX_WALK_SCRIPT=walks/gameplay_ui.ron HEX_WALK_OUT=$OUT cargo run -p hex_game --features visual-walk
-
-# UI/runtime PRs also run the real Retina/fullscreen window and persisted restart.
-tools/run_gameplay_ui_native_review_macos.sh .context/visual-walks/pr-<N>-native
 ```
 
-Run the scripts relevant to the diff. Gameplay UI uses the six-frame offscreen
-route plus the four-checkpoint native wrapper; map/world routes retain their owned
-scripts and acceptance criteria. Each run
+Run the scripts relevant to the diff. Gameplay UI uses the one bounded Bevy
+image-target route; map/world routes retain their owned scripts and acceptance
+criteria. Each run
 must exit 0 — a nonzero exit is a mechanical `fail`; the process's own log
 names the stalled step or black frame. NEVER run while the operator has a
 game instance open (the two windows fight for nothing, but the operator's
@@ -75,9 +73,10 @@ Print a table: frame × verdict × finding. Then the receipt entry for
 `/audit-pr` (this skill is its Step 2.5, key `5_visual_walk`):
 
 - All frames ok → `"status": "pass"`, summary like
-  `"10 frames across offscreen/native routes, 0 structural, 0 mechanical, 0 review findings"`.
-- Review findings only → `"status": "warn"` + the findings array. Green
-  overall; the human sees the list in the PR body / merge report.
+  `"10 Bevy image-target frames, 0 structural, 0 mechanical, 0 review findings"`.
+- A review finding in a UI/presentation diff → `"status": "fail"` + the findings
+  array. An ordinary non-UI runtime diff may report review findings as `warn`, but
+  they never become green evidence for a UI change.
 - Any mechanical failure → `"status": "fail"` + findings. This blocks
   `/merge-pr` like any failing step.
 

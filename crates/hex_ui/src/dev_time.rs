@@ -4,9 +4,9 @@ use bevy::prelude::*;
 use hex_core::Screen;
 
 use crate::{
-    blurb, fine, heading, layout::is_ultra_constrained, panel, row_button, DevTimeIntent,
-    DevTimeView, GameplayChromeView, HudElement, ResolvedUiMetrics, UiAssets, UiHudSetup, UiIntent,
-    UiRegionRole, UiSystems, UiViewportClass,
+    blurb, fine, heading, layout::is_ultra_constrained, panel, theme::fixed_row_button,
+    DevTimeIntent, DevTimeView, GameplayChromeView, HudElement, ResolvedUiMetrics, UiAssets,
+    UiHudSetup, UiIntent, UiRegionRole, UiSystems, UiViewportClass,
 };
 
 const CONTROLS: [(&str, &str, DevTimeIntent); 6] = [
@@ -139,7 +139,11 @@ fn panel_node(metrics: ResolvedUiMetrics, decision_required: bool) -> Node {
             node.right = Val::Auto;
             node.left = Val::Px(8.0);
             node.width = Val::Px(180.0);
-            node.height = Val::Px(176.0);
+            node.height = Val::Px(if metrics.content_scale >= 1.5 {
+                (metrics.effective_size.y - 16.0).max(176.0)
+            } else {
+                176.0 + 120.0 * (metrics.content_scale - 1.0).max(0.0)
+            });
             node.row_gap = Val::Px(2.0);
             node.padding = UiRect::all(Val::Px(4.0));
         } else {
@@ -257,7 +261,9 @@ fn reconcile_layout(
 }
 
 fn control_size(metrics: ResolvedUiMetrics) -> (f32, f32) {
-    if is_ultra_constrained(metrics) {
+    if is_ultra_constrained(metrics) && metrics.content_scale >= 1.5 {
+        (172.0, 44.0)
+    } else if is_ultra_constrained(metrics) {
         (82.0, 44.0)
     } else if metrics.viewport == UiViewportClass::Compact {
         (76.0, 36.0)
@@ -267,7 +273,9 @@ fn control_size(metrics: ResolvedUiMetrics) -> (f32, f32) {
 }
 
 fn ultra_primary_left(metrics: ResolvedUiMetrics, decision_required: bool) -> Option<f32> {
-    (is_ultra_constrained(metrics) && !decision_required).then_some(196.0)
+    (is_ultra_constrained(metrics) && !decision_required).then_some(
+        crate::layout::ultra_action_rail_left(metrics, decision_required),
+    )
 }
 
 fn reserve_ultra_left_column(
@@ -327,10 +335,14 @@ fn rebuild(
             .entity(controls_entity)
             .despawn_related::<Children>();
         if available {
+            let (width, height) = control_size(*metrics);
             commands.entity(controls_entity).with_children(|controls| {
                 for (name, label, intent) in CONTROLS {
                     controls
-                        .spawn((row_button(name, 96.0), DevTimeControl(intent)))
+                        .spawn((
+                            fixed_row_button(name, width, height),
+                            DevTimeControl(intent),
+                        ))
                         .with_child(fine(&assets, label));
                 }
             });
@@ -675,7 +687,7 @@ mod tests {
         assert!(left + width < actions_left);
         assert!(top + height <= metrics.effective_size.y);
         assert!(control_height >= 44.0);
-        assert!(2.0 * control_width + 2.0 <= width - 8.0);
+        assert!(control_width <= width - 8.0);
     }
 
     #[test]
@@ -687,9 +699,9 @@ mod tests {
         assert_eq!(panel.right, Val::Auto);
         assert_eq!(panel.top, Val::Px(8.0));
         assert_eq!(panel.width, Val::Px(180.0));
-        assert_eq!(panel.height, Val::Px(176.0));
+        assert_eq!(panel.height, Val::Px(560.0));
         let (control_width, control_height) = control_size(metrics);
-        assert!(2.0 * control_width + 2.0 <= 180.0 - 8.0);
+        assert!(control_width <= 180.0 - 8.0);
         assert!(control_height >= 44.0);
         assert_eq!(ultra_primary_left(metrics, false), Some(196.0));
         assert_eq!(ultra_primary_left(metrics, true), None);

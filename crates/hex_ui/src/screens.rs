@@ -148,24 +148,33 @@ fn spawn_settings(mut commands: Commands, assets: Res<UiAssets>, view: Res<UiSet
                 &assets,
                 "Display, readable UI scale, presentation, and volume.",
             ));
-            root.spawn((panel(), SettingsSurface))
-                .insert(Node {
-                    width: Val::Px(700.0),
-                    max_width: Val::Percent(94.0),
-                    max_height: Val::Percent(78.0),
-                    padding: UiRect::all(Val::Px(18.0)),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(10.0),
-                    overflow: Overflow::scroll_y(),
-                    border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(10.0)),
-                    ..default()
-                })
-                .with_children(|surface| {
-                    spawn_settings_rows(surface, &assets, &view);
-                });
-            root.spawn((button("Back"), SettingsBack))
-                .with_child(label(&assets, "Back to title"));
+            root.spawn((
+                button("Back"),
+                SettingsBack,
+                crate::UiVisibilityRequirement::Immediate,
+            ))
+            .with_child(label(&assets, "Back to title"));
+            root.spawn((
+                panel(),
+                SettingsSurface,
+                bevy::ui_widgets::ScrollArea,
+                ScrollPosition::default(),
+            ))
+            .insert(Node {
+                width: Val::Px(700.0),
+                max_width: Val::Percent(94.0),
+                max_height: Val::Percent(78.0),
+                padding: UiRect::all(Val::Px(18.0)),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(10.0),
+                overflow: Overflow::scroll_y(),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(10.0)),
+                ..default()
+            })
+            .with_children(|surface| {
+                spawn_settings_rows(surface, &assets, &view);
+            });
             root.spawn((
                 SettingNotice,
                 blurb(&assets, view.notice.clone().unwrap_or_default()),
@@ -181,7 +190,17 @@ fn apply_settings_layout(
     mut controls: Query<
         &mut Node,
         (
-            Or<(With<SettingControl>, With<SettingsBack>)>,
+            With<SettingControl>,
+            Without<SettingsRoot>,
+            Without<SettingsSurface>,
+            Without<SettingsBack>,
+        ),
+    >,
+    mut backs: Query<
+        &mut Node,
+        (
+            With<SettingsBack>,
+            Without<SettingControl>,
             Without<SettingsRoot>,
             Without<SettingsSurface>,
         ),
@@ -199,6 +218,7 @@ fn apply_settings_layout(
         };
     }
     for mut node in &mut surfaces {
+        node.flex_shrink = if compact { 0.0 } else { 1.0 };
         node.max_height = if compact {
             Val::Auto
         } else {
@@ -213,6 +233,16 @@ fn apply_settings_layout(
     for mut node in &mut controls {
         node.width = Val::Percent(100.0);
         node.max_width = Val::Px(440.0);
+        node.min_width = Val::Px(0.0);
+        node.min_height = Val::Px(64.0 * metrics.content_scale.max(1.0));
+        node.flex_shrink = 0.0;
+    }
+    for mut node in &mut backs {
+        node.position_type = PositionType::Absolute;
+        node.top = Val::Px(12.0);
+        node.right = Val::Px(12.0);
+        node.width = Val::Px(240.0);
+        node.max_width = Val::Percent(40.0);
         node.min_width = Val::Px(0.0);
     }
 }

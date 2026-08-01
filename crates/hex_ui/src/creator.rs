@@ -305,15 +305,17 @@ fn spawn_creator_ui(
                         CreatorHeaderActions,
                         Node {
                             flex_direction: FlexDirection::Row,
+                            flex_wrap: FlexWrap::Wrap,
                             column_gap: Val::Px(8.0),
+                            row_gap: Val::Px(6.0),
                             align_items: AlignItems::Center,
                             ..default()
                         },
                     ))
                     .with_children(|actions| {
                         if session.workspace != CreatorWorkspace::Hub {
-                            action_button(actions, assets, "Undo", CreatorIntent::Undo, 90.0);
-                            action_button(actions, assets, "Redo", CreatorIntent::Redo, 90.0);
+                            action_button(actions, assets, "Undo", CreatorIntent::Undo, 160.0);
+                            action_button(actions, assets, "Redo", CreatorIntent::Redo, 160.0);
                         }
                         if store.error.is_some() {
                             action_button(
@@ -325,7 +327,7 @@ fn spawn_creator_ui(
                                     "Reset Library"
                                 },
                                 CreatorIntent::ResetLibrary,
-                                140.0,
+                                220.0,
                             );
                         }
                         let current_dirty = match session.tab {
@@ -338,7 +340,7 @@ fn spawn_creator_ui(
                                 assets,
                                 "Discard Changes",
                                 CreatorIntent::DiscardChanges,
-                                150.0,
+                                260.0,
                             );
                         }
                         action_button(
@@ -350,7 +352,7 @@ fn spawn_creator_ui(
                                 "Library"
                             },
                             CreatorIntent::Back,
-                            100.0,
+                            180.0,
                         );
                     });
             });
@@ -711,6 +713,7 @@ fn name_input(
         Node {
             width: Val::Percent(100.0),
             min_height: Val::Px(44.0),
+            flex_shrink: 0.0,
             padding: UiRect::all(Val::Px(9.0)),
             border: UiRect::all(Val::Px(1.0)),
             ..default()
@@ -1094,7 +1097,7 @@ fn spawn_character_actions(
                 assets,
                 "Duplicate",
                 CreatorIntent::DuplicateCharacter,
-                120.0,
+                220.0,
             );
             action_button(
                 actions,
@@ -1653,7 +1656,7 @@ fn spawn_spell_tab(
                     assets,
                     "Duplicate",
                     CreatorIntent::DuplicateSpell,
-                    120.0,
+                    220.0,
                 );
                 action_button(
                     actions,

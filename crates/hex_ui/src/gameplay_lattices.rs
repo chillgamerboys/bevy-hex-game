@@ -251,7 +251,9 @@ fn rebuild(
                     Node {
                         width: Val::Px(if ultra_constrained { 120.0 } else { 188.0 }),
                         min_width: Val::Px(if ultra_constrained { 120.0 } else { 188.0 }),
-                        height: Val::Px(72.0),
+                        min_height: Val::Px(72.0),
+                        height: Val::Auto,
+                        flex_shrink: 0.0,
                         flex_direction: FlexDirection::Column,
                         justify_content: JustifyContent::Center,
                         row_gap: Val::Px(3.0),

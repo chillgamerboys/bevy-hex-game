@@ -79,7 +79,6 @@ impl DerefMut for CreatorSession {
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CreatorEntryRequest {
     CharacterLibrary,
-    SpellLibrary,
     SpellFromCharacter,
 }
 
@@ -204,10 +203,6 @@ fn apply_entry_request(session: &mut CreatorSession, request: CreatorEntryReques
         CreatorEntryRequest::CharacterLibrary => {
             session.view = CreatorView::Hub;
             CreatorEntry::CharacterLibrary
-        }
-        CreatorEntryRequest::SpellLibrary => {
-            session.view = CreatorView::Hub;
-            CreatorEntry::SpellLibrary
         }
         CreatorEntryRequest::SpellFromCharacter => {
             session.view = CreatorView::Hub;
@@ -1262,7 +1257,7 @@ mod tests {
         assert!(session.return_to_character_creator);
         assert_eq!(session.tab, CreatorTab::Spells);
 
-        apply_entry_request(&mut session, CreatorEntryRequest::SpellLibrary);
+        apply_entry_request(&mut session, CreatorEntryRequest::CharacterLibrary);
         assert!(!session.return_to_combat_lab);
         assert!(!session.return_to_character_creator);
     }

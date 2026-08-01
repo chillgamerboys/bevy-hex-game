@@ -98,14 +98,12 @@ cargo run -p hex_game --features visual-walk
 ```
 
 Exit code is the mechanical verdict: any stalled step, structural UI failure, or
-black frame fails the run. The scoped gameplay route contains six deterministic
-offscreen frames plus four native macOS checkpoints, never more than ten reviewed
-images. It reviews hierarchy, layout, focus, legibility, and responsive composition
-only; gameplay correctness is proved by canonical state snapshots in the
-rules/contracts/simulation/app partitions. Offscreen capture redirects the camera
-because the primary window is unreadable on macOS/Metal. The native wrapper
-`tools/run_gameplay_ui_native_review_macos.sh` instead preserves the real window and
-captures its exact CoreGraphics window ID for Retina/fullscreen/restart evidence.
+black frame fails the run. The scoped gameplay route contains at most ten
+deterministic Bevy image-target frames. It reviews hierarchy, layout, focus,
+legibility, and responsive composition only; gameplay correctness is proved by
+canonical state snapshots in the rules/contracts/simulation/app partitions. Each
+capture has an explicit logical canvas and device scale, and uses Bevy's
+`ImageRenderTarget` plus `Screenshot::image` without an operating-system capture API.
 
 ## Workspace
 
@@ -346,7 +344,7 @@ links) → `/test-full` (+ship build; the visual walk stays manual).
 Gameplay tests are partitioned by concern in
 [`docs/development/gameplay-testing.md`](docs/development/gameplay-testing.md);
 logical combat evidence comes from rules/contracts/simulation/app data, while a
-scoped gameplay visual run is capped at ten reviewed presentation frames.
+scoped gameplay visual run contains exactly ten reviewed presentation frames.
 Standalone audits: `/audit-diff`, `/audit-silent-failures`, `/update-docs`,
 `/visual-walk` (the scripted capture walk — audit-pr's Step 2.5; the agent
 reads the frames, and the human walk still owns motion and taste).

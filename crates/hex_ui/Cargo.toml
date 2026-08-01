@@ -19,7 +19,7 @@ ron = { workspace = true }
 default = []
 dev-tools = []
 test-support = []
-visual-review = []
+visual-review = ["bevy/bevy_ui_debug"]
 
 [lints]
 workspace = true
