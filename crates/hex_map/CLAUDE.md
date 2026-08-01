@@ -117,7 +117,7 @@ A tile's `Transform` has to match the rendered run described by its span:
 
 Gameplay reads `span.top` to place a piece on a surface. If the transform disagrees,
 pieces float or sink and **nothing errors** — the tiles still render. There is a test
-for this (`tests/spawning.rs::every_tile_transform_matches_its_span`); keep it
+for this (`tests/contracts/presentation.rs::every_tile_transform_matches_its_span`); keep it
 passing.
 
 ## Voxels, columns, and the rule about them
@@ -218,7 +218,9 @@ A clean log is not evidence a change worked. **Look at the window.**
 
 ```sh
 cargo dev                      # run with inspector and live asset reload
-cargo test -p hex_map          # fast; no GPU needed
+python3 tools/test_scope.py run map_unit
+python3 tools/test_scope.py run map_generation
+python3 tools/test_scope.py run map_contracts
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 ```
 
@@ -237,8 +239,9 @@ depending on what has been looked at.
 ## Before you finish
 
 1. `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-2. `cargo test --workspace`
-3. **Run the game and look at it.** Every bug found in this codebase so far was found
+2. `python3 tools/test_scope.py check-partitions map`
+3. Run the selected map concerns from `python3 tools/test_scope.py plan`.
+4. **Run the game and look at it.** Every bug found in this codebase so far was found
    by a human looking at the window, not by CI.
 
 ## Where your work goes

@@ -289,6 +289,7 @@ fn apply_presentation_occlusion(mut commands: Commands, mut candidates: Occlusio
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hex_test_app::HeadlessAppBuilder;
 
     #[derive(Resource, Default)]
     struct CutawayChangeCounts {
@@ -311,10 +312,10 @@ mod tests {
     }
 
     fn test_app(target: TilePos, region: InteriorRegionId) -> (App, Entity) {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, TransformPlugin));
-        app.init_resource::<CameraMode>();
-        app.add_systems(
+        let mut builder = HeadlessAppBuilder::new().with_minimal_plugins();
+        builder.app_mut().add_plugins(TransformPlugin);
+        builder.app_mut().init_resource::<CameraMode>();
+        builder.app_mut().add_systems(
             PostUpdate,
             (
                 reconcile_interior_cutaway,
@@ -327,23 +328,24 @@ mod tests {
 
         let mut interiors = InteriorRegions::new();
         interiors.insert_surface(target, region);
-        app.insert_resource(interiors);
+        builder.app_mut().insert_resource(interiors);
 
-        let target_entity = app
+        let target_entity = builder
+            .app_mut()
             .world_mut()
             .spawn((
                 Transform::from_translation(target.coord.to_world(0.0)),
                 CameraFocusTarget::new(target),
             ))
             .id();
-        app.world_mut().spawn((
+        builder.app_mut().world_mut().spawn((
             Transform::from_xyz(0.0, 4.0, 7.0),
             PanOrbitCamera {
                 focus: target.coord.to_world(0.4),
                 radius: 7.0,
             },
         ));
-        (app, target_entity)
+        (builder.build(), target_entity)
     }
 
     fn spawn_roof(app: &mut App, position: TilePos, region: InteriorRegionId) -> Entity {

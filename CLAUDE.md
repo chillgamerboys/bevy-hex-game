@@ -341,10 +341,12 @@ Conventional Commits — `/release` computes the version bump from them.
 merge without a green receipt for the current HEAD.
 Test tiers: `/test-quick` (fmt+clippy+tests) → `/test-local` (+deny, doc,
 links) → `/test-full` (+ship build; the visual walk stays manual).
-Gameplay tests are partitioned by concern in
-[`docs/development/gameplay-testing.md`](docs/development/gameplay-testing.md);
-logical combat evidence comes from rules/contracts/simulation/app data, while a
-scoped gameplay visual run contains exactly ten reviewed presentation frames.
+Gameplay and map tests are partitioned by concern in
+[`docs/development/gameplay-testing.md`](docs/development/gameplay-testing.md) and
+[`docs/development/map-testing.md`](docs/development/map-testing.md); logical combat
+evidence comes from rules/contracts/simulation/app data, while map logic uses
+unit/generation/publication data and retains its existing visual criteria. The scoped
+gameplay visual run contains exactly ten reviewed presentation frames.
 Standalone audits: `/audit-diff`, `/audit-silent-failures`, `/update-docs`,
 `/visual-walk` (the scripted capture walk — audit-pr's Step 2.5; the agent
 reads the frames, and the human walk still owns motion and taste).
@@ -372,17 +374,19 @@ to be out of date. Everything else under `docs/` describes contracts.
   `println!`, float `==` and undocumented public items are all denied. Tests may
   unwrap, expect, panic, debug and print; slice indexing and the other restrictions
   remain denied.
-- **Headless integration tests** use dependency-limited fixtures from
-  `hex_test_support` and live in their owning gameplay crate. Units and combat each
+- **Headless integration tests** use capability-based app mechanics from
+  `hex_test_app` and dependency-limited fixtures from `hex_test_support`, then live
+  in their owning crate. Units and combat each
   expose one explicit `contracts` target; concern modules live beneath that target
   rather than creating another Bevy link. The single
   `hex_combat_core/tests/simulation.rs` target owns multi-turn composition, and the
   single `hex_game/tests/gameplay_app.rs` target owns gameplay UI behavior behind
   `test-support`. `game_content_contracts` and the library's private
   scenario/loading tests stay separately selectable in the residual shared seam.
-  Map tests retain their separate world-owned infrastructure. None can see anything
-  visual — a black sky or a mistransformed tile still needs a human looking at the
-  window.
+  Map tests may reuse the neutral app shell while retaining their world-owned fixture
+  data and acceptance criteria; they must not replace the map producer with a synthetic
+  consumer arena. None can see anything visual — a black sky or a mistransformed tile
+  still needs a human looking at the window.
 
 **Gaps in the engine and the toolchain** — `bevy_lint` unusable at 0.19, Bevy
 features untrimmed, animation still `Box<dyn Transformer>` — are recorded in

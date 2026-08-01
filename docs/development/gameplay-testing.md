@@ -6,27 +6,27 @@ each concern and reserve rendered frames for facts only a renderer or a person c
 judge.
 
 This partition does not own `hex_map`, the map review runner, Forest or Waterfall
-walks, perception/map stress suites, or their acceptance criteria. Cross-owner
-scenario binaries continue to run in the residual workspace suite. The unchanged
-`hex_map` corpus runs beside it in the world-owned map shard whenever that residual
-concern is selected.
+walks, perception/map stress suites, or their acceptance criteria. The complementary
+[map testing contract](map-testing.md) keeps those oracles world-owned while both
+owners use the same fail-closed scope selector and evidence format. Cross-owner
+scenario binaries continue to run in the residual workspace suite.
 
 ## Concern partitions
 
 | Concern | Owns | Allowed dependencies | Oracle | Local command | Ordinary budget |
 |---|---|---|---|---|---:|
-| Pure rules | Value objects, lattice transformations, compact AI policy | Owning crate dependencies only | Return values and immutable state | `python3 tools/gameplay_scope.py run rules` | 60 s total |
-| ECS contracts | Focused commands, effects, movement, turns, occupancy and Channel seams | `hex_test_support`, then the owning gameplay crate dependencies | Components, resources, messages and exact positions | `python3 tools/gameplay_scope.py run contracts` | 60 s per test |
-| Deterministic simulation | Multi-turn composition, tempo profiles, 3v3/6v6, canonical summaries and bounded no-progress | `hex_combat_core` over `hex_core` + `hex_lattice`; never Bevy App, `hex_test_support`, renderer, viewport, wall clock, asset server, ECS entity, perception implementation, or map generator | Full `CombatRunSnapshot` equality across two runs plus named metric assertions | `python3 tools/gameplay_scope.py run simulation` | 60 s |
-| Game/UI behavior | Pure Combat Lab/Creator transitions plus Bevy wiring, re-entry and drawer lifecycle | `hex_gameplay_model` for state/launch/navigation truth; `hex_ui` for rendering; `hex_game` with default-off `test-support` only for Bevy lifecycle | Pure state equality, `GameplayStateSnapshot` for canonical facts, and `UiTreeSnapshot` for presentation structure | `python3 tools/gameplay_scope.py run app` | 60 s |
+| Pure rules | Value objects, lattice transformations, compact AI policy | Owning crate dependencies only | Return values and immutable state | `python3 tools/test_scope.py run rules` | 60 s total |
+| ECS contracts | Focused commands, effects, movement, turns, occupancy and Channel seams | `hex_test_support`, then the owning gameplay crate dependencies | Components, resources, messages and exact positions | `python3 tools/test_scope.py run contracts` | 60 s per test |
+| Deterministic simulation | Multi-turn composition, tempo profiles, 3v3/6v6, canonical summaries and bounded no-progress | `hex_combat_core` over `hex_core` + `hex_lattice`; never Bevy App, `hex_test_support`, renderer, viewport, wall clock, asset server, ECS entity, perception implementation, or map generator | Full `CombatRunSnapshot` equality across two runs plus named metric assertions | `python3 tools/test_scope.py run simulation` | 60 s |
+| Game/UI behavior | Pure Combat Lab/Creator transitions plus Bevy wiring, re-entry and drawer lifecycle | `hex_gameplay_model` for state/launch/navigation truth; `hex_ui` for rendering; `hex_game` with default-off `test-support` only for Bevy lifecycle | Pure state equality, `GameplayStateSnapshot` for canonical facts, and `UiTreeSnapshot` for presentation structure | `python3 tools/test_scope.py run app` | 60 s |
 | Visual smoke | Layout, legibility, overlap, responsive composition and presentation regressions | Release-shaped game with `visual-walk`; no `dev` or `test-support` | Reviewed frames plus the human motion/feel walk | Run the one scoped gameplay walk through `/visual-walk` | At most 10 reviewed gameplay frames |
 | Soak/performance | Long stalemates, stress corpora, bounded retention and performance | The scheduled stress workflow | Typed completion/timeout, fingerprints, timing and memory bounds | `.github/workflows/stress.yaml` | Scheduled/manual only |
 
 The required gameplay CI job publishes separate JUnit and timing evidence for the
 first four partitions. The residual workspace job keeps all other non-map packages
 and cross-owner game/world contract binaries under the existing feature set, CI
-profile, and timeout. The same residual decision also enables the separately
-budgeted, unchanged `hex_map` test shard.
+profile, and timeout. Map unit, generation, and publication evidence runs through
+its independently selected world-owned partitions.
 
 ## Integration target topology
 
@@ -56,12 +56,12 @@ The concern filter is not the Cargo selector. Cargo packages, targets, and featu
 must be selected first so a rules-only change cannot compile the renderer or unrelated
 owner packages and then merely filter their tests out.
 
-`.config/gameplay-test-scopes.json` is the single machine-readable authority for
+`.config/test-scopes.json` is the single machine-readable authority for
 canonical concern commands and changed-path classification. Inspect the proposed
 closure for a branch with:
 
 ```sh
-python3 tools/gameplay_scope.py plan --base origin/dev --head HEAD
+python3 tools/test_scope.py plan --base origin/dev --head HEAD
 ```
 
 For a source PR inside a wave, substitute that PR's wave base, for example
@@ -70,11 +70,11 @@ wave source would correctly select every earlier lane, but it would not be a use
 edit-loop scope.
 
 The selector unions concerns across changed files. Shared vocabulary, validation
-infrastructure, world-owned paths, an unknown path, an invalid manifest, or an empty
-diff fail closed to the complete gate. A narrow rules graph additionally runs:
+infrastructure, unclassified world-owned paths, an unknown path, an invalid manifest,
+or an empty diff fail closed to the complete gate. A narrow rules graph additionally runs:
 
 ```sh
-python3 tools/gameplay_scope.py check-graph rules
+python3 tools/test_scope.py check-graph rules
 ```
 
 That guard rejects a workspace dependency edge outside `hex_core`, `hex_lattice`, and
@@ -102,10 +102,24 @@ unchanged and continue on their owning changes and broad gates.
 
 ## Shared support boundary
 
-`hex_test_support` is test-only infrastructure. Its Cargo dependency ceiling is
-Bevy, `hex_core`, and `hex_assets`. It may construct deterministic minimal apps,
-advance fixed time, settle within a bound, publish synthetic shared surfaces, load
-fixture palettes/settings/content, and observe shared positions/resources.
+`hex_test_app` is the lowest test-only infrastructure tier. Its Cargo dependency
+ceiling is Bevy and `hex_core`; callers explicitly opt into assets, states, input,
+shared schedules, and deterministic time so absence tests do not receive hidden
+capabilities. It owns plugin finalization, bounded settling, and state-entry mechanics,
+but no fixture or owner implementation.
+
+`hex_test_support` builds on that neutral tier. Its Cargo dependency ceiling adds
+`hex_assets`; it may publish synthetic shared surfaces, load fixture
+palettes/settings/content, and observe shared positions/resources. Its existing
+`TestAppBuilder` remains the complete compatibility shell for gameplay and map
+contracts.
+
+The deterministic app shell, plugin finalization, and state-transition helpers are
+neutral infrastructure available to owning tests on either side of the gameplay/world
+boundary. Domain fixtures and acceptance criteria stay with their owner. In
+particular, `hex_map` publication tests may reuse the app shell but must exercise the
+real map plugin; using `SyntheticArena` there would replace the publisher under test
+with consumer-authored facts and invalidate the evidence.
 
 It must never depend on `hex_units`, `hex_combat`, `hex_game`, `hex_map`,
 `hex_world`, or `hex_perception`. Such an edge would let the fixture reconstruct

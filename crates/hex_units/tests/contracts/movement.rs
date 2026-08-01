@@ -14,13 +14,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
-use bevy::asset::AssetPlugin;
 use bevy::camera::NormalizedRenderTarget;
 use bevy::picking::backend::HitData;
 use bevy::picking::events::{Click, Pointer};
 use bevy::picking::pointer::{Location, PointerButton, PointerId};
 use bevy::prelude::*;
-use bevy::state::app::StatesPlugin;
 
 use hex_anim::Transformation;
 use hex_assets::{
@@ -34,6 +32,7 @@ use hex_core::{
     Pause, Screen, SubstanceId, TerrainReady, TilePos, TraversalBlockers, TraversalProfile, Turn,
     MAX_HEADROOM,
 };
+use hex_test_app::HeadlessAppBuilder;
 use hex_test_support::TestAppBuilder;
 use hex_units::{
     Body, Enemy, Faction, Footing, HexPathingLine, HoveredSurface, MovementSystems, MovingTo,
@@ -534,14 +533,15 @@ fn the_player_knows_which_surface_it_is_on() {
 /// nothing. Reproducing the crash requires reproducing the *absence*.
 #[test]
 fn clicking_before_settings_load_does_not_panic() {
-    let mut app = App::new();
-    app.add_plugins((MinimalPlugins, AssetPlugin::default(), StatesPlugin));
-    app.init_asset::<Mesh>();
-    app.init_asset::<StandardMaterial>();
-    app.init_state::<Screen>();
+    let mut builder = HeadlessAppBuilder::new()
+        .with_minimal_plugins()
+        .with_assets()
+        .with_state_plugin();
+    builder.app_mut().init_state::<Screen>();
     // No GameAssets, no PlayerSettings: the state the game is in on the title
     // screen, before the loading screen has run.
-    app.add_plugins(hex_units::plugin);
+    builder.app_mut().add_plugins(hex_units::plugin);
+    let mut app = builder.build();
     app.update();
 
     let window = app.world_mut().spawn(Window::default()).id();

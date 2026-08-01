@@ -1402,8 +1402,9 @@ pub(crate) fn frame_object_positions(
 
 #[cfg(test)]
 mod tests {
-    use bevy::asset::{AssetEvent, AssetPlugin};
+    use bevy::asset::AssetEvent;
     use bevy::ecs::message::Messages;
+    use hex_test_app::HeadlessAppBuilder;
 
     use super::*;
 
@@ -1548,8 +1549,11 @@ mod tests {
             ..default()
         };
 
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+        let mut builder = HeadlessAppBuilder::new()
+            .with_minimal_plugins()
+            .with_asset_plugin();
+        builder
+            .app_mut()
             .init_asset::<StandardMaterial>()
             .insert_resource(ViewportRenderAssets {
                 hex_mesh: Handle::default(),
@@ -1562,6 +1566,7 @@ mod tests {
             .insert_resource(ViewportPreviewRig::default())
             .insert_resource(ViewportSceneCache::default())
             .add_systems(Update, rebuild_viewport);
+        let mut app = builder.build();
 
         app.update();
         let material_handle = app

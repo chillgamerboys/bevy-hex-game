@@ -17,6 +17,7 @@ hex_units = { workspace = true }
 
 [dev-dependencies]
 bevy_platform = { workspace = true }
+hex_test_app = { workspace = true }
 
 [lints]
 workspace = true

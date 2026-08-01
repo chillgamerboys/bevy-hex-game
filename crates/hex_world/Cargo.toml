@@ -12,5 +12,8 @@ bevy = { workspace = true }
 hex_assets = { workspace = true }
 hex_core = { workspace = true }
 
+[dev-dependencies]
+hex_test_app = { workspace = true }
+
 [lints]
 workspace = true

@@ -3222,6 +3222,7 @@ version = "0.4.0"
 dependencies = [
  "bevy",
  "hex_core",
+ "hex_test_app",
 ]
 
 [[package]]
@@ -3232,6 +3233,7 @@ dependencies = [
  "hex_ai",
  "hex_core",
  "hex_lattice",
+ "hex_test_app",
  "ron",
  "serde",
  "serde_json",
@@ -3250,6 +3252,7 @@ dependencies = [
  "hex_core",
  "hex_lattice",
  "hex_perception",
+ "hex_test_app",
  "hex_test_support",
  "hex_units",
  "serde",
@@ -3304,6 +3307,7 @@ dependencies = [
  "bevy_egui",
  "hex_assets",
  "hex_core",
+ "hex_test_app",
  "image",
  "ron",
  "serde",
@@ -3365,6 +3369,7 @@ dependencies = [
  "bevy",
  "hex_assets",
  "hex_core",
+ "hex_test_support",
  "rand 0.8.7",
  "ron",
  "serde",
@@ -3378,6 +3383,7 @@ dependencies = [
  "bevy",
  "hex_assets",
  "hex_core",
+ "hex_test_app",
 ]
 
 [[package]]
@@ -3392,7 +3398,16 @@ dependencies = [
  "bevy_state",
  "hex_assets",
  "hex_core",
+ "hex_test_app",
  "hex_units",
+]
+
+[[package]]
+name = "hex_test_app"
+version = "0.4.0"
+dependencies = [
+ "bevy",
+ "hex_core",
 ]
 
 [[package]]
@@ -3402,6 +3417,7 @@ dependencies = [
  "bevy",
  "hex_assets",
  "hex_core",
+ "hex_test_app",
 ]
 
 [[package]]
@@ -3426,6 +3442,7 @@ dependencies = [
  "hex_assets",
  "hex_core",
  "hex_lattice",
+ "hex_test_app",
  "hex_test_support",
  "ron",
  "serde",
@@ -3439,6 +3456,7 @@ dependencies = [
  "bevy",
  "hex_assets",
  "hex_core",
+ "hex_test_app",
 ]
 
 [[package]]

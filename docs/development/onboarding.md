@@ -144,17 +144,18 @@ map-owned behavior with its palette entry rather than embedding another RGB lite
 ## Knowing you have not broken anything
 
 ```sh
-python3 tools/gameplay_scope.py plan --base origin/dev --head HEAD
-for concern in $(python3 tools/gameplay_scope.py selected-tests); do
-  python3 tools/gameplay_scope.py run "$concern" || exit $?
+python3 tools/test_scope.py plan --base origin/dev --head HEAD
+for concern in $(python3 tools/test_scope.py selected-tests); do
+  python3 tools/test_scope.py run "$concern" || exit $?
 done
-python3 tools/gameplay_scope.py run clippy
+python3 tools/test_scope.py run clippy
 ```
 
-The selector chooses the affected gameplay concerns and fails closed to the complete
-gate for an unknown or shared path. Broad owner corpora still run for their owning
-changes, on `dev`, and at the final wave/release gate. These checks run automatically
-on pull requests; Markdown-only changes run the documentation link check instead.
+The selector chooses the affected gameplay and map concerns and fails closed to the
+complete gate for an unknown or shared path. Broad owner corpora still run for their
+owning changes, on `dev`, and at the final wave/release gate. These checks run
+automatically on pull requests; Markdown-only changes run the documentation link
+check instead.
 
 **Then run the game and look at it.** This matters more than it sounds. Every bug
 found in this project so far was found by a person looking at the window — including

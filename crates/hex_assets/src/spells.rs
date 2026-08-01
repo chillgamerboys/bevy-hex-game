@@ -875,6 +875,7 @@ fn build_spellbook(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hex_test_app::HeadlessAppBuilder;
 
     fn targeting() -> TargetingSpec {
         TargetingSpec {
@@ -1078,9 +1079,10 @@ mod tests {
     #[test]
     fn invalid_trajectory_reload_keeps_the_last_valid_spellbook() {
         let valid = test_file();
-        let mut app = App::new();
-        app.add_systems(Update, build_spellbook);
-        app.insert_resource(valid.clone());
+        let mut builder = HeadlessAppBuilder::new();
+        builder.app_mut().add_systems(Update, build_spellbook);
+        builder.app_mut().insert_resource(valid.clone());
+        let mut app = builder.build();
         app.update();
         assert!(app.world().resource::<SpellBook>().matches_source(&valid));
 

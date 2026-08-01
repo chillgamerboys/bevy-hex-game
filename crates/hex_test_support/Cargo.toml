@@ -3,9 +3,10 @@ name = "hex_test_support"
 version.workspace = true
 edition.workspace = true
 publish = false
-description = "Dependency-limited synthetic fixtures for gameplay-owned headless tests."
+description = "Dependency-limited deterministic app setup and synthetic shared fixtures."
 
-# This dependency ceiling is intentional. The crate publishes only the component
+# This dependency ceiling is intentional. `hex_test_app` supplies neutral mechanics;
+# this crate publishes only the component
 # contracts that gameplay consumes; it cannot import either their producers
 # (`hex_map`, `hex_world`, `hex_perception`) or their consumers (`hex_units`,
 # `hex_combat`, `hex_game`).
@@ -13,6 +14,7 @@ description = "Dependency-limited synthetic fixtures for gameplay-owned headless
 bevy = { workspace = true }
 hex_assets = { workspace = true }
 hex_core = { workspace = true }
+hex_test_app = { workspace = true }
 
 [lints]
 workspace = true

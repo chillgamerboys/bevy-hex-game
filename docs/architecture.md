@@ -17,7 +17,8 @@ hex_core → hex_lattice → {hex_assets, hex_units, hex_combat}   (the pure rul
 hex_core → hex_anim ─────────────────────→ hex_units
 {Bevy, bevy-inspector-egui} → hex_dev ──────────────────────────────→ hex_game
 {Bevy, bevy_egui, hex_core, hex_assets} → hex_editor  (standalone tool)
-{Bevy, hex_core, hex_assets} → hex_test_support  (test-only shared contracts)
+{Bevy, hex_core} → hex_test_app → hex_test_support  (test-only app mechanics)
+{Bevy, hex_core, hex_assets} ───→ hex_test_support  (test-only shared fixtures)
 ```
 
 An arrow means "may depend on". **Cargo enforces this.** A `use` that crosses the
@@ -47,7 +48,8 @@ will, and no amount of documentation prevents it. A compiler error does.
 | `hex_dev` | World inspector. Behind the `dev` feature | Bevy, `bevy-inspector-egui` | gameplay |
 | `hex_game` | Thin executable library and composition root: observes authority, builds immutable UI view models, applies typed intents, and wires plugins | all runtime crates | shared |
 | `hex_editor` | Standalone palette, voxel-style, and object authoring; validated explicit writes, untracked recovery, and deterministic review packs | Bevy, `bevy_egui`, `hex_core`, `hex_assets` | shared tooling |
-| `hex_test_support` | Test-only deterministic app setup, synthetic exact-surface facts, and fixture assets; no gameplay or world implementation | Bevy, `hex_core`, `hex_assets` | gameplay testing |
+| `hex_test_app` | Capability-based deterministic Bevy app construction, plugin finalization, bounded settling, and shared state entry; no fixtures or owner implementation | Bevy, `hex_core` | shared testing |
+| `hex_test_support` | Test-only deterministic app setup plus consumer-side synthetic exact-surface facts and fixture assets; no gameplay or world implementation | Bevy, `hex_core`, `hex_assets`, `hex_test_app` | gameplay testing; neutral app shell is shared across owners |
 
 `hex_editor` is not a game screen and does not depend on runtime world or gameplay
 crates. Reusable art schemas and validation live in `hex_assets`; the editor owns only
@@ -472,9 +474,10 @@ asks for is looking at the window.
 
 ## Testing
 
-Testing is partitioned by the authority needed for the claim. The complete gameplay
-matrix, commands, dependency ceilings, budgets, and anti-patterns are the
-[gameplay testing contract](development/gameplay-testing.md).
+Testing is partitioned by the authority needed for the claim. The complete matrices,
+commands, dependency ceilings, budgets, and anti-patterns are the
+[gameplay](development/gameplay-testing.md) and
+[map](development/map-testing.md) testing contracts.
 
 **Pure unit tests** live beside behavior throughout the workspace and do not need a GPU:
 coordinate round-tripping, the cube invariant, lattice properties, content validation,
@@ -483,10 +486,11 @@ and movement rules — including that a two-level body is refused a one-voxel cr
 a one-level body walks into.
 
 **Focused ECS contracts** run a deterministic headless `App` and inspect components,
-resources, messages and exact positions. Gameplay-owned tests build shared facts
-through dependency-limited `hex_test_support`; map tests retain their own world-owned
-fixtures and acceptance criteria. Separate asset integration tests parse the GLB
-directly to verify mesh geometry.
+resources, messages and exact positions. Owning tests may reuse the neutral app shell
+from dependency-limited `hex_test_support`. Gameplay consumer tests may also build
+synthetic shared facts there; map tests retain their own world-owned fixtures and
+acceptance criteria and must exercise the real map publisher. Separate asset
+integration tests parse the GLB directly to verify mesh geometry.
 
 **Composition** has one `hex_combat_core` simulation target and one `hex_game` headless
 app/UI target. A simulation compares complete canonical snapshots from two fresh runs.

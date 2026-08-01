@@ -17,7 +17,7 @@ Expected: clean. Any error → STOP, surface verbatim.
 ## Step 2 — Clippy
 
 ```bash
-python3 tools/gameplay_scope.py run clippy
+python3 tools/test_scope.py run clippy
 ```
 
 Expected: clean. Any error → STOP, surface verbatim. (Rust has no
@@ -32,7 +32,7 @@ First inspect and record the fail-closed decision:
 ```bash
 BASE=$(gh pr view --json baseRefName -q .baseRefName 2>/dev/null || \
   git rev-parse --abbrev-ref '@{upstream}' 2>/dev/null | sed 's#^[^/]*/##')
-python3 tools/gameplay_scope.py plan --base "origin/${BASE:-dev}" --head HEAD
+python3 tools/test_scope.py plan --base "origin/${BASE:-dev}" --head HEAD
 ```
 
 Then run the selected test concerns in canonical order:
@@ -40,9 +40,9 @@ Then run the selected test concerns in canonical order:
 ```bash
 BASE=$(gh pr view --json baseRefName -q .baseRefName 2>/dev/null || \
   git rev-parse --abbrev-ref '@{upstream}' 2>/dev/null | sed 's#^[^/]*/##')
-for concern in $(python3 tools/gameplay_scope.py selected-tests \
+for concern in $(python3 tools/test_scope.py selected-tests \
   --base "origin/${BASE:-dev}" --head HEAD); do
-  python3 tools/gameplay_scope.py run "$concern" || exit $?
+  python3 tools/test_scope.py run "$concern" || exit $?
 done
 ```
 

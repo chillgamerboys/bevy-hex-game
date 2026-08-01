@@ -301,8 +301,8 @@ fn apply_view_lighting(
 
 #[cfg(test)]
 mod tests {
-    use bevy::state::app::StatesPlugin;
     use hex_assets::{CelestialCycleSettings, LightingKeyframe, LightingProfile};
+    use hex_test_app::HeadlessAppBuilder;
 
     use super::*;
 
@@ -413,18 +413,27 @@ mod tests {
     }
 
     fn runtime_app(settings: LightingSettings, time: Option<f32>) -> (App, Entity) {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin));
-        app.init_state::<Screen>();
-        app.insert_resource(settings);
-        app.insert_resource(GlobalAmbientLight::default());
-        app.insert_resource(Assets::<Image>::default());
+        let mut builder = HeadlessAppBuilder::new()
+            .with_minimal_plugins()
+            .with_state_plugin();
+        builder.app_mut().init_state::<Screen>();
+        builder.app_mut().insert_resource(settings);
+        builder
+            .app_mut()
+            .insert_resource(GlobalAmbientLight::default());
+        builder
+            .app_mut()
+            .insert_resource(Assets::<Image>::default());
         if let Some(hours) = time {
-            app.insert_resource(TimeOfDay { hours });
+            builder.app_mut().insert_resource(TimeOfDay { hours });
         }
-        app.add_plugins(super::plugin);
-        let camera = app.world_mut().spawn(Camera3d::default()).id();
-        (app, camera)
+        builder.app_mut().add_plugins(super::plugin);
+        let camera = builder
+            .app_mut()
+            .world_mut()
+            .spawn(Camera3d::default())
+            .id();
+        (builder.build(), camera)
     }
 
     fn key_light_snapshot(app: &mut App) -> (usize, f32, Vec3, Vec3, bool) {
@@ -770,10 +779,14 @@ mod tests {
 
     #[test]
     fn missing_resolved_lighting_is_an_explicit_setup_failure() {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin));
-        app.init_state::<Screen>();
-        app.add_systems(OnEnter(Screen::Gameplay), publish_exterior_illumination);
+        let mut builder = HeadlessAppBuilder::new()
+            .with_minimal_plugins()
+            .with_state_plugin();
+        builder.app_mut().init_state::<Screen>();
+        builder
+            .app_mut()
+            .add_systems(OnEnter(Screen::Gameplay), publish_exterior_illumination);
+        let mut app = builder.build();
 
         enter(&mut app, Screen::Gameplay);
 
