@@ -165,7 +165,11 @@ impl HeadlessAppBuilder {
 
     /// Finalizes plugins and returns the runnable app.
     pub fn build(mut self) -> App {
-        while self.app.plugins_state() != PluginsState::Cleaned {
+        if self.app.plugins_state() != PluginsState::Cleaned {
+            while self.app.plugins_state() == PluginsState::Adding {
+                #[cfg(not(target_arch = "wasm32"))]
+                bevy::tasks::tick_global_task_pools_on_main_thread();
+            }
             self.app.finish();
             self.app.cleanup();
         }
@@ -222,7 +226,24 @@ pub fn run_until(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
     use super::*;
+
+    struct DelayedReadyPlugin {
+        ready_polls: Arc<AtomicUsize>,
+    }
+
+    impl Plugin for DelayedReadyPlugin {
+        fn build(&self, _app: &mut App) {}
+
+        fn ready(&self, _app: &App) -> bool {
+            self.ready_polls.fetch_add(1, Ordering::SeqCst) > 0
+        }
+    }
 
     #[test]
     fn bare_builder_inserts_no_hidden_capabilities() {
@@ -281,5 +302,18 @@ mod tests {
             run_until(&mut app, 3, |_| false),
             Err(RunLimitExceeded { frames: 3 })
         );
+    }
+
+    #[test]
+    fn build_waits_until_every_plugin_reports_ready() {
+        let ready_polls = Arc::new(AtomicUsize::new(0));
+        let mut builder = HeadlessAppBuilder::new().with_minimal_plugins();
+        builder.app_mut().add_plugins(DelayedReadyPlugin {
+            ready_polls: Arc::clone(&ready_polls),
+        });
+
+        let _app = builder.build();
+
+        assert_eq!(ready_polls.load(Ordering::SeqCst), 2);
     }
 }
