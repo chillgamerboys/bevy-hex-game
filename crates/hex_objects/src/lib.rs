@@ -1727,6 +1727,35 @@ mod tests {
         for child in child_entities(&app, first) {
             app.world_mut()
                 .entity_mut(child)
+                .insert(TreeFadeAmount::new(0.05).expect("grouped fade opacity should be valid"));
+        }
+        app.update();
+
+        let grouped_handles = chunk_handles(&app, first);
+        assert_eq!(grouped_handles, stable_handles);
+        assert_eq!(chunk_handles(&app, second), second_before);
+        assert_eq!(
+            app.world().resource::<Assets<StandardMaterial>>().len(),
+            material_count + per_tree_materials,
+            "a grouped fade target must reuse the exact tree's existing clones"
+        );
+        for (key, (_, faded_id, _)) in &grouped_handles {
+            let (_, original_id, _) = first_before
+                .get(key)
+                .expect("the grouped tree should retain every original visual chunk");
+            let materials = app.world().resource::<Assets<StandardMaterial>>();
+            let faded = materials
+                .get(*faded_id)
+                .expect("the grouped per-tree clone should remain live");
+            let original = materials
+                .get(*original_id)
+                .expect("the globally shared source should remain live");
+            assert!((faded.base_color.alpha() - original.base_color.alpha() * 0.05).abs() < 1e-5);
+        }
+
+        for child in child_entities(&app, first) {
+            app.world_mut()
+                .entity_mut(child)
                 .insert(TreeFadeAmount::OPAQUE);
         }
         app.update();

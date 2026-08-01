@@ -12,9 +12,13 @@
     AssertSelectedAt(expected: (q: -26, r: 46, level: 13)),
     Settle(45),
     Capture("01-two-rings-outlet-waterfall-front"),
-    OrbitCamera(yaw_turns: 0.33333334),
+    // The +120° eye lies inside the outlet bank and correctly forces a safety
+    // close-up. Review the open river side here, then reset the following region.
+    OrbitCamera(yaw_turns: -0.16666667),
     Settle(45),
     Capture("02-two-rings-outlet-waterfall-side"),
+    OrbitCamera(yaw_turns: 0.16666667),
+    Settle(15),
     ClickAnchor(name: "fort_fort_courtyard", expected: (q: -45, r: 44, level: 17)),
     AwaitPartyIdle(max_frames: 3600),
     AssertSelectedAt(expected: (q: -45, r: 44, level: 17)),

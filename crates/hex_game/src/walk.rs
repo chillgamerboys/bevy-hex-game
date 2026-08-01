@@ -1717,6 +1717,7 @@ mod tests {
             ("Two Rings", "mountains B pass", vec![1.0 / 3.0, -1.0 / 3.0]),
             ("Two Rings", "mountains C stream", vec![0.0, -1.0 / 6.0]),
             ("Two Rings", "frozen bridge", vec![0.0, 1.0 / 3.0]),
+            ("Two Rings", "outlet fall", vec![0.0, -1.0 / 6.0]),
         ];
         for (scenario, label, expected) in expected_manifest {
             let actual = manifest
@@ -1752,6 +1753,10 @@ mod tests {
                     1.0 / 6.0,
                     1.0 / 3.0,
                 ],
+            ),
+            (
+                "../../walks/camera_two_rings_west.ron",
+                vec![-1.0 / 6.0, 1.0 / 6.0, -1.0 / 3.0, 1.0 / 3.0, -1.0 / 3.0],
             ),
         ];
         for (script_path, expected) in expected_gestures {

@@ -52,6 +52,20 @@ struct TreeFadeTimelines {
     roots: BTreeMap<hex_core::TilePos, TreeFadeTimeline>,
 }
 
+/// Shares the authored 20% opacity across render chunks when several exact trees
+/// intersect the camera-focus corridor. One tree retains the exact authored opacity
+/// regardless of renderer chunking; a dense multi-tree screen cannot compound every
+/// translucent foliage layer at 20% independently.
+fn shared_tree_fade_opacity(blocked_roots: usize, blocking_chunks: usize) -> f32 {
+    if blocked_roots <= 1 {
+        return TREE_FADED_OPACITY;
+    }
+    let Ok(count) = u16::try_from(blocking_chunks.max(1)) else {
+        return 0.0;
+    };
+    TREE_FADED_OPACITY / f32::from(count)
+}
+
 /// The exact presentation state to restore when the final occlusion reason clears.
 #[derive(Component, Debug, Clone, Copy)]
 struct AppliedPresentationOcclusion {
@@ -186,6 +200,7 @@ fn reconcile_tree_fades(
 
     let mut present = BTreeSet::new();
     let mut blocked = BTreeSet::new();
+    let mut blocking_chunks = 0_usize;
     for (tree, transform, bounds, _fade) in trees.p0().iter() {
         present.insert(tree.0);
         if corridor.is_some_and(|(_target, start, end)| {
@@ -198,6 +213,7 @@ fn reconcile_tree_fades(
             )
         }) {
             blocked.insert(tree.0);
+            blocking_chunks = blocking_chunks.saturating_add(1);
         }
     }
 
@@ -210,9 +226,10 @@ fn reconcile_tree_fades(
     }
 
     let delta = time.delta_secs().max(0.0);
+    let faded_opacity = shared_tree_fade_opacity(blocked.len(), blocking_chunks);
     let mut completed = Vec::new();
     for (root, timeline) in &mut timelines.roots {
-        advance_tree_fade_timeline(timeline, blocked.contains(root), delta);
+        advance_tree_fade_timeline(timeline, blocked.contains(root), faded_opacity, delta);
         if !blocked.contains(root) && timeline.amount >= 1.0 {
             completed.push(*root);
         }
@@ -235,21 +252,35 @@ fn reconcile_tree_fades(
     }
 }
 
-fn advance_tree_fade_timeline(timeline: &mut TreeFadeTimeline, blocked: bool, delta: f32) {
+fn advance_tree_fade_timeline(
+    timeline: &mut TreeFadeTimeline,
+    blocked: bool,
+    faded_opacity: f32,
+    delta: f32,
+) {
     if blocked {
         timeline.clear_seconds = 0.0;
-        let fade_rate = (1.0 - TREE_FADED_OPACITY) / TREE_FADE_IN_SECONDS;
-        timeline.amount = (timeline.amount - fade_rate * delta).max(TREE_FADED_OPACITY);
+        if timeline.amount > faded_opacity {
+            let fade_rate = (1.0 - faded_opacity) / TREE_FADE_IN_SECONDS;
+            timeline.amount = (timeline.amount - fade_rate * delta).max(faded_opacity);
+        } else if timeline.amount < faded_opacity {
+            let restore_rate = (1.0 - TREE_FADED_OPACITY) / TREE_FADE_RESTORE_SECONDS;
+            timeline.amount = (timeline.amount + restore_rate * delta).min(faded_opacity);
+        }
         return;
     }
 
-    let remaining_hold = (TREE_FADE_HOLD_SECONDS - timeline.clear_seconds).max(0.0);
-    let hold_delta = delta.min(remaining_hold);
-    timeline.clear_seconds += hold_delta;
-    let restore_delta = delta - hold_delta;
-    if restore_delta > 0.0 {
-        let restore_rate = (1.0 - TREE_FADED_OPACITY) / TREE_FADE_RESTORE_SECONDS;
-        timeline.amount = (timeline.amount + restore_rate * restore_delta).min(1.0);
+    let previous_restore =
+        (timeline.clear_seconds - TREE_FADE_HOLD_SECONDS).clamp(0.0, TREE_FADE_RESTORE_SECONDS);
+    timeline.clear_seconds =
+        (timeline.clear_seconds + delta).min(TREE_FADE_HOLD_SECONDS + TREE_FADE_RESTORE_SECONDS);
+    let current_restore =
+        (timeline.clear_seconds - TREE_FADE_HOLD_SECONDS).clamp(0.0, TREE_FADE_RESTORE_SECONDS);
+    let restore_delta = current_restore - previous_restore;
+    let remaining_duration = TREE_FADE_RESTORE_SECONDS - previous_restore;
+    if restore_delta > 0.0 && remaining_duration > 0.0 {
+        let restored_fraction = (restore_delta / remaining_duration).clamp(0.0, 1.0);
+        timeline.amount += (1.0 - timeline.amount) * restored_fraction;
     }
 }
 
@@ -667,7 +698,12 @@ mod tests {
         let blocking = spawn_tree_chunk(&mut app, root, on_segment, Vec3::splat(0.5));
         let same_tree_clear =
             spawn_tree_chunk(&mut app, root, on_segment + Vec3::X * 4.0, Vec3::splat(0.5));
-        let stacked_other = spawn_tree_chunk(&mut app, other_root, on_segment, Vec3::splat(0.5));
+        let stacked_other = spawn_tree_chunk(
+            &mut app,
+            other_root,
+            on_segment + Vec3::X * 4.0,
+            Vec3::splat(0.5),
+        );
         app.world_mut()
             .resource_mut::<TreeFadeTimelines>()
             .roots
@@ -718,44 +754,145 @@ mod tests {
             amount: 1.0,
             clear_seconds: 0.0,
         };
-        advance_tree_fade_timeline(&mut timeline, true, TREE_FADE_IN_SECONDS);
+        advance_tree_fade_timeline(
+            &mut timeline,
+            true,
+            TREE_FADED_OPACITY,
+            TREE_FADE_IN_SECONDS,
+        );
         assert!((timeline.amount - TREE_FADED_OPACITY).abs() < f32::EPSILON);
 
-        advance_tree_fade_timeline(&mut timeline, false, TREE_FADE_HOLD_SECONDS);
+        advance_tree_fade_timeline(
+            &mut timeline,
+            false,
+            TREE_FADED_OPACITY,
+            TREE_FADE_HOLD_SECONDS,
+        );
         assert!((timeline.amount - TREE_FADED_OPACITY).abs() < f32::EPSILON);
 
-        advance_tree_fade_timeline(&mut timeline, false, TREE_FADE_RESTORE_SECONDS * 0.5);
+        advance_tree_fade_timeline(
+            &mut timeline,
+            false,
+            TREE_FADED_OPACITY,
+            TREE_FADE_RESTORE_SECONDS * 0.5,
+        );
         assert!((timeline.amount - 0.6).abs() < 1e-5);
-        advance_tree_fade_timeline(&mut timeline, false, TREE_FADE_RESTORE_SECONDS * 0.5);
+        advance_tree_fade_timeline(
+            &mut timeline,
+            false,
+            TREE_FADED_OPACITY,
+            TREE_FADE_RESTORE_SECONDS * 0.5,
+        );
         assert!((timeline.amount - 1.0).abs() < 1e-5);
 
-        advance_tree_fade_timeline(&mut timeline, true, TREE_FADE_IN_SECONDS * 0.5);
+        advance_tree_fade_timeline(
+            &mut timeline,
+            true,
+            TREE_FADED_OPACITY,
+            TREE_FADE_IN_SECONDS * 0.5,
+        );
         assert!((timeline.amount - 0.6).abs() < 1e-5);
         assert!(timeline.clear_seconds.abs() < f32::EPSILON);
     }
 
     #[test]
-    fn stable_faded_tree_does_not_republish_chunk_requests() {
+    fn dense_tree_corridors_share_opacity_without_changing_the_lone_tree_contract() {
+        assert!((shared_tree_fade_opacity(1, 6) - TREE_FADED_OPACITY).abs() < f32::EPSILON);
+        assert!((shared_tree_fade_opacity(2, 2) - 0.1).abs() < f32::EPSILON);
+        assert!((shared_tree_fade_opacity(3, 4) - 0.05).abs() < f32::EPSILON);
+        assert!(shared_tree_fade_opacity(usize::MAX, usize::MAX).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn a_shrinking_blocker_group_restores_toward_twenty_percent_without_jumping() {
+        let mut timeline = TreeFadeTimeline {
+            amount: 0.05,
+            clear_seconds: 0.0,
+        };
+
+        advance_tree_fade_timeline(&mut timeline, true, TREE_FADED_OPACITY, 0.03);
+        assert!(timeline.amount > 0.05 && timeline.amount < TREE_FADED_OPACITY);
+
+        advance_tree_fade_timeline(
+            &mut timeline,
+            true,
+            TREE_FADED_OPACITY,
+            TREE_FADE_RESTORE_SECONDS,
+        );
+        assert!((timeline.amount - TREE_FADED_OPACITY).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn a_group_faded_tree_still_restores_in_the_authored_duration() {
+        let grouped_opacity = shared_tree_fade_opacity(4, 5);
+        let mut timeline = TreeFadeTimeline {
+            amount: grouped_opacity,
+            clear_seconds: 0.0,
+        };
+
+        advance_tree_fade_timeline(
+            &mut timeline,
+            false,
+            grouped_opacity,
+            TREE_FADE_HOLD_SECONDS,
+        );
+        assert!((timeline.amount - grouped_opacity).abs() < f32::EPSILON);
+        advance_tree_fade_timeline(
+            &mut timeline,
+            false,
+            grouped_opacity,
+            TREE_FADE_RESTORE_SECONDS,
+        );
+        assert!((timeline.amount - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn stable_dense_tree_corridor_does_not_republish_chunk_requests() {
         let target = position(0, 0, 7);
-        let root = position(1, 0, 7);
+        let first_root = position(1, 0, 7);
+        let second_root = position(2, 0, 7);
+        let unrelated_root = position(3, 0, 7);
         let (mut app, _, _) = test_app(target, InteriorRegionId(1));
         *app.world_mut().resource_mut::<CameraMode>() = CameraMode::Character;
         let eye = Vec3::new(0.0, 4.0, 7.0);
         let focus = target.coord.to_world(0.4);
-        let tree = spawn_tree_chunk(&mut app, root, eye.lerp(focus, 0.5), Vec3::splat(0.5));
-        app.world_mut()
-            .entity_mut(tree)
-            .insert(TreeFadeAmount::new(TREE_FADED_OPACITY).expect("valid opacity"));
-        app.world_mut()
-            .resource_mut::<TreeFadeTimelines>()
-            .roots
-            .insert(
-                root,
-                TreeFadeTimeline {
-                    amount: TREE_FADED_OPACITY,
-                    clear_seconds: 0.0,
-                },
-            );
+        let on_segment = eye.lerp(focus, 0.5);
+        let first_a = spawn_tree_chunk(&mut app, first_root, on_segment, Vec3::splat(0.5));
+        let first_b = spawn_tree_chunk(
+            &mut app,
+            first_root,
+            on_segment + Vec3::Y * 0.2,
+            Vec3::splat(0.5),
+        );
+        let first_clear = spawn_tree_chunk(
+            &mut app,
+            first_root,
+            on_segment + Vec3::X * 4.0,
+            Vec3::splat(0.5),
+        );
+        let second = spawn_tree_chunk(
+            &mut app,
+            second_root,
+            on_segment - Vec3::Y * 0.2,
+            Vec3::splat(0.5),
+        );
+        let unrelated = spawn_tree_chunk(
+            &mut app,
+            unrelated_root,
+            on_segment + Vec3::X * 5.0,
+            Vec3::splat(0.5),
+        );
+
+        app.update();
+        app.update();
+        app.update();
+
+        let expected = shared_tree_fade_opacity(2, 3);
+        for chunk in [first_a, first_b, first_clear, second] {
+            assert!((fade_amount(&app, chunk) - expected).abs() < 1e-5);
+        }
+        assert!((fade_amount(&app, unrelated) - 1.0).abs() < f32::EPSILON);
+
         app.init_resource::<PresentationChangeCounts>().add_systems(
             PostUpdate,
             count_presentation_changes.after(reconcile_tree_fades),

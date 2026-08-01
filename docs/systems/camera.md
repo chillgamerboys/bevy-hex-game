@@ -71,7 +71,14 @@ Generated trees publish one exact stack-safe root. `hex_objects` copies
 `TreeOccluder(root)` and an opaque `TreeFadeAmount` to every trunk, branch, foliage,
 and canopy render chunk. `hex_world` intersects the final camera-focus corridor with
 transformed chunk bounds; one blocking chunk fades every chunk at that exact root to
-20%, holds for 0.2 seconds after clearance, then restores over 0.3 seconds.
+20%, holds for 0.2 seconds after clearance, then restores over 0.3 seconds. A lone
+tree retains that exact opacity regardless of how its renderer chunks are split. When
+several exact trees intersect the corridor at once, their intersecting chunks share
+the 20% opacity budget. This avoids overlapping translucent foliage compounding into
+a dark veil over the unit and forward route. The split is a conservative, stable
+per-intersecting-chunk multiplier rather than an exact screen-alpha promise: OIT still
+composites mesh fragments and whole-tree identity also fades chunks outside the direct
+corridor.
 
 Material authority stays in `hex_objects`. It lazily clones each actively fading
 tree's shared source materials, participates in OIT while those clones are blended,
