@@ -396,9 +396,74 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_new_rail_renders_current_unchanged_view_on_gameplay_reentry() {
+    fn refresh_gate_includes_a_new_action_rail() {
         assert!(action_rail_needs_refresh(false, false, false, true));
         assert!(!action_rail_needs_refresh(false, false, false, false));
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn gameplay_reentry_repopulates_a_new_rail_from_the_unchanged_hud_view() {
+        let mut app = App::new();
+        app.add_plugins(crate::test_support::HeadlessUiPlugin::default())
+            .add_systems(
+                OnExit(Screen::Gameplay),
+                crate::despawn_screen(Screen::Gameplay),
+            );
+        let expected_view = GameplayHudView {
+            actor_label: "Re-entry Ranger".to_owned(),
+            round: "Round 3".to_owned(),
+            movement_remaining: 2,
+            action_remaining: true,
+            actions: vec![crate::ActionAffordance {
+                action: GameplayAction::EndTurn,
+                label: "End turn".to_owned(),
+                shortcut: Some("Enter".to_owned()),
+                availability: ActionAvailability::Enabled,
+                priority: crate::ActionPriority::Primary,
+            }],
+            ..default()
+        };
+        app.world_mut().insert_resource(expected_view.clone());
+
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Gameplay);
+        for _ in 0..8 {
+            app.update();
+        }
+        assert_eq!(
+            presented_action_rail_actions(&mut app),
+            [GameplayAction::EndTurn]
+        );
+
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Loading);
+        for _ in 0..4 {
+            app.update();
+        }
+        assert!(presented_action_rail_actions(&mut app).is_empty());
+        assert_eq!(app.world().resource::<GameplayHudView>(), &expected_view);
+
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Gameplay);
+        for _ in 0..8 {
+            app.update();
+        }
+
+        assert_eq!(app.world().resource::<GameplayHudView>(), &expected_view);
+        assert_eq!(
+            presented_action_rail_actions(&mut app),
+            [GameplayAction::EndTurn]
+        );
+    }
+
+    #[cfg(feature = "test-support")]
+    fn presented_action_rail_actions(app: &mut App) -> Vec<GameplayAction> {
+        let mut query = app.world_mut().query::<&ActionRailKey>();
+        query.iter(app.world()).map(|action| action.0).collect()
     }
 
     #[test]
