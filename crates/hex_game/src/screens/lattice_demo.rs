@@ -63,6 +63,7 @@ pub(super) fn plugin(app: &mut App) {
             handle_cell_intents.after(hex_ui::UiSystems::EmitIntents),
             handle_cast_intents.after(hex_ui::UiSystems::EmitIntents),
             handle_action_intents.after(hex_ui::UiSystems::EmitIntents),
+            handle_navigation_intents.after(hex_ui::UiSystems::EmitIntents),
             publish_demo_view,
             handle_input,
         )
@@ -341,6 +342,22 @@ fn handle_action_intents(
     }
 }
 
+fn handle_navigation_intents(
+    mut intents: MessageReader<hex_ui::UiIntent>,
+    mut next: ResMut<NextState<Screen>>,
+    request: Option<Res<LocalDemoRequest>>,
+) {
+    let mut requested_back = false;
+    for intent in intents.read() {
+        // Drain the complete reader even after Back is found so no stale intent
+        // survives a later screen re-entry.
+        requested_back |= matches!(intent, hex_ui::UiIntent::Back);
+    }
+    if requested_back {
+        next.set(demo_return_screen(request.as_deref()));
+    }
+}
+
 fn try_cast(
     demo: &mut DemoLattice,
     cell: LatticeCoord,
@@ -518,12 +535,12 @@ fn handle_input(
     if bindings.just_pressed(&keys, hex_core::InputAction::ReturnTitle)
         || bindings.just_pressed(&keys, hex_core::InputAction::Cancel)
     {
-        next.set(
-            request
-                .as_deref()
-                .map_or(Screen::Title, |request| request.return_to),
-        );
+        next.set(demo_return_screen(request.as_deref()));
     }
+}
+
+fn demo_return_screen(request: Option<&LocalDemoRequest>) -> Screen {
+    request.map_or(Screen::Title, |request| request.return_to)
 }
 
 #[cfg(test)]
@@ -561,6 +578,38 @@ mod tests {
         let index = ContentIndex::build(&elements, &spells, &substances)
             .expect("shipped content cross-references resolve");
         (elements, spells, index)
+    }
+
+    #[test]
+    fn back_returns_to_the_calling_screen_or_title() {
+        let assert_back_destination = |request: Option<LocalDemoRequest>, expected| {
+            let mut app = App::new();
+            app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+                .init_state::<Screen>()
+                .add_message::<hex_ui::UiIntent>()
+                .add_systems(Update, handle_navigation_intents);
+            if let Some(request) = request {
+                app.insert_resource(request);
+            }
+            app.world_mut().write_message(hex_ui::UiIntent::Back);
+            app.update();
+            app.update();
+            assert_eq!(*app.world().resource::<State<Screen>>().get(), expected);
+        };
+
+        assert_back_destination(None, Screen::Title);
+
+        let (elements, spells, index) = real_content();
+        let (spec, _) = build_demo_spec(&elements, &spells, &index);
+        let stats = build_demo_stats(&spec, &spells, &index, &elements);
+        let request = LocalDemoRequest {
+            spec,
+            stats,
+            spells,
+            index,
+            return_to: Screen::CharacterCreator,
+        };
+        assert_back_destination(Some(request), Screen::CharacterCreator);
     }
 
     /// The whole point of the screen: every spell the demo places is castable

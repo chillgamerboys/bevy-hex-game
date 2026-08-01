@@ -456,7 +456,7 @@ pub mod test_support {
                 Self::LatticeDemo => task(
                     "lattice-demo",
                     Screen::LatticeDemo,
-                    &["End Turn", "Reset", "Cast Lightning Bolt"],
+                    &["Back", "End Turn", "Reset", "Cast Lightning Bolt"],
                     &[],
                     false,
                 ),
@@ -680,7 +680,10 @@ pub mod test_support {
                     }),
                     ..default()
                 },
-                bevy::asset::AssetPlugin::default(),
+                bevy::asset::AssetPlugin {
+                    watch_for_changes_override: Some(false),
+                    ..default()
+                },
                 bevy::image::ImagePlugin::default(),
                 bevy::mesh::MeshPlugin,
                 bevy::text::TextPlugin,
@@ -1548,7 +1551,7 @@ pub mod test_support {
         }
 
         #[test]
-        fn every_task_passes_the_representative_viewport_and_scale_matrix() {
+        fn every_task_passes_its_declared_viewport_and_scale_matrix() {
             let viewports = [
                 (UVec2::new(1280, 720), 1.0, crate::UiScaleMode::Auto),
                 (UVec2::new(1920, 1080), 1.0, crate::UiScaleMode::Auto),
@@ -1557,19 +1560,119 @@ pub mod test_support {
                 (UVec2::new(3024, 1898), 2.0, crate::UiScaleMode::Auto),
             ];
             let mut failures = Vec::new();
+            let exhaustive_contracts = UiTaskCase::ALL
+                .into_iter()
+                .filter(|case| case.contract().exhaustive_layout)
+                .map(|case| case.contract().id)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                exhaustive_contracts,
+                [
+                    "title-cold",
+                    "map-scenarios",
+                    "demos",
+                    "creator-character-library",
+                    "creator-spell-library",
+                    "creator-character-invalid",
+                    "creator-spell-invalid",
+                    "lab-map",
+                    "lab-rosters-max",
+                    "lab-rules",
+                    "lab-reports-populated",
+                    "deployment-incomplete",
+                    "gameplay-player-turn-max",
+                    "aiming-blocked",
+                    "decision-disable",
+                    "hud-hidden-required",
+                    "report-compare",
+                ],
+                "the documented high-risk task set must not silently lose exhaustive coverage"
+            );
             for case in UiTaskCase::ALL {
-                for (physical, device_scale, mode) in viewports {
-                    let snapshot =
-                        task_snapshot_at(case, physical.x, physical.y, device_scale, mode);
-                    let issues = task_contract_issues(case, &snapshot);
-                    if !issues.is_empty() {
-                        failures.push((case.contract().id, physical, device_scale, mode, issues));
+                if case.contract().exhaustive_layout {
+                    for (physical, device_scale) in structural_canvases() {
+                        for mode in all_scale_modes() {
+                            let snapshot =
+                                task_snapshot_at(case, physical.x, physical.y, device_scale, mode);
+                            let issues = task_contract_issues(case, &snapshot);
+                            if !issues.is_empty() {
+                                failures.push((
+                                    case.contract().id,
+                                    physical,
+                                    device_scale,
+                                    mode,
+                                    issues,
+                                ));
+                            }
+                        }
+                    }
+                } else {
+                    for (physical, device_scale, mode) in viewports {
+                        let snapshot =
+                            task_snapshot_at(case, physical.x, physical.y, device_scale, mode);
+                        let issues = task_contract_issues(case, &snapshot);
+                        if !issues.is_empty() {
+                            failures.push((
+                                case.contract().id,
+                                physical,
+                                device_scale,
+                                mode,
+                                issues,
+                            ));
+                        }
                     }
                 }
             }
             assert!(
                 failures.is_empty(),
-                "representative UI task matrix failures: {failures:#?}"
+                "declared UI task matrix failures: {failures:#?}"
+            );
+        }
+
+        #[test]
+        fn populated_reports_have_complete_scroll_routes_at_every_structural_canvas() {
+            let case = UiTaskCase::LabReportsPopulated;
+            let mut failures = Vec::new();
+            for (physical, device_scale) in structural_canvases() {
+                for mode in all_scale_modes() {
+                    let snapshot =
+                        task_snapshot_at(case, physical.x, physical.y, device_scale, mode);
+                    let issues = task_contract_issues(case, &snapshot);
+                    if !issues.is_empty() {
+                        failures.push((physical, device_scale, mode, issues));
+                    }
+                }
+            }
+            assert!(
+                failures.is_empty(),
+                "populated Combat Lab report scroll failures: {failures:#?}"
+            );
+        }
+
+        #[test]
+        fn lattice_demo_back_is_an_immediate_focusable_route() {
+            let snapshot = lattice_demo_snapshot(1280, 720, 1.0, crate::UiScaleMode::Auto);
+            let back = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.name == "Back")
+                .expect("the Lattice Demo must expose a Back control");
+            assert!(
+                back.fully_visible,
+                "Back must be visible without scrolling: {back:?}"
+            );
+            assert_eq!(
+                back.visibility_requirement,
+                Some(crate::UiVisibilityRequirement::Immediate)
+            );
+            assert!(
+                snapshot.focus_order.iter().any(|name| name == "Back"),
+                "Back must be reachable by keyboard focus: {:?}",
+                snapshot.focus_order
+            );
+            assert!(
+                back.accessible_label.is_some(),
+                "Back must carry an accessibility label"
             );
         }
 
@@ -2853,7 +2956,7 @@ pub mod test_support {
         }
 
         #[test]
-        fn statistics_drawer_restores_standard_layout_after_enlarged_ui() {
+        fn expanded_statistics_replaces_and_then_restores_the_populated_inspector() {
             let mut app = App::new();
             app.add_plugins(HeadlessUiPlugin::with_scale_factor(1920, 1080, 1.0));
             app.world_mut().insert_resource(crate::GameplayChromeView {
@@ -2896,22 +2999,73 @@ pub mod test_support {
                 end.fully_visible,
                 "the final drawer action must be usable: {end:?}"
             );
-            let drawer = snapshot
+            snapshot
                 .nodes
                 .iter()
                 .find(|node| node.name == "Combat Lab Live Statistics Drawer")
                 .and_then(|node| node.visible_bounds)
                 .expect("the expanded statistics drawer must be visible");
-            let own_lattice = snapshot
-                .nodes
-                .iter()
-                .find(|node| node.name == "Own Lattice Panel")
-                .and_then(|node| node.visible_bounds)
-                .expect("the inspector lattice must remain structurally mounted beneath it");
             assert!(
-                rect_contains(drawer, own_lattice),
-                "the expanded drawer must fully replace the read-only inspector instead of partially overlapping it: drawer={drawer:?}, inspector={own_lattice:?}"
+                snapshot.nodes.iter().all(|node| !matches!(
+                    node.name.as_str(),
+                    "Inspector HUD Region" | "Own Lattice Panel" | "Target Lattice Panel"
+                )),
+                "the expanded drawer must hide the complete populated inspector: {:?}",
+                snapshot
+                    .nodes
+                    .iter()
+                    .filter(|node| node.name.contains("Lattice") || node.name.contains("Inspector"))
+                    .collect::<Vec<_>>()
             );
+
+            app.world_mut()
+                .resource_mut::<crate::GameplayChromeView>()
+                .decision_required = true;
+            for _ in 0..8 {
+                app.update();
+            }
+            let required = ui_tree_snapshot(app.world_mut());
+            assert!(
+                required
+                    .nodes
+                    .iter()
+                    .all(|node| node.name != "Combat Lab Live Statistics Drawer"),
+                "a blocking decision must hide the secondary statistics drawer"
+            );
+            for restored in [
+                "Inspector HUD Region",
+                "Own Lattice Panel",
+                "Target Lattice Panel",
+            ] {
+                assert!(
+                    required.nodes.iter().any(|node| node.name == restored),
+                    "a blocking decision must retain {restored}"
+                );
+            }
+
+            app.world_mut()
+                .resource_mut::<crate::GameplayChromeView>()
+                .decision_required = false;
+            app.world_mut()
+                .resource_mut::<crate::review::UiReviewPresentation>()
+                .statistics
+                .as_mut()
+                .expect("the review fixture must retain statistics")
+                .expanded = false;
+            for _ in 0..8 {
+                app.update();
+            }
+            let collapsed = ui_tree_snapshot(app.world_mut());
+            for restored in [
+                "Inspector HUD Region",
+                "Own Lattice Panel",
+                "Target Lattice Panel",
+            ] {
+                assert!(
+                    collapsed.nodes.iter().any(|node| node.name == restored),
+                    "collapsing statistics must restore {restored}"
+                );
+            }
         }
 
         #[test]

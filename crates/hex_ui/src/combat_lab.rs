@@ -38,6 +38,9 @@ struct LabResponsiveBody;
 #[derive(Component)]
 struct LabInnerScroll;
 
+#[derive(Component)]
+struct LabMinimumTarget;
+
 #[derive(Component, Debug, Clone, Copy)]
 enum LabBodyPanel {
     Sidebar(f32),
@@ -184,7 +187,7 @@ fn apply_lab_screen_layout(
     parents: Query<&ChildOf>,
     responsive_bodies: Query<(), With<LabResponsiveBody>>,
     mut controls: Query<
-        &mut Node,
+        (&mut Node, Option<&LabMinimumTarget>),
         (
             Or<(With<CombatLabIntent>, With<InteractionDisabled>)>,
             Without<LabRoot>,
@@ -253,13 +256,19 @@ fn apply_lab_screen_layout(
             commands.entity(entity).insert(ScrollArea);
         }
     }
-    for mut node in &mut controls {
+    for (mut node, minimum_target) in &mut controls {
         node.max_width = if compact {
             Val::Percent(100.0)
         } else {
             Val::Auto
         };
-        node.min_width = if compact { Val::Px(0.0) } else { Val::Auto };
+        node.min_width = if minimum_target.is_some() {
+            Val::Px(44.0)
+        } else if compact {
+            Val::Px(0.0)
+        } else {
+            Val::Auto
+        };
     }
 }
 
@@ -395,6 +404,7 @@ fn scrollable_lab_glyph_button(
         .spawn((
             fixed_row_button(text, 48.0, 48.0),
             action,
+            LabMinimumTarget,
             crate::UiVisibilityRequirement::Scrollable,
         ))
         .with_child(label(assets, text));
@@ -765,8 +775,11 @@ fn spawn_rules_setup(
                 rules.spawn(heading(assets, "3 · rules profile"));
                 rules
                     .spawn(Node {
+                        width: Val::Percent(100.0),
                         flex_direction: FlexDirection::Row,
+                        flex_wrap: FlexWrap::Wrap,
                         column_gap: Val::Px(7.0),
+                        row_gap: Val::Px(7.0),
                         ..default()
                     })
                     .with_children(|presets| {
@@ -1209,8 +1222,11 @@ fn spawn_build_card(
                     .insert(TextColor(DANGER));
             }
             card.spawn(Node {
+                width: Val::Percent(100.0),
                 flex_direction: FlexDirection::Row,
+                flex_wrap: FlexWrap::Wrap,
                 column_gap: Val::Px(4.0),
+                row_gap: Val::Px(4.0),
                 ..default()
             })
             .with_children(|actions| {
@@ -1501,172 +1517,186 @@ fn spawn_saved_reports(
     _state: &CombatLabScreenView,
     reports: &CombatLabReportsView,
 ) {
-    root.spawn(panel())
-        .insert(Node {
+    root.spawn((
+        LabResponsiveBody,
+        ScrollArea,
+        Node {
             width: Val::Percent(96.0),
-            height: Val::Px(0.0),
             min_height: Val::Px(0.0),
-            flex_basis: Val::Px(0.0),
             flex_grow: 1.0,
-            ..panel_node()
-        })
-        .with_children(|history| {
-            history.spawn(heading(assets, "explicitly saved local reports"));
-            history.spawn(blurb(
-                assets,
-                "Separate from Creator and Continue · fixed fixtures never consult this history.",
-            ));
-            if let Some(error) = &reports.error {
-                history
-                    .spawn(blurb(assets, error.clone()))
-                    .insert(TextColor(DANGER));
-            }
-            if reports.reports.is_empty() {
+            flex_direction: FlexDirection::Row,
+            ..default()
+        },
+    ))
+    .with_children(|body| {
+        body.spawn((panel(), LabBodyPanel::Main))
+            .insert(Node {
+                min_width: Val::Px(0.0),
+                min_height: Val::Px(0.0),
+                flex_grow: 1.0,
+                ..panel_node()
+            })
+            .with_children(|history| {
+                history.spawn(heading(assets, "explicitly saved local reports"));
                 history.spawn(blurb(
                     assets,
-                    "No saved reports. Finish a Lab run and choose Save Report.",
+                    "Separate from Creator and Continue · fixed fixtures never consult this history.",
                 ));
-                return;
-            }
-            history
-                .spawn((
-                    LabInnerScroll,
-                    ScrollArea,
-                    Node {
-                        min_height: Val::Px(0.0),
-                        flex_grow: 1.0,
-                        flex_direction: FlexDirection::Column,
-                        row_gap: Val::Px(7.0),
-                        overflow: Overflow::scroll_y(),
-                        ..default()
-                    },
-                ))
-                .with_children(|list| {
-                    for report in &reports.reports {
-                        list.spawn(panel())
-                            .insert(Node {
-                                width: Val::Percent(100.0),
-                                ..panel_node()
-                            })
-                            .with_children(|card| {
-                                card.spawn(heading(assets, report.heading.clone()));
-                                card.spawn((
-                                    Name::new(format!("Report {} Label", report.id.0)),
-                                    AccessibleLabel::new(format!(
-                                        "Report {} comparison label",
-                                        report.id.0
-                                    )),
-                                    TabIndex(0),
-                                    crate::UiVisibilityRequirement::Scrollable,
-                                    EditableText {
-                                        max_characters: Some(128),
-                                        visible_width: Some(32.0),
-                                        ..EditableText::new(&report.label)
-                                    },
-                                    body_text_role(),
-                                    responsive_control_role(),
-                                    TextFont {
-                                        font: assets.body.clone().into(),
-                                        ..TextFont::from_font_size(18.0)
-                                    },
-                                    TextColor(Color::WHITE),
-                                    BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.08)),
-                                    Node {
-                                        width: Val::Percent(100.0),
-                                        min_height: Val::Px(44.0),
-                                        padding: UiRect::all(Val::Px(7.0)),
-                                        ..default()
-                                    },
-                                    CombatLabReportField::Label(report.id),
-                                ));
-                                card.spawn((
-                                    Name::new(format!("Report {} Notes", report.id.0)),
-                                    AccessibleLabel::new(format!("Report {} notes", report.id.0)),
-                                    TabIndex(0),
-                                    crate::UiVisibilityRequirement::Scrollable,
-                                    EditableText {
-                                        max_characters: Some(2_048),
-                                        visible_width: Some(52.0),
-                                        ..EditableText::new(&report.notes)
-                                    },
-                                    body_text_role(),
-                                    responsive_control_role(),
-                                    TextFont {
-                                        font: assets.body.clone().into(),
-                                        ..TextFont::from_font_size(18.0)
-                                    },
-                                    TextColor(LABEL),
-                                    BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.05)),
-                                    Node {
-                                        width: Val::Percent(100.0),
-                                        min_height: Val::Px(44.0),
-                                        padding: UiRect::all(Val::Px(7.0)),
-                                        ..default()
-                                    },
-                                    CombatLabReportField::Notes(report.id),
-                                ));
-                                card.spawn(fine(assets, report.metadata.clone()));
-                                card.spawn(blurb(assets, report.summary.clone()));
-                                scrollable_lab_button(
-                                    card,
-                                    assets,
-                                    if report.left_selected {
-                                        "LEFT · SELECTED"
+                if let Some(error) = &reports.error {
+                    history
+                        .spawn(blurb(assets, error.clone()))
+                        .insert(TextColor(DANGER));
+                }
+                if reports.reports.is_empty() {
+                    history.spawn(blurb(
+                        assets,
+                        "No saved reports. Finish a Lab run and choose Save Report.",
+                    ));
+                    return;
+                }
+                history
+                    .spawn((
+                        LabInnerScroll,
+                        ScrollArea,
+                        Node {
+                            min_height: Val::Px(0.0),
+                            flex_grow: 1.0,
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(7.0),
+                            overflow: Overflow::scroll_y(),
+                            ..default()
+                        },
+                    ))
+                    .with_children(|list| {
+                        for report in &reports.reports {
+                            list.spawn(panel())
+                                .insert(Node {
+                                    width: Val::Percent(100.0),
+                                    ..panel_node()
+                                })
+                                .with_children(|card| {
+                                    card.spawn(heading(assets, report.heading.clone()));
+                                    card.spawn((
+                                        Name::new(format!("Report {} Label", report.id.0)),
+                                        AccessibleLabel::new(format!(
+                                            "Report {} comparison label",
+                                            report.id.0
+                                        )),
+                                        TabIndex(0),
+                                        crate::UiVisibilityRequirement::Scrollable,
+                                        EditableText {
+                                            max_characters: Some(128),
+                                            visible_width: Some(32.0),
+                                            ..EditableText::new(&report.label)
+                                        },
+                                        body_text_role(),
+                                        responsive_control_role(),
+                                        TextFont {
+                                            font: assets.body.clone().into(),
+                                            ..TextFont::from_font_size(18.0)
+                                        },
+                                        TextColor(Color::WHITE),
+                                        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.08)),
+                                        Node {
+                                            width: Val::Percent(100.0),
+                                            min_height: Val::Px(44.0),
+                                            padding: UiRect::all(Val::Px(7.0)),
+                                            ..default()
+                                        },
+                                        CombatLabReportField::Label(report.id),
+                                    ));
+                                    card.spawn((
+                                        Name::new(format!("Report {} Notes", report.id.0)),
+                                        AccessibleLabel::new(format!(
+                                            "Report {} notes",
+                                            report.id.0
+                                        )),
+                                        TabIndex(0),
+                                        crate::UiVisibilityRequirement::Scrollable,
+                                        EditableText {
+                                            max_characters: Some(2_048),
+                                            visible_width: Some(52.0),
+                                            ..EditableText::new(&report.notes)
+                                        },
+                                        body_text_role(),
+                                        responsive_control_role(),
+                                        TextFont {
+                                            font: assets.body.clone().into(),
+                                            ..TextFont::from_font_size(18.0)
+                                        },
+                                        TextColor(LABEL),
+                                        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.05)),
+                                        Node {
+                                            width: Val::Percent(100.0),
+                                            min_height: Val::Px(44.0),
+                                            padding: UiRect::all(Val::Px(7.0)),
+                                            ..default()
+                                        },
+                                        CombatLabReportField::Notes(report.id),
+                                    ));
+                                    card.spawn(fine(assets, report.metadata.clone()));
+                                    card.spawn(blurb(assets, report.summary.clone()));
+                                    scrollable_lab_button(
+                                        card,
+                                        assets,
+                                        if report.left_selected {
+                                            "LEFT · SELECTED"
+                                        } else {
+                                            "Use as Left"
+                                        },
+                                        CombatLabIntent::SelectCompareLeft(report.id),
+                                        140.0,
+                                    );
+                                    scrollable_lab_button(
+                                        card,
+                                        assets,
+                                        if report.right_selected {
+                                            "RIGHT · SELECTED"
+                                        } else {
+                                            "Use as Right"
+                                        },
+                                        CombatLabIntent::SelectCompareRight(report.id),
+                                        140.0,
+                                    );
+                                    if report.pending_delete {
+                                        card.spawn(fine(
+                                            assets,
+                                            "CONFIRM DELETE · this removes only this local report",
+                                        ))
+                                        .insert(TextColor(DANGER));
+                                        scrollable_lab_button(
+                                            card,
+                                            assets,
+                                            "Confirm Delete",
+                                            CombatLabIntent::ConfirmReportDelete(report.id),
+                                            160.0,
+                                        );
+                                        scrollable_lab_button(
+                                            card,
+                                            assets,
+                                            "Cancel",
+                                            CombatLabIntent::CancelReportDelete,
+                                            100.0,
+                                        );
                                     } else {
-                                        "Use as Left"
-                                    },
-                                    CombatLabIntent::SelectCompareLeft(report.id),
-                                    140.0,
-                                );
-                                scrollable_lab_button(
-                                    card,
-                                    assets,
-                                    if report.right_selected {
-                                        "RIGHT · SELECTED"
-                                    } else {
-                                        "Use as Right"
-                                    },
-                                    CombatLabIntent::SelectCompareRight(report.id),
-                                    140.0,
-                                );
-                                if report.pending_delete {
-                                    card.spawn(fine(
-                                        assets,
-                                        "CONFIRM DELETE · this removes only this local report",
-                                    ))
-                                    .insert(TextColor(DANGER));
-                                    scrollable_lab_button(
-                                        card,
-                                        assets,
-                                        "Confirm Delete",
-                                        CombatLabIntent::ConfirmReportDelete(report.id),
-                                        160.0,
-                                    );
-                                    scrollable_lab_button(
-                                        card,
-                                        assets,
-                                        "Cancel",
-                                        CombatLabIntent::CancelReportDelete,
-                                        100.0,
-                                    );
-                                } else {
-                                    scrollable_lab_button(
-                                        card,
-                                        assets,
-                                        "Delete…",
-                                        CombatLabIntent::RequestReportDelete(report.id),
-                                        110.0,
-                                    );
-                                }
-                            });
-                    }
-                });
-            if let Some(comparison) = &reports.comparison {
-                history.spawn(heading(assets, comparison.heading.clone()));
-                history.spawn(fine(assets, comparison.frozen.clone()));
-                history.spawn(blurb(assets, comparison.deltas.clone()));
-            }
-        });
+                                        scrollable_lab_button(
+                                            card,
+                                            assets,
+                                            "Delete…",
+                                            CombatLabIntent::RequestReportDelete(report.id),
+                                            110.0,
+                                        );
+                                    }
+                                });
+                        }
+                    });
+                if let Some(comparison) = &reports.comparison {
+                    history.spawn(heading(assets, comparison.heading.clone()));
+                    history.spawn(fine(assets, comparison.frozen.clone()));
+                    history.spawn(blurb(assets, comparison.deltas.clone()));
+                }
+            });
+    });
 }
 
 /// Stable visible fixture identities for immutable headless observation.
