@@ -11,6 +11,7 @@ use crate::{
     ActionAffordance, ActionAvailability, ActionPriority, CastingAimView, CastingPanelContentView,
     CastingSpellView, CellInteraction, DecisionChoiceView, GameplayAction, LatticeCellView,
     OutcomeAction, OutcomeActionView, OutcomeCompareChoiceView, OwnLatticeView,
+    TargetLatticeStateView, TargetLatticeView,
 };
 
 #[derive(Resource, Default)]
@@ -86,7 +87,12 @@ pub fn apply_ui_review_fixture(commands: &mut Commands, name: &str) -> Result<()
                     aiming: None,
                 },
             });
-            review.statistics = Some(LabStatisticsView::default());
+            review.statistics = Some(LabStatisticsView {
+                present: true,
+                visible: true,
+                expanded: false,
+                text: "Round 4 · live Combat Lab totals".to_owned(),
+            });
         }
         "required-decision" => {
             review.hud = Some(required_hud());
@@ -145,6 +151,7 @@ pub fn apply_ui_review_fixture(commands: &mut Commands, name: &str) -> Result<()
         }
         "live-statistics" => {
             review.hud = Some(ordinary_hud());
+            review.lattices = Some(populated_lattices());
             review.statistics = Some(LabStatisticsView {
                 present: true,
                 visible: true,
@@ -399,4 +406,55 @@ fn decision_lattices() -> GameplayLatticesView {
         }),
         target: None,
     }
+}
+
+#[cfg(any(feature = "visual-review", feature = "test-support"))]
+fn populated_lattices() -> GameplayLatticesView {
+    let mut lattices = decision_lattices();
+    if let Some(own) = &mut lattices.own {
+        own.heading = "selected ally".to_owned();
+        own.decision = None;
+        let templates = own.cells.clone();
+        for (index, (template, (q, r))) in templates
+            .iter()
+            .cycle()
+            .zip([
+                (1, -1),
+                (0, -1),
+                (-1, 0),
+                (2, 0),
+                (2, -1),
+                (2, -2),
+                (1, -2),
+                (0, -2),
+                (-1, -1),
+            ])
+            .enumerate()
+        {
+            let mut cell = template.clone();
+            cell.coord = hex_core::LatticeCoord::new(q, r);
+            cell.label = format!("CELL {}", index + templates.len() + 1);
+            cell.selected = false;
+            cell.interaction = CellInteraction::ReadOnly;
+            own.cells.push(cell);
+        }
+        for cell in &mut own.cells {
+            cell.detail = "LIVE".to_owned();
+            cell.selected = false;
+            cell.interaction = CellInteraction::ReadOnly;
+        }
+    }
+    let target_cells = lattices
+        .own
+        .as_ref()
+        .map_or_else(Vec::new, |own| own.cells.iter().take(8).cloned().collect());
+    lattices.target = Some(TargetLatticeView {
+        heading: "aim target".to_owned(),
+        identity: "Raider · Hostile".to_owned(),
+        state: TargetLatticeStateView::Known {
+            cells: target_cells,
+            unknown: Some(4),
+        },
+    });
+    lattices
 }

@@ -6,9 +6,9 @@ use bevy::ui_widgets::ScrollArea;
 use hex_core::Screen;
 
 use crate::{
-    blurb, heading, layout::is_ultra_constrained, row_button, supporting_text_role, DespawnOnExit,
-    LabStatisticsIntent, LabStatisticsView, ResolvedUiMetrics, UiAssets, UiIntent, UiSystems,
-    UiViewportClass, ACCENT_EDGE, LABEL,
+    blurb, hud_heading, layout::is_ultra_constrained, row_button, supporting_text_role,
+    DespawnOnExit, GameplayChromeView, LabStatisticsIntent, LabStatisticsView, ResolvedUiMetrics,
+    UiAssets, UiIntent, UiRegionRole, UiSystems, UiViewportClass, ACCENT_EDGE, LABEL,
 };
 
 #[derive(Component)]
@@ -28,7 +28,7 @@ pub(super) fn plugin(app: &mut App) {
         .add_systems(
             Update,
             (
-                (render, apply_layout).chain().in_set(UiSystems::Render),
+                (apply_layout, render).chain().in_set(UiSystems::Render),
                 emit_intents.in_set(UiSystems::EmitIntents),
             )
                 .run_if(in_state(Screen::Gameplay)),
@@ -79,7 +79,7 @@ fn spawn(mut commands: Commands, assets: Res<UiAssets>) {
                     },
                 ))
                 .with_children(|body| {
-                    body.spawn(heading(&assets, "LIVE COMBAT LAB STATISTICS"));
+                    body.spawn(hud_heading(&assets, "LIVE COMBAT LAB STATISTICS"));
                     body.spawn((
                         Summary,
                         Text::new("Waiting for canonical combat statistics…"),
@@ -109,30 +109,50 @@ fn spawn(mut commands: Commands, assets: Res<UiAssets>) {
 
 fn render(
     view: Res<LabStatisticsView>,
+    chrome: Res<GameplayChromeView>,
     review: Option<Res<crate::review::UiReviewPresentation>>,
+    added_regions: Query<(), Added<UiRegionRole>>,
+    added_drawers: Query<(), Added<Drawer>>,
     mut drawers: Query<&mut Visibility, With<Drawer>>,
-    mut bodies: Query<&mut Visibility, (With<Body>, Without<Drawer>)>,
+    mut bodies: Query<&mut Visibility, (With<Body>, Without<Drawer>, Without<UiRegionRole>)>,
+    mut regions: Query<(&UiRegionRole, &mut Visibility), (Without<Drawer>, Without<Body>)>,
     mut summaries: Query<&mut Text, With<Summary>>,
     buttons: Query<(&Control, &Children)>,
     mut labels: Query<&mut Text, (Without<Summary>, Without<Drawer>)>,
 ) {
     let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
-    if !view.is_changed() && !review_changed {
+    if !view.is_changed()
+        && !chrome.is_changed()
+        && !review_changed
+        && added_regions.is_empty()
+        && added_drawers.is_empty()
+    {
         return;
     }
     let view = review
         .as_ref()
         .and_then(|review| review.statistics.as_ref())
         .unwrap_or(view.as_ref());
+    let show_drawer = view.present && view.visible && !chrome.decision_required;
+    let replaces_inspector = show_drawer && view.expanded;
+    for (role, mut visibility) in &mut regions {
+        if *role == UiRegionRole::Inspector {
+            *visibility = if replaces_inspector {
+                Visibility::Hidden
+            } else {
+                Visibility::Inherited
+            };
+        }
+    }
     for mut visibility in &mut drawers {
-        *visibility = if view.present && view.visible {
+        *visibility = if show_drawer {
             Visibility::Inherited
         } else {
             Visibility::Hidden
         };
     }
     for mut visibility in &mut bodies {
-        *visibility = if view.expanded {
+        *visibility = if show_drawer && view.expanded {
             Visibility::Inherited
         } else {
             Visibility::Hidden
@@ -163,21 +183,21 @@ fn apply_layout(
     review: Option<Res<crate::review::UiReviewPresentation>>,
     added: Query<(), Added<Drawer>>,
     mut drawers: Query<&mut Node, (With<Drawer>, Without<Body>)>,
-    mut bodies: Query<(&mut Node, &mut Visibility), (With<Body>, Without<Drawer>)>,
+    mut bodies: Query<&mut Node, (With<Body>, Without<Drawer>)>,
 ) {
-    if !metrics.is_changed() && added.is_empty() {
+    let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
+    if !metrics.is_changed() && !view.is_changed() && !review_changed && added.is_empty() {
         return;
     }
     let expanded = review
         .as_ref()
         .and_then(|review| review.statistics.as_ref())
         .map_or(view.expanded, |view| view.expanded);
-    for (mut body, mut visibility) in &mut bodies {
-        body.display = Display::Flex;
-        *visibility = if expanded {
-            Visibility::Inherited
+    for mut body in &mut bodies {
+        body.display = if expanded {
+            Display::Flex
         } else {
-            Visibility::Hidden
+            Display::None
         };
     }
     for mut node in &mut drawers {
@@ -191,12 +211,12 @@ fn apply_layout(
                     92.0
                 };
                 node.top = Val::Px(top);
-                let bottom = if ultra {
+                let bottom = if ultra || !expanded {
                     12.0
                 } else {
                     crate::layout::semantic_action_rail_clearance(*metrics)
                 };
-                node.bottom = Val::Px(bottom);
+                node.bottom = if expanded { Val::Px(bottom) } else { Val::Auto };
                 if ultra {
                     node.left = Val::Px(12.0);
                     node.right = Val::Px(12.0);
@@ -204,9 +224,8 @@ fn apply_layout(
                     node.flex_direction = FlexDirection::Row;
                     node.align_items = AlignItems::Center;
                     node.column_gap = Val::Px(7.0);
-                    for (mut body, mut visibility) in &mut bodies {
+                    for mut body in &mut bodies {
                         body.display = Display::None;
-                        *visibility = Visibility::Hidden;
                     }
                 } else {
                     node.left = Val::Auto;
@@ -216,7 +235,11 @@ fn apply_layout(
                     node.align_items = AlignItems::Stretch;
                     node.column_gap = Val::ZERO;
                 }
-                node.max_height = Val::Px((metrics.logical_size.y - top - bottom).max(0.0));
+                node.max_height = if expanded {
+                    Val::Px((metrics.logical_size.y - top - bottom).max(0.0))
+                } else {
+                    Val::Auto
+                };
             }
             UiViewportClass::Standard => {
                 node.display = Display::Flex;

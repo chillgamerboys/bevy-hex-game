@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use hex_core::Screen;
 
 use crate::{
-    body_text_role, heading, panel, HudElement, InitiativeSide, InitiativeView, UiAssets,
+    hud_heading, hud_text_role, panel, HudElement, InitiativeSide, InitiativeView, UiAssets,
     UiHudSetup, UiRegionRole, ACCENT, BLURB_SIZE, LABEL, READ_ONLY_HUD,
 };
 
@@ -56,7 +56,7 @@ fn spawn_panel(
             ..default()
         })
         .with_children(|panel| {
-            panel.spawn((InitiativeHeading, heading(&assets, "turn order")));
+            panel.spawn((InitiativeHeading, hud_heading(&assets, "turn order")));
             panel.spawn((
                 Name::new("Initiative Body"),
                 InitiativeBody,
@@ -111,7 +111,7 @@ fn rebuild(
             rows.spawn((
                 Name::new(format!("Initiative Unit {}", entry.unit.0)),
                 Text::new(entry_label(entry, dense)),
-                body_text_role(),
+                hud_text_role(),
                 TextFont {
                     font: assets.body.clone().into(),
                     ..TextFont::from_font_size(BLURB_SIZE)
