@@ -671,7 +671,7 @@ mod tests {
         let actions_left = ultra_primary_left(metrics, false)
             .expect("the ordinary ultra-constrained layout must reserve the left column");
         let (control_width, control_height) = control_size(metrics);
-        assert_eq!(left, 8.0);
+        assert!((left - 8.0).abs() < f32::EPSILON);
         assert!(left + width < actions_left);
         assert!(top + height <= metrics.effective_size.y);
         assert!(control_height >= 44.0);
