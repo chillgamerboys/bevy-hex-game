@@ -4,9 +4,10 @@ use bevy::prelude::*;
 use hex_core::Screen;
 
 use crate::{
-    blurb, fine, heading, panel, row_button, spawn_lattice_cells, GameplayLatticesView, HudElement,
-    LatticeIntent, LatticeScale, RequiredActionSurface, TargetLatticeStateView, TargetPulseView,
-    UiAssets, UiHudSetup, UiIntent, UiRegionRole, UiSystems, EDGE, PANEL_BG, READ_ONLY_HUD,
+    blurb, fine, hud_heading, panel, row_button, spawn_lattice_cells, GameplayLatticesView,
+    HudElement, LatticeIntent, LatticeScale, RequiredActionSurface, TargetLatticeStateView,
+    TargetPulseView, UiAssets, UiHudSetup, UiIntent, UiRegionRole, UiSystems, EDGE, PANEL_BG,
+    READ_ONLY_HUD,
 };
 
 #[derive(Component)]
@@ -81,7 +82,7 @@ fn spawn_panels(
                 ))
                 .insert(panel_node(Display::Flex))
                 .with_children(|panel| {
-                    panel.spawn((OwnHeading, heading(&assets, "selected ally")));
+                    panel.spawn((OwnHeading, hud_heading(&assets, "selected ally")));
                     panel.spawn((
                         Name::new("Own Lattice Body"),
                         OwnBody,
@@ -99,7 +100,7 @@ fn spawn_panels(
                 ))
                 .insert(panel_node(Display::None))
                 .with_children(|panel| {
-                    panel.spawn((TargetHeading, heading(&assets, "aim target")));
+                    panel.spawn((TargetHeading, hud_heading(&assets, "aim target")));
                     panel.spawn((
                         Name::new("Target Lattice Body"),
                         TargetBody,

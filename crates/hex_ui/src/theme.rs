@@ -3,9 +3,12 @@ use bevy::prelude::*;
 use hex_assets::ElementCatalog;
 use hex_core::ElementId;
 
-const RESTING: Color = Color::srgba(1.0, 1.0, 1.0, 0.08);
-const HOVERED: Color = Color::srgba(1.0, 1.0, 1.0, 0.16);
-const PRESSED: Color = Color::srgba(1.0, 0.94, 0.75, 0.28);
+// Keep controls visually inside the dark arcane surface instead of rendering
+// large translucent grey slabs. Opaque resting paint also makes their contrast
+// independent of the world or menu color behind them.
+const RESTING: Color = Color::srgba(0.105, 0.115, 0.145, 0.98);
+const HOVERED: Color = Color::srgba(0.16, 0.17, 0.20, 0.99);
+const PRESSED: Color = Color::srgba(0.25, 0.22, 0.15, 0.99);
 /// Primary readable text.
 pub const LABEL: Color = Color::srgb(0.96, 0.96, 0.97);
 /// Supporting readable text.
@@ -44,6 +47,10 @@ enum SemanticText {
     ScreenTitle,
     Heading,
     Body,
+    /// Persistent gameplay chrome uses the smallest accessible hierarchy so
+    /// world actors remain the dominant visual layer.
+    HudHeading,
+    HudBody,
     Supporting,
     Metadata,
     /// A redundant label constrained inside a diagram cell.
@@ -146,6 +153,18 @@ pub fn heading(assets: &UiAssets, text: impl Into<String>) -> impl Bundle {
     )
 }
 
+/// Compact section heading for persistent gameplay chrome.
+#[must_use]
+pub(crate) fn hud_heading(assets: &UiAssets, text: impl Into<String>) -> impl Bundle {
+    text_bundle(
+        assets.display.clone(),
+        text,
+        20.0,
+        ACCENT,
+        SemanticText::HudHeading,
+    )
+}
+
 /// Essential body or control text.
 #[must_use]
 pub fn label(assets: &UiAssets, text: impl Into<String>) -> impl Bundle {
@@ -205,6 +224,12 @@ fn text_bundle(
 #[must_use]
 pub(crate) const fn body_text_role() -> impl Bundle {
     SemanticText::Body
+}
+
+/// Applies compact essential typography to persistent gameplay chrome.
+#[must_use]
+pub(crate) const fn hud_text_role() -> impl Bundle {
+    SemanticText::HudBody
 }
 
 /// Applies supporting typography to a custom text entity.
@@ -409,6 +434,8 @@ fn apply_semantic_metrics(
             SemanticText::ScreenTitle => SCREEN_TITLE_SIZE * metrics.heading_scale,
             SemanticText::Heading => TITLE_SIZE * metrics.heading_scale,
             SemanticText::Body => (LABEL_SIZE * metrics.content_scale).max(18.0),
+            SemanticText::HudHeading => (20.0 * metrics.heading_scale).max(18.0),
+            SemanticText::HudBody => (18.0 * metrics.content_scale).max(18.0),
             SemanticText::Supporting => (BLURB_SIZE * metrics.content_scale).max(18.0),
             SemanticText::Metadata => FINE_SIZE * metrics.content_scale,
             SemanticText::CompactGlyph { base_size } => base_size * metrics.control_scale.max(1.0),

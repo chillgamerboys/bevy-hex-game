@@ -3,7 +3,7 @@
 
 use bevy::prelude::*;
 use bevy::ui::InteractionDisabled;
-use bevy::ui_widgets::ScrollArea;
+use bevy::ui_widgets::{ControlOrientation, ScrollArea, Scrollbar, ScrollbarThumb};
 use hex_core::Screen;
 
 use crate::{
@@ -14,7 +14,7 @@ use crate::{
 };
 
 const TITLE_ACTIONS_MAX_WIDTH: f32 = 960.0;
-const SCENARIO_DECK_MAX_WIDTH: f32 = 1_500.0;
+const SCENARIO_DECK_MAX_WIDTH: f32 = 1_160.0;
 const SURFACE_GAP: f32 = 12.0;
 
 #[derive(Component)]
@@ -40,6 +40,12 @@ struct ScenarioIntroduction;
 
 #[derive(Component)]
 struct ScenarioDeck;
+
+#[derive(Component)]
+struct ScenarioColumn;
+
+#[derive(Component)]
+struct ScenarioColumnHeading;
 
 #[derive(Component)]
 struct ScenarioControl(ScenarioBrowserIntent);
@@ -344,41 +350,88 @@ fn render_scenarios(
         crate::UiVisibilityRequirement::Immediate,
     ));
     root.spawn((
-        Name::new("Scenario Catalog Viewport"),
-        ScenarioCatalogViewport,
-        ScrollArea,
-        ScrollPosition::default(),
+        Name::new("Scenario Catalog Frame"),
         Node {
             width: Val::Percent(100.0),
             min_height: Val::Px(0.0),
             flex_grow: 1.0,
-            align_items: AlignItems::Center,
-            justify_content: JustifyContent::FlexStart,
-            overflow: Overflow::scroll_y(),
+            flex_direction: FlexDirection::Row,
+            column_gap: Val::Px(8.0),
             ..default()
         },
     ))
-    .with_children(|viewport| {
-        viewport
+    .with_children(|frame| {
+        let viewport = frame
             .spawn((
-                Name::new("Scenario Catalog"),
-                ScenarioDeck,
+                Name::new("Scenario Catalog Viewport"),
+                ScenarioCatalogViewport,
+                ScrollArea,
+                ScrollPosition::default(),
                 Node {
-                    width: Val::Percent(96.0),
-                    max_width: Val::Px(SCENARIO_DECK_MAX_WIDTH),
-                    flex_shrink: 0.0,
-                    align_self: AlignSelf::Center,
-                    display: Display::Grid,
-                    grid_template_columns: RepeatedGridTrack::flex(2, 1.0),
-                    column_gap: Val::Px(SURFACE_GAP),
-                    row_gap: Val::Px(SURFACE_GAP),
-                    align_items: AlignItems::Start,
+                    min_width: Val::Px(0.0),
+                    min_height: Val::Px(0.0),
+                    flex_grow: 1.0,
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::FlexStart,
+                    overflow: Overflow::scroll_y(),
                     ..default()
                 },
             ))
-            .with_children(|deck| {
-                spawn_scenario_column(deck, assets, view.kind.title(), view.scenarios.iter());
-            });
+            .with_children(|viewport| {
+                viewport
+                    .spawn((
+                        Name::new("Scenario Catalog"),
+                        ScenarioDeck,
+                        Node {
+                            width: Val::Percent(96.0),
+                            max_width: Val::Px(SCENARIO_DECK_MAX_WIDTH),
+                            flex_shrink: 0.0,
+                            align_self: AlignSelf::Center,
+                            display: Display::Grid,
+                            grid_template_columns: RepeatedGridTrack::flex(2, 1.0),
+                            column_gap: Val::Px(SURFACE_GAP),
+                            row_gap: Val::Px(SURFACE_GAP),
+                            align_items: AlignItems::Start,
+                            ..default()
+                        },
+                    ))
+                    .with_children(|deck| {
+                        spawn_scenario_column(
+                            deck,
+                            assets,
+                            view.kind.title(),
+                            view.scenarios.iter(),
+                        );
+                    });
+            })
+            .id();
+        if view.kind == crate::ScenarioBrowserKind::MapScenarios {
+            frame
+                .spawn((
+                    Name::new("Scenario Catalog Scrollbar"),
+                    Scrollbar::new(viewport, ControlOrientation::Vertical, 36.0),
+                    Node {
+                        width: Val::Px(18.0),
+                        height: Val::Percent(100.0),
+                        flex_shrink: 0.0,
+                        border: UiRect::all(Val::Px(1.0)),
+                        border_radius: BorderRadius::all(Val::Px(9.0)),
+                        ..default()
+                    },
+                    BorderColor::all(ACCENT_EDGE),
+                    BackgroundColor(Color::srgba(0.02, 0.03, 0.045, 0.96)),
+                ))
+                .with_child((
+                    Name::new("Scenario Catalog Scrollbar Thumb"),
+                    ScrollbarThumb {
+                        border_radius: BorderRadius::all(Val::Px(8.0)),
+                        border: UiRect::all(Val::Px(1.0)),
+                    },
+                    BorderColor::all(ACCENT_EDGE),
+                    BackgroundColor(crate::ACCENT),
+                ));
+        }
     });
     root.spawn((
         button("Back"),
@@ -394,22 +447,35 @@ fn spawn_scenario_column<'a>(
     title: &'static str,
     entries: impl Iterator<Item = &'a TitleScenarioView>,
 ) {
-    deck.spawn((Name::new(format!("{title} Scenario Column")), panel()))
-        .insert(Node {
-            min_width: Val::Px(0.0),
-            flex_direction: FlexDirection::Column,
-            row_gap: Val::Px(10.0),
-            padding: UiRect::all(Val::Px(14.0)),
-            border: UiRect::all(Val::Px(1.0)),
-            border_radius: BorderRadius::all(Val::Px(10.0)),
-            ..default()
-        })
-        .with_children(|column| {
-            column.spawn(heading(assets, title));
-            for entry in entries {
-                spawn_scenario_card(column, assets, entry);
-            }
-        });
+    deck.spawn((
+        Name::new(format!("{title} Scenario Column")),
+        ScenarioColumn,
+        panel(),
+    ))
+    .insert(Node {
+        min_width: Val::Px(0.0),
+        display: Display::Grid,
+        grid_template_columns: RepeatedGridTrack::flex(2, 1.0),
+        column_gap: Val::Px(10.0),
+        row_gap: Val::Px(10.0),
+        padding: UiRect::all(Val::Px(14.0)),
+        border: UiRect::all(Val::Px(1.0)),
+        border_radius: BorderRadius::all(Val::Px(10.0)),
+        ..default()
+    })
+    .with_children(|column| {
+        column.spawn((
+            ScenarioColumnHeading,
+            heading(assets, title),
+            Node {
+                grid_column: GridPlacement::span(2),
+                ..default()
+            },
+        ));
+        for entry in entries {
+            spawn_scenario_card(column, assets, entry);
+        }
+    });
 }
 
 fn spawn_scenario_card(
@@ -422,8 +488,8 @@ fn spawn_scenario_card(
         Node {
             width: Val::Percent(100.0),
             flex_direction: FlexDirection::Column,
+            align_items: AlignItems::FlexStart,
             row_gap: Val::Px(6.0),
-            align_items: AlignItems::Stretch,
             ..default()
         },
     ))
@@ -438,7 +504,7 @@ fn spawn_scenario_card(
             width: Val::Percent(100.0),
             min_width: Val::Px(0.0),
             min_height: Val::Px(58.0),
-            padding: UiRect::axes(Val::Px(14.0), Val::Px(10.0)),
+            padding: UiRect::axes(Val::Px(14.0), Val::Px(8.0)),
             flex_direction: FlexDirection::Column,
             align_items: AlignItems::FlexStart,
             row_gap: Val::Px(3.0),
@@ -465,8 +531,42 @@ fn spawn_scenario_card(
 fn apply_scenario_layout(
     metrics: Res<ResolvedUiMetrics>,
     added: Query<(), Added<ScenarioDeck>>,
-    mut decks: Query<&mut Node, With<ScenarioDeck>>,
-    mut introductions: Query<&mut Node, (With<ScenarioIntroduction>, Without<ScenarioDeck>)>,
+    mut decks: Query<
+        &mut Node,
+        (
+            With<ScenarioDeck>,
+            Without<ScenarioColumn>,
+            Without<ScenarioColumnHeading>,
+            Without<ScenarioIntroduction>,
+        ),
+    >,
+    mut columns: Query<
+        &mut Node,
+        (
+            With<ScenarioColumn>,
+            Without<ScenarioDeck>,
+            Without<ScenarioColumnHeading>,
+            Without<ScenarioIntroduction>,
+        ),
+    >,
+    mut headings: Query<
+        &mut Node,
+        (
+            With<ScenarioColumnHeading>,
+            Without<ScenarioDeck>,
+            Without<ScenarioColumn>,
+            Without<ScenarioIntroduction>,
+        ),
+    >,
+    mut introductions: Query<
+        &mut Node,
+        (
+            With<ScenarioIntroduction>,
+            Without<ScenarioDeck>,
+            Without<ScenarioColumn>,
+            Without<ScenarioColumnHeading>,
+        ),
+    >,
 ) {
     if !metrics.is_changed() && added.is_empty() {
         return;
@@ -481,6 +581,12 @@ fn apply_scenario_layout(
     }
     for mut node in &mut decks {
         node.grid_template_columns = RepeatedGridTrack::flex(1, 1.0);
+    }
+    for mut node in &mut columns {
+        node.grid_template_columns = RepeatedGridTrack::flex(if compact { 1 } else { 2 }, 1.0);
+    }
+    for mut node in &mut headings {
+        node.grid_column = GridPlacement::span(if compact { 1 } else { 2 });
     }
 }
 

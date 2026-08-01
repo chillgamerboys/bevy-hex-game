@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use hex_core::Screen;
 
 use crate::{
-    body_text_role, responsive_control_role, BadgeKind, DespawnOnExit, HudElement, UiAssets,
+    hud_text_role, responsive_control_role, BadgeKind, DespawnOnExit, HudElement, UiAssets,
     UiSystems, UnitBadgeView, UnitBadgesView, ACCENT, BLURB_SIZE, DANGER, LABEL, PANEL_BG,
 };
 
@@ -61,7 +61,7 @@ fn spawn_badge(commands: &mut Commands, assets: &UiAssets, kind: BadgeKind) {
         .with_child((
             BadgeLabel,
             Text::new(""),
-            body_text_role(),
+            hud_text_role(),
             TextFont {
                 font: assets.body.clone().into(),
                 ..TextFont::from_font_size(BLURB_SIZE)

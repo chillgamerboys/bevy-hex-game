@@ -76,8 +76,8 @@ pub use theme::{
     LABEL_SIZE, MUTED, PANEL_BG, SCREEN_TITLE_SIZE, SMALL_BUTTON_WIDTH, TITLE_SIZE,
 };
 pub(crate) use theme::{
-    body_text_role, compact_glyph_role, fixed_row_button, owner_resolved_control_role,
-    responsive_control_role, supporting_text_role,
+    body_text_role, compact_glyph_role, fixed_row_button, hud_heading, hud_text_role,
+    owner_resolved_control_role, responsive_control_role, supporting_text_role,
 };
 
 #[cfg(any(feature = "visual-review", feature = "test-support"))]
@@ -2366,6 +2366,18 @@ pub mod test_support {
             mode: crate::UiScaleMode,
             kind: crate::ScenarioBrowserKind,
         ) -> UiTreeSnapshot {
+            let mut app =
+                production_scenario_app(physical_width, physical_height, scale_factor, mode, kind);
+            ui_tree_snapshot(app.world_mut())
+        }
+
+        fn production_scenario_app(
+            physical_width: u32,
+            physical_height: u32,
+            scale_factor: f32,
+            mode: crate::UiScaleMode,
+            kind: crate::ScenarioBrowserKind,
+        ) -> App {
             let library: hex_assets::ScenarioLibrary =
                 ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
                     .expect("the production scenario catalog must parse");
@@ -2405,7 +2417,7 @@ pub mod test_support {
             for _ in 0..8 {
                 app.update();
             }
-            ui_tree_snapshot(app.world_mut())
+            app
         }
 
         fn gameplay_fixture_snapshot(
@@ -3116,6 +3128,79 @@ pub mod test_support {
         }
 
         #[test]
+        fn production_scenario_catalog_consumes_real_pointer_scroll_input() {
+            use bevy::camera::NormalizedRenderTarget;
+            use bevy::input::{mouse::MouseScrollUnit, touch::TouchPhase};
+            use bevy::picking::{
+                backend::HitData,
+                events::{Pointer, Scroll},
+                pointer::{Location, PointerId},
+            };
+            use bevy::window::{PrimaryWindow, WindowRef};
+
+            let mut app = production_scenario_app(
+                960,
+                540,
+                1.0,
+                crate::UiScaleMode::Auto,
+                crate::ScenarioBrowserKind::MapScenarios,
+            );
+            assert!(
+                app.is_plugin_added::<bevy::ui_widgets::ScrollAreaPlugin>(),
+                "the runtime UI stack must install the observer that turns wheel/trackpad events into ScrollPosition changes"
+            );
+            assert!(app
+                .world_mut()
+                .query::<&Name>()
+                .iter(app.world())
+                .any(|name| name.as_str() == "Scenario Catalog Scrollbar"));
+            let scroller = app
+                .world_mut()
+                .query::<(Entity, &Name, Option<&ScrollArea>)>()
+                .iter(app.world())
+                .find_map(|(entity, name, scroll)| {
+                    (name.as_str() == "Scenario Catalog Viewport" && scroll.is_some())
+                        .then_some(entity)
+                })
+                .expect("the scenario screen has one catalog scroller");
+            let target = app
+                .world_mut()
+                .query::<(Entity, &Name)>()
+                .iter(app.world())
+                .find_map(|(entity, name)| (name.as_str() == "The Crossing").then_some(entity))
+                .expect("production maps include a button below the scroller");
+            let before = app.world().get::<ScrollPosition>(scroller).unwrap().y;
+            let window = app
+                .world_mut()
+                .query_filtered::<Entity, With<PrimaryWindow>>()
+                .single(app.world())
+                .expect("headless UI owns one primary window");
+            let normalized_window = WindowRef::Entity(window)
+                .normalize(Some(window))
+                .expect("an explicit window always normalizes");
+            app.world_mut().trigger(Pointer::new(
+                PointerId::Mouse,
+                Location {
+                    target: NormalizedRenderTarget::Window(normalized_window),
+                    position: Vec2::new(480.0, 270.0),
+                },
+                Scroll {
+                    unit: MouseScrollUnit::Line,
+                    x: 0.0,
+                    y: -4.0,
+                    hit: HitData::new(Entity::PLACEHOLDER, 0.0, None, None),
+                    phase: TouchPhase::Moved,
+                },
+                target,
+            ));
+            let after = app.world().get::<ScrollPosition>(scroller).unwrap().y;
+            assert!(
+                after > before,
+                "a wheel event over a scenario button must bubble to the catalog scroller: {before} -> {after}"
+            );
+        }
+
+        #[test]
         fn compact_retina_scenario_heading_keeps_display_glyphs_off_the_target_edge() {
             let snapshot = production_scenario_snapshot(
                 2560,
@@ -3139,9 +3224,48 @@ pub mod test_support {
         }
 
         #[test]
+        fn ordinary_gameplay_keeps_most_of_the_canvas_for_the_world() {
+            let snapshot = gameplay_fixture_snapshot(
+                1920,
+                1080,
+                1.0,
+                crate::UiScaleMode::Auto,
+                "casting-list",
+            );
+            let rail = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.name == "Primary Action Rail")
+                .expect("ordinary gameplay has a primary action rail");
+            let casting = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.name == "Casting Panel")
+                .expect("ordinary gameplay has a spell strip");
+            let rail_top = rail.center.y - rail.size.y * 0.5;
+            let casting_top = casting.center.y - casting.size.y * 0.5;
+            assert!(
+                rail.size.y <= 120.0 && rail_top >= 940.0,
+                "ordinary rail must stay a compact bottom strip: {rail:?}"
+            );
+            assert!(
+                casting.size.y <= 90.0 && casting_top >= 800.0,
+                "ordinary spell actions must leave the world readable: {casting:?}"
+            );
+            assert!(
+                snapshot
+                    .nodes
+                    .iter()
+                    .all(|node| node.name != "Action Rail Prompt"),
+                "generic instructional copy must not consume a permanent HUD row"
+            );
+        }
+
+        #[test]
         fn gameplay_presentation_states_pass_the_complete_structural_matrix() {
             for fixture in [
                 "normal-gameplay",
+                "casting-list",
                 "required-decision",
                 "aiming-disabled",
                 "live-statistics",
