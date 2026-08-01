@@ -306,7 +306,10 @@ fn render_scenarios(
         display(assets, "Scenarios"),
         Node {
             flex_shrink: 0.0,
-            margin: UiRect::top(Val::Px(20.0)),
+            // Cinzel's capitals overhang their nominal line box. Keep enough
+            // logical inset that the glyph atlas stays clear of Retina canvas
+            // clipping as well as the Yoga node bounds.
+            margin: UiRect::top(Val::Px(40.0)),
             ..default()
         },
         crate::UiVisibilityRequirement::Immediate,

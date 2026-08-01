@@ -1571,8 +1571,11 @@ pub mod test_support {
                 .iter()
                 .find(|node| node.name == "Scenario Screen Title")
                 .expect("scenario catalog has a named screen title");
+            let title_glyphs = title
+                .rendered_text_bounds
+                .expect("the scenario title glyphs must be laid out");
             assert!(
-                title.rendered_text_bounds.is_some() && title.fully_visible,
+                title.fully_visible && title_glyphs.min.y >= 8.0,
                 "the actual title glyphs must fit the initial canvas: {title:?}"
             );
             for scenario in ["The Crossing", "Waterfall"] {
