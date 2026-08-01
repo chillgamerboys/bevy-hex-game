@@ -3304,6 +3304,7 @@ dependencies = [
  "bevy_egui",
  "hex_assets",
  "hex_core",
+ "hex_test_app",
  "image",
  "ron",
  "serde",
@@ -3378,6 +3379,7 @@ dependencies = [
  "bevy",
  "hex_assets",
  "hex_core",
+ "hex_test_app",
 ]
 
 [[package]]

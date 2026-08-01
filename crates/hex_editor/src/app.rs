@@ -2514,6 +2514,7 @@ mod tests {
         ObjectPlacement, PaletteSwatch, PlantPart, SrgbColor, VoxelStyle, VoxelSurfaceMode,
         OBJECT_BLUEPRINT_SCHEMA_VERSION,
     };
+    use hex_test_app::HeadlessAppBuilder;
     use serde::Serialize;
 
     use super::*;
@@ -3032,10 +3033,13 @@ mod tests {
             .as_ref()
             .expect("fixture recovery store should exist")
             .clone();
-        let mut app = App::new();
-        app.insert_resource(Time::<()>::default())
+        let mut builder = HeadlessAppBuilder::new();
+        builder
+            .app_mut()
+            .insert_resource(Time::<()>::default())
             .insert_resource(runtime)
             .add_systems(Update, autosave_recovery);
+        let mut app = builder.build();
         app.update();
         app.world_mut()
             .resource_mut::<Time<()>>()
@@ -3517,10 +3521,12 @@ mod tests {
         runtime.recovery_autosave.last_observed = Some(session.clone());
         runtime.recovery_autosave.last_written = Some(session);
 
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
+        let mut builder = HeadlessAppBuilder::new().with_minimal_plugins();
+        builder
+            .app_mut()
             .insert_resource(runtime)
             .add_systems(Update, autosave_recovery);
+        let mut app = builder.build();
         app.update();
 
         let runtime = app.world().resource::<WorkshopRuntime>();
