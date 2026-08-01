@@ -56,6 +56,12 @@ statistics are secondary drawers. A responsive region presents at most one secon
 drawer; compact layouts collapse secondary information before they reduce action
 visibility.
 
+Builds with the default-off `dev` feature add a `DEV · TIME` panel to the gameplay
+Inspector region. `hex_ui` renders only the immutable current-hour or unavailable
+projection and emits typed half-hour/preset intents; the `hex_game` adapter remains
+responsible for changing the existing session clock. Static lighting exposes a reason
+instead of controls, and shipping builds contain neither the panel nor its adapter.
+
 ## Responsive model
 
 The world camera always renders at native resolution. Bevy's global `UiScale`

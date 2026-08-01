@@ -59,3 +59,9 @@ frame. `apply_sky_material` pushes that same frame into the dome while the light
 system applies it to the single shadow-casting key light, exposure, ambient fill,
 environment fill, and fog. See [development/config.md](../development/config.md) for
 the authored controls.
+
+The default-off development UI may adjust an existing cyclic `TimeOfDay` in half-hour
+steps or select midnight, dawn, noon, and dusk. Its adapter runs before lighting
+resolution, so physical lighting and the renderer-independent exterior illumination
+projection change in the same frame. It never inserts a missing clock, changes a
+static profile, persists a preference, or ships in the default release build.

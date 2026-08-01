@@ -13,6 +13,8 @@ mod combat_log;
 mod creation_presentation;
 mod creator;
 mod deployment;
+#[cfg(feature = "dev-tools")]
+mod dev_time;
 mod focus;
 mod gameplay_frame;
 mod gameplay_lattices;
@@ -57,6 +59,8 @@ pub use model::{
     TargetLatticeStateView, TargetLatticeView, TargetPulseView, TitleIntent, TitleScenarioView,
     TitleView, UiIntent, UiSetting, UiSettingRow, UiSettingsView, UnitBadgeView, UnitBadgesView,
 };
+#[cfg(feature = "dev-tools")]
+pub use model::{DevTimeIntent, DevTimeView};
 pub use scale::{
     resolve_auto_scale, resolve_ui_metrics, resolve_viewport_class, ResolvedUiMetrics, UiScaleMode,
     UiScalePreference, UiViewportClass,
@@ -144,6 +148,9 @@ impl Plugin for UiPlugin {
             creator::plugin,
             deployment::plugin,
         ));
+        #[cfg(feature = "dev-tools")]
+        app.init_resource::<DevTimeView>()
+            .add_plugins(dev_time::plugin);
         #[cfg(feature = "test-support")]
         app.init_resource::<test_support::LatestUiTreeSnapshot>()
             .add_systems(Last, test_support::publish_ui_tree_snapshot);
