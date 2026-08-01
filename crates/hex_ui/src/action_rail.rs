@@ -87,6 +87,7 @@ fn refresh_action_rail(
     review: Option<Res<crate::review::UiReviewPresentation>>,
     metrics: Res<ResolvedUiMetrics>,
     assets: Res<UiAssets>,
+    added_rails: Query<(), Added<ActionRail>>,
     mut commands: Commands,
     mut rails: Query<
         (Entity, &mut Node, &mut BorderColor),
@@ -114,7 +115,12 @@ fn refresh_action_rail(
     >,
 ) {
     let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
-    if !view.is_changed() && !review_changed && !metrics.is_changed() {
+    if !action_rail_needs_refresh(
+        view.is_changed(),
+        review_changed,
+        metrics.is_changed(),
+        !added_rails.is_empty(),
+    ) {
         return;
     }
     let view = review
@@ -267,6 +273,15 @@ fn refresh_action_rail(
     });
 }
 
+fn action_rail_needs_refresh(
+    view_changed: bool,
+    review_changed: bool,
+    metrics_changed: bool,
+    rail_added: bool,
+) -> bool {
+    view_changed || review_changed || metrics_changed || rail_added
+}
+
 fn action_rail_node(viewport: UiViewportClass) -> Node {
     let mut node = Node {
         position_type: PositionType::Absolute,
@@ -379,6 +394,12 @@ mod tests {
     use crate::{resolve_ui_metrics, UiScaleMode};
 
     use super::*;
+
+    #[test]
+    fn a_new_rail_renders_current_unchanged_view_on_gameplay_reentry() {
+        assert!(action_rail_needs_refresh(false, false, false, true));
+        assert!(!action_rail_needs_refresh(false, false, false, false));
+    }
 
     #[test]
     fn required_priority_is_reserved_for_blocking_choices() {
