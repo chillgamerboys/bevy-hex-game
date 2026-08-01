@@ -166,6 +166,7 @@ pub mod test_support {
         InputFocus,
     };
     use bevy::prelude::*;
+    use bevy::ui_widgets::ScrollArea;
     use bevy::window::WindowResolution;
     use std::collections::HashSet;
 
@@ -665,7 +666,11 @@ pub mod test_support {
                 if outside {
                     match axis {
                         OverflowAxis::Visible => {}
-                        OverflowAxis::Scroll if target_length <= parent_length + 0.5 => {
+                        OverflowAxis::Scroll
+                            if world.get::<ScrollArea>(parent).is_some()
+                                && world.get::<ScrollPosition>(parent).is_some()
+                                && target_length <= parent_length + 0.5 =>
+                        {
                             // Once this scroll viewport can reveal the target, outer
                             // clippers constrain the viewport rather than the target's
                             // current offscreen coordinates.
@@ -1065,6 +1070,24 @@ pub mod test_support {
                     });
                 }
                 hex_core::Screen::CharacterCreator => {
+                    let element_file: hex_assets::ElementFile =
+                        ron::from_str(include_str!("../../../assets/config/elements.ron"))
+                            .expect("the production element catalog must parse");
+                    let elements = hex_assets::ElementCatalog::from_file(&element_file);
+                    let spell_file: hex_assets::SpellFile =
+                        ron::from_str(include_str!("../../../assets/config/spells.ron"))
+                            .expect("the production spell catalog must parse");
+                    let spell_book = hex_assets::SpellBook::from_file(&spell_file);
+                    let deployable_shipped_spells = spell_book
+                        .iter()
+                        .filter(|(_, _, spell)| {
+                            matches!(
+                                spell.targeting.shape,
+                                hex_assets::TargetShape::SelfCast | hex_assets::TargetShape::Single
+                            )
+                        })
+                        .map(|(_, name, _)| name.to_owned())
+                        .collect();
                     app.world_mut().insert_resource(crate::CreatorScreenView {
                         active: true,
                         screen,
@@ -1079,6 +1102,10 @@ pub mod test_support {
                             "Assign a positive mana capacity.".to_owned(),
                         ],
                         character_dirty: true,
+                        elements: Some(elements),
+                        spell_book: Some(spell_book),
+                        spell_file: Some(spell_file),
+                        deployable_shipped_spells,
                         ..default()
                     });
                 }
@@ -1414,6 +1441,36 @@ pub mod test_support {
         }
 
         #[test]
+        fn production_creator_catalog_uses_an_operable_standard_scroll_owner() {
+            let snapshot = setup_screen_snapshot(
+                1600,
+                900,
+                1.0,
+                crate::UiScaleMode::Auto,
+                hex_core::Screen::CharacterCreator,
+            );
+            assert_eq!(snapshot.metrics.viewport, crate::UiViewportClass::Standard);
+            assert!(
+                snapshot.layout_issues().is_empty(),
+                "the production-populated creator must remain reachable: {:?}",
+                snapshot.layout_issues()
+            );
+            let erase = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.name == "Erase")
+                .expect("the production creator exposes its final palette action");
+            assert!(
+                !erase.fully_visible,
+                "the fixture must exercise a control that actually needs scrolling"
+            );
+            assert!(
+                erase.scroll_reachable,
+                "the final production palette action must have an operable scroll path"
+            );
+        }
+
+        #[test]
         fn snapshot_exposes_accessibility_and_focus_order_without_mutable_ui_state() {
             let mut world = World::new();
             let group = world
@@ -1503,6 +1560,73 @@ pub mod test_support {
             let snapshot = ui_tree_snapshot(&mut world);
             assert!(snapshot.nodes.is_empty());
             assert!(snapshot.focus_order.is_empty());
+        }
+
+        #[test]
+        fn scroll_styling_without_a_scroll_owner_is_not_reachable() {
+            let mut app = App::new();
+            app.add_plugins(HeadlessUiPlugin::default());
+            let scroller = app
+                .world_mut()
+                .spawn((
+                    Name::new("Unowned Scroll Viewport"),
+                    TabGroup::new(50),
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: Val::Px(20.0),
+                        top: Val::Px(20.0),
+                        width: Val::Px(100.0),
+                        height: Val::Px(100.0),
+                        overflow: Overflow::scroll_y(),
+                        ..default()
+                    },
+                ))
+                .id();
+            let control = app
+                .world_mut()
+                .spawn((
+                    Name::new("Clipped Scroll Control"),
+                    AccessibleLabel::new("Clipped scroll control"),
+                    Button,
+                    TabIndex(0),
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: Val::Px(0.0),
+                        top: Val::Px(120.0),
+                        width: Val::Px(44.0),
+                        height: Val::Px(44.0),
+                        ..default()
+                    },
+                ))
+                .id();
+            app.world_mut().entity_mut(scroller).add_child(control);
+            for _ in 0..4 {
+                app.update();
+            }
+
+            let snapshot = ui_tree_snapshot(app.world_mut());
+            let control = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.name == "Clipped Scroll Control")
+                .expect("the clipped control remains structurally observable");
+            assert!(!control.scroll_reachable);
+            assert!(snapshot
+                .layout_issues()
+                .iter()
+                .any(|issue| issue.contains("Clipped Scroll Control is clipped")));
+
+            app.world_mut().entity_mut(scroller).insert(ScrollArea);
+            for _ in 0..2 {
+                app.update();
+            }
+            let snapshot = ui_tree_snapshot(app.world_mut());
+            let control = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.name == "Clipped Scroll Control")
+                .expect("the clipped control remains structurally observable");
+            assert!(control.scroll_reachable);
         }
 
         #[test]

@@ -54,6 +54,7 @@ pub(super) fn plugin(app: &mut App) {
 }
 
 fn apply_creator_layout(
+    mut commands: Commands,
     metrics: Res<ResolvedUiMetrics>,
     added_bodies: Query<(), Added<CreatorResponsiveBody>>,
     mut roots: Query<&mut Node, With<CreatorRoot>>,
@@ -76,7 +77,7 @@ fn apply_creator_layout(
         ),
     >,
     mut panels: Query<
-        (&CreatorBodyPanel, &mut Node),
+        (Entity, &CreatorBodyPanel, &mut Node),
         (
             Without<CreatorResponsiveBody>,
             Without<CreatorHeader>,
@@ -143,7 +144,7 @@ fn apply_creator_layout(
             Vec::new()
         };
     }
-    for (role, mut node) in &mut panels {
+    for (entity, role, mut node) in &mut panels {
         if compact {
             node.width = Val::Percent(100.0);
             node.height = match role {
@@ -162,6 +163,10 @@ fn apply_creator_layout(
             node.flex_grow = 0.0;
             if matches!(role, CreatorBodyPanel::Sidebar { .. }) {
                 node.overflow = Overflow::default();
+                // Compact owns one continuous page at the root. Leaving an idle
+                // ScrollArea on a now-visible sidebar would swallow wheel events
+                // before they reach that root owner.
+                commands.entity(entity).remove::<ScrollArea>();
             }
         } else {
             node.width = match role {
@@ -179,6 +184,9 @@ fn apply_creator_layout(
             };
             if matches!(role, CreatorBodyPanel::Sidebar { .. }) {
                 node.overflow = Overflow::scroll_y();
+                // Overflow is only styling until Bevy's ScrollArea owns pointer
+                // scrolling and ScrollIntoView for keyboard focus.
+                commands.entity(entity).insert(ScrollArea);
             }
         }
     }
@@ -356,8 +364,6 @@ fn spawn_creator_ui(
             }
             root.spawn((
                 Name::new("Creator Content"),
-                ScrollArea,
-                ScrollPosition::default(),
                 CreatorResponsiveBody,
                 Node {
                     width: Val::Percent(100.0),
