@@ -2,9 +2,9 @@ use bevy::prelude::*;
 use hex_core::Screen;
 
 use crate::{
-    blurb, button, despawn_screen, display, fine, heading, label, panel, screen_root, screen_title,
-    GameplayAction, PauseView, ResolvedUiMetrics, UiAssets, UiIntent, UiSetting, UiSettingsView,
-    UiSystems, UiViewportClass,
+    blurb, brand_logo, button, despawn_screen, display, fine, heading, label, panel, screen_root,
+    screen_title, GameplayAction, PauseView, ResolvedUiMetrics, UiAssets, UiIntent, UiSetting,
+    UiSettingsView, UiSystems, UiViewportClass,
 };
 
 #[derive(Component)]
@@ -118,7 +118,7 @@ fn spawn_splash(mut commands: Commands, assets: Res<UiAssets>) {
     commands
         .spawn(screen_root(Screen::Splash, "Splash Screen"))
         .with_children(|root| {
-            root.spawn(display(&assets, "Hex Game"));
+            root.spawn(brand_logo(&assets, 620.0));
             root.spawn(blurb(&assets, "A deterministic elemental tactics game"));
         });
 }

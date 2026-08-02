@@ -78,7 +78,7 @@ jobs:
           mkdir -p "$package/symbols"
           cp "$release_dir/${{ matrix.source_binary }}" "$package/${{ matrix.packaged_binary }}"
           cp -r assets "$package/"
-          cp assets/ui/hex-cell.png "$package/app-icon.png"
+          cp assets/ui/app-icon.png "$package/app-icon.png"
           cp README.md "$package/"
           find "$release_dir" -maxdepth 1 \
             \( -name '*.pdb' -o -name '*.dSYM' -o -name '*.dwp' \) \

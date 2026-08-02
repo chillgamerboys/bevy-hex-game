@@ -8,9 +8,9 @@ use hex_core::Screen;
 use hex_gameplay_model::{CampaignSlotId, MainMenuRoute};
 
 use crate::{
-    blurb, button, despawn_screen, display, fine, fluid_button, heading, label, panel, screen_root,
-    screen_title, CampaignSlotStatusView, MainMenuIntent, MainMenuView, ResolvedUiMetrics,
-    UiAssets, UiIntent, UiSystems, UiViewportClass, UiVisibilityRequirement,
+    blurb, brand_logo, button, despawn_screen, fine, fluid_button, heading, label, panel,
+    screen_root, screen_title, CampaignSlotStatusView, MainMenuIntent, MainMenuView,
+    ResolvedUiMetrics, UiAssets, UiIntent, UiSystems, UiViewportClass, UiVisibilityRequirement,
 };
 
 #[derive(Component)]
@@ -82,7 +82,7 @@ fn render(root: &mut ChildSpawnerCommands, assets: &UiAssets, view: &MainMenuVie
 }
 
 fn render_root(root: &mut ChildSpawnerCommands, assets: &UiAssets, view: &MainMenuView) {
-    root.spawn((display(assets, "Hex"), crate::UiTextMustFit));
+    root.spawn(brand_logo(assets, 420.0));
     if let Some(reason) = &view.setup_failure {
         root.spawn(blurb(assets, reason.clone()));
     }

@@ -429,6 +429,7 @@ mod tests {
             .insert_resource(UiAssets {
                 display: Handle::default(),
                 body: Handle::default(),
+                logo: Handle::default(),
                 hex_cell: Handle::default(),
             })
             .add_systems(Update, (rebuild, emit_intents, receive).chain());
@@ -481,6 +482,7 @@ mod tests {
             .insert_resource(UiAssets {
                 display: Handle::default(),
                 body: Handle::default(),
+                logo: Handle::default(),
                 hex_cell: Handle::default(),
             })
             .add_systems(Update, (spawn_panel, rebuild).chain());
@@ -533,6 +535,7 @@ mod tests {
             .insert_resource(UiAssets {
                 display: Handle::default(),
                 body: Handle::default(),
+                logo: Handle::default(),
                 hex_cell: Handle::default(),
             })
             .add_systems(Startup, spawn_panel)
@@ -822,6 +825,7 @@ mod tests {
             .insert_resource(UiAssets {
                 display: Handle::default(),
                 body: Handle::default(),
+                logo: Handle::default(),
                 hex_cell: Handle::default(),
             })
             .add_systems(Update, rebuild);
@@ -868,6 +872,7 @@ mod tests {
             .insert_resource(UiAssets {
                 display: Handle::default(),
                 body: Handle::default(),
+                logo: Handle::default(),
                 hex_cell: Handle::default(),
             })
             .add_systems(Update, rebuild);
