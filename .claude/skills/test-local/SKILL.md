@@ -1,6 +1,6 @@
 ---
 name: test-local
-description: Full local check loop — fmt + clippy + workspace tests + cargo-deny + doc build + markdown link check. Everything CI's quick and test jobs run, on the developer machine. Use before pushing for review; `/test-full` adds the ship-shape build on top.
+description: PR-local check loop — fmt + clippy + concern-selected tests + cargo-deny + doc build + markdown link check. Mirrors the affected CI closure on the developer machine. Use before pushing for review; `/test-full` adds the selected ship-shape and visual applicability gates.
 ---
 
 When invoked, run this sequence. STOP on first failure.
@@ -17,22 +17,32 @@ cargo fmt --all --check
 python3 tools/test_scope.py run clippy
 ```
 
-## Step 3 — Full workspace suite
+## Step 3 — Selected concern closure
 
 ```bash
-python3 tools/test_scope.py run rules
-python3 tools/test_scope.py run contracts
-python3 tools/test_scope.py run simulation
-python3 tools/test_scope.py run app
-python3 tools/test_scope.py run map_unit
-python3 tools/test_scope.py run map_generation
-python3 tools/test_scope.py run map_contracts
-python3 tools/test_scope.py run residual
-cargo test --workspace --all-features --profile ci --doc
+BASE=$(gh pr view --json baseRefName -q .baseRefName 2>/dev/null || \
+  git rev-parse --abbrev-ref '@{upstream}' 2>/dev/null | sed 's#^[^/]*/##')
+python3 tools/test_scope.py plan --base "origin/${BASE:-dev}" --head HEAD || exit $?
+SELECTED=$(python3 tools/test_scope.py selected-tests \
+  --base "origin/${BASE:-dev}" --head HEAD) || exit $?
+REMAINING=$SELECTED
+while [ -n "$REMAINING" ]; do
+  concern=${REMAINING%% *}
+  case "$REMAINING" in
+    *" "*) REMAINING=${REMAINING#* } ;;
+    *) REMAINING= ;;
+  esac
+  python3 tools/test_scope.py run "$concern" || exit $?
+done
+case " $SELECTED " in
+  *" residual "*) cargo test --workspace --all-features --profile ci --doc ;;
+esac
 ```
 
-Report each concern independently. `/test-local` is deliberately broad;
-`/test-quick` uses the scope selector for the edit loop.
+Report the decision and each selected concern independently. Do not manually promote
+an omitted application/UI, simulation, generation, or residual concern merely because
+it exists. Unknown/unclassified paths and empty diffs already fail closed; pushes to
+`dev`/`main` and final wave or release candidates force the complete gate.
 
 ## Step 4 — Dependency audit
 
@@ -72,7 +82,7 @@ echo "all relative links resolve"
 ## Output
 
 ```
-✓ /test-local — fmt, clippy, all test concerns, deny, doc, links green (<elapsed>s)
+✓ /test-local — fmt, clippy, concerns <names>, deny, doc, links green (<elapsed>s)
 ```
 
 ## When to invoke

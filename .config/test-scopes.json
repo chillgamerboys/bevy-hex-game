@@ -1,7 +1,9 @@
 {
   "version": 1,
   "all_concerns": [
+    "selector",
     "rules",
+    "trajectory_contracts",
     "contracts",
     "simulation",
     "app",
@@ -14,7 +16,9 @@
     "shipping"
   ],
   "local_test_order": [
+    "selector",
     "rules",
+    "trajectory_contracts",
     "contracts",
     "simulation",
     "app",
@@ -24,6 +28,15 @@
     "residual"
   ],
   "concerns": {
+    "selector": {
+      "description": "Fail-closed scope routing and canonical-command validation.",
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "tools/test_test_scope.py"
+      ]
+    },
     "rules": {
       "description": "Pure core, lattice, and AI rules.",
       "command": [
@@ -43,6 +56,27 @@
       ],
       "root_packages": ["hex_core", "hex_lattice", "hex_ai"],
       "allowed_workspace_packages": ["hex_core", "hex_lattice", "hex_ai"]
+    },
+    "trajectory_contracts": {
+      "description": "Pure trajectory/volume/creation rules and their direct non-UI AI, command, and casting consumers.",
+      "command": [
+        "cargo",
+        "nextest",
+        "run",
+        "--package",
+        "hex_units",
+        "--package",
+        "hex_combat",
+        "--package",
+        "hex_game",
+        "--lib",
+        "--test",
+        "contracts",
+        "--cargo-profile",
+        "ci",
+        "--profile",
+        "gameplay-trajectory"
+      ]
     },
     "contracts": {
       "description": "Focused gameplay ECS contracts.",
@@ -233,7 +267,7 @@
       "expected_counts": {
         "map_unit": 94,
         "map_generation": 384,
-        "map_contracts": 74
+        "map_contracts": 75
       },
       "expected_ignored": 25,
       "full_command": [
@@ -260,6 +294,14 @@
   },
   "rules": [
     {
+      "name": "scope-routing-contract",
+      "patterns": [
+        "tools/test_test_scope.py"
+      ],
+      "concerns": ["selector"],
+      "reason": "Selector regression changes run their own fail-closed unit target; command manifests, selector engines, and CI topology remain fully fail-closed."
+    },
+    {
       "name": "scope-infrastructure",
       "patterns": [
         ".config/test-scopes.json",
@@ -267,7 +309,6 @@
         "tools/check_deprecated_ui_terms.py",
         "tools/gameplay_scope.py",
         "tools/test_scope.py",
-        "tools/test_test_scope.py",
         ".github/workflows/**",
         "Cargo.toml",
         "Cargo.lock",
@@ -325,6 +366,12 @@
       "reason": "Shared map foundations feed unit, generation, and publication contracts."
     },
     {
+      "name": "terrain-impact-contract",
+      "patterns": ["crates/hex_core/src/terrain_impact.rs"],
+      "full": true,
+      "reason": "The current shared file also owns the damaged-voxel projection consumed by map and application code; keep it fail-closed until those authorities are split by file."
+    },
+    {
       "name": "shared-core",
       "patterns": ["crates/hex_core/**"],
       "full": true,
@@ -364,6 +411,15 @@
       "patterns": ["crates/hex_anim/**"],
       "concerns": ["contracts", "app", "residual", "clippy", "docs", "shipping"],
       "reason": "Animation owns residual inline tests and crosses unit movement, combat lifecycle, and presentation."
+    },
+    {
+      "name": "unit-trajectory-contracts",
+      "patterns": [
+        "crates/hex_units/src/trajectories.rs",
+        "crates/hex_units/src/volumes.rs"
+      ],
+      "concerns": ["trajectory_contracts", "clippy", "docs", "shipping"],
+      "reason": "Trajectory and volume geometry use their pure rules plus direct creation, AI, command, and casting consumers; application/UI partitions cannot add authority evidence."
     },
     {
       "name": "units",

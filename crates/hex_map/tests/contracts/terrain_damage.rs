@@ -25,6 +25,57 @@ const TOUGH_SUBSTANCES: [&str; 9] = [
     "metal",
 ];
 
+#[derive(Resource, Default)]
+struct TerrainPhaseTrace(Vec<&'static str>);
+
+fn trace_apply_world(mut trace: ResMut<TerrainPhaseTrace>) {
+    trace.0.push("apply world");
+}
+
+fn trace_refresh_projections(mut trace: ResMut<TerrainPhaseTrace>) {
+    trace.0.push("refresh projections");
+}
+
+fn trace_reconcile_actors(mut trace: ResMut<TerrainPhaseTrace>) {
+    trace.0.push("reconcile actors");
+}
+
+fn trace_consume_outcomes(mut trace: ResMut<TerrainPhaseTrace>) {
+    trace.0.push("consume outcomes");
+}
+
+fn trace_perception(mut trace: ResMut<TerrainPhaseTrace>) {
+    trace.0.push("perception");
+}
+
+#[test]
+fn terrain_protocol_orders_reserved_phases_before_perception() {
+    let mut app = test_app();
+    app.init_resource::<TerrainPhaseTrace>().add_systems(
+        Update,
+        (
+            trace_perception.in_set(PerceptionSystems::ResolveIllumination),
+            trace_consume_outcomes.in_set(TerrainSystems::ConsumeOutcomes),
+            trace_reconcile_actors.in_set(TerrainSystems::ReconcileActors),
+            trace_refresh_projections.in_set(TerrainSystems::RefreshProjections),
+            trace_apply_world.in_set(TerrainSystems::ApplyWorld),
+        ),
+    );
+
+    app.update();
+
+    assert_eq!(
+        app.world().resource::<TerrainPhaseTrace>().0,
+        [
+            "apply world",
+            "refresh projections",
+            "reconcile actors",
+            "consume outcomes",
+            "perception",
+        ]
+    );
+}
+
 fn install_damage_content(app: &mut App) -> (ElementId, ElementId) {
     let source: ElementFile = ron::from_str(
         r#"(

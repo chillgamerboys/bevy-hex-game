@@ -118,6 +118,19 @@ class TestScopeTests(unittest.TestCase):
             ("contracts", "app", "clippy", "docs", "shipping"),
         )
 
+    def test_trajectory_geometry_omits_application_and_ui_tests(self) -> None:
+        for path in (
+            "crates/hex_units/src/trajectories.rs",
+            "crates/hex_units/src/volumes.rs",
+        ):
+            with self.subTest(path=path):
+                decision = self.classify(path)
+                self.assertFalse(decision.full)
+                self.assertEqual(
+                    decision.concerns,
+                    ("trajectory_contracts", "clippy", "docs", "shipping"),
+                )
+
     def test_combat_adapter_change_omits_independent_pure_simulation(self) -> None:
         decision = self.classify("crates/hex_combat/src/authority_host.rs")
         self.assertFalse(decision.full)
@@ -170,6 +183,23 @@ class TestScopeTests(unittest.TestCase):
 
     def test_shared_core_change_selects_full_gate(self) -> None:
         decision = self.classify("crates/hex_core/src/position.rs")
+        self.assertTrue(decision.full)
+        self.assertEqual(decision.concerns, tuple(self.config["all_concerns"]))
+
+    def test_combined_terrain_impact_file_remains_fail_closed(self) -> None:
+        decision = self.classify("crates/hex_core/src/terrain_impact.rs")
+        self.assertTrue(decision.full)
+        self.assertEqual(decision.concerns, tuple(self.config["all_concerns"]))
+        self.assertIn("terrain-impact-contract", decision.matched_rules)
+
+    def test_spell_resolution_foundation_bootstrap_remains_full(
+        self,
+    ) -> None:
+        decision = self.classify(
+            "crates/hex_core/src/terrain_impact.rs",
+            "crates/hex_map/src/grid.rs",
+            "crates/hex_map/tests/contracts/terrain_damage.rs",
+        )
         self.assertTrue(decision.full)
         self.assertEqual(decision.concerns, tuple(self.config["all_concerns"]))
 
@@ -330,8 +360,21 @@ class TestScopeTests(unittest.TestCase):
             ),
         )
 
-    def test_scope_infrastructure_change_runs_everything(self) -> None:
-        decision = self.classify(".config/test-scopes.json")
+    def test_command_manifest_changes_fail_closed(self) -> None:
+        decision = self.classify(
+            ".config/test-scopes.json",
+            "tools/test_test_scope.py",
+        )
+        self.assertTrue(decision.full)
+        self.assertEqual(decision.concerns, tuple(self.config["all_concerns"]))
+
+    def test_selector_regression_change_selects_only_its_own_target(self) -> None:
+        decision = self.classify("tools/test_test_scope.py")
+        self.assertFalse(decision.full)
+        self.assertEqual(decision.concerns, ("selector",))
+
+    def test_scope_engine_change_runs_everything(self) -> None:
+        decision = self.classify("tools/test_scope.py")
         self.assertTrue(decision.full)
 
     def test_deprecated_ui_checker_is_explicit_scope_infrastructure(self) -> None:
@@ -430,7 +473,7 @@ class TestScopeTests(unittest.TestCase):
         partition = self.config["partition_checks"]["map"]
         self.assertEqual(
             partition["expected_counts"],
-            {"map_unit": 94, "map_generation": 384, "map_contracts": 74},
+            {"map_unit": 94, "map_generation": 384, "map_contracts": 75},
         )
         self.assertEqual(partition["expected_ignored"], 25)
 
@@ -480,7 +523,9 @@ class TestScopeTests(unittest.TestCase):
         self.assertEqual(
             self.config["local_test_order"],
             [
+                "selector",
                 "rules",
+                "trajectory_contracts",
                 "contracts",
                 "simulation",
                 "app",
@@ -490,6 +535,61 @@ class TestScopeTests(unittest.TestCase):
                 "residual",
             ],
         )
+
+    def test_trajectory_command_is_one_junit_producing_non_ui_wedge(self) -> None:
+        definition = self.config["concerns"]["trajectory_contracts"]
+        command = definition["command"]
+
+        self.assertEqual(command[:3], ["cargo", "nextest", "run"])
+        packages = [
+            command[index + 1]
+            for index, value in enumerate(command)
+            if value == "--package"
+        ]
+        self.assertEqual(packages, ["hex_units", "hex_combat", "hex_game"])
+        self.assertIn("--lib", command)
+        self.assertEqual(command[command.index("--test") + 1], "contracts")
+        self.assertEqual(
+            command[command.index("--profile") + 1], "gameplay-trajectory"
+        )
+        self.assertNotIn("preflight_command", definition)
+        self.assertNotIn("postflight_command", definition)
+        self.assertNotIn("hex_ui", command)
+        self.assertNotIn("gameplay_app", command)
+
+        nextest = (ROOT / ".config" / "nextest.toml").read_text(encoding="utf-8")
+        profile = nextest.split("[profile.gameplay-trajectory]", maxsplit=1)[1].split(
+            "[profile.gameplay-trajectory.junit]", maxsplit=1
+        )[0]
+        for direct_consumer in (
+            "a_two_level_column_starts_wholly_above_the_selected_floor",
+            "a_selected_lower_stack_never_jumps_to_the_highest_run",
+            "ai::tests::ai_legality_uses_only_faction_authorized_material",
+            "an_observed_anchor_allows_area_spillover_into_unknown_space",
+            "a_blocked_direct_trajectory_refuses_before_payment",
+            "an_authored_arc_clears_the_same_wall",
+            "a_confirmed_cast_names_its_anchor_and_only_the_facing_it_needs",
+        ):
+            self.assertIn(direct_consumer, profile)
+        for unrelated_consumer in (
+            "existing_material_blocks_the_complete_creation_volume",
+            "a_body_and_its_support_are_both_protected",
+            "settled_construction_replaces_stale_movement_authority",
+            "a_facing_points_at_what_was_aimed_at",
+        ):
+            self.assertNotIn(unrelated_consumer, profile)
+        self.assertIn('path = "junit.xml"', nextest.split(
+            "[profile.gameplay-trajectory.junit]", maxsplit=1
+        )[1])
+
+    def test_local_skill_checks_selection_and_splits_portably(self) -> None:
+        skill = (ROOT / ".claude" / "skills" / "test-local" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("--head HEAD) || exit $?", skill)
+        self.assertIn("REMAINING=$SELECTED", skill)
+        self.assertIn("concern=${REMAINING%% *}", skill)
+        self.assertNotIn("for concern in $SELECTED", skill)
 
     def test_repository_relative_paths_are_required(self) -> None:
         with self.assertRaises(test_scope.ScopeConfigurationError):
@@ -506,6 +606,22 @@ class TestScopeTests(unittest.TestCase):
             ROOT / ".github" / "workflows" / "manual-runtime-signoff.yaml"
         ).read_text(encoding="utf-8")
         self.assertIn("hex_gameplay_model", workflow)
+
+    def test_manual_runtime_gate_exempts_pure_trajectory_contract_paths(self) -> None:
+        workflow = (
+            ROOT / ".github" / "workflows" / "manual-runtime-signoff.yaml"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("crates\\/hex_core\\/src\\/terrain_impact\\.rs", workflow)
+        self.assertIn(
+            "crates\\/hex_units\\/src\\/(trajectories|volumes)\\.rs",
+            workflow,
+        )
+        self.assertIn('if ! changed="$(git diff --name-only', workflow)
+        self.assertIn('result="$(field_value "Manual runtime result")"', workflow)
+        self.assertIn('require_named_field "Manual runtime findings/waiver"', workflow)
+        self.assertIn('reviewer" != "$WAIVER_ACTOR', workflow)
+        self.assertIn('collaborators/$reviewer/permission', workflow)
+        self.assertIn('admin|maintain)', workflow)
 
     def test_shipping_job_primes_cold_windows_dependencies(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "ci.yaml").read_text(
@@ -535,6 +651,25 @@ class TestScopeTests(unittest.TestCase):
         self.assertIn("tools/test_scope.py check-partitions map", map_job)
         self.assertNotIn("--workspace", map_job)
         self.assertNotIn("outputs.residual", map_job)
+
+    def test_gameplay_ci_runs_the_canonical_trajectory_concern(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yaml").read_text(
+            encoding="utf-8"
+        )
+        gameplay_job = workflow.split("\n  gameplay:\n", maxsplit=1)[1].split(
+            "\n  build:\n", maxsplit=1
+        )[0]
+        self.assertIn(
+            "trajectory_contracts: ${{ steps.filter.outputs.trajectory_contracts }}",
+            workflow,
+        )
+        self.assertIn("tools/test_scope.py run trajectory_contracts", gameplay_job)
+        self.assertIn(
+            "target/nextest/gameplay-trajectory/junit.xml", gameplay_job
+        )
+        self.assertNotIn("tools/test_scope.py run app", gameplay_job.split(
+            "- name: Trajectory and volume contracts", maxsplit=1
+        )[1].split("- name: Gameplay simulation", maxsplit=1)[0])
 
     def test_gameplay_scope_wrapper_preserves_the_old_entry_point(self) -> None:
         wrapper = (ROOT / "tools" / "gameplay_scope.py").read_text(

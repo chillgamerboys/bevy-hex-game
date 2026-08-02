@@ -107,10 +107,10 @@ always `fail`.
 - **In GitHub CI** — runners have no GPU; this is a local gate on the dev
   machine, like the rest of the audit chain's heavy steps.
 - **Doc-only / no-runtime diffs** — that's Step 0's `skipped`.
-- **As a substitute for the human walk.** The PR template keeps two boxes:
-  the automated walk (this skill, auto-tickable from the receipt) and the
-  human's "I ran the game and looked at it" — `/promote` still gates on the
-  human one, always.
+- **As a substitute for the human walk.** The PR template keeps automated visual
+  evidence separate from structured exact-head human runtime evidence. A feature PR
+  with no rendered/runtime surface may carry a verified maintainer N/A waiver;
+  `/promote` still gates on the human PASS, always.
 
 ## Self-updating
 

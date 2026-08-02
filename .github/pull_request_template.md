@@ -8,30 +8,32 @@
 - [ ] `cargo fmt --all --check` (unless Markdown-only)
 - [ ] `cargo deny check` (unless Markdown-only)
 - [ ] `cargo clippy --workspace --all-targets --all-features --profile ci -- -D warnings` (unless Markdown-only)
-- [ ] Gameplay rules, contracts, simulation, and app partitions (report each concern below)
-- [ ] Residual workspace tests and doctests (unless Markdown-only)
+- [ ] `python3 tools/test_scope.py plan --base origin/dev --head HEAD` recorded; every selected test concern passed
+- [ ] Residual workspace tests and doctests (only when the scope decision selects `residual`)
 - [ ] `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features` (unless Markdown-only)
-- [ ] `cargo build --package hex_game --release` (unless Markdown-only; CI builds the shipping package on all three platforms)
-- [ ] Structural UI oracle and scoped Bevy image-target walk green; agent read every frame
+- [ ] `cargo build --package hex_game --release` (when the scope decision selects `shipping`; CI builds it on all three platforms)
+- [ ] Structural UI oracle and scoped Bevy image-target walk green, or exact-head N/A because the reviewed diff has no rendered runtime concern
 
 ### Manual runtime sign-off
 
 <!--
-Gameplay runtime changes may be marked ready only after a named human runs the
-release-shaped build at the exact final PR head. Any later push invalidates this
-sign-off. Agent-operated Bevy frame review and visual-walk evidence are useful but do not
-replace the named human gate. Source lanes targeting wave/* defer this evidence to
-the combined wave PR into dev; do not copy a sign-off from a lane or older wave head.
+Gameplay runtime-surface changes may be marked ready only after a named human runs the
+release-shaped build at the exact final PR head. A named maintainer may instead record
+an exact-head N/A waiver when the reviewed change has no rendered presentation,
+navigation, movement, persistence, or visual-script surface. Any later push invalidates
+either result. Agent-operated Bevy frame review and visual-walk evidence are useful but
+do not replace the named human gate. Source lanes targeting wave/* defer this evidence
+to the combined wave PR into dev; do not copy evidence from a lane or older wave head.
 -->
 
 - Agent-operated Bevy visual review:
 
-Manual runtime result: <PASS or BLOCKED>
-Manual runtime commit: <full 40-character PR head SHA>
-Manual runtime reviewer: <named human>
-Manual runtime date: <YYYY-MM-DD>
-Manual runtime route: <affected scenarios and failure paths exercised>
-Manual runtime findings/waiver: <none, findings, or explicit maintainer waiver>
+Manual runtime result: <PASS, BLOCKED, or N/A>
+Manual runtime commit: <full 40-character PR head SHA for PASS/waiver, or N/A only when no runtime path changed>
+Manual runtime reviewer: <named human for PASS; @maintainer-login for waiver; N/A only when no runtime path changed>
+Manual runtime date: <YYYY-MM-DD for PASS/waiver, or N/A only when no runtime path changed>
+Manual runtime route: <affected route for PASS; exact non-rendered reason for waiver; N/A only when no runtime path changed>
+Manual runtime findings/waiver: <findings or explicit maintainer waiver; N/A only when no runtime path changed>
 
 <!--
 For UI work, record all applicable checkpoints explicitly: 1280x720, 1920x1080,
@@ -43,6 +45,8 @@ and pause.
 -->
 
 ### Evidence by concern
+
+<!-- Record omitted concerns as N/A with the selector reason; do not run them merely to fill this list. -->
 
 - Pure rules:
 - ECS contracts:
@@ -68,7 +72,7 @@ sky, a wrong speed unit just looks slightly off, and a tile whose transform
 disagrees with its span floats or sinks. All of them pass CI. The automated walk
 (receipt key 5_visual_walk) catches the renders-nothing/renders-broken class and
 lists layout findings; motion, feel, and taste still need human eyes — /promote
-gates on the human box, never the automated one.
+gates on the structured exact-head human PASS fields, never the automated tier.
 
 If the change touches rendering, movement, persistence, or state transitions, walk
 it at the exact candidate head: splash -> Main Menu -> Campaign slot 1 -> Party
