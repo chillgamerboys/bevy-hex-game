@@ -3,11 +3,40 @@
 The gameplay camera has two modes with separate authority:
 
 - **Map** is a free pan/orbit view framed by the generated `MapViewHint`.
-- **Character** follows the selected `CameraFocusTarget` and adapts its effective pose
-  to public world geometry without changing player-authored yaw or desired zoom.
+- **Character** follows the selected `CameraFocusTarget`; the player exclusively owns
+  look direction and desired zoom. A deterministic upward-look composition keeps
+  ordinary free-look above the supporting floor, while terrain may shorten only the
+  rendered boom along that placement ray.
 
-This is presentation only. Camera geometry never grants sight, changes picking
-legality, brightens darkness, or becomes a gameplay occupancy fact.
+This is presentation only. Camera geometry never grants sight, changes gameplay
+targeting legality, brightens darkness, or becomes an occupancy fact. A unit hidden
+by the near-camera presentation envelope is also ignored by Bevy picking until it is
+shown again; that suppression does not alter gameplay command authority.
+
+## Character motion regression contract
+
+Human motion review of the first adaptive candidate (`9bbaddf`) found defects that
+the endpoint screenshot suite could not expose:
+
+| Observed defect | Cause in the first candidate | Required regression guarantee |
+|---|---|---|
+| The perspective and distance visibly changed while the selected unit walked. | A stateless collision search could choose a different pitch every frame, while any improved radius clearance began restoring immediately. Small terrain changes therefore produced alternating pitch and in/out boom motion. | Following an unobstructed moving unit preserves the exact player-authored rotation and its deterministic placement offset. Collision may retract only the effective radius; blocked frames never move it outward, and release requires continuous full clearance before one monotonic recovery. |
+| Upward look stopped at some positions or was immediately undone. | Character pitch was limited to a downward-only arc, and the same-frame collision pass could replace a manual pitch with its own searched pitch. | Character input spans straight up through straight down. A follow/collision pass never writes rotation, including at either vertical pole or while the boom is fully retracted. |
+| A fully retracted unusual-angle view could be inside the selected character. | At straight-up look, the supporting floor correctly limits the downward boom to zero; the shipped focus point is inside the current character mesh. | When terrain forces the eye inside the selected character's near-camera envelope, camera-owned presentation occlusion suppresses that character until the monotonic boom recovery carries the eye clear. The reason composes with fog and other visibility owners and is removed on retarget, mode exit, and gameplay exit. |
+| Orbiting could suppress zoom input. | Orbit and wheel handling were mutually exclusive within one frame. | A simultaneous right-drag and wheel event authors both rotation and desired radius. |
+| Automated review reported green despite the motion defects. | Scripted captures were taken after movement settled and proved route coverage, not temporal continuity or control feel. | Headless regressions cover frame sequences and exact authority; final acceptance also requires a native motion review, not still images alone. |
+
+These are behavior contracts, not tuning preferences. Rotation always matches player
+input exactly. For ordinary upward free-look, the placement ray may lag that authored
+pitch by at most `15°`; this keeps the long third-person boom above the supporting floor
+and the character near the lower portion of the frame. Beyond the first `15°` of upward
+look, the placement ray tracks the authored pitch with that fixed composition offset,
+while contact with the supporting floor progressively shortens the boom into the close
+view. This placement is a pure function of player look, so walking cannot change it.
+Terrain then changes position only along that placement ray: it retracts immediately,
+remains stable through changing partial clearance, waits for the configured release
+delay after complete clearance, and restores at the configured maximum rate.
+`PanOrbitCamera.radius` remains the player's requested zoom throughout.
 
 ## Boundary
 
@@ -26,44 +55,55 @@ same public projection before the next Character-camera resolution.
 
 ## Desired and effective pose
 
-`PanOrbitCamera.radius` is always the player's desired zoom. Character collision keeps
-an independent effective radius, desired rotation, and effective pitch:
+`PanOrbitCamera.radius` is always the player's desired zoom, and the camera
+`Transform.rotation` is always the player's authored look direction. Character
+collision keeps only an independent effective radius:
 
-1. Sweep a conservative camera probe from focus along the requested yaw and pitch.
-2. Retract immediately before the first expanded public hex prism, retaining the
-   configured collision margin.
-3. If same-yaw retraction falls below the configured preferred minimum radius, test
-   the complete bounded set of progressively higher pitches, then test back toward
-   the horizon so low cave ceilings can retain a readable radius. The pitch with the
-   greatest true clearance wins; equal clearances prefer the smallest deviation from
-   the player-authored pitch, with the upward-first search order as the final stable
-   tie-break. Obstructions that leave the preferred minimum intact retract without an
-   automatic pitch change.
-4. Restore radius and pitch smoothly after clearance, settling exactly inside small
-   hysteresis bands.
+1. Derive the placement ray from player-authored rotation. Level and downward views use
+   the exact orbit ray. Shallow upward free-look retains a horizontal boom; beyond the
+   `15°` composition allowance it progressively tilts down behind the target while the
+   view rotation itself remains exact.
+2. Sweep a conservative camera probe from focus along that placement ray.
+3. Retract immediately before the first expanded public hex prism, retaining the
+   configured collision margin. Never rotate the view or overwrite desired zoom.
+4. While any obstruction remains, accept only safer inward changes. Improved partial
+   clearance cannot move the camera outward or accumulate release time.
+5. After the complete desired boom remains clear for the release delay, restore at no
+   more than the configured world-units-per-second rate. Recovery is one monotonic
+   outward run unless a new obstruction requires an immediate retraction.
+6. At or below the configured `character_self_hide_radius` (shipped as `1.0`), add the
+   camera-owned composable visibility reason to the selected unit root. Restore the
+   unit only beyond the threshold plus exit hysteresis, so a near-first-person view
+   remains clear without visibility chatter.
 
-The probe expands all six prism faces and the vertical span, conservatively enclosing
-the close camera's near plane around faces, corners, bridge undersides, and cave
-ceilings. The exact `CameraFocusTarget.surface` and coplanar floor tangencies are
-ignored while the probe exits upward; a wall, ceiling, raised surface, or different
-run genuinely overlapping the probe is an immediate hit. Validation keeps the probe
-radius no larger than the focus height, so the configured sweep cannot begin inside
-ordinary supporting terrain.
+The probe and collision margin expand all six prism faces and the vertical span,
+conservatively enclosing the close camera's near plane around faces, corners, bridge
+undersides, and cave ceilings. While the placement ray exits level or upward, zero-entry
+floor spans at the focus coordinate and its immediate ring are ignored when their top is
+at or below the focus and within one voxel level of the selected surface. This prevents
+the local support floor from collapsing an otherwise clear tangent boom without
+ignoring remote or overhead geometry. A downward boom—produced when the player looks
+up—may correctly retract to zero against the supporting floor; close-character
+occlusion keeps that fully controlled view usable. Validation keeps the probe radius no
+larger than the focus height, so the target point remains outside ordinary supporting
+material.
 
 The shipped defaults in `camera.ron` are:
 
 | Setting | Value |
 |---|---:|
-| probe radius | `0.4` world units |
+| probe radius | `0.1` world units |
 | collision margin | `0.35` world units |
-| preferred minimum effective radius | `1.5` world units |
-| adaptive maximum pitch | `0.75` quarter-turn fractions |
-| pitch search step | `0.05` quarter-turn fractions |
+| release delay | `0.2` seconds |
 | radius restoration | `8.0` world units/second |
-| pitch restoration | `0.8` quarter-turn fractions/second |
+| self-hide radius | `1.0` world units |
+| initial pitch | `0.3` quarter-turn fractions |
+| Character pitch arc | `-1.0..=1.0` (straight up through straight down) |
 
-Manual orbit input updates the desired rotation. Automatic collision never searches
-or commits a different yaw. Switching back to Map restores the exact saved map pose.
+Manual orbit input changes rotation directly, including at both vertical poles. The
+full Character arc is a code-level contract rather than a configurable narrower range.
+Simultaneous wheel input still changes desired zoom. Switching back to Map restores the
+exact saved map pose.
 
 ## Trees and interiors
 
@@ -87,7 +127,7 @@ the same catalog style is never mutated. Authored `CanopyOccluder` metadata rema
 separate art boundary and does not create camera behavior by itself.
 
 Ordinary gameplay never removes cave roofs. Those roof runs remain visible collision
-geometry, allowing the adaptive camera to stay inside a tight interior. Only explicit
+geometry, allowing the collision-limited camera to stay inside a tight interior. Only explicit
 `map-review` tooling may install the full-cutaway override, which hides the complete
 roof of the selected exact `InteriorRegionId` for one deterministic capture.
 
@@ -100,13 +140,19 @@ propagation. Camera-driven presentation then uses the shared order:
 
 Tree intersection observes final propagated camera/object transforms, renderer-owned
 material changes settle before composed visibility, and fog/review reasons remain
-independent. Gameplay exit clears collision indexes, adaptive pose state, fade
-timelines, temporary material clones, and OIT ownership.
+independent. Near-character hiding adds and removes only its own composable reason.
+Gameplay exit clears collision indexes, effective-radius recovery state, proximity
+ownership, fade timelines, temporary material clones, and OIT ownership. Retargeting
+also discards the previous unit's collision history and resolves the new unit's own
+clear or obstructed corridor in the same frame.
 
-Focused tests cover prism faces/corners and stacked spans, player-yaw preservation,
-immediate adaptation and damped recovery, a synthetic flat radius-55 lower-level
-benchmark, a 2,048-render-chunk tree-fade performance gate, 10,000 unchanged frames,
-whole-tree/material isolation, review-only roofs, and 100 gameplay lifecycles. An
+Focused tests cover prism faces/corners and stacked spans, exact player-rotation
+authority, both vertical poles, simultaneous orbit/zoom input, 120 open-motion frames,
+blocked-clearance chatter, delayed monotonic recovery, proximity occlusion composition,
+a clear and obstructed focus retarget, a synthetic flat radius-55 lower-level benchmark,
+a 2,048-render-chunk tree-fade
+performance gate, 10,000 unchanged frames, whole-tree/material isolation, review-only
+roofs, and 100 gameplay lifecycles. An
 ignored release composition diagnostic generates the pinned shipped Two Rings
 scenario, builds and repeatedly rebuilds the camera index from its public
 `HexTile`/`TilePos`/`HexSpan` projection, and keeps steady Character collision below

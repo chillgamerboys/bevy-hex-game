@@ -74,6 +74,13 @@ struct AppliedPresentationOcclusion {
     had_not_shadow_caster: bool,
 }
 
+/// Identifies the exact reason owned by Character-camera proximity reconciliation.
+///
+/// Cleanup follows this marker rather than [`AppliedPresentationOcclusion`], which
+/// may remain active for an unrelated owner such as fog.
+#[derive(Component, Debug)]
+struct CharacterCameraOcclusionOwner;
+
 type OcclusionCandidates = Or<(
     With<PresentationOcclusion>,
     With<AppliedPresentationOcclusion>,
@@ -108,7 +115,11 @@ pub(super) fn plugin(app: &mut App) {
     )
     .add_systems(
         PostUpdate,
-        (reconcile_interior_cutaway, reconcile_tree_fades)
+        (
+            reconcile_interior_cutaway,
+            reconcile_tree_fades,
+            reconcile_character_proximity,
+        )
             .chain()
             .in_set(PresentationSystems::ResolveCameraOcclusion)
             .run_if(in_state(Screen::Gameplay)),
@@ -119,7 +130,13 @@ pub(super) fn plugin(app: &mut App) {
             .in_set(PresentationSystems::ApplyVisibility)
             .run_if(in_state(Screen::Gameplay)),
     )
-    .add_systems(OnExit(Screen::Gameplay), clear_tree_fade_timelines);
+    .add_systems(
+        OnExit(Screen::Gameplay),
+        (
+            (clear_character_proximity, apply_presentation_occlusion).chain(),
+            clear_tree_fade_timelines,
+        ),
+    );
 }
 
 pub(super) fn install_full_review_override(app: &mut App) {
@@ -146,6 +163,76 @@ fn reconcile_interior_cutaway(
             PresentationOcclusionReason::InteriorCutaway,
             should_hide,
         );
+    }
+}
+
+type CharacterOcclusionCandidates =
+    Or<(With<CameraFocusTarget>, With<CharacterCameraOcclusionOwner>)>;
+
+/// Hides only the selected unit when a collision-limited camera would sit inside it.
+///
+/// The camera remains fully player-authored. This is presentation help for the
+/// near-first-person result of a tight-space or unusual-angle radius retraction, not
+/// an alternate camera angle. Exit hysteresis prevents a one-frame visibility toggle
+/// around the authored threshold.
+fn reconcile_character_proximity(
+    mut commands: Commands,
+    mode: Res<CameraMode>,
+    settings: Res<CameraSettings>,
+    cameras: Query<(&PanOrbitCamera, &GlobalTransform), Without<CameraFocusTarget>>,
+    mut candidates: ParamSet<(
+        Query<Entity, With<CameraFocusTarget>>,
+        Query<
+            (
+                Entity,
+                Has<CharacterCameraOcclusionOwner>,
+                Option<&mut PresentationOcclusion>,
+            ),
+            CharacterOcclusionCandidates,
+        >,
+    )>,
+) {
+    let focused = {
+        let targets = candidates.p0();
+        targets.single().ok()
+    };
+    let effective_radius = (*mode == CameraMode::Character)
+        .then(|| cameras.single().ok())
+        .flatten()
+        .map(|(camera, transform)| transform.translation().distance(camera.focus));
+    let exit_hysteresis = settings.character_collision_margin * 0.25;
+
+    for (entity, owned, occlusion) in &mut candidates.p1() {
+        let threshold =
+            settings.character_self_hide_radius + if owned { exit_hysteresis } else { 0.0 };
+        let should_hide =
+            Some(entity) == focused && effective_radius.is_some_and(|radius| radius <= threshold);
+
+        match occlusion {
+            Some(occlusion) => set_reason(
+                occlusion,
+                PresentationOcclusionReason::CharacterCameraProximity,
+                should_hide,
+            ),
+            None if should_hide => {
+                commands
+                    .entity(entity)
+                    .insert(PresentationOcclusion::from_reason(
+                        PresentationOcclusionReason::CharacterCameraProximity,
+                    ));
+            }
+            None => {}
+        }
+
+        if should_hide && !owned {
+            commands
+                .entity(entity)
+                .insert(CharacterCameraOcclusionOwner);
+        } else if !should_hide && owned {
+            commands
+                .entity(entity)
+                .remove::<CharacterCameraOcclusionOwner>();
+        }
     }
 }
 
@@ -387,6 +474,27 @@ fn clear_tree_fade_timelines(mut timelines: ResMut<TreeFadeTimelines>) {
     timelines.roots.clear();
 }
 
+fn clear_character_proximity(
+    mut commands: Commands,
+    mut owners: Query<
+        (Entity, Option<&mut PresentationOcclusion>),
+        With<CharacterCameraOcclusionOwner>,
+    >,
+) {
+    for (entity, occlusion) in &mut owners {
+        if let Some(occlusion) = occlusion {
+            set_reason(
+                occlusion,
+                PresentationOcclusionReason::CharacterCameraProximity,
+                false,
+            );
+        }
+        commands
+            .entity(entity)
+            .remove::<CharacterCameraOcclusionOwner>();
+    }
+}
+
 /// Applies the combined reason set and is the sole owner of concrete presentation state.
 fn apply_presentation_occlusion(mut commands: Commands, mut candidates: OcclusionCandidateQuery) {
     for (entity, mut visibility, pickable, no_shadow, occlusion, applied) in &mut candidates {
@@ -472,16 +580,12 @@ mod tests {
             gameplay_focus: (0.0, 6.0, 0.0),
             character_focus_height: 0.4,
             character_radius: 7.0,
-            character_probe_radius: 0.4,
+            character_probe_radius: 0.1,
             character_collision_margin: 0.35,
-            character_min_effective_radius: 1.5,
             character_restoration_speed: 8.0,
+            character_collision_release_delay: 0.2,
+            character_self_hide_radius: 1.0,
             character_pitch: 0.3,
-            character_min_pitch: 0.05,
-            character_max_pitch: 0.95,
-            character_adaptive_max_pitch: 0.75,
-            character_pitch_search_step: 0.05,
-            character_pitch_restoration_speed: 0.8,
             pan_speed: 0.4,
             pan_speed_offset: 10.0,
             min_pitch: 0.25,
@@ -505,6 +609,7 @@ mod tests {
                 (
                     reconcile_interior_cutaway,
                     reconcile_tree_fades,
+                    reconcile_character_proximity,
                     apply_presentation_occlusion,
                 )
                     .chain()
@@ -521,6 +626,8 @@ mod tests {
             .world_mut()
             .spawn((
                 Transform::from_translation(target.coord.to_world(0.0)),
+                Visibility::Inherited,
+                PresentationOcclusion::default(),
                 CameraFocusTarget::new(target),
             ))
             .id();
@@ -560,6 +667,197 @@ mod tests {
         assert!(!entity.contains::<Pickable>());
         assert!(!entity.contains::<NotShadowCaster>());
         assert!(!entity.contains::<AppliedPresentationOcclusion>());
+    }
+
+    fn set_camera_distance(app: &mut App, camera: Entity, distance: f32) {
+        let focus = app
+            .world()
+            .entity(camera)
+            .get::<PanOrbitCamera>()
+            .expect("the camera should retain its orbit state")
+            .focus;
+        app.world_mut()
+            .entity_mut(camera)
+            .get_mut::<Transform>()
+            .expect("the camera should retain its transform")
+            .translation = focus + Vec3::Z * distance;
+    }
+
+    fn enter_screen(app: &mut App, screen: Screen) {
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(screen);
+        app.update();
+    }
+
+    #[test]
+    fn close_character_occlusion_uses_entry_and_exit_hysteresis() {
+        let target_pos = position(0, 0, 7);
+        let (mut app, target, camera) = test_app(target_pos, InteriorRegionId(2));
+        *app.world_mut().resource_mut::<CameraMode>() = CameraMode::Character;
+
+        set_camera_distance(&mut app, camera, 0.8);
+        app.update();
+        assert_hidden(&app, target);
+        let target_ref = app.world().entity(target);
+        assert!(target_ref.contains::<CharacterCameraOcclusionOwner>());
+        assert!(target_ref
+            .get::<PresentationOcclusion>()
+            .expect("the target should retain composable occlusion")
+            .contains(PresentationOcclusionReason::CharacterCameraProximity));
+
+        set_camera_distance(&mut app, camera, 1.05);
+        app.update();
+        assert_hidden(&app, target);
+        assert!(
+            app.world()
+                .entity(target)
+                .contains::<CharacterCameraOcclusionOwner>(),
+            "the target must stay hidden inside the exit hysteresis band"
+        );
+
+        set_camera_distance(&mut app, camera, 1.2);
+        app.update();
+        assert_ordinary(&app, target);
+        let target_ref = app.world().entity(target);
+        assert!(!target_ref.contains::<CharacterCameraOcclusionOwner>());
+        assert!(!target_ref
+            .get::<PresentationOcclusion>()
+            .expect("the unit owns a persistent composable reason set")
+            .contains(PresentationOcclusionReason::CharacterCameraProximity));
+    }
+
+    #[test]
+    fn map_mode_clears_only_camera_owned_character_occlusion() {
+        let target_pos = position(0, 0, 7);
+        let (mut app, target, camera) = test_app(target_pos, InteriorRegionId(2));
+        app.world_mut()
+            .entity_mut(target)
+            .get_mut::<PresentationOcclusion>()
+            .expect("the target should retain composable occlusion")
+            .insert(PresentationOcclusionReason::Fog);
+        *app.world_mut().resource_mut::<CameraMode>() = CameraMode::Character;
+        set_camera_distance(&mut app, camera, 0.8);
+        app.update();
+        assert_hidden(&app, target);
+
+        *app.world_mut().resource_mut::<CameraMode>() = CameraMode::Map;
+        app.update();
+        assert_hidden(&app, target);
+        let target_ref = app.world().entity(target);
+        let reasons = target_ref
+            .get::<PresentationOcclusion>()
+            .expect("fog must retain the composable reason set");
+        assert!(reasons.contains(PresentationOcclusionReason::Fog));
+        assert!(!reasons.contains(PresentationOcclusionReason::CharacterCameraProximity));
+        assert!(!target_ref.contains::<CharacterCameraOcclusionOwner>());
+
+        app.world_mut()
+            .entity_mut(target)
+            .get_mut::<PresentationOcclusion>()
+            .expect("fog must retain the composable reason set")
+            .remove(PresentationOcclusionReason::Fog);
+        app.update();
+        assert_ordinary(&app, target);
+    }
+
+    #[test]
+    fn retarget_and_target_loss_restore_the_previous_character() {
+        let target_pos = position(0, 0, 7);
+        let (mut app, first, camera) = test_app(target_pos, InteriorRegionId(2));
+        *app.world_mut().resource_mut::<CameraMode>() = CameraMode::Character;
+        set_camera_distance(&mut app, camera, 0.8);
+        app.update();
+        assert_hidden(&app, first);
+
+        app.world_mut()
+            .entity_mut(first)
+            .remove::<CameraFocusTarget>();
+        let second = app
+            .world_mut()
+            .spawn((
+                Transform::from_translation(Vec3::ZERO),
+                Visibility::Inherited,
+                PresentationOcclusion::default(),
+                CameraFocusTarget::new(target_pos),
+            ))
+            .id();
+        app.update();
+        assert_ordinary(&app, first);
+        assert_hidden(&app, second);
+
+        app.world_mut()
+            .entity_mut(second)
+            .remove::<CameraFocusTarget>();
+        app.update();
+        assert_ordinary(&app, first);
+        assert_ordinary(&app, second);
+        assert!(!app
+            .world()
+            .entity(first)
+            .contains::<CharacterCameraOcclusionOwner>());
+        assert!(!app
+            .world()
+            .entity(second)
+            .contains::<CharacterCameraOcclusionOwner>());
+    }
+
+    #[test]
+    fn repeated_gameplay_exits_clear_character_camera_occlusion() {
+        let mut builder = HeadlessAppBuilder::new()
+            .with_minimal_plugins()
+            .with_state_plugin();
+        builder.app_mut().add_plugins(TransformPlugin);
+        builder
+            .app_mut()
+            .init_state::<Screen>()
+            .insert_resource(camera_settings())
+            .init_resource::<CameraMode>()
+            .add_plugins(plugin);
+        let target = builder
+            .app_mut()
+            .world_mut()
+            .spawn((
+                Transform::default(),
+                Visibility::Inherited,
+                PresentationOcclusion::default(),
+                CameraFocusTarget::new(TilePos::ORIGIN),
+            ))
+            .id();
+        let focus = Vec3::Y * camera_settings().character_focus_height;
+        let camera = builder
+            .app_mut()
+            .world_mut()
+            .spawn((
+                Transform::from_translation(focus + Vec3::Z * 0.8),
+                PanOrbitCamera { focus, radius: 7.0 },
+            ))
+            .id();
+        let mut app = builder.build();
+        app.update();
+
+        for cycle in 0..100 {
+            enter_screen(&mut app, Screen::Gameplay);
+            *app.world_mut().resource_mut::<CameraMode>() = CameraMode::Character;
+            set_camera_distance(&mut app, camera, 0.8);
+            app.update();
+            assert_hidden(&app, target);
+
+            enter_screen(&mut app, Screen::Title);
+            assert_ordinary(&app, target);
+            let target_ref = app.world().entity(target);
+            assert!(
+                !target_ref.contains::<CharacterCameraOcclusionOwner>(),
+                "cycle {cycle} leaked camera proximity ownership"
+            );
+            assert!(
+                !target_ref
+                    .get::<PresentationOcclusion>()
+                    .expect("the unit should retain its composable reason set")
+                    .contains(PresentationOcclusionReason::CharacterCameraProximity),
+                "cycle {cycle} leaked the camera proximity reason"
+            );
+        }
     }
 
     #[test]

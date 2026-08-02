@@ -23,10 +23,9 @@ const SKY_DOME_RADIUS: f32 = 500.0;
 
 /// Distance from a unit-hex centre to any one of its six faces.
 const HEX_FACE_DISTANCE: f32 = HEX_CIRCUMRADIUS * 0.866_025_4;
-/// Defensive runtime cap even if a test or external adapter bypasses settings validation.
-const MAX_ADAPTIVE_PITCH_SAMPLES: usize = 256;
-const MAX_ADAPTIVE_PITCH_SAMPLES_F32: f32 = 256.0;
-
+/// Lets ordinary upward free-look keep the character near the lower third of the
+/// view before unusual-angle assistance starts lowering and retracting the boom.
+const CHARACTER_UPWARD_COMPOSITION_ALLOWANCE: f32 = std::f32::consts::PI / 12.0;
 /// Marks the sky-dome entity so `follow_camera` can pin it to the camera.
 #[derive(Component, Reflect)]
 #[reflect(Component)]
@@ -199,20 +198,29 @@ struct CameraObstructionIndex {
 
 /// Transient pose used only while Character mode avoids terrain.
 ///
-/// Desired rotation remains player-authored. Collision may temporarily raise the
-/// effective pitch or shorten the effective radius, but never rewrites yaw or zoom.
+/// Player-authored rotation and zoom remain on the camera components. Collision may
+/// only shorten the effective boom radius, then restore it after stable clearance.
 #[derive(Resource, Debug, Default)]
 struct CharacterCameraCollision {
+    target: Option<Entity>,
     effective_radius: Option<f32>,
-    desired_rotation: Option<Quat>,
-    effective_pitch: Option<f32>,
+    last_desired_radius: Option<f32>,
+    outward_clear_for_seconds: f32,
 }
 
 impl CharacterCameraCollision {
+    fn begin_target(&mut self, target: Entity, desired_radius: f32) {
+        self.target = Some(target);
+        self.effective_radius = Some(desired_radius);
+        self.last_desired_radius = Some(desired_radius);
+        self.outward_clear_for_seconds = 0.0;
+    }
+
     fn clear(&mut self) {
+        self.target = None;
         self.effective_radius = None;
-        self.desired_rotation = None;
-        self.effective_pitch = None;
+        self.last_desired_radius = None;
+        self.outward_clear_for_seconds = 0.0;
     }
 }
 
@@ -220,46 +228,6 @@ impl CharacterCameraCollision {
 struct CameraClearance {
     radius: f32,
     obstructed: bool,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct CharacterCameraPath {
-    pitch: f32,
-}
-
-/// Deterministic best-clearance accumulator for one bounded same-yaw pitch search.
-struct CharacterCameraPathSearch {
-    desired_pitch: f32,
-    best: CharacterCameraPath,
-    best_radius: f32,
-}
-
-impl CharacterCameraPathSearch {
-    fn new(desired_pitch: f32, initial_radius: f32) -> Self {
-        Self {
-            desired_pitch,
-            best: CharacterCameraPath {
-                pitch: desired_pitch,
-            },
-            best_radius: initial_radius,
-        }
-    }
-
-    fn retain(&mut self, candidate: CharacterCameraPath, radius: f32) {
-        let radius_order = radius.total_cmp(&self.best_radius);
-        let candidate_offset = (candidate.pitch - self.desired_pitch).abs();
-        let best_offset = (self.best.pitch - self.desired_pitch).abs();
-        if radius_order.is_gt()
-            || (radius_order.is_eq() && candidate_offset.total_cmp(&best_offset).is_lt())
-        {
-            self.best = candidate;
-            self.best_radius = radius;
-        }
-    }
-
-    fn finish(self) -> CharacterCameraPath {
-        self.best
-    }
 }
 
 /// Spawn the game camera and the procedural sky dome.
@@ -392,7 +360,7 @@ fn map_camera_active(mode: Res<CameraMode>) -> bool {
 fn pitch_limits(mode: CameraMode, settings: &CameraSettings) -> (f32, f32) {
     match mode {
         CameraMode::Map => (settings.min_pitch, settings.max_pitch),
-        CameraMode::Character => (settings.character_min_pitch, settings.character_max_pitch),
+        CameraMode::Character => (-1.0, 1.0),
     }
 }
 
@@ -404,7 +372,7 @@ fn toggle_camera_mode(
     mut mode: ResMut<CameraMode>,
     mut saved: ResMut<SavedMapCamera>,
     mut collision: ResMut<CharacterCameraCollision>,
-    targets: Query<(&Transform, &CameraFocusTarget), Without<PanOrbitCamera>>,
+    targets: Query<(Entity, &Transform, &CameraFocusTarget), Without<PanOrbitCamera>>,
     mut cameras: Query<(&mut Transform, &mut PanOrbitCamera), Without<CameraFocusTarget>>,
 ) {
     if !bindings.just_pressed(&keys, InputAction::ToggleCamera) {
@@ -416,7 +384,7 @@ fn toggle_camera_mode(
     };
     match *mode {
         CameraMode::Map => {
-            let Ok((target, _focus_target)) = targets.single() else {
+            let Ok((target_entity, target, _focus_target)) = targets.single() else {
                 warn!("cannot enter character camera without exactly one selected focus target");
                 return;
             };
@@ -424,18 +392,11 @@ fn toggle_camera_mode(
 
             let wanted_pitch = settings.character_pitch * std::f32::consts::FRAC_PI_2;
             let pitch_delta = wanted_pitch - downward_pitch(transform.rotation);
-            transform.rotation = apply_pitch_delta(
-                transform.rotation,
-                pitch_delta,
-                settings.character_min_pitch,
-                settings.character_max_pitch,
-            );
+            transform.rotation = apply_pitch_delta(transform.rotation, pitch_delta, -1.0, 1.0);
 
             camera.focus = target.translation + Vec3::Y * settings.character_focus_height;
             camera.radius = settings.character_radius;
-            collision.effective_radius = Some(camera.radius);
-            collision.desired_rotation = Some(transform.rotation);
-            collision.effective_pitch = Some(pitch_fraction(transform.rotation));
+            collision.begin_target(target_entity, camera.radius);
             transform.translation = camera.focus
                 + Mat3::from_quat(transform.rotation).mul_vec3(Vec3::new(0.0, 0.0, camera.radius));
             *mode = CameraMode::Character;
@@ -458,7 +419,7 @@ fn follow_character_camera(
     time: Res<Time>,
     obstruction_index: Res<CameraObstructionIndex>,
     mut collision: ResMut<CharacterCameraCollision>,
-    targets: Query<(&Transform, &CameraFocusTarget), Without<PanOrbitCamera>>,
+    targets: Query<(Entity, &Transform, &CameraFocusTarget), Without<PanOrbitCamera>>,
     mut cameras: Query<(&mut Transform, &mut PanOrbitCamera), Without<CameraFocusTarget>>,
 ) {
     if *mode != CameraMode::Character {
@@ -467,7 +428,7 @@ fn follow_character_camera(
     let Ok((mut transform, mut camera)) = cameras.single_mut() else {
         return;
     };
-    let Ok((target_transform, target)) = targets.single() else {
+    let Ok((target_entity, target_transform, target)) = targets.single() else {
         if let Some(pose) = saved.0.take() {
             pose.restore(&mut transform, &mut camera);
         }
@@ -476,40 +437,22 @@ fn follow_character_camera(
         return;
     };
 
+    // Collision history belongs to one selected unit. A new target must resolve its
+    // own corridor immediately instead of inheriting the prior target's close boom or
+    // release timer.
+    if collision.target != Some(target_entity) {
+        collision.begin_target(target_entity, camera.radius);
+    }
+
     let wanted_focus = target_transform.translation + Vec3::Y * settings.character_focus_height;
     if wanted_focus.distance_squared(camera.focus) > f32::EPSILON {
         camera.focus = wanted_focus;
     }
 
-    let desired_rotation = collision.desired_rotation.unwrap_or(transform.rotation);
-    let desired_pitch = pitch_fraction(desired_rotation);
-    let target_path = obstruction_index.character_path(
-        wanted_focus,
-        target.surface,
-        desired_rotation,
-        camera.radius,
-        settings.character_probe_radius,
-        settings.character_collision_margin,
-        settings.character_min_effective_radius,
-        settings.character_min_pitch,
-        settings.character_adaptive_max_pitch,
-        settings.character_pitch_search_step,
-    );
-    let previous_pitch = collision.effective_pitch.unwrap_or(desired_pitch);
-    let effective_pitch = resolve_effective_pitch(
-        previous_pitch,
-        target_path.pitch,
-        desired_pitch,
-        settings.character_pitch_search_step * 0.25,
-        settings.character_pitch_restoration_speed,
-        time.delta_secs(),
-    );
-    let effective_rotation = if (effective_pitch - desired_pitch).abs() <= f32::EPSILON {
-        desired_rotation
-    } else {
-        rotation_with_pitch(desired_rotation, effective_pitch)
-    };
-    let direction = effective_rotation * Vec3::Z;
+    // Rotation is exclusively player-authored. Collision follows the deterministic
+    // placement ray derived from that look and can shorten only its distance; it
+    // never changes where the player looks.
+    let direction = character_boom_direction(transform.rotation);
     let clearance = obstruction_index.safe_radius(
         wanted_focus,
         target.surface,
@@ -518,18 +461,19 @@ fn follow_character_camera(
         settings.character_probe_radius,
         settings.character_collision_margin,
     );
-    if transform.rotation.dot(effective_rotation).abs() < 1.0 - f32::EPSILON {
-        transform.rotation = effective_rotation;
-    }
     let previous = collision.effective_radius.unwrap_or(camera.radius);
-    let hysteresis = settings.character_collision_margin * 0.25;
+    let desired_changed = collision
+        .last_desired_radius
+        .is_none_or(|radius| (radius - camera.radius).abs() > f32::EPSILON);
     let effective = resolve_effective_radius(
         previous,
         clearance.radius,
         clearance.obstructed,
-        hysteresis,
+        desired_changed,
+        settings.character_collision_release_delay,
         settings.character_restoration_speed,
         time.delta_secs(),
+        &mut collision.outward_clear_for_seconds,
     );
     if collision
         .effective_radius
@@ -538,16 +482,10 @@ fn follow_character_camera(
         collision.effective_radius = Some(effective);
     }
     if collision
-        .effective_pitch
-        .is_none_or(|pitch| (pitch - effective_pitch).abs() > f32::EPSILON)
+        .last_desired_radius
+        .is_none_or(|radius| (radius - camera.radius).abs() > f32::EPSILON)
     {
-        collision.effective_pitch = Some(effective_pitch);
-    }
-    if collision
-        .desired_rotation
-        .is_none_or(|rotation| rotation.dot(desired_rotation).abs() < 1.0 - f32::EPSILON)
-    {
-        collision.desired_rotation = Some(desired_rotation);
+        collision.last_desired_radius = Some(camera.radius);
     }
 
     let wanted_eye = wanted_focus + direction * effective;
@@ -556,49 +494,72 @@ fn follow_character_camera(
     }
 }
 
-fn resolve_effective_pitch(
-    previous: f32,
-    required: f32,
-    desired: f32,
-    hysteresis: f32,
-    restoration_speed: f32,
-    delta_seconds: f32,
-) -> f32 {
-    let previous_offset = previous - desired;
-    let required_offset = required - desired;
-    let changes_side = previous_offset * required_offset < -f32::EPSILON;
-    let moves_further_from_desired = required_offset.abs() > previous_offset.abs() + hysteresis;
-    if changes_side || moves_further_from_desired {
-        required
-    } else {
-        let delta = required - previous;
-        if delta.abs() <= hysteresis {
-            required
-        } else {
-            previous
-                + delta.clamp(
-                    -restoration_speed * delta_seconds,
-                    restoration_speed * delta_seconds,
-                )
-        }
-    }
-}
-
 fn resolve_effective_radius(
     previous: f32,
     safe_radius: f32,
     obstructed: bool,
-    hysteresis: f32,
+    desired_changed: bool,
+    release_delay: f32,
     restoration_speed: f32,
     delta_seconds: f32,
+    outward_clear_for_seconds: &mut f32,
 ) -> f32 {
     if safe_radius < previous {
-        safe_radius
-    } else if !obstructed || safe_radius - previous > hysteresis {
-        (previous + restoration_speed * delta_seconds).min(safe_radius)
-    } else {
-        previous
+        *outward_clear_for_seconds = 0.0;
+        return safe_radius;
     }
+    // Partial clearance is still an obstruction. Waiting until the complete desired
+    // boom is clear prevents adjacent faces from accumulating one release timer and
+    // producing an outward/inward "breath" while the character walks past them.
+    if obstructed {
+        *outward_clear_for_seconds = 0.0;
+        return previous;
+    }
+    if desired_changed {
+        *outward_clear_for_seconds = 0.0;
+        return safe_radius;
+    }
+    if safe_radius - previous <= f32::EPSILON {
+        *outward_clear_for_seconds = 0.0;
+        return previous;
+    }
+
+    *outward_clear_for_seconds += delta_seconds.max(0.0);
+    if *outward_clear_for_seconds + f32::EPSILON < release_delay {
+        return previous;
+    }
+
+    (previous + restoration_speed * delta_seconds.max(0.0)).min(safe_radius)
+}
+
+/// Returns the placement ray for the Character camera without changing its look.
+///
+/// Downward and level views use the ordinary orbit ray. For upward free-look, the
+/// camera may lag the authored pitch by at most fifteen degrees. This keeps shallow
+/// upward input from driving a long third-person boom into the supporting floor,
+/// while steeper placement rays track the authored pitch with that fixed offset and
+/// progressively meet the support-limited close view. The camera's rotation remains
+/// exactly player-authored throughout.
+fn character_boom_direction(rotation: Quat) -> Vec3 {
+    let desired_pitch = downward_pitch(rotation);
+    if !desired_pitch.is_finite() {
+        return rotation * Vec3::Z;
+    }
+    let placement_pitch = if desired_pitch < 0.0 {
+        (desired_pitch + CHARACTER_UPWARD_COMPOSITION_ALLOWANCE).min(0.0)
+    } else {
+        desired_pitch
+    };
+    let right = rotation * Vec3::X;
+    let mut horizontal_back = right.cross(Vec3::Y).normalize_or_zero();
+    if horizontal_back.length_squared() <= f32::EPSILON {
+        let backward = rotation * Vec3::Z;
+        horizontal_back = Vec3::new(backward.x, 0.0, backward.z).normalize_or_zero();
+    }
+    if horizontal_back.length_squared() <= f32::EPSILON {
+        horizontal_back = Vec3::Z;
+    }
+    horizontal_back * placement_pitch.cos() + Vec3::Y * placement_pitch.sin()
 }
 
 impl CameraObstructionIndex {
@@ -623,116 +584,6 @@ impl CameraObstructionIndex {
         self.spans_by_coord = spans_by_coord;
         self.initialized = true;
         self.rebuilds = self.rebuilds.saturating_add(1);
-    }
-
-    fn character_path(
-        &self,
-        focus: Vec3,
-        support: TilePos,
-        desired_rotation: Quat,
-        desired_radius: f32,
-        probe_radius: f32,
-        margin: f32,
-        preferred_minimum_radius: f32,
-        adaptive_min_pitch: f32,
-        adaptive_max_pitch: f32,
-        pitch_step: f32,
-    ) -> CharacterCameraPath {
-        let desired_pitch = pitch_fraction(desired_rotation);
-        let direction = desired_rotation * Vec3::Z;
-        let current = self.safe_radius(
-            focus,
-            support,
-            direction,
-            desired_radius,
-            probe_radius,
-            margin,
-        );
-        let direct = CharacterCameraPath {
-            pitch: desired_pitch,
-        };
-        if !current.obstructed
-            || current.radius >= preferred_minimum_radius
-            || direction.length_squared() <= f32::EPSILON
-        {
-            return direct;
-        }
-        // The minimum radius decides when adaptation is necessary; it is not the
-        // search objective. Returning the first sample that merely crossed that
-        // threshold could leave the camera pressed against the selected unit even
-        // when a slightly different same-yaw pitch restored the complete boom.
-        // Compare the complete bounded search instead, maximizing honest clearance
-        // and using the smallest authored-pitch deviation as a deterministic tie.
-        let mut search = CharacterCameraPathSearch::new(desired_pitch, current.radius);
-
-        let maximum_pitch = adaptive_max_pitch.max(desired_pitch);
-        let upward_range = maximum_pitch - desired_pitch;
-        if upward_range > f32::EPSILON {
-            let requested_step = if pitch_step.is_finite() && pitch_step > 0.0 {
-                pitch_step
-            } else {
-                upward_range
-            };
-            let bounded_step = requested_step.max(upward_range / MAX_ADAPTIVE_PITCH_SAMPLES_F32);
-            let mut pitch = (desired_pitch + bounded_step).min(maximum_pitch);
-            for sample in 0..MAX_ADAPTIVE_PITCH_SAMPLES {
-                if sample == MAX_ADAPTIVE_PITCH_SAMPLES - 1 {
-                    pitch = maximum_pitch;
-                }
-                let rotation = rotation_with_pitch(desired_rotation, pitch);
-                let clearance = self.safe_radius(
-                    focus,
-                    support,
-                    rotation * Vec3::Z,
-                    desired_radius,
-                    probe_radius,
-                    margin,
-                );
-                let candidate = CharacterCameraPath { pitch };
-                search.retain(candidate, clearance.radius);
-                if pitch >= maximum_pitch {
-                    break;
-                }
-                pitch = (pitch + bounded_step).min(maximum_pitch);
-            }
-        }
-
-        // Raising the eye clears walls and nearby vegetation, but it is the wrong
-        // response beneath a low roof. Include the bounded search back toward the
-        // horizon so its true clearance competes with every upward sample at the
-        // same player-authored yaw.
-        let minimum_pitch = adaptive_min_pitch.min(desired_pitch);
-        let downward_range = desired_pitch - minimum_pitch;
-        if downward_range > f32::EPSILON {
-            let requested_step = if pitch_step.is_finite() && pitch_step > 0.0 {
-                pitch_step
-            } else {
-                downward_range
-            };
-            let bounded_step = requested_step.max(downward_range / MAX_ADAPTIVE_PITCH_SAMPLES_F32);
-            let mut pitch = (desired_pitch - bounded_step).max(minimum_pitch);
-            for sample in 0..MAX_ADAPTIVE_PITCH_SAMPLES {
-                if sample == MAX_ADAPTIVE_PITCH_SAMPLES - 1 {
-                    pitch = minimum_pitch;
-                }
-                let rotation = rotation_with_pitch(desired_rotation, pitch);
-                let clearance = self.safe_radius(
-                    focus,
-                    support,
-                    rotation * Vec3::Z,
-                    desired_radius,
-                    probe_radius,
-                    margin,
-                );
-                let candidate = CharacterCameraPath { pitch };
-                search.retain(candidate, clearance.radius);
-                if pitch <= minimum_pitch {
-                    break;
-                }
-                pitch = (pitch - bounded_step).max(minimum_pitch);
-            }
-        }
-        search.finish()
     }
 
     fn safe_radius(
@@ -806,9 +657,8 @@ impl CameraObstructionIndex {
                 obstructed: false,
             },
             |distance| CameraClearance {
-                // The minimum is a preferred usable distance, never permission to
-                // cross the closest hit. A tight enclosure may remain below that
-                // preference even after the bounded upward pitch search.
+                // The margin is a preferred separation, never permission to cross
+                // the closest hit. A tight enclosure may honestly retract to zero.
                 radius: (distance - margin).max(0.0).min(desired_radius),
                 obstructed: true,
             },
@@ -942,8 +792,8 @@ fn clear_camera_obstruction_index(
         index.initialized = false;
     }
     if collision.effective_radius.is_some()
-        || collision.desired_rotation.is_some()
-        || collision.effective_pitch.is_some()
+        || collision.last_desired_radius.is_some()
+        || collision.outward_clear_for_seconds > 0.0
     {
         collision.clear();
     }
@@ -1134,15 +984,16 @@ fn pan_camera(
 /// Applies one vertical drag while keeping the camera inside its configured pitch arc.
 ///
 /// Pitch is measured as the signed angle downward from the horizon. The settings store
-/// the limits as fractions of a quarter-turn, so `0.0` is level and `1.0` is straight
-/// down. Integrating the scalar angle before building the quaternion avoids losing
-/// which side of straight down a large cursor movement crossed.
+/// the limits as fractions of a quarter-turn, so `-1.0` is straight up, `0.0` is
+/// level, and `1.0` is straight down. Integrating the scalar angle before building
+/// the quaternion avoids losing which side of a vertical pole a large cursor movement
+/// crossed.
 fn apply_pitch_delta(rotation: Quat, downward_delta: f32, min_pitch: f32, max_pitch: f32) -> Quat {
     if !downward_delta.is_finite()
         || !min_pitch.is_finite()
         || !max_pitch.is_finite()
-        || !(0.0..=1.0).contains(&min_pitch)
-        || !(0.0..=1.0).contains(&max_pitch)
+        || !(-1.0..=1.0).contains(&min_pitch)
+        || !(-1.0..=1.0).contains(&max_pitch)
         || min_pitch > max_pitch
     {
         return rotation;
@@ -1170,13 +1021,10 @@ fn downward_pitch(rotation: Quat) -> f32 {
     (-forward_y).atan2(up_y)
 }
 
-fn pitch_fraction(rotation: Quat) -> f32 {
-    downward_pitch(rotation) / std::f32::consts::FRAC_PI_2
-}
-
+#[cfg(any(test, feature = "test-support"))]
 fn rotation_with_pitch(rotation: Quat, pitch: f32) -> Quat {
     let wanted = pitch * std::f32::consts::FRAC_PI_2;
-    apply_pitch_delta(rotation, wanted - downward_pitch(rotation), 0.0, 1.0)
+    apply_pitch_delta(rotation, wanted - downward_pitch(rotation), -1.0, 1.0)
 }
 
 /// Pan the camera with WASD, zoom with scroll wheel, orbit with right mouse drag.
@@ -1191,7 +1039,6 @@ fn orbit_camera(
     input_mouse: Res<ButtonInput<MouseButton>>,
     settings: Res<CameraSettings>,
     mode: Res<CameraMode>,
-    mut collision: ResMut<CharacterCameraCollision>,
     mut last_cursor: Local<Option<Vec2>>,
     mut query: Query<(&mut PanOrbitCamera, &mut Transform)>,
 ) {
@@ -1231,20 +1078,13 @@ fn orbit_camera(
             let delta_x = rotation_move.x / window.x * std::f32::consts::PI * 2.0;
             let delta_y = rotation_move.y / window.y * std::f32::consts::PI;
             let yaw = Quat::from_rotation_y(-delta_x);
-            let base_rotation = if *mode == CameraMode::Character {
-                collision.desired_rotation.unwrap_or(transform.rotation)
-            } else {
-                transform.rotation
-            };
+            let base_rotation = transform.rotation;
             transform.rotation = yaw * base_rotation; // rotate around global y axis
             let (min_pitch, max_pitch) = pitch_limits(*mode, &settings);
             transform.rotation =
                 apply_pitch_delta(transform.rotation, delta_y, min_pitch, max_pitch);
-            if *mode == CameraMode::Character {
-                collision.desired_rotation = Some(transform.rotation);
-                collision.effective_pitch = Some(pitch_fraction(transform.rotation));
-            }
-        } else if scroll.abs() > 0.0 {
+        }
+        if scroll.abs() > 0.0 {
             any = true;
             pan_orbit.radius -= scroll * pan_orbit.radius * settings.zoom_sensitivity;
             // dont allow zoom to reach zero or you get stuck
@@ -1286,7 +1126,7 @@ pub mod test_support {
     use hex_assets::CameraSettings;
     use hex_core::{HexSpan, TilePos};
 
-    use super::{rotation_with_pitch, CameraObstructionIndex};
+    use super::{character_boom_direction, rotation_with_pitch, CameraObstructionIndex};
 
     const INDEX_REBUILD_SAMPLES: usize = 32;
 
@@ -1396,31 +1236,18 @@ pub mod test_support {
         let mut result_checksum = 0_u64;
         for sample in samples.iter().cycle().take(query_count) {
             let started = Instant::now();
-            let path = index.character_path(
-                sample.focus,
-                sample.support,
-                sample.desired_rotation,
-                settings.character_radius,
-                settings.character_probe_radius,
-                settings.character_collision_margin,
-                settings.character_min_effective_radius,
-                settings.character_min_pitch,
-                settings.character_adaptive_max_pitch,
-                settings.character_pitch_search_step,
-            );
-            let effective_rotation = rotation_with_pitch(sample.desired_rotation, path.pitch);
             let clearance = index.safe_radius(
                 sample.focus,
                 sample.support,
-                effective_rotation * Vec3::Z,
+                character_boom_direction(sample.desired_rotation),
                 settings.character_radius,
                 settings.character_probe_radius,
                 settings.character_collision_margin,
             );
             query_timings.push(started.elapsed());
             result_checksum = result_checksum.rotate_left(9)
-                ^ u64::from(path.pitch.to_bits())
-                ^ (u64::from(clearance.radius.to_bits()) << 32);
+                ^ u64::from(clearance.radius.to_bits())
+                ^ (u64::from(clearance.obstructed) << 63);
         }
         let query_p95 = percentile(&mut query_timings, 95);
         let query_worst = query_timings.last().copied().unwrap_or_default();
@@ -1479,16 +1306,12 @@ mod tests {
             gameplay_focus: (0.0, 6.0, 0.0),
             character_focus_height: 0.4,
             character_radius: 7.0,
-            character_probe_radius: 0.4,
+            character_probe_radius: 0.1,
             character_collision_margin: 0.35,
-            character_min_effective_radius: 1.5,
             character_restoration_speed: 8.0,
+            character_collision_release_delay: 0.2,
+            character_self_hide_radius: 1.0,
             character_pitch: 0.3,
-            character_min_pitch: 0.05,
-            character_max_pitch: 0.95,
-            character_adaptive_max_pitch: 0.75,
-            character_pitch_search_step: 0.05,
-            character_pitch_restoration_speed: 0.8,
             pan_speed: 0.4,
             pan_speed_offset: 10.0,
             min_pitch: 0.25,
@@ -1591,43 +1414,56 @@ mod tests {
         )
     }
 
-    fn timed_character_queries(iterations: usize) -> (CharacterCameraPath, Vec<Duration>) {
+    fn timed_character_queries(iterations: usize) -> (CameraClearance, Vec<Duration>) {
         let (index, direction) = flat_radius_55_obstruction_fixture();
         let desired_rotation = Transform::from_translation(direction)
             .looking_at(Vec3::ZERO, Vec3::Y)
             .rotation;
-        let expected = index.character_path(
+        let expected = index.safe_radius(
             Vec3::Y,
             TilePos::ORIGIN,
-            desired_rotation,
+            desired_rotation * Vec3::Z,
             7.0,
             0.4,
             0.35,
-            1.5,
-            0.05,
-            0.75,
-            0.05,
         );
         let mut timings = Vec::with_capacity(iterations);
         for _ in 0..iterations {
             let started = Instant::now();
-            let path = index.character_path(
+            let clearance = index.safe_radius(
                 Vec3::Y,
                 TilePos::ORIGIN,
-                desired_rotation,
+                desired_rotation * Vec3::Z,
                 7.0,
                 0.4,
                 0.35,
-                1.5,
-                0.05,
-                0.75,
-                0.05,
             );
             timings.push(started.elapsed());
-            assert!((path.pitch - expected.pitch).abs() < f32::EPSILON);
+            assert_eq!(clearance.radius.to_bits(), expected.radius.to_bits());
+            assert_eq!(clearance.obstructed, expected.obstructed);
         }
         assert_eq!(index.rebuilds, 1);
         (expected, timings)
+    }
+
+    fn resolve_test_radius(
+        previous: f32,
+        safe_radius: f32,
+        obstructed: bool,
+        desired_changed: bool,
+        delta_seconds: f32,
+        outward_clear_for_seconds: &mut f32,
+    ) -> f32 {
+        resolve_effective_radius(
+            previous,
+            safe_radius,
+            obstructed,
+            desired_changed,
+            0.2,
+            8.0,
+            delta_seconds,
+            outward_clear_for_seconds,
+        )
     }
 
     fn timing_percentile(timings: &mut [Duration], percentile: usize) -> Duration {
@@ -1641,24 +1477,32 @@ mod tests {
     }
 
     #[test]
-    fn pitch_delta_clamps_to_angular_limits() {
-        let min_pitch = 0.25;
-        let max_pitch = 0.95;
-        let min_angle = min_pitch * std::f32::consts::FRAC_PI_2;
-        let max_angle = max_pitch * std::f32::consts::FRAC_PI_2;
-        let middle = 0.5 * std::f32::consts::FRAC_PI_2;
+    fn character_pitch_spans_straight_up_through_straight_down() {
+        let middle = rotation_at_pitch(0.0);
+        let straight_up = apply_pitch_delta(middle, -10.0, -1.0, 1.0);
+        let straight_down = apply_pitch_delta(middle, 10.0, -1.0, 1.0);
+        let upward_interior = apply_pitch_delta(middle, -0.4, -1.0, 1.0);
 
-        assert_pitch(
-            apply_pitch_delta(rotation_at_pitch(middle), -10.0, min_pitch, max_pitch),
-            min_angle,
+        assert_pitch(straight_up, -std::f32::consts::FRAC_PI_2);
+        assert!(
+            (straight_up * Vec3::NEG_Z).dot(Vec3::Y) > 0.99999,
+            "the upper Character limit must look straight up"
         );
-        assert_pitch(
-            apply_pitch_delta(rotation_at_pitch(middle), 10.0, min_pitch, max_pitch),
-            max_angle,
+        assert_pitch(straight_down, std::f32::consts::FRAC_PI_2);
+        assert!(
+            (straight_down * Vec3::NEG_Z).dot(Vec3::NEG_Y) > 0.99999,
+            "the lower Character limit must look straight down"
         );
-        assert_pitch(
-            apply_pitch_delta(rotation_at_pitch(middle), 0.1, min_pitch, max_pitch),
-            middle + 0.1,
+        assert_pitch(upward_interior, -0.4);
+        assert_eq!(
+            pitch_limits(CameraMode::Map, &camera_settings()),
+            (0.25, 0.95),
+            "Map mode keeps its tactical downward-only arc"
+        );
+        assert_eq!(
+            pitch_limits(CameraMode::Character, &camera_settings()),
+            (-1.0, 1.0),
+            "Character mode must expose the full vertical look arc"
         );
     }
 
@@ -1920,6 +1764,100 @@ mod tests {
     }
 
     #[test]
+    fn straight_up_look_retracts_against_support_without_reauthoring_rotation() {
+        let settings = camera_settings();
+        let authored = apply_pitch_delta(
+            Quat::from_rotation_y(0.7),
+            -std::f32::consts::FRAC_PI_2,
+            -1.0,
+            1.0,
+        );
+        let index = CameraObstructionIndex {
+            spans_by_coord: BTreeMap::from([(
+                hex_core::HexCoord::ORIGIN,
+                vec![indexed_span(
+                    hex_core::HexCoord::ORIGIN,
+                    HexSpan::new(-0.4, 0.0),
+                )],
+            )]),
+            initialized: true,
+            rebuilds: 1,
+        };
+        let clearance = index.safe_radius(
+            Vec3::Y * settings.character_focus_height,
+            TilePos::ORIGIN,
+            character_boom_direction(authored),
+            settings.character_radius,
+            settings.character_probe_radius,
+            settings.character_collision_margin,
+        );
+
+        assert!(clearance.obstructed);
+        assert!(clearance.radius.abs() < f32::EPSILON);
+        assert!((authored * Vec3::NEG_Z).dot(Vec3::Y) > 0.99999);
+        assert!((authored * Vec3::X).dot(Quat::from_rotation_y(0.7) * Vec3::X) > 0.99999);
+    }
+
+    #[test]
+    fn shallow_upward_look_keeps_the_full_open_ground_boom() {
+        let settings = camera_settings();
+        let authored = rotation_at_pitch(-10.0_f32.to_radians());
+        let boom_direction = character_boom_direction(authored);
+        let index = CameraObstructionIndex {
+            spans_by_coord: BTreeMap::from([(
+                hex_core::HexCoord::ORIGIN,
+                vec![indexed_span(
+                    hex_core::HexCoord::ORIGIN,
+                    HexSpan::new(-0.4, 0.0),
+                )],
+            )]),
+            initialized: true,
+            rebuilds: 1,
+        };
+
+        let clearance = index.safe_radius(
+            Vec3::Y * settings.character_focus_height,
+            TilePos::ORIGIN,
+            boom_direction,
+            settings.character_radius,
+            settings.character_probe_radius,
+            settings.character_collision_margin,
+        );
+
+        assert!(boom_direction.y.abs() < 1e-5);
+        assert!(!clearance.obstructed);
+        assert!((clearance.radius - settings.character_radius).abs() < f32::EPSILON);
+        assert_pitch(authored, -10.0_f32.to_radians());
+    }
+
+    #[test]
+    fn upward_placement_is_continuous_and_never_lags_authored_look_by_more_than_fifteen_degrees() {
+        let cases = [
+            (0.0_f32, 0.0_f32),
+            (-10.0, 0.0),
+            (-15.0, 0.0),
+            (-30.0, -15.0),
+            (-90.0, -75.0),
+        ];
+        let mut previous_placement = f32::INFINITY;
+
+        for (authored_degrees, expected_placement_degrees) in cases {
+            let authored_pitch = authored_degrees.to_radians();
+            let direction = character_boom_direction(rotation_at_pitch(authored_pitch));
+            let placement_pitch = direction.y.clamp(-1.0, 1.0).asin();
+            let expected = expected_placement_degrees.to_radians();
+
+            assert!((placement_pitch - expected).abs() < 1e-5);
+            assert!(placement_pitch <= previous_placement + 1e-5);
+            assert!(placement_pitch >= authored_pitch - 1e-5);
+            assert!(
+                placement_pitch - authored_pitch <= CHARACTER_UPWARD_COMPOSITION_ALLOWANCE + 1e-5
+            );
+            previous_placement = placement_pitch;
+        }
+    }
+
+    #[test]
     fn interpolated_uphill_focus_exits_the_destination_floor_without_collapsing() {
         let from = hex_core::HexCoord::ORIGIN;
         let to = hex_core::HexCoord::from_axial(0, 1);
@@ -1973,7 +1911,7 @@ mod tests {
     }
 
     #[test]
-    fn nearer_hit_is_never_overridden_by_preferred_minimum_radius() {
+    fn nearer_hit_sets_the_exact_margin_safe_radius() {
         let obstruction_coord = hex_core::HexCoord::from_axial(0, 1);
         let direction = obstruction_coord.to_world(0.0).normalize();
         let index = CameraObstructionIndex {
@@ -1990,7 +1928,7 @@ mod tests {
         assert!(clearance.obstructed);
         assert!(
             clearance.radius < 1.5,
-            "the actual margin-safe clearance must win over the preferred minimum"
+            "the nearest hit should determine the actual margin-safe clearance"
         );
         let hit = CameraObstruction {
             position: TilePos::new(obstruction_coord, 0),
@@ -2003,349 +1941,13 @@ mod tests {
     }
 
     #[test]
-    fn pitch_search_keeps_a_later_full_clearance_over_the_first_usable_sample() {
-        let desired_pitch = 0.3;
-        let mut search = CharacterCameraPathSearch::new(desired_pitch, 0.202_f32);
-
-        search.retain(CharacterCameraPath { pitch: 0.45 }, 1.987);
-        search.retain(CharacterCameraPath { pitch: 0.55 }, 7.0);
-
-        assert!((search.finish().pitch - 0.55).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn two_obstructions_keep_searching_until_the_complete_boom_is_clear() {
-        let support = TilePos::new(hex_core::HexCoord::ORIGIN, 18);
-        let focus = Vec3::new(0.0, 8.0, 0.0);
-        let near = hex_core::HexCoord::from_axial(-1, 0);
-        let far = hex_core::HexCoord::from_axial(-2, 1);
-        let index = CameraObstructionIndex {
-            spans_by_coord: BTreeMap::from([
-                (
-                    near,
-                    vec![IndexedCameraSpan {
-                        position: TilePos::new(near, 19),
-                        span: HexSpan::new(5.6, 8.0),
-                    }],
-                ),
-                (
-                    far,
-                    vec![IndexedCameraSpan {
-                        position: TilePos::new(far, 23),
-                        span: HexSpan::new(7.6, 9.6),
-                    }],
-                ),
-            ]),
-            initialized: true,
-            rebuilds: 1,
-        };
-        let yaw = 5.036_368_f32;
-        let horizontal = Vec3::new(yaw.sin(), 0.0, yaw.cos());
-        let desired = rotation_facing(horizontal, 0.3);
-        let first_usable = index.safe_radius(
-            focus,
-            support,
-            rotation_with_pitch(desired, 0.45) * Vec3::Z,
-            7.0,
-            0.4,
-            0.35,
-        );
-        let full_clearance = index.safe_radius(
-            focus,
-            support,
-            rotation_with_pitch(desired, 0.55) * Vec3::Z,
-            7.0,
-            0.4,
-            0.35,
-        );
-
-        assert!(first_usable.radius >= 1.5 && first_usable.radius < 7.0);
-        assert!((full_clearance.radius - 7.0).abs() < f32::EPSILON);
-
-        let path = index.character_path(
-            focus, support, desired, 7.0, 0.4, 0.35, 1.5, 0.05, 0.75, 0.05,
-        );
-        assert!((path.pitch - 0.55).abs() < 1e-5);
-    }
-
-    #[test]
-    fn equal_clearance_prefers_the_nearest_pitch_then_retains_search_order() {
-        let desired_pitch = 0.3;
-        let mut search = CharacterCameraPathSearch::new(desired_pitch, 0.2);
-
-        search.retain(CharacterCameraPath { pitch: 0.55 }, 7.0);
-        search.retain(CharacterCameraPath { pitch: 0.05 }, 7.0);
-        assert!(
-            (search.best.pitch - 0.55).abs() < f32::EPSILON,
-            "equal opposite offsets retain the upward-first bounded search order"
-        );
-
-        search.retain(CharacterCameraPath { pitch: 0.1 }, 7.0);
-        assert!((search.finish().pitch - 0.1).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn low_roof_search_continues_past_a_barely_usable_downward_pitch() {
-        let support = TilePos::new(hex_core::HexCoord::ORIGIN, 6);
-        let focus = Vec3::new(0.0, 3.2, 0.0);
-        let roof = (0..=2)
-            .map(|q| {
-                let coord = hex_core::HexCoord::from_axial(q, 0);
-                (
-                    coord,
-                    vec![IndexedCameraSpan {
-                        position: TilePos::new(coord, 16),
-                        span: HexSpan::new(4.4, 6.8),
-                    }],
-                )
-            })
-            .collect();
-        let index = CameraObstructionIndex {
-            spans_by_coord: roof,
-            initialized: true,
-            rebuilds: 1,
-        };
-        let desired = rotation_facing(Vec3::X, 0.3);
-        let first_usable = index.safe_radius(
-            focus,
-            support,
-            rotation_with_pitch(desired, 0.25) * Vec3::Z,
-            7.0,
-            0.4,
-            0.35,
-        );
-        let full_clearance = index.safe_radius(
-            focus,
-            support,
-            rotation_with_pitch(desired, 0.1) * Vec3::Z,
-            7.0,
-            0.4,
-            0.35,
-        );
-
-        assert!(first_usable.radius >= 1.5 && first_usable.radius < 7.0);
-        assert!((full_clearance.radius - 7.0).abs() < f32::EPSILON);
-
-        let path = index.character_path(
-            focus, support, desired, 7.0, 0.4, 0.35, 1.5, 0.05, 0.75, 0.05,
-        );
-        assert!((path.pitch - 0.1).abs() < 1e-5);
-    }
-
-    #[test]
-    fn obstructed_path_preserves_yaw_and_searches_upward() {
-        let obstruction_coord = hex_core::HexCoord::from_axial(0, 1);
-        let direction = obstruction_coord.to_world(0.0).normalize();
-        let index = CameraObstructionIndex {
-            spans_by_coord: BTreeMap::from([(
-                obstruction_coord,
-                vec![indexed_span(obstruction_coord, HexSpan::new(0.0, 1.0))],
-            )]),
-            initialized: true,
-            rebuilds: 1,
-        };
-        let desired = rotation_facing(direction, 0.05);
-
-        let path = index.character_path(
-            Vec3::Y,
-            TilePos::ORIGIN,
-            desired,
-            7.0,
-            0.4,
-            0.35,
-            1.5,
-            0.05,
-            0.75,
-            0.05,
-        );
-        let resolved = rotation_with_pitch(desired, path.pitch);
-
-        assert!(
-            path.pitch > 0.05,
-            "a low blocked view should search progressively higher pitches"
-        );
-        let desired_heading = (desired * Vec3::Z).xz().normalize();
-        let resolved_heading = (resolved * Vec3::Z).xz().normalize();
-        assert!(desired_heading.dot(resolved_heading) > 0.9999);
-        let clearance =
-            index.safe_radius(Vec3::Y, TilePos::ORIGIN, resolved * Vec3::Z, 7.0, 0.4, 0.35);
-        assert!(clearance.radius >= 1.5);
-        assert!(
-            (clearance.radius - 7.0).abs() < f32::EPSILON,
-            "adaptive pitch must keep searching after the first barely usable clearance"
-        );
-    }
-
-    #[test]
-    fn low_ceiling_corridor_preserves_yaw_and_searches_toward_the_horizon() {
-        let corridor_end = hex_core::HexCoord::from_axial(0, 5);
-        let direction = corridor_end.to_world(0.0).normalize();
-        let spans_by_coord = hex_core::HexCoord::ORIGIN
-            .line_between(corridor_end)
-            .into_iter()
-            .map(|coord| {
-                (
-                    coord,
-                    vec![IndexedCameraSpan {
-                        position: TilePos::new(coord, 3),
-                        // The shipped cave corridor keeps three 0.4-unit levels
-                        // between floor and roof.
-                        span: HexSpan::new(1.2, 1.6),
-                    }],
-                )
-            })
-            .collect();
-        let index = CameraObstructionIndex {
-            spans_by_coord,
-            initialized: true,
-            rebuilds: 1,
-        };
-        let desired_pitch = 0.3;
-        let desired = rotation_facing(direction, desired_pitch);
-        let focus = Vec3::Y * 0.4;
-        let direct = index.safe_radius(focus, TilePos::ORIGIN, desired * Vec3::Z, 7.0, 0.4, 0.35);
-        assert!(direct.radius < 1.5);
-
-        let path = index.character_path(
-            focus,
-            TilePos::ORIGIN,
-            desired,
-            7.0,
-            0.4,
-            0.35,
-            1.5,
-            0.05,
-            0.75,
-            0.05,
-        );
-        let resolved = rotation_with_pitch(desired, path.pitch);
-        let clearance =
-            index.safe_radius(focus, TilePos::ORIGIN, resolved * Vec3::Z, 7.0, 0.4, 0.35);
-
-        assert!(path.pitch < desired_pitch);
-        assert!(clearance.radius >= 1.5);
-        let desired_heading = (desired * Vec3::Z).xz().normalize();
-        let resolved_heading = (resolved * Vec3::Z).xz().normalize();
-        assert!(desired_heading.dot(resolved_heading) > 0.9999);
-    }
-
-    #[test]
-    fn a_minor_obstruction_retracts_without_overriding_the_players_pitch() {
-        let obstruction_coord = hex_core::HexCoord::from_axial(0, 4);
-        let direction = obstruction_coord.to_world(0.0).normalize();
-        let index = CameraObstructionIndex {
-            spans_by_coord: BTreeMap::from([(
-                obstruction_coord,
-                vec![indexed_span(obstruction_coord, HexSpan::new(0.0, 2.0))],
-            )]),
-            initialized: true,
-            rebuilds: 1,
-        };
-        let desired_pitch = 0.05;
-        let desired = rotation_facing(direction, desired_pitch);
-        let direct = index.safe_radius(Vec3::Y, TilePos::ORIGIN, desired * Vec3::Z, 7.0, 0.4, 0.35);
-        assert!(direct.obstructed);
-        assert!(direct.radius >= 1.5 && direct.radius < 7.0);
-
-        let path = index.character_path(
-            Vec3::Y,
-            TilePos::ORIGIN,
-            desired,
-            7.0,
-            0.4,
-            0.35,
-            1.5,
-            0.05,
-            0.75,
-            0.05,
-        );
-
-        assert!((path.pitch - desired_pitch).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn pathological_runtime_pitch_steps_are_bounded_and_still_search() {
-        let obstruction_coord = hex_core::HexCoord::from_axial(0, 1);
-        let direction = obstruction_coord.to_world(0.0).normalize();
-        let index = CameraObstructionIndex {
-            spans_by_coord: BTreeMap::from([(
-                obstruction_coord,
-                vec![indexed_span(obstruction_coord, HexSpan::new(0.0, 1.0))],
-            )]),
-            initialized: true,
-            rebuilds: 1,
-        };
-        let desired_pitch = 0.05;
-        let desired = rotation_facing(direction, desired_pitch);
-
-        let path = index.character_path(
-            Vec3::Y,
-            TilePos::ORIGIN,
-            desired,
-            7.0,
-            0.4,
-            0.35,
-            1.5,
-            0.05,
-            0.75,
-            1e-9,
-        );
-
-        assert!(path.pitch.is_finite());
-        assert!(path.pitch > desired_pitch && path.pitch <= 0.75);
-    }
-
-    #[test]
-    fn enclosed_path_keeps_yaw_and_uses_best_true_clearance_without_penetration() {
-        let origin = hex_core::HexCoord::ORIGIN;
-        let spans_by_coord = origin
-            .neighbors()
-            .into_iter()
-            .map(|coord| (coord, vec![indexed_span(coord, HexSpan::new(0.0, 20.0))]))
-            .collect();
-        let direction = hex_core::HexCoord::from_axial(0, 1)
-            .to_world(0.0)
-            .normalize();
-        let index = CameraObstructionIndex {
-            spans_by_coord,
-            initialized: true,
-            rebuilds: 1,
-        };
-        let desired = rotation_facing(direction, 0.05);
-
-        let path = index.character_path(
-            Vec3::Y,
-            TilePos::ORIGIN,
-            desired,
-            7.0,
-            0.4,
-            0.35,
-            1.5,
-            0.05,
-            0.75,
-            0.05,
-        );
-        let resolved = rotation_with_pitch(desired, path.pitch);
-        let verified =
-            index.safe_radius(Vec3::Y, TilePos::ORIGIN, resolved * Vec3::Z, 7.0, 0.4, 0.35);
-
-        assert!(verified.obstructed);
-        assert!(
-            verified.radius < 1.5,
-            "a full enclosure cannot honestly retain the preferred minimum"
-        );
-        let desired_heading = (desired * Vec3::Z).xz().normalize();
-        let resolved_heading = (resolved * Vec3::Z).xz().normalize();
-        assert!(desired_heading.dot(resolved_heading) > 0.9999);
-    }
-
-    #[test]
     fn flat_radius_55_obstruction_queries_are_deterministic() {
-        let (path, mut timings) = timed_character_queries(100);
+        let (clearance, mut timings) = timed_character_queries(100);
         let p95 = timing_percentile(&mut timings, 95);
         let worst = timings.last().copied().unwrap_or_default();
 
-        assert!(path.pitch.is_finite());
+        assert!(clearance.radius.is_finite());
+        assert!(clearance.obstructed);
         eprintln!(
             "synthetic flat radius-55 Character collision diagnostic (debug): \
              p95={p95:?}, worst={worst:?}"
@@ -2355,7 +1957,7 @@ mod tests {
     #[test]
     #[ignore = "manual release-mode synthetic radius-55 Character-camera timing diagnostic"]
     fn flat_radius_55_character_collision_release_timing() {
-        let (_path, mut timings) = timed_character_queries(10_000);
+        let (_clearance, mut timings) = timed_character_queries(10_000);
         let p95 = timing_percentile(&mut timings, 95);
         let worst = timings.last().copied().unwrap_or_default();
 
@@ -2370,42 +1972,122 @@ mod tests {
     }
 
     #[test]
-    fn collision_snaps_inward_and_restores_with_hysteresis() {
+    fn collision_retracts_immediately_then_recovers_after_stable_clearance() {
+        let mut clear_for = 0.0;
+        let retracted = resolve_test_radius(6.0, 2.5, true, false, 0.1, &mut clear_for);
+        assert!((retracted - 2.5).abs() < f32::EPSILON);
+        assert!(clear_for.abs() < f32::EPSILON);
+
+        let held = resolve_test_radius(retracted, 7.0, false, false, 0.1, &mut clear_for);
+        assert!((held - retracted).abs() < f32::EPSILON);
+        assert!((clear_for - 0.1).abs() < f32::EPSILON);
+
+        let mut radii = vec![held];
+        while *radii
+            .last()
+            .expect("the recovery sequence starts populated")
+            < 7.0
+        {
+            let previous = *radii.last().expect("the recovery sequence stays populated");
+            let next = resolve_test_radius(previous, 7.0, false, false, 0.1, &mut clear_for);
+            assert!(next + f32::EPSILON >= previous, "recovery reversed inward");
+            assert!(next - previous <= 0.8 + 1e-5);
+            assert!(next <= 7.0);
+            radii.push(next);
+        }
         assert!(
-            (resolve_effective_radius(6.0, 2.5, true, 0.1, 8.0, 0.25) - 2.5).abs() < f32::EPSILON,
-            "new obstructions must shorten the camera immediately"
+            radii
+                .get(1)
+                .is_some_and(|radius| (*radius - 3.3).abs() < 1e-5),
+            "recovery should advance by exactly the configured 0.8-unit step"
         );
+        assert!((radii.last().copied().unwrap_or_default() - 7.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn collision_recovery_never_snaps_past_the_configured_rate() {
+        let mut clear_for = 0.2;
+        let mut effective = 2.35;
+
+        while effective < 7.0 {
+            let previous = effective;
+            effective = resolve_test_radius(previous, 7.0, false, false, 0.1, &mut clear_for);
+            assert!(effective + f32::EPSILON >= previous);
+            assert!(
+                effective - previous <= 0.8 + 1e-5,
+                "the final recovery frame must not add an unbounded hysteresis snap"
+            );
+        }
+
+        assert!((effective - 7.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn worsening_clearance_resets_the_release_delay() {
+        let mut clear_for = 0.0;
+        let mut effective = 2.5;
+
+        effective = resolve_test_radius(effective, 7.0, false, false, 0.1, &mut clear_for);
+        assert!((effective - 2.5).abs() < f32::EPSILON);
+        assert!((clear_for - 0.1).abs() < f32::EPSILON);
+
+        effective = resolve_test_radius(effective, 3.0, true, false, 0.1, &mut clear_for);
         assert!(
-            (resolve_effective_radius(2.5, 2.55, true, 0.1, 8.0, 0.25) - 2.5).abs() < f32::EPSILON,
-            "sub-margin clearance changes must not jitter the camera"
+            (effective - 2.5).abs() < f32::EPSILON,
+            "partial blocked clearance must not start an outward/inward camera breath"
         );
+        assert!(clear_for.abs() < f32::EPSILON);
+
+        effective = resolve_test_radius(effective, 7.0, false, false, 0.1, &mut clear_for);
+        assert!((effective - 2.5).abs() < f32::EPSILON);
+        effective = resolve_test_radius(effective, 7.0, false, false, 0.1, &mut clear_for);
+        assert!((effective - 3.3).abs() < 1e-5);
+    }
+
+    #[test]
+    fn obstruction_chatter_never_moves_the_camera_outward() {
+        let mut clear_for = 0.0;
+        let mut effective = 2.5;
+        let mut observed = Vec::new();
+        for safe_radius in [2.55, 2.48, 2.53] {
+            effective =
+                resolve_test_radius(effective, safe_radius, true, false, 0.1, &mut clear_for);
+            observed.push(effective);
+        }
+        assert_eq!(observed, vec![2.5, 2.48, 2.48]);
+        assert!(clear_for.abs() < f32::EPSILON);
+
+        effective = resolve_test_radius(effective, 7.0, false, false, 0.1, &mut clear_for);
+        assert!((effective - 2.48).abs() < f32::EPSILON);
+        effective = resolve_test_radius(effective, 7.0, false, false, 0.1, &mut clear_for);
+        assert!(effective > 2.48);
+        let interrupted = resolve_test_radius(effective, 2.2, true, false, 0.1, &mut clear_for);
+        assert!((interrupted - 2.2).abs() < f32::EPSILON);
+        assert!(clear_for.abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn a_player_zoom_change_takes_effect_without_collision_lag() {
+        let mut clear_for = 0.1;
+        let zoomed = resolve_test_radius(2.5, 5.6, false, true, 0.1, &mut clear_for);
+        assert!((zoomed - 5.6).abs() < f32::EPSILON);
+        assert!(clear_for.abs() < f32::EPSILON);
+
+        let collision_limited = resolve_test_radius(5.6, 3.0, true, true, 0.1, &mut clear_for);
+        assert!((collision_limited - 3.0).abs() < f32::EPSILON);
+        assert!(clear_for.abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn player_zoom_never_releases_an_improved_but_still_blocked_radius() {
+        let mut clear_for = 0.1;
+        let effective = resolve_test_radius(2.5, 3.0, true, true, 0.1, &mut clear_for);
+
         assert!(
-            (resolve_effective_radius(2.5, 7.0, false, 0.1, 8.0, 0.25) - 4.5).abs() < f32::EPSILON,
-            "a cleared obstruction should restore at the authored rate"
+            (effective - 2.5).abs() < f32::EPSILON,
+            "a desired-zoom change must not turn partial blocked clearance into an outward pop"
         );
-        assert!(
-            (resolve_effective_pitch(0.3, 0.75, 0.3, 0.0125, 0.8, 0.25) - 0.75).abs()
-                < f32::EPSILON,
-            "a newly required higher pitch must apply immediately"
-        );
-        assert!(
-            (resolve_effective_pitch(0.75, 0.3, 0.3, 0.0125, 0.8, 0.25) - 0.55).abs()
-                < f32::EPSILON,
-            "a cleared pitch should restore at the authored rate"
-        );
-        assert!(
-            (resolve_effective_pitch(0.305, 0.3, 0.3, 0.0125, 0.8, 0.25) - 0.3).abs()
-                < f32::EPSILON,
-            "sub-step pitch residue should settle exactly instead of jittering"
-        );
-        assert!(
-            (resolve_effective_pitch(0.3, 0.1, 0.3, 0.0125, 0.8, 0.25) - 0.1).abs() < f32::EPSILON,
-            "a newly required lower pitch must apply immediately beneath a ceiling"
-        );
-        assert!(
-            (resolve_effective_pitch(0.1, 0.3, 0.3, 0.0125, 0.8, 0.125) - 0.2).abs() < f32::EPSILON,
-            "a cleared lower pitch should restore at the authored rate"
-        );
+        assert!(clear_for.abs() < f32::EPSILON);
     }
 
     #[test]
@@ -2518,13 +2200,13 @@ mod tests {
     }
 
     #[test]
-    fn adaptive_pitch_preserves_player_yaw_for_ten_thousand_frames() {
+    fn obstructed_character_camera_preserves_player_rotation_for_ten_thousand_frames() {
         let settings = camera_settings();
         let focus = Vec3::Y * settings.character_focus_height;
         let obstruction_coord = hex_core::HexCoord::from_axial(0, 1);
         let initial_direction = obstruction_coord.to_world(0.0).normalize();
-        let rotation = rotation_facing(initial_direction, settings.character_min_pitch);
-        let eye = focus + rotation * Vec3::Z * settings.character_radius;
+        let authored_rotation = rotation_facing(initial_direction, 0.0);
+        let eye = focus + authored_rotation * Vec3::Z * settings.character_radius;
         let mut builder = HeadlessAppBuilder::new().with_minimal_plugins();
         builder
             .app_mut()
@@ -2550,7 +2232,7 @@ mod tests {
         let camera = app
             .world_mut()
             .spawn((
-                Transform::from_translation(eye).with_rotation(rotation),
+                Transform::from_translation(eye).with_rotation(authored_rotation),
                 PanOrbitCamera {
                     focus,
                     radius: settings.character_radius,
@@ -2568,22 +2250,19 @@ mod tests {
         ));
 
         app.update();
-        let settled_rotation = app
+        let settled = app
             .world()
             .entity(camera)
             .get::<Transform>()
-            .expect("the camera should keep its transform")
-            .rotation;
-        let settled_direction = settled_rotation * Vec3::Z;
+            .expect("the camera should keep its transform");
         assert!(
-            settled_direction
-                .xz()
-                .normalize()
-                .dot(initial_direction.xz().normalize())
-                > 0.9999,
-            "collision avoidance must preserve the player-authored yaw"
+            settled.rotation.dot(authored_rotation).abs() > 0.999999,
+            "collision must not author either pitch or yaw"
         );
-        assert!(pitch_fraction(settled_rotation) > settings.character_min_pitch);
+        assert!(
+            settled.translation.distance(focus) < settings.character_radius,
+            "the obstruction should be handled by radius retraction"
+        );
         assert_eq!(app.world().resource::<CameraObstructionIndex>().rebuilds, 1);
         *app.world_mut().resource_mut::<CameraChangeCounts>() = CameraChangeCounts::default();
 
@@ -2601,68 +2280,53 @@ mod tests {
             .get::<Transform>()
             .expect("the camera should keep its transform")
             .rotation;
-        assert!(final_rotation.dot(settled_rotation).abs() > 0.9999);
+        assert!(final_rotation.dot(authored_rotation).abs() > 0.999999);
     }
 
     #[test]
-    fn character_pitch_can_orbit_near_the_horizon() {
-        let min_pitch = 0.05;
-        let max_pitch = 0.95;
-        let rotation = apply_pitch_delta(
-            rotation_at_pitch(0.3 * std::f32::consts::FRAC_PI_2),
-            -10.0,
-            min_pitch,
-            max_pitch,
-        );
-
-        assert_pitch(rotation, min_pitch * std::f32::consts::FRAC_PI_2);
-        assert!(
-            min_pitch < camera_settings().min_pitch,
-            "the close camera should tilt closer to the horizon than the map camera"
-        );
-        assert_eq!(
-            pitch_limits(CameraMode::Map, &camera_settings()),
-            (0.25, 0.95)
-        );
-        assert_eq!(
-            pitch_limits(CameraMode::Character, &camera_settings()),
-            (min_pitch, max_pitch)
-        );
+    fn pitch_delta_cannot_flip_across_either_vertical_pole() {
+        for (delta, expected) in [
+            (-std::f32::consts::PI, -std::f32::consts::FRAC_PI_2),
+            (std::f32::consts::PI, std::f32::consts::FRAC_PI_2),
+        ] {
+            let rotation = apply_pitch_delta(rotation_at_pitch(0.0), delta, -1.0, 1.0);
+            assert!(rotation.is_finite());
+            assert!((rotation.length() - 1.0).abs() < 1e-5);
+            assert_pitch(rotation, expected);
+            assert!(
+                downward_pitch(rotation).abs() <= std::f32::consts::FRAC_PI_2 + 1e-5,
+                "a large drag crossed a vertical pole and inverted the camera"
+            );
+        }
     }
 
     #[test]
-    fn pitch_delta_cannot_flip_across_straight_down() {
-        let min_pitch = 0.25;
-        let max_pitch = 0.95;
-        let middle = 0.5 * std::f32::consts::FRAC_PI_2;
-
-        // One full-window cursor jump produces a PI-radian delta. Applying that raw
-        // before measuring the tilt used to cross straight down and leave the camera
-        // inverted instead of at its lower-looking limit.
-        let rotation = apply_pitch_delta(
-            rotation_at_pitch(middle),
-            std::f32::consts::PI,
-            min_pitch,
-            max_pitch,
-        );
-
-        assert_pitch(rotation, max_pitch * std::f32::consts::FRAC_PI_2);
-        assert!((rotation * Vec3::Y).y > 0.0, "the camera ended upside down");
-    }
-
-    #[test]
-    fn pitch_delta_preserves_yaw() {
+    fn pitch_delta_preserves_yaw_through_both_vertical_poles() {
         let yaw = 1.1;
-        let middle = 0.5 * std::f32::consts::FRAC_PI_2;
-        let before = Quat::from_rotation_y(yaw) * rotation_at_pitch(middle);
-        let after = apply_pitch_delta(before, 0.2, 0.25, 0.95);
-        let before_heading = (before * Vec3::NEG_Z).xz().normalize();
-        let after_heading = (after * Vec3::NEG_Z).xz().normalize();
+        let before = Quat::from_rotation_y(yaw) * rotation_at_pitch(0.0);
+        let expected_right = before * Vec3::X;
 
-        assert!(
-            before_heading.dot(after_heading) > 0.9999,
-            "local pitch changed the camera's yaw"
-        );
+        for delta in [-10.0, 10.0] {
+            let at_pole = apply_pitch_delta(before, delta, -1.0, 1.0);
+            assert!(
+                (at_pole * Vec3::X).dot(expected_right) > 0.9999,
+                "pitching to a pole discarded the player-authored yaw"
+            );
+
+            let yaw_delta = 0.7;
+            let turned_at_pole = Quat::from_rotation_y(yaw_delta) * at_pole;
+            let away_from_pole = apply_pitch_delta(
+                turned_at_pole,
+                if delta.is_sign_negative() { 0.2 } else { -0.2 },
+                -1.0,
+                1.0,
+            );
+            let wanted_right = Quat::from_rotation_y(yaw_delta) * expected_right;
+            assert!(
+                (away_from_pole * Vec3::X).dot(wanted_right) > 0.9999,
+                "yaw authored at a pole did not reappear after pitching away"
+            );
+        }
     }
 
     #[test]
@@ -2728,26 +2392,17 @@ mod tests {
             .entity(camera)
             .get::<Transform>()
             .expect("the ordinary orbit target should retain its transform");
-        let initial_heading = (initial_rotation * Vec3::NEG_Z).xz().normalize();
-        let authored_heading = (transform.rotation * Vec3::NEG_Z).xz().normalize();
+        let initial_right = initial_rotation * Vec3::X;
+        let authored_right = transform.rotation * Vec3::X;
         assert!(
-            (initial_heading.dot(authored_heading) + 0.5).abs() < 1e-4,
+            (initial_right.dot(authored_right) + 0.5).abs() < 1e-4,
             "one-third-turn right drag should author a 120-degree yaw"
         );
-        assert_pitch(
-            transform.rotation,
-            camera_settings().character_max_pitch * std::f32::consts::FRAC_PI_2,
-        );
+        assert_pitch(transform.rotation, std::f32::consts::FRAC_PI_2);
         assert!(
-            (transform.rotation * Vec3::Y).y > 0.0,
-            "bounded Character pitch must never turn the camera upside down"
+            (transform.rotation * Vec3::NEG_Z).dot(Vec3::NEG_Y) > 0.99999,
+            "the downward gesture should reach straight down without inverting"
         );
-        let desired = app
-            .world()
-            .resource::<CharacterCameraCollision>()
-            .desired_rotation
-            .expect("ordinary Character input should publish the player-authored rotation");
-        assert!(desired.dot(transform.rotation).abs() > 0.9999);
         let authored_radius = app
             .world()
             .entity(camera)
@@ -2758,6 +2413,190 @@ mod tests {
             (authored_radius - radius).abs() < f32::EPSILON,
             "an azimuth gesture must not mutate desired zoom"
         );
+
+        app.world_mut().write_message(CursorMoved {
+            window,
+            position: Vec2::new(200.0, -800.0),
+            delta: Some(Vec2::new(0.0, -1_600.0)),
+        });
+        app.update();
+        let upward = app
+            .world()
+            .entity(camera)
+            .get::<Transform>()
+            .expect("the ordinary orbit target should retain its transform");
+        assert_pitch(upward.rotation, -std::f32::consts::FRAC_PI_2);
+        assert!(
+            (upward.rotation * Vec3::NEG_Z).dot(Vec3::Y) > 0.99999,
+            "the upward gesture should reach straight up"
+        );
+    }
+
+    #[test]
+    fn right_drag_and_wheel_author_rotation_and_zoom_in_the_same_frame() {
+        let mut builder = HeadlessAppBuilder::new()
+            .with_minimal_plugins()
+            .with_input();
+        builder
+            .app_mut()
+            .add_message::<CursorMoved>()
+            .add_message::<MouseWheel>()
+            .insert_resource(camera_settings())
+            .insert_resource(CameraMode::Character)
+            .init_resource::<CharacterCameraCollision>()
+            .add_systems(Update, orbit_camera);
+        let window = builder
+            .app_mut()
+            .world_mut()
+            .spawn((
+                Window {
+                    resolution: bevy::window::WindowResolution::new(1_200, 800),
+                    ..default()
+                },
+                PrimaryWindow,
+            ))
+            .id();
+        let initial_rotation = Quat::from_rotation_y(0.4) * rotation_at_pitch(0.0);
+        let focus = Vec3::ZERO;
+        let radius = 7.0;
+        let camera = builder
+            .app_mut()
+            .world_mut()
+            .spawn((
+                PanOrbitCamera { focus, radius },
+                Transform {
+                    translation: focus + initial_rotation * Vec3::Z * radius,
+                    rotation: initial_rotation,
+                    ..default()
+                },
+            ))
+            .id();
+        let mut app = builder.build();
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Right);
+        app.world_mut().write_message(CursorMoved {
+            window,
+            position: Vec2::new(600.0, 400.0),
+            delta: None,
+        });
+        app.update();
+
+        let before = *app
+            .world()
+            .entity(camera)
+            .get::<Transform>()
+            .expect("the orbit target should retain its transform");
+        app.world_mut().write_message(CursorMoved {
+            window,
+            position: Vec2::new(480.0, 480.0),
+            delta: Some(Vec2::new(-120.0, 80.0)),
+        });
+        app.world_mut().write_message(MouseWheel {
+            unit: bevy::input::mouse::MouseScrollUnit::Line,
+            x: 0.0,
+            y: 1.0,
+            window,
+            phase: bevy::input::touch::TouchPhase::Moved,
+        });
+        app.update();
+
+        let entity = app.world().entity(camera);
+        let transform = entity
+            .get::<Transform>()
+            .expect("the orbit target should retain its transform");
+        let orbit = entity
+            .get::<PanOrbitCamera>()
+            .expect("the orbit target should retain its controls");
+        assert!(transform.rotation.dot(before.rotation).abs() < 0.9999);
+        assert!((orbit.radius - 5.6).abs() < 1e-5);
+        let wanted_eye = orbit.focus + transform.rotation * Vec3::Z * orbit.radius;
+        assert!(transform.translation.distance(wanted_eye) < 1e-5);
+    }
+
+    #[test]
+    fn orbit_input_survives_the_same_frame_collision_pass() {
+        let (mut app, camera, _) = prototype_camera_app(Some(Vec3::ZERO));
+        app.insert_resource(ButtonInput::<MouseButton>::default())
+            .add_message::<CursorMoved>()
+            .add_message::<MouseWheel>()
+            .add_systems(Update, orbit_camera);
+        let window = app
+            .world_mut()
+            .spawn((
+                Window {
+                    resolution: bevy::window::WindowResolution::new(1_200, 800),
+                    ..default()
+                },
+                PrimaryWindow,
+            ))
+            .id();
+        toggle_camera(&mut app);
+
+        *app.world_mut().resource_mut::<CameraObstructionIndex>() = CameraObstructionIndex {
+            spans_by_coord: BTreeMap::from([(
+                hex_core::HexCoord::ORIGIN,
+                vec![indexed_span(
+                    hex_core::HexCoord::ORIGIN,
+                    HexSpan::new(-1.0, 20.0),
+                )],
+            )]),
+            initialized: true,
+            rebuilds: 1,
+        };
+        app.update();
+        let blocked = camera_pose(&app, camera);
+        assert!(
+            blocked.0.translation.distance(blocked.1) < blocked.2,
+            "the fixture must begin with active collision retraction"
+        );
+
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Right);
+        app.world_mut().write_message(CursorMoved {
+            window,
+            position: Vec2::new(600.0, 400.0),
+            delta: None,
+        });
+        app.update();
+        let baseline = camera_pose(&app, camera).0.rotation;
+
+        app.world_mut().write_message(CursorMoved {
+            window,
+            position: Vec2::new(720.0, -800.0),
+            delta: Some(Vec2::new(120.0, -1_200.0)),
+        });
+        app.world_mut().write_message(MouseWheel {
+            unit: bevy::input::mouse::MouseScrollUnit::Line,
+            x: 0.0,
+            y: 1.0,
+            window,
+            phase: bevy::input::touch::TouchPhase::Moved,
+        });
+        app.update();
+        let yaw = Quat::from_rotation_y(-0.2 * std::f32::consts::PI);
+        let expected = apply_pitch_delta(yaw * baseline, -1.5 * std::f32::consts::PI, -1.0, 1.0);
+        let authored = camera_pose(&app, camera);
+        assert!(authored.0.rotation.dot(expected).abs() > 0.999999);
+        assert!(
+            (authored.0.rotation * Vec3::NEG_Z).dot(Vec3::Y) > 0.99999,
+            "collision must not prevent a straight-up look"
+        );
+        assert!((authored.2 - 5.6).abs() < 1e-5);
+        assert!(
+            authored.0.translation.distance(authored.1) < f32::EPSILON,
+            "the unusual-angle obstruction should retract position without changing look direction"
+        );
+
+        for frame in 0..100 {
+            app.update();
+            let held = camera_pose(&app, camera);
+            assert!(
+                held.0.rotation.dot(expected).abs() > 0.999999,
+                "blocked follow rewrote player rotation on frame {frame}"
+            );
+        }
     }
 
     #[test]
@@ -2958,6 +2797,18 @@ mod tests {
         (transform, camera.focus, camera.radius)
     }
 
+    fn install_tall_camera_wall(app: &mut App, focus: Vec3, direction: Vec3, distance: f32) {
+        let coord = hex_core::HexCoord::from_world(focus + direction * distance);
+        *app.world_mut().resource_mut::<CameraObstructionIndex>() = CameraObstructionIndex {
+            spans_by_coord: BTreeMap::from([(
+                coord,
+                vec![indexed_span(coord, HexSpan::new(-10.0, 20.0))],
+            )]),
+            initialized: true,
+            rebuilds: 1,
+        };
+    }
+
     #[test]
     fn character_camera_snaps_close_and_restores_the_exact_map_pose() {
         let target = Vec3::new(3.0, 2.0, -1.0);
@@ -3009,7 +2860,7 @@ mod tests {
     }
 
     #[test]
-    fn character_camera_adapts_before_a_public_terrain_run() {
+    fn character_camera_retracts_before_public_terrain_without_rotating() {
         let target = Vec3::new(3.0, 2.0, -1.0);
         let (mut app, camera, _) = prototype_camera_app(Some(target));
 
@@ -3038,13 +2889,9 @@ mod tests {
         let effective = collision
             .effective_radius
             .expect("Character mode should retain an effective radius");
-        let effective_pitch = collision
-            .effective_pitch
-            .expect("Character mode should retain an effective pitch");
         assert!(
-            effective < camera_settings().character_radius
-                || effective_pitch > camera_settings().character_pitch,
-            "an obstruction must retract the camera or raise its pitch"
+            effective < camera_settings().character_radius,
+            "an obstruction must retract the camera along the authored boom"
         );
         assert!(
             (shortened.0.translation.distance(shortened.1) - effective).abs() < 1e-5,
@@ -3054,11 +2901,9 @@ mod tests {
             (shortened.2 - camera_settings().character_radius).abs() < f32::EPSILON,
             "collision must not overwrite the player's requested orbit radius"
         );
-        let requested_heading = (unobstructed.0.rotation * Vec3::Z).xz().normalize();
-        let effective_heading = (shortened.0.rotation * Vec3::Z).xz().normalize();
         assert!(
-            requested_heading.dot(effective_heading) > 0.9999,
-            "collision must preserve player-authored yaw"
+            unobstructed.0.rotation.dot(shortened.0.rotation).abs() > 0.999999,
+            "collision must preserve the complete player-authored rotation"
         );
     }
 
@@ -3112,6 +2957,302 @@ mod tests {
                 .distance(expected_focus + eye_offset)
                 < 1e-5
         );
+    }
+
+    #[test]
+    fn a_clear_new_focus_target_does_not_inherit_the_old_targets_retracted_boom() {
+        let (mut app, camera, old_target) = prototype_camera_app(Some(Vec3::ZERO));
+        let old_target = old_target.expect("the fixture should spawn a target");
+        toggle_camera(&mut app);
+        let initial = camera_pose(&app, camera);
+        let direction = character_boom_direction(initial.0.rotation);
+        install_tall_camera_wall(&mut app, initial.1, direction, 2.0);
+        app.update();
+        let retracted = camera_pose(&app, camera);
+        let old_effective_radius = retracted.0.translation.distance(retracted.1);
+        assert!(old_effective_radius < retracted.2 - 1e-4);
+
+        app.world_mut()
+            .entity_mut(old_target)
+            .remove::<CameraFocusTarget>();
+        app.world_mut()
+            .resource_mut::<CameraObstructionIndex>()
+            .spans_by_coord
+            .clear();
+        let replacement_position = Vec3::new(40.0, 1.0, 0.0);
+        let replacement_surface =
+            TilePos::new(hex_core::HexCoord::from_world(replacement_position), 0);
+        app.world_mut().spawn((
+            Transform::from_translation(replacement_position),
+            CameraFocusTarget::new(replacement_surface),
+        ));
+
+        app.update();
+
+        let retargeted = camera_pose(&app, camera);
+        assert!(
+            (retargeted.0.translation.distance(retargeted.1) - retargeted.2).abs() < 1e-5,
+            "a clear new target must begin at the player's desired boom, not recover from the old target"
+        );
+    }
+
+    #[test]
+    fn a_blocked_new_focus_target_resolves_its_own_safe_boom_immediately() {
+        let (mut app, camera, old_target) = prototype_camera_app(Some(Vec3::ZERO));
+        let old_target = old_target.expect("the fixture should spawn a target");
+        toggle_camera(&mut app);
+        let initial = camera_pose(&app, camera);
+        let direction = character_boom_direction(initial.0.rotation);
+        install_tall_camera_wall(&mut app, initial.1, direction, 2.0);
+        app.update();
+        let retracted = camera_pose(&app, camera);
+        let old_effective_radius = retracted.0.translation.distance(retracted.1);
+        assert!(old_effective_radius < retracted.2 - 1e-4);
+
+        app.world_mut()
+            .entity_mut(old_target)
+            .remove::<CameraFocusTarget>();
+        let replacement_position = Vec3::new(40.0, 1.0, 0.0);
+        let replacement_surface =
+            TilePos::new(hex_core::HexCoord::from_world(replacement_position), 0);
+        let replacement_focus =
+            replacement_position + Vec3::Y * camera_settings().character_focus_height;
+        install_tall_camera_wall(&mut app, replacement_focus, direction, 4.0);
+        let settings = camera_settings();
+        let expected = app
+            .world()
+            .resource::<CameraObstructionIndex>()
+            .safe_radius(
+                replacement_focus,
+                replacement_surface,
+                direction,
+                settings.character_radius,
+                settings.character_probe_radius,
+                settings.character_collision_margin,
+            );
+        assert!(expected.obstructed);
+        assert!(expected.radius > old_effective_radius + 1e-4);
+        app.world_mut().spawn((
+            Transform::from_translation(replacement_position),
+            CameraFocusTarget::new(replacement_surface),
+        ));
+
+        app.update();
+
+        let retargeted = camera_pose(&app, camera);
+        assert!(
+            (retargeted.0.translation.distance(retargeted.1) - expected.radius).abs() < 1e-5,
+            "a blocked new target must resolve its own clearance instead of inheriting the old boom"
+        );
+    }
+
+    #[test]
+    fn unobstructed_motion_preserves_the_exact_player_authored_composition() {
+        let start = Vec3::new(2.0, 1.0, -3.0);
+        let (mut app, camera, target) = prototype_camera_app(Some(start));
+        let target = target.expect("the fixture should spawn a target");
+        toggle_camera(&mut app);
+        let initial = camera_pose(&app, camera);
+        let authored_rotation = initial.0.rotation;
+        let desired_radius = camera_settings().character_radius;
+        let step = Vec3::new(0.017, 0.003, -0.011);
+        let mut previous_eye = initial.0.translation;
+
+        for frame in 0..120 {
+            let target_translation = {
+                let mut target = app.world_mut().entity_mut(target);
+                let mut transform = target
+                    .get_mut::<Transform>()
+                    .expect("the target should have a transform");
+                transform.translation += step;
+                transform.translation
+            };
+            app.update();
+
+            let pose = camera_pose(&app, camera);
+            let expected_focus =
+                target_translation + Vec3::Y * camera_settings().character_focus_height;
+            assert!(
+                pose.1.distance(expected_focus) < 1e-5,
+                "frame {frame} did not follow the selected unit exactly"
+            );
+            assert!(
+                pose.0.rotation.dot(authored_rotation).abs() > 0.999999,
+                "frame {frame} changed the player's perspective"
+            );
+            assert!((pose.2 - desired_radius).abs() < f32::EPSILON);
+            assert!(
+                (pose.0.translation.distance(expected_focus) - desired_radius).abs() < 1e-5,
+                "frame {frame} changed the camera distance in open space"
+            );
+            assert!(
+                pose.0
+                    .translation
+                    .distance(expected_focus + authored_rotation * Vec3::Z * desired_radius)
+                    < 1e-5
+            );
+            assert!(
+                (pose.0.translation - previous_eye).distance(step) < 1e-5,
+                "frame {frame} introduced motion unrelated to character movement"
+            );
+            previous_eye = pose.0.translation;
+        }
+    }
+
+    #[test]
+    fn shallow_upward_free_look_stays_stable_while_the_character_walks() {
+        let start = Vec3::new(2.0, 1.0, -3.0);
+        let (mut app, camera, target) = prototype_camera_app(Some(start));
+        let target = target.expect("the fixture should spawn a target");
+        toggle_camera(&mut app);
+        let authored_rotation = rotation_at_pitch(-10.0_f32.to_radians());
+        app.world_mut()
+            .entity_mut(camera)
+            .get_mut::<Transform>()
+            .expect("the camera should retain its transform")
+            .rotation = authored_rotation;
+        app.update();
+
+        let desired_radius = camera_settings().character_radius;
+        let eye_offset = character_boom_direction(authored_rotation) * desired_radius;
+        let step = Vec3::new(0.017, 0.003, -0.011);
+        let mut previous_eye = camera_pose(&app, camera).0.translation;
+        for frame in 0..120 {
+            let target_translation = {
+                let mut target = app.world_mut().entity_mut(target);
+                let mut transform = target
+                    .get_mut::<Transform>()
+                    .expect("the target should retain its transform");
+                transform.translation += step;
+                transform.translation
+            };
+            app.update();
+
+            let pose = camera_pose(&app, camera);
+            let expected_focus =
+                target_translation + Vec3::Y * camera_settings().character_focus_height;
+            assert!(pose.0.rotation.dot(authored_rotation).abs() > 0.999999);
+            assert!((pose.2 - desired_radius).abs() < f32::EPSILON);
+            assert!(
+                pose.0.translation.distance(expected_focus + eye_offset) < 1e-5,
+                "frame {frame} changed the player-controlled shallow-upward composition"
+            );
+            assert!(
+                (pose.0.translation - previous_eye).distance(step) < 1e-5,
+                "frame {frame} introduced camera motion unrelated to walking"
+            );
+            previous_eye = pose.0.translation;
+        }
+    }
+
+    #[test]
+    fn moving_past_partial_clearance_never_recreates_camera_breathing() {
+        let start = Vec3::ZERO;
+        let (mut app, camera, target) = prototype_camera_app(Some(start));
+        let target = target.expect("the fixture should spawn a target");
+        toggle_camera(&mut app);
+        let initial = camera_pose(&app, camera);
+        let authored_rotation = initial.0.rotation;
+        let boom = character_boom_direction(authored_rotation);
+        let ground_boom = boom.xz().normalize();
+        let wall_center = initial.1 + boom * 4.0;
+        let wall_coord = hex_core::HexCoord::from_world(wall_center);
+        *app.world_mut().resource_mut::<CameraObstructionIndex>() = CameraObstructionIndex {
+            spans_by_coord: BTreeMap::from([(
+                wall_coord,
+                vec![indexed_span(wall_coord, HexSpan::new(-10.0, 20.0))],
+            )]),
+            initialized: true,
+            rebuilds: 1,
+        };
+        app.update();
+
+        let desired_radius = camera_settings().character_radius;
+        let mut previous_radius = camera_pose(&app, camera)
+            .0
+            .translation
+            .distance(camera_pose(&app, camera).1);
+        assert!(previous_radius < desired_radius);
+
+        // Walking away from the wall improves its partial clearance, but the wall
+        // remains present. The camera must hold instead of following every increase.
+        for frame in 0..10 {
+            let target_translation = {
+                let mut entity = app.world_mut().entity_mut(target);
+                let mut transform = entity
+                    .get_mut::<Transform>()
+                    .expect("the target should retain its transform");
+                transform.translation -= Vec3::new(ground_boom.x, 0.0, ground_boom.y) * 0.04;
+                transform.translation
+            };
+            app.update();
+            let pose = camera_pose(&app, camera);
+            let radius = pose.0.translation.distance(pose.1);
+            assert!(
+                (radius - previous_radius).abs() < 1e-5,
+                "frame {frame} released into still-blocked partial clearance"
+            );
+            assert!(pose.0.rotation.dot(authored_rotation).abs() > 0.999999);
+            assert!((pose.2 - desired_radius).abs() < f32::EPSILON);
+            assert!(
+                pose.1.distance(
+                    target_translation + Vec3::Y * camera_settings().character_focus_height
+                ) < 1e-5
+            );
+        }
+
+        // Reversing past the starting point worsens clearance and may retract only
+        // inward. It must never produce an outward/inward alternating sequence.
+        let mut retracted_further = false;
+        for frame in 0..15 {
+            {
+                let mut entity = app.world_mut().entity_mut(target);
+                entity
+                    .get_mut::<Transform>()
+                    .expect("the target should retain its transform")
+                    .translation += Vec3::new(ground_boom.x, 0.0, ground_boom.y) * 0.05;
+            }
+            app.update();
+            let pose = camera_pose(&app, camera);
+            let radius = pose.0.translation.distance(pose.1);
+            assert!(
+                radius <= previous_radius + 1e-5,
+                "frame {frame} moved outward while the wall remained"
+            );
+            assert!(pose.0.rotation.dot(authored_rotation).abs() > 0.999999);
+            assert!((pose.2 - desired_radius).abs() < f32::EPSILON);
+            retracted_further |= radius < previous_radius - 1e-5;
+            previous_radius = radius;
+        }
+        assert!(
+            retracted_further,
+            "worsening wall clearance must produce at least one strict inward retraction"
+        );
+
+        app.world_mut()
+            .resource_mut::<CameraObstructionIndex>()
+            .spans_by_coord
+            .clear();
+        let held = previous_radius;
+        app.update();
+        let first_clear = camera_pose(&app, camera);
+        assert!((first_clear.0.translation.distance(first_clear.1) - held).abs() < 1e-5);
+
+        let mut restored = held;
+        for _ in 0..16 {
+            app.update();
+            let pose = camera_pose(&app, camera);
+            let radius = pose.0.translation.distance(pose.1);
+            assert!(radius + 1e-5 >= restored);
+            assert!(radius - restored <= 0.8 + 1e-5);
+            assert!(pose.0.rotation.dot(authored_rotation).abs() > 0.999999);
+            assert!((pose.2 - desired_radius).abs() < f32::EPSILON);
+            restored = radius;
+            if (restored - desired_radius).abs() < 1e-5 {
+                break;
+            }
+        }
+        assert!((restored - desired_radius).abs() < 1e-5);
     }
 
     fn move_focus_target_in_update(mut targets: Query<&mut Transform, With<CameraFocusTarget>>) {
@@ -3262,9 +3403,10 @@ mod tests {
             }
             *app.world_mut().resource_mut::<CharacterCameraCollision>() =
                 CharacterCameraCollision {
+                    target: None,
                     effective_radius: Some(2.0),
-                    desired_rotation: Some(Quat::IDENTITY),
-                    effective_pitch: Some(0.3),
+                    last_desired_radius: Some(7.0),
+                    outward_clear_for_seconds: 0.15,
                 };
 
             enter(&mut app, Screen::Title);
@@ -3272,9 +3414,10 @@ mod tests {
             assert!(!index.initialized);
             assert!(index.spans_by_coord.is_empty());
             let collision = app.world().resource::<CharacterCameraCollision>();
+            assert!(collision.target.is_none());
             assert!(collision.effective_radius.is_none());
-            assert!(collision.desired_rotation.is_none());
-            assert!(collision.effective_pitch.is_none());
+            assert!(collision.last_desired_radius.is_none());
+            assert!(collision.outward_clear_for_seconds.abs() < f32::EPSILON);
         }
     }
 

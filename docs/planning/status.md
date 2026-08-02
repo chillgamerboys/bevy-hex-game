@@ -326,16 +326,18 @@ metadata. Prairie publishes nonblocking grass.
 Caves publishes authored crystal `ObjectInstance`s with presentation-only
 point-light children at its gameplay-light sites.
 
-Character camera mode keeps player-authored yaw and desired zoom while a conservative
-probe retracts against the public stacked-terrain projection and, only when necessary,
-searches upward first, then toward the horizon for low-ceiling clearance. Distance and
-pitch restore smoothly. Ordinary
-gameplay keeps cave roofs intact, while explicit map-review capture may still request a
-complete interior cutaway. Automated geometry, lifecycle, idle-churn, and release
-performance gates are live. Seed-exact multi-azimuth walks now exercise ordinary
-pointer movement to a proved destination on every standalone selectable map and every
-Two Rings region; final human motion/readability approval remains pending. Map mode
-remains available without a scenario restriction.
+Character camera mode gives the player exclusive ownership of yaw, full-range pitch,
+and desired zoom. A conservative probe retracts only the effective boom radius against
+the public stacked-terrain projection, waits for continuous full clearance, then
+restores outward monotonically. Near-first-person retraction hides only the selected
+unit through a composable camera-owned visibility reason. Ordinary gameplay keeps cave
+roofs intact, while explicit map-review capture may still request a complete interior
+cutaway. Automated geometry, control-authority, motion-continuity, lifecycle,
+idle-churn, and release-performance gates are live. Seed-exact multi-azimuth walks now
+exercise ordinary pointer movement to a proved destination on every standalone
+selectable map and every Two Rings region; final human motion/readability approval of
+the corrected candidate remains pending. Map mode remains available without a
+scenario restriction.
 
 ## What is provisional
 

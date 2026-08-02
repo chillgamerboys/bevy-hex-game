@@ -15,9 +15,6 @@ use bevy::prelude::*;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize};
 
-/// Keeps adaptive pitch search bounded to at most 200 authored increments.
-const MIN_CHARACTER_PITCH_SEARCH_STEP: f32 = 0.005;
-
 /// A colour written as `(r, g, b)` in sRGB, each component 0.0–1.0.
 ///
 /// A plain tuple rather than Bevy's `Color`, whose serialized form is an
@@ -45,29 +42,18 @@ pub struct CameraSettings {
     pub character_probe_radius: f32,
     /// Clearance kept between the close camera and the first obstructing terrain run.
     pub character_collision_margin: f32,
-    /// Preferred smallest usable radius while avoiding terrain.
-    ///
-    /// When same-yaw retraction falls below this radius, Character-camera collision
-    /// searches higher pitches first, then toward the horizon for low ceilings. A
-    /// complete enclosure may require a smaller radius so the camera never crosses
-    /// an actual terrain hit.
-    pub character_min_effective_radius: f32,
     /// World units per second used when restoring the close camera after an
     /// obstruction clears.
     pub character_restoration_speed: f32,
-    /// Initial close-view pitch as a fraction from the horizon toward straight down.
+    /// Seconds of continuous outward clearance required before an automatically
+    /// retracted close camera begins restoring its desired radius.
+    pub character_collision_release_delay: f32,
+    /// Effective Character-camera radius at or below which the selected unit is
+    /// hidden so a near-first-person view cannot be occluded by its own mesh.
+    pub character_self_hide_radius: f32,
+    /// Initial close-view pitch as a signed quarter-turn fraction: -1.0 is straight
+    /// up, 0.0 is the horizon, and 1.0 is straight down.
     pub character_pitch: f32,
-    /// Closest the close view may tilt toward the horizon, 0.0–1.0.
-    pub character_min_pitch: f32,
-    /// Furthest the close view may tilt toward straight down, 0.0–1.0.
-    pub character_max_pitch: f32,
-    /// Highest pitch collision avoidance tests before searching toward the horizon,
-    /// 0.0–1.0.
-    pub character_adaptive_max_pitch: f32,
-    /// Pitch-fraction increment used by both collision-avoidance search directions.
-    pub character_pitch_search_step: f32,
-    /// Pitch fractions per second used when restoring the player-authored pitch.
-    pub character_pitch_restoration_speed: f32,
     /// WASD pan speed, scaled by zoom distance so panning feels the same when
     /// zoomed out as when zoomed in.
     pub pan_speed: f32,
@@ -135,58 +121,27 @@ impl CameraSettings {
         if self.character_collision_margin >= self.character_radius {
             return Err("character_collision_margin must be less than character_radius".to_owned());
         }
-        if !self.character_min_effective_radius.is_finite()
-            || self.character_min_effective_radius <= 0.0
-        {
-            return Err("character_min_effective_radius must be positive and finite".to_owned());
-        }
-        if self.character_min_effective_radius > self.character_radius {
-            return Err(
-                "character_min_effective_radius must not exceed character_radius".to_owned(),
-            );
-        }
         if !self.character_restoration_speed.is_finite() || self.character_restoration_speed <= 0.0
         {
             return Err("character_restoration_speed must be positive and finite".to_owned());
         }
-        validate_unit_interval("character_pitch", self.character_pitch)?;
-        validate_unit_interval("character_min_pitch", self.character_min_pitch)?;
-        validate_unit_interval("character_max_pitch", self.character_max_pitch)?;
-        if self.character_min_pitch > self.character_max_pitch {
-            return Err("character_min_pitch must not exceed character_max_pitch".to_owned());
-        }
-        if !(self.character_min_pitch..=self.character_max_pitch).contains(&self.character_pitch) {
-            return Err(
-                "character_pitch must be within character_min_pitch..=character_max_pitch"
-                    .to_owned(),
-            );
-        }
-        validate_unit_interval(
-            "character_adaptive_max_pitch",
-            self.character_adaptive_max_pitch,
+        validate_nonnegative(
+            "character_collision_release_delay",
+            self.character_collision_release_delay,
         )?;
-        if !(self.character_min_pitch..=self.character_max_pitch)
-            .contains(&self.character_adaptive_max_pitch)
+        let character_self_show_radius =
+            self.character_self_hide_radius + self.character_collision_margin * 0.25;
+        if !self.character_self_hide_radius.is_finite()
+            || self.character_self_hide_radius < self.character_probe_radius
+            || self.character_self_hide_radius >= self.character_radius
+            || character_self_show_radius >= self.character_radius
         {
             return Err(
-                "character_adaptive_max_pitch must be within character_min_pitch..=character_max_pitch"
+                "character_self_hide_radius must be finite, at least character_probe_radius, and leave its collision-margin exit hysteresis below character_radius"
                     .to_owned(),
             );
         }
-        if !self.character_pitch_search_step.is_finite()
-            || self.character_pitch_search_step < MIN_CHARACTER_PITCH_SEARCH_STEP
-            || self.character_pitch_search_step > 1.0
-        {
-            return Err(
-                "character_pitch_search_step must be finite and within 0.005..=1.0".to_owned(),
-            );
-        }
-        if !self.character_pitch_restoration_speed.is_finite()
-            || self.character_pitch_restoration_speed <= 0.0
-        {
-            return Err("character_pitch_restoration_speed must be positive and finite".to_owned());
-        }
-
+        validate_range("character_pitch", self.character_pitch, -1.0, 1.0, true)?;
         validate_nonnegative("pan_speed", self.pan_speed)?;
         validate_nonnegative("pan_speed_offset", self.pan_speed_offset)?;
         validate_unit_interval("min_pitch", self.min_pitch)?;
@@ -221,14 +176,10 @@ struct UnvalidatedCameraSettings {
     character_radius: f32,
     character_probe_radius: f32,
     character_collision_margin: f32,
-    character_min_effective_radius: f32,
     character_restoration_speed: f32,
+    character_collision_release_delay: f32,
+    character_self_hide_radius: f32,
     character_pitch: f32,
-    character_min_pitch: f32,
-    character_max_pitch: f32,
-    character_adaptive_max_pitch: f32,
-    character_pitch_search_step: f32,
-    character_pitch_restoration_speed: f32,
     pan_speed: f32,
     pan_speed_offset: f32,
     min_pitch: f32,
@@ -251,14 +202,10 @@ impl<'de> Deserialize<'de> for CameraSettings {
             character_radius: raw.character_radius,
             character_probe_radius: raw.character_probe_radius,
             character_collision_margin: raw.character_collision_margin,
-            character_min_effective_radius: raw.character_min_effective_radius,
             character_restoration_speed: raw.character_restoration_speed,
+            character_collision_release_delay: raw.character_collision_release_delay,
+            character_self_hide_radius: raw.character_self_hide_radius,
             character_pitch: raw.character_pitch,
-            character_min_pitch: raw.character_min_pitch,
-            character_max_pitch: raw.character_max_pitch,
-            character_adaptive_max_pitch: raw.character_adaptive_max_pitch,
-            character_pitch_search_step: raw.character_pitch_search_step,
-            character_pitch_restoration_speed: raw.character_pitch_restoration_speed,
             pan_speed: raw.pan_speed,
             pan_speed_offset: raw.pan_speed_offset,
             min_pitch: raw.min_pitch,
@@ -1527,16 +1474,12 @@ mod tests {
         );
         assert!((camera.character_focus_height - 0.4).abs() < f32::EPSILON);
         assert!((camera.character_radius - 7.0).abs() < f32::EPSILON);
-        assert!((camera.character_probe_radius - 0.4).abs() < f32::EPSILON);
+        assert!((camera.character_probe_radius - 0.1).abs() < f32::EPSILON);
         assert!((camera.character_collision_margin - 0.35).abs() < f32::EPSILON);
-        assert!((camera.character_min_effective_radius - 1.5).abs() < f32::EPSILON);
         assert!((camera.character_restoration_speed - 8.0).abs() < f32::EPSILON);
+        assert!((camera.character_collision_release_delay - 0.2).abs() < f32::EPSILON);
+        assert!((camera.character_self_hide_radius - 1.0).abs() < f32::EPSILON);
         assert!((camera.character_pitch - 0.3).abs() < f32::EPSILON);
-        assert!((camera.character_min_pitch - 0.05).abs() < f32::EPSILON);
-        assert!((camera.character_max_pitch - 0.95).abs() < f32::EPSILON);
-        assert!((camera.character_adaptive_max_pitch - 0.75).abs() < f32::EPSILON);
-        assert!((camera.character_pitch_search_step - 0.05).abs() < f32::EPSILON);
-        assert!((camera.character_pitch_restoration_speed - 0.8).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -1548,13 +1491,19 @@ mod tests {
                 1,
             )
             .replacen(
-                "character_probe_radius: 0.4",
+                "character_probe_radius: 0.1",
                 "character_probe_radius: 1.8",
+                1,
+            )
+            .replacen(
+                "character_self_hide_radius: 1.0",
+                "character_self_hide_radius: 2.0",
                 1,
             );
         let camera: CameraSettings =
             ron::from_str(&alternate).expect("a bounded wide probe should remain configurable");
         assert!((camera.character_probe_radius - 1.8).abs() < f32::EPSILON);
+        assert!((camera.character_self_hide_radius - 2.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -1591,17 +1540,17 @@ mod tests {
                 "character_radius",
             ),
             (
-                "character_probe_radius: 0.4",
+                "character_probe_radius: 0.1",
                 "character_probe_radius: 0.0",
                 "character_probe_radius",
             ),
             (
-                "character_probe_radius: 0.4",
+                "character_probe_radius: 0.1",
                 "character_probe_radius: 2.1",
                 "character_probe_radius",
             ),
             (
-                "character_probe_radius: 0.4",
+                "character_probe_radius: 0.1",
                 "character_probe_radius: 0.5",
                 "character_focus_height",
             ),
@@ -1616,59 +1565,49 @@ mod tests {
                 "character_collision_margin",
             ),
             (
-                "character_min_effective_radius: 1.5",
-                "character_min_effective_radius: 0.0",
-                "character_min_effective_radius",
-            ),
-            (
-                "character_min_effective_radius: 1.5",
-                "character_min_effective_radius: 8.0",
-                "character_min_effective_radius",
-            ),
-            (
                 "character_restoration_speed: 8.0",
                 "character_restoration_speed: 0.0",
                 "character_restoration_speed",
             ),
             (
+                "character_collision_release_delay: 0.2",
+                "character_collision_release_delay: -0.1",
+                "character_collision_release_delay",
+            ),
+            (
+                "character_collision_release_delay: 0.2",
+                "character_collision_release_delay: NaN",
+                "character_collision_release_delay",
+            ),
+            (
+                "character_self_hide_radius: 1.0",
+                "character_self_hide_radius: 0.0",
+                "character_self_hide_radius",
+            ),
+            (
+                "character_self_hide_radius: 1.0",
+                "character_self_hide_radius: 0.05",
+                "character_self_hide_radius",
+            ),
+            (
+                "character_self_hide_radius: 1.0",
+                "character_self_hide_radius: 7.0",
+                "character_self_hide_radius",
+            ),
+            (
+                "character_self_hide_radius: 1.0",
+                "character_self_hide_radius: 6.95",
+                "character_self_hide_radius",
+            ),
+            (
                 "character_pitch: 0.3",
-                "character_pitch: 1.0",
+                "character_pitch: -1.1",
                 "character_pitch",
             ),
             (
-                "character_min_pitch: 0.05",
-                "character_min_pitch: -0.1",
-                "character_min_pitch",
-            ),
-            (
-                "character_max_pitch: 0.95",
-                "character_max_pitch: 1.1",
-                "character_max_pitch",
-            ),
-            (
-                "character_min_pitch: 0.05",
-                "character_min_pitch: 0.96",
-                "character_min_pitch",
-            ),
-            (
-                "character_adaptive_max_pitch: 0.75",
-                "character_adaptive_max_pitch: 1.0",
-                "character_adaptive_max_pitch",
-            ),
-            (
-                "character_pitch_search_step: 0.05",
-                "character_pitch_search_step: 0.0",
-                "character_pitch_search_step",
-            ),
-            (
-                "character_pitch_search_step: 0.05",
-                "character_pitch_search_step: 0.000001",
-                "character_pitch_search_step",
-            ),
-            (
-                "character_pitch_restoration_speed: 0.8",
-                "character_pitch_restoration_speed: 0.0",
-                "character_pitch_restoration_speed",
+                "character_pitch: 0.3",
+                "character_pitch: 1.1",
+                "character_pitch",
             ),
             ("pan_speed: 0.4", "pan_speed: -0.1", "pan_speed"),
             (
@@ -1699,6 +1638,30 @@ mod tests {
             assert!(
                 error.to_string().contains(expected),
                 "{replacement:?} returned an unrelated error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn removed_adaptive_pitch_settings_are_not_silently_accepted() {
+        for field in [
+            "character_min_effective_radius",
+            "character_min_pitch",
+            "character_max_pitch",
+            "character_adaptive_max_pitch",
+            "character_pitch_search_step",
+            "character_pitch_restoration_speed",
+        ] {
+            let stale = CAMERA_RON.replacen(
+                "character_collision_release_delay: 0.2,",
+                &format!("character_collision_release_delay: 0.2,\n    {field}: 0.5,"),
+                1,
+            );
+            let error = ron::from_str::<CameraSettings>(&stale)
+                .expect_err("removed adaptive-pitch settings must be rejected");
+            assert!(
+                error.to_string().contains(field),
+                "stale {field} returned an unrelated error: {error}"
             );
         }
     }

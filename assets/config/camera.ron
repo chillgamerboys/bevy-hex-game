@@ -8,22 +8,21 @@
     character_focus_height: 0.4,
     character_radius: 7.0,
     // Terrain collision affects only Character mode. The camera snaps inward before
-    // the closest public tile span, searches upward first and then toward the
-    // horizon for low ceilings without changing player yaw, and restores pitch and
-    // distance smoothly once the view clears. The sphere probe conservatively
-    // protects the camera near plane around prism corners.
-    character_probe_radius: 0.4,
+    // the closest public tile span without changing the player's look direction or
+    // desired zoom. Outward recovery begins only after clearance remains stable, so
+    // walking past adjacent obstructions cannot make the view repeatedly breathe.
+    // The sphere probe plus collision margin conservatively protect the near plane
+    // around prism corners.
+    character_probe_radius: 0.1,
     character_collision_margin: 0.35,
-    character_min_effective_radius: 1.5,
     character_restoration_speed: 8.0,
-    // Fraction from level with the horizon (0.0) to straight down (1.0).
+    character_collision_release_delay: 0.2,
+    // At near-first-person distances the selected mesh would cover the view. Hide
+    // it until the collision boom recovers beyond this radius (plus hysteresis).
+    character_self_hide_radius: 1.0,
+    // Signed quarter-turn fraction: -1.0 is straight up, 0.0 is the horizon,
+    // and 1.0 is straight down.
     character_pitch: 0.3,
-    // The close view can approach the horizon to inspect terrain above the unit.
-    character_min_pitch: 0.05,
-    character_max_pitch: 0.95,
-    character_adaptive_max_pitch: 0.75,
-    character_pitch_search_step: 0.05,
-    character_pitch_restoration_speed: 0.8,
 
     // WASD pan speed. Scaled by how far out you are zoomed, so panning feels the
     // same at every distance.

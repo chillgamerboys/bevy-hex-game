@@ -376,7 +376,7 @@ artifacts and verdicts:
 - [ ] Procedural Hills, Waterfall, Forest, Caves, and every V3 showcase present on the
   final integrated branch have intact seams, blockers, liquids, objects, lighting, and
   cutaways.
-- [ ] Camera pan/orbit/zoom, close-character handoff, adaptive collision restoration,
+- [ ] Camera pan/orbit/zoom, close-character handoff, radius-only collision restoration,
   whole-tree fade transitions, and the dark-lighting handoff have no frame pop or
   idle drift.
 - [ ] One ordinary play session confirms movement speed, turn cadence, cast feedback,

@@ -1,4 +1,4 @@
-//! Presentation of the world that is not the map: sky, adaptive camera, and review cutaways.
+//! Presentation of the world that is not the map: sky, collision-aware camera, and review cutaways.
 //!
 //! The hex grid used to live here. It moved to `hex_map`, which owns terrain
 //! generation, tile spawning, and map settings together — so the map can be worked
