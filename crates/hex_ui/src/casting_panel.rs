@@ -2,16 +2,16 @@
 
 use bevy::input_focus::tab_navigation::TabIndex;
 use bevy::prelude::*;
-use bevy::ui_widgets::ScrollArea;
 use hex_core::Screen;
 
 use crate::{
-    blurb, fine, heading, row_button, spawn_decision_controls, CastingIntent,
-    CastingPanelContentView, CastingPanelView, HudElement, RequiredActionSurface, UiAssets,
-    UiHudSetup, UiIntent, UiRegionRole, UiSystems, BLURB_SIZE, EDGE, LABEL, PANEL_BG,
+    blurb, fine, hud_heading, hud_text_role, owner_resolved_control_role, row_button,
+    spawn_decision_controls, CastingIntent, CastingPanelContentView, CastingPanelView, HudElement,
+    RequiredActionSurface, UiAssets, UiHudSetup, UiIntent, UiRegionRole, UiSystems, BLURB_SIZE,
+    EDGE, LABEL, PANEL_BG,
 };
 
-const CONTROL_WIDTH: f32 = 104.0;
+const CONTROL_WIDTH: f32 = 116.0;
 const SWATCH_WIDTH: f32 = 5.0;
 
 const FRAME: Pickable = Pickable {
@@ -24,6 +24,9 @@ struct PanelBody;
 
 #[derive(Component)]
 struct CastingPanel;
+
+#[derive(Component)]
+struct CastingHeading;
 
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
 enum CastingControl {
@@ -40,7 +43,11 @@ pub(super) fn plugin(app: &mut App) {
     )
     .add_systems(
         Update,
-        (rebuild, emit_intents.in_set(UiSystems::EmitIntents)).run_if(in_state(Screen::Gameplay)),
+        (
+            rebuild.in_set(UiSystems::Render),
+            emit_intents.in_set(UiSystems::EmitIntents),
+        )
+            .run_if(in_state(Screen::Gameplay)),
     );
 }
 
@@ -53,8 +60,6 @@ fn spawn_panel(
         .spawn((
             Name::new("Casting Panel"),
             CastingPanel,
-            ScrollArea,
-            ScrollPosition::default(),
             RequiredActionSurface,
             HudElement,
             Node {
@@ -62,7 +67,7 @@ fn spawn_panel(
                 top: Val::Px(0.0),
                 left: Val::Px(0.0),
                 right: Val::Px(0.0),
-                height: Val::Px(126.0),
+                height: Val::Px(88.0),
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(4.0),
                 padding: UiRect::axes(Val::Px(9.0), Val::Px(6.0)),
@@ -75,7 +80,7 @@ fn spawn_panel(
             FRAME,
         ))
         .with_children(|panel| {
-            panel.spawn(heading(&assets, "actions"));
+            panel.spawn((CastingHeading, hud_heading(&assets, "actions")));
             panel.spawn((
                 Name::new("Casting Body"),
                 PanelBody,
@@ -103,8 +108,30 @@ fn rebuild(
     view: Res<CastingPanelView>,
     review: Option<Res<crate::review::UiReviewPresentation>>,
     metrics: Res<crate::ResolvedUiMetrics>,
-    mut panels: Query<&mut Node, (With<CastingPanel>, Without<PanelBody>)>,
-    mut bodies: Query<(Entity, &mut Node), (With<PanelBody>, Without<CastingPanel>)>,
+    mut panels: Query<
+        &mut Node,
+        (
+            With<CastingPanel>,
+            Without<PanelBody>,
+            Without<CastingHeading>,
+        ),
+    >,
+    mut bodies: Query<
+        (Entity, &mut Node),
+        (
+            With<PanelBody>,
+            Without<CastingPanel>,
+            Without<CastingHeading>,
+        ),
+    >,
+    mut headings: Query<
+        &mut Node,
+        (
+            With<CastingHeading>,
+            Without<CastingPanel>,
+            Without<PanelBody>,
+        ),
+    >,
     assets: Res<UiAssets>,
 ) {
     let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
@@ -121,19 +148,32 @@ fn rebuild(
     // On the compact canvas a blocking decision is promoted into the persistent
     // action rail. Repeating its full prompt and controls in the fixed-height
     // casting region competes with that required surface at enlarged scales.
-    let promoted_to_rail = metrics.viewport == crate::UiViewportClass::Compact
-        && matches!(view.content, CastingPanelContentView::Decision { .. });
+    // Required choices have one canonical presentation owner: the persistent
+    // rail. Repeating their controls here wastes world space and lets two
+    // independently sized surfaces compete at intermediate semantic scales.
+    let promoted_to_rail = matches!(view.content, CastingPanelContentView::Decision { .. });
     let ultra_constrained = crate::layout::is_ultra_constrained(*metrics);
-    panel.height = Val::Px(if ultra_constrained {
-        (metrics.effective_size.y - 88.0).max(44.0)
+    // The Actions region already reserves the Inspector lane. Do not reserve it
+    // again here: doing so needlessly squeezed the production spell catalog on
+    // Compact Retina canvases.
+    panel.top = Val::ZERO;
+    panel.right = Val::ZERO;
+    for mut heading in &mut headings {
+        // "Actions" repeats the persistent rail's role and costs a full HUD
+        // row. Spell labels already make this strip unambiguous.
+        heading.display = Display::None;
+    }
+    // Semantic enlargement must not turn a wide spell strip into a tall stack.
+    // Stack only when the effective canvas is genuinely narrow.
+    let stacked = ultra_constrained
+        || (metrics.viewport == crate::UiViewportClass::Compact
+            && metrics.effective_size.x < 900.0);
+    panel.height = if stacked {
+        Val::Auto
     } else {
-        126.0
-    });
-    panel.overflow = if ultra_constrained {
-        Overflow::scroll_y()
-    } else {
-        Overflow::default()
+        Val::Px(crate::layout::action_region_height(*metrics) - 4.0)
     };
+    panel.overflow = Overflow::default();
     panel.display = if view.visible && !promoted_to_rail {
         Display::Flex
     } else {
@@ -145,18 +185,18 @@ fn rebuild(
     let Ok((body, mut body_node)) = bodies.single_mut() else {
         return;
     };
-    body_node.flex_direction = if ultra_constrained {
+    body_node.flex_direction = if stacked {
         FlexDirection::Column
     } else {
         FlexDirection::Row
     };
-    body_node.align_items = if ultra_constrained {
+    body_node.align_items = if stacked {
         AlignItems::Stretch
     } else {
         AlignItems::Center
     };
-    body_node.flex_grow = if ultra_constrained { 0.0 } else { 1.0 };
-    body_node.row_gap = Val::Px(if ultra_constrained { 4.0 } else { 0.0 });
+    body_node.flex_grow = if stacked { 0.0 } else { 1.0 };
+    body_node.row_gap = Val::Px(if stacked { 4.0 } else { 0.0 });
     commands.entity(body).despawn_related::<Children>();
     commands
         .entity(body)
@@ -180,13 +220,21 @@ fn rebuild(
                     rows.spawn(blurb(&assets, reason.to_uppercase()));
                 }
                 if let Some(aiming) = aiming {
+                    // Keep the escape hatch ahead of explanatory copy on short
+                    // enlarged canvases. The action rail already carries the
+                    // current phase; cancellation must never be pushed below it.
+                    spawn_aim_controls(rows, &assets, aiming.controls_enabled);
                     rows.spawn(blurb(&assets, aiming.label.clone()));
-                    if aiming.controls_enabled {
-                        spawn_aim_controls(rows, &assets);
-                    }
                 } else {
                     for spell in spells {
-                        spawn_spell(rows, spell, unavailable.is_some(), &assets);
+                        spawn_spell(
+                            rows,
+                            spell,
+                            unavailable.is_some(),
+                            stacked,
+                            metrics.control_scale,
+                            &assets,
+                        );
                     }
                 }
             }
@@ -197,15 +245,19 @@ fn spawn_spell(
     rows: &mut ChildSpawnerCommands,
     spell: &crate::CastingSpellView,
     unavailable: bool,
+    stacked: bool,
+    semantic_control_scale: f32,
     assets: &UiAssets,
 ) {
+    let semantic_control_scale = semantic_control_scale.max(1.0);
     rows.spawn((
         Name::new("Spell Row"),
         Node {
-            flex_basis: Val::Px(0.0),
-            flex_grow: 1.0,
+            flex_basis: if stacked { Val::Auto } else { Val::Px(0.0) },
+            flex_grow: if stacked { 0.0 } else { 1.0 },
+            flex_shrink: if stacked { 0.0 } else { 1.0 },
             min_width: Val::Px(0.0),
-            min_height: Val::Px(74.0),
+            min_height: Val::Px(52.0 * semantic_control_scale),
             flex_direction: FlexDirection::Row,
             column_gap: Val::Px(4.0),
             align_items: AlignItems::Center,
@@ -217,7 +269,7 @@ fn spawn_spell(
         entry.spawn((
             Node {
                 width: Val::Px(SWATCH_WIDTH),
-                height: Val::Px(74.0),
+                height: Val::Px(52.0 * semantic_control_scale),
                 border_radius: BorderRadius::all(Val::Px(2.0)),
                 ..default()
             },
@@ -231,14 +283,17 @@ fn spawn_spell(
                     AccessibleLabel::new(format!("Cast {} · {}", spell.name, spell.cost)),
                     Button,
                     TabIndex(0),
+                    crate::UiVisibilityRequirement::Scrollable,
+                    owner_resolved_control_role(),
                     CastingControl::Begin(spell.name.clone()),
-                    spell_button_node(),
+                    spell_button_node(stacked, semantic_control_scale),
                     BorderColor::all(EDGE),
                     BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.08)),
                 ))
                 .with_children(|button| {
                     button.spawn((
                         Text::new(spell.name.clone()),
+                        hud_text_role(),
                         TextFont {
                             font: assets.body.clone().into(),
                             ..TextFont::from_font_size(BLURB_SIZE)
@@ -257,7 +312,7 @@ fn spawn_spell(
                         spell.name,
                         spell.blocked.as_deref().unwrap_or(&spell.cost)
                     )),
-                    spell_button_node(),
+                    spell_button_node(stacked, semantic_control_scale),
                     BorderColor::all(EDGE),
                     BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.04)),
                     Pickable::IGNORE,
@@ -280,13 +335,23 @@ fn spell_is_actionable(unavailable: bool, spell: &crate::CastingSpellView) -> bo
     !unavailable && spell.blocked.is_none()
 }
 
-fn spell_button_node() -> Node {
+fn spell_button_node(stacked: bool, semantic_control_scale: f32) -> Node {
+    let semantic_control_scale = semantic_control_scale.max(1.0);
     Node {
-        width: Val::Px(148.0),
-        max_width: Val::Px(148.0),
+        width: if stacked {
+            Val::Percent(100.0)
+        } else {
+            Val::Px(148.0 * semantic_control_scale)
+        },
+        max_width: if stacked {
+            Val::Auto
+        } else {
+            Val::Px(148.0 * semantic_control_scale)
+        },
         flex_grow: 1.0,
-        height: Val::Px(74.0),
-        padding: UiRect::all(Val::Px(7.0)),
+        height: Val::Auto,
+        min_height: Val::Px(52.0 * semantic_control_scale),
+        padding: UiRect::all(Val::Px(7.0 * semantic_control_scale)),
         flex_direction: FlexDirection::Column,
         justify_content: JustifyContent::Center,
         row_gap: Val::Px(2.0),
@@ -296,7 +361,7 @@ fn spell_button_node() -> Node {
     }
 }
 
-fn spawn_aim_controls(rows: &mut ChildSpawnerCommands, assets: &UiAssets) {
+fn spawn_aim_controls(rows: &mut ChildSpawnerCommands, assets: &UiAssets, controls_enabled: bool) {
     rows.spawn((
         Name::new("Aim Controls"),
         Node {
@@ -312,12 +377,45 @@ fn spawn_aim_controls(rows: &mut ChildSpawnerCommands, assets: &UiAssets) {
             ("Next Target", "next", "TAB", CastingControl::Next),
             ("Cancel Aim", "cancel", "Q", CastingControl::Cancel),
         ] {
-            controls
-                .spawn((row_button(name, CONTROL_WIDTH), control))
-                .with_children(|button| {
-                    button.spawn(blurb(assets, label));
-                    button.spawn(fine(assets, shortcut));
-                });
+            if controls_enabled || matches!(&control, CastingControl::Cancel) {
+                controls
+                    .spawn((row_button(name, CONTROL_WIDTH), control))
+                    .with_children(|button| {
+                        button.spawn(blurb(assets, label));
+                        button.spawn(fine(assets, shortcut));
+                    });
+            } else {
+                controls
+                    .spawn((
+                        Name::new(format!("{name} Disabled")),
+                        AccessibleLabel::new(format!("{label} unavailable")),
+                        // Disabled aiming controls still communicate why the
+                        // action cannot be taken. Keep them in the structural
+                        // oracle even though they intentionally leave the tab
+                        // order, so their visible copy cannot overflow again.
+                        crate::UiVisibilityRequirement::Immediate,
+                        crate::UiTextMustFit,
+                        crate::responsive_control_role(),
+                        Node {
+                            width: Val::Auto,
+                            min_width: Val::Px(CONTROL_WIDTH),
+                            min_height: Val::Px(48.0),
+                            flex_shrink: 0.0,
+                            align_items: AlignItems::Center,
+                            justify_content: JustifyContent::Center,
+                            flex_direction: FlexDirection::Column,
+                            border: UiRect::all(Val::Px(1.0)),
+                            ..default()
+                        },
+                        BorderColor::all(EDGE),
+                        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.035)),
+                        Pickable::IGNORE,
+                    ))
+                    .with_children(|disabled| {
+                        disabled.spawn(blurb(assets, label));
+                        disabled.spawn(fine(assets, "BLOCKED"));
+                    });
+            }
         }
     });
 }

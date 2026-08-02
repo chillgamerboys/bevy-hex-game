@@ -180,6 +180,13 @@ opt-level = 0
 [profile.ci.package.hex_map]
 opt-level = 1
 
+# The structural UI matrix constructs thousands of real Bevy layout apps. At
+# opt-level 0 that one acceptance test takes several minutes and dominates every
+# narrow gameplay CI run; optimize the owning crate while retaining the fast-link
+# CI profile for the rest of the workspace.
+[profile.ci.package.hex_ui]
+opt-level = 1
+
 # Map's ordinary corpus is runtime-heavy rather than link-heavy. Reuse the
 # development dependency optimizations in its isolated CI shard while retaining
 # compact debug information and bounded codegen parallelism.

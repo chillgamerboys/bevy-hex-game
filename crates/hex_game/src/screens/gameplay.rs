@@ -101,10 +101,13 @@ pub(crate) fn plugin(app: &mut App) {
     app.add_systems(
         Update,
         (
-            handle_lab_statistics_intents.after(hex_ui::UiSystems::EmitIntents),
+            toggle_lab_statistics_from_intents,
+            handle_lab_statistics_intents,
             publish_lab_statistics_view,
         )
             .chain()
+            .after(hex_ui::UiSystems::EmitIntents)
+            .before(hex_ui::UiSystems::Render)
             .run_if(in_state(Screen::Gameplay))
             .run_if(resource_equals(GameplayPhase::Active)),
     );
@@ -198,6 +201,23 @@ use hex_gameplay_model::{
 
 type OutcomeReportState = ReportViewModel<crate::combat_reports::CombatLabReportId>;
 
+/// Installs the shipping report-selection adapter without the rest of Gameplay.
+///
+/// The default-off application contract uses this focused registration to drive
+/// real [`hex_ui::UiIntent`] messages through [`ReportViewModel`] and then observe
+/// the immutable [`OutcomeReportView`]. Keeping the private state inside this
+/// module prevents test support from gaining a second mutation path.
+#[cfg(feature = "test-support")]
+pub(crate) fn install_outcome_report_test_adapter(app: &mut App) {
+    app.add_message::<hex_ui::UiIntent>()
+        .init_resource::<OutcomeReportState>()
+        .init_resource::<OutcomeReportView>()
+        .add_systems(
+            Update,
+            (handle_outcome_report_intents, sync_outcome_report_view).chain(),
+        );
+}
+
 fn reset_outcome_report(
     mut state: ResMut<OutcomeReportState>,
     mut view: ResMut<OutcomeReportView>,
@@ -210,6 +230,24 @@ fn reset_lab_statistics_view(mut view: ResMut<hex_ui::LabStatisticsView>) {
     *view = hex_ui::LabStatisticsView::default();
 }
 
+/// Applies the secondary drawer toggle through the same typed intent used by the
+/// shipping application. Kept separate from report finalization so the
+/// default-off headless contract can exercise this exact path without fabricating
+/// storage, combat, or report authority.
+pub(crate) fn toggle_lab_statistics_from_intents(
+    mut intents: MessageReader<hex_ui::UiIntent>,
+    mut view: ResMut<hex_ui::LabStatisticsView>,
+) {
+    for intent in intents.read() {
+        if matches!(
+            intent,
+            hex_ui::UiIntent::LabStatistics(hex_ui::LabStatisticsIntent::Toggle)
+        ) {
+            view.expanded = !view.expanded;
+        }
+    }
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "manual stop freezes the same independent launch facts as outcome reporting"
@@ -217,7 +255,6 @@ fn reset_lab_statistics_view(mut view: ResMut<hex_ui::LabStatisticsView>) {
 fn handle_lab_statistics_intents(
     mut commands: Commands,
     mut intents: MessageReader<hex_ui::UiIntent>,
-    mut view: ResMut<hex_ui::LabStatisticsView>,
     lab: Option<Res<CombatLabSession>>,
     launch: Option<Res<CombatLabReportLaunch>>,
     summary: Option<Res<CombatSummary>>,
@@ -228,14 +265,11 @@ fn handle_lab_statistics_intents(
 ) {
     let mut end_experiment = false;
     for intent in intents.read() {
-        match intent {
-            hex_ui::UiIntent::LabStatistics(hex_ui::LabStatisticsIntent::Toggle) => {
-                view.expanded = !view.expanded;
-            }
-            hex_ui::UiIntent::LabStatistics(hex_ui::LabStatisticsIntent::EndExperiment) => {
-                end_experiment = true;
-            }
-            _ => {}
+        if matches!(
+            intent,
+            hex_ui::UiIntent::LabStatistics(hex_ui::LabStatisticsIntent::EndExperiment)
+        ) {
+            end_experiment = true;
         }
     }
     if !end_experiment {
@@ -281,7 +315,7 @@ pub(crate) fn lab_statistics_should_be_visible(
     phase == GameplayPhase::Active && resolution.is_none_or(|resolution| resolution.0.is_none())
 }
 
-fn publish_lab_statistics_view(
+pub(crate) fn publish_lab_statistics_view(
     phase: Res<GameplayPhase>,
     resolution: Option<Res<EncounterResolution>>,
     lab: Option<Res<CombatLabSession>>,

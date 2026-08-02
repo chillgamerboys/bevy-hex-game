@@ -2,6 +2,7 @@
 
 use bevy::input_focus::tab_navigation::TabGroup;
 use bevy::prelude::*;
+use bevy::ui_widgets::ScrollArea;
 use hex_core::{AppSystems, Screen};
 
 use crate::{
@@ -108,6 +109,9 @@ fn spawn_region(
     mut node: Node,
     viewport: crate::UiViewportClass,
 ) {
+    if matches!(role, UiRegionRole::Inspector | UiRegionRole::Actions) {
+        node.overflow = Overflow::scroll_y();
+    }
     constrain_region_to_canvas(
         ResolvedUiMetrics {
             viewport,
@@ -116,32 +120,76 @@ fn spawn_region(
         role,
         &mut node,
     );
-    frame.spawn((Name::new(name), role, node, Pickable::IGNORE));
+    let picking = if matches!(role, UiRegionRole::Inspector | UiRegionRole::Actions) {
+        // A ScrollArea must itself participate in picking so wheel/trackpad input
+        // over read-only descendants can target it and be consumed before the
+        // world camera. Read-only, non-scrollable HUD regions remain transparent.
+        Pickable::default()
+    } else {
+        Pickable::IGNORE
+    };
+    let mut region = frame.spawn((Name::new(name), role, node, picking));
+    if matches!(role, UiRegionRole::Inspector | UiRegionRole::Actions) {
+        region.insert((ScrollArea, ScrollPosition::default()));
+    }
 }
 
 fn apply_responsive_layout(
     metrics: Res<ResolvedUiMetrics>,
+    chrome: Res<GameplayChromeView>,
+    lattices: Res<crate::GameplayLatticesView>,
+    review: Option<Res<crate::review::UiReviewPresentation>>,
     added_regions: Query<(), Added<UiRegionRole>>,
     mut regions: Query<(&UiRegionRole, &mut Node)>,
 ) {
-    if !metrics.is_changed() && added_regions.is_empty() {
+    let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
+    if !metrics.is_changed()
+        && !chrome.is_changed()
+        && !lattices.is_changed()
+        && !review_changed
+        && added_regions.is_empty()
+    {
         return;
     }
+    let lattices = review
+        .as_ref()
+        .and_then(|review| review.lattices.as_ref())
+        .unwrap_or(lattices.as_ref());
+    let chrome = review
+        .as_ref()
+        .map_or(*chrome, |review| review.effective_chrome(*chrome));
+    let promoted_decision =
+        crate::gameplay_lattices::compact_decision_visible(*metrics, &chrome, lattices);
     for (role, mut node) in &mut regions {
         constrain_region_to_canvas(*metrics, *role, &mut node);
+        if *role == UiRegionRole::Inspector {
+            // Remove an empty hidden Inspector from both layout and picking.
+            // A non-ultra required choice still uses this region; an ultra one
+            // owns a promoted lattice surface in the persistent action region.
+            node.display = if (!chrome.shown && !chrome.decision_required) || promoted_decision {
+                Display::None
+            } else {
+                Display::Flex
+            };
+        }
     }
 }
 
 fn apply_visibility(
     view: Res<GameplayChromeView>,
+    review: Option<Res<crate::review::UiReviewPresentation>>,
     added_roots: Query<(), Added<HudElement>>,
     mut roots: Query<(&mut Visibility, Has<RequiredActionSurface>), With<HudElement>>,
 ) {
-    if !view.is_changed() && added_roots.is_empty() {
+    let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
+    if !view.is_changed() && !review_changed && added_roots.is_empty() {
         return;
     }
+    let view = review
+        .as_ref()
+        .map_or(*view, |review| review.effective_chrome(*view));
     for (mut visibility, required_action) in &mut roots {
-        let wanted = if view.encounter_complete && required_action {
+        let wanted = if view.encounter_complete {
             Visibility::Hidden
         } else if view.shown || (required_action && view.decision_required) {
             Visibility::Inherited
@@ -195,6 +243,10 @@ mod tests {
             .resource_mut::<GameplayChromeView>()
             .encounter_complete = true;
         app.update();
+        assert_eq!(
+            app.world().get::<Visibility>(ordinary),
+            Some(&Visibility::Hidden)
+        );
         assert_eq!(
             app.world().get::<Visibility>(required),
             Some(&Visibility::Hidden)

@@ -3,8 +3,6 @@
 //! This is deliberately one integration binary: linking Bevy once is expensive,
 //! while these assertions share the same immutable game-layer observation API.
 
-use std::collections::BTreeSet;
-
 use bevy::prelude::World;
 use hex_assets::{CombatRulesProfile, CombatSettings};
 use hex_combat::{
@@ -18,8 +16,8 @@ use hex_game::combat_reports::{
 };
 use hex_game::test_support::{
     fixture_filter_snapshot, gameplay_state_snapshot, live_statistics_snapshot,
-    live_statistics_visible, report_snapshot, sandbox_reentry_snapshot, tempo_movement_matrix,
-    wave_seven_fixtures, ReportMode,
+    live_statistics_visible, production_lab_ui_transition_snapshot, report_transition_snapshot,
+    sandbox_reentry_snapshot, tempo_movement_matrix, wave_seven_fixtures, ReportMode,
 };
 use hex_units::{Standing, StandsOn};
 
@@ -104,7 +102,7 @@ fn fixture_search_filters_in_place_and_clear_restores_every_card() {
 }
 
 #[test]
-fn report_modes_and_comparison_identity_are_observed_without_rendered_text() {
+fn report_modes_and_comparison_identity_follow_real_typed_application_transitions() {
     let current = sample_report(8, 0, 1);
     let older = sample_report(2, 2, 3);
     let selected = sample_report(6, 4, 5);
@@ -123,35 +121,36 @@ fn report_modes_and_comparison_identity_are_observed_without_rendered_text() {
         },
     ];
 
-    let projections = [
-        report_snapshot(&current, ReportMode::Overview, &saved, None),
-        report_snapshot(&current, ReportMode::Units, &saved, None),
-        report_snapshot(&current, ReportMode::SpellsEffects, &saved, None),
-        report_snapshot(&current, ReportMode::Timeline, &saved, None),
-        report_snapshot(
-            &current,
-            ReportMode::Compare,
-            &saved,
-            Some(CombatLabReportId(17)),
-        ),
-    ];
+    let transition = report_transition_snapshot(&current, &saved, CombatLabReportId(17))
+        .expect("completed reports must drive the production report adapter");
     assert_eq!(
-        projections
+        transition
+            .modes
             .iter()
             .map(|projection| projection.mode)
-            .collect::<BTreeSet<_>>()
-            .len(),
-        projections.len(),
-        "every report mode must remain independently selectable"
+            .collect::<Vec<_>>(),
+        vec![
+            ReportMode::Overview,
+            ReportMode::Units,
+            ReportMode::SpellsEffects,
+            ReportMode::Timeline,
+            ReportMode::Compare,
+        ],
+        "each typed intent must settle through the model and game adapter"
     );
-    let current_fingerprint = current.fingerprint().ok();
-    assert!(projections
+    let current_fingerprint = current
+        .fingerprint()
+        .expect("current fixture must have a canonical fingerprint");
+    assert!(transition
+        .modes
         .iter()
         .all(|projection| projection.current_fingerprint == current_fingerprint));
-    assert!(projections
+    assert!(transition
+        .modes
         .iter()
         .all(|projection| projection.units == [UnitId(0), UnitId(1)]));
-    let Some(comparison) = projections
+    let Some(comparison) = transition
+        .modes
         .last()
         .and_then(|projection| projection.comparison)
     else {
@@ -162,7 +161,20 @@ fn report_modes_and_comparison_identity_are_observed_without_rendered_text() {
         comparison.1,
         saved
             .first()
-            .and_then(|saved| saved.report.fingerprint().ok())
+            .expect("comparison fixture exists")
+            .report
+            .fingerprint()
+            .expect("comparison fixture must have a canonical fingerprint")
+    );
+    assert_eq!(transition.after_compare.mode, ReportMode::Overview);
+    assert_eq!(
+        transition.after_compare.comparison,
+        Some(comparison),
+        "leaving Compare must preserve the independently selected canonical report"
+    );
+    assert_eq!(
+        transition.after_compare.current_fingerprint, current_fingerprint,
+        "presentation transitions must not replace the retained current report"
     );
 }
 
@@ -193,6 +205,73 @@ fn live_drawer_uses_the_canonical_summary_and_has_a_bounded_lifecycle() {
         GameplayPhase::Active,
         Some(EncounterResolution(Some(EncounterOutcome::Victory)))
     ));
+}
+
+#[test]
+fn production_lab_toggle_keeps_statistics_below_the_lattice_at_retina_size() {
+    let transition = production_lab_ui_transition_snapshot();
+    assert_eq!(
+        transition.published_own_lattice_cells, 7,
+        "the production lattice publisher must project the canonical player lattice"
+    );
+    assert!(
+        transition.expanded_state,
+        "the typed production intent must toggle application state"
+    );
+    assert_eq!(
+        transition.expanded.metrics.logical_size,
+        bevy::prelude::Vec2::new(1291.0, 721.0),
+        "the contract must use Bevy client pixels, excluding native title-bar chrome"
+    );
+    assert_eq!(
+        transition.expanded.metrics.viewport,
+        hex_ui::UiViewportClass::Compact
+    );
+    assert!(
+        transition.collapsed.layout_issues().is_empty(),
+        "the collapsed production adapter tree must satisfy the structural oracle: {:?}",
+        transition.collapsed.layout_issues()
+    );
+    assert!(
+        transition.expanded.layout_issues().is_empty(),
+        "the expanded production adapter tree must satisfy the structural oracle: {:?}",
+        transition.expanded.layout_issues()
+    );
+
+    fn node<'a>(
+        snapshot: &'a hex_ui::test_support::UiTreeSnapshot,
+        name: &str,
+    ) -> &'a hex_ui::test_support::UiNodeObservation {
+        snapshot
+            .nodes
+            .iter()
+            .find(|node| node.name == name)
+            .unwrap_or_else(|| panic!("production tree is missing {name:?}"))
+    }
+    let collapsed_lattice = node(&transition.collapsed, "Lattice Readout Stack");
+    let expanded_lattice = node(&transition.expanded, "Lattice Readout Stack");
+    let drawer = node(&transition.expanded, "Combat Lab Live Statistics Drawer");
+    assert_eq!(
+        expanded_lattice.parent_name.as_deref(),
+        Some("Inspector HUD Region")
+    );
+    assert_eq!(drawer.parent_name.as_deref(), Some("Inspector HUD Region"));
+    assert!(
+        expanded_lattice.center.y + expanded_lattice.size.y * 0.5
+            <= drawer.center.y - drawer.size.y * 0.5 + 0.5,
+        "statistics must follow the persistent lattice in the same scroll flow: lattice={expanded_lattice:?}, drawer={drawer:?}"
+    );
+    assert!(
+        (expanded_lattice.center - collapsed_lattice.center)
+            .abs()
+            .max_element()
+            <= 0.5
+            && (expanded_lattice.size - collapsed_lattice.size)
+                .abs()
+                .max_element()
+                <= 0.5,
+        "expanding through the production intent must not move or resize the lattice: collapsed={collapsed_lattice:?}, expanded={expanded_lattice:?}"
+    );
 }
 
 #[test]
@@ -273,5 +352,30 @@ fn gameplay_snapshot_reads_exact_canonical_position_and_budget_without_rendering
     assert_eq!(unit.position, position(-3, 2, 4));
     assert_eq!(unit.turn.map(|turn| turn.movement_left), Some(2));
     assert_eq!(unit.turn.map(|turn| turn.acted), Some(true));
-    assert!(snapshot.legal_actions.is_empty());
+    assert!(snapshot.presented_actions.is_empty());
+}
+
+#[test]
+fn gameplay_snapshot_names_hud_actions_as_a_presentation_projection() {
+    let mut world = World::new();
+    let presented = hex_ui::ActionAffordance {
+        action: hex_ui::GameplayAction::EndTurn,
+        label: "End turn".to_owned(),
+        shortcut: Some("Space".to_owned()),
+        availability: hex_ui::ActionAvailability::Enabled,
+        priority: hex_ui::ActionPriority::Primary,
+    };
+    world.insert_resource(hex_ui::GameplayHudView {
+        phase: GameplayPhase::Active,
+        actor: Some(UnitId(0)),
+        actor_label: "Hedge Mage".to_owned(),
+        round: "Round 1".to_owned(),
+        movement_remaining: 2,
+        action_remaining: true,
+        required_prompt: None,
+        actions: vec![presented.clone()],
+    });
+
+    let snapshot = gameplay_state_snapshot(&mut world);
+    assert_eq!(snapshot.presented_actions, vec![presented]);
 }

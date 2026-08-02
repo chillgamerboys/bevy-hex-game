@@ -98,14 +98,12 @@ cargo run -p hex_game --features visual-walk
 ```
 
 Exit code is the mechanical verdict: any stalled step, structural UI failure, or
-black frame fails the run. The scoped gameplay route contains six deterministic
-offscreen frames plus four native macOS checkpoints, never more than ten reviewed
-images. It reviews hierarchy, layout, focus, legibility, and responsive composition
-only; gameplay correctness is proved by canonical state snapshots in the
-rules/contracts/simulation/app partitions. Offscreen capture redirects the camera
-because the primary window is unreadable on macOS/Metal. The native wrapper
-`tools/run_gameplay_ui_native_review_macos.sh` instead preserves the real window and
-captures its exact CoreGraphics window ID for Retina/fullscreen/restart evidence.
+black frame fails the run. The scoped gameplay route contains at most ten
+deterministic Bevy image-target frames. It reviews hierarchy, layout, focus,
+legibility, and responsive composition only; gameplay correctness is proved by
+canonical state snapshots in the rules/contracts/simulation/app partitions. Each
+capture has an explicit logical canvas and device scale, and uses Bevy's
+`ImageRenderTarget` plus `Screenshot::image` without an operating-system capture API.
 
 ## Workspace
 
@@ -347,7 +345,8 @@ Gameplay and map tests are partitioned by concern in
 [`docs/development/gameplay-testing.md`](docs/development/gameplay-testing.md) and
 [`docs/development/map-testing.md`](docs/development/map-testing.md); logical combat
 evidence comes from rules/contracts/simulation/app data, while map logic uses
-unit/generation/publication data and retains its existing visual criteria.
+unit/generation/publication data and retains its existing visual criteria. The scoped
+gameplay visual run contains exactly ten reviewed presentation frames.
 Standalone audits: `/audit-diff`, `/audit-silent-failures`, `/update-docs`,
 `/visual-walk` (the scripted capture walk — audit-pr's Step 2.5; the agent
 reads the frames, and the human walk still owns motion and taste).
@@ -359,7 +358,7 @@ tickets. Binding is encouraged, never required.
 
 Runs on macOS/Metal at 60 FPS, 3,400–4,100 entities in gameplay depending on the
 terrain seed. Bevy 0.19 and Rust 1.97.1 are pinned. The test count is intentionally
-not frozen here; the current foundation gate and its exact count are recorded in
+not frozen here; dated foundation checkpoints and their exact counts are recorded in
 [foundation-hardening.md](docs/planning/foundation-hardening.md). macOS is the primary
 dev machine; the WSL2 setup in the README belongs to another contributor and still
 works.

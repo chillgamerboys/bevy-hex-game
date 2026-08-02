@@ -1262,7 +1262,7 @@ mod tests {
         assert!(session.return_to_character_creator);
         assert_eq!(session.tab, CreatorTab::Spells);
 
-        apply_entry_request(&mut session, CreatorEntryRequest::SpellLibrary);
+        apply_entry_request(&mut session, CreatorEntryRequest::CharacterLibrary);
         assert!(!session.return_to_combat_lab);
         assert!(!session.return_to_character_creator);
     }

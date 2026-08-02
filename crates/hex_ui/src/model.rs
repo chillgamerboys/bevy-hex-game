@@ -359,7 +359,9 @@ impl Default for LabStatisticsView {
         Self {
             present: false,
             visible: false,
-            expanded: true,
+            // Statistics are secondary to the battlefield. Start collapsed so
+            // entering Combat Lab never hides actors or primary commands.
+            expanded: false,
             text: "Waiting for canonical combat statistics…".to_owned(),
         }
     }
@@ -1106,7 +1108,7 @@ pub struct PauseView {
     pub notice: Option<String>,
 }
 
-/// One immutable scenario card on the title screen.
+/// One immutable scenario card in the development catalog.
 #[derive(Debug, Clone)]
 pub struct TitleScenarioView {
     /// Exact launch input represented by the card.
@@ -1115,11 +1117,39 @@ pub struct TitleScenarioView {
     pub resolved_seed: Option<u64>,
 }
 
+/// Which development catalog the player deliberately opened from the title.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum ScenarioBrowserKind {
+    /// Map/world presentation scenarios.
+    #[default]
+    MapScenarios,
+    /// Focused gameplay demonstrations.
+    Demos,
+}
+
+impl ScenarioBrowserKind {
+    /// Player-facing screen title.
+    #[must_use]
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::MapScenarios => "Map Scenarios",
+            Self::Demos => "Demos",
+        }
+    }
+}
+
+/// Immutable development-scenario catalog supplied by the composition root.
+#[derive(Resource, Debug, Default, Clone)]
+pub struct ScenarioBrowserView {
+    /// Deliberately selected catalog; presentation never mixes categories.
+    pub kind: ScenarioBrowserKind,
+    /// Visible scenarios in authored order for exactly `kind`.
+    pub scenarios: Vec<TitleScenarioView>,
+}
+
 /// Immutable title-screen projection supplied by the composition root.
 #[derive(Resource, Debug, Default, Clone)]
 pub struct TitleView {
-    /// Development scenarios in authored order. The renderer groups them by category.
-    pub scenarios: Vec<TitleScenarioView>,
     /// Setup failure carried back from gameplay, if one exists.
     pub setup_failure: Option<String>,
 }
@@ -1150,20 +1180,31 @@ pub enum TitleIntent {
     Continue,
     /// Launch the independently configured default game.
     NewGame,
-    /// Launch one visible development scenario.
-    StartScenario(Scenario),
-    /// Replace one generated scenario's session seed.
-    RerollScenario(Scenario),
-    /// Open character authoring.
+    /// Open the Character Creator library.
     CharacterCreator,
-    /// Open spell authoring.
+    /// Open the Spell Creator library.
     SpellCreator,
     /// Open Combat Lab.
     CombatLab,
+    /// Open the map/world scenario catalog.
+    MapScenarios,
+    /// Open the focused gameplay demo catalog.
+    Demos,
     /// Open settings.
     Settings,
     /// Exit the application.
     Quit,
+}
+
+/// Typed intentions emitted by the development scenario catalog.
+#[derive(Debug, Clone)]
+pub enum ScenarioBrowserIntent {
+    /// Launch the exact visible scenario snapshot.
+    Start(Scenario),
+    /// Replace one generated scenario's session seed.
+    Reroll(Scenario),
+    /// Return to the title.
+    Back,
 }
 
 impl Default for PauseView {
@@ -1222,6 +1263,8 @@ pub enum UiIntent {
     AdjustSetting(UiSetting),
     /// Activate a title-screen route or exact scenario card.
     Title(TitleIntent),
+    /// Act on the development scenario catalog.
+    Scenarios(ScenarioBrowserIntent),
 }
 
 #[cfg(test)]
@@ -1249,5 +1292,13 @@ mod tests {
             return;
         };
         assert!(!reason.trim().is_empty());
+    }
+
+    #[test]
+    fn live_statistics_start_as_collapsed_secondary_chrome() {
+        let view = LabStatisticsView::default();
+        assert!(!view.present);
+        assert!(!view.visible);
+        assert!(!view.expanded);
     }
 }

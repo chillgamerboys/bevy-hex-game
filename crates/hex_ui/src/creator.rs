@@ -2,7 +2,9 @@
 
 use std::collections::BTreeSet;
 
+use bevy::input::mouse::MouseScrollUnit;
 use bevy::input_focus::tab_navigation::TabIndex;
+use bevy::picking::events::{Pointer, Scroll};
 use bevy::prelude::*;
 use bevy::text::EditableText;
 use bevy::ui_widgets::ScrollArea;
@@ -15,7 +17,8 @@ use hex_core::{LatticeCoord, Screen};
 use hex_gameplay_model::CreatorSurface as CreatorTab;
 
 use crate::{
-    blurb, display, effect_summary, element_color, fine, heading, label, panel, panel_node,
+    blurb, body_text_role, compact_glyph_role, display, effect_summary, element_color, fine,
+    heading, label, owner_resolved_control_role, panel, panel_node, responsive_control_role,
     row_button, screen_root, short_name, CharacterBuildSummary, CreatorEffectKind, CreatorIntent,
     CreatorLibraryView, CreatorNameField, CreatorScreenView, CreatorWorkspace, OwnColors,
     ResolvedUiMetrics, SpellBuildSummary, UiAssets, UiIntent, UiSystems, UiViewportClass, ACCENT,
@@ -34,6 +37,15 @@ struct CreatorHeaderActions;
 #[derive(Component)]
 struct CreatorResponsiveBody;
 
+#[derive(Component)]
+struct CreatorLatticeCanvas;
+
+/// Compact Creator pages have one vertical owner at the screen root. The
+/// lattice still accepts horizontal trackpad input without swallowing the
+/// vertical delta that must bubble to that page owner.
+#[derive(Component)]
+pub(crate) struct CompactCreatorCanvasScroll;
+
 #[derive(Component, Clone, Copy)]
 enum CreatorBodyPanel {
     Sidebar { width: f32, compact_row: i16 },
@@ -41,16 +53,49 @@ enum CreatorBodyPanel {
 }
 
 pub(super) fn plugin(app: &mut App) {
-    app.add_systems(
-        Update,
-        (
-            render,
-            apply_creator_layout,
-            emit_actions.in_set(UiSystems::EmitIntents),
-            emit_name_changes.in_set(UiSystems::EmitIntents),
-        )
-            .run_if(creator_screen_active),
-    );
+    app.add_observer(scroll_compact_canvas_with_residual)
+        .add_systems(
+            Update,
+            (
+                (render, apply_creator_layout)
+                    .chain()
+                    .in_set(UiSystems::Render),
+                emit_actions.in_set(UiSystems::EmitIntents),
+                emit_name_changes.in_set(UiSystems::EmitIntents),
+            )
+                .run_if(creator_screen_active),
+        );
+}
+
+fn scroll_compact_canvas_with_residual(
+    mut scroll: On<Pointer<Scroll>>,
+    mut canvases: Query<(&ComputedNode, &mut ScrollPosition), With<CompactCreatorCanvasScroll>>,
+) {
+    let Ok((computed, mut position)) = canvases.get_mut(scroll.entity) else {
+        return;
+    };
+    let factor = match scroll.unit {
+        MouseScrollUnit::Line => MouseScrollUnit::SCROLL_UNIT_CONVERSION_FACTOR,
+        MouseScrollUnit::Pixel => 1.0,
+    };
+    let visible = computed.size() * computed.inverse_scale_factor;
+    let content = computed.content_size() * computed.inverse_scale_factor;
+    let max_range = (content - visible).max(Vec2::ZERO);
+    let delta = Vec2::new(scroll.x, scroll.y) * factor;
+    let old = position.0;
+    let new = (old - delta).clamp(Vec2::ZERO, max_range);
+    position.0 = new;
+
+    // Only the unconsumed vertical component belongs to the outer page. Drop
+    // residual horizontal motion because Compact has no outer horizontal
+    // owner, then let Bevy bubble any vertical remainder to CreatorRoot.
+    let consumed = old - new;
+    let residual_y = delta.y - consumed.y;
+    scroll.event_mut().event.x = 0.0;
+    scroll.event_mut().event.y = residual_y / factor;
+    if residual_y.abs() <= f32::EPSILON {
+        scroll.propagate(false);
+    }
 }
 
 fn apply_creator_layout(
@@ -74,6 +119,7 @@ fn apply_creator_layout(
             Without<CreatorHeader>,
             Without<CreatorHeaderActions>,
             Without<CreatorRoot>,
+            Without<CreatorLatticeCanvas>,
         ),
     >,
     mut panels: Query<
@@ -83,6 +129,18 @@ fn apply_creator_layout(
             Without<CreatorHeader>,
             Without<CreatorHeaderActions>,
             Without<CreatorRoot>,
+            Without<CreatorLatticeCanvas>,
+        ),
+    >,
+    mut lattice_canvases: Query<
+        (Entity, &mut Node),
+        (
+            With<CreatorLatticeCanvas>,
+            Without<CreatorResponsiveBody>,
+            Without<CreatorHeader>,
+            Without<CreatorHeaderActions>,
+            Without<CreatorRoot>,
+            Without<CreatorBodyPanel>,
         ),
     >,
 ) {
@@ -90,6 +148,7 @@ fn apply_creator_layout(
         return;
     }
     let compact = metrics.viewport == UiViewportClass::Compact;
+    let stacked_header = compact || metrics.logical_size.x < 2000.0 || metrics.content_scale > 1.0;
     for mut node in &mut roots {
         node.overflow = if compact {
             Overflow::scroll_y()
@@ -98,25 +157,33 @@ fn apply_creator_layout(
         };
     }
     for mut node in &mut headers {
-        node.flex_direction = if compact {
+        node.flex_direction = if stacked_header {
             FlexDirection::Column
         } else {
             FlexDirection::Row
         };
-        node.align_items = if compact {
+        node.align_items = if stacked_header {
             AlignItems::Stretch
         } else {
             AlignItems::Center
         };
-        node.row_gap = if compact { Val::Px(8.0) } else { Val::ZERO };
+        node.row_gap = if stacked_header {
+            Val::Px(8.0)
+        } else {
+            Val::ZERO
+        };
     }
     for mut node in &mut header_actions {
-        node.flex_wrap = if compact {
+        node.flex_wrap = if stacked_header {
             FlexWrap::Wrap
         } else {
             FlexWrap::NoWrap
         };
-        node.row_gap = if compact { Val::Px(6.0) } else { Val::ZERO };
+        node.row_gap = if stacked_header {
+            Val::Px(6.0)
+        } else {
+            Val::ZERO
+        };
     }
     for mut node in &mut bodies {
         node.display = if compact {
@@ -130,6 +197,8 @@ fn apply_creator_layout(
             FlexDirection::Row
         };
         node.height = if compact { Val::Auto } else { Val::Px(0.0) };
+        node.min_height = if compact { Val::Auto } else { Val::Px(0.0) };
+        node.flex_basis = if compact { Val::Auto } else { Val::Px(0.0) };
         node.flex_grow = if compact { 0.0 } else { 1.0 };
         node.overflow = Overflow::default();
         node.row_gap = if compact { Val::Px(12.0) } else { Val::ZERO };
@@ -166,11 +235,19 @@ fn apply_creator_layout(
                 // Compact owns one continuous page at the root. Leaving an idle
                 // ScrollArea on a now-visible sidebar would swallow wheel events
                 // before they reach that root owner.
-                commands.entity(entity).remove::<ScrollArea>();
+                commands
+                    .entity(entity)
+                    .remove::<ScrollArea>()
+                    .insert(ScrollPosition::default());
             }
         } else {
             node.width = match role {
-                CreatorBodyPanel::Sidebar { width, .. } => Val::Px(*width),
+                CreatorBodyPanel::Sidebar { width, .. } => {
+                    // Responsive row controls grow with semantic scale. Reserve
+                    // the same horizontal pressure in their owning sidebar so
+                    // a 200% control cannot escape into the adjacent workspace.
+                    Val::Px(*width * metrics.control_scale.max(1.0))
+                }
                 CreatorBodyPanel::Main => Val::Auto,
             };
             node.height = Val::Auto;
@@ -190,6 +267,21 @@ fn apply_creator_layout(
             }
         }
     }
+    for (entity, mut node) in &mut lattice_canvases {
+        if compact {
+            node.overflow = Overflow::scroll();
+            commands
+                .entity(entity)
+                .remove::<ScrollArea>()
+                .insert(CompactCreatorCanvasScroll);
+        } else {
+            node.overflow = Overflow::scroll();
+            commands
+                .entity(entity)
+                .remove::<CompactCreatorCanvasScroll>()
+                .insert(ScrollArea);
+        }
+    }
 }
 
 fn creator_screen_active(screen: Res<State<Screen>>) -> bool {
@@ -203,9 +295,10 @@ fn render(
     mut commands: Commands,
     roots: Query<Entity, With<CreatorRoot>>,
     view: Res<CreatorScreenView>,
+    metrics: Res<ResolvedUiMetrics>,
     assets: Res<UiAssets>,
 ) {
-    if !view.is_changed() {
+    if !view.is_changed() && !metrics.is_changed() {
         return;
     }
     for root in &roots {
@@ -224,6 +317,7 @@ fn render(
         view.spell_file.as_ref(),
         view.lattice_file.as_ref(),
         view.presets.as_ref(),
+        metrics.control_scale,
     );
 }
 
@@ -260,6 +354,7 @@ fn spawn_creator_ui(
     spell_file: Option<&SpellFile>,
     lattice_file: Option<&LatticeFile>,
     presets: Option<&CreationPresetCatalog>,
+    semantic_control_scale: f32,
 ) {
     let screen = match session.tab {
         CreatorTab::Characters => Screen::CharacterCreator,
@@ -305,15 +400,55 @@ fn spawn_creator_ui(
                         CreatorHeaderActions,
                         Node {
                             flex_direction: FlexDirection::Row,
+                            flex_wrap: FlexWrap::Wrap,
                             column_gap: Val::Px(8.0),
+                            row_gap: Val::Px(6.0),
                             align_items: AlignItems::Center,
                             ..default()
                         },
                     ))
                     .with_children(|actions| {
+                        if session.tab == CreatorTab::Characters {
+                            action_button(
+                                actions,
+                                assets,
+                                "Open Spell Creator",
+                                CreatorIntent::OpenSpellCreator,
+                                210.0,
+                            );
+                        }
                         if session.workspace != CreatorWorkspace::Hub {
-                            action_button(actions, assets, "Undo", CreatorIntent::Undo, 90.0);
-                            action_button(actions, assets, "Redo", CreatorIntent::Redo, 90.0);
+                            action_button(
+                                actions,
+                                assets,
+                                "Save",
+                                match session.workspace {
+                                    CreatorWorkspace::Character => CreatorIntent::SaveCharacter,
+                                    CreatorWorkspace::Spell => CreatorIntent::SaveSpell,
+                                    CreatorWorkspace::Hub => {
+                                        unreachable!("the Creator hub has no active draft to save")
+                                    }
+                                },
+                                110.0,
+                            );
+                            action_button(actions, assets, "Undo", CreatorIntent::Undo, 160.0);
+                            action_button(actions, assets, "Redo", CreatorIntent::Redo, 160.0);
+                            if session.workspace == CreatorWorkspace::Character {
+                                action_button(
+                                    actions,
+                                    assets,
+                                    "Local Test",
+                                    CreatorIntent::LocalTest,
+                                    120.0,
+                                );
+                                action_button(
+                                    actions,
+                                    assets,
+                                    "Test on Map",
+                                    CreatorIntent::TestOnMap,
+                                    130.0,
+                                );
+                            }
                         }
                         if store.error.is_some() {
                             action_button(
@@ -325,7 +460,7 @@ fn spawn_creator_ui(
                                     "Reset Library"
                                 },
                                 CreatorIntent::ResetLibrary,
-                                140.0,
+                                220.0,
                             );
                         }
                         let current_dirty = match session.tab {
@@ -338,7 +473,7 @@ fn spawn_creator_ui(
                                 assets,
                                 "Discard Changes",
                                 CreatorIntent::DiscardChanges,
-                                150.0,
+                                260.0,
                             );
                         }
                         action_button(
@@ -350,7 +485,7 @@ fn spawn_creator_ui(
                                 "Library"
                             },
                             CreatorIntent::Back,
-                            100.0,
+                            180.0,
                         );
                     });
             });
@@ -389,6 +524,7 @@ fn spawn_creator_ui(
                     spell_book,
                     lattice_file,
                     presets,
+                    semantic_control_scale,
                 ),
                 CreatorWorkspace::Spell => spawn_spell_tab(
                     body, assets, session, store, elements, spell_book, spell_file, presets,
@@ -437,15 +573,6 @@ fn spawn_creator_hub(
                     }
                 },
             ));
-            if session.tab == CreatorTab::Characters {
-                action_button(
-                    navigation,
-                    assets,
-                    "Open Spell Creator",
-                    CreatorIntent::OpenSpellCreator,
-                    190.0,
-                );
-            }
         });
 
     body.spawn((CreatorBodyPanel::Main, panel()))
@@ -521,7 +648,7 @@ fn spawn_creator_hub(
                                 .iter()
                                 .filter(|record| record.audience == PresetAudience::HumanTemplate)
                             {
-                                action_button(
+                                scrollable_action_button(
                                     shelf,
                                     assets,
                                     record.character.name.clone(),
@@ -592,7 +719,7 @@ fn spawn_creator_hub(
                                 .iter()
                                 .filter(|record| record.audience == PresetAudience::HumanTemplate)
                             {
-                                action_button(
+                                scrollable_action_button(
                                     shelf,
                                     assets,
                                     record.spell.name.clone(),
@@ -640,7 +767,11 @@ fn creator_record_card(
     ready: bool,
 ) {
     parent
-        .spawn((row_button(name.to_owned(), 520.0), action))
+        .spawn((
+            row_button(name.to_owned(), 520.0),
+            action,
+            crate::UiVisibilityRequirement::Scrollable,
+        ))
         .insert(Node {
             width: Val::Percent(100.0),
             min_height: Val::Px(70.0),
@@ -682,6 +813,23 @@ fn action_button(
         .with_child(label(assets, text));
 }
 
+fn scrollable_action_button(
+    parent: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    text: impl Into<String>,
+    action: CreatorIntent,
+    width: f32,
+) {
+    let text = text.into();
+    parent
+        .spawn((
+            row_button(text.clone(), width),
+            action,
+            crate::UiVisibilityRequirement::Scrollable,
+        ))
+        .with_child(label(assets, text));
+}
+
 fn name_input(
     parent: &mut ChildSpawnerCommands,
     assets: &UiAssets,
@@ -696,11 +844,14 @@ fn name_input(
         Name::new(accessible),
         AccessibleLabel::new(accessible),
         TabIndex(0),
+        crate::DefaultImmediateControl,
         EditableText {
             max_characters: Some(MAX_CREATION_NAME_CHARS),
             visible_width: Some(24.0),
             ..EditableText::new(value)
         },
+        body_text_role(),
+        responsive_control_role(),
         TextFont {
             font: assets.body.clone().into(),
             ..TextFont::from_font_size(18.0)
@@ -711,6 +862,7 @@ fn name_input(
         Node {
             width: Val::Percent(100.0),
             min_height: Val::Px(44.0),
+            flex_shrink: 0.0,
             padding: UiRect::all(Val::Px(9.0)),
             border: UiRect::all(Val::Px(1.0)),
             ..default()
@@ -732,6 +884,7 @@ fn spawn_character_tab(
     spell_book: Option<&SpellBook>,
     _lattice_file: Option<&LatticeFile>,
     _presets: Option<&CreationPresetCatalog>,
+    semantic_control_scale: f32,
 ) {
     let Some(character) = &session.character else {
         body.spawn(blurb(assets, "No character draft."));
@@ -757,6 +910,12 @@ fn spawn_character_tab(
         palette.spawn(blurb(
             assets,
             "Choose a tool, then click occupied hexes or outlined neighbor slots.",
+        ));
+        palette.spawn((
+            Name::new("Creator Palette More Tools Cue"),
+            AccessibleLabel::new("More character creation tools are available below"),
+            crate::UiVisibilityRequirement::Scrollable,
+            blurb(assets, "More tools below ↓"),
         ));
         colored_tool_button(
             palette,
@@ -840,13 +999,6 @@ fn spawn_character_tab(
                 }
             }
         }
-        action_button(
-            palette,
-            assets,
-            "Manage Spells",
-            CreatorIntent::OpenSpellCreator,
-            190.0,
-        );
         colored_tool_button(
             palette,
             assets,
@@ -899,22 +1051,42 @@ fn spawn_character_tab(
                             ..default()
                         })
                         .with_children(|zoom| {
-                            action_button(zoom, assets, "Fit", CreatorIntent::FitLattice, 58.0);
-                            action_button(zoom, assets, "−", CreatorIntent::Zoom(-1), 44.0);
+                            scrollable_action_button(
+                                zoom,
+                                assets,
+                                "Fit",
+                                CreatorIntent::FitLattice,
+                                58.0,
+                            );
+                            scrollable_action_button(
+                                zoom,
+                                assets,
+                                "−",
+                                CreatorIntent::Zoom(-1),
+                                44.0,
+                            );
                             zoom.spawn(label(
                                 assets,
                                 format!("{}%", lattice_scale_percent(session.zoom_step)),
                             ));
-                            action_button(zoom, assets, "+", CreatorIntent::Zoom(1), 44.0);
+                            scrollable_action_button(
+                                zoom,
+                                assets,
+                                "+",
+                                CreatorIntent::Zoom(1),
+                                44.0,
+                            );
                         });
                 });
             spawn_character_actions(center, assets, session, &issues);
             center
                 .spawn((
                     Name::new("Lattice Canvas"),
+                    CreatorLatticeCanvas,
                     ScrollArea,
                     Node {
                         width: Val::Percent(100.0),
+                        min_width: Val::Px(0.0),
                         min_height: Val::Px(0.0),
                         flex_grow: 1.0,
                         overflow: Overflow::scroll(),
@@ -940,6 +1112,7 @@ fn spawn_character_tab(
                                 session.zoom_step,
                                 elements,
                                 &store.file,
+                                semantic_control_scale,
                             );
                         });
                 });
@@ -960,6 +1133,12 @@ fn spawn_character_tab(
     })
     .with_children(|right| {
         right.spawn(heading(assets, "cell inspector"));
+        right.spawn((
+            Name::new("Creator Inspector More Details Cue"),
+            AccessibleLabel::new("More character build details are available below"),
+            crate::UiVisibilityRequirement::Scrollable,
+            blurb(assets, "More build details below ↓"),
+        ));
         if let Some(coord) = session.selected_cell {
             let content = character
                 .cells
@@ -986,7 +1165,7 @@ fn spawn_character_tab(
                 "Palette tools paint directly. Inspect leaves cells unchanged.",
             ));
             if coord != LatticeCoord::ORIGIN {
-                action_button(
+                scrollable_action_button(
                     right,
                     assets,
                     "Remove Selected Cell",
@@ -1010,7 +1189,9 @@ fn spawn_character_tab(
                 right
                     .spawn(Node {
                         flex_direction: FlexDirection::Row,
+                        flex_wrap: FlexWrap::Wrap,
                         column_gap: Val::Px(4.0),
+                        row_gap: Val::Px(4.0),
                         ..default()
                     })
                     .with_children(|row| {
@@ -1020,7 +1201,7 @@ fn spawn_character_tab(
                             ("C−", true, -1),
                             ("C+", true, 1),
                         ] {
-                            action_button(
+                            scrollable_action_button(
                                 row,
                                 assets,
                                 text,
@@ -1088,15 +1269,14 @@ fn spawn_character_actions(
             },
         ))
         .with_children(|actions| {
-            action_button(actions, assets, "Save", CreatorIntent::SaveCharacter, 110.0);
-            action_button(
+            scrollable_action_button(
                 actions,
                 assets,
                 "Duplicate",
                 CreatorIntent::DuplicateCharacter,
-                120.0,
+                220.0,
             );
-            action_button(
+            scrollable_action_button(
                 actions,
                 assets,
                 if session.confirm_delete {
@@ -1106,20 +1286,6 @@ fn spawn_character_actions(
                 },
                 CreatorIntent::DeleteCharacter,
                 140.0,
-            );
-            action_button(
-                actions,
-                assets,
-                "Local Test",
-                CreatorIntent::LocalTest,
-                120.0,
-            );
-            action_button(
-                actions,
-                assets,
-                "Test on Map",
-                CreatorIntent::TestOnMap,
-                130.0,
             );
             if !issues.is_empty() || session.character_dirty {
                 actions.spawn(fine(
@@ -1142,6 +1308,7 @@ fn spawn_lattice_cells(
     zoom_step: i8,
     elements: Option<&ElementCatalog>,
     library: &hex_assets::CreationLibraryFile,
+    semantic_control_scale: f32,
 ) {
     let occupied: BTreeSet<LatticeCoord> =
         character.cells.iter().map(CreationCell::coord).collect();
@@ -1154,7 +1321,8 @@ fn spawn_lattice_cells(
                 .filter(|neighbor| !occupied.contains(neighbor)),
         );
     }
-    let scale = lattice_scale(zoom_step);
+    let intrinsic_scale = lattice_scale(zoom_step);
+    let scale = intrinsic_scale * semantic_control_scale.max(1.0);
     for cell in &character.cells {
         let coord = cell.coord();
         let (left, top) = lattice_pixel(coord, scale);
@@ -1168,6 +1336,8 @@ fn spawn_lattice_cells(
                 Name::new(format!("Creator Cell {},{}", coord.q(), coord.r())),
                 crate::lattice::TessellatedControl,
                 Button,
+                crate::UiVisibilityRequirement::Scrollable,
+                owner_resolved_control_role(),
                 CreatorIntent::SelectCell(coord),
                 ImageNode {
                     image: assets.hex_cell.clone(),
@@ -1189,9 +1359,10 @@ fn spawn_lattice_cells(
             .with_children(|hex| {
                 hex.spawn((
                     Text::new(resolved_cell_label(&cell.kind, library)),
+                    compact_glyph_role((11.0 * intrinsic_scale).max(9.0)),
                     TextFont {
                         font: assets.body.clone().into(),
-                        ..TextFont::from_font_size((11.0 * scale).max(9.0))
+                        ..TextFont::from_font_size((11.0 * intrinsic_scale).max(9.0))
                     },
                     TextColor(LABEL),
                     Pickable::IGNORE,
@@ -1204,9 +1375,10 @@ fn spawn_lattice_cells(
                     } else {
                         ""
                     }),
+                    compact_glyph_role((8.0 * intrinsic_scale).max(7.0)),
                     TextFont {
                         font: assets.body.clone().into(),
-                        ..TextFont::from_font_size((8.0 * scale).max(7.0))
+                        ..TextFont::from_font_size((8.0 * intrinsic_scale).max(7.0))
                     },
                     TextColor(if selected_cell { ACCENT } else { LABEL }),
                     Pickable::IGNORE,
@@ -1221,6 +1393,8 @@ fn spawn_lattice_cells(
                     Name::new(format!("Add Cell {},{}", coord.q(), coord.r())),
                     crate::lattice::TessellatedControl,
                     Button,
+                    crate::UiVisibilityRequirement::Scrollable,
+                    owner_resolved_control_role(),
                     CreatorIntent::AddCell(coord),
                     ImageNode {
                         image: assets.hex_cell.clone(),
@@ -1335,7 +1509,11 @@ fn colored_tool_button(
 ) {
     let text = text.into();
     parent
-        .spawn((row_button(text.clone(), 200.0), action))
+        .spawn((
+            row_button(text.clone(), 200.0),
+            action,
+            crate::UiVisibilityRequirement::Scrollable,
+        ))
         .insert((
             OwnColors,
             BackgroundColor(brighten(color, if selected { 0.26 } else { 0.0 })),
@@ -1403,28 +1581,28 @@ fn spawn_spell_tab(
                             ..default()
                         })
                         .with_children(|row| {
-                            action_button(
+                            scrollable_action_button(
                                 row,
                                 assets,
                                 "Element",
                                 CreatorIntent::CycleRequirement(index),
                                 84.0,
                             );
-                            action_button(
+                            scrollable_action_button(
                                 row,
                                 assets,
                                 "−",
                                 CreatorIntent::AdjustRequirement(index, -1),
                                 42.0,
                             );
-                            action_button(
+                            scrollable_action_button(
                                 row,
                                 assets,
                                 "+",
                                 CreatorIntent::AdjustRequirement(index, 1),
                                 42.0,
                             );
-                            action_button(
+                            scrollable_action_button(
                                 row,
                                 assets,
                                 "Remove",
@@ -1435,7 +1613,7 @@ fn spawn_spell_tab(
                 });
         }
         if saved.spell.requirements.len() < 6 {
-            action_button(
+            scrollable_action_button(
                 left,
                 assets,
                 "+ Add Requirement",
@@ -1491,7 +1669,7 @@ fn spawn_spell_tab(
                 "Enchantment",
                 CreatorIntent::SetEnchantment(true),
                 enchantment,
-                120.0,
+                150.0,
             );
             let single = saved.spell.targeting.shape == TargetShape::Single;
             segmented_button(
@@ -1511,14 +1689,14 @@ fn spawn_spell_tab(
                 82.0,
             );
             if single {
-                action_button(
+                scrollable_action_button(
                     controls,
                     assets,
                     "Range −",
                     CreatorIntent::AdjustRange(-1),
                     84.0,
                 );
-                action_button(
+                scrollable_action_button(
                     controls,
                     assets,
                     "Range +",
@@ -1527,14 +1705,14 @@ fn spawn_spell_tab(
                 );
             }
             if enchantment {
-                action_button(
+                scrollable_action_button(
                     controls,
                     assets,
                     "Defense −",
                     CreatorIntent::AdjustDefense(-1),
                     100.0,
                 );
-                action_button(
+                scrollable_action_button(
                     controls,
                     assets,
                     "Defense +",
@@ -1586,35 +1764,35 @@ fn spawn_spell_tab(
                             ..default()
                         })
                         .with_children(|row| {
-                            action_button(
+                            scrollable_action_button(
                                 row,
                                 assets,
                                 "←",
                                 CreatorIntent::MoveEffect(index, -1),
                                 44.0,
                             );
-                            action_button(
+                            scrollable_action_button(
                                 row,
                                 assets,
                                 "→",
                                 CreatorIntent::MoveEffect(index, 1),
                                 44.0,
                             );
-                            action_button(
+                            scrollable_action_button(
                                 row,
                                 assets,
                                 "Value −",
                                 CreatorIntent::AdjustEffect(index, -1),
                                 76.0,
                             );
-                            action_button(
+                            scrollable_action_button(
                                 row,
                                 assets,
                                 "Value +",
                                 CreatorIntent::AdjustEffect(index, 1),
                                 76.0,
                             );
-                            action_button(
+                            scrollable_action_button(
                                 row,
                                 assets,
                                 "Remove",
@@ -1637,7 +1815,13 @@ fn spawn_spell_tab(
                     ("+ Restore", CreatorEffectKind::Restore),
                     ("+ Reveal", CreatorEffectKind::Reveal),
                 ] {
-                    action_button(row, assets, name, CreatorIntent::AddEffect(kind), 105.0);
+                    scrollable_action_button(
+                        row,
+                        assets,
+                        name,
+                        CreatorIntent::AddEffect(kind),
+                        105.0,
+                    );
                 }
             });
             form.spawn(Node {
@@ -1647,15 +1831,14 @@ fn spawn_spell_tab(
                 ..default()
             })
             .with_children(|actions| {
-                action_button(actions, assets, "Save", CreatorIntent::SaveSpell, 110.0);
-                action_button(
+                scrollable_action_button(
                     actions,
                     assets,
                     "Duplicate",
                     CreatorIntent::DuplicateSpell,
-                    120.0,
+                    220.0,
                 );
-                action_button(
+                scrollable_action_button(
                     actions,
                     assets,
                     if session.confirm_delete {
@@ -1741,7 +1924,11 @@ fn segmented_button(
     width: f32,
 ) {
     parent
-        .spawn((row_button(text, width), action))
+        .spawn((
+            row_button(text, width),
+            action,
+            crate::UiVisibilityRequirement::Scrollable,
+        ))
         .insert(BorderColor::all(if selected { ACCENT } else { EDGE }))
         .with_child(label(
             assets,

@@ -1,13 +1,46 @@
-// The six deterministic offscreen frames in the gameplay UI acceptance route.
-// Native macOS review owns the other four checkpoints. Every Capture first runs
-// the live UiTreeSnapshot structural oracle; pixels remain presentation evidence.
+// Ten deterministic Bevy image-target frames. Every Capture first runs the live
+// UiTreeSnapshot structural oracle; pixels remain presentation evidence only.
 [
     AwaitScreen("Title"),
+    SetViewport(width: 1280, height: 720, device_scale: 2.0),
+    Settle(8),
+    ReviewCapture(name: "ui-01-title-compact-2x", task: TitleCold),
+
+    Click(name: "Map Scenarios"),
+    AwaitScreen("Scenarios"),
+    Settle(4),
+    ReviewCapture(name: "ui-02-map-scenarios-compact", task: MapScenarios),
+    Click(name: "Back"),
+    AwaitScreen("Title"),
+
+    // Exercise the independently typed demo route without spending another
+    // reviewed frame; the title capture already proves both routes are visible.
+    Click(name: "Demos"),
+    AwaitScreen("Scenarios"),
+    Click(name: "Back"),
+    AwaitScreen("Title"),
+
+    SetViewport(width: 1920, height: 1080, device_scale: 1.0),
+    Click(name: "Settings"),
+    AwaitScreen("Settings"),
+    Settle(4),
+    ReviewCapture(name: "ui-03-settings-standard", task: Settings),
+    Click(name: "Back"),
+    AwaitScreen("Title"),
+
+    // Spell Creator is a first-class title route. Walk it before the sampled
+    // Character validation frame so discoverability cannot regress silently.
+    Click(name: "Spell Creator"),
+    AwaitScreen("SpellCreator"),
+    Settle(4),
+    Click(name: "Title"),
+    AwaitScreen("Title"),
+
     Click(name: "Character Creator"),
     AwaitScreen("CharacterCreator"),
     Click(name: "New Blank Character"),
     Settle(4),
-    Capture("ui-01-creator-validation"),
+    ReviewCapture(name: "ui-04-creator-validation", task: CharacterInvalid),
     Click(name: "Discard Changes"),
     Click(name: "Library"),
     Click(name: "Title"),
@@ -16,27 +49,45 @@
     Click(name: "Combat Lab"),
     AwaitScreen("CombatLab"),
     Settle(4),
-    Capture("ui-02-combat-lab-setup"),
+    ReviewCapture(name: "ui-05-combat-lab-setup", task: LabMap),
     Click(name: "Continue to Rosters"),
     Click(name: "Continue to Rules"),
     Click(name: "Load Map & Deploy"),
     AwaitScreen("Gameplay"),
     AwaitTerrain,
     Settle(6),
-    Capture("ui-03-deployment"),
+    ReviewCapture(name: "ui-06-deployment", task: DeploymentIncomplete),
     Click(name: "Deterministic Auto-place"),
     Click(name: "Start Combat"),
 
     PresentUi("aiming-disabled"),
     Settle(4),
-    Capture("ui-04-aiming-disabled"),
+    ReviewCapture(
+        name: "ui-07-maximum-actions-aiming-disabled",
+        task: AimingBlocked,
+    ),
 
+    SetUiScale(Percent200),
+    PresentUi("required-decision"),
+    Settle(6),
+    ReviewCapture(name: "ui-08-required-decision-200", task: DisableDecision),
+
+    SetUiScale(Auto),
+    // Exact Bevy client canvas behind the reported 2582×1494 outer macOS
+    // window: 2582×1442 physical pixels at 2× => 1291×721 logical.
+    SetViewport(width: 1291, height: 721, device_scale: 2.0),
     PresentUi("live-statistics"),
     Settle(4),
-    Capture("ui-05-live-statistics"),
+    ReviewCapture(
+        name: "ui-09-live-statistics-compact-retina",
+        task: LabStatistics,
+    ),
 
-    SetViewport("3840x2160"),
+    SetViewport(width: 3840, height: 2160, device_scale: 1.0),
     PresentUi("dense-report-compare"),
     Settle(6),
-    Capture("ui-06-dense-report-compare-4k"),
+    ReviewCapture(
+        name: "ui-10-dense-report-compare-4k",
+        task: LabReportCompare,
+    ),
 ]

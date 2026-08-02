@@ -260,6 +260,12 @@ class TestScopeTests(unittest.TestCase):
                 ),
                 "partition check map has invalid all_tests_command",
             ),
+            (
+                lambda config: config["concerns"]["app"].update(
+                    postflight_command=[]
+                ),
+                "concern app postflight_command must be non-empty strings",
+            ),
         )
         for mutate, expected in cases:
             with self.subTest(expected=expected):
@@ -357,10 +363,16 @@ class TestScopeTests(unittest.TestCase):
         self.assertIn("--test", command)
         self.assertEqual(command[command.index("--test") + 1], "gameplay_app")
         features = command[command.index("--features") + 1].split(",")
-        self.assertEqual(
-            set(features),
-            {"hex_game/test-support", "hex_ui/dev-tools"},
-        )
+        self.assertEqual(features, ["hex_game/test-support"])
+        self.assertNotIn("hex_ui/dev-tools", command)
+
+    def test_app_dev_tools_are_exercised_only_by_a_focused_followup(self) -> None:
+        command = self.config["concerns"]["app"]["postflight_command"]
+        self.assertEqual(command[command.index("--package") + 1], "hex_ui")
+        self.assertIn("--lib", command)
+        features = command[command.index("--features") + 1].split(",")
+        self.assertEqual(set(features), {"test-support", "dev-tools"})
+        self.assertEqual(command[-1], "dev_time::tests::")
 
     def test_app_preflight_compiles_default_feature_library_tests(self) -> None:
         command = self.config["concerns"]["app"]["preflight_command"]

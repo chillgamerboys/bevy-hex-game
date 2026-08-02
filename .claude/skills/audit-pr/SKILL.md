@@ -80,8 +80,8 @@ have failed review anyway.
 
 **What it does:** invokes the `/test-full` skill — `/test-local`
 (fmt, clippy, workspace tests, `cargo deny`, doc build, markdown link
-check) then the ship-shape build (`cargo build --workspace --profile
-ci`, no `--all-features`), then it prints the manual visual walk.
+check) then the ship-shape build (`cargo build --package hex_game
+--release`, no `--all-features`), then it prints the manual visual walk.
 Doc-only diffs short-circuit to `/test-quick`.
 
 See the `test-*` SKILL.mds for current expected counts (these grow as
@@ -104,13 +104,16 @@ should exist before the cheap textual steps wrap up.
 `visual-walk` feature, drives the game through `walks/*.ron` (real
 button wiring, injected input), captures a PNG per scripted step, and
 the agent READS every frame. Two tiers: mechanical (stall, black
-frame, wrong/missing screen) and review (layout, overflow, contrast —
-listed for the human, never auto-blocking).
+frame, wrong/missing screen) and review (layout, overflow, contrast).
+Review findings block when UI or presentation is the changed surface and remain
+advisory for other runtime changes.
 
 **Decision:**
 - ✓ all frames ok → status `pass`, proceed to Step 3.
-- ⚠ review-tier findings only → status `warn`, proceed. Findings ride
-  the receipt into the merge report; the human judges them.
+- ⚠ review-tier findings in a non-UI runtime diff only → status `warn`, proceed.
+  Findings ride the receipt into the merge report; the human judges them.
+- ✗ any review-tier finding in a UI/presentation diff → **STOP**, status `fail`.
+  Usability is part of the changed surface and cannot be downgraded to advisory.
 - ✗ any mechanical failure → **STOP**, status `fail`. A game that
   cannot walk its own screens is not merge-ready.
 - — no runtime surface in the diff → status `skipped`, proceed. Same
@@ -175,7 +178,7 @@ receipt at `/tmp/audit-pr-receipt-{PR_NUM}.json` using the
     "2_test_full":             {"status": "pass", "summary": "local green, ship build green, visual walk manual", "findings": []},
     "3_audit_silent_failures": {"status": "pass", "summary": "0 candidates", "findings": []},
     "4_update_docs":           {"status": "pass", "summary": "no drift", "findings": []},
-    "5_visual_walk":           {"status": "pass", "summary": "11 frames across 2 walks, 0 mechanical, 0 review findings", "findings": []}
+    "5_visual_walk":           {"status": "pass", "review_policy": "blocking", "summary": "10 frames across 1 walk, 0 mechanical, 0 review findings", "findings": []}
   },
   "environment": {
     "is_conductor_workspace": true,
@@ -192,12 +195,18 @@ receipt at `/tmp/audit-pr-receipt-{PR_NUM}.json` using the
   Done-state ticket). Counts as pass for `overall_status`.
 - `"fail"` — step found blocking issues (✗ in the report table;
   audit-diff findings, failing tests, etc.).
-- `"skipped"` — step did not run because a prior step failed.
+- `"skipped"` — step did not apply to the diff or a prior step failed.
+
+`5_visual_walk` additionally requires `review_policy`: `"blocking"` for a
+UI/presentation diff, `"advisory"` for another runtime diff, or
+`"not_applicable"` when skipped. A `warn` is valid only with `"advisory"`.
 
 **`overall_status` values:**
 
-- `"green"` — all of steps 0-4 are `pass` or `warn`.
-- `"failed"` — at least one of steps 0-4 is `fail`. Subsequent
+- `"green"` — all required steps, including `5_visual_walk`, are `pass` or a
+  policy-valid `warn`; a no-runtime visual walk may be `skipped`.
+- `"failed"` — at least one required step, including `5_visual_walk`, is `fail`.
+  Subsequent
   steps are typically `"skipped"`.
 
 **Findings array shape:** each step writes step-specific finding
@@ -239,7 +248,10 @@ a one-line summary.
 - Skipped steps still get an entry with
   `{"status": "skipped", "summary": "skipped — prior step failed", "findings": []}`
   so the receipt is fully populated and merge-pr can report which
-  step blocked.
+  step blocked. `5_visual_walk` is the one schema-specific exception: every
+  skipped visual walk, whether inapplicable or skipped after an earlier failure,
+  must include `"review_policy": "not_applicable"` so the strict reader can
+  distinguish a deliberate skip from a malformed legacy entry.
 
 **Failure handling:** if the write fails (e.g. a `/tmp` permission
 anomaly), log loud but do NOT fail the audit. The gate's value is the
@@ -253,12 +265,12 @@ of the receipt means `/merge-pr` STOPs — "no receipt" is a hard block.
 | 0 audit-linear | ✓ HEX-N (state) / ⚠ no tie / ⚠ HEX-N (terminal state) |
 | 1 audit-diff | ✓ clean / ✗ N findings |
 | 2 test-full | ✓ all green / ✗ failed at [step] |
-| 2.5 visual-walk | ✓ N frames ok / ⚠ N review findings / ✗ mechanical failure / — skipped (no runtime surface) |
+| 2.5 visual-walk | ✓ N frames ok / ⚠ N non-UI review findings / ✗ UI review or mechanical failure / — skipped (no runtime surface) |
 | 3 audit-silent-failures | ✓ 0 real / ✗ N findings |
 | 4 update-docs | ✓ current / ✓ N files updated (committed `<sha>`) |
 | receipt | ✓ wrote `/tmp/audit-pr-receipt-<N>.json` (overall_status: green / failed) |
 
-If any of steps 1-4 (or 2.5's mechanical tier) is ✗, the PR is not
+If any of steps 1-4 (or either blocking tier in 2.5) is ✗, the PR is not
 merge-ready. The skill stops
 at the first failure — subsequent rows are reported as `— (skipped,
 prior step failed)`. **Step 5 receipt is still written** (with

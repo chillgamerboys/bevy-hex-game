@@ -1,15 +1,15 @@
-// What the title screen offers.
+// What the Scenarios screen offers.
 //
 // A scenario is a world plus the units standing on it. `default_game` names the entry
-// launched by New Game; every other entry appears in its development lane.
+// launched by New Game; every other entry appears in its development column.
 //
 // Order is the order they are listed, so it is your decision rather than an accident.
 //
 // FIELDS
 //
 //   name      what the button says
-//   category  REQUIRED development lane: Map or Demo. The default keeps a category
-//             for schema uniformity but is hidden from both lanes.
+//   category  REQUIRED Scenarios column: Map or Demo. The default keeps a category
+//             for schema uniformity but is hidden from both columns.
 //   blurb     one line underneath, saying what is interesting about this one
 //   world     the map file, as a path under `assets/`
 //   lighting  OPTIONAL sun/sky/cloud file. Omit it for the shipped look

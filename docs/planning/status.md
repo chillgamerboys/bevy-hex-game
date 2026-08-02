@@ -182,9 +182,11 @@ selected ally, decision owner, aimed target, and retained target as explicit rol
 Party Trial is the 3v3 integration and human regression fixture; Ability Lab and Raider
 Mirror remain its focused automated companions behind stable fixture IDs.
 
-The **Wave 5 pre-alpha app shell is live**. The title deck exposes Maps, focused
-Demos, and Actions; New Game resolves the hidden Party Trial default, while Continue
-restores one explicit save made from paused exploration. That atomic, build-bound
+The **Wave 5 pre-alpha app shell is live**. The title presents one responsive grid of
+primary application routes, including independent Map Scenarios and Demos catalogs
+and direct Character Creator and Spell Creator entries; New Game resolves the hidden
+Party Trial default, while Continue restores one explicit save made from paused
+exploration. That atomic, build-bound
 resume captures scenario/content identity, generator identity, party lattices, and
 exploration positions, rejects corrupt or incompatible files visibly, and cannot be
 written during combat. Settings atomically persists window, presentation, and volume
@@ -194,8 +196,8 @@ and retained crash symbols. These are disposable continuity and artifact scaffol
 not a durable save contract, rebinding UI, audio content, signing, storefront, crash
 reporting, or telemetry.
 
-The **Wave 6 Creator and Combat Lab are live under Demos**. One versioned atomic
-creation library owns stable custom character and spell IDs, supports reopen,
+The **Wave 6 Creator and Combat Lab are live as primary title routes**. One versioned
+atomic creation library owns stable custom character and spell IDs, supports reopen,
 modify, rename, duplicate, and confirmed deletion, and refuses removal of referenced
 spells. Draft/Ready and Map-ready diagnostics fail closed through shared schema and
 combat validation. Immutable human templates are duplicable; automation-only
@@ -209,8 +211,9 @@ range, requirements, and permanent Draft/Ready diagnostics.
 Combat Lab owns transient Sandbox setup for all sixteen distinct supported shipped
 maps, with deterministic renderer previews, tactical descriptions and tags, complete
 ordered one-to-six rosters, deterministic deployment, and creator-origin return routing.
-Its searchable fixture selector replaces individual title cards and adds packaged
-creator spell and roster matrices. Every launch freezes its content namespace,
+Its searchable fixture selector coexists with the focused Demos entries and adds
+Lab-only packaged creator spell and roster matrices. Every launch freezes its content
+namespace,
 encounter, and seed for Retry, refuses Continue writes, and restores shipped runtime
 content on exit.
 
@@ -278,7 +281,8 @@ default-off
 **`visual-walk`** build drives the whole game through scripted RON walks — screens,
 clicks by `Name`, keys, scenario launches — photographing every step through an
 offscreen render target so an agent can read the frames; `/audit-pr` runs it as a
-mechanical gate. New Game reaches the 3v3 Party Trial in one click, while fixture walks
+structural and mechanical gate, with usability findings also blocking changes to UI
+or presentation. New Game reaches the 3v3 Party Trial in one click, while fixture walks
 launch Ability Lab and Raider Mirror by stable ID. The menus wear vendored
 Cinzel/Inter type over a
 design-token widget set; scenarios carry optional per-scenario lighting, and cyclic

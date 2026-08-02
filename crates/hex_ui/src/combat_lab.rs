@@ -16,11 +16,11 @@ use hex_gameplay_model::{
 };
 
 use crate::{
-    blurb, display, element_color, fine, heading, label, panel, panel_node, row_button,
-    screen_root, screen_root_node, short_name, CharacterBuildSummary, CombatLabIntent,
-    CombatLabReportField, CombatLabReportsView, CombatLabRulesVariant, CombatLabScreenView,
-    CreatorLibraryView, ResolvedUiMetrics, UiAssets, UiIntent, UiSystems, UiViewportClass, DANGER,
-    FUSION_COLOR, LABEL,
+    blurb, body_text_role, compact_glyph_role, display, element_color, fine, fixed_row_button,
+    heading, label, panel, panel_node, responsive_control_role, row_button, screen_root,
+    screen_root_node, short_name, CharacterBuildSummary, CombatLabIntent, CombatLabReportField,
+    CombatLabReportsView, CombatLabRulesVariant, CombatLabScreenView, CreatorLibraryView,
+    ResolvedUiMetrics, UiAssets, UiIntent, UiSystems, UiViewportClass, DANGER, FUSION_COLOR, LABEL,
 };
 
 const MAX_ROSTER: usize = MAX_COMBAT_LAB_ROSTER;
@@ -36,7 +36,13 @@ struct LabTabs;
 struct LabResponsiveBody;
 
 #[derive(Component)]
+struct LabFixturePanel;
+
+#[derive(Component)]
 struct LabInnerScroll;
+
+#[derive(Component)]
+struct LabMinimumTarget;
 
 #[derive(Component, Debug, Clone, Copy)]
 enum LabBodyPanel {
@@ -58,8 +64,9 @@ pub(super) fn plugin(app: &mut App) {
     app.add_systems(
         Update,
         (
-            render,
-            apply_lab_screen_layout,
+            (render, apply_lab_screen_layout)
+                .chain()
+                .in_set(UiSystems::Render),
             emit_actions.in_set(UiSystems::EmitIntents),
             emit_text_changes.in_set(UiSystems::EmitIntents),
         )
@@ -137,8 +144,10 @@ fn emit_text_changes(
 }
 
 fn apply_lab_screen_layout(
+    mut commands: Commands,
     metrics: Res<ResolvedUiMetrics>,
     added_bodies: Query<(), Added<LabResponsiveBody>>,
+    added_fixture_panels: Query<(), Added<LabFixturePanel>>,
     mut roots: Query<
         &mut Node,
         (
@@ -147,6 +156,7 @@ fn apply_lab_screen_layout(
             Without<LabResponsiveBody>,
             Without<LabBodyPanel>,
             Without<LabInnerScroll>,
+            Without<LabFixturePanel>,
         ),
     >,
     mut tabs: Query<
@@ -157,9 +167,18 @@ fn apply_lab_screen_layout(
             Without<LabResponsiveBody>,
             Without<LabBodyPanel>,
             Without<LabInnerScroll>,
+            Without<LabFixturePanel>,
         ),
     >,
-    mut bodies: Query<&mut Node, (With<LabResponsiveBody>, Without<LabRoot>, Without<LabTabs>)>,
+    mut bodies: Query<
+        &mut Node,
+        (
+            With<LabResponsiveBody>,
+            Without<LabRoot>,
+            Without<LabTabs>,
+            Without<LabFixturePanel>,
+        ),
+    >,
     mut panels: Query<
         (&LabBodyPanel, &mut Node),
         (
@@ -167,20 +186,35 @@ fn apply_lab_screen_layout(
             Without<LabRoot>,
             Without<LabTabs>,
             Without<LabInnerScroll>,
+            Without<LabFixturePanel>,
+        ),
+    >,
+    mut fixture_panels: Query<
+        (Entity, &mut Node),
+        (
+            With<LabFixturePanel>,
+            Without<LabResponsiveBody>,
+            Without<LabBodyPanel>,
+            Without<LabRoot>,
+            Without<LabTabs>,
+            Without<LabInnerScroll>,
         ),
     >,
     mut inner_scrolls: Query<
-        &mut Node,
+        (Entity, &mut Node),
         (
             With<LabInnerScroll>,
             Without<LabResponsiveBody>,
             Without<LabBodyPanel>,
             Without<LabRoot>,
             Without<LabTabs>,
+            Without<LabFixturePanel>,
         ),
     >,
+    parents: Query<&ChildOf>,
+    compact_scroll_owners: Query<(), Or<(With<LabResponsiveBody>, With<LabFixturePanel>)>>,
     mut controls: Query<
-        &mut Node,
+        (&mut Node, Option<&LabMinimumTarget>),
         (
             Or<(With<CombatLabIntent>, With<InteractionDisabled>)>,
             Without<LabRoot>,
@@ -188,19 +222,16 @@ fn apply_lab_screen_layout(
             Without<LabResponsiveBody>,
             Without<LabBodyPanel>,
             Without<LabInnerScroll>,
+            Without<LabFixturePanel>,
         ),
     >,
 ) {
-    if !metrics.is_changed() && added_bodies.is_empty() {
+    if !metrics.is_changed() && added_bodies.is_empty() && added_fixture_panels.is_empty() {
         return;
     }
     let compact = metrics.viewport == UiViewportClass::Compact;
     for mut node in &mut roots {
-        node.overflow = if compact {
-            Overflow::scroll_y()
-        } else {
-            Overflow::clip_y()
-        };
+        node.overflow = Overflow::clip_y();
     }
     for mut node in &mut tabs {
         node.flex_wrap = if compact {
@@ -217,12 +248,12 @@ fn apply_lab_screen_layout(
             FlexDirection::Row
         };
         node.overflow = if compact {
-            Overflow::visible()
+            Overflow::scroll_y()
         } else {
             Overflow::default()
         };
-        node.height = if compact { Val::Auto } else { Val::Px(0.0) };
-        node.flex_grow = if compact { 0.0 } else { 1.0 };
+        node.height = Val::Px(0.0);
+        node.flex_grow = 1.0;
     }
     for (role, mut node) in &mut panels {
         node.width = if compact {
@@ -235,21 +266,71 @@ fn apply_lab_screen_layout(
         };
         node.height = Val::Auto;
     }
-    for mut node in &mut inner_scrolls {
-        node.flex_grow = if compact { 0.0 } else { 1.0 };
+    for (entity, mut node) in &mut fixture_panels {
+        node.height = Val::Px(0.0);
+        node.min_height = Val::Px(0.0);
+        node.flex_basis = Val::Px(0.0);
+        node.flex_grow = 1.0;
         node.overflow = if compact {
-            Overflow::visible()
-        } else {
             Overflow::scroll_y()
+        } else {
+            Overflow::default()
         };
+        if compact {
+            commands.entity(entity).insert(ScrollArea);
+        } else {
+            commands
+                .entity(entity)
+                .remove::<ScrollArea>()
+                .insert(ScrollPosition::default());
+        }
     }
-    for mut node in &mut controls {
+    for (entity, mut node) in &mut inner_scrolls {
+        let nested_in_compact_owner = std::iter::successors(Some(entity), |current| {
+            parents.get(*current).ok().map(ChildOf::parent)
+        })
+        .any(|ancestor| compact_scroll_owners.contains(ancestor));
+        if compact && nested_in_compact_owner {
+            // Compact setup screens have one outer scroll owner. Nested list
+            // scrollers would make the visible slice reachable only through a
+            // competing wheel target and break keyboard scroll-into-view.
+            node.height = Val::Auto;
+            node.flex_basis = Val::Auto;
+            node.flex_grow = 0.0;
+            node.overflow = Overflow::visible();
+            commands
+                .entity(entity)
+                .remove::<ScrollArea>()
+                .insert(ScrollPosition::default());
+        } else {
+            // A flex child with an automatic basis lays itself out at its full
+            // content height. Its ancestor then clips that content, while the
+            // apparent ScrollArea has no overflow range of its own. Give the
+            // list a bounded viewport so wheel and ScrollIntoView can reach
+            // every row (including the independent Fixtures list).
+            node.height = Val::Px(0.0);
+            // The viewport itself must fit one complete semantic control;
+            // otherwise no scroll position can ever reveal a row in full.
+            node.min_height = Val::Px(48.0 * metrics.control_scale.max(1.0));
+            node.flex_basis = Val::Px(0.0);
+            node.flex_grow = 1.0;
+            node.overflow = Overflow::scroll_y();
+            commands.entity(entity).insert(ScrollArea);
+        }
+    }
+    for (mut node, minimum_target) in &mut controls {
         node.max_width = if compact {
             Val::Percent(100.0)
         } else {
             Val::Auto
         };
-        node.min_width = if compact { Val::Px(0.0) } else { Val::Auto };
+        node.min_width = if minimum_target.is_some() {
+            Val::Px(44.0)
+        } else if compact {
+            Val::Px(0.0)
+        } else {
+            Val::Auto
+        };
     }
 }
 
@@ -355,6 +436,39 @@ fn lab_button(
     let text = text.into();
     parent
         .spawn((row_button(text.clone(), width), action))
+        .with_child(label(assets, text));
+}
+
+fn scrollable_lab_button(
+    parent: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    text: impl Into<String>,
+    action: CombatLabIntent,
+    width: f32,
+) {
+    let text = text.into();
+    parent
+        .spawn((
+            row_button(text.clone(), width),
+            action,
+            crate::UiVisibilityRequirement::Scrollable,
+        ))
+        .with_child(label(assets, text));
+}
+
+fn scrollable_lab_glyph_button(
+    parent: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    text: &'static str,
+    action: CombatLabIntent,
+) {
+    parent
+        .spawn((
+            fixed_row_button(text, 48.0, 48.0),
+            action,
+            LabMinimumTarget,
+            crate::UiVisibilityRequirement::Scrollable,
+        ))
         .with_child(label(assets, text));
 }
 
@@ -491,6 +605,7 @@ fn map_button(
         .spawn((
             row_button(map.display_name.clone(), 280.0),
             CombatLabIntent::SelectMap(map.id.clone()),
+            crate::UiVisibilityRequirement::Scrollable,
         ))
         .insert(BorderColor::all(if selected {
             Color::srgba(0.49, 0.68, 0.86, 1.0)
@@ -587,6 +702,13 @@ fn spawn_map_setup(
                     assets,
                     "The selected map and resolved seed are frozen into every run and report.",
                 ));
+                list.spawn((
+                    Name::new("Combat Lab Map Catalog Scroll Cue"),
+                    AccessibleLabel::new("More Combat Lab maps are available by scrolling"),
+                    crate::UiVisibilityRequirement::Scrollable,
+                    blurb(assets, "MORE MAPS BELOW · SCROLL ↓"),
+                ))
+                .insert(TextColor(Color::srgba(0.93, 0.79, 0.46, 1.0)));
                 list.spawn((
                     LabInnerScroll,
                     ScrollArea,
@@ -722,8 +844,11 @@ fn spawn_rules_setup(
                 rules.spawn(heading(assets, "3 · rules profile"));
                 rules
                     .spawn(Node {
+                        width: Val::Percent(100.0),
                         flex_direction: FlexDirection::Row,
+                        flex_wrap: FlexWrap::Wrap,
                         column_gap: Val::Px(7.0),
+                        row_gap: Val::Px(7.0),
                         ..default()
                     })
                     .with_children(|presets| {
@@ -733,7 +858,7 @@ fn spawn_rules_setup(
                             (CombatRulesPreset::Custom, "Custom"),
                         ] {
                             let selected = profile.preset == preset;
-                            lab_button(
+                            scrollable_lab_button(
                                 presets,
                                 assets,
                                 if selected {
@@ -781,20 +906,18 @@ fn spawn_rules_setup(
                                     })
                                     .with_children(
                                         |stepper| {
-                                            lab_button(
+                                            scrollable_lab_glyph_button(
                                                 stepper,
                                                 assets,
                                                 "−",
                                                 CombatLabIntent::AdjustRule(field, -1),
-                                                46.0,
                                             );
                                             stepper.spawn(label(assets, value.to_string()));
-                                            lab_button(
+                                            scrollable_lab_glyph_button(
                                                 stepper,
                                                 assets,
                                                 "+",
                                                 CombatLabIntent::AdjustRule(field, 1),
-                                                46.0,
                                             );
                                             stepper.spawn(fine(
                                                 assets,
@@ -816,21 +939,21 @@ fn spawn_rules_setup(
                                     );
                                 });
                         }
-                    });
-                rules
-                    .spawn(Node {
-                        flex_direction: FlexDirection::Row,
-                        column_gap: Val::Px(7.0),
-                        ..default()
-                    })
-                    .with_children(|actions| {
-                        lab_button(
-                            actions,
-                            assets,
-                            "Reset to Shipped",
-                            CombatLabIntent::ResetRules,
-                            180.0,
-                        );
+                        fields
+                            .spawn(Node {
+                                flex_direction: FlexDirection::Row,
+                                column_gap: Val::Px(7.0),
+                                ..default()
+                            })
+                            .with_children(|actions| {
+                                scrollable_lab_button(
+                                    actions,
+                                    assets,
+                                    "Reset to Shipped",
+                                    CombatLabIntent::ResetRules,
+                                    180.0,
+                                );
+                            });
                     });
             });
     });
@@ -1168,20 +1291,23 @@ fn spawn_build_card(
                     .insert(TextColor(DANGER));
             }
             card.spawn(Node {
+                width: Val::Percent(100.0),
                 flex_direction: FlexDirection::Row,
+                flex_wrap: FlexWrap::Wrap,
                 column_gap: Val::Px(4.0),
+                row_gap: Val::Px(4.0),
                 ..default()
             })
             .with_children(|actions| {
                 if let Some((_, up, down, remove)) = roster_actions {
-                    lab_button(actions, assets, "↑", up, 42.0);
-                    lab_button(actions, assets, "↓", down, 42.0);
-                    lab_button(actions, assets, "Remove", remove, 78.0);
+                    scrollable_lab_glyph_button(actions, assets, "↑", up);
+                    scrollable_lab_glyph_button(actions, assets, "↓", down);
+                    scrollable_lab_button(actions, assets, "Remove", remove, 78.0);
                 } else if let Some(add) = add_action {
-                    lab_button(actions, assets, "Add to roster", add, 132.0);
+                    scrollable_lab_button(actions, assets, "Add to roster", add, 132.0);
                 } else if !ready {
                     if let RosterChoice::Custom(id) = choice {
-                        lab_button(
+                        scrollable_lab_button(
                             actions,
                             assets,
                             "Edit in Creator",
@@ -1291,6 +1417,7 @@ fn spawn_mini_lattice(
                     ))
                     .with_child((
                         Text::new(text),
+                        compact_glyph_role(7.0),
                         TextFont {
                             font: assets.body.clone().into(),
                             ..TextFont::from_font_size(7.0)
@@ -1306,133 +1433,144 @@ fn spawn_fixture_selector(
     assets: &UiAssets,
     state: &CombatLabScreenView,
 ) {
-    root.spawn(panel())
-        .insert(Node {
-            width: Val::Percent(88.0),
-            min_height: Val::Px(0.0),
-            flex_grow: 1.0,
-            ..panel_node()
-        })
-        .with_children(|fixture_panel| {
-            fixture_panel.spawn(heading(assets, "fixed deterministic fixtures"));
-            fixture_panel.spawn(blurb(
-                assets,
-                "Immutable map, seed, roster, AI, and placement. Local creations are never read.",
-            ));
-            fixture_panel.spawn((
-                Name::new("Fixture Search"),
-                AccessibleLabel::new("Search fixed Combat Lab fixtures"),
-                TabIndex(0),
-                EditableText {
-                    max_characters: Some(48),
-                    visible_width: Some(32.0),
-                    ..EditableText::new(&state.fixture_filter)
-                },
-                TextFont {
-                    font: assets.body.clone().into(),
-                    ..TextFont::from_font_size(18.0)
-                },
-                TextColor(Color::WHITE),
-                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.08)),
+    root.spawn((
+        Name::new("Combat Lab Fixture Panel"),
+        LabFixturePanel,
+        ScrollArea,
+        ScrollPosition::default(),
+        panel(),
+    ))
+    .insert(Node {
+        width: Val::Percent(88.0),
+        height: Val::Px(0.0),
+        min_height: Val::Px(0.0),
+        flex_basis: Val::Px(0.0),
+        flex_grow: 1.0,
+        ..panel_node()
+    })
+    .with_children(|fixture_panel| {
+        fixture_panel.spawn(heading(assets, "fixed deterministic fixtures"));
+        fixture_panel.spawn(blurb(
+            assets,
+            "Immutable map, seed, roster, AI, and placement. Local creations are never read.",
+        ));
+        fixture_panel.spawn((
+            Name::new("Fixture Search"),
+            AccessibleLabel::new("Search fixed Combat Lab fixtures"),
+            TabIndex(0),
+            crate::DefaultImmediateControl,
+            EditableText {
+                max_characters: Some(48),
+                visible_width: Some(32.0),
+                ..EditableText::new(&state.fixture_filter)
+            },
+            body_text_role(),
+            responsive_control_role(),
+            TextFont {
+                font: assets.body.clone().into(),
+                ..TextFont::from_font_size(18.0)
+            },
+            TextColor(Color::WHITE),
+            BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.08)),
+            Node {
+                width: Val::Percent(100.0),
+                min_height: Val::Px(60.0),
+                padding: UiRect::axes(Val::Px(8.0), Val::ZERO),
+                ..default()
+            },
+            FixtureFilter,
+        ));
+        fixture_panel
+            .spawn((
+                Name::new("Combat Lab Fixture List"),
+                LabInnerScroll,
+                ScrollArea,
                 Node {
-                    width: Val::Percent(100.0),
-                    min_height: Val::Px(44.0),
-                    padding: UiRect::all(Val::Px(8.0)),
+                    height: Val::Px(0.0),
+                    min_height: Val::Px(0.0),
+                    flex_basis: Val::Px(0.0),
+                    flex_grow: 1.0,
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(8.0),
+                    overflow: Overflow::scroll_y(),
                     ..default()
                 },
-                FixtureFilter,
-            ));
-            fixture_panel
-                .spawn((
-                    LabInnerScroll,
-                    ScrollArea,
-                    Node {
-                        min_height: Val::Px(0.0),
-                        flex_grow: 1.0,
-                        flex_direction: FlexDirection::Column,
-                        row_gap: Val::Px(8.0),
-                        overflow: Overflow::scroll_y(),
-                        ..default()
-                    },
-                ))
-                .with_children(|list| {
-                    let filter = state.fixture_filter.to_lowercase();
-                    for fixture in COMBAT_LAB_FIXTURES {
-                        let searchable = format!(
-                            "{} {} {} {} {} {}",
-                            fixture.id,
-                            fixture.name,
-                            fixture.tags,
-                            fixture.description,
-                            fixture.map_seed,
-                            fixture.roster
-                        )
-                        .to_lowercase();
-                        let visible = filter.is_empty() || searchable.contains(&filter);
-                        list.spawn((
-                            panel(),
-                            FixtureCard {
-                                #[cfg(any(test, feature = "test-support"))]
-                                id: fixture.id,
-                                searchable,
-                            },
-                        ))
-                        .insert(Node {
-                            width: Val::Percent(100.0),
-                            display: if visible {
-                                Display::Flex
-                            } else {
-                                Display::None
-                            },
-                            ..panel_node()
-                        })
-                        .with_children(|card| {
-                            card.spawn(heading(assets, fixture.name));
-                            card.spawn(fine(assets, format!("{} · {}", fixture.id, fixture.tags)));
-                            card.spawn(fine(
-                                assets,
-                                format!("{} · {}", fixture.map_seed, fixture.roster),
-                            ));
-                            card.spawn(blurb(assets, fixture.description));
-                            if fixture.profile_matrix {
-                                for (variant, label) in [
-                                    (CombatLabRulesVariant::Shipped, "Run Shipped"),
-                                    (
-                                        CombatLabRulesVariant::TacticalTwoStep,
-                                        "Run Tactical two-step",
-                                    ),
-                                    (
-                                        CombatLabRulesVariant::CustomThreeStep,
-                                        "Run Custom three-step",
-                                    ),
-                                ] {
-                                    lab_button(
-                                        card,
-                                        assets,
-                                        label,
-                                        CombatLabIntent::StartFixture(
-                                            fixture.id.to_owned(),
-                                            variant,
-                                        ),
-                                        210.0,
-                                    );
-                                }
-                            } else {
-                                lab_button(
+            ))
+            .with_children(|list| {
+                let filter = state.fixture_filter.to_lowercase();
+                for fixture in COMBAT_LAB_FIXTURES {
+                    let searchable = format!(
+                        "{} {} {} {} {} {}",
+                        fixture.id,
+                        fixture.name,
+                        fixture.tags,
+                        fixture.description,
+                        fixture.map_seed,
+                        fixture.roster
+                    )
+                    .to_lowercase();
+                    let visible = filter.is_empty() || searchable.contains(&filter);
+                    list.spawn((
+                        panel(),
+                        FixtureCard {
+                            #[cfg(any(test, feature = "test-support"))]
+                            id: fixture.id,
+                            searchable,
+                        },
+                    ))
+                    .insert(Node {
+                        width: Val::Percent(100.0),
+                        display: if visible {
+                            Display::Flex
+                        } else {
+                            Display::None
+                        },
+                        ..panel_node()
+                    })
+                    .with_children(|card| {
+                        card.spawn(heading(assets, fixture.name));
+                        card.spawn(fine(assets, format!("{} · {}", fixture.id, fixture.tags)));
+                        card.spawn(fine(
+                            assets,
+                            format!("{} · {}", fixture.map_seed, fixture.roster),
+                        ));
+                        card.spawn(blurb(assets, fixture.description));
+                        if fixture.profile_matrix {
+                            for (variant, label) in [
+                                (CombatLabRulesVariant::Shipped, "Run Shipped"),
+                                (
+                                    CombatLabRulesVariant::TacticalTwoStep,
+                                    "Run Tactical two-step",
+                                ),
+                                (
+                                    CombatLabRulesVariant::CustomThreeStep,
+                                    "Run Custom three-step",
+                                ),
+                            ] {
+                                scrollable_lab_button(
                                     card,
                                     assets,
-                                    "Run Fixture",
-                                    CombatLabIntent::StartFixture(
-                                        fixture.id.to_owned(),
-                                        CombatLabRulesVariant::Shipped,
-                                    ),
-                                    150.0,
+                                    label,
+                                    CombatLabIntent::StartFixture(fixture.id.to_owned(), variant),
+                                    210.0,
                                 );
                             }
-                        });
-                    }
-                });
-        });
+                        } else {
+                            scrollable_lab_button(
+                                card,
+                                assets,
+                                "Run Fixture",
+                                CombatLabIntent::StartFixture(
+                                    fixture.id.to_owned(),
+                                    CombatLabRulesVariant::Shipped,
+                                ),
+                                150.0,
+                            );
+                        }
+                    });
+                }
+            });
+    });
 }
 
 fn choice_name(choice: &RosterChoice, store: &CreatorLibraryView) -> String {
@@ -1454,164 +1592,186 @@ fn spawn_saved_reports(
     _state: &CombatLabScreenView,
     reports: &CombatLabReportsView,
 ) {
-    root.spawn(panel())
-        .insert(Node {
+    root.spawn((
+        LabResponsiveBody,
+        ScrollArea,
+        Node {
             width: Val::Percent(96.0),
             min_height: Val::Px(0.0),
             flex_grow: 1.0,
-            ..panel_node()
-        })
-        .with_children(|history| {
-            history.spawn(heading(assets, "explicitly saved local reports"));
-            history.spawn(blurb(
-                assets,
-                "Separate from Creator and Continue · fixed fixtures never consult this history.",
-            ));
-            if let Some(error) = &reports.error {
-                history
-                    .spawn(blurb(assets, error.clone()))
-                    .insert(TextColor(DANGER));
-            }
-            if reports.reports.is_empty() {
+            flex_direction: FlexDirection::Row,
+            ..default()
+        },
+    ))
+    .with_children(|body| {
+        body.spawn((panel(), LabBodyPanel::Main))
+            .insert(Node {
+                min_width: Val::Px(0.0),
+                min_height: Val::Px(0.0),
+                flex_grow: 1.0,
+                ..panel_node()
+            })
+            .with_children(|history| {
+                history.spawn(heading(assets, "explicitly saved local reports"));
                 history.spawn(blurb(
                     assets,
-                    "No saved reports. Finish a Lab run and choose Save Report.",
+                    "Separate from Creator and Continue · fixed fixtures never consult this history.",
                 ));
-                return;
-            }
-            history
-                .spawn((
-                    LabInnerScroll,
-                    ScrollArea,
-                    Node {
-                        min_height: Val::Px(0.0),
-                        flex_grow: 1.0,
-                        flex_direction: FlexDirection::Column,
-                        row_gap: Val::Px(7.0),
-                        overflow: Overflow::scroll_y(),
-                        ..default()
-                    },
-                ))
-                .with_children(|list| {
-                    for report in &reports.reports {
-                        list.spawn(panel())
-                            .insert(Node {
-                                width: Val::Percent(100.0),
-                                ..panel_node()
-                            })
-                            .with_children(|card| {
-                                card.spawn(heading(assets, report.heading.clone()));
-                                card.spawn((
-                                    Name::new(format!("Report {} Label", report.id.0)),
-                                    AccessibleLabel::new(format!(
-                                        "Report {} comparison label",
-                                        report.id.0
-                                    )),
-                                    TabIndex(0),
-                                    EditableText {
-                                        max_characters: Some(128),
-                                        visible_width: Some(32.0),
-                                        ..EditableText::new(&report.label)
-                                    },
-                                    TextFont {
-                                        font: assets.body.clone().into(),
-                                        ..TextFont::from_font_size(18.0)
-                                    },
-                                    TextColor(Color::WHITE),
-                                    BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.08)),
-                                    Node {
-                                        width: Val::Percent(100.0),
-                                        min_height: Val::Px(44.0),
-                                        padding: UiRect::all(Val::Px(7.0)),
-                                        ..default()
-                                    },
-                                    CombatLabReportField::Label(report.id),
-                                ));
-                                card.spawn((
-                                    Name::new(format!("Report {} Notes", report.id.0)),
-                                    AccessibleLabel::new(format!("Report {} notes", report.id.0)),
-                                    TabIndex(0),
-                                    EditableText {
-                                        max_characters: Some(2_048),
-                                        visible_width: Some(52.0),
-                                        ..EditableText::new(&report.notes)
-                                    },
-                                    TextFont {
-                                        font: assets.body.clone().into(),
-                                        ..TextFont::from_font_size(18.0)
-                                    },
-                                    TextColor(LABEL),
-                                    BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.05)),
-                                    Node {
-                                        width: Val::Percent(100.0),
-                                        min_height: Val::Px(44.0),
-                                        padding: UiRect::all(Val::Px(7.0)),
-                                        ..default()
-                                    },
-                                    CombatLabReportField::Notes(report.id),
-                                ));
-                                card.spawn(fine(assets, report.metadata.clone()));
-                                card.spawn(blurb(assets, report.summary.clone()));
-                                lab_button(
-                                    card,
-                                    assets,
-                                    if report.left_selected {
-                                        "LEFT · SELECTED"
+                if let Some(error) = &reports.error {
+                    history
+                        .spawn(blurb(assets, error.clone()))
+                        .insert(TextColor(DANGER));
+                }
+                if reports.reports.is_empty() {
+                    history.spawn(blurb(
+                        assets,
+                        "No saved reports. Finish a Lab run and choose Save Report.",
+                    ));
+                    return;
+                }
+                history
+                    .spawn((
+                        LabInnerScroll,
+                        ScrollArea,
+                        Node {
+                            min_height: Val::Px(0.0),
+                            flex_grow: 1.0,
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(7.0),
+                            overflow: Overflow::scroll_y(),
+                            ..default()
+                        },
+                    ))
+                    .with_children(|list| {
+                        for report in &reports.reports {
+                            list.spawn(panel())
+                                .insert(Node {
+                                    width: Val::Percent(100.0),
+                                    ..panel_node()
+                                })
+                                .with_children(|card| {
+                                    card.spawn(heading(assets, report.heading.clone()));
+                                    card.spawn((
+                                        Name::new(format!("Report {} Label", report.id.0)),
+                                        AccessibleLabel::new(format!(
+                                            "Report {} comparison label",
+                                            report.id.0
+                                        )),
+                                        TabIndex(0),
+                                        crate::UiVisibilityRequirement::Scrollable,
+                                        EditableText {
+                                            max_characters: Some(128),
+                                            visible_width: Some(32.0),
+                                            ..EditableText::new(&report.label)
+                                        },
+                                        body_text_role(),
+                                        responsive_control_role(),
+                                        TextFont {
+                                            font: assets.body.clone().into(),
+                                            ..TextFont::from_font_size(18.0)
+                                        },
+                                        TextColor(Color::WHITE),
+                                        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.08)),
+                                        Node {
+                                            width: Val::Percent(100.0),
+                                            min_height: Val::Px(44.0),
+                                            padding: UiRect::all(Val::Px(7.0)),
+                                            ..default()
+                                        },
+                                        CombatLabReportField::Label(report.id),
+                                    ));
+                                    card.spawn((
+                                        Name::new(format!("Report {} Notes", report.id.0)),
+                                        AccessibleLabel::new(format!(
+                                            "Report {} notes",
+                                            report.id.0
+                                        )),
+                                        TabIndex(0),
+                                        crate::UiVisibilityRequirement::Scrollable,
+                                        EditableText {
+                                            max_characters: Some(2_048),
+                                            visible_width: Some(52.0),
+                                            ..EditableText::new(&report.notes)
+                                        },
+                                        body_text_role(),
+                                        responsive_control_role(),
+                                        TextFont {
+                                            font: assets.body.clone().into(),
+                                            ..TextFont::from_font_size(18.0)
+                                        },
+                                        TextColor(LABEL),
+                                        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.05)),
+                                        Node {
+                                            width: Val::Percent(100.0),
+                                            min_height: Val::Px(44.0),
+                                            padding: UiRect::all(Val::Px(7.0)),
+                                            ..default()
+                                        },
+                                        CombatLabReportField::Notes(report.id),
+                                    ));
+                                    card.spawn(fine(assets, report.metadata.clone()));
+                                    card.spawn(blurb(assets, report.summary.clone()));
+                                    scrollable_lab_button(
+                                        card,
+                                        assets,
+                                        if report.left_selected {
+                                            "LEFT · SELECTED"
+                                        } else {
+                                            "Use as Left"
+                                        },
+                                        CombatLabIntent::SelectCompareLeft(report.id),
+                                        140.0,
+                                    );
+                                    scrollable_lab_button(
+                                        card,
+                                        assets,
+                                        if report.right_selected {
+                                            "RIGHT · SELECTED"
+                                        } else {
+                                            "Use as Right"
+                                        },
+                                        CombatLabIntent::SelectCompareRight(report.id),
+                                        140.0,
+                                    );
+                                    if report.pending_delete {
+                                        card.spawn(fine(
+                                            assets,
+                                            "CONFIRM DELETE · this removes only this local report",
+                                        ))
+                                        .insert(TextColor(DANGER));
+                                        scrollable_lab_button(
+                                            card,
+                                            assets,
+                                            "Confirm Delete",
+                                            CombatLabIntent::ConfirmReportDelete(report.id),
+                                            160.0,
+                                        );
+                                        scrollable_lab_button(
+                                            card,
+                                            assets,
+                                            "Cancel",
+                                            CombatLabIntent::CancelReportDelete,
+                                            100.0,
+                                        );
                                     } else {
-                                        "Use as Left"
-                                    },
-                                    CombatLabIntent::SelectCompareLeft(report.id),
-                                    140.0,
-                                );
-                                lab_button(
-                                    card,
-                                    assets,
-                                    if report.right_selected {
-                                        "RIGHT · SELECTED"
-                                    } else {
-                                        "Use as Right"
-                                    },
-                                    CombatLabIntent::SelectCompareRight(report.id),
-                                    140.0,
-                                );
-                                if report.pending_delete {
-                                    card.spawn(fine(
-                                        assets,
-                                        "CONFIRM DELETE · this removes only this local report",
-                                    ))
-                                    .insert(TextColor(DANGER));
-                                    lab_button(
-                                        card,
-                                        assets,
-                                        "Confirm Delete",
-                                        CombatLabIntent::ConfirmReportDelete(report.id),
-                                        160.0,
-                                    );
-                                    lab_button(
-                                        card,
-                                        assets,
-                                        "Cancel",
-                                        CombatLabIntent::CancelReportDelete,
-                                        100.0,
-                                    );
-                                } else {
-                                    lab_button(
-                                        card,
-                                        assets,
-                                        "Delete…",
-                                        CombatLabIntent::RequestReportDelete(report.id),
-                                        110.0,
-                                    );
-                                }
-                            });
-                    }
-                });
-            if let Some(comparison) = &reports.comparison {
-                history.spawn(heading(assets, comparison.heading.clone()));
-                history.spawn(fine(assets, comparison.frozen.clone()));
-                history.spawn(blurb(assets, comparison.deltas.clone()));
-            }
-        });
+                                        scrollable_lab_button(
+                                            card,
+                                            assets,
+                                            "Delete…",
+                                            CombatLabIntent::RequestReportDelete(report.id),
+                                            110.0,
+                                        );
+                                    }
+                                });
+                        }
+                    });
+                if let Some(comparison) = &reports.comparison {
+                    history.spawn(heading(assets, comparison.heading.clone()));
+                    history.spawn(fine(assets, comparison.frozen.clone()));
+                    history.spawn(blurb(assets, comparison.deltas.clone()));
+                }
+            });
+    });
 }
 
 /// Stable visible fixture identities for immutable headless observation.
@@ -1708,6 +1868,69 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["tempo-matrix"]
         );
+    }
+
+    #[test]
+    fn compact_fixture_catalog_defers_to_one_bounded_outer_scroll_owner() {
+        let mut app = App::new();
+        app.insert_resource(crate::resolve_ui_metrics(
+            Vec2::new(960.0, 540.0),
+            crate::UiScaleMode::Percent200,
+        ))
+        .add_systems(Update, apply_lab_screen_layout);
+
+        let root = app.world_mut().spawn((LabRoot, Node::default())).id();
+        let fixture_panel = app
+            .world_mut()
+            .spawn((
+                LabFixturePanel,
+                ScrollArea,
+                ScrollPosition::default(),
+                Node::default(),
+            ))
+            .id();
+        let fixture_list = app
+            .world_mut()
+            .spawn((LabInnerScroll, ScrollArea, Node::default()))
+            .id();
+        app.world_mut()
+            .entity_mut(fixture_panel)
+            .add_child(fixture_list);
+        app.world_mut().entity_mut(root).add_child(fixture_panel);
+
+        let responsive_body = app
+            .world_mut()
+            .spawn((LabResponsiveBody, Node::default()))
+            .id();
+        let nested_list = app
+            .world_mut()
+            .spawn((LabInnerScroll, ScrollArea, Node::default()))
+            .id();
+        app.world_mut()
+            .entity_mut(responsive_body)
+            .add_child(nested_list);
+        app.world_mut().entity_mut(root).add_child(responsive_body);
+
+        app.update();
+
+        let fixture_panel_node = app.world().get::<Node>(fixture_panel).unwrap();
+        assert_eq!(fixture_panel_node.height, Val::Px(0.0));
+        assert_eq!(fixture_panel_node.flex_basis, Val::Px(0.0));
+        assert!((fixture_panel_node.flex_grow - 1.0).abs() <= f32::EPSILON);
+        assert_eq!(fixture_panel_node.overflow, Overflow::scroll_y());
+        assert!(app.world().get::<ScrollArea>(fixture_panel).is_some());
+
+        let fixture_list_node = app.world().get::<Node>(fixture_list).unwrap();
+        assert_eq!(fixture_list_node.height, Val::Auto);
+        assert_eq!(fixture_list_node.flex_basis, Val::Auto);
+        assert!(fixture_list_node.flex_grow.abs() <= f32::EPSILON);
+        assert!(app.world().get::<ScrollArea>(fixture_list).is_none());
+
+        let nested_node = app.world().get::<Node>(nested_list).unwrap();
+        assert_eq!(nested_node.height, Val::Auto);
+        assert_eq!(nested_node.flex_basis, Val::Auto);
+        assert!(nested_node.flex_grow.abs() <= f32::EPSILON);
+        assert!(app.world().get::<ScrollArea>(nested_list).is_none());
     }
 
     #[test]

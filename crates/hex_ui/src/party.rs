@@ -5,7 +5,8 @@ use bevy::prelude::*;
 use hex_core::Screen;
 
 use crate::{
-    blurb, heading, HudElement, PartyIntent, PartyView, UiAssets, UiHudSetup, UiIntent,
+    blurb, hud_heading, hud_text_role, owner_resolved_control_role, responsive_control_role,
+    HudElement, PartyIntent, PartyView, ResolvedUiMetrics, UiAssets, UiHudSetup, UiIntent,
     UiRegionRole, UiSystems, ACCENT, ACCENT_EDGE, BLURB_SIZE, EDGE, LABEL, PANEL_BG,
 };
 
@@ -28,7 +29,11 @@ pub(super) fn plugin(app: &mut App) {
     )
     .add_systems(
         Update,
-        (rebuild, emit_intents.in_set(UiSystems::EmitIntents)).run_if(in_state(Screen::Gameplay)),
+        (
+            rebuild.in_set(UiSystems::Render),
+            emit_intents.in_set(UiSystems::EmitIntents),
+        )
+            .run_if(in_state(Screen::Gameplay)),
     );
 }
 
@@ -54,7 +59,7 @@ fn spawn_panels(
             BackgroundColor(PANEL_BG),
         ))
         .with_children(|root| {
-            root.spawn(heading(&assets, "party"));
+            root.spawn(hud_heading(&assets, "party"));
             root.spawn(blurb(&assets, "ALLIES · keys 1–6"));
             root.spawn((
                 PartyBody,
@@ -87,12 +92,21 @@ fn spawn_panels(
             BackgroundColor(PANEL_BG),
         ))
         .with_children(|root| {
-            root.spawn(heading(&assets, "formation"));
+            root.spawn(hud_heading(&assets, "formation"));
             root.spawn(blurb(
                 &assets,
                 "Select an ally, then choose a slot. Occupied slots swap.",
             ));
-            root.spawn((FormationBody, Node::default(), Pickable::IGNORE));
+            root.spawn((
+                FormationBody,
+                Node {
+                    width: Val::Percent(100.0),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(8.0),
+                    ..default()
+                },
+                Pickable::IGNORE,
+            ));
         })
         .id();
     if let Some(region) = region(UiRegionRole::Party, &regions) {
@@ -115,9 +129,10 @@ fn rebuild(
     party_bodies: Query<Entity, With<PartyBody>>,
     formation_bodies: Query<Entity, With<FormationBody>>,
     mut formation_panels: Query<&mut Node, With<FormationPanel>>,
+    metrics: Res<ResolvedUiMetrics>,
     assets: Res<UiAssets>,
 ) {
-    if !view.is_changed() {
+    if !view.is_changed() && !metrics.is_changed() {
         return;
     }
     if let Ok(mut panel) = formation_panels.single_mut() {
@@ -149,6 +164,7 @@ fn rebuild(
                             format!("Party Member {}", member.slot + 1),
                             member.label.clone(),
                             Val::Percent(100.0),
+                            crate::UiVisibilityRequirement::Immediate,
                         ),
                         PartyControl(PartyIntent::SelectMember(member.slot)),
                         BorderColor::all(border),
@@ -167,6 +183,7 @@ fn rebuild(
                         "Party Movement Mode",
                         view.movement_mode.clone(),
                         Val::Percent(100.0),
+                        crate::UiVisibilityRequirement::Scrollable,
                     ),
                     PartyControl(PartyIntent::ToggleMovementMode),
                     BorderColor::all(ACCENT_EDGE),
@@ -175,7 +192,12 @@ fn rebuild(
                 .with_child(body_text(&assets, view.movement_mode.clone()));
             formation
                 .spawn((
-                    control_button("Party Rest", "REST PARTY · R", Val::Percent(100.0)),
+                    control_button(
+                        "Party Rest",
+                        "REST PARTY · R",
+                        Val::Percent(100.0),
+                        crate::UiVisibilityRequirement::Scrollable,
+                    ),
                     PartyControl(PartyIntent::Rest),
                     BorderColor::all(EDGE),
                     BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.07)),
@@ -201,6 +223,7 @@ fn rebuild(
                                     format!("Formation Preset {preset}"),
                                     preset.clone(),
                                     Val::Auto,
+                                    crate::UiVisibilityRequirement::Scrollable,
                                 ),
                                 PartyControl(PartyIntent::SelectPreset(preset.clone())),
                                 BorderColor::all(EDGE),
@@ -210,7 +233,7 @@ fn rebuild(
                     }
                 });
             formation.spawn(blurb(&assets, "ASSIGNMENT GRID · ◆ anchor"));
-            spawn_slot_grid(formation, &view, &assets);
+            spawn_slot_grid(formation, &view, &assets, metrics.control_scale.max(1.0));
         });
     }
 }
@@ -219,12 +242,15 @@ fn control_button(
     name: impl Into<String>,
     accessible: impl Into<String>,
     width: Val,
+    visibility_requirement: crate::UiVisibilityRequirement,
 ) -> impl Bundle {
     (
         Name::new(name.into()),
         AccessibleLabel::new(accessible),
         Button,
         TabIndex(0),
+        visibility_requirement,
+        responsive_control_role(),
         Node {
             width,
             min_height: Val::Px(48.0),
@@ -239,6 +265,7 @@ fn control_button(
 fn body_text(assets: &UiAssets, text: impl Into<String>) -> impl Bundle {
     (
         Text::new(text),
+        hud_text_role(),
         TextFont {
             font: assets.body.clone().into(),
             ..TextFont::from_font_size(BLURB_SIZE)
@@ -252,15 +279,24 @@ fn body_text(assets: &UiAssets, text: impl Into<String>) -> impl Bundle {
     clippy::cast_precision_loss,
     reason = "formation offsets are content-limited to a six-cell miniature"
 )]
-fn spawn_slot_grid(parent: &mut ChildSpawnerCommands, view: &PartyView, assets: &UiAssets) {
+fn spawn_slot_grid(
+    parent: &mut ChildSpawnerCommands,
+    view: &PartyView,
+    assets: &UiAssets,
+    semantic_control_scale: f32,
+) {
+    const SLOT_STEP: i32 = 48;
+    const ROW_OFFSET: i32 = SLOT_STEP / 2;
+
     let positions: Vec<_> = view
         .slots
         .iter()
         .map(|slot| {
             (
                 slot,
-                (slot.offset.x() * 20 + slot.offset.y() * 10) as f32,
-                (slot.offset.y() * 18) as f32,
+                (slot.offset.x() * SLOT_STEP + slot.offset.y() * ROW_OFFSET) as f32
+                    * semantic_control_scale,
+                (slot.offset.y() * SLOT_STEP) as f32 * semantic_control_scale,
             )
         })
         .collect();
@@ -279,8 +315,8 @@ fn spawn_slot_grid(parent: &mut ChildSpawnerCommands, view: &PartyView, assets: 
         .spawn((
             Name::new("Formation mini-grid"),
             Node {
-                width: Val::Px(max_x - min_x + 44.0),
-                height: Val::Px(max_y - min_y + 44.0),
+                width: Val::Px(max_x - min_x + 44.0 * semantic_control_scale),
+                height: Val::Px(max_y - min_y + 44.0 * semantic_control_scale),
                 position_type: PositionType::Relative,
                 align_self: AlignSelf::Center,
                 ..default()
@@ -289,7 +325,7 @@ fn spawn_slot_grid(parent: &mut ChildSpawnerCommands, view: &PartyView, assets: 
         ))
         .with_children(|grid| {
             for (slot, x, y) in positions {
-                let label = if slot.anchor { "◆" } else { "⬡" };
+                let label = if slot.anchor { "◆" } else { "◇" };
                 grid.spawn((
                     Name::new(format!(
                         "Formation Slot ({}, {})",
@@ -304,13 +340,15 @@ fn spawn_slot_grid(parent: &mut ChildSpawnerCommands, view: &PartyView, assets: 
                     )),
                     Button,
                     TabIndex(0),
+                    crate::UiVisibilityRequirement::Scrollable,
+                    owner_resolved_control_role(),
                     PartyControl(PartyIntent::AssignSlot(slot.offset)),
                     Node {
                         position_type: PositionType::Absolute,
                         left: Val::Px(x - min_x),
                         top: Val::Px(y - min_y),
-                        width: Val::Px(44.0),
-                        height: Val::Px(44.0),
+                        width: Val::Px(44.0 * semantic_control_scale),
+                        height: Val::Px(44.0 * semantic_control_scale),
                         align_items: AlignItems::Center,
                         justify_content: JustifyContent::Center,
                         border: UiRect::all(Val::Px(1.0)),
@@ -337,5 +375,140 @@ fn emit_intents(
         if *interaction == Interaction::Pressed {
             intents.write(UiIntent::Party(control.0.clone()));
         }
+    }
+}
+
+#[cfg(all(test, feature = "test-support"))]
+mod tests {
+    use super::*;
+
+    fn formation_app(width: u32, height: u32, mode: crate::UiScaleMode) -> App {
+        let mut app = App::new();
+        app.add_plugins(crate::test_support::HeadlessUiPlugin::new(width, height));
+        app.world_mut()
+            .insert_resource(crate::UiScalePreference(mode));
+        app.world_mut().insert_resource(PartyView {
+            members: (0..6)
+                .map(|slot| crate::PartyMemberView {
+                    slot,
+                    label: format!("ALLY {} · formation member", slot + 1),
+                    active: slot == 0,
+                    selected: slot == 0,
+                })
+                .collect(),
+            formation_visible: true,
+            movement_mode: "GROUP MOVE · G".to_owned(),
+            presets: ["Column", "Compact", "Wedge"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+            slots: [(-1, 1), (0, -1), (0, 0), (0, 1), (1, -1), (1, 0)]
+                .into_iter()
+                .map(|(q, r)| crate::FormationSlotView {
+                    offset: hex_core::HexCoord::from_axial(q, r),
+                    anchor: q == 0 && r == 0,
+                })
+                .collect(),
+        });
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Gameplay);
+
+        for _ in 0..8 {
+            app.update();
+        }
+        app
+    }
+
+    #[test]
+    fn live_six_member_formation_controls_fit_the_standard_inspector() {
+        let mut app = formation_app(1920, 1080, crate::UiScaleMode::Auto);
+        let snapshot = crate::test_support::ui_tree_snapshot(app.world_mut());
+        assert!(
+            snapshot.layout_issues().is_empty(),
+            "live formation controls must remain reachable: {:?}",
+            snapshot.layout_issues()
+        );
+        let grid = snapshot
+            .nodes
+            .iter()
+            .find(|node| node.name == "Formation mini-grid")
+            .expect("the live formation grid must be presented");
+        assert!(grid.fully_visible, "formation grid must fit: {grid:?}");
+    }
+
+    #[test]
+    fn enlarged_compact_formation_focus_scrolls_the_final_slot_into_view() {
+        use bevy::input_focus::InputFocus;
+
+        let mut app = formation_app(1280, 720, crate::UiScaleMode::Percent200);
+        let entity_named = |app: &mut App, wanted: &str| {
+            app.world_mut()
+                .query::<(Entity, &Name)>()
+                .iter(app.world())
+                .find_map(|(entity, name)| (name.as_str() == wanted).then_some(entity))
+                .unwrap_or_else(|| panic!("missing {wanted:?}"))
+        };
+        let inspector = entity_named(&mut app, "Inspector HUD Region");
+        let final_slot_name = "Formation Slot (1, 0)";
+        let final_slot_entity = entity_named(&mut app, final_slot_name);
+        let initial = crate::test_support::ui_tree_snapshot(app.world_mut());
+        let formation_controls = initial
+            .nodes
+            .iter()
+            .filter(|node| {
+                matches!(node.name.as_str(), "Party Movement Mode" | "Party Rest")
+                    || node.name.starts_with("Formation Preset ")
+                    || node.name.starts_with("Formation Slot (")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            formation_controls.len(),
+            11,
+            "the populated fixture must cover every secondary formation control"
+        );
+        for control in formation_controls {
+            assert_eq!(
+                control.visibility_requirement,
+                Some(crate::UiVisibilityRequirement::Scrollable),
+                "secondary formation controls must opt into the Inspector's scroll contract: {control:?}"
+            );
+            assert!(
+                control.scroll_reachable,
+                "secondary formation controls must have a complete Inspector scroll route: {control:?}"
+            );
+        }
+        let final_slot = initial
+            .nodes
+            .iter()
+            .find(|node| node.name == final_slot_name)
+            .expect("the populated formation must expose its final slot");
+        assert!(
+            !final_slot.fully_visible
+                && final_slot.in_focus_order
+                && final_slot.keyboard_reachable == Some(true),
+            "the regression fixture must exercise a keyboard-reachable slot below the initial fold: {final_slot:?}"
+        );
+
+        app.insert_resource(InputFocus::from_entity(final_slot_entity));
+        for _ in 0..3 {
+            app.update();
+        }
+        assert!(
+            app.world()
+                .get::<ScrollPosition>(inspector)
+                .is_some_and(|position| position.y > 0.0),
+            "focusing the final formation slot must move the Inspector scroll owner"
+        );
+        let focused = crate::test_support::ui_tree_snapshot(app.world_mut());
+        let final_slot = focused
+            .nodes
+            .iter()
+            .find(|node| node.name == final_slot_name)
+            .expect("the focused formation slot remains presented");
+        assert!(
+            final_slot.fully_visible && final_slot.focused,
+            "the complete slot and focus ring must be visible after keyboard navigation: {final_slot:?}"
+        );
     }
 }

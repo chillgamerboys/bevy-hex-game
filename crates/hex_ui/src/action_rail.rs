@@ -4,7 +4,7 @@ use bevy::ui_widgets::ScrollArea;
 use hex_core::Screen;
 
 use crate::{
-    blurb, fine, heading, layout::is_ultra_constrained, row_button, ActionAvailability,
+    blurb, fine, fixed_row_button, hud_heading, layout::is_ultra_constrained, ActionAvailability,
     DespawnOnExit, GameplayAction, GameplayHudView, LatticeIntent, ResolvedUiMetrics, UiAssets,
     UiIntent, UiViewportClass, ACCENT, EDGE, PANEL_BG,
 };
@@ -41,6 +41,7 @@ fn spawn_action_rail(mut commands: Commands, assets: Res<UiAssets>) {
     commands
         .spawn((
             Name::new("Primary Action Rail"),
+            crate::UiVisibilityRequirement::Immediate,
             ActionRail,
             ScrollArea,
             ScrollPosition::default(),
@@ -52,12 +53,21 @@ fn spawn_action_rail(mut commands: Commands, assets: Res<UiAssets>) {
             GlobalZIndex(4),
         ))
         .with_children(|rail| {
-            rail.spawn((ActionRailCopy::Heading, heading(&assets, "Now")));
             rail.spawn((
+                Name::new("Action Rail Heading"),
+                ActionRailCopy::Heading,
+                hud_heading(&assets, "Now"),
+            ));
+            rail.spawn((
+                Name::new("Action Rail Summary"),
                 ActionRailCopy::Summary,
                 blurb(&assets, "Preparing actions…"),
             ));
-            rail.spawn((ActionRailCopy::Prompt, blurb(&assets, "")));
+            rail.spawn((
+                Name::new("Action Rail Prompt"),
+                ActionRailCopy::Prompt,
+                blurb(&assets, ""),
+            ));
             rail.spawn((
                 Name::new("Primary Action Rail Controls"),
                 ActionRailActions,
@@ -78,40 +88,67 @@ fn refresh_action_rail(
     review: Option<Res<crate::review::UiReviewPresentation>>,
     metrics: Res<ResolvedUiMetrics>,
     assets: Res<UiAssets>,
+    added_rails: Query<(), Added<ActionRail>>,
     mut commands: Commands,
     mut rails: Query<
         (Entity, &mut Node, &mut BorderColor),
-        (With<ActionRail>, Without<ActionRailCopy>),
+        (
+            With<ActionRail>,
+            Without<ActionRailCopy>,
+            Without<ActionRailActions>,
+        ),
     >,
     mut copy: Query<
         (&ActionRailCopy, &mut Text, &mut Node),
-        (With<ActionRailCopy>, Without<ActionRail>),
+        (
+            With<ActionRailCopy>,
+            Without<ActionRail>,
+            Without<ActionRailActions>,
+        ),
     >,
-    actions: Query<Entity, With<ActionRailActions>>,
+    mut actions: Query<
+        (Entity, &mut Node),
+        (
+            With<ActionRailActions>,
+            Without<ActionRail>,
+            Without<ActionRailCopy>,
+        ),
+    >,
 ) {
     let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
-    if !view.is_changed() && !review_changed && !metrics.is_changed() {
+    if !action_rail_needs_refresh(
+        view.is_changed(),
+        review_changed,
+        metrics.is_changed(),
+        !added_rails.is_empty(),
+    ) {
         return;
     }
     let view = review
         .as_ref()
         .and_then(|review| review.hud.as_ref())
         .unwrap_or(view.as_ref());
+    let decision_required = view
+        .actions
+        .iter()
+        .any(|action| action.priority == crate::ActionPriority::Required);
+    let minimal_deployment =
+        view.phase == hex_core::GameplayPhase::Deployment && view.actions.is_empty();
     if let Ok((_, mut node, mut border)) = rails.single_mut() {
-        apply_action_rail_layout(
-            *metrics,
-            &mut node,
-            view.phase == hex_core::GameplayPhase::Deployment && view.actions.is_empty(),
-        );
-        *border = BorderColor::all(if view.required_prompt.is_some() {
-            ACCENT
+        apply_action_rail_layout(*metrics, &mut node, minimal_deployment, decision_required);
+        node.display = if minimal_deployment {
+            Display::None
         } else {
-            EDGE
-        });
+            Display::Flex
+        };
+        *border = BorderColor::all(if decision_required { ACCENT } else { EDGE });
     }
     for (kind, mut text, mut node) in &mut copy {
-        node.display = if is_ultra_constrained(*metrics)
-            && matches!(kind, ActionRailCopy::Heading | ActionRailCopy::Prompt)
+        node.width = Val::Auto;
+        node.min_width = Val::Auto;
+        node.flex_shrink = 1.0;
+        node.display = if minimal_deployment
+            || matches!(kind, ActionRailCopy::Heading | ActionRailCopy::Prompt)
         {
             Display::None
         } else {
@@ -120,17 +157,34 @@ fn refresh_action_rail(
         match kind {
             ActionRailCopy::Heading => {}
             ActionRailCopy::Summary => {
-                text.0 = format!(
-                    "{} · {} · Move {} · Action {}",
-                    view.round,
-                    view.actor_label,
-                    view.movement_remaining,
-                    if view.action_remaining {
-                        "ready"
-                    } else {
-                        "spent"
-                    }
-                );
+                let action_state = if view.action_remaining {
+                    "ready"
+                } else {
+                    "spent"
+                };
+                let summary = if is_ultra_constrained(*metrics) && metrics.content_scale >= 1.5 {
+                    let actor = view
+                        .actor_label
+                        .strip_suffix(" · Player")
+                        .or_else(|| view.actor_label.strip_suffix(" · Hostile"))
+                        .unwrap_or(&view.actor_label);
+                    format!(
+                        "{} · {actor}\nMove {} · Action {action_state}",
+                        view.round, view.movement_remaining
+                    )
+                } else {
+                    format!(
+                        "{} · {} · Move {} · Action {action_state}",
+                        view.round, view.actor_label, view.movement_remaining
+                    )
+                };
+                text.0 = if decision_required {
+                    view.required_prompt
+                        .as_deref()
+                        .map_or(summary.clone(), |prompt| format!("{summary}\n{prompt}"))
+                } else {
+                    summary
+                };
             }
             ActionRailCopy::Prompt => {
                 text.0 = view.required_prompt.clone().unwrap_or_else(|| {
@@ -139,31 +193,81 @@ fn refresh_action_rail(
             }
         }
     }
-    let Ok(action_root) = actions.single() else {
+    let Ok((action_root, mut action_node)) = actions.single_mut() else {
         return;
     };
+    action_node.width = Val::Percent(100.0);
+    action_node.min_width = Val::Auto;
+    action_node.flex_grow = 0.0;
     commands.entity(action_root).despawn_related::<Children>();
     commands.entity(action_root).with_children(|root| {
         let mut offered = view.actions.clone();
         offered.sort_by_key(|action| std::cmp::Reverse(action.priority));
+        let sole_action = offered.len() == 1;
+        let ordinary_action_width = if metrics.viewport == UiViewportClass::Compact {
+            let left = 12.0;
+            let right = if is_ultra_constrained(*metrics) && decision_required {
+                12.0
+            } else {
+                crate::layout::center_right_inset(*metrics)
+            };
+            let rail_content_width = (metrics.logical_size.x - left - right - 24.0).max(44.0);
+            let column_count = if metrics.content_scale >= 1.5 {
+                offered.len().min(3)
+            } else {
+                offered.len()
+            }
+            .max(1);
+            let columns = match u16::try_from(column_count) {
+                Ok(columns) => f32::from(columns),
+                Err(_) => f32::from(u16::MAX),
+            };
+            let gaps = 8.0 * (columns - 1.0);
+            ((rail_content_width - gaps) / columns).clamp(96.0, 520.0)
+        } else {
+            156.0 * metrics.content_scale.max(1.0)
+        };
         for action in offered {
+            let action_width = if sole_action {
+                520.0_f32.min(metrics.logical_size.x - 48.0)
+            } else {
+                ordinary_action_width
+            };
             let name = format!("Action Rail {}", action.label);
+            let immediate = matches!(
+                action.priority,
+                crate::ActionPriority::Required | crate::ActionPriority::Primary
+            );
             match action.availability {
                 ActionAvailability::Enabled => {
-                    root.spawn((row_button(name, 156.0), ActionRailKey(action.action)))
-                        .with_children(|button| {
-                            button.spawn(blurb(&assets, action.label));
-                            if let Some(shortcut) = action.shortcut {
-                                button.spawn(fine(&assets, shortcut));
-                            }
+                    let control_height = if metrics.content_scale >= 1.5 {
+                        60.0
+                    } else {
+                        52.0
+                    } * metrics.control_scale.max(1.0);
+                    let mut control = root.spawn((
+                        fixed_row_button(name, action_width, control_height),
+                        ActionRailKey(action.action),
+                    ));
+                    if immediate {
+                        control.insert(crate::UiVisibilityRequirement::Immediate);
+                    }
+                    control.with_children(|button| {
+                        let label = action.shortcut.map_or(action.label.clone(), |shortcut| {
+                            format!("{} · {shortcut}", action.label)
                         });
+                        button.spawn(blurb(&assets, label));
+                    });
                 }
                 ActionAvailability::Disabled { reason } => {
-                    root.spawn((
+                    let accessible = format!("{} unavailable · {reason}", action.label);
+                    let mut control = root.spawn((
                         Name::new(name),
+                        AccessibleLabel::new(accessible),
                         Node {
-                            width: Val::Px(156.0),
-                            min_height: Val::Px(48.0),
+                            width: Val::Px(action_width),
+                            min_height: Val::Px(48.0 * metrics.control_scale.max(1.0)),
+                            flex_shrink: 0.0,
                             padding: UiRect::axes(Val::Px(10.0), Val::Px(5.0)),
                             flex_direction: FlexDirection::Column,
                             justify_content: JustifyContent::Center,
@@ -173,10 +277,17 @@ fn refresh_action_rail(
                         },
                         BorderColor::all(EDGE),
                         BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.035)),
-                    ))
-                    .with_children(|disabled| {
+                    ));
+                    if immediate {
+                        control.insert(crate::UiVisibilityRequirement::Immediate);
+                    }
+                    control.with_children(|disabled| {
                         disabled.spawn(blurb(&assets, action.label));
-                        disabled.spawn(fine(&assets, format!("Unavailable · {reason}")));
+                        let visible_reason = reason
+                            .strip_prefix("Unavailable while ")
+                            .or_else(|| reason.strip_prefix("Unavailable because "))
+                            .unwrap_or(&reason);
+                        disabled.spawn(fine(&assets, visible_reason.to_owned()));
                     });
                 }
             }
@@ -184,13 +295,22 @@ fn refresh_action_rail(
     });
 }
 
+fn action_rail_needs_refresh(
+    view_changed: bool,
+    review_changed: bool,
+    metrics_changed: bool,
+    rail_added: bool,
+) -> bool {
+    view_changed || review_changed || metrics_changed || rail_added
+}
+
 fn action_rail_node(viewport: UiViewportClass) -> Node {
     let mut node = Node {
         position_type: PositionType::Absolute,
-        min_height: Val::Px(116.0),
-        padding: UiRect::axes(Val::Px(18.0), Val::Px(12.0)),
+        min_height: Val::Px(92.0),
+        padding: UiRect::axes(Val::Px(14.0), Val::Px(8.0)),
         flex_direction: FlexDirection::Column,
-        row_gap: Val::Px(8.0),
+        row_gap: Val::Px(5.0),
         border: UiRect::all(Val::Px(2.0)),
         border_radius: BorderRadius::all(Val::Px(10.0)),
         ..default()
@@ -199,15 +319,51 @@ fn action_rail_node(viewport: UiViewportClass) -> Node {
     node
 }
 
-fn apply_action_rail_layout(metrics: ResolvedUiMetrics, node: &mut Node, minimal_deployment: bool) {
+fn apply_action_rail_layout(
+    metrics: ResolvedUiMetrics,
+    node: &mut Node,
+    minimal_deployment: bool,
+    decision_required: bool,
+) {
     apply_action_rail_insets(metrics.viewport, node);
+    node.right = Val::Px(crate::layout::center_right_inset(metrics));
     if is_ultra_constrained(metrics) {
+        node.left = Val::Px(12.0);
+        if decision_required {
+            // The ordinary Inspector is hidden while its required lattice is
+            // promoted into this rail, so the blocking choice may use the lane.
+            node.right = Val::Px(12.0);
+        }
+    }
+    let left = match node.left {
+        Val::Px(left) => left,
+        _ => 0.0,
+    };
+    let right = match node.right {
+        Val::Px(right) => right,
+        _ => 0.0,
+    };
+    let horizontal_insets = left + right;
+    node.width = Val::Px((metrics.logical_size.x - horizontal_insets).max(44.0));
+    node.flex_direction = FlexDirection::Column;
+    node.align_items = AlignItems::Stretch;
+    node.column_gap = Val::Px(0.0);
+    if is_ultra_constrained(metrics) {
+        let rail_height = crate::layout::ultra_action_rail_height(metrics);
         node.top = Val::Px(8.0);
         node.bottom = Val::Auto;
         node.padding = UiRect::axes(Val::Px(10.0), Val::Px(6.0));
         node.row_gap = Val::Px(4.0);
-        node.min_height = Val::Px(if minimal_deployment { 48.0 } else { 64.0 });
-        node.height = Val::Px(if minimal_deployment { 48.0 } else { 64.0 });
+        node.min_height = Val::Px(if minimal_deployment {
+            48.0
+        } else {
+            rail_height
+        });
+        node.height = Val::Px(if minimal_deployment {
+            48.0
+        } else {
+            rail_height
+        });
         node.overflow = if minimal_deployment {
             Overflow::default()
         } else {
@@ -215,9 +371,15 @@ fn apply_action_rail_layout(metrics: ResolvedUiMetrics, node: &mut Node, minimal
         };
     } else {
         node.top = Val::Auto;
-        node.padding = UiRect::axes(Val::Px(18.0), Val::Px(12.0));
-        node.row_gap = Val::Px(8.0);
-        node.min_height = Val::Px(116.0);
+        node.padding = UiRect::axes(Val::Px(14.0), Val::Px(8.0));
+        node.row_gap = Val::Px(5.0);
+        node.min_height = Val::Px(if minimal_deployment {
+            0.0
+        } else if decision_required {
+            116.0
+        } else {
+            92.0
+        });
         node.height = Val::Auto;
         node.overflow = Overflow::default();
     }
@@ -259,6 +421,77 @@ mod tests {
     use crate::{resolve_ui_metrics, UiScaleMode};
 
     use super::*;
+
+    #[test]
+    fn refresh_gate_includes_a_new_action_rail() {
+        assert!(action_rail_needs_refresh(false, false, false, true));
+        assert!(!action_rail_needs_refresh(false, false, false, false));
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn gameplay_reentry_repopulates_a_new_rail_from_the_unchanged_hud_view() {
+        let mut app = App::new();
+        app.add_plugins(crate::test_support::HeadlessUiPlugin::default())
+            .add_systems(
+                OnExit(Screen::Gameplay),
+                crate::despawn_screen(Screen::Gameplay),
+            );
+        let expected_view = GameplayHudView {
+            actor_label: "Re-entry Ranger".to_owned(),
+            round: "Round 3".to_owned(),
+            movement_remaining: 2,
+            action_remaining: true,
+            actions: vec![crate::ActionAffordance {
+                action: GameplayAction::EndTurn,
+                label: "End turn".to_owned(),
+                shortcut: Some("Enter".to_owned()),
+                availability: ActionAvailability::Enabled,
+                priority: crate::ActionPriority::Primary,
+            }],
+            ..default()
+        };
+        app.world_mut().insert_resource(expected_view.clone());
+
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Gameplay);
+        for _ in 0..8 {
+            app.update();
+        }
+        assert_eq!(
+            presented_action_rail_actions(&mut app),
+            [GameplayAction::EndTurn]
+        );
+
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Loading);
+        for _ in 0..4 {
+            app.update();
+        }
+        assert!(presented_action_rail_actions(&mut app).is_empty());
+        assert_eq!(app.world().resource::<GameplayHudView>(), &expected_view);
+
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Gameplay);
+        for _ in 0..8 {
+            app.update();
+        }
+
+        assert_eq!(app.world().resource::<GameplayHudView>(), &expected_view);
+        assert_eq!(
+            presented_action_rail_actions(&mut app),
+            [GameplayAction::EndTurn]
+        );
+    }
+
+    #[cfg(feature = "test-support")]
+    fn presented_action_rail_actions(app: &mut App) -> Vec<GameplayAction> {
+        let mut query = app.world_mut().query::<&ActionRailKey>();
+        query.iter(app.world()).map(|action| action.0).collect()
+    }
 
     #[test]
     fn required_priority_is_reserved_for_blocking_choices() {

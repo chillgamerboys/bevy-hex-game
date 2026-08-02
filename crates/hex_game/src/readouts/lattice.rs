@@ -96,6 +96,7 @@ pub(super) fn plugin(app: &mut App) {
             refresh_readouts
                 .in_set(AppSystems::Update)
                 .after(GameplaySystems::UiContext)
+                .before(hex_ui::UiSystems::Render)
                 .run_if(in_state(Screen::Gameplay)),
         )
         .add_systems(OnExit(Screen::Gameplay), clear_focus);
@@ -249,7 +250,7 @@ fn reconcile_selection(selection: &mut DisableSelection, next: Option<DisableDec
     selection.decision = next;
 }
 
-fn refresh_readouts(
+pub(crate) fn refresh_readouts(
     mut readouts: ResMut<GameplayLatticesView>,
     context: Res<GameplayUiContext>,
     selection: Res<DisableSelection>,

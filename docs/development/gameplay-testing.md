@@ -18,7 +18,7 @@ scenario binaries continue to run in the residual workspace suite.
 | Pure rules | Value objects, lattice transformations, compact AI policy | Owning crate dependencies only | Return values and immutable state | `python3 tools/test_scope.py run rules` | 60 s total |
 | ECS contracts | Focused commands, effects, movement, turns, occupancy and Channel seams | `hex_test_support`, then the owning gameplay crate dependencies | Components, resources, messages and exact positions | `python3 tools/test_scope.py run contracts` | 60 s per test |
 | Deterministic simulation | Multi-turn composition, tempo profiles, 3v3/6v6, canonical summaries and bounded no-progress | `hex_combat_core` over `hex_core` + `hex_lattice`; never Bevy App, `hex_test_support`, renderer, viewport, wall clock, asset server, ECS entity, perception implementation, or map generator | Full `CombatRunSnapshot` equality across two runs plus named metric assertions | `python3 tools/test_scope.py run simulation` | 60 s |
-| Game/UI behavior | Pure Combat Lab/Creator transitions plus Bevy wiring, re-entry and drawer lifecycle | `hex_gameplay_model` for state/launch/navigation truth; `hex_ui` for rendering; `hex_game` with default-off `test-support` only for Bevy lifecycle | Pure state equality, `GameplayStateSnapshot` for canonical facts, and `UiTreeSnapshot` for presentation structure | `python3 tools/test_scope.py run app` | 60 s |
+| Game/UI behavior | Pure Combat Lab/Creator transitions plus Bevy wiring, re-entry and drawer lifecycle | `hex_gameplay_model` for state/launch/navigation truth; `hex_ui` for rendering; `hex_game` with default-off `test-support` only for Bevy lifecycle | Pure state equality, `GameplayStateSnapshot` for authority facts and explicit presentation-adapter observations, and `UiTreeSnapshot` for presentation structure | `python3 tools/test_scope.py run app` | 60 s |
 | Visual smoke | Layout, legibility, overlap, responsive composition and presentation regressions | Release-shaped game with `visual-walk`; no `dev` or `test-support` | Reviewed frames plus the human motion/feel walk | Run the one scoped gameplay walk through `/visual-walk` | At most 10 reviewed gameplay frames |
 | Soak/performance | Long stalemates, stress corpora, bounded retention and performance | The scheduled stress workflow | Typed completion/timeout, fingerprints, timing and memory bounds | `.github/workflows/stress.yaml` | Scheduled/manual only |
 
@@ -39,10 +39,15 @@ readable without adding another linker invocation.
 
 The app partition runs `hex_gameplay_model` and `hex_ui` inline tests together with
 `hex_game/tests/gameplay_app.rs`, the default-off gameplay-owned application target.
-Before enabling `test-support`, it also compiles the default-feature `hex_game`
-library-test target in package isolation. That preflight prevents workspace feature
-unification from hiding a test-only field or import that the ordinary shipping-shaped
-crate cannot compile.
+Its primary run enables only `hex_game/test-support`; `hex_ui/dev-tools` is absent, so
+the exhaustive structural matrix has the same runtime composition as shipping plus
+immutable test observation. Before that run, the partition compiles the
+default-feature `hex_game` library-test target in package isolation. That preflight
+prevents workspace feature unification from hiding a test-only field or import that
+the ordinary shipping-shaped crate cannot compile. A focused postflight runs only the
+development-time UI tests with `hex_ui`'s `dev-tools,test-support` features. This keeps
+optional inspector/clock coverage without allowing those surfaces to alter or mask
+the primary matrix.
 `hex_game/tests/game_content_contracts.rs` is the separately selectable shared
 shipped-content seam, and the `hex_game` library target retains inline
 scenario/loading contracts that require private composition details. Those shared
@@ -128,14 +133,18 @@ Owning tests add their system under test on top of the support app.
 
 `hex_game` exposes `GameplayStateSnapshot` only behind `test-support`. It observes
 canonical screen/phase/mode, turn and budgets, pending decisions, command state,
-exact positions, lattice summaries, outcome, and report fingerprints. `hex_ui`
-separately exposes `UiTreeSnapshot` for visible regions, focus/accessibility,
-computed bounds/overflow, and action priority. Neither feature exposes mutable
-screen state, and the shipping binary has no feature dependency on either harness.
+exact positions, lattice summaries, outcome, and report fingerprints. Its explicitly
+named `presented_actions` field mirrors `GameplayHudView` only for application-adapter
+parity; it is not a legal-action oracle and cannot replace owning command/contract
+tests. `hex_ui` separately exposes `UiTreeSnapshot` for visible regions,
+focus/accessibility, computed bounds/overflow, and action priority. Neither feature
+exposes mutable screen state, and the shipping binary has no feature dependency on
+either harness.
 `hex_game` also re-exports `HeadlessUiPlugin`, which installs the real presentation
 schedules on a synthetic window without Winit or a renderer. Use it only with
-`UiTreeSnapshot` presentation assertions; canonical behavior still comes from
-`GameplayStateSnapshot` and the owning rules or simulation target.
+`UiTreeSnapshot` presentation assertions; canonical behavior still comes from the
+authority-backed fields in `GameplayStateSnapshot` and the owning rules, contracts,
+or simulation target.
 
 `hex_gameplay_model` owns renderer-free Combat Lab and Creator transitions. It may
 depend on `bevy_ecs` derive support and `hex_core`, but not on assets, combat, units,
@@ -172,32 +181,45 @@ that balance is fun.
 
 ## Visual evidence policy
 
+The complete runtime task inventory and its full headless matrix are defined in
+[Runtime UI verification](ui-verification.md). Every populated interactive task runs
+all viewport/device mappings and semantic scales in one linked binary; a visual route
+samples that contract and does not define the set of UI paths that exist.
+
 Screenshots answer presentation questions: whether controls fit, labels read, dense
 rosters remain legible, drawers overlap, and a responsive surface adapts. They do not
 prove occupancy, action accounting, tempo, determinism, state restoration, or report
 identity.
 
-A scoped gameplay acceptance run reviews no more than ten frames. Six deterministic
-offscreen frames cover Creator validation, Combat Lab setup/deployment, aiming and a
-disabled action, the live statistics drawer, and the 4K dense Compare report. Four
-native macOS window-only frames cover cold Compact title, Standard settings,
-fullscreen Auto gameplay, and a restarted 200% required decision. Default-off
-presentation fixtures create visual state without solving combat. Before any
-capture, the live `UiTreeSnapshot` oracle rejects zero-area targets, inherited
+A scoped gameplay acceptance run reviews exactly ten deterministic Bevy
+image-target frames. They cover the Compact title and Map Scenario catalog while
+mechanically traversing the independent Demo route, Creator validation, Combat Lab
+setup/deployment, maximum gameplay actions, a 200%
+required decision, the Compact Retina statistics drawer, and the 4K dense Compare report.
+Default-off presentation fixtures create visual state without solving combat.
+Before any capture, the live `UiTreeSnapshot` oracle rejects zero-area targets, inherited
 clipping, off-canvas placement, unreachable scroll content, overlap, missing labels,
-invalid focus order, and targets below 44×44. The runner contains no combat-solving
-verbs.
+invalid focus order, and targets below 44×44. Authored presentation fixtures also
+apply named composition contracts; for example, the live-statistics frame requires
+every populated lattice edge above the statistics drawer at every semantic scale,
+rather than accepting either surface in isolation. The same contract drives real
+wheel and Tab/Shift-Tab input through the single Inspector scroll owner, requires HUD
+hiding to remove lattice and statistics together, and prevents Compact statistics
+from covering any still-focusable casting control. The scoped gameplay script uses no
+combat-solving steps; generic world-owned walks retain their existing driver verbs.
 
 Forest, Waterfall, map review, and Alberto's map captures are outside this budget and
 remain unchanged.
 
 ## Manual runtime sign-off
 
-The automated walk, an agent-operated native runtime review, and a named human
+The automated Bevy visual walk, an agent frame review, and a named human
 playtest are distinct evidence. Gameplay runtime PRs record the human result in the
 structured PR fields together with the full final head SHA, reviewer, date, and exact
-route exercised. A later push makes that evidence stale and the required
-`Current-head manual runtime sign-off` check fails until the new head is played.
+route exercised. A later push makes that evidence stale. On a draft, the
+`Current-head manual runtime sign-off` workflow may remain green because enforcement
+is deferred; that is not a PASS. The required check must validate the new played head
+before the PR can leave draft.
 
 Source-lane PRs targeting `wave/*` defer this gate because they are not independently
 shippable runtime candidates. The combined wave PR targeting `dev` must carry the

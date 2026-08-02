@@ -6,9 +6,9 @@ use bevy::ui_widgets::ScrollArea;
 use hex_core::Screen;
 
 use crate::{
-    action_rail_clearance, blurb, fine, heading, label, layout::is_ultra_constrained, row_button,
-    stacked_row_button, DeploymentIntent, DeploymentRosterEntryView, DeploymentView,
-    ResolvedUiMetrics, UiAssets, UiIntent, UiSystems, UiViewportClass, DANGER,
+    blurb, fine, heading, label, layout::is_ultra_constrained, row_button, stacked_row_button,
+    DeploymentIntent, DeploymentRosterEntryView, DeploymentView, ResolvedUiMetrics, UiAssets,
+    UiIntent, UiSystems, UiViewportClass, DANGER,
 };
 
 #[derive(Component)]
@@ -21,14 +21,16 @@ struct DeploymentSummary;
 struct DeploymentSide;
 
 #[derive(Component)]
+struct DeploymentSides;
+
+#[derive(Component)]
 struct DeploymentActions;
 
 pub(super) fn plugin(app: &mut App) {
     app.add_systems(
         Update,
         (
-            render,
-            apply_layout,
+            (render, apply_layout).chain().in_set(UiSystems::Render),
             emit_actions.in_set(UiSystems::EmitIntents),
         )
             .run_if(in_state(Screen::Gameplay)),
@@ -93,8 +95,22 @@ fn render(
                     "CLICK BLUE for Player · CLICK RED for Hostile · solid tokens show placements",
                 ));
             });
-            spawn_side(hud, &assets, "PLAYER", true, &view.players);
-            spawn_side(hud, &assets, "HOSTILE", false, &view.hostiles);
+            hud.spawn((
+                Name::new("Deployment Roster Scroll"),
+                DeploymentSides,
+                Node {
+                    min_width: Val::Px(0.0),
+                    min_height: Val::Px(0.0),
+                    flex_grow: 1.0,
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(18.0),
+                    ..default()
+                },
+            ))
+            .with_children(|sides| {
+                spawn_side(sides, &assets, "PLAYER", true, &view.players);
+                spawn_side(sides, &assets, "HOSTILE", false, &view.hostiles);
+            });
             hud.spawn((
                 DeploymentActions,
                 Node {
@@ -158,6 +174,10 @@ fn spawn_side(
         DeploymentSide,
         Node {
             width: Val::Px(245.0),
+            // In stacked layouts `DeploymentSides` is the sole scroll owner.
+            // Keep each side at its natural roster height so Yoga reports the
+            // complete final card in that owner's attainable content range.
+            flex_shrink: 0.0,
             flex_direction: FlexDirection::Column,
             row_gap: Val::Px(2.0),
             ..default()
@@ -185,6 +205,7 @@ fn spawn_side(
             );
             side.spawn((
                 stacked_row_button(text.clone(), 235.0),
+                crate::UiVisibilityRequirement::Scrollable,
                 DeploymentIntent::Select {
                     player,
                     index: entry.index,
@@ -206,8 +227,16 @@ fn deployment_button(
     text: &'static str,
     action: DeploymentIntent,
 ) {
+    let width = match action {
+        DeploymentIntent::Undo => 90.0,
+        DeploymentIntent::ClearPlayer | DeploymentIntent::ClearHostile => 150.0,
+        DeploymentIntent::AutoPlace => 270.0,
+        DeploymentIntent::Back => 170.0,
+        DeploymentIntent::StartCombat => 160.0,
+        DeploymentIntent::Select { .. } => unreachable!("roster selection uses its own card"),
+    };
     parent
-        .spawn((row_button(text, 166.0), action))
+        .spawn((row_button(text, width), action))
         .with_child(label(assets, text));
 }
 
@@ -245,6 +274,16 @@ fn apply_layout(
             Without<DeploymentActions>,
         ),
     >,
+    mut side_groups: Query<
+        (Entity, &mut Node),
+        (
+            With<DeploymentSides>,
+            Without<DeploymentRoot>,
+            Without<DeploymentSummary>,
+            Without<DeploymentSide>,
+            Without<DeploymentActions>,
+        ),
+    >,
     mut actions: Query<
         &mut Node,
         (
@@ -259,69 +298,118 @@ fn apply_layout(
         return;
     }
     let compact = metrics.viewport == UiViewportClass::Compact;
+    // The 1512-wide logical canvas produced by a Retina fullscreen window is
+    // nominally Standard, but cannot fit the three deployment columns and the
+    // persistent action region side-by-side. Treat deployment as a denser
+    // composition with its own content breakpoint.
+    let stacked = compact || metrics.logical_size.x < 1900.0 || metrics.content_scale >= 1.5;
     let ultra_constrained = is_ultra_constrained(*metrics);
     for (entity, mut node) in &mut roots {
-        (node.left, node.right) = match metrics.viewport {
-            UiViewportClass::Compact if ultra_constrained => (Val::Px(8.0), Val::Px(8.0)),
-            UiViewportClass::Compact => (Val::Px(196.0), Val::Px(12.0)),
-            UiViewportClass::Standard => (Val::Px(244.0), Val::Px(320.0)),
-            UiViewportClass::Wide => (Val::Px(288.0), Val::Px(360.0)),
+        (node.left, node.right) = if stacked && metrics.content_scale >= 1.5 {
+            (Val::Px(12.0), Val::Px(12.0))
+        } else {
+            match metrics.viewport {
+                UiViewportClass::Compact if ultra_constrained => (Val::Px(8.0), Val::Px(8.0)),
+                UiViewportClass::Compact => (Val::Px(196.0), Val::Px(12.0)),
+                UiViewportClass::Standard => (Val::Px(244.0), Val::Px(320.0)),
+                UiViewportClass::Wide => (Val::Px(288.0), Val::Px(360.0)),
+            }
         };
         node.top = Val::Px(if ultra_constrained {
             68.0
         } else if compact {
             12.0
+        } else if stacked {
+            68.0
         } else {
             18.0
         });
         node.bottom = if ultra_constrained {
             Val::Px(8.0)
         } else if compact {
-            Val::Px(action_rail_clearance(metrics.viewport))
+            // Deployment projects an intentionally minimal 48px rail. Reserving
+            // the ordinary gameplay rail's full height would collapse the 6v6
+            // roster viewport to zero on short Compact canvases.
+            Val::Px(68.0)
+        } else if stacked {
+            Val::Px(68.0)
         } else {
             Val::Auto
         };
-        node.min_height = if compact {
+        node.min_height = if stacked {
             Val::Px(0.0)
         } else {
             Val::Px(126.0)
         };
-        node.flex_direction = if compact {
+        node.flex_direction = if stacked {
             FlexDirection::Column
         } else {
             FlexDirection::Row
         };
-        node.overflow = if compact {
-            Overflow::scroll_y()
-        } else {
-            Overflow::default()
-        };
-        if compact {
-            commands.entity(entity).insert(ScrollArea);
-        } else {
-            commands.entity(entity).remove::<ScrollArea>();
-        }
+        node.overflow = Overflow::clip();
+        commands.entity(entity).remove::<ScrollArea>();
     }
     for mut node in &mut summary {
-        node.width = if compact {
+        node.display = if ultra_constrained {
+            Display::None
+        } else {
+            Display::Flex
+        };
+        node.width = if stacked {
             Val::Percent(100.0)
         } else {
             Val::Px(300.0)
         };
     }
     for mut node in &mut sides {
-        node.width = if compact {
+        node.width = if stacked {
             Val::Percent(100.0)
         } else {
-            Val::Px(245.0)
+            Val::Px(245.0 * metrics.control_scale.max(1.0))
         };
     }
+    for (entity, mut node) in &mut side_groups {
+        node.width = if stacked {
+            Val::Percent(100.0)
+        } else {
+            Val::Auto
+        };
+        node.min_height = Val::Px(0.0);
+        node.flex_grow = 1.0;
+        node.height = if stacked { Val::Px(0.0) } else { Val::Auto };
+        node.flex_basis = if stacked { Val::Px(0.0) } else { Val::Auto };
+        node.flex_direction = if stacked {
+            FlexDirection::Column
+        } else {
+            FlexDirection::Row
+        };
+        node.row_gap = if stacked { Val::Px(8.0) } else { Val::ZERO };
+        // Leave semantic tail room inside the sole roster scroll owner. Bevy's
+        // fractional text/control rounding can otherwise place the final card's
+        // border one logical pixel beyond the reported content extent.
+        node.padding.bottom = if stacked {
+            Val::Px(8.0 * metrics.spacing_scale)
+        } else {
+            Val::ZERO
+        };
+        node.overflow = if stacked {
+            Overflow::scroll_y()
+        } else {
+            Overflow::default()
+        };
+        if stacked {
+            commands.entity(entity).insert(ScrollArea);
+        } else {
+            commands.entity(entity).remove::<ScrollArea>();
+        }
+    }
     for mut node in &mut actions {
-        node.width = if compact {
+        node.width = if stacked {
             Val::Percent(100.0)
         } else {
             Val::Px(340.0)
         };
+        node.flex_shrink = 0.0;
     }
 }
 
@@ -367,5 +455,112 @@ mod tests {
         assert!(actions
             .iter(app.world())
             .any(|action| *action == DeploymentIntent::StartCombat));
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn enlarged_stacked_roster_can_focus_and_reveal_its_final_card() {
+        use bevy::input_focus::InputFocus;
+
+        let mut app = App::new();
+        app.add_plugins(crate::test_support::HeadlessUiPlugin::new(960, 540));
+        app.world_mut()
+            .insert_resource(crate::UiScalePreference(crate::UiScaleMode::Percent175));
+        let roster = |side: &str| {
+            (0..6)
+                .map(|index| DeploymentRosterEntryView {
+                    index,
+                    name: format!("{side} Unit {}", index + 1),
+                    selected: index == 0,
+                    position: None,
+                })
+                .collect::<Vec<_>>()
+        };
+        app.world_mut().insert_resource(DeploymentView {
+            active: true,
+            map_name: "Stacked Surface Arena".to_owned(),
+            notice: "Place every player and hostile on an exact legal surface.".to_owned(),
+            players: roster("Player"),
+            hostiles: roster("Hostile"),
+            complete: false,
+        });
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Gameplay);
+        for _ in 0..8 {
+            app.update();
+        }
+
+        let entity_named = |app: &mut App, wanted: &str| {
+            app.world_mut()
+                .query::<(Entity, &Name)>()
+                .iter(app.world())
+                .find_map(|(entity, name)| (name.as_str() == wanted).then_some(entity))
+                .unwrap_or_else(|| panic!("missing {wanted:?}"))
+        };
+        let roster_scroll = entity_named(&mut app, "Deployment Roster Scroll");
+        let final_card_name = "SELECT [H6] Hostile Unit 6\nchoose surface";
+        let final_card_entity = entity_named(&mut app, final_card_name);
+        let roster_scroll_geometry = app
+            .world()
+            .get::<ComputedNode>(roster_scroll)
+            .map(|node| {
+                (
+                    node.size() * node.inverse_scale_factor,
+                    node.content_size() * node.inverse_scale_factor,
+                )
+            })
+            .expect("the deployment scroll owner must be laid out");
+        let side_geometry = app
+            .world_mut()
+            .query_filtered::<&ComputedNode, With<DeploymentSide>>()
+            .iter(app.world())
+            .map(|node| {
+                (
+                    node.size() * node.inverse_scale_factor,
+                    node.content_size() * node.inverse_scale_factor,
+                )
+            })
+            .collect::<Vec<_>>();
+        let initial = crate::test_support::ui_tree_snapshot(app.world_mut());
+        let final_card = initial
+            .nodes
+            .iter()
+            .find(|node| node.name == final_card_name)
+            .expect("the populated hostile roster must expose its sixth card");
+        assert_eq!(
+            final_card.visibility_requirement,
+            Some(crate::UiVisibilityRequirement::Scrollable)
+        );
+        assert!(
+            !final_card.fully_visible && final_card.scroll_reachable,
+            "the exact regression must start below the fold but have an attainable range: {final_card:?}; owner={roster_scroll_geometry:?}; sides={side_geometry:?}"
+        );
+
+        assert!(
+            final_card.in_focus_order && final_card.keyboard_reachable == Some(true),
+            "the sixth hostile deployment card must belong to the active keyboard scope: {final_card:?}; order={:?}",
+            initial.focus_order,
+        );
+        app.insert_resource(InputFocus::from_entity(final_card_entity));
+        for _ in 0..3 {
+            app.update();
+        }
+        assert!(
+            app.world()
+                .get::<ScrollPosition>(roster_scroll)
+                .is_some_and(|position| position.y > 0.0),
+            "focusing the final card must move the sole deployment scroll owner"
+        );
+        let focused = crate::test_support::ui_tree_snapshot(app.world_mut());
+        let final_card = focused
+            .nodes
+            .iter()
+            .find(|node| node.name == final_card_name)
+            .expect("the focused card remains presented");
+        assert!(
+            final_card.fully_visible && final_card.focused,
+            "the complete card and focus ring must be visible after keyboard navigation: {final_card:?}"
+        );
     }
 }

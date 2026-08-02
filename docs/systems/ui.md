@@ -51,36 +51,65 @@ actions. Blocking decisions take `Required` priority and show their progress. Th
 rail is outside the HUD visibility tree, so hiding inspectors or the HUD cannot hide
 the required action.
 
-Party and turn state are primary information. Inspector, event log, and Combat Lab
-statistics are secondary drawers. A responsive region presents at most one secondary
-drawer; compact layouts collapse secondary information before they reduce action
-visibility.
+Party and turn state are primary information. The selected unit's lattice is
+persistent Inspector context, not a replaceable drawer. In Combat Lab sessions,
+statistics are a secondary surface ordered below that lattice; collapsing or
+expanding statistics must never hide, move, or cover the lattice. The event log and
+other optional inspectors remain secondary drawers. The Inspector is one persistent
+vertical scroll owner at every viewport and scale: own/target lattice readouts come
+first and statistics follow them in the same flow. Statistics can never be visible
+without that lattice. On an ultra-constrained blocking decision, the required lattice
+is promoted into the persistent action rail and the ordinary Inspector and statistics
+both hide; this avoids presenting two independently focusable copies of the same
+required choice. Redundant world badges yield so no secondary surface can cover a
+primary action.
 
 Builds with the default-off `dev` feature add a `DEV · TIME` panel to the gameplay
 Inspector region. `hex_ui` renders only the immutable current-hour or unavailable
 projection and emits typed half-hour/preset intents; the `hex_game` adapter remains
 responsible for changing the existing session clock. Static lighting exposes a reason
 instead of controls, and shipping builds contain neither the panel nor its adapter.
+On Compact Combat Lab canvases, live statistics take precedence over this
+development-only panel inside the same Inspector flow so the two secondary surfaces
+cannot compete for space.
 
 ## Responsive model
 
 The world camera always renders at native resolution. Bevy's global `UiScale`
-changes UI only and leaves operating-system DPI scaling authoritative.
+remains `1.0`, and operating-system DPI scaling stays authoritative. Semantic
+tokens scale UI content without scaling the entire Bevy layout tree.
 
 Auto scale is:
 
 ```text
-clamp(min(logical_width / 1920, logical_height / 1080), 1.0, 2.0)
+clamp(min(logical_width / 1920, logical_height / 1080), 1.0, 1.5)
 ```
 
 Manual 75%, 100%, 125%, 150%, 175%, and 200% choices replace Auto; they do not
-multiply it. Layout is selected from the effective post-scale canvas:
+multiply it. Body and supporting type use that content scale subject to the 18px
+essential-text floor. Display, title, and heading type use
+`1 + 0.5 × (content_scale - 1)`, capped at `1.5`. Control
+geometry uses the same moderated growth above 100% but never shrinks below its
+authored baseline, preserving 44×44 logical-pixel targets. Spacing uses
+`1 + 0.25 × (content_scale - 1)`, capped at `1.25`. Layout is selected from the
+logical canvas divided by the greater of content and spacing scale. This matters at
+200%: a 1920×1080 window must reflow to Compact instead of keeping Standard side
+rails beside doubled essential copy. Below 100%, spacing remains the density limit so
+smaller type does not unexpectedly promote an ordinary canvas to Wide.
 
-| Class | Effective canvas | Behavior |
+| Class | Semantic-density-adjusted logical canvas | Behavior |
 |---|---|---|
-| Compact | below 1600×900 | one content column; drawers overlay/collapse; action rail remains full width |
-| Standard | 1600×900 through 2399 px wide | primary content plus one secondary region |
+| Compact | below 1440×810 | persistent scrollable Inspector with lattice first and secondary content below; blocking lattice choices promote into the always-visible action rail |
+| Standard | at least 1440×810 and below 2400 px wide | primary content plus one secondary region |
 | Wide | at least 2400 px wide | bounded primary content with one persistent secondary region |
+
+Compact setup and Creator pages use one vertical page-scroll owner. The Character
+Creator lattice is the sole exception that needs a bounded two-axis pan surface: its
+custom Bevy-native handler consumes only motion the canvas can use, then bubbles the
+remaining vertical delta to the page at its boundary. Keyboard focus first reveals a
+cell inside that canvas and then reveals the canvas inside the outer page. Idle nested
+ScrollArea components are forbidden because Bevy 0.19 consumes wheel events before
+checking whether that child can move.
 
 Representative structure:
 
@@ -94,17 +123,25 @@ Compact                         Standard / Wide
 └──────────────┘                └──────────────────────────────┘
 ```
 
-Structural tests cover 960×540, 1280×720, 1920×1080, 2560×1440, and
-3840×2160 in Auto and 200% modes. Explicit Retina cases keep physical client size
-separate from OS scale, including 1280×720 @2× and the observed 3024×1898 @2×
-fullscreen client. Required controls must remain visible or scroll-reachable,
+Structural tests cover 960×540, 1280×720, 1512×949, 1920×1080, 2560×1440, and
+3840×2160 at 1× and 2× device scale in every semantic UI scale mode. Device pixels
+remain separate from logical layout, so 1280×720 @2× and the observed 3024×1898
+physical fullscreen client (1512×949 logical @2×) exercise the same contract.
+The reported 2582×1494 outer window includes native title-bar chrome; its Bevy client
+is approximately 2582×1442 physical, or 1291×721 logical at 2×. Tests use that client
+canvas directly and cover both 699px and 700px effective-height boundary cases so
+native chrome cannot silently select an untested layout.
+Primary controls must be fully visible immediately; secondary catalog/report content
+may instead prove complete scroll reachability. Every required control remains
 unobscured, accessible, and at least 44×44. `UiTreeSnapshot` intersects each node
-with the canvas and Bevy's inherited `CalculatedClip`; a nonzero `ComputedNode`
-inside a clipped ancestor is not treated as visible. The oracle also checks focus
-order and interactive overlap without inspecting pixels or rendered text.
-The matrix uses the full production title catalog, populated Settings, Creator and
-Combat Lab setup projections, a 6v6 deployment, and the maximum ordinary gameplay
-action rail plus required, aiming, statistics, and report states. A half logical
+and named text node's actual glyph rectangles with the canvas and Bevy's inherited
+`CalculatedClip`; a nonzero `ComputedNode` whose glyphs or box cross a clipped edge
+is not treated as fully visible. The oracle also checks focus order and interactive
+overlap without interpreting the text or pixels as gameplay truth.
+The matrix uses the full production title routes, the independently filtered Map
+Scenarios and Demos catalogs, populated
+Settings, Creator and Combat Lab setup projections, a 6v6 deployment, and the maximum
+ordinary gameplay action rail plus required, aiming, statistics, and report states. A half logical
 pixel is the only target-size tolerance, accounting for physical-pixel rounding at
 fractional Auto scales.
 
@@ -121,7 +158,7 @@ At 100% scale the semantic type tokens are:
 | Supporting | 18 | guidance and validation detail |
 | Metadata | 16 | optional, nonessential annotations only |
 
-Essential text must be at least 18 physical pixels at 1080p. Pointer targets are at
+Essential text must be at least 18 logical pixels. Pointer targets are at
 least 44×44 logical pixels. Layout uses semantic gaps and panel padding rather than
 screen-specific offsets where a shared token applies.
 
@@ -154,9 +191,10 @@ A true modal uses a Bevy `TabGroup` so focus cannot escape until its blocking ch
 is resolved. Informational drawers are not modals and do not trap focus. Controller
 navigation and remapping are intentionally deferred.
 
-This foundation uses Bevy's stable
-[`UiScale`](https://bevy.org/examples/ui-user-interface/ui-scaling/), tab navigation,
-focus, and accessibility components. Experimental widgets and BSN are outside this
+This foundation uses Bevy's stable tab navigation, focus, accessibility, image
+render targets, and screenshot components. The global `UiScale` remains 1.0;
+semantic typography, control, and spacing tokens provide accessibility scaling
+without doubling whole panels. Experimental widgets and BSN are outside this
 stabilization change.
 
 ## Preferences
@@ -167,26 +205,37 @@ the renderer resource and is persisted through the existing preferences writer.
 
 ## Testing oracle boundary
 
+The exhaustive player-task inventory, coverage tiers, and fail-closed control
+classification live in [Runtime UI verification](../development/ui-verification.md).
+That inventory is the acceptance source for route and fixture completeness; this
+section defines which oracle may prove each kind of fact.
+
 Use the cheapest authoritative oracle:
 
 - Pure view-model, scale, breakpoint, intent, and priority behavior stays inline in
   `hex_ui`.
 - Game and UI wiring uses the existing `gameplay_app` integration target with
-  `test-support`. `GameplayStateSnapshot` reads canonical resources/components;
-  `UiTreeSnapshot` reads presentation structure only.
+  `test-support`. `GameplayStateSnapshot` reads authority resources/components and
+  labels its copied HUD affordances `presented_actions`; those affordances prove
+  adapter parity, not command legality. `UiTreeSnapshot` reads presentation structure
+  only.
 - Deterministic combat and balance evidence belongs to the rules, contracts, and
   simulation partitions.
-- The scoped presentation route reviews exactly six deterministic offscreen frames
-  from `walks/gameplay_ui.ron` and four native macOS window-only checkpoints. Every
-  `Capture` first passes the live structural oracle. The native wrapper uses an
-  isolated `HEX_GAME_DATA_DIR`, records physical/logical size, OS/UI scale, viewport
-class, window mode, bounds, and commit SHA, and includes a persisted restart.
-Window capture also rejects an empty or black image before writing evidence metadata.
+- The scoped presentation route reviews exactly ten deterministic Bevy image-target
+  frames from `walks/gameplay_ui.ron`. Every gameplay `ReviewCapture` declares an
+  exact `UiTaskCase` and passes that task's live named-control contract before a PNG
+  can be written; merely reaching the right screen is insufficient. A typed review
+  viewport supplies logical size and device scale; Bevy renders into an
+  `ImageRenderTarget` and captures it with `Screenshot::image`. Diagnostic UI
+  overlays are rejected on this acceptance route. No operating-system capture API
+  or primary-window screenshot participates. Generic world-owner `Capture` steps
+  remain unchanged.
 
 A screenshot must never prove legality, budgets, decisions, damage, Channel,
-outcomes, persistence, deployment, or report identity. The visual runner therefore
-has no combat-solving verbs; presentation fixtures open authored states while typed
-tests prove their canonical facts.
+outcomes, persistence, deployment, or report identity. The scoped gameplay visual
+script therefore uses no combat-solving steps; presentation fixtures open authored
+states while typed tests prove their canonical facts. Generic world-owned walks keep
+their existing driver verbs and acceptance criteria.
 
 Forest, Waterfall, map-review, V3, and world-owned captures remain outside this
 contract and are unchanged.
@@ -198,27 +247,20 @@ mkdir -p .context/ui-review
 ui_review_data="$(mktemp -d .context/ui-review/data.XXXXXX)"
 HEX_GAME_DATA_DIR="$ui_review_data" \
 HEX_WALK_SCRIPT=walks/gameplay_ui.ron \
-HEX_WALK_OUT=.context/ui-review/offscreen \
+HEX_WALK_OUT=.context/ui-review/bevy \
 cargo run -p hex_game --features visual-walk
-
-tools/run_gameplay_ui_native_review_macos.sh
 ```
-
-Native capture uses the actual `Hex Game` CoreGraphics window ID with
-`screencapture -l`; it does not photograph the desktop or rely on Bevy's unreadable
-macOS/Metal primary-window screenshot path. The wrapper fails before launch when
-macOS Screen & System Audio Recording permission is unavailable. Enable Conductor
-(and its terminal host if macOS lists one) under System Settings → Privacy & Security,
-then fully restart Conductor before rerunning.
 
 ## Screen audit
 
 | Surface | Primary task | Persistent action | Secondary content |
 |---|---|---|---|
 | Splash/loading | understand progress | none | none |
-| Title | choose route | selected route | development scenario lists |
+| Title | choose route | all primary routes initially visible | none |
+| Map Scenarios | choose a map/world presentation fixture | Back | map-only catalog |
+| Demos | choose a focused gameplay demonstration | Back | demo-only catalog |
 | Settings | change one preference | Back | persistence notice |
-| Creators | finish the current authoring step | Back / Next / Confirm | optional details and history |
+| Character / Spell Creator | finish the current authoring step | Library / Save / Test where applicable | palettes, catalogs, validation, and history |
 | Combat Lab setup | choose fixture/profile and deploy | Back / Launch | fixture explanation and tuning |
 | Gameplay | act for the current unit | Now / Choose / Confirm rail | inspector, log, statistics |
 | Pause | resume, save, or leave | Resume | save notice |

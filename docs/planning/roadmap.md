@@ -54,7 +54,7 @@ still belong to the crate they change. `docs` is whoever picks it up.
 | Formation traversal | Wave 4: per-segment sextant rotation, deterministic bottleneck compression/reformation, and all-or-nothing exact-path `MoveParty` validation |
 | Outcomes and recovery | Wave 4: retained-world Victory/Defeat, exact same-seed Retry, caster-chosen Renewal restoration with next-round revival, and whole-party exploration Rest |
 | Party-combat checkpoint | Wave 4: deterministic 3v3 Party Trial summary/replay, focused Ability Lab and Raider Mirror walks, and the completed human Crossing playtest |
-| Pre-alpha app shell | Wave 5: Maps, focused Demos, and Actions; Party Trial is the hidden New Game default and Close Quarters retired |
+| Pre-alpha app shell | Wave 5 foundation, now presented as a responsive primary-route title with independent Map Scenarios and Demos catalogs plus direct Character/Spell Creator routes; Party Trial is the hidden New Game default and Close Quarters retired |
 | Exploration resume | Wave 5 / HEX-15: one atomic, build/content-bound slot, saved only from quiescent paused exploration and restored before first perception <!-- linear: HEX-15 owner: shravan-kumaran --> |
 | Settings and seams | Wave 5 / HEX-16: persistent display and volume preferences, centralized fixed input actions, and empty music/SFX/UI buses <!-- linear: HEX-16 owner: shravan-kumaran --> |
 | Release artifact scaffold | Wave 5 / HEX-17: stable app identity, normalized packages, retained symbol material, and documented future credential slots with no live integrations <!-- linear: HEX-17 owner: shravan-kumaran --> |
@@ -127,8 +127,8 @@ the whole wave lands on `dev` in one merge (CONTRIBUTING.md has the rules).
   promising save compatibility or live storefront, signing, telemetry, or crash
   reporting. Engine upkeep remains parked for the Bevy 0.20 window and is not a Wave 5
   gate.
-- **Wave 6 — creator and combat lab (delivered).** The Demos lane now owns separate
-  Character Creator and Spell Creator entries plus one Combat Lab. Local records have
+- **Wave 6 — creator and combat lab (delivered).** The primary title routes now expose
+  separate Character Creator and Spell Creator workspaces plus Combat Lab. Local records have
   stable IDs, atomic persistence, Draft/Ready and Map-ready diagnostics,
   dependency-safe deletion, and immutable packaged templates. Sandbox builds ordered
   rosters on all sixteen distinct supported shipped maps, previews and describes
@@ -240,7 +240,10 @@ behaviors exist. The chosen profile is frozen into launch and Retry.
 The Rules step presents preset cards above labelled steppers, a plain-language
 description of each parameter's effect, a visible changed-from-shipped state, Reset,
 and validation at the point of editing. Active Lab sessions add a collapsible
-statistics drawer without replacing the ordinary gameplay HUD. Outcomes open a
+statistics drawer below the persistent lattice readout without replacing the
+ordinary gameplay HUD. The Inspector is its single scroll owner at every scale;
+statistics never appear without that lattice, and HUD/terminal transitions hide the
+two together. Outcomes open a
 full-screen report with **Overview**, **Units**, **Spells & Effects**, **Timeline**,
 and **Compare** modes. Comparison shows both frozen profile/roster headers and
 labelled numeric deltas; colour is never the only indication of improvement or
@@ -285,13 +288,15 @@ today, and its status, is [contracts.md](../contracts.md).
 
 ### Pre-alpha app shell and default game
 
-The development-friendly three-column title deck now has Maps, focused Demos, and
-Actions lanes. Party Trial is the one integrated default game and launches through
-New Game rather than appearing beside diagnostic fixtures. Character Creator, Spell
-Creator, and Combat Lab are the only Wave 6 title entries. Ability Lab, Raider Mirror, and creator matrices live
-behind Combat Lab's fixed-fixture selector; Close Quarters and the Combat category
-remain retired. Continue and Settings are active, while starting a New Game never
-reads or overwrites the resume slot.
+The responsive title now keeps Continue, New Game, Character Creator, Spell Creator,
+Combat Lab, Map Scenarios, Demos, Settings, and Quit together as primary routes. Map
+Scenarios and Demos open independently filtered scrollable catalogs. Party Trial is
+the one integrated default game and launches through New Game rather than appearing
+beside diagnostic fixtures.
+Ability Lab and Raider Mirror remain available by stable fixture ID inside Combat Lab
+and also appear in Demos; creator matrices remain Lab-only.
+Close Quarters and the Combat category remain retired. Starting a New Game never reads
+or overwrites the resume slot.
 
 ### Save and load
 

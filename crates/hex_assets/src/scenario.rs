@@ -1,4 +1,4 @@
-//! The scenarios offered on the title screen.
+//! The scenarios offered in the development Scenarios catalog.
 //!
 //! A scenario is a **world plus the units standing on it**: pick one and you get that
 //! terrain with those pieces, without editing a file or restarting.
@@ -31,7 +31,7 @@ pub struct ScenarioLibrary {
     ///
     /// The entry remains in `scenarios` so it uses the same validated world,
     /// lighting, encounter, and seed vocabulary as every development fixture. The
-    /// title screen resolves it independently and does not also list it in a lane.
+    /// title screen resolves it independently and the Scenarios catalog omits it.
     pub default_game: String,
     /// The scenarios, in the order they are listed.
     pub scenarios: Vec<Scenario>,
@@ -46,7 +46,7 @@ impl ScenarioLibrary {
             .find(|scenario| scenario.name == self.default_game)
     }
 
-    /// Development scenarios visible in the Maps and Demos lanes.
+    /// Development scenarios visible in the Scenarios catalog's Maps and Demos sections.
     pub fn visible_scenarios(&self) -> impl Iterator<Item = &Scenario> {
         self.scenarios
             .iter()
@@ -57,9 +57,9 @@ impl ScenarioLibrary {
 /// One playable setup: a world, and where the units start on it.
 #[derive(Reflect, Debug, Clone)]
 pub struct Scenario {
-    /// What the title screen calls it.
+    /// Player-facing name used by the Scenarios catalog and loading flow.
     pub name: String,
-    /// Which framed title-screen column owns this scenario.
+    /// Which Scenarios catalog section owns this scenario.
     pub category: ScenarioCategory,
     /// One line under the name, saying what is interesting about it.
     pub blurb: String,
@@ -77,7 +77,7 @@ pub struct Scenario {
     pub lighting: String,
     /// Reproducible terrain seed for a generated world.
     ///
-    /// Authored scenarios omit this. The title screen can replace a configured seed
+    /// Authored scenarios omit this. The Scenarios catalog can replace a configured seed
     /// for the current process, but never writes that replacement back to this asset.
     pub generation_seed: Option<u64>,
     /// Optional time of day at which this scenario starts, in `[0, 24)`.
@@ -95,7 +95,7 @@ pub struct Scenario {
     pub encounter: String,
 }
 
-/// The development title-screen lane a non-default scenario can inhabit.
+/// The Scenarios catalog section a non-default scenario can inhabit.
 #[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
 pub enum ScenarioCategory {
     /// Worlds whose terrain or traversal is the main attraction.
@@ -214,7 +214,7 @@ mod tests {
         }
     }
 
-    /// Two scenarios with the same name are indistinguishable on the title screen.
+    /// Two scenarios with the same name are indistinguishable in the catalog.
     #[test]
     fn scenario_names_are_unique() {
         let library: ScenarioLibrary =
@@ -242,7 +242,7 @@ mod tests {
             library
                 .visible_scenarios()
                 .all(|scenario| scenario.name != default.name),
-            "the default must not also appear in a development lane"
+            "the default must not also appear in the development catalog"
         );
     }
 

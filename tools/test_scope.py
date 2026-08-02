@@ -151,15 +151,18 @@ def load_config(path: pathlib.Path = DEFAULT_CONFIG) -> dict[str, Any]:
             raise ScopeConfigurationError(
                 f"concern {concern} command must be non-empty strings"
             )
-        preflight = definition.get("preflight_command")
-        if preflight is not None and (
-            not isinstance(preflight, list)
-            or not preflight
-            or not all(isinstance(value, str) and value for value in preflight)
-        ):
-            raise ScopeConfigurationError(
-                f"concern {concern} preflight_command must be non-empty strings"
-            )
+        for command_name in ("preflight_command", "postflight_command"):
+            extra_command = definition.get(command_name)
+            if extra_command is not None and (
+                not isinstance(extra_command, list)
+                or not extra_command
+                or not all(
+                    isinstance(value, str) and value for value in extra_command
+                )
+            ):
+                raise ScopeConfigurationError(
+                    f"concern {concern} {command_name} must be non-empty strings"
+                )
         environment = definition.get("environment", {})
         if not isinstance(environment, dict) or not all(
             isinstance(key, str)
@@ -541,6 +544,11 @@ def main() -> int:
                     else []
                 ),
                 definition["command"],
+                *(
+                    [definition["postflight_command"]]
+                    if "postflight_command" in definition
+                    else []
+                ),
             ]
             print(" && ".join(shlex.join(command) for command in commands))
             return 0
@@ -552,18 +560,22 @@ def main() -> int:
                 )
             commands = [
                 *(
-                    [definition["preflight_command"]]
+                    [("preflight", definition["preflight_command"])]
                     if "preflight_command" in definition
                     else []
                 ),
-                definition["command"],
+                ("command", definition["command"]),
+                *(
+                    [("postflight", definition["postflight_command"])]
+                    if "postflight_command" in definition
+                    else []
+                ),
             ]
             environment = os.environ.copy()
             environment.update(definition.get("environment", {}))
             started = time.monotonic()
             returncode = 0
-            for index, command in enumerate(commands):
-                label = "preflight" if index < len(commands) - 1 else "command"
+            for label, command in commands:
                 print(
                     f"scope {label} [{arguments.concern}]: {shlex.join(command)}",
                     flush=True,

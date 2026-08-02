@@ -143,10 +143,11 @@ cargo deny check
 cargo clippy --workspace --all-targets --all-features --profile ci -- -D warnings
 cargo test --workspace --all-features --profile ci
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
-cargo build --workspace --profile ci
+cargo build --package hex_game --release
 ```
 
-GitHub CI additionally runs the three-platform shipping build and domain coverage.
+GitHub CI additionally runs that shipping-package build on the other supported
+platforms and runs domain coverage.
 Run the automated visual walk and inspect every frame, then have a human play the
 combined build. Human review belongs here because motion, seams, composition, and
 taste do not become cheaper or more reliable when repeated on incomplete leaves.

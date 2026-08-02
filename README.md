@@ -101,8 +101,7 @@ Party Trial.
 Regenerate readme_assets/party-trial-combat.png with:
 HEX_WALK_SCRIPT=walks/readme_party_trial.ron \
 HEX_WALK_OUT=.context/readme-captures/party-trial \
-HEX_WALK_SIZE=1280x720 \
-HEX_GAME_DATA_DIR=.context/readme-captures/party-trial-data \
+HEX_WALK_VIEWPORT=1280x720@1 \
 cargo run --release -p hex_game --features visual-walk
 cp .context/readme-captures/party-trial/party-trial-combat.png \
   readme_assets/party-trial-combat.png
@@ -123,12 +122,13 @@ much of the larger design remain ahead. The exact boundary is recorded in the
 
 ### Play the current build
 
-The title screen separates development **Maps** and focused **Demos** from application
-**Actions**. **New Game** launches Party Trial as the one integrated default scenario;
-the Demos column contains **Character Creator**, **Spell Creator**, and **Combat Lab**.
-Combat Lab provides a transient roster/deployment Sandbox across all sixteen shipped
-maps and a searchable fixed-fixture selector for Ability Lab, Raider Mirror,
-and creator-format matrices.
+The title screen keeps the primary application routes together: **Continue**, **New
+Game**, **Character Creator**, **Spell Creator**, **Combat Lab**, **Map Scenarios**,
+**Demos**, **Settings**, and **Quit**. **New Game** launches Party Trial as the hidden
+integrated default. **Map Scenarios** and **Demos** open separate filtered catalogs;
+the two Creator routes open their exact libraries directly, while **Combat Lab** provides a
+transient roster/deployment Sandbox across all sixteen shipped maps and a searchable
+fixed-fixture selector for Ability Lab, Raider Mirror, and creator-format matrices.
 **Continue** restores one explicitly saved exploration slot through the ordinary
 loading flow. Saving is available only while paused in a safe exploration state;
 combat, movement, and open decisions refuse it. The slot is bound to its build,
@@ -139,8 +139,7 @@ data is reported instead of partially loaded. New Game never overwrites it.
 Regenerate the Creator and deployment screenshots with:
 HEX_WALK_SCRIPT=walks/readme_creator_lab.ron \
 HEX_WALK_OUT=.context/readme-captures/creator-lab \
-HEX_WALK_SIZE=1280x720 \
-HEX_GAME_DATA_DIR=.context/readme-captures/creator-lab-data \
+HEX_WALK_VIEWPORT=1280x720@1 \
 cargo run --release -p hex_game --features visual-walk
 cp .context/readme-captures/creator-lab/character-creator.png \
   readme_assets/character-creator.png

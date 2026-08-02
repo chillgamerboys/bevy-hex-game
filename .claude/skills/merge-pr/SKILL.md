@@ -19,20 +19,31 @@ by `/audit-pr` after every run (green AND failed). This is the
 **hard gate** for merge eligibility — there is no warn-but-proceed
 path. Six cases (routed on `schema_version`):
 
+For every schema-v3 receipt, validate `5_visual_walk` before routing on SHA,
+status, or age. The entry must exist, `review_policy` must be `blocking`,
+`advisory`, or `not_applicable`, and the status/policy pair must be coherent:
+`pass` pairs with `blocking` or `advisory`; `warn` pairs only with `advisory`;
+`skipped` pairs only with `not_applicable`; and `fail` pairs with `blocking` or
+`advisory` and requires `overall_status: "failed"`. Any `fail` inside an
+otherwise-green receipt is also invalid. A missing field or invalid pair means
+the receipt cannot prove the gate that produced it: **STOP** and rerun
+`/audit-pr`. This validation applies equally to fresh and older receipts.
+
 1. **Receipt present, `schema_version=3`, `head_sha` matches `git
    rev-parse HEAD`, `completed_at` within last 60 min,
    `overall_status: "green"`** → ✓ silent. Audit-pr was green
    for *this exact commit* recently. Proceed with full confidence.
    (A `warn` on step `0_audit_linear` — no ticket tie — is part of
    green here; this repo's Linear tie is soft. Echo it in the report,
-   don't block on it. A `warn` on `5_visual_walk` is also green, but
-   is NOT silent: print its review-tier findings `{step, png_path,
-   check, message}` in the report so the operator sees what the
+   don't block on it. A valid advisory warning on `5_visual_walk` is NOT
+   silent: print its review-tier findings `{step,
+   png_path, check, message}` in the report so the operator sees what the
    agent's eyes flagged before finalizing. A `fail` on
    `5_visual_walk` flips `overall_status` to failed like any other
    step; `skipped` means the diff had no runtime surface.)
 
-2. **Receipt present, SHA matches, but `completed_at` > 60 min old**
+2. **Receipt present, SHA and green overall status match, but `completed_at`
+   > 60 min old**
    → ⚠ warn (don't STOP):
 
    ```
@@ -43,7 +54,8 @@ path. Six cases (routed on `schema_version`):
      merging.
    ```
 
-3. **Receipt present, SHA matches, `overall_status: "failed"`** →
+3. **Receipt present, SHA matches, `overall_status: "failed"` (regardless of
+   receipt age)** →
    ✗ STOP. **Print the failing step's `findings` array verbatim** —
    v3 captures structured findings so the operator sees the exact
    bugs without re-running the audit:
@@ -193,8 +205,10 @@ State can change between audit and merge — these checks are fast
    Detection-and-recovery beats a surprise mid-flight failure.
 
 4. **Mergeable per GitHub.** Same JSON:
-   - `mergeable: MERGEABLE` required; `CONFLICTING` → STOP "resolve
-     conflicts via `git pull origin dev --rebase`."
+   - `mergeable: MERGEABLE` required; `CONFLICTING` → STOP "fetch the
+     PR's actual base, merge `origin/<baseRefName>` additively into the published
+     head, resolve and validate the conflicts, then push the merge commit; never
+     rebase or force-push a published/shared branch."
    - `mergeStateStatus: CLEAN` is the happy path. `UNSTABLE` (checks
      pending) → ⚠ warn but proceed. `BLOCKED` → STOP "branch
      protection blocks merge (failing checks / required reviews)."

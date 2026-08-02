@@ -43,8 +43,9 @@ pub(super) fn plugin(app: &mut App) {
         .add_systems(
             Update,
             (
-                refresh_settings,
-                apply_settings_layout,
+                (refresh_settings, apply_settings_layout)
+                    .chain()
+                    .in_set(UiSystems::Render),
                 handle_settings_controls,
             )
                 .run_if(in_state(Screen::Settings)),
@@ -54,7 +55,7 @@ pub(super) fn plugin(app: &mut App) {
         .add_systems(
             Update,
             (
-                refresh_pause,
+                refresh_pause.in_set(UiSystems::Render),
                 handle_pause_controls.in_set(UiSystems::EmitIntents),
             )
                 .run_if(in_state(hex_core::Pause(true))),
@@ -148,24 +149,33 @@ fn spawn_settings(mut commands: Commands, assets: Res<UiAssets>, view: Res<UiSet
                 &assets,
                 "Display, readable UI scale, presentation, and volume.",
             ));
-            root.spawn((panel(), SettingsSurface))
-                .insert(Node {
-                    width: Val::Px(700.0),
-                    max_width: Val::Percent(94.0),
-                    max_height: Val::Percent(78.0),
-                    padding: UiRect::all(Val::Px(18.0)),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(10.0),
-                    overflow: Overflow::scroll_y(),
-                    border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(10.0)),
-                    ..default()
-                })
-                .with_children(|surface| {
-                    spawn_settings_rows(surface, &assets, &view);
-                });
-            root.spawn((button("Back"), SettingsBack))
-                .with_child(label(&assets, "Back to title"));
+            root.spawn((
+                button("Back"),
+                SettingsBack,
+                crate::UiVisibilityRequirement::Immediate,
+            ))
+            .with_child(label(&assets, "Back to title"));
+            root.spawn((
+                panel(),
+                SettingsSurface,
+                bevy::ui_widgets::ScrollArea,
+                ScrollPosition::default(),
+            ))
+            .insert(Node {
+                width: Val::Px(700.0),
+                max_width: Val::Percent(94.0),
+                max_height: Val::Percent(78.0),
+                padding: UiRect::all(Val::Px(18.0)),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(10.0),
+                overflow: Overflow::scroll_y(),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(10.0)),
+                ..default()
+            })
+            .with_children(|surface| {
+                spawn_settings_rows(surface, &assets, &view);
+            });
             root.spawn((
                 SettingNotice,
                 blurb(&assets, view.notice.clone().unwrap_or_default()),
@@ -174,14 +184,25 @@ fn spawn_settings(mut commands: Commands, assets: Res<UiAssets>, view: Res<UiSet
 }
 
 fn apply_settings_layout(
+    mut commands: Commands,
     metrics: Res<ResolvedUiMetrics>,
     added: Query<(), Added<SettingsSurface>>,
     mut roots: Query<&mut Node, (With<SettingsRoot>, Without<SettingsSurface>)>,
-    mut surfaces: Query<&mut Node, (With<SettingsSurface>, Without<SettingsRoot>)>,
+    mut surfaces: Query<(Entity, &mut Node), (With<SettingsSurface>, Without<SettingsRoot>)>,
     mut controls: Query<
         &mut Node,
         (
-            Or<(With<SettingControl>, With<SettingsBack>)>,
+            With<SettingControl>,
+            Without<SettingsRoot>,
+            Without<SettingsSurface>,
+            Without<SettingsBack>,
+        ),
+    >,
+    mut backs: Query<
+        &mut Node,
+        (
+            With<SettingsBack>,
+            Without<SettingControl>,
             Without<SettingsRoot>,
             Without<SettingsSurface>,
         ),
@@ -192,13 +213,22 @@ fn apply_settings_layout(
     }
     let compact = metrics.viewport == UiViewportClass::Compact;
     for mut node in &mut roots {
+        // A vertically overflowing flex column cannot scroll to content placed
+        // above its origin by Center alignment. Compact owns the scroll route,
+        // so anchor its first setting at the start edge.
+        node.justify_content = if compact {
+            JustifyContent::FlexStart
+        } else {
+            JustifyContent::Center
+        };
         node.overflow = if compact {
             Overflow::scroll_y()
         } else {
             Overflow::clip_y()
         };
     }
-    for mut node in &mut surfaces {
+    for (entity, mut node) in &mut surfaces {
+        node.flex_shrink = if compact { 0.0 } else { 1.0 };
         node.max_height = if compact {
             Val::Auto
         } else {
@@ -209,10 +239,33 @@ fn apply_settings_layout(
         } else {
             Overflow::scroll_y()
         };
+        if compact {
+            // Compact owns one continuous page scroll. Bevy's ScrollArea
+            // consumes wheel input before it checks whether this surface can
+            // scroll, so an idle nested owner would strand the lower rows.
+            commands
+                .entity(entity)
+                .remove::<bevy::ui_widgets::ScrollArea>()
+                .insert(ScrollPosition::default());
+        } else {
+            commands
+                .entity(entity)
+                .insert((bevy::ui_widgets::ScrollArea, ScrollPosition::default()));
+        }
     }
     for mut node in &mut controls {
         node.width = Val::Percent(100.0);
         node.max_width = Val::Px(440.0);
+        node.min_width = Val::Px(0.0);
+        node.min_height = Val::Px(64.0 * metrics.content_scale.max(1.0));
+        node.flex_shrink = 0.0;
+    }
+    for mut node in &mut backs {
+        node.position_type = PositionType::Absolute;
+        node.top = Val::Px(12.0);
+        node.right = Val::Px(12.0);
+        node.width = Val::Px(240.0);
+        node.max_width = Val::Percent(40.0);
         node.min_width = Val::Px(0.0);
     }
 }
@@ -263,6 +316,7 @@ fn spawn_settings_rows(
             .spawn((
                 button(format!("Setting {:?}", row.setting)),
                 SettingControl(row.setting),
+                crate::UiVisibilityRequirement::Scrollable,
             ))
             .with_child(label(assets, format!("{} · {}", row.label, row.value)));
     }
