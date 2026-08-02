@@ -139,10 +139,13 @@ slot 1 with zero prior play time; the legacy file is never overwritten or delete
 Sandbox is the single temporary encounter setup. Its default draft is Flat Arena
 with one Hedge Mage in Party and one Raider in Enemies. Choose one of the shipped
 maps, fill either sparse six-slot ordered roster from templates or saved Map-ready
-characters, deploy every occupied slot, and launch with the shipped combat rules.
-The draft survives child pages, Main Menu excursions, Creator trips, and gameplay
-return. Tools contains Character Creator, Spell Creator, and a disabled Map Creator
-marked Coming Soon.
+characters, then place occupied Party slots followed by Enemy slots one at a time on
+any canonical legal, unoccupied exact surface. Deployment hides the ordinary gameplay
+HUD and leaves one compact task card over the map; after the final placement, Review
+offers Undo, Return to Sandbox, and Start Combat with the shipped rules. The draft
+survives child pages, Main Menu excursions, Creator trips, and gameplay return. Tools
+contains Character Creator, Spell Creator, and a disabled Map Creator marked Coming
+Soon.
 
 <!--
 Regenerate the Creator and Sandbox deployment screenshots with:
@@ -179,6 +182,7 @@ for later audio and rebinding work; Wave 5 does not pretend those products exist
 | `R` | Recover the whole party while exploring |
 | `F5` while paused in Campaign exploration | Atomically replace the bound Campaign slot |
 | `H` | Hide or show ordinary readouts; an active damage choice stays visible |
+| Sandbox Deployment terrain click | Place the current Party or Enemy character on that legal, unoccupied exact surface |
 | Click lattice cells, then `ENTER` | Choose and confirm which cells incoming damage disables |
 | `ESC` | Pause, or leave the Main Menu |
 | `BACKSPACE` | Return to the owning Creator, Sandbox setup, or Main Menu |
@@ -188,10 +192,10 @@ disable, restore, and break enchantments without constructing a map combat. See 
 [Creator and Sandbox contract](docs/systems/creator-and-sandbox.md) for saved content,
 readiness, route identity, deployment, and frozen Retry behavior.
 
-![Sandbox deployment on the Fort map, with exact Party and Enemy placement regions highlighted directly on the terrain](readme_assets/sandbox-deployment.png)
+![Guided Sandbox deployment on the Fort map, with one compact character task card and exact placement tokens over the terrain](readme_assets/sandbox-deployment.png)
 
-*Sandbox loads the real terrain before combat and records exact elevated surfaces
-for every deployed unit.*
+*Sandbox hides the ordinary gameplay HUD while Party then Enemy characters are placed
+one at a time, and records the exact elevated surface chosen for every unit.*
 
 ## Read more
 

@@ -53,7 +53,8 @@ only from the Creator's local mechanics test.
 | Character Creator | saved clean Map-ready character | Library, Save, Local Test, Open in Sandbox | Open in Sandbox preserves map/Enemies, replaces Party with slot 1 only, retains typed Creator origin |
 | Spell Creator | library/workspace variants | Library, Save | Tools-origin return stays typed as Tools |
 | Tools | complete | Back, Character Creator, Spell Creator | Map Creator visible, disabled, and labelled Coming Soon; exactly those three tools |
-| Deployment | 1v1 and sparse 6v6 | Back, placement actions, Start | every occupied slot has a unique exact surface before Start; invalid occupancy visibly refused |
+| Deployment placing | 1v1 and sparse 6v6 | Undo when available, Return to Sandbox | compact current-character card; stable Party-then-Enemies progress; any canonical legal unoccupied exact surface accepted; invalid footing or occupancy visibly refused; ordinary HUD absent from layout, focus, scrolling, and picking |
+| Deployment Review | complete 1v1 and sparse 6v6 | Undo, Return to Sandbox, Start Combat | every occupied slot has one unique exact surface; earlier slots can be selected for repositioning; exact launch remains frozen only after Start |
 | Sandbox outcome | Victory and Defeat | Retry Exact, Return to Sandbox | no telemetry/report controls; retry retains launch snapshot identity |
 | Settings | authored and persisted values | Back | changes save immediately; all controls have labels; chosen presentation survives restart |
 
@@ -99,14 +100,16 @@ not infer correctness from physical-window size or a desktop screenshot.
 Renderer-free model tests cover every route and Back transition, draft preservation,
 pending versus committed map identity, generated-seed regeneration, exact seed
 launch, Party/Enemy side and slot identity, Creator return destinations, blocker
-priority, stable roster flattening with duplicates, and Retry Exact identity.
+priority, stable roster flattening with duplicates, guided Party-then-Enemies
+deployment order, exact occupancy, reselection, Undo, Review, and Retry Exact identity.
 
 Headless application tests cover exactly four Main Menu actions, exactly three
 Campaign cards, mixed slot projection, absence of obsolete shipping navigation,
-canonical catalog/content/rules/deployment resources, cold launch, Sandbox re-entry,
-outcome return, Creator-origin return, and actual focus-tree/control names. Those
-tests may build UI trees through default-off `test-support`; production plugins do
-not gain test fixture routes.
+canonical catalog/content/rules/deployment resources, a real exact-terrain placement
+outside the staging regions, complete ordinary-HUD suppression, cold launch, Sandbox
+re-entry, outcome return, Creator-origin return, and actual focus-tree/control names.
+Those tests may build UI trees through default-off `test-support`; production plugins
+do not gain test fixture routes.
 
 Screenshots prove only presentation structure: hierarchy, layout, legibility,
 contrast, responsive reflow, focus visibility, and the pictured state. They do not

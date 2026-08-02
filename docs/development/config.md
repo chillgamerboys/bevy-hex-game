@@ -19,7 +19,7 @@ you do not need to recompile the game.
 | `lighting.ron` | Sun brightness, colour and angle, ambient light, the sky gradient and its hex clouds |
 | `player.ron` | Player piece size and movement speed |
 | `scenarios.ron` | Internal world + lighting + encounter launch definitions used by Campaign, Sandbox, saves, retry, review, and tests |
-| `sandbox_maps.ron` | Stable player-facing Sandbox map IDs, scenario and seed contract, plus Party/Enemy deployment-region centers and radii |
+| `sandbox_maps.ron` | Stable player-facing Sandbox map IDs and scenario/seed contract, plus Party/Enemy hidden actor-staging centers and radii retained for compatibility |
 | `encounters/*.ron` | Who is on the map: rosters by archetype, and where each unit starts |
 | `lattices.ron` | Who each of them *is*: the gems, fusions and spells an archetype is made of |
 | `menu.ron` | How the menu screens look |
@@ -578,9 +578,12 @@ the per-user data directory's `creations.ron`, not the shipped asset tree.
 checked on load. Every distinct
 supported shipped environment appears once. Each entry has a stable ID, display name,
 tactical description and tags, renderer-generated preview asset, scenario, optional
-generation seed, and one deployment region per side. A region center is either
-`Fixed((x, y, z))` for authored terrain or `Anchor("name")` for a generated exact
-surface, with a bounded path-cost `radius`.
+generation seed, and one hidden actor-staging region per side. A staging center is
+either `Fixed((x, y, z))` for authored terrain or `Anchor("name")` for a generated
+exact surface, with a bounded path-cost `radius`. These fields are retained as stable
+compatibility metadata so Loading can stage the frozen roster before guided
+deployment. They do not restrict the player's exact placement choices: each current
+Party or Enemy character may be placed on any canonical legal, unoccupied surface.
 
 Selecting a generated map in Sandbox creates a pending `resolved_seed`. Regenerate
 changes only that pending value and displays the exact replacement. **Use Map**

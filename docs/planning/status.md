@@ -198,9 +198,14 @@ Flat Arena with one Hedge Mage and one Raider. A selected map is pending until U
 Map; generated maps may regenerate only that pending resolved seed, and Back discards
 it. Sparse slots and duplicates are valid, while launch flattens occupied slots in
 stable order. The draft survives child routes, Main Menu and Creator excursions, and
-gameplay return. Start freezes shipped combat rules plus exact map/seed, ordered
-rosters, content revision, and deployment for Loading and Retry Exact. Terminal
-Sandbox play shows only Victory/Defeat, Retry Exact, and Return to Sandbox.
+gameplay return. Guided deployment places occupied Party slots and then Enemy slots
+one at a time on any canonical legal, unoccupied exact surface. The ordinary gameplay
+HUD is fully suppressed during that phase, leaving a compact task card; the final
+placement enters Review with Undo, Return to Sandbox, and Start Combat. Catalog side
+regions remain only as hidden actor-staging compatibility metadata. Start freezes
+shipped combat rules plus exact map/seed, ordered rosters, content revision, and
+deployment for Loading and Retry Exact. Terminal Sandbox play shows only
+Victory/Defeat, Retry Exact, and Return to Sandbox.
 
 Tools contains Character Creator, Spell Creator, and a disabled Map Creator marked
 Coming Soon. Creator origins and destinations are typed. Creating from a character

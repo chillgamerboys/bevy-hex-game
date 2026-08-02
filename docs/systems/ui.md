@@ -31,10 +31,10 @@ Main Menu, Campaign, Sandbox, and Creator transitions remain in
 `hex_gameplay_model`. A widget may select or submit a typed transition, but it must
 not duplicate the transition policy. Route-specific immutable views render the
 Main Menu, three Campaign cards, Sandbox dashboard and child routes, while
-`DeploymentView` renders its HUD. `hex_game` alone validates Campaign records and
-map readiness, resolves exact surfaces, freezes launch identity, and admits Start.
-The 3D deployment highlights and placement tokens remain spatial world
-presentation, not runtime UI.
+`DeploymentView` renders one compact guided task card and its Review actions.
+`hex_game` alone validates Campaign records and map readiness, resolves exact terrain
+clicks, freezes launch identity, and admits Start. Exact 3D placement tokens remain
+spatial world presentation, not runtime UI.
 
 ## Information hierarchy
 
@@ -50,7 +50,10 @@ Gameplay adds a persistent **Now / Choose / Confirm** rail. It always presents t
 current actor, phase, remaining movement and action, and the currently authorized
 actions. Blocking decisions take `Required` priority and show their progress. The
 rail is outside the HUD visibility tree, so hiding inspectors or the HUD cannot hide
-the required action.
+the required action during active play. Deployment is a stronger phase-level task:
+it removes the rail and every other ordinary HUD region from layout, focus, scrolling,
+and picking, then presents only its compact modal task card over the map. This
+effective suppression does not change the player's ordinary HUD preference.
 
 Party and turn state are primary information. The selected unit's lattice is
 persistent Inspector context, not a replaceable drawer. The event log and other
@@ -133,10 +136,10 @@ is not treated as fully visible. The oracle also checks focus order and interact
 overlap without interpreting the text or pixels as gameplay truth.
 The matrix uses Main Menu, all three Campaign record states, Sandbox Overview, map
 browser and both map-detail modes, sparse and dense Party/Enemies rosters, character
-picker, Tools, populated Settings, Creator, a 6v6 deployment, and the maximum ordinary
-gameplay action rail plus required and aiming states. A half logical pixel is the only
-target-size tolerance, accounting for physical-pixel rounding at fractional Auto
-scales.
+picker, Tools, populated Settings, Creator, guided 6v6 Deployment placement and Review,
+and the maximum ordinary gameplay action rail plus required and aiming states. A half
+logical pixel is the only target-size tolerance, accounting for physical-pixel
+rounding at fractional Auto scales.
 
 ## Typography, spacing, and contrast
 
@@ -258,7 +261,7 @@ cargo run -p hex_game --features visual-walk
 | Tools | choose an authoring tool | Back | Character Creator, Spell Creator, disabled Map Creator |
 | Settings | change one preference | Back | persistence notice |
 | Character / Spell Creator | finish the current authoring step | Library / Save / Test where applicable | palettes, catalogs, validation, history, typed origin |
-| Deployment | place every occupied Sandbox roster slot | Back / Start | exact legal surfaces and occupancy refusal |
+| Deployment | place occupied Party then Enemy slots one at a time and review exact choices | Undo / Return to Sandbox / Start Combat in Review | compact current-character card, exact legal-surface and occupancy refusal, no ordinary HUD |
 | Gameplay | act for the current unit | Now / Choose / Confirm rail | inspector and log |
 | Pause | resume, save, or leave | Resume | save notice |
 | Sandbox outcome | acknowledge result | Retry Exact / Return to Sandbox | Victory or Defeat only |

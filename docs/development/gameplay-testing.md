@@ -18,7 +18,7 @@ scenario binaries continue to run in the residual workspace suite.
 | Pure rules | Value objects, lattice transformations, compact AI policy | Owning crate dependencies only | Return values and immutable state | `python3 tools/test_scope.py run rules` | 60 s total |
 | ECS contracts | Focused commands, effects, movement, turns, occupancy and Channel seams | `hex_test_support`, then the owning gameplay crate dependencies | Components, resources, messages and exact positions | `python3 tools/test_scope.py run contracts` | 60 s per test |
 | Deterministic simulation | Multi-turn composition, tempo profiles, 3v3/6v6, canonical summaries and bounded no-progress | `hex_combat_core` over `hex_core` + `hex_lattice`; never Bevy App, `hex_test_support`, renderer, viewport, wall clock, asset server, ECS entity, perception implementation, or map generator | Full `CombatRunSnapshot` equality across two runs plus named metric assertions | `python3 tools/test_scope.py run simulation` | 60 s |
-| Game/UI behavior | Pure Main Menu, Campaign, Sandbox, and Creator transitions plus Bevy wiring, persistence, re-entry, deployment, and outcome lifecycle | `hex_gameplay_model` for route/draft/launch truth; `hex_ui` for rendering; `hex_game` with default-off `test-support` only for Bevy lifecycle | Pure state equality, `GameplayStateSnapshot` for authority facts and explicit presentation-adapter observations, and `UiTreeSnapshot` for presentation structure | `python3 tools/test_scope.py run app` | 60 s |
+| Game/UI behavior | Pure Main Menu, Campaign, Sandbox, Creator, and guided deployment transitions plus Bevy wiring, persistence, re-entry, exact terrain placement, HUD suppression, and outcome lifecycle | `hex_gameplay_model` for route/draft/deployment/launch truth; `hex_ui` for rendering; `hex_game` with default-off `test-support` only for Bevy lifecycle | Pure state equality, `GameplayStateSnapshot` for authority facts and explicit presentation-adapter observations, and `UiTreeSnapshot` for presentation structure | `python3 tools/test_scope.py run app` | 60 s |
 | Visual smoke | Layout, legibility, overlap, responsive composition and presentation regressions | Release-shaped game with `visual-walk`; no `dev` or `test-support` | Reviewed frames plus the human motion/feel walk | Run the one scoped gameplay walk through `/visual-walk` | At most 10 reviewed gameplay frames |
 | Soak/performance | Long stalemates, stress corpora, bounded retention and performance | The scheduled stress workflow | Typed completion/timeout, fingerprints, timing and memory bounds | `.github/workflows/stress.yaml` | Scheduled/manual only |
 
@@ -195,10 +195,20 @@ of those request types, manifests, or injected rules joins the shipping plugin g
 transitions. It may depend on `bevy_ecs` derive support and `hex_core`, but not on
 assets, combat, units, game, map, world, perception, or the Bevy facade. It is the
 oracle for route and Back behavior, pending/committed map and resolved-seed edits,
-fixed six-slot roster identity/order/duplicates, launch-blocker priority, exact Retry
-identity, Campaign slot identity, typed Creator destinations, and bounded edit
-history. Widget systems emit typed actions into that model and apply effectful
-results; they do not duplicate those decisions.
+fixed six-slot roster identity/order/duplicates, launch-blocker priority, guided
+Party-then-Enemies deployment order, exact placement occupancy, reselection, Undo and
+Review, exact Retry identity, Campaign slot identity, typed Creator destinations, and
+bounded edit history. Widget systems emit typed actions into that model and apply
+effectful results; they do not duplicate those decisions.
+
+The application adapter proves that one ordinary `HexTile` click outside the catalog's
+hidden staging regions is accepted when canonical walker footing admits its exact
+`TilePos`, while invalid footing and occupied surfaces refuse without advancing.
+Headless presentation evidence separately proves that Deployment removes every
+ordinary HUD surface from layout, focus, scrolling, and picking and leaves the compact
+task card reachable. The scoped visual walk places at least one Party and one Enemy
+character before capturing Review; pixels never substitute for the typed placement or
+frozen-launch assertions.
 
 ### Campaign persistence evidence
 

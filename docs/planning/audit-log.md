@@ -10,24 +10,26 @@ file is the record that travels with the repo.
 ## Wave 25 — feat(game): cut over to Campaign and Sandbox (2026-08-02)
 
 - **PR**: #176 — `shrav-k/campaign-sandbox-cutover`
-- **Outcome**: candidate audit green; exact-head named-human runtime sign-off remains
-  the external merge gate
+- **Outcome**: guided-deployment follow-up implemented; final combined audit and
+  exact-head named-human runtime sign-off remain pending after PR #175 reconciliation
 - **Lenses triggered**: 4, 6, 7, 8, D2, plus the fresh-eyes pass
 
 | Lens | File:line | Severity | Status |
 |---|---|---|---|
-| 6 | `crates/hex_game/src/screens/sandbox.rs` (`on_deployment_surface_clicked`) | SHIP-BLOCKER | fixed — the global pointer observer no longer requires asynchronously loaded `GameAssets` and `PlayerSettings` before it can reject an unrelated click; a trigger-level regression covers the pre-load path |
+| 6 | `crates/hex_game/src/screens/sandbox.rs` (`on_deployment_tile_clicked`), `crates/hex_ui/src/gameplay_frame.rs` | SHIP-BLOCKER | fixed — guided placement targets canonical terrain directly, validates exact walker footing and occupancy without catalog-region caps, and removes ordinary HUD regions from layout and picking during Deployment |
+| 7 | `crates/hex_gameplay_model/src/sandbox.rs`, `crates/hex_ui/src/deployment.rs` | SHIP-BLOCKER | fixed — the typed queue admits only the next unplaced slot or a prior placed slot, and Undo derives Review again whenever it restores a complete exact deployment |
 | 4 | `crates/hex_game/src/screens/gameplay.rs` (`handle_outcome_actions`, `handle_input`) | SHIP-BLOCKER | fixed — Campaign Return and Backspace now reset the persistent menu model to its root before entering `Screen::Title`; typed outcome and keyboard regressions cover both paths without changing Sandbox ownership |
 | 8 | `.github/workflows/manual-runtime-signoff.yaml` | SHIP-BLOCKER | fixed — the exact-head runtime gate now treats every shipped `assets/**` path as runtime-visible instead of omitting menu, scenario, Creator, and Sandbox preview inputs |
 | 7, 8 | `.config/test-scopes.json`, `tools/test_test_scope.py` | NON-BLOCKER | fixed — the deprecated-vocabulary validator is explicit validation infrastructure, with a selector regression proving full coverage and no unknown path |
 | D2 | `docs/design/game.md` | NON-BLOCKER | fixed — removed a link to a nonexistent `magic-outside-combat` fragment while preserving the open design question |
 
-**Notes**: the all-feature workspace suite, strict Clippy, dependency policy, warning-denied
-docs, shipping build, terminology scan, selector tests, and exact patched-state visual walk
-are green. The first workspace retry failed only because the shared volume reached zero
-free bytes; deleting disposable Rust build caches recovered the space, and the exact same
-gate then passed. Linear was unavailable and remains a soft coordination signal. The PR
-must not merge until its body records a named-human runtime PASS for the final head SHA.
+**Notes**: the prior all-feature candidate evidence applied to pre-follow-up head
+`6929212`. The guided-deployment follow-up has green focused model/runtime/UI tests,
+strict affected-package Clippy, the complete six-case deployment structural matrix,
+and a release Fort walk that placed Party and Enemy through ordinary exact terrain
+clicks before capturing Review. The complete combined gate must be rerun after PR #175
+lands. Linear was unavailable and remains a soft coordination signal. The PR must not
+merge until its body records a named-human runtime PASS for the final head SHA.
 
 ## Wave 24 — feat(map): biome expansion and Two Rings (2026-07-30)
 

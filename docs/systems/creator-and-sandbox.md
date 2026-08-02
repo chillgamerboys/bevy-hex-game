@@ -116,11 +116,12 @@ combat rules loaded from `combat.ron`.
 ### Map selection
 
 `sandbox_maps.ron` is the exclusive player-facing map catalog. Its stable IDs,
-scenario names, authored seeds, and deployment regions are compatibility contracts.
-Selecting a row creates a pending map choice. Regenerate changes only that pending
-generated seed; authored maps expose no regeneration. **Use Map** commits the pending
-choice, while Back discards it. **Create New Map** is visible but disabled with
-**Coming Soon**.
+scenario names, authored seeds, and Party/Enemy staging metadata are compatibility
+contracts. The two regions stage hidden actors deterministically while terrain loads;
+they do not constrain manual placement. Selecting a row creates a pending map choice.
+Regenerate changes only that pending generated seed; authored maps expose no
+regeneration. **Use Map** commits the pending choice, while Back discards it. **Create
+New Map** is visible but disabled with **Coming Soon**.
 
 The catalog currently resolves Flat Arena, The Crossing, Procedural Hills, Rolling
 Hills, Frozen Hills, Volcanic Hills, Sky Islands, Mountains, Caves, Waterfall,
@@ -132,15 +133,27 @@ scenario uses do not create duplicate choices.
 Sandbox loading has an explicit `Preparing → Deployment → Active` phase boundary.
 Preparing installs the frozen content and terrain. During Deployment the terrain and
 camera run while actors, AI, combat, casting, campaign saving, and the ordinary
-gameplay HUD remain inactive.
+gameplay HUD remain inactive. Phase-level suppression removes every ordinary HUD
+surface, including the action rail, from layout, focus, scrolling, and picking without
+changing the player's stored HUD preference. One compact modal task card remains over
+the interactive map.
 
-The map renders clickable world-space surface caps inside Party and Enemy regions.
-Candidates use walker footing, exact headroom and blockers, and the live terrain
-surface, so a placement records the complete `TilePos`, including elevation.
-Occupied or invalid surfaces are rejected. Placement proceeds in stable roster order;
-the player may reposition an earlier row, undo, clear either side, or deterministically
-auto-place on nearest legal unused surfaces. Start remains refused until every unit
-has one unique valid surface.
+Occupied sparse slots form one stable queue: Party slots first, then Enemy slots, each
+in original slot order. The current character owns the next primary terrain click.
+`hex_game` validates the clicked exact `TilePos` against the canonical walker footing,
+including solidity, headroom, traversal blockers, and elevation. Any legal,
+unoccupied surface on the map may be chosen; catalog staging regions impose no
+manual-placement boundary. Invalid or occupied surfaces produce a visible typed
+refusal without changing the placement or queue position.
+
+A successful click paints an exact placement token and advances to the next character.
+Future unplaced entries remain disclosed but disabled until the stable queue reaches
+them. The player may select an earlier placed character to reposition it or use
+**Undo** to restore the previous exact edit. Undo returns to Review whenever that
+restoration is complete. The final placement enters **Review**, where the compact task
+surface offers **Undo**, **Return to Sandbox**, and **Start Combat**. There are no
+shipping clear-side or automatic-placement actions. Start remains refused outside
+Review or unless every occupied slot owns one unique valid surface.
 
 Start freezes a `SandboxLaunchSnapshot`: exact map and resolved seed, flattened
 ordered rosters, accepted content revision, shipped rules, and eventual deployment.
