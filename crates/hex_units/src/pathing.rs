@@ -24,6 +24,14 @@ use crate::movement::Standing;
 #[cfg(test)]
 use hex_core::config::HEX_SMALL_DIAMETER;
 
+/// Horizontal progress over the lower surface before an elevation step reaches the
+/// higher surface.
+///
+/// Keeping the root high across the middle third clears the current piece before its
+/// footprint crosses the voxel edge. The bend remains presentation-only: domain
+/// movement still advances between the two real [`Standing`] endpoints.
+const STEP_OVER_BLEND_FRACTION: f32 = 1.0 / 3.0;
+
 /// Moves a piece along a sequence of surfaces, one hex-crossing at a time.
 ///
 /// The caller decides which surfaces the route passes through. That is deliberate:
@@ -49,25 +57,48 @@ impl HexPathingLine {
                 unreachable!("windows(2) always yields pairs")
             };
 
-            // TODO: height differences are traversed as a straight diagonal, so a
-            // piece clips through the corner of a tall column. Splitting into a
-            // horizontal and a vertical leg, or arcing over, would fix it — but
-            // which is right depends on what a "step" means in the movement rules.
-
-            // A climb is longer in 3D than a level crossing. Accumulating each leg's
-            // actual duration keeps the next one from starting in the past and
-            // jumping partway through as soon as the climb finishes.
-            transformers.push(LinearMovement::new(
-                from.world_position(),
-                to.world_position(),
-                speed,
-                start_time,
-            ));
-            start_time += leg_duration(*from, *to, speed);
+            for segment in leg_waypoints(*from, *to).windows(2) {
+                let [start, end] = segment else {
+                    unreachable!("windows(2) always yields pairs")
+                };
+                transformers.push(LinearMovement::new(*start, *end, speed, start_time));
+                start_time += segment_duration(*start, *end, speed);
+            }
         }
 
         Self { transformers }
     }
+}
+
+/// Rendered world-space points for one logical surface-to-surface leg.
+///
+/// Flat legs stay straight. An uphill leg reaches the high surface over the lower
+/// third, then stays high across the voxel edge; downhill is the exact reverse. The
+/// world-space endpoint heights come from the published spans rather than a map
+/// setting or reconstructed voxel scale.
+fn leg_waypoints(from: Standing, to: Standing) -> Vec<Vec3> {
+    let start = from.world_position();
+    let end = to.world_position();
+    let mut waypoints = Vec::with_capacity(3);
+    waypoints.push(start);
+
+    if from.pos.level != to.pos.level {
+        let blend = if from.pos.level < to.pos.level {
+            STEP_OVER_BLEND_FRACTION
+        } else {
+            1.0 - STEP_OVER_BLEND_FRACTION
+        };
+        let mut bend = start.lerp(end, blend);
+        bend.y = start.y.max(end.y);
+        waypoints.push(bend);
+    }
+
+    waypoints.push(end);
+    waypoints
+}
+
+fn segment_duration(start: Vec3, end: Vec3, speed: f32) -> f64 {
+    f64::from(start.distance(end) / speed)
 }
 
 /// Seconds needed to travel one route leg at `speed`.
@@ -75,7 +106,15 @@ impl HexPathingLine {
 /// Shared with logical movement reconciliation so the rendered position and
 /// [`StandsOn`](crate::StandsOn) cross a waypoint on the same frame.
 pub(crate) fn leg_duration(from: Standing, to: Standing, speed: f32) -> f64 {
-    f64::from(from.world_position().distance(to.world_position()) / speed)
+    leg_waypoints(from, to)
+        .windows(2)
+        .map(|segment| {
+            let [start, end] = segment else {
+                unreachable!("windows(2) always yields pairs")
+            };
+            segment_duration(*start, *end, speed)
+        })
+        .sum()
 }
 
 /// The index of the last whole route step reached after `elapsed` active seconds.
@@ -127,9 +166,97 @@ mod tests {
         );
     }
 
-    /// A sloped leg takes longer than a flat one and the following leg must wait for it.
+    fn assert_time_close(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() < 1e-6,
+            "expected {expected}, got {actual}"
+        );
+    }
+
+    fn position_at(line: &HexPathingLine, time: f64) -> Vec3 {
+        let mut transform = Transform::default();
+        line.update(&mut transform, time);
+        transform.translation
+    }
+
+    /// Equal-height movement retains the original straight, constant-speed crossing.
     #[test]
-    fn elevated_legs_are_scheduled_by_their_actual_3d_length() {
+    fn flat_legs_remain_straight() {
+        let from = standing(HexCoord::ORIGIN, 4, 2.25);
+        let to = standing(HexCoord::new_cubic(1, -1, 0), 4, 2.25);
+        let speed = 2.5;
+        let duration = f64::from(HEX_SMALL_DIAMETER / speed);
+        let line = HexPathingLine::new(&[from, to], speed);
+
+        assert_time_close(leg_duration(from, to, speed), duration);
+        assert_close(position_at(&line, 0.0), from.world_position());
+        assert_close(
+            position_at(&line, duration * 0.5),
+            from.world_position().lerp(to.world_position(), 0.5),
+        );
+        assert_close(position_at(&line, duration), to.world_position());
+    }
+
+    /// Uphill movement reaches the destination height before the piece crosses the
+    /// shared edge, using the published world-space span rather than a fixed level
+    /// height.
+    #[test]
+    fn uphill_legs_clear_the_voxel_edge() {
+        let from = standing(HexCoord::ORIGIN, 7, 1.35);
+        let to = standing(HexCoord::new_cubic(1, -1, 0), 8, 2.15);
+        let speed = 3.0;
+        let start = from.world_position();
+        let end = to.world_position();
+        let line = HexPathingLine::new(&[from, to], speed);
+
+        let mut bend = start.lerp(end, STEP_OVER_BLEND_FRACTION);
+        bend.y = end.y;
+        let mut edge = start.lerp(end, 0.5);
+        edge.y = end.y;
+        let mut high_side = start.lerp(end, 0.75);
+        high_side.y = end.y;
+
+        let bend_time = segment_duration(start, bend, speed);
+        let edge_time = bend_time + segment_duration(bend, edge, speed);
+        let high_side_time = bend_time + segment_duration(bend, high_side, speed);
+
+        assert_close(position_at(&line, bend_time), bend);
+        assert_close(position_at(&line, edge_time), edge);
+        assert_close(position_at(&line, high_side_time), high_side);
+        assert_close(position_at(&line, leg_duration(from, to, speed)), end);
+    }
+
+    /// Downhill is the exact time-reverse of uphill, so it stays on the high surface
+    /// until the piece has crossed the edge before descending.
+    #[test]
+    fn downhill_legs_reverse_the_uphill_step_over() {
+        let low = standing(HexCoord::ORIGIN, 7, 1.35);
+        let high = standing(HexCoord::new_cubic(1, -1, 0), 8, 2.15);
+        let speed = 3.0;
+        let uphill = HexPathingLine::new(&[low, high], speed);
+        let downhill = HexPathingLine::new(&[high, low], speed);
+        let uphill_duration = leg_duration(low, high, speed);
+        let downhill_duration = leg_duration(high, low, speed);
+
+        assert_time_close(uphill_duration, downhill_duration);
+        for elapsed in [
+            0.0,
+            uphill_duration * 0.2,
+            uphill_duration * 0.5,
+            uphill_duration * 0.8,
+            uphill_duration,
+        ] {
+            assert_close(
+                position_at(&uphill, elapsed),
+                position_at(&downhill, downhill_duration - elapsed),
+            );
+        }
+    }
+
+    /// A step-over leg uses its bent world-space length, and the following flat leg
+    /// waits for both presentation segments to finish.
+    #[test]
+    fn step_over_legs_share_their_duration_with_logical_movement() {
         let a = standing(HexCoord::ORIGIN, 0, 1.0);
         let b = standing(HexCoord::new_cubic(1, -1, 0), 1, 2.0);
         let c = standing(HexCoord::new_cubic(2, -2, 0), 1, 2.0);
@@ -138,6 +265,16 @@ mod tests {
         let first_end = leg_duration(a, b, speed);
         let finish = first_end + leg_duration(b, c, speed);
         let line = HexPathingLine::new(&steps, speed);
+
+        assert!(
+            first_end > f64::from(a.world_position().distance(b.world_position()) / speed),
+            "the step-over should be longer than the old straight chord"
+        );
+        assert_eq!(
+            reached_step_index(&steps, speed, first_end - 1e-6),
+            Some(0),
+            "the logical route advanced before the rendered step-over landed"
+        );
 
         let mut transform = Transform::default();
         line.update(&mut transform, first_end);
@@ -152,17 +289,18 @@ mod tests {
             !line.is_finished(finish - 1e-6),
             "the flat second leg started before the climb had finished"
         );
+        assert_eq!(
+            reached_step_index(&steps, speed, finish - 1e-6),
+            Some(1),
+            "the logical route finished before the rendered flat leg"
+        );
         assert!(line.is_finished(finish));
         line.update(&mut transform, finish);
         assert_close(transform.translation, c.world_position());
-    }
-
-    /// Keep the horizontal geometry constant named here as part of the contract: an
-    /// elevated leg must be strictly longer than one flat hex crossing.
-    #[test]
-    fn a_climb_is_longer_than_the_flat_hex_diameter() {
-        let a = standing(HexCoord::ORIGIN, 0, 1.0);
-        let b = standing(HexCoord::new_cubic(1, -1, 0), 1, 2.0);
-        assert!(leg_duration(a, b, 1.0) > f64::from(HEX_SMALL_DIAMETER));
+        assert_eq!(
+            reached_step_index(&steps, speed, finish),
+            Some(2),
+            "the logical route should finish with its animation"
+        );
     }
 }
