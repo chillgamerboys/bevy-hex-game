@@ -112,6 +112,17 @@
             ],
         ),
         (
+            scenario: "Outpost",
+            seed: Some(1290212),
+            points: [
+                (label: "gate threshold", destination: Exact((q: 10, r: -5, level: 15)), azimuth_turns: [0.0, 0.16666667, -0.16666667]),
+                (label: "inner courtyard", destination: Exact((q: 5, r: -2, level: 15)), azimuth_turns: [0.0, 0.33333334]),
+                (label: "front walk +7", destination: Anchor(name: "outpost_front_walk", expected: (q: 8, r: -4, level: 22)), azimuth_turns: [0.0, 0.16666667, -0.16666667]),
+                (label: "wall walk +11", destination: Anchor(name: "outpost_wall_walk", expected: (q: -9, r: 0, level: 26)), azimuth_turns: [0.0, 0.33333334]),
+                (label: "lookout roof +27", destination: Anchor(name: "outpost_rooftop", expected: (q: 8, r: -8, level: 42)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
+            ],
+        ),
+        (
             scenario: "Seven Regions",
             seed: Some(703700113),
             points: [
