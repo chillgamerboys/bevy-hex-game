@@ -1,7 +1,8 @@
 //! Composable reasons for hiding presentation entities.
 //!
-//! Fog and explicit review cutaways may affect the same entity. A reason set prevents
-//! one owner from restoring visibility while another still requires it hidden.
+//! Fog, explicit review cutaways, and near-character camera occlusion may affect the
+//! same entity. A reason set prevents one owner from restoring visibility while
+//! another still requires it hidden.
 
 use bevy_ecs::prelude::*;
 use bevy_reflect::prelude::*;
@@ -72,6 +73,8 @@ pub enum PresentationOcclusionReason {
     Fog,
     /// Explicit capture tooling hides the selected interior's roof.
     InteriorCutaway,
+    /// The Character camera is close enough that the selected unit would obscure it.
+    CharacterCameraProximity,
 }
 
 impl PresentationOcclusionReason {
@@ -79,6 +82,7 @@ impl PresentationOcclusionReason {
         match self {
             Self::Fog => 1 << 0,
             Self::InteriorCutaway => 1 << 1,
+            Self::CharacterCameraProximity => 1 << 2,
         }
     }
 }
@@ -182,5 +186,14 @@ mod tests {
         assert!(!occlusion.insert(PresentationOcclusionReason::InteriorCutaway));
         assert!(occlusion.remove(PresentationOcclusionReason::InteriorCutaway));
         assert!(!occlusion.remove(PresentationOcclusionReason::InteriorCutaway));
+    }
+
+    #[test]
+    fn camera_proximity_composes_with_other_visibility_owners() {
+        let mut occlusion = PresentationOcclusion::from_reason(PresentationOcclusionReason::Fog);
+        assert!(occlusion.insert(PresentationOcclusionReason::CharacterCameraProximity));
+        assert!(occlusion.remove(PresentationOcclusionReason::CharacterCameraProximity));
+        assert!(occlusion.contains(PresentationOcclusionReason::Fog));
+        assert!(occlusion.is_hidden());
     }
 }

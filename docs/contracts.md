@@ -55,7 +55,7 @@ than agreed, the fallback the gameplay side ships without it is in
 | `KnowledgeSource` / `KnowledgeExpiry` — how a lattice fact was learned and when it stops being true | core | combat | live | [systems/combat.md](systems/combat.md) |
 | `CanopyOccluder` — exact authored canopy membership, separate from whole-tree behavior; runtime consumer pending | shared art / `hex_objects` | pending | **partial** | [systems/asset-workshop.md](systems/asset-workshop.md) |
 | `TreeOccluder` / `TreeFadeAmount` — stack-safe whole-tree identity and renderer-neutral camera opacity | world | presentation | live | [systems/camera.md](systems/camera.md) |
-| `PresentationOcclusion` — explicit review-roof reason live; fog reason pending | shared | presentation | **partial** | [systems/perception.md](systems/perception.md) |
+| `PresentationOcclusion` — review-roof and Character-camera proximity reasons live; faction-fog producer pending | shared | presentation | **partial** | [systems/camera.md](systems/camera.md), [systems/perception.md](systems/perception.md) |
 | `perception.ron` — sight tunables as designer-facing settings | world | perception | live | [planning/boundary.md](planning/boundary.md) J |
 
 ## Ordering
