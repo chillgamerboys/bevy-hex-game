@@ -1,0 +1,23 @@
+// A compact worked-stone outpost with a gatehouse, enclosed spiral stairs, wall
+// walks, and two high open lookout decks.
+(
+    grid_radius: 12,
+    level_height: 0.4,
+    terrain: Procedural((
+        generator_version: 3,
+        layout: Single((
+            environment: TemperateGrassland,
+            recipe: Outpost(()),
+            overlays: [],
+            mask: WholeWorld,
+            edges: (
+                east: WorldBoundary,
+                south_east: WorldBoundary,
+                south_west: WorldBoundary,
+                west: WorldBoundary,
+                north_west: WorldBoundary,
+                north_east: WorldBoundary,
+            ),
+        )),
+    )),
+)

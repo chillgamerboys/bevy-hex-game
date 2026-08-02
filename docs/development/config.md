@@ -360,6 +360,36 @@ As with earlier procedural scenarios, the reproducible seed belongs in
 `scenarios.ron`, not in the world recipe. V3 rejects unsupported
 recipe/environment pairs and incomplete edge contracts while deserializing.
 
+**Use V3 Outpost terrain.** Outpost is a separate structure recipe rather than a
+Fort tuning preset. It has no designer-facing geometry knobs: the radius-12 footprint,
+east-facing gate, open courtyard, front walk at relative level `+7`, side and rear
+walks at `+11`, and twin three-loop lookout towers ending at `+27` are one validated
+layout contract:
+
+```ron
+terrain: Procedural((
+    generator_version: 3,
+    layout: Single((
+        environment: TemperateGrassland,
+        recipe: Outpost(()),
+        overlays: [],
+        mask: WholeWorld,
+        edges: (
+            east: WorldBoundary,
+            south_east: WorldBoundary,
+            south_west: WorldBoundary,
+            west: WorldBoundary,
+            north_west: WorldBoundary,
+            north_east: WorldBoundary,
+        ),
+    )),
+)),
+```
+
+Outpost accepts only `grid_radius: 12` and `TemperateGrassland`. The visible
+`Outpost` Map scenario uses the shared anchored skirmish and pins seed `1290212`;
+as with every generated scenario, rerolling changes only the current session.
+
 **Compare gameplay sight ranges.** `perception.ron` contains three fixed review
 profiles without coupling them to renderer brightness:
 

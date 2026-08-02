@@ -144,6 +144,14 @@
             encounter: "config/encounters/anchored-skirmish.ron",
         ),
         (
+            name: "Outpost",
+            category: Map,
+            blurb: "A compact gatehouse fort with an open courtyard, linked wall walks, and twin spiral lookout towers.",
+            world: "config/worlds/procedural-outpost.ron",
+            generation_seed: Some(1290212),
+            encounter: "config/encounters/anchored-skirmish.ron",
+        ),
+        (
             name: "Seven Regions",
             category: Map,
             blurb: "One connected V3 world joining hills, mountains, waterfall, forest, fort, caves, and sky islands.",
