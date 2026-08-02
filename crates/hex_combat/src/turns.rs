@@ -279,7 +279,12 @@ fn engagement(
     units: Query<(Entity, &Faction, &StandsOn), Without<Downed>>,
     crossings: Option<Res<MovementCrossings>>,
     settings: Res<CombatSettings>,
+    pending: Res<PendingDecision>,
+    resolution: Res<crate::SpellResolutionState>,
 ) {
+    if pending.is_open() || resolution.is_blocking() {
+        return;
+    }
     let engage = settings.engage_range;
     let disengage = engage + settings.disengage_margin;
     let levels_per_bonus = settings.levels_per_bonus_range;
@@ -470,6 +475,7 @@ fn end_turn_on_space(
     turn_order: Res<TurnOrder>,
     registry: Res<UnitRegistry>,
     pending: Res<PendingDecision>,
+    resolution: Res<crate::SpellResolutionState>,
     owners: Query<(Option<&ControlOwner>, &Faction)>,
     mut queue: ResMut<CommandQueue>,
 ) {
@@ -477,7 +483,10 @@ fn end_turn_on_space(
         .as_deref()
         .and_then(InputFocus::get)
         .is_some_and(|entity| focusable_controls.contains(entity));
-    if !raw_end_turn_requested(&keys, &bindings, focus_owns_shortcuts) || pending.is_open() {
+    if !raw_end_turn_requested(&keys, &bindings, focus_owns_shortcuts)
+        || pending.is_open()
+        || resolution.is_blocking()
+    {
         return;
     }
     let Some(current) = turn_order.current() else {
@@ -525,7 +534,11 @@ fn advance_turn(
     initiatives: Query<&Initiative>,
     downed: Query<(), With<Downed>>,
     mut revivals: ResMut<PendingRevivals>,
+    resolution: Res<crate::SpellResolutionState>,
 ) {
+    if resolution.is_blocking() {
+        return;
+    }
     let Some(current) = turn_order.current() else {
         return;
     };

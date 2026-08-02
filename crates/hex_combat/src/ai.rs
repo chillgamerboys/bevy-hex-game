@@ -244,12 +244,18 @@ fn drive_ai(
     turn_order: Res<TurnOrder>,
     unit_registry: Res<UnitRegistry>,
     pending: Res<PendingDecision>,
+    resolution: Res<crate::SpellResolutionState>,
     mut queue: ResMut<CommandQueue>,
     mut algorithms: ResMut<AiAlgorithmRegistry>,
     mut traces: ResMut<AiDecisionTraces>,
     world: AiWorld,
     units: UnitQuery,
 ) {
+    if matches!(resolution.status(), crate::SpellResolutionStatus::Frozen(_))
+        || (resolution.is_blocking() && !pending.is_open())
+    {
+        return;
+    }
     let Some(table) = world.table.as_deref() else {
         return;
     };

@@ -43,8 +43,8 @@ use hex_assets::{
 };
 use hex_core::{
     Busy, CommandQueue, ControlOwner, GameCommand, IssuedCommand, Mode, PartyFormation,
-    PausableSystems, PendingDecision, Screen, TerrainEdit, TilePos, TraversalBlockers, Turn,
-    UnitId,
+    PausableSystems, PendingDecision, Screen, TerrainEdit, TerrainImpact, TerrainImpactOutcome,
+    TilePos, TraversalBlockers, Turn, UnitId,
 };
 use hex_perception::FactionMapKnowledge;
 use hex_units::{
@@ -65,6 +65,7 @@ mod move_along;
 mod move_party;
 mod presentation;
 mod rest;
+mod spell_resolution;
 mod strike;
 
 /// Tiles, as the applier needs them to ground a commanded path.
@@ -119,6 +120,8 @@ struct Verb<'a> {
     tables: Option<ContentTables<'a>>,
     /// The one open decision, if resolution is parked on somebody's answer.
     pending: &'a mut PendingDecision,
+    /// Private completion authority for area effects and terrain acknowledgements.
+    resolution: &'a mut crate::SpellResolutionState,
     /// Stable names for per-element structured outcomes.
     elements: Option<&'a ElementCatalog>,
     /// The ledger of effects that outlast the action that caused them.
@@ -161,11 +164,13 @@ struct Verb<'a> {
 #[derive(SystemParam)]
 struct ResolutionStores<'w> {
     pending: ResMut<'w, PendingDecision>,
+    resolution: ResMut<'w, crate::SpellResolutionState>,
     effects: ResMut<'w, crate::effects::PersistentEffects>,
     knowledge: ResMut<'w, crate::knowledge::FactionLatticeKnowledge>,
     spatial: Option<Res<'w, FactionMapKnowledge>>,
     terrain: Option<Res<'w, TerrainOccupancy>>,
     terrain_edits: MessageWriter<'w, TerrainEdit>,
+    terrain_impacts: MessageWriter<'w, TerrainImpact>,
     events: MessageWriter<'w, CombatEvent>,
     revivals: ResMut<'w, crate::turns::PendingRevivals>,
     summary: ResMut<'w, crate::CombatSummary>,
@@ -204,11 +209,15 @@ pub(crate) fn plugin(app: &mut App) {
         // needs initialising as well as registering. Nothing sets it to anything but
         // `None` until the damage model lands.
         .init_resource::<PendingDecision>()
+        .init_resource::<crate::SpellResolutionState>()
         .register_type::<GameCommand>()
         .register_type::<IssuedCommand>()
         .register_type::<Busy>()
         .register_type::<PendingDecision>()
-        .add_message::<TerrainEdit>();
+        .add_message::<TerrainEdit>()
+        .add_message::<TerrainImpact>()
+        .add_message::<TerrainImpactOutcome>();
+    spell_resolution::plugin(app);
     app.add_systems(
         Update,
         (apply_commands
@@ -219,10 +228,6 @@ pub(crate) fn plugin(app: &mut App) {
     // Unit ids reset between sessions, so a held-over command would name
     // somebody else's unit next launch.
     app.add_systems(OnExit(Screen::Gameplay), clear_session_state);
-    // A decision open when a fight ends has nobody left to answer it: both answer paths
-    // are combat-only, so it would park every later cast behind "a decision is still
-    // open" for the rest of the session.
-    app.add_systems(OnExit(Mode::Combat), clear_pending_decision);
 }
 
 /// Forgets everything naming a unit, on the way out of a session.
@@ -232,17 +237,14 @@ pub(crate) fn plugin(app: &mut App) {
 /// session, so a queued command or an unanswered decision held across one names
 /// somebody else's unit next launch: the queue would apply to a stranger, and the
 /// decision would park resolution forever on an answer nobody can give.
-fn clear_session_state(mut queue: ResMut<CommandQueue>, mut pending: ResMut<PendingDecision>) {
+fn clear_session_state(
+    mut queue: ResMut<CommandQueue>,
+    mut pending: ResMut<PendingDecision>,
+    mut resolution: ResMut<crate::SpellResolutionState>,
+) {
     queue.clear();
     *pending = PendingDecision::None;
-}
-
-/// Drops an unanswered decision when a fight ends.
-fn clear_pending_decision(mut pending: ResMut<PendingDecision>) {
-    if pending.is_open() {
-        warn!("combat ended with a decision still open; dropping it");
-        *pending = PendingDecision::None;
-    }
+    resolution.reset();
 }
 
 /// Drains the queue: validate, apply, project.
@@ -310,8 +312,8 @@ fn apply_commands(
                 &mut stores.pending,
                 &mut stores.revivals,
                 &registry,
-                &mut units.actors,
-                &mut units.lattices,
+                &units.actors,
+                &units.lattices,
             );
             assert!(
                 projected.is_ok(),
@@ -324,7 +326,78 @@ fn apply_commands(
         }
     }
 
+    if in_combat
+        && matches!(
+            stores.resolution.status(),
+            crate::SpellResolutionStatus::Pending { .. }
+        )
+        && !stores.pending.is_open()
+        && stores.resolution.has_unit_work()
+    {
+        let progressed = spell_resolution::pump_unit_work(
+            &mut stores.resolution,
+            &mut stores.pending,
+            &mut stores.effects,
+            turn_order.round,
+            &registry,
+            &units.actors,
+            &mut units.lattices,
+            &mut emitted,
+        );
+        if progressed {
+            let Some(authority) = stores.authority.as_deref_mut() else {
+                stores
+                    .resolution
+                    .freeze(crate::SpellResolutionFailure::AuthorityUnavailable {
+                        reason: "combat authority is absent while advancing unit effects"
+                            .to_owned(),
+                    });
+                stores.events.write_batch(emitted);
+                return;
+            };
+            if !authority.state.external_resolution_is_held() {
+                stores
+                    .resolution
+                    .freeze(crate::SpellResolutionFailure::AuthorityUnavailable {
+                        reason: "combat authority lost the spell-resolution hold".to_owned(),
+                    });
+                stores.events.write_batch(emitted);
+                return;
+            }
+            if let Err(reason) = adopt_authority_projection(
+                &mut authority.state,
+                &turn_order,
+                &stores.pending,
+                &stores.revivals,
+                &registry,
+                &units.actors,
+                &units.lattices,
+            ) {
+                stores
+                    .resolution
+                    .freeze(crate::SpellResolutionFailure::AuthorityUnavailable { reason });
+                stores.events.write_batch(emitted);
+                return;
+            }
+        }
+    }
+
     while let Some(issued) = queue.pop() {
+        if matches!(
+            stores.resolution.status(),
+            crate::SpellResolutionStatus::Frozen(_)
+        ) {
+            let refusal = CommandRefusal::Busy;
+            if let Some(authority) = stores.authority.as_deref_mut() {
+                authority
+                    .state
+                    .record_adapter_refusal(issued.clone(), refusal.clone());
+                let mut discarded = Vec::new();
+                authority.drain_events(&mut discarded);
+            }
+            drop_command(&mut emitted, &issued, refusal);
+            continue;
+        }
         if in_combat && stores.authority.is_none() {
             let refusal = CommandRefusal::MissingCombatData {
                 data: crate::CombatData::AuthorityState,
@@ -341,6 +414,11 @@ fn apply_commands(
             let unit = issued.command.unit();
             let observed = issued.clone();
             let recorded = issued.command.clone();
+            let answered_spell_decision =
+                matches!(
+                    stores.resolution.status(),
+                    crate::SpellResolutionStatus::Pending { .. }
+                ) && matches!(&observed.command, GameCommand::ChooseDisables { .. });
             let Some(authority) = stores.authority.as_deref_mut() else {
                 drop_command(
                     &mut emitted,
@@ -379,6 +457,7 @@ fn apply_commands(
                     .zip(elements.as_deref())
                     .map(|(index, elements)| index.tables(elements)),
                 pending: &mut stores.pending,
+                resolution: &mut stores.resolution,
                 elements: elements.as_deref(),
                 effects: &mut stores.effects,
                 knowledge: &mut stores.knowledge,
@@ -423,8 +502,8 @@ fn apply_commands(
                     &mut stores.pending,
                     &mut stores.revivals,
                     &registry,
-                    &mut units.actors,
-                    &mut units.lattices,
+                    &units.actors,
+                    &units.lattices,
                 );
                 assert!(
                     projected.is_ok(),
@@ -436,10 +515,16 @@ fn apply_commands(
                 stores.rounds.write_batch(elapsed);
             }
             stores.summary.record_command(&recorded);
+            if answered_spell_decision {
+                // The pure answer may have downed the defender through deferred ECS
+                // projection. Let that projection settle before the next snapshotted
+                // occupant is inspected or another queued command is considered.
+                break;
+            }
             continue;
         }
 
-        if let Some(refusal) = modal_refusal(&stores.pending, &issued.command) {
+        if let Some(refusal) = modal_refusal(&stores.pending, &stores.resolution, &issued.command) {
             record_adapter_refusal(
                 stores.authority.as_deref_mut(),
                 in_combat,
@@ -496,6 +581,7 @@ fn apply_commands(
                 .zip(elements.as_deref())
                 .map(|(index, elements)| index.tables(elements)),
             pending: &mut stores.pending,
+            resolution: &mut stores.resolution,
             elements: elements.as_deref(),
             effects: &mut stores.effects,
             knowledge: &mut stores.knowledge,
@@ -556,6 +642,7 @@ fn apply_commands(
             } => cast::apply(
                 &mut verb,
                 &mut stores.terrain_edits,
+                &mut stores.terrain_impacts,
                 &mut commands,
                 &mut units.actors,
                 &mut units.lattices,
@@ -598,6 +685,16 @@ fn apply_commands(
         if let Err(refusal) = outcome {
             if in_combat {
                 if let Some(authority) = stores.authority.as_deref_mut() {
+                    if matches!(&observed.command, GameCommand::Cast { .. })
+                        && stores.resolution.is_blocking()
+                        && !authority.state.external_resolution_is_held()
+                    {
+                        if let Err(reason) = authority.state.begin_external_resolution() {
+                            stores.resolution.freeze(
+                                crate::SpellResolutionFailure::AuthorityUnavailable { reason },
+                            );
+                        }
+                    }
                     authority
                         .state
                         .record_adapter_refusal(observed.clone(), refusal.clone());
@@ -608,11 +705,22 @@ fn apply_commands(
             drop_command(&mut emitted, &issued, refusal);
         } else {
             let mut needs_settled_adoption = false;
+            let mut authority_ready = true;
             if in_combat {
                 if let Some(authority) = stores.authority.as_deref_mut() {
+                    if matches!(&observed.command, GameCommand::Cast { .. })
+                        && stores.resolution.is_blocking()
+                    {
+                        if let Err(reason) = authority.state.begin_external_resolution() {
+                            stores.resolution.freeze(
+                                crate::SpellResolutionFailure::AuthorityUnavailable { reason },
+                            );
+                            authority_ready = false;
+                        }
+                    }
                     needs_settled_adoption =
                         matches!(&observed.command, GameCommand::ChooseRestores { .. });
-                    if !needs_settled_adoption {
+                    if authority_ready && !needs_settled_adoption {
                         let adopted = adopt_authority_projection(
                             &mut authority.state,
                             &turn_order,
@@ -634,9 +742,10 @@ fn apply_commands(
                 }
             }
             stores.summary.record_command(&recorded);
-            if needs_settled_adoption {
-                // Restoration removes `Downed` through deferred commands. Settle
-                // and validate that complete projection before reducing any later
+            if needs_settled_adoption || !authority_ready {
+                // Restoration removes `Downed` through deferred commands, while a
+                // failed external hold must freeze before anything else interleaves.
+                // Settle and validate the complete projection before reducing a later
                 // queued command against the canonical authority.
                 break;
             }
@@ -718,17 +827,25 @@ fn project_authority_state(
     pending: &mut PendingDecision,
     revivals: &mut crate::turns::PendingRevivals,
     registry: &UnitRegistry,
-    actors: &mut ActorQuery,
-    lattices: &mut cast::LatticeQuery,
+    actors: &ActorQuery,
+    lattices: &cast::LatticeQuery,
 ) -> Result<(), String> {
-    order.project(&state.order, state.current(), state.round);
-    *pending = state.pending.clone();
-    revivals.project(&state.pending_revivals);
+    // Validate the complete projection before mutating any ECS fact or enqueueing a
+    // deferred component write. A late missing unit/lattice must leave both sides of
+    // the authority seam at the pre-release checkpoint.
+    let mut targets = Vec::with_capacity(state.units.len());
+    let mut claimed_entities = BTreeMap::new();
     for actor in state.units.values() {
         let entity = registry
             .entity_of(actor.id)
             .ok_or_else(|| format!("authority unit {:?} has no ECS entity", actor.id))?;
-        let (standing, _, turn, busy, _, _, downed) = actors.get_mut(entity).map_err(|error| {
+        if let Some(existing) = claimed_entities.insert(entity, actor.id) {
+            return Err(format!(
+                "authority units {existing:?} and {:?} share one ECS entity",
+                actor.id,
+            ));
+        }
+        let (standing, _, _, busy, _, _, downed) = actors.get(entity).map_err(|error| {
             format!("authority unit {:?} is not projectable: {error}", actor.id)
         })?;
         if standing.map(|standing| standing.0.pos) != Some(actor.position) {
@@ -738,15 +855,30 @@ fn project_authority_state(
                 standing.map(|standing| standing.0.pos)
             ));
         }
-        match (turn, actor.turn) {
-            (Some(mut current), Some(expected)) => *current = expected,
-            (None, Some(expected)) => {
+        match (&actor.lattice, lattices.get(entity).ok()) {
+            (Some(expected), Some((spec, _))) if expected.spec == *spec => {}
+            (None, None) => {}
+            _ => {
+                return Err(format!(
+                    "authority lattice shape for {:?} cannot be projected",
+                    actor.id
+                ));
+            }
+        }
+        targets.push((entity, busy, downed));
+    }
+
+    order.project(&state.order, state.current(), state.round);
+    *pending = state.pending.clone();
+    revivals.project(&state.pending_revivals);
+    for (actor, (entity, busy, downed)) in state.units.values().zip(targets) {
+        match actor.turn {
+            Some(expected) => {
                 commands.entity(entity).insert(expected);
             }
-            (Some(_), None) => {
+            None => {
                 commands.entity(entity).remove::<Turn>();
             }
-            (None, None) => {}
         }
         if actor.busy != busy {
             if actor.busy {
@@ -762,17 +894,8 @@ fn project_authority_state(
                 commands.entity(entity).remove::<Downed>();
             }
         }
-        match (&actor.lattice, lattices.get_mut(entity).ok()) {
-            (Some(expected), Some((spec, mut actual))) if expected.spec == *spec => {
-                *actual = expected.state.clone();
-            }
-            (None, None) => {}
-            _ => {
-                return Err(format!(
-                    "authority lattice shape for {:?} cannot be projected",
-                    actor.id
-                ));
-            }
+        if let Some(expected) = &actor.lattice {
+            commands.entity(entity).insert(expected.state.clone());
         }
     }
     Ok(())
@@ -831,7 +954,16 @@ fn current_occupancy(base: &UnitOccupancy, reserved: &BTreeMap<UnitId, TilePos>)
 
 /// While resolution is waiting on a defender, the answer is the whole command
 /// vocabulary. Nothing else may interleave with the lattice state it settles.
-fn modal_refusal(pending: &PendingDecision, command: &GameCommand) -> Option<CommandRefusal> {
+fn modal_refusal(
+    pending: &PendingDecision,
+    resolution: &crate::SpellResolutionState,
+    command: &GameCommand,
+) -> Option<CommandRefusal> {
+    if matches!(resolution.status(), crate::SpellResolutionStatus::Frozen(_))
+        || (resolution.is_blocking() && !pending.is_open())
+    {
+        return Some(CommandRefusal::Busy);
+    }
     let decider = match *pending {
         PendingDecision::None => return None,
         PendingDecision::ChooseDisables { decider, .. }
@@ -896,7 +1028,7 @@ mod tests {
         ];
         for command in &blocked {
             assert_eq!(
-                modal_refusal(&pending, command),
+                modal_refusal(&pending, &crate::SpellResolutionState::default(), command),
                 Some(CommandRefusal::DecisionPending { decider }),
                 "{command:?} escaped the modal gate"
             );
@@ -905,6 +1037,7 @@ mod tests {
         assert_eq!(
             modal_refusal(
                 &pending,
+                &crate::SpellResolutionState::default(),
                 &GameCommand::ChooseDisables {
                     unit: UnitId(9),
                     cells: vec![LatticeCoord::ORIGIN],
@@ -915,6 +1048,7 @@ mod tests {
         assert_eq!(
             modal_refusal(
                 &pending,
+                &crate::SpellResolutionState::default(),
                 &GameCommand::ChooseDisables {
                     unit: decider,
                     cells: vec![LatticeCoord::ORIGIN],
@@ -923,5 +1057,37 @@ mod tests {
             None,
             "the exact matching answer is the one legal command"
         );
+    }
+
+    #[test]
+    fn an_external_spell_transaction_blocks_ordinary_commands_between_answers() {
+        let mut resolution = crate::SpellResolutionState::default();
+        resolution
+            .begin(
+                UnitId(2),
+                vec![crate::spell_resolution::UnitResolution::Burn {
+                    source: UnitId(2),
+                    target: UnitId(5),
+                    turns: 1,
+                }],
+                Vec::new(),
+            )
+            .expect("fixture transaction starts");
+        let command = GameCommand::EndTurn { unit: UnitId(2) };
+        assert_eq!(
+            modal_refusal(&PendingDecision::None, &resolution, &command),
+            Some(CommandRefusal::Busy)
+        );
+
+        let pending = PendingDecision::ChooseDisables {
+            decider: UnitId(5),
+            count: 1,
+            source: UnitId(2),
+        };
+        let answer = GameCommand::ChooseDisables {
+            unit: UnitId(5),
+            cells: vec![LatticeCoord::ORIGIN],
+        };
+        assert_eq!(modal_refusal(&pending, &resolution, &answer), None);
     }
 }

@@ -23,9 +23,11 @@ use bevy::prelude::*;
 
 use hex_assets::{CastingAxis, Effect, Spell, TargetShape};
 use hex_core::{
-    KnowledgeExpiry, KnowledgeState, LatticeCoord, PendingDecision, TerrainEdit, TilePos, UnitId,
+    KnowledgeExpiry, KnowledgeState, LatticeCoord, PendingDecision, TerrainEdit, TerrainImpact,
+    TilePos, UnitId,
 };
 use hex_lattice::{apply_cast, castable, CastBlocked, CellKind, LatticeSpec, LatticeState};
+use hex_units::trajectories::clip_effect_volume;
 use hex_units::{
     resolve_creation_volume, targeting, trajectory_destination, trajectory_is_clear,
     validate_creation_volume, volumes, CreationBody,
@@ -46,6 +48,7 @@ use super::{presentation, ActorQuery, Verb};
 pub(super) fn apply(
     ctx: &mut Verb,
     terrain_edits: &mut MessageWriter<TerrainEdit>,
+    terrain_impacts: &mut MessageWriter<TerrainImpact>,
     commands: &mut Commands,
     actors: &mut ActorQuery,
     lattices: &mut LatticeQuery,
@@ -72,6 +75,9 @@ pub(super) fn apply(
             PendingDecision::None => unit,
         };
         return Err(CommandRefusal::DecisionPending { decider });
+    }
+    if ctx.resolution.is_blocking() {
+        return Err(CommandRefusal::Busy);
     }
 
     let Some(book) = ctx.spells else {
@@ -110,6 +116,17 @@ pub(super) fn apply(
     // nothing but `warn!` lines — invisible in a release build, where the console is
     // hidden. See `delivers_anything`.
     if !delivers_anything(spec) {
+        return Err(CommandRefusal::UndeliverableSpell {
+            spell: spell_name.to_owned(),
+        });
+    }
+    let area = spec.targeting.shape.can_cover_multiple_voxels();
+    if area
+        && spec
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::RestoreHexes { .. } | Effect::Reveal { .. }))
+    {
         return Err(CommandRefusal::UndeliverableSpell {
             spell: spell_name.to_owned(),
         });
@@ -179,12 +196,13 @@ pub(super) fn apply(
     // Resolved but not yet consumed: rungs 4 and 5 are what read a volume, and both
     // are terrain magic's. Resolving it here anyway is the cheap half of the check —
     // a shape that cannot resolve is a cast that should not have been legal.
-    if volumes::resolve(&spec.targeting.shape, standing.pos, target, facing).is_none() {
+    let Some(raw_volume) = volumes::resolve(&spec.targeting.shape, standing.pos, target, facing)
+    else {
         return Err(CommandRefusal::ShapeUnresolved {
             spell: spell_name.to_owned(),
             target,
         });
-    }
+    };
 
     let Some(spatial) = ctx.spatial else {
         return Err(CommandRefusal::MissingCombatData {
@@ -197,7 +215,7 @@ pub(super) fn apply(
             target,
         });
     }
-    if !matches!(spec.targeting.trajectory, hex_assets::Trajectory::None) {
+    let effect_volume = if !matches!(spec.targeting.trajectory, hex_assets::Trajectory::None) {
         let Some(terrain) = ctx.terrain else {
             return Err(CommandRefusal::MissingCombatData {
                 data: CombatData::TerrainOccupancy,
@@ -213,7 +231,15 @@ pub(super) fn apply(
                 spell: spell_name.to_owned(),
             });
         }
-    }
+        clip_effect_volume(spec.targeting.trajectory, target, raw_volume, terrain).map_err(
+            |_clip_error| CommandRefusal::ShapeUnresolved {
+                spell: spell_name.to_owned(),
+                target,
+            },
+        )?
+    } else {
+        raw_volume
+    };
     let target_unit = unit_standing_on(ctx, actors, target);
     if let Some((target, _, true)) = target_unit {
         if spec.effects.iter().any(effect_damages_unit) {
@@ -227,6 +253,81 @@ pub(super) fn apply(
     // after the lattice plan succeeds.
     let creation_edits =
         plan_terrain_creation(ctx, actors, spell_name, spec, standing.pos, target, facing)?;
+
+    // Snapshot exact occupants before payment or terrain settlement. Area effects are
+    // queued in authored-effect then stable-unit order; later world mutation cannot
+    // add, remove, or reorder who this paid cast reached.
+    let occupants = if area {
+        units_in_volume(ctx, actors, &effect_volume)
+    } else {
+        Vec::new()
+    };
+    let mut unit_work = Vec::new();
+    if area {
+        for effect in &spec.effects {
+            for &(target, _, downed) in &occupants {
+                if downed {
+                    continue;
+                }
+                match effect {
+                    Effect::DisableHexes {
+                        count,
+                        targeted: false,
+                    } => unit_work.push(crate::spell_resolution::UnitResolution::Disable {
+                        source: unit,
+                        target,
+                        count: u16::from(*count),
+                    }),
+                    Effect::Burn { turns } => {
+                        unit_work.push(crate::spell_resolution::UnitResolution::Burn {
+                            source: unit,
+                            target,
+                            turns: *turns,
+                        });
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    let impact_count = spec
+        .effects
+        .iter()
+        .filter(|effect| matches!(effect, Effect::Impact { .. }))
+        .count();
+    let batch_ids = match ctx.resolution.preview_batch_ids(impact_count) {
+        Ok(batch_ids) => batch_ids,
+        Err(failure) => {
+            ctx.resolution.freeze(failure);
+            return Err(CommandRefusal::Busy);
+        }
+    };
+    let mut batch_ids = batch_ids.into_iter();
+    let mut impacts = Vec::with_capacity(impact_count);
+    for effect in &spec.effects {
+        let Effect::Impact { element, power } = effect else {
+            continue;
+        };
+        let Some(element) = ctx.elements.and_then(|catalog| catalog.id(element)) else {
+            return Err(CommandRefusal::MissingCombatData {
+                data: CombatData::ElementCatalog,
+            });
+        };
+        let Some(batch) = batch_ids.next() else {
+            ctx.resolution
+                .freeze(crate::SpellResolutionFailure::AuthorityUnavailable {
+                    reason: "terrain batch preflight produced too few ids".to_owned(),
+                });
+            return Err(CommandRefusal::Busy);
+        };
+        impacts.push(TerrainImpact {
+            batch,
+            volume: effect_volume.clone(),
+            element,
+            power: *power,
+        });
+    }
 
     // --- rung 2: the lattice -----------------------------------------------
 
@@ -280,12 +381,41 @@ pub(super) fn apply(
             });
         }
     }
+    let transaction_started = match ctx.resolution.begin(unit, unit_work, impacts.clone()) {
+        Ok(started) => Some(started),
+        Err(failure) => {
+            // Payment is already committed. Retain the exact fatal evidence and do
+            // not publish work the correlation ledger could no longer own.
+            ctx.resolution.freeze(failure);
+            None
+        }
+    };
     ctx.events.push(CombatEvent::Cast {
         caster: unit,
         spell: spell_name.to_owned(),
         target,
     });
     terrain_edits.write_batch(creation_edits);
+    if transaction_started.is_some() {
+        terrain_impacts.write_batch(impacts);
+    }
+    if area && transaction_started == Some(true) {
+        super::spell_resolution::pump_unit_work(
+            ctx.resolution,
+            ctx.pending,
+            ctx.effects,
+            ctx.turn_order.round,
+            ctx.registry,
+            actors,
+            lattices,
+            ctx.events,
+        );
+        if ctx.resolution.obligations_complete() && !ctx.pending.is_open() {
+            // A Burn-only area cast has no asynchronous obligation and never needs
+            // to acquire the combat-authority hold.
+            ctx.resolution.finish();
+        }
+    }
 
     // --- effects -----------------------------------------------------------
 
@@ -295,6 +425,9 @@ pub(super) fn apply(
     for effect in &spec.effects {
         match effect {
             Effect::DisableHexes { count, targeted } => {
+                if area {
+                    continue;
+                }
                 if *targeted {
                     refusals.push("targeted disables need the attacker to pick hexes (not built)");
                     continue;
@@ -305,7 +438,8 @@ pub(super) fn apply(
                     continue;
                 };
                 let landed = open_disable_decision(
-                    ctx,
+                    ctx.pending,
+                    ctx.events,
                     lattices,
                     defender.0,
                     defender.1,
@@ -362,7 +496,11 @@ pub(super) fn apply(
             Effect::Illuminate { .. } => refusals.push("Illuminate waits on the perception lane"),
             Effect::ClearTerrain => refusals.push("legacy ClearTerrain is decode-only"),
             Effect::SetTerrain { .. } | Effect::SpawnWall { .. } => {}
+            Effect::Impact { .. } => {}
             Effect::Burn { turns } => {
+                if area {
+                    continue;
+                }
                 let Some(defender) = target_unit else {
                     // Same rule as `DisableHexes` above: a spell that reaches nobody is
                     // a legal cast that set nothing alight, and it is already paid for.
@@ -488,7 +626,8 @@ pub(crate) fn spell_cell(
 /// absorbed entirely is not a choice anybody has to make, and an open decision requiring
 /// zero cells would park resolution on an answer with no content.
 pub(super) fn open_disable_decision(
-    ctx: &mut Verb,
+    pending: &mut PendingDecision,
+    events: &mut Vec<CombatEvent>,
     lattices: &mut LatticeQuery,
     defender_id: UnitId,
     defender_entity: Entity,
@@ -501,7 +640,7 @@ pub(super) fn open_disable_decision(
     let count = hex_lattice::resolve_incoming(state, raw);
     let prevented = raw.saturating_sub(count);
     if prevented > 0 {
-        ctx.events.push(CombatEvent::DamagePrevented {
+        events.push(CombatEvent::DamagePrevented {
             source,
             target: defender_id,
             amount: prevented,
@@ -511,12 +650,12 @@ pub(super) fn open_disable_decision(
         info!("cast: {defender_id:?} absorbed the whole hit");
         return false;
     }
-    *ctx.pending = PendingDecision::ChooseDisables {
+    *pending = PendingDecision::ChooseDisables {
         decider: defender_id,
         count,
         source,
     };
-    ctx.events.push(CombatEvent::DecisionOpened {
+    events.push(CombatEvent::DecisionOpened {
         decider: defender_id,
         source,
         count,
@@ -558,6 +697,7 @@ pub fn delivers_anything(spell: &Spell) -> bool {
         Effect::DisableHexes { targeted, .. } => !targeted,
         Effect::RestoreHexes { .. } => true,
         Effect::Burn { .. } => true,
+        Effect::Impact { .. } => true,
         // Everything below is refused by name in the match above; see the reasons there.
         Effect::Reveal { .. } => true,
         Effect::SetTerrain { .. } | Effect::SpawnWall { .. } => {
@@ -705,6 +845,27 @@ fn unit_standing_on(
         let (standing, _, _, _, _, _, downed) = actors.get(entity).ok()?;
         (standing?.0.pos == pos).then_some((id, entity, downed))
     })
+}
+
+/// Exact occupants of one canonical effect volume in stable identity order.
+fn units_in_volume(
+    ctx: &Verb,
+    actors: &ActorQuery,
+    volume: &[TilePos],
+) -> Vec<(UnitId, Entity, bool)> {
+    let mut occupants = ctx
+        .registry
+        .iter()
+        .filter_map(|(id, entity)| {
+            let (standing, _, _, _, _, _, downed) = actors.get(entity).ok()?;
+            volume
+                .binary_search(&standing?.0.pos)
+                .is_ok()
+                .then_some((id, entity, downed))
+        })
+        .collect::<Vec<_>>();
+    occupants.sort_by_key(|(id, ..)| *id);
+    occupants
 }
 
 /// Whether this implemented effect would further damage a unit on the anchor.

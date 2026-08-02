@@ -47,6 +47,8 @@ pub mod outcomes {
 }
 /// Terminal encounter detection and its simulation gate.
 pub mod resolution;
+/// Pending host-resolved area and terrain spell transactions.
+pub mod spell_resolution;
 /// Deterministic session combat reporting.
 pub mod summary;
 /// Whose turn it is, and what they have left.
@@ -64,6 +66,7 @@ pub use outcomes::{
     RestorationRefusal, UnitData,
 };
 pub use resolution::{encounter_unresolved, EncounterResolution};
+pub use spell_resolution::{SpellResolutionFailure, SpellResolutionState, SpellResolutionStatus};
 pub use summary::{
     CombatSummary, CombatTranscriptRecorder, CommandKind, DeliveredEffectKind, UnitCombatSummary,
     COMBAT_SUMMARY_FINGERPRINT_VERSION, MAX_COMBAT_SUMMARY_DETAILS,
