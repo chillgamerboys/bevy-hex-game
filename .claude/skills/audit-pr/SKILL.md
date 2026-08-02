@@ -80,8 +80,8 @@ have failed review anyway.
 
 **What it does:** invokes the `/test-full` skill — `/test-local`
 (fmt, clippy, workspace tests, `cargo deny`, doc build, markdown link
-check) then the ship-shape build (`cargo build --workspace --profile
-ci`, no `--all-features`), then it prints the manual visual walk.
+check) then the ship-shape build (`cargo build --package hex_game
+--release`, no `--all-features`), then it prints the manual visual walk.
 Doc-only diffs short-circuit to `/test-quick`.
 
 See the `test-*` SKILL.mds for current expected counts (these grow as

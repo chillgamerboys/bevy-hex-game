@@ -1,12 +1,12 @@
 # Creator and Combat Lab
 
-Wave 6 replaces the old title-screen Lattice Demo with the **Creators** and **Combat
-Lab** primary routes. Creators enters the character library; character and spell
-libraries retain independent screens and workspaces, and the character workspace
-links directly to spell management when an inscription needs work. The lattice
-mechanics sandbox still exists, but only as a local test launched from the Creator.
-Ability Lab and Raider Mirror retain stable fixtures inside Combat Lab and also appear
-as focused entries in the separate Scenarios catalog.
+Wave 6 replaces the old title-screen Lattice Demo with direct **Character Creator**,
+**Spell Creator**, and **Combat Lab** primary routes. Character and spell libraries
+retain independent screens and workspaces, and the character workspace links directly
+to spell management when an inscription needs work. The lattice mechanics sandbox
+still exists, but only as a local test launched from the Creator. Ability Lab and
+Raider Mirror retain stable fixtures inside Combat Lab and also appear as focused
+entries in the separate Demos catalog.
 
 This document owns the creation-library, creator, sandbox, deployment, fixture, and
 launch-snapshot contracts. `hex_assets` owns serializable content, `hex_combat` owns
@@ -156,7 +156,13 @@ seed, roster order, and resolved surfaces. Fixed fixtures bypass Deployment beca
 their encounter placements are immutable.
 
 During a Lab encounter, a collapsible statistics drawer supplements rather than
-replaces the ordinary HUD. It reads `CombatSummary` directly and labels rounds and
+replaces the ordinary HUD. At every viewport and semantic scale it follows the
+persistent own/target lattice readout in the Inspector's single scroll flow;
+statistics never render without an own lattice. Expanding it cannot hide, move, or
+cover that readout, and mouse-wheel plus Tab/Shift-Tab navigation can reach every
+secondary control. HUD hiding and terminal outcomes remove lattice and statistics
+together. It reads
+`CombatSummary` directly and labels rounds and
 completed turns, current and maximum no-progress stretches, outcome,
 successful/refused commands, AI choices, movement distance/budget, casts, Channel and
 mana restored by element, strikes, idle turns, disable flow, restorations, downings,

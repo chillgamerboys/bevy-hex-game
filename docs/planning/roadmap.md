@@ -129,7 +129,7 @@ the whole wave lands on `dev` in one merge (CONTRIBUTING.md has the rules).
   reporting. Engine upkeep remains parked for the Bevy 0.20 window and is not a Wave 5
   gate.
 - **Wave 6 — creator and combat lab (delivered).** The primary title routes now expose
-  one Creator workspace for character and spell authoring plus one Combat Lab. Local records have
+  separate Character Creator and Spell Creator workspaces plus Combat Lab. Local records have
   stable IDs, atomic persistence, Draft/Ready and Map-ready diagnostics,
   dependency-safe deletion, and immutable packaged templates. Sandbox builds ordered
   rosters on all sixteen distinct supported shipped maps, previews and describes
@@ -241,7 +241,10 @@ behaviors exist. The chosen profile is frozen into launch and Retry.
 The Rules step presents preset cards above labelled steppers, a plain-language
 description of each parameter's effect, a visible changed-from-shipped state, Reset,
 and validation at the point of editing. Active Lab sessions add a collapsible
-statistics drawer without replacing the ordinary gameplay HUD. Outcomes open a
+statistics drawer below the persistent lattice readout without replacing the
+ordinary gameplay HUD. The Inspector is its single scroll owner at every scale;
+statistics never appear without that lattice, and HUD/terminal transitions hide the
+two together. Outcomes open a
 full-screen report with **Overview**, **Units**, **Spells & Effects**, **Timeline**,
 and **Compare** modes. Comparison shows both frozen profile/roster headers and
 labelled numeric deltas; colour is never the only indication of improvement or

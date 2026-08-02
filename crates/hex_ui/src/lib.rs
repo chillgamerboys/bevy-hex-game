@@ -103,6 +103,10 @@ pub enum UiHudSetup {
     Frame,
     /// Attach presentation panels to those regions.
     Panels,
+    /// Attach optional development tooling after persistent gameplay panels.
+    Tooling,
+    /// Attach secondary surfaces after the persistent readouts they follow.
+    Secondary,
 }
 
 /// Initial-view requirement consumed by the structural presentation oracle.
@@ -119,11 +123,22 @@ pub enum UiVisibilityRequirement {
 #[derive(Component, Debug, Clone, Copy)]
 pub(crate) struct DefaultImmediateControl;
 
+/// Opt-in invariant for controls or headings whose descendant glyphs must stay
+/// inside their own presentation box.
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct UiTextMustFit;
+
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app.configure_sets(
             OnEnter(hex_core::Screen::Gameplay),
-            (UiHudSetup::Frame, UiHudSetup::Panels).chain(),
+            (
+                UiHudSetup::Frame,
+                UiHudSetup::Panels,
+                UiHudSetup::Tooling,
+                UiHudSetup::Secondary,
+            )
+                .chain(),
         )
         .add_message::<UiIntent>()
         .init_resource::<CombatLogView>()
@@ -191,7 +206,7 @@ pub mod test_support {
     use bevy::prelude::*;
     use bevy::ui_widgets::ScrollArea;
     use bevy::window::WindowResolution;
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
 
     use crate::{ActionPriority, ResolvedUiMetrics};
 
@@ -236,6 +251,20 @@ pub mod test_support {
         }
     }
 
+    /// Returns the populated, maximum-normal casting projection used to exercise
+    /// production rendering without installing a review override.
+    #[must_use]
+    pub fn populated_gameplay_casting() -> crate::CastingPanelView {
+        crate::review::populated_casting()
+    }
+
+    /// Returns populated own and disclosed-target lattice projections used to
+    /// exercise production rendering without installing a review override.
+    #[must_use]
+    pub fn populated_gameplay_lattices() -> crate::GameplayLatticesView {
+        crate::review::populated_lattices()
+    }
+
     /// One player task whose presentation must remain independently constructible.
     ///
     /// This is intentionally more granular than [`hex_core::Screen`]. A single
@@ -244,7 +273,7 @@ pub mod test_support {
         missing_docs,
         reason = "variant meaning is documented by its public UiTaskContract"
     )]
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Deserialize)]
     pub enum UiTaskCase {
         Splash,
         Loading,
@@ -306,6 +335,20 @@ pub mod test_support {
         pub exhaustive_layout: bool,
     }
 
+    /// Lattice presentation that must accompany a populated gameplay task.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum UiTaskLatticeRequirement {
+        /// This task does not present live gameplay lattices.
+        None,
+        /// The persistent selected-player lattice must be populated.
+        Own,
+        /// Both the selected-player lattice and an authored disclosed target must be populated.
+        OwnAndTarget,
+        /// A blocking choice must present either its persistent own lattice or the
+        /// promoted Compact choice used when the Inspector yields at extreme scales.
+        RequiredChoice,
+    }
+
     impl UiTaskCase {
         /// Every known task case. Adding a task requires adding it here and to the
         /// exhaustive contract match below.
@@ -363,11 +406,9 @@ pub mod test_support {
                 Self::Splash => task("startup-splash", Screen::Splash, &[], &[], false),
                 Self::Loading => task("startup-loading", Screen::Loading, &[], &[], false),
                 Self::TitleCold => task("title-cold", Screen::Title, TITLE_CONTROLS, &[], true),
-                Self::TitleResume => {
-                    task("title-resume", Screen::Title, TITLE_CONTROLS, &[], false)
-                }
+                Self::TitleResume => task("title-resume", Screen::Title, TITLE_CONTROLS, &[], true),
                 Self::TitleFailure => {
-                    task("title-failure", Screen::Title, TITLE_CONTROLS, &[], false)
+                    task("title-failure", Screen::Title, TITLE_CONTROLS, &[], true)
                 }
                 Self::MapScenarios => task(
                     "map-scenarios",
@@ -388,7 +429,7 @@ pub mod test_support {
                     Screen::Settings,
                     &["Back"],
                     &["Setting UiScale", "Setting UiVolume"],
-                    false,
+                    true,
                 ),
                 Self::CharacterLibrary => task(
                     "creator-character-library",
@@ -409,28 +450,40 @@ pub mod test_support {
                     Screen::CharacterCreator,
                     &["Open Spell Creator", "Confirm Reset", "Title"],
                     &[],
-                    false,
+                    true,
                 ),
                 Self::CharacterInvalid => task(
                     "creator-character-invalid",
                     Screen::CharacterCreator,
                     &["Library", "Save", "Open Spell Creator"],
-                    &["Erase"],
+                    &[
+                        "Creator Palette More Tools Cue",
+                        "Erase",
+                        "Creator Inspector More Details Cue",
+                    ],
                     true,
                 ),
                 Self::CharacterReady => task(
                     "creator-character-ready",
                     Screen::CharacterCreator,
                     &["Library", "Save", "Local Test", "Test on Map"],
-                    &["Erase"],
-                    false,
+                    &[
+                        "Creator Palette More Tools Cue",
+                        "Erase",
+                        "Creator Inspector More Details Cue",
+                    ],
+                    true,
                 ),
                 Self::CharacterConfirmDelete => task(
                     "creator-character-confirm-delete",
                     Screen::CharacterCreator,
                     &["Library", "Save", "Open Spell Creator"],
-                    &["Confirm Delete"],
-                    false,
+                    &[
+                        "Creator Palette More Tools Cue",
+                        "Creator Inspector More Details Cue",
+                        "Confirm Delete",
+                    ],
+                    true,
                 ),
                 Self::SpellInvalid => task(
                     "creator-spell-invalid",
@@ -444,27 +497,27 @@ pub mod test_support {
                     Screen::SpellCreator,
                     &["Library", "Save"],
                     &["Delete"],
-                    false,
+                    true,
                 ),
                 Self::SpellConfirmDelete => task(
                     "creator-spell-confirm-delete",
                     Screen::SpellCreator,
                     &["Library", "Save"],
                     &["Confirm Delete"],
-                    false,
+                    true,
                 ),
                 Self::LatticeDemo => task(
                     "lattice-demo",
                     Screen::LatticeDemo,
                     &["Back", "End Turn", "Reset", "Cast Lightning Bolt"],
                     &[],
-                    false,
+                    true,
                 ),
                 Self::LabMap => task(
                     "lab-map",
                     Screen::CombatLab,
                     LAB_TABS,
-                    &["Flat Arena"],
+                    &["Combat Lab Map Catalog Scroll Cue", "Flat Arena"],
                     true,
                 ),
                 Self::LabRosters => task(
@@ -472,7 +525,7 @@ pub mod test_support {
                     Screen::CombatLab,
                     &["Back to Map", "Continue to Rules"],
                     &["Add to roster"],
-                    false,
+                    true,
                 ),
                 Self::LabRostersMax => task(
                     "lab-rosters-max",
@@ -493,10 +546,10 @@ pub mod test_support {
                     Screen::CombatLab,
                     LAB_TABS,
                     &["Run Custom three-step"],
-                    false,
+                    true,
                 ),
                 Self::LabReportsEmpty => {
-                    task("lab-reports-empty", Screen::CombatLab, LAB_TABS, &[], false)
+                    task("lab-reports-empty", Screen::CombatLab, LAB_TABS, &[], true)
                 }
                 Self::LabReportsPopulated => task(
                     "lab-reports-populated",
@@ -517,7 +570,7 @@ pub mod test_support {
                     Screen::Gameplay,
                     &["Start Combat", "Back to Rules"],
                     &[],
-                    false,
+                    true,
                 ),
                 Self::Exploration => task(
                     "gameplay-exploration",
@@ -528,7 +581,7 @@ pub mod test_support {
                         "Action Rail Pause",
                     ],
                     &[],
-                    false,
+                    true,
                 ),
                 Self::PlayerTurnMaxActions => task(
                     "gameplay-player-turn-max",
@@ -547,19 +600,24 @@ pub mod test_support {
                     Screen::Gameplay,
                     &["Primary Action Rail"],
                     &[],
-                    false,
+                    true,
                 ),
                 Self::Casting => task(
                     "casting",
                     Screen::Gameplay,
                     &["Primary Action Rail"],
                     &["Cast Lightning Bolt"],
-                    false,
+                    true,
                 ),
                 Self::AimingBlocked => task(
                     "aiming-blocked",
                     Screen::Gameplay,
-                    &["Primary Action Rail", "Cancel Aim"],
+                    &[
+                        "Primary Action Rail",
+                        "Confirm Cast Disabled",
+                        "Next Target Disabled",
+                        "Cancel Aim",
+                    ],
                     &[],
                     true,
                 ),
@@ -575,7 +633,7 @@ pub mod test_support {
                     Screen::Gameplay,
                     &["Primary Action Rail", "Action Rail Confirm 2 / 3"],
                     &[],
-                    false,
+                    true,
                 ),
                 Self::HudHiddenRequired => task(
                     "hud-hidden-required",
@@ -587,26 +645,74 @@ pub mod test_support {
                 Self::LabStatistics => task(
                     "lab-statistics",
                     Screen::Gameplay,
+                    &["Primary Action Rail"],
                     &[
-                        "Primary Action Rail",
+                        "Expand or collapse live Combat Lab statistics",
+                        "Combat Lab Statistics Scroll Cue",
                         "End experiment and save the current Combat Lab report",
+                        "Combat Lab Statistics Detail End",
                     ],
-                    &[],
-                    false,
+                    true,
                 ),
-                Self::Pause => task("pause", Screen::Gameplay, &["Resume"], &[], false),
+                Self::Pause => task("pause", Screen::Gameplay, &["Resume"], &[], true),
                 Self::OrdinaryOutcome => task(
                     "outcome-ordinary",
                     Screen::Gameplay,
                     &["Continue", "Retry"],
                     &[],
-                    false,
+                    true,
                 ),
-                Self::LabReportOverview => report_task("report-overview", false),
-                Self::LabReportUnits => report_task("report-units", false),
-                Self::LabReportSpellsEffects => report_task("report-spells-effects", false),
-                Self::LabReportTimeline => report_task("report-timeline", false),
+                Self::LabReportOverview => report_task("report-overview", true),
+                Self::LabReportUnits => report_task("report-units", true),
+                Self::LabReportSpellsEffects => report_task("report-spells-effects", true),
+                Self::LabReportTimeline => report_task("report-timeline", true),
                 Self::LabReportCompare => report_task("report-compare", true),
+            }
+        }
+
+        /// Fail-closed lattice surface required by this task's authored state.
+        #[must_use]
+        pub const fn lattice_requirement(self) -> UiTaskLatticeRequirement {
+            match self {
+                Self::Exploration
+                | Self::PlayerTurnMaxActions
+                | Self::HostileTurn
+                | Self::AimingBlocked
+                | Self::Pause => UiTaskLatticeRequirement::Own,
+                Self::Casting | Self::LabStatistics => UiTaskLatticeRequirement::OwnAndTarget,
+                Self::DisableDecision | Self::RestoreDecision | Self::HudHiddenRequired => {
+                    UiTaskLatticeRequirement::RequiredChoice
+                }
+                _ => UiTaskLatticeRequirement::None,
+            }
+        }
+
+        /// Named controls whose relative keyboard order is part of this task's
+        /// contract. Controls not listed still must be keyboard reachable; this
+        /// sequence records only ordering relationships that are intentional and
+        /// stable across responsive reflow.
+        #[must_use]
+        pub const fn focus_sequence(self) -> &'static [&'static str] {
+            match self {
+                Self::TitleCold | Self::TitleResume | Self::TitleFailure => TITLE_CONTROLS,
+                Self::MapScenarios => &["The Crossing", "Waterfall", "Back"],
+                Self::Demos => &["Ability Lab", "Raider Mirror", "Back"],
+                Self::LabMap
+                | Self::LabFixtures
+                | Self::LabReportsEmpty
+                | Self::LabReportsPopulated => LAB_TABS,
+                Self::LabReportOverview
+                | Self::LabReportUnits
+                | Self::LabReportSpellsEffects
+                | Self::LabReportTimeline
+                | Self::LabReportCompare => &[
+                    "Overview",
+                    "Units",
+                    "Spells & Effects",
+                    "Timeline",
+                    "Compare",
+                ],
+                _ => &[],
             }
         }
     }
@@ -722,6 +828,10 @@ pub mod test_support {
     pub struct UiNodeObservation {
         /// Stable entity name used by review and test automation.
         pub name: String,
+        /// Whether the entity supplied an authored stable [`Name`].
+        pub has_stable_name: bool,
+        /// Stable identity of the immediate presentation parent, when named.
+        pub parent_name: Option<String>,
         /// Whether any part of the node is visible after ancestor and canvas clipping.
         pub visible: bool,
         /// Computed logical size when Bevy layout has run.
@@ -762,6 +872,13 @@ pub mod test_support {
         pub obscured_by_action_rail: Option<Vec2>,
         /// Whether transparent corners intentionally tessellate with sibling controls.
         pub tessellated: bool,
+    }
+
+    impl UiNodeObservation {
+        fn layout_bounds(&self) -> Option<Rect> {
+            (self.size.x > 0.5 && self.size.y > 0.5)
+                .then(|| Rect::from_center_size(self.center, self.size))
+        }
     }
 
     /// Presentation-only state. It is never a gameplay oracle.
@@ -810,12 +927,22 @@ pub mod test_support {
                 }
                 if node.overflows {
                     issues.push(format!(
-                        "{} has presentation content outside its box",
-                        node.name
+                        "{} has presentation content outside its box; content {:.1}×{:.1} versus box {:.1}×{:.1}",
+                        node.name,
+                        node.content_size.x,
+                        node.content_size.y,
+                        node.size.x,
+                        node.size.y,
                     ));
                 }
             }
             for node in self.nodes.iter().filter(|node| node.focusable) {
+                if !node.has_stable_name {
+                    issues.push(format!(
+                        "{} is interactive but has no authored stable Name",
+                        node.name
+                    ));
+                }
                 let Some(requirement) = node.visibility_requirement else {
                     issues.push(format!(
                         "{} is interactive but has no explicit immediate/scrollable visibility contract",
@@ -885,13 +1012,19 @@ pub mod test_support {
                     ));
                 }
             }
-            let visible_focusable = self
+            let checked_controls = self
                 .nodes
                 .iter()
-                .filter(|node| node.in_focus_order && node.visible)
+                .filter(|node| {
+                    node.visible
+                        && (node.in_focus_order
+                            || (node.visibility_requirement
+                                == Some(crate::UiVisibilityRequirement::Immediate)
+                                && node.accessible_label.is_some()))
+                })
                 .collect::<Vec<_>>();
-            for (index, left) in visible_focusable.iter().enumerate() {
-                for right in visible_focusable.iter().skip(index + 1) {
+            for (index, left) in checked_controls.iter().enumerate() {
+                for right in checked_controls.iter().skip(index + 1) {
                     if left.tessellated && right.tessellated {
                         continue;
                     }
@@ -909,6 +1042,516 @@ pub mod test_support {
                             overlap.width(),
                             overlap.height()
                         ));
+                    }
+                }
+            }
+            issues
+        }
+
+        /// Returns fail-closed geometry and named-control failures for one task.
+        ///
+        /// Visual-walk captures use this same contract as the exhaustive
+        /// headless matrix, so reaching the correct screen is insufficient when
+        /// the authored task surface failed to render.
+        #[must_use]
+        pub fn task_issues(&self, case: UiTaskCase) -> Vec<String> {
+            let contract = case.contract();
+            let mut issues = match case {
+                UiTaskCase::Casting => self.review_fixture_issues("casting-list"),
+                UiTaskCase::LabStatistics => self.review_fixture_issues("live-statistics"),
+                _ => self.layout_issues(),
+            };
+            for name in contract.immediate_controls {
+                let Some(node) = self.nodes.iter().find(|node| node.name == *name) else {
+                    issues.push(format!("missing immediate control {name:?}"));
+                    continue;
+                };
+                if node.visibility_requirement != Some(crate::UiVisibilityRequirement::Immediate) {
+                    issues.push(format!("control {name:?} is not explicitly Immediate"));
+                }
+                if !node.fully_visible {
+                    issues.push(format!(
+                        "control {name:?} is not initially visible: {node:?}"
+                    ));
+                }
+            }
+            for name in contract.scrollable_controls {
+                let Some(node) = self.nodes.iter().find(|node| node.name == *name) else {
+                    issues.push(format!("missing scrollable control {name:?}"));
+                    continue;
+                };
+                if node.visibility_requirement != Some(crate::UiVisibilityRequirement::Scrollable) {
+                    issues.push(format!(
+                        "control {name:?} did not explicitly opt into Scrollable"
+                    ));
+                }
+                if !node.scroll_reachable {
+                    issues.push(format!(
+                        "control {name:?} has no complete scroll route: {node:?}"
+                    ));
+                }
+            }
+            let mut previous_focus = None;
+            for name in case.focus_sequence() {
+                let Some(node) = self.nodes.iter().find(|node| node.name == *name) else {
+                    continue;
+                };
+                if !node.focusable {
+                    continue;
+                }
+                let Some(position) = self.focus_order.iter().position(|focused| focused == name)
+                else {
+                    continue;
+                };
+                if previous_focus.is_some_and(|previous| position <= previous) {
+                    issues.push(format!(
+                        "control {name:?} appears out of declared focus order: {:?}",
+                        self.focus_order
+                    ));
+                }
+                previous_focus = Some(position);
+            }
+            issues.extend(self.task_lattice_issues(case));
+            if case == UiTaskCase::HudHiddenRequired {
+                for hidden in [
+                    "Party Strip",
+                    "Initiative Panel",
+                    "Combat Log Panel",
+                    "Combat Lab Live Statistics Drawer",
+                ] {
+                    if self.nodes.iter().any(|node| node.name == hidden) {
+                        issues.push(format!(
+                            "ordinary HUD surface {hidden:?} remained visible while the HUD was hidden"
+                        ));
+                    }
+                }
+            }
+            issues
+        }
+
+        fn task_lattice_issues(&self, case: UiTaskCase) -> Vec<String> {
+            let mut issues = Vec::new();
+            match case.lattice_requirement() {
+                UiTaskLatticeRequirement::None => {}
+                UiTaskLatticeRequirement::Own => {
+                    self.require_lattice_branch(case, "own", &mut issues);
+                }
+                UiTaskLatticeRequirement::OwnAndTarget => {
+                    self.require_lattice_branch(case, "own", &mut issues);
+                    self.require_lattice_branch(case, "target", &mut issues);
+                }
+                UiTaskLatticeRequirement::RequiredChoice => {
+                    if self
+                        .nodes
+                        .iter()
+                        .any(|node| node.name == "Compact Required Lattice Choice")
+                    {
+                        for name in [
+                            "Compact Required Lattice Choice",
+                            "Compact Required Lattice",
+                            "Compact Required Cell (0, 0)",
+                        ] {
+                            let Some(node) = self.nodes.iter().find(|node| node.name == name)
+                            else {
+                                issues.push(format!(
+                                    "{} is missing required promoted lattice surface {name:?}",
+                                    case.contract().id
+                                ));
+                                continue;
+                            };
+                            if node.size.x <= 0.5 || node.size.y <= 0.5 {
+                                issues.push(format!(
+                                    "{} required promoted lattice surface {name:?} has no layout area",
+                                    case.contract().id
+                                ));
+                            } else if !node.fully_visible {
+                                issues.push(format!(
+                                    "{} required promoted lattice surface {name:?} is not initially visible: {node:?}",
+                                    case.contract().id
+                                ));
+                            }
+                        }
+                    } else {
+                        self.require_lattice_branch(case, "own", &mut issues);
+                    }
+                }
+            }
+            issues
+        }
+
+        fn require_lattice_branch(&self, case: UiTaskCase, branch: &str, issues: &mut Vec<String>) {
+            let (panel, lattice, cell, body) = match branch {
+                "own" => (
+                    "Own Lattice Panel",
+                    "Own Lattice",
+                    "Own Cell (0, 0)",
+                    "Own Lattice Body",
+                ),
+                "target" => (
+                    "Target Lattice Panel",
+                    "Target Lattice",
+                    "Target Cell (0, 0)",
+                    "Target Lattice Body",
+                ),
+                other => unreachable!("unknown lattice presentation branch {other:?}"),
+            };
+            for (name, expected_parent) in [
+                (panel, "Lattice Readout Stack"),
+                (lattice, body),
+                (cell, lattice),
+            ] {
+                let Some(node) = self.nodes.iter().find(|node| node.name == name) else {
+                    issues.push(format!(
+                        "{} is missing required {branch} lattice surface {name:?}",
+                        case.contract().id
+                    ));
+                    continue;
+                };
+                if node.size.x <= 0.5 || node.size.y <= 0.5 {
+                    issues.push(format!(
+                        "{} required {branch} lattice surface {name:?} has no layout area",
+                        case.contract().id
+                    ));
+                }
+                if !node.scroll_reachable {
+                    issues.push(format!(
+                        "{} required {branch} lattice surface {name:?} has no complete scroll route: {node:?}",
+                        case.contract().id
+                    ));
+                }
+                if node.parent_name.as_deref() != Some(expected_parent) {
+                    issues.push(format!(
+                        "{} required {branch} lattice surface {name:?} must be a child of {expected_parent:?}, not {:?}",
+                        case.contract().id,
+                        node.parent_name
+                    ));
+                }
+            }
+        }
+
+        /// Returns presentation-contract failures for an authored review fixture.
+        ///
+        /// This supplements generic geometry checks with named composition facts;
+        /// it never infers gameplay state from pixels or rendered copy.
+        #[must_use]
+        pub fn review_fixture_issues(&self, fixture: &str) -> Vec<String> {
+            let mut issues = self.layout_issues();
+            let drawers = self
+                .nodes
+                .iter()
+                .filter(|node| node.name == "Combat Lab Live Statistics Drawer")
+                .collect::<Vec<_>>();
+            if !drawers.is_empty() {
+                let lattices = self
+                    .nodes
+                    .iter()
+                    .filter(|node| node.name == "Lattice Readout Stack")
+                    .collect::<Vec<_>>();
+                let own_panels = self
+                    .nodes
+                    .iter()
+                    .filter(|node| node.name == "Own Lattice Panel")
+                    .collect::<Vec<_>>();
+                if drawers.len() != 1 || lattices.len() != 1 || own_panels.len() != 1 {
+                    issues.push(format!(
+                        "presented statistics require exactly one lattice stack and own panel: drawers={}, stacks={}, own_panels={}",
+                        drawers.len(),
+                        lattices.len(),
+                        own_panels.len()
+                    ));
+                } else if let (Some(drawer), Some(lattice)) = (drawers.first(), lattices.first()) {
+                    if drawer.parent_name.as_deref() != Some("Inspector HUD Region")
+                        || lattice.parent_name.as_deref() != Some("Inspector HUD Region")
+                    {
+                        issues.push(format!(
+                            "statistics and lattice must share the Inspector scroll owner: lattice_parent={:?}, drawer_parent={:?}",
+                            lattice.parent_name, drawer.parent_name
+                        ));
+                    }
+                    if let (Some(lattice_bounds), Some(drawer_bounds)) =
+                        (lattice.layout_bounds(), drawer.layout_bounds())
+                    {
+                        if lattice_bounds.max.y > drawer_bounds.min.y + 0.5 {
+                            issues.push(format!(
+                                "presented statistics must follow the lattice: lattice={lattice_bounds:?}, drawer={drawer_bounds:?}"
+                            ));
+                        }
+                    }
+                }
+            }
+            if !matches!(fixture, "casting-list" | "live-statistics") {
+                return issues;
+            }
+
+            let required_surface = |name: &str,
+                                    requirement: Option<crate::UiVisibilityRequirement>,
+                                    issues: &mut Vec<String>| {
+                let Some(node) = self.nodes.iter().find(|node| node.name == name) else {
+                    issues.push(format!("{fixture} is missing required surface {name:?}"));
+                    return None;
+                };
+                if node.size.x <= 0.5 || node.size.y <= 0.5 {
+                    issues.push(format!(
+                        "{fixture} required surface {name:?} has no layout area: {node:?}"
+                    ));
+                } else if requirement == Some(crate::UiVisibilityRequirement::Immediate)
+                    && !node.fully_visible
+                {
+                    issues.push(format!(
+                        "{fixture} required surface {name:?} is not fully visible: {node:?}"
+                    ));
+                } else if requirement == Some(crate::UiVisibilityRequirement::Scrollable)
+                    && !node.scroll_reachable
+                {
+                    issues.push(format!(
+                        "{fixture} required surface {name:?} has no complete scroll route: {node:?}"
+                    ));
+                }
+                Some(node)
+            };
+
+            let drawer = required_surface("Combat Lab Live Statistics Drawer", None, &mut issues);
+            let toggle = required_surface(
+                "Expand or collapse live Combat Lab statistics",
+                Some(crate::UiVisibilityRequirement::Scrollable),
+                &mut issues,
+            );
+            let end_control = required_surface(
+                "End experiment and save the current Combat Lab report",
+                Some(crate::UiVisibilityRequirement::Scrollable),
+                &mut issues,
+            );
+            if let Some(drawer_bounds) = drawer.and_then(UiNodeObservation::layout_bounds) {
+                for control in [toggle, end_control].into_iter().flatten() {
+                    if let Some(control_bounds) = control.layout_bounds() {
+                        if control_bounds.min.x < drawer_bounds.min.x - 0.5
+                            || control_bounds.max.x > drawer_bounds.max.x + 0.5
+                            || control_bounds.min.y < drawer_bounds.min.y - 0.5
+                            || control_bounds.max.y > drawer_bounds.max.y + 0.5
+                        {
+                            issues.push(format!(
+                                "statistics control {:?} escapes its drawer: drawer={drawer_bounds:?}, control={control_bounds:?}",
+                                control.name
+                            ));
+                        }
+                    }
+                }
+            }
+            if fixture == "live-statistics" {
+                let casting = self.nodes.iter().find(|node| node.name == "Casting Panel");
+                if casting.is_none() {
+                    issues.push(
+                        "live-statistics is missing the populated primary casting surface"
+                            .to_owned(),
+                    );
+                }
+                if let (Some(drawer_bounds), Some(casting_bounds)) = (
+                    drawer.and_then(|node| node.visible_bounds),
+                    casting.and_then(|node| node.visible_bounds),
+                ) {
+                    let overlap = drawer_bounds.intersect(casting_bounds);
+                    if overlap.width() > 0.5 && overlap.height() > 0.5 {
+                        issues.push(format!(
+                            "expanded statistics cover the primary casting surface by {:.1}×{:.1}: drawer={drawer_bounds:?}, casting={casting_bounds:?}",
+                            overlap.width(),
+                            overlap.height()
+                        ));
+                    }
+                }
+                if let Some(drawer_bounds) = drawer.and_then(|node| node.visible_bounds) {
+                    for control in self.nodes.iter().filter(|node| {
+                        node.focusable
+                            && !matches!(
+                                node.name.as_str(),
+                                "Expand or collapse live Combat Lab statistics"
+                                    | "End experiment and save the current Combat Lab report"
+                            )
+                    }) {
+                        let Some(control_bounds) = control.visible_bounds else {
+                            continue;
+                        };
+                        let overlap = drawer_bounds.intersect(control_bounds);
+                        if overlap.width() > 0.5 && overlap.height() > 0.5 {
+                            issues.push(format!(
+                                "expanded statistics cover focusable control {:?} by {:.1}×{:.1}",
+                                control.name,
+                                overlap.width(),
+                                overlap.height()
+                            ));
+                        }
+                    }
+                }
+                if let Some(body) =
+                    required_surface("Combat Lab Statistics Body", None, &mut issues)
+                {
+                    if body.visibility_requirement
+                        != Some(crate::UiVisibilityRequirement::Scrollable)
+                    {
+                        issues.push(
+                            "the expanded statistics body must explicitly be Scrollable".to_owned(),
+                        );
+                    }
+                }
+                if let Some(end) = self
+                    .nodes
+                    .iter()
+                    .find(|node| node.name == "Combat Lab Statistics Detail End")
+                {
+                    if end.visibility_requirement
+                        != Some(crate::UiVisibilityRequirement::Scrollable)
+                        || !end.scroll_reachable
+                    {
+                        issues.push(format!(
+                            "the complete statistics detail has no scroll route: {end:?}"
+                        ));
+                    }
+                } else {
+                    issues.push(
+                        "live-statistics is missing its scrollable detail end marker".to_owned(),
+                    );
+                }
+            } else if self
+                .nodes
+                .iter()
+                .any(|node| node.name == "Combat Lab Statistics Body")
+            {
+                issues
+                    .push("collapsed statistics unexpectedly present their detail body".to_owned());
+            }
+
+            let inspector = required_surface(
+                "Inspector HUD Region",
+                Some(crate::UiVisibilityRequirement::Immediate),
+                &mut issues,
+            );
+            let lattice = required_surface("Lattice Readout Stack", None, &mut issues);
+            let own_panel = required_surface(
+                "Own Lattice Panel",
+                Some(crate::UiVisibilityRequirement::Scrollable),
+                &mut issues,
+            );
+            let target_panel = required_surface(
+                "Target Lattice Panel",
+                Some(crate::UiVisibilityRequirement::Scrollable),
+                &mut issues,
+            );
+            let own_lattice = required_surface(
+                "Own Lattice",
+                Some(crate::UiVisibilityRequirement::Scrollable),
+                &mut issues,
+            );
+            let target_lattice = required_surface(
+                "Target Lattice",
+                Some(crate::UiVisibilityRequirement::Scrollable),
+                &mut issues,
+            );
+            let own_cell = required_surface(
+                "Own Cell (0, 0)",
+                Some(crate::UiVisibilityRequirement::Scrollable),
+                &mut issues,
+            );
+            let target_cell = required_surface(
+                "Target Cell (0, 0)",
+                Some(crate::UiVisibilityRequirement::Scrollable),
+                &mut issues,
+            );
+            let own_extreme = required_surface(
+                "Own Cell (2, -2)",
+                Some(crate::UiVisibilityRequirement::Scrollable),
+                &mut issues,
+            );
+            let target_extreme = required_surface(
+                "Target Cell (2, 0)",
+                Some(crate::UiVisibilityRequirement::Scrollable),
+                &mut issues,
+            );
+
+            for (node, expected_parent) in [
+                (inspector, "Gameplay HUD Safe Frame"),
+                (lattice, "Inspector HUD Region"),
+                (own_panel, "Lattice Readout Stack"),
+                (target_panel, "Lattice Readout Stack"),
+                (drawer, "Inspector HUD Region"),
+                (own_lattice, "Own Lattice Body"),
+                (target_lattice, "Target Lattice Body"),
+                (own_cell, "Own Lattice"),
+                (target_cell, "Target Lattice"),
+                (own_extreme, "Own Lattice"),
+                (target_extreme, "Target Lattice"),
+            ] {
+                if let Some(node) = node {
+                    if node.parent_name.as_deref() != Some(expected_parent) {
+                        issues.push(format!(
+                            "{:?} must be a child of {expected_parent:?}, not {:?}",
+                            node.name, node.parent_name
+                        ));
+                    }
+                }
+            }
+
+            for (prefix, parent) in [
+                ("Own Cell (", own_lattice),
+                ("Target Cell (", target_lattice),
+            ] {
+                let Some(parent_bounds) = parent.and_then(UiNodeObservation::layout_bounds) else {
+                    continue;
+                };
+                for cell in self
+                    .nodes
+                    .iter()
+                    .filter(|node| node.name.starts_with(prefix))
+                {
+                    if cell.parent_name.as_deref() != parent.map(|node| node.name.as_str()) {
+                        issues.push(format!(
+                            "{:?} is detached from its lattice parent {:?}",
+                            cell.name,
+                            parent.map(|node| node.name.as_str())
+                        ));
+                    }
+                    let Some(cell_bounds) = cell.layout_bounds() else {
+                        issues.push(format!("{:?} has no lattice-cell layout area", cell.name));
+                        continue;
+                    };
+                    if cell_bounds.min.x < parent_bounds.min.x - 0.5
+                        || cell_bounds.max.x > parent_bounds.max.x + 0.5
+                        || cell_bounds.min.y < parent_bounds.min.y - 0.5
+                        || cell_bounds.max.y > parent_bounds.max.y + 0.5
+                    {
+                        issues.push(format!(
+                            "{:?} escapes its lattice geometry: lattice={parent_bounds:?}, cell={cell_bounds:?}",
+                            cell.name
+                        ));
+                    }
+                    if !cell.scroll_reachable {
+                        issues.push(format!(
+                            "{:?} has no complete Inspector scroll route",
+                            cell.name
+                        ));
+                    }
+                }
+            }
+
+            if let (Some(lattice_bounds), Some(drawer_bounds)) = (
+                lattice.and_then(UiNodeObservation::layout_bounds),
+                drawer.and_then(UiNodeObservation::layout_bounds),
+            ) {
+                if lattice_bounds.max.y > drawer_bounds.min.y + 0.5 {
+                    issues.push(format!(
+                        "statistics must follow the lattice: lattice={lattice_bounds:?}, drawer={drawer_bounds:?}"
+                    ));
+                }
+            }
+            if let Some(inspector_bounds) = inspector.and_then(UiNodeObservation::layout_bounds) {
+                for surface in [lattice, drawer].into_iter().flatten() {
+                    if let Some(bounds) = surface.layout_bounds() {
+                        if bounds.min.x < inspector_bounds.min.x - 0.5
+                            || bounds.max.x > inspector_bounds.max.x + 0.5
+                        {
+                            issues.push(format!(
+                                "{:?} escapes the Inspector lane horizontally: inspector={inspector_bounds:?}, surface={bounds:?}",
+                                surface.name
+                            ));
+                        }
                     }
                 }
             }
@@ -943,15 +1586,27 @@ pub mod test_support {
             .into_iter()
             .map(|(_, name)| name)
             .collect::<Vec<_>>();
+        let descendant_text_bounds = descendant_text_bounds_by_ancestor(world);
         let entities = {
-            let mut query = world.query_filtered::<Entity, With<Name>>();
+            let mut query = world.query::<Entity>();
             query.iter(world).collect::<Vec<_>>()
         };
         let mut nodes = entities
             .into_iter()
             .filter(|entity| is_presented(world, *entity))
             .filter_map(|entity| {
-                let name = world.get::<Name>(entity)?;
+                let stable_name = world.get::<Name>(entity);
+                let focusable = world.get::<Button>(entity).is_some()
+                    || world
+                        .get::<TabIndex>(entity)
+                        .is_some_and(|index| index.0 >= 0);
+                if stable_name.is_none() && !focusable {
+                    return None;
+                }
+                let name = stable_name.map_or_else(
+                    || format!("<unnamed UI entity {:?}>", entity),
+                    |name| name.as_str().to_owned(),
+                );
                 let computed = world.get::<ComputedNode>(entity);
                 let inverse_scale = computed.map_or(1.0, |node| node.inverse_scale_factor);
                 let size =
@@ -964,6 +1619,10 @@ pub mod test_support {
                 let bounds = Rect::from_center_size(center, size);
                 let rendered_text_bounds = rendered_text_bounds(world, entity);
                 let presented_bounds = rendered_text_bounds.unwrap_or(bounds);
+                let descendant_text_overflow = world.get::<crate::UiTextMustFit>(entity).is_some()
+                    && descendant_text_bounds
+                        .get(&entity)
+                        .is_some_and(|text_bounds| descendant_text_overflows(bounds, *text_bounds));
                 let visible_bounds =
                     effective_visible_bounds(world, entity, presented_bounds, metrics);
                 let fully_visible = rect_contains(
@@ -972,10 +1631,6 @@ pub mod test_support {
                 ) && world.get::<CalculatedClip>(entity).is_none_or(|clip| {
                     rect_contains(scale_rect(clip.clip, inverse_scale), presented_bounds)
                 });
-                let focusable = world.get::<Button>(entity).is_some()
-                    || world
-                        .get::<TabIndex>(entity)
-                        .is_some_and(|index| index.0 >= 0);
                 let enabled_in_active_scope = focusable
                     && world.get::<bevy::ui::InteractionDisabled>(entity).is_none()
                     && active_modal.is_none_or(|modal| is_descendant_or_self(world, entity, modal));
@@ -1001,7 +1656,12 @@ pub mod test_support {
                     None
                 };
                 Some(UiNodeObservation {
-                    name: name.as_str().to_owned(),
+                    name,
+                    has_stable_name: stable_name.is_some(),
+                    parent_name: world
+                        .get::<ChildOf>(entity)
+                        .and_then(|parent| world.get::<Name>(parent.parent()))
+                        .map(|name| name.as_str().to_owned()),
                     visible: visible_bounds.is_some(),
                     size,
                     content_size: computed.map_or(Vec2::ZERO, |node| {
@@ -1025,16 +1685,17 @@ pub mod test_support {
                         .get::<AccessibleLabel>(entity)
                         .map(|label| label.0.clone()),
                     tab_index: world.get::<TabIndex>(entity).map(|index| index.0),
-                    overflows: computed.is_some_and(|node| {
-                        // Yoga text measurement can extend a few logical pixels
-                        // beyond the border box for glyph overhang and borders.
-                        // Keep the tolerance logical so 1× and Retina inputs use
-                        // the same oracle; larger layout overflow still fails.
-                        let epsilon = 10.0;
-                        let content = node.content_size() * node.inverse_scale_factor;
-                        let size = node.size() * node.inverse_scale_factor;
-                        content.x > size.x + epsilon || content.y > size.y + epsilon
-                    }),
+                    overflows: descendant_text_overflow
+                        || computed.is_some_and(|node| {
+                            // Yoga text measurement can extend a few logical pixels
+                            // beyond the border box for glyph overhang and borders.
+                            // Keep the tolerance logical so 1× and Retina inputs use
+                            // the same oracle; larger layout overflow still fails.
+                            let epsilon = 10.0;
+                            let content = node.content_size() * node.inverse_scale_factor;
+                            let size = node.size() * node.inverse_scale_factor;
+                            content.x > size.x + epsilon || content.y > size.y + epsilon
+                        }),
                     focused: focused == Some(entity),
                     focusable,
                     in_focus_order: focus_entities.contains(&entity),
@@ -1104,16 +1765,60 @@ pub mod test_support {
             })
     }
 
+    fn descendant_text_bounds_by_ancestor(world: &mut World) -> HashMap<Entity, Rect> {
+        let text_entities = {
+            let mut query = world.query_filtered::<Entity, With<bevy::text::TextLayoutInfo>>();
+            query.iter(world).collect::<Vec<_>>()
+        };
+        let mut bounds_by_ancestor = HashMap::<Entity, Rect>::new();
+        for text_entity in text_entities {
+            let Some(bounds) = rendered_text_bounds(world, text_entity) else {
+                continue;
+            };
+            let mut current = Some(text_entity);
+            while let Some(entity) = current {
+                bounds_by_ancestor
+                    .entry(entity)
+                    .and_modify(|existing| {
+                        *existing = Rect::from_corners(
+                            existing.min.min(bounds.min),
+                            existing.max.max(bounds.max),
+                        );
+                    })
+                    .or_insert(bounds);
+                current = world.get::<ChildOf>(entity).map(ChildOf::parent);
+            }
+        }
+        bounds_by_ancestor
+    }
+
     fn scale_rect(rect: Rect, scale: f32) -> Rect {
         Rect::from_corners(rect.min * scale, rect.max * scale)
     }
 
     fn rect_contains(outer: Rect, inner: Rect) -> bool {
-        const EPSILON: f32 = 0.5;
-        inner.min.x >= outer.min.x - EPSILON
-            && inner.min.y >= outer.min.y - EPSILON
-            && inner.max.x <= outer.max.x + EPSILON
-            && inner.max.y <= outer.max.y + EPSILON
+        rect_contains_with_epsilon(outer, inner, 0.5)
+    }
+
+    fn rect_contains_with_epsilon(outer: Rect, inner: Rect, epsilon: f32) -> bool {
+        inner.min.x >= outer.min.x - epsilon
+            && inner.min.y >= outer.min.y - epsilon
+            && inner.max.x <= outer.max.x + epsilon
+            && inner.max.y <= outer.max.y + epsilon
+    }
+
+    fn descendant_text_overflows(container: Rect, text: Rect) -> bool {
+        // Atlas ascent/descent can legitimately overhang a control's Yoga text
+        // box vertically without painting into a neighboring action. Horizontal
+        // escape is the collision-prone failure (for example two long disabled
+        // status labels running together), so keep that tolerance tight while
+        // retaining the legacy content-box allowance vertically.
+        const HORIZONTAL_EPSILON: f32 = 2.0;
+        const VERTICAL_EPSILON: f32 = 10.0;
+        text.min.x < container.min.x - HORIZONTAL_EPSILON
+            || text.max.x > container.max.x + HORIZONTAL_EPSILON
+            || text.min.y < container.min.y - VERTICAL_EPSILON
+            || text.max.y > container.max.y + VERTICAL_EPSILON
     }
 
     fn non_empty_intersection(left: Rect, right: Rect) -> Option<Rect> {
@@ -1196,9 +1901,11 @@ pub mod test_support {
         let mut candidate_min = target_min;
         let mut candidate_max = target_max;
         while let Some(parent) = world.get::<ChildOf>(current).map(ChildOf::parent) {
-            if let (Some(node), Some(parent_bounds)) =
-                (world.get::<Node>(parent), node_bounds(world, parent))
-            {
+            if let (Some(node), Some(computed), Some(parent_bounds)) = (
+                world.get::<Node>(parent),
+                world.get::<ComputedNode>(parent),
+                node_bounds(world, parent),
+            ) {
                 let axis = if horizontal {
                     node.overflow.x
                 } else {
@@ -1222,10 +1929,38 @@ pub mod test_support {
                     match axis {
                         OverflowAxis::Visible => {}
                         OverflowAxis::Scroll
-                            if world.get::<ScrollArea>(parent).is_some()
+                            if (world.get::<ScrollArea>(parent).is_some()
+                                || world
+                                    .get::<crate::creator::CompactCreatorCanvasScroll>(parent)
+                                    .is_some())
                                 && world.get::<ScrollPosition>(parent).is_some()
                                 && target_length <= parent_length + 0.5 =>
                         {
+                            let Some(scroll) = world.get::<ScrollPosition>(parent) else {
+                                return false;
+                            };
+                            let current_scroll = if horizontal { scroll.x } else { scroll.y };
+                            let visible_size = computed.size() * computed.inverse_scale_factor;
+                            let content_size =
+                                computed.content_size() * computed.inverse_scale_factor;
+                            let max_scroll = if horizontal {
+                                (content_size.x - visible_size.x).max(0.0)
+                            } else {
+                                (content_size.y - visible_size.y).max(0.0)
+                            };
+                            // Increasing ScrollPosition moves content toward the
+                            // viewport origin. From the current layout, legal
+                            // target shifts span [s - max, s]. That range must
+                            // intersect the shifts that fully contain the target.
+                            let legal_shift_min = current_scroll - max_scroll;
+                            let legal_shift_max = current_scroll;
+                            let required_shift_min = parent_min - candidate_min;
+                            let required_shift_max = parent_max - candidate_max;
+                            if legal_shift_min.max(required_shift_min)
+                                > legal_shift_max.min(required_shift_max) + 0.5
+                            {
+                                return false;
+                            }
                             // Once this scroll viewport can reveal the target, outer
                             // clippers constrain the viewport rather than the target's
                             // current offscreen coordinates.
@@ -1451,39 +2186,7 @@ pub mod test_support {
         }
 
         fn task_contract_issues(case: UiTaskCase, snapshot: &UiTreeSnapshot) -> Vec<String> {
-            let contract = case.contract();
-            let mut issues = snapshot.layout_issues();
-            for name in contract.immediate_controls {
-                let Some(node) = snapshot.nodes.iter().find(|node| node.name == *name) else {
-                    issues.push(format!("missing immediate control {name:?}"));
-                    continue;
-                };
-                if node.visibility_requirement != Some(crate::UiVisibilityRequirement::Immediate) {
-                    issues.push(format!("control {name:?} is not explicitly Immediate"));
-                }
-                if !node.fully_visible {
-                    issues.push(format!(
-                        "control {name:?} is not initially visible: {node:?}"
-                    ));
-                }
-            }
-            for name in contract.scrollable_controls {
-                let Some(node) = snapshot.nodes.iter().find(|node| node.name == *name) else {
-                    issues.push(format!("missing scrollable control {name:?}"));
-                    continue;
-                };
-                if node.visibility_requirement != Some(crate::UiVisibilityRequirement::Scrollable) {
-                    issues.push(format!(
-                        "control {name:?} did not explicitly opt into Scrollable"
-                    ));
-                }
-                if !node.scroll_reachable {
-                    issues.push(format!(
-                        "control {name:?} has no complete scroll route: {node:?}"
-                    ));
-                }
-            }
-            issues
+            snapshot.task_issues(case)
         }
 
         fn assert_task_contract(case: UiTaskCase, snapshot: &UiTreeSnapshot) {
@@ -1560,33 +2263,15 @@ pub mod test_support {
                 (UVec2::new(3024, 1898), 2.0, crate::UiScaleMode::Auto),
             ];
             let mut failures = Vec::new();
-            let exhaustive_contracts = UiTaskCase::ALL
+            let smoke_only_contracts = UiTaskCase::ALL
                 .into_iter()
-                .filter(|case| case.contract().exhaustive_layout)
+                .filter(|case| !case.contract().exhaustive_layout)
                 .map(|case| case.contract().id)
                 .collect::<Vec<_>>();
             assert_eq!(
-                exhaustive_contracts,
-                [
-                    "title-cold",
-                    "map-scenarios",
-                    "demos",
-                    "creator-character-library",
-                    "creator-spell-library",
-                    "creator-character-invalid",
-                    "creator-spell-invalid",
-                    "lab-map",
-                    "lab-rosters-max",
-                    "lab-rules",
-                    "lab-reports-populated",
-                    "deployment-incomplete",
-                    "gameplay-player-turn-max",
-                    "aiming-blocked",
-                    "decision-disable",
-                    "hud-hidden-required",
-                    "report-compare",
-                ],
-                "the documented high-risk task set must not silently lose exhaustive coverage"
+                smoke_only_contracts,
+                ["startup-splash", "startup-loading"],
+                "every populated interactive task must retain the complete viewport/scale matrix"
             );
             for case in UiTaskCase::ALL {
                 if case.contract().exhaustive_layout {
@@ -1769,6 +2454,319 @@ pub mod test_support {
         }
 
         #[test]
+        fn character_workspace_announces_more_sidebar_content() {
+            let cues = [
+                (
+                    "Creator Palette More Tools Cue",
+                    "More character creation tools are available below",
+                ),
+                (
+                    "Creator Inspector More Details Cue",
+                    "More character build details are available below",
+                ),
+            ];
+            for case in [
+                UiTaskCase::CharacterInvalid,
+                UiTaskCase::CharacterReady,
+                UiTaskCase::CharacterConfirmDelete,
+            ] {
+                for (width, height, immediately_visible) in [(1920, 1080, true), (960, 540, false)]
+                {
+                    let snapshot =
+                        creator_case_snapshot(case, width, height, 1.0, crate::UiScaleMode::Auto);
+                    for (name, accessible_label) in cues {
+                        let cue = snapshot
+                            .nodes
+                            .iter()
+                            .find(|node| node.name == name)
+                            .unwrap_or_else(|| {
+                                panic!("{} is missing {name:?}", case.contract().id)
+                            });
+                        assert_eq!(
+                            cue.accessible_label.as_deref(),
+                            Some(accessible_label),
+                            "{} must describe {name:?} without relying on color",
+                            case.contract().id,
+                        );
+                        assert!(
+                            cue.scroll_reachable,
+                            "{} cannot reach {name:?} at {width}x{height}: {cue:?}",
+                            case.contract().id,
+                        );
+                        if immediately_visible {
+                            assert!(
+                                cue.fully_visible,
+                                "{} hides {name:?} in the standard initial view: {cue:?}",
+                                case.contract().id,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn compact_settings_pointer_scroll_reaches_the_single_page_owner() {
+            use bevy::input::{mouse::MouseScrollUnit, touch::TouchPhase};
+            use bevy::window::{CursorMoved, PrimaryWindow, WindowEvent};
+
+            let mut app = setup_screen_app(
+                960,
+                540,
+                1.0,
+                crate::UiScaleMode::Percent200,
+                hex_core::Screen::Settings,
+            );
+            let root = app
+                .world_mut()
+                .query::<(Entity, &Name)>()
+                .iter(app.world())
+                .find_map(|(entity, name)| (name.as_str() == "Settings Screen").then_some(entity))
+                .expect("Settings owns a named page root");
+            assert!(app.world().get::<ScrollArea>(root).is_some());
+            assert_eq!(
+                app.world_mut()
+                    .query_filtered::<Entity, With<ScrollArea>>()
+                    .iter(app.world())
+                    .count(),
+                1,
+                "Compact Settings must not retain a wheel-trapping nested scroll owner"
+            );
+            let snapshot = ui_tree_snapshot(app.world_mut());
+            let target = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.name.starts_with("Setting ") && node.fully_visible)
+                .expect("at least one Settings row starts under the cursor");
+            let position = target
+                .visible_bounds
+                .map(|bounds| (bounds.min + bounds.max) * 0.5)
+                .expect("the visible Settings row has cursor bounds");
+            let window = app
+                .world_mut()
+                .query_filtered::<Entity, With<PrimaryWindow>>()
+                .single(app.world())
+                .expect("headless UI owns one primary window");
+            let before = app.world().get::<ScrollPosition>(root).unwrap().y;
+            app.world_mut()
+                .write_message(WindowEvent::CursorMoved(CursorMoved {
+                    window,
+                    position,
+                    delta: None,
+                }));
+            app.update();
+            app.world_mut().write_message(WindowEvent::MouseWheel(
+                bevy::input::mouse::MouseWheel {
+                    unit: MouseScrollUnit::Line,
+                    x: 0.0,
+                    y: -100.0,
+                    window,
+                    phase: TouchPhase::Moved,
+                },
+            ));
+            app.update();
+            let after = app.world().get::<ScrollPosition>(root).unwrap().y;
+            assert!(
+                after > before,
+                "real wheel input over a Settings row must move the Compact page: {before} -> {after}"
+            );
+        }
+
+        #[test]
+        fn compact_creator_canvas_preserves_vertical_page_scrolling() {
+            use bevy::input::{mouse::MouseScrollUnit, touch::TouchPhase};
+            use bevy::window::{CursorMoved, PrimaryWindow, WindowEvent};
+
+            for (width, height, mode) in [
+                (960, 540, crate::UiScaleMode::Auto),
+                (1280, 720, crate::UiScaleMode::Percent200),
+            ] {
+                let mut app =
+                    creator_case_app(UiTaskCase::CharacterInvalid, width, height, 1.0, mode);
+                let named_entity = |app: &mut App, wanted: &str| {
+                    app.world_mut()
+                        .query::<(Entity, &Name)>()
+                        .iter(app.world())
+                        .find_map(|(entity, name)| (name.as_str() == wanted).then_some(entity))
+                        .unwrap_or_else(|| panic!("missing {wanted:?}"))
+                };
+                let root = named_entity(&mut app, "Creator Screen");
+                let canvas = named_entity(&mut app, "Lattice Canvas");
+                assert!(app.world().get::<ScrollArea>(root).is_some());
+                assert!(
+                    app.world().get::<ScrollArea>(canvas).is_none(),
+                    "Compact Creator must not let its lattice consume vertical wheel input"
+                );
+
+                let initial = ui_tree_snapshot(app.world_mut());
+                let canvas_node = initial
+                    .nodes
+                    .iter()
+                    .find(|node| node.name == "Lattice Canvas")
+                    .expect("the Character workspace has a lattice canvas");
+                let canvas_top = canvas_node.center.y - canvas_node.size.y * 0.5;
+                let root_computed = app.world().get::<ComputedNode>(root).unwrap();
+                let root_visible = root_computed.size() * root_computed.inverse_scale_factor;
+                let root_content =
+                    root_computed.content_size() * root_computed.inverse_scale_factor;
+                let root_max_y = (root_content.y - root_visible.y).max(0.0);
+                app.world_mut().get_mut::<ScrollPosition>(root).unwrap().y =
+                    (canvas_top - 80.0).clamp(0.0, (root_max_y - 80.0).max(0.0));
+                for _ in 0..3 {
+                    app.update();
+                }
+                let positioned = ui_tree_snapshot(app.world_mut());
+                let canvas_bounds = positioned
+                    .nodes
+                    .iter()
+                    .find(|node| node.name == "Lattice Canvas")
+                    .and_then(|node| node.visible_bounds)
+                    .expect("the compact page can bring the lattice canvas under the cursor");
+                let position = (canvas_bounds.min + canvas_bounds.max) * 0.5;
+                let window = app
+                    .world_mut()
+                    .query_filtered::<Entity, With<PrimaryWindow>>()
+                    .single(app.world())
+                    .expect("headless UI owns one primary window");
+                let send_wheel = |app: &mut App, x, y| {
+                    app.world_mut()
+                        .write_message(WindowEvent::CursorMoved(CursorMoved {
+                            window,
+                            position,
+                            delta: None,
+                        }));
+                    app.update();
+                    app.world_mut().write_message(WindowEvent::MouseWheel(
+                        bevy::input::mouse::MouseWheel {
+                            unit: MouseScrollUnit::Line,
+                            x,
+                            y,
+                            window,
+                            phase: TouchPhase::Moved,
+                        },
+                    ));
+                    app.update();
+                };
+
+                app.world_mut().get_mut::<ScrollPosition>(canvas).unwrap().y = 0.0;
+                let root_before_inner = app.world().get::<ScrollPosition>(root).unwrap().y;
+                send_wheel(&mut app, 0.0, -1.0);
+                assert!(
+                    app.world().get::<ScrollPosition>(canvas).unwrap().y > 0.0,
+                    "the compact lattice must retain its own vertical pan before reaching its boundary"
+                );
+                assert!(
+                    (app.world().get::<ScrollPosition>(root).unwrap().y - root_before_inner).abs()
+                        <= f32::EPSILON,
+                    "a fully consumed canvas delta must not also move the page"
+                );
+
+                let canvas_computed = app.world().get::<ComputedNode>(canvas).unwrap();
+                let canvas_visible = canvas_computed.size() * canvas_computed.inverse_scale_factor;
+                let canvas_content =
+                    canvas_computed.content_size() * canvas_computed.inverse_scale_factor;
+                let canvas_max = (canvas_content - canvas_visible).max(Vec2::ZERO);
+                {
+                    let mut canvas_position =
+                        app.world_mut().get_mut::<ScrollPosition>(canvas).unwrap();
+                    canvas_position.x = 0.0;
+                    canvas_position.y = canvas_max.y;
+                }
+                let before = app.world().get::<ScrollPosition>(root).unwrap().y;
+                let before_x = app.world().get::<ScrollPosition>(canvas).unwrap().x;
+                send_wheel(&mut app, -1.0, -4.0);
+                let after = app.world().get::<ScrollPosition>(root).unwrap().y;
+                assert!(
+                    after > before,
+                    "unconsumed vertical wheel input must hand off from the lattice boundary to the Compact Creator page at {width}×{height} {mode:?}: {before} -> {after}"
+                );
+                if canvas_max.x > 0.5 {
+                    assert!(
+                        app.world().get::<ScrollPosition>(canvas).unwrap().x > before_x,
+                        "a diagonal trackpad event must still pan an overflowing lattice horizontally while its vertical remainder moves the page at {width}×{height} {mode:?}; max={canvas_max:?}, before={before_x}, after={}",
+                        app.world().get::<ScrollPosition>(canvas).unwrap().x
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn compact_creator_focus_reveals_a_cell_through_both_scroll_owners() {
+            let mut app = creator_case_app(
+                UiTaskCase::CharacterInvalid,
+                960,
+                540,
+                1.0,
+                crate::UiScaleMode::Auto,
+            );
+            let named_entity = |app: &mut App, wanted: &str| {
+                app.world_mut()
+                    .query::<(Entity, &Name)>()
+                    .iter(app.world())
+                    .find_map(|(entity, name)| (name.as_str() == wanted).then_some(entity))
+                    .unwrap_or_else(|| panic!("missing {wanted:?}"))
+            };
+            let root = named_entity(&mut app, "Creator Screen");
+            let canvas = named_entity(&mut app, "Lattice Canvas");
+            let target = named_entity(&mut app, "Add Cell 0,1");
+
+            app.world_mut().get_mut::<ScrollPosition>(root).unwrap().y = 0.0;
+            app.world_mut().get_mut::<ScrollPosition>(canvas).unwrap().0 = Vec2::ZERO;
+            for _ in 0..3 {
+                app.update();
+            }
+            let before = ui_tree_snapshot(app.world_mut());
+            let target_before = before
+                .nodes
+                .iter()
+                .find(|node| node.name == "Add Cell 0,1")
+                .expect("the populated Character fixture must expose a lower lattice cell");
+            assert!(
+                !target_before.fully_visible,
+                "the regression target must begin clipped before focus: {target_before:?}"
+            );
+            assert_eq!(
+                target_before.clipped_by.as_deref(),
+                Some("Lattice Canvas"),
+                "the initial failure must be nested-canvas clipping, not an unrelated surface"
+            );
+            let root_before = app.world().get::<ScrollPosition>(root).unwrap().y;
+            let canvas_before = app.world().get::<ScrollPosition>(canvas).unwrap().0;
+
+            app.insert_resource(InputFocus::from_entity(target));
+            app.insert_resource(bevy::input_focus::InputFocusVisible(true));
+            for _ in 0..4 {
+                app.update();
+            }
+
+            let root_after = app.world().get::<ScrollPosition>(root).unwrap().y;
+            let canvas_after = app.world().get::<ScrollPosition>(canvas).unwrap().0;
+            assert!(
+                canvas_after != canvas_before,
+                "focusing a clipped lattice cell must move the custom inner owner: {canvas_before:?} -> {canvas_after:?}"
+            );
+            assert!(
+                root_after > root_before,
+                "after revealing the cell in the canvas, focus must reveal that canvas in the Compact page: {root_before} -> {root_after}"
+            );
+
+            let after = ui_tree_snapshot(app.world_mut());
+            let target_after = after
+                .nodes
+                .iter()
+                .find(|node| node.name == "Add Cell 0,1")
+                .expect("the focused lattice cell must remain presented");
+            assert!(
+                target_after.focused && target_after.fully_visible,
+                "the focused cell and its ring must finish fully visible: {target_after:?}"
+            );
+            assert!(
+                app.world().get::<Outline>(target).is_some(),
+                "visible keyboard focus must paint the focus ring on the revealed cell"
+            );
+        }
+
+        #[test]
         fn every_combat_lab_setup_surface_has_a_populated_task_contract() {
             let mut failures = Vec::new();
             for case in [
@@ -1790,6 +2788,68 @@ pub mod test_support {
                 failures.is_empty(),
                 "Combat Lab task failures: {failures:#?}"
             );
+        }
+
+        #[test]
+        fn standard_combat_lab_map_catalog_signposts_its_scroll_route() {
+            let snapshot = lab_case_snapshot(
+                UiTaskCase::LabMap,
+                1920,
+                1080,
+                1.0,
+                crate::UiScaleMode::Auto,
+            );
+            let cue = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.name == "Combat Lab Map Catalog Scroll Cue")
+                .expect("the map catalog must publish a stable scroll affordance");
+            assert!(
+                cue.fully_visible,
+                "the standard review frame must show its map scroll affordance: {cue:?}"
+            );
+            assert_eq!(
+                cue.accessible_label.as_deref(),
+                Some("More Combat Lab maps are available by scrolling")
+            );
+            assert!(
+                cue.scroll_reachable,
+                "the map scroll affordance must remain reachable when a smaller canvas reflows it"
+            );
+        }
+
+        #[test]
+        fn enlarged_compact_fixture_catalog_has_an_attainable_scroll_range() {
+            for (physical_width, physical_height, device_scale) in
+                [(960, 540, 1.0), (1920, 1080, 2.0)]
+            {
+                for mode in [
+                    crate::UiScaleMode::Percent175,
+                    crate::UiScaleMode::Percent200,
+                ] {
+                    let snapshot = lab_case_snapshot(
+                        UiTaskCase::LabFixtures,
+                        physical_width,
+                        physical_height,
+                        device_scale,
+                        mode,
+                    );
+                    let list = snapshot
+                        .nodes
+                        .iter()
+                        .find(|node| node.name == "Combat Lab Fixture List")
+                        .expect("the Fixtures tab owns one named list viewport");
+                    let final_control = snapshot
+                        .nodes
+                        .iter()
+                        .find(|node| node.name == "Run Custom three-step")
+                        .expect("the populated Fixtures tab exposes its final run control");
+                    assert!(
+                        final_control.scroll_reachable,
+                        "the complete final fixture must fit inside the list's attainable range at {physical_width}×{physical_height} / {device_scale}× in {mode:?}: list={list:?}, target={final_control:?}"
+                    );
+                }
+            }
         }
 
         #[test]
@@ -1844,6 +2904,52 @@ pub mod test_support {
                 failures.is_empty(),
                 "gameplay presentation task failures: {failures:#?}"
             );
+        }
+
+        #[test]
+        fn active_gameplay_task_contract_rejects_a_missing_own_lattice() {
+            let mut snapshot = gameplay_case_snapshot(
+                UiTaskCase::Exploration,
+                1920,
+                1080,
+                1.0,
+                crate::UiScaleMode::Auto,
+            );
+            assert_task_contract(UiTaskCase::Exploration, &snapshot);
+
+            snapshot.nodes.retain(|node| node.name != "Own Lattice");
+            let issues = task_contract_issues(UiTaskCase::Exploration, &snapshot);
+            assert!(
+                issues.iter().any(|issue| issue.contains(
+                    "gameplay-exploration is missing required own lattice surface \"Own Lattice\""
+                )),
+                "removing the populated own lattice must fail the active gameplay task contract: {issues:?}"
+            );
+        }
+
+        #[test]
+        fn every_active_gameplay_fixture_publishes_its_lattice_contract() {
+            for case in [
+                UiTaskCase::Exploration,
+                UiTaskCase::PlayerTurnMaxActions,
+                UiTaskCase::HostileTurn,
+                UiTaskCase::AimingBlocked,
+                UiTaskCase::Pause,
+                UiTaskCase::Casting,
+                UiTaskCase::LabStatistics,
+                UiTaskCase::DisableDecision,
+                UiTaskCase::RestoreDecision,
+                UiTaskCase::HudHiddenRequired,
+            ] {
+                let snapshot =
+                    gameplay_case_snapshot(case, 1920, 1080, 1.0, crate::UiScaleMode::Auto);
+                let issues = snapshot.task_lattice_issues(case);
+                assert!(
+                    issues.is_empty(),
+                    "{} must publish its complete lattice presentation contract: {issues:?}",
+                    case.contract().id
+                );
+            }
         }
 
         fn required_choice_snapshot(
@@ -2008,13 +3114,13 @@ pub mod test_support {
             ui_tree_snapshot(app.world_mut())
         }
 
-        fn creator_case_snapshot(
+        fn creator_case_app(
             case: UiTaskCase,
             width: u32,
             height: u32,
             scale_factor: f32,
             mode: crate::UiScaleMode,
-        ) -> UiTreeSnapshot {
+        ) -> App {
             let screen = case.contract().screen;
             assert!(matches!(
                 screen,
@@ -2156,6 +3262,17 @@ pub mod test_support {
             for _ in 0..8 {
                 app.update();
             }
+            app
+        }
+
+        fn creator_case_snapshot(
+            case: UiTaskCase,
+            width: u32,
+            height: u32,
+            scale_factor: f32,
+            mode: crate::UiScaleMode,
+        ) -> UiTreeSnapshot {
+            let mut app = creator_case_app(case, width, height, scale_factor, mode);
             ui_tree_snapshot(app.world_mut())
         }
 
@@ -2503,13 +3620,21 @@ pub mod test_support {
             app
         }
 
-        fn gameplay_fixture_snapshot(
+        fn apply_gameplay_review_fixture(app: &mut App, fixture: &str) {
+            let mut queue = bevy::ecs::world::CommandQueue::default();
+            let mut commands = Commands::new(&mut queue, app.world());
+            crate::apply_ui_review_fixture(&mut commands, fixture)
+                .expect("the structural fixture name must be valid");
+            queue.apply(app.world_mut());
+        }
+
+        fn gameplay_fixture_app(
             physical_width: u32,
             physical_height: u32,
             scale_factor: f32,
             mode: crate::UiScaleMode,
             fixture: &str,
-        ) -> UiTreeSnapshot {
+        ) -> App {
             let mut app = App::new();
             app.add_plugins(HeadlessUiPlugin::with_scale_factor(
                 physical_width,
@@ -2518,22 +3643,30 @@ pub mod test_support {
             ));
             app.world_mut()
                 .insert_resource(crate::UiScalePreference(mode));
-            app.world_mut().insert_resource(crate::GameplayChromeView {
-                shown: true,
-                decision_required: fixture == "required-decision",
-                encounter_complete: fixture == "dense-report-compare",
-            });
-            let mut queue = bevy::ecs::world::CommandQueue::default();
-            let mut commands = Commands::new(&mut queue, app.world());
-            crate::apply_ui_review_fixture(&mut commands, fixture)
-                .expect("the structural fixture name must be valid");
-            queue.apply(app.world_mut());
+            // Keep authoritative state ordinary: an authored review fixture must
+            // carry every presentation fact it needs instead of relying on a
+            // second, test-only reconstruction of gameplay chrome.
+            app.world_mut()
+                .insert_resource(crate::GameplayChromeView::default());
+            apply_gameplay_review_fixture(&mut app, fixture);
             app.world_mut()
                 .resource_mut::<NextState<hex_core::Screen>>()
                 .set(hex_core::Screen::Gameplay);
             for _ in 0..8 {
                 app.update();
             }
+            app
+        }
+
+        fn gameplay_fixture_snapshot(
+            physical_width: u32,
+            physical_height: u32,
+            scale_factor: f32,
+            mode: crate::UiScaleMode,
+            fixture: &str,
+        ) -> UiTreeSnapshot {
+            let mut app =
+                gameplay_fixture_app(physical_width, physical_height, scale_factor, mode, fixture);
             ui_tree_snapshot(app.world_mut())
         }
 
@@ -2649,13 +3782,13 @@ pub mod test_support {
             ui_tree_snapshot(app.world_mut())
         }
 
-        fn setup_screen_snapshot(
+        fn setup_screen_app(
             physical_width: u32,
             physical_height: u32,
             scale_factor: f32,
             mode: crate::UiScaleMode,
             screen: hex_core::Screen,
-        ) -> UiTreeSnapshot {
+        ) -> App {
             let mut app = App::new();
             app.add_plugins(HeadlessUiPlugin::with_scale_factor(
                 physical_width,
@@ -2778,6 +3911,18 @@ pub mod test_support {
             for _ in 0..8 {
                 app.update();
             }
+            app
+        }
+
+        fn setup_screen_snapshot(
+            physical_width: u32,
+            physical_height: u32,
+            scale_factor: f32,
+            mode: crate::UiScaleMode,
+            screen: hex_core::Screen,
+        ) -> UiTreeSnapshot {
+            let mut app =
+                setup_screen_app(physical_width, physical_height, scale_factor, mode, screen);
             ui_tree_snapshot(app.world_mut())
         }
 
@@ -2905,6 +4050,133 @@ pub mod test_support {
         }
 
         #[test]
+        fn visual_walk_fixture_transition_keeps_chrome_and_inspector_coherent() {
+            let mut app =
+                gameplay_fixture_app(1920, 1080, 1.0, crate::UiScaleMode::Auto, "aiming-disabled");
+            let inspector = app
+                .world_mut()
+                .query::<(Entity, &Name)>()
+                .iter(app.world())
+                .find_map(|(entity, name)| {
+                    (name.as_str() == "Inspector HUD Region").then_some(entity)
+                })
+                .expect("Gameplay owns one Inspector region");
+
+            app.world_mut()
+                .insert_resource(crate::UiScalePreference(crate::UiScaleMode::Percent200));
+            apply_gameplay_review_fixture(&mut app, "required-decision");
+            for _ in 0..6 {
+                app.update();
+            }
+
+            assert_eq!(
+                *app.world().resource::<crate::GameplayChromeView>(),
+                crate::GameplayChromeView::default(),
+                "the fixture must not reconstruct or mutate authoritative gameplay chrome"
+            );
+            let review = app
+                .world()
+                .resource::<crate::review::UiReviewPresentation>();
+            assert!(
+                review.chrome.is_some(),
+                "the required fixture must author its required-decision presentation fact"
+            );
+            assert_eq!(
+                review.effective_chrome(crate::GameplayChromeView::default()),
+                crate::GameplayChromeView {
+                    decision_required: true,
+                    ..default()
+                },
+                "the required fixture must merge with authoritative gameplay chrome"
+            );
+            let required = ui_tree_snapshot(app.world_mut());
+            let required_issues = required.review_fixture_issues("required-decision");
+            assert!(
+                required_issues.is_empty(),
+                "the live walk transition must pass the structural oracle: {required_issues:?}"
+            );
+            let promoted = required
+                .nodes
+                .iter()
+                .find(|node| node.name == "Compact Required Lattice Choice")
+                .expect("the enlarged required choice must be promoted into the action region");
+            assert!(
+                promoted.fully_visible,
+                "the promoted required choice must be immediately usable: {promoted:?}"
+            );
+            assert_eq!(
+                app.world().get::<Node>(inspector).map(|node| node.display),
+                Some(Display::None),
+                "the ordinary Inspector must yield to the promoted required surface"
+            );
+            assert!(
+                required
+                    .nodes
+                    .iter()
+                    .all(|node| node.name != "Inspector HUD Region"),
+                "a hidden Inspector must not remain in the visible UI tree"
+            );
+
+            app.world_mut()
+                .insert_resource(crate::UiScalePreference(crate::UiScaleMode::Auto));
+            apply_gameplay_review_fixture(&mut app, "live-statistics");
+            for _ in 0..6 {
+                app.update();
+            }
+
+            assert_eq!(
+                app.world()
+                    .resource::<crate::review::UiReviewPresentation>()
+                    .chrome,
+                None,
+                "ordinary fixtures must stop overriding authoritative gameplay chrome"
+            );
+            assert_eq!(
+                app.world().get::<Node>(inspector).map(|node| node.display),
+                Some(Display::Flex),
+                "ordinary presentation must restore the Inspector"
+            );
+            let ordinary = ui_tree_snapshot(app.world_mut());
+            let ordinary_issues = ordinary.review_fixture_issues("live-statistics");
+            assert!(
+                ordinary_issues.is_empty(),
+                "the restored lattice/statistics composition must pass the oracle: {ordinary_issues:?}"
+            );
+            assert!(
+                ordinary
+                    .nodes
+                    .iter()
+                    .all(|node| node.name != "Compact Required Lattice Choice"),
+                "the promoted decision surface must leave the visible tree after the decision"
+            );
+            let lattice = ordinary
+                .nodes
+                .iter()
+                .find(|node| node.name == "Lattice Readout Stack")
+                .expect("ordinary Lab presentation must restore the lattice");
+            let statistics = ordinary
+                .nodes
+                .iter()
+                .find(|node| node.name == "Combat Lab Live Statistics Drawer")
+                .expect("ordinary Lab presentation must restore live statistics");
+            assert_eq!(lattice.parent_name.as_deref(), Some("Inspector HUD Region"));
+            assert_eq!(
+                statistics.parent_name.as_deref(),
+                Some("Inspector HUD Region")
+            );
+            let lattice_bounds = lattice
+                .layout_bounds()
+                .expect("the restored lattice must have layout");
+            let statistics_bounds = statistics
+                .layout_bounds()
+                .expect("the restored statistics must have layout");
+            assert!(
+                lattice_bounds.max.y <= statistics_bounds.min.y + 0.5,
+                "statistics must remain below the lattice after the transition: lattice={lattice_bounds:?}, statistics={statistics_bounds:?}"
+            );
+        }
+
+        #[test]
         fn deployment_does_not_reserve_an_empty_combat_action_rail() {
             for complete in [false, true] {
                 let snapshot =
@@ -2948,7 +4220,7 @@ pub mod test_support {
         }
 
         #[test]
-        fn expanded_statistics_replaces_and_then_restores_the_populated_inspector() {
+        fn statistics_follow_the_populated_lattice_through_reflow_and_decisions() {
             let mut app = App::new();
             app.add_plugins(HeadlessUiPlugin::with_scale_factor(1920, 1080, 1.0));
             app.world_mut().insert_resource(crate::GameplayChromeView {
@@ -2978,9 +4250,9 @@ pub mod test_support {
             let snapshot = ui_tree_snapshot(app.world_mut());
             assert_eq!(snapshot.metrics.viewport, crate::UiViewportClass::Standard);
             assert!(
-                snapshot.layout_issues().is_empty(),
+                snapshot.review_fixture_issues("live-statistics").is_empty(),
                 "the restored drawer must not retain Compact row geometry: {:?}",
-                snapshot.layout_issues()
+                snapshot.review_fixture_issues("live-statistics")
             );
             let end = snapshot
                 .nodes
@@ -2988,26 +4260,82 @@ pub mod test_support {
                 .find(|node| node.name == "End experiment and save the current Combat Lab report")
                 .expect("the expanded drawer must expose its final action");
             assert!(
-                end.fully_visible,
-                "the final drawer action must be usable: {end:?}"
+                end.scroll_reachable,
+                "the final drawer action must have a complete Inspector scroll route: {end:?}"
             );
-            snapshot
+            let drawer = snapshot
                 .nodes
                 .iter()
                 .find(|node| node.name == "Combat Lab Live Statistics Drawer")
-                .and_then(|node| node.visible_bounds)
-                .expect("the expanded statistics drawer must be visible");
+                .and_then(UiNodeObservation::layout_bounds)
+                .expect("the expanded statistics drawer must retain layout");
+            for retained in [
+                "Inspector HUD Region",
+                "Own Lattice Panel",
+                "Target Lattice Panel",
+            ] {
+                assert!(
+                    snapshot.nodes.iter().any(|node| node.name == retained),
+                    "expanded statistics must retain {retained}"
+                );
+            }
+            let lattice = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.name == "Lattice Readout Stack")
+                .and_then(UiNodeObservation::layout_bounds)
+                .expect("the populated lattice stack must retain layout");
             assert!(
-                snapshot.nodes.iter().all(|node| !matches!(
-                    node.name.as_str(),
-                    "Inspector HUD Region" | "Own Lattice Panel" | "Target Lattice Panel"
-                )),
-                "the expanded drawer must hide the complete populated inspector: {:?}",
+                lattice.max.y <= drawer.min.y + 0.5,
+                "the lattice must precede expanded statistics: lattice={lattice:?}, drawer={drawer:?}"
+            );
+
+            assert!(
                 snapshot
                     .nodes
                     .iter()
-                    .filter(|node| node.name.contains("Lattice") || node.name.contains("Inspector"))
-                    .collect::<Vec<_>>()
+                    .find(|node| node.name == "Combat Lab Statistics Body")
+                    .and_then(UiNodeObservation::layout_bounds)
+                    .is_some(),
+                "expanded statistics must lay out its body below the lattice"
+            );
+
+            app.world_mut()
+                .insert_resource(crate::UiScalePreference(crate::UiScaleMode::Percent200));
+            for _ in 0..8 {
+                app.update();
+            }
+            let compact = ui_tree_snapshot(app.world_mut());
+            assert_eq!(compact.metrics.viewport, crate::UiViewportClass::Compact);
+            assert!(
+                compact.review_fixture_issues("live-statistics").is_empty(),
+                "Standard-to-Compact reparenting failed: {:?}",
+                compact.review_fixture_issues("live-statistics")
+            );
+
+            app.world_mut()
+                .insert_resource(crate::UiScalePreference(crate::UiScaleMode::Auto));
+            for _ in 0..8 {
+                app.update();
+            }
+            let restored_standard = ui_tree_snapshot(app.world_mut());
+            assert!(
+                restored_standard
+                    .review_fixture_issues("live-statistics")
+                    .is_empty(),
+                "Compact-to-Standard reparenting failed: {:?}",
+                restored_standard.review_fixture_issues("live-statistics")
+            );
+            let restored_lattice = restored_standard
+                .nodes
+                .iter()
+                .find(|node| node.name == "Lattice Readout Stack")
+                .and_then(UiNodeObservation::layout_bounds)
+                .expect("returning to Standard must restore the lattice readout");
+            assert!(
+                (restored_lattice.min - lattice.min).abs().max_element() <= 0.5
+                    && (restored_lattice.max - lattice.max).abs().max_element() <= 0.5,
+                "Standard-to-Compact-to-Standard reflow moved the lattice: before={lattice:?}, after={restored_lattice:?}"
             );
 
             app.world_mut()
@@ -3048,6 +4376,11 @@ pub mod test_support {
                 app.update();
             }
             let collapsed = ui_tree_snapshot(app.world_mut());
+            assert!(
+                collapsed.review_fixture_issues("casting-list").is_empty(),
+                "the collapsed inspector contract failed after reflow: {:?}",
+                collapsed.review_fixture_issues("casting-list")
+            );
             for restored in [
                 "Inspector HUD Region",
                 "Own Lattice Panel",
@@ -3055,7 +4388,7 @@ pub mod test_support {
             ] {
                 assert!(
                     collapsed.nodes.iter().any(|node| node.name == restored),
-                    "collapsing statistics must restore {restored}"
+                    "collapsing statistics must retain {restored}"
                 );
             }
             let collapsed_drawer = collapsed
@@ -3064,16 +4397,15 @@ pub mod test_support {
                 .find(|node| node.name == "Combat Lab Live Statistics Drawer")
                 .and_then(|node| node.visible_bounds)
                 .expect("the collapsed drawer controls remain visible");
-            let own_lattice = collapsed
+            let lattice = collapsed
                 .nodes
                 .iter()
-                .find(|node| node.name == "Own Lattice Panel")
+                .find(|node| node.name == "Lattice Readout Stack")
                 .and_then(|node| node.visible_bounds)
-                .expect("collapsing statistics must restore the inspector lattice");
-            let overlap = collapsed_drawer.intersect(own_lattice);
+                .expect("collapsing statistics must retain the inspector lattice");
             assert!(
-                overlap.width() <= 0.5 || overlap.height() <= 0.5,
-                "collapsed controls must reserve space above the restored lattice: drawer={collapsed_drawer:?}, inspector={own_lattice:?}, overlap={overlap:?}"
+                lattice.max.y <= collapsed_drawer.min.y + 0.5,
+                "collapsed statistics must follow the lattice: lattice={lattice:?}, drawer={collapsed_drawer:?}"
             );
         }
 
@@ -3089,7 +4421,7 @@ pub mod test_support {
             ] {
                 for mode in all_scale_modes() {
                     let snapshot = required_choice_snapshot(logical_size.x, logical_size.y, mode);
-                    let prefix = if snapshot.metrics.viewport == crate::UiViewportClass::Compact {
+                    let prefix = if crate::layout::is_ultra_constrained(snapshot.metrics) {
                         "Compact Required"
                     } else {
                         "Own"
@@ -3353,24 +4685,68 @@ pub mod test_support {
 
         #[test]
         fn compact_retina_scenario_heading_keeps_display_glyphs_off_the_target_edge() {
+            for kind in [
+                crate::ScenarioBrowserKind::MapScenarios,
+                crate::ScenarioBrowserKind::Demos,
+            ] {
+                let snapshot =
+                    production_scenario_snapshot(2560, 1440, 2.0, crate::UiScaleMode::Auto, kind);
+                let title = snapshot
+                    .nodes
+                    .iter()
+                    .find(|node| node.name == "Scenario Screen Title")
+                    .unwrap_or_else(|| panic!("the {kind:?} catalog must have a screen heading"));
+                let glyphs = title
+                    .rendered_text_bounds
+                    .expect("the screen heading must have measured glyphs");
+                assert!(
+                    glyphs.min.y >= 32.0 && !title.overflows,
+                    "the game-only Retina target needs a contained, visibly inset screen title: {title:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn compact_retina_map_catalog_uses_two_readable_card_columns() {
             let snapshot = production_scenario_snapshot(
                 2560,
                 1440,
                 2.0,
                 crate::UiScaleMode::Auto,
-                crate::ScenarioBrowserKind::Demos,
+                crate::ScenarioBrowserKind::MapScenarios,
             );
-            let title = snapshot
+            assert!(
+                snapshot.layout_issues().is_empty(),
+                "the compact Retina map catalog must remain structurally valid: {:?}",
+                snapshot.layout_issues()
+            );
+            let crossing = snapshot
                 .nodes
                 .iter()
-                .find(|node| node.name == "Scenario Screen Title")
-                .expect("the Demos catalog must have a display heading");
-            let glyphs = title
-                .rendered_text_bounds
-                .expect("the display heading must have measured glyphs");
+                .find(|node| node.name == "The Crossing")
+                .expect("the production map catalog includes The Crossing");
+            let hills = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.name == "Procedural Hills")
+                .expect("the production map catalog includes Procedural Hills");
             assert!(
-                glyphs.min.y >= 32.0,
-                "the game-only Retina target needs visible air above Cinzel capitals: {title:?}"
+                (crossing.center.x - hills.center.x).abs() > 100.0,
+                "a 1280px logical catalog should use two scan-friendly columns: crossing={crossing:?}, hills={hills:?}"
+            );
+            assert!(
+                crossing.size.x < snapshot.metrics.logical_size.x * 0.48
+                    && hills.size.x < snapshot.metrics.logical_size.x * 0.48,
+                "scenario cards must not become full-width slabs: crossing={crossing:?}, hills={hills:?}"
+            );
+            let scrollbar = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.name == "Scenario Catalog Scrollbar")
+                .expect("the production map catalog exposes a visible scrollbar");
+            assert!(
+                scrollbar.size.x <= 10.5,
+                "the scrollbar must remain a secondary affordance: {scrollbar:?}"
             );
         }
 
@@ -3413,58 +4789,584 @@ pub mod test_support {
         }
 
         #[test]
-        fn combat_lab_statistics_and_lattice_have_one_inspector_owner_at_retina_size() {
-            let collapsed = gameplay_fixture_snapshot(
-                3024,
-                1964,
-                2.0,
-                crate::UiScaleMode::Auto,
-                "casting-list",
+        fn combat_lab_statistics_follow_the_lattice_at_retina_size() {
+            // Include the reported outer-window dimensions, their actual client
+            // canvas, the previous fullscreen client, and both sides of the
+            // ultra-Compact height boundary. A title bar must never be mistaken
+            // for renderable Bevy client space.
+            for physical in [
+                UVec2::new(3024, 1898),
+                UVec2::new(2582, 1494),
+                UVec2::new(2582, 1442),
+                UVec2::new(2582, 1400),
+                UVec2::new(2582, 1398),
+            ] {
+                for mode in all_scale_modes() {
+                    let collapsed = gameplay_fixture_snapshot(
+                        physical.x,
+                        physical.y,
+                        2.0,
+                        mode,
+                        "casting-list",
+                    );
+                    assert!(
+                        collapsed.review_fixture_issues("casting-list").is_empty(),
+                        "collapsed Retina presentation contract failed at {physical:?} in {mode:?}: {:?}",
+                        collapsed.review_fixture_issues("casting-list")
+                    );
+                    let bounds = |name: &str| {
+                        collapsed
+                            .nodes
+                            .iter()
+                            .find(|node| node.name == name)
+                            .and_then(UiNodeObservation::layout_bounds)
+                            .unwrap_or_else(|| {
+                                panic!(
+                                    "{name} must have layout in the collapsed Lab state at {physical:?} in {mode:?}"
+                                )
+                            })
+                    };
+                    let drawer = bounds("Combat Lab Live Statistics Drawer");
+                    let lattice = bounds("Lattice Readout Stack");
+                    assert!(
+                        lattice.max.y <= drawer.min.y + 0.5,
+                        "collapsed statistics must follow the lattice at {physical:?} in {mode:?}: drawer {drawer:?}, lattice {lattice:?}"
+                    );
+
+                    let expanded = gameplay_fixture_snapshot(
+                        physical.x,
+                        physical.y,
+                        2.0,
+                        mode,
+                        "live-statistics",
+                    );
+                    assert!(
+                        expanded.review_fixture_issues("live-statistics").is_empty(),
+                        "expanded Retina presentation contract failed at {physical:?} in {mode:?}: {:?}",
+                        expanded.review_fixture_issues("live-statistics")
+                    );
+                    let expanded_bounds = |name: &str| {
+                        expanded
+                            .nodes
+                            .iter()
+                            .find(|node| node.name == name)
+                            .and_then(UiNodeObservation::layout_bounds)
+                            .unwrap_or_else(|| {
+                                panic!(
+                                    "{name} must retain layout in the expanded Lab state at {physical:?} in {mode:?}"
+                                )
+                            })
+                    };
+                    let expanded_lattice = expanded_bounds("Lattice Readout Stack");
+                    let expanded_drawer = expanded_bounds("Combat Lab Live Statistics Drawer");
+                    assert!(
+                        expanded_lattice.max.y <= expanded_drawer.min.y + 0.5,
+                        "expanded statistics must follow the lattice at {physical:?} in {mode:?}: drawer {expanded_drawer:?}, lattice {expanded_lattice:?}"
+                    );
+                    assert!(
+                        (expanded_lattice.min - lattice.min).abs().max_element() <= 0.5
+                            && (expanded_lattice.max - lattice.max).abs().max_element() <= 0.5,
+                        "expanding statistics must not move or resize the persistent lattice at {physical:?} in {mode:?}: collapsed={lattice:?}, expanded={expanded_lattice:?}"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn hiding_the_hud_cannot_leave_statistics_without_the_lattice() {
+            let mut app =
+                gameplay_fixture_app(2582, 1442, 2.0, crate::UiScaleMode::Auto, "live-statistics");
+            app.world_mut()
+                .resource_mut::<crate::GameplayChromeView>()
+                .shown = false;
+            for _ in 0..4 {
+                app.update();
+            }
+            let inspector = app
+                .world_mut()
+                .query::<(Entity, &Name)>()
+                .iter(app.world())
+                .find_map(|(entity, name)| {
+                    (name.as_str() == "Inspector HUD Region").then_some(entity)
+                })
+                .expect("Gameplay owns one Inspector region");
+            assert_eq!(
+                app.world().get::<Node>(inspector).unwrap().display,
+                Display::None,
+                "an ordinary hidden HUD must remove the empty Inspector from layout and picking"
             );
-            let bounds = |name: &str| {
-                collapsed
+            let hidden = ui_tree_snapshot(app.world_mut());
+            for surface in [
+                "Own Lattice Panel",
+                "Target Lattice Panel",
+                "Combat Lab Live Statistics Drawer",
+            ] {
+                assert!(
+                    hidden.nodes.iter().all(|node| node.name != surface),
+                    "HUD hiding must hide lattice and secondary statistics together; {surface:?} remained: {:?}",
+                    hidden
+                        .nodes
+                        .iter()
+                        .filter(|node| node.name.contains("Lattice") || node.name.contains("Statistics"))
+                        .collect::<Vec<_>>()
+                );
+            }
+            assert!(
+                hidden
                     .nodes
                     .iter()
-                    .find(|node| node.name == name)
-                    .and_then(|node| node.visible_bounds)
-                    .unwrap_or_else(|| panic!("{name} must be visible in the collapsed Lab state"))
-            };
-            let drawer = bounds("Combat Lab Live Statistics Drawer");
-            let lattice = bounds("Lattice Readout Stack");
-            let overlap = drawer.intersect(lattice);
+                    .any(|node| node.name == "Primary Action Rail"),
+                "the persistent action rail remains outside ordinary HUD visibility"
+            );
             assert!(
-                overlap.width() <= 0.5 || overlap.height() <= 0.5,
-                "collapsed statistics must reserve inspector space above the lattice: drawer {drawer:?}, lattice {lattice:?}, overlap {overlap:?}"
+                hidden
+                    .nodes
+                    .iter()
+                    .all(|node| node.name != "Inspector HUD Region"),
+                "a hidden empty Inspector must not remain a transparent wheel trap"
+            );
+        }
+
+        #[test]
+        fn stale_statistics_cannot_render_without_a_lattice_or_after_the_encounter() {
+            let mut app = App::new();
+            app.add_plugins(HeadlessUiPlugin::with_scale_factor(2582, 1442, 2.0));
+            app.world_mut()
+                .insert_resource(crate::UiScalePreference(crate::UiScaleMode::Auto));
+            app.world_mut()
+                .insert_resource(crate::GameplayChromeView::default());
+            app.world_mut().insert_resource(crate::LabStatisticsView {
+                present: true,
+                visible: true,
+                expanded: true,
+                text: "Intentionally stale live statistics".to_owned(),
+            });
+            app.world_mut()
+                .resource_mut::<NextState<hex_core::Screen>>()
+                .set(hex_core::Screen::Gameplay);
+            for _ in 0..8 {
+                app.update();
+            }
+            let drawer = app
+                .world_mut()
+                .query::<(Entity, &Name)>()
+                .iter(app.world())
+                .find_map(|(entity, name)| {
+                    (name.as_str() == "Combat Lab Live Statistics Drawer").then_some(entity)
+                })
+                .expect("Gameplay owns one dormant statistics drawer");
+            let missing_lattice = ui_tree_snapshot(app.world_mut());
+            assert!(
+                missing_lattice.nodes.iter().all(|node| {
+                    node.name != "Combat Lab Live Statistics Drawer"
+                        && node.name != "Own Lattice"
+                }),
+                "a stale visible statistics projection must fail closed until the persistent lattice exists"
+            );
+            assert_eq!(
+                app.world().get::<Node>(drawer).unwrap().display,
+                Display::None
+            );
+            assert!(
+                app.world()
+                    .get::<ComputedNode>(drawer)
+                    .unwrap()
+                    .size()
+                    .max_element()
+                    <= 0.5,
+                "a stale hidden drawer must not leave blank Inspector layout or scroll extent"
             );
 
-            let expanded = gameplay_fixture_snapshot(
+            app.world_mut()
+                .insert_resource(populated_gameplay_lattices());
+            for _ in 0..8 {
+                app.update();
+            }
+            let coherent = ui_tree_snapshot(app.world_mut());
+            assert!(coherent
+                .nodes
+                .iter()
+                .any(|node| node.name == "Own Lattice Panel"));
+            assert!(coherent
+                .nodes
+                .iter()
+                .any(|node| node.name == "Combat Lab Live Statistics Drawer"));
+            assert_eq!(
+                app.world().get::<Node>(drawer).unwrap().display,
+                Display::Flex
+            );
+            assert!(app.world().get::<ComputedNode>(drawer).unwrap().size().y > 0.5);
+
+            app.world_mut()
+                .resource_mut::<crate::GameplayChromeView>()
+                .encounter_complete = true;
+            for _ in 0..4 {
+                app.update();
+            }
+            let complete = ui_tree_snapshot(app.world_mut());
+            for surface in [
+                "Own Lattice Panel",
+                "Target Lattice Panel",
+                "Combat Lab Live Statistics Drawer",
+            ] {
+                assert!(
+                    complete.nodes.iter().all(|node| node.name != surface),
+                    "terminal chrome must hide stale lattice/statistics together; {surface:?} remained"
+                );
+            }
+            assert_eq!(
+                app.world().get::<Node>(drawer).unwrap().display,
+                Display::None
+            );
+            assert!(
+                app.world()
+                    .get::<ComputedNode>(drawer)
+                    .unwrap()
+                    .size()
+                    .max_element()
+                    <= 0.5,
+                "terminal statistics must not retain hidden scroll extent"
+            );
+        }
+
+        #[test]
+        fn compact_inspector_consumes_real_scroll_input_to_reach_statistics_end() {
+            use bevy::input::{mouse::MouseScrollUnit, touch::TouchPhase};
+            use bevy::ui_widgets::ScrollArea;
+            use bevy::window::{CursorMoved, PrimaryWindow, WindowEvent};
+
+            let mut app =
+                gameplay_fixture_app(960, 540, 1.0, crate::UiScaleMode::Auto, "live-statistics");
+            let entity_named = |app: &mut App, wanted: &str| {
+                app.world_mut()
+                    .query::<(Entity, &Name)>()
+                    .iter(app.world())
+                    .find_map(|(entity, name)| (name.as_str() == wanted).then_some(entity))
+                    .unwrap_or_else(|| panic!("missing {wanted:?}"))
+            };
+            let inspector = entity_named(&mut app, "Inspector HUD Region");
+            let body = entity_named(&mut app, "Combat Lab Statistics Body");
+            assert!(
+                app.world().get::<ScrollArea>(inspector).is_some(),
+                "the Inspector must own the vertical scroll route"
+            );
+            assert!(
+                app.world().get::<ScrollArea>(body).is_none(),
+                "statistics must not trap wheel input in a nested scroll owner"
+            );
+            let window = app
+                .world_mut()
+                .query_filtered::<Entity, With<PrimaryWindow>>()
+                .single(app.world())
+                .expect("headless UI owns one primary window");
+            let initial = ui_tree_snapshot(app.world_mut());
+            let own_bounds = initial
+                .nodes
+                .iter()
+                .find(|node| node.name == "Own Lattice Panel")
+                .and_then(|node| node.visible_bounds)
+                .expect("the own lattice starts inside the Inspector viewport");
+            let pointer_position = (own_bounds.min + own_bounds.max) * 0.5;
+            let scroll = |app: &mut App, position: Vec2| {
+                app.world_mut()
+                    .write_message(WindowEvent::CursorMoved(CursorMoved {
+                        window,
+                        position,
+                        delta: None,
+                    }));
+                app.update();
+                app.world_mut().write_message(WindowEvent::MouseWheel(
+                    bevy::input::mouse::MouseWheel {
+                        unit: MouseScrollUnit::Line,
+                        x: 0.0,
+                        y: -100.0,
+                        window,
+                        phase: TouchPhase::Moved,
+                    },
+                ));
+                app.update();
+            };
+
+            scroll(&mut app, pointer_position);
+            assert!(
+                app.world().get::<ScrollPosition>(inspector).unwrap().y > 0.0,
+                "a real cursor and wheel event over read-only lattice content must move the Inspector scroll owner"
+            );
+            for _ in 0..3 {
+                app.update();
+            }
+            let scrolled = ui_tree_snapshot(app.world_mut());
+            let end = scrolled
+                .nodes
+                .iter()
+                .find(|node| node.name == "Combat Lab Statistics Detail End")
+                .expect("the statistics end marker remains structurally present");
+            assert!(
+                end.fully_visible,
+                "the single real Inspector scroll route must reveal the complete statistics end: {end:?}"
+            );
+        }
+
+        #[test]
+        fn compact_tab_navigation_scrolls_statistics_focus_into_view() {
+            use bevy::input::{
+                keyboard::{Key, KeyboardInput},
+                ButtonState,
+            };
+            use bevy::window::PrimaryWindow;
+
+            fn send_key(
+                app: &mut App,
+                window: Entity,
+                key_code: KeyCode,
+                logical_key: Key,
+                state: ButtonState,
+            ) {
+                app.world_mut().write_message(KeyboardInput {
+                    key_code,
+                    logical_key,
+                    state,
+                    text: None,
+                    repeat: false,
+                    window,
+                });
+                app.update();
+            }
+
+            let mut app =
+                gameplay_fixture_app(960, 540, 1.0, crate::UiScaleMode::Auto, "live-statistics");
+            let window = app
+                .world_mut()
+                .query_filtered::<Entity, With<PrimaryWindow>>()
+                .single(app.world())
+                .expect("headless UI owns one primary window");
+            let inspector = app
+                .world_mut()
+                .query::<(Entity, &Name)>()
+                .iter(app.world())
+                .find_map(|(entity, name)| {
+                    (name.as_str() == "Inspector HUD Region").then_some(entity)
+                })
+                .expect("gameplay owns an Inspector scroll region");
+            let initial = ui_tree_snapshot(app.world_mut());
+            let end_initial = initial
+                .nodes
+                .iter()
+                .find(|node| node.name == "End experiment and save the current Combat Lab report")
+                .expect("the secondary Lab control is structurally present");
+            assert!(
+                !end_initial.fully_visible,
+                "the compact fixture must genuinely require keyboard-driven scrolling"
+            );
+
+            let mut reached_end = false;
+            for _ in 0..=initial.focus_order.len() {
+                send_key(
+                    &mut app,
+                    window,
+                    KeyCode::Tab,
+                    Key::Tab,
+                    ButtonState::Pressed,
+                );
+                send_key(
+                    &mut app,
+                    window,
+                    KeyCode::Tab,
+                    Key::Tab,
+                    ButtonState::Released,
+                );
+                let focus = app.world().resource::<InputFocus>().get();
+                reached_end = focus.is_some_and(|entity| {
+                    app.world().get::<Name>(entity).is_some_and(|name| {
+                        name.as_str() == "End experiment and save the current Combat Lab report"
+                    })
+                });
+                if reached_end {
+                    break;
+                }
+            }
+            assert!(
+                reached_end,
+                "real Tab navigation must reach the offscreen Lab control; order={:?}",
+                initial.focus_order
+            );
+            for _ in 0..3 {
+                app.update();
+            }
+            assert!(
+                app.world().get::<ScrollPosition>(inspector).unwrap().y > 0.0,
+                "focusing an offscreen control must scroll its Inspector owner"
+            );
+            let end_focused = ui_tree_snapshot(app.world_mut());
+            assert!(
+                end_focused
+                    .nodes
+                    .iter()
+                    .find(|node| {
+                        node.name == "End experiment and save the current Combat Lab report"
+                    })
+                    .is_some_and(|node| node.fully_visible && node.focused),
+                "the keyboard focus ring must be visible with the focused End Experiment control"
+            );
+
+            send_key(
+                &mut app,
+                window,
+                KeyCode::ShiftLeft,
+                Key::Shift,
+                ButtonState::Pressed,
+            );
+            send_key(
+                &mut app,
+                window,
+                KeyCode::Tab,
+                Key::Tab,
+                ButtonState::Pressed,
+            );
+            send_key(
+                &mut app,
+                window,
+                KeyCode::Tab,
+                Key::Tab,
+                ButtonState::Released,
+            );
+            send_key(
+                &mut app,
+                window,
+                KeyCode::ShiftLeft,
+                Key::Shift,
+                ButtonState::Released,
+            );
+            for _ in 0..3 {
+                app.update();
+            }
+            let toggle_focused = ui_tree_snapshot(app.world_mut());
+            assert!(
+                toggle_focused
+                    .nodes
+                    .iter()
+                    .find(|node| { node.name == "Expand or collapse live Combat Lab statistics" })
+                    .is_some_and(|node| node.fully_visible && node.focused),
+                "Shift-Tab must keep the preceding statistics control and its focus ring visible"
+            );
+        }
+
+        #[test]
+        fn live_statistics_oracle_rejects_missing_reordered_or_occluded_surfaces() {
+            let snapshot = gameplay_fixture_snapshot(
                 3024,
                 1964,
                 2.0,
                 crate::UiScaleMode::Auto,
                 "live-statistics",
             );
+
+            let mut missing = snapshot.clone();
+            missing
+                .nodes
+                .retain(|node| node.name != "Lattice Readout Stack");
+            let missing_issues = missing.review_fixture_issues("live-statistics");
             assert!(
-                expanded
-                    .nodes
+                missing_issues
                     .iter()
-                    .all(|node| node.name != "Lattice Readout Stack"),
-                "expanded statistics must replace, rather than cover, the inspector lattice"
+                    .any(|issue| issue
+                        .contains("missing required surface \"Lattice Readout Stack\"")),
+                "the fixture oracle must reject a missing lattice: {missing_issues:?}"
+            );
+            let cross_fixture_issues = missing.review_fixture_issues("normal-gameplay");
+            assert!(
+                cross_fixture_issues.iter().any(|issue| issue.contains(
+                    "presented statistics require exactly one lattice stack and own panel"
+                )),
+                "the statistics/lattice implication must apply outside named Lab fixtures: {cross_fixture_issues:?}"
+            );
+
+            let mut zero_area = snapshot.clone();
+            let zero_lattice = zero_area
+                .nodes
+                .iter_mut()
+                .find(|node| node.name == "Lattice Readout Stack")
+                .expect("the valid fixture must contain a lattice");
+            zero_lattice.size = Vec2::ZERO;
+            zero_lattice.visible_bounds = None;
+            zero_lattice.fully_visible = true;
+            let zero_area_issues = zero_area.review_fixture_issues("live-statistics");
+            assert!(
+                zero_area_issues
+                    .iter()
+                    .any(|issue| issue.contains("has no layout area")),
+                "the fixture oracle must reject a zero-area lattice: {zero_area_issues:?}"
+            );
+
+            let mut missing_extreme = snapshot.clone();
+            missing_extreme
+                .nodes
+                .retain(|node| node.name != "Own Cell (2, -2)");
+            let missing_extreme_issues = missing_extreme.review_fixture_issues("live-statistics");
+            assert!(
+                missing_extreme_issues.iter().any(|issue| {
+                    issue.contains("missing required surface \"Own Cell (2, -2)\"")
+                }),
+                "the fixture oracle must reject a clipped or missing lattice edge: {missing_extreme_issues:?}"
+            );
+
+            let drawer = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.name == "Combat Lab Live Statistics Drawer")
+                .and_then(UiNodeObservation::layout_bounds)
+                .expect("the valid fixture must contain statistics");
+            let mut reordered = snapshot.clone();
+            let lattice = reordered
+                .nodes
+                .iter_mut()
+                .find(|node| node.name == "Lattice Readout Stack")
+                .expect("the valid fixture must contain a lattice");
+            lattice.center.y = drawer.min.y + lattice.size.y * 0.5 + 1.0;
+            let reordered_issues = reordered.review_fixture_issues("live-statistics");
+            assert!(
+                reordered_issues
+                    .iter()
+                    .any(|issue| issue.contains("statistics must follow the lattice")),
+                "the fixture oracle must reject statistics painted before the lattice: {reordered_issues:?}"
+            );
+
+            let mut occluded = snapshot;
+            occluded
+                .nodes
+                .iter_mut()
+                .find(|node| node.name == "Combat Lab Live Statistics Drawer")
+                .expect("the valid fixture must contain statistics")
+                .visible_bounds = Some(drawer);
+            let casting = occluded
+                .nodes
+                .iter_mut()
+                .find(|node| node.name == "Casting Panel")
+                .expect("the valid fixture must contain casting");
+            casting.visible_bounds = Some(drawer);
+            let occlusion_issues = occluded.review_fixture_issues("live-statistics");
+            assert!(
+                occlusion_issues
+                    .iter()
+                    .any(|issue| issue.contains("cover the primary casting surface")),
+                "the fixture oracle must reject an opaque drawer over casting: {occlusion_issues:?}"
             );
         }
 
         #[test]
         fn gameplay_presentation_states_pass_the_complete_structural_matrix() {
-            for fixture in [
-                "normal-gameplay",
-                "casting-list",
-                "required-decision",
-                "aiming-disabled",
-                "live-statistics",
-                "dense-report-compare",
-            ] {
-                for (physical_size, scale_factor) in structural_canvases() {
-                    for mode in all_scale_modes() {
+            for (physical_size, scale_factor) in structural_canvases() {
+                for mode in all_scale_modes() {
+                    let mut collapsed_lattice = None;
+                    let mut collapsed_viewport = None;
+                    for fixture in [
+                        "normal-gameplay",
+                        "casting-list",
+                        "required-decision",
+                        "aiming-disabled",
+                        "live-statistics",
+                        "dense-report-compare",
+                    ] {
                         let snapshot = gameplay_fixture_snapshot(
                             physical_size.x,
                             physical_size.y,
@@ -3472,48 +5374,51 @@ pub mod test_support {
                             mode,
                             fixture,
                         );
+                        let issues = snapshot.review_fixture_issues(fixture);
                         assert!(
-                            snapshot.layout_issues().is_empty(),
+                            issues.is_empty(),
                             "{fixture} must remain reachable at {physical_size:?} / {scale_factor}× in {mode:?}: {:?}; rail nodes: {:?}",
-                            snapshot.layout_issues(),
+                            issues,
                             snapshot
                                 .nodes
                                 .iter()
                                 .filter(|node| node.name.contains("Action Rail"))
                                 .collect::<Vec<_>>()
                         );
-                        if fixture == "casting-list"
-                            && snapshot.metrics.viewport != crate::UiViewportClass::Compact
-                        {
-                            let surface = |name: &str| {
-                                snapshot
-                                    .nodes
-                                    .iter()
-                                    .find(|node| node.name == name)
-                                    .and_then(|node| node.visible_bounds)
-                                    .unwrap_or_else(|| {
-                                        panic!(
-                                            "{name} must be present for the collapsed inspector contract at {physical_size:?} / {scale_factor}× in {mode:?}"
-                                        )
-                                    })
-                            };
-                            let drawer = surface("Combat Lab Live Statistics Drawer");
-                            let lattice = surface("Lattice Readout Stack");
-                            let overlap = drawer.intersect(lattice);
-                            assert!(
-                                overlap.width() <= 0.5 || overlap.height() <= 0.5,
-                                "collapsed inspector surfaces overlap at {physical_size:?} / {scale_factor}× in {mode:?}: drawer={drawer:?}, lattice={lattice:?}, overlap={overlap:?}"
+                        let lattice = snapshot
+                            .nodes
+                            .iter()
+                            .find(|node| node.name == "Lattice Readout Stack")
+                            .and_then(UiNodeObservation::layout_bounds);
+                        if fixture == "casting-list" {
+                            collapsed_lattice = lattice;
+                            collapsed_viewport = Some(snapshot.metrics.viewport);
+                        } else if fixture == "live-statistics" {
+                            assert_eq!(
+                                collapsed_viewport,
+                                Some(snapshot.metrics.viewport),
+                                "statistics state must not alter responsive classification"
                             );
-                        }
-                        if fixture == "live-statistics"
-                            && snapshot.metrics.viewport != crate::UiViewportClass::Compact
-                        {
+                            let collapsed_lattice = collapsed_lattice.unwrap_or_else(|| {
+                                panic!(
+                                    "collapsed lattice missing at {physical_size:?} / {scale_factor}× in {mode:?}"
+                                )
+                            });
+                            let expanded_lattice = lattice.unwrap_or_else(|| {
+                                panic!(
+                                    "expanded lattice missing at {physical_size:?} / {scale_factor}× in {mode:?}"
+                                )
+                            });
                             assert!(
-                                snapshot
-                                    .nodes
-                                    .iter()
-                                    .all(|node| node.name != "Lattice Readout Stack"),
-                                "expanded statistics must exclusively own the inspector at {physical_size:?} / {scale_factor}× in {mode:?}"
+                                (expanded_lattice.min - collapsed_lattice.min)
+                                    .abs()
+                                    .max_element()
+                                    <= 0.5
+                                    && (expanded_lattice.max - collapsed_lattice.max)
+                                        .abs()
+                                        .max_element()
+                                        <= 0.5,
+                                "statistics expansion moved or resized the lattice at {physical_size:?} / {scale_factor}× in {mode:?}: collapsed={collapsed_lattice:?}, expanded={expanded_lattice:?}"
                             );
                         }
                     }
@@ -3677,6 +5582,22 @@ pub mod test_support {
         }
 
         #[test]
+        fn unnamed_interactive_controls_fail_closed() {
+            let mut world = World::new();
+            world.spawn((
+                Button,
+                TabIndex(0),
+                AccessibleLabel::new("Generic fallback labels are insufficient"),
+                crate::UiVisibilityRequirement::Immediate,
+                InheritedVisibility::VISIBLE,
+            ));
+            let snapshot = ui_tree_snapshot(&mut world);
+            assert!(snapshot.layout_issues().iter().any(|issue| {
+                issue.contains("unnamed UI entity") && issue.contains("no authored stable Name")
+            }));
+        }
+
+        #[test]
         fn snapshot_excludes_display_none_subtrees() {
             let mut world = World::new();
             let collapsed = world
@@ -3724,7 +5645,7 @@ pub mod test_support {
                     },
                 ))
                 .id();
-            let control = app
+            let control_entity = app
                 .world_mut()
                 .spawn((
                     Name::new("Clipped Scroll Control"),
@@ -3742,7 +5663,9 @@ pub mod test_support {
                     },
                 ))
                 .id();
-            app.world_mut().entity_mut(scroller).add_child(control);
+            app.world_mut()
+                .entity_mut(scroller)
+                .add_child(control_entity);
             for _ in 0..4 {
                 app.update();
             }
@@ -3770,6 +5693,25 @@ pub mod test_support {
                 .find(|node| node.name == "Clipped Scroll Control")
                 .expect("the clipped control remains structurally observable");
             assert!(control.scroll_reachable);
+
+            app.world_mut().get_mut::<Node>(control_entity).unwrap().top = Val::Px(-60.0);
+            for _ in 0..2 {
+                app.update();
+            }
+            let snapshot = ui_tree_snapshot(app.world_mut());
+            let control = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.name == "Clipped Scroll Control")
+                .expect("the negative-offset control remains structurally observable");
+            assert!(
+                !control.scroll_reachable,
+                "a ScrollArea with no attainable negative range cannot reveal an offscreen absolute child"
+            );
+            assert!(snapshot
+                .layout_issues()
+                .iter()
+                .any(|issue| issue.contains("Clipped Scroll Control is clipped")));
         }
 
         #[test]

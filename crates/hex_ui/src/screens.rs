@@ -184,10 +184,11 @@ fn spawn_settings(mut commands: Commands, assets: Res<UiAssets>, view: Res<UiSet
 }
 
 fn apply_settings_layout(
+    mut commands: Commands,
     metrics: Res<ResolvedUiMetrics>,
     added: Query<(), Added<SettingsSurface>>,
     mut roots: Query<&mut Node, (With<SettingsRoot>, Without<SettingsSurface>)>,
-    mut surfaces: Query<&mut Node, (With<SettingsSurface>, Without<SettingsRoot>)>,
+    mut surfaces: Query<(Entity, &mut Node), (With<SettingsSurface>, Without<SettingsRoot>)>,
     mut controls: Query<
         &mut Node,
         (
@@ -212,13 +213,21 @@ fn apply_settings_layout(
     }
     let compact = metrics.viewport == UiViewportClass::Compact;
     for mut node in &mut roots {
+        // A vertically overflowing flex column cannot scroll to content placed
+        // above its origin by Center alignment. Compact owns the scroll route,
+        // so anchor its first setting at the start edge.
+        node.justify_content = if compact {
+            JustifyContent::FlexStart
+        } else {
+            JustifyContent::Center
+        };
         node.overflow = if compact {
             Overflow::scroll_y()
         } else {
             Overflow::clip_y()
         };
     }
-    for mut node in &mut surfaces {
+    for (entity, mut node) in &mut surfaces {
         node.flex_shrink = if compact { 0.0 } else { 1.0 };
         node.max_height = if compact {
             Val::Auto
@@ -230,6 +239,19 @@ fn apply_settings_layout(
         } else {
             Overflow::scroll_y()
         };
+        if compact {
+            // Compact owns one continuous page scroll. Bevy's ScrollArea
+            // consumes wheel input before it checks whether this surface can
+            // scroll, so an idle nested owner would strand the lower rows.
+            commands
+                .entity(entity)
+                .remove::<bevy::ui_widgets::ScrollArea>()
+                .insert(ScrollPosition::default());
+        } else {
+            commands
+                .entity(entity)
+                .insert((bevy::ui_widgets::ScrollArea, ScrollPosition::default()));
+        }
     }
     for mut node in &mut controls {
         node.width = Val::Percent(100.0);

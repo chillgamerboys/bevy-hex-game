@@ -104,7 +104,7 @@
         "--package",
         "hex_game",
         "--features",
-        "hex_game/test-support,hex_ui/dev-tools",
+        "hex_game/test-support",
         "--lib",
         "--test",
         "gameplay_app",
@@ -112,6 +112,18 @@
         "ci",
         "--profile",
         "gameplay-app"
+      ],
+      "postflight_command": [
+        "cargo",
+        "test",
+        "--package",
+        "hex_ui",
+        "--lib",
+        "--features",
+        "test-support,dev-tools",
+        "--profile",
+        "ci",
+        "dev_time::tests::"
       ]
     },
     "map_unit": {

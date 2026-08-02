@@ -60,12 +60,12 @@ python3 tools/test_scope.py run map_contracts
 python3 tools/test_scope.py run residual
 cargo test --workspace --all-features --profile ci --doc
 python3 tools/test_scope.py run docs
-cargo build --workspace --profile ci
+cargo build --package hex_game --release
 ```
 
-CI runs the final build command on Linux, Windows, and macOS. Run it on your local
-platform; the CI matrix covers the other two. Markdown-only changes skip the Rust
-commands, but still need valid relative links.
+CI runs the final shipping-package build command on Linux, Windows, and macOS. Run it
+on your local platform; the CI matrix covers the other two. Markdown-only changes
+skip the Rust commands, but still need valid relative links.
 
 The concern commands are separated because their evidence has different authority.
 Their exact Cargo package, target, and feature selections live in

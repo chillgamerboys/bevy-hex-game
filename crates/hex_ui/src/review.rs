@@ -3,7 +3,8 @@
 use bevy::prelude::*;
 
 use crate::{
-    CastingPanelView, GameplayHudView, GameplayLatticesView, LabStatisticsView, OutcomeReportView,
+    CastingPanelView, GameplayChromeView, GameplayHudView, GameplayLatticesView, LabStatisticsView,
+    OutcomeReportView,
 };
 
 #[cfg(any(feature = "visual-review", feature = "test-support"))]
@@ -16,11 +17,58 @@ use crate::{
 
 #[derive(Resource, Default)]
 pub(crate) struct UiReviewPresentation {
+    pub(crate) chrome: Option<GameplayChromeOverride>,
     pub(crate) hud: Option<GameplayHudView>,
     pub(crate) casting: Option<CastingPanelView>,
     pub(crate) lattices: Option<GameplayLatticesView>,
     pub(crate) statistics: Option<LabStatisticsView>,
     pub(crate) outcome: Option<OutcomeReportView>,
+}
+
+/// Narrow presentation overrides used only by authored review fixtures.
+///
+/// Keeping each field optional prevents a fixture that needs one presentation
+/// fact (for example, a required decision) from shadowing unrelated canonical
+/// chrome such as the player's HUD visibility preference.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct GameplayChromeOverride {
+    shown: Option<bool>,
+    decision_required: Option<bool>,
+    encounter_complete: Option<bool>,
+}
+
+impl GameplayChromeOverride {
+    #[cfg(any(feature = "visual-review", feature = "test-support"))]
+    const fn required_decision() -> Self {
+        Self {
+            decision_required: Some(true),
+            shown: None,
+            encounter_complete: None,
+        }
+    }
+
+    #[cfg(any(feature = "visual-review", feature = "test-support"))]
+    const fn encounter_complete() -> Self {
+        Self {
+            encounter_complete: Some(true),
+            shown: None,
+            decision_required: None,
+        }
+    }
+
+    pub(crate) fn apply(self, base: GameplayChromeView) -> GameplayChromeView {
+        GameplayChromeView {
+            shown: self.shown.unwrap_or(base.shown),
+            decision_required: self.decision_required.unwrap_or(base.decision_required),
+            encounter_complete: self.encounter_complete.unwrap_or(base.encounter_complete),
+        }
+    }
+}
+
+impl UiReviewPresentation {
+    pub(crate) fn effective_chrome(&self, base: GameplayChromeView) -> GameplayChromeView {
+        self.chrome.map_or(base, |override_| override_.apply(base))
+    }
 }
 
 #[cfg(any(feature = "visual-review", feature = "test-support"))]
@@ -58,10 +106,12 @@ pub fn apply_ui_review_fixture(commands: &mut Commands, name: &str) -> Result<()
                     },
                 ],
             });
+            review.lattices = Some(populated_own_lattice());
             review.statistics = Some(LabStatisticsView::default());
         }
         "player-turn-max" => {
             review.hud = Some(ordinary_hud());
+            review.lattices = Some(populated_own_lattice());
             review.statistics = Some(LabStatisticsView::default());
         }
         "hostile-turn" => {
@@ -75,18 +125,12 @@ pub fn apply_ui_review_fixture(commands: &mut Commands, name: &str) -> Result<()
                 required_prompt: Some("WAIT · Raider is choosing its action.".to_owned()),
                 actions: Vec::new(),
             });
+            review.lattices = Some(populated_own_lattice());
             review.statistics = Some(LabStatisticsView::default());
         }
         "casting-list" => {
             review.hud = Some(ordinary_hud());
-            review.casting = Some(CastingPanelView {
-                visible: true,
-                content: CastingPanelContentView::Spells {
-                    unavailable: None,
-                    spells: production_spell_catalog(),
-                    aiming: None,
-                },
-            });
+            review.casting = Some(populated_casting());
             review.statistics = Some(LabStatisticsView {
                 present: true,
                 visible: true,
@@ -96,6 +140,7 @@ pub fn apply_ui_review_fixture(commands: &mut Commands, name: &str) -> Result<()
             review.lattices = Some(populated_lattices());
         }
         "required-decision" => {
+            review.chrome = Some(GameplayChromeOverride::required_decision());
             review.hud = Some(required_hud());
             review.casting = Some(CastingPanelView {
                 visible: true,
@@ -113,6 +158,7 @@ pub fn apply_ui_review_fixture(commands: &mut Commands, name: &str) -> Result<()
             review.statistics = Some(LabStatisticsView::default());
         }
         "restore-decision" => {
+            review.chrome = Some(GameplayChromeOverride::required_decision());
             review.hud = Some(required_hud());
             review.casting = Some(CastingPanelView {
                 visible: true,
@@ -148,10 +194,12 @@ pub fn apply_ui_review_fixture(commands: &mut Commands, name: &str) -> Result<()
                     }),
                 },
             });
+            review.lattices = Some(populated_own_lattice());
             review.statistics = Some(LabStatisticsView::default());
         }
         "live-statistics" => {
             review.hud = Some(ordinary_hud());
+            review.casting = Some(populated_casting());
             review.lattices = Some(populated_lattices());
             review.statistics = Some(LabStatisticsView {
                 present: true,
@@ -162,10 +210,12 @@ pub fn apply_ui_review_fixture(commands: &mut Commands, name: &str) -> Result<()
             });
         }
         "dense-report-compare" => {
+            review.chrome = Some(GameplayChromeOverride::encounter_complete());
             review.statistics = Some(LabStatisticsView::default());
             review.outcome = Some(dense_report(hex_gameplay_model::ReportMode::Compare));
         }
         "ordinary-outcome" => {
+            review.chrome = Some(GameplayChromeOverride::encounter_complete());
             review.statistics = Some(LabStatisticsView::default());
             review.outcome = Some(OutcomeReportView {
                 visible: true,
@@ -185,18 +235,23 @@ pub fn apply_ui_review_fixture(commands: &mut Commands, name: &str) -> Result<()
             });
         }
         "report-overview" => {
+            review.chrome = Some(GameplayChromeOverride::encounter_complete());
             review.outcome = Some(dense_report(hex_gameplay_model::ReportMode::Overview));
         }
         "report-units" => {
+            review.chrome = Some(GameplayChromeOverride::encounter_complete());
             review.outcome = Some(dense_report(hex_gameplay_model::ReportMode::Units));
         }
         "report-spells-effects" => {
+            review.chrome = Some(GameplayChromeOverride::encounter_complete());
             review.outcome = Some(dense_report(hex_gameplay_model::ReportMode::SpellsEffects));
         }
         "report-timeline" => {
+            review.chrome = Some(GameplayChromeOverride::encounter_complete());
             review.outcome = Some(dense_report(hex_gameplay_model::ReportMode::Timeline));
         }
         "report-compare" => {
+            review.chrome = Some(GameplayChromeOverride::encounter_complete());
             review.outcome = Some(dense_report(hex_gameplay_model::ReportMode::Compare));
         }
         other => {
@@ -207,6 +262,18 @@ pub fn apply_ui_review_fixture(commands: &mut Commands, name: &str) -> Result<()
     }
     commands.insert_resource(review);
     Ok(())
+}
+
+#[cfg(any(feature = "visual-review", feature = "test-support"))]
+pub(crate) fn populated_casting() -> CastingPanelView {
+    CastingPanelView {
+        visible: true,
+        content: CastingPanelContentView::Spells {
+            unavailable: None,
+            spells: production_spell_catalog(),
+            aiming: None,
+        },
+    }
 }
 
 #[cfg(any(feature = "visual-review", feature = "test-support"))]
@@ -410,7 +477,7 @@ fn decision_lattices() -> GameplayLatticesView {
 }
 
 #[cfg(any(feature = "visual-review", feature = "test-support"))]
-fn populated_lattices() -> GameplayLatticesView {
+pub(crate) fn populated_lattices() -> GameplayLatticesView {
     let mut lattices = decision_lattices();
     if let Some(own) = &mut lattices.own {
         own.heading = "selected ally".to_owned();
@@ -457,5 +524,12 @@ fn populated_lattices() -> GameplayLatticesView {
             unknown: Some(4),
         },
     });
+    lattices
+}
+
+#[cfg(any(feature = "visual-review", feature = "test-support"))]
+fn populated_own_lattice() -> GameplayLatticesView {
+    let mut lattices = populated_lattices();
+    lattices.target = None;
     lattices
 }

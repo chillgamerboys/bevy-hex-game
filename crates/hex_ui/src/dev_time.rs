@@ -46,19 +46,13 @@ struct DevTimeControl(DevTimeIntent);
 pub(super) fn plugin(app: &mut App) {
     app.add_systems(
         OnEnter(Screen::Gameplay),
-        spawn_panel.in_set(UiHudSetup::Panels),
+        spawn_panel.in_set(UiHudSetup::Tooling),
     )
     .add_systems(
         Update,
         (rebuild, reconcile_layout)
             .chain()
             .in_set(UiSystems::Render)
-            .run_if(in_state(Screen::Gameplay)),
-    )
-    .add_systems(
-        Update,
-        reserve_ultra_left_column
-            .after(UiSystems::Render)
             .run_if(in_state(Screen::Gameplay)),
     )
     .add_systems(
@@ -74,14 +68,19 @@ fn spawn_panel(
     assets: Res<UiAssets>,
     metrics: Res<ResolvedUiMetrics>,
     chrome: Res<GameplayChromeView>,
-    regions: Query<(Entity, &UiRegionRole, Option<&ChildOf>)>,
+    statistics: Option<Res<crate::LabStatisticsView>>,
+    review: Option<Res<crate::review::UiReviewPresentation>>,
+    regions: Query<(Entity, &UiRegionRole)>,
 ) {
-    let Some((inspector, frame)) = regions.iter().find_map(|(entity, role, parent)| {
-        (*role == UiRegionRole::Inspector).then_some((entity, parent.map(ChildOf::parent)))
-    }) else {
+    let Some(inspector) = regions
+        .iter()
+        .find_map(|(entity, role)| (*role == UiRegionRole::Inspector).then_some(entity))
+    else {
         return;
     };
-    let parent = panel_parent(metrics.viewport, inspector, frame);
+    let chrome = review
+        .as_ref()
+        .map_or(*chrome, |review| review.effective_chrome(*chrome));
     let panel = commands
         .spawn((
             Name::new("Dev Time Panel"),
@@ -91,7 +90,15 @@ fn spawn_panel(
             Pickable::IGNORE,
             GlobalZIndex(3),
         ))
-        .insert(panel_node(*metrics, chrome.decision_required))
+        .insert(panel_node(
+            *metrics,
+            chrome.decision_required,
+            statistics_visible(
+                statistics.as_deref(),
+                review.as_deref(),
+                chrome.decision_required,
+            ),
+        ))
         .with_children(|panel| {
             panel.spawn((DevTimeHeading, heading(&assets, "DEV · TIME")));
             panel.spawn((
@@ -110,24 +117,33 @@ fn spawn_panel(
             ));
         })
         .id();
-    commands.entity(parent).add_child(panel);
-}
-
-fn panel_parent(viewport: UiViewportClass, inspector: Entity, frame: Option<Entity>) -> Entity {
-    if viewport == UiViewportClass::Compact {
-        frame.unwrap_or(inspector)
-    } else {
-        inspector
-    }
+    commands.entity(inspector).add_child(panel);
 }
 
 fn panel_is_collapsed(metrics: ResolvedUiMetrics, decision_required: bool) -> bool {
     is_ultra_constrained(metrics) && (decision_required || metrics.effective_size.y < 400.0)
 }
 
-fn panel_node(metrics: ResolvedUiMetrics, decision_required: bool) -> Node {
+fn statistics_visible(
+    statistics: Option<&crate::LabStatisticsView>,
+    review: Option<&crate::review::UiReviewPresentation>,
+    decision_required: bool,
+) -> bool {
+    let statistics = review
+        .and_then(|review| review.statistics.as_ref())
+        .or(statistics);
+    statistics
+        .is_some_and(|statistics| statistics.present && statistics.visible && !decision_required)
+}
+
+fn panel_node(
+    metrics: ResolvedUiMetrics,
+    decision_required: bool,
+    statistics_visible: bool,
+) -> Node {
     let mut node = Node {
         width: Val::Percent(100.0),
+        flex_shrink: 0.0,
         flex_direction: FlexDirection::Column,
         row_gap: Val::Px(8.0),
         padding: UiRect::all(Val::Px(12.0)),
@@ -136,25 +152,11 @@ fn panel_node(metrics: ResolvedUiMetrics, decision_required: bool) -> Node {
         ..default()
     };
     if metrics.viewport == UiViewportClass::Compact {
-        node.position_type = PositionType::Absolute;
         node.row_gap = Val::Px(4.0);
         if is_ultra_constrained(metrics) {
-            node.top = Val::Px(8.0);
-            node.right = Val::Auto;
-            node.left = Val::Px(8.0);
-            node.width = Val::Px(180.0);
-            node.height = Val::Px(if metrics.content_scale >= 1.5 {
-                (metrics.effective_size.y - 16.0).max(176.0)
-            } else {
-                176.0 + 120.0 * (metrics.content_scale - 1.0).max(0.0)
-            });
             node.row_gap = Val::Px(2.0);
             node.padding = UiRect::all(Val::Px(4.0));
         } else {
-            node.top = Val::Px(8.0);
-            node.right = Val::Px(8.0);
-            node.width = Val::Px(256.0);
-            node.height = Val::Px(136.0);
             node.padding = UiRect::all(Val::Px(6.0));
         }
     }
@@ -162,6 +164,9 @@ fn panel_node(metrics: ResolvedUiMetrics, decision_required: bool) -> Node {
     // not enough room for six legible 44px controls beside the action rail, so
     // collapse the panel instead of clipping it or covering player actions.
     if panel_is_collapsed(metrics, decision_required) {
+        node.display = Display::None;
+    }
+    if metrics.viewport == UiViewportClass::Compact && statistics_visible {
         node.display = Display::None;
     }
     node
@@ -186,14 +191,14 @@ fn controls_node(metrics: ResolvedUiMetrics) -> Node {
 }
 
 fn reconcile_layout(
-    mut commands: Commands,
     metrics: Res<ResolvedUiMetrics>,
     chrome: Res<GameplayChromeView>,
+    statistics: Option<Res<crate::LabStatisticsView>>,
+    review: Option<Res<crate::review::UiReviewPresentation>>,
     added_panels: Query<(), Added<DevTimePanel>>,
     added_roots: Query<(), Added<DevTimeControls>>,
     added_controls: Query<(), Added<DevTimeControl>>,
-    regions: Query<(Entity, &UiRegionRole, &ChildOf)>,
-    mut panels: Query<(Entity, &ChildOf, &mut Node), (With<DevTimePanel>, Without<DevTimeHeading>)>,
+    mut panels: Query<&mut Node, (With<DevTimePanel>, Without<DevTimeHeading>)>,
     mut roots: Query<
         &mut Node,
         (
@@ -224,6 +229,10 @@ fn reconcile_layout(
 ) {
     if !metrics.is_changed()
         && !chrome.is_changed()
+        && statistics
+            .as_ref()
+            .is_none_or(|statistics| !statistics.is_changed())
+        && review.as_ref().is_none_or(|review| !review.is_changed())
         && added_panels.is_empty()
         && added_roots.is_empty()
         && added_controls.is_empty()
@@ -231,17 +240,19 @@ fn reconcile_layout(
         return;
     }
 
-    let Some((inspector, frame)) = regions.iter().find_map(|(entity, role, parent)| {
-        (*role == UiRegionRole::Inspector).then_some((entity, parent.parent()))
-    }) else {
-        return;
-    };
-    let wanted_parent = panel_parent(metrics.viewport, inspector, Some(frame));
-    if let Ok((panel, current_parent, mut node)) = panels.single_mut() {
-        if current_parent.parent() != wanted_parent {
-            commands.entity(wanted_parent).add_child(panel);
-        }
-        *node = panel_node(*metrics, chrome.decision_required);
+    let chrome = review
+        .as_ref()
+        .map_or(*chrome, |review| review.effective_chrome(*chrome));
+    if let Ok(mut node) = panels.single_mut() {
+        *node = panel_node(
+            *metrics,
+            chrome.decision_required,
+            statistics_visible(
+                statistics.as_deref(),
+                review.as_deref(),
+                chrome.decision_required,
+            ),
+        );
     }
     if let Ok(mut node) = roots.single_mut() {
         *node = controls_node(*metrics);
@@ -276,44 +287,6 @@ fn control_size(metrics: ResolvedUiMetrics) -> (f32, f32) {
         (76.0, 36.0)
     } else {
         (96.0, 48.0)
-    }
-}
-
-fn ultra_primary_left(metrics: ResolvedUiMetrics, decision_required: bool) -> Option<f32> {
-    (is_ultra_constrained(metrics) && !panel_is_collapsed(metrics, decision_required)).then_some(
-        crate::layout::ultra_action_rail_left(metrics, decision_required),
-    )
-}
-
-fn reserve_ultra_left_column(
-    metrics: Res<ResolvedUiMetrics>,
-    chrome: Res<GameplayChromeView>,
-    mut primary_nodes: Query<
-        (
-            &mut Node,
-            Option<&UiRegionRole>,
-            Has<crate::action_rail::ActionRail>,
-        ),
-        Or<(With<UiRegionRole>, With<crate::action_rail::ActionRail>)>,
-    >,
-) {
-    if !is_ultra_constrained(*metrics) {
-        return;
-    }
-    let reserved_left = ultra_primary_left(*metrics, chrome.decision_required);
-    for (mut node, role, action_rail) in &mut primary_nodes {
-        let desired = if role == Some(&UiRegionRole::Actions) {
-            reserved_left.unwrap_or(8.0)
-        } else if action_rail {
-            reserved_left.unwrap_or(12.0)
-        } else {
-            continue;
-        };
-        let matches =
-            matches!(node.left, Val::Px(current) if (current - desired).abs() < f32::EPSILON);
-        if !matches {
-            node.left = Val::Px(desired);
-        }
     }
 }
 
@@ -589,7 +562,7 @@ mod tests {
     }
 
     #[test]
-    fn compact_panel_leaves_the_hidden_inspector_without_recreating_controls() {
+    fn compact_panel_stays_in_the_scrollable_inspector_without_recreating_controls() {
         let mut app = App::new();
         app.insert_resource(DevTimeView::Available { hours: 12.0 })
             .init_resource::<GameplayChromeView>()
@@ -627,9 +600,9 @@ mod tests {
                 })
                 .expect("the compact development panel must exist")
         };
-        assert_eq!(parent, frame);
-        assert_eq!(position, PositionType::Absolute);
-        assert_eq!(width, Val::Px(256.0));
+        assert_eq!(parent, inspector);
+        assert_eq!(position, PositionType::Relative);
+        assert_eq!(width, Val::Percent(100.0));
         let control_sizes = {
             let world = app.world_mut();
             let mut query = world.query_filtered::<&Node, With<DevTimeControl>>();
@@ -670,48 +643,44 @@ mod tests {
     }
 
     #[test]
-    fn ultra_constrained_controls_use_the_free_left_column() {
+    fn ultra_constrained_controls_reflow_inside_the_inspector() {
         let metrics = crate::resolve_ui_metrics(Vec2::new(960.0, 540.0), crate::UiScaleMode::Auto);
         assert_eq!(metrics.viewport, UiViewportClass::Compact);
-        let panel = panel_node(metrics, false);
-        let Val::Px(width) = panel.width else {
-            panic!("the compact panel must have a bounded width");
-        };
-        let Val::Px(left) = panel.left else {
-            panic!("the ultra-constrained panel must have a bounded left inset");
-        };
-        let Val::Px(top) = panel.top else {
-            panic!("the compact panel must have a bounded top inset");
-        };
-        let Val::Px(height) = panel.height else {
-            panic!("the compact panel must have a bounded height");
-        };
-        let actions_left = ultra_primary_left(metrics, false)
-            .expect("the ordinary ultra-constrained layout must reserve the left column");
+        let panel = panel_node(metrics, false, false);
         let (control_width, control_height) = control_size(metrics);
-        assert!((left - 8.0).abs() < f32::EPSILON);
-        assert!(left + width < actions_left);
-        assert!(top + height <= metrics.effective_size.y);
+        assert_eq!(panel.position_type, PositionType::Relative);
+        assert_eq!(panel.width, Val::Percent(100.0));
         assert!(control_height >= 44.0);
-        assert!(control_width <= width - 8.0);
+        assert!(control_width * 3.0 + 16.0 <= crate::layout::inspector_width(metrics));
     }
 
     #[test]
     fn common_two_hundred_percent_canvas_collapses_secondary_controls() {
         let metrics =
             crate::resolve_ui_metrics(Vec2::new(1280.0, 720.0), crate::UiScaleMode::Percent200);
-        let panel = panel_node(metrics, false);
-        assert_eq!(panel.left, Val::Px(8.0));
-        assert_eq!(panel.right, Val::Auto);
-        assert_eq!(panel.top, Val::Px(8.0));
-        assert_eq!(panel.width, Val::Px(180.0));
-        assert_eq!(panel.height, Val::Px(344.0));
+        let panel = panel_node(metrics, false, false);
+        assert_eq!(panel.position_type, PositionType::Relative);
+        assert_eq!(panel.width, Val::Percent(100.0));
         assert_eq!(panel.display, Display::None);
         let (control_width, control_height) = control_size(metrics);
-        assert!(control_width <= 180.0 - 8.0);
+        assert!(control_width * 2.0 + 12.0 <= crate::layout::inspector_width(metrics));
         assert!(control_height >= 44.0);
-        assert_eq!(ultra_primary_left(metrics, false), None);
-        assert_eq!(ultra_primary_left(metrics, true), None);
+    }
+
+    #[test]
+    fn compact_live_statistics_take_priority_over_dev_time_tools() {
+        let compact = crate::resolve_ui_metrics(Vec2::new(1280.0, 720.0), crate::UiScaleMode::Auto);
+        assert_eq!(compact.viewport, UiViewportClass::Compact);
+        assert_eq!(
+            panel_node(compact, false, true).display,
+            Display::None,
+            "the Combat Lab statistics surface must not overlap dev-only controls"
+        );
+
+        let standard =
+            crate::resolve_ui_metrics(Vec2::new(1920.0, 1080.0), crate::UiScaleMode::Auto);
+        assert_eq!(standard.viewport, UiViewportClass::Standard);
+        assert_eq!(panel_node(standard, false, true).display, Display::Flex);
     }
 
     #[cfg(feature = "test-support")]
@@ -784,7 +753,7 @@ mod tests {
                 let panel_max = panel.center + panel.size * 0.5;
                 assert!(panel_min.cmpge(Vec2::ZERO).all());
                 assert!(
-                    panel_max.cmple(snapshot.metrics.effective_size).all(),
+                    panel_max.cmple(snapshot.metrics.logical_size).all(),
                     "the panel must remain on canvas at {logical_size:?} in {mode:?}: panel={panel:?}, metrics={:?}",
                     snapshot.metrics
                 );

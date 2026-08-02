@@ -211,7 +211,7 @@ range, requirements, and permanent Draft/Ready diagnostics.
 Combat Lab owns transient Sandbox setup for all sixteen distinct supported shipped
 maps, with deterministic renderer previews, tactical descriptions and tags, complete
 ordered one-to-six rosters, deterministic deployment, and creator-origin return routing.
-Its searchable fixture selector coexists with the focused Scenarios entries and adds
+Its searchable fixture selector coexists with the focused Demos entries and adds
 Lab-only packaged creator spell and roster matrices. Every launch freezes its content
 namespace,
 encounter, and seed for Retry, refuses Continue writes, and restores shipped runtime

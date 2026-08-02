@@ -143,7 +143,8 @@ pub(super) fn plugin(app: &mut App) {
         viewport.logical_size.y,
         viewport.device_scale,
     );
-    if env::var_os(UI_DEBUG_ENV).is_some() {
+    let diagnostic_overlays = env::var_os(UI_DEBUG_ENV).is_some();
+    if diagnostic_overlays {
         let mut options = app
             .world_mut()
             .resource_mut::<bevy::ui_render::prelude::GlobalUiDebugOptions>();
@@ -154,9 +155,14 @@ pub(super) fn plugin(app: &mut App) {
         options.outline_content_box = true;
         options.outline_scrollbars = true;
     }
-    app.insert_resource(WalkState::new(steps, PathBuf::from(out), viewport))
-        .add_systems(Startup, accelerate_walk_time)
-        .add_systems(PreUpdate, run_walk.after(InputSystems));
+    app.insert_resource(WalkState::new(
+        steps,
+        PathBuf::from(out),
+        viewport,
+        diagnostic_overlays,
+    ))
+    .add_systems(Startup, accelerate_walk_time)
+    .add_systems(PreUpdate, run_walk.after(InputSystems));
 }
 
 fn accelerate_walk_time(mut time: ResMut<Time<Virtual>>) {
@@ -192,6 +198,15 @@ enum WalkStep {
     Settle(u32),
     /// Photograph the current Bevy image target into `<out>/<name>.png`.
     Capture(String),
+    /// Capture one gameplay-owned review task through its named structural contract.
+    ///
+    /// Map-owner walks retain the generic `Capture` variant unchanged. Gameplay
+    /// UI acceptance uses this fail-closed variant so a correct screen root with
+    /// the wrong task contents cannot produce evidence.
+    ReviewCapture {
+        name: String,
+        task: hex_ui::test_support::UiTaskCase,
+    },
     /// Press the `index`-th button whose `Name` starts with `name`.
     Click {
         name: String,
@@ -310,7 +325,9 @@ fn validate_step(step: &WalkStep) -> Result<(), String> {
     match step {
         WalkStep::AwaitScreen(name) => parse_screen(name).map(|_| ()),
         WalkStep::Key(name) => parse_key(name).map(|_| ()),
-        WalkStep::Capture(name) if name.trim().is_empty() => {
+        WalkStep::Capture(name) | WalkStep::ReviewCapture { name, .. }
+            if name.trim().is_empty() =>
+        {
             Err("capture name must not be empty".to_owned())
         }
         WalkStep::Click { name, .. } if name.trim().is_empty() => {
@@ -330,6 +347,7 @@ fn validate_step(step: &WalkStep) -> Result<(), String> {
                 name.as_str(),
                 "clear"
                     | "normal-gameplay"
+                    | "casting-list"
                     | "required-decision"
                     | "aiming-disabled"
                     | "live-statistics"
@@ -591,6 +609,10 @@ struct WalkState {
     camera: Option<Entity>,
     /// Exact logical canvas and raster density under review.
     viewport: hex_ui::ReviewViewport,
+    /// Authored presentation fixture whose named composition contract is active.
+    presentation: Option<String>,
+    /// Debug outlines are useful diagnostics but invalidate acceptance evidence.
+    diagnostic_overlays: bool,
     failed: bool,
 }
 
@@ -680,7 +702,12 @@ impl WalkContent<'_, '_> {
 }
 
 impl WalkState {
-    fn new(steps: Vec<WalkStep>, out_dir: PathBuf, viewport: hex_ui::ReviewViewport) -> Self {
+    fn new(
+        steps: Vec<WalkStep>,
+        out_dir: PathBuf,
+        viewport: hex_ui::ReviewViewport,
+        diagnostic_overlays: bool,
+    ) -> Self {
         Self {
             steps,
             cursor: 0,
@@ -698,6 +725,8 @@ impl WalkState {
             capture_target: CaptureTargetPreparation::Refresh,
             camera: None,
             viewport,
+            presentation: None,
+            diagnostic_overlays,
             failed: false,
         }
     }
@@ -782,6 +811,77 @@ fn prepare_capture_target(state: &mut WalkState) -> Result<bool, String> {
 
 fn shared_target_msaa_update(source: Msaa, target: Msaa) -> Option<Msaa> {
     (target != source).then_some(source)
+}
+
+fn capture_structural_issues(
+    snapshot: &hex_ui::test_support::UiTreeSnapshot,
+    presentation: Option<&str>,
+    task: Option<hex_ui::test_support::UiTaskCase>,
+    screen: Option<Screen>,
+) -> Vec<String> {
+    let mut issues = task.map_or_else(
+        || {
+            presentation.map_or_else(
+                || snapshot.layout_issues(),
+                |fixture| snapshot.review_fixture_issues(fixture),
+            )
+        },
+        |task| snapshot.task_issues(task),
+    );
+    if let (Some(fixture), Some(task)) = (presentation, task) {
+        let compatible = match fixture {
+            "normal-gameplay" => task == hex_ui::test_support::UiTaskCase::Exploration,
+            "casting-list" => task == hex_ui::test_support::UiTaskCase::Casting,
+            "aiming-disabled" => task == hex_ui::test_support::UiTaskCase::AimingBlocked,
+            "required-decision" => matches!(
+                task,
+                hex_ui::test_support::UiTaskCase::DisableDecision
+                    | hex_ui::test_support::UiTaskCase::RestoreDecision
+                    | hex_ui::test_support::UiTaskCase::HudHiddenRequired
+            ),
+            "live-statistics" => task == hex_ui::test_support::UiTaskCase::LabStatistics,
+            "dense-report-compare" => task == hex_ui::test_support::UiTaskCase::LabReportCompare,
+            _ => false,
+        };
+        if !compatible {
+            issues.push(format!(
+                "presentation fixture {fixture:?} cannot satisfy task {:?}",
+                task.contract().id
+            ));
+        }
+    }
+    if let Some(screen) = screen {
+        if let Some(task) = task {
+            let expected = task.contract().screen;
+            if expected != screen {
+                issues.push(format!(
+                    "capture task {:?} belongs to {expected:?}, not active screen {screen:?}",
+                    task.contract().id
+                ));
+            }
+        }
+        let expected_roots: &[&str] = match screen {
+            Screen::Splash => &["Splash Screen"],
+            Screen::Title => &["Title Screen"],
+            Screen::Scenarios => &["Map Scenarios Screen", "Demos Screen"],
+            Screen::Settings => &["Settings Screen"],
+            Screen::LatticeDemo => &["Lattice Demo Screen"],
+            Screen::CharacterCreator | Screen::SpellCreator => &["Creator Screen"],
+            Screen::CombatLab => &["Combat Lab Screen"],
+            Screen::Loading => &["Loading Screen"],
+            Screen::Gameplay => &["Gameplay HUD Safe Frame"],
+        };
+        if !snapshot
+            .nodes
+            .iter()
+            .any(|node| expected_roots.iter().any(|expected| node.name == *expected))
+        {
+            issues.push(format!(
+                "capture snapshot for {screen:?} is stale or incomplete; expected one of {expected_roots:?}"
+            ));
+        }
+    }
+    issues
 }
 
 #[expect(
@@ -932,6 +1032,10 @@ fn run_walk(
         state.failed = true;
         return;
     };
+    let review_task = match &step {
+        WalkStep::ReviewCapture { task, .. } => Some(*task),
+        _ => None,
+    };
 
     if state.step_started.elapsed() > STEP_TIMEOUT {
         error!(
@@ -990,7 +1094,15 @@ fn run_walk(
                 state.advance();
             }
         }
-        WalkStep::Capture(ref name) => {
+        WalkStep::Capture(ref name) | WalkStep::ReviewCapture { ref name, .. } => {
+            if review_task.is_some() && state.diagnostic_overlays {
+                error!(
+                    "visual walk rejected acceptance capture {name:?}: {UI_DEBUG_ENV} enables diagnostic overlays"
+                );
+                state.failed = true;
+                exit.write(AppExit::error());
+                return;
+            }
             match prepare_capture_target(&mut state) {
                 Ok(true) => {}
                 Ok(false) => return,
@@ -1005,7 +1117,12 @@ fn run_walk(
                 let Some(snapshot) = latest_ui_tree.0.as_ref() else {
                     return;
                 };
-                let issues = snapshot.layout_issues();
+                let issues = capture_structural_issues(
+                    snapshot,
+                    state.presentation.as_deref(),
+                    review_task,
+                    Some(*screen.get()),
+                );
                 if !issues.is_empty() {
                     error!(
                         "visual walk structural oracle rejected {name}:\n{}",
@@ -1193,6 +1310,7 @@ fn run_walk(
                 exit.write(AppExit::error());
                 return;
             }
+            state.presentation = (name != "clear").then(|| name.clone());
             state.advance();
         }
         WalkStep::SetUiScale(mode) => {
@@ -1484,12 +1602,56 @@ mod tests {
     }
 
     #[test]
+    fn capture_uses_the_active_fixture_composition_contract() {
+        let snapshot = hex_ui::test_support::UiTreeSnapshot {
+            metrics: hex_ui::ResolvedUiMetrics {
+                viewport: hex_ui::UiViewportClass::Standard,
+                logical_size: Vec2::new(1920.0, 1080.0),
+                ..default()
+            },
+            nodes: Vec::new(),
+            focus_order: Vec::new(),
+            action_priority: None,
+        };
+        assert!(capture_structural_issues(&snapshot, None, None, None).is_empty());
+        let issues = capture_structural_issues(&snapshot, Some("live-statistics"), None, None);
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.contains("Lattice Readout Stack")),
+            "the capture path must reject a live-statistics frame with no lattice: {issues:?}"
+        );
+        let issues = capture_structural_issues(&snapshot, None, None, Some(Screen::Scenarios));
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.contains("stale or incomplete")),
+            "a stale screen snapshot must not authorize a capture: {issues:?}"
+        );
+        let issues = capture_structural_issues(
+            &snapshot,
+            Some("aiming-disabled"),
+            Some(hex_ui::test_support::UiTaskCase::AimingBlocked),
+            Some(Screen::Gameplay),
+        );
+        assert!(
+            issues.iter().any(|issue| issue.contains("Cancel Aim")),
+            "a named review capture must reject the right screen with the wrong task contents: {issues:?}"
+        );
+    }
+
+    #[test]
     fn unknown_screens_and_keys_are_rejected_at_load() {
         assert_eq!(parse_key("C"), Ok(KeyCode::KeyC));
         assert_eq!(parse_key("H"), Ok(KeyCode::KeyH));
         assert!(validate_step(&WalkStep::AwaitScreen("Menu".into())).is_err());
         assert!(validate_step(&WalkStep::Key("F13".into())).is_err());
         assert!(validate_step(&WalkStep::Capture(" ".into())).is_err());
+        assert!(validate_step(&WalkStep::ReviewCapture {
+            name: " ".into(),
+            task: hex_ui::test_support::UiTaskCase::TitleCold,
+        })
+        .is_err());
         assert!(validate_step(&WalkStep::Click {
             name: String::new(),
             index: 0
@@ -1551,6 +1713,7 @@ mod tests {
             steps,
             PathBuf::from("captures"),
             hex_ui::ReviewViewport::DEFAULT,
+            false,
         );
         let mut images = Assets::<Image>::default();
 
@@ -2386,7 +2549,9 @@ mod tests {
                 ron::from_str::<Vec<WalkStep>>(script)
                     .expect("the gameplay UI walk parses")
                     .into_iter()
-                    .filter(|step| matches!(step, WalkStep::Capture(_)))
+                    .filter(|step| {
+                        matches!(step, WalkStep::Capture(_) | WalkStep::ReviewCapture { .. })
+                    })
                     .count()
             })
             .sum::<usize>();

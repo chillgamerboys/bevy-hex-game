@@ -65,6 +65,7 @@ fn spawn_panels(
             Name::new("Lattice Readout Stack"),
             Node {
                 width: Val::Percent(100.0),
+                flex_shrink: 0.0,
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(8.0),
                 ..default()
@@ -206,17 +207,27 @@ fn rebuild(
     mut target_headings: Query<&mut Text, (With<TargetHeading>, Without<OwnHeading>)>,
     assets: Res<UiAssets>,
     metrics: Res<crate::ResolvedUiMetrics>,
+    chrome: Res<crate::GameplayChromeView>,
 ) {
     let view_changed = view.is_changed();
     let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
-    if !view_changed && !review_changed && !pulse.is_changed() && !metrics.is_changed() {
+    let chrome_changed = chrome.is_changed();
+    if !view_changed
+        && !review_changed
+        && !pulse.is_changed()
+        && !metrics.is_changed()
+        && !chrome_changed
+    {
         return;
     }
     let view = review
         .as_ref()
         .and_then(|review| review.lattices.as_ref())
         .unwrap_or(view.as_ref());
-    let compact_decision = compact_decision_visible(metrics.viewport, view);
+    let chrome = review
+        .as_ref()
+        .map_or(*chrome, |review| review.effective_chrome(*chrome));
+    let compact_decision = compact_decision_visible(*metrics, &chrome, view);
     if let Ok(mut panel) = compact_panels.single_mut() {
         panel.display = if compact_decision {
             Display::Flex
@@ -236,7 +247,7 @@ fn rebuild(
             PANEL_BG
         };
     }
-    if !view_changed && !review_changed && !metrics.is_changed() {
+    if !view_changed && !review_changed && !metrics.is_changed() && !chrome_changed {
         return;
     }
     if let Ok(body) = compact_bodies.single() {
@@ -353,8 +364,13 @@ fn rebuild(
     }
 }
 
-fn compact_decision_visible(viewport: crate::UiViewportClass, view: &GameplayLatticesView) -> bool {
-    viewport == crate::UiViewportClass::Compact
+pub(crate) fn compact_decision_visible(
+    metrics: crate::ResolvedUiMetrics,
+    chrome: &crate::GameplayChromeView,
+    view: &GameplayLatticesView,
+) -> bool {
+    crate::layout::is_ultra_constrained(metrics)
+        && chrome.decision_required
         && view.own.as_ref().is_some_and(|own| own.decision.is_some())
 }
 
@@ -461,10 +477,10 @@ mod tests {
     #[test]
     fn compact_layout_promotes_only_required_lattice_choices() {
         let mut view = GameplayLatticesView::default();
-        assert!(!compact_decision_visible(
-            crate::UiViewportClass::Compact,
-            &view
-        ));
+        let mut chrome = crate::GameplayChromeView::default();
+        let ultra =
+            crate::resolve_ui_metrics(Vec2::new(1280.0, 720.0), crate::UiScaleMode::Percent200);
+        assert!(!compact_decision_visible(ultra, &chrome, &view));
 
         view.own = Some(crate::OwnLatticeView {
             heading: "required choice".to_owned(),
@@ -476,13 +492,16 @@ mod tests {
                 restoring: false,
             }),
         });
-        assert!(compact_decision_visible(
-            crate::UiViewportClass::Compact,
-            &view
-        ));
-        assert!(!compact_decision_visible(
-            crate::UiViewportClass::Standard,
-            &view
-        ));
+        assert!(
+            !compact_decision_visible(ultra, &chrome, &view),
+            "a stale lattice projection cannot promote before the application names a blocking decision"
+        );
+        chrome.decision_required = true;
+        assert!(compact_decision_visible(ultra, &chrome, &view));
+
+        let ordinary_compact =
+            crate::resolve_ui_metrics(Vec2::new(1280.0, 720.0), crate::UiScaleMode::Auto);
+        assert_eq!(ordinary_compact.viewport, crate::UiViewportClass::Compact);
+        assert!(!compact_decision_visible(ordinary_compact, &chrome, &view));
     }
 }

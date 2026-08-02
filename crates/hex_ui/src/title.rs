@@ -7,7 +7,7 @@ use bevy::ui_widgets::{ControlOrientation, ScrollArea, Scrollbar, ScrollbarThumb
 use hex_core::Screen;
 
 use crate::{
-    blurb, button, despawn_screen, display, fine, heading, label, panel, screen_root,
+    blurb, button, despawn_screen, display, fine, label, panel, screen_root, screen_title,
     stacked_row_button, supporting_text_role, ResolvedUiMetrics, ResumeView, ScenarioBrowserIntent,
     ScenarioBrowserView, TitleIntent, TitleScenarioView, TitleView, UiAssets, UiIntent, UiSystems,
     UiViewportClass, ACCENT_EDGE, BLURB_SIZE, DANGER,
@@ -43,9 +43,6 @@ struct ScenarioDeck;
 
 #[derive(Component)]
 struct ScenarioColumn;
-
-#[derive(Component)]
-struct ScenarioColumnHeading;
 
 #[derive(Component)]
 struct ScenarioControl(ScenarioBrowserIntent);
@@ -243,8 +240,30 @@ fn spawn_title_action(
 fn apply_title_layout(
     metrics: Res<ResolvedUiMetrics>,
     added: Query<(), Added<TitleActions>>,
-    mut actions: Query<&mut Node, With<TitleActions>>,
-    mut details: Query<&mut Node, (With<TitleActionDetail>, Without<TitleActions>)>,
+    mut actions: Query<
+        &mut Node,
+        (
+            With<TitleActions>,
+            Without<TitleActionDetail>,
+            Without<TitleControl>,
+        ),
+    >,
+    mut details: Query<
+        &mut Node,
+        (
+            With<TitleActionDetail>,
+            Without<TitleActions>,
+            Without<TitleControl>,
+        ),
+    >,
+    mut controls: Query<
+        &mut Node,
+        (
+            With<TitleControl>,
+            Without<TitleActions>,
+            Without<TitleActionDetail>,
+        ),
+    >,
 ) {
     if !metrics.is_changed() && added.is_empty() {
         return;
@@ -268,6 +287,18 @@ fn apply_title_layout(
             Display::None
         } else {
             Display::Flex
+        };
+    }
+    for mut node in &mut controls {
+        // Once supporting copy is removed, retain only the semantic minimum
+        // target instead of five rows of the taller desktop card baseline.
+        // The shared control scaler still enlarges this 44px baseline at high
+        // preferences, so accessibility does not trade away reachability.
+        node.min_height = Val::Px(if primary_labels_only { 44.0 } else { 58.0 });
+        node.padding = if primary_labels_only {
+            UiRect::axes(Val::Px(12.0), Val::Px(6.0))
+        } else {
+            UiRect::axes(Val::Px(14.0), Val::Px(9.0))
         };
     }
 }
@@ -325,12 +356,13 @@ fn render_scenarios(
 ) {
     root.spawn((
         Name::new("Scenario Screen Title"),
-        display(assets, view.kind.title()),
+        screen_title(assets, view.kind.title()),
         Node {
             flex_shrink: 0.0,
             ..default()
         },
         crate::UiVisibilityRequirement::Immediate,
+        crate::UiTextMustFit,
     ));
     root.spawn((
         Name::new("Scenario Screen Introduction"),
@@ -412,11 +444,11 @@ fn render_scenarios(
                     Name::new("Scenario Catalog Scrollbar"),
                     Scrollbar::new(viewport, ControlOrientation::Vertical, 36.0),
                     Node {
-                        width: Val::Px(18.0),
+                        width: Val::Px(10.0),
                         height: Val::Percent(100.0),
                         flex_shrink: 0.0,
                         border: UiRect::all(Val::Px(1.0)),
-                        border_radius: BorderRadius::all(Val::Px(9.0)),
+                        border_radius: BorderRadius::all(Val::Px(5.0)),
                         ..default()
                     },
                     BorderColor::all(ACCENT_EDGE),
@@ -425,7 +457,7 @@ fn render_scenarios(
                 .with_child((
                     Name::new("Scenario Catalog Scrollbar Thumb"),
                     ScrollbarThumb {
-                        border_radius: BorderRadius::all(Val::Px(8.0)),
+                        border_radius: BorderRadius::all(Val::Px(4.0)),
                         border: UiRect::all(Val::Px(1.0)),
                     },
                     BorderColor::all(ACCENT_EDGE),
@@ -464,14 +496,6 @@ fn spawn_scenario_column<'a>(
         ..default()
     })
     .with_children(|column| {
-        column.spawn((
-            ScenarioColumnHeading,
-            heading(assets, title),
-            Node {
-                grid_column: GridPlacement::span(2),
-                ..default()
-            },
-        ));
         for entry in entries {
             spawn_scenario_card(column, assets, entry);
         }
@@ -508,6 +532,8 @@ fn spawn_scenario_card(
             flex_direction: FlexDirection::Column,
             align_items: AlignItems::FlexStart,
             row_gap: Val::Px(3.0),
+            border: UiRect::all(Val::Px(1.0)),
+            border_radius: BorderRadius::all(Val::Px(6.0)),
             ..default()
         })
         .with_children(|button| {
@@ -536,7 +562,6 @@ fn apply_scenario_layout(
         (
             With<ScenarioDeck>,
             Without<ScenarioColumn>,
-            Without<ScenarioColumnHeading>,
             Without<ScenarioIntroduction>,
         ),
     >,
@@ -545,16 +570,6 @@ fn apply_scenario_layout(
         (
             With<ScenarioColumn>,
             Without<ScenarioDeck>,
-            Without<ScenarioColumnHeading>,
-            Without<ScenarioIntroduction>,
-        ),
-    >,
-    mut headings: Query<
-        &mut Node,
-        (
-            With<ScenarioColumnHeading>,
-            Without<ScenarioDeck>,
-            Without<ScenarioColumn>,
             Without<ScenarioIntroduction>,
         ),
     >,
@@ -564,7 +579,6 @@ fn apply_scenario_layout(
             With<ScenarioIntroduction>,
             Without<ScenarioDeck>,
             Without<ScenarioColumn>,
-            Without<ScenarioColumnHeading>,
         ),
     >,
 ) {
@@ -583,10 +597,12 @@ fn apply_scenario_layout(
         node.grid_template_columns = RepeatedGridTrack::flex(1, 1.0);
     }
     for mut node in &mut columns {
-        node.grid_template_columns = RepeatedGridTrack::flex(if compact { 1 } else { 2 }, 1.0);
-    }
-    for mut node in &mut headings {
-        node.grid_column = GridPlacement::span(if compact { 1 } else { 2 });
+        let columns = if compact && metrics.effective_size.x < 1_100.0 {
+            1
+        } else {
+            2
+        };
+        node.grid_template_columns = RepeatedGridTrack::flex(columns, 1.0);
     }
 }
 
@@ -630,5 +646,75 @@ mod tests {
             TitleIntent::Quit,
         ];
         assert_eq!(intents.len(), 9);
+    }
+
+    #[cfg(feature = "test-support")]
+    fn failed_title_snapshot(
+        physical_width: u32,
+        physical_height: u32,
+        device_scale: f32,
+        mode: crate::UiScaleMode,
+    ) -> crate::test_support::UiTreeSnapshot {
+        let mut app = App::new();
+        app.add_plugins(crate::test_support::HeadlessUiPlugin::with_scale_factor(
+            physical_width,
+            physical_height,
+            device_scale,
+        ));
+        app.world_mut()
+            .insert_resource(crate::UiScalePreference(mode));
+        app.world_mut().insert_resource(crate::TitleView {
+            setup_failure: Some(
+                "The selected scenario could not be prepared; choose another route.".to_owned(),
+            ),
+        });
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Title);
+        for _ in 0..8 {
+            app.update();
+        }
+        crate::test_support::ui_tree_snapshot(app.world_mut())
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn compact_failure_keeps_every_primary_route_immediately_visible() {
+        for (physical_width, physical_height, device_scale) in [(960, 540, 1.0), (1920, 1080, 2.0)]
+        {
+            for mode in [
+                crate::UiScaleMode::Percent175,
+                crate::UiScaleMode::Percent200,
+            ] {
+                let snapshot =
+                    failed_title_snapshot(physical_width, physical_height, device_scale, mode);
+                for name in [
+                    "Continue",
+                    "New Game",
+                    "Character Creator",
+                    "Spell Creator",
+                    "Combat Lab",
+                    "Map Scenarios",
+                    "Demos",
+                    "Settings",
+                    "Quit",
+                ] {
+                    let node = snapshot
+                        .nodes
+                        .iter()
+                        .find(|node| node.name == name)
+                        .unwrap_or_else(|| panic!("missing primary title route {name:?}"));
+                    assert_eq!(
+                        node.visibility_requirement,
+                        Some(crate::UiVisibilityRequirement::Immediate),
+                        "{name} must remain an Immediate route"
+                    );
+                    assert!(
+                        node.fully_visible,
+                        "{name} must be visible at {physical_width}×{physical_height} / {device_scale}× in {mode:?}: {node:?}"
+                    );
+                }
+            }
+        }
     }
 }

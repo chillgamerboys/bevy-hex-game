@@ -164,6 +164,7 @@ fn rebuild(
                             format!("Party Member {}", member.slot + 1),
                             member.label.clone(),
                             Val::Percent(100.0),
+                            crate::UiVisibilityRequirement::Immediate,
                         ),
                         PartyControl(PartyIntent::SelectMember(member.slot)),
                         BorderColor::all(border),
@@ -182,6 +183,7 @@ fn rebuild(
                         "Party Movement Mode",
                         view.movement_mode.clone(),
                         Val::Percent(100.0),
+                        crate::UiVisibilityRequirement::Scrollable,
                     ),
                     PartyControl(PartyIntent::ToggleMovementMode),
                     BorderColor::all(ACCENT_EDGE),
@@ -190,7 +192,12 @@ fn rebuild(
                 .with_child(body_text(&assets, view.movement_mode.clone()));
             formation
                 .spawn((
-                    control_button("Party Rest", "REST PARTY · R", Val::Percent(100.0)),
+                    control_button(
+                        "Party Rest",
+                        "REST PARTY · R",
+                        Val::Percent(100.0),
+                        crate::UiVisibilityRequirement::Scrollable,
+                    ),
                     PartyControl(PartyIntent::Rest),
                     BorderColor::all(EDGE),
                     BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.07)),
@@ -216,6 +223,7 @@ fn rebuild(
                                     format!("Formation Preset {preset}"),
                                     preset.clone(),
                                     Val::Auto,
+                                    crate::UiVisibilityRequirement::Scrollable,
                                 ),
                                 PartyControl(PartyIntent::SelectPreset(preset.clone())),
                                 BorderColor::all(EDGE),
@@ -234,13 +242,14 @@ fn control_button(
     name: impl Into<String>,
     accessible: impl Into<String>,
     width: Val,
+    visibility_requirement: crate::UiVisibilityRequirement,
 ) -> impl Bundle {
     (
         Name::new(name.into()),
         AccessibleLabel::new(accessible),
         Button,
         TabIndex(0),
-        crate::DefaultImmediateControl,
+        visibility_requirement,
         responsive_control_role(),
         Node {
             width,
@@ -331,7 +340,7 @@ fn spawn_slot_grid(
                     )),
                     Button,
                     TabIndex(0),
-                    crate::DefaultImmediateControl,
+                    crate::UiVisibilityRequirement::Scrollable,
                     owner_resolved_control_role(),
                     PartyControl(PartyIntent::AssignSlot(slot.offset)),
                     Node {
@@ -373,12 +382,11 @@ fn emit_intents(
 mod tests {
     use super::*;
 
-    #[test]
-    fn live_six_member_formation_controls_fit_the_standard_inspector() {
+    fn formation_app(width: u32, height: u32, mode: crate::UiScaleMode) -> App {
         let mut app = App::new();
-        app.add_plugins(crate::test_support::HeadlessUiPlugin::new(1920, 1080));
+        app.add_plugins(crate::test_support::HeadlessUiPlugin::new(width, height));
         app.world_mut()
-            .insert_resource(crate::UiScalePreference(crate::UiScaleMode::Auto));
+            .insert_resource(crate::UiScalePreference(mode));
         app.world_mut().insert_resource(PartyView {
             members: (0..6)
                 .map(|slot| crate::PartyMemberView {
@@ -409,7 +417,12 @@ mod tests {
         for _ in 0..8 {
             app.update();
         }
+        app
+    }
 
+    #[test]
+    fn live_six_member_formation_controls_fit_the_standard_inspector() {
+        let mut app = formation_app(1920, 1080, crate::UiScaleMode::Auto);
         let snapshot = crate::test_support::ui_tree_snapshot(app.world_mut());
         assert!(
             snapshot.layout_issues().is_empty(),
@@ -422,5 +435,80 @@ mod tests {
             .find(|node| node.name == "Formation mini-grid")
             .expect("the live formation grid must be presented");
         assert!(grid.fully_visible, "formation grid must fit: {grid:?}");
+    }
+
+    #[test]
+    fn enlarged_compact_formation_focus_scrolls_the_final_slot_into_view() {
+        use bevy::input_focus::InputFocus;
+
+        let mut app = formation_app(1280, 720, crate::UiScaleMode::Percent200);
+        let entity_named = |app: &mut App, wanted: &str| {
+            app.world_mut()
+                .query::<(Entity, &Name)>()
+                .iter(app.world())
+                .find_map(|(entity, name)| (name.as_str() == wanted).then_some(entity))
+                .unwrap_or_else(|| panic!("missing {wanted:?}"))
+        };
+        let inspector = entity_named(&mut app, "Inspector HUD Region");
+        let final_slot_name = "Formation Slot (1, 0)";
+        let final_slot_entity = entity_named(&mut app, final_slot_name);
+        let initial = crate::test_support::ui_tree_snapshot(app.world_mut());
+        let formation_controls = initial
+            .nodes
+            .iter()
+            .filter(|node| {
+                matches!(node.name.as_str(), "Party Movement Mode" | "Party Rest")
+                    || node.name.starts_with("Formation Preset ")
+                    || node.name.starts_with("Formation Slot (")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            formation_controls.len(),
+            11,
+            "the populated fixture must cover every secondary formation control"
+        );
+        for control in formation_controls {
+            assert_eq!(
+                control.visibility_requirement,
+                Some(crate::UiVisibilityRequirement::Scrollable),
+                "secondary formation controls must opt into the Inspector's scroll contract: {control:?}"
+            );
+            assert!(
+                control.scroll_reachable,
+                "secondary formation controls must have a complete Inspector scroll route: {control:?}"
+            );
+        }
+        let final_slot = initial
+            .nodes
+            .iter()
+            .find(|node| node.name == final_slot_name)
+            .expect("the populated formation must expose its final slot");
+        assert!(
+            !final_slot.fully_visible
+                && final_slot.in_focus_order
+                && final_slot.keyboard_reachable == Some(true),
+            "the regression fixture must exercise a keyboard-reachable slot below the initial fold: {final_slot:?}"
+        );
+
+        app.insert_resource(InputFocus::from_entity(final_slot_entity));
+        for _ in 0..3 {
+            app.update();
+        }
+        assert!(
+            app.world()
+                .get::<ScrollPosition>(inspector)
+                .is_some_and(|position| position.y > 0.0),
+            "focusing the final formation slot must move the Inspector scroll owner"
+        );
+        let focused = crate::test_support::ui_tree_snapshot(app.world_mut());
+        let final_slot = focused
+            .nodes
+            .iter()
+            .find(|node| node.name == final_slot_name)
+            .expect("the focused formation slot remains presented");
+        assert!(
+            final_slot.fully_visible && final_slot.focused,
+            "the complete slot and focus ring must be visible after keyboard navigation: {final_slot:?}"
+        );
     }
 }

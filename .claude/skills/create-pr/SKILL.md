@@ -146,7 +146,7 @@ ${LINES_STAT}
 - [ ] `cargo clippy --workspace --all-targets --all-features --profile ci -- -D warnings` (unless Markdown-only)
 - [ ] `cargo test --workspace --all-features --profile ci` (unless Markdown-only)
 - [ ] `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features` (unless Markdown-only)
-- [ ] `cargo build --workspace --profile ci` (unless Markdown-only; CI builds all three platforms)
+- [ ] `cargo build --package hex_game --release` (unless Markdown-only; CI builds the shipping package on all three platforms)
 - [ ] Automated visual walk green — `/visual-walk` captured the screens and the agent read every frame
 - [ ] **A human ran the game and looked at it**
 

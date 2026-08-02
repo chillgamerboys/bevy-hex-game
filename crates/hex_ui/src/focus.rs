@@ -2,8 +2,10 @@ use bevy::input_focus::{
     tab_navigation::{TabIndex, TabNavigationPlugin},
     InputFocus, InputFocusVisible,
 };
+use bevy::math::Affine2;
 use bevy::prelude::*;
 use bevy::ui::InteractionDisabled;
+use bevy::ui_widgets::ScrollIntoView;
 
 const FOCUS_COLOR: Color = Color::srgb(0.98, 0.86, 0.56);
 
@@ -15,7 +17,13 @@ pub(super) fn plugin(app: &mut App) {
         .add_systems(PreUpdate, activate_focused_button)
         .add_systems(
             PostUpdate,
-            (prepare_buttons, sync_focusability, paint_keyboard_focus).chain(),
+            (
+                prepare_buttons,
+                sync_focusability,
+                scroll_focused_into_view,
+                paint_keyboard_focus,
+            )
+                .chain(),
         );
 }
 
@@ -119,6 +127,82 @@ fn activate_focused_button(
     };
     *interaction = Interaction::Pressed;
     *previously_pressed = Some(entity);
+}
+
+fn scroll_focused_into_view(
+    focus: Res<InputFocus>,
+    parents: Query<&ChildOf>,
+    nodes: Query<
+        (&UiGlobalTransform, &ComputedNode),
+        Without<crate::creator::CompactCreatorCanvasScroll>,
+    >,
+    mut canvases: Query<
+        (
+            &Node,
+            &UiGlobalTransform,
+            &ComputedNode,
+            &mut ScrollPosition,
+        ),
+        With<crate::creator::CompactCreatorCanvasScroll>,
+    >,
+    mut commands: Commands,
+) {
+    if !focus.is_changed() {
+        return;
+    }
+    if let Some(entity) = focus.get() {
+        if let Some(canvas) = parents
+            .iter_ancestors(entity)
+            .find(|ancestor| canvases.contains(*ancestor))
+        {
+            let (
+                Ok((target_transform, target_computed)),
+                Ok((canvas_node, canvas_transform, canvas_computed, mut canvas_scroll)),
+            ) = (nodes.get(entity), canvases.get_mut(canvas))
+            else {
+                commands.trigger(ScrollIntoView { entity });
+                return;
+            };
+            let target_size = target_computed.size() * target_computed.inverse_scale_factor;
+            let target_affine: Affine2 = target_transform.into();
+            let target_pos = target_affine.translation * target_computed.inverse_scale_factor
+                - target_size * 0.5;
+            let canvas_size = canvas_computed.size() * canvas_computed.inverse_scale_factor;
+            let canvas_affine: Affine2 = canvas_transform.into();
+            let canvas_pos = canvas_affine.translation * canvas_computed.inverse_scale_factor
+                - canvas_size * 0.5;
+            let target_local_top_left = target_pos - canvas_pos + canvas_scroll.0;
+            let target_local_bottom_right = target_local_top_left + target_size;
+            let content_size =
+                canvas_computed.content_size() * canvas_computed.inverse_scale_factor;
+            let max_range = (content_size - canvas_size).max(Vec2::ZERO);
+
+            if canvas_node.overflow.x == OverflowAxis::Scroll {
+                if target_local_top_left.x < canvas_scroll.x {
+                    canvas_scroll.x = target_local_top_left.x.clamp(0.0, max_range.x);
+                } else if target_local_bottom_right.x > canvas_scroll.x + canvas_size.x {
+                    canvas_scroll.x =
+                        (target_local_bottom_right.x - canvas_size.x).clamp(0.0, max_range.x);
+                }
+            }
+            if canvas_node.overflow.y == OverflowAxis::Scroll {
+                if target_local_top_left.y < canvas_scroll.y {
+                    canvas_scroll.y = target_local_top_left.y.clamp(0.0, max_range.y);
+                } else if target_local_bottom_right.y > canvas_scroll.y + canvas_size.y {
+                    canvas_scroll.y =
+                        (target_local_bottom_right.y - canvas_size.y).clamp(0.0, max_range.y);
+                }
+            }
+            // The generic owner now receives the canvas rather than the still
+            // clipped cell, revealing this nested viewport in the outer page.
+            commands.trigger(ScrollIntoView { entity: canvas });
+            return;
+        }
+        // Bevy's ScrollArea observer walks to the nearest scroll owner and updates
+        // it just enough to expose this control. This keeps keyboard focus and its
+        // visible ring together without duplicating scroll geometry here.
+        commands.trigger(ScrollIntoView { entity });
+    }
 }
 
 fn paint_keyboard_focus(

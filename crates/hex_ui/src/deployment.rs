@@ -174,6 +174,10 @@ fn spawn_side(
         DeploymentSide,
         Node {
             width: Val::Px(245.0),
+            // In stacked layouts `DeploymentSides` is the sole scroll owner.
+            // Keep each side at its natural roster height so Yoga reports the
+            // complete final card in that owner's attainable content range.
+            flex_shrink: 0.0,
             flex_direction: FlexDirection::Column,
             row_gap: Val::Px(2.0),
             ..default()
@@ -380,6 +384,14 @@ fn apply_layout(
             FlexDirection::Row
         };
         node.row_gap = if stacked { Val::Px(8.0) } else { Val::ZERO };
+        // Leave semantic tail room inside the sole roster scroll owner. Bevy's
+        // fractional text/control rounding can otherwise place the final card's
+        // border one logical pixel beyond the reported content extent.
+        node.padding.bottom = if stacked {
+            Val::Px(8.0 * metrics.spacing_scale)
+        } else {
+            Val::ZERO
+        };
         node.overflow = if stacked {
             Overflow::scroll_y()
         } else {
@@ -443,5 +455,112 @@ mod tests {
         assert!(actions
             .iter(app.world())
             .any(|action| *action == DeploymentIntent::StartCombat));
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn enlarged_stacked_roster_can_focus_and_reveal_its_final_card() {
+        use bevy::input_focus::InputFocus;
+
+        let mut app = App::new();
+        app.add_plugins(crate::test_support::HeadlessUiPlugin::new(960, 540));
+        app.world_mut()
+            .insert_resource(crate::UiScalePreference(crate::UiScaleMode::Percent175));
+        let roster = |side: &str| {
+            (0..6)
+                .map(|index| DeploymentRosterEntryView {
+                    index,
+                    name: format!("{side} Unit {}", index + 1),
+                    selected: index == 0,
+                    position: None,
+                })
+                .collect::<Vec<_>>()
+        };
+        app.world_mut().insert_resource(DeploymentView {
+            active: true,
+            map_name: "Stacked Surface Arena".to_owned(),
+            notice: "Place every player and hostile on an exact legal surface.".to_owned(),
+            players: roster("Player"),
+            hostiles: roster("Hostile"),
+            complete: false,
+        });
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Gameplay);
+        for _ in 0..8 {
+            app.update();
+        }
+
+        let entity_named = |app: &mut App, wanted: &str| {
+            app.world_mut()
+                .query::<(Entity, &Name)>()
+                .iter(app.world())
+                .find_map(|(entity, name)| (name.as_str() == wanted).then_some(entity))
+                .unwrap_or_else(|| panic!("missing {wanted:?}"))
+        };
+        let roster_scroll = entity_named(&mut app, "Deployment Roster Scroll");
+        let final_card_name = "SELECT [H6] Hostile Unit 6\nchoose surface";
+        let final_card_entity = entity_named(&mut app, final_card_name);
+        let roster_scroll_geometry = app
+            .world()
+            .get::<ComputedNode>(roster_scroll)
+            .map(|node| {
+                (
+                    node.size() * node.inverse_scale_factor,
+                    node.content_size() * node.inverse_scale_factor,
+                )
+            })
+            .expect("the deployment scroll owner must be laid out");
+        let side_geometry = app
+            .world_mut()
+            .query_filtered::<&ComputedNode, With<DeploymentSide>>()
+            .iter(app.world())
+            .map(|node| {
+                (
+                    node.size() * node.inverse_scale_factor,
+                    node.content_size() * node.inverse_scale_factor,
+                )
+            })
+            .collect::<Vec<_>>();
+        let initial = crate::test_support::ui_tree_snapshot(app.world_mut());
+        let final_card = initial
+            .nodes
+            .iter()
+            .find(|node| node.name == final_card_name)
+            .expect("the populated hostile roster must expose its sixth card");
+        assert_eq!(
+            final_card.visibility_requirement,
+            Some(crate::UiVisibilityRequirement::Scrollable)
+        );
+        assert!(
+            !final_card.fully_visible && final_card.scroll_reachable,
+            "the exact regression must start below the fold but have an attainable range: {final_card:?}; owner={roster_scroll_geometry:?}; sides={side_geometry:?}"
+        );
+
+        assert!(
+            final_card.in_focus_order && final_card.keyboard_reachable == Some(true),
+            "the sixth hostile deployment card must belong to the active keyboard scope: {final_card:?}; order={:?}",
+            initial.focus_order,
+        );
+        app.insert_resource(InputFocus::from_entity(final_card_entity));
+        for _ in 0..3 {
+            app.update();
+        }
+        assert!(
+            app.world()
+                .get::<ScrollPosition>(roster_scroll)
+                .is_some_and(|position| position.y > 0.0),
+            "focusing the final card must move the sole deployment scroll owner"
+        );
+        let focused = crate::test_support::ui_tree_snapshot(app.world_mut());
+        let final_card = focused
+            .nodes
+            .iter()
+            .find(|node| node.name == final_card_name)
+            .expect("the focused card remains presented");
+        assert!(
+            final_card.fully_visible && final_card.focused,
+            "the complete card and focus ring must be visible after keyboard navigation: {final_card:?}"
+        );
     }
 }

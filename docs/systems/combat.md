@@ -30,12 +30,13 @@ boundary would flip in and out of combat every frame it drifted.
 
 ## Tactical HUD and role resolution
 
-Gameplay UI is one safe frame with 12px viewport margins and 8px inter-panel gaps:
-a 224px party rail, a 300px inspector, a 72px top turn rail, and a 132px bottom
-action dock. The center bands use those side widths as insets, so 1280×720 and
-1920×1080 have no independently positioned panels competing for the same pixels.
-Noninteractive regions pass pointer input through to the world; opaque action and
-history panels catch clicks intended for their controls.
+Gameplay UI is one responsive safe frame with 12px baseline viewport margins and 8px
+baseline inter-panel gaps. Semantic scale and viewport class resolve the party,
+Inspector, top-turn, and bottom-action regions; center bands consume the resolved
+side insets, so no independently positioned panels compete for the same pixels. Most
+read-only regions pass pointer input through to the world. The Inspector participates
+in picking because it is the single scroll owner for lattice and secondary detail,
+and opaque action/history panels catch input intended for their controls.
 
 The HUD is mode-aware:
 

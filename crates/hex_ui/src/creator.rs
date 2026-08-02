@@ -2,7 +2,9 @@
 
 use std::collections::BTreeSet;
 
+use bevy::input::mouse::MouseScrollUnit;
 use bevy::input_focus::tab_navigation::TabIndex;
+use bevy::picking::events::{Pointer, Scroll};
 use bevy::prelude::*;
 use bevy::text::EditableText;
 use bevy::ui_widgets::ScrollArea;
@@ -35,6 +37,15 @@ struct CreatorHeaderActions;
 #[derive(Component)]
 struct CreatorResponsiveBody;
 
+#[derive(Component)]
+struct CreatorLatticeCanvas;
+
+/// Compact Creator pages have one vertical owner at the screen root. The
+/// lattice still accepts horizontal trackpad input without swallowing the
+/// vertical delta that must bubble to that page owner.
+#[derive(Component)]
+pub(crate) struct CompactCreatorCanvasScroll;
+
 #[derive(Component, Clone, Copy)]
 enum CreatorBodyPanel {
     Sidebar { width: f32, compact_row: i16 },
@@ -42,17 +53,49 @@ enum CreatorBodyPanel {
 }
 
 pub(super) fn plugin(app: &mut App) {
-    app.add_systems(
-        Update,
-        (
-            (render, apply_creator_layout)
-                .chain()
-                .in_set(UiSystems::Render),
-            emit_actions.in_set(UiSystems::EmitIntents),
-            emit_name_changes.in_set(UiSystems::EmitIntents),
-        )
-            .run_if(creator_screen_active),
-    );
+    app.add_observer(scroll_compact_canvas_with_residual)
+        .add_systems(
+            Update,
+            (
+                (render, apply_creator_layout)
+                    .chain()
+                    .in_set(UiSystems::Render),
+                emit_actions.in_set(UiSystems::EmitIntents),
+                emit_name_changes.in_set(UiSystems::EmitIntents),
+            )
+                .run_if(creator_screen_active),
+        );
+}
+
+fn scroll_compact_canvas_with_residual(
+    mut scroll: On<Pointer<Scroll>>,
+    mut canvases: Query<(&ComputedNode, &mut ScrollPosition), With<CompactCreatorCanvasScroll>>,
+) {
+    let Ok((computed, mut position)) = canvases.get_mut(scroll.entity) else {
+        return;
+    };
+    let factor = match scroll.unit {
+        MouseScrollUnit::Line => MouseScrollUnit::SCROLL_UNIT_CONVERSION_FACTOR,
+        MouseScrollUnit::Pixel => 1.0,
+    };
+    let visible = computed.size() * computed.inverse_scale_factor;
+    let content = computed.content_size() * computed.inverse_scale_factor;
+    let max_range = (content - visible).max(Vec2::ZERO);
+    let delta = Vec2::new(scroll.x, scroll.y) * factor;
+    let old = position.0;
+    let new = (old - delta).clamp(Vec2::ZERO, max_range);
+    position.0 = new;
+
+    // Only the unconsumed vertical component belongs to the outer page. Drop
+    // residual horizontal motion because Compact has no outer horizontal
+    // owner, then let Bevy bubble any vertical remainder to CreatorRoot.
+    let consumed = old - new;
+    let residual_y = delta.y - consumed.y;
+    scroll.event_mut().event.x = 0.0;
+    scroll.event_mut().event.y = residual_y / factor;
+    if residual_y.abs() <= f32::EPSILON {
+        scroll.propagate(false);
+    }
 }
 
 fn apply_creator_layout(
@@ -76,6 +119,7 @@ fn apply_creator_layout(
             Without<CreatorHeader>,
             Without<CreatorHeaderActions>,
             Without<CreatorRoot>,
+            Without<CreatorLatticeCanvas>,
         ),
     >,
     mut panels: Query<
@@ -85,6 +129,18 @@ fn apply_creator_layout(
             Without<CreatorHeader>,
             Without<CreatorHeaderActions>,
             Without<CreatorRoot>,
+            Without<CreatorLatticeCanvas>,
+        ),
+    >,
+    mut lattice_canvases: Query<
+        (Entity, &mut Node),
+        (
+            With<CreatorLatticeCanvas>,
+            Without<CreatorResponsiveBody>,
+            Without<CreatorHeader>,
+            Without<CreatorHeaderActions>,
+            Without<CreatorRoot>,
+            Without<CreatorBodyPanel>,
         ),
     >,
 ) {
@@ -141,6 +197,8 @@ fn apply_creator_layout(
             FlexDirection::Row
         };
         node.height = if compact { Val::Auto } else { Val::Px(0.0) };
+        node.min_height = if compact { Val::Auto } else { Val::Px(0.0) };
+        node.flex_basis = if compact { Val::Auto } else { Val::Px(0.0) };
         node.flex_grow = if compact { 0.0 } else { 1.0 };
         node.overflow = Overflow::default();
         node.row_gap = if compact { Val::Px(12.0) } else { Val::ZERO };
@@ -177,11 +235,19 @@ fn apply_creator_layout(
                 // Compact owns one continuous page at the root. Leaving an idle
                 // ScrollArea on a now-visible sidebar would swallow wheel events
                 // before they reach that root owner.
-                commands.entity(entity).remove::<ScrollArea>();
+                commands
+                    .entity(entity)
+                    .remove::<ScrollArea>()
+                    .insert(ScrollPosition::default());
             }
         } else {
             node.width = match role {
-                CreatorBodyPanel::Sidebar { width, .. } => Val::Px(*width),
+                CreatorBodyPanel::Sidebar { width, .. } => {
+                    // Responsive row controls grow with semantic scale. Reserve
+                    // the same horizontal pressure in their owning sidebar so
+                    // a 200% control cannot escape into the adjacent workspace.
+                    Val::Px(*width * metrics.control_scale.max(1.0))
+                }
                 CreatorBodyPanel::Main => Val::Auto,
             };
             node.height = Val::Auto;
@@ -199,6 +265,21 @@ fn apply_creator_layout(
                 // scrolling and ScrollIntoView for keyboard focus.
                 commands.entity(entity).insert(ScrollArea);
             }
+        }
+    }
+    for (entity, mut node) in &mut lattice_canvases {
+        if compact {
+            node.overflow = Overflow::scroll();
+            commands
+                .entity(entity)
+                .remove::<ScrollArea>()
+                .insert(CompactCreatorCanvasScroll);
+        } else {
+            node.overflow = Overflow::scroll();
+            commands
+                .entity(entity)
+                .remove::<CompactCreatorCanvasScroll>()
+                .insert(ScrollArea);
         }
     }
 }
@@ -830,6 +911,12 @@ fn spawn_character_tab(
             assets,
             "Choose a tool, then click occupied hexes or outlined neighbor slots.",
         ));
+        palette.spawn((
+            Name::new("Creator Palette More Tools Cue"),
+            AccessibleLabel::new("More character creation tools are available below"),
+            crate::UiVisibilityRequirement::Scrollable,
+            blurb(assets, "More tools below ↓"),
+        ));
         colored_tool_button(
             palette,
             assets,
@@ -995,9 +1082,11 @@ fn spawn_character_tab(
             center
                 .spawn((
                     Name::new("Lattice Canvas"),
+                    CreatorLatticeCanvas,
                     ScrollArea,
                     Node {
                         width: Val::Percent(100.0),
+                        min_width: Val::Px(0.0),
                         min_height: Val::Px(0.0),
                         flex_grow: 1.0,
                         overflow: Overflow::scroll(),
@@ -1044,6 +1133,12 @@ fn spawn_character_tab(
     })
     .with_children(|right| {
         right.spawn(heading(assets, "cell inspector"));
+        right.spawn((
+            Name::new("Creator Inspector More Details Cue"),
+            AccessibleLabel::new("More character build details are available below"),
+            crate::UiVisibilityRequirement::Scrollable,
+            blurb(assets, "More build details below ↓"),
+        ));
         if let Some(coord) = session.selected_cell {
             let content = character
                 .cells

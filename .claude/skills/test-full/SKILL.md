@@ -40,11 +40,12 @@ If `/test-local` fails → STOP. Surface the failing step + report.
 ## Phase 2 — Ship-shape build
 
 ```bash
-cargo build --workspace --profile ci
+cargo build --package hex_game --release
 ```
 
-No `--all-features`: this is exactly what CI's three-platform matrix
-builds and what ships — `hex_dev` and the `dev` feature excluded. It
+No `--all-features`, and only the shipping package: this is exactly what CI's
+three-platform matrix builds and what ships — workspace-only binaries, `hex_dev`,
+and the `dev` feature are excluded. It
 catches "builds with the inspector but not without", which Phase 1
 cannot see because every other command runs `--all-features`.
 
