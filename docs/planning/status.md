@@ -335,9 +335,9 @@ roofs intact, while explicit map-review capture may still request a complete int
 cutaway. Automated geometry, control-authority, motion-continuity, lifecycle,
 idle-churn, and release-performance gates are live. Seed-exact multi-azimuth walks now
 exercise ordinary pointer movement to a proved destination on every standalone
-selectable map and every Two Rings region; final human motion/readability approval of
-the corrected candidate remains pending. Map mode remains available without a
-scenario restriction.
+selectable map and every Two Rings region. Alberto approved the corrected camera's
+motion and readability in a native Two Rings release walk at runtime head `2397d8e`
+on 2026-08-01. Map mode remains available without a scenario restriction.
 
 ## What is provisional
 

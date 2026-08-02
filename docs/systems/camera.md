@@ -172,9 +172,10 @@ restarts the same exact scenario and follows the Waterfall A/Frozen Hills detour
 the direct route legitimately enters combat; it never suppresses that combat.
 
 Standalone and Two Rings upper Sky Island surfaces remain flight-gated, so the
-evidence proves only their grounded bridges. Human motion/readability review remains
-an explicit presentation gate; the harness does not invent movement capabilities or
-treat static frames as play-feel approval. Review cards use route-readable open-side
-azimuths; deliberately blocked yaws remain collision/yaw-preservation test cases and
-must be swept during the human gate to confirm immediate safe retraction and smooth
-recovery after the player rotates clear.
+evidence proves only their grounded bridges. The harness does not invent movement
+capabilities or treat static frames as play-feel approval. Alberto completed the human
+motion/readability gate on 2026-08-01 in the shipped release path on Two Rings at
+runtime head `2397d8e` and approved the corrected player-controlled camera for merge.
+Future camera-behavior changes must repeat a native motion review, including blocked
+yaw cases that confirm immediate safe retraction and smooth recovery after the player
+rotates clear.

@@ -34,7 +34,7 @@ still belong to the crate they change. `docs` is whoever picks it up.
 | Co-casting and rituals | variable-mana group casting after Wave 7 supplies a real Channel action and evidence for initiative and action economy | combat | <!-- linear: HEX-26 owner: shravan-kumaran -->
 | Engine upkeep | the one budgeted Bevy 0.20 upgrade (~Q4 2026) plus the feature trim, landed together in a quiet window before any release | game | <!-- linear: HEX-18 owner: shravan-kumaran -->
 | Perception presentation | faction fog, remembered rendering, picking gates, and composition with explicit review-roof visibility and whole-tree opacity | perception |
-| Character-first camera | player-authoritative full-range look, radius-only terrain collision with stable recovery, near-character occlusion, whole-tree fading, ordinary opaque cave roofs, and seed-exact multi-azimuth traversal over every selectable map and Two Rings region are implemented; remaining work is human motion/readability approval and a later product rule limiting Map mode to appropriate scenarios | world / presentation |
+| Scenario camera policy | decide when Map mode is appropriate and limit its availability by scenario now that the human-approved Character view is live | world / presentation |
 | Remaining movement and combat perception adapters | unknown-route restriction; detection, engagement, ordinary-attack targeting, and one-round last-known-position behavior in isolated owner-reviewed PRs; AI and casting anchors are already live | units/combat |
 | V1/V2 legacy removal | remove the frozen V1/V2 parsers, generators, assets, and runtime tests now that every active shipped procedural scenario resolves through V3 | map |
 | Named rule regions | revisit a content-addressable exact-surface overlay when the first region-sensitive spell lands; do not combine biome identity, lighting, and anti-magic into generic tile tags | map/combat |
@@ -70,6 +70,7 @@ still belong to the crate they change. `docs` is whoever picks it up.
 | Expanded biome set | Volcano, Deep Forest, and Prairie add distinct crater/lava, full-woodland, and open-grassland recipes while stable scenario and object identities remain compatible |
 | Nineteen-region composition | Ring19 composes the selectable radius-55 Two Rings map from 19 fixed logical regions, 42 physically redundant seams, one mountain-fed confluence/outlet water graph, and a separate volcano lava outlet |
 | Cave lighting and presentation | V3 Caves publishes deterministic gameplay lights over required routes plus authored emissive crystals and restrained presentation-only physical lights |
+| Character-first camera | Player-authoritative full-range look, radius-only terrain collision with stable recovery, near-character occlusion, whole-tree fading, ordinary opaque cave roofs, seed-exact multi-azimuth traversal over every selectable map and Two Rings region, and Alberto's 2026-08-01 native motion/readability approval |
 
 ## Sequencing — independent lanes behind one contract
 
