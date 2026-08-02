@@ -90,6 +90,8 @@ pub enum ProceduralRecipeMetrics {
     Forest(ForestMetrics),
     /// Worked-stone defenses, circulation, and access measurements.
     Fort(FortMetrics),
+    /// Compact fortification, stair-loop, and lookout measurements.
+    Outpost(OutpostMetrics),
     /// Underground topology, clearance, roof, and local-light measurements.
     Caves(CavesMetrics),
     /// Whole-world traversal, seam, and semantic-content measurements.
@@ -268,6 +270,37 @@ pub struct FortMetrics {
     pub independent_gate_routes: u32,
     /// Exposed surfaces whose exact supporting material is worked stone.
     pub worked_stone_surfaces: u32,
+}
+
+/// Exact deterministic measurements of one selected V3 Outpost plan.
+#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct OutpostMetrics {
+    /// Solid worked-stone voxels assigned to the complete fortification.
+    pub structure_voxels: u32,
+    /// Ordinary surfaces inside the ground-level courtyard.
+    pub courtyard_surfaces: u32,
+    /// Ordinary surfaces on the front, side, and rear wall walks.
+    pub wall_walk_surfaces: u32,
+    /// Ordinary surfaces belonging to the two enclosed climbing routes.
+    pub stair_surfaces: u32,
+    /// Exact independently climbable front towers.
+    pub tower_count: u32,
+    /// Nine-level loops authored across both towers.
+    pub stair_loops: u32,
+    /// Ordinary surfaces on the open lookout roofs.
+    pub lookout_surfaces: u32,
+    /// Clear ordinary surfaces across the front gate aperture.
+    pub gate_surfaces: u32,
+    /// Ordinary walker surfaces in the connected map network.
+    pub ordinary_surfaces: u32,
+    /// Distinct elevations in the ordinary network.
+    pub reachable_elevation_levels: u32,
+    /// Highest ordinary surface minus the lowest ordinary surface.
+    pub relief: Level,
+    /// Shortest ordinary path between the required actor anchors.
+    pub critical_route_steps: u32,
+    /// Independently usable tower climbing routes.
+    pub connected_tower_routes: u32,
 }
 
 /// Exact deterministic measurements of one selected V3 Caves plan.

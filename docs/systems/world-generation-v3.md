@@ -342,6 +342,34 @@ major structural failures reject the candidate rather than carving the topology,
 and a separately authored orientation-zero fallback passes the same checks. The
 fort remains generated static geometry, not a player construction system.
 
+### Outpost
+
+Outpost is an additive radius-12 `Single` recipe rather than a Fort tuning preset.
+Its authored structure occupies roughly the radius-11 interior, faces east in its
+canonical orientation, and keeps an open ground-datum courtyard behind one front
+gate. Worked-stone walls enclose the courtyard. The gate aperture remains clear for
+the canonical two-level-tall walker, carries a front walk at relative level `+7`,
+and joins side and rear wall walks at relative level `+11`; the outer parapet rises
+one further level without becoming an accidental ordinary route.
+
+Two mirrored front towers enclose independent compact stairs. Each stair turns after
+two ordinary treads and one enlarged three-cell landing. Three turns return to the
+same horizontal phase exactly nine levels above the start. Repeated phases are
+separate one-voxel slabs with implicit air between them, never solid columns that
+would bury lower loops. The first loop connects to the front walk at `+7`; the
+second reaches the upper tower exit at `+10` and the perimeter walk at `+11`.
+
+The towers continue through three total nine-level loops to open spotting decks at
+relative level `+27`. Each deck is slightly broader than its tower shell and retains
+an open stairwell over the final approach, so the roof neither buries the last treads
+nor reduces the transition aperture below the ordinary-walker contract. Exact graph
+validation proves exterior-to-courtyard access, both independent climbs, every walk
+connection, and both lookout decks. It also rejects a missing tread, an accidental
+wall shortcut, insufficient gate or stair-exit headroom, mismatched worked-stone
+structure membership, and any Outpost setting outside its radius-12 temperate
+contract. Outpost remains static generated geometry; it adds no door object,
+climbing rule, gameplay blocker, or construction mechanic.
+
 ### Composite
 
 Ring7 and Ring19 first resolve global routes, elevation profiles, liquid ports, and

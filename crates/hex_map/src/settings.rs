@@ -633,6 +633,8 @@ pub enum V3RecipeSettings {
     Forest(V3ForestSettings),
     /// A static worked-stone defensive structure.
     Fort(V3FortSettings),
+    /// A compact worked-stone outpost with enclosed climbing towers.
+    Outpost(V3OutpostSettings),
     /// An off-centre crater massif with descending lava.
     Volcano(V3VolcanoSettings),
     /// Dense woodland across a complete patch.
@@ -740,6 +742,10 @@ pub struct V3ForestSettings;
 /// Reserved Fort recipe payload.
 #[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub struct V3FortSettings;
+
+/// Reserved Outpost recipe payload.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct V3OutpostSettings;
 
 /// A stable name and semantic overlay kind.
 #[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -1883,6 +1889,7 @@ const fn ring19_recipe_name(recipe: &V3RecipeSettings) -> &'static str {
         V3RecipeSettings::Waterfall(_) => "Waterfall",
         V3RecipeSettings::Forest(_) => "Forest",
         V3RecipeSettings::Fort(_) => "Fort",
+        V3RecipeSettings::Outpost(_) => "Outpost",
         V3RecipeSettings::Volcano(_) => "Volcano",
         V3RecipeSettings::DeepForest(_) => "DeepForest",
         V3RecipeSettings::Prairie(_) => "Prairie",
@@ -1952,6 +1959,17 @@ fn validate_v3_recipe(
             | V3RecipeSettings::Fort(_),
             _,
         ) => Err("V3 Waterfall, Forest, and Fort currently require TemperateGrassland".to_owned()),
+        (V3RecipeSettings::Outpost(_), V3EnvironmentSettings::TemperateGrassland)
+            if grid_radius == 12 =>
+        {
+            Ok(())
+        }
+        (V3RecipeSettings::Outpost(_), V3EnvironmentSettings::TemperateGrassland) => {
+            Err("V3 Outpost requires grid_radius exactly 12".to_owned())
+        }
+        (V3RecipeSettings::Outpost(_), _) => {
+            Err("V3 Outpost requires the TemperateGrassland environment".to_owned())
+        }
         (V3RecipeSettings::Volcano(settings), V3EnvironmentSettings::Volcanic) => {
             settings.validate(grid_radius)
         }
@@ -3851,6 +3869,18 @@ mod tests {
         assert!(
             validate_v3_recipe(&prairie, V3EnvironmentSettings::Frozen, 20).is_err(),
             "Prairie remains temperate-only"
+        );
+
+        let outpost = V3RecipeSettings::Outpost(V3OutpostSettings);
+        validate_v3_recipe(&outpost, V3EnvironmentSettings::TemperateGrassland, 12)
+            .expect("Outpost should validate in its temperate radius-12 world");
+        assert!(
+            validate_v3_recipe(&outpost, V3EnvironmentSettings::Rocky, 12).is_err(),
+            "Outpost remains temperate-only"
+        );
+        assert!(
+            validate_v3_recipe(&outpost, V3EnvironmentSettings::TemperateGrassland, 20).is_err(),
+            "the authored radius-11 fortification remains radius-12-only"
         );
     }
 

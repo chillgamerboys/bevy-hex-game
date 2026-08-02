@@ -58,6 +58,9 @@ pub(crate) fn construct_fragment(
         V3RecipeSettings::Fort(settings) => {
             fort::construct_patch(patch, settings, level_height, mode)
         }
+        V3RecipeSettings::Outpost(_) => Err(vec![composite_issue(
+            "Outpost is currently a Single-layout recipe",
+        )]),
         V3RecipeSettings::Caves(settings) => {
             caves::construct_patch(patch, settings, level_height, mode, cave_vegetation)
         }
@@ -138,6 +141,9 @@ pub(crate) fn validate_fragment(
                 fort::validate_fort_at_ground(plan, ground_level)
             })
         }
+        V3RecipeSettings::Outpost(_) => WorldValidation::Invalid(vec![composite_issue(
+            "Outpost is currently a Single-layout recipe",
+        )]),
         V3RecipeSettings::Caves(settings) => discard_metrics(
             caves::validate_caves_with_surface_sink(patch, fragment, settings, cave_vegetation),
         ),

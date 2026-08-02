@@ -707,6 +707,7 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
         V3RecipeSettings::Waterfall(_) => "Waterfall",
         V3RecipeSettings::Forest(_) => "Forest",
         V3RecipeSettings::Fort(_) => "Fort",
+        V3RecipeSettings::Outpost(_) => "Outpost",
         V3RecipeSettings::Volcano(_) => "Volcano",
         V3RecipeSettings::DeepForest(_) => "DeepForest",
         V3RecipeSettings::Prairie(_) => "Prairie",

@@ -60,9 +60,9 @@ pub use liquid_render::LiquidVisualTime;
 pub use procedural::{
     CavesMetrics as CavesReportMetrics, DeepForestMetrics as DeepForestReportMetrics,
     ForestMetrics as ForestReportMetrics, FortMetrics as FortReportMetrics, GenerationReport,
-    PrairieMetrics as PrairieReportMetrics, ProceduralRecipeMetrics, Ring19Metrics, Ring7Metrics,
-    TacticalMetrics, VolcanoMetrics as VolcanoReportMetrics,
-    WaterfallMetrics as WaterfallReportMetrics,
+    OutpostMetrics as OutpostReportMetrics, PrairieMetrics as PrairieReportMetrics,
+    ProceduralRecipeMetrics, Ring19Metrics, Ring7Metrics, TacticalMetrics,
+    VolcanoMetrics as VolcanoReportMetrics, WaterfallMetrics as WaterfallReportMetrics,
 };
 pub use settings::{
     BridgeSettings, CavesSettings, CrossingSettings, CubeCoord, DerivedHillsCrossing,
@@ -75,9 +75,9 @@ pub use settings::{
     Ring19RegionSettings, RiverSettings, SharedEdgeSettings, ShowcaseSettings, SkyIslandsSettings,
     TacticalSettings, TerrainSettings, V2EnvironmentSettings, V2HillsSettings, V2RecipeSettings,
     V3CavesSettings, V3DeepForestSettings, V3EnvironmentSettings, V3ForestSettings, V3FortSettings,
-    V3HillsSettings, V3LayoutSettings, V3MountainsSettings, V3OverlaySettings, V3PrairieSettings,
-    V3RecipeSettings, V3Ring19Settings, V3Ring7Settings, V3SkyIslandsSettings, V3VolcanoSettings,
-    V3WaterfallSettings, WalkerPortSettings, V3_RING19_REGION_COUNT,
+    V3HillsSettings, V3LayoutSettings, V3MountainsSettings, V3OutpostSettings, V3OverlaySettings,
+    V3PrairieSettings, V3RecipeSettings, V3Ring19Settings, V3Ring7Settings, V3SkyIslandsSettings,
+    V3VolcanoSettings, V3WaterfallSettings, WalkerPortSettings, V3_RING19_REGION_COUNT,
 };
 pub use voxel::{runs, Column, SubstanceRun, VoxelMap};
 

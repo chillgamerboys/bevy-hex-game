@@ -394,6 +394,7 @@ fn encode_recipe_settings(encoder: &mut FingerprintEncoder, recipe: &V3RecipeSet
             encoder.i32(settings.max_relief);
             encoder.u8(settings.grass_coverage_percent);
         }
+        V3RecipeSettings::Outpost(_) => encoder.tag(10),
     }
 }
 
@@ -1219,6 +1220,23 @@ mod tests {
             settings_fingerprint(12, 0.4, &forward).expect("the settings encode"),
             settings_fingerprint(12, 0.4, &reversed).expect("the settings encode")
         );
+    }
+
+    #[test]
+    fn outpost_uses_a_new_recipe_identity_without_retagging_fort() {
+        let mut fort = FingerprintEncoder::new();
+        encode_recipe_settings(
+            &mut fort,
+            &V3RecipeSettings::Fort(crate::settings::V3FortSettings),
+        );
+        let mut outpost = FingerprintEncoder::new();
+        encode_recipe_settings(
+            &mut outpost,
+            &V3RecipeSettings::Outpost(crate::settings::V3OutpostSettings),
+        );
+
+        assert_eq!(fort.bytes, 6_u8.to_le_bytes());
+        assert_eq!(outpost.bytes, 10_u8.to_le_bytes());
     }
 
     #[test]
