@@ -4,6 +4,7 @@
     "selector",
     "rules",
     "trajectory_contracts",
+    "spell_resolution_contracts",
     "contracts",
     "simulation",
     "app",
@@ -19,6 +20,7 @@
     "selector",
     "rules",
     "trajectory_contracts",
+    "spell_resolution_contracts",
     "contracts",
     "simulation",
     "app",
@@ -76,6 +78,57 @@
         "ci",
         "--profile",
         "gameplay-trajectory"
+      ]
+    },
+    "spell_resolution_contracts": {
+      "description": "Exact non-UI spell impact, area resolution, settlement, authority, and real terrain-protocol seams.",
+      "preflight_command": [
+        "cargo",
+        "nextest",
+        "run",
+        "--package",
+        "hex_core",
+        "--package",
+        "hex_assets",
+        "--package",
+        "hex_units",
+        "--package",
+        "hex_combat_core",
+        "--package",
+        "hex_combat",
+        "--lib",
+        "--test",
+        "contracts",
+        "--cargo-profile",
+        "ci",
+        "--profile",
+        "gameplay-spell-resolution"
+      ],
+      "command": [
+        "cargo",
+        "nextest",
+        "run",
+        "--package",
+        "hex_map",
+        "--test",
+        "contracts",
+        "--cargo-profile",
+        "ci",
+        "--profile",
+        "gameplay-spell-resolution-map"
+      ],
+      "postflight_command": [
+        "cargo",
+        "nextest",
+        "run",
+        "--package",
+        "hex_game",
+        "--test",
+        "spell_resolution",
+        "--cargo-profile",
+        "ci",
+        "--profile",
+        "gameplay-spell-resolution-composition"
       ]
     },
     "contracts": {
@@ -292,6 +345,9 @@
       ]
     }
   },
+  "waiver_manifests": [
+    ".config/test-waivers/spell-resolution-wave.json"
+  ],
   "rules": [
     {
       "name": "scope-routing-contract",
@@ -306,6 +362,7 @@
       "patterns": [
         ".config/test-scopes.json",
         ".config/nextest.toml",
+        ".config/test-waivers/**",
         "tools/check_deprecated_ui_terms.py",
         "tools/gameplay_scope.py",
         "tools/test_scope.py",

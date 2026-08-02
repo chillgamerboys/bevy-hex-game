@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "name": "spell-resolution-wave",
+  "description": "One-wave maintainer waiver replacing full, app/UI, simulation, visual, map-corpus, and residual gates with exact non-UI spell-resolution evidence.",
+  "concerns": [
+    "selector",
+    "trajectory_contracts",
+    "spell_resolution_contracts",
+    "clippy",
+    "docs",
+    "shipping"
+  ],
+  "allowed_patterns": [
+    ".config/nextest.toml",
+    ".config/test-scopes.json",
+    ".config/test-waivers/spell-resolution-wave.json",
+    ".github/workflows/ci.yaml",
+    "assets/config/spells.ron",
+    "crates/hex_assets/src/content_index.rs",
+    "crates/hex_assets/src/lattices.rs",
+    "crates/hex_assets/src/spells.rs",
+    "crates/hex_combat/**",
+    "crates/hex_combat_core/src/authority.rs",
+    "crates/hex_game/Cargo.toml",
+    "crates/hex_game/src/casting/preview.rs",
+    "crates/hex_game/src/screens/creator.rs",
+    "crates/hex_game/tests/spell_resolution.rs",
+    "crates/hex_units/**",
+    "docs/contracts.md",
+    "docs/development/gameplay-testing.md",
+    "docs/development/parallel-development.md",
+    "docs/planning/roadmap.md",
+    "docs/planning/spell-resolution-wave.md",
+    "docs/planning/status.md",
+    "docs/systems/casting.md",
+    "tools/test_scope.py",
+    "tools/test_test_scope.py"
+  ]
+}

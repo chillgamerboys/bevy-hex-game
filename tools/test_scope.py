@@ -22,6 +22,14 @@ from typing import Any, Iterable
 
 REPOSITORY_ROOT = pathlib.Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = REPOSITORY_ROOT / ".config" / "test-scopes.json"
+WAIVER_DIRECTORY = ".config/test-waivers/"
+WAIVER_KEYS = {
+    "version",
+    "name",
+    "description",
+    "concerns",
+    "allowed_patterns",
+}
 
 
 class ScopeConfigurationError(ValueError):
@@ -46,6 +54,7 @@ class ScopeDecision:
     matched_rules: tuple[str, ...]
     reasons: tuple[str, ...]
     unknown_files: tuple[str, ...]
+    waiver: str | None
 
     def as_dict(self, all_concerns: Iterable[str]) -> dict[str, Any]:
         """Return stable machine-readable output."""
@@ -58,6 +67,7 @@ class ScopeDecision:
             "matched_rules": list(self.matched_rules),
             "reasons": list(self.reasons),
             "unknown_files": list(self.unknown_files),
+            "waiver": self.waiver,
             "concerns": {
                 concern: concern in selected for concern in all_concerns
             },
@@ -99,6 +109,27 @@ def load_config(path: pathlib.Path = DEFAULT_CONFIG) -> dict[str, Any]:
         )
     if not isinstance(rules, list) or not rules:
         raise ScopeConfigurationError("rules must be a non-empty list")
+
+    waiver_manifests = raw.get("waiver_manifests")
+    if not isinstance(waiver_manifests, list) or not waiver_manifests:
+        raise ScopeConfigurationError(
+            "waiver_manifests must contain approved repository-relative paths"
+        )
+    if (
+        not all(
+            isinstance(path, str)
+            and path.startswith(WAIVER_DIRECTORY)
+            and path.endswith(".json")
+            and pathlib.PurePosixPath(path).as_posix() == path
+            and ".." not in pathlib.PurePosixPath(path).parts
+            for path in waiver_manifests
+        )
+        or len(set(waiver_manifests)) != len(waiver_manifests)
+    ):
+        raise ScopeConfigurationError(
+            "waiver_manifests must be unique safe JSON paths under "
+            f"{WAIVER_DIRECTORY}"
+        )
 
     partition_checks = raw.get("partition_checks", {})
     if not isinstance(partition_checks, dict):
@@ -231,7 +262,192 @@ def _matches(path: str, patterns: Iterable[str]) -> bool:
     return any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)
 
 
-def classify(paths: Iterable[str], config: dict[str, Any]) -> ScopeDecision:
+def _full_decision(
+    decision: ScopeDecision,
+    all_concerns: tuple[str, ...],
+    matched_rule: str,
+    reason: str,
+) -> ScopeDecision:
+    """Return an explicit fail-closed decision while retaining its evidence."""
+
+    return ScopeDecision(
+        changed_files=decision.changed_files,
+        concerns=all_concerns,
+        full=True,
+        code=True,
+        matched_rules=tuple(sorted((*decision.matched_rules, matched_rule))),
+        reasons=tuple(sorted((*decision.reasons, reason))),
+        unknown_files=decision.unknown_files,
+        waiver=None,
+    )
+
+
+def _load_waiver(
+    path: pathlib.Path,
+    manifest_path: str,
+    all_concerns: tuple[str, ...],
+) -> dict[str, Any]:
+    """Load one exact waiver manifest or reject it as unsafe."""
+
+    try:
+        waiver = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ScopeConfigurationError(
+            f"cannot load waiver {manifest_path}: {error}"
+        ) from error
+    if not isinstance(waiver, dict) or set(waiver) != WAIVER_KEYS:
+        raise ScopeConfigurationError(
+            f"waiver {manifest_path} must define exactly {sorted(WAIVER_KEYS)}"
+        )
+    if waiver.get("version") != 1:
+        raise ScopeConfigurationError(f"waiver {manifest_path} version must be 1")
+    name = waiver.get("name")
+    description = waiver.get("description")
+    concerns = waiver.get("concerns")
+    patterns = waiver.get("allowed_patterns")
+    if (
+        not isinstance(name, str)
+        or not name
+        or name != pathlib.PurePosixPath(manifest_path).stem
+        or not isinstance(description, str)
+        or not description
+    ):
+        raise ScopeConfigurationError(
+            f"waiver {manifest_path} needs a matching name and description"
+        )
+    if (
+        not isinstance(concerns, list)
+        or not concerns
+        or not all(isinstance(concern, str) for concern in concerns)
+        or len(set(concerns)) != len(concerns)
+        or set(concerns) - set(all_concerns)
+        or "selector" not in concerns
+    ):
+        raise ScopeConfigurationError(
+            f"waiver {manifest_path} has unknown, duplicate, or unsafe concerns"
+        )
+    if (
+        not isinstance(patterns, list)
+        or not patterns
+        or not all(
+            isinstance(pattern, str)
+            and pattern
+            and not pathlib.PurePosixPath(pattern).is_absolute()
+            and ".." not in pathlib.PurePosixPath(pattern).parts
+            for pattern in patterns
+        )
+        or len(set(patterns)) != len(patterns)
+        or not _matches(manifest_path, patterns)
+    ):
+        raise ScopeConfigurationError(
+            f"waiver {manifest_path} has unsafe patterns or does not admit itself"
+        )
+    return waiver
+
+
+def _apply_waiver(
+    decision: ScopeDecision,
+    config: dict[str, Any],
+    repository_root: pathlib.Path,
+) -> ScopeDecision:
+    """Apply one tracked, self-declared, exact-diff waiver or fail closed."""
+
+    all_concerns = tuple(config["all_concerns"])
+    configured = set(config["waiver_manifests"])
+    changed_candidates = tuple(
+        path
+        for path in decision.changed_files
+        if path.startswith(WAIVER_DIRECTORY)
+    )
+    if not changed_candidates:
+        return decision
+    if len(changed_candidates) != 1 or changed_candidates[0] not in configured:
+        return _full_decision(
+            decision,
+            all_concerns,
+            "fail-closed-unknown-waiver",
+            "Unknown or multiple waiver manifests select the full gate.",
+        )
+
+    manifest_path = changed_candidates[0]
+    try:
+        tracked = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", "--", manifest_path],
+            cwd=repository_root,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        tracked = None
+    if tracked is None or tracked.returncode != 0:
+        return _full_decision(
+            decision,
+            all_concerns,
+            "fail-closed-untracked-waiver",
+            "An untracked waiver manifest cannot narrow validation.",
+        )
+
+    try:
+        waiver = _load_waiver(
+            repository_root / manifest_path,
+            manifest_path,
+            all_concerns,
+        )
+    except ScopeConfigurationError as error:
+        return _full_decision(
+            decision,
+            all_concerns,
+            "fail-closed-invalid-waiver",
+            str(error),
+        )
+
+    if decision.unknown_files:
+        return _full_decision(
+            decision,
+            all_concerns,
+            "fail-closed-waiver-unknown-path",
+            "A waiver cannot admit paths unknown to ordinary scope routing.",
+        )
+    outside = tuple(
+        path
+        for path in decision.changed_files
+        if not _matches(path, waiver["allowed_patterns"])
+    )
+    if outside:
+        return _full_decision(
+            decision,
+            all_concerns,
+            "fail-closed-waiver-outside-allowlist",
+            "Changed paths outside the waiver allowlist select the full gate: "
+            + ", ".join(outside),
+        )
+
+    name = waiver["name"]
+    selected = set(waiver["concerns"])
+    return ScopeDecision(
+        changed_files=decision.changed_files,
+        concerns=tuple(
+            concern for concern in all_concerns if concern in selected
+        ),
+        full=False,
+        code=True,
+        matched_rules=tuple(
+            sorted((*decision.matched_rules, f"waiver:{name}"))
+        ),
+        reasons=(
+            f"Tracked one-wave waiver {name}: {waiver['description']}",
+        ),
+        unknown_files=(),
+        waiver=name,
+    )
+
+
+def classify(
+    paths: Iterable[str],
+    config: dict[str, Any],
+    repository_root: pathlib.Path = REPOSITORY_ROOT,
+) -> ScopeDecision:
     """Classify changed paths, failing closed to the full gate."""
 
     changed_files = normalize_paths(paths)
@@ -245,6 +461,7 @@ def classify(paths: Iterable[str], config: dict[str, Any]) -> ScopeDecision:
             matched_rules=("fail-closed-empty-diff",),
             reasons=("No changed paths were available; selecting the full gate.",),
             unknown_files=(),
+            waiver=None,
         )
 
     selected: set[str] = set()
@@ -280,7 +497,7 @@ def classify(paths: Iterable[str], config: dict[str, Any]) -> ScopeDecision:
 
     if full:
         selected.update(all_concerns)
-    return ScopeDecision(
+    decision = ScopeDecision(
         changed_files=changed_files,
         concerns=tuple(
             concern for concern in all_concerns if concern in selected
@@ -290,11 +507,33 @@ def classify(paths: Iterable[str], config: dict[str, Any]) -> ScopeDecision:
         matched_rules=tuple(sorted(matched_rules)),
         reasons=tuple(sorted(reasons)),
         unknown_files=tuple(unknown_files),
+        waiver=None,
     )
+    return _apply_waiver(decision, config, repository_root)
 
 
 def force_full(decision: ScopeDecision, all_concerns: Iterable[str]) -> ScopeDecision:
-    """Promote a decision to the complete integration gate."""
+    """Promote integration unless an exact tracked one-wave waiver is active."""
+
+    if decision.waiver is not None:
+        return ScopeDecision(
+            changed_files=decision.changed_files,
+            concerns=decision.concerns,
+            full=False,
+            code=True,
+            matched_rules=decision.matched_rules,
+            reasons=tuple(
+                sorted(
+                    (
+                        *decision.reasons,
+                        "The exact tracked one-wave waiver also applies to this "
+                        "integration push.",
+                    )
+                )
+            ),
+            unknown_files=decision.unknown_files,
+            waiver=decision.waiver,
+        )
 
     return ScopeDecision(
         changed_files=decision.changed_files,
@@ -311,6 +550,7 @@ def force_full(decision: ScopeDecision, all_concerns: Iterable[str]) -> ScopeDec
             )
         ),
         unknown_files=decision.unknown_files,
+        waiver=None,
     )
 
 
@@ -348,6 +588,7 @@ def write_github_outputs(
     lines = [
         f"code={str(decision.code).lower()}",
         f"full={str(decision.full).lower()}",
+        f"waiver={decision.waiver or ''}",
     ]
     for concern, enabled in output["concerns"].items():
         lines.append(f"{concern}={str(enabled).lower()}")

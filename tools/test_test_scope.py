@@ -65,6 +65,41 @@ class TestScopeTests(unittest.TestCase):
             (ROOT / ".config" / "test-scopes.json").read_text(encoding="utf-8")
         )
 
+    def classify_with_waiver(
+        self,
+        *paths: str,
+        waiver: dict | str | None = None,
+        tracked: bool = True,
+        remove_after_track: bool = False,
+    ):
+        """Classify against an isolated tracked or deliberately invalid waiver."""
+
+        manifest_path = self.config["waiver_manifests"][0]
+        if waiver is None:
+            waiver = json.loads(
+                (ROOT / manifest_path).read_text(encoding="utf-8")
+            )
+        rendered = waiver if isinstance(waiver, str) else json.dumps(waiver)
+        with tempfile.TemporaryDirectory() as directory:
+            repository = pathlib.Path(directory)
+            destination = repository / manifest_path
+            destination.parent.mkdir(parents=True)
+            destination.write_text(rendered, encoding="utf-8")
+            subprocess.run(
+                ["git", "init", "--quiet"],
+                cwd=repository,
+                check=True,
+            )
+            if tracked:
+                subprocess.run(
+                    ["git", "add", "--", manifest_path],
+                    cwd=repository,
+                    check=True,
+                )
+            if remove_after_track:
+                destination.unlink()
+            return test_scope.classify(paths, self.config, repository)
+
     def test_lattice_change_selects_rules_contracts_and_simulation(self) -> None:
         decision = self.classify("crates/hex_lattice/src/cast.rs")
         self.assertFalse(decision.full)
@@ -280,6 +315,136 @@ class TestScopeTests(unittest.TestCase):
         self.assertTrue(decision.full)
         self.assertTrue(decision.code)
 
+    def test_tracked_one_wave_waiver_selects_only_exact_non_ui_evidence(
+        self,
+    ) -> None:
+        manifest = self.config["waiver_manifests"][0]
+        decision = self.classify_with_waiver(
+            manifest,
+            ".config/test-scopes.json",
+            "crates/hex_combat/src/spell_resolution.rs",
+            "crates/hex_units/src/terrain_reconciliation.rs",
+            "crates/hex_game/tests/spell_resolution.rs",
+            "docs/development/gameplay-testing.md",
+        )
+
+        self.assertFalse(decision.full)
+        self.assertEqual(decision.waiver, "spell-resolution-wave")
+        self.assertEqual(
+            decision.concerns,
+            (
+                "selector",
+                "trajectory_contracts",
+                "spell_resolution_contracts",
+                "clippy",
+                "docs",
+                "shipping",
+            ),
+        )
+        for omitted in (
+            "app",
+            "simulation",
+            "map_unit",
+            "map_generation",
+            "map_contracts",
+            "residual",
+        ):
+            self.assertNotIn(omitted, decision.concerns)
+
+    def test_waiver_is_inactive_when_its_manifest_is_not_in_the_diff(self) -> None:
+        decision = self.classify(
+            ".config/test-scopes.json",
+            "crates/hex_combat/src/spell_resolution.rs",
+        )
+
+        self.assertTrue(decision.full)
+        self.assertIsNone(decision.waiver)
+
+    def test_untracked_or_missing_waiver_manifest_fails_closed(self) -> None:
+        manifest = self.config["waiver_manifests"][0]
+        for tracked, remove_after_track, marker in (
+            (False, False, "fail-closed-untracked-waiver"),
+            (True, True, "fail-closed-invalid-waiver"),
+        ):
+            with self.subTest(marker=marker):
+                decision = self.classify_with_waiver(
+                    manifest,
+                    "crates/hex_combat/src/spell_resolution.rs",
+                    tracked=tracked,
+                    remove_after_track=remove_after_track,
+                )
+                self.assertTrue(decision.full)
+                self.assertIsNone(decision.waiver)
+                self.assertIn(marker, decision.matched_rules)
+
+    def test_malformed_or_unknown_waiver_content_fails_closed(self) -> None:
+        manifest = self.config["waiver_manifests"][0]
+        unknown = json.loads(
+            (ROOT / manifest).read_text(encoding="utf-8")
+        )
+        unknown["concerns"].append("unknown_concern")
+        unhashable_concern = json.loads(
+            (ROOT / manifest).read_text(encoding="utf-8")
+        )
+        unhashable_concern["concerns"] = [{}]
+        unhashable_pattern = json.loads(
+            (ROOT / manifest).read_text(encoding="utf-8")
+        )
+        unhashable_pattern["allowed_patterns"] = [{}]
+        for waiver in (
+            "{",
+            unknown,
+            unhashable_concern,
+            unhashable_pattern,
+        ):
+            with self.subTest(waiver=waiver):
+                decision = self.classify_with_waiver(
+                    manifest,
+                    "crates/hex_combat/src/spell_resolution.rs",
+                    waiver=waiver,
+                )
+                self.assertTrue(decision.full)
+                self.assertIsNone(decision.waiver)
+                self.assertIn(
+                    "fail-closed-invalid-waiver", decision.matched_rules
+                )
+
+    def test_waiver_cannot_admit_out_of_allowlist_or_unknown_paths(self) -> None:
+        manifest = self.config["waiver_manifests"][0]
+        outside = self.classify_with_waiver(
+            manifest,
+            "crates/hex_combat/src/spell_resolution.rs",
+            "crates/hex_ui/src/lib.rs",
+        )
+        self.assertTrue(outside.full)
+        self.assertIn(
+            "fail-closed-waiver-outside-allowlist", outside.matched_rules
+        )
+
+        waiver = json.loads(
+            (ROOT / manifest).read_text(encoding="utf-8")
+        )
+        waiver["allowed_patterns"].append("unexpected/**")
+        unknown = self.classify_with_waiver(
+            manifest,
+            "crates/hex_combat/src/spell_resolution.rs",
+            "unexpected/new-system.rs",
+            waiver=waiver,
+        )
+        self.assertTrue(unknown.full)
+        self.assertIn("unexpected/new-system.rs", unknown.unknown_files)
+        self.assertIn(
+            "fail-closed-waiver-unknown-path", unknown.matched_rules
+        )
+
+    def test_unknown_waiver_manifest_path_fails_closed(self) -> None:
+        decision = self.classify(
+            ".config/test-waivers/not-approved.json",
+            "crates/hex_combat/src/spell_resolution.rs",
+        )
+        self.assertTrue(decision.full)
+        self.assertIn("fail-closed-unknown-waiver", decision.matched_rules)
+
     def test_empty_command_arrays_are_rejected_without_a_traceback(self) -> None:
         cases = (
             (
@@ -319,6 +484,16 @@ class TestScopeTests(unittest.TestCase):
         self.assert_cli_rejects_config(
             config,
             "documentation_only must be a boolean",
+        )
+
+    def test_invalid_waiver_manifest_config_is_rejected_without_a_traceback(
+        self,
+    ) -> None:
+        config = self.fresh_config()
+        config["waiver_manifests"] = [{}]
+        self.assert_cli_rejects_config(
+            config,
+            "waiver_manifests must be unique safe JSON paths",
         )
 
     def test_mixed_diff_unions_concerns(self) -> None:
@@ -390,6 +565,22 @@ class TestScopeTests(unittest.TestCase):
         self.assertTrue(decision.code)
         self.assertEqual(decision.concerns, tuple(self.config["all_concerns"]))
         self.assertIn("forced-full-integration", decision.matched_rules)
+
+    def test_exact_one_wave_waiver_remains_narrow_on_its_integration_push(
+        self,
+    ) -> None:
+        manifest = self.config["waiver_manifests"][0]
+        waived = self.classify_with_waiver(
+            manifest,
+            "crates/hex_combat/src/spell_resolution.rs",
+        )
+        decision = test_scope.force_full(
+            waived, self.config["all_concerns"]
+        )
+
+        self.assertFalse(decision.full)
+        self.assertEqual(decision.concerns, waived.concerns)
+        self.assertEqual(decision.waiver, "spell-resolution-wave")
 
     def test_rules_command_has_an_exact_package_graph(self) -> None:
         command = self.config["concerns"]["rules"]["command"]
@@ -526,6 +717,7 @@ class TestScopeTests(unittest.TestCase):
                 "selector",
                 "rules",
                 "trajectory_contracts",
+                "spell_resolution_contracts",
                 "contracts",
                 "simulation",
                 "app",
@@ -581,6 +773,119 @@ class TestScopeTests(unittest.TestCase):
         self.assertIn('path = "junit.xml"', nextest.split(
             "[profile.gameplay-trajectory.junit]", maxsplit=1
         )[1])
+
+    def test_spell_resolution_concern_uses_exact_non_ui_targets(self) -> None:
+        definition = self.config["concerns"]["spell_resolution_contracts"]
+        domain = definition["preflight_command"]
+        map_seams = definition["command"]
+        composition = definition["postflight_command"]
+
+        for command in (domain, map_seams, composition):
+            self.assertEqual(command[:3], ["cargo", "nextest", "run"])
+        packages = [
+            domain[index + 1]
+            for index, value in enumerate(domain)
+            if value == "--package"
+        ]
+        self.assertEqual(
+            packages,
+            [
+                "hex_core",
+                "hex_assets",
+                "hex_units",
+                "hex_combat_core",
+                "hex_combat",
+            ],
+        )
+        self.assertIn("--lib", domain)
+        self.assertEqual(domain[domain.index("--test") + 1], "contracts")
+        self.assertEqual(
+            domain[domain.index("--profile") + 1],
+            "gameplay-spell-resolution",
+        )
+        self.assertEqual(
+            map_seams[map_seams.index("--package") + 1], "hex_map"
+        )
+        self.assertNotIn("--lib", map_seams)
+        self.assertEqual(
+            map_seams[map_seams.index("--test") + 1], "contracts"
+        )
+        self.assertEqual(
+            map_seams[map_seams.index("--profile") + 1],
+            "gameplay-spell-resolution-map",
+        )
+        self.assertEqual(
+            composition[composition.index("--package") + 1], "hex_game"
+        )
+        self.assertNotIn("--lib", composition)
+        self.assertEqual(
+            composition[composition.index("--test") + 1],
+            "spell_resolution",
+        )
+        self.assertEqual(
+            composition[composition.index("--profile") + 1],
+            "gameplay-spell-resolution-composition",
+        )
+        rendered = " ".join((*domain, *map_seams, *composition))
+        for forbidden in (
+            "--workspace",
+            "--all-features",
+            "hex_ui",
+            "gameplay_app",
+            "simulation",
+        ):
+            self.assertNotIn(forbidden, rendered)
+
+        nextest = (ROOT / ".config" / "nextest.toml").read_text(
+            encoding="utf-8"
+        )
+        profile = nextest.split(
+            "[profile.gameplay-spell-resolution]", maxsplit=1
+        )[1].split("[profile.gameplay-spell-resolution.junit]", maxsplit=1)[0]
+        for required in (
+            "terrain_impact::tests::",
+            "impact_round_trips_reflects_and_has_complete_fingerprint_fields",
+            "terrain_occupancy::tests::",
+            "terrain_reconciliation::",
+            "external_resolution_holds_turn_and_outcome_between_area_answers",
+            "spell_resolution::tests::",
+            "a_damage_cast_on_a_downed_unit_is_refused_before_payment",
+        ):
+            self.assertIn(required, profile)
+        for forbidden in (
+            "package(hex_ui)",
+            "binary(gameplay_app)",
+            "binary(simulation)",
+            "procedural",
+        ):
+            self.assertNotIn(forbidden, profile)
+        self.assertIn(
+            'path = "junit.xml"',
+            nextest.split(
+                "[profile.gameplay-spell-resolution.junit]", maxsplit=1
+            )[1],
+        )
+        map_profile = nextest.split(
+            "[profile.gameplay-spell-resolution-map]", maxsplit=1
+        )[1].split(
+            "[profile.gameplay-spell-resolution-map.junit]", maxsplit=1
+        )[0]
+        self.assertIn(
+            "terrain_protocol_orders_reserved_phases_before_perception",
+            map_profile,
+        )
+        self.assertIn(
+            "overkill_is_capped_and_empty_voxels_report_no_material",
+            map_profile,
+        )
+        self.assertNotIn("procedural", map_profile)
+        composition_profile = nextest.split(
+            "[profile.gameplay-spell-resolution-composition]", maxsplit=1
+        )[1].split(
+            "[profile.gameplay-spell-resolution-composition.junit]",
+            maxsplit=1,
+        )[0]
+        self.assertIn("package(hex_game) & kind(test)", composition_profile)
 
     def test_local_skill_checks_selection_and_splits_portably(self) -> None:
         skill = (ROOT / ".claude" / "skills" / "test-local" / "SKILL.md").read_text(
@@ -670,6 +975,49 @@ class TestScopeTests(unittest.TestCase):
         self.assertNotIn("tools/test_scope.py run app", gameplay_job.split(
             "- name: Trajectory and volume contracts", maxsplit=1
         )[1].split("- name: Gameplay simulation", maxsplit=1)[0])
+
+    def test_ci_publishes_and_runs_the_spell_resolution_waiver_wedge(
+        self,
+    ) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "ci.yaml").read_text(
+            encoding="utf-8"
+        )
+        gameplay_job = workflow.split("\n  gameplay:\n", maxsplit=1)[1].split(
+            "\n  build:\n", maxsplit=1
+        )[0]
+        self.assertIn(
+            "waiver: ${{ steps.filter.outputs.waiver }}", workflow
+        )
+        self.assertIn(
+            "spell_resolution_contracts: "
+            "${{ steps.filter.outputs.spell_resolution_contracts }}",
+            workflow,
+        )
+        self.assertIn(
+            "tools/test_scope.py run spell_resolution_contracts", gameplay_job
+        )
+        self.assertIn(
+            "target/nextest/gameplay-spell-resolution/junit.xml",
+            gameplay_job,
+        )
+        self.assertIn(
+            "target/nextest/gameplay-spell-resolution-map/junit.xml",
+            gameplay_job,
+        )
+        self.assertIn(
+            "target/nextest/gameplay-spell-resolution-composition/junit.xml",
+            gameplay_job,
+        )
+        spell_step = gameplay_job.split(
+            "- name: Spell resolution contracts", maxsplit=1
+        )[1].split("- name: Gameplay simulation", maxsplit=1)[0]
+        for forbidden in (
+            "tools/test_scope.py run app",
+            "tools/test_scope.py run simulation",
+            "tools/test_scope.py run map_",
+            "tools/test_scope.py run residual",
+        ):
+            self.assertNotIn(forbidden, spell_step)
 
     def test_gameplay_scope_wrapper_preserves_the_old_entry_point(self) -> None:
         wrapper = (ROOT / "tools" / "gameplay_scope.py").read_text(
