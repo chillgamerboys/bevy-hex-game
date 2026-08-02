@@ -364,10 +364,11 @@ Gameplay and map tests are partitioned by concern in
 evidence comes from rules/contracts/simulation/app data, while map logic uses
 unit/generation/publication data and retains its existing visual criteria. The scoped
 gameplay visual run contains exactly ten reviewed presentation frames.
-Ordinary PRs run only the selector-chosen producer/consumer closure; application/UI
-tests and visual walks are not substitutes for pure contract or trajectory evidence.
-Unknown/unclassified paths, pushes to `dev`/`main`, and final wave/release candidates
-still promote to the complete gate.
+Ordinary PRs run only the selector-chosen producer/consumer closure; trajectory-only
+changes use their dedicated pure/direct-consumer concern without application/UI tests.
+The combined terrain-impact source, unknown/unclassified paths, command-manifest or CI
+changes, pushes to `dev`/`main`, and final wave/release candidates still promote to the
+complete gate.
 Standalone audits: `/audit-diff`, `/audit-silent-failures`, `/update-docs`,
 `/visual-walk` (the scripted capture walk — audit-pr's Step 2.5; the agent
 reads the frames, and the human walk still owns motion and taste).

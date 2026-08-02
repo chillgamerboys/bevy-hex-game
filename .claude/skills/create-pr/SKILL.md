@@ -148,24 +148,27 @@ ${LINES_STAT}
 - [ ] Residual workspace tests and doctests (only when the scope decision selects `residual`)
 - [ ] `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features` (unless Markdown-only)
 - [ ] `cargo build --package hex_game --release` (when the scope decision selects `shipping`; CI builds it on all three platforms)
-- [ ] Structural UI oracle and scoped Bevy image-target walk green, or N/A because no app/UI/rendered runtime concern is selected
+- [ ] Structural UI oracle and scoped Bevy image-target walk green, or exact-head N/A because the reviewed diff has no rendered runtime concern
 
 ### Manual runtime sign-off
 
 <!--
-Gameplay runtime changes may be marked ready only after a named human runs the
-release-shaped build at the exact final PR head. Any later push invalidates this
-sign-off. Source lanes targeting wave/* defer this evidence to the combined wave PR.
+Gameplay runtime-surface changes may be marked ready only after a named human runs the
+release-shaped build at the exact final PR head. A named maintainer may instead record
+an exact-head N/A waiver when the reviewed change has no rendered presentation,
+navigation, movement, persistence, or visual-script surface. Any later push invalidates
+either result. Source lanes targeting wave/* defer this evidence to the combined wave
+PR.
 -->
 
 - Agent-operated Bevy visual review:
 
 Manual runtime result: <PASS, BLOCKED, or N/A>
-Manual runtime commit: <full 40-character PR head SHA or N/A>
-Manual runtime reviewer: <named human or N/A>
-Manual runtime date: <YYYY-MM-DD or N/A>
-Manual runtime route: <affected scenarios and failure paths exercised, or why N/A>
-Manual runtime findings/waiver: <none, findings, explicit maintainer waiver, or N/A>
+Manual runtime commit: <full 40-character PR head SHA for PASS/waiver, or N/A only when no runtime path changed>
+Manual runtime reviewer: <named human for PASS; @maintainer-login for waiver; N/A only when no runtime path changed>
+Manual runtime date: <YYYY-MM-DD for PASS/waiver, or N/A only when no runtime path changed>
+Manual runtime route: <affected route for PASS; exact non-rendered reason for waiver; N/A only when no runtime path changed>
+Manual runtime findings/waiver: <findings or explicit maintainer waiver; N/A only when no runtime path changed>
 
 ### Evidence by concern
 
@@ -186,7 +189,7 @@ sky, a wrong speed unit just looks slightly off, and a tile whose transform
 disagrees with its span floats or sinks. All of them pass CI. The automated walk
 (receipt key 5_visual_walk) catches the renders-nothing/renders-broken class and
 lists layout findings; motion, feel, and taste still need human eyes — /promote
-gates on the human box, never the automated one.
+gates on the structured exact-head human PASS fields, never the automated tier.
 
 If the change touches rendering, movement, persistence, or state transitions, walk it
 at the exact candidate head: splash -> Main Menu -> Campaign slot 1 -> Party Trial,
@@ -211,8 +214,9 @@ necessary — it is worth a sentence so the people who depend on them know.
 ```
 
 The Checks list is what `/audit-pr` verifies mechanically, including a policy-valid
-N/A for the automated visual walk (receipt key `5_visual_walk`) when the scope has no
-rendered runtime concern. The named human fields belong to the operator; stills are
+N/A for the automated visual walk (receipt key `5_visual_walk`) when the reviewed diff
+has no rendered runtime concern. This applicability decision is independent of a
+fail-closed automated `app` selection. The named human fields belong to the operator; stills are
 not play, and motion, feel, and taste still need a human at the window when runtime
 sign-off applies.
 

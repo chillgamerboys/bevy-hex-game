@@ -12,10 +12,11 @@ it CAN see the window — the game photographs itself along a scripted
 walk and the agent reads every frame, so renders-nothing and
 renders-broken failures (blue window, black sky, missing panel, dead
 screen transition) are mechanical failures here, not surprises for a
-human. What it still cannot judge is motion and taste: whether the
-thing that renders correctly also looks *good*. That stays the
-operator's, via the PR template's "a human ran the game and looked at
-it" checkbox, and is why `main` moves only by promotion.
+human. What it still cannot judge is motion and taste: whether the thing that renders
+correctly also looks *good*. That stays in the PR's structured exact-head human runtime
+evidence, and is why combined waves and `main` promotion require a human PASS. A
+verified maintainer may record N/A only for an ordinary feature diff with no rendered
+or runtime-interaction surface.
 
 ## Pre-flight: Require a PR
 
@@ -89,8 +90,9 @@ the suite expands; embedding them here would drift).
 
 **Decision:**
 - ✓ `test-full` returns all-green → proceed to Step 3. Its Phase 3
-  (visual walk) reports `manual — operator confirms`; that is not a
-  failure, and the receipt does not claim the walk happened.
+  reports either the operator's structured exact-head runtime evidence or an
+  exact-head N/A reason when the reviewed diff has no rendered/runtime surface;
+  the receipt does not claim a human walk happened.
 - ✗ Any step fails → **STOP**. Surface the failing suite/step and
   report back. Do not run Step 3 — a silent-failures audit on a
   partially-broken state conflates failures.

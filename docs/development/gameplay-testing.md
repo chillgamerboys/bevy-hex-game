@@ -114,12 +114,12 @@ edit-loop scope.
 
 The selector unions concerns across changed files. A classified shared contract uses
 the smallest producer/consumer closure that can compile or exercise its authority;
-unclassified shared vocabulary, selector-engine or CI-topology changes, unclassified
+unclassified shared vocabulary, selector-command or CI-topology changes, unclassified
 world-owned paths, an unknown path, an invalid manifest, or an empty diff still fail
-closed to the complete gate. Routing-table changes are different from selector-engine
-changes: the former run the always-on selector unit suite plus representative rules and
-map closures, while changes to `tools/test_scope.py`, nextest configuration, workflows,
-or Cargo topology remain full. A narrow rules graph additionally runs:
+closed to the complete gate. The combined `.config/test-scopes.json` file contains
+both routing and executable commands, so every change to it stays full; selector
+regression-test-only changes run the dedicated `selector` concern. A narrow rules graph
+additionally runs:
 
 ```sh
 python3 tools/test_scope.py check-graph rules
@@ -136,13 +136,7 @@ Asset and animation changes do select the residual partition because their ownin
 inline tests live outside the four explicit gameplay targets. A concern may be
 omitted only when it cannot compile or exercise the changed authority.
 
-The terrain-resolution foundation is an explicit narrow seam. Changes to
-`hex_core::terrain_impact` select pure rules plus the real map producer contracts; a
-co-change to the map's phase configuration also selects map units. Changes confined
-to `hex_units::trajectories` or `hex_units::volumes` select renderer-free ECS contracts.
-Neither path selects deterministic combat simulation or application/UI tests, because
-those partitions cannot add authority evidence for value validation, geometry, or an
-empty reserved schedule phase. The focused edit-loop wedge is:
+The terrain-resolution foundation used this explicit review wedge:
 
 ```sh
 cargo test -p hex_core --lib terrain_impact::tests::
@@ -157,9 +151,30 @@ the installed `ApplyWorld → RefreshProjections → ReconcileActors → Consume
 perception` order and the real mixed material/air producer seam. They do not initialize
 `hex_game`, `hex_ui`, a renderer, or a map-generation corpus.
 
-Pull-request CI applies the selector directly and publishes the decision plus
-per-concern JUnit and timing evidence. Pushes to `dev` or `main` forcibly promote
-the decision to the complete integration gate, regardless of changed paths. Final
+The combined `hex_core::terrain_impact` file also owns the damaged-voxel projection
+consumed by map and application code, so future whole-file changes remain fail-closed
+until those authorities are split by file. That prevents a path-level exemption from
+silently skipping a real consumer.
+
+Changes confined to `hex_units::trajectories` or `hex_units::volumes` select the
+dedicated `trajectory_contracts` concern. Its one nextest profile runs the pure
+trajectory and volume unit modules; the dedicated volume contracts; two direct
+creation-resolution units; and the direct AI-legality, authoritative command, and game
+casting consumers. The current closure is 61 tests across `hex_units`, `hex_combat`,
+and the `hex_game` library:
+
+```sh
+python3 tools/test_scope.py run trajectory_contracts
+```
+
+It emits JUnit at `target/nextest/gameplay-trajectory/junit.xml`. It does not select
+`hex_ui`, the `gameplay_app` target, deterministic combat simulation, map generation,
+or residual workspace tests. Changes to broader unit or casting authority continue to
+use their broader producer/consumer closures.
+
+Pull-request CI applies the selector directly and publishes the decision plus timing
+evidence and JUnit for each nextest-backed concern. Pushes to `dev` or `main` forcibly
+promote the decision to the complete integration gate, regardless of changed paths. Final
 wave/release candidates likewise run the complete gate before the exact-head manual
 sign-off; unknown paths, invalid configuration, and empty diffs also fail closed to
 that same result.
@@ -314,13 +329,17 @@ remain unchanged.
 
 ## Manual runtime sign-off
 
-The automated Bevy visual walk, an agent frame review, and a named human
-playtest are distinct evidence. Gameplay runtime PRs record the human result in the
-structured PR fields together with the full final head SHA, reviewer, date, and exact
-route exercised. A later push makes that evidence stale. On a draft, the
+The automated Bevy visual walk, an agent frame review, and a named human playtest are
+distinct evidence. Gameplay runtime-surface PRs record the human PASS in the structured
+PR fields together with the full final head SHA, reviewer, date, and exact route
+exercised. When a conservative runtime classification has no rendered presentation,
+navigation, movement, persistence, or visual-script surface, a maintainer may instead
+record an exact-head N/A waiver. The waiver names that maintainer's GitHub login and its
+specific reason; the workflow requires the same maintain/admin account to trigger the
+check. A later push makes either form of evidence stale. On a draft, the
 `Current-head manual runtime sign-off` workflow may remain green because enforcement
-is deferred; that is not a PASS. The required check must validate the new played head
-before the PR can leave draft.
+is deferred; that is not a PASS or waiver. The required check must validate the new
+head before the PR can leave draft.
 
 Source-lane PRs targeting `wave/*` defer this gate because they are not independently
 shippable runtime candidates. The combined wave PR targeting `dev` must carry the
@@ -328,9 +347,11 @@ named human sign-off for its exact final head; merging a lane into a wave never
 inherits, substitutes for, or weakens that release gate.
 
 Draft PRs may omit the sign-off while implementation is moving. A gameplay PR may not
-be marked ready or merged with a placeholder, a blocked result, a different commit,
-or an agent named as the human reviewer. A maintainer waiver describes an
-infrastructure exception; it does not convert a known gameplay failure into a pass.
+be marked ready or merged with a placeholder, a blocked result, a different commit, or
+an agent named as the human reviewer. An N/A waiver is available only for a
+non-rendered change and only to a verified maintainer; it does not convert a known
+gameplay failure into a pass. Combined wave PRs and release promotions still require
+the named-human PASS.
 
 ## Anti-patterns
 

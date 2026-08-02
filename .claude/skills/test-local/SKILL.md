@@ -22,10 +22,16 @@ python3 tools/test_scope.py run clippy
 ```bash
 BASE=$(gh pr view --json baseRefName -q .baseRefName 2>/dev/null || \
   git rev-parse --abbrev-ref '@{upstream}' 2>/dev/null | sed 's#^[^/]*/##')
-python3 tools/test_scope.py plan --base "origin/${BASE:-dev}" --head HEAD
+python3 tools/test_scope.py plan --base "origin/${BASE:-dev}" --head HEAD || exit $?
 SELECTED=$(python3 tools/test_scope.py selected-tests \
-  --base "origin/${BASE:-dev}" --head HEAD)
-for concern in $SELECTED; do
+  --base "origin/${BASE:-dev}" --head HEAD) || exit $?
+REMAINING=$SELECTED
+while [ -n "$REMAINING" ]; do
+  concern=${REMAINING%% *}
+  case "$REMAINING" in
+    *" "*) REMAINING=${REMAINING#* } ;;
+    *) REMAINING= ;;
+  esac
   python3 tools/test_scope.py run "$concern" || exit $?
 done
 case " $SELECTED " in

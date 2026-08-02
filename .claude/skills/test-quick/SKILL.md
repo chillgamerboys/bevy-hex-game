@@ -32,7 +32,7 @@ First inspect and record the fail-closed decision:
 ```bash
 BASE=$(gh pr view --json baseRefName -q .baseRefName 2>/dev/null || \
   git rev-parse --abbrev-ref '@{upstream}' 2>/dev/null | sed 's#^[^/]*/##')
-python3 tools/test_scope.py plan --base "origin/${BASE:-dev}" --head HEAD
+python3 tools/test_scope.py plan --base "origin/${BASE:-dev}" --head HEAD || exit $?
 ```
 
 Then run the selected test concerns in canonical order:
@@ -40,8 +40,14 @@ Then run the selected test concerns in canonical order:
 ```bash
 BASE=$(gh pr view --json baseRefName -q .baseRefName 2>/dev/null || \
   git rev-parse --abbrev-ref '@{upstream}' 2>/dev/null | sed 's#^[^/]*/##')
-for concern in $(python3 tools/test_scope.py selected-tests \
-  --base "origin/${BASE:-dev}" --head HEAD); do
+SELECTED=$(python3 tools/test_scope.py selected-tests \
+  --base "origin/${BASE:-dev}" --head HEAD) || exit $?
+while [ -n "$SELECTED" ]; do
+  concern=${SELECTED%% *}
+  case "$SELECTED" in
+    *" "*) SELECTED=${SELECTED#* } ;;
+    *) SELECTED= ;;
+  esac
   python3 tools/test_scope.py run "$concern" || exit $?
 done
 ```

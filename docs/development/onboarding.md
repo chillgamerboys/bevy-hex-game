@@ -145,26 +145,35 @@ map-owned behavior with its palette entry rather than embedding another RGB lite
 
 ```sh
 python3 tools/test_scope.py plan --base origin/dev --head HEAD
-for concern in $(python3 tools/test_scope.py selected-tests); do
+SELECTED=$(python3 tools/test_scope.py selected-tests) || exit $?
+while [ -n "$SELECTED" ]; do
+  concern=${SELECTED%% *}
+  case "$SELECTED" in
+    *" "*) SELECTED=${SELECTED#* } ;;
+    *) SELECTED= ;;
+  esac
   python3 tools/test_scope.py run "$concern" || exit $?
 done
 python3 tools/test_scope.py run clippy
 ```
 
 The selector chooses the affected gameplay and map concerns and fails closed to the
-complete gate for an unknown or unclassified shared path. Classified shared contracts
-use their explicit producer/consumer closure, so a terrain or trajectory rule does not
-select or execute the application/UI test partition merely because both are
-gameplay-adjacent. Broad owner corpora still run for their owning changes, on `dev`,
-and at the final wave/release gate. These checks run automatically on pull requests;
+complete gate for an unknown or unclassified shared path. Trajectory/volume-only
+changes use their dedicated pure/direct-consumer concern, so they do not select or
+execute the application/UI partition merely because both are gameplay-adjacent. The
+combined terrain-impact source stays full until its projection and protocol authorities
+are split by file. Broad owner corpora still run for their owning changes, on `dev`, and
+at the final wave/release gate. These checks run automatically on pull requests;
 Markdown-only changes run the documentation link check instead.
 
-If the selector chooses `app`, or the diff changes rendering, movement behavior,
-persistence, runtime navigation, or a visual script, **run the game and look at it**.
-This matters more than it sounds: a crash and a piece sunk into the ground both once
-passed every automated check. Pure contract or trajectory changes instead record the
-visual/runtime gate as not applicable; launching the UI cannot add authority evidence
-for them. Final waves and release promotions retain their broader human walk.
+If the diff changes rendering, movement behavior, persistence, runtime navigation, or
+a visual script, **run the game and look at it**. This matters more than it sounds: a
+crash and a piece sunk into the ground both once passed every automated check. Pure
+contract or trajectory changes instead record the visual/runtime gate as not
+applicable; launching the UI cannot add authority evidence for them. Visual
+applicability is independent of a conservative `app` selection caused only by changing
+validation infrastructure. Final waves and release promotions retain their broader
+human walk.
 
 ## When it will not build
 
