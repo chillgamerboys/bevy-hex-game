@@ -248,9 +248,9 @@ and tests without a renderer. It holds the largest share of the test suite.
 - **Settings come from `assets/config/*.ron`.** On initial load, resources are
   absent until parsed rather than defaulted, so a bad file stalls loading. After
   that, a failed hot reload retains the last valid value and reports the error.
-  Elements, substances, spells, and lattices additionally require one matching
-  `AcceptedContentRevision`; resource presence or a settled Bevy change tick cannot
-  admit mixed source revisions.
+  Elements, substances, the terrain-damage matrix, spells, and lattices additionally
+  require one matching `AcceptedContentRevision`; resource presence or a settled Bevy
+  change tick cannot admit mixed source revisions.
 
 ## Bevy 0.19 specifics
 

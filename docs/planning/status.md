@@ -116,8 +116,9 @@ targeting, and a closed effect enum). A `ContentIndex` resolves every element an
 substance name a spell references; a dangling reference is logged and the last valid
 content kept. Canonical source fingerprints prevent that retained index or lattice
 library from being paired with newer raw catalogs: Loading requires one
-`AcceptedContentRevision` spanning elements, substances, spells, and lattices. A test
-opens everything shipped so a broken reference cannot ship.
+`AcceptedContentRevision` spanning elements, substances, the terrain-damage matrix,
+spells, and lattices. A test opens everything shipped so a broken reference cannot
+ship.
 `ElementId` and `SpellId` are opaque `hex_core` ids assigned from sorted names, like
 `SubstanceId`. A dev-feature content dump remains available for inspecting the resolved
 spell list, while gameplay now consumes the same catalogs through its lattices and cast
