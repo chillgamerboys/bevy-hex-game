@@ -342,6 +342,11 @@ material-changing `Set` discards old damage and creates its new voxel at full he
 spell construction remains the existing atomic, empty-volume placement of `stone`
 through `TerrainEdit::Set`; it does not use `TerrainImpact`.
 
+Both message streams are claimed before the pausable mutation phase so an edit or
+impact emitted late in the last running frame cannot expire while paused. Terrain,
+health, and outcomes remain unchanged until gameplay resumes; the next running
+`ApplyWorld` phase drains the retained direct edits before the retained impacts.
+
 All current topology protections still win over the damage table. Bedrock,
 non-diggable voxels, authored V3 liquids and their protected lower supports, feature
 roots, and generated-light protection resist without acquiring damage. Liquids do not

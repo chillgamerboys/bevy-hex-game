@@ -233,7 +233,7 @@
       "expected_counts": {
         "map_unit": 94,
         "map_generation": 384,
-        "map_contracts": 73
+        "map_contracts": 74
       },
       "expected_ignored": 25,
       "full_command": [

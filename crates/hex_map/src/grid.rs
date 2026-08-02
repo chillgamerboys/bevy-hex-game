@@ -61,6 +61,14 @@ enum PendingTerrainImpact {
 #[derive(Resource, Debug, Default)]
 struct PendingTerrainImpacts(Vec<PendingTerrainImpact>);
 
+/// Direct edits claimed before the pausable mutation phase.
+///
+/// Messages live for only a bounded number of updates. Keeping an owned queue lets
+/// a cast announced immediately before pausing survive until gameplay resumes
+/// without changing the world against a stale perception frame.
+#[derive(Resource, Debug, Default)]
+struct PendingTerrainEdits(Vec<TerrainEdit>);
+
 /// Registers world construction and tile spawning.
 pub fn plugin(app: &mut App) {
     liquid_render::plugin(app);
@@ -94,6 +102,7 @@ pub fn plugin(app: &mut App) {
         .register_type::<Ring19Metrics>()
         .init_resource::<DamagedVoxels>()
         .init_resource::<TerrainDamageState>()
+        .init_resource::<PendingTerrainEdits>()
         .init_resource::<PendingTerrainImpacts>()
         .add_message::<TerrainEdit>()
         .add_message::<TerrainImpact>()
@@ -119,13 +128,21 @@ pub fn plugin(app: &mut App) {
         )
         .add_systems(
             Update,
+            (collect_terrain_edits, collect_terrain_impacts)
+                .in_set(TerrainSystems::ApplyWorld)
+                .run_if(in_state(Screen::Gameplay)),
+        )
+        .add_systems(
+            Update,
             (
-                collect_terrain_impacts,
                 apply_terrain_changes.run_if(terrain_world_available),
                 reject_pending_impacts_without_world.run_if(not(terrain_world_available)),
             )
                 .chain()
                 .in_set(TerrainSystems::ApplyWorld)
+                .in_set(hex_core::PausableSystems)
+                .after(collect_terrain_edits)
+                .after(collect_terrain_impacts)
                 .run_if(in_state(Screen::Gameplay)),
         )
         .add_systems(OnExit(Screen::Gameplay), teardown_map);
@@ -146,12 +163,14 @@ fn generate_world(
     resolved_seed: Option<Res<ResolvedMapSeed>>,
     mut damage_state: ResMut<TerrainDamageState>,
     mut damaged_voxels: ResMut<DamagedVoxels>,
+    mut pending_edits: ResMut<PendingTerrainEdits>,
     mut pending_impacts: ResMut<PendingTerrainImpacts>,
     mut edits: ResMut<Messages<TerrainEdit>>,
     mut impacts: ResMut<Messages<TerrainImpact>>,
     mut outcomes: ResMut<Messages<TerrainImpactOutcome>>,
 ) {
     damage_state.reset(&mut damaged_voxels);
+    pending_edits.0.clear();
     pending_impacts.0.clear();
     edits.clear();
     impacts.clear();
@@ -319,6 +338,7 @@ fn teardown_map(
     grids: Query<Entity, With<HexGrid>>,
     mut damage_state: ResMut<TerrainDamageState>,
     mut damaged_voxels: ResMut<DamagedVoxels>,
+    mut pending_edits: ResMut<PendingTerrainEdits>,
     mut pending_impacts: ResMut<PendingTerrainImpacts>,
     mut edits: ResMut<Messages<TerrainEdit>>,
     mut impacts: ResMut<Messages<TerrainImpact>>,
@@ -328,6 +348,7 @@ fn teardown_map(
         commands.entity(entity).despawn();
     }
     damage_state.reset(&mut damaged_voxels);
+    pending_edits.0.clear();
     pending_impacts.0.clear();
     edits.clear();
     impacts.clear();
@@ -641,12 +662,20 @@ struct EditableSpatialConsequences<'w> {
 /// Mutable terrain-impact resources grouped to stay within Bevy's function-system
 /// parameter arity while keeping every authority explicit.
 #[derive(SystemParam)]
-struct TerrainMutation<'w, 's> {
-    edits: MessageReader<'w, 's, TerrainEdit>,
+struct TerrainMutation<'w> {
+    edits: ResMut<'w, PendingTerrainEdits>,
     outcomes: MessageWriter<'w, TerrainImpactOutcome>,
     pending: ResMut<'w, PendingTerrainImpacts>,
     damage_state: ResMut<'w, TerrainDamageState>,
     damaged_voxels: ResMut<'w, DamagedVoxels>,
+}
+
+/// Claims direct edits outside the pausable mutation phase so they cannot age out.
+fn collect_terrain_edits(
+    mut edits: MessageReader<TerrainEdit>,
+    mut pending: ResMut<PendingTerrainEdits>,
+) {
+    pending.0.extend(edits.read().cloned());
 }
 
 /// Reprojects an accepted cave prop using the feature renderer's exact origin convention.
@@ -790,13 +819,13 @@ fn apply_terrain_changes(
     } = mutation;
     let mut changed = false;
     let mut changed_coords = BTreeSet::new();
-    for edit in edits.read() {
+    for edit in edits.0.drain(..) {
         let semantic_projection_protected = presentation.as_deref().is_some_and(|projection| {
             projection.protects_liquid_edit(edit.pos())
                 || projection.protects_feature_edit(edit.pos())
                 || projection.protects_light_edit(edit.pos())
         });
-        if apply_terrain_edit(&mut map, &table, edit, semantic_projection_protected) {
+        if apply_terrain_edit(&mut map, &table, &edit, semantic_projection_protected) {
             damage_state.forget_voxel(edit.pos(), &mut damaged_voxels);
             changed = true;
             changed_coords.insert(edit.pos().coord);

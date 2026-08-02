@@ -620,6 +620,70 @@ fn direct_edits_precede_impacts_and_material_changes_share_one_rebuild() {
 }
 
 #[test]
+fn edits_and_impacts_wait_while_paused_without_aging_out() {
+    let mut app = test_app();
+    let (earth, _fire) = install_damage_content(&mut app);
+    enter_gameplay(&mut app);
+    let target = *exactly_one(&positions_with_substance(&app, "stone", 1));
+    let (stone, dirt) = {
+        let table = app.world().resource::<SubstanceTable>();
+        (
+            table.id("stone").expect("stone should exist"),
+            table.id("dirt").expect("dirt should exist"),
+        )
+    };
+    let grid_before = current_grid(&mut app);
+    let announced = impact(46, vec![target], earth, 1);
+    let mut cursor = app
+        .world()
+        .resource::<Messages<TerrainImpactOutcome>>()
+        .get_cursor();
+
+    app.world_mut().write_message(TerrainEdit::Set {
+        pos: target,
+        substance: dirt,
+    });
+    app.world_mut().write_message(announced.clone());
+    app.world_mut()
+        .resource_mut::<NextState<Pause>>()
+        .set(Pause(true));
+
+    for _ in 0..4 {
+        app.update();
+    }
+
+    assert_eq!(app.world().resource::<State<Pause>>().get(), &Pause(true));
+    assert_eq!(app.world().resource::<VoxelMap>().get(target), stone);
+    assert_eq!(current_grid(&mut app), grid_before);
+    assert!(app.world().resource::<DamagedVoxels>().is_empty());
+    assert!(collect_outcomes(&app, &mut cursor).is_empty());
+
+    app.world_mut()
+        .resource_mut::<NextState<Pause>>()
+        .set(Pause(false));
+    app.update();
+
+    assert_eq!(app.world().resource::<VoxelMap>().get(target), dirt);
+    assert_eq!(
+        app.world().resource::<DamagedVoxels>().get(target),
+        Some(TerrainVoxelHealth {
+            remaining: 1,
+            maximum: 2,
+        })
+    );
+    let outcomes = collect_outcomes(&app, &mut cursor);
+    let outcome = exactly_one(&outcomes);
+    assert!(outcome.is_consistent_with(&announced));
+    let TerrainImpactResult::Applied(voxels) = &outcome.result else {
+        panic!("the delayed impact should apply after its direct edit");
+    };
+    let voxel = exactly_one(voxels);
+    assert_eq!(voxel.before, Some(dirt));
+    assert_eq!(voxel.disposition, TerrainImpactDisposition::Damaged);
+    assert_ne!(current_grid(&mut app), grid_before);
+}
+
+#[test]
 fn created_voxels_begin_at_full_health_and_damage_state_clears_on_reentry() {
     let mut app = test_app();
     let (earth, _fire) = install_damage_content(&mut app);
