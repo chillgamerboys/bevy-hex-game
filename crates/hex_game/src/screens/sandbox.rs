@@ -18,7 +18,8 @@ use hex_assets::{
 };
 use hex_core::{
     GameplayPhase, GameplaySetup, GameplaySetupFailure, Headroom, HexSpan, HexTile,
-    ResolvedMapSeed, Screen, SubstanceId, TilePos, TraversalBlockers, TraversalProfile, UnitId,
+    PresentationOcclusion, PresentationOcclusionReason, ResolvedMapSeed, Screen, SubstanceId,
+    TilePos, TraversalBlockers, TraversalProfile, UnitId,
 };
 use hex_gameplay_model::{
     CampaignSlotId, CreatorNavigation, MainMenuModel, MainMenuRoute, SandboxBackResult,
@@ -237,9 +238,6 @@ struct DeploymentMarkerMaterials {
     player: Handle<StandardMaterial>,
     hostile: Handle<StandardMaterial>,
 }
-
-#[derive(Component)]
-struct DeploymentHidden;
 
 #[derive(Resource, Debug, Default)]
 struct SandboxNotice(Option<String>);
@@ -1312,16 +1310,15 @@ fn enter_deployment(
     session: Option<Res<DeploymentSession>>,
     mut phase: ResMut<GameplayPhase>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut hidden: Query<(Entity, &mut Visibility), Or<(With<Faction>, With<hex_units::UnitRing>)>>,
+    mut actors: Query<&mut PresentationOcclusion, With<Faction>>,
 ) {
     let Some(_session) = session.as_deref() else {
         *phase = GameplayPhase::Active;
         return;
     };
     *phase = GameplayPhase::Deployment;
-    for (entity, mut visibility) in &mut hidden {
-        *visibility = Visibility::Hidden;
-        commands.entity(entity).insert(DeploymentHidden);
+    for mut occlusion in &mut actors {
+        occlusion.insert(PresentationOcclusionReason::SandboxDeployment);
     }
     commands.insert_resource(DeploymentMarkerMaterials {
         player: materials.add(deployment_marker_material(Color::srgb(0.10, 0.68, 1.0))),
@@ -1521,7 +1518,7 @@ struct DeploymentRuntime<'w, 's> {
             &'static mut Transform,
         ),
     >,
-    hidden_presentation: Query<'w, 's, (Entity, &'static mut Visibility), With<DeploymentHidden>>,
+    actor_occlusion: Query<'w, 's, &'static mut PresentationOcclusion, With<Faction>>,
     world_entities: Query<'w, 's, Entity, With<DeploymentWorldEntity>>,
     encounter: Option<ResMut<'w, Encounter>>,
     active: Option<ResMut<'w, crate::scenarios::ActiveScenario>>,
@@ -1789,9 +1786,8 @@ fn handle_deployment_actions(
                     Some(accepted_content_revision),
                 );
                 active.0 = sandbox.launch.loading_input();
-                for (entity, mut visibility) in &mut runtime.hidden_presentation {
-                    *visibility = Visibility::Inherited;
-                    commands.entity(entity).remove::<DeploymentHidden>();
+                for mut occlusion in &mut runtime.actor_occlusion {
+                    occlusion.remove(PresentationOcclusionReason::SandboxDeployment);
                 }
                 for entity in &runtime.world_entities {
                     commands.entity(entity).despawn();
@@ -2853,7 +2849,7 @@ mod tests {
                 StandsOn(original_standing),
                 original_transform,
                 Visibility::Hidden,
-                DeploymentHidden,
+                PresentationOcclusion::from_reason(PresentationOcclusionReason::SandboxDeployment),
             ))
             .id();
         app.world_mut().spawn((
@@ -2869,7 +2865,7 @@ mod tests {
             }),
             Transform::from_xyz(17.0, 3.0, -11.0),
             Visibility::Hidden,
-            DeploymentHidden,
+            PresentationOcclusion::from_reason(PresentationOcclusionReason::SandboxDeployment),
         ));
         let deployment_world_entity = app.world_mut().spawn(DeploymentWorldEntity).id();
         app.insert_resource(DeploymentMarkerMaterials {
@@ -2954,7 +2950,9 @@ mod tests {
                 "{missing:?} must not partially move presentation"
             );
             assert_eq!(party_unit.get::<Visibility>(), Some(&Visibility::Hidden));
-            assert!(party_unit.contains::<DeploymentHidden>());
+            assert!(party_unit.get::<PresentationOcclusion>().is_some_and(
+                |occlusion| occlusion.contains(PresentationOcclusionReason::SandboxDeployment)
+            ));
 
             if missing == MissingDeploymentIdentity::Encounter {
                 assert!(!world.contains_resource::<Encounter>());
@@ -3031,7 +3029,9 @@ mod tests {
             Some(&fixture.original_transform)
         );
         assert_eq!(party_unit.get::<Visibility>(), Some(&Visibility::Hidden));
-        assert!(party_unit.contains::<DeploymentHidden>());
+        assert!(party_unit.get::<PresentationOcclusion>().is_some_and(
+            |occlusion| occlusion.contains(PresentationOcclusionReason::SandboxDeployment)
+        ));
         assert_eq!(world.resource::<Encounter>(), &fixture.encounter);
         assert_eq!(
             world.resource::<crate::scenarios::ActiveScenario>().0,
@@ -3052,6 +3052,63 @@ mod tests {
             world.resource::<NextState<Screen>>(),
             &NextState::Unchanged
         ));
+    }
+
+    #[test]
+    fn successful_deployment_commit_removes_only_its_occlusion_reason_and_freezes_retry() {
+        let mut fixture = deployment_identity_fixture();
+        let expected_deployment =
+            deployment_snapshot(fixture.app.world().resource::<DeploymentSession>())
+                .expect("the complete deployment fixture must expose exact surfaces");
+        fixture
+            .app
+            .world_mut()
+            .entity_mut(fixture.party_unit)
+            .get_mut::<PresentationOcclusion>()
+            .expect("Sandbox actors carry composable presentation state")
+            .insert(PresentationOcclusionReason::CharacterCameraProximity);
+
+        fixture
+            .app
+            .world_mut()
+            .write_message(UiIntent::Deployment(DeploymentAction::StartCombat));
+        fixture.app.update();
+
+        let world = fixture.app.world();
+        assert_eq!(*world.resource::<GameplayPhase>(), GameplayPhase::Active);
+        assert!(!world.contains_resource::<DeploymentSession>());
+        assert!(!world.contains_resource::<DeploymentMarkerMaterials>());
+        assert!(world.get_entity(fixture.deployment_world_entity).is_err());
+
+        let party_unit = world
+            .get_entity(fixture.party_unit)
+            .expect("the deployed Party unit remains spawned");
+        assert_eq!(
+            party_unit.get::<StandsOn>().map(|standing| standing.0.pos),
+            expected_deployment.party.first().copied()
+        );
+        assert_eq!(party_unit.get::<Visibility>(), Some(&Visibility::Hidden));
+        let occlusion = party_unit
+            .get::<PresentationOcclusion>()
+            .expect("the actor keeps its composable presentation state");
+        assert!(!occlusion.contains(PresentationOcclusionReason::SandboxDeployment));
+        assert!(occlusion.contains(PresentationOcclusionReason::CharacterCameraProximity));
+
+        let sandbox = world.resource::<SandboxSession>();
+        assert_eq!(sandbox.launch.deployment, Some(expected_deployment));
+        assert_eq!(
+            sandbox.launch.content_revision,
+            Some(fixture.accepted_fingerprint)
+        );
+        assert_eq!(
+            world.resource::<crate::scenarios::ActiveScenario>().0,
+            sandbox.launch.loading_input(),
+            "Retry Exact must retain the committed exact encounter"
+        );
+        assert_eq!(
+            sandbox.launch.loading_input().encounter_override.as_ref(),
+            Some(world.resource::<Encounter>())
+        );
     }
 
     #[derive(Resource)]
