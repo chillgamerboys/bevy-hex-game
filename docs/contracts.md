@@ -35,7 +35,7 @@ than agreed, the fallback the gameplay side ships without it is in
 | `TerrainEdit::Set` / `::Clear` — the write path | gameplay | world | live | [systems/map.md](systems/map.md) |
 | `BiomeRegions` — published by V3; gameplay consumer pending | world | gameplay | **partial** | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
 | `TraversalBlockers` — exact feature-occupied surfaces consumed by validation, perception, and movement | world | perception / `hex_units` | live | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
-| `RunBottom(Level)` — each run's lowest voxel; prerequisite to terrain casting and obstruction-aware trajectories | world | gameplay | **live** | [planning/boundary.md](planning/boundary.md) C |
+| `RunBottom(Level)` — each run's lowest voxel; exact occupancy for terrain casting and obstruction-aware trajectories | world | gameplay | **live** | [planning/boundary.md](planning/boundary.md) C |
 | `TerrainImpact { batch, volume, ElementId, power }` — declarative canonical-volume voxel damage | gameplay | world | **partial** — map admission/resolution is live; gameplay spell publisher pending | [planning/boundary.md](planning/boundary.md) G |
 | `TerrainImpactOutcome` — one applied or rejected answer with exact per-voxel health transitions | world | gameplay | **partial** — map publication is live; gameplay pending-batch consumer pending | [planning/boundary.md](planning/boundary.md) H |
 | `DamagedVoxels` — exact partial-health projection, never a visibility grant | world | shared presentation | live | [planning/boundary.md](planning/boundary.md) H |

@@ -197,8 +197,9 @@ different reason. [casting.md](../systems/casting.md) validates a cast against t
 voxels it would affect — is this voxel solid, is it empty enough to conjure into, is it
 somebody's supporting surface — and none of those are answerable without exact
 occupancy. Wave 3 deliberately shipped terrain effects fail-closed rather than
-reconstructing it; `RunBottom` has now unblocked permanent construction and remains
-the foundation for obstruction-aware trajectories and sight.
+reconstructing it; `RunBottom` now underpins permanent construction and live
+obstruction-aware trajectories, and remains the foundation for future
+obstruction-aware sight.
 
 One component answers casting legality, conjuration placement, trajectory, cover, and
 pathing alike, using the existing published-data pattern rather than a new API surface.
@@ -217,9 +218,10 @@ You already hold both bounds when merging runs in the spawn pass. Every run enti
 including stacked runs under bridges, overhangs, and caves, carries it. Spawn-bundle
 tests assert the exact inclusive bottom and top for each such run.
 
-**Publication is live:** the shared type and map adapter land together while gameplay
-consumers remain downstream. Terrain casting did wait for this contract; it does not
-reconstruct occupancy or ship terrain effects that cannot distinguish rock from air.
+**Publication and the first casting consumers are live:** permanent construction and
+material-sensitive trajectory checks use the shared type and map adapter without
+reconstructing occupancy from presentation facts. Cover and obstruction-aware sight
+remain downstream.
 Obstruction-aware sight may still use its independent approximation while its consumer
 waits: a sight line is
 blocked iff some intervening column's highest run top reaches it. Wrong only

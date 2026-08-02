@@ -409,9 +409,9 @@ gameplay and is pinned in
   gets. **`hexx::a_star` cannot supply that model**, despite being compiled in: it
   keys on `Hex` alone, so it cannot tell a bridge from the ground beneath it.
 - **What terrain changes cost.** `TerrainEdit` remains applied when it arrives and
-  costs nobody anything. A spell impact keeps its cast pending until the next ordered
-  map answer, but mana/action payment is gameplay policy rather than a property of the
-  map.
+  costs nobody anything. The pending gameplay adapter must keep an elemental cast
+  pending until the next ordered map answer, but mana/action payment is gameplay
+  policy rather than a property of the map.
 - **Whether stacked surfaces ever connect.** Teleport and tunnel are named in the design
   but not implemented. When they are, they belong in `hex_units` as explicit
   exceptions to the step rule, not as changes to it.

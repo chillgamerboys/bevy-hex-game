@@ -11,7 +11,7 @@
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
-use hex_core::{Screen, SubstanceId};
+use hex_core::{is_terrain_toughness, Screen, SubstanceId};
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -346,7 +346,7 @@ impl SubstanceTable {
             };
             let mut substance = substance.clone();
             if let Some(toughness) = substance.toughness {
-                if !matches!(toughness, 1 | 2 | 4 | 8) {
+                if !is_terrain_toughness(toughness) {
                     return Err(SubstanceTableError::InvalidToughness {
                         substance: name.clone(),
                         toughness,

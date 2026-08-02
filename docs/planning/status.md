@@ -466,7 +466,7 @@ The first implementation also ships with explicit limitations:
   interior *roof* projection current, but interior **membership** is never re-derived,
   so a chamber you blow open still counts as inside. Live perception therefore
   continues to classify the chamber as Interior and does not admit daylight
-  ([boundary.md](boundary.md) ask I).
+  ([boundary.md](boundary.md) I).
 - **Casting is provisionally combat-only.** Recovery between fights is intended to be
   a rest action, but real-time casting still needs an interaction and rest flow.
   **Rituals remain deferred** — `co_castable` parses and labels rituals in the demo,

@@ -167,7 +167,8 @@ applier in `hex_combat` is authoritative.
    trajectory is clear. Range uses
    [`in_reach`](../../crates/hex_units/src/targeting.rs) (**built**), so **spells
    inherit high-ground-buys-range automatically** from the same rule engagement uses.
-   Trajectory is deferred; see *Obstruction*.
+   Direct, authored-rise Arc, and None trajectory checks are built and wired; see
+   *Obstruction*. Per-voxel clipping of the resolved effect volume remains deferred.
 4. **Unit interaction — provisional first-wave safety policy.** The current unit-effect
    applier reaches the unit on the anchor. Content therefore refuses a unit-affecting
    spell only when its resolved shape can contain more than one distinct voxel. Boundary
@@ -216,7 +217,8 @@ Tiles publish each run's inclusive top (`TilePos`) and bottom
 saturated clearance fact. `hex_units::TerrainOccupancy` now compacts those exact
 inclusive bounds, preserving real air gaps between stacked runs without reconstructing
 occupancy from rendered spans or world units. Construction legality consumes that
-projection; trajectory, cover, and pathing remain downstream consumers.
+projection, as do the live trajectory checks; cover and pathing remain downstream
+consumers.
 
 ### Construction placement
 

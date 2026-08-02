@@ -7,6 +7,30 @@ file is the record that travels with the repo.
 
 <!-- /audit-diff appends below this line. Don't insert content between this comment and Wave entries; the skill anchors on this marker. -->
 
+## Wave 25 — feat: add terrain durability and destruction (2026-08-02)
+
+- **PR**: #175 — `wave/terrain-durability`
+- **Outcome**: green — one duplicated contract literal and the live-documentation
+  contradictions fixed; one behavior-neutral pure-test expansion deferred to the
+  named post-merge foundation
+- **Lenses triggered**: 2, 7, D3, D4
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 2 | `crates/hex_assets/src/substances.rs`:349 | NON-BLOCKER | fixed — authored substance validation now consumes shared `is_terrain_toughness` instead of repeating the `1/2/4/8` scale |
+| D3, D4 | `docs/systems/casting.md`:170, `docs/planning/roadmap.md`:32 | SHIP-BLOCKER | fixed — PR #162 already landed `Direct`/`Arc`/`None` caster-to-anchor obstruction; only per-voxel effect-volume clipping remains deferred under HEX-24 |
+| D3, D4 | `docs/systems/casting.md`:219, `docs/planning/boundary.md`:200, `docs/contracts.md`:38 | NON-BLOCKER | fixed — every live contract source now describes `RunBottom` as consumed by permanent construction and trajectory checks while cover and obstruction-aware sight remain downstream |
+| D3, D4 | `docs/planning/roadmap.md`:31, `docs/planning/roadmap.md`:116 | NON-BLOCKER | fixed — the living plan now distinguishes permanent construction from deferred save/restore and separates live construction, trajectories, and world durability from the gameplay impact/outcome/settlement and perception residuals |
+| D3, D4 | `docs/planning/status.md`:469, `docs/systems/map.md`:412, `docs/README.md`:79 | NON-BLOCKER | fixed — boundary I is accepted, the pending cast is explicitly future gameplay behavior, and the documentation index describes the boundary ledger's accepted/live decisions as well as open asks |
+| 7 | `crates/hex_core/src/terrain_impact.rs`:386 | NON-BLOCKER | deferred — the post-#175 behavior-neutral spell-resolution foundation already owns the exhaustive malformed-outcome matrix against the now-settled live dispositions |
+
+**Notes**: all eight code lenses and the fresh-eyes pass found no remaining checkpoint
+blocker in content readiness, deterministic map resolution, pause/re-entry lifecycle,
+presentation privacy, or ownership. The shipped 63-pair test deliberately pins the
+initial complete element/material allow-list; later balance work must update that
+fixture when it removes pairs. Exact-head CI, automated visual review, and named human
+runtime sign-off remain separate landing gates rather than claims made by this entry.
+
 ## Wave 24 — feat(map): biome expansion and Two Rings (2026-07-30)
 
 - **PR**: #144 — `wave/alberto-biome-expansion`

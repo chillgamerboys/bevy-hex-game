@@ -28,8 +28,8 @@ still belong to the crate they change. `docs` is whoever picks it up.
 
 | Epic | Scope | Owner |
 |---|---|---|
-| Terrain magic | **Partial:** permanent `Single`/`Column` stone evocation construction is live. The world side now owns the fixed toughness content, Boolean element/material matrix, sparse exact-voxel health, protected ordered impact resolution, applied/rejected outcomes, ordinary terrain consequences, and observation-gated health bars. Remaining HEX-19 work is gameplay-owned canonical `TerrainImpact` emission, pending-batch outcome consumption, fresh occupancy/movement ordering, and deterministic unsupported-actor settlement before perception and combat resume. The initial cave-breach ruling keeps authored Interior membership and defers dynamic daylight; area construction, enchantment-bound terrain, fluid dynamics, feature destruction, and terrain persistence remain deferred | combat | <!-- linear: HEX-19 owner: shravan-kumaran -->
-| Trajectories and lingering effects | exact `Direct`/`Arc`/`None` material trajectories now share one symmetric integer supercover; faction-facing preview, cycling, and AI use authorized knowledge while full occupancy remains at command authority. Remaining work is area-unit resolution, area-lingering zones, dispel, and later sight reuse | combat | <!-- linear: HEX-24 owner: shravan-kumaran -->
+| Terrain magic | **Partial:** permanent `Single`/`Column` stone evocation construction is live. The world side now owns the fixed toughness content, Boolean element/material matrix, sparse exact-voxel health, protected ordered impact resolution, applied/rejected outcomes, ordinary terrain consequences, and observation-gated health bars. Remaining HEX-19 work is gameplay-owned canonical `TerrainImpact` emission, pending-batch outcome consumption, fresh occupancy/movement ordering, and deterministic unsupported-actor settlement before perception and combat resume. The initial cave-breach ruling keeps authored Interior membership and defers dynamic daylight; area construction, enchantment-bound terrain, fluid dynamics, feature destruction, and terrain save/restore persistence remain deferred | combat | <!-- linear: HEX-19 owner: shravan-kumaran -->
+| Trajectories and lingering effects | Exact `Direct`/`Arc`/`None` material trajectories now share one symmetric integer supercover; faction-facing preview, cycling, and AI use authorized knowledge while full occupancy remains at command authority. Remaining work is per-voxel effect-volume clipping, area-unit resolution, area-lingering zones, dispel, and later sight reuse | combat | <!-- linear: HEX-24 owner: shravan-kumaran -->
 | Magic outside combat | general real-time casting and its input model; Rest has moved into outcomes/recovery and does not settle this deferred question | combat | <!-- linear: HEX-25 owner: shravan-kumaran -->
 | Co-casting and rituals | variable-mana group casting after Wave 7 supplies a real Channel action and evidence for initiative and action economy | combat | <!-- linear: HEX-26 owner: shravan-kumaran -->
 | Engine upkeep | the one budgeted Bevy 0.20 upgrade (~Q4 2026) plus the feature trim, landed together in a quiet window before any release | game | <!-- linear: HEX-18 owner: shravan-kumaran -->
@@ -114,16 +114,19 @@ the whole wave lands on `dev` in one merge (CONTRIBUTING.md has the rules).
 
 - **Wave 3 — the slice becomes a game (delivered).** Lattices wired the damage loop
   from casts through disables and downing, alongside persistent effects, knowledge and
-  divination, and authored encounters. The `RunBottom` prerequisite is now live;
-  terrain magic still owns the unbuilt legality, declaration, outcome, and
-  conjuration-admission adapters for the agreed G/H/L shapes.
+  divination, and authored encounters. Later work now consumes the live `RunBottom`
+  projection for permanent construction and obstruction-aware trajectories, and the
+  world side of terrain durability is live. Gameplay still owns elemental declaration,
+  outcome consumption, refreshed occupancy/movement, and unsupported-actor settlement.
 - **Wave 4 — complete party combat (delivered).** Algorithm-neutral AI hosting, party
   controls, formation traversal, outcomes, Renewal, Rest, and one integrated 3v3
   scenario through a mandatory human playtest checkpoint. Casting UX and combat
   readability already landed in Wave 3. General real-time casting, Channel,
   co-casting, initiative, action economy, and rout remain future gameplay decisions.
-  Perception adapters and `RunBottom`-dependent obstruction/trajectory work are
-  optional satellites, not retroactive Wave 4 gates.
+  Perception adapters and `RunBottom`-dependent obstruction/trajectory work were
+  optional satellites, not retroactive Wave 4 gates. `RunBottom`-backed construction
+  and trajectories subsequently landed; the remaining perception adapters stay
+  Upcoming.
 - **Wave 5 — pre-alpha continuity (delivered).** A stable app shell and default New Game,
   one disposable exploration-resume slot, persistent settings and audio/input seams,
   and release-artifact scaffolding. This wave gets ahead of productization without
