@@ -1,6 +1,9 @@
 use bevy::prelude::*;
-use hex_assets::Scenario;
 use hex_core::{GameplayPhase, UnitId};
+use hex_gameplay_model::{
+    CampaignSlotId, MainMenuRoute, SandboxCharacter, SandboxRoute, SandboxSide, SandboxSlotIndex,
+    SandboxStartBlocker,
+};
 
 /// Whether an action can currently be taken, with the canonical refusal when it cannot.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -341,67 +344,15 @@ pub enum PartyIntent {
     Rest,
 }
 
-/// Immutable live Combat Lab statistics presentation.
-#[derive(Resource, Debug, Clone, PartialEq, Eq)]
-pub struct LabStatisticsView {
-    /// Whether the current gameplay run belongs to Combat Lab.
-    pub present: bool,
-    /// Whether the encounter is still active and the drawer may be shown.
-    pub visible: bool,
-    /// Whether the secondary statistics body is expanded.
-    pub expanded: bool,
-    /// Canonical, already-formatted combat summary.
-    pub text: String,
-}
-
-impl Default for LabStatisticsView {
-    fn default() -> Self {
-        Self {
-            present: false,
-            visible: false,
-            // Statistics are secondary to the battlefield. Start collapsed so
-            // entering Combat Lab never hides actors or primary commands.
-            expanded: false,
-            text: "Waiting for canonical combat statistics…".to_owned(),
-        }
-    }
-}
-
-/// Typed actions available from the live Combat Lab statistics drawer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LabStatisticsIntent {
-    /// Expand or collapse the secondary statistics body.
-    Toggle,
-    /// Freeze the current run as a manual-stop report.
-    EndExperiment,
-}
-
-/// One selectable saved-report identity in Compare mode.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OutcomeCompareChoiceView {
-    /// Stable report identity owned by the gameplay model.
-    pub id: hex_gameplay_model::CombatLabReportId,
-    /// Complete player-facing selector label.
-    pub label: String,
-    /// Whether this report is the current comparison target.
-    pub selected: bool,
-}
-
 /// Outcome actions whose effects remain application-owned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutcomeAction {
     /// Continue after victory.
     Continue,
-    /// Retry the active non-Lab scenario.
+    /// Retry the active Campaign scenario.
     Retry,
-    /// Retry the exact frozen Lab launch.
+    /// Retry the exact frozen Sandbox launch.
     RetryExact,
-    /// Restore the frozen Lab run for tuning.
-    TuneAgain,
-    /// Copy a fixed fixture into the editable sandbox.
-    CopyToSandbox,
-    /// Persist the frozen report.
-    SaveReport,
     /// Return to the session's owning screen.
     Return,
 }
@@ -415,49 +366,22 @@ pub struct OutcomeActionView {
     pub label: String,
 }
 
-/// Immutable encounter outcome and optional Combat Lab report presentation.
-#[derive(Resource, Debug, Clone, PartialEq, Eq)]
-pub struct OutcomeReportView {
+/// Immutable encounter outcome presentation.
+#[derive(Resource, Debug, Clone, Default, PartialEq, Eq)]
+pub struct OutcomeView {
     /// Whether an encounter outcome currently blocks gameplay.
     pub visible: bool,
     /// Outcome heading.
     pub title: String,
     /// Short outcome guidance.
     pub detail: String,
-    /// Frozen run identity and fingerprint, when this is a Lab run.
-    pub metadata: Option<String>,
-    /// Active report mode.
-    pub mode: hex_gameplay_model::ReportMode,
-    /// Already-formatted, gameplay-owned report body.
-    pub body: Option<String>,
-    /// Independent saved-report choices.
-    pub comparisons: Vec<OutcomeCompareChoiceView>,
     /// Ordered footer actions.
     pub actions: Vec<OutcomeActionView>,
 }
 
-impl Default for OutcomeReportView {
-    fn default() -> Self {
-        Self {
-            visible: false,
-            title: String::new(),
-            detail: String::new(),
-            metadata: None,
-            mode: hex_gameplay_model::ReportMode::Overview,
-            body: None,
-            comparisons: Vec::new(),
-            actions: Vec::new(),
-        }
-    }
-}
-
-/// Typed outcome/report controls emitted by presentation.
+/// Typed outcome controls emitted by presentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutcomeIntent {
-    /// Select one report presentation mode.
-    SelectMode(hex_gameplay_model::ReportMode),
-    /// Select one saved report without changing the active mode implicitly.
-    CompareWith(hex_gameplay_model::CombatLabReportId),
     /// Activate an application-owned outcome transition.
     Activate(OutcomeAction),
 }
@@ -561,6 +485,8 @@ pub struct CreatorScreenView {
     pub tab: hex_gameplay_model::CreatorSurface,
     /// Library hub or focused editor.
     pub workspace: CreatorWorkspace,
+    /// Application-owned destination label shown when leaving the library hub.
+    pub hub_exit_label: String,
     /// Current character draft.
     pub character: Option<hex_assets::SavedCharacter>,
     /// Current spell draft.
@@ -612,6 +538,7 @@ impl Default for CreatorScreenView {
             screen: hex_core::Screen::CharacterCreator,
             tab: hex_gameplay_model::CreatorSurface::Characters,
             workspace: CreatorWorkspace::Hub,
+            hub_exit_label: "Back to Tools".to_owned(),
             character: None,
             spell: None,
             selected_cell: None,
@@ -725,201 +652,177 @@ pub enum CreatorIntent {
     DiscardChanges,
     /// Open the isolated lattice test with the unsaved draft.
     LocalTest,
-    /// Open Combat Lab with the saved character.
-    TestOnMap,
+    /// Open Sandbox with the saved character in Party slot 1.
+    OpenInSandbox,
     /// Request or confirm full library reset.
     ResetLibrary,
     /// Replace one draft name.
     SetName(CreatorNameField, String),
 }
 
-/// Rules profile used for one fixed-fixture launch.
+/// One catalog map projected for Sandbox selection or confirmation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SandboxMapView {
+    /// Stable catalog identity.
+    pub id: String,
+    /// Player-facing name.
+    pub name: String,
+    /// Authored tactical description.
+    pub description: String,
+    /// Existing renderer-generated preview asset path.
+    pub preview: String,
+    /// Resolved launch seed, or `None` for authored terrain.
+    pub resolved_seed: Option<u64>,
+    /// Whether this pending generated choice may receive another seed.
+    pub can_regenerate: bool,
+}
+
+/// One renderer-ready character identity and lattice summary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SandboxCharacterView {
+    /// Stable packaged or local identity returned by typed intents.
+    pub character: SandboxCharacter<hex_assets::CustomCharacterId>,
+    /// Player-facing character name.
+    pub name: String,
+    /// Compact lattice presentation.
+    pub lattice: String,
+    /// Renderer-neutral authored lattice cells.
+    pub cells: Vec<SandboxLatticeCellView>,
+    /// Canonical Map-ready refusal, when this character cannot launch.
+    pub blocked: Option<String>,
+    /// Whether this character owns the picker preview.
+    pub selected: bool,
+}
+
+/// Semantic cell treatment for a Sandbox character preview.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CombatLabRulesVariant {
-    /// Authored shipping rules.
-    Shipped,
-    /// Authored tactical two-step preset.
-    TacticalTwoStep,
-    /// Custom three-step movement profile.
-    CustomThreeStep,
+pub enum SandboxLatticeCellKind {
+    /// Basic elemental mana cell.
+    Gem,
+    /// Higher-order fusion cell.
+    Fusion,
+    /// Castable spell inscription.
+    Spell,
+    /// Structural durability cell.
+    Blank,
 }
 
-/// Editable saved-report annotation field.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CombatLabReportField {
-    /// Short report label.
-    Label(hex_gameplay_model::CombatLabReportId),
-    /// Longer free-form notes.
-    Notes(hex_gameplay_model::CombatLabReportId),
-}
-
-/// One frozen report card.
+/// One renderer-neutral cell in a Sandbox character preview.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CombatLabReportCardView {
-    /// Stable local report identity.
-    pub id: hex_gameplay_model::CombatLabReportId,
-    /// Termination heading.
-    pub heading: String,
-    /// Editable label.
+pub struct SandboxLatticeCellView {
+    /// Axial q coordinate.
+    pub q: i32,
+    /// Axial r coordinate.
+    pub r: i32,
+    /// Compact glyph.
     pub label: String,
-    /// Editable notes.
-    pub notes: String,
-    /// Frozen launch identity and fingerprint.
-    pub metadata: String,
-    /// Canonical summary metrics.
-    pub summary: String,
-    /// Whether selected on the left comparison axis.
-    pub left_selected: bool,
-    /// Whether selected on the right comparison axis.
-    pub right_selected: bool,
-    /// Whether destructive confirmation is open.
-    pub pending_delete: bool,
+    /// Semantic color role.
+    pub kind: SandboxLatticeCellKind,
 }
 
-/// Frozen comparison presentation.
+/// One of the fixed six roster slots.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CombatLabComparisonView {
-    /// Comparison heading naming both stable IDs.
-    pub heading: String,
-    /// Frozen launch headers.
-    pub frozen: String,
-    /// Canonical metric deltas.
-    pub deltas: String,
+pub struct SandboxRosterSlotView {
+    /// Exact side-local slot identity.
+    pub slot: SandboxSlotIndex,
+    /// Occupant presentation, when the slot is not sparse.
+    pub character: Option<SandboxCharacterView>,
 }
 
-/// Saved-report surface projection.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct CombatLabReportsView {
-    /// Last report persistence error.
-    pub error: Option<String>,
-    /// Saved reports in stable local order.
-    pub reports: Vec<CombatLabReportCardView>,
-    /// Independent two-report comparison.
-    pub comparison: Option<CombatLabComparisonView>,
-}
-
-/// Immutable Combat Lab setup presentation.
-#[derive(Resource, Debug, Clone)]
-pub struct CombatLabScreenView {
-    /// Whether the Combat Lab screen is active.
+/// Immutable route-specific Sandbox presentation.
+#[derive(Resource, Debug, Clone, PartialEq, Eq)]
+pub struct SandboxView {
+    /// Whether the coarse Sandbox screen is active.
     pub active: bool,
-    /// Active top-level Lab surface.
-    pub tab: hex_gameplay_model::LabTab,
-    /// Active Sandbox step.
-    pub sandbox_step: hex_gameplay_model::SandboxStep,
-    /// Selected packaged map ID.
-    pub map: String,
-    /// Ordered player roster.
-    pub players: Vec<hex_gameplay_model::RosterChoice<hex_assets::CustomCharacterId>>,
-    /// Ordered hostile roster.
-    pub hostiles: Vec<hex_gameplay_model::RosterChoice<hex_assets::CustomCharacterId>>,
-    /// Fixture search query.
-    pub fixture_filter: String,
-    /// Player-facing setup notice.
-    pub notice: String,
-    /// Selected combat rules.
-    pub rules: Option<hex_assets::CombatRulesProfile>,
-    /// Report awaiting destructive confirmation.
-    pub pending_report_delete: Option<hex_gameplay_model::CombatLabReportId>,
-    /// Saved Creator content.
-    pub library: CreatorLibraryView,
-    /// Accepted element catalog.
-    pub elements: Option<hex_assets::ElementCatalog>,
-    /// Accepted spell catalog.
-    pub spells: Option<hex_assets::SpellBook>,
-    /// Packaged Creator content.
-    pub presets: Option<hex_assets::CreationPresetCatalog>,
-    /// Packaged Combat Lab map catalog.
-    pub maps: Option<hex_assets::CombatLabMapCatalog>,
-    /// Authored combat settings.
-    pub combat: Option<hex_assets::CombatSettings>,
-    /// Choices admitted by the canonical map-readiness oracle.
-    pub map_ready_choices: Vec<hex_gameplay_model::RosterChoice<hex_assets::CustomCharacterId>>,
-    /// Frozen saved-report presentation.
-    pub reports: CombatLabReportsView,
+    /// Renderer-free child route.
+    pub route: SandboxRoute,
+    /// Committed map summary used by the overview and launch.
+    pub map: Option<SandboxMapView>,
+    /// Pending, cancelable map summary used only by map detail.
+    pub pending_map: Option<SandboxMapView>,
+    /// Canonical catalog rows in stable authored order.
+    pub maps: Vec<SandboxMapView>,
+    /// Fixed Party slots.
+    pub party: Vec<SandboxRosterSlotView>,
+    /// Fixed Enemy slots.
+    pub enemies: Vec<SandboxRosterSlotView>,
+    /// Character rows available to the shared picker.
+    pub characters: Vec<SandboxCharacterView>,
+    /// Currently previewed character, without roster mutation.
+    pub preview: Option<SandboxCharacterView>,
+    /// Centralized typed launch refusal.
+    pub start_blocker: Option<SandboxStartBlocker>,
+    /// Supplemental application-owned status, when useful.
+    pub notice: Option<String>,
 }
 
-impl Default for CombatLabScreenView {
+impl Default for SandboxView {
     fn default() -> Self {
+        let empty_slots = || {
+            SandboxSlotIndex::ALL
+                .into_iter()
+                .map(|slot| SandboxRosterSlotView {
+                    slot,
+                    character: None,
+                })
+                .collect()
+        };
         Self {
             active: false,
-            tab: hex_gameplay_model::LabTab::Sandbox,
-            sandbox_step: hex_gameplay_model::SandboxStep::Map,
-            map: String::new(),
-            players: Vec::new(),
-            hostiles: Vec::new(),
-            fixture_filter: String::new(),
-            notice: String::new(),
-            rules: None,
-            pending_report_delete: None,
-            library: CreatorLibraryView::default(),
-            elements: None,
-            spells: None,
-            presets: None,
-            maps: None,
-            combat: None,
-            map_ready_choices: Vec::new(),
-            reports: CombatLabReportsView::default(),
+            route: SandboxRoute::Overview,
+            map: None,
+            pending_map: None,
+            maps: Vec::new(),
+            party: empty_slots(),
+            enemies: empty_slots(),
+            characters: Vec::new(),
+            preview: None,
+            start_blocker: Some(SandboxStartBlocker::MapsLoading),
+            notice: None,
         }
     }
 }
 
-/// Typed Combat Lab setup actions interpreted by the composition root.
-#[derive(Component, Debug, Clone, PartialEq)]
-pub enum CombatLabIntent {
-    /// Select a top-level Lab surface.
-    Tab(hex_gameplay_model::LabTab),
-    /// Return to the title screen.
+/// Typed Sandbox actions interpreted by the composition root.
+#[derive(Component, Debug, Clone, PartialEq, Eq)]
+pub enum SandboxIntent {
+    /// Navigate to the canonical parent route or destination.
     Back,
-    /// Select one Sandbox step.
-    ShowSandboxStep(hex_gameplay_model::SandboxStep),
-    /// Select a packaged map.
+    /// Open the catalog browser without changing the committed map.
+    OpenMapBrowser,
+    /// Create a pending map choice and open its confirmation route.
     SelectMap(String),
-    /// Add a packaged player template.
-    AddPlayerTemplate(String),
-    /// Add a packaged hostile template.
-    AddHostileTemplate(String),
-    /// Add a saved player character.
-    AddPlayerCustom(hex_assets::CustomCharacterId),
-    /// Add a saved hostile character.
-    AddHostileCustom(hex_assets::CustomCharacterId),
-    /// Remove an ordered player entry.
-    RemovePlayer(usize),
-    /// Remove an ordered hostile entry.
-    RemoveHostile(usize),
-    /// Move an ordered player entry.
-    MovePlayer(usize, i8),
-    /// Move an ordered hostile entry.
-    MoveHostile(usize, i8),
-    /// Open one blocked saved character in Creator.
-    EditCustom(hex_assets::CustomCharacterId),
-    /// Select an authored rules preset.
-    SelectRulesPreset(hex_assets::CombatRulesPreset),
-    /// Adjust one custom rules field.
-    AdjustRule(hex_assets::CombatRuleField, i8),
-    /// Restore shipped rules.
-    ResetRules,
-    /// Load terrain and enter deployment.
-    PrepareDeployment,
-    /// Launch one deterministic fixture.
-    StartFixture(String, CombatLabRulesVariant),
-    /// Select the left report comparison.
-    SelectCompareLeft(hex_gameplay_model::CombatLabReportId),
-    /// Select the right report comparison.
-    SelectCompareRight(hex_gameplay_model::CombatLabReportId),
-    /// Open report-delete confirmation.
-    RequestReportDelete(hex_gameplay_model::CombatLabReportId),
-    /// Delete one confirmed report.
-    ConfirmReportDelete(hex_gameplay_model::CombatLabReportId),
-    /// Close report-delete confirmation.
-    CancelReportDelete,
-    /// Replace the fixture search query.
-    SetFixtureFilter(String),
-    /// Replace one saved-report annotation field.
-    SetReportField(CombatLabReportField, String),
+    /// Replace only the pending generated seed.
+    RegenerateMap,
+    /// Commit the pending map choice.
+    UseMap,
+    /// Open one side's reusable fixed-slot roster route.
+    OpenRoster(SandboxSide),
+    /// Open the shared picker for one exact side and slot.
+    OpenCharacterPicker {
+        /// Party or Enemies.
+        side: SandboxSide,
+        /// Bounded side-local slot.
+        slot: SandboxSlotIndex,
+    },
+    /// Preview a character without changing either roster.
+    PreviewCharacter(SandboxCharacter<hex_assets::CustomCharacterId>),
+    /// Apply the preview to the picker route's exact side and slot.
+    UseCharacter,
+    /// Clear one exact sparse roster slot.
+    ClearSlot {
+        /// Party or Enemies.
+        side: SandboxSide,
+        /// Bounded side-local slot.
+        slot: SandboxSlotIndex,
+    },
+    /// Enter Character Creator with this picker as typed origin.
+    CreateCharacter,
+    /// Freeze and prepare the current draft for deployment.
+    StartSandbox,
 }
 
-/// One immutable roster row in the Combat Lab deployment HUD.
+/// One immutable roster row in the Sandbox deployment HUD.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeploymentRosterEntryView {
     /// Stable side-local row index.
@@ -932,7 +835,7 @@ pub struct DeploymentRosterEntryView {
     pub position: Option<hex_core::TilePos>,
 }
 
-/// Immutable Combat Lab deployment presentation.
+/// Immutable Sandbox deployment presentation.
 #[derive(Resource, Debug, Clone, Default, PartialEq, Eq)]
 pub struct DeploymentView {
     /// Whether a deployment session is active.
@@ -941,10 +844,10 @@ pub struct DeploymentView {
     pub map_name: String,
     /// Current placement instruction or refusal.
     pub notice: String,
-    /// Ordered player roster.
-    pub players: Vec<DeploymentRosterEntryView>,
-    /// Ordered hostile roster.
-    pub hostiles: Vec<DeploymentRosterEntryView>,
+    /// Ordered Party roster.
+    pub party: Vec<DeploymentRosterEntryView>,
+    /// Ordered Enemies roster.
+    pub enemies: Vec<DeploymentRosterEntryView>,
     /// Whether every exact placement passes the canonical start gate.
     pub complete: bool,
 }
@@ -954,20 +857,20 @@ pub struct DeploymentView {
 pub enum DeploymentIntent {
     /// Select a side-local roster row.
     Select {
-        /// Player or hostile side.
-        player: bool,
+        /// Party or Enemies side.
+        side: SandboxSide,
         /// Side-local roster index.
         index: usize,
     },
     /// Restore the last changed placement.
     Undo,
-    /// Clear every player placement.
-    ClearPlayer,
-    /// Clear every hostile placement.
-    ClearHostile,
+    /// Clear every Party placement.
+    ClearParty,
+    /// Clear every Enemy placement.
+    ClearEnemies,
     /// Apply deterministic canonical placement order.
     AutoPlace,
-    /// Return to Combat Lab rules.
+    /// Return to the Sandbox overview.
     Back,
     /// Confirm the complete exact deployment.
     StartCombat,
@@ -1108,102 +1011,92 @@ pub struct PauseView {
     pub notice: Option<String>,
 }
 
-/// One immutable scenario card in the development catalog.
-#[derive(Debug, Clone)]
-pub struct TitleScenarioView {
-    /// Exact launch input represented by the card.
-    pub scenario: Scenario,
-    /// Session-resolved seed shown beside generated scenarios.
-    pub resolved_seed: Option<u64>,
+/// Compact character/lattice preview shown in one occupied Campaign slot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CampaignPartyMemberView {
+    /// Player-facing character name.
+    pub name: String,
+    /// Existing lattice summary projected by the save adapter.
+    pub lattice: String,
+    /// Existing compact lattice shape shared with Sandbox character cards.
+    pub cells: Vec<SandboxLatticeCellView>,
 }
 
-/// Which development catalog the player deliberately opened from the title.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub enum ScenarioBrowserKind {
-    /// Map/world presentation scenarios.
-    #[default]
-    MapScenarios,
-    /// Focused gameplay demonstrations.
-    Demos,
+/// Immutable state of one of the three Campaign slots.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CampaignSlotStatusView {
+    /// No manual save has been written to this slot.
+    Empty,
+    /// A compatible save can be continued.
+    Available {
+        /// Saved player party in stable unit order.
+        party: Vec<CampaignPartyMemberView>,
+        /// Accumulated active gameplay time.
+        active_time: String,
+    },
+    /// Data exists but is corrupt or incompatible and must remain untouched.
+    Invalid {
+        /// Canonical refusal from persistence validation.
+        reason: String,
+    },
 }
 
-impl ScenarioBrowserKind {
-    /// Player-facing screen title.
-    #[must_use]
-    pub const fn title(self) -> &'static str {
-        match self {
-            Self::MapScenarios => "Map Scenarios",
-            Self::Demos => "Demos",
-        }
-    }
+/// One immutable Campaign slot card.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CampaignSlotView {
+    /// Exact persistence identity.
+    pub slot: CampaignSlotId,
+    /// Empty, resumable, or invalid presentation.
+    pub status: CampaignSlotStatusView,
 }
 
-/// Immutable development-scenario catalog supplied by the composition root.
-#[derive(Resource, Debug, Default, Clone)]
-pub struct ScenarioBrowserView {
-    /// Deliberately selected catalog; presentation never mixes categories.
-    pub kind: ScenarioBrowserKind,
-    /// Visible scenarios in authored order for exactly `kind`.
-    pub scenarios: Vec<TitleScenarioView>,
-}
-
-/// Immutable title-screen projection supplied by the composition root.
-#[derive(Resource, Debug, Default, Clone)]
-pub struct TitleView {
+/// Immutable Main Menu hierarchy supplied by the composition root.
+#[derive(Resource, Debug, Clone, PartialEq, Eq)]
+pub struct MainMenuView {
+    /// Current renderer-free child route.
+    pub route: MainMenuRoute,
     /// Setup failure carried back from gameplay, if one exists.
     pub setup_failure: Option<String>,
+    /// Exactly three Campaign slots in stable order.
+    pub campaign_slots: Vec<CampaignSlotView>,
 }
 
-/// Independent Continue affordance supplied by the save adapter.
-#[derive(Resource, Debug, Clone, PartialEq, Eq)]
-pub struct ResumeView {
-    /// Whether Continue may be activated.
-    pub available: bool,
-    /// Visible status or refusal reason attached to Continue.
-    pub message: String,
-}
-
-impl Default for ResumeView {
+impl Default for MainMenuView {
     fn default() -> Self {
         Self {
-            available: false,
-            message: "No exploration resume has been saved.".to_owned(),
+            route: MainMenuRoute::Root,
+            setup_failure: None,
+            campaign_slots: CampaignSlotId::ALL
+                .into_iter()
+                .map(|slot| CampaignSlotView {
+                    slot,
+                    status: CampaignSlotStatusView::Empty,
+                })
+                .collect(),
         }
     }
 }
 
-/// Title-screen intents. Scenario intents retain the exact card snapshot that was
-/// clicked so a same-frame content hot reload cannot reinterpret the action.
-#[derive(Debug, Clone)]
-pub enum TitleIntent {
-    /// Resume the save adapter's current slot.
-    Continue,
-    /// Launch the independently configured default game.
-    NewGame,
-    /// Open the Character Creator library.
-    CharacterCreator,
-    /// Open the Spell Creator library.
-    SpellCreator,
-    /// Open Combat Lab.
-    CombatLab,
-    /// Open the map/world scenario catalog.
-    MapScenarios,
-    /// Open the focused gameplay demo catalog.
-    Demos,
-    /// Open settings.
-    Settings,
-    /// Exit the application.
-    Quit,
-}
-
-/// Typed intentions emitted by the development scenario catalog.
-#[derive(Debug, Clone)]
-pub enum ScenarioBrowserIntent {
-    /// Launch the exact visible scenario snapshot.
-    Start(Scenario),
-    /// Replace one generated scenario's session seed.
-    Reroll(Scenario),
-    /// Return to the title.
+/// Typed Main Menu and Campaign intentions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MainMenuIntent {
+    /// Open the three Campaign slots.
+    OpenCampaign,
+    /// Enter the persistent Sandbox draft.
+    OpenSandbox,
+    /// Open the creator tools hierarchy.
+    OpenTools,
+    /// Open Settings.
+    OpenSettings,
+    /// Open Character Creator from Tools.
+    OpenCharacterCreator,
+    /// Open Spell Creator from Tools.
+    OpenSpellCreator,
+    /// Bind and launch the default campaign in one empty slot.
+    NewCampaign(CampaignSlotId),
+    /// Continue one exact occupied slot.
+    ContinueCampaign(CampaignSlotId),
+    /// Return from a child route to the root.
     Back,
 }
 
@@ -1242,17 +1135,15 @@ pub enum UiIntent {
     Casting(CastingIntent),
     /// Act on party selection or formation configuration.
     Party(PartyIntent),
-    /// Act on the live Combat Lab statistics drawer.
-    LabStatistics(LabStatisticsIntent),
-    /// Act on the encounter outcome or frozen Combat Lab report.
+    /// Act on the encounter outcome.
     Outcome(OutcomeIntent),
     /// Act on the isolated Lattice Demo.
     LatticeDemo(LatticeDemoIntent),
     /// Act on Character or Spell Creator presentation.
     Creator(CreatorIntent),
-    /// Act on Combat Lab setup or saved reports.
-    CombatLab(CombatLabIntent),
-    /// Act on the exact Combat Lab deployment surface.
+    /// Act on Sandbox composition.
+    Sandbox(SandboxIntent),
+    /// Act on the exact Sandbox deployment surface.
     Deployment(DeploymentIntent),
     /// Adjust the development-only cyclic map clock.
     #[cfg(feature = "dev-tools")]
@@ -1261,10 +1152,8 @@ pub enum UiIntent {
     Back,
     /// Cycle one Settings value.
     AdjustSetting(UiSetting),
-    /// Activate a title-screen route or exact scenario card.
-    Title(TitleIntent),
-    /// Act on the development scenario catalog.
-    Scenarios(ScenarioBrowserIntent),
+    /// Navigate the Main Menu, Campaign, and Tools hierarchy.
+    MainMenu(MainMenuIntent),
 }
 
 #[cfg(test)]
@@ -1295,10 +1184,13 @@ mod tests {
     }
 
     #[test]
-    fn live_statistics_start_as_collapsed_secondary_chrome() {
-        let view = LabStatisticsView::default();
-        assert!(!view.present);
-        assert!(!view.visible);
-        assert!(!view.expanded);
+    fn sandbox_projection_keeps_six_slots_per_side() {
+        let view = SandboxView::default();
+        assert_eq!(view.party.len(), 6);
+        assert_eq!(view.enemies.len(), 6);
+        assert!(matches!(
+            view.start_blocker,
+            Some(SandboxStartBlocker::MapsLoading)
+        ));
     }
 }

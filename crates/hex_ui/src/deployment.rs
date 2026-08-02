@@ -1,9 +1,10 @@
-//! Combat Lab deployment presentation.
+//! Sandbox deployment presentation.
 
 use bevy::input_focus::tab_navigation::TabGroup;
 use bevy::prelude::*;
 use bevy::ui_widgets::ScrollArea;
 use hex_core::Screen;
+use hex_gameplay_model::SandboxSide;
 
 use crate::{
     blurb, fine, heading, label, layout::is_ultra_constrained, row_button, stacked_row_button,
@@ -55,7 +56,7 @@ fn render(
 
     commands
         .spawn((
-            Name::new("Combat Lab Deployment HUD"),
+            Name::new("Sandbox Deployment HUD"),
             DeploymentRoot,
             TabGroup {
                 order: 20,
@@ -92,7 +93,7 @@ fn render(
                 summary.spawn(blurb(&assets, view.notice.clone()));
                 summary.spawn(fine(
                     &assets,
-                    "CLICK BLUE for Player · CLICK RED for Hostile · solid tokens show placements",
+                    "CLICK BLUE for Party · CLICK RED for Enemies · solid tokens show placements",
                 ));
             });
             hud.spawn((
@@ -108,8 +109,14 @@ fn render(
                 },
             ))
             .with_children(|sides| {
-                spawn_side(sides, &assets, "PLAYER", true, &view.players);
-                spawn_side(sides, &assets, "HOSTILE", false, &view.hostiles);
+                spawn_side(sides, &assets, "PARTY", SandboxSide::Party, &view.party);
+                spawn_side(
+                    sides,
+                    &assets,
+                    "ENEMIES",
+                    SandboxSide::Enemies,
+                    &view.enemies,
+                );
             });
             hud.spawn((
                 DeploymentActions,
@@ -128,14 +135,14 @@ fn render(
                 deployment_button(
                     actions,
                     &assets,
-                    "Clear Player",
-                    DeploymentIntent::ClearPlayer,
+                    "Clear Party",
+                    DeploymentIntent::ClearParty,
                 );
                 deployment_button(
                     actions,
                     &assets,
-                    "Clear Hostile",
-                    DeploymentIntent::ClearHostile,
+                    "Clear Enemies",
+                    DeploymentIntent::ClearEnemies,
                 );
                 deployment_button(
                     actions,
@@ -143,7 +150,12 @@ fn render(
                     "Deterministic Auto-place",
                     DeploymentIntent::AutoPlace,
                 );
-                deployment_button(actions, &assets, "Back to Rules", DeploymentIntent::Back);
+                deployment_button(
+                    actions,
+                    &assets,
+                    "Return to Sandbox",
+                    DeploymentIntent::Back,
+                );
                 if view.complete {
                     deployment_button(
                         actions,
@@ -167,7 +179,7 @@ fn spawn_side(
     hud: &mut ChildSpawnerCommands,
     assets: &UiAssets,
     title: &'static str,
-    player: bool,
+    roster_side: SandboxSide,
     roster: &[DeploymentRosterEntryView],
 ) {
     hud.spawn((
@@ -189,7 +201,11 @@ fn spawn_side(
             let text = format!(
                 "{} [{}{}] {}\n{}",
                 if entry.selected { "SELECTED" } else { "SELECT" },
-                if player { "P" } else { "H" },
+                if roster_side == SandboxSide::Party {
+                    "P"
+                } else {
+                    "E"
+                },
                 entry.index + 1,
                 entry.name,
                 entry.position.map_or_else(
@@ -207,7 +223,7 @@ fn spawn_side(
                 stacked_row_button(text.clone(), 235.0),
                 crate::UiVisibilityRequirement::Scrollable,
                 DeploymentIntent::Select {
-                    player,
+                    side: roster_side,
                     index: entry.index,
                 },
             ))
@@ -229,7 +245,7 @@ fn deployment_button(
 ) {
     let width = match action {
         DeploymentIntent::Undo => 90.0,
-        DeploymentIntent::ClearPlayer | DeploymentIntent::ClearHostile => 150.0,
+        DeploymentIntent::ClearParty | DeploymentIntent::ClearEnemies => 150.0,
         DeploymentIntent::AutoPlace => 270.0,
         DeploymentIntent::Back => 170.0,
         DeploymentIntent::StartCombat => 160.0,
@@ -433,13 +449,13 @@ mod tests {
                 active: true,
                 map_name: "Flat Arena".to_owned(),
                 notice: "Choose a surface".to_owned(),
-                players: vec![DeploymentRosterEntryView {
+                party: vec![DeploymentRosterEntryView {
                     index: 0,
                     name: "Hedge Mage".to_owned(),
                     selected: true,
                     position: None,
                 }],
-                hostiles: Vec::new(),
+                enemies: Vec::new(),
                 complete: false,
             })
             .add_systems(Update, render);
@@ -479,9 +495,9 @@ mod tests {
         app.world_mut().insert_resource(DeploymentView {
             active: true,
             map_name: "Stacked Surface Arena".to_owned(),
-            notice: "Place every player and hostile on an exact legal surface.".to_owned(),
-            players: roster("Player"),
-            hostiles: roster("Hostile"),
+            notice: "Place every Party and Enemy character on an exact legal surface.".to_owned(),
+            party: roster("Party"),
+            enemies: roster("Enemy"),
             complete: false,
         });
         app.world_mut()
@@ -499,7 +515,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing {wanted:?}"))
         };
         let roster_scroll = entity_named(&mut app, "Deployment Roster Scroll");
-        let final_card_name = "SELECT [H6] Hostile Unit 6\nchoose surface";
+        let final_card_name = "SELECT [E6] Enemy Unit 6\nchoose surface";
         let final_card_entity = entity_named(&mut app, final_card_name);
         let roster_scroll_geometry = app
             .world()
@@ -527,7 +543,7 @@ mod tests {
             .nodes
             .iter()
             .find(|node| node.name == final_card_name)
-            .expect("the populated hostile roster must expose its sixth card");
+            .expect("the populated Enemy roster must expose its sixth card");
         assert_eq!(
             final_card.visibility_requirement,
             Some(crate::UiVisibilityRequirement::Scrollable)
@@ -539,7 +555,7 @@ mod tests {
 
         assert!(
             final_card.in_focus_order && final_card.keyboard_reachable == Some(true),
-            "the sixth hostile deployment card must belong to the active keyboard scope: {final_card:?}; order={:?}",
+            "the sixth Enemy deployment card must belong to the active keyboard scope: {final_card:?}; order={:?}",
             initial.focus_order,
         );
         app.insert_resource(InputFocus::from_entity(final_card_entity));

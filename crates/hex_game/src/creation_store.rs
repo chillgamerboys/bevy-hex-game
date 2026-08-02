@@ -163,6 +163,7 @@ mod tests {
         StoragePaths {
             preferences: root.join("preferences.ron"),
             resume: root.join("resume.ron"),
+            campaigns: root.join("campaigns.ron"),
             creations: root.join("creations.ron"),
             combat_reports: root.join("combat-reports.ron"),
         }

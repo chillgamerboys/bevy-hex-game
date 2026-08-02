@@ -4,14 +4,16 @@
 //! package adapts button interactions, persistence, loaded catalogs, and navigation
 //! into these typed transitions; it does not reconstruct their results.
 
-mod combat_lab;
 mod creator;
+mod main_menu;
+mod sandbox;
 
-pub use combat_lab::{
-    resolve_lab_run, CombatLabEdit, CombatLabModel, CombatLabReportDeployment, CombatLabReportId,
-    LabRunAction, LabRunFailure, LabRunTransition, LabTab, ReportMode, ReportViewModel,
-    RosterChoice, SandboxRestore, SandboxStep, MAX_COMBAT_LAB_ROSTER,
-};
 pub use creator::{
-    CreatorDestination, CreatorEntry, CreatorNavigation, CreatorSurface, EditHistory,
+    CreatorDestination, CreatorEntry, CreatorNavigation, CreatorOrigin, CreatorSurface, EditHistory,
+};
+pub use main_menu::{CampaignSlotId, MainMenuModel, MainMenuRoute};
+pub use sandbox::{
+    SandboxBackResult, SandboxCharacter, SandboxDestination, SandboxDraft, SandboxEntryOrigin,
+    SandboxMapSelection, SandboxModel, SandboxRoster, SandboxRoute, SandboxSide, SandboxSlotIndex,
+    SandboxStartBlocker, SANDBOX_ROSTER_SIZE,
 };

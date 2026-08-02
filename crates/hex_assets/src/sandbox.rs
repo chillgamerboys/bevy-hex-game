@@ -1,4 +1,4 @@
-//! Versioned map and deployment-region content for the human Combat Lab.
+//! Versioned map and deployment-region content for Sandbox sessions.
 
 use std::collections::BTreeSet;
 
@@ -7,23 +7,23 @@ use serde::{de::Error as _, Deserialize, Deserializer};
 
 use crate::{CubeCoord, LoadSettings, CONFIG_EXTENSIONS};
 
-/// Current on-disk schema for `config/combat_lab_maps.ron`.
-pub const COMBAT_LAB_MAP_SCHEMA_VERSION: u32 = 2;
+/// Current on-disk schema for `config/sandbox_maps.ron`.
+pub const SANDBOX_MAP_SCHEMA_VERSION: u32 = 2;
 
-/// Curated maps offered by the transient Combat Lab Sandbox.
+/// Curated maps offered by Sandbox.
 #[derive(Asset, Resource, Reflect, Debug, Clone, PartialEq, Eq)]
 #[reflect(Resource)]
-pub struct CombatLabMapCatalog {
+pub struct SandboxMapCatalog {
     /// Versioned independently from the user's creation library.
     pub schema_version: u32,
     /// Stable authored display order.
-    pub maps: Vec<CombatLabMapDefinition>,
+    pub maps: Vec<SandboxMapDefinition>,
 }
 
 /// One fixed-seed map and the two regions in which rosters may deploy.
 #[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct CombatLabMapDefinition {
+pub struct SandboxMapDefinition {
     /// Stable machine identifier stored in launch data and tests.
     pub id: String,
     /// Player-facing map name.
@@ -39,24 +39,24 @@ pub struct CombatLabMapDefinition {
     /// Exact seed used when the selected scenario is generated.
     pub fixed_seed: Option<u64>,
     /// Legal region for human-controlled units.
-    pub player_region: CombatLabDeploymentRegion,
+    pub player_region: SandboxDeploymentRegion,
     /// Legal region for baseline-AI units.
-    pub hostile_region: CombatLabDeploymentRegion,
+    pub hostile_region: SandboxDeploymentRegion,
 }
 
 /// A bounded legal surface region resolved after terrain exists.
 #[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct CombatLabDeploymentRegion {
+pub struct SandboxDeploymentRegion {
     /// Authored coordinate or map-generated anchor at the center.
-    pub center: CombatLabRegionCenter,
+    pub center: SandboxRegionCenter,
     /// Footing path-cost radius from the resolved center.
     pub radius: u32,
 }
 
 /// Ways packaged content may resolve the center of a deployment region.
 #[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
-pub enum CombatLabRegionCenter {
+pub enum SandboxRegionCenter {
     /// Exact authored horizontal coordinate; terrain resolves its top surface.
     Fixed(CubeCoord),
     /// Named map anchor that already includes exact elevation.
@@ -67,26 +67,26 @@ pub enum CombatLabRegionCenter {
 #[serde(deny_unknown_fields)]
 struct UnvalidatedCatalog {
     schema_version: u32,
-    maps: Vec<CombatLabMapDefinition>,
+    maps: Vec<SandboxMapDefinition>,
 }
 
-impl CombatLabMapCatalog {
+impl SandboxMapCatalog {
     /// Finds a map by stable machine identifier.
     #[must_use]
-    pub fn get(&self, id: &str) -> Option<&CombatLabMapDefinition> {
+    pub fn get(&self, id: &str) -> Option<&SandboxMapDefinition> {
         self.maps.iter().find(|map| map.id == id)
     }
 
     /// Validates stable IDs, schema, centers, and bounded deployment radii.
     pub fn validate(&self) -> Result<(), String> {
-        if self.schema_version != COMBAT_LAB_MAP_SCHEMA_VERSION {
+        if self.schema_version != SANDBOX_MAP_SCHEMA_VERSION {
             return Err(format!(
-                "unsupported Combat Lab map schema {}; expected {}",
-                self.schema_version, COMBAT_LAB_MAP_SCHEMA_VERSION
+                "unsupported Sandbox map schema {}; expected {}",
+                self.schema_version, SANDBOX_MAP_SCHEMA_VERSION
             ));
         }
         if self.maps.is_empty() {
-            return Err("Combat Lab map catalog must contain at least one map".to_owned());
+            return Err("Sandbox map catalog must contain at least one map".to_owned());
         }
         let mut ids = BTreeSet::new();
         for map in &self.maps {
@@ -97,18 +97,18 @@ impl CombatLabMapCatalog {
                 || map.preview.trim().is_empty()
             {
                 return Err(
-                    "Combat Lab map IDs, names, descriptions, previews, and scenarios cannot be blank"
+                    "Sandbox map IDs, names, descriptions, previews, and scenarios cannot be blank"
                         .to_owned(),
                 );
             }
             if map.tags.is_empty() || map.tags.iter().any(|tag| tag.trim().is_empty()) {
                 return Err(format!(
-                    "Combat Lab map {:?} needs at least one non-blank tag",
+                    "Sandbox map {:?} needs at least one non-blank tag",
                     map.id
                 ));
             }
             if !ids.insert(map.id.as_str()) {
-                return Err(format!("duplicate Combat Lab map ID {:?}", map.id));
+                return Err(format!("duplicate Sandbox map ID {:?}", map.id));
             }
             for (side, region) in [
                 ("Player", &map.player_region),
@@ -120,7 +120,7 @@ impl CombatLabMapCatalog {
                         map.id, region.radius
                     ));
                 }
-                if let CombatLabRegionCenter::Fixed(coord) = &region.center {
+                if let SandboxRegionCenter::Fixed(coord) = &region.center {
                     if coord.x + coord.y + coord.z != 0 {
                         return Err(format!(
                             "{} {side} deployment coordinate must sum to zero",
@@ -134,7 +134,7 @@ impl CombatLabMapCatalog {
     }
 }
 
-impl<'de> Deserialize<'de> for CombatLabMapCatalog {
+impl<'de> Deserialize<'de> for SandboxMapCatalog {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -149,10 +149,10 @@ impl<'de> Deserialize<'de> for CombatLabMapCatalog {
     }
 }
 
-/// Registers packaged Combat Lab map content.
+/// Registers packaged Sandbox map content.
 pub fn plugin(app: &mut App) {
-    app.register_type::<CombatLabMapCatalog>()
-        .load_settings::<CombatLabMapCatalog>("config/combat_lab_maps.ron", CONFIG_EXTENSIONS);
+    app.register_type::<SandboxMapCatalog>()
+        .load_settings::<SandboxMapCatalog>("config/sandbox_maps.ron", CONFIG_EXTENSIONS);
 }
 
 #[cfg(test)]
@@ -161,48 +161,48 @@ mod tests {
 
     #[test]
     fn shipped_catalog_parses_and_has_stable_maps() {
-        let catalog: CombatLabMapCatalog =
-            ron::from_str(include_str!("../../../assets/config/combat_lab_maps.ron"))
-                .expect("shipped Combat Lab maps parse");
-        assert_eq!(catalog.schema_version, COMBAT_LAB_MAP_SCHEMA_VERSION);
+        let catalog: SandboxMapCatalog =
+            ron::from_str(include_str!("../../../assets/config/sandbox_maps.ron"))
+                .expect("shipped Sandbox maps parse");
+        assert_eq!(catalog.schema_version, SANDBOX_MAP_SCHEMA_VERSION);
         assert!(catalog.get("flat-arena").is_some());
         assert!(catalog.get("the-crossing").is_some());
         assert!(catalog.get("procedural-hills").is_some());
         assert!(catalog.get("forest").is_some());
         let prairie = catalog
             .get("prairie")
-            .expect("Prairie should remain selectable in Combat Lab");
+            .expect("Prairie should remain selectable in Sandbox");
         assert_eq!(prairie.scenario, "Prairie");
         assert_eq!(prairie.fixed_seed, Some(1_592_598_566));
-        assert_eq!(prairie.preview, "ui/combat-lab/prairie.png");
+        assert_eq!(prairie.preview, "ui/sandbox/prairie.png");
         let deep_forest = catalog
             .get("deep-forest")
-            .expect("Deep Forest should remain selectable in Combat Lab");
+            .expect("Deep Forest should remain selectable in Sandbox");
         assert_eq!(deep_forest.scenario, "Deep Forest");
         assert_eq!(deep_forest.fixed_seed, Some(1_592_598_566));
-        assert_eq!(deep_forest.preview, "ui/combat-lab/deep-forest.png");
+        assert_eq!(deep_forest.preview, "ui/sandbox/deep-forest.png");
         assert!(catalog.get("fort").is_some());
         assert!(catalog.get("seven-regions").is_some());
         let two_rings = catalog
             .get("two-rings")
-            .expect("Two Rings should be selectable in Combat Lab");
+            .expect("Two Rings should be selectable in Sandbox");
         assert_eq!(two_rings.scenario, "Two Rings");
         assert_eq!(two_rings.fixed_seed, Some(1_592_598_566));
-        assert_eq!(two_rings.preview, "ui/combat-lab/two-rings.png");
+        assert_eq!(two_rings.preview, "ui/sandbox/two-rings.png");
         assert_eq!(catalog.maps.len(), 16);
 
         let scenarios: crate::ScenarioLibrary =
             ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
                 .expect("shipped scenarios parse");
-        for scenario in scenarios
-            .scenarios
-            .iter()
-            .filter(|scenario| scenario.category == crate::ScenarioCategory::Map)
-        {
+        for map in &catalog.maps {
             assert!(
-                catalog.maps.iter().any(|map| map.scenario == scenario.name),
-                "Map scenario {:?} is missing from Combat Lab",
-                scenario.name
+                scenarios
+                    .scenarios
+                    .iter()
+                    .any(|scenario| scenario.name == map.scenario),
+                "Sandbox map {:?} names an unavailable scenario {:?}",
+                map.id,
+                map.scenario
             );
         }
 

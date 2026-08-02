@@ -38,13 +38,13 @@
 // when this file parses, and the fix is a formation. A formation is also how a named
 // spawn zone is written: the anchor names it and `spread` bounds it.
 //
-// Every rostered unit is placed or the game returns to the title screen saying which
-// entry could not be, so a unit is never quietly missing from a fight.
+// Every rostered unit is placed or the game returns visibly to the Main Menu (or the
+// retained Creator-origin Sandbox flow) saying which entry could not be, so a unit is
+// never quietly missing from a fight.
 //
 // TO ADD A PARTY MEMBER: add a line to `units`. Nothing else changes — the formation
-// finds it a surface. (The interface has not caught up yet: selection, the camera and
-// the hostile AI are all still written for one piece a side, so a bigger roster is
-// playable but not yet pleasant.)
+// finds it a surface. Selection, camera framing, and hostile AI all consume the full
+// roster.
 (
     name: "Anchored Skirmish",
     rosters: [

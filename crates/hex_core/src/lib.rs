@@ -10,9 +10,10 @@
 //! their common language belongs.
 
 pub mod app;
-pub mod combat_lab;
 pub mod commands;
 pub mod config;
+#[cfg(feature = "test-support")]
+pub mod deterministic_fixture;
 pub mod effects;
 pub mod elements;
 pub mod faction;
@@ -36,8 +37,12 @@ pub use app::{
     AppSystems, GameplayPhase, GameplaySetup, GameplaySystems, Mode, PausableSystems, Pause,
     RoundElapsed, Screen, Turn,
 };
-pub use combat_lab::{combat_lab_fixture, CombatLabFixtureDefinition, COMBAT_LAB_FIXTURES};
 pub use commands::{Busy, CommandQueue, GameCommand, IssuedCommand, PendingDecision};
+#[cfg(feature = "test-support")]
+pub use deterministic_fixture::{
+    deterministic_fixture, DeterministicFixtureDefinition, DeterministicFixtureInitialState,
+    DeterministicRosterEntry, DeterministicRosterPlacement, DETERMINISTIC_FIXTURES,
+};
 pub use effects::{EffectEnd, EffectId, EffectPayload, PersistentEffect};
 pub use elements::{ElementId, SpellId};
 pub use faction::Faction;

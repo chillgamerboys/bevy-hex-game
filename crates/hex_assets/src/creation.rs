@@ -27,13 +27,11 @@ pub const MAX_CREATION_RADIUS: i32 = 64;
 /// Player-facing creator names are deliberately compact.
 pub const MAX_CREATION_NAME_CHARS: usize = 32;
 
-/// Whether a packaged record is offered to humans or reserved for automation.
+/// Player-facing audience for a packaged Creator record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PresetAudience {
     /// Read-only, visible, and duplicable in the Creator and Sandbox.
     HumanTemplate,
-    /// Immutable data addressed only by fixed fixture ids.
-    AutomationFixture,
 }
 
 /// One packaged character using the same record shape as local persistence.
@@ -765,18 +763,17 @@ mod tests {
         )))
         .expect("creation_presets.ron parses");
         assert_eq!(catalog.version, CREATION_SCHEMA_VERSION);
-        for audience in [
-            PresetAudience::HumanTemplate,
-            PresetAudience::AutomationFixture,
-        ] {
-            catalog
-                .library_for(audience)
-                .validate_integrity()
-                .expect("packaged records keep stable ids and references");
-        }
+        catalog
+            .library_for(PresetAudience::HumanTemplate)
+            .validate_integrity()
+            .expect("packaged records keep stable ids and references");
         assert!(catalog
             .characters
             .iter()
-            .any(|record| record.key == "fixture-caster"));
+            .all(|record| record.audience == PresetAudience::HumanTemplate));
+        assert!(catalog
+            .spells
+            .iter()
+            .all(|record| record.audience == PresetAudience::HumanTemplate));
     }
 }

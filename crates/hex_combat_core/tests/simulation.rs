@@ -16,7 +16,7 @@ use hex_combat_core::{
     ControllerInput, ElementNames, FrozenCombatContent, RulesProfile, RunBounds,
 };
 use hex_core::{
-    combat_lab_fixture, ElementId, Faction, GameCommand, HexCoord, IssuedCommand, LatticeCoord,
+    deterministic_fixture, ElementId, Faction, GameCommand, HexCoord, IssuedCommand, LatticeCoord,
     PlayerSeat, SpellId, TilePos, UnitId,
 };
 use hex_lattice::{
@@ -104,11 +104,11 @@ fn roster_case(name: &str, rules: RulesProfile, side_size: usize) -> CombatCase 
 
 #[test]
 fn shipped_tactical_and_custom_three_step_profiles_are_deterministic() {
-    let fixture = combat_lab_fixture("tempo-matrix").expect("shared tempo fixture");
+    let fixture = deterministic_fixture("tempo-matrix").expect("shared deterministic fixture");
     assert!(fixture.simulated);
     assert!(fixture.profile_matrix);
-    assert_eq!(fixture.player_count, fixture.hostile_count);
-    let side_size = usize::from(fixture.player_count);
+    assert_eq!(fixture.party.len(), fixture.enemies.len());
+    let side_size = fixture.party.len();
     for (profile_name, rules, expected_budget) in [
         ("shipped", profile("Shipped", 4), 4),
         ("tactical", profile("Tactical", 2), 2),
@@ -148,6 +148,24 @@ fn shipped_tactical_and_custom_three_step_profiles_are_deterministic() {
             .iter()
             .any(|issued| matches!(issued.command, GameCommand::MoveAlong { .. })));
         assert_eq!(first.positions.len(), 6);
+    }
+}
+
+#[test]
+fn deterministic_fixture_manifest_preserves_stable_review_identities() {
+    for id in [
+        "ability-lab",
+        "raider-mirror",
+        "creator-spell-matrix",
+        "creator-roster-matrix",
+        "occupancy-matrix",
+        "channel-attrition",
+        "tempo-matrix",
+    ] {
+        assert_eq!(
+            deterministic_fixture(id).map(|fixture| fixture.id),
+            Some(id)
+        );
     }
 }
 

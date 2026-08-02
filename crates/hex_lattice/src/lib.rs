@@ -65,5 +65,7 @@ pub use channel::channel;
 pub use disable::{apply_disables, resolve_incoming, restore};
 pub use recovery::rest;
 pub use spec::{CellKind, LatticeSpec};
-pub use state::{ActiveEnchantment, BrokenEnchantment, LatticeState, LatticeStats};
+pub use state::{
+    ActiveEnchantment, BrokenEnchantment, LatticeState, LatticeStateError, LatticeStats,
+};
 pub use tables::{Casting, FusionTable, Requirement, SpellTable, Tables};

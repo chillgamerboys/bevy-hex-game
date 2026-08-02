@@ -1,6 +1,6 @@
 //! The game itself.
 //!
-//! Owns the pause toggle, the route back to the title screen, and the HUD. Terrain,
+//! Owns the pause toggle, the route back to Main Menu, and the HUD. Terrain,
 //! environment, and the units are spawned by `hex_map`, `hex_world`, and `hex_units`
 //! on `OnEnter(Screen::Gameplay)`; this module deliberately does not reach into any
 //! of them. It reads `Mode` and `TurnOrder` to describe what is happening, and
@@ -12,10 +12,9 @@
 //! before an interface for it existed; nothing here emits a command any more.
 
 use bevy::prelude::*;
-use hex_assets::{CombatSettings, ElementCatalog, FormationCatalog};
+use hex_assets::{CombatSettings, ElementCatalog, FixedSettingsFreeze, FormationCatalog};
 use hex_combat::{
-    ChannelReadiness, CombatSummary, CommandRefusal, EncounterOutcome, EncounterResolution, Turn,
-    TurnOrder, UnitCombatSummary,
+    ChannelReadiness, CommandRefusal, EncounterOutcome, EncounterResolution, Turn, TurnOrder,
 };
 use hex_core::{
     AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, GameplayPhase, GameplaySystems,
@@ -25,28 +24,17 @@ use hex_core::{
 use hex_lattice::{LatticeSpec, LatticeState, LatticeStats};
 use hex_units::{Archetype, Downed, Party, Player, Selected, UnitRegistry};
 
-#[cfg(test)]
-use hex_core::HexCoord;
-
-use super::combat_lab::{
-    CombatLabReportLaunch, CombatLabSandboxRequest, CombatLabSession, CreatorContentOverlay,
-    CreatorDisplayName,
-};
 use super::despawn_screen;
-use crate::combat_reports::{
-    CombatLabReport, CombatLabReportStore, CombatLabReportTermination, CurrentCombatLabReport,
-};
+use super::sandbox::{CreatorDisplayName, GameplaySessionOrigin, SandboxSession};
 use crate::readouts::{DisableSelection, GameplayUiContext, UiUnitIdentity};
 use crate::scenarios::ActiveScenario;
-use crate::storage::StoragePaths;
 use hex_ui::{
     ActionAffordance, ActionAvailability, ActionPriority, GameplayAction, GameplayHudView,
-    OutcomeAction, OutcomeActionView, OutcomeCompareChoiceView, OutcomeReportView,
+    OutcomeAction, OutcomeActionView, OutcomeView,
 };
 
 pub(crate) fn plugin(app: &mut App) {
     app.init_resource::<InputBindings>();
-    app.init_resource::<OutcomeReportState>();
     app.add_sub_state::<Pause>();
     app.register_type::<Pause>();
     // A second sub-state of `Screen::Gameplay`, independent of `Pause`. Both are
@@ -89,22 +77,7 @@ pub(crate) fn plugin(app: &mut App) {
     );
     app.add_systems(
         Update,
-        (
-            handle_outcome_report_intents.after(hex_ui::UiSystems::EmitIntents),
-            sync_outcome_report_view,
-            handle_outcome_actions,
-        )
-            .chain()
-            .run_if(in_state(Screen::Gameplay))
-            .run_if(resource_equals(GameplayPhase::Active)),
-    );
-    app.add_systems(
-        Update,
-        (
-            toggle_lab_statistics_from_intents,
-            handle_lab_statistics_intents,
-            publish_lab_statistics_view,
-        )
+        (sync_outcome_view, handle_outcome_actions)
             .chain()
             .after(hex_ui::UiSystems::EmitIntents)
             .before(hex_ui::UiSystems::Render)
@@ -125,12 +98,7 @@ pub(crate) fn plugin(app: &mut App) {
     );
     app.add_systems(
         OnEnter(Screen::Gameplay),
-        (
-            reset_pause,
-            reset_mode,
-            reset_outcome_report,
-            reset_lab_statistics_view,
-        ),
+        (reset_pause, reset_mode, reset_outcome_view),
     );
     app.add_systems(OnExit(Screen::Gameplay), despawn_screen(Screen::Gameplay));
 }
@@ -194,233 +162,8 @@ fn handle_gameplay_ui_intents(
     }
 }
 
-pub(crate) use hex_gameplay_model::ReportMode as OutcomeReportMode;
-use hex_gameplay_model::{
-    resolve_lab_run, LabRunAction, LabRunFailure, LabRunTransition, ReportViewModel,
-};
-
-type OutcomeReportState = ReportViewModel<crate::combat_reports::CombatLabReportId>;
-
-/// Installs the shipping report-selection adapter without the rest of Gameplay.
-///
-/// The default-off application contract uses this focused registration to drive
-/// real [`hex_ui::UiIntent`] messages through [`ReportViewModel`] and then observe
-/// the immutable [`OutcomeReportView`]. Keeping the private state inside this
-/// module prevents test support from gaining a second mutation path.
-#[cfg(feature = "test-support")]
-pub(crate) fn install_outcome_report_test_adapter(app: &mut App) {
-    app.add_message::<hex_ui::UiIntent>()
-        .init_resource::<OutcomeReportState>()
-        .init_resource::<OutcomeReportView>()
-        .add_systems(
-            Update,
-            (handle_outcome_report_intents, sync_outcome_report_view).chain(),
-        );
-}
-
-fn reset_outcome_report(
-    mut state: ResMut<OutcomeReportState>,
-    mut view: ResMut<OutcomeReportView>,
-) {
-    *state = OutcomeReportState::default();
-    *view = OutcomeReportView::default();
-}
-
-fn reset_lab_statistics_view(mut view: ResMut<hex_ui::LabStatisticsView>) {
-    *view = hex_ui::LabStatisticsView::default();
-}
-
-/// Applies the secondary drawer toggle through the same typed intent used by the
-/// shipping application. Kept separate from report finalization so the
-/// default-off headless contract can exercise this exact path without fabricating
-/// storage, combat, or report authority.
-pub(crate) fn toggle_lab_statistics_from_intents(
-    mut intents: MessageReader<hex_ui::UiIntent>,
-    mut view: ResMut<hex_ui::LabStatisticsView>,
-) {
-    for intent in intents.read() {
-        if matches!(
-            intent,
-            hex_ui::UiIntent::LabStatistics(hex_ui::LabStatisticsIntent::Toggle)
-        ) {
-            view.expanded = !view.expanded;
-        }
-    }
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "manual stop freezes the same independent launch facts as outcome reporting"
-)]
-fn handle_lab_statistics_intents(
-    mut commands: Commands,
-    mut intents: MessageReader<hex_ui::UiIntent>,
-    lab: Option<Res<CombatLabSession>>,
-    launch: Option<Res<CombatLabReportLaunch>>,
-    summary: Option<Res<CombatSummary>>,
-    shipped: Option<Res<CombatSettings>>,
-    paths: Res<StoragePaths>,
-    mut reports: ResMut<CombatLabReportStore>,
-    mut next_screen: ResMut<NextState<Screen>>,
-) {
-    let mut end_experiment = false;
-    for intent in intents.read() {
-        if matches!(
-            intent,
-            hex_ui::UiIntent::LabStatistics(hex_ui::LabStatisticsIntent::EndExperiment)
-        ) {
-            end_experiment = true;
-        }
-    }
-    if !end_experiment {
-        return;
-    }
-    let (Some(lab), Some(launch), Some(summary), Some(shipped)) = (
-        lab.as_deref(),
-        launch.as_deref(),
-        summary.as_deref(),
-        shipped.as_deref(),
-    ) else {
-        error!("Combat Lab manual stop is missing frozen launch or summary facts");
-        return;
-    };
-    let report = match CombatLabReport::new(
-        lab.profile.clone(),
-        launch.origin.clone(),
-        launch.map.clone(),
-        launch.content_revision,
-        launch.rosters.clone(),
-        launch.deployment.clone(),
-        CombatLabReportTermination::ManualStop,
-        summary.clone(),
-    ) {
-        Ok(report) => report,
-        Err(error) => {
-            reports.error = Some(format!("manual-stop report failed closed: {error}"));
-            return;
-        }
-    };
-    commands.insert_resource(CurrentCombatLabReport(report.clone()));
-    if let Err(error) = reports.save(report, shipped, &paths) {
-        reports.error = Some(error);
-        return;
-    }
-    next_screen.set(Screen::CombatLab);
-}
-
-pub(crate) fn lab_statistics_should_be_visible(
-    phase: GameplayPhase,
-    resolution: Option<&EncounterResolution>,
-) -> bool {
-    phase == GameplayPhase::Active && resolution.is_none_or(|resolution| resolution.0.is_none())
-}
-
-pub(crate) fn publish_lab_statistics_view(
-    phase: Res<GameplayPhase>,
-    resolution: Option<Res<EncounterResolution>>,
-    lab: Option<Res<CombatLabSession>>,
-    summary: Option<Res<CombatSummary>>,
-    mut view: ResMut<hex_ui::LabStatisticsView>,
-) {
-    let next = hex_ui::LabStatisticsView {
-        present: lab.is_some(),
-        visible: lab.is_some() && lab_statistics_should_be_visible(*phase, resolution.as_deref()),
-        expanded: view.expanded,
-        text: summary.as_deref().map_or_else(
-            || "Waiting for canonical combat statistics…".to_owned(),
-            live_statistics_label,
-        ),
-    };
-    if *view != next {
-        *view = next;
-    }
-}
-
-pub(crate) fn live_statistics_label(summary: &CombatSummary) -> String {
-    let mana = if summary.channelled_mana.is_empty() {
-        "none".to_owned()
-    } else {
-        summary
-            .channelled_mana
-            .iter()
-            .map(|(element, amount)| format!("{element} {amount}"))
-            .collect::<Vec<_>>()
-            .join(" · ")
-    };
-    let outcome = summary
-        .outcome
-        .map_or("IN PROGRESS", |outcome| match outcome {
-            EncounterOutcome::Victory => "VICTORY",
-            EncounterOutcome::Defeat => "DEFEAT",
-        });
-    let units = summary
-        .units
-        .iter()
-        .map(|(unit, summary)| format_unit_statistics(*unit, summary))
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!(
-        "Round {} · Turns {} · Outcome {outcome} · No-progress {}/{} current/max\n\
-         Commands {} successful / {} refused · AI choices {}\n\
-         Move {} actions · {} distance / {} budget used\n\
-         Casts {} · Channel {} · Strikes {} · Idle turns {}\n\
-         Disables {} raw / {} prevented / {} applied\n\
-         Restored {} · Downed {} · Revived {}\n\
-         Mana restored · {mana}\n\
-         PER UNIT\n{units}",
-        summary.rounds,
-        summary.turns,
-        summary.no_progress_current,
-        summary.no_progress_max,
-        summary.successful_commands,
-        summary.refused_commands,
-        summary.ai_selection_count,
-        summary.moves,
-        summary.movement_distance,
-        summary.movement_budget_used,
-        summary.casts,
-        summary.channels,
-        summary.strikes,
-        summary.idle_turns,
-        summary.raw_disables,
-        summary.prevented_disables,
-        summary.applied_disables,
-        summary.restored_cells,
-        summary.downings,
-        summary.revivals,
-    )
-}
-
-fn format_unit_statistics(unit: UnitId, summary: &UnitCombatSummary) -> String {
-    let mana = summary
-        .channelled_mana
-        .iter()
-        .map(|(element, amount)| format!("{element} {amount}"))
-        .collect::<Vec<_>>()
-        .join("/");
-    format!(
-        "#{} turns {} · no-progress {}/{} · cmd {}/{} · move {}/{} · cast {} · channel {} [{}] · strike {} · disable {}/{}/{} · restore {} · down/revive {}/{} · idle {} · AI {}",
-        unit.0,
-        summary.turns,
-        summary.no_progress_current,
-        summary.no_progress_max,
-        summary.successful_commands,
-        summary.refused_commands,
-        summary.movement_distance,
-        summary.movement_budget_used,
-        summary.casts_by_spell.values().sum::<u32>(),
-        summary.channels,
-        if mana.is_empty() { "none" } else { &mana },
-        summary.strikes,
-        summary.raw_disables,
-        summary.prevented_disables,
-        summary.applied_disables,
-        summary.restored_cells,
-        summary.downings,
-        summary.revivals,
-        summary.idle_turns,
-        summary.ai_choices,
-    )
+fn reset_outcome_view(mut view: ResMut<OutcomeView>) {
+    *view = OutcomeView::default();
 }
 
 fn handle_party_strip(
@@ -589,164 +332,65 @@ fn publish_party_view(
         *view = next;
     }
 }
-fn sync_outcome_report_view(
-    mut commands: Commands,
+fn sync_outcome_view(
     resolution: Res<EncounterResolution>,
-    lab: Option<Res<CombatLabSession>>,
-    launch: Option<Res<CombatLabReportLaunch>>,
-    summary: Option<Res<CombatSummary>>,
-    current: Option<Res<CurrentCombatLabReport>>,
-    reports: Option<Res<CombatLabReportStore>>,
-    report_state: Res<OutcomeReportState>,
-    mut view: ResMut<OutcomeReportView>,
+    sandbox: Option<Res<SandboxSession>>,
+    mut view: ResMut<OutcomeView>,
 ) {
     let Some(outcome) = resolution.outcome() else {
         if view.visible {
-            *view = OutcomeReportView::default();
+            *view = OutcomeView::default();
         }
         return;
     };
-    let report = if lab.is_some() {
-        current
-            .as_deref()
-            .map(|report| report.0.clone())
-            .or_else(|| {
-                lab.as_deref()
-                    .zip(launch.as_deref())
-                    .zip(summary.as_deref())
-                    .and_then(|((lab, launch), summary)| {
-                        match CombatLabReport::new(
-                            lab.profile.clone(),
-                            launch.origin.clone(),
-                            launch.map.clone(),
-                            launch.content_revision,
-                            launch.rosters.clone(),
-                            launch.deployment.clone(),
-                            CombatLabReportTermination::Outcome(outcome),
-                            summary.clone(),
-                        ) {
-                            Ok(report) => {
-                                commands.insert_resource(CurrentCombatLabReport(report.clone()));
-                                Some(report)
-                            }
-                            Err(error) => {
-                                error!("Combat Lab report evidence failed closed: {error}");
-                                None
-                            }
-                        }
-                    })
-            })
-    } else {
-        None
-    };
-    let (title, detail) = match outcome {
-        EncounterOutcome::Victory => ("Victory", "The battlefield remains as the encounter ended."),
-        EncounterOutcome::Defeat => (
-            "Defeat",
-            "Retry replays this scenario with the same resolved seed.",
-        ),
-    };
-    let metadata = report.as_ref().zip(lab.as_deref()).map(|(report, lab)| {
-        let changes = report.profile.changed_from_shipped(&lab.shipped_combat);
-        format!(
-            "{:?} · {} · seed {} · Player {} / Hostile {} · {} rule change{} · fingerprint {:016X}",
-            report.profile.preset,
-            report.map.scenario,
-            report
-                .map
-                .resolved_seed
-                .map_or_else(|| "authored".to_owned(), |seed| seed.to_string()),
-            report.rosters.players.len(),
-            report.rosters.hostiles.len(),
-            changes.len(),
-            if changes.len() == 1 { "" } else { "s" },
-            report.summary_fingerprint,
-        )
-    });
-    let body = report.as_ref().map(|report| {
-        outcome_report_text(
-            report,
-            report_state.mode,
-            reports.as_deref(),
-            report_state.compare_report,
-        )
-    });
-    let comparisons = reports.as_deref().map_or_else(Vec::new, |reports| {
-        reports
-            .history
-            .reports
-            .iter()
-            .map(|saved| {
-                let selected = report_state.compare_report == Some(saved.id);
-                OutcomeCompareChoiceView {
-                    id: saved.id,
-                    label: if selected {
-                        format!("COMPARE · REPORT {}", saved.id.0)
-                    } else {
-                        format!("Report {}", saved.id.0)
-                    },
-                    selected,
-                }
-            })
-            .collect()
-    });
-    let mut actions = if report.is_some() {
+    let actions = if sandbox.is_some() {
         vec![
-            OutcomeActionView {
-                action: OutcomeAction::SaveReport,
-                label: "Save Report".to_owned(),
-            },
             OutcomeActionView {
                 action: OutcomeAction::RetryExact,
                 label: "Retry Exact".to_owned(),
             },
             OutcomeActionView {
-                action: OutcomeAction::TuneAgain,
-                label: "Tune & Run Again".to_owned(),
+                action: OutcomeAction::Return,
+                label: "Return to Sandbox".to_owned(),
             },
         ]
     } else {
-        vec![OutcomeActionView {
-            action: match outcome {
-                EncounterOutcome::Victory => OutcomeAction::Continue,
-                EncounterOutcome::Defeat => OutcomeAction::Retry,
+        vec![
+            OutcomeActionView {
+                action: match outcome {
+                    EncounterOutcome::Victory => OutcomeAction::Continue,
+                    EncounterOutcome::Defeat => OutcomeAction::Retry,
+                },
+                label: match outcome {
+                    EncounterOutcome::Victory => "Continue",
+                    EncounterOutcome::Defeat => "Retry",
+                }
+                .to_owned(),
             },
-            label: match outcome {
-                EncounterOutcome::Victory => "Continue",
-                EncounterOutcome::Defeat => "Retry",
-            }
-            .to_owned(),
-        }]
+            OutcomeActionView {
+                action: OutcomeAction::Return,
+                label: "Return to Main Menu".to_owned(),
+            },
+        ]
     };
-    if matches!(
-        report.as_ref().map(|report| &report.origin),
-        Some(crate::combat_reports::CombatLabReportOrigin::FixedFixture { .. })
-    ) {
-        actions.push(OutcomeActionView {
-            action: OutcomeAction::CopyToSandbox,
-            label: "Copy to Sandbox".to_owned(),
-        });
-    }
-    let return_label =
-        lab.as_deref()
-            .map_or("Return to Title", |session| match session.return_to {
-                Screen::CharacterCreator => "Return to Creator",
-                Screen::SpellCreator => "Return to Spell Creator",
-                Screen::CombatLab => "Return to Combat Lab",
-                _ => "Return to Title",
-            });
-    actions.push(OutcomeActionView {
-        action: OutcomeAction::Return,
-        label: return_label.to_owned(),
-    });
-    let next = OutcomeReportView {
+    let next = OutcomeView {
         visible: true,
-        title: title.to_owned(),
-        detail: detail.to_owned(),
-        metadata,
-        mode: report_state.mode,
-        body,
-        comparisons,
+        title: match outcome {
+            EncounterOutcome::Victory => "Victory",
+            EncounterOutcome::Defeat => "Defeat",
+        }
+        .to_owned(),
+        detail: match (sandbox.is_some(), outcome) {
+            (true, EncounterOutcome::Victory) => "The Enemy roster can no longer continue.",
+            (true, EncounterOutcome::Defeat) => "The Party roster can no longer continue.",
+            (false, EncounterOutcome::Victory) => {
+                "The encounter is complete. Continue the Campaign when ready."
+            }
+            (false, EncounterOutcome::Defeat) => {
+                "Retry replays this scenario with the same resolved seed."
+            }
+        }
+        .to_owned(),
         actions,
     };
     if *view != next {
@@ -754,217 +398,12 @@ fn sync_outcome_report_view(
     }
 }
 
-fn handle_outcome_report_intents(
-    mut intents: MessageReader<hex_ui::UiIntent>,
-    mut state: ResMut<OutcomeReportState>,
-) {
-    for intent in intents.read() {
-        match *intent {
-            hex_ui::UiIntent::Outcome(hex_ui::OutcomeIntent::SelectMode(mode)) => {
-                state.select_mode(mode);
-            }
-            hex_ui::UiIntent::Outcome(hex_ui::OutcomeIntent::CompareWith(id)) => {
-                state.compare_with(id);
-            }
-            _ => {}
-        }
-    }
-}
-
-pub(crate) fn outcome_report_text(
-    report: &CombatLabReport,
-    mode: OutcomeReportMode,
-    store: Option<&CombatLabReportStore>,
-    selected: Option<crate::combat_reports::CombatLabReportId>,
-) -> String {
-    match mode {
-        OutcomeReportMode::Overview => format!(
-            "OVERVIEW\nRounds {} · Turns {} · Commands {} successful / {} refused · AI choices {}\n\
-             Movement {} distance / {} budget · Casts {} · Channel {} · Strikes {} · Idle {}\n\
-             Disables {} raw / {} prevented / {} applied · Restored {} · Downed {} · Revived {}\n\
-             No-progress stretch {} current / {} maximum · Timeline {} of {} canonical events retained",
-            report.summary.rounds,
-            report.summary.turns,
-            report.summary.successful_commands,
-            report.summary.refused_commands,
-            report.summary.ai_selection_count,
-            report.summary.movement_distance,
-            report.summary.movement_budget_used,
-            report.summary.casts,
-            report.summary.channels,
-            report.summary.strikes,
-            report.summary.idle_turns,
-            report.summary.raw_disables,
-            report.summary.prevented_disables,
-            report.summary.applied_disables,
-            report.summary.restored_cells,
-            report.summary.downings,
-            report.summary.revivals,
-            report.summary.no_progress_current,
-            report.summary.no_progress_max,
-            report.summary.events.len(),
-            report.summary.event_count,
-        ),
-        OutcomeReportMode::Units => {
-            let mut lines = vec!["UNITS · stable frozen roster order".to_owned()];
-            for (side, roster) in [
-                ("PLAYER", report.rosters.players.as_slice()),
-                ("HOSTILE", report.rosters.hostiles.as_slice()),
-            ] {
-                for entry in roster {
-                    let unit = UnitId(entry.unit_id);
-                    let summary = report.summary.units.get(&unit).cloned().unwrap_or_default();
-                    lines.push(format!(
-                        "{side} · {} · {}",
-                        entry.display_name,
-                        format_unit_statistics(unit, &summary)
-                    ));
-                }
-            }
-            lines.join("\n")
-        }
-        OutcomeReportMode::SpellsEffects => {
-            let casts = report
-                .summary
-                .casts_by_spell
-                .iter()
-                .map(|(spell, count)| format!("{spell} {count}"))
-                .collect::<Vec<_>>()
-                .join(" · ");
-            let effects = report
-                .summary
-                .delivered_effects
-                .iter()
-                .map(|(effect, count)| format!("{effect:?} {count}"))
-                .collect::<Vec<_>>()
-                .join(" · ");
-            let mana = report
-                .summary
-                .channelled_mana
-                .iter()
-                .map(|(element, amount)| format!("{element} {amount}"))
-                .collect::<Vec<_>>()
-                .join(" · ");
-            format!(
-                "SPELLS & EFFECTS\nCasts · {}\nDelivered · {}\nChannel mana · {}\nDisable flow · {} raw / {} prevented / {} applied · restorations {}",
-                if casts.is_empty() { "none" } else { &casts },
-                if effects.is_empty() { "none" } else { &effects },
-                if mana.is_empty() { "none" } else { &mana },
-                report.summary.raw_disables,
-                report.summary.prevented_disables,
-                report.summary.applied_disables,
-                report.summary.restored_cells,
-            )
-        }
-        OutcomeReportMode::Timeline => {
-            let retained = report.summary.events.len();
-            let shown = retained.min(18);
-            let skipped = retained.saturating_sub(shown);
-            let mut lines = vec![format!(
-                "TIMELINE · showing final {shown} of {} retained / {} total{}",
-                retained,
-                report.summary.event_count,
-                if u64::try_from(retained).unwrap_or(u64::MAX) < report.summary.event_count {
-                    " · OLDER EVENTS TRUNCATED"
-                } else {
-                    ""
-                }
-            )];
-            for (index, event) in report.summary.events.iter().skip(skipped).enumerate() {
-                lines.push(format!("{:04} · {event:?}", skipped + index + 1));
-            }
-            lines.join("\n")
-        }
-        OutcomeReportMode::Compare => {
-            let Some(store) = store else {
-                return "COMPARE\nSaved report history is unavailable.".to_owned();
-            };
-            let comparison = selected
-                .and_then(|id| store.history.reports.iter().find(|saved| saved.id == id))
-                .or_else(|| store.history.reports.last());
-            let Some(saved) = comparison else {
-                return "COMPARE\nSave a report, then select it here. Fixed fixtures do not read history until Compare is explicitly opened.".to_owned();
-            };
-            format_report_comparison(report, &saved.report, saved.id.0)
-        }
-    }
-}
-
-fn format_report_comparison(
-    current: &CombatLabReport,
-    saved: &CombatLabReport,
-    saved_id: u64,
-) -> String {
-    format!(
-        "COMPARE · THIS RUN ↔ REPORT {saved_id}\n\
-         THIS · {}\n\
-         SAVED · {}\n\
-         DELTAS (this − saved) · rounds {:+} · turns {:+} · successful {:+} · refused {:+}\n\
-         movement {:+} · Channel {:+} · applied disables {:+} · no-progress max {:+}",
-        outcome_frozen_header(current),
-        outcome_frozen_header(saved),
-        signed_report_delta(current.summary.rounds, saved.summary.rounds),
-        signed_report_delta(current.summary.turns, saved.summary.turns),
-        signed_report_delta(
-            current.summary.successful_commands,
-            saved.summary.successful_commands,
-        ),
-        signed_report_delta(
-            current.summary.refused_commands,
-            saved.summary.refused_commands,
-        ),
-        signed_report_delta(
-            current.summary.movement_distance,
-            saved.summary.movement_distance,
-        ),
-        signed_report_delta(current.summary.channels, saved.summary.channels),
-        signed_report_delta(
-            current.summary.applied_disables,
-            saved.summary.applied_disables,
-        ),
-        signed_report_delta(
-            current.summary.no_progress_max,
-            saved.summary.no_progress_max,
-        ),
-    )
-}
-
-fn outcome_frozen_header(report: &CombatLabReport) -> String {
-    let roster = |entries: &[crate::combat_reports::CombatLabReportRosterEntry]| {
-        entries
-            .iter()
-            .map(|entry| entry.display_name.as_str())
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    format!(
-        "{:?} · {} · rules [{}/{}/{}/{}/{}/{}] · P [{}] · H [{}]",
-        report.profile.preset,
-        report.map.scenario,
-        report.profile.movement_per_turn,
-        report.profile.strike_disables,
-        report.profile.engage_range,
-        report.profile.disengage_margin,
-        report.profile.levels_per_bonus_range,
-        report.profile.reveal_duration,
-        roster(&report.rosters.players),
-        roster(&report.rosters.hostiles),
-    )
-}
-
-fn signed_report_delta(left: u32, right: u32) -> i64 {
-    i64::from(left) - i64::from(right)
-}
-
 fn handle_outcome_actions(
     mut intents: MessageReader<hex_ui::UiIntent>,
     resolution: Res<EncounterResolution>,
     active: Option<Res<ActiveScenario>>,
-    lab: Option<Res<CombatLabSession>>,
-    overlay: Option<Res<CreatorContentOverlay>>,
-    current_report: Option<Res<CurrentCombatLabReport>>,
-    mut report_store: Option<ResMut<CombatLabReportStore>>,
-    paths: Option<Res<StoragePaths>>,
+    sandbox: Option<Res<SandboxSession>>,
+    origin: Option<Res<GameplaySessionOrigin>>,
     mut commands: Commands,
     mut next_mode: ResMut<NextState<Mode>>,
     mut next_screen: ResMut<NextState<Screen>>,
@@ -977,14 +416,10 @@ fn handle_outcome_actions(
             continue;
         };
         match (*action, outcome) {
-            (OutcomeAction::Continue, EncounterOutcome::Victory) => {
-                if let Some(lab) = lab.as_deref() {
-                    next_screen.set(lab.return_to);
-                } else {
-                    next_mode.set(Mode::Exploring);
-                }
+            (OutcomeAction::Continue, EncounterOutcome::Victory) if sandbox.is_none() => {
+                next_mode.set(Mode::Exploring);
             }
-            (OutcomeAction::Retry, EncounterOutcome::Defeat) => {
+            (OutcomeAction::Retry, EncounterOutcome::Defeat) if sandbox.is_none() => {
                 let Some(active) = active.as_deref() else {
                     error!("cannot retry: active scenario launch input was not retained");
                     continue;
@@ -992,80 +427,39 @@ fn handle_outcome_actions(
                 commands.insert_resource(active.0.clone());
                 next_screen.set(Screen::Loading);
             }
-            (
-                action @ (OutcomeAction::RetryExact
-                | OutcomeAction::TuneAgain
-                | OutcomeAction::CopyToSandbox),
-                _,
-            ) => {
-                let action = match action {
-                    OutcomeAction::RetryExact => LabRunAction::RetryExact,
-                    OutcomeAction::TuneAgain => LabRunAction::TuneAgain,
-                    OutcomeAction::CopyToSandbox => LabRunAction::CopyToSandbox,
-                    _ => unreachable!("match arm limits outcome actions"),
-                };
-                let transition = resolve_lab_run(
-                    action,
-                    active.as_deref().map(|active| &active.0),
-                    current_report.as_deref().map(|report| &report.0),
-                    |report| {
-                        matches!(
-                            report.origin,
-                            crate::combat_reports::CombatLabReportOrigin::FixedFixture { .. }
-                        )
-                    },
-                );
-                match transition {
-                    Ok(LabRunTransition::RetryExact(scenario)) => {
-                        commands.insert_resource(scenario);
-                        next_screen.set(Screen::Loading);
-                    }
-                    Ok(LabRunTransition::RestoreSandbox(report)) => {
-                        commands.insert_resource(CombatLabSandboxRequest {
-                            report,
-                            overlay: overlay.as_deref().cloned(),
-                        });
-                        next_screen.set(Screen::CombatLab);
-                    }
-                    Err(failure) => {
-                        let message = match failure {
-                            LabRunFailure::MissingScenario => {
-                                "cannot retry exact Lab run: frozen scenario input was not retained"
-                            }
-                            LabRunFailure::MissingReport => {
-                                "cannot restore Lab run: frozen report state is unavailable"
-                            }
-                            LabRunFailure::CopyRequiresFixture => {
-                                "cannot copy non-fixture report to Sandbox"
-                            }
-                        };
-                        error!("{message}");
-                    }
-                }
-            }
-            (OutcomeAction::SaveReport, _) => {
-                let (Some(report), Some(store), Some(lab), Some(paths)) = (
-                    current_report.as_deref(),
-                    report_store.as_deref_mut(),
-                    lab.as_deref(),
-                    paths.as_deref(),
-                ) else {
-                    error!("cannot save Lab report: frozen report state is unavailable");
+            (OutcomeAction::RetryExact, _) if sandbox.is_some() => {
+                let Some(sandbox) = sandbox.as_deref() else {
+                    error!(
+                        "cannot retry exact Sandbox run: frozen launch snapshot was not retained"
+                    );
                     continue;
                 };
-                match store.save(report.0.clone(), &lab.shipped_combat, paths) {
-                    Ok(id) => info!("saved Combat Lab report {}", id.0),
-                    Err(error) => error!("could not save Combat Lab report: {error}"),
-                }
+                // `SandboxSession` and `CreatorContentOverlay` deliberately remain
+                // installed. Loading consumes the same frozen scenario identity,
+                // deployment, roster, and content snapshot as the completed run.
+                commands.insert_resource(FixedSettingsFreeze::<CombatSettings>::default());
+                commands.insert_resource(FixedSettingsFreeze::<hex_assets::SpellFile>::default());
+                commands.insert_resource(FixedSettingsFreeze::<hex_assets::LatticeFile>::default());
+                commands.insert_resource(sandbox.launch.loading_input());
+                commands.insert_resource(sandbox.launch.rules.clone());
+                next_screen.set(Screen::Loading);
             }
             (OutcomeAction::Return, _) => {
-                next_screen.set(
-                    lab.as_deref()
-                        .map_or(Screen::Title, |session| session.return_to),
-                );
+                next_screen.set(gameplay_return_screen(origin.as_deref(), sandbox.is_some()));
             }
             _ => {}
         }
+    }
+}
+
+fn gameplay_return_screen(
+    origin: Option<&GameplaySessionOrigin>,
+    has_sandbox_session: bool,
+) -> Screen {
+    if has_sandbox_session || matches!(origin, Some(GameplaySessionOrigin::Sandbox)) {
+        Screen::Sandbox
+    } else {
+        Screen::Title
     }
 }
 
@@ -1094,7 +488,7 @@ fn publish_hud_view(
         let next = GameplayHudView {
             phase: GameplayPhase::Deployment,
             actor: None,
-            actor_label: "Combat Lab deployment".to_owned(),
+            actor_label: "Sandbox deployment".to_owned(),
             round: "Setup".to_owned(),
             movement_remaining: 0,
             action_remaining: false,
@@ -1118,10 +512,7 @@ fn publish_hud_view(
             round: outcome,
             movement_remaining: 0,
             action_remaining: false,
-            required_prompt: Some(
-                "Review the encounter report, then retry, tune, copy, or return to Combat Lab."
-                    .to_owned(),
-            ),
+            required_prompt: Some("Choose Retry Exact or return to the session setup.".to_owned()),
             actions: Vec::new(),
         };
         if *view != next {
@@ -1376,17 +767,15 @@ fn handle_input(
     pause: Res<State<Pause>>,
     mut next_pause: ResMut<NextState<Pause>>,
     mut next_screen: ResMut<NextState<Screen>>,
-    lab: Option<Res<CombatLabSession>>,
+    sandbox: Option<Res<SandboxSession>>,
+    origin: Option<Res<GameplaySessionOrigin>>,
 ) {
     if bindings.just_pressed(&keys, InputAction::Pause) {
         next_pause.set(toggled_pause(*pause.get()));
     }
     // Backspace rather than Escape, which is taken by pause.
     if bindings.just_pressed(&keys, InputAction::ReturnTitle) {
-        next_screen.set(
-            lab.as_deref()
-                .map_or(Screen::Title, |session| session.return_to),
-        );
+        next_screen.set(gameplay_return_screen(origin.as_deref(), sandbox.is_some()));
     }
 }
 
@@ -1398,8 +787,14 @@ fn toggled_pause(pause: Pause) -> Pause {
 mod tests {
     use bevy::state::app::StatesPlugin;
     use bevy::MinimalPlugins;
-    use hex_assets::ScenarioLibrary;
-    use hex_core::{ResolvedMapSeed, TilePos};
+    use hex_assets::{
+        CombatSettings, Encounter, EncounterFaction, EncounterPlacement, Roster, RosterEntry,
+        ScenarioLibrary,
+    };
+    use hex_core::{HexCoord, ResolvedMapSeed, TilePos};
+    use hex_gameplay_model::{CampaignSlotId, SandboxCharacter, SandboxMapSelection};
+
+    use super::super::sandbox::{SandboxDeploymentSnapshot, SandboxLaunchSnapshot};
 
     #[test]
     fn typed_and_keyboard_pause_paths_share_the_same_toggle() {
@@ -1434,52 +829,86 @@ mod tests {
 
     use super::*;
 
-    fn sample_report(rounds: u32) -> CombatLabReport {
-        let shipped = hex_assets::CombatSettings::default();
-        let mut summary = CombatSummary::default();
-        summary.rounds = rounds;
-        summary.turns = rounds.saturating_mul(3);
-        summary.no_progress_max = 2;
-        summary.outcome = Some(EncounterOutcome::Victory);
-        summary.units.insert(
-            UnitId(1),
-            UnitCombatSummary {
-                movement_distance: 3,
-                channels: 1,
-                ..default()
-            },
+    fn sample_sandbox_session(seed: u64) -> SandboxSession {
+        let library: ScenarioLibrary =
+            ron::from_str(include_str!("../../../../assets/config/scenarios.ron"))
+                .expect("shipped scenarios parse");
+        let scenario = library
+            .scenarios
+            .into_iter()
+            .find(|scenario| scenario.name == "Procedural Hills")
+            .expect("Sandbox scenario exists");
+        let party = vec![
+            SandboxCharacter::Template("hedge-mage".to_owned()),
+            SandboxCharacter::Template("hedge-mage".to_owned()),
+        ];
+        let enemies = vec![
+            SandboxCharacter::Template("raider".to_owned()),
+            SandboxCharacter::Template("raider".to_owned()),
+        ];
+        let party_surfaces = vec![
+            TilePos::new(HexCoord::from_axial(-2, 1), 1),
+            TilePos::new(HexCoord::from_axial(-1, 1), 1),
+        ];
+        let enemy_surfaces = vec![
+            TilePos::new(HexCoord::from_axial(2, -1), 1),
+            TilePos::new(HexCoord::from_axial(3, -1), 1),
+        ];
+        let initial = Encounter {
+            name: "Sandbox test".to_owned(),
+            rosters: Vec::new(),
+        };
+        let rules = CombatSettings {
+            movement_per_turn: 3,
+            ..Default::default()
+        };
+        let mut launch = SandboxLaunchSnapshot::new(
+            SandboxMapSelection::new("procedural-hills", Some(seed)),
+            "Procedural Hills".to_owned(),
+            party.clone(),
+            enemies.clone(),
+            Some(77),
+            rules,
+            scenario,
+            initial,
         );
-        CombatLabReport::new(
-            hex_assets::CombatRulesProfile::shipped(&shipped),
-            crate::combat_reports::CombatLabReportOrigin::Sandbox,
-            crate::combat_reports::CombatLabReportMap {
-                catalog_id: "flat-arena".to_owned(),
-                scenario: "Ability Lab".to_owned(),
-                resolved_seed: None,
+        let exact = Encounter {
+            name: "Sandbox test · exact".to_owned(),
+            rosters: [
+                (EncounterFaction::Player, &party, &party_surfaces),
+                (EncounterFaction::Hostile, &enemies, &enemy_surfaces),
+            ]
+            .into_iter()
+            .map(|(faction, choices, surfaces)| Roster {
+                faction,
+                placement: EncounterPlacement::Surface(
+                    surfaces.first().copied().unwrap_or(TilePos::ORIGIN),
+                ),
+                units: choices
+                    .iter()
+                    .zip(surfaces)
+                    .map(|(choice, surface)| RosterEntry {
+                        archetype: match choice {
+                            SandboxCharacter::Template(key) => key.clone(),
+                            SandboxCharacter::Custom(id) => format!("custom-character-{}", id.0),
+                        },
+                        placement: Some(EncounterPlacement::Surface(*surface)),
+                        ai_profile: None,
+                        ai_group: None,
+                    })
+                    .collect(),
+            })
+            .collect(),
+        };
+        launch.freeze_deployment(
+            SandboxDeploymentSnapshot {
+                party: party_surfaces,
+                enemies: enemy_surfaces,
             },
-            77,
-            crate::combat_reports::CombatLabReportRosters {
-                players: vec![crate::combat_reports::CombatLabReportRosterEntry {
-                    unit_id: 1,
-                    archetype: "hedge-mage".to_owned(),
-                    display_name: "Hedge Mage".to_owned(),
-                    controller: crate::combat_reports::CombatLabReportController::Human,
-                }],
-                hostiles: vec![crate::combat_reports::CombatLabReportRosterEntry {
-                    unit_id: 2,
-                    archetype: "raider".to_owned(),
-                    display_name: "Raider".to_owned(),
-                    controller: crate::combat_reports::CombatLabReportController::BaselineAi,
-                }],
-            },
-            crate::combat_reports::CombatLabReportDeployment {
-                players: vec![TilePos::new(HexCoord::ORIGIN, 1)],
-                hostiles: vec![TilePos::new(HexCoord::from_axial(1, 0), 1)],
-            },
-            CombatLabReportTermination::Outcome(EncounterOutcome::Victory),
-            summary,
-        )
-        .expect("fixture report evidence")
+            exact,
+            Some(77),
+        );
+        SandboxSession { launch }
     }
 
     #[test]
@@ -1539,53 +968,32 @@ mod tests {
     }
 
     #[test]
-    fn outcome_report_projects_modes_body_and_typed_actions() {
-        let shipped = hex_assets::CombatSettings::default();
-        let report = sample_report(4);
+    fn sandbox_outcome_projects_only_exact_retry_and_return() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .insert_resource(EncounterResolution(Some(EncounterOutcome::Victory)))
-            .insert_resource(report.summary.clone())
-            .insert_resource(CombatLabSession {
-                kind: super::super::combat_lab::CombatLabSessionKind::Sandbox,
-                return_to: Screen::CombatLab,
-                profile: report.profile.clone(),
-                shipped_combat: shipped,
-                report_map: report.map.clone(),
-                initial_state: None,
-            })
-            .insert_resource(CombatLabReportLaunch {
-                origin: report.origin.clone(),
-                map: report.map.clone(),
-                content_revision: report.content_revision,
-                rosters: report.rosters.clone(),
-                deployment: report.deployment.clone(),
-            })
-            .init_resource::<CombatLabReportStore>()
-            .init_resource::<OutcomeReportState>()
-            .init_resource::<OutcomeReportView>()
-            .add_systems(Update, sync_outcome_report_view);
+            .insert_resource(sample_sandbox_session(9_001))
+            .init_resource::<OutcomeView>()
+            .add_systems(Update, sync_outcome_view);
         app.update();
 
-        let view = app.world().resource::<OutcomeReportView>();
+        let view = app.world().resource::<OutcomeView>();
         assert!(view.visible);
-        assert_eq!(view.mode, OutcomeReportMode::Overview);
-        assert!(view
-            .body
-            .as_deref()
-            .is_some_and(|body| body.contains("OVERVIEW")));
-        assert!(view
-            .actions
-            .iter()
-            .any(|action| action.action == OutcomeAction::RetryExact));
-        assert!(view
-            .actions
-            .iter()
-            .any(|action| action.action == OutcomeAction::Return));
+        assert_eq!(
+            view.actions
+                .iter()
+                .map(|action| action.action)
+                .collect::<Vec<_>>(),
+            vec![OutcomeAction::RetryExact, OutcomeAction::Return]
+        );
+        assert_eq!(
+            view.actions.get(1).map(|action| action.label.as_str()),
+            Some("Return to Sandbox")
+        );
     }
 
     #[test]
-    fn retry_requeues_the_exact_active_scenario_and_seed() {
+    fn sandbox_retry_requeues_exact_identity_and_preserves_session() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin))
             .init_state::<Screen>()
@@ -1611,18 +1019,93 @@ mod tests {
             resolved_seed: Some(seed),
             encounter_override: None,
         }));
+        let session = sample_sandbox_session(seed.0);
+        let expected_retry = session.launch.loading_input();
+        let expected_rules = session.launch.rules.clone();
+        app.insert_resource(session.clone());
+        app.insert_resource(GameplaySessionOrigin::Sandbox);
         app.add_message::<hex_ui::UiIntent>();
         app.add_systems(Update, handle_outcome_actions);
         app.world_mut()
             .write_message(hex_ui::UiIntent::Outcome(hex_ui::OutcomeIntent::Activate(
-                OutcomeAction::Retry,
+                OutcomeAction::RetryExact,
             )));
         app.update();
 
         let retry = app.world().resource::<crate::scenarios::ScenarioToLoad>();
-        assert_eq!(retry.scenario.name, scenario.name);
-        assert_eq!(retry.scenario.world, scenario.world);
-        assert_eq!(retry.scenario.encounter, scenario.encounter);
-        assert_eq!(retry.resolved_seed, Some(seed));
+        assert_eq!(retry, &expected_retry);
+        assert_ne!(retry.encounter_override, None);
+        let exact = retry
+            .encounter_override
+            .as_ref()
+            .expect("Retry Exact carries deployed encounter");
+        let retried_party = exact
+            .rosters
+            .first()
+            .map(|roster| {
+                roster
+                    .units
+                    .iter()
+                    .map(|unit| unit.archetype.as_str())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        assert_eq!(retried_party, vec!["hedge-mage", "hedge-mage"]);
+        assert_eq!(app.world().resource::<CombatSettings>(), &expected_rules);
+        assert!(app
+            .world()
+            .contains_resource::<FixedSettingsFreeze<CombatSettings>>());
+        assert!(app
+            .world()
+            .contains_resource::<FixedSettingsFreeze<hex_assets::SpellFile>>());
+        assert!(app
+            .world()
+            .contains_resource::<FixedSettingsFreeze<hex_assets::LatticeFile>>());
+        assert_eq!(
+            app.world().resource::<SandboxSession>().launch,
+            session.launch
+        );
+        assert_eq!(
+            app.world().resource::<GameplaySessionOrigin>(),
+            &GameplaySessionOrigin::Sandbox
+        );
+    }
+
+    #[test]
+    fn gameplay_returns_to_its_typed_owner() {
+        assert_eq!(
+            gameplay_return_screen(Some(&GameplaySessionOrigin::Sandbox), true),
+            Screen::Sandbox
+        );
+        assert_eq!(
+            gameplay_return_screen(
+                Some(&GameplaySessionOrigin::Campaign(CampaignSlotId::Two)),
+                false,
+            ),
+            Screen::Title
+        );
+    }
+
+    #[test]
+    fn terminal_sandbox_return_intent_transitions_the_real_app_back_to_sandbox() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .insert_state(Screen::Gameplay)
+            .add_sub_state::<Mode>()
+            .add_message::<hex_ui::UiIntent>()
+            .insert_resource(EncounterResolution(Some(EncounterOutcome::Victory)))
+            .insert_resource(sample_sandbox_session(9_001))
+            .insert_resource(GameplaySessionOrigin::Sandbox)
+            .add_systems(Update, handle_outcome_actions);
+        app.world_mut()
+            .write_message(hex_ui::UiIntent::Outcome(hex_ui::OutcomeIntent::Activate(
+                OutcomeAction::Return,
+            )));
+        app.update();
+        app.update();
+        assert_eq!(
+            *app.world().resource::<State<Screen>>().get(),
+            Screen::Sandbox
+        );
     }
 }

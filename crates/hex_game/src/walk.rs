@@ -42,7 +42,7 @@ use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy::window::CursorMoved;
 #[cfg(test)]
-use hex_assets::ScenarioCategory;
+use hex_assets::SandboxMapCatalog;
 use hex_assets::ScenarioLibrary;
 use hex_core::{
     Busy, CameraFocusTarget, CommandQueue, GameplaySetupFailure, Headroom, HexCoord, HexTile,
@@ -270,7 +270,7 @@ enum WalkStep {
     },
     /// Press and release a supported gameplay or menu key.
     Key(String),
-    /// Launch a scenario by exact name, bypassing the menu UI.
+    /// Install an exact internal scenario as a review-only launch input.
     StartScenario {
         name: String,
         #[serde(default)]
@@ -350,8 +350,7 @@ fn validate_step(step: &WalkStep) -> Result<(), String> {
                     | "casting-list"
                     | "required-decision"
                     | "aiming-disabled"
-                    | "live-statistics"
-                    | "dense-report-compare"
+                    | "sandbox-outcome"
             ) =>
         {
             Err(format!("unknown presentation-only UI fixture {name:?}"))
@@ -450,16 +449,15 @@ fn parse_screen(name: &str) -> Result<Screen, String> {
     match name {
         "Splash" => Ok(Screen::Splash),
         "Title" => Ok(Screen::Title),
-        "Scenarios" => Ok(Screen::Scenarios),
+        "Sandbox" => Ok(Screen::Sandbox),
         "Settings" => Ok(Screen::Settings),
         "LatticeDemo" => Ok(Screen::LatticeDemo),
         "CharacterCreator" => Ok(Screen::CharacterCreator),
         "SpellCreator" => Ok(Screen::SpellCreator),
-        "CombatLab" => Ok(Screen::CombatLab),
         "Loading" => Ok(Screen::Loading),
         "Gameplay" => Ok(Screen::Gameplay),
         _ => Err(format!(
-            "unknown screen {name:?}; expected Splash, Title, Scenarios, Settings, CharacterCreator, SpellCreator, CombatLab, LatticeDemo, Loading, or Gameplay"
+            "unknown screen {name:?}; expected Splash, Title, Sandbox, Settings, CharacterCreator, SpellCreator, LatticeDemo, Loading, or Gameplay"
         )),
     }
 }
@@ -839,8 +837,7 @@ fn capture_structural_issues(
                     | hex_ui::test_support::UiTaskCase::RestoreDecision
                     | hex_ui::test_support::UiTaskCase::HudHiddenRequired
             ),
-            "live-statistics" => task == hex_ui::test_support::UiTaskCase::LabStatistics,
-            "dense-report-compare" => task == hex_ui::test_support::UiTaskCase::LabReportCompare,
+            "sandbox-outcome" => task == hex_ui::test_support::UiTaskCase::SandboxOutcome,
             _ => false,
         };
         if !compatible {
@@ -862,12 +859,11 @@ fn capture_structural_issues(
         }
         let expected_roots: &[&str] = match screen {
             Screen::Splash => &["Splash Screen"],
-            Screen::Title => &["Title Screen"],
-            Screen::Scenarios => &["Map Scenarios Screen", "Demos Screen"],
+            Screen::Title => &["Main Menu"],
             Screen::Settings => &["Settings Screen"],
             Screen::LatticeDemo => &["Lattice Demo Screen"],
             Screen::CharacterCreator | Screen::SpellCreator => &["Creator Screen"],
-            Screen::CombatLab => &["Combat Lab Screen"],
+            Screen::Sandbox => &["Sandbox"],
             Screen::Loading => &["Loading Screen"],
             Screen::Gameplay => &["Gameplay HUD Safe Frame"],
         };
@@ -1459,6 +1455,12 @@ mod tests {
         "../../walks/camera_two_rings_west.ron",
     ];
 
+    /// Sandbox maps reviewed through deployment rather than terrain traversal.
+    ///
+    /// Flat Arena has no meaningful camera route; the README Sandbox deployment
+    /// walk and scoped map-selection frames exercise it through its shipping path.
+    const DEPLOYMENT_ONLY_SANDBOX_MAP_IDS: &[&str] = &["flat-arena"];
+
     #[derive(Resource, Default)]
     struct PointerRecord {
         target: Option<Entity>,
@@ -1500,8 +1502,8 @@ mod tests {
         AwaitScreen("Title"),
         Settle(30),
         Capture("01-title"),
-        Click(name: "Combat Lab"),
-        AwaitScreen("CombatLab"),
+        Click(name: "Sandbox"),
+        AwaitScreen("Sandbox"),
         Key("Backspace"),
         StartScenario(name: "The Crossing"),
         AwaitTerrain,
@@ -1537,7 +1539,7 @@ mod tests {
         assert_eq!(
             steps.get(3),
             Some(&WalkStep::Click {
-                name: "Combat Lab".into(),
+                name: "Sandbox".into(),
                 index: 0
             })
         );
@@ -1614,14 +1616,17 @@ mod tests {
             action_priority: None,
         };
         assert!(capture_structural_issues(&snapshot, None, None, None).is_empty());
-        let issues = capture_structural_issues(&snapshot, Some("live-statistics"), None, None);
-        assert!(
-            issues
-                .iter()
-                .any(|issue| issue.contains("Lattice Readout Stack")),
-            "the capture path must reject a live-statistics frame with no lattice: {issues:?}"
+        let issues = capture_structural_issues(
+            &snapshot,
+            Some("sandbox-outcome"),
+            Some(hex_ui::test_support::UiTaskCase::SandboxOutcome),
+            Some(Screen::Gameplay),
         );
-        let issues = capture_structural_issues(&snapshot, None, None, Some(Screen::Scenarios));
+        assert!(
+            issues.iter().any(|issue| issue.contains("Retry Exact")),
+            "the capture path must reject an incomplete Sandbox outcome: {issues:?}"
+        );
+        let issues = capture_structural_issues(&snapshot, None, None, Some(Screen::Sandbox));
         assert!(
             issues
                 .iter()
@@ -1649,7 +1654,7 @@ mod tests {
         assert!(validate_step(&WalkStep::Capture(" ".into())).is_err());
         assert!(validate_step(&WalkStep::ReviewCapture {
             name: " ".into(),
-            task: hex_ui::test_support::UiTaskCase::TitleCold,
+            task: hex_ui::test_support::UiTaskCase::MainMenu,
         })
         .is_err());
         assert!(validate_step(&WalkStep::Click {
@@ -1775,20 +1780,20 @@ mod tests {
     }
 
     #[test]
-    fn camera_route_manifest_is_a_seed_exact_bijection_with_selectable_maps() {
-        let library: ScenarioLibrary =
-            ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
-                .expect("the shipped scenario library parses");
+    fn camera_route_manifest_is_seed_exact_for_traversed_sandbox_maps() {
+        let catalog: SandboxMapCatalog =
+            ron::from_str(include_str!("../../../assets/config/sandbox_maps.ron"))
+                .expect("the shipped Sandbox map catalog parses");
         let manifest: CameraRouteManifest =
             ron::from_str(include_str!("../../../walks/camera_routes.ron"))
                 .expect("the camera route manifest parses");
         assert_eq!(manifest.schema_version, 1);
 
-        let maps = library
-            .scenarios
+        let maps = catalog
+            .maps
             .iter()
-            .filter(|scenario| scenario.category == ScenarioCategory::Map)
-            .map(|scenario| (scenario.name.as_str(), scenario.generation_seed))
+            .filter(|map| !DEPLOYMENT_ONLY_SANDBOX_MAP_IDS.contains(&map.id.as_str()))
+            .map(|map| (map.scenario.as_str(), map.fixed_seed))
             .collect::<std::collections::BTreeMap<_, _>>();
         let routes = manifest
             .routes
@@ -1799,8 +1804,19 @@ mod tests {
         assert_eq!(routes.len(), manifest.routes.len(), "route names repeat");
         assert_eq!(
             routes, maps,
-            "Map scenarios and camera routes must be a bijection"
+            "traversed Sandbox maps and camera routes must be a seed-exact bijection"
         );
+        assert_eq!(
+            catalog.maps.len(),
+            routes.len() + DEPLOYMENT_ONLY_SANDBOX_MAP_IDS.len(),
+            "every Sandbox map needs either camera traversal or explicit deployment-only review"
+        );
+        for id in DEPLOYMENT_ONLY_SANDBOX_MAP_IDS {
+            assert!(
+                catalog.get(id).is_some(),
+                "deployment-only Sandbox map {id:?} must remain in the shipping catalog"
+            );
+        }
         assert_eq!(routes.len(), 15);
 
         for route in &manifest.routes {
@@ -2504,9 +2520,10 @@ mod tests {
         for name in [
             "Splash",
             "Title",
-            "Scenarios",
+            "Sandbox",
+            "Settings",
             "CharacterCreator",
-            "CombatLab",
+            "SpellCreator",
             "LatticeDemo",
             "Loading",
             "Gameplay",
@@ -2523,7 +2540,7 @@ mod tests {
             "../../walks/waterfall.ron",
             "../../walks/forest.ron",
             "../../walks/readme_party_trial.ron",
-            "../../walks/readme_creator_lab.ron",
+            "../../walks/readme_creator_sandbox.ron",
         ]
         .into_iter()
         .chain(CAMERA_ROUTE_SCRIPTS.iter().map(|(path, _)| *path))
@@ -2543,21 +2560,58 @@ mod tests {
 
     #[test]
     fn scoped_gameplay_acceptance_stays_within_the_frame_budget() {
-        let captures = [include_str!("../../../walks/gameplay_ui.ron")]
-            .into_iter()
-            .map(|script| {
-                ron::from_str::<Vec<WalkStep>>(script)
-                    .expect("the gameplay UI walk parses")
-                    .into_iter()
-                    .filter(|step| {
-                        matches!(step, WalkStep::Capture(_) | WalkStep::ReviewCapture { .. })
-                    })
-                    .count()
+        let steps: Vec<WalkStep> = ron::from_str(include_str!("../../../walks/gameplay_ui.ron"))
+            .expect("the gameplay UI walk parses");
+        let captures = steps
+            .iter()
+            .filter(|step| matches!(step, WalkStep::Capture(_) | WalkStep::ReviewCapture { .. }))
+            .count();
+        let tasks = steps
+            .iter()
+            .filter_map(|step| match step {
+                WalkStep::ReviewCapture { task, .. } => Some(*task),
+                _ => None,
             })
-            .sum::<usize>();
+            .collect::<Vec<_>>();
         assert_eq!(
             captures, 10,
             "scoped gameplay acceptance must capture exactly 10 frames"
+        );
+        assert_eq!(
+            tasks.len(),
+            captures,
+            "every scoped frame must use a fail-closed task contract"
+        );
+        let task_ids = tasks
+            .iter()
+            .map(|task| task.contract().id)
+            .collect::<std::collections::BTreeSet<_>>();
+        let expected = [
+            "main-menu",
+            "campaign",
+            "sandbox-overview",
+            "sandbox-map-browser",
+            "sandbox-map-detail",
+            "sandbox-party",
+            "sandbox-enemies",
+            "sandbox-character-picker",
+            "tools",
+        ]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            task_ids, expected,
+            "every cutover route needs one native frame"
+        );
+        assert_eq!(
+            tasks
+                .iter()
+                .filter(|task| {
+                    **task == hex_ui::test_support::UiTaskCase::SandboxCharacterPicker
+                })
+                .count(),
+            2,
+            "the character picker owns the one targeted 4K/200% duplicate"
         );
     }
 
@@ -2603,13 +2657,13 @@ mod tests {
         let mut checked = 0;
         let mut launches_default = false;
         let mut continues_save = false;
-        let mut launches_lab_sandbox = false;
+        let mut launches_sandbox = false;
         for script in [
             "../../walks/gameplay_ui.ron",
             "../../walks/waterfall.ron",
             "../../walks/forest.ron",
             "../../walks/readme_party_trial.ron",
-            "../../walks/readme_creator_lab.ron",
+            "../../walks/readme_creator_sandbox.ron",
         ]
         .into_iter()
         .chain(CAMERA_ROUTE_SCRIPTS.iter().map(|(path, _)| *path))
@@ -2634,13 +2688,13 @@ mod tests {
                 if matches!(step, WalkStep::Click { name, .. } if name == "Continue") {
                     continues_save = true;
                 }
-                if matches!(step, WalkStep::Click { name, .. } if name == "Load Map & Deploy") {
-                    launches_lab_sandbox = true;
+                if matches!(step, WalkStep::Click { name, .. } if name == "Start Sandbox") {
+                    launches_sandbox = true;
                 }
             }
         }
         assert!(
-            checked > 0 || launches_default || continues_save || launches_lab_sandbox,
+            checked > 0 || launches_default || continues_save || launches_sandbox,
             "the UI walk must exercise at least one real application launch path"
         );
     }

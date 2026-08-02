@@ -18,7 +18,7 @@ use bevy::prelude::*;
 /// Data-authored algorithm dispatch for AI controllers.
 pub mod ai_profiles;
 pub mod art_palette;
-pub mod combat_lab;
+#[cfg(any(test, feature = "test-support"))]
 pub mod combat_rules;
 pub mod content_index;
 pub mod creation;
@@ -35,7 +35,9 @@ pub mod object_blueprint;
 pub mod object_catalog;
 /// Validated gameplay sight settings.
 pub mod perception;
-/// The scenarios offered on the title screen.
+/// Curated maps and deployment regions for Sandbox sessions.
+pub mod sandbox;
+/// Internal world, lighting, and encounter launch definitions.
 pub mod scenario;
 pub mod settings;
 pub mod spells;
@@ -47,10 +49,7 @@ pub use art_palette::{
     VoxelEmission, VoxelStyle, VoxelStyleCatalog, VoxelStyleId, VoxelSurfaceMode,
     ART_SCHEMA_VERSION, DEFAULT_NEAR_COLOR_THRESHOLD,
 };
-pub use combat_lab::{
-    CombatLabDeploymentRegion, CombatLabMapCatalog, CombatLabMapDefinition, CombatLabRegionCenter,
-    COMBAT_LAB_MAP_SCHEMA_VERSION,
-};
+#[cfg(any(test, feature = "test-support"))]
 pub use combat_rules::{
     CombatRuleBounds, CombatRuleChange, CombatRuleField, CombatRulesPreset, CombatRulesProfile,
     COMBAT_RULES_PROFILE_VERSION,
@@ -76,7 +75,8 @@ pub use lattices::{
     UnvalidatedCell, UnvalidatedEntry,
 };
 pub use loader::{
-    choose_settings, LoadSettings, RegisterSettings, SelectSettings, SettingsRegistry,
+    choose_settings, FixedSettingsFreeze, LoadSettings, RegisterSettings, SelectSettings,
+    SettingsRegistry,
 };
 pub use object_blueprint::{
     ConnectivityPolicy, EffectPart, LocalAxialCoord, LocalVoxelCoord, ObjectBlueprint,
@@ -88,6 +88,10 @@ pub use object_catalog::{
     ResolvedVoxelStyle, RuntimeArtCatalog, RuntimeArtCatalogStatus, OBJECT_CATALOG_SCHEMA_VERSION,
 };
 pub use perception::{PerceptionSettings, SightBandSettings, SightPreset, SightRanges};
+pub use sandbox::{
+    SandboxDeploymentRegion, SandboxMapCatalog, SandboxMapDefinition, SandboxRegionCenter,
+    SANDBOX_MAP_SCHEMA_VERSION,
+};
 pub use scenario::{Scenario, ScenarioCategory, ScenarioLibrary};
 pub use settings::{
     to_color, ActionEconomy, CameraSettings, CelestialBody, CelestialCycleSettings,
@@ -131,7 +135,7 @@ pub fn plugin(app: &mut App) {
         .register_type::<ScenarioLibrary>();
 
     app.add_plugins(substances::plugin);
-    app.add_plugins(combat_lab::plugin);
+    app.add_plugins(sandbox::plugin);
     app.add_plugins(ai_profiles::plugin);
     app.add_plugins(elements::plugin);
     app.add_plugins(creation::plugin);

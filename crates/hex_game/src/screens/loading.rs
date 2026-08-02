@@ -19,7 +19,7 @@ use crate::scenarios::ScenarioContractStatus;
 pub(super) fn plugin(app: &mut App) {
     app.add_systems(
         PostUpdate,
-        super::combat_lab::apply_creator_content_overlay
+        super::sandbox::apply_creator_content_overlay
             .before(ContentReadinessSystems::PublishAcceptedRevision)
             .run_if(in_state(Screen::Loading)),
     );
@@ -27,7 +27,6 @@ pub(super) fn plugin(app: &mut App) {
         PostUpdate,
         (
             crate::scenarios::validate_loaded_scenario,
-            super::combat_lab::apply_combat_rules_profile,
             enter_gameplay_when_ready,
         )
             .chain()

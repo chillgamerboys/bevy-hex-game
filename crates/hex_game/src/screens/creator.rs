@@ -16,7 +16,8 @@ use hex_assets::{
 };
 use hex_core::{LatticeCoord, Screen};
 use hex_gameplay_model::{
-    CreatorDestination, CreatorEntry, CreatorNavigation, CreatorSurface as CreatorTab, EditHistory,
+    CreatorDestination, CreatorEntry, CreatorNavigation, CreatorOrigin,
+    CreatorSurface as CreatorTab, EditHistory, MainMenuModel, MainMenuRoute,
 };
 
 use crate::creation_store::CreationStore;
@@ -57,6 +58,7 @@ pub(crate) struct CreatorSession {
     notice: String,
     confirm_delete: bool,
     confirm_reset: bool,
+    newly_saved_character: Option<CustomCharacterId>,
     history: EditHistory<CreatorSnapshot>,
     revision: u64,
 }
@@ -77,11 +79,17 @@ impl DerefMut for CreatorSession {
 
 /// Explicit entry intent keeps top-level navigation separate from gameplay returns.
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CreatorEntryRequest {
-    CharacterLibrary,
-    SpellLibrary,
-    SpellFromCharacter,
+pub(crate) struct CreatorEntryRequest(pub(crate) CreatorEntry);
+
+/// Outermost Creator navigation retained while its character opens in Sandbox.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CreatorSandboxReturn {
+    pub(crate) navigation: CreatorNavigation,
 }
+
+/// Restores the retained Creator workspace after a Creator-origin Sandbox flow.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CreatorRestoreRequest(pub(crate) CreatorNavigation);
 
 impl CreatorSession {
     fn bump(&mut self) {
@@ -143,34 +151,17 @@ fn initialize_session(
     mut commands: Commands,
     mut session: ResMut<CreatorSession>,
     entry_request: Option<Res<CreatorEntryRequest>>,
-    edit_request: Option<Res<super::combat_lab::CreatorEditRequest>>,
+    restore_request: Option<Res<CreatorRestoreRequest>>,
     store: Res<CreationStore>,
-    overlay: Option<Res<super::combat_lab::CreatorContentOverlay>>,
 ) {
-    let editing_from_lab = edit_request.is_some();
-    super::combat_lab::restore_shipped_content(&mut commands, overlay.as_deref());
-    commands.remove_resource::<super::combat_lab::CombatLabSession>();
-    if editing_from_lab {
-        session.return_to_combat_lab = true;
-    }
-    if let Some(request) = entry_request.as_deref().copied() {
-        apply_entry_request(&mut session, request);
+    if let Some(request) = restore_request.as_deref().copied() {
+        session.navigation = request.0;
+        session.view = CreatorView::Character;
+        commands.remove_resource::<CreatorRestoreRequest>();
         commands.remove_resource::<CreatorEntryRequest>();
-    }
-    if let Some(request) = edit_request {
-        if let Some(character) = store
-            .file
-            .characters
-            .iter()
-            .find(|character| character.id == request.character)
-        {
-            session.character = Some(character.clone());
-            session.character_dirty = false;
-            session.selected_cell = Some(LatticeCoord::ORIGIN);
-            session.tab = CreatorTab::Characters;
-            session.view = CreatorView::Character;
-        }
-        commands.remove_resource::<super::combat_lab::CreatorEditRequest>();
+    } else if let Some(request) = entry_request.as_deref().copied() {
+        apply_entry_request(&mut session, request.0);
+        commands.remove_resource::<CreatorEntryRequest>();
     }
     if session.character.is_none() {
         session.character = store.file.characters.first().cloned().or_else(|| {
@@ -189,38 +180,35 @@ fn initialize_session(
         });
     }
     session.selected_cell = Some(LatticeCoord::ORIGIN);
-    session.notice = if editing_from_lab {
-        "Sandbox setup preserved. Resolve the blockers, save, then return to Combat Lab.".to_owned()
-    } else {
-        store.error.clone().unwrap_or_default()
-    };
+    session.notice = store.error.clone().unwrap_or_default();
     session.confirm_delete = false;
     session.confirm_reset = false;
     session.bump();
 }
 
-fn apply_entry_request(session: &mut CreatorSession, request: CreatorEntryRequest) {
-    let entry = match request {
-        CreatorEntryRequest::CharacterLibrary => {
+fn apply_entry_request(session: &mut CreatorSession, entry: CreatorEntry) {
+    match entry {
+        CreatorEntry::CharacterLibrary(_) => {
             session.view = CreatorView::Hub;
-            CreatorEntry::CharacterLibrary
+            session.newly_saved_character = None;
         }
-        CreatorEntryRequest::SpellLibrary => {
+        CreatorEntry::SpellLibrary(_) => {
             session.view = CreatorView::Hub;
-            CreatorEntry::SpellLibrary
+            session.newly_saved_character = None;
         }
-        CreatorEntryRequest::SpellFromCharacter => {
+        CreatorEntry::SpellFromCharacter => {
             session.view = CreatorView::Hub;
-            CreatorEntry::SpellFromCharacter
         }
-    };
+    }
     session.navigation.enter(entry);
 }
 
 fn handle_escape(
     keys: Res<ButtonInput<KeyCode>>,
+    mut commands: Commands,
     mut next: ResMut<NextState<Screen>>,
     mut session: ResMut<CreatorSession>,
+    mut main_menu: ResMut<MainMenuModel>,
 ) {
     let dirty = match session.tab {
         CreatorTab::Characters => session.character_dirty,
@@ -228,15 +216,39 @@ fn handle_escape(
     };
     if keys.just_pressed(KeyCode::Escape) && !dirty {
         let destination = session.navigation.back();
-        if destination == CreatorDestination::CharacterEditor {
+        route_destination(
+            destination,
+            &mut session,
+            &mut main_menu,
+            &mut commands,
+            &mut next,
+        );
+    }
+}
+
+fn route_destination(
+    destination: CreatorDestination,
+    session: &mut CreatorSession,
+    main_menu: &mut MainMenuModel,
+    commands: &mut Commands,
+    next: &mut NextState<Screen>,
+) {
+    match destination {
+        CreatorDestination::CharacterEditor => {
             session.view = CreatorView::Character;
             next.set(Screen::CharacterCreator);
-        } else {
-            next.set(match destination {
-                CreatorDestination::CombatLab => Screen::CombatLab,
-                CreatorDestination::Title => Screen::Title,
-                CreatorDestination::CharacterEditor => Screen::CharacterCreator,
+        }
+        CreatorDestination::Tools => {
+            main_menu.show(MainMenuRoute::Tools);
+            next.set(Screen::Title);
+        }
+        CreatorDestination::SandboxCharacterPicker { side, slot } => {
+            commands.insert_resource(super::sandbox::CreatorPickerReturn {
+                side,
+                slot,
+                saved_character: session.newly_saved_character,
             });
+            next.set(Screen::Sandbox);
         }
     }
 }
@@ -315,6 +327,14 @@ fn publish_creator_view(
             CreatorView::Character => CreatorWorkspace::Character,
             CreatorView::Spell => CreatorWorkspace::Spell,
         },
+        hub_exit_label: if session.parent_surface.is_some() {
+            "Back to Character".to_owned()
+        } else {
+            match session.origin {
+                CreatorOrigin::Tools => "Back to Tools".to_owned(),
+                CreatorOrigin::SandboxCharacterPicker { .. } => "Back to Sandbox".to_owned(),
+            }
+        },
         character: session.character.clone(),
         spell: session.spell.clone(),
         selected_cell: session.selected_cell,
@@ -351,11 +371,13 @@ fn handle_actions(
     elements: Option<Res<ElementCatalog>>,
     spell_book: Option<Res<SpellBook>>,
     spell_file: Option<Res<SpellFile>>,
-    _lattice_file: Option<Res<LatticeFile>>,
+    lattice_file: Option<Res<LatticeFile>>,
     substances: Option<Res<SubstanceTable>>,
     presets: Option<Res<CreationPresetCatalog>>,
+    sandbox_return: Option<Res<CreatorSandboxReturn>>,
     mut commands: Commands,
     mut next: ResMut<NextState<Screen>>,
+    mut main_menu: ResMut<MainMenuModel>,
 ) {
     for intent in intents.read() {
         let hex_ui::UiIntent::Creator(action) = intent else {
@@ -384,20 +406,17 @@ fn handle_actions(
                     session.erase_tool = false;
                 } else {
                     let destination = session.navigation.back();
-                    if destination == CreatorDestination::CharacterEditor {
-                        session.view = CreatorView::Character;
-                        next.set(Screen::CharacterCreator);
-                    } else {
-                        next.set(match destination {
-                            CreatorDestination::CombatLab => Screen::CombatLab,
-                            CreatorDestination::Title => Screen::Title,
-                            CreatorDestination::CharacterEditor => Screen::CharacterCreator,
-                        });
-                    }
+                    route_destination(
+                        destination,
+                        &mut session,
+                        &mut main_menu,
+                        &mut commands,
+                        &mut next,
+                    );
                 }
             }
             CreatorAction::OpenSpellCreator => {
-                commands.insert_resource(CreatorEntryRequest::SpellFromCharacter);
+                commands.insert_resource(CreatorEntryRequest(CreatorEntry::SpellFromCharacter));
                 next.set(Screen::SpellCreator);
             }
             CreatorAction::NewCharacter => {
@@ -520,6 +539,11 @@ fn handle_actions(
                 let Some(character) = session.character.clone() else {
                     continue;
                 };
+                let is_new = !store
+                    .file
+                    .characters
+                    .iter()
+                    .any(|saved| saved.id == character.id);
                 let collision = store.file.characters.iter().any(|saved| {
                     saved.id != character.id
                         && normalized_name(&saved.name) == normalized_name(&character.name)
@@ -531,6 +555,15 @@ fn handle_actions(
                         Ok(()) => {
                             session.character_dirty = false;
                             session.notice = "Character saved.".to_owned();
+                            if is_new
+                                && matches!(
+                                    session.navigation.origin,
+                                    CreatorOrigin::SandboxCharacterPicker { .. }
+                                )
+                            {
+                                session.newly_saved_character =
+                                    session.character.as_ref().map(|character| character.id);
+                            }
                         }
                         Err(error) => session.notice = error,
                     }
@@ -567,11 +600,15 @@ fn handle_actions(
                     session.notice =
                         "Press Confirm Delete to remove this saved character.".to_owned();
                 } else if let Some(character) = &session.character {
-                    match store.delete_character(character.id, &paths) {
+                    let deleted = character.id;
+                    match store.delete_character(deleted, &paths) {
                         Ok(()) => {
                             session.character = store.file.characters.first().cloned();
                             session.character_dirty = false;
                             session.confirm_delete = false;
+                            if session.newly_saved_character == Some(deleted) {
+                                session.newly_saved_character = None;
+                            }
                             session.notice = "Character deleted.".to_owned();
                             session.view = CreatorView::Hub;
                         }
@@ -922,7 +959,7 @@ fn handle_actions(
                     Err(error) => session.notice = format!("Local Test blocked: {error}"),
                 }
             }
-            CreatorAction::TestOnMap => {
+            CreatorAction::OpenInSandbox => {
                 let Some(character) = &session.character else {
                     continue;
                 };
@@ -932,20 +969,28 @@ fn handle_actions(
                         .characters
                         .iter()
                         .any(|saved| saved.id == character.id)
-                    && elements.as_deref().is_some_and(|elements| {
-                        spell_book.as_deref().is_some_and(|spells| {
-                            character_map_issues(character, &store.file, elements, spells)
-                                .is_empty()
-                        })
-                    });
+                    && super::sandbox::creator_character_map_readiness(
+                        character.id,
+                        &store.file,
+                        spell_file.as_deref(),
+                        lattice_file.as_deref(),
+                        elements.as_deref(),
+                        substances.as_deref(),
+                    )
+                    .is_ok();
                 if ready {
-                    commands.insert_resource(super::combat_lab::CreatorTestRequest {
+                    if sandbox_return.is_none() {
+                        commands.insert_resource(CreatorSandboxReturn {
+                            navigation: session.navigation,
+                        });
+                    }
+                    commands.insert_resource(super::sandbox::CreatorOpenSandboxRequest {
                         character: character.id,
                     });
-                    next.set(Screen::CombatLab);
+                    next.set(Screen::Sandbox);
                 } else {
                     session.notice =
-                        "Test on Map requires a saved, clean, Map-ready character.".to_owned();
+                        "Open in Sandbox requires a saved, clean, Map-ready character.".to_owned();
                 }
             }
             CreatorAction::ResetLibrary => {
@@ -953,6 +998,7 @@ fn handle_actions(
                     match store.reset(&paths) {
                         Ok(()) => {
                             session.confirm_reset = false;
+                            session.newly_saved_character = None;
                             session.notice = "Creation library reset.".to_owned();
                         }
                         Err(error) => session.notice = error,
@@ -1051,7 +1097,6 @@ fn build_local_test(
         stats: archetype.stats.clone(),
         spells,
         index,
-        return_to: Screen::CharacterCreator,
     })
 }
 
@@ -1107,7 +1152,7 @@ fn spell_map_issues(saved: &SavedSpell, elements: &ElementCatalog) -> Vec<String
     issues
 }
 
-fn character_map_issues(
+pub(super) fn character_map_issues(
     character: &SavedCharacter,
     library: &hex_assets::CreationLibraryFile,
     elements: &ElementCatalog,
@@ -1254,16 +1299,71 @@ mod tests {
     }
 
     #[test]
-    fn spell_management_preserves_a_combat_lab_return_route() {
+    fn spell_management_preserves_an_exact_sandbox_picker_return_route() {
         let mut session = CreatorSession::default();
-        session.navigation.return_to_combat_lab = true;
-        apply_entry_request(&mut session, CreatorEntryRequest::SpellFromCharacter);
-        assert!(session.return_to_combat_lab);
-        assert!(session.return_to_character_creator);
+        let origin = CreatorOrigin::SandboxCharacterPicker {
+            side: hex_gameplay_model::SandboxSide::Enemies,
+            slot: hex_gameplay_model::SandboxSlotIndex::Five,
+        };
+        apply_entry_request(&mut session, CreatorEntry::CharacterLibrary(origin));
+        apply_entry_request(&mut session, CreatorEntry::SpellFromCharacter);
         assert_eq!(session.tab, CreatorTab::Spells);
+        assert_eq!(
+            session.navigation.back(),
+            CreatorDestination::CharacterEditor
+        );
+        assert_eq!(
+            session.navigation.back(),
+            CreatorDestination::SandboxCharacterPicker {
+                side: hex_gameplay_model::SandboxSide::Enemies,
+                slot: hex_gameplay_model::SandboxSlotIndex::Five,
+            }
+        );
+    }
 
-        apply_entry_request(&mut session, CreatorEntryRequest::CharacterLibrary);
-        assert!(!session.return_to_combat_lab);
-        assert!(!session.return_to_character_creator);
+    #[test]
+    fn tools_entry_replaces_stale_sandbox_picker_identity() {
+        let mut session = CreatorSession::default();
+        apply_entry_request(
+            &mut session,
+            CreatorEntry::CharacterLibrary(CreatorOrigin::SandboxCharacterPicker {
+                side: hex_gameplay_model::SandboxSide::Party,
+                slot: hex_gameplay_model::SandboxSlotIndex::Two,
+            }),
+        );
+        apply_entry_request(
+            &mut session,
+            CreatorEntry::SpellLibrary(CreatorOrigin::Tools),
+        );
+
+        assert_eq!(session.navigation.back(), CreatorDestination::Tools);
+        assert_eq!(session.tab, CreatorTab::Spells);
+    }
+
+    #[test]
+    fn nested_picker_excursion_restores_the_outer_creator_origin() {
+        let mut session = CreatorSession::default();
+        apply_entry_request(
+            &mut session,
+            CreatorEntry::CharacterLibrary(CreatorOrigin::Tools),
+        );
+        let retained = CreatorSandboxReturn {
+            navigation: session.navigation,
+        };
+
+        apply_entry_request(
+            &mut session,
+            CreatorEntry::CharacterLibrary(CreatorOrigin::SandboxCharacterPicker {
+                side: hex_gameplay_model::SandboxSide::Party,
+                slot: hex_gameplay_model::SandboxSlotIndex::Four,
+            }),
+        );
+        assert!(matches!(
+            session.navigation.back(),
+            CreatorDestination::SandboxCharacterPicker { .. }
+        ));
+
+        session.navigation = retained.navigation;
+        assert_eq!(session.navigation.back(), CreatorDestination::Tools);
     }
 }

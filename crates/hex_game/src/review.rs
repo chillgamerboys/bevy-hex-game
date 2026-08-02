@@ -603,12 +603,11 @@ fn capture_timeout_diagnostic(
         match screen {
             Screen::Splash
             | Screen::Title
-            | Screen::Scenarios
             | Screen::Settings
             | Screen::LatticeDemo
             | Screen::CharacterCreator
             | Screen::SpellCreator
-            | Screen::CombatLab => CapturePhase::AwaitingScenario,
+            | Screen::Sandbox => CapturePhase::AwaitingScenario,
             Screen::Loading => CapturePhase::Loading,
             Screen::Gameplay if !state.view_applied => CapturePhase::AwaitingCamera,
             Screen::Gameplay if !terrain_ready => CapturePhase::AwaitingTerrain,

@@ -1,6 +1,6 @@
 use bevy::input_focus::{
     tab_navigation::{TabIndex, TabNavigationPlugin},
-    InputFocus, InputFocusVisible,
+    FocusCause, InputFocus, InputFocusVisible,
 };
 use bevy::math::Affine2;
 use bevy::prelude::*;
@@ -12,19 +12,65 @@ const FOCUS_COLOR: Color = Color::srgb(0.98, 0.86, 0.56);
 #[derive(Component)]
 struct LogicalTabIndex(i32);
 
+#[derive(Debug)]
+struct FocusRefreshRequest {
+    root: Entity,
+    preferred_name: Option<String>,
+}
+
+#[derive(Default, Resource)]
+pub(crate) struct FocusRefreshRequests(Vec<FocusRefreshRequest>);
+
 pub(super) fn plugin(app: &mut App) {
     app.add_plugins(TabNavigationPlugin)
+        .init_resource::<FocusRefreshRequests>()
         .add_systems(PreUpdate, activate_focused_button)
         .add_systems(
             PostUpdate,
             (
                 prepare_buttons,
                 sync_focusability,
+                restore_focus_after_refresh,
                 scroll_focused_into_view,
                 paint_keyboard_focus,
             )
                 .chain(),
         );
+}
+
+/// Clears focus before a route replaces its descendants and records where to
+/// restore it after deferred hierarchy commands have been applied.
+pub(crate) fn begin_route_refresh(
+    root: Entity,
+    focus: &mut InputFocus,
+    parents: &Query<&ChildOf>,
+    names: &Query<&Name>,
+    requests: &mut FocusRefreshRequests,
+) {
+    let Some(focused) = focus.get() else { return };
+    if !is_within_root(focused, root, parents) {
+        return;
+    }
+
+    requests.0.push(FocusRefreshRequest {
+        root,
+        preferred_name: names.get(focused).ok().map(|name| name.as_str().to_owned()),
+    });
+    // This must be immediate. The old descendants are removed through deferred
+    // Commands, and no later focus system may target one for ScrollIntoView.
+    focus.clear();
+}
+
+fn is_within_root(mut entity: Entity, root: Entity, parents: &Query<&ChildOf>) -> bool {
+    loop {
+        if entity == root {
+            return true;
+        }
+        let Ok(parent) = parents.get(entity) else {
+            return false;
+        };
+        entity = parent.parent();
+    }
 }
 
 fn prepare_buttons(world: &mut World) {
@@ -86,6 +132,51 @@ fn sync_focusability(world: &mut World) {
     }) {
         world.resource_mut::<InputFocus>().clear();
     }
+}
+
+fn restore_focus_after_refresh(
+    mut focus: ResMut<InputFocus>,
+    mut requests: ResMut<FocusRefreshRequests>,
+    children: Query<&Children>,
+    controls: Query<(&TabIndex, Option<&Name>), With<Button>>,
+) {
+    for request in requests.0.drain(..) {
+        let Some(entity) = first_reachable_control(
+            request.root,
+            request.preferred_name.as_deref(),
+            &children,
+            &controls,
+        ) else {
+            continue;
+        };
+        focus.set(entity, FocusCause::Navigated);
+    }
+}
+
+fn first_reachable_control(
+    root: Entity,
+    preferred_name: Option<&str>,
+    children: &Query<&Children>,
+    controls: &Query<(&TabIndex, Option<&Name>), With<Button>>,
+) -> Option<Entity> {
+    let mut stack = vec![root];
+    let mut first = None;
+    while let Some(entity) = stack.pop() {
+        if let Ok((tab_index, name)) = controls.get(entity) {
+            if tab_index.0 >= 0 {
+                first.get_or_insert(entity);
+                if preferred_name
+                    .is_some_and(|preferred| name.is_some_and(|name| name.as_str() == preferred))
+                {
+                    return Some(entity);
+                }
+            }
+        }
+        if let Ok(entity_children) = children.get(entity) {
+            stack.extend(entity_children.iter().rev());
+        }
+    }
+    first
 }
 
 fn is_reachable(world: &World, mut entity: Entity) -> bool {
@@ -233,6 +324,65 @@ mod tests {
 
     use super::*;
 
+    #[derive(Component)]
+    struct RouteRefreshReplacement;
+
+    #[derive(Resource)]
+    struct RouteRefreshFixture {
+        root: Entity,
+        requested: bool,
+    }
+
+    #[derive(Resource)]
+    struct ScrollObservation {
+        targets: Vec<Entity>,
+        all_targets_were_live: bool,
+    }
+
+    impl Default for ScrollObservation {
+        fn default() -> Self {
+            Self {
+                targets: Vec::new(),
+                all_targets_were_live: true,
+            }
+        }
+    }
+
+    fn rebuild_fixture_route(
+        mut fixture: ResMut<RouteRefreshFixture>,
+        mut focus: ResMut<InputFocus>,
+        mut requests: ResMut<FocusRefreshRequests>,
+        parents: Query<&ChildOf>,
+        names: Query<&Name>,
+        mut commands: Commands,
+    ) {
+        if !fixture.requested {
+            return;
+        }
+        fixture.requested = false;
+        let root = fixture.root;
+        begin_route_refresh(root, &mut focus, &parents, &names, &mut requests);
+        commands.entity(root).despawn_related::<Children>();
+        commands.entity(root).with_children(|route| {
+            route.spawn((Name::new("Earlier Action"), Button, TabIndex(0)));
+            route.spawn((
+                Name::new("Persistent Action"),
+                Button,
+                TabIndex(0),
+                RouteRefreshReplacement,
+            ));
+        });
+    }
+
+    fn record_scroll_target(
+        scroll: On<ScrollIntoView>,
+        entities: Query<Entity>,
+        mut observation: ResMut<ScrollObservation>,
+    ) {
+        observation.all_targets_were_live &= entities.contains(scroll.entity);
+        observation.targets.push(scroll.entity);
+    }
+
     #[test]
     fn hidden_subtrees_leave_and_reenter_the_tab_order() {
         let mut app = App::new();
@@ -292,5 +442,62 @@ mod tests {
             Some(&Interaction::Pressed),
             "a key meant for a despawned focused action must not activate its replacement"
         );
+    }
+
+    #[test]
+    fn route_refresh_retargets_focus_before_scrolling_the_rebuilt_hierarchy() {
+        let mut app = App::new();
+        app.init_resource::<InputFocus>()
+            .insert_resource(InputFocusVisible(true))
+            .init_resource::<FocusRefreshRequests>()
+            .init_resource::<ScrollObservation>()
+            .add_observer(record_scroll_target)
+            .add_systems(Update, rebuild_fixture_route)
+            .add_systems(
+                PostUpdate,
+                (
+                    prepare_buttons,
+                    sync_focusability,
+                    restore_focus_after_refresh,
+                    scroll_focused_into_view,
+                    paint_keyboard_focus,
+                )
+                    .chain(),
+            );
+        let root = app.world_mut().spawn_empty().id();
+        let old = app
+            .world_mut()
+            .spawn((Name::new("Persistent Action"), Button, TabIndex(0)))
+            .id();
+        app.world_mut().entity_mut(root).add_child(old);
+        app.insert_resource(RouteRefreshFixture {
+            root,
+            requested: false,
+        });
+        app.update();
+
+        app.world_mut()
+            .resource_mut::<InputFocus>()
+            .set(old, FocusCause::Navigated);
+        app.world_mut()
+            .resource_mut::<RouteRefreshFixture>()
+            .requested = true;
+        app.update();
+
+        assert!(app.world().get_entity(old).is_err());
+        let replacement = app
+            .world_mut()
+            .query_filtered::<Entity, With<RouteRefreshReplacement>>()
+            .single(app.world())
+            .unwrap();
+        assert_eq!(
+            app.world().resource::<InputFocus>().get(),
+            Some(replacement)
+        );
+        assert_eq!(app.world().get::<TabIndex>(replacement), Some(&TabIndex(0)));
+        assert!(app.world().get::<Outline>(replacement).is_some());
+        let observation = app.world().resource::<ScrollObservation>();
+        assert!(observation.all_targets_were_live);
+        assert_eq!(observation.targets.last(), Some(&replacement));
     }
 }

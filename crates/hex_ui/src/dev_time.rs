@@ -68,7 +68,6 @@ fn spawn_panel(
     assets: Res<UiAssets>,
     metrics: Res<ResolvedUiMetrics>,
     chrome: Res<GameplayChromeView>,
-    statistics: Option<Res<crate::LabStatisticsView>>,
     review: Option<Res<crate::review::UiReviewPresentation>>,
     regions: Query<(Entity, &UiRegionRole)>,
 ) {
@@ -90,15 +89,7 @@ fn spawn_panel(
             Pickable::IGNORE,
             GlobalZIndex(3),
         ))
-        .insert(panel_node(
-            *metrics,
-            chrome.decision_required,
-            statistics_visible(
-                statistics.as_deref(),
-                review.as_deref(),
-                chrome.decision_required,
-            ),
-        ))
+        .insert(panel_node(*metrics, chrome.decision_required))
         .with_children(|panel| {
             panel.spawn((DevTimeHeading, heading(&assets, "DEV · TIME")));
             panel.spawn((
@@ -124,23 +115,7 @@ fn panel_is_collapsed(metrics: ResolvedUiMetrics, decision_required: bool) -> bo
     is_ultra_constrained(metrics) && (decision_required || metrics.effective_size.y < 400.0)
 }
 
-fn statistics_visible(
-    statistics: Option<&crate::LabStatisticsView>,
-    review: Option<&crate::review::UiReviewPresentation>,
-    decision_required: bool,
-) -> bool {
-    let statistics = review
-        .and_then(|review| review.statistics.as_ref())
-        .or(statistics);
-    statistics
-        .is_some_and(|statistics| statistics.present && statistics.visible && !decision_required)
-}
-
-fn panel_node(
-    metrics: ResolvedUiMetrics,
-    decision_required: bool,
-    statistics_visible: bool,
-) -> Node {
+fn panel_node(metrics: ResolvedUiMetrics, decision_required: bool) -> Node {
     let mut node = Node {
         width: Val::Percent(100.0),
         flex_shrink: 0.0,
@@ -164,9 +139,6 @@ fn panel_node(
     // not enough room for six legible 44px controls beside the action rail, so
     // collapse the panel instead of clipping it or covering player actions.
     if panel_is_collapsed(metrics, decision_required) {
-        node.display = Display::None;
-    }
-    if metrics.viewport == UiViewportClass::Compact && statistics_visible {
         node.display = Display::None;
     }
     node
@@ -193,7 +165,6 @@ fn controls_node(metrics: ResolvedUiMetrics) -> Node {
 fn reconcile_layout(
     metrics: Res<ResolvedUiMetrics>,
     chrome: Res<GameplayChromeView>,
-    statistics: Option<Res<crate::LabStatisticsView>>,
     review: Option<Res<crate::review::UiReviewPresentation>>,
     added_panels: Query<(), Added<DevTimePanel>>,
     added_roots: Query<(), Added<DevTimeControls>>,
@@ -229,9 +200,6 @@ fn reconcile_layout(
 ) {
     if !metrics.is_changed()
         && !chrome.is_changed()
-        && statistics
-            .as_ref()
-            .is_none_or(|statistics| !statistics.is_changed())
         && review.as_ref().is_none_or(|review| !review.is_changed())
         && added_panels.is_empty()
         && added_roots.is_empty()
@@ -244,15 +212,7 @@ fn reconcile_layout(
         .as_ref()
         .map_or(*chrome, |review| review.effective_chrome(*chrome));
     if let Ok(mut node) = panels.single_mut() {
-        *node = panel_node(
-            *metrics,
-            chrome.decision_required,
-            statistics_visible(
-                statistics.as_deref(),
-                review.as_deref(),
-                chrome.decision_required,
-            ),
-        );
+        *node = panel_node(*metrics, chrome.decision_required);
     }
     if let Ok(mut node) = roots.single_mut() {
         *node = controls_node(*metrics);
@@ -646,7 +606,7 @@ mod tests {
     fn ultra_constrained_controls_reflow_inside_the_inspector() {
         let metrics = crate::resolve_ui_metrics(Vec2::new(960.0, 540.0), crate::UiScaleMode::Auto);
         assert_eq!(metrics.viewport, UiViewportClass::Compact);
-        let panel = panel_node(metrics, false, false);
+        let panel = panel_node(metrics, false);
         let (control_width, control_height) = control_size(metrics);
         assert_eq!(panel.position_type, PositionType::Relative);
         assert_eq!(panel.width, Val::Percent(100.0));
@@ -658,29 +618,13 @@ mod tests {
     fn common_two_hundred_percent_canvas_collapses_secondary_controls() {
         let metrics =
             crate::resolve_ui_metrics(Vec2::new(1280.0, 720.0), crate::UiScaleMode::Percent200);
-        let panel = panel_node(metrics, false, false);
+        let panel = panel_node(metrics, false);
         assert_eq!(panel.position_type, PositionType::Relative);
         assert_eq!(panel.width, Val::Percent(100.0));
         assert_eq!(panel.display, Display::None);
         let (control_width, control_height) = control_size(metrics);
         assert!(control_width * 2.0 + 12.0 <= crate::layout::inspector_width(metrics));
         assert!(control_height >= 44.0);
-    }
-
-    #[test]
-    fn compact_live_statistics_take_priority_over_dev_time_tools() {
-        let compact = crate::resolve_ui_metrics(Vec2::new(1280.0, 720.0), crate::UiScaleMode::Auto);
-        assert_eq!(compact.viewport, UiViewportClass::Compact);
-        assert_eq!(
-            panel_node(compact, false, true).display,
-            Display::None,
-            "the Combat Lab statistics surface must not overlap dev-only controls"
-        );
-
-        let standard =
-            crate::resolve_ui_metrics(Vec2::new(1920.0, 1080.0), crate::UiScaleMode::Auto);
-        assert_eq!(standard.viewport, UiViewportClass::Standard);
-        assert_eq!(panel_node(standard, false, true).display, Display::Flex);
     }
 
     #[cfg(feature = "test-support")]
