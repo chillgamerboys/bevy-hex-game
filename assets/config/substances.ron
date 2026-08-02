@@ -112,8 +112,8 @@
             toughness: Some(4),
         ),
 
-        // Lava is an opaque, non-solid voxel for now. Damage and emissive rendering
-        // need gameplay and material contracts that do not exist yet.
+        // Lava is an opaque, non-solid voxel and deliberately opts out of toughness.
+        // Fluid redistribution and emissive rendering remain separate concerns.
         "lava": (
             swatch: Some("liquid/lava"),
             solid: false,
