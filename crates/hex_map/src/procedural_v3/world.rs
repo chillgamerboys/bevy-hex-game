@@ -76,6 +76,22 @@ pub(crate) enum StructureKind {
     Tower,
     Gate,
     Keep,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "reserved by the Garden foundation before its semantic recipe lands"
+        )
+    )]
+    Column,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "reserved by the Garden foundation before its semantic recipe lands"
+        )
+    )]
+    Roof,
 }
 
 /// Exact solid voxels participating in one generated structure.

@@ -37,6 +37,14 @@ mod dry_patch_tests;
 mod fingerprint;
 mod forest;
 mod fort;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the Garden foundation is consumed by the following semantic recipe lane"
+    )
+)]
+mod garden;
 mod hills;
 #[expect(
     dead_code,
@@ -937,6 +945,7 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
         V3RecipeSettings::Volcano(_) => "Volcano",
         V3RecipeSettings::DeepForest(_) => "DeepForest",
         V3RecipeSettings::Prairie(_) => "Prairie",
+        V3RecipeSettings::Garden(_) => "Garden",
     }
 }
 

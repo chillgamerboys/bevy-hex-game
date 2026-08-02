@@ -43,8 +43,8 @@ use crate::terrain_damage::TerrainDamageState;
 use crate::voxel::{runs, Column, SubstanceRun, VoxelMap};
 use crate::{
     CavesReportMetrics, DeepForestReportMetrics, ForestReportMetrics, FortReportMetrics,
-    GenerationReport, PrairieReportMetrics, ProceduralRecipeMetrics, Ring19Metrics, Ring7Metrics,
-    VolcanoReportMetrics, WaterfallReportMetrics,
+    GardenReportMetrics, GenerationReport, PrairieReportMetrics, ProceduralRecipeMetrics,
+    Ring19Metrics, Ring7Metrics, VolcanoReportMetrics, WaterfallReportMetrics,
 };
 
 /// One claimed impact decision retained in exact incoming message order.
@@ -94,6 +94,7 @@ pub fn plugin(app: &mut App) {
         .register_type::<WaterfallReportMetrics>()
         .register_type::<ForestReportMetrics>()
         .register_type::<FortReportMetrics>()
+        .register_type::<GardenReportMetrics>()
         .register_type::<CavesReportMetrics>()
         .register_type::<Ring7Metrics>()
         .register_type::<VolcanoReportMetrics>()

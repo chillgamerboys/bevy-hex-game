@@ -639,6 +639,8 @@ pub enum V3RecipeSettings {
     DeepForest(V3DeepForestSettings),
     /// Open rolling grassland without trees or an authored road.
     Prairie(V3PrairieSettings),
+    /// A fixed sculptural garden core surrounded by procedural temperate terrain.
+    Garden(V3GardenSettings),
 }
 
 /// V3 Hills parameters, intentionally independent from the frozen V2 payload.
@@ -740,6 +742,13 @@ pub struct V3ForestSettings;
 /// Reserved Fort recipe payload.
 #[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub struct V3FortSettings;
+
+/// Garden recipe payload.
+///
+/// The authored core and all initial quotas are recipe invariants rather than
+/// designer-tunable fields.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct V3GardenSettings;
 
 /// A stable name and semantic overlay kind.
 #[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -1886,6 +1895,7 @@ const fn ring19_recipe_name(recipe: &V3RecipeSettings) -> &'static str {
         V3RecipeSettings::Volcano(_) => "Volcano",
         V3RecipeSettings::DeepForest(_) => "DeepForest",
         V3RecipeSettings::Prairie(_) => "Prairie",
+        V3RecipeSettings::Garden(_) => "Garden",
     }
 }
 
@@ -1969,6 +1979,17 @@ fn validate_v3_recipe(
         }
         (V3RecipeSettings::Prairie(_), _) => {
             Err("V3 Prairie requires the TemperateGrassland environment".to_owned())
+        }
+        (V3RecipeSettings::Garden(_), V3EnvironmentSettings::TemperateGrassland)
+            if grid_radius == 12 =>
+        {
+            Ok(())
+        }
+        (V3RecipeSettings::Garden(_), V3EnvironmentSettings::TemperateGrassland) => {
+            Err("V3 Garden requires grid_radius exactly 12".to_owned())
+        }
+        (V3RecipeSettings::Garden(_), _) => {
+            Err("V3 Garden requires the TemperateGrassland environment".to_owned())
         }
     }
 }
@@ -3851,6 +3872,23 @@ mod tests {
         assert!(
             validate_v3_recipe(&prairie, V3EnvironmentSettings::Frozen, 20).is_err(),
             "Prairie remains temperate-only"
+        );
+
+        let garden = V3RecipeSettings::Garden(V3GardenSettings);
+        validate_v3_recipe(&garden, V3EnvironmentSettings::TemperateGrassland, 12)
+            .expect("Garden should validate in its temperate radius-12 world");
+        assert!(
+            validate_v3_recipe(&garden, V3EnvironmentSettings::Rocky, 12).is_err(),
+            "Garden remains temperate-only"
+        );
+        assert!(
+            validate_v3_recipe(&garden, V3EnvironmentSettings::TemperateGrassland, 20).is_err(),
+            "the authored Garden core remains radius-12-only"
+        );
+        assert_eq!(
+            ron::from_str::<V3RecipeSettings>("Garden(())")
+                .expect("the empty Garden payload should use the established unit RON shape"),
+            garden
         );
     }
 

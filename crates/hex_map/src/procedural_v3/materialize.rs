@@ -811,6 +811,8 @@ fn encode_structures(
             StructureKind::Tower => 3,
             StructureKind::Gate => 4,
             StructureKind::Keep => 5,
+            StructureKind::Column => 6,
+            StructureKind::Roof => 7,
         });
         encode_tile_set(encoder, &structure.voxels)?;
     }

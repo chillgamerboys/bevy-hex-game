@@ -274,6 +274,47 @@ blocker footprints, and deterministic semantic fingerprints. Their standalone
 selectable maps are **Deep Forest** and **Prairie**, both pinned to seed
 `1592598566`.
 
+### Garden
+
+Garden is a radius-12, TemperateGrassland, Single-only recipe with a seed-invariant
+architectural and hydrological core. Sketch elevation zero is runtime level 15. Six
+one-cell Worked Stone supports stand at `(-3,-3) +12`, `(3,-6) +12`, `(-6,3) +12`,
+`(6,-3) +10`, `(3,3) +5`, and `(-3,6) +8`. The three height-12 supports are joined
+by exactly thirteen one-voxel-thick roof cells:
+
+```text
+NW->NE: (-3,-3),(-2,-3),(-1,-4),(0,-4),(1,-5),(2,-5),(3,-6)
+NW->W:  (-3,-3),(-3,-2),(-4,-1),(-4,0),(-5,1),(-5,2),(-6,3)
+```
+
+Support and roof tops are non-standable sculpture. Garden adds no stairs,
+special-movement region, interior, cutaway, or camera-authored geometry. Dry ordinary
+ground below the canopy retains normal two-level walker headroom.
+
+The exact lake footprint contains 59 cells. Its inclusive axial `r` ranges are
+`q=-4:0..4`, `-3:-1..4`, `-2:-2..4`, `-1:-3..4`, `0:-4..4`, `1:-4..3`,
+`2:-4..2`, `3:-4..1`, and `4:-3..-1`. Water lies at relative level `-1` over a
+Gravel bed at `-2`; only `(-4,0)` and `(0,-4)` are horizontally covered by the roof.
+The eastern source is fixed: a raised Current pool at `(1,0,+2)` feeds a continuous
+Fall at `(1,-1)` down to a Still receiver at `(0,-1,-1)`, with Stone shoulders at
+`(2,-1)`, `(2,0)`, and `(1,1)`. The complete lake and source form one authored
+liquid body and receive the ordinary V3 liquid/support edit and impact protection.
+
+Terrain inside `|q+2r| <= 9`, `|q-r| <= 9`, and `|2q+r| <= 9` is flat. Only the
+outer halo receives zero through two levels of seeded relief, with a walker-safe
+apron. Two independently weighted, vertex-disjoint Gravel paths enter from `(4,8)`
+and `(8,4)` and terminate at `(1,4)` and `(4,0)`. Exactly four near trees stand
+immediately outside the enclosure and twelve far trees occupy the outer band; their
+complete visual footprints avoid the core, liquids, source, paths, anchors, and one
+another. Nonblocking grass tufts occupy exactly half of the remaining eligible
+exterior surfaces.
+
+Only outer relief, bounded path bends, and vegetation positions, rotations, and tree
+forms vary by seed. Columns, roof, lake, source, actor anchors, and review anchors are
+byte-identical across every candidate, seed, and fallback. The settings fingerprint
+uses reserved recipe tag 15; private Column and Roof structures append tags 6 and 7.
+No shared cross-owner contract changes are introduced.
+
 ### Volcano
 
 Volcanic Hills keeps its scenario name for compatibility but now dispatches the V3

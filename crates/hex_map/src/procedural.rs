@@ -100,6 +100,8 @@ pub enum ProceduralRecipeMetrics {
     DeepForest(DeepForestMetrics),
     /// Open grassland, ground-cover, and route measurements.
     Prairie(PrairieMetrics),
+    /// Fixed garden architecture, hydrology, paths, and exterior vegetation.
+    Garden(GardenMetrics),
     /// Whole-world topology, hydrology, and content measurements for Two Rings.
     Ring19(Ring19Metrics),
 }
@@ -410,6 +412,45 @@ pub struct PrairieMetrics {
     /// Highest ordinary surface minus the lowest.
     pub relief: Level,
     /// Shortest ordinary route between the required actor anchors.
+    pub critical_route_steps: u32,
+}
+
+/// Exact deterministic measurements of one selected V3 Garden plan.
+#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct GardenMetrics {
+    /// Exact authored support columns.
+    pub columns: u32,
+    /// Worked-stone voxels assigned to all support columns.
+    pub column_voxels: u32,
+    /// Exact one-voxel-thick canopy cells.
+    pub roof_cells: u32,
+    /// Exact still-lake footprint, including source-formation coordinates.
+    pub lake_cells: u32,
+    /// Lake cells horizontally covered by the authored canopy.
+    pub covered_water_cells: u32,
+    /// Nodes in the fixed current-to-fall-to-still source chain.
+    pub source_nodes: u32,
+    /// Continuous water voxels in the vertical fall column.
+    pub source_fall_voxels: u32,
+    /// Independently protected gravel paths entering from the south-east.
+    pub paths: u32,
+    /// Exact ordinary surfaces covered by both paths.
+    pub path_surfaces: u32,
+    /// Blocking trees immediately outside the column enclosure.
+    pub near_trees: u32,
+    /// Blocking trees in the outer terrain band.
+    pub far_trees: u32,
+    /// Nonblocking exterior grass-tuft instances.
+    pub grass_tufts: u32,
+    /// Complete surfaces admitted by the ordinary walker profile.
+    pub ordinary_surfaces: u32,
+    /// Ordinary surfaces reachable from the party anchor.
+    pub reachable_surfaces: u32,
+    /// Distinct elevations in the reachable ordinary network.
+    pub reachable_elevation_levels: u32,
+    /// Highest reachable ordinary surface minus the lowest.
+    pub relief: Level,
+    /// Shortest ordinary path between the required actor anchors.
     pub critical_route_steps: u32,
 }
 

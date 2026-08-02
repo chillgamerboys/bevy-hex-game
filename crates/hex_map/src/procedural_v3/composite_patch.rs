@@ -88,6 +88,9 @@ pub(crate) fn construct_fragment(
             mode,
             art_catalog,
         ),
+        V3RecipeSettings::Garden(_) => Err(vec![composite_issue(
+            "Garden is currently a Single-layout recipe",
+        )]),
     }
 }
 
@@ -163,6 +166,9 @@ pub(crate) fn validate_fragment(
             fragment,
             art_catalog,
         )),
+        V3RecipeSettings::Garden(_) => WorldValidation::Invalid(vec![composite_issue(
+            "Garden is currently a Single-layout recipe",
+        )]),
     };
     match validation {
         WorldValidation::Valid(()) => Ok(()),

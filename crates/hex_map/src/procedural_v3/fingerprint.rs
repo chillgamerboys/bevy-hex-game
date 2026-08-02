@@ -394,6 +394,7 @@ fn encode_recipe_settings(encoder: &mut FingerprintEncoder, recipe: &V3RecipeSet
             encoder.i32(settings.max_relief);
             encoder.u8(settings.grass_coverage_percent);
         }
+        V3RecipeSettings::Garden(_) => encoder.tag(15),
     }
 }
 
@@ -780,6 +781,8 @@ const fn structure_kind_tag(kind: StructureKind) -> u8 {
         StructureKind::Tower => 3,
         StructureKind::Gate => 4,
         StructureKind::Keep => 5,
+        StructureKind::Column => 6,
+        StructureKind::Roof => 7,
     }
 }
 
@@ -1219,6 +1222,29 @@ mod tests {
             settings_fingerprint(12, 0.4, &forward).expect("the settings encode"),
             settings_fingerprint(12, 0.4, &reversed).expect("the settings encode")
         );
+    }
+
+    #[test]
+    fn garden_reserves_additive_recipe_and_structure_tags() {
+        let mut prairie = FingerprintEncoder::new();
+        encode_recipe_settings(
+            &mut prairie,
+            &V3RecipeSettings::Prairie(V3PrairieSettings {
+                base_level: 15,
+                max_relief: 2,
+                grass_coverage_percent: 50,
+            }),
+        );
+        let mut garden = FingerprintEncoder::new();
+        encode_recipe_settings(
+            &mut garden,
+            &V3RecipeSettings::Garden(crate::settings::V3GardenSettings),
+        );
+
+        assert_eq!(prairie.bytes.first(), Some(&9));
+        assert_eq!(garden.bytes, 15_u8.to_le_bytes());
+        assert_eq!(structure_kind_tag(StructureKind::Column), 6);
+        assert_eq!(structure_kind_tag(StructureKind::Roof), 7);
     }
 
     #[test]
