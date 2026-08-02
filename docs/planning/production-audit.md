@@ -370,7 +370,10 @@ fenced.
   presentation.
 - **The window stays load-bearing.** Headless tests cannot see a black sky
   or a sunken piece; every serious bug here was found by a person looking.
-  The visual walk remains part of every gameplay PR.
+  The visual walk remains part of gameplay PRs that change rendered presentation,
+  runtime navigation, movement behavior, persistence, or a visual script; pure
+  contract/trajectory PRs record it as not applicable. Combined waves and release
+  promotions retain the broader walk.
 
 ## Risks
 

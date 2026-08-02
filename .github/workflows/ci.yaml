@@ -39,6 +39,7 @@ jobs:
       code: ${{ steps.filter.outputs.code }}
       full: ${{ steps.filter.outputs.full }}
       rules: ${{ steps.filter.outputs.rules }}
+      trajectory_contracts: ${{ steps.filter.outputs.trajectory_contracts }}
       contracts: ${{ steps.filter.outputs.contracts }}
       simulation: ${{ steps.filter.outputs.simulation }}
       app: ${{ steps.filter.outputs.app }}
@@ -300,15 +301,15 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
-        if: needs.changes.outputs.rules == 'true' || needs.changes.outputs.contracts == 'true' || needs.changes.outputs.simulation == 'true' || needs.changes.outputs.app == 'true'
+        if: needs.changes.outputs.rules == 'true' || needs.changes.outputs.trajectory_contracts == 'true' || needs.changes.outputs.contracts == 'true' || needs.changes.outputs.simulation == 'true' || needs.changes.outputs.app == 'true'
       - uses: dtolnay/rust-toolchain@stable
-        if: needs.changes.outputs.rules == 'true' || needs.changes.outputs.contracts == 'true' || needs.changes.outputs.simulation == 'true' || needs.changes.outputs.app == 'true'
+        if: needs.changes.outputs.rules == 'true' || needs.changes.outputs.trajectory_contracts == 'true' || needs.changes.outputs.contracts == 'true' || needs.changes.outputs.simulation == 'true' || needs.changes.outputs.app == 'true'
       - uses: Swatinem/rust-cache@v2
-        if: needs.changes.outputs.rules == 'true' || needs.changes.outputs.contracts == 'true' || needs.changes.outputs.simulation == 'true' || needs.changes.outputs.app == 'true'
+        if: needs.changes.outputs.rules == 'true' || needs.changes.outputs.trajectory_contracts == 'true' || needs.changes.outputs.contracts == 'true' || needs.changes.outputs.simulation == 'true' || needs.changes.outputs.app == 'true'
       - uses: taiki-e/install-action@nextest
-        if: needs.changes.outputs.rules == 'true' || needs.changes.outputs.contracts == 'true' || needs.changes.outputs.simulation == 'true' || needs.changes.outputs.app == 'true'
+        if: needs.changes.outputs.rules == 'true' || needs.changes.outputs.trajectory_contracts == 'true' || needs.changes.outputs.contracts == 'true' || needs.changes.outputs.simulation == 'true' || needs.changes.outputs.app == 'true'
       - name: Install Linux dependencies
-        if: needs.changes.outputs.rules == 'true' || needs.changes.outputs.contracts == 'true' || needs.changes.outputs.simulation == 'true' || needs.changes.outputs.app == 'true'
+        if: needs.changes.outputs.rules == 'true' || needs.changes.outputs.trajectory_contracts == 'true' || needs.changes.outputs.contracts == 'true' || needs.changes.outputs.simulation == 'true' || needs.changes.outputs.app == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
@@ -330,6 +331,14 @@ jobs:
           python3 tools/test_scope.py run contracts \
             --timing-out gameplay-contracts-timing.json \
             2>&1 | tee gameplay-contracts-timing.log
+      - name: Trajectory and volume contracts
+        if: needs.changes.outputs.trajectory_contracts == 'true'
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 tools/test_scope.py run trajectory_contracts \
+            --timing-out gameplay-trajectory-timing.json \
+            2>&1 | tee gameplay-trajectory-timing.log
       - name: Gameplay simulation
         if: needs.changes.outputs.simulation == 'true'
         shell: bash
@@ -348,7 +357,7 @@ jobs:
             --timing-out gameplay-app-timing.json \
             2>&1 | tee gameplay-app-timing.log
       - name: Upload gameplay timing artifacts
-        if: always() && (needs.changes.outputs.rules == 'true' || needs.changes.outputs.contracts == 'true' || needs.changes.outputs.simulation == 'true' || needs.changes.outputs.app == 'true')
+        if: always() && (needs.changes.outputs.rules == 'true' || needs.changes.outputs.trajectory_contracts == 'true' || needs.changes.outputs.contracts == 'true' || needs.changes.outputs.simulation == 'true' || needs.changes.outputs.app == 'true')
         uses: actions/upload-artifact@v4
         with:
           name: gameplay-test-timings
@@ -356,6 +365,7 @@ jobs:
             gameplay-*-timing.log
             gameplay-*-timing.json
             target/nextest/gameplay-rules/junit.xml
+            target/nextest/gameplay-trajectory/junit.xml
             target/nextest/gameplay-contracts/junit.xml
             target/nextest/gameplay-simulation/junit.xml
             target/nextest/gameplay-app/junit.xml

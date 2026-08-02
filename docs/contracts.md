@@ -67,7 +67,7 @@ than agreed, the fallback the gameplay side ships without it is in
 | `PerceptionSystems` — headless phases through `PublishKnowledge` | core | perception | live | [systems/perception.md](systems/perception.md) |
 | `PerceptionSystems::ApplyPresentation` — fog projection phase | core | perception | reserved | [systems/perception.md](systems/perception.md) |
 | `PresentationSystems` — camera obstruction → renderer-owned materials → composed visibility | core | world / presentation | live | [systems/camera.md](systems/camera.md) |
-| `TerrainSystems` — `ApplyWorld → ReconcileActors` before perception and later combat authority | core | world / gameplay | **partial** — map `ApplyWorld` is live; occupancy reordering and gameplay `ReconcileActors` remain pending | [planning/boundary.md](planning/boundary.md) H |
+| `TerrainSystems` — reserved `ApplyWorld → RefreshProjections → ReconcileActors → ConsumeOutcomes` before perception and later combat authority | core | world / gameplay | **partial** — map `ApplyWorld` is live; the configured downstream phases are empty until gameplay lands occupancy/movement refresh, actor settlement, and outcome consumption | [planning/boundary.md](planning/boundary.md) H |
 | `AppSystems`, `PausableSystems` | core | all | live | [`CLAUDE.md`](../CLAUDE.md) |
 | Same-frame combat knowledge — `PublishKnowledge → spatial lattice sync → Act → Apply → Resolve → Advance` | perception / gameplay | combat / AI | live | [systems/ai.md](systems/ai.md) |
 

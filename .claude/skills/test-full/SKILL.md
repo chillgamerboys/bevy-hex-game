@@ -1,6 +1,6 @@
 ---
 name: test-full
-description: Pre-merge gate — chains `/test-local` (fmt/clippy/tests/deny/doc/links) → ship-shape build (default features, what CI's matrix builds) → manual visual-verification reminder. Used as Step 2 of `/audit-pr`. Doc-only diffs short-circuit to `/test-quick`. Stop on first failure.
+description: Pre-merge gate — chains `/test-local` (fmt/clippy/selected tests/deny/doc/links) → ship-shape build when selected → scoped visual applicability. Used as Step 2 of `/audit-pr`. Doc-only diffs short-circuit to `/test-quick`. Stop on first failure.
 ---
 
 When invoked, run this sequence. STOP on first failure.
@@ -39,6 +39,8 @@ If `/test-local` fails → STOP. Surface the failing step + report.
 
 ## Phase 2 — Ship-shape build
 
+Run this phase when the scope decision selects `shipping`:
+
 ```bash
 cargo build --package hex_game --release
 ```
@@ -48,6 +50,9 @@ three-platform matrix builds and what ships — workspace-only binaries, `hex_de
 and the `dev` feature are excluded. It
 catches "builds with the inspector but not without", which Phase 1
 cannot see because every other command runs `--all-features`.
+
+If `shipping` is omitted, record `ship build: not applicable (scope decision)` rather
+than compiling it anyway.
 
 ## Phase 3 — Visual verification (two tiers)
 
@@ -64,7 +69,7 @@ looking at the window — as every serious bug here was before the walk
 existed. Print the walk for the operator:
 
 ```
-Manual walk (PR checkbox: "A human ran the game and looked at it"):
+Manual walk (record exact-head result, commit, reviewer, date, and route in the PR):
   cargo dev
   splash → title → New Game → Party Trial
   orbit (right-drag), WASD pan, zoom
@@ -74,13 +79,22 @@ Manual walk (PR checkbox: "A human ran the game and looked at it"):
 ```
 
 Report this phase as `automated walk: <verdict>; human walk: operator
-confirms`. The human box in the PR template belongs to the operator,
-not this skill.
+records structured evidence`. The human runtime fields in the PR template belong to
+the operator, not this skill.
+
+If the diff changes no rendered presentation, runtime navigation, movement behavior,
+persistence, or visual script, record both visual tiers as `not applicable` with that
+reason. This applicability decision is independent of a fail-closed selector choosing
+`app` because validation infrastructure changed: automated closure and visual evidence
+answer different questions. Record an exact-head maintainer waiver when a runtime path
+is conservatively classified but the reviewed diff has no rendered/runtime surface.
+Do not launch the UI merely to turn an unrelated test into a checkbox. Final combined
+waves and release promotions keep their broader runtime gate.
 
 ## Output
 
 ```
-✓ /test-full — local green, ship build green, visual walk: manual — operator confirms
+✓ /test-full — local green, ship build green, visual applicability: <manual evidence | exact-head N/A reason>
 ```
 
 ## Findings shape (for audit-pr receipt v3)
@@ -104,8 +118,8 @@ operator sees the exact failures without re-running.
 ## When invoked from `/audit-pr`
 
 Automatic as Step 2. The receipt's `2_test_full` step records the
-outcome with per-suite findings. The visual walk stays the operator's
-to confirm via the PR checkbox — the receipt does not claim it.
+outcome with per-suite findings. The human runtime walk stays the operator's to record
+in the structured PR fields — the receipt does not claim it.
 
 ## When invoked standalone
 

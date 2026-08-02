@@ -374,13 +374,15 @@ normally publishes. The authored cave membership itself is not regenerated: remo
 a roof voxel updates roof metadata, but the chamber stays in its authored Interior
 domain and does not gain daylight in this slice.
 
-`TerrainSystems::ApplyWorld` now owns this map work and completes before perception.
-The gameplay integration must move exact terrain-occupancy publication after
-`ApplyWorld` and before `TerrainSystems::ReconcileActors`, then reconcile current
-movement before settling unsupported units. Only after settlement may perception and
-later combat authority refresh. `ReconcileActors` itself is not live yet. The map
-never reads a character or chooses a landing; that deterministic policy belongs to
-gameplay and is pinned in
+The configured terrain protocol is `TerrainSystems::ApplyWorld →
+RefreshProjections → ReconcileActors → ConsumeOutcomes` before perception. Only
+`ApplyWorld` owns live systems and performs this map work. The future gameplay
+integration will use `RefreshProjections` for exact terrain-occupancy publication and
+ordinary movement reconcile, `ReconcileActors` for unsupported units, and
+`ConsumeOutcomes` for matching answer validation before perception and later combat
+authority refresh. Those three phases are empty reservations in this foundation. The
+map never reads a character, chooses a landing, or releases a pending cast; those
+deterministic policies belong to gameplay and are pinned in
 [boundary H](../planning/boundary.md#cross-owner-ordering-and-unsupported-actors).
 
 ## Things that are true and easy to forget

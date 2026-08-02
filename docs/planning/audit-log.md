@@ -7,6 +7,33 @@ file is the record that travels with the repo.
 
 <!-- /audit-diff appends below this line. Don't insert content between this comment and Wave entries; the skill anchors on this marker. -->
 
+## Wave 27 — feat: establish spell resolution contract foundation (2026-08-02)
+
+- **PR**: #178 — `feat/spell-resolution-foundation`
+- **Outcome**: green after final automation-contract corrections
+- **Lenses triggered**: 6, 7, 8, D1, plus the fresh-eyes pass
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 6 | `.claude/skills/test-{quick,local}/SKILL.md` | SHIP-BLOCKER | fixed — selector failure now stops the gate and the concern loop uses portable scalar parsing under both bash and the repository-default zsh |
+| 7 | `.config/{test-scopes.json,nextest.toml}`, `.github/workflows/ci.yaml` | SHIP-BLOCKER | fixed — trajectory/volume-only changes run one JUnit-producing 61-test closure across pure geometry and the direct creation, AI, command, and casting consumers; no `hex_ui` or `gameplay_app` tests are selected |
+| 8 | `.config/test-scopes.json` | SHIP-BLOCKER | fixed — the combined routing/command manifest and combined terrain-impact source remain fail-closed instead of exempting their untested consumers |
+| D1 | `.github/workflows/manual-runtime-signoff.yaml`, `.claude/skills/{create-pr,merge-pr,test-full}/SKILL.md` | SHIP-BLOCKER | fixed — only the two pure geometry paths bypass the runtime gate automatically; conservative runtime classifications require exact-head PASS or an explicit named maintainer N/A waiver, while wave landings still require PASS |
+
+**Notes**: the Rust contract and schedule diff was clean across all eight code lenses.
+Exact-head evidence includes 59 selector regressions; ten exhaustive terrain-impact
+tests; the reverse-registered phase-order contract; the mixed material/air producer;
+140 rules, 94 map-unit, and 75 map-contract tests; warnings-denied workspace Clippy and
+docs; dependency policy; and the release build. The new trajectory wedge separately
+passes 12 trajectory units, 5 volume units, 2 creation-resolution units, 32 volume
+contracts, 1 AI consumer, 6 authoritative command contracts, and 3 game-library
+casting consumers (61 total). No application/UI test target or visual walk was run. Because this PR
+changes the canonical command manifest and CI topology, the selector correctly marks
+the bootstrap diff full; the maintainer explicitly chose the listed non-UI evidence
+for this landing while retaining the full fail-closed policy for future infrastructure
+changes. Linear was unavailable and remains a soft coordination signal; HEX-19 and
+HEX-24 stay partial.
+
 ## Wave 26 — feat(game): cut over to Campaign and Sandbox (2026-08-02)
 
 - **PR**: #176 — `shrav-k/campaign-sandbox-cutover`

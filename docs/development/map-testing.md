@@ -48,9 +48,13 @@ python3 tools/test_scope.py plan --base origin/dev --head HEAD
 Map integration-test changes select contracts; procedural source changes select
 generation plus contracts; grid/presentation source changes select unit plus
 contracts; shared map foundations select all three. Shared `hex_test_support` changes
-select both gameplay and map consumers. Other world crates, shared core/assets,
-unknown paths, invalid configuration, and empty diffs fail closed. Pushes to `dev` or
-`main` and final wave candidates force the complete gate.
+select both gameplay and map consumers. The combined shared terrain-impact source also
+owns the damaged-health projection, so path-level changes remain full; the foundation
+PR records a narrower exact validator/schedule/producer wedge as review evidence rather
+than weakening that fail-closed route. Unclassified shared core/assets, other world
+crates, selector-command or CI-topology changes, unknown paths, invalid configuration,
+and empty diffs fail closed.
+Pushes to `dev` or `main` and final wave candidates force the complete gate.
 
 The executable completeness guard is:
 

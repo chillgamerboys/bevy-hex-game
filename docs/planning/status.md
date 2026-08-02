@@ -256,9 +256,13 @@ deterministic simulation, and model/headless-app partitions. One fail-closed con
 map selects exact packages, targets, and features for narrow pull requests. Map
 validation uses the same authority for unit, deterministic generation, and real-plugin
 publication contracts, with all PR seeds preserved under an optimized test-only
-profile. Unknown paths, shared core/assets, other world crates, or validation
-infrastructure promote to the complete gate. The residual workspace corpus still runs
-on its owning changes, `dev` pushes, schedules, and combined wave/release candidates.
+profile. Unknown paths, unclassified shared core/assets, other world crates, or
+selector-command/CI-topology changes promote to the complete gate. The combined
+terrain-impact source stays full because it also carries an application-consumed
+health projection. Trajectory/volume-only changes instead run their pure/direct
+contract modules and casting consumers; they do not select application/UI partitions
+that cannot exercise those authorities. The residual workspace corpus still runs on
+its owning changes, `dev` pushes, schedules, and combined wave/release candidates.
 Screenshots remain presentation evidence only; the dependency ceilings, commands,
 budgets, and anti-patterns are recorded in the
 [gameplay](../development/gameplay-testing.md) and
