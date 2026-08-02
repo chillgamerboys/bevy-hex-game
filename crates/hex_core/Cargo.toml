@@ -17,7 +17,7 @@ test-support = []
 # higher-level crate that owns the behavior instead.
 [dependencies]
 bevy_ecs = { workspace = true, features = ["bevy_reflect"] }
-bevy_input = { workspace = true, features = ["keyboard"] }
+bevy_input = { workspace = true, features = ["keyboard", "serialize"] }
 bevy_math = { workspace = true }
 bevy_platform = { workspace = true }
 bevy_reflect = { workspace = true }

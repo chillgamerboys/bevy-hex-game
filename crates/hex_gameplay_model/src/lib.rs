@@ -5,11 +5,16 @@
 //! into these typed transitions; it does not reconstruct their results.
 
 mod creator;
+mod hud;
 mod main_menu;
 mod sandbox;
 
 pub use creator::{
     CreatorDestination, CreatorEntry, CreatorNavigation, CreatorOrigin, CreatorSurface, EditHistory,
+};
+pub use hud::{
+    HudActionResult, HudComponent, HudComponentPreferences, HudContext, HudContextEligibility,
+    HudState, HudTransientSurface, HudViewportMode, MainViewDestination,
 };
 pub use main_menu::{CampaignSlotId, MainMenuModel, MainMenuRoute};
 pub use sandbox::{

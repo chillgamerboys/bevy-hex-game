@@ -51,7 +51,10 @@ pub use formation::{
     MAX_FORMATION_SLOTS, MIN_FORMATION_SLOTS,
 };
 pub use hex::{HexCoord, HexGrid, HexSpan, HexTile, Sextant};
-pub use input::{InputAction, InputBindings};
+pub use input::{
+    BindingConflict, BindingEditError, InputAction, InputActionMetadata, InputBindingOverrides,
+    InputBindings, InputCategory, InputContext, KeyChord, KeyModifiers,
+};
 pub use lattice_ids::{EnchantId, LatticeCoord};
 pub use occupancy::{OccupancyBlock, UnitOccupancy};
 pub use perception::{
@@ -61,7 +64,7 @@ pub use perception::{
 };
 pub use presentation::{
     CanopyOccluder, PresentationOcclusion, PresentationOcclusionReason, PresentationSystems,
-    TreeFadeAmount, TreeOccluder,
+    TargetReticleRequest, TreeFadeAmount, TreeOccluder, WorldMarkerSuppression,
 };
 pub use setup::GameplaySetupFailure;
 pub use spatial::{BiomeRegionId, BiomeRegions, TraversalBlockers};
@@ -76,5 +79,5 @@ pub use terrain_impact::{
 };
 pub use traversal::{TraversalEndpoint, TraversalProfile};
 pub use unit_ids::{ControlOwner, PlayerSeat, SimSeeds, UnitId};
-pub use view::CameraFocusTarget;
+pub use view::{CameraFocusTarget, CenterInspectionCamera, InspectionCameraSubject};
 pub use voxel::{Headroom, Level, RunBottom, SubstanceId, TerrainEdit, TilePos, MAX_HEADROOM};
