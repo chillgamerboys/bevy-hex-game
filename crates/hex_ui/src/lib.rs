@@ -580,6 +580,8 @@ mod structural_tests {
                                 && side == SandboxSide::Party
                                 && slot == SandboxSlotIndex::One,
                             placed: complete,
+                            selectable: complete
+                                || (side == SandboxSide::Party && slot == SandboxSlotIndex::One),
                         })
                 })
                 .collect::<Vec<_>>();
@@ -1610,12 +1612,7 @@ pub mod test_support {
                 Self::DeploymentIncomplete => task(
                     "deployment-incomplete",
                     Screen::Gameplay,
-                    &[
-                        "Deployment Party slot 1",
-                        "Deployment Enemies slot 6",
-                        "Undo",
-                        "Return to Sandbox",
-                    ],
+                    &["Deployment Party slot 1", "Undo", "Return to Sandbox"],
                     &[],
                     true,
                 ),

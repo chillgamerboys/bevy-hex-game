@@ -149,6 +149,11 @@ pub enum SandboxPlacementRefusal {
     },
     /// Review owns the task until the player selects a character to reposition.
     SelectCharacter,
+    /// A later unplaced slot was chosen before the stable guided queue reached it.
+    FollowOrder {
+        /// First unplaced slot that remains eligible for guided placement.
+        expected: SandboxDeploymentSlot,
+    },
     /// Live actors no longer match the frozen ordered roster.
     RosterChanged,
     /// At least one occupied roster slot still needs an exact placement.
@@ -179,6 +184,9 @@ impl fmt::Display for SandboxPlacementRefusal {
             Self::SelectCharacter => {
                 formatter.write_str("Select a character before choosing another surface.")
             }
+            Self::FollowOrder { expected } => {
+                write!(formatter, "Place {expected} before choosing a later character.")
+            }
             Self::RosterChanged => formatter.write_str(
                 "Sandbox deployment no longer matches its roster. Return to Sandbox and start again.",
             ),
@@ -196,7 +204,6 @@ impl fmt::Display for SandboxPlacementRefusal {
 struct SandboxDeploymentEdit {
     slot: SandboxDeploymentSlot,
     previous: Option<TilePos>,
-    previous_stage: SandboxDeploymentStage,
 }
 
 /// Renderer-free authority for guided, exact-surface Sandbox deployment.
@@ -284,10 +291,27 @@ impl SandboxDeploymentModel {
         !self.undo.is_empty()
     }
 
+    /// Whether this queue entry may be selected without bypassing guided order.
+    ///
+    /// Already placed entries remain available for repositioning. Among unplaced
+    /// entries, only the first stable Party-then-Enemies slot is eligible.
+    #[must_use]
+    pub fn is_selectable(&self, slot: SandboxDeploymentSlot) -> bool {
+        self.order.contains(&slot)
+            && (self.placement(slot).is_some() || self.first_unplaced() == Some(slot))
+    }
+
     /// Selects any occupied slot for placement or repositioning.
     #[must_use]
     pub fn select_slot(&mut self, slot: SandboxDeploymentSlot) -> bool {
         if !self.order.contains(&slot) {
+            self.refuse(SandboxPlacementRefusal::RosterChanged);
+            return false;
+        }
+        if !self.is_selectable(slot) {
+            if let Some(expected) = self.first_unplaced() {
+                self.refuse(SandboxPlacementRefusal::FollowOrder { expected });
+            }
             return false;
         }
         self.stage = SandboxDeploymentStage::Placing(slot);
@@ -324,15 +348,10 @@ impl SandboxDeploymentModel {
         }
 
         let previous = self.placement(slot);
-        let previous_stage = self.stage;
         if let Some(target) = self.placements_mut(slot.side).get_mut(slot.slot.index()) {
             *target = Some(position);
         }
-        self.undo.push(SandboxDeploymentEdit {
-            slot,
-            previous,
-            previous_stage,
-        });
+        self.undo.push(SandboxDeploymentEdit { slot, previous });
         self.refusal = None;
         self.stage = self.next_stage_after(slot);
         Ok(self.stage)
@@ -350,7 +369,10 @@ impl SandboxDeploymentModel {
         {
             *target = edit.previous;
         }
-        self.stage = edit.previous_stage;
+        self.stage = self.first_unplaced().map_or(
+            SandboxDeploymentStage::Review,
+            SandboxDeploymentStage::Placing,
+        );
         self.refusal = None;
         true
     }
@@ -419,6 +441,13 @@ impl SandboxDeploymentModel {
                 SandboxDeploymentStage::Review,
                 SandboxDeploymentStage::Placing,
             )
+    }
+
+    fn first_unplaced(&self) -> Option<SandboxDeploymentSlot> {
+        self.order
+            .iter()
+            .copied()
+            .find(|slot| self.placement(*slot).is_none())
     }
 }
 
@@ -1171,15 +1200,41 @@ mod tests {
         assert_eq!(deployment.placement(party), Some(party_first));
         assert_eq!(
             deployment.stage,
-            SandboxDeploymentStage::Placing(party),
-            "undo must restore the stage that owned the repositioning click"
+            SandboxDeploymentStage::Review,
+            "undoing a Review reposition must restore the complete Review gate"
         );
         assert_eq!(deployment.progress(party), Some((1, 2)));
         assert_eq!(deployment.progress(enemy), Some((2, 2)));
     }
 
     #[test]
-    fn guided_deployment_rejects_unknown_slot_without_mutation() {
+    fn guided_deployment_refuses_future_slots_but_keeps_prior_placements_selectable() {
+        let draft: SandboxDraft<u64> = SandboxDraft::default();
+        let mut deployment = SandboxDeploymentModel::from_draft(&draft);
+        let party = SandboxDeploymentSlot::new(SandboxSide::Party, SandboxSlotIndex::One);
+        let enemy = SandboxDeploymentSlot::new(SandboxSide::Enemies, SandboxSlotIndex::One);
+        assert!(deployment.is_selectable(party));
+        assert!(!deployment.is_selectable(enemy));
+        assert!(!deployment.select_slot(enemy));
+        assert_eq!(
+            deployment.refusal,
+            Some(SandboxPlacementRefusal::FollowOrder { expected: party })
+        );
+        assert_eq!(deployment.stage, SandboxDeploymentStage::Placing(party));
+
+        let party_surface = TilePos::new(hex_core::HexCoord::ORIGIN, 1);
+        assert_eq!(
+            deployment.place_validated(party_surface),
+            Ok(SandboxDeploymentStage::Placing(enemy))
+        );
+        assert!(deployment.is_selectable(party));
+        assert!(deployment.is_selectable(enemy));
+        assert!(deployment.select_slot(party));
+        assert_eq!(deployment.stage, SandboxDeploymentStage::Placing(party));
+    }
+
+    #[test]
+    fn guided_deployment_rejects_unknown_slot_without_placement_mutation() {
         let draft: SandboxDraft<u64> = SandboxDraft::default();
         let mut deployment = SandboxDeploymentModel::from_draft(&draft);
         let before = deployment.clone();
@@ -1187,7 +1242,12 @@ mod tests {
             SandboxSide::Party,
             SandboxSlotIndex::Six,
         )));
-        assert_eq!(deployment, before);
+        assert_eq!(deployment.stage, before.stage);
+        assert_eq!(deployment.frozen_placements(), before.frozen_placements());
+        assert_eq!(
+            deployment.refusal,
+            Some(SandboxPlacementRefusal::RosterChanged)
+        );
     }
 
     #[test]

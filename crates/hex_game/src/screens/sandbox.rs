@@ -1281,6 +1281,7 @@ fn publish_deployment_view(
             ),
             selected: session.deployment.active_slot() == Some(slot),
             placed: session.deployment.placement(slot).is_some(),
+            selectable: session.deployment.is_selectable(slot),
         })
         .collect();
     *view = DeploymentView {
@@ -1638,11 +1639,7 @@ fn handle_deployment_actions(
         };
         match action {
             DeploymentAction::SelectSlot(slot) => {
-                if !session.deployment.select_slot(*slot) {
-                    session
-                        .deployment
-                        .refuse(SandboxPlacementRefusal::RosterChanged);
-                }
+                let _selected = session.deployment.select_slot(*slot);
             }
             DeploymentAction::Undo => {
                 let _undone = session.deployment.undo();
@@ -2234,6 +2231,18 @@ mod tests {
         assert!(
             session.complete(),
             "stacked surfaces at distinct elevations remain distinct"
+        );
+        let first_party_slot =
+            SandboxDeploymentSlot::new(SandboxSide::Party, SandboxSlotIndex::One);
+        assert!(session.deployment.select_slot(first_party_slot));
+        session
+            .deployment
+            .place_validated(TilePos::new(HexCoord::from_axial(-1, 0), 3))
+            .expect("a Review reposition returns to Review");
+        assert!(session.deployment.undo());
+        assert!(
+            session.complete(),
+            "undoing a Review reposition must restore the Start Combat gate"
         );
         assert_eq!(
             resolved_deployment_markers(&session).collect::<Vec<_>>(),

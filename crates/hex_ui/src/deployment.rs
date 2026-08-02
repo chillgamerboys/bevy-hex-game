@@ -186,50 +186,77 @@ fn spawn_queue_control(
         "NOW"
     } else if entry.placed {
         "SET"
-    } else {
+    } else if entry.selectable {
         "NEXT"
+    } else {
+        "WAIT"
     };
     let spoken_status = if entry.selected {
         "current placement"
     } else if entry.placed {
         "placed"
+    } else if entry.selectable {
+        "next in order"
     } else {
-        "waiting"
+        "waiting for earlier characters"
     };
     let control_name = deployment_slot_name(entry.slot);
-    controls
-        .spawn((
+    let accessible =
+        AccessibleLabel::new(format!("{}, {}, {spoken_status}", entry.slot, entry.name));
+    let mut control = if entry.selectable {
+        let mut control = controls.spawn((
             fixed_row_button(control_name, 56.0, 56.0),
             crate::UiVisibilityRequirement::Immediate,
             DeploymentIntent::SelectSlot(entry.slot),
+        ));
+        control
+            .insert(accessible)
+            .insert(BorderColor::all(if entry.selected { ACCENT } else { EDGE }));
+        control
+    } else {
+        controls.spawn((
+            Name::new(control_name),
+            accessible,
+            Node {
+                width: Val::Px(56.0),
+                height: Val::Px(56.0),
+                min_width: Val::Px(56.0),
+                min_height: Val::Px(56.0),
+                flex_shrink: 0.0,
+                flex_direction: FlexDirection::Column,
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(6.0)),
+                ..default()
+            },
+            BorderColor::all(EDGE),
+            BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.025)),
+            Pickable::IGNORE,
         ))
-        .insert(AccessibleLabel::new(format!(
-            "{}, {}, {spoken_status}",
-            entry.slot, entry.name
-        )))
-        .insert(BorderColor::all(if entry.selected { ACCENT } else { EDGE }))
-        .with_children(|control| {
-            control.spawn((
-                Text::new(format!("{short_side}{}", entry.slot.slot.number())),
-                compact_glyph_role(14.0),
-                TextFont {
-                    font: assets.body.clone().into(),
-                    ..TextFont::from_font_size(14.0)
-                },
-                TextColor(LABEL),
-                Pickable::IGNORE,
-            ));
-            control.spawn((
-                Text::new(status),
-                compact_glyph_role(9.0),
-                TextFont {
-                    font: assets.body.clone().into(),
-                    ..TextFont::from_font_size(9.0)
-                },
-                TextColor(if entry.selected { ACCENT } else { LABEL }),
-                Pickable::IGNORE,
-            ));
-        });
+    };
+    control.with_children(|control| {
+        control.spawn((
+            Text::new(format!("{short_side}{}", entry.slot.slot.number())),
+            compact_glyph_role(14.0),
+            TextFont {
+                font: assets.body.clone().into(),
+                ..TextFont::from_font_size(14.0)
+            },
+            TextColor(LABEL),
+            Pickable::IGNORE,
+        ));
+        control.spawn((
+            Text::new(status),
+            compact_glyph_role(9.0),
+            TextFont {
+                font: assets.body.clone().into(),
+                ..TextFont::from_font_size(9.0)
+            },
+            TextColor(if entry.selected { ACCENT } else { LABEL }),
+            Pickable::IGNORE,
+        ));
+    });
 }
 
 fn deployment_slot_name(slot: SandboxDeploymentSlot) -> String {
@@ -444,6 +471,7 @@ mod tests {
             name: name.into(),
             selected,
             placed,
+            selectable: selected || placed,
         }
     }
 
@@ -544,6 +572,35 @@ mod tests {
         )));
     }
 
+    #[test]
+    fn future_slots_are_visible_without_an_enabled_selection_intent() {
+        let mut app = App::new();
+        app.insert_resource(assets())
+            .insert_resource(placing_view())
+            .add_systems(Update, render);
+        app.update();
+
+        let intents = app
+            .world_mut()
+            .query::<&DeploymentIntent>()
+            .iter(app.world())
+            .copied()
+            .collect::<Vec<_>>();
+        assert!(intents.contains(&DeploymentIntent::SelectSlot(slot(
+            SandboxSide::Party,
+            SandboxSlotIndex::One
+        ))));
+        assert!(!intents.contains(&DeploymentIntent::SelectSlot(slot(
+            SandboxSide::Enemies,
+            SandboxSlotIndex::One
+        ))));
+        assert!(app
+            .world_mut()
+            .query::<&Name>()
+            .iter(app.world())
+            .any(|name| name.as_str() == "Deployment Enemies slot 1"));
+    }
+
     #[cfg(feature = "test-support")]
     #[test]
     fn deployment_modal_traps_retains_and_activates_keyboard_focus() {
@@ -565,8 +622,8 @@ mod tests {
         press_key(&mut app, KeyCode::Tab, Key::Tab);
         assert_eq!(
             focused_name(&app),
-            Some("Deployment Enemies slot 1"),
-            "real Tab input must stay inside the deployment task"
+            Some("Undo"),
+            "a future Enemy slot must not enter focus before the Party is placed"
         );
 
         // Guided progression redraws the card. Stable sparse-slot names retain
@@ -582,8 +639,20 @@ mod tests {
                 if entry.slot.side == SandboxSide::Party {
                     entry.placed = true;
                 }
+                entry.selectable = entry.selected || entry.placed;
             }
         }
+        app.update();
+        assert_eq!(focused_name(&app), Some("Undo"));
+        let enemy = app
+            .world_mut()
+            .query::<(Entity, &Name)>()
+            .iter(app.world())
+            .find_map(|(entity, name)| {
+                (name.as_str() == "Deployment Enemies slot 1").then_some(entity)
+            })
+            .expect("the newly current Enemy slot must become an enabled control");
+        app.insert_resource(InputFocus::from_entity(enemy));
         app.update();
         assert_eq!(focused_name(&app), Some("Deployment Enemies slot 1"));
 
@@ -652,7 +721,7 @@ mod tests {
 
     #[cfg(feature = "test-support")]
     #[test]
-    fn enlarged_twelve_character_queue_remains_immediate_and_keyboard_reachable() {
+    fn enlarged_queue_stays_visible_while_future_slots_remain_out_of_focus() {
         let mut app = App::new();
         app.add_plugins(crate::test_support::HeadlessUiPlugin::new(1280, 720));
         app.world_mut()
@@ -688,8 +757,12 @@ mod tests {
             .find(|node| node.name == "Deployment Enemies slot 6")
             .expect("the exact sparse Enemy slot must be presented");
         assert!(
-            last.fully_visible && last.in_focus_order && last.keyboard_reachable == Some(true),
-            "the final queue control must remain immediate and reachable: {last:?}"
+            last.fully_visible
+                && !last.in_focus_order
+                && last.accessible_label.as_deref().is_some_and(|label| {
+                    label.contains("waiting for earlier characters")
+                }),
+            "the final future slot must stay visible and disclosed without bypassing order: {last:?}"
         );
         assert!(app
             .world_mut()

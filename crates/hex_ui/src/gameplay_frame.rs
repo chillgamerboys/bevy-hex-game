@@ -179,13 +179,12 @@ fn apply_responsive_layout(
             Display::None
         };
         let participates = node.display != Display::None;
-        *pickable = if participates
-            && matches!(*role, UiRegionRole::Inspector | UiRegionRole::Actions)
-        {
-            Pickable::default()
-        } else {
-            Pickable::IGNORE
-        };
+        *pickable =
+            if participates && matches!(*role, UiRegionRole::Inspector | UiRegionRole::Actions) {
+                Pickable::default()
+            } else {
+                Pickable::IGNORE
+            };
     }
 }
 

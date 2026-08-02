@@ -833,6 +833,8 @@ pub struct DeploymentQueueEntryView {
     pub selected: bool,
     /// Whether this entry already owns one exact surface.
     pub placed: bool,
+    /// Whether selecting this entry preserves stable guided order.
+    pub selectable: bool,
 }
 
 /// Immutable Sandbox deployment presentation.
