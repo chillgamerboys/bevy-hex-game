@@ -21,6 +21,7 @@ use hex_core::{
     InputAction, InputBindings, IssuedCommand, Mode, PartyFormation, PartyMovementMode, Pause,
     PendingDecision, Screen, UnitId,
 };
+use hex_gameplay_model::{MainMenuModel, MainMenuRoute};
 use hex_lattice::{LatticeSpec, LatticeState, LatticeStats};
 use hex_units::{Archetype, Downed, Party, Player, Selected, UnitRegistry};
 
@@ -34,7 +35,8 @@ use hex_ui::{
 };
 
 pub(crate) fn plugin(app: &mut App) {
-    app.init_resource::<InputBindings>();
+    app.init_resource::<InputBindings>()
+        .init_resource::<MainMenuModel>();
     app.add_sub_state::<Pause>();
     app.register_type::<Pause>();
     // A second sub-state of `Screen::Gameplay`, independent of `Pause`. Both are
@@ -407,6 +409,7 @@ fn handle_outcome_actions(
     mut commands: Commands,
     mut next_mode: ResMut<NextState<Mode>>,
     mut next_screen: ResMut<NextState<Screen>>,
+    mut main_menu: ResMut<MainMenuModel>,
 ) {
     let Some(outcome) = resolution.outcome() else {
         return;
@@ -445,7 +448,9 @@ fn handle_outcome_actions(
                 next_screen.set(Screen::Loading);
             }
             (OutcomeAction::Return, _) => {
-                next_screen.set(gameplay_return_screen(origin.as_deref(), sandbox.is_some()));
+                let destination = gameplay_return_screen(origin.as_deref(), sandbox.is_some());
+                prepare_main_menu_for_gameplay_return(destination, &mut main_menu);
+                next_screen.set(destination);
             }
             _ => {}
         }
@@ -460,6 +465,12 @@ fn gameplay_return_screen(
         Screen::Sandbox
     } else {
         Screen::Title
+    }
+}
+
+fn prepare_main_menu_for_gameplay_return(destination: Screen, main_menu: &mut MainMenuModel) {
+    if destination == Screen::Title {
+        main_menu.show(MainMenuRoute::Root);
     }
 }
 
@@ -769,13 +780,16 @@ fn handle_input(
     mut next_screen: ResMut<NextState<Screen>>,
     sandbox: Option<Res<SandboxSession>>,
     origin: Option<Res<GameplaySessionOrigin>>,
+    mut main_menu: ResMut<MainMenuModel>,
 ) {
     if bindings.just_pressed(&keys, InputAction::Pause) {
         next_pause.set(toggled_pause(*pause.get()));
     }
     // Backspace rather than Escape, which is taken by pause.
     if bindings.just_pressed(&keys, InputAction::ReturnTitle) {
-        next_screen.set(gameplay_return_screen(origin.as_deref(), sandbox.is_some()));
+        let destination = gameplay_return_screen(origin.as_deref(), sandbox.is_some());
+        prepare_main_menu_for_gameplay_return(destination, &mut main_menu);
+        next_screen.set(destination);
     }
 }
 
@@ -997,7 +1011,8 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin))
             .init_state::<Screen>()
-            .add_sub_state::<Mode>();
+            .add_sub_state::<Mode>()
+            .init_resource::<MainMenuModel>();
         app.world_mut()
             .resource_mut::<NextState<Screen>>()
             .set(Screen::Gameplay);
@@ -1093,6 +1108,7 @@ mod tests {
             .insert_state(Screen::Gameplay)
             .add_sub_state::<Mode>()
             .add_message::<hex_ui::UiIntent>()
+            .init_resource::<MainMenuModel>()
             .insert_resource(EncounterResolution(Some(EncounterOutcome::Victory)))
             .insert_resource(sample_sandbox_session(9_001))
             .insert_resource(GameplaySessionOrigin::Sandbox)
@@ -1106,6 +1122,68 @@ mod tests {
         assert_eq!(
             *app.world().resource::<State<Screen>>().get(),
             Screen::Sandbox
+        );
+    }
+
+    #[test]
+    fn campaign_return_intent_opens_the_main_menu_root() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .insert_state(Screen::Gameplay)
+            .add_sub_state::<Mode>()
+            .add_message::<hex_ui::UiIntent>()
+            .init_resource::<MainMenuModel>()
+            .insert_resource(EncounterResolution(Some(EncounterOutcome::Victory)))
+            .insert_resource(GameplaySessionOrigin::Campaign(CampaignSlotId::Two))
+            .add_systems(Update, handle_outcome_actions);
+        app.world_mut()
+            .resource_mut::<MainMenuModel>()
+            .show(MainMenuRoute::Campaign);
+        app.world_mut()
+            .write_message(hex_ui::UiIntent::Outcome(hex_ui::OutcomeIntent::Activate(
+                OutcomeAction::Return,
+            )));
+
+        app.update();
+        app.update();
+
+        assert_eq!(
+            *app.world().resource::<State<Screen>>().get(),
+            Screen::Title
+        );
+        assert_eq!(
+            app.world().resource::<MainMenuModel>().route,
+            MainMenuRoute::Root
+        );
+    }
+
+    #[test]
+    fn campaign_keyboard_return_opens_the_main_menu_root() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .insert_state(Screen::Gameplay)
+            .insert_state(Pause(false))
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<InputBindings>()
+            .init_resource::<MainMenuModel>()
+            .add_systems(Update, handle_input);
+        app.world_mut()
+            .resource_mut::<MainMenuModel>()
+            .show(MainMenuRoute::Campaign);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Backspace);
+
+        app.update();
+        app.update();
+
+        assert_eq!(
+            *app.world().resource::<State<Screen>>().get(),
+            Screen::Title
+        );
+        assert_eq!(
+            app.world().resource::<MainMenuModel>().route,
+            MainMenuRoute::Root
         );
     }
 }

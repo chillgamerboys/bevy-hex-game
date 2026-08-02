@@ -222,8 +222,7 @@ thing that can go wrong is something they could in principle have known.
   alternative was inventing a regeneration curve before there was a fight to pace it
   against. Rest doubles as a testing affordance: it is the shortest path from "a fight
   ended badly" back to "try that again". It does **not** settle whether casting is
-  possible outside combat — that is [magic outside combat](#magic-outside-combat)'s
-  question and stays open.
+  possible outside combat — that question stays open.
 - **Ruled 2026-07-27: rout and surrender are deferred.** Both are named above as brakes
   on the negative spiral and as the thing that ends a fight before the slog, and both
   need a threshold number nobody can pick honestly yet. `rout_policy` stays an unbuilt

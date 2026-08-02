@@ -7,6 +7,28 @@ file is the record that travels with the repo.
 
 <!-- /audit-diff appends below this line. Don't insert content between this comment and Wave entries; the skill anchors on this marker. -->
 
+## Wave 25 — feat(game): cut over to Campaign and Sandbox (2026-08-02)
+
+- **PR**: #176 — `shrav-k/campaign-sandbox-cutover`
+- **Outcome**: candidate audit green; exact-head named-human runtime sign-off remains
+  the external merge gate
+- **Lenses triggered**: 4, 6, 7, 8, D2, plus the fresh-eyes pass
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 6 | `crates/hex_game/src/screens/sandbox.rs` (`on_deployment_surface_clicked`) | SHIP-BLOCKER | fixed — the global pointer observer no longer requires asynchronously loaded `GameAssets` and `PlayerSettings` before it can reject an unrelated click; a trigger-level regression covers the pre-load path |
+| 4 | `crates/hex_game/src/screens/gameplay.rs` (`handle_outcome_actions`, `handle_input`) | SHIP-BLOCKER | fixed — Campaign Return and Backspace now reset the persistent menu model to its root before entering `Screen::Title`; typed outcome and keyboard regressions cover both paths without changing Sandbox ownership |
+| 8 | `.github/workflows/manual-runtime-signoff.yaml` | SHIP-BLOCKER | fixed — the exact-head runtime gate now treats every shipped `assets/**` path as runtime-visible instead of omitting menu, scenario, Creator, and Sandbox preview inputs |
+| 7, 8 | `.config/test-scopes.json`, `tools/test_test_scope.py` | NON-BLOCKER | fixed — the deprecated-vocabulary validator is explicit validation infrastructure, with a selector regression proving full coverage and no unknown path |
+| D2 | `docs/design/game.md` | NON-BLOCKER | fixed — removed a link to a nonexistent `magic-outside-combat` fragment while preserving the open design question |
+
+**Notes**: the all-feature workspace suite, strict Clippy, dependency policy, warning-denied
+docs, shipping build, terminology scan, selector tests, and exact patched-state visual walk
+are green. The first workspace retry failed only because the shared volume reached zero
+free bytes; deleting disposable Rust build caches recovered the space, and the exact same
+gate then passed. Linear was unavailable and remains a soft coordination signal. The PR
+must not merge until its body records a named-human runtime PASS for the final head SHA.
+
 ## Wave 24 — feat(map): biome expansion and Two Rings (2026-07-30)
 
 - **PR**: #144 — `wave/alberto-biome-expansion`

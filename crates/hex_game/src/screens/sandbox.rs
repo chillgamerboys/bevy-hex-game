@@ -1647,8 +1647,8 @@ struct DeploymentMarkerRuntime<'w, 's> {
     tiles: DeploymentTileQuery<'w, 's>,
     table: Option<Res<'w, SubstanceTable>>,
     blockers: Option<Res<'w, TraversalBlockers>>,
-    game_assets: Res<'w, GameAssets>,
-    player_settings: Res<'w, PlayerSettings>,
+    game_assets: Option<Res<'w, GameAssets>>,
+    player_settings: Option<Res<'w, PlayerSettings>>,
     materials: Option<Res<'w, DeploymentMarkerMaterials>>,
     entities: Query<'w, 's, Entity, With<DeploymentPlacementMarker>>,
 }
@@ -1661,12 +1661,16 @@ fn rebuild_deployment_markers(
     for entity in &runtime.entities {
         commands.entity(entity).despawn();
     }
-    let (Some(table), Some(materials)) = (runtime.table.as_deref(), runtime.materials.as_deref())
-    else {
+    let (Some(table), Some(materials), Some(game_assets), Some(player_settings)) = (
+        runtime.table.as_deref(),
+        runtime.materials.as_deref(),
+        runtime.game_assets.as_deref(),
+        runtime.player_settings.as_deref(),
+    ) else {
         return;
     };
     let footing = deployment_footing(&runtime.tiles, table, runtime.blockers.as_deref());
-    let scale = runtime.player_settings.scale * 1.08;
+    let scale = player_settings.scale * 1.08;
     let child_transform = Transform {
         translation: Vec3::new(-scale, -scale, -10.0 * scale),
         scale: Vec3::splat(scale),
@@ -1681,7 +1685,7 @@ fn rebuild_deployment_markers(
         } else {
             materials.hostile.clone()
         };
-        let [mesh_a, mesh_b] = runtime.game_assets.player_pieces.clone();
+        let [mesh_a, mesh_b] = game_assets.player_pieces.clone();
         commands
             .spawn((
                 Name::new(format!(
@@ -1697,7 +1701,7 @@ fn rebuild_deployment_markers(
             ))
             .with_children(|marker| {
                 marker.spawn((
-                    Mesh3d(runtime.game_assets.hex_tile.clone()),
+                    Mesh3d(game_assets.hex_tile.clone()),
                     MeshMaterial3d(material.clone()),
                     Transform {
                         translation: Vec3::new(0.0, 0.045, 0.0),
@@ -2191,6 +2195,11 @@ fn apply_creator_display_names(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use bevy::camera::NormalizedRenderTarget;
+    use bevy::picking::backend::HitData;
+    use bevy::picking::pointer::{Location, PointerButton, PointerId};
     use bevy::state::app::StatesPlugin;
     use hex_assets::{
         ArtPalette, ElementFile, SandboxDeploymentRegion, SandboxRegionCenter, SubstanceFile,
@@ -2242,6 +2251,31 @@ mod tests {
                 handle_sandbox_intents.run_if(in_state(Screen::Sandbox)),
             );
         app
+    }
+
+    #[test]
+    fn unrelated_click_is_safe_before_deployment_assets_arrive() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_observer(on_deployment_surface_clicked);
+        let target = app.world_mut().spawn_empty().id();
+        let window = app.world_mut().spawn_empty().id();
+        let target_window = bevy::window::WindowRef::Entity(window)
+            .normalize(Some(window))
+            .expect("the explicit window target normalizes");
+        let location = Location {
+            target: NormalizedRenderTarget::Window(target_window),
+            position: Vec2::ZERO,
+        };
+        let click = Click {
+            button: PointerButton::Primary,
+            hit: HitData::new(target, 0.0, None, None),
+            duration: Duration::from_millis(1),
+            count: 1,
+        };
+
+        app.world_mut()
+            .trigger(Pointer::new(PointerId::Mouse, location, click, target));
     }
 
     #[test]

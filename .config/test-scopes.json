@@ -264,6 +264,7 @@
       "patterns": [
         ".config/test-scopes.json",
         ".config/nextest.toml",
+        "tools/check_deprecated_ui_terms.py",
         "tools/gameplay_scope.py",
         "tools/test_scope.py",
         "tools/test_test_scope.py",
