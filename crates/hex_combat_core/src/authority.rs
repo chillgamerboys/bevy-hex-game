@@ -468,6 +468,13 @@ pub struct CombatState {
     /// every remaining obligation.
     #[serde(default)]
     resolution_held: bool,
+    /// Removing the current unit during an external resolution deferred its handoff.
+    ///
+    /// The successor remains current for stable initiative indexing, but it receives
+    /// neither a [`Turn`] nor start-of-turn effects until the host releases the whole
+    /// transaction.
+    #[serde(default)]
+    turn_handoff_deferred: bool,
     /// Exact accepted command transcript.
     pub commands: Vec<IssuedCommand>,
     /// Exact structured outcome transcript, including refusals.
@@ -603,6 +610,7 @@ impl CombatState {
             metrics: CombatMetrics::default(),
             pending,
             resolution_held: false,
+            turn_handoff_deferred: false,
             commands: Vec::new(),
             events: Vec::new(),
             outcome: None,
@@ -671,6 +679,9 @@ impl CombatState {
         }
         self.resolution_held = false;
         self.detect_outcome();
+        if std::mem::take(&mut self.turn_handoff_deferred) && self.outcome.is_none() {
+            self.grant_current_turn();
+        }
         self.advance_if_finished();
         Ok(())
     }
@@ -803,7 +814,8 @@ impl CombatState {
                     projection.id
                 ));
             }
-            if projection.turn.is_some() != (current == Some(projection.id)) {
+            let expects_turn = current == Some(projection.id) && !self.turn_handoff_deferred;
+            if projection.turn.is_some() != expects_turn {
                 return Err(format!(
                     "adapter turn marker disagrees for unit {:?}",
                     projection.id
@@ -1695,7 +1707,11 @@ impl CombatState {
             // Removing the current actor slides the index onto its successor. That
             // successor did not pass through `advance_if_finished`, so it has no turn
             // until this explicit handoff. The ECS projection follows the same rule.
-            self.grant_current_turn();
+            if self.resolution_held {
+                self.turn_handoff_deferred = true;
+            } else {
+                self.grant_current_turn();
+            }
         }
     }
 
@@ -3127,6 +3143,155 @@ mod tests {
             "release resumes the finished turn once"
         );
         assert!(sim.finish_external_resolution().is_err());
+    }
+
+    #[test]
+    fn held_area_answer_defers_current_caster_handoff_until_release() {
+        let cell = LatticeCoord::ORIGIN;
+        let spec = LatticeSpec::default().with(cell, CellKind::Blank);
+        let mut sim = CombatState::start_with_session(
+            rules(4),
+            corridor(3),
+            ElementNames::default(),
+            [
+                CombatUnit::new(
+                    UnitId(0),
+                    PlayerSeat(0),
+                    Faction::Player,
+                    position(0, 0),
+                    20,
+                )
+                .with_lattice(
+                    spec.clone(),
+                    LatticeState::new(&spec, &LatticeStats::default()),
+                    LatticeStats::default(),
+                ),
+                CombatUnit::new(
+                    UnitId(1),
+                    PlayerSeat(0),
+                    Faction::Hostile,
+                    position(1, 0),
+                    10,
+                )
+                .with_lattice(
+                    spec.clone(),
+                    LatticeState::new(&spec, &LatticeStats::default()),
+                    LatticeStats::default(),
+                ),
+                CombatUnit::new(UnitId(2), PlayerSeat(0), Faction::Player, position(2, 0), 5),
+            ],
+            PendingDecision::ChooseDisables {
+                decider: UnitId(0),
+                count: 1,
+                source: UnitId(0),
+            },
+            BTreeMap::new(),
+        )
+        .expect("fixture state");
+        let caster_turn = sim
+            .units
+            .get_mut(&UnitId(0))
+            .and_then(|unit| unit.turn.as_mut())
+            .expect("the caster owns the opening turn");
+        caster_turn.acted = true;
+        caster_turn.movement_left = 0;
+        sim.effects.insert(
+            EffectId(0),
+            PersistentEffect {
+                source: UnitId(2),
+                target: UnitId(1),
+                payload: EffectPayload::Burn,
+                start: 0,
+                end: EffectEnd::AfterTurns(2),
+                ticks: 0,
+            },
+        );
+        sim.next_effect_id = 1;
+        sim.begin_external_resolution()
+            .expect("the area transaction acquires one hold");
+
+        sim.apply(IssuedCommand {
+            seat: PlayerSeat(0),
+            command: GameCommand::ChooseDisables {
+                unit: UnitId(0),
+                cells: vec![cell],
+            },
+        })
+        .expect("the held area answer downs the current caster");
+
+        assert_eq!(sim.current(), Some(UnitId(1)));
+        assert_eq!(sim.units.get(&UnitId(1)).and_then(|unit| unit.turn), None);
+        assert_eq!(
+            sim.effects.get(&EffectId(0)).map(|effect| effect.ticks),
+            Some(0),
+            "the successor's turn effect cannot tick under the area hold"
+        );
+        assert!(!sim.events.iter().any(|event| matches!(
+            event,
+            CombatEvent::BurnTicked {
+                target: UnitId(1),
+                ..
+            }
+        )));
+
+        let projection = sim
+            .units
+            .values()
+            .map(|unit| CombatUnitProjection {
+                id: unit.id,
+                position: unit.position,
+                turn: unit.turn,
+                busy: unit.busy,
+                downed: unit.downed,
+                lattice: unit.lattice.as_ref().map(|lattice| lattice.state.clone()),
+            })
+            .collect::<Vec<_>>();
+        sim.adopt_projection(
+            sim.order.clone(),
+            sim.current(),
+            sim.round,
+            sim.pending.clone(),
+            sim.pending_revivals.clone(),
+            projection,
+        )
+        .expect("the held no-turn successor is a valid adapter projection");
+
+        sim.finish_external_resolution()
+            .expect("the complete transaction releases once");
+        assert_eq!(
+            sim.units.get(&UnitId(1)).and_then(|unit| unit.turn),
+            Some(Turn {
+                movement_left: 4,
+                acted: false,
+            })
+        );
+        assert!(matches!(
+            sim.pending,
+            PendingDecision::ChooseDisables {
+                decider: UnitId(1),
+                count: 1,
+                source: UnitId(2)
+            }
+        ));
+        assert_eq!(
+            sim.effects.get(&EffectId(0)).map(|effect| effect.ticks),
+            Some(1)
+        );
+        assert_eq!(
+            sim.events
+                .iter()
+                .filter(|event| matches!(event, CombatEvent::BurnTicked { .. }))
+                .count(),
+            1,
+            "release must grant and tick the successor exactly once"
+        );
+
+        let released = sim.clone();
+        assert!(sim.finish_external_resolution().is_err());
+        assert_eq!(
+            sim, released,
+            "a duplicate release cannot repeat the handoff"
+        );
     }
 
     #[test]
