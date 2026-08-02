@@ -233,7 +233,7 @@
       "expected_counts": {
         "map_unit": 94,
         "map_generation": 384,
-        "map_contracts": 61
+        "map_contracts": 73
       },
       "expected_ignored": 25,
       "full_command": [
@@ -302,6 +302,7 @@
       "name": "map-publication",
       "patterns": [
         "crates/hex_map/src/grid.rs",
+        "crates/hex_map/src/terrain_damage.rs",
         "crates/hex_map/src/feature_render.rs",
         "crates/hex_map/src/liquid_render.rs",
         "crates/hex_map/src/crystal_render.rs"
