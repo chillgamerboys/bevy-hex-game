@@ -40,6 +40,8 @@ pub mod scenario;
 pub mod settings;
 pub mod spells;
 pub mod substances;
+/// World-owned Boolean elemental admission for voxel damage.
+pub mod terrain_damage;
 
 pub use ai_profiles::AiProfileCatalog;
 pub use art_palette::{
@@ -100,6 +102,9 @@ pub use spells::{
     TargetingSpec, Trajectory, VoxelOffset, MAX_ARC_RISE, MAX_TARGET_RANGE,
 };
 pub use substances::{Substance, SubstanceFile, SubstanceTable, SubstanceTableError};
+pub use terrain_damage::{
+    TerrainDamageError, TerrainDamageFile, TerrainDamagePair, TerrainDamageTable,
+};
 
 const HEX_MESH: &str = "meshes/hex.glb";
 const PIECES_MESH: &str = "meshes/pieces.glb";
@@ -134,6 +139,7 @@ pub fn plugin(app: &mut App) {
     app.add_plugins(combat_lab::plugin);
     app.add_plugins(ai_profiles::plugin);
     app.add_plugins(elements::plugin);
+    app.add_plugins(terrain_damage::plugin);
     app.add_plugins(creation::plugin);
     app.add_plugins(spells::plugin);
     app.add_plugins(content_index::plugin);

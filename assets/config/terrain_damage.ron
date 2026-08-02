@@ -1,0 +1,79 @@
+// Boolean elemental admission for voxel damage.
+//
+// A listed (element, substance) pair permits damage. Every missing pair resists.
+// The initial balance deliberately admits every current element against every
+// toughness-bearing material; later balance changes can remove individual pairs
+// without changing the resolver contract.
+(
+    damaging_pairs: [
+        (element: "Air", substance: "basalt"),
+        (element: "Air", substance: "dirt"),
+        (element: "Air", substance: "grass"),
+        (element: "Air", substance: "gravel"),
+        (element: "Air", substance: "ice"),
+        (element: "Air", substance: "metal"),
+        (element: "Air", substance: "snow"),
+        (element: "Air", substance: "stone"),
+        (element: "Air", substance: "worked_stone"),
+
+        (element: "Earth", substance: "basalt"),
+        (element: "Earth", substance: "dirt"),
+        (element: "Earth", substance: "grass"),
+        (element: "Earth", substance: "gravel"),
+        (element: "Earth", substance: "ice"),
+        (element: "Earth", substance: "metal"),
+        (element: "Earth", substance: "snow"),
+        (element: "Earth", substance: "stone"),
+        (element: "Earth", substance: "worked_stone"),
+
+        (element: "Fire", substance: "basalt"),
+        (element: "Fire", substance: "dirt"),
+        (element: "Fire", substance: "grass"),
+        (element: "Fire", substance: "gravel"),
+        (element: "Fire", substance: "ice"),
+        (element: "Fire", substance: "metal"),
+        (element: "Fire", substance: "snow"),
+        (element: "Fire", substance: "stone"),
+        (element: "Fire", substance: "worked_stone"),
+
+        (element: "Light", substance: "basalt"),
+        (element: "Light", substance: "dirt"),
+        (element: "Light", substance: "grass"),
+        (element: "Light", substance: "gravel"),
+        (element: "Light", substance: "ice"),
+        (element: "Light", substance: "metal"),
+        (element: "Light", substance: "snow"),
+        (element: "Light", substance: "stone"),
+        (element: "Light", substance: "worked_stone"),
+
+        (element: "Lightning", substance: "basalt"),
+        (element: "Lightning", substance: "dirt"),
+        (element: "Lightning", substance: "grass"),
+        (element: "Lightning", substance: "gravel"),
+        (element: "Lightning", substance: "ice"),
+        (element: "Lightning", substance: "metal"),
+        (element: "Lightning", substance: "snow"),
+        (element: "Lightning", substance: "stone"),
+        (element: "Lightning", substance: "worked_stone"),
+
+        (element: "Metal", substance: "basalt"),
+        (element: "Metal", substance: "dirt"),
+        (element: "Metal", substance: "grass"),
+        (element: "Metal", substance: "gravel"),
+        (element: "Metal", substance: "ice"),
+        (element: "Metal", substance: "metal"),
+        (element: "Metal", substance: "snow"),
+        (element: "Metal", substance: "stone"),
+        (element: "Metal", substance: "worked_stone"),
+
+        (element: "Water", substance: "basalt"),
+        (element: "Water", substance: "dirt"),
+        (element: "Water", substance: "grass"),
+        (element: "Water", substance: "gravel"),
+        (element: "Water", substance: "ice"),
+        (element: "Water", substance: "metal"),
+        (element: "Water", substance: "snow"),
+        (element: "Water", substance: "stone"),
+        (element: "Water", substance: "worked_stone"),
+    ],
+)

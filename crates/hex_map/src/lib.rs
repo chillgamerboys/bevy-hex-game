@@ -52,6 +52,7 @@ mod procedural_v3;
 pub mod settings;
 /// Pure construction of complete voxel maps from terrain presets.
 mod terrain;
+mod terrain_damage;
 /// Voxel storage and the run-merging that turns it into prisms.
 pub mod voxel;
 

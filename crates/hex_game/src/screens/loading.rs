@@ -6,11 +6,12 @@
 //! resource that did not exist yet was the gap between those two schedules —
 //! undocumented, unenforced, and one refactor away from a panic.
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use hex_assets::{
     AcceptedContentRevision, ArtPalette, ContentIndex, ContentReadinessSystems, ElementCatalog,
     ElementFile, GameAssets, LatticeFile, LatticeLibrary, SettingsRegistry, SpellBook, SpellFile,
-    SubstanceFile, SubstanceTable,
+    SubstanceFile, SubstanceTable, TerrainDamageFile, TerrainDamageTable,
 };
 use hex_core::Screen;
 
@@ -57,14 +58,7 @@ fn enter_gameplay_when_ready(
     substance_file: Option<Res<SubstanceFile>>,
     substances: Option<Res<SubstanceTable>>,
     scenario_contract: Option<Res<ScenarioContractStatus>>,
-    accepted_content: Option<Res<AcceptedContentRevision>>,
-    content: Option<Res<ContentIndex>>,
-    lattices: Option<Res<LatticeLibrary>>,
-    element_file: Option<Res<ElementFile>>,
-    elements: Option<Res<ElementCatalog>>,
-    spell_file: Option<Res<SpellFile>>,
-    spells: Option<Res<SpellBook>>,
-    lattice_file: Option<Res<LatticeFile>>,
+    graph: AcceptedContentGraph,
     mut next: ResMut<NextState<Screen>>,
 ) {
     let substances_are_current = substance_file
@@ -82,14 +76,16 @@ fn enter_gameplay_when_ready(
     // change ticks cannot establish coherence: the changed flag settles after one frame
     // while the retained ids remain stale indefinitely.
     let content_is_current = match (
-        accepted_content.as_deref(),
-        content.as_deref(),
-        lattices.as_deref(),
-        element_file.as_deref(),
-        elements.as_deref(),
-        spell_file.as_deref(),
-        spells.as_deref(),
-        lattice_file.as_deref(),
+        graph.accepted.as_deref(),
+        graph.content.as_deref(),
+        graph.lattices.as_deref(),
+        graph.element_file.as_deref(),
+        graph.elements.as_deref(),
+        graph.spell_file.as_deref(),
+        graph.spells.as_deref(),
+        graph.lattice_file.as_deref(),
+        graph.terrain_damage_file.as_deref(),
+        graph.terrain_damage.as_deref(),
         substances.as_deref(),
     ) {
         (
@@ -101,13 +97,17 @@ fn enter_gameplay_when_ready(
             Some(spell_file),
             Some(spells),
             Some(lattice_file),
+            Some(terrain_damage_file),
+            Some(terrain_damage),
             Some(substances),
         ) => {
             accepted.matches_resolved(content, lattices)
+                && accepted.matches_terrain_damage(terrain_damage)
                 && elements.matches_source(element_file)
                 && spells.matches_source(spell_file)
                 && content.matches_sources(elements, spells, substances)
                 && lattices.matches_sources(lattice_file, elements, spells)
+                && terrain_damage.matches_sources(terrain_damage_file, elements, substances)
         }
         _ => false,
     };
@@ -119,6 +119,20 @@ fn enter_gameplay_when_ready(
     {
         next.set(Screen::Gameplay);
     }
+}
+
+#[derive(SystemParam)]
+struct AcceptedContentGraph<'w> {
+    accepted: Option<Res<'w, AcceptedContentRevision>>,
+    content: Option<Res<'w, ContentIndex>>,
+    lattices: Option<Res<'w, LatticeLibrary>>,
+    element_file: Option<Res<'w, ElementFile>>,
+    elements: Option<Res<'w, ElementCatalog>>,
+    spell_file: Option<Res<'w, SpellFile>>,
+    spells: Option<Res<'w, SpellBook>>,
+    lattice_file: Option<Res<'w, LatticeFile>>,
+    terrain_damage_file: Option<Res<'w, TerrainDamageFile>>,
+    terrain_damage: Option<Res<'w, TerrainDamageTable>>,
 }
 
 #[cfg(test)]
@@ -194,6 +208,11 @@ mod tests {
             .expect("the stable fixtures should form a valid content index");
         let lattices = LatticeLibrary::build(&lattice_file, &elements, &spell_book)
             .expect("the stable fixtures should form a valid lattice library");
+        let terrain_damage_file = TerrainDamageFile {
+            damaging_pairs: Vec::new(),
+        };
+        let terrain_damage = TerrainDamageTable::from_file(&terrain_damage_file, &elements, &table)
+            .expect("the empty test damage matrix should resolve");
         let mut app = App::new();
         app.add_plugins((
             MinimalPlugins,
@@ -231,6 +250,8 @@ mod tests {
         app.insert_resource(lattice_file);
         app.insert_resource(content);
         app.insert_resource(lattices);
+        app.insert_resource(terrain_damage_file);
+        app.insert_resource(terrain_damage);
         plugin(&mut app);
         app
     }
