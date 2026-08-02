@@ -1,0 +1,227 @@
+# Spell resolution gameplay wave
+
+Status: **draft plan for approval**. No runtime behavior in this branch implements the
+wave yet.
+
+Base: `origin/dev @ 6cb749adc5168e4480d1f4efedba8097f49bf64d`
+
+Integration branch: `wave/spell-resolution`
+
+Integration owner: Shravan / gameplay
+
+This plan applies the repository's
+[parallel-development rules](../development/parallel-development.md) to the remaining
+gameplay half of terrain magic. It is a single wave because clipping, area resolution,
+terrain acknowledgment, settlement, and command release share one runtime transaction;
+reviewing any leaf as a completed feature would be misleading.
+
+## Landed foundation
+
+- PR #162 delivered exact caster-to-anchor `Direct`, authored-rise `Arc`, and `None`
+  trajectories over one symmetric integer supercover.
+- PR #174 superseded the stale PR #173 camera prerequisite.
+- PR #175 delivered the world-owned terrain durability resolver: fixed toughness,
+  protected ordered impact resolution, applied/rejected outcomes, sparse health, and
+  terrain rebuild consequences.
+- PR #176 landed independently and no longer overlaps this work.
+- PR #178 delivered exhaustive `TerrainImpactOutcome` validation, configured
+  `TerrainSystems::{ApplyWorld, RefreshProjections, ReconcileActors, ConsumeOutcomes}`
+  ordering vocabulary, and the 61-test non-UI trajectory/volume concern.
+
+The live [G/H contracts](../contracts.md) are sufficient. This wave requires no new
+`hex_core` schema, no `hex_map` implementation change, and no Alberto/world
+implementation lane. The accepted settlement policy replaces the earlier support
+reservation proposal. A breached cave retains authored Interior membership and gains
+no dynamic daylight in this slice.
+
+## Combined outcome
+
+A legal area elemental cast will:
+
+1. resolve one canonical effect volume and obstruction-clip it without changing the
+   already-live caster-to-anchor trajectory;
+2. snapshot exact occupants and apply supported unit effects in authored-effect then
+   stable-`UnitId` order, including caster, allies, and enemies;
+3. pay once and publish exact `TerrainImpact` batches;
+4. keep command and turn authority pending while the world applies or rejects them;
+5. refresh occupancy and movement, settle unsupported actors deterministically, and
+   adopt the settled positions into combat authority;
+6. validate every matching answer and resume only after terrain, unit decisions,
+   settlement, and authority adoption are all complete.
+
+The first shipped content consumer is Fireball with
+`Impact(element: "Fire", power: 2)`. Its existing `Displace` effect remains explicitly
+deferred.
+
+## Pinned gameplay policy
+
+### Effect-volume clipping
+
+- Reuse the exact direct supercover; do not add another ray algorithm.
+- `Direct` and `Arc` keep their existing caster-to-anchor legality, then clip each
+  candidate along the selected-anchor-to-candidate supercover.
+- Exclude both radial endpoints. The anchor and the wall/candidate voxel remain
+  hittable; only intermediate material clips voxels behind it.
+- `Trajectory::None` preserves the raw canonical volume byte-for-byte.
+- Reject noncanonical input. Never sort, deduplicate, normalize, repair, or add voxels.
+- Authority uses complete `TerrainOccupancy`. Preview and AI use
+  `KnownTerrainOccupancy`, so hidden blockers never change faction-facing choices.
+
+### Area occupants and hidden information
+
+- Snapshot exact `StandsOn` occupants when the cast commits, before terrain settlement.
+- Process effects in authored order and occupants in stable `UnitId` order. Apply each
+  effect to each body at most once; never filter by faction.
+- This wave delivers area `DisableHexes` and `Burn`. It queues one defender choice at a
+  time behind the existing public `PendingDecision`.
+- A selected downed damage target retains the current pre-payment refusal. Incidental
+  downed spill targets are skipped without revealing their presence.
+- Area `RestoreHexes` and `Reveal` remain fail-closed. A hidden Restore would expose a
+  target lattice through the caster's exact-cell choice, while hidden Reveal conflicts
+  with the current observed-subject rule. Neither policy should be invented inside the
+  implementation.
+- The existing gameplay deployability gate may expose shipped Fireball to a
+  Creator-authored full Fire ring after area damage lands. Packaged archetypes and
+  scenario balance stay unchanged; no UI layout or presentation work belongs here.
+
+### Terrain transaction and failure
+
+- Add gameplay-owned `Effect::Impact { element: String, power: u8 }`. Reject blank or
+  unknown element names and zero power before gameplay; never infer an impact element
+  from gem requirements.
+- Permit repeated Impact effects. Preflight enough checked, monotonic, session-local
+  batch IDs before payment and correlate every exact `TerrainBatchId -> TerrainImpact`.
+  Each batch resolves independently, and all must finish before cast release.
+- A valid `Applied` or `Rejected` answer—including `TerrainUnavailable`—retains payment
+  and completes that batch.
+- Unknown, duplicate, mismatched, or structurally inconsistent answers retain typed
+  correlation evidence and freeze resolution. There is no timeout or optimistic
+  release.
+- Pending state, queued decisions, the batch allocator, and fatal evidence reset on
+  gameplay-screen teardown, not ordinary combat exit. Pause retains them.
+
+### Unsupported actors
+
+After refreshed terrain publication, settle unsupported units in stable `UnitId`
+order:
+
+1. highest legal, unoccupied support strictly below in the same column;
+2. otherwise lateral legal surfaces ordered by
+   `(hex_distance, abs_level_difference, is_higher, TilePos)`;
+3. body/headroom/traversal rules, exact blockers, current occupancy, and earlier
+   reservations all apply;
+4. cancel stale route, `Busy`, and transformation state and update `StandsOn`,
+   `Transform`, occupancy, and combat authority together;
+5. falling costs no health, movement, action, or turn ownership;
+6. no landing yields a typed fatal/frozen diagnostic—never air standing or despawn.
+
+## Integration topology
+
+Only the integration owner edits `crates/hex_combat/src/commands/cast.rs`,
+`crates/hex_combat/src/commands/mod.rs`, `.config/test-scopes.json`, CI topology, and
+shared delivery docs.
+
+| Lane | Branch | Base/dependency | Owned result |
+|---|---|---|---|
+| Transaction foundation | `wave/spell-resolution` | exact wave base | one private pending transaction, queue, modal gate, and turn/exit gate |
+| Effect-volume clipping | `feat/spell-volume-clipping` | exact wave base; parallel | pure clipping helpers and contracts; no cast hot-file edits |
+| Terrain reconciliation | `feat/terrain-reconciliation` | exact wave base; parallel | occupancy/movement phase placement and pure deterministic landing planner |
+| Area + terrain runtime | `feat/spell-resolution-runtime` | combined checkpoint | Impact schema/content, area queue, batch ledger, outcome consumer, settlement and authority adoption |
+| Composition | `wave/spell-resolution` | all lanes | dedicated headless composition target, exact scope routing, docs, and delivery reconciliation |
+
+Source branches target the wave or remain source-only. One final wave PR targets
+`dev`; there is no leaf PR per helper by default.
+
+## Exact runtime order
+
+```text
+frame N Combat Apply: commit/pay once, queue unit work, emit TerrainImpact
+
+frame N+1 TerrainSystems::ApplyWorld
+  -> TerrainSystems::RefreshProjections
+       -> TerrainOccupancySystems::Publish
+       -> MovementSystems::Reconcile
+  -> TerrainSystems::ReconcileActors
+       -> cancel invalid routes and settle actors
+       -> adopt exact positions into combat authority
+  -> TerrainSystems::ConsumeOutcomes
+       -> validate and correlate answers
+       -> release only when every obligation is complete
+  -> perception through PublishKnowledge
+  -> Combat Act -> Apply -> Resolve -> Advance
+```
+
+Replace the current occupancy-after-`PublishKnowledge` edge; do not supplement it and
+create a cycle. Do not add `Combat Apply -> ApplyWorld` or
+`ConsumeOutcomes -> Act`. Normal actions, turn advance, disengagement, and combat exit
+all remain gated while a transaction or fatal resolution state is active.
+
+## Narrow non-UI verification
+
+The automated test evidence is limited to authorities that can exercise these changes.
+It does **not** run `hex_ui`, `hex_game/tests/gameplay_app.rs`, UI snapshots, visual
+walks, deterministic combat simulation, procedural-generation corpora, or the residual
+workspace corpus.
+
+- Clipping: extend and run `python3 tools/test_scope.py run trajectory_contracts`.
+  Cover malformed input, `None`, endpoints, wall shadows, conservative grazes,
+  vertical/stacked cases, canonical preservation, and knowledge-vs-authority privacy.
+- Resolution: add `python3 tools/test_scope.py run spell_resolution_contracts` with an
+  exact nextest filter and JUnit. It includes only the new impact/content, area queue,
+  settlement, pending/outcome, phase-order, and composition prefixes; the ten
+  `hex_core::terrain_impact` tests; and these two real-map producer seams:
+  `terrain_protocol_orders_reserved_phases_before_perception` and
+  `overkill_is_capped_and_empty_voxels_report_no_material`.
+- Composition: add explicit `hex_game/tests/spell_resolution.rs` using minimal state
+  and the real map/units/perception/combat plugins. It installs no `AppPlugin`,
+  renderer, viewport, `hex_ui::UiPlugin`, or test-support UI and uses a tiny authored
+  fixture rather than a V3 seed corpus.
+- Non-test checks remain format, dependency policy, strict workspace Clippy,
+  warnings-denied docs, and the default-feature shipping release build.
+- Final runtime evidence is one named human Creator -> Sandbox Fireball pass on the
+  exact wave head. It is not a UI/visual test; no screenshot review is required.
+
+The scope/profile/CI bootstrap itself currently triggers the repository's fail-closed
+full gate. The user's explicit instruction is the maintainer waiver for this wave's
+`app`/UI test omission. The PR must publish the exact narrow JUnit replacements and
+must label the omitted default full/app gate as waived—not green. Ordinary workflow
+state is restored immediately after the exact merge.
+
+## Combined acceptance
+
+- Frame N pays/emits exactly once and prevents later command or turn interleaving.
+- Terrain answers and at least three queued defender choices may finish in either order
+  and converge to the same final state.
+- Friendly fire reaches caster, allies, and enemies exactly once in stable order.
+- A mixed material/air impact uses the real #175 resolver, refreshes occupancy, settles
+  simultaneous unsupported actors around occupied candidates, and adopts exact
+  positions before the next action.
+- Applied, all valid rejections, out-of-order valid multi-batch answers, malformed or
+  foreign answers, pause/resume, forced mode exit, regeneration, and gameplay
+  teardown/re-entry are bounded and deterministic.
+- No-landing and invalid-correlation paths remain visibly fatal/frozen; no stale batch,
+  duplicate payment, silent despawn, air standing, or timeout release is accepted.
+
+## Stop conditions
+
+- Any required change to G/H fields, meanings, rejection precedence, toughness,
+  protections, world content, or `hex_map` implementation.
+- Any new gameplay-to-world fact, support reservations, dynamic cave daylight/interior
+  reclassification, liquid mutation, or feature destruction.
+- A schedule cycle, stale occupancy/position reaching a later command, or inability to
+  adopt settlement into combat authority before answer release.
+- A second lane implements its own clipping, pending queue, settlement, or completion
+  authority, or edits an integration-owned hot file.
+- Area Restore/Reveal would be admitted without a separately accepted hidden
+  information/choice policy.
+- Layout, rendering, or presentation behavior becomes necessary. That invalidates the
+  non-UI waiver and requires a new scope decision.
+
+## Delivery-state reconciliation
+
+HEX-19 and HEX-24 remain partial / In Progress while this PR is a draft. Linear is a
+soft coordination signal and is currently unavailable; the exact recommended update
+is to record #162, #175, and #178 as delivered foundations and retain the residuals
+listed here. Final tracked [casting](../systems/casting.md), status, contracts, roadmap,
+and [gameplay-testing](../development/gameplay-testing.md) corrections land on the
+wave candidate before it is called complete.
