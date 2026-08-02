@@ -516,11 +516,13 @@ legacy generator lifetime.
 **Scheduling note (gameplay side agrees, and has moved to suit).** Your rule that no
 production save may depend on regenerating a V1/V2 seed still makes D2 a
 *prerequisite* for durable saves rather than an optimization — and D1 a prerequisite
-for restoring an edited world. Wave 5's pre-alpha resume slot is a deliberately
-disposable exception: it records an explicit seed, generator version, and content
-digests, then refuses drift instead of migrating or silently rebuilding a different
-world ([roadmap.md](roadmap.md)). It never claims production compatibility and does
-not save combat. D1 and D2 therefore remain asked without blocking that scaffold.
+for restoring an edited world. The former Wave 5 single resume was superseded by
+exactly three Campaign slots plus one-time legacy migration. Those slots remain a
+deliberately disposable pre-alpha exception: each records an explicit seed, generator
+version, and content identities, then refuses drift instead of silently rebuilding a
+different world ([roadmap.md](roadmap.md)). They never claim production compatibility
+and do not save combat. D1 and D2 therefore remain asked without blocking that
+scaffold.
 When they land, contract H's outcome log is what makes a replayed impact reproducible
 without pinning the response table's version.
 

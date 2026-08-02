@@ -18,8 +18,8 @@ you do not need to recompile the game.
 | `perception.ron` | Active sight profile, Bright/Dim/Dark ranges, and the downhill sight bonus |
 | `lighting.ron` | Sun brightness, colour and angle, ambient light, the sky gradient and its hex clouds |
 | `player.ron` | Player piece size and movement speed |
-| `scenarios.ron` | The default New Game and visible development fixtures: a map, a sky and an encounter |
-| `combat_lab_maps.ron` | Stable Combat Lab map IDs, scenario and fixed seed, plus Player/Hostile deployment-region centers and radii |
+| `scenarios.ron` | Internal world + lighting + encounter launch definitions used by Campaign, Sandbox, saves, retry, review, and tests |
+| `sandbox_maps.ron` | Stable player-facing Sandbox map IDs, scenario and seed contract, plus Party/Enemy deployment-region centers and radii |
 | `encounters/*.ron` | Who is on the map: rosters by archetype, and where each unit starts |
 | `lattices.ron` | Who each of them *is*: the gems, fusions and spells an archetype is made of |
 | `menu.ron` | How the menu screens look |
@@ -56,9 +56,8 @@ How quickly you *see* the change depends on which file:
 | `lattices.ron` | On the next world rebuild (re-parsed and re-resolved on save) |
 | `menu.ron` | Straight away |
 
-**To rebuild the world**, press `BACKSPACE` to return to the title screen, then use
-New Game for Party Trial or relaunch the visible development fixture you are tuning.
-It takes under a second and picks up your edit.
+**To rebuild the world**, press `BACKSPACE` to return to the owning Campaign or
+Sandbox route, then launch again. It takes under a second and picks up your edit.
 
 The split exists because some values are read continuously while the game runs and
 others are read once, when the map and pieces are created. Nothing is lost either
@@ -543,7 +542,8 @@ the same as everywhere else.
 
 ## The menus
 
-`menu.ron` is the splash, title and loading screens. One value so far:
+`menu.ron` is the splash, Main Menu, Campaign, Sandbox, Tools, and loading surfaces.
+One value so far:
 
 ```ron
 background: (0.10, 0.11, 0.14),
@@ -560,25 +560,33 @@ has somewhere obvious to go.
 ## Configuring a scenario
 
 A scenario names a world, a sky, and an encounter. The library's `default_game`
-names the entry launched by New Game; that entry is hidden from the development
-catalog. Every other scenario chooses the independently scrollable `Map` or `Demo`
-column on the separate **Scenarios** screen through `category`. Ability Lab and Raider
-Mirror appear there as focused Demos and also retain stable fixture IDs inside Combat
-Lab. Creator-format automation matrices remain Combat Lab fixtures rather than
-scenarios.
+names the canonical Campaign started from an empty slot. Players do not browse these
+definitions directly: Campaign, Sandbox, saves, Retry Exact, deterministic review,
+and tests resolve them internally through the same `ScenarioToLoad` loading contract.
+`category` remains inert compatibility metadata while legacy
+`resume.ron` data can still refer to this `scenarios.ron`; do not use it to create a
+shipping route.
 
-Immutable creator-format templates and automation records live in
-`creation_presets.ron`. `HumanTemplate` records appear as duplicable Creator choices;
-`AutomationFixture` records are isolated behind fixed fixtures. Local saved creations
-belong to the per-user data directory's `creations.ron`, not the shipped asset tree.
+Immutable human creator-format templates live in `creation_presets.ron` and appear as
+duplicable Creator choices. Exact automation-only Creator records live instead in
+`crates/hex_game/testdata/deterministic_creator_library.ron`; that file and the stable
+deterministic fixture manifest are consumed only by the default-off `test-support`
+boundary and never enter the shipping asset loader. Local saved creations belong to
+the per-user data directory's `creations.ron`, not the shipped asset tree.
 
-`combat_lab_maps.ron` owns the deployable Sandbox map list independently from the
-Scenarios-screen catalog. Its `schema_version` is checked on load. Every distinct
+`sandbox_maps.ron` owns the deployable Sandbox map list. Its `schema_version` is
+checked on load. Every distinct
 supported shipped environment appears once. Each entry has a stable ID, display name,
 tactical description and tags, renderer-generated preview asset, scenario, optional
-fixed generation seed, and one deployment region per side. A region center is either
+generation seed, and one deployment region per side. A region center is either
 `Fixed((x, y, z))` for authored terrain or `Anchor("name")` for a generated exact
 surface, with a bounded path-cost `radius`.
+
+Selecting a generated map in Sandbox creates a pending `resolved_seed`. Regenerate
+changes only that pending value and displays the exact replacement. **Use Map**
+commits it; Back discards it; restarting the process returns to the configured seed.
+Authored maps have no regeneration action. None of these operations edits either RON
+file.
 
 ```ron
 (
@@ -618,11 +626,6 @@ reproducible seed here:
     encounter: "config/encounters/anchored-skirmish.ron",
 ),
 ```
-
-The Scenarios screen shows the resolved seed beside every visible generated scenario.
-Its `reroll` button changes only the current session, and the exact replacement seed
-is shown and logged so a useful or broken map can be reproduced. It never edits
-`scenarios.ron`; restarting returns to the configured seed.
 
 It is called `lighting` rather than `sky` because it also sets **the sun's angle and
 colour**, so it decides which way the shadows fall. That is most of what makes a
@@ -710,16 +713,17 @@ bridge keeps his surface and the crowd flows around him.
 
 ### When a unit cannot be placed
 
-**Every rostered unit is placed, or the game returns to the title screen with the
-reason on it** — naming the side, the archetype, and what was wrong. An anchor that the
+**Every rostered unit is placed, or loading returns to the Main Menu with a visible
+reason** — naming the side, the archetype, and what was wrong. An anchor that the
 active map does not publish, an authored coordinate with nothing standable under it, and
 a formation with more units than room all fail that way. None of them is a unit that
 quietly does not appear, which is the class of bug this repo is worst at noticing.
 
 A scenario is also checked against the world it names: procedural terrain requires every
 placement to resolve through an anchor, and authored terrain requires every placement to
-be fixed. That pairing is checked once both files have loaded, and a mismatch returns to
-the title screen rather than starting a fight with a unit missing.
+be fixed. That pairing is checked once both files have loaded, and a mismatch returns
+to the Main Menu rather than starting a fight with a unit missing. The in-memory
+Sandbox draft remains available when its route is opened again.
 
 ## Writing a lattice
 
@@ -918,10 +922,17 @@ file and fails if any reference dangles, so the shipped game never carries a bro
 
 ## Local Settings are not authored config
 
-The in-game Settings screen writes `preferences.ron` beside the disposable
-`resume.ron`; it never edits `assets/config/display.ron`. Set `HEX_GAME_DATA_DIR` to
-an explicit directory when a test or review needs isolated local state. Otherwise the
-files live under:
+The in-game Settings screen writes `preferences.ron` beside `campaigns.ron`,
+`creations.ron`, and any legacy local files; it never edits
+`assets/config/display.ron`. Campaign persistence contains exactly three indexed
+records and is replaced atomically. On first load without `campaigns.ron`, a valid
+legacy `resume.ron` is copied into slot 1 with zero prior active-play time. Invalid
+legacy data is preserved with its refusal, and `resume.ron` is never overwritten or
+deleted. An existing obsolete `combat-reports.ron` is likewise never read, modified,
+or deleted.
+
+Set `HEX_GAME_DATA_DIR` to an explicit directory when a test or review needs isolated
+local state. Otherwise the files live under:
 
 - macOS: `~/Library/Application Support/Hex Game/`
 - Windows: `%APPDATA%/Hex Game/`

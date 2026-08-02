@@ -395,8 +395,9 @@ because you cannot tune a spiral you have not felt. Channel and Renewal/Restore 
 since landed as provisional playable brakes without deciding the remaining policy.
 The loop now includes defender-chosen disables, downing, Burn, Reveal, recovery, and
 the combat readouts. Whether it reads as *nothing, nothing, nothing, collapse* is a
-Combat Lab simulation and manual-play question. Rituals, rout, surrender, and any
-additional brake should answer that evidence rather than precede it.
+deterministic-simulation and bounded Sandbox playtest question. Rituals, rout,
+surrender, and any additional brake should answer that evidence rather than precede
+it.
 
 ### Initiative
 
@@ -404,8 +405,10 @@ Unresolved and crucial.
 
 The current prototype is a deterministic baseline: each active unit has one slot,
 ordered by its authored initiative and then stable unit id. It has no roll, round
-reroll, hold/delay action, or boss multi-slot rule. Combat Lab should compare
-alternatives against that baseline rather than treating it as the final design.
+reroll, hold/delay action, or boss multi-slot rule. Default-off deterministic cases
+and explicit design playtests should compare alternatives against that baseline
+rather than treating it as the final design; ordinary Sandbox always uses shipped
+rules.
 
 - **One roll per combat, fixed.** Plannable, but a bad roll can kill a character under
   permadeath, and "improvable by air spells" has a timing problem — order locks before
@@ -425,11 +428,12 @@ broken by a well-placed hit before the third caster contributes.
 
 The same question as initiative in disguise: how scarce is a turn?
 
-The current prototype permits up to four movement steps plus one action and offers a
-two-step and bounded Custom profile in Combat Lab. Wave 7 retained the four-step
-shipping value because the deterministic matrix proved profile fidelity but supplied
-no balance preference. That is an experimental baseline, not a settled answer; see
-the [tempo decision audit](../development/wave-7-tempo-decision.md).
+The current prototype permits up to four movement steps plus one action. Wave 7's
+historical two-step and bounded-Custom experiments retained the four-step shipping
+value because the deterministic matrix proved profile fidelity but supplied no
+balance preference. Optional profile injection remains test-only, while Sandbox
+freezes the shipped value. That is an experimental baseline, not a settled answer;
+see the [tempo decision audit](../development/wave-7-tempo-decision.md).
 
 - **Strict one action** (move *or* cast *or* channel). Maximum tension, but movement
   effectively stops happening — which strands elevation, illumination and terrain.

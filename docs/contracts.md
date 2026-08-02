@@ -83,7 +83,8 @@ than agreed, the fallback the gameplay side ships without it is in
 | `AcceptedContentRevision` — one deterministic semantic identity across elements, substances, spells, and lattices; Loading requires it | shared loader boundary | game setup | live | [planning/foundation-hardening.md](planning/foundation-hardening.md) |
 | `lattices.ron` — every authored archetype is one contiguous hex arrangement; errors name the archetype | gameplay | lattice spawning | live | [development/config.md](development/config.md#writing-a-lattice) |
 | `combat.ron` — engagement, budgets, policy knobs | gameplay | gameplay | live | [development/config.md](development/config.md) |
-| `scenarios.ron` — hidden New Game default plus visible Map and focused Demo fixtures | shared | both | live | [development/config.md](development/config.md) |
+| `scenarios.ron` / `ScenarioToLoad` — internal world + lighting + encounter launch identity for Campaign, Sandbox, saves, retry, review, and tests | shared | both | live | [development/config.md](development/config.md) |
+| `sandbox_maps.ron` — stable player-facing map IDs, scenario/seed identity, and Party/Enemy deployment regions | shared | both | live | [systems/creator-and-sandbox.md](systems/creator-and-sandbox.md) |
 | `encounters/*.ron` — rosters by archetype, and where each unit starts | shared | both | live | [development/config.md](development/config.md) |
 | Terrain-response table — authored stable names resolved to `(ElementId, power, SubstanceId)` | world | world | **agreed** | [planning/boundary.md](planning/boundary.md) G |
 | `Substance::conjurable` plus spell-reference validation | world policy / gameplay loader | gameplay | live | [planning/boundary.md](planning/boundary.md) L |

@@ -48,7 +48,7 @@ HEX_REVIEW_SEED=1592598566 \
 cargo run --release -p hex_game --features map-review
 ```
 
-This bypasses only the title-screen click. Loading, validation, terrain spawning, and
+This bypasses only the Main Menu click. Loading, validation, terrain spawning, and
 actor spawning still use the production path. Omit `HEX_REVIEW_SEED` to use the
 scenario's configured seed; an override is valid only when that scenario declares
 `generation_seed`.
@@ -138,11 +138,12 @@ design's open questions. `hex_assets` resolves authored content into it, `hex_un
 carries per-unit lattice state, and `hex_combat` drives casts, disables, and decisions.
 See `crates/hex_lattice`.
 
-**`hex_gameplay_model` is pure screen behavior** — Combat Lab editing, report
-selection and launch routing, plus Creator navigation and edit history. It does not
-depend on assets, combat, units, the game binary, or renderer. `hex_game` adapts typed
-model transitions to Bevy resources, persistence, and navigation instead of owning a
-second copy of those decisions.
+**`hex_gameplay_model` is pure screen behavior** — Main Menu, Campaign, and Sandbox
+routing, pending/committed map and fixed-slot roster edits, typed launch blockers,
+plus Creator navigation and edit history. It does not depend on assets, combat,
+units, the game binary, or renderer. `hex_game` adapts typed model transitions to
+Bevy resources, persistence, and navigation instead of owning a second copy of those
+decisions.
 
 **`hex_map`, `hex_world` and `hex_units` must not depend on each other.** Shared
 types go in `hex_core`. Cargo enforces this; a violating `use` fails to compile.
@@ -293,8 +294,8 @@ Full list, including the map-specific ones:
 
 **Observers are global.** They fire in every state. One touching a gameplay-only
 resource must take `Option<Res<T>>` — Bevy validates parameters *before* the body
-runs, so an internal guard won't save it. This caused a real crash on the title
-screen.
+runs, so an internal guard won't save it. This caused a real crash on the Main
+Menu.
 
 ## Branch & PR workflow
 

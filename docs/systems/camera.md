@@ -158,12 +158,13 @@ scenario, builds and repeatedly rebuilds the camera index from its public
 `HexTile`/`TilePos`/`HexSpan` projection, and keeps steady Character collision below
 1 ms p95 across its exact published anchors and six yaws.
 
-The tracked route manifest pins all 15 selectable Map scenarios to their exact seed
-and representative stack-safe destinations. Every standalone selectable Map has an
-executable multi-azimuth Character walk using ordinary pointer movement and bounded
-party-idle waiting, followed by an exact check that the selected unit's authoritative
-footing and the camera-focus surface both equal the requested destination. Sky Islands
-exercises only its reachable ordinary ground bridge.
+The tracked route manifest pins 15 camera-walk Sandbox catalog maps—every entry except
+the deployment-only Flat Arena—to their exact scenario seed and representative
+stack-safe destinations. Each has an executable multi-azimuth Character walk using
+ordinary pointer movement and bounded party-idle waiting, followed by an exact check
+that the selected unit's authoritative footing and the camera-focus surface both equal
+the requested destination. Sky Islands exercises only its reachable ordinary ground
+bridge.
 
 Five seed-pinned Two Rings groups cover one ordinary-network destination in all 19
 regions, require at least two captured azimuths after exact selected-unit and
