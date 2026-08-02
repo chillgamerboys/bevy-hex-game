@@ -131,10 +131,15 @@ release.
 The candidate wires the configured `TerrainSystems` protocol as
 `ApplyWorld → RefreshProjections → ReconcileActors → ConsumeOutcomes` before
 perception and later combat. `RefreshProjections` republishes exact terrain occupancy
-and reconciles ordinary movement. `ReconcileActors` processes unsupported actors in
-stable `UnitId` order, reserves earlier destinations, cancels stale route/Busy/
-transformation state, commits `StandsOn` and `Transform`, and adopts the exact result
-into combat authority. Landing first chooses the highest legal unoccupied support
+and reconciles ordinary movement. A separate outcome reader stages only whether a
+structurally consistent first answer is `Applied`; it does not complete or correlate
+the batch. This makes `ReconcileActors` run settlement only for material work the
+world actually applied, so a valid `TerrainUnavailable` or other rejection cannot
+fail against an irrelevant support projection. `ReconcileActors` processes unsupported
+actors in stable `UnitId` order, reserves earlier destinations, validates the complete
+future authority projection before any ECS write, then atomically cancels stale
+route/Busy/transformation state, commits `StandsOn` and `Transform`, and adopts the
+exact result into combat authority. Landing first chooses the highest legal unoccupied support
 strictly below in the same column; otherwise it uses the lateral ordering pinned in
 [boundary H](../planning/boundary.md#cross-owner-ordering-and-unsupported-actors).
 Falling costs no health, movement, action, or turn. No legal landing freezes with a
@@ -143,8 +148,9 @@ typed diagnostic rather than leaving an actor in air or despawning it.
 The authority hold is independent of the one public `PendingDecision`. It therefore
 survives between defender answers and while terrain is unresolved, blocking ordinary
 commands, turn advance, disengagement, and outcome settlement. `ConsumeOutcomes`
-releases it exactly once only after all obligations and settlement/adoption have
-completed. Pending state, queued work, batch allocation, and fatal evidence survive
+remains the only phase that validates/correlates completion and releases it exactly
+once, only after all obligations and any required settlement/adoption have completed.
+Pending state, queued work, batch allocation, and fatal evidence survive
 pause and ordinary combat-mode exit, then reset on gameplay-screen teardown.
 
 An answer is authoritative simulation truth, not permission to show hidden terrain.

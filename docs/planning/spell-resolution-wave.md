@@ -167,9 +167,10 @@ frame N+1 TerrainSystems::ApplyWorld
   -> TerrainSystems::RefreshProjections
        -> TerrainOccupancySystems::Publish
        -> MovementSystems::Reconcile
+       -> stage only whether a consistent first answer is Applied (not completion)
   -> TerrainSystems::ReconcileActors
-       -> cancel invalid routes and settle actors
-       -> adopt exact positions into combat authority
+       -> for Applied work, plan every landing and validate future authority first
+       -> atomically cancel invalid routes, settle actors, and adopt exact positions
   -> TerrainSystems::ConsumeOutcomes
        -> validate and correlate answers
        -> release only when every obligation is complete
@@ -181,6 +182,9 @@ Replace the current occupancy-after-`PublishKnowledge` edge; do not supplement i
 create a cycle. Do not add `Combat Apply -> ApplyWorld` or
 `ConsumeOutcomes -> Act`. Normal actions, turn advance, disengagement, and combat exit
 all remain gated while a transaction or fatal resolution state is active.
+Valid rejected answers never invoke settlement; the early Applied staging reader owns
+no completion authority and exists only to keep rejection and settlement failure paths
+disjoint.
 
 ## Narrow non-UI verification
 
