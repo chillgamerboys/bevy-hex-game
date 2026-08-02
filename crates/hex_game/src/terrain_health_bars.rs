@@ -135,27 +135,27 @@ fn sync_health_bars(
         }
     }
 
-    let (Some(damaged), Some(knowledge), Some(illumination), Some(handles)) =
-        (damaged, knowledge, illumination, render_assets.handles())
+    let Some(damaged) = damaged else {
+        despawn_remaining(&mut commands, existing);
+        return;
+    };
+    if damaged.is_empty() {
+        despawn_remaining(&mut commands, existing);
+        return;
+    }
+    let (Some(knowledge), Some(illumination), Some(handles)) =
+        (knowledge, illumination, render_assets.handles())
     else {
         despawn_remaining(&mut commands, existing);
         return;
     };
 
-    let mut exposed_tiles = BTreeMap::new();
-    for (entity, pos, headroom) in &tiles {
-        if headroom.0 == 0 {
-            continue;
-        }
-        match exposed_tiles.entry(*pos) {
-            std::collections::btree_map::Entry::Vacant(entry) => {
-                entry.insert(Some(ExposedTile { entity }));
-            }
-            std::collections::btree_map::Entry::Occupied(mut entry) => {
-                entry.insert(None);
-            }
-        }
-    }
+    let exposed_tiles = collect_exposed_tiles(
+        &damaged,
+        tiles
+            .iter()
+            .map(|(entity, pos, headroom)| (entity, *pos, *headroom)),
+    );
 
     for (pos, health) in damaged.iter() {
         let observed = knowledge.faction(Faction::Player).state(pos) == KnowledgeState::Observed;
@@ -186,6 +186,27 @@ fn sync_health_bars(
     }
 
     despawn_remaining(&mut commands, existing);
+}
+
+fn collect_exposed_tiles(
+    damaged: &DamagedVoxels,
+    tiles: impl IntoIterator<Item = (Entity, TilePos, Headroom)>,
+) -> BTreeMap<TilePos, Option<ExposedTile>> {
+    let mut exposed_tiles = BTreeMap::new();
+    for (entity, pos, headroom) in tiles {
+        if damaged.get(pos).is_none() || headroom.0 == 0 {
+            continue;
+        }
+        match exposed_tiles.entry(pos) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(Some(ExposedTile { entity }));
+            }
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                entry.insert(None);
+            }
+        }
+    }
+    exposed_tiles
 }
 
 fn despawn_remaining(
@@ -284,7 +305,7 @@ fn orient_health_bars(
 
 fn compose_health_bar_visibility(
     cameras: Query<&Camera, With<PanOrbitCamera>>,
-    tiles: Query<(&Visibility, &InheritedVisibility), (With<HexTile>, Without<TerrainHealthBar>)>,
+    tiles: Query<&Visibility, (With<HexTile>, Without<TerrainHealthBar>)>,
     mut bars: Query<
         (&TerrainHealthBar, &mut Visibility),
         (With<TerrainHealthBar>, Without<HexTile>),
@@ -292,9 +313,9 @@ fn compose_health_bar_visibility(
 ) {
     let camera_ready = cameras.single().is_ok_and(|camera| camera.is_active);
     for (bar, mut visibility) in &mut bars {
-        let tile_visible = tiles.get(bar.tile).is_ok_and(|(visibility, inherited)| {
-            *visibility != Visibility::Hidden && inherited.get()
-        });
+        let tile_visible = tiles
+            .get(bar.tile)
+            .is_ok_and(|visibility| *visibility != Visibility::Hidden);
         let next = if camera_ready && tile_visible {
             Visibility::Inherited
         } else {
@@ -447,6 +468,76 @@ mod tests {
     }
 
     #[test]
+    fn exposed_candidates_store_only_exact_damaged_positions() {
+        let target = pos(0, 2);
+        let unrelated_low = pos(4, 2);
+        let unrelated_high = pos(9, 8);
+        let mut damaged = DamagedVoxels::new();
+        damaged.publish(target, health(2, 4));
+
+        let mut world = World::new();
+        let target_entity = world.spawn_empty().id();
+        let unrelated_low_entity = world.spawn_empty().id();
+        let unrelated_high_entity = world.spawn_empty().id();
+        let candidates = collect_exposed_tiles(
+            &damaged,
+            [
+                (unrelated_low_entity, unrelated_low, Headroom(4)),
+                (target_entity, target, Headroom(4)),
+                (unrelated_high_entity, unrelated_high, Headroom(4)),
+            ],
+        );
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(
+            candidates
+                .get(&target)
+                .copied()
+                .flatten()
+                .map(|tile| tile.entity),
+            Some(target_entity)
+        );
+        assert!(!candidates.contains_key(&unrelated_low));
+        assert!(!candidates.contains_key(&unrelated_high));
+    }
+
+    #[test]
+    fn empty_projection_creates_no_bar_and_cleans_existing_parts() {
+        let mut app = test_app();
+        let position = pos(0, 2);
+        install_authority(&mut app, &[position], true, IlluminationLevel::Bright);
+        damage(&mut app, &[(position, health(2, 4))]);
+        spawn_tile(&mut app, position, Headroom(4));
+        spawn_camera(&mut app, Quat::IDENTITY);
+        settle(&mut app);
+        assert_eq!(
+            app.world_mut()
+                .query::<&TerrainHealthBar>()
+                .iter(app.world())
+                .count(),
+            1
+        );
+
+        app.insert_resource(DamagedVoxels::new());
+        app.update();
+
+        assert_eq!(
+            app.world_mut()
+                .query::<&TerrainHealthBar>()
+                .iter(app.world())
+                .count(),
+            0
+        );
+        assert_eq!(
+            app.world_mut()
+                .query::<&TerrainHealthBarPart>()
+                .iter(app.world())
+                .count(),
+            0
+        );
+    }
+
+    #[test]
     fn darkness_unknown_knowledge_and_burial_fail_closed() {
         let mut app = test_app();
         let position = pos(0, 2);
@@ -531,7 +622,7 @@ mod tests {
     }
 
     #[test]
-    fn composed_tile_visibility_ignores_stale_view_state_and_cleanup_removes_every_part() {
+    fn composed_tile_visibility_ignores_stale_aggregates_and_cleanup_removes_every_part() {
         let mut app = test_app();
         let position = pos(0, 2);
         install_authority(&mut app, &[position], true, IlluminationLevel::Bright);
@@ -552,12 +643,12 @@ mod tests {
 
         app.world_mut()
             .entity_mut(tile)
-            .insert(ViewVisibility::HIDDEN);
+            .insert((InheritedVisibility::HIDDEN, ViewVisibility::HIDDEN));
         app.update();
         assert_eq!(
             app.world().get::<Visibility>(root),
             Some(&Visibility::Inherited),
-            "tile ViewVisibility is a prior-frame aggregate; the bar receives its own current-frame camera culling"
+            "tile visibility aggregates are prior-frame state; the bar receives its own current-frame propagation and culling"
         );
 
         app.world_mut().entity_mut(tile).insert((
