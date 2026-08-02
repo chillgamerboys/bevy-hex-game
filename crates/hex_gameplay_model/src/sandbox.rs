@@ -151,6 +151,8 @@ pub enum SandboxPlacementRefusal {
     SelectCharacter,
     /// Live actors no longer match the frozen ordered roster.
     RosterChanged,
+    /// At least one occupied roster slot still needs an exact placement.
+    Incomplete,
     /// The active scenario, content, encounter, or provenance is incomplete.
     LaunchIdentityUnavailable,
 }
@@ -180,6 +182,9 @@ impl fmt::Display for SandboxPlacementRefusal {
             Self::RosterChanged => formatter.write_str(
                 "Sandbox deployment no longer matches its roster. Return to Sandbox and start again.",
             ),
+            Self::Incomplete => {
+                formatter.write_str("Place every character before starting combat.")
+            }
             Self::LaunchIdentityUnavailable => formatter.write_str(
                 "Sandbox launch identity is unavailable. Return to Sandbox and start again.",
             ),
@@ -271,6 +276,12 @@ impl SandboxDeploymentModel {
             .iter()
             .position(|candidate| *candidate == slot)
             .map(|index| (index + 1, self.order.len()))
+    }
+
+    /// Whether one exact placement edit is available to restore.
+    #[must_use]
+    pub fn can_undo(&self) -> bool {
+        !self.undo.is_empty()
     }
 
     /// Selects any occupied slot for placement or repositioning.

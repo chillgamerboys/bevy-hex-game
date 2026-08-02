@@ -1,4 +1,4 @@
-//! Versioned map and deployment-region content for Sandbox sessions.
+//! Versioned Sandbox map content with hidden actor-staging compatibility metadata.
 
 use std::collections::BTreeSet;
 
@@ -20,7 +20,7 @@ pub struct SandboxMapCatalog {
     pub maps: Vec<SandboxMapDefinition>,
 }
 
-/// One fixed-seed map and the two regions in which rosters may deploy.
+/// One fixed-seed map and the two compatibility regions used to stage hidden actors.
 #[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SandboxMapDefinition {
@@ -38,13 +38,13 @@ pub struct SandboxMapDefinition {
     pub scenario: String,
     /// Exact seed used when the selected scenario is generated.
     pub fixed_seed: Option<u64>,
-    /// Legal region for human-controlled units.
+    /// Hidden staging region for human-controlled units; manual placement ignores it.
     pub player_region: SandboxDeploymentRegion,
-    /// Legal region for baseline-AI units.
+    /// Hidden staging region for baseline-AI units; manual placement ignores it.
     pub hostile_region: SandboxDeploymentRegion,
 }
 
-/// A bounded legal surface region resolved after terrain exists.
+/// A bounded hidden actor-staging region resolved after terrain exists.
 #[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SandboxDeploymentRegion {
@@ -54,7 +54,7 @@ pub struct SandboxDeploymentRegion {
     pub radius: u32,
 }
 
-/// Ways packaged content may resolve the center of a deployment region.
+/// Ways packaged content may resolve the center of an actor-staging region.
 #[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
 pub enum SandboxRegionCenter {
     /// Exact authored horizontal coordinate; terrain resolves its top surface.
@@ -77,7 +77,7 @@ impl SandboxMapCatalog {
         self.maps.iter().find(|map| map.id == id)
     }
 
-    /// Validates stable IDs, schema, centers, and bounded deployment radii.
+    /// Validates stable IDs, schema, centers, and bounded staging radii.
     pub fn validate(&self) -> Result<(), String> {
         if self.schema_version != SANDBOX_MAP_SCHEMA_VERSION {
             return Err(format!(

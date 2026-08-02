@@ -48,7 +48,7 @@ pub use model::{
     CampaignSlotStatusView, CampaignSlotView, CastingAimView, CastingIntent,
     CastingPanelContentView, CastingPanelView, CastingSpellView, CombatLogLineView, CombatLogView,
     CreatorEffectKind, CreatorIntent, CreatorLibraryView, CreatorNameField, CreatorScreenView,
-    CreatorWorkspace, DecisionChoiceView, DeploymentIntent, DeploymentRosterEntryView,
+    CreatorWorkspace, DecisionChoiceView, DeploymentIntent, DeploymentQueueEntryView,
     DeploymentView, FormationSlotView, GameplayAction, GameplayChromeView, GameplayHudView,
     GameplayLatticesView, InitiativeEntryView, InitiativeSide, InitiativeView, LatticeDemoIntent,
     LatticeDemoSpellView, LatticeDemoView, LatticeIntent, MainMenuIntent, MainMenuView,
@@ -102,8 +102,8 @@ pub enum UiSystems {
 mod structural_tests {
     use bevy::prelude::*;
     use hex_gameplay_model::{
-        CampaignSlotId, MainMenuRoute, SandboxCharacter, SandboxRoute, SandboxSide,
-        SandboxSlotIndex, SandboxStartBlocker,
+        CampaignSlotId, MainMenuRoute, SandboxCharacter, SandboxDeploymentSlot,
+        SandboxDeploymentStage, SandboxRoute, SandboxSide, SandboxSlotIndex, SandboxStartBlocker,
     };
 
     use super::*;
@@ -567,31 +567,33 @@ mod structural_tests {
 
     fn deployment_snapshot(size: UVec2, mode: UiScaleMode, complete: bool) -> UiTreeSnapshot {
         settled_snapshot(hex_core::Screen::Gameplay, size, 1.0, mode, |world| {
-            let roster = |side: &str| {
-                (0..6)
-                    .map(|index| DeploymentRosterEntryView {
-                        index,
-                        name: format!("{side} Character {}", index + 1),
-                        selected: index == 0,
-                        position: complete.then(|| {
-                            hex_core::TilePos::new(
-                                hex_core::HexCoord::from_axial(
-                                    i32::try_from(index)
-                                        .expect("deployment fixture index is bounded"),
-                                    0,
-                                ),
-                                0,
-                            )
-                        }),
-                    })
-                    .collect::<Vec<_>>()
-            };
+            let active = SandboxDeploymentSlot::new(SandboxSide::Party, SandboxSlotIndex::One);
+            let queue = SandboxSide::ALL
+                .into_iter()
+                .flat_map(|side| {
+                    SandboxSlotIndex::ALL
+                        .into_iter()
+                        .map(move |slot| DeploymentQueueEntryView {
+                            slot: SandboxDeploymentSlot::new(side, slot),
+                            name: format!("{side} Character {slot}"),
+                            selected: !complete
+                                && side == SandboxSide::Party
+                                && slot == SandboxSlotIndex::One,
+                            placed: complete,
+                        })
+                })
+                .collect::<Vec<_>>();
             world.insert_resource(DeploymentView {
                 active: true,
                 map_name: "Flat Arena".to_owned(),
-                notice: "Place every character on an exact legal surface.".to_owned(),
-                party: roster("Party"),
-                enemies: roster("Enemy"),
+                notice: "Click any valid map surface.".to_owned(),
+                stage: Some(if complete {
+                    SandboxDeploymentStage::Review
+                } else {
+                    SandboxDeploymentStage::Placing(active)
+                }),
+                queue,
+                can_undo: true,
                 complete,
             });
             world.insert_resource(GameplayHudView {
@@ -1608,14 +1610,24 @@ pub mod test_support {
                 Self::DeploymentIncomplete => task(
                     "deployment-incomplete",
                     Screen::Gameplay,
-                    &["Undo", "Deterministic Auto-place", "Return to Sandbox"],
+                    &[
+                        "Deployment Party slot 1",
+                        "Deployment Enemies slot 6",
+                        "Undo",
+                        "Return to Sandbox",
+                    ],
                     &[],
                     true,
                 ),
                 Self::DeploymentComplete => task(
                     "deployment-complete",
                     Screen::Gameplay,
-                    &["Start Combat", "Return to Sandbox"],
+                    &[
+                        "Deployment Party slot 1",
+                        "Deployment Enemies slot 6",
+                        "Return to Sandbox",
+                        "Start Combat",
+                    ],
                     &[],
                     true,
                 ),

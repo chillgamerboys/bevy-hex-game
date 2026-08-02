@@ -33,6 +33,11 @@
     Click(name: "Start Sandbox"),
     AwaitScreen("Gameplay"),
     AwaitTerrain,
+    // Guided deployment consumes ordinary exact terrain clicks. These two
+    // surfaces are seed-exact Fort review points outside any UI adapter.
+    ClickTile(q: 8, r: -4, level: Some(15)),
+    ClickTile(q: 0, r: 0, level: Some(15)),
+    AwaitButton("Start Combat"),
     Settle(30),
     Capture("sandbox-deployment"),
 ]

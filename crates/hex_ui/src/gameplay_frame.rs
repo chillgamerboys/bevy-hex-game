@@ -140,7 +140,7 @@ fn apply_responsive_layout(
     lattices: Res<crate::GameplayLatticesView>,
     review: Option<Res<crate::review::UiReviewPresentation>>,
     added_regions: Query<(), Added<UiRegionRole>>,
-    mut regions: Query<(&UiRegionRole, &mut Node)>,
+    mut regions: Query<(&UiRegionRole, &mut Node, &mut Pickable)>,
 ) {
     let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
     if !metrics.is_changed()
@@ -160,18 +160,32 @@ fn apply_responsive_layout(
         .map_or(*chrome, |review| review.effective_chrome(*chrome));
     let promoted_decision =
         crate::gameplay_lattices::compact_decision_visible(*metrics, &chrome, lattices);
-    for (role, mut node) in &mut regions {
+    let ordinary_shown = chrome.shown && !chrome.encounter_complete;
+    let decision_required = chrome.decision_required && !chrome.encounter_complete;
+    for (role, mut node, mut pickable) in &mut regions {
         constrain_region_to_canvas(*metrics, *role, &mut node);
-        if *role == UiRegionRole::Inspector {
-            // Remove an empty hidden Inspector from both layout and picking.
-            // A non-ultra required choice still uses this region; an ultra one
-            // owns a promoted lattice surface in the persistent action region.
-            node.display = if (!chrome.shown && !chrome.decision_required) || promoted_decision {
-                Display::None
-            } else {
-                Display::Flex
-            };
-        }
+        let responsive_display = node.display;
+        // Layout recomputation restores each region's canonical geometry. Apply
+        // phase/user suppression after it so resizing cannot resurrect invisible
+        // chrome as an interaction layer over the map.
+        let shown = match *role {
+            UiRegionRole::Party | UiRegionRole::Turn | UiRegionRole::Events => ordinary_shown,
+            UiRegionRole::Inspector => (ordinary_shown || decision_required) && !promoted_decision,
+            UiRegionRole::Actions => ordinary_shown || (decision_required && promoted_decision),
+        };
+        node.display = if shown {
+            responsive_display
+        } else {
+            Display::None
+        };
+        let participates = node.display != Display::None;
+        *pickable = if participates
+            && matches!(*role, UiRegionRole::Inspector | UiRegionRole::Actions)
+        {
+            Pickable::default()
+        } else {
+            Pickable::IGNORE
+        };
     }
 }
 
@@ -265,5 +279,42 @@ mod tests {
         assert!(groups
             .iter(app.world())
             .any(|(name, group)| name.as_str() == "Gameplay HUD Safe Frame" && !group.modal));
+    }
+
+    #[test]
+    fn hidden_chrome_releases_every_region_from_layout_and_picking_after_resize() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<ResolvedUiMetrics>()
+            .init_resource::<GameplayChromeView>()
+            .init_resource::<crate::GameplayLatticesView>()
+            .add_systems(Update, apply_responsive_layout);
+        for role in [
+            UiRegionRole::Party,
+            UiRegionRole::Turn,
+            UiRegionRole::Inspector,
+            UiRegionRole::Actions,
+            UiRegionRole::Events,
+        ] {
+            app.world_mut()
+                .spawn((role, Node::default(), Pickable::default()));
+        }
+
+        app.world_mut().insert_resource(GameplayChromeView {
+            shown: false,
+            decision_required: false,
+            encounter_complete: false,
+        });
+        app.update();
+        app.world_mut()
+            .resource_mut::<ResolvedUiMetrics>()
+            .logical_size = Vec2::new(960.0, 540.0);
+        app.update();
+
+        let mut regions = app.world_mut().query::<(&Node, &Pickable)>();
+        for (node, pickable) in regions.iter(app.world()) {
+            assert_eq!(node.display, Display::None);
+            assert_eq!(*pickable, Pickable::IGNORE);
+        }
     }
 }

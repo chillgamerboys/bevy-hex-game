@@ -17,28 +17,24 @@ use hex_assets::{
     SubstanceTable,
 };
 use hex_core::{
-    GameplayPhase, GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexSpan, HexTile,
-    MapAnchorId, MapAnchors, ResolvedMapSeed, Screen, SubstanceId, TilePos, TraversalBlockers,
-    TraversalProfile, UnitId,
+    GameplayPhase, GameplaySetup, GameplaySetupFailure, Headroom, HexSpan, HexTile,
+    ResolvedMapSeed, Screen, SubstanceId, TilePos, TraversalBlockers, TraversalProfile, UnitId,
 };
 use hex_gameplay_model::{
     CampaignSlotId, CreatorNavigation, MainMenuModel, MainMenuRoute, SandboxBackResult,
-    SandboxCharacter, SandboxDestination, SandboxEntryOrigin, SandboxMapSelection, SandboxModel,
-    SandboxRoute, SandboxSide, SandboxSlotIndex, SandboxStartBlocker, SANDBOX_ROSTER_SIZE,
+    SandboxCharacter, SandboxDeploymentModel, SandboxDeploymentSlot, SandboxDeploymentStage,
+    SandboxDestination, SandboxEntryOrigin, SandboxMapSelection, SandboxModel,
+    SandboxPlacementRefusal, SandboxRoute, SandboxSide, SandboxSlotIndex, SandboxStartBlocker,
 };
-use hex_units::{Archetype, Body, Faction, Footing, Reach, StandsOn, UnitOccupancy};
+use hex_units::{Archetype, Body, Faction, Footing, StandsOn};
 
 use crate::creation_store::CreationStore;
 use crate::scenarios::ScenarioToLoad;
 use hex_ui::{
-    DeploymentIntent as DeploymentAction, DeploymentRosterEntryView, DeploymentView,
+    DeploymentIntent as DeploymentAction, DeploymentQueueEntryView, DeploymentView,
     SandboxCharacterView, SandboxIntent, SandboxLatticeCellKind, SandboxLatticeCellView,
     SandboxMapView, SandboxRosterSlotView, SandboxView, UiIntent, UiSystems,
 };
-
-const MAX_ROSTER: usize = SANDBOX_ROSTER_SIZE;
-const DEPLOYMENT_IDENTITY_REFUSAL: &str =
-    "Sandbox launch identity is unavailable. Return to Sandbox and start again.";
 
 type RosterChoice = SandboxCharacter<CustomCharacterId>;
 pub(crate) type SandboxState = SandboxModel<CustomCharacterId>;
@@ -191,14 +187,7 @@ struct DeploymentSession {
     map_definition: SandboxMapDefinition,
     party: Vec<RosterChoice>,
     enemies: Vec<RosterChoice>,
-    party_placements: Vec<Option<TilePos>>,
-    enemy_placements: Vec<Option<TilePos>>,
-    active_side: SandboxSide,
-    active_index: usize,
-    undo: Vec<(SandboxSide, usize, Option<TilePos>)>,
-    party_surfaces: Vec<TilePos>,
-    enemy_surfaces: Vec<TilePos>,
-    notice: String,
+    deployment: SandboxDeploymentModel,
 }
 
 impl DeploymentSession {
@@ -206,97 +195,33 @@ impl DeploymentSession {
         map_definition: SandboxMapDefinition,
         party: Vec<RosterChoice>,
         enemies: Vec<RosterChoice>,
-        preserved: Option<&SandboxDeploymentSnapshot>,
+        deployment: SandboxDeploymentModel,
     ) -> Self {
-        let party_len = party.len();
-        let enemy_len = enemies.len();
         Self {
             map_definition,
             party,
             enemies,
-            party_placements: preserved.map_or_else(
-                || vec![None; party_len],
-                |deployment| {
-                    deployment
-                        .party
-                        .iter()
-                        .copied()
-                        .map(Some)
-                        .chain(std::iter::repeat(None))
-                        .take(party_len)
-                        .collect()
-                },
-            ),
-            enemy_placements: preserved.map_or_else(
-                || vec![None; enemy_len],
-                |deployment| {
-                    deployment
-                        .enemies
-                        .iter()
-                        .copied()
-                        .map(Some)
-                        .chain(std::iter::repeat(None))
-                        .take(enemy_len)
-                        .collect()
-                },
-            ),
-            active_side: SandboxSide::Party,
-            active_index: 0,
-            undo: Vec::new(),
-            party_surfaces: Vec::new(),
-            enemy_surfaces: Vec::new(),
-            notice: "PARTY 1 · Click a BLUE highlighted surface.".to_owned(),
+            deployment,
         }
     }
 
     fn complete(&self) -> bool {
-        self.capacity_notice().is_none()
-            && placements_complete_exact(&self.party_placements, self.party.len())
-            && placements_complete_exact(&self.enemy_placements, self.enemies.len())
-            && placements_belong_to_region(&self.party_placements, &self.party_surfaces)
-            && placements_belong_to_region(&self.enemy_placements, &self.enemy_surfaces)
-            && !deployment_occupancy(self).has_overlaps()
+        self.deployment.is_complete()
+            && matches!(self.deployment.stage, SandboxDeploymentStage::Review)
     }
 
-    fn capacity_notice(&self) -> Option<String> {
-        let party_shortfall = self.party.len().saturating_sub(self.party_surfaces.len());
-        let enemy_shortfall = self.enemies.len().saturating_sub(self.enemy_surfaces.len());
-        if party_shortfall == 0 && enemy_shortfall == 0 {
-            return None;
+    fn choice(&self, slot: SandboxDeploymentSlot) -> Option<&RosterChoice> {
+        let index = self
+            .deployment
+            .order()
+            .iter()
+            .filter(|candidate| candidate.side == slot.side)
+            .position(|candidate| *candidate == slot)?;
+        match slot.side {
+            SandboxSide::Party => self.party.get(index),
+            SandboxSide::Enemies => self.enemies.get(index),
         }
-
-        let mut sides = Vec::new();
-        if party_shortfall > 0 {
-            sides.push(format!(
-                "Party region provides {} of {} required surfaces",
-                self.party_surfaces.len(),
-                self.party.len()
-            ));
-        }
-        if enemy_shortfall > 0 {
-            sides.push(format!(
-                "Enemy region provides {} of {} required surfaces",
-                self.enemy_surfaces.len(),
-                self.enemies.len()
-            ));
-        }
-        Some(format!(
-            "{}. Go Back and reduce that roster or choose another map.",
-            sides.join("; ")
-        ))
     }
-}
-
-fn placements_belong_to_region(placements: &[Option<TilePos>], surfaces: &[TilePos]) -> bool {
-    placements
-        .iter()
-        .all(|placement| placement.is_some_and(|position| surfaces.contains(&position)))
-}
-
-#[derive(Component, Debug, Clone, Copy)]
-struct DeploymentSurface {
-    pos: TilePos,
-    player: bool,
 }
 
 #[derive(Component)]
@@ -304,8 +229,7 @@ struct DeploymentWorldEntity;
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 struct DeploymentPlacementMarker {
-    player: bool,
-    index: usize,
+    slot: SandboxDeploymentSlot,
 }
 
 #[derive(Resource)]
@@ -351,12 +275,13 @@ pub(super) fn plugin(app: &mut App) {
             Update,
             (
                 handle_deployment_actions.after(UiSystems::EmitIntents),
+                sync_deployment_markers,
                 publish_deployment_view,
             )
                 .chain()
                 .run_if(in_state(Screen::Gameplay)),
         )
-        .add_observer(on_deployment_surface_clicked)
+        .add_observer(on_deployment_tile_clicked)
         .add_systems(OnExit(Screen::Gameplay), clear_deployment_world)
         .add_systems(OnEnter(Screen::Title), cleanup_sandbox_before_main_menu)
         .add_systems(
@@ -780,6 +705,7 @@ struct PreparedSandboxLaunch {
     rules: CombatSettings,
     party: Vec<RosterChoice>,
     enemies: Vec<RosterChoice>,
+    deployment: SandboxDeploymentModel,
     overlay: CreatorContentOverlay,
 }
 
@@ -856,6 +782,7 @@ fn prepare_sandbox_launch(
         .as_deref()
         .cloned()
         .ok_or(SandboxStartBlocker::MapsLoading)?;
+    let deployment = SandboxDeploymentModel::from_draft(&state.draft);
     let party = state.draft.flattened_roster(SandboxSide::Party);
     let enemies = state.draft.flattened_roster(SandboxSide::Enemies);
     let Some(overlay) = resolved_overlay else {
@@ -872,6 +799,7 @@ fn prepare_sandbox_launch(
         rules,
         party,
         enemies,
+        deployment,
         overlay,
     })
 }
@@ -998,7 +926,7 @@ fn handle_sandbox_intents(
                     prepared.definition,
                     prepared.party,
                     prepared.enemies,
-                    None,
+                    prepared.deployment,
                 ));
                 commands.insert_resource(GameplayPhase::Preparing);
                 commands.insert_resource(GameplaySessionOrigin::Sandbox);
@@ -1292,17 +1220,37 @@ fn choice_name(choice: &RosterChoice, store: &CreationStore) -> String {
     }
 }
 
-fn placements_complete_exact(placements: &[Option<TilePos>], roster_len: usize) -> bool {
-    placements.len() == roster_len
-        && !placements.is_empty()
-        && placements.iter().all(Option::is_some)
+fn deployment_snapshot(session: &DeploymentSession) -> Option<SandboxDeploymentSnapshot> {
+    session
+        .deployment
+        .frozen_placements()
+        .map(|(party, enemies)| SandboxDeploymentSnapshot { party, enemies })
 }
 
-fn deployment_snapshot(session: &DeploymentSession) -> Option<SandboxDeploymentSnapshot> {
-    session.complete().then(|| SandboxDeploymentSnapshot {
-        party: session.party_placements.iter().copied().flatten().collect(),
-        enemies: session.enemy_placements.iter().copied().flatten().collect(),
-    })
+fn deployment_notice(session: &DeploymentSession, store: &CreationStore) -> String {
+    if let Some(refusal) = session.deployment.refusal {
+        return refusal.message();
+    }
+    match session.deployment.stage {
+        SandboxDeploymentStage::Placing(slot) => {
+            let name = session
+                .choice(slot)
+                .map_or_else(|| slot.to_string(), |choice| choice_name(choice, store));
+            let (current, total) = session
+                .deployment
+                .progress(slot)
+                .unwrap_or((1, session.deployment.order().len()));
+            format!(
+                "{} {} of {total} · Choose any open surface for {name}.",
+                slot.side.to_string().to_uppercase(),
+                current
+            )
+        }
+        SandboxDeploymentStage::Review => format!(
+            "All {} characters placed · select one to reposition or start combat.",
+            session.deployment.order().len()
+        ),
+    }
 }
 
 fn publish_deployment_view(
@@ -1320,32 +1268,28 @@ fn publish_deployment_view(
     if !session_changed && !store.is_changed() && view.active {
         return;
     }
-    let entries = |side: SandboxSide, roster: &[RosterChoice], placements: &[Option<TilePos>]| {
-        roster
-            .iter()
-            .enumerate()
-            .map(|(index, choice)| DeploymentRosterEntryView {
-                index,
-                name: choice_name(choice, &store),
-                selected: session.active_side == side && session.active_index == index,
-                position: placements.get(index).copied().flatten(),
-            })
-            .collect()
-    };
+    let queue = session
+        .deployment
+        .order()
+        .iter()
+        .copied()
+        .map(|slot| DeploymentQueueEntryView {
+            slot,
+            name: session.choice(slot).map_or_else(
+                || format!("Unavailable {slot}"),
+                |choice| choice_name(choice, &store),
+            ),
+            selected: session.deployment.active_slot() == Some(slot),
+            placed: session.deployment.placement(slot).is_some(),
+        })
+        .collect();
     *view = DeploymentView {
         active: true,
         map_name: session.map_definition.display_name.clone(),
-        notice: session.notice.clone(),
-        party: entries(
-            SandboxSide::Party,
-            &session.party,
-            &session.party_placements,
-        ),
-        enemies: entries(
-            SandboxSide::Enemies,
-            &session.enemies,
-            &session.enemy_placements,
-        ),
+        notice: deployment_notice(session, &store),
+        stage: Some(session.deployment.stage),
+        queue,
+        can_undo: session.deployment.can_undo(),
         complete: session.complete(),
     };
 }
@@ -1362,30 +1306,14 @@ type DeploymentTileQuery<'w, 's> = Query<
     With<HexTile>,
 >;
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "deployment projects live terrain, actors, HUD, and the frozen launch together"
-)]
 fn enter_deployment(
     mut commands: Commands,
-    mut session: Option<ResMut<DeploymentSession>>,
+    session: Option<Res<DeploymentSession>>,
     mut phase: ResMut<GameplayPhase>,
-    tiles: DeploymentTileQuery,
-    table: Res<SubstanceTable>,
-    blockers: Option<Res<TraversalBlockers>>,
-    anchors: Option<Res<MapAnchors>>,
-    game_assets: Res<GameAssets>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut hidden: Query<
-        (Entity, &mut Visibility),
-        Or<(
-            With<Faction>,
-            With<crate::readouts::HudElement>,
-            With<hex_units::UnitRing>,
-        )>,
-    >,
+    mut hidden: Query<(Entity, &mut Visibility), Or<(With<Faction>, With<hex_units::UnitRing>)>>,
 ) {
-    let Some(session) = session.as_deref_mut() else {
+    let Some(_session) = session.as_deref() else {
         *phase = GameplayPhase::Active;
         return;
     };
@@ -1394,96 +1322,10 @@ fn enter_deployment(
         *visibility = Visibility::Hidden;
         commands.entity(entity).insert(DeploymentHidden);
     }
-
-    let footing = deployment_footing(&tiles, &table, blockers.as_deref());
-    let Some(player_center) = deployment_center(
-        &session.map_definition.player_region,
-        &footing,
-        anchors.as_deref(),
-    ) else {
-        session.notice = "Party deployment region could not resolve on this terrain.".to_owned();
-        return;
-    };
-    let Some(hostile_center) = deployment_center(
-        &session.map_definition.hostile_region,
-        &footing,
-        anchors.as_deref(),
-    ) else {
-        session.notice = "Enemy deployment region could not resolve on this terrain.".to_owned();
-        return;
-    };
-    session.party_surfaces = ordered_deployment_surfaces(
-        player_center,
-        &footing,
-        session.map_definition.player_region.radius,
-    );
-    session.enemy_surfaces = ordered_deployment_surfaces(
-        hostile_center,
-        &footing,
-        session.map_definition.hostile_region.radius,
-    );
-    let mut occupied = std::collections::BTreeSet::new();
-    let mut dropped = 0;
-    for placements in [
-        session.party_placements.as_mut_slice(),
-        session.enemy_placements.as_mut_slice(),
-    ] {
-        for placement in placements {
-            if placement.is_some_and(|position| {
-                footing.at(position).is_none() || !occupied.insert(position)
-            }) {
-                *placement = None;
-                dropped += 1;
-            }
-        }
-    }
-    if dropped == 0 && session.complete() {
-        session.notice =
-            "Exact frozen deployment retained · select any row to reposition.".to_owned();
-    } else if dropped > 0 {
-        session.notice = format!(
-            "{dropped} frozen placement{} no longer valid; place the highlighted roster rows.",
-            if dropped == 1 { " is" } else { "s are" }
-        );
-        advance_deployment_cursor(session);
-    }
-    if let Some(notice) = session.capacity_notice() {
-        // Capacity is the hard start gate, so it outranks retained-placement cleanup.
-        session.notice = notice;
-    }
-
-    let player_material = materials.add(deployment_material(Color::srgba(0.20, 0.68, 0.98, 0.58)));
-    let hostile_material = materials.add(deployment_material(Color::srgba(0.94, 0.30, 0.24, 0.58)));
     commands.insert_resource(DeploymentMarkerMaterials {
         player: materials.add(deployment_marker_material(Color::srgb(0.10, 0.68, 1.0))),
         hostile: materials.add(deployment_marker_material(Color::srgb(1.0, 0.20, 0.13))),
     });
-    for (player, positions, material) in [
-        (true, session.party_surfaces.as_slice(), &player_material),
-        (false, session.enemy_surfaces.as_slice(), &hostile_material),
-    ] {
-        for pos in positions {
-            let Some(standing) = footing.at(*pos) else {
-                continue;
-            };
-            commands.spawn((
-                Name::new(if player {
-                    "Party Deployment Surface"
-                } else {
-                    "Enemy Deployment Surface"
-                }),
-                DeploymentWorldEntity,
-                DeploymentSurface { pos: *pos, player },
-                Mesh3d(game_assets.hex_tile.clone()),
-                MeshMaterial3d(material.clone()),
-                Transform {
-                    translation: pos.coord.to_world(standing.span.top + 0.035),
-                    scale: Vec3::new(0.88, 0.035, 0.88),
-                    ..default()
-                },
-            ));
-        }
-    }
 }
 
 fn deployment_footing(
@@ -1499,45 +1341,6 @@ fn deployment_footing(
     )
 }
 
-fn ordered_deployment_surfaces(
-    center: hex_units::Standing,
-    footing: &Footing,
-    radius: u32,
-) -> Vec<TilePos> {
-    let reach = Reach::from(center, footing, Some(radius));
-    let mut positions = reach
-        .surfaces()
-        .map(|standing| standing.pos)
-        .collect::<Vec<_>>();
-    positions.sort_by_key(|position| (reach.cost(*position).unwrap_or(u32::MAX), *position));
-    positions
-}
-
-fn deployment_center(
-    region: &SandboxDeploymentRegion,
-    footing: &Footing,
-    anchors: Option<&MapAnchors>,
-) -> Option<hex_units::Standing> {
-    match &region.center {
-        SandboxRegionCenter::Fixed(coord) => {
-            footing.ground(HexCoord::new_cubic(coord.x, coord.y, coord.z))
-        }
-        SandboxRegionCenter::Anchor(anchor) => anchors
-            .and_then(|anchors| anchors.get(&MapAnchorId::new(anchor.clone())))
-            .and_then(|pos| footing.at(pos)),
-    }
-}
-
-fn deployment_material(color: Color) -> StandardMaterial {
-    StandardMaterial {
-        base_color: color,
-        alpha_mode: AlphaMode::Blend,
-        unlit: true,
-        depth_bias: 18.0,
-        ..default()
-    }
-}
-
 fn deployment_marker_material(color: Color) -> StandardMaterial {
     StandardMaterial {
         base_color: color,
@@ -1546,100 +1349,36 @@ fn deployment_marker_material(color: Color) -> StandardMaterial {
     }
 }
 
-fn on_deployment_surface_clicked(
+fn on_deployment_tile_clicked(
     click: On<Pointer<Click>>,
-    surfaces: Query<&DeploymentSurface>,
+    tiles: DeploymentTileQuery,
+    table: Option<Res<SubstanceTable>>,
+    blockers: Option<Res<TraversalBlockers>>,
     mut session: Option<ResMut<DeploymentSession>>,
-    mut commands: Commands,
-    markers: DeploymentMarkerRuntime,
 ) {
     if click.button != PointerButton::Primary {
         return;
     }
-    let Ok(surface) = surfaces.get(click.event_target()) else {
+    let Ok((pos, _, _, _)) = tiles.get(click.event_target()) else {
         return;
     };
     let Some(session) = session.as_deref_mut() else {
         return;
     };
-    let active_player = session.active_side == SandboxSide::Party;
-    if surface.player != active_player {
-        session.notice = format!(
-            "{} {} · Click a {} highlighted surface.",
-            if active_player { "PARTY" } else { "ENEMIES" },
-            session.active_index + 1,
-            if active_player { "BLUE" } else { "RED" }
-        );
+    let Some(table) = table.as_deref() else {
+        session
+            .deployment
+            .refuse(SandboxPlacementRefusal::TerrainUnavailable);
+        return;
+    };
+    let footing = deployment_footing(&tiles, table, blockers.as_deref());
+    if footing.at(*pos).is_none() {
+        session
+            .deployment
+            .refuse(SandboxPlacementRefusal::InvalidFooting);
         return;
     }
-    let active = deployment_unit_id(session.active_side, session.active_index);
-    let occupied = deployment_occupancy(session).is_occupied(surface.pos, Some(active));
-    if occupied {
-        session.notice = "That exact surface is already occupied.".to_owned();
-        return;
-    }
-    let placements = if session.active_side == SandboxSide::Party {
-        &mut session.party_placements
-    } else {
-        &mut session.enemy_placements
-    };
-    let previous = placements.get(session.active_index).copied().flatten();
-    if let Some(placement) = placements.get_mut(session.active_index) {
-        *placement = Some(surface.pos);
-        session
-            .undo
-            .push((session.active_side, session.active_index, previous));
-    }
-    advance_deployment_cursor(session);
-    rebuild_deployment_markers(&mut commands, &markers, session);
-}
-
-fn deployment_unit_id(side: SandboxSide, index: usize) -> hex_core::UnitId {
-    let offset = if side == SandboxSide::Party {
-        0
-    } else {
-        u64::try_from(MAX_ROSTER).unwrap_or(u64::MAX)
-    };
-    hex_core::UnitId(offset.saturating_add(u64::try_from(index).unwrap_or(u64::MAX)))
-}
-
-fn deployment_occupancy(session: &DeploymentSession) -> UnitOccupancy {
-    UnitOccupancy::from_positions(
-        session
-            .party_placements
-            .iter()
-            .enumerate()
-            .filter_map(|(index, placement)| {
-                placement.map(|position| (deployment_unit_id(SandboxSide::Party, index), position))
-            })
-            .chain(
-                session
-                    .enemy_placements
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(index, placement)| {
-                        placement.map(|position| {
-                            (deployment_unit_id(SandboxSide::Enemies, index), position)
-                        })
-                    }),
-            ),
-    )
-}
-
-fn advance_deployment_cursor(session: &mut DeploymentSession) {
-    if let Some(index) = session.party_placements.iter().position(Option::is_none) {
-        session.active_side = SandboxSide::Party;
-        session.active_index = index;
-        session.notice = format!("PARTY {} · Click a BLUE highlighted surface.", index + 1);
-    } else if let Some(index) = session.enemy_placements.iter().position(Option::is_none) {
-        session.active_side = SandboxSide::Enemies;
-        session.active_index = index;
-        session.notice = format!("ENEMIES {} · Click a RED highlighted surface.", index + 1);
-    } else {
-        session.notice =
-            "DEPLOYMENT COMPLETE · Solid blue/red tokens mark the resolved surfaces. Start Combat or reposition with Undo."
-                .to_owned();
-    }
+    let _placed = session.deployment.place_validated(*pos);
 }
 
 #[derive(SystemParam)]
@@ -1651,6 +1390,44 @@ struct DeploymentMarkerRuntime<'w, 's> {
     player_settings: Option<Res<'w, PlayerSettings>>,
     materials: Option<Res<'w, DeploymentMarkerMaterials>>,
     entities: Query<'w, 's, Entity, With<DeploymentPlacementMarker>>,
+}
+
+fn sync_deployment_markers(
+    mut commands: Commands,
+    session: Option<Res<DeploymentSession>>,
+    runtime: DeploymentMarkerRuntime,
+) {
+    let session_changed = session
+        .as_ref()
+        .is_some_and(|resource| resource.is_changed());
+    let Some(session) = session.as_deref() else {
+        return;
+    };
+    let expected = resolved_deployment_markers(session).count();
+    let resources_changed = runtime
+        .table
+        .as_ref()
+        .is_some_and(|resource| resource.is_changed())
+        || runtime
+            .blockers
+            .as_ref()
+            .is_some_and(|resource| resource.is_changed())
+        || runtime
+            .game_assets
+            .as_ref()
+            .is_some_and(|resource| resource.is_changed())
+        || runtime
+            .player_settings
+            .as_ref()
+            .is_some_and(|resource| resource.is_changed())
+        || runtime
+            .materials
+            .as_ref()
+            .is_some_and(|resource| resource.is_changed());
+    if !session_changed && !resources_changed && runtime.entities.iter().count() == expected {
+        return;
+    }
+    rebuild_deployment_markers(&mut commands, &runtime, session);
 }
 
 fn rebuild_deployment_markers(
@@ -1676,25 +1453,20 @@ fn rebuild_deployment_markers(
         scale: Vec3::splat(scale),
         ..default()
     };
-    for (player, index, pos) in resolved_deployment_markers(session) {
+    for (slot, pos) in resolved_deployment_markers(session) {
         let Some(standing) = footing.at(pos) else {
             continue;
         };
-        let material = if player {
-            materials.player.clone()
-        } else {
-            materials.hostile.clone()
+        let material = match slot.side {
+            SandboxSide::Party => materials.player.clone(),
+            SandboxSide::Enemies => materials.hostile.clone(),
         };
         let [mesh_a, mesh_b] = game_assets.player_pieces.clone();
         commands
             .spawn((
-                Name::new(format!(
-                    "{} Placement {}",
-                    if player { "Player" } else { "Hostile" },
-                    index + 1
-                )),
+                Name::new(format!("{} Placement {}", slot.side, slot.slot)),
                 DeploymentWorldEntity,
-                DeploymentPlacementMarker { player, index },
+                DeploymentPlacementMarker { slot },
                 Transform::from_translation(standing.world_position()),
                 Visibility::default(),
                 Pickable::IGNORE,
@@ -1724,19 +1496,13 @@ fn rebuild_deployment_markers(
 
 fn resolved_deployment_markers(
     session: &DeploymentSession,
-) -> impl Iterator<Item = (bool, usize, TilePos)> + '_ {
+) -> impl Iterator<Item = (SandboxDeploymentSlot, TilePos)> + '_ {
     session
-        .party_placements
+        .deployment
+        .order()
         .iter()
-        .enumerate()
-        .filter_map(|(index, placement)| placement.map(|pos| (true, index, pos)))
-        .chain(
-            session
-                .enemy_placements
-                .iter()
-                .enumerate()
-                .filter_map(|(index, placement)| placement.map(|pos| (false, index, pos))),
-        )
+        .copied()
+        .filter_map(|slot| session.deployment.placement(slot).map(|pos| (slot, pos)))
 }
 
 #[derive(SystemParam)]
@@ -1837,26 +1603,20 @@ fn ordered_deployment_units(
 
 fn deployment_moves(
     units: &[OrderedDeploymentUnit],
-    placements: &[Option<TilePos>],
+    placements: &[TilePos],
     footing: &Footing,
-) -> Result<Vec<(Entity, hex_units::Standing)>, String> {
+) -> Result<Vec<(Entity, hex_units::Standing)>, SandboxPlacementRefusal> {
     if units.len() != placements.len() {
-        return Err("Sandbox deployment no longer matches its frozen roster.".to_owned());
+        return Err(SandboxPlacementRefusal::RosterChanged);
     }
     units
         .iter()
         .zip(placements)
-        .map(|(unit, placement)| {
-            let pos = placement.ok_or_else(|| {
-                format!(
-                    "Sandbox unit {:?} has no frozen deployment surface.",
-                    unit.id
-                )
-            })?;
-            let standing = footing
-                .at(pos)
-                .ok_or_else(|| format!("Selected surface {pos:?} is no longer valid footing."))?;
-            Ok((unit.entity, standing))
+        .map(|(unit, pos)| {
+            footing
+                .at(*pos)
+                .map(|standing| (unit.entity, standing))
+                .ok_or(SandboxPlacementRefusal::InvalidFooting)
         })
         .collect()
 }
@@ -1877,86 +1637,15 @@ fn handle_deployment_actions(
             return;
         };
         match action {
-            DeploymentAction::Select { side, index } => {
-                let valid = match side {
-                    SandboxSide::Party => *index < session.party.len(),
-                    SandboxSide::Enemies => *index < session.enemies.len(),
-                };
-                if valid {
-                    session.active_side = *side;
-                    session.active_index = *index;
-                    session.notice = format!(
-                        "{} {} selected · click a {} highlighted surface to place or reposition.",
-                        match side {
-                            SandboxSide::Party => "PARTY",
-                            SandboxSide::Enemies => "ENEMIES",
-                        },
-                        index + 1,
-                        if *side == SandboxSide::Party {
-                            "BLUE"
-                        } else {
-                            "RED"
-                        }
-                    );
+            DeploymentAction::SelectSlot(slot) => {
+                if !session.deployment.select_slot(*slot) {
+                    session
+                        .deployment
+                        .refuse(SandboxPlacementRefusal::RosterChanged);
                 }
             }
             DeploymentAction::Undo => {
-                if let Some((side, index, previous)) = session.undo.pop() {
-                    let placements = if side == SandboxSide::Party {
-                        &mut session.party_placements
-                    } else {
-                        &mut session.enemy_placements
-                    };
-                    if let Some(placement) = placements.get_mut(index) {
-                        *placement = previous;
-                    }
-                    session.active_side = side;
-                    session.active_index = index;
-                    session.notice = format!("Reposition {} unit {}.", side, index + 1);
-                }
-            }
-            DeploymentAction::ClearParty => {
-                session.party_placements.fill(None);
-                session.undo.clear();
-                session.active_side = SandboxSide::Party;
-                session.active_index = 0;
-                session.notice = "Party placements cleared.".to_owned();
-            }
-            DeploymentAction::ClearEnemies => {
-                session.enemy_placements.fill(None);
-                session.undo.clear();
-                session.active_side = SandboxSide::Enemies;
-                session.active_index = 0;
-                session.notice = "Enemy placements cleared.".to_owned();
-            }
-            DeploymentAction::AutoPlace => {
-                session.party_placements.fill(None);
-                session.enemy_placements.fill(None);
-                let mut occupancy = UnitOccupancy::default();
-                for (index, (placement, surface)) in session
-                    .party_placements
-                    .iter_mut()
-                    .zip(&session.party_surfaces)
-                    .enumerate()
-                {
-                    *placement = Some(*surface);
-                    occupancy.relocate(deployment_unit_id(SandboxSide::Party, index), *surface);
-                }
-                let enemies = session
-                    .enemy_surfaces
-                    .iter()
-                    .filter(|surface| !occupancy.is_occupied(**surface, None))
-                    .copied()
-                    .take(session.enemy_placements.len())
-                    .collect::<Vec<_>>();
-                for (index, (placement, surface)) in
-                    session.enemy_placements.iter_mut().zip(enemies).enumerate()
-                {
-                    *placement = Some(surface);
-                    occupancy.relocate(deployment_unit_id(SandboxSide::Enemies, index), surface);
-                }
-                session.undo.clear();
-                advance_deployment_cursor(session);
+                let _undone = session.deployment.undo();
             }
             DeploymentAction::Back => {
                 *phase = GameplayPhase::Active;
@@ -1985,7 +1674,9 @@ fn handle_deployment_actions(
                     error!(
                         "refusing to commit Sandbox deployment because its exact launch identity is incomplete: {issue}"
                     );
-                    session.notice = DEPLOYMENT_IDENTITY_REFUSAL.to_owned();
+                    session
+                        .deployment
+                        .refuse(SandboxPlacementRefusal::LaunchIdentityUnavailable);
                     continue;
                 }
                 let (Some(encounter), Some(active), Some(sandbox), Some(accepted)) = (
@@ -1997,7 +1688,9 @@ fn handle_deployment_actions(
                     error!(
                         "refusing to commit Sandbox deployment because its exact launch identity changed during validation"
                     );
-                    session.notice = DEPLOYMENT_IDENTITY_REFUSAL.to_owned();
+                    session
+                        .deployment
+                        .refuse(SandboxPlacementRefusal::LaunchIdentityUnavailable);
                     continue;
                 };
                 let expected_loading_input = sandbox.launch.loading_input();
@@ -2007,20 +1700,22 @@ fn handle_deployment_actions(
                     error!(
                         "refusing to commit Sandbox deployment because its active scenario, encounter, and frozen launch identity disagree"
                     );
-                    session.notice = DEPLOYMENT_IDENTITY_REFUSAL.to_owned();
+                    session
+                        .deployment
+                        .refuse(SandboxPlacementRefusal::LaunchIdentityUnavailable);
                     continue;
                 }
                 let accepted_content_revision = accepted.fingerprint();
                 let Some(table) = runtime.markers.table.as_deref() else {
-                    session.notice = "Terrain rules are still loading.".to_owned();
+                    session
+                        .deployment
+                        .refuse(SandboxPlacementRefusal::TerrainUnavailable);
                     continue;
                 };
-                if let Some(notice) = session.capacity_notice() {
-                    session.notice = notice;
-                    continue;
-                }
                 if !session.complete() {
-                    session.notice = "Every roster entry needs one unique surface.".to_owned();
+                    session
+                        .deployment
+                        .refuse(SandboxPlacementRefusal::Incomplete);
                     continue;
                 }
                 let footing = deployment_footing(
@@ -2041,23 +1736,31 @@ fn handle_deployment_actions(
                 let (players, hostiles) = match ordered {
                     Ok(ordered) => ordered,
                     Err(reason) => {
-                        session.notice = reason;
+                        error!("refusing Sandbox deployment after roster validation: {reason}");
+                        session
+                            .deployment
+                            .refuse(SandboxPlacementRefusal::RosterChanged);
                         continue;
                     }
                 };
-                let moves = deployment_moves(&players, &session.party_placements, &footing)
-                    .and_then(|mut moves| {
-                        moves.extend(deployment_moves(
-                            &hostiles,
-                            &session.enemy_placements,
-                            &footing,
-                        )?);
+                let party_placements = session
+                    .deployment
+                    .ordered_placements(SandboxSide::Party)
+                    .collect::<Vec<_>>();
+                let enemy_placements = session
+                    .deployment
+                    .ordered_placements(SandboxSide::Enemies)
+                    .collect::<Vec<_>>();
+                let moves = deployment_moves(&players, &party_placements, &footing).and_then(
+                    |mut moves| {
+                        moves.extend(deployment_moves(&hostiles, &enemy_placements, &footing)?);
                         Ok(moves)
-                    });
+                    },
+                );
                 let moves = match moves {
                     Ok(moves) => moves,
-                    Err(reason) => {
-                        session.notice = reason;
+                    Err(refusal) => {
+                        session.deployment.refuse(refusal);
                         continue;
                     }
                 };
@@ -2067,15 +1770,18 @@ fn handle_deployment_actions(
                         error!(
                             "a Sandbox unit disappeared between exact deployment validation and placement"
                         );
-                        session.notice =
-                            "Sandbox deployment roster changed before placement.".to_owned();
+                        session
+                            .deployment
+                            .refuse(SandboxPlacementRefusal::RosterChanged);
                         continue 'intents;
                     };
                     on.0 = standing;
                     transform.translation = standing.world_position();
                 }
                 let Some(deployment) = deployment_snapshot(session) else {
-                    session.notice = "Deployment could not be frozen exactly.".to_owned();
+                    session
+                        .deployment
+                        .refuse(SandboxPlacementRefusal::Incomplete);
                     continue;
                 };
                 let exact = exact_deployed_encounter(session);
@@ -2099,11 +1805,12 @@ fn handle_deployment_actions(
                 continue;
             }
         }
-        rebuild_deployment_markers(&mut commands, &runtime.markers, session);
     }
 }
 
 fn exact_deployed_encounter(session: &DeploymentSession) -> Encounter {
+    let party_placements = session.deployment.ordered_placements(SandboxSide::Party);
+    let enemy_placements = session.deployment.ordered_placements(SandboxSide::Enemies);
     Encounter {
         name: format!("Creator Sandbox · {}", session.map_definition.display_name),
         rosters: vec![
@@ -2116,9 +1823,9 @@ fn exact_deployed_encounter(session: &DeploymentSession) -> Encounter {
                 units: session
                     .party
                     .iter()
-                    .zip(&session.party_placements)
+                    .zip(party_placements)
                     .map(|(choice, placement)| {
-                        roster_entry(choice, placement.map(EncounterPlacement::Surface))
+                        roster_entry(choice, Some(EncounterPlacement::Surface(placement)))
                     })
                     .collect(),
             },
@@ -2131,9 +1838,9 @@ fn exact_deployed_encounter(session: &DeploymentSession) -> Encounter {
                 units: session
                     .enemies
                     .iter()
-                    .zip(&session.enemy_placements)
+                    .zip(enemy_placements)
                     .map(|(choice, placement)| {
-                        roster_entry(choice, placement.map(EncounterPlacement::Surface))
+                        roster_entry(choice, Some(EncounterPlacement::Surface(placement)))
                     })
                     .collect(),
             },
@@ -2204,6 +1911,7 @@ mod tests {
     use hex_assets::{
         ArtPalette, ElementFile, SandboxDeploymentRegion, SandboxRegionCenter, SubstanceFile,
     };
+    use hex_core::HexCoord;
 
     use super::*;
 
@@ -2227,11 +1935,43 @@ mod tests {
         }
     }
 
-    fn roster() -> Vec<RosterChoice> {
-        vec![
-            RosterChoice::Template("wolf".to_owned()),
-            RosterChoice::Template("raider".to_owned()),
-        ]
+    fn deployment_session(
+        definition: SandboxMapDefinition,
+        party: Vec<RosterChoice>,
+        enemies: Vec<RosterChoice>,
+    ) -> DeploymentSession {
+        let mut party_choices = party.iter().cloned();
+        let mut enemy_choices = enemies.iter().cloned();
+        let draft = hex_gameplay_model::SandboxDraft::<CustomCharacterId> {
+            map: None,
+            party: std::array::from_fn(|_| party_choices.next()),
+            enemies: std::array::from_fn(|_| enemy_choices.next()),
+        };
+        DeploymentSession::new(
+            definition,
+            party,
+            enemies,
+            SandboxDeploymentModel::from_draft(&draft),
+        )
+    }
+
+    fn trigger_primary_click(app: &mut App, target: Entity) {
+        let window = app.world_mut().spawn_empty().id();
+        let target_window = bevy::window::WindowRef::Entity(window)
+            .normalize(Some(window))
+            .expect("the explicit window target normalizes");
+        let location = Location {
+            target: NormalizedRenderTarget::Window(target_window),
+            position: Vec2::ZERO,
+        };
+        let click = Click {
+            button: PointerButton::Primary,
+            hit: HitData::new(target, 0.0, None, None),
+            duration: Duration::from_millis(1),
+            count: 1,
+        };
+        app.world_mut()
+            .trigger(Pointer::new(PointerId::Mouse, location, click, target));
     }
 
     fn sandbox_navigation_app(initial: Screen) -> App {
@@ -2257,25 +1997,9 @@ mod tests {
     fn unrelated_click_is_safe_before_deployment_assets_arrive() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .add_observer(on_deployment_surface_clicked);
+            .add_observer(on_deployment_tile_clicked);
         let target = app.world_mut().spawn_empty().id();
-        let window = app.world_mut().spawn_empty().id();
-        let target_window = bevy::window::WindowRef::Entity(window)
-            .normalize(Some(window))
-            .expect("the explicit window target normalizes");
-        let location = Location {
-            target: NormalizedRenderTarget::Window(target_window),
-            position: Vec2::ZERO,
-        };
-        let click = Click {
-            button: PointerButton::Primary,
-            hit: HitData::new(target, 0.0, None, None),
-            duration: Duration::from_millis(1),
-            count: 1,
-        };
-
-        app.world_mut()
-            .trigger(Pointer::new(PointerId::Mouse, location, click, target));
+        trigger_primary_click(&mut app, target);
     }
 
     #[test]
@@ -2473,64 +2197,40 @@ mod tests {
     }
 
     #[test]
-    fn exact_deployment_requires_one_surface_for_every_roster_entry() {
-        let first = TilePos::new(HexCoord::ORIGIN, 2);
-        let second = TilePos::new(HexCoord::new_cubic(1, -1, 0), 5);
-        let mut placements = vec![Some(first), None];
-        assert!(!placements_complete_exact(&placements, 2));
-        if let Some(placement) = placements.get_mut(1) {
-            *placement = Some(second);
-        }
-        assert!(placements_complete_exact(&placements, 2));
-        assert!(!placements_complete_exact(&placements, 1));
-        assert!(!placements_complete_exact(&[], 0));
-    }
-
-    #[test]
-    fn deployment_capacity_shortfall_names_the_exact_side() {
-        let mut session = DeploymentSession::new(map_definition(), roster(), roster(), None);
-        session.party_surfaces = vec![TilePos::new(HexCoord::ORIGIN, 1)];
-        session.enemy_surfaces = vec![
-            TilePos::new(HexCoord::ORIGIN, 2),
-            TilePos::new(HexCoord::from_axial(1, 0), 2),
-        ];
-
-        assert_eq!(
-            session.capacity_notice().as_deref(),
-            Some(
-                "Party region provides 1 of 2 required surfaces. Go Back and reduce that roster or choose another map."
-            )
-        );
-        session
-            .party_surfaces
-            .push(TilePos::new(HexCoord::from_axial(-1, 0), 1));
-        assert_eq!(session.capacity_notice(), None);
-    }
-
-    #[test]
-    fn deployment_uses_exact_surface_occupancy_and_freezes_stable_order() {
-        let mut session = DeploymentSession::new(
+    fn deployment_guides_stable_order_and_freezes_exact_stacked_surfaces() {
+        let mut session = deployment_session(
             map_definition(),
             vec![
                 RosterChoice::Template("wolf".to_owned()),
                 RosterChoice::Template("hedge-mage".to_owned()),
             ],
             vec![RosterChoice::Template("raider".to_owned())],
-            None,
         );
         let first_party = TilePos::new(HexCoord::ORIGIN, 3);
         let second_party = TilePos::new(HexCoord::from_axial(1, 0), 3);
         let stacked_enemy = TilePos::new(first_party.coord, first_party.level + 1);
-        session.party_placements = vec![Some(first_party), Some(second_party)];
-        session.enemy_placements = vec![Some(first_party)];
-        session.party_surfaces = vec![first_party, second_party];
-        session.enemy_surfaces = vec![first_party, stacked_enemy];
-        assert!(
-            !session.complete(),
-            "two units cannot own the same exact surface"
+        assert_eq!(
+            session.deployment.place_validated(first_party),
+            Ok(SandboxDeploymentStage::Placing(SandboxDeploymentSlot::new(
+                SandboxSide::Party,
+                SandboxSlotIndex::Two
+            )))
         );
-
-        session.enemy_placements = vec![Some(stacked_enemy)];
+        assert_eq!(
+            session.deployment.place_validated(second_party),
+            Ok(SandboxDeploymentStage::Placing(SandboxDeploymentSlot::new(
+                SandboxSide::Enemies,
+                SandboxSlotIndex::One
+            )))
+        );
+        assert!(matches!(
+            session.deployment.place_validated(first_party),
+            Err(SandboxPlacementRefusal::Occupied { .. })
+        ));
+        assert_eq!(
+            session.deployment.place_validated(stacked_enemy),
+            Ok(SandboxDeploymentStage::Review)
+        );
         assert!(
             session.complete(),
             "stacked surfaces at distinct elevations remain distinct"
@@ -2538,9 +2238,18 @@ mod tests {
         assert_eq!(
             resolved_deployment_markers(&session).collect::<Vec<_>>(),
             vec![
-                (true, 0, first_party),
-                (true, 1, second_party),
-                (false, 0, stacked_enemy)
+                (
+                    SandboxDeploymentSlot::new(SandboxSide::Party, SandboxSlotIndex::One),
+                    first_party
+                ),
+                (
+                    SandboxDeploymentSlot::new(SandboxSide::Party, SandboxSlotIndex::Two),
+                    second_party
+                ),
+                (
+                    SandboxDeploymentSlot::new(SandboxSide::Enemies, SandboxSlotIndex::One),
+                    stacked_enemy
+                )
             ]
         );
         assert_eq!(
@@ -2578,6 +2287,85 @@ mod tests {
                 ai_group: None,
             })
         );
+    }
+
+    #[test]
+    fn terrain_clicks_place_outside_legacy_regions_and_refuse_invalid_or_occupied_surfaces() {
+        let fixture = content_fixture().expect("the shipped content fixture should resolve");
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_observer(on_deployment_tile_clicked)
+            .insert_resource(fixture.substances.clone())
+            .insert_resource(deployment_session(
+                map_definition(),
+                vec![RosterChoice::Template("hedge-mage".to_owned())],
+                vec![RosterChoice::Template("raider".to_owned())],
+            ));
+        let grass = fixture
+            .substances
+            .id("grass")
+            .expect("the fixture has standable grass");
+        let outside_party_region = TilePos::new(HexCoord::from_axial(8, -3), 1);
+        let outside_enemy_region = TilePos::new(HexCoord::from_axial(-7, 2), 1);
+        let invalid = TilePos::new(HexCoord::from_axial(9, -3), 1);
+        let valid_span = HexSpan::from_ground(1.0);
+        let first = app
+            .world_mut()
+            .spawn((
+                HexTile,
+                outside_party_region,
+                valid_span,
+                grass,
+                Headroom(10),
+            ))
+            .id();
+        let second = app
+            .world_mut()
+            .spawn((
+                HexTile,
+                outside_enemy_region,
+                valid_span,
+                grass,
+                Headroom(10),
+            ))
+            .id();
+        let invalid_target = app
+            .world_mut()
+            .spawn((HexTile, invalid, valid_span, grass, Headroom(0)))
+            .id();
+
+        trigger_primary_click(&mut app, first);
+        let session = app.world().resource::<DeploymentSession>();
+        assert_eq!(
+            session.deployment.active_slot(),
+            Some(SandboxDeploymentSlot::new(
+                SandboxSide::Enemies,
+                SandboxSlotIndex::One
+            ))
+        );
+
+        trigger_primary_click(&mut app, first);
+        assert!(matches!(
+            app.world()
+                .resource::<DeploymentSession>()
+                .deployment
+                .refusal,
+            Some(SandboxPlacementRefusal::Occupied { .. })
+        ));
+        trigger_primary_click(&mut app, invalid_target);
+        assert_eq!(
+            app.world()
+                .resource::<DeploymentSession>()
+                .deployment
+                .refusal,
+            Some(SandboxPlacementRefusal::InvalidFooting)
+        );
+        trigger_primary_click(&mut app, second);
+        assert_eq!(
+            app.world().resource::<DeploymentSession>().deployment.stage,
+            SandboxDeploymentStage::Review
+        );
+        assert!(app.world().resource::<DeploymentSession>().complete());
     }
 
     #[test]
@@ -2753,7 +2541,7 @@ mod tests {
     }
 
     #[test]
-    fn sandbox_encounter_preserves_duplicate_roster_order_and_catalog_regions() {
+    fn sandbox_encounter_preserves_duplicate_order_and_catalog_staging_regions() {
         let definition = map_definition();
         let party = vec![
             RosterChoice::Template("hedge-mage".to_owned()),
@@ -3060,7 +2848,10 @@ mod tests {
             ))
             .id();
         app.world_mut().spawn((
-            UnitId(u64::try_from(MAX_ROSTER).expect("the roster bound fits u64")),
+            UnitId(
+                u64::try_from(hex_gameplay_model::SANDBOX_ROSTER_SIZE)
+                    .expect("the roster bound fits u64"),
+            ),
             Faction::Hostile,
             Archetype("raider".to_owned()),
             StandsOn(hex_units::Standing {
@@ -3076,11 +2867,15 @@ mod tests {
             player: Handle::default(),
             hostile: Handle::default(),
         });
-        let mut deployment = DeploymentSession::new(definition, party, enemies, None);
-        deployment.party_surfaces = vec![party_surface];
-        deployment.enemy_surfaces = vec![enemy_surface];
-        deployment.party_placements = vec![Some(party_surface)];
-        deployment.enemy_placements = vec![Some(enemy_surface)];
+        let mut deployment = deployment_session(definition, party, enemies);
+        deployment
+            .deployment
+            .place_validated(party_surface)
+            .expect("the Party surface is exact");
+        deployment
+            .deployment
+            .place_validated(enemy_surface)
+            .expect("the Enemy surface completes Review");
         assert!(deployment.complete(), "the refusal fixture is commit-ready");
         app.insert_resource(deployment);
         app.insert_resource(encounter.clone());
@@ -3119,8 +2914,8 @@ mod tests {
 
             let world = fixture.app.world();
             assert_eq!(
-                world.resource::<DeploymentSession>().notice,
-                DEPLOYMENT_IDENTITY_REFUSAL,
+                world.resource::<DeploymentSession>().deployment.refusal,
+                Some(SandboxPlacementRefusal::LaunchIdentityUnavailable),
                 "{missing:?} must produce the visible identity refusal"
             );
             assert_eq!(
@@ -3206,8 +3001,8 @@ mod tests {
 
         let world = fixture.app.world();
         assert_eq!(
-            world.resource::<DeploymentSession>().notice,
-            DEPLOYMENT_IDENTITY_REFUSAL
+            world.resource::<DeploymentSession>().deployment.refusal,
+            Some(SandboxPlacementRefusal::LaunchIdentityUnavailable)
         );
         assert_eq!(
             *world.resource::<GameplayPhase>(),

@@ -1,5 +1,6 @@
 // Curated, deterministic maps for Sandbox.
-// Regions are authored separately from encounters because Sandbox places every unit.
+// Side regions remain stable only to stage hidden actors before guided deployment.
+// Players may place each current character on any canonical legal, unoccupied surface.
 (
     schema_version: 2,
     maps: [

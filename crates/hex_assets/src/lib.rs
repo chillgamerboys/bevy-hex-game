@@ -35,7 +35,7 @@ pub mod object_blueprint;
 pub mod object_catalog;
 /// Validated gameplay sight settings.
 pub mod perception;
-/// Curated maps and deployment regions for Sandbox sessions.
+/// Curated Sandbox maps with hidden actor-staging compatibility metadata.
 pub mod sandbox;
 /// Internal world, lighting, and encounter launch definitions.
 pub mod scenario;

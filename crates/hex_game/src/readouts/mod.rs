@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 use hex_combat::{CombatSystems, EncounterResolution};
 use hex_core::{AppSystems, GameplayPhase, GameplaySetup, GameplaySystems, Screen};
-pub(crate) use hex_ui::{HudElement, UiHudSetup as HudSetup};
+pub(crate) use hex_ui::UiHudSetup as HudSetup;
 
 mod badges;
 mod context;

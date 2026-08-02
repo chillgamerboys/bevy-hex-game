@@ -504,7 +504,7 @@ fn publish_hud_view(
             movement_remaining: 0,
             action_remaining: false,
             required_prompt: Some(
-                "Choose each roster entry, place it on a matching surface, then confirm Start Combat."
+                "Place each character on any open legal surface, then review and start combat."
                     .to_owned(),
             ),
             actions: Vec::new(),

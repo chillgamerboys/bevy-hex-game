@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 use hex_core::{GameplayPhase, UnitId};
 use hex_gameplay_model::{
-    CampaignSlotId, MainMenuRoute, SandboxCharacter, SandboxRoute, SandboxSide, SandboxSlotIndex,
-    SandboxStartBlocker,
+    CampaignSlotId, MainMenuRoute, SandboxCharacter, SandboxDeploymentSlot, SandboxDeploymentStage,
+    SandboxRoute, SandboxSide, SandboxSlotIndex, SandboxStartBlocker,
 };
 
 /// Whether an action can currently be taken, with the canonical refusal when it cannot.
@@ -822,17 +822,17 @@ pub enum SandboxIntent {
     StartSandbox,
 }
 
-/// One immutable roster row in the Sandbox deployment HUD.
+/// One immutable occupied slot in the guided Sandbox deployment queue.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeploymentRosterEntryView {
-    /// Stable side-local row index.
-    pub index: usize,
+pub struct DeploymentQueueEntryView {
+    /// Exact sparse side/slot identity.
+    pub slot: SandboxDeploymentSlot,
     /// Player-facing build name.
     pub name: String,
-    /// Whether this row owns the next surface click.
+    /// Whether this entry owns the next valid terrain click.
     pub selected: bool,
-    /// Exact chosen surface rendered as a disclosed label.
-    pub position: Option<hex_core::TilePos>,
+    /// Whether this entry already owns one exact surface.
+    pub placed: bool,
 }
 
 /// Immutable Sandbox deployment presentation.
@@ -844,10 +844,12 @@ pub struct DeploymentView {
     pub map_name: String,
     /// Current placement instruction or refusal.
     pub notice: String,
-    /// Ordered Party roster.
-    pub party: Vec<DeploymentRosterEntryView>,
-    /// Ordered Enemies roster.
-    pub enemies: Vec<DeploymentRosterEntryView>,
+    /// Current guided placement or final review stage.
+    pub stage: Option<SandboxDeploymentStage>,
+    /// Stable Party-then-Enemies occupied-slot queue.
+    pub queue: Vec<DeploymentQueueEntryView>,
+    /// Whether the exact previous placement edit can be restored.
+    pub can_undo: bool,
     /// Whether every exact placement passes the canonical start gate.
     pub complete: bool,
 }
@@ -855,21 +857,10 @@ pub struct DeploymentView {
 /// Typed deployment actions interpreted by the composition root.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeploymentIntent {
-    /// Select a side-local roster row.
-    Select {
-        /// Party or Enemies side.
-        side: SandboxSide,
-        /// Side-local roster index.
-        index: usize,
-    },
+    /// Select one occupied sparse slot for placement or repositioning.
+    SelectSlot(SandboxDeploymentSlot),
     /// Restore the last changed placement.
     Undo,
-    /// Clear every Party placement.
-    ClearParty,
-    /// Clear every Enemy placement.
-    ClearEnemies,
-    /// Apply deterministic canonical placement order.
-    AutoPlace,
     /// Return to the Sandbox overview.
     Back,
     /// Confirm the complete exact deployment.
