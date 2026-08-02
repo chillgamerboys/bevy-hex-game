@@ -158,7 +158,7 @@ scenario, builds and repeatedly rebuilds the camera index from its public
 `HexTile`/`TilePos`/`HexSpan` projection, and keeps steady Character collision below
 1 ms p95 across its exact published anchors and six yaws.
 
-The tracked route manifest pins all 15 selectable Map scenarios to their exact seed
+The tracked route manifest pins all 16 selectable Map scenarios to their exact seed
 and representative stack-safe destinations. Every standalone selectable Map has an
 executable multi-azimuth Character walk using ordinary pointer movement and bounded
 party-idle waiting, followed by an exact check that the selected unit's authoritative

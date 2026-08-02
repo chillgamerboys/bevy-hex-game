@@ -347,10 +347,13 @@ fort remains generated static geometry, not a player construction system.
 Outpost is an additive radius-12 `Single` recipe rather than a Fort tuning preset.
 Its authored structure occupies roughly the radius-11 interior, faces east in its
 canonical orientation, and keeps an open ground-datum courtyard behind one front
-gate. Worked-stone walls enclose the courtyard. The gate aperture remains clear for
-the canonical two-level-tall walker, carries a front walk at relative level `+7`,
-and joins side and rear wall walks at relative level `+11`; the outer parapet rises
-one further level without becoming an accidental ordinary route.
+gate. Light limestone walls enclose a gravel court. A radius-2 terracotta central
+inlay and terracotta circulation paths link the gate and both tower entries, while
+deliberate worked-stone courses and caps provide trim instead of per-voxel tint
+noise. The gate aperture remains clear for the canonical two-level-tall walker,
+carries a front walk at relative level `+7`, and joins side and rear wall walks at
+relative level `+11`; the outer parapet rises one further level without becoming an
+accidental ordinary route.
 
 Two mirrored front towers enclose independent compact stairs. Each stair turns after
 two ordinary treads and one enlarged three-cell landing. Three turns return to the
@@ -358,6 +361,10 @@ same horizontal phase exactly nine levels above the start. Repeated phases are
 separate one-voxel slabs with implicit air between them, never solid columns that
 would bury lower loops. The first loop connects to the front walk at `+7`; the
 second reaches the upper tower exit at `+10` and the perimeter walk at `+11`.
+Exposed stair treads and enlarged landings are timber over limestone support, while
+green-blue slate marks the front canopy, exposed floors and walks, connectors, and
+lookout decks. Walls, stairs, ceilings/roofing, floors, and ground circulation
+therefore remain distinct semantic materials even in a tightly framed view.
 
 The towers continue through three total nine-level loops to open spotting decks at
 relative level `+27`. Each deck is slightly broader than its tower shell and retains
@@ -365,10 +372,12 @@ an open stairwell over the final approach, so the roof neither buries the last t
 nor reduces the transition aperture below the ordinary-walker contract. Exact graph
 validation proves exterior-to-courtyard access, both independent climbs, every walk
 connection, and both lookout decks. It also rejects a missing tread, an accidental
-wall shortcut, insufficient gate or stair-exit headroom, mismatched worked-stone
-structure membership, and any Outpost setting outside its radius-12 temperate
-contract. Outpost remains static generated geometry; it adds no door object,
-climbing rule, gameplay blocker, or construction mechanic.
+wall shortcut, insufficient gate or stair-exit headroom, mismatched per-component
+material membership, and any Outpost setting outside its radius-12 temperate
+contract. Stable `outpost_rooftop` and `outpost_south_rooftop` anchors identify both
+review decks without reconstructing private structure geometry. Outpost remains
+static generated geometry; it adds no door object, climbing rule, gameplay blocker,
+or construction mechanic.
 
 ### Composite
 
@@ -415,7 +424,8 @@ The normative delivery order is:
 11. complete scenario and review-tool migration;
 12. additive Volcano, Deep Forest, and Prairie recipes;
 13. `Ring19` and the selectable Two Rings map;
-14. V1/V2 removal.
+14. the additive Outpost fortification recipe;
+15. V1/V2 removal.
 
 See [planning/status.md](../planning/status.md) for progress through this sequence.
 

@@ -109,12 +109,12 @@ silently count as simulation evidence.
 
 ### Sandbox
 
-Sandbox offers all sixteen distinct shipped maps through the versioned
+Sandbox offers all seventeen distinct shipped maps through the versioned
 `combat_lab_maps.ron` catalog: Flat Arena, The Crossing, Procedural Hills, Rolling
 Hills, Frozen Hills, Volcanic Hills, Sky Islands, Mountains, Caves, Waterfall,
-Forest, Deep Forest, Prairie, Fort, Seven Regions, and Two Rings. Duplicate scenario
-uses of Flat Arena and The Crossing do not create duplicate map choices. Each stable
-map record names its scenario, deterministic seed contract, renderer-generated
+Forest, Deep Forest, Prairie, Fort, Outpost, Seven Regions, and Two Rings. Duplicate
+scenario uses of Flat Arena and The Crossing do not create duplicate map choices.
+Each stable map record names its scenario, deterministic seed contract, renderer-generated
 preview, tactical description and tags, and separate Player and Hostile deployment
 regions. A region resolves from an authored cube coordinate or named map anchor plus
 a bounded footing radius. Both rosters are

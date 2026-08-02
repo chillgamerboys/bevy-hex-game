@@ -1882,11 +1882,30 @@ mod tests {
                     }),
                 ),
                 (
-                    "inner courtyard",
+                    "central courtyard",
+                    CameraRouteDestination::Anchor {
+                        name: "outpost_courtyard".to_owned(),
+                        expected: CameraRouteTile {
+                            q: 0,
+                            r: 0,
+                            level: 15,
+                        },
+                    },
+                ),
+                (
+                    "north tower entrance",
                     CameraRouteDestination::Exact(CameraRouteTile {
                         q: 5,
-                        r: -2,
+                        r: -7,
                         level: 15,
+                    }),
+                ),
+                (
+                    "north tower turn +3",
+                    CameraRouteDestination::Exact(CameraRouteTile {
+                        q: 9,
+                        r: -10,
+                        level: 18,
                     }),
                 ),
                 (
@@ -1912,12 +1931,23 @@ mod tests {
                     },
                 ),
                 (
-                    "lookout roof +27",
+                    "north lookout roof +27",
                     CameraRouteDestination::Anchor {
                         name: "outpost_rooftop".to_owned(),
                         expected: CameraRouteTile {
                             q: 8,
                             r: -8,
+                            level: 42,
+                        },
+                    },
+                ),
+                (
+                    "south lookout roof +27",
+                    CameraRouteDestination::Anchor {
+                        name: "outpost_south_rooftop".to_owned(),
+                        expected: CameraRouteTile {
+                            q: 8,
+                            r: 0,
                             level: 42,
                         },
                     },

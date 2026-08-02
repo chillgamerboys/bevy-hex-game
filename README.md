@@ -127,7 +127,7 @@ Game**, **Character Creator**, **Spell Creator**, **Combat Lab**, **Map Scenario
 **Demos**, **Settings**, and **Quit**. **New Game** launches Party Trial as the hidden
 integrated default. **Map Scenarios** and **Demos** open separate filtered catalogs;
 the two Creator routes open their exact libraries directly, while **Combat Lab** provides a
-transient roster/deployment Sandbox across all sixteen shipped maps and a searchable
+transient roster/deployment Sandbox across all seventeen shipped maps and a searchable
 fixed-fixture selector for Ability Lab, Raider Mirror, and creator-format matrices.
 **Continue** restores one explicitly saved exploration slot through the ordinary
 loading flow. Saving is available only while paused in a safe exploration state;

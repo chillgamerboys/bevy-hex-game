@@ -2793,7 +2793,7 @@ mod tests {
             report.semantic_plan_fingerprint,
             Some(6_901_546_631_227_104_688)
         );
-        assert_eq!(report.map_fingerprint, 7_940_527_797_927_330_083);
+        assert_eq!(report.map_fingerprint, 7_730_484_767_363_855_279);
         assert_eq!(report.valid_candidates, 8);
         let Some(ProceduralRecipeMetrics::Volcano(metrics)) = &report.recipe_metrics else {
             panic!(
@@ -3026,6 +3026,158 @@ mod tests {
             *app.world().resource::<State<Mode>>().get(),
             Mode::Exploring
         );
+    }
+
+    /// The Outpost's authored review route climbs high enough to increase ability
+    /// range. Its encounter must still leave the gate, courtyard, enclosed stair,
+    /// wall walk, and lookout available as ordinary exploration; otherwise combat
+    /// halts the production movement crossings before the vertical route can be
+    /// inspected or used tactically.
+    #[test]
+    fn shipped_outpost_route_reaches_both_lookouts_before_combat_can_begin() {
+        let mut app = procedural_gameplay_app_with_combat("Outpost", true);
+        enter_screen(&mut app, Screen::Gameplay);
+
+        let (party_position, hostile_position, front_walk, wall_walk, rooftop, south_rooftop) = {
+            let anchors = app.world().resource::<MapAnchors>();
+            let anchor = |name: &str| {
+                anchors
+                    .get(&MapAnchorId::from(name))
+                    .unwrap_or_else(|| panic!("Outpost should publish {name}"))
+            };
+            (
+                anchor("party_start"),
+                anchor("hostile_start"),
+                anchor("outpost_front_walk"),
+                anchor("outpost_wall_walk"),
+                anchor("outpost_rooftop"),
+                anchor("outpost_south_rooftop"),
+            )
+        };
+        assert_eq!(
+            hostile_position,
+            TilePos::new(HexCoord::from_axial(-8, 8), 15),
+            "the guard must hold the rear courtyard rather than target through a tower"
+        );
+
+        let (body, player_unit) = {
+            let world = app.world_mut();
+            let mut players = world.query_filtered::<(&Body, &UnitId), With<Player>>();
+            let (body, unit) = players
+                .single(world)
+                .expect("Outpost should spawn exactly one identified player");
+            (*body, *unit)
+        };
+        let footing = {
+            let world = app.world_mut();
+            let mut tiles = world
+                .query_filtered::<(&TilePos, &HexSpan, &SubstanceId, &Headroom), With<HexTile>>();
+            Footing::from_tiles(
+                tiles.iter(world),
+                world.resource::<SubstanceTable>(),
+                body,
+                None,
+            )
+        };
+        let hostile = footing
+            .at(hostile_position)
+            .expect("the shipped hostile anchor should be live footing");
+        let route = [
+            (
+                "gate threshold",
+                TilePos::new(HexCoord::from_axial(10, -5), 15),
+            ),
+            ("inner courtyard", TilePos::new(HexCoord::ORIGIN, 15)),
+            (
+                "north tower entrance",
+                TilePos::new(HexCoord::from_axial(5, -7), 15),
+            ),
+            (
+                "north tower turn +3",
+                TilePos::new(HexCoord::from_axial(9, -10), 18),
+            ),
+            ("front walk +7", front_walk),
+            ("wall walk +11", wall_walk),
+            ("north lookout roof +27", rooftop),
+            ("south lookout roof +27", south_rooftop),
+        ];
+        let (engage_range, levels_per_bonus) = {
+            let combat = app.world().resource::<CombatSettings>();
+            (combat.engage_range, combat.levels_per_bonus_range)
+        };
+        assert_eq!(south_rooftop.level, rooftop.level);
+        let lookout_surfaces = footing
+            .standings()
+            .into_iter()
+            .filter(|surface| surface.pos.level == rooftop.level)
+            .collect::<Vec<_>>();
+        assert!(
+            lookout_surfaces.len() > 2,
+            "Outpost should expose both open lookout decks at +27"
+        );
+        for surface in &lookout_surfaces {
+            assert!(
+                !either_in_reach(surface.pos, hostile.pos, engage_range, levels_per_bonus),
+                "hostile at {:?} can engage an ordinary lookout surface {:?}",
+                hostile.pos,
+                surface.pos
+            );
+        }
+
+        let mut current = footing
+            .at(party_position)
+            .expect("the shipped player anchor should be live footing");
+        let mut paths = Vec::new();
+        for (label, destination) in route {
+            let path = Reach::from(current, &footing, None)
+                .path_to(destination)
+                .unwrap_or_else(|| panic!("party cannot traverse to {label} at {destination:?}"));
+            assert!(
+                !path.is_empty(),
+                "the route to {label} should move the party"
+            );
+            for surface in &path {
+                assert!(
+                    !either_in_reach(surface.pos, hostile.pos, engage_range, levels_per_bonus,),
+                    "hostile at {:?} can start combat before {label}, at route surface {:?}",
+                    hostile.pos,
+                    surface.pos
+                );
+            }
+            current = *path
+                .last()
+                .expect("the checked path should have an endpoint");
+            assert_eq!(current.pos, destination);
+            paths.push((label, destination, path));
+        }
+
+        // Remove presentation timing so each exact production route reconciles on
+        // the next updates, while combat still consumes every MovementCrossing.
+        app.world_mut().remove_resource::<PlayerSettings>();
+        for (label, destination, path) in paths {
+            app.world_mut()
+                .resource_mut::<CommandQueue>()
+                .push(IssuedCommand {
+                    seat: PlayerSeat(0),
+                    command: GameCommand::MoveAlong {
+                        unit: player_unit,
+                        path: path.iter().map(|surface| surface.pos).collect(),
+                    },
+                });
+            for _ in 0..4 {
+                app.update();
+            }
+            assert_eq!(
+                standing_pos::<Player>(&mut app),
+                Some(destination),
+                "the production route stopped before {label}"
+            );
+            assert_eq!(
+                *app.world().resource::<State<Mode>>().get(),
+                Mode::Exploring,
+                "combat began before the party reached {label}"
+            );
+        }
     }
 
     /// Sim seeds ride the same install path as the map seed, and the same

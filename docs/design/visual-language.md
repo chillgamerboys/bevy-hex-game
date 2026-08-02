@@ -111,7 +111,8 @@ The initial catalog records the currently rendered content vocabulary:
 | Group | Swatches | Current authority |
 |---|---|---|
 | Terrain | grass, dirt, stone, gravel, snow, ice, basalt, bedrock | `palette.ron`, referenced by `substances.ron` |
-| Liquids and construction | water, lava, water foam, metal | `palette.ron`; bodies and metal are referenced by `substances.ron`, while the liquid shader resolves foam directly |
+| Liquids | water, lava, water foam | `palette.ron`; bodies are referenced by `substances.ron`, while the liquid shader resolves foam directly |
+| Construction | metal, worked stone, limestone, slate, timber, terracotta | `palette.ron`, referenced by `substances.ron`; Outpost assigns these by structural role rather than procedural tint variation |
 | Authored vegetation | trunk, three foliage values, and two grass values | `palette.ron`, referenced by the small broadleaf, tall narrow, old-growth, and nonblocking grass-tuft objects rendered by Forest |
 | Emissive props | cyan crystal body and glow | `palette.ron`, referenced by the low, branched, and spire crystal objects |
 | Units | player red, hostile blue | `palette.ron`, resolved during actor setup |

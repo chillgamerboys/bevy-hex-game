@@ -1,7 +1,7 @@
-// One real route from the eastern gate, through the safe side of the courtyard,
-// and up the authored switchback stairs to all three review elevations. The
-// courtyard destination stays outside the hostile's engagement threshold so the
-// walk remains an exploration/camera review rather than starting combat.
+// One real route from the eastern gate, through the central courtyard, and up the
+// authored switchback stairs to all three review elevations and across both lookout
+// towers. The hostile holds the rear courtyard, leaving this complete inspection
+// route outside engagement range.
 [
     AwaitScreen("Title"),
     StartScenario(name: "Outpost", seed: Some(1290212)),
@@ -17,27 +17,37 @@
     AssertSelectedAt(expected: (q: 10, r: -5, level: 15)),
     Settle(45),
     Capture("02-outpost-gate-threshold"),
+
+    ClickAnchor(name: "outpost_courtyard", expected: (q: 0, r: 0, level: 15)),
+    AwaitPartyIdle(max_frames: 1800),
+    AssertSelectedAt(expected: (q: 0, r: 0, level: 15)),
+    OrbitCamera(yaw_turns: 0.33333334),
     OrbitCamera(yaw_turns: 0.16666667),
     Settle(45),
-    Capture("03-outpost-gate-side"),
+    Capture("03-outpost-courtyard"),
 
-    OrbitCamera(yaw_turns: -0.16666667),
-    ClickTile(q: 5, r: -2, level: Some(15)),
+    ClickTile(q: 5, r: -7, level: Some(15)),
     AwaitPartyIdle(max_frames: 1200),
-    AssertSelectedAt(expected: (q: 5, r: -2, level: 15)),
+    AssertSelectedAt(expected: (q: 5, r: -7, level: 15)),
+
+    ClickTile(q: 8, r: -9, level: Some(17)),
+    AwaitPartyIdle(max_frames: 1200),
+    AssertSelectedAt(expected: (q: 8, r: -9, level: 17)),
+    OrbitCamera(yaw_turns: -0.16666667),
     Settle(45),
-    Capture("04-outpost-courtyard"),
+    Capture("04-outpost-tight-stair-north"),
+    OrbitCamera(yaw_turns: 0.33333334),
+    Settle(45),
+    Capture("05-outpost-tight-stair-front"),
 
     ClickAnchor(name: "outpost_front_walk", expected: (q: 8, r: -4, level: 22)),
     AwaitPartyIdle(max_frames: 1800),
     AssertSelectedAt(expected: (q: 8, r: -4, level: 22)),
+    OrbitCamera(yaw_turns: -0.33333334),
     Settle(60),
-    Capture("05-outpost-front-walk-plus-7"),
-    OrbitCamera(yaw_turns: -0.16666667),
-    Settle(45),
-    Capture("06-outpost-front-walk-rear"),
+    Capture("06-outpost-front-walk-plus-7"),
+    OrbitCamera(yaw_turns: 0.0, pitch_fraction: 0.3),
 
-    OrbitCamera(yaw_turns: 0.16666667),
     ClickAnchor(name: "outpost_wall_walk", expected: (q: -9, r: 0, level: 26)),
     AwaitPartyIdle(max_frames: 3000),
     AssertSelectedAt(expected: (q: -9, r: 0, level: 26)),
@@ -48,10 +58,16 @@
     AwaitPartyIdle(max_frames: 3600),
     AssertSelectedAt(expected: (q: 8, r: -8, level: 42)),
     Settle(60),
-    Capture("08-outpost-lookout-plus-27"),
+    Capture("08-outpost-north-lookout-plus-27"),
+
+    ClickAnchor(name: "outpost_south_rooftop", expected: (q: 8, r: 0, level: 42)),
+    AwaitPartyIdle(max_frames: 6000),
+    AssertSelectedAt(expected: (q: 8, r: 0, level: 42)),
+    Settle(60),
+    Capture("09-outpost-south-lookout-plus-27"),
     OrbitCamera(yaw_turns: 0.33333334, pitch_fraction: -0.15),
     Settle(60),
-    Capture("09-outpost-lookout-rear"),
+    Capture("10-outpost-south-lookout-rear"),
 
     Key("Backspace"),
     AwaitScreen("Title"),

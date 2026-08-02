@@ -388,7 +388,13 @@ terrain: Procedural((
 
 Outpost accepts only `grid_radius: 12` and `TemperateGrassland`. The visible
 `Outpost` Map scenario uses the shared anchored skirmish and pins seed `1290212`;
-as with every generated scenario, rerolling changes only the current session.
+as with every generated scenario, rerolling changes only the current session. Its
+material grammar is content-authored through stable substances: limestone for walls,
+worked stone for trim, timber for exposed stair treads and landings, and slate for
+exposed floors, walks, and roofing. Gravel covers the surrounding courtyard; a
+radius-2 terracotta central inlay and terracotta circulation paths link the gate and
+both tower entries. These roles are not renderer tints and remain part of
+deterministic map materialization and fingerprinting.
 
 **Compare gameplay sight ranges.** `perception.ron` contains three fixed review
 profiles without coupling them to renderer brightness:

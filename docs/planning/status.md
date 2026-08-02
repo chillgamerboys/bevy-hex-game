@@ -89,8 +89,13 @@ Outpost adds a distinct compact radius-12 fortification behind its own selectabl
 scenario. Its east-facing gate opens into a ground-datum courtyard beneath a level-7
 front walk, with connected level-11 side and rear walks. Two mirrored gate towers
 enclose independent three-turn stairs that gain nine levels per loop and continue for
-three loops to open level-27 lookout decks. Exact graph validation covers gate access,
-both climbs, every walk connection, stair headroom, and the final open stairwells.
+three loops to open level-27 lookout decks. Limestone walls and worked-stone trim
+frame a gravel courtyard whose radius-2 terracotta central inlay and circulation
+paths link the gate and both tower entries. Timber stair treads and landings contrast
+with slate floors, walks, and roofing so load-bearing walls, stairs, ceilings, and
+floors remain visually distinct. Exact graph and material validation covers gate
+access, both climbs, every walk connection, stair headroom, the final open
+stairwells, and exact component membership.
 
 Movement is level-based over stacked surfaces, with body size decided by headroom and
 a breadth-first pathfinder that cannot collapse a stack. A movement preview draws the
@@ -215,7 +220,7 @@ contiguous 64-cell lattice editor, manual stats, undo/redo, and an unsaved local
 mechanics test. The Spell Creator provides ordered repeatable effects, targeting,
 range, requirements, and permanent Draft/Ready diagnostics.
 
-Combat Lab owns transient Sandbox setup for all sixteen distinct supported shipped
+Combat Lab owns transient Sandbox setup for all seventeen distinct supported shipped
 maps, with deterministic renderer previews, tactical descriptions and tags, complete
 ordered one-to-six rosters, deterministic deployment, and creator-origin return routing.
 Its searchable fixture selector coexists with the focused Demos entries and adds

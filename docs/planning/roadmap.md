@@ -66,7 +66,7 @@ still belong to the crate they change. `docs` is whoever picks it up.
 | V3 active recipe migration | Hills, Sky Islands, Mountains, Caves, Waterfall, Forest, Fort, Outpost, Volcano, Deep Forest, and Prairie all use the V3 semantic pipeline in shipped scenarios |
 | Forest authored objects | Forest publishes rotated vegetation `ObjectInstance`s and exact blockers; `hex_objects` propagates whole-tree camera roots and retains authored canopy masks as separate art metadata |
 | Structures and Fort | V3 Fort ships worked-stone walls, towers, gates, keep, wall walks, stairs, battlements, and validated defensive circulation |
-| Outpost structure | The additive radius-12 Outpost scenario ships an east-facing courtyard fort, linked front/perimeter walks, twin enclosed nine-level-loop stairs, and open level-27 lookout decks |
+| Outpost structure | The additive radius-12 Outpost scenario ships an east-facing gravel-courtyard fort with a terracotta central inlay and circulation paths, limestone walls, worked-stone trim, timber stairs and landings, slate floors/walks/roofs, twin enclosed nine-level-loop climbs, and open level-27 lookouts |
 | Seven-region composition | Ring7 composes all seven V3 recipe variants in one connected radius-33 world with global routes, elevation seams, and hydrology |
 | Expanded biome set | Volcano, Deep Forest, and Prairie add distinct crater/lava, full-woodland, and open-grassland recipes while stable scenario and object identities remain compatible |
 | Nineteen-region composition | Ring19 composes the selectable radius-55 Two Rings map from 19 fixed logical regions, 42 physically redundant seams, one mountain-fed confluence/outlet water graph, and a separate volcano lava outlet |
@@ -134,7 +134,7 @@ the whole wave lands on `dev` in one merge (CONTRIBUTING.md has the rules).
   separate Character Creator and Spell Creator workspaces plus Combat Lab. Local records have
   stable IDs, atomic persistence, Draft/Ready and Map-ready diagnostics,
   dependency-safe deletion, and immutable packaged templates. Sandbox builds ordered
-  rosters on all sixteen distinct supported shipped maps, previews and describes
+  rosters on all seventeen distinct supported shipped maps, previews and describes
   each choice, resolves deployment, freezes content for Retry, and refuses resume
   writes. Fixed automated scenarios live behind one searchable stable-ID selector.
 - **Wave 7 — tactical integrity and tempo (delivered).** Combat Lab is now the
