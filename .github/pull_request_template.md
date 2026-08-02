@@ -26,12 +26,12 @@ the combined wave PR into dev; do not copy a sign-off from a lane or older wave 
 
 - Agent-operated Bevy visual review:
 
-Manual runtime result: <PASS or BLOCKED>
-Manual runtime commit: <full 40-character PR head SHA>
-Manual runtime reviewer: <named human>
-Manual runtime date: <YYYY-MM-DD>
-Manual runtime route: <affected scenarios and failure paths exercised>
-Manual runtime findings/waiver: <none, findings, or explicit maintainer waiver>
+Manual runtime result: <PASS, BLOCKED, or N/A>
+Manual runtime commit: <full 40-character PR head SHA or N/A>
+Manual runtime reviewer: <named human or N/A>
+Manual runtime date: <YYYY-MM-DD or N/A>
+Manual runtime route: <affected scenarios and failure paths exercised, or why N/A>
+Manual runtime findings/waiver: <none, findings, explicit maintainer waiver, or N/A>
 
 <!--
 For UI work, record all applicable checkpoints explicitly: 1280x720, 1920x1080,
