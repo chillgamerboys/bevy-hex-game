@@ -242,6 +242,23 @@
             ),
         ),
         (
+            id: "outpost",
+            display_name: "Outpost",
+            description: "A compact gatehouse fort whose twin switchback towers connect the courtyard, front walk, perimeter wall, and high lookout roofs.",
+            tags: ["Fortification", "Stairs", "Lookouts"],
+            preview: "ui/combat-lab/outpost.png",
+            scenario: "Outpost",
+            fixed_seed: Some(1290212),
+            player_region: (
+                center: Anchor("party_start"),
+                radius: 4,
+            ),
+            hostile_region: (
+                center: Anchor("hostile_start"),
+                radius: 4,
+            ),
+        ),
+        (
             id: "seven-regions",
             display_name: "Seven Regions",
             description: "One connected world joins hills, mountains, waterfall, forest, fort, caves, and sky islands.",

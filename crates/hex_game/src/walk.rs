@@ -1447,6 +1447,7 @@ mod tests {
         ("../../walks/camera_deep_forest.ron", "Deep Forest"),
         ("../../walks/camera_prairie.ron", "Prairie"),
         ("../../walks/camera_fort.ron", "Fort"),
+        ("../../walks/camera_outpost.ron", "Outpost"),
         ("../../walks/camera_seven_regions.ron", "Seven Regions"),
         ("../../walks/camera_two_rings.ron", "Two Rings"),
     ];
@@ -1801,7 +1802,7 @@ mod tests {
             routes, maps,
             "Map scenarios and camera routes must be a bijection"
         );
-        assert_eq!(routes.len(), 15);
+        assert_eq!(routes.len(), 16);
 
         for route in &manifest.routes {
             assert!(
@@ -1850,6 +1851,79 @@ mod tests {
                 CameraRouteDestination::Anchor { name, .. } if name == "bridge"
             )
         }));
+    }
+
+    #[test]
+    fn outpost_route_pins_every_authored_review_elevation() {
+        let manifest: CameraRouteManifest =
+            ron::from_str(include_str!("../../../walks/camera_routes.ron"))
+                .expect("the camera route manifest parses");
+        let outpost = manifest
+            .routes
+            .iter()
+            .find(|route| route.scenario == "Outpost")
+            .expect("Outpost has a camera route");
+        assert_eq!(outpost.seed, Some(1_290_212));
+
+        let points = outpost
+            .points
+            .iter()
+            .map(|point| (point.label.as_str(), point.destination.clone()))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(
+            points,
+            std::collections::BTreeMap::from([
+                (
+                    "gate threshold",
+                    CameraRouteDestination::Exact(CameraRouteTile {
+                        q: 10,
+                        r: -5,
+                        level: 15,
+                    }),
+                ),
+                (
+                    "inner courtyard",
+                    CameraRouteDestination::Exact(CameraRouteTile {
+                        q: 5,
+                        r: -2,
+                        level: 15,
+                    }),
+                ),
+                (
+                    "front walk +7",
+                    CameraRouteDestination::Anchor {
+                        name: "outpost_front_walk".to_owned(),
+                        expected: CameraRouteTile {
+                            q: 8,
+                            r: -4,
+                            level: 22,
+                        },
+                    },
+                ),
+                (
+                    "wall walk +11",
+                    CameraRouteDestination::Anchor {
+                        name: "outpost_wall_walk".to_owned(),
+                        expected: CameraRouteTile {
+                            q: -9,
+                            r: 0,
+                            level: 26,
+                        },
+                    },
+                ),
+                (
+                    "lookout roof +27",
+                    CameraRouteDestination::Anchor {
+                        name: "outpost_rooftop".to_owned(),
+                        expected: CameraRouteTile {
+                            q: 8,
+                            r: -8,
+                            level: 42,
+                        },
+                    },
+                ),
+            ])
+        );
     }
 
     #[test]
