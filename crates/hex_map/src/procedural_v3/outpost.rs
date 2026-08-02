@@ -364,7 +364,7 @@ impl OutpostTemplate {
             let tower_interior = towers
                 .iter()
                 .any(|tower| coord.distance(tower.center) <= TOWER_WALL_RADIUS);
-            let top = if (courtyard && !tower_interior) || gate_coords.contains(coord) {
+            let top = if courtyard || tower_interior || gate_coords.contains(coord) {
                 SolidMaterialRole::Gravel
             } else {
                 SolidMaterialRole::Grass
@@ -866,7 +866,13 @@ fn author_lookout(
         if !stair_surfaces.contains(&position) {
             author.worked_voxel(position, StructureKind::Tower, tower.index)?;
         }
-        surfaces.insert(position);
+        if is_lookout_corner_post(coord, tower) {
+            let post = position.above();
+            author.worked_voxel(post, StructureKind::Tower, tower.index)?;
+            author.special_surfaces.insert(post);
+        } else {
+            surfaces.insert(position);
+        }
     }
     surfaces.extend(stair_surfaces.iter().copied().filter(|position| {
         position.level == level && position.coord.distance(tower.center) <= LOOKOUT_RADIUS
@@ -1233,6 +1239,20 @@ fn mirror_across_front_axis(coord: HexCoord) -> HexCoord {
     HexCoord::new_cubic(-z, -y, -x)
 }
 
+fn is_lookout_corner_post(coord: HexCoord, tower: TowerSpec) -> bool {
+    [
+        HexCoord::from_axial(4, 0),
+        HexCoord::from_axial(0, 4),
+        HexCoord::from_axial(-4, 4),
+        HexCoord::from_axial(-4, 0),
+        HexCoord::from_axial(0, -4),
+        HexCoord::from_axial(4, -4),
+    ]
+    .into_iter()
+    .map(|offset| shift(tower.center, offset))
+    .any(|corner| corner == coord)
+}
+
 fn inner_door(tower: TowerSpec) -> HexCoord {
     match tower.index {
         0 => HexCoord::from_axial(7, -5),
@@ -1496,6 +1516,18 @@ mod tests {
             .iter()
             .flatten()
             .any(|surface| surface.coord.distance(HexCoord::ORIGIN) == REQUIRED_RADIUS));
+        assert_eq!(
+            template
+                .volume
+                .surfaces
+                .iter()
+                .filter(|(surface, metadata)| {
+                    surface.level == GROUND_LEVEL + LOOKOUT_RISE + 1
+                        && metadata.access == SurfaceAccess::SpecialMovement(PARAPET_REGION)
+                })
+                .count(),
+            8,
+        );
         assert!(!template.gate_closure.is_empty());
         assert!(!template.gate_closure.contains(&template.party_start));
         assert!(!ordinary
