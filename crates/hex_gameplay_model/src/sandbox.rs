@@ -3,6 +3,7 @@
 use std::fmt;
 
 use bevy_ecs::prelude::Resource;
+use hex_core::TilePos;
 use serde::{Deserialize, Serialize};
 
 /// Exact number of ordered character slots on each Sandbox side.
@@ -99,6 +100,314 @@ impl SandboxSlotIndex {
 impl fmt::Display for SandboxSlotIndex {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{}", self.number())
+    }
+}
+
+/// Stable identity for one occupied slot in a Sandbox deployment queue.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SandboxDeploymentSlot {
+    /// Roster side that owns the character.
+    pub side: SandboxSide,
+    /// Original sparse roster slot; deployment never compacts this identity.
+    pub slot: SandboxSlotIndex,
+}
+
+impl SandboxDeploymentSlot {
+    /// Creates one exact side-local deployment identity.
+    #[must_use]
+    pub const fn new(side: SandboxSide, slot: SandboxSlotIndex) -> Self {
+        Self { side, slot }
+    }
+}
+
+impl fmt::Display for SandboxDeploymentSlot {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{} slot {}", self.side, self.slot)
+    }
+}
+
+/// Current step in the guided Sandbox deployment task.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SandboxDeploymentStage {
+    /// One exact occupied roster slot owns the next valid terrain click.
+    Placing(SandboxDeploymentSlot),
+    /// Every occupied slot has an exact placement and may be reviewed or started.
+    Review,
+}
+
+/// Typed reason a Sandbox placement or launch action was refused.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SandboxPlacementRefusal {
+    /// Published terrain facts are not ready for placement validation.
+    TerrainUnavailable,
+    /// The clicked exact surface does not admit the canonical walker body.
+    InvalidFooting,
+    /// Another exact roster slot already owns the clicked surface.
+    Occupied {
+        /// Slot whose placement must remain unique.
+        occupant: SandboxDeploymentSlot,
+    },
+    /// Review owns the task until the player selects a character to reposition.
+    SelectCharacter,
+    /// Live actors no longer match the frozen ordered roster.
+    RosterChanged,
+    /// The active scenario, content, encounter, or provenance is incomplete.
+    LaunchIdentityUnavailable,
+}
+
+impl SandboxPlacementRefusal {
+    /// Stable player-facing refusal copy.
+    #[must_use]
+    pub fn message(self) -> String {
+        self.to_string()
+    }
+}
+
+impl fmt::Display for SandboxPlacementRefusal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TerrainUnavailable => {
+                formatter.write_str("Sandbox terrain is still loading.")
+            }
+            Self::InvalidFooting => formatter
+                .write_str("Choose a solid surface with enough room for this character."),
+            Self::Occupied { occupant } => {
+                write!(formatter, "That surface is already occupied by {occupant}.")
+            }
+            Self::SelectCharacter => {
+                formatter.write_str("Select a character before choosing another surface.")
+            }
+            Self::RosterChanged => formatter.write_str(
+                "Sandbox deployment no longer matches its roster. Return to Sandbox and start again.",
+            ),
+            Self::LaunchIdentityUnavailable => formatter.write_str(
+                "Sandbox launch identity is unavailable. Return to Sandbox and start again.",
+            ),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+struct SandboxDeploymentEdit {
+    slot: SandboxDeploymentSlot,
+    previous: Option<TilePos>,
+    previous_stage: SandboxDeploymentStage,
+}
+
+/// Renderer-free authority for guided, exact-surface Sandbox deployment.
+///
+/// The model owns sparse slot identity, Party-then-Enemies progression, exact
+/// occupancy, review, and undo. The application adapter validates a clicked
+/// [`TilePos`] against live published terrain before calling [`Self::place_validated`].
+#[derive(Resource, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SandboxDeploymentModel {
+    order: Vec<SandboxDeploymentSlot>,
+    party: [Option<TilePos>; SANDBOX_ROSTER_SIZE],
+    enemies: [Option<TilePos>; SANDBOX_ROSTER_SIZE],
+    undo: Vec<SandboxDeploymentEdit>,
+    /// Current guided placement or final review stage.
+    pub stage: SandboxDeploymentStage,
+    /// Most recent typed refusal, cleared by a successful transition.
+    pub refusal: Option<SandboxPlacementRefusal>,
+}
+
+impl SandboxDeploymentModel {
+    /// Builds a stable Party-then-Enemies queue from occupied sparse draft slots.
+    #[must_use]
+    pub fn from_draft<CustomId>(draft: &SandboxDraft<CustomId>) -> Self {
+        let order = SandboxSide::ALL
+            .into_iter()
+            .flat_map(|side| {
+                SandboxSlotIndex::ALL.into_iter().filter_map(move |slot| {
+                    draft
+                        .character(side, slot)
+                        .is_some()
+                        .then_some(SandboxDeploymentSlot::new(side, slot))
+                })
+            })
+            .collect::<Vec<_>>();
+        let stage = order.first().copied().map_or(
+            SandboxDeploymentStage::Review,
+            SandboxDeploymentStage::Placing,
+        );
+        Self {
+            order,
+            party: [None; SANDBOX_ROSTER_SIZE],
+            enemies: [None; SANDBOX_ROSTER_SIZE],
+            undo: Vec::new(),
+            stage,
+            refusal: None,
+        }
+    }
+
+    /// Ordered occupied sparse slots, with Party slots before Enemy slots.
+    #[must_use]
+    pub fn order(&self) -> &[SandboxDeploymentSlot] {
+        &self.order
+    }
+
+    /// Active placement owner, or `None` while reviewing a complete deployment.
+    #[must_use]
+    pub const fn active_slot(&self) -> Option<SandboxDeploymentSlot> {
+        match self.stage {
+            SandboxDeploymentStage::Placing(slot) => Some(slot),
+            SandboxDeploymentStage::Review => None,
+        }
+    }
+
+    /// Exact placement for one sparse slot.
+    #[must_use]
+    pub fn placement(&self, slot: SandboxDeploymentSlot) -> Option<TilePos> {
+        self.placements(slot.side)
+            .get(slot.slot.index())
+            .copied()
+            .flatten()
+    }
+
+    /// One-based progress position and total occupied slot count.
+    #[must_use]
+    pub fn progress(&self, slot: SandboxDeploymentSlot) -> Option<(usize, usize)> {
+        self.order
+            .iter()
+            .position(|candidate| *candidate == slot)
+            .map(|index| (index + 1, self.order.len()))
+    }
+
+    /// Selects any occupied slot for placement or repositioning.
+    #[must_use]
+    pub fn select_slot(&mut self, slot: SandboxDeploymentSlot) -> bool {
+        if !self.order.contains(&slot) {
+            return false;
+        }
+        self.stage = SandboxDeploymentStage::Placing(slot);
+        self.refusal = None;
+        true
+    }
+
+    /// Records a live-adapter refusal without mutating placement or progression.
+    pub fn refuse(&mut self, refusal: SandboxPlacementRefusal) {
+        self.refusal = Some(refusal);
+    }
+
+    /// Commits a terrain-validated exact surface for the active slot.
+    ///
+    /// Exact occupancy is transactional. A refused position changes neither the
+    /// slot's previous placement nor the guided stage.
+    pub fn place_validated(
+        &mut self,
+        position: TilePos,
+    ) -> Result<SandboxDeploymentStage, SandboxPlacementRefusal> {
+        let Some(slot) = self.active_slot() else {
+            let refusal = SandboxPlacementRefusal::SelectCharacter;
+            self.refuse(refusal);
+            return Err(refusal);
+        };
+        if let Some(occupant) =
+            self.order.iter().copied().find(|candidate| {
+                *candidate != slot && self.placement(*candidate) == Some(position)
+            })
+        {
+            let refusal = SandboxPlacementRefusal::Occupied { occupant };
+            self.refuse(refusal);
+            return Err(refusal);
+        }
+
+        let previous = self.placement(slot);
+        let previous_stage = self.stage;
+        if let Some(target) = self.placements_mut(slot.side).get_mut(slot.slot.index()) {
+            *target = Some(position);
+        }
+        self.undo.push(SandboxDeploymentEdit {
+            slot,
+            previous,
+            previous_stage,
+        });
+        self.refusal = None;
+        self.stage = self.next_stage_after(slot);
+        Ok(self.stage)
+    }
+
+    /// Restores the last placement or repositioning edit and its exact stage.
+    #[must_use]
+    pub fn undo(&mut self) -> bool {
+        let Some(edit) = self.undo.pop() else {
+            return false;
+        };
+        if let Some(target) = self
+            .placements_mut(edit.slot.side)
+            .get_mut(edit.slot.slot.index())
+        {
+            *target = edit.previous;
+        }
+        self.stage = edit.previous_stage;
+        self.refusal = None;
+        true
+    }
+
+    /// Whether both non-empty sides have one unique exact placement per occupied slot.
+    #[must_use]
+    pub fn is_complete(&self) -> bool {
+        SandboxSide::ALL.into_iter().all(|side| {
+            let side_slots = self.order.iter().filter(|slot| slot.side == side);
+            let mut found = false;
+            for slot in side_slots {
+                found = true;
+                if self.placement(*slot).is_none() {
+                    return false;
+                }
+            }
+            found
+        })
+    }
+
+    /// Exact placements for one side in stable occupied-slot launch order.
+    pub fn ordered_placements(&self, side: SandboxSide) -> impl Iterator<Item = TilePos> + '_ {
+        self.order
+            .iter()
+            .copied()
+            .filter(move |slot| slot.side == side)
+            .filter_map(|slot| self.placement(slot))
+    }
+
+    /// Complete ordered Party and Enemy placements, ready to freeze into launch identity.
+    #[must_use]
+    pub fn frozen_placements(&self) -> Option<(Vec<TilePos>, Vec<TilePos>)> {
+        self.is_complete().then(|| {
+            (
+                self.ordered_placements(SandboxSide::Party).collect(),
+                self.ordered_placements(SandboxSide::Enemies).collect(),
+            )
+        })
+    }
+
+    fn placements(&self, side: SandboxSide) -> &[Option<TilePos>; SANDBOX_ROSTER_SIZE] {
+        match side {
+            SandboxSide::Party => &self.party,
+            SandboxSide::Enemies => &self.enemies,
+        }
+    }
+
+    fn placements_mut(&mut self, side: SandboxSide) -> &mut [Option<TilePos>; SANDBOX_ROSTER_SIZE] {
+        match side {
+            SandboxSide::Party => &mut self.party,
+            SandboxSide::Enemies => &mut self.enemies,
+        }
+    }
+
+    fn next_stage_after(&self, slot: SandboxDeploymentSlot) -> SandboxDeploymentStage {
+        let Some(current) = self.order.iter().position(|candidate| *candidate == slot) else {
+            return SandboxDeploymentStage::Review;
+        };
+        self.order
+            .iter()
+            .skip(current + 1)
+            .chain(self.order.iter().take(current + 1))
+            .copied()
+            .find(|candidate| self.placement(*candidate).is_none())
+            .map_or(
+                SandboxDeploymentStage::Review,
+                SandboxDeploymentStage::Placing,
+            )
     }
 }
 
@@ -762,6 +1071,112 @@ mod tests {
             model.back(),
             SandboxBackResult::Exit(SandboxDestination::Creator)
         );
+    }
+
+    #[test]
+    fn guided_deployment_preserves_sparse_slot_order_and_exact_stack_identity() {
+        let mut draft: SandboxDraft<u64> = SandboxDraft::default();
+        draft.clear(SandboxSide::Party);
+        draft.set_character(
+            SandboxSide::Party,
+            SandboxSlotIndex::Two,
+            Some(Character::Custom(7)),
+        );
+        draft.set_character(
+            SandboxSide::Party,
+            SandboxSlotIndex::Six,
+            Some(Character::Custom(7)),
+        );
+        draft.clear(SandboxSide::Enemies);
+        draft.set_character(
+            SandboxSide::Enemies,
+            SandboxSlotIndex::Three,
+            Some(template("raider")),
+        );
+
+        let mut deployment = SandboxDeploymentModel::from_draft(&draft);
+        let party_two = SandboxDeploymentSlot::new(SandboxSide::Party, SandboxSlotIndex::Two);
+        let party_six = SandboxDeploymentSlot::new(SandboxSide::Party, SandboxSlotIndex::Six);
+        let enemy_three = SandboxDeploymentSlot::new(SandboxSide::Enemies, SandboxSlotIndex::Three);
+        assert_eq!(deployment.order(), [party_two, party_six, enemy_three]);
+        assert_eq!(deployment.stage, SandboxDeploymentStage::Placing(party_two));
+
+        let lower = TilePos::new(hex_core::HexCoord::ORIGIN, 1);
+        let upper = TilePos::new(hex_core::HexCoord::ORIGIN, 4);
+        let hostile = TilePos::new(hex_core::HexCoord::from_axial(1, 0), 2);
+        assert_eq!(
+            deployment.place_validated(lower),
+            Ok(SandboxDeploymentStage::Placing(party_six))
+        );
+        assert_eq!(
+            deployment.place_validated(upper),
+            Ok(SandboxDeploymentStage::Placing(enemy_three)),
+            "stacked exact surfaces at one coordinate must remain distinct"
+        );
+        assert_eq!(
+            deployment.place_validated(lower),
+            Err(SandboxPlacementRefusal::Occupied {
+                occupant: party_two,
+            })
+        );
+        assert_eq!(deployment.placement(enemy_three), None);
+        assert_eq!(
+            deployment.place_validated(hostile),
+            Ok(SandboxDeploymentStage::Review)
+        );
+        assert!(deployment.is_complete());
+        assert_eq!(
+            deployment.frozen_placements(),
+            Some((vec![lower, upper], vec![hostile]))
+        );
+    }
+
+    #[test]
+    fn guided_deployment_reselection_and_undo_restore_the_exact_previous_stage() {
+        let draft: SandboxDraft<u64> = SandboxDraft::default();
+        let mut deployment = SandboxDeploymentModel::from_draft(&draft);
+        let party = SandboxDeploymentSlot::new(SandboxSide::Party, SandboxSlotIndex::One);
+        let enemy = SandboxDeploymentSlot::new(SandboxSide::Enemies, SandboxSlotIndex::One);
+        let party_first = TilePos::new(hex_core::HexCoord::ORIGIN, 1);
+        let party_moved = TilePos::new(hex_core::HexCoord::from_axial(1, 0), 1);
+        let hostile = TilePos::new(hex_core::HexCoord::from_axial(-1, 0), 1);
+
+        assert_eq!(
+            deployment.place_validated(party_first),
+            Ok(SandboxDeploymentStage::Placing(enemy))
+        );
+        assert_eq!(
+            deployment.place_validated(hostile),
+            Ok(SandboxDeploymentStage::Review)
+        );
+        assert!(deployment.select_slot(party));
+        assert_eq!(
+            deployment.place_validated(party_moved),
+            Ok(SandboxDeploymentStage::Review)
+        );
+        assert_eq!(deployment.placement(party), Some(party_moved));
+
+        assert!(deployment.undo());
+        assert_eq!(deployment.placement(party), Some(party_first));
+        assert_eq!(
+            deployment.stage,
+            SandboxDeploymentStage::Placing(party),
+            "undo must restore the stage that owned the repositioning click"
+        );
+        assert_eq!(deployment.progress(party), Some((1, 2)));
+        assert_eq!(deployment.progress(enemy), Some((2, 2)));
+    }
+
+    #[test]
+    fn guided_deployment_rejects_unknown_slot_without_mutation() {
+        let draft: SandboxDraft<u64> = SandboxDraft::default();
+        let mut deployment = SandboxDeploymentModel::from_draft(&draft);
+        let before = deployment.clone();
+        assert!(!deployment.select_slot(SandboxDeploymentSlot::new(
+            SandboxSide::Party,
+            SandboxSlotIndex::Six,
+        )));
+        assert_eq!(deployment, before);
     }
 
     #[test]

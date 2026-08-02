@@ -13,7 +13,8 @@ pub use creator::{
 };
 pub use main_menu::{CampaignSlotId, MainMenuModel, MainMenuRoute};
 pub use sandbox::{
-    SandboxBackResult, SandboxCharacter, SandboxDestination, SandboxDraft, SandboxEntryOrigin,
-    SandboxMapSelection, SandboxModel, SandboxRoster, SandboxRoute, SandboxSide, SandboxSlotIndex,
-    SandboxStartBlocker, SANDBOX_ROSTER_SIZE,
+    SandboxBackResult, SandboxCharacter, SandboxDeploymentModel, SandboxDeploymentSlot,
+    SandboxDeploymentStage, SandboxDestination, SandboxDraft, SandboxEntryOrigin,
+    SandboxMapSelection, SandboxModel, SandboxPlacementRefusal, SandboxRoster, SandboxRoute,
+    SandboxSide, SandboxSlotIndex, SandboxStartBlocker, SANDBOX_ROSTER_SIZE,
 };
