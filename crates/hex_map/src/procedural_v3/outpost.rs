@@ -50,6 +50,7 @@ const COURTYARD: &str = "outpost_courtyard";
 const FRONT_WALK: &str = "outpost_front_walk";
 const WALL_WALK: &str = "outpost_wall_walk";
 const ROOFTOP: &str = "outpost_rooftop";
+const SOUTH_ROOFTOP: &str = "outpost_south_rooftop";
 
 /// Deterministic Outpost diagnostics retained by candidate selection and reports.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,7 +68,7 @@ pub(crate) struct OutpostMetrics {
     pub(crate) relief: i32,
     pub(crate) critical_route_steps: u32,
     pub(crate) connected_tower_routes: u32,
-    pub(crate) worked_stone_surfaces: u32,
+    pub(crate) fortification_surfaces: u32,
 }
 
 #[derive(Debug)]
@@ -289,6 +290,10 @@ pub(crate) fn construct_patch(
             ROOFTOP.to_owned(),
             TilePos::new(tower_specs()[0].center, GROUND_LEVEL + LOOKOUT_RISE),
         ),
+        (
+            SOUTH_ROOFTOP.to_owned(),
+            TilePos::new(tower_specs()[1].center, GROUND_LEVEL + LOOKOUT_RISE),
+        ),
     ]);
     let biome_regions = template
         .volume
@@ -340,7 +345,10 @@ impl OutpostTemplate {
             )]);
         }
         let party_start = TilePos::new(HexCoord::from_axial(12, -6), GROUND_LEVEL);
-        let hostile_start = TilePos::new(HexCoord::ORIGIN, GROUND_LEVEL);
+        // Keep the encounter in the rear courtyard. A guard at the origin can engage
+        // units through the tower shell once the authored stair's height bonus grows,
+        // interrupting ordinary exploration before the lookout is reached.
+        let hostile_start = TilePos::new(HexCoord::from_axial(-8, 8), GROUND_LEVEL);
         let gate_coords = gate_path_coords();
         let gate_floors = gate_coords
             .iter()
@@ -358,13 +366,19 @@ impl OutpostTemplate {
             })
             .collect::<BTreeSet<_>>();
         let towers = tower_specs();
+        let terracotta_floor = terracotta_floor_coords(&towers);
         let mut author = VoxelAuthor::default();
         for coord in mask {
             let courtyard = coord.distance(HexCoord::ORIGIN) < WALL_WALK_RADIUS;
             let tower_interior = towers
                 .iter()
                 .any(|tower| coord.distance(tower.center) <= TOWER_WALL_RADIUS);
-            let top = if courtyard || tower_interior || gate_coords.contains(coord) {
+            let top = if terracotta_floor.contains(coord)
+                || tower_interior
+                || gate_coords.contains(coord)
+            {
+                SolidMaterialRole::Terracotta
+            } else if courtyard {
                 SolidMaterialRole::Gravel
             } else {
                 SolidMaterialRole::Grass
@@ -379,10 +393,17 @@ impl OutpostTemplate {
                 continue;
             }
             if coord == HexCoord::from_axial(9, -5) {
-                author.worked_range(
+                author.structure_range(
                     coord,
                     GROUND_LEVEL + 1,
-                    GROUND_LEVEL + PARAPET_RISE,
+                    GROUND_LEVEL + PARAPET_RISE - 1,
+                    SolidMaterialRole::Limestone,
+                    StructureKind::Gate,
+                    0,
+                )?;
+                author.structure_voxel(
+                    TilePos::new(coord, GROUND_LEVEL + PARAPET_RISE),
+                    SolidMaterialRole::WorkedStone,
                     StructureKind::Gate,
                     0,
                 )?;
@@ -391,10 +412,17 @@ impl OutpostTemplate {
                 author.special_surfaces.insert(surface);
                 continue;
             }
-            author.worked_range(
+            author.structure_range(
                 coord,
                 GROUND_LEVEL + 1,
-                GROUND_LEVEL + WALL_WALK_RISE,
+                GROUND_LEVEL + WALL_WALK_RISE - 1,
+                SolidMaterialRole::Limestone,
+                StructureKind::Wall,
+                0,
+            )?;
+            author.structure_voxel(
+                TilePos::new(coord, GROUND_LEVEL + WALL_WALK_RISE),
+                SolidMaterialRole::Slate,
                 StructureKind::Wall,
                 0,
             )?;
@@ -404,10 +432,17 @@ impl OutpostTemplate {
             if gate_coords.contains(&coord) || in_tower_footprint(coord, &towers) {
                 continue;
             }
-            author.worked_range(
+            author.structure_range(
                 coord,
                 GROUND_LEVEL + 1,
-                GROUND_LEVEL + PARAPET_RISE,
+                GROUND_LEVEL + PARAPET_RISE - 1,
+                SolidMaterialRole::Limestone,
+                StructureKind::Wall,
+                0,
+            )?;
+            author.structure_voxel(
+                TilePos::new(coord, GROUND_LEVEL + PARAPET_RISE),
+                SolidMaterialRole::WorkedStone,
                 StructureKind::Wall,
                 0,
             )?;
@@ -418,7 +453,7 @@ impl OutpostTemplate {
 
         for tower in towers {
             author_tower_shell(&mut author, tower)?;
-            author_tower_core(&mut author, tower)?;
+            carve_tower_windows(&mut author, tower)?;
         }
 
         let mut stair_paths = [Vec::new(), Vec::new()];
@@ -444,19 +479,25 @@ impl OutpostTemplate {
 
         for (coord, owner, index, already_authored) in front_walk_cells() {
             let position = TilePos::new(coord, GROUND_LEVEL + FRONT_WALK_RISE);
+            let material = if owner == StructureKind::Stair {
+                SolidMaterialRole::Timber
+            } else {
+                SolidMaterialRole::Slate
+            };
             if already_authored {
-                front_walk.insert(position);
-                continue;
+                author.replace_structure_material(position, owner, index, material)?;
+            } else {
+                author.structure_voxel(position, material, owner, index)?;
             }
-            author.worked_voxel(position, owner, index)?;
             if owner == StructureKind::Stair {
                 stair_surfaces.insert(position);
             }
             front_walk.insert(position);
         }
         for coord in HexCoord::from_axial(8, -4).line_between(HexCoord::from_axial(10, -5)) {
-            author.worked_voxel(
+            author.structure_voxel(
                 TilePos::new(coord, GROUND_LEVEL + FRONT_WALK_RISE),
+                SolidMaterialRole::Slate,
                 StructureKind::Gate,
                 0,
             )?;
@@ -467,8 +508,22 @@ impl OutpostTemplate {
             for coord in connector {
                 let position = TilePos::new(coord, GROUND_LEVEL + WALL_WALK_RISE);
                 if coord.distance(tower.center) == 2 {
-                    author.worked_voxel(position, StructureKind::Stair, tower.index)?;
+                    author.structure_voxel(
+                        position,
+                        SolidMaterialRole::Timber,
+                        StructureKind::Stair,
+                        tower.index,
+                    )?;
                     stair_surfaces.insert(position);
+                } else if stair_surfaces.contains(&position) {
+                    author.replace_structure_material(
+                        position,
+                        StructureKind::Stair,
+                        tower.index,
+                        SolidMaterialRole::Timber,
+                    )?;
+                } else {
+                    author.replace_any_structure_material(position, SolidMaterialRole::Slate)?;
                 }
                 wall_walk.insert(position);
             }
@@ -541,23 +596,25 @@ impl VoxelAuthor {
         );
     }
 
-    fn worked_range(
+    fn structure_range(
         &mut self,
         coord: HexCoord,
         bottom: i32,
         top: i32,
+        material: SolidMaterialRole,
         kind: StructureKind,
         index: u8,
     ) -> Result<(), Vec<WorldValidationIssue>> {
         for level in bottom..=top {
-            self.worked_voxel(TilePos::new(coord, level), kind, index)?;
+            self.structure_voxel(TilePos::new(coord, level), material, kind, index)?;
         }
         Ok(())
     }
 
-    fn worked_voxel(
+    fn structure_voxel(
         &mut self,
         position: TilePos,
+        material: SolidMaterialRole,
         kind: StructureKind,
         index: u8,
     ) -> Result<(), Vec<WorldValidationIssue>> {
@@ -575,10 +632,88 @@ impl VoxelAuthor {
         column.insert(
             position.level,
             AuthoredVoxel {
-                material: SolidMaterialRole::WorkedStone,
+                material,
                 structure: Some((kind, index)),
             },
         );
+        Ok(())
+    }
+
+    fn replace_structure_material(
+        &mut self,
+        position: TilePos,
+        kind: StructureKind,
+        index: u8,
+        material: SolidMaterialRole,
+    ) -> Result<(), Vec<WorldValidationIssue>> {
+        let Some(column) = self.columns.get_mut(&position.coord) else {
+            return Err(vec![recipe_issue(format!(
+                "Outpost material treatment omitted authored column at {position:?}"
+            ))]);
+        };
+        let Some(existing) = column.get_mut(&position.level) else {
+            return Err(vec![recipe_issue(format!(
+                "Outpost material treatment omitted structure voxel at {position:?}"
+            ))]);
+        };
+        if existing.structure != Some((kind, index)) {
+            return Err(vec![recipe_issue(format!(
+                "Outpost material treatment at {position:?} expected {:?}, got {:?}",
+                (kind, index),
+                existing.structure
+            ))]);
+        }
+        existing.material = material;
+        Ok(())
+    }
+
+    fn replace_any_structure_material(
+        &mut self,
+        position: TilePos,
+        material: SolidMaterialRole,
+    ) -> Result<(), Vec<WorldValidationIssue>> {
+        let Some(column) = self.columns.get_mut(&position.coord) else {
+            return Err(vec![recipe_issue(format!(
+                "Outpost material treatment omitted authored column at {position:?}"
+            ))]);
+        };
+        let Some(existing) = column.get_mut(&position.level) else {
+            return Err(vec![recipe_issue(format!(
+                "Outpost material treatment omitted structure voxel at {position:?}"
+            ))]);
+        };
+        if existing.structure.is_none() {
+            return Err(vec![recipe_issue(format!(
+                "Outpost material treatment at {position:?} reached unowned terrain"
+            ))]);
+        }
+        existing.material = material;
+        Ok(())
+    }
+
+    fn remove_masonry_voxel(
+        &mut self,
+        position: TilePos,
+        kind: StructureKind,
+        index: u8,
+    ) -> Result<(), Vec<WorldValidationIssue>> {
+        let Some(column) = self.columns.get_mut(&position.coord) else {
+            return Err(vec![recipe_issue(format!(
+                "Outpost window omitted authored column at {position:?}"
+            ))]);
+        };
+        let Some(existing) = column.get(&position.level).copied() else {
+            return Err(vec![recipe_issue(format!(
+                "Outpost window omitted authored wall voxel at {position:?}"
+            ))]);
+        };
+        if existing.structure != Some((kind, index)) || !is_masonry(existing.material) {
+            return Err(vec![recipe_issue(format!(
+                "Outpost window at {position:?} does not belong to {:?}",
+                (kind, index)
+            ))]);
+        }
+        column.remove(&position.level);
         Ok(())
     }
 
@@ -676,93 +811,99 @@ fn author_tower_shell(
             continue;
         }
         if coord == ground_door {
-            author.worked_range(
+            author_tower_shell_range(
+                author,
+                tower,
                 coord,
                 GROUND_LEVEL + 3,
                 GROUND_LEVEL + LOOKOUT_RISE,
-                StructureKind::Tower,
-                tower.index,
             )?;
         } else if coord == inner_door {
-            author.worked_range(
+            author_tower_shell_range(
+                author,
+                tower,
                 coord,
                 GROUND_LEVEL + 1,
                 GROUND_LEVEL + FRONT_WALK_RISE,
-                StructureKind::Tower,
-                tower.index,
             )?;
-            author.worked_range(
+            author_tower_shell_range(
+                author,
+                tower,
                 coord,
                 GROUND_LEVEL + WALL_WALK_RISE,
                 GROUND_LEVEL + LOOKOUT_RISE,
-                StructureKind::Tower,
-                tower.index,
             )?;
         } else if coord == outer_door {
-            author.worked_range(
+            author_tower_shell_range(
+                author,
+                tower,
                 coord,
                 GROUND_LEVEL + 1,
                 GROUND_LEVEL + WALL_WALK_RISE,
-                StructureKind::Tower,
-                tower.index,
             )?;
-            author.worked_range(
+            author_tower_shell_range(
+                author,
+                tower,
                 coord,
                 GROUND_LEVEL + 15,
                 GROUND_LEVEL + LOOKOUT_RISE,
-                StructureKind::Tower,
-                tower.index,
             )?;
         } else {
-            author.worked_range(
+            author_tower_shell_range(
+                author,
+                tower,
                 coord,
                 GROUND_LEVEL + 1,
                 GROUND_LEVEL + LOOKOUT_RISE,
-                StructureKind::Tower,
-                tower.index,
             )?;
         }
     }
     Ok(())
 }
 
-fn author_tower_core(
+fn author_tower_shell_range(
     author: &mut VoxelAuthor,
     tower: TowerSpec,
+    coord: HexCoord,
+    bottom: i32,
+    top: i32,
 ) -> Result<(), Vec<WorldValidationIssue>> {
-    let mut route_footprint = stair_phases()
-        .into_iter()
-        .map(|coord| transform_local(coord, tower))
-        .collect::<BTreeSet<_>>();
-    for (_phase, wings) in landing_wings() {
-        route_footprint.extend(wings.into_iter().map(|coord| transform_local(coord, tower)));
-    }
-    route_footprint.extend(
-        front_walk_cells()
-            .into_iter()
-            .map(|(coord, _, _, _)| coord)
-            .filter(|coord| coord.distance(tower.center) <= 2),
-    );
-    let connector_index = usize::from(tower.index);
-    if let Some(connector) = upper_connectors().get(connector_index) {
-        route_footprint.extend(
-            connector
-                .iter()
-                .copied()
-                .filter(|coord| coord.distance(tower.center) <= 2),
-        );
-    }
-    for coord in tower.center.within_radius(2) {
-        if route_footprint.contains(&coord) {
-            continue;
-        }
-        author.worked_range(
-            coord,
-            GROUND_LEVEL,
-            GROUND_LEVEL + LOOKOUT_RISE,
+    for level in bottom..=top {
+        let rise = level.saturating_sub(GROUND_LEVEL);
+        let worked_stone_band = matches!(rise, FRONT_WALK_RISE | WALL_WALK_RISE | LOOKOUT_RISE);
+        let worked_stone_sill = coord == tower_window_coord(tower) && matches!(rise, 3 | 12 | 21);
+        let worked_stone_lintel = coord == ground_door(tower) && rise == 3;
+        let material = if worked_stone_band || worked_stone_sill || worked_stone_lintel {
+            SolidMaterialRole::WorkedStone
+        } else {
+            SolidMaterialRole::Limestone
+        };
+        author.structure_voxel(
+            TilePos::new(coord, level),
+            material,
             StructureKind::Tower,
             tower.index,
         )?;
+    }
+    Ok(())
+}
+
+fn carve_tower_windows(
+    author: &mut VoxelAuthor,
+    tower: TowerSpec,
+) -> Result<(), Vec<WorldValidationIssue>> {
+    let coord = tower_window_coord(tower);
+    for cycle in 0..STAIR_LOOPS_PER_TOWER {
+        let cycle_rise = i32::try_from(cycle)
+            .unwrap_or(i32::MAX)
+            .saturating_mul(STAIR_LOOP_RISE);
+        for rise in [cycle_rise + 4, cycle_rise + 5] {
+            author.remove_masonry_voxel(
+                TilePos::new(coord, GROUND_LEVEL + rise),
+                StructureKind::Tower,
+                tower.index,
+            )?;
+        }
     }
     Ok(())
 }
@@ -775,6 +916,15 @@ fn author_stair(
     let landings = landing_wings();
     let mut primary = Vec::new();
     let mut surfaces = BTreeSet::new();
+    // The rising first loop otherwise leaves one three-level-deep pocket behind
+    // its +3 landing. Extend the second tread inward to keep that floor out of the
+    // ordinary graph while retaining an open air well through the tower center.
+    let inner_step = TilePos::new(
+        transform_local(HexCoord::from_axial(1, 1), tower),
+        GROUND_LEVEL + 2,
+    );
+    author_stair_surface(author, inner_step, 2, tower.index)?;
+    surfaces.insert(inner_step);
     for cycle in 0..STAIR_LOOPS_PER_TOWER {
         let base = i32::try_from(cycle)
             .unwrap_or(i32::MAX)
@@ -808,7 +958,12 @@ fn author_stair(
         HexCoord::from_axial(0, -2),
     ] {
         let position = TilePos::new(transform_local(local, tower), GROUND_LEVEL + final_rise);
-        author.worked_voxel(position, StructureKind::Stair, tower.index)?;
+        author.structure_voxel(
+            position,
+            SolidMaterialRole::Timber,
+            StructureKind::Stair,
+            tower.index,
+        )?;
         surfaces.insert(position);
     }
     primary.push(TilePos::new(
@@ -824,17 +979,22 @@ fn author_stair_surface(
     rise: i32,
     index: u8,
 ) -> Result<(), Vec<WorldValidationIssue>> {
-    if rise < STAIR_LOOP_RISE {
-        author.worked_range(
+    if rise < STAIR_LOOP_RISE && position.level > GROUND_LEVEL {
+        author.structure_range(
             position.coord,
             GROUND_LEVEL,
-            position.level,
+            position.level - 1,
+            SolidMaterialRole::Limestone,
             StructureKind::Stair,
             index,
-        )
-    } else {
-        author.worked_voxel(position, StructureKind::Stair, index)
+        )?;
     }
+    author.structure_voxel(
+        position,
+        SolidMaterialRole::Timber,
+        StructureKind::Stair,
+        index,
+    )
 }
 
 fn author_lookout(
@@ -864,11 +1024,21 @@ fn author_lookout(
         }
         let position = TilePos::new(coord, level);
         if !stair_surfaces.contains(&position) {
-            author.worked_voxel(position, StructureKind::Tower, tower.index)?;
+            author.structure_voxel(
+                position,
+                SolidMaterialRole::Slate,
+                StructureKind::Tower,
+                tower.index,
+            )?;
         }
         if is_lookout_corner_post(coord, tower) {
             let post = position.above();
-            author.worked_voxel(post, StructureKind::Tower, tower.index)?;
+            author.structure_voxel(
+                post,
+                SolidMaterialRole::WorkedStone,
+                StructureKind::Tower,
+                tower.index,
+            )?;
             author.special_surfaces.insert(post);
         } else {
             surfaces.insert(position);
@@ -925,6 +1095,10 @@ fn validate_outpost(plan: &GeneratedWorldPlan) -> WorldValidation<OutpostMetrics
             ROOFTOP,
             TilePos::new(tower_specs()[0].center, GROUND_LEVEL + LOOKOUT_RISE),
         ),
+        (
+            SOUTH_ROOFTOP,
+            TilePos::new(tower_specs()[1].center, GROUND_LEVEL + LOOKOUT_RISE),
+        ),
     ]);
     for (name, position) in expected_anchors {
         if plan.anchors.get(name) != Some(&position) {
@@ -933,7 +1107,7 @@ fn validate_outpost(plan: &GeneratedWorldPlan) -> WorldValidation<OutpostMetrics
             )));
         }
     }
-    validate_worked_stone_membership(plan, &mut issues);
+    validate_structure_material_membership(plan, &mut issues);
     let tower_structures = count_kind(&plan.structures, StructureKind::Tower);
     let stair_structures = count_kind(&plan.structures, StructureKind::Stair);
     if tower_structures != 2 || stair_structures != 2 {
@@ -1014,6 +1188,22 @@ fn validate_outpost(plan: &GeneratedWorldPlan) -> WorldValidation<OutpostMetrics
                 "Outpost stair {tower_index} has no traversable courtyard doorway"
             )));
         }
+        let front_index = usize::try_from(FRONT_WALK_RISE).unwrap_or(usize::MAX);
+        if path.get(front_index).is_none_or(|junction| {
+            !template.front_walk.contains(junction) || !ordinary.contains(*junction)
+        }) {
+            issues.push(recipe_issue(format!(
+                "Outpost stair {tower_index} does not join its +{FRONT_WALK_RISE} front walk"
+            )));
+        }
+        let wall_index = usize::try_from(WALL_WALK_RISE).unwrap_or(usize::MAX);
+        if path.get(wall_index).is_none_or(|junction| {
+            !template.wall_walk.contains(junction) || !ordinary.contains(*junction)
+        }) {
+            issues.push(recipe_issue(format!(
+                "Outpost stair {tower_index} does not join its +{WALL_WALK_RISE} wall walk"
+            )));
+        }
         if path.last().is_none_or(|exit| {
             template
                 .lookouts
@@ -1022,6 +1212,16 @@ fn validate_outpost(plan: &GeneratedWorldPlan) -> WorldValidation<OutpostMetrics
         }) {
             issues.push(recipe_issue(format!(
                 "Outpost stair {tower_index} does not terminate on its own lookout"
+            )));
+        }
+        if template.lookouts.get(tower_index).is_none_or(|lookout| {
+            !lookout.iter().any(|surface| {
+                surface.coord.distance(HexCoord::ORIGIN) == REQUIRED_RADIUS
+                    && ordinary.contains(*surface)
+            })
+        }) {
+            issues.push(recipe_issue(format!(
+                "Outpost lookout {tower_index} does not touch the radius-{REQUIRED_RADIUS} boundary"
             )));
         }
         let phases = stair_phases();
@@ -1090,11 +1290,11 @@ fn validate_outpost(plan: &GeneratedWorldPlan) -> WorldValidation<OutpostMetrics
         .values()
         .map(|structure| structure.voxels.len())
         .sum::<usize>();
-    let worked_stone_surfaces = plan
+    let fortification_surfaces = plan
         .volume
         .surfaces
         .keys()
-        .filter(|surface| surface_material(plan, **surface) == Some(SolidMaterialRole::WorkedStone))
+        .filter(|surface| surface_material(plan, **surface).is_some_and(is_structure_material))
         .count();
     let stair_loops = template
         .stair_paths
@@ -1118,11 +1318,11 @@ fn validate_outpost(plan: &GeneratedWorldPlan) -> WorldValidation<OutpostMetrics
             .copied()
             .unwrap_or_default(),
         connected_tower_routes: count_u32(connected_tower_routes),
-        worked_stone_surfaces: count_u32(worked_stone_surfaces),
+        fortification_surfaces: count_u32(fortification_surfaces),
     })
 }
 
-fn validate_worked_stone_membership(
+fn validate_structure_material_membership(
     plan: &GeneratedWorldPlan,
     issues: &mut Vec<WorldValidationIssue>,
 ) {
@@ -1141,7 +1341,7 @@ fn validate_worked_stone_membership(
                 let VolumeElement::Solid(mass) = *element else {
                     return Vec::new();
                 };
-                if mass.material != SolidMaterialRole::WorkedStone {
+                if !is_structure_material(mass.material) {
                     return Vec::new();
                 }
                 (mass.levels.bottom..mass.levels.top)
@@ -1152,9 +1352,26 @@ fn validate_worked_stone_membership(
         .collect::<BTreeSet<_>>();
     if actual != expected {
         issues.push(recipe_issue(
-            "Outpost worked-stone voxels do not exactly match structure membership",
+            "Outpost structural-material voxels do not exactly match structure membership",
         ));
     }
+}
+
+const fn is_masonry(material: SolidMaterialRole) -> bool {
+    matches!(
+        material,
+        SolidMaterialRole::Limestone | SolidMaterialRole::WorkedStone
+    )
+}
+
+const fn is_structure_material(material: SolidMaterialRole) -> bool {
+    matches!(
+        material,
+        SolidMaterialRole::Limestone
+            | SolidMaterialRole::WorkedStone
+            | SolidMaterialRole::Slate
+            | SolidMaterialRole::Timber
+    )
 }
 
 fn surface_material(plan: &GeneratedWorldPlan, surface: TilePos) -> Option<SolidMaterialRole> {
@@ -1198,6 +1415,18 @@ fn tower_specs() -> [TowerSpec; 2] {
             index: 1,
         },
     ]
+}
+
+fn terracotta_floor_coords(towers: &[TowerSpec; 2]) -> BTreeSet<HexCoord> {
+    let mut floor = HexCoord::ORIGIN
+        .within_radius(2)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    floor.extend(HexCoord::from_axial(12, -6).line_between(HexCoord::ORIGIN));
+    for tower in towers {
+        floor.extend(HexCoord::ORIGIN.line_between(ground_door(*tower)));
+    }
+    floor
 }
 
 fn stair_phases() -> [HexCoord; 9] {
@@ -1271,6 +1500,13 @@ fn outer_door(tower: TowerSpec) -> HexCoord {
     match tower.index {
         0 => HexCoord::from_axial(6, -9),
         _ => HexCoord::from_axial(6, 3),
+    }
+}
+
+fn tower_window_coord(tower: TowerSpec) -> HexCoord {
+    match tower.index {
+        0 => HexCoord::from_axial(11, -11),
+        _ => HexCoord::from_axial(11, 0),
     }
 }
 
@@ -1432,6 +1668,225 @@ mod tests {
         assert_eq!(selected.metrics.relief, 27);
         assert_eq!(selected.metrics.reachable_elevation_levels, 28);
         assert_eq!(selected.validated.plan.validate(), Vec::new());
+
+        let plan = &selected.validated.plan;
+        for tower in tower_specs() {
+            for level in GROUND_LEVEL + 1..GROUND_LEVEL + LOOKOUT_RISE {
+                assert_eq!(
+                    surface_material(plan, TilePos::new(tower.center, level)),
+                    None,
+                    "tower {} reintroduced a solid core at level {level}",
+                    tower.index
+                );
+            }
+            let inner_step_coord = transform_local(HexCoord::from_axial(1, 1), tower);
+            assert_eq!(
+                surface_material(plan, TilePos::new(inner_step_coord, GROUND_LEVEL + 2)),
+                Some(SolidMaterialRole::Timber)
+            );
+            for level in GROUND_LEVEL + 3..GROUND_LEVEL + LOOKOUT_RISE {
+                assert_eq!(
+                    surface_material(plan, TilePos::new(inner_step_coord, level)),
+                    None,
+                    "tower {} reintroduced a full-height pocket filler at level {level}",
+                    tower.index
+                );
+            }
+            for cycle in 0..STAIR_LOOPS_PER_TOWER {
+                let landing_rise = i32::try_from(cycle).expect("cycle fits") * STAIR_LOOP_RISE + 3;
+                let sill = TilePos::new(tower_window_coord(tower), GROUND_LEVEL + landing_rise);
+                assert_eq!(
+                    plan.volume
+                        .surfaces
+                        .get(&sill)
+                        .map(|metadata| metadata.access),
+                    Some(SurfaceAccess::Ordinary)
+                );
+                assert_eq!(
+                    surface_material(plan, sill),
+                    Some(SolidMaterialRole::WorkedStone),
+                    "tower {} lost its loop-{cycle} worked-stone window sill",
+                    tower.index
+                );
+                for opening_rise in [landing_rise + 1, landing_rise + 2] {
+                    assert_eq!(
+                        surface_material(
+                            plan,
+                            TilePos::new(tower_window_coord(tower), GROUND_LEVEL + opening_rise,),
+                        ),
+                        None,
+                        "tower {} sealed its loop-{cycle} outward window",
+                        tower.index
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn material_grammar_distinguishes_masonry_treads_roofs_and_paving() {
+        let selected = generate(12, 0.4, &settings(), 1_290_212)
+            .expect("the sketched Outpost should generate");
+        let plan = &selected.validated.plan;
+        let patch = plan
+            .layout
+            .patches
+            .get(&PatchId(0))
+            .expect("Outpost should retain patch zero");
+        let template = OutpostTemplate::build(&patch.mask).expect("template should rebuild");
+
+        let courtyard_center = TilePos::new(HexCoord::ORIGIN, GROUND_LEVEL);
+        assert_eq!(
+            surface_material(plan, courtyard_center),
+            Some(SolidMaterialRole::Terracotta)
+        );
+        assert_eq!(
+            surface_material(plan, template.party_start),
+            Some(SolidMaterialRole::Terracotta)
+        );
+        assert_eq!(
+            surface_material(plan, template.hostile_start),
+            Some(SolidMaterialRole::Gravel)
+        );
+        for floor in &template.gate_floors {
+            assert_eq!(
+                surface_material(plan, *floor),
+                Some(SolidMaterialRole::Terracotta),
+                "gate floor {floor:?} lost its terracotta route marker"
+            );
+        }
+        for floor in &template.courtyard {
+            let expected = if terracotta_floor_coords(&tower_specs()).contains(&floor.coord) {
+                SolidMaterialRole::Terracotta
+            } else {
+                SolidMaterialRole::Gravel
+            };
+            assert_eq!(
+                surface_material(plan, *floor),
+                Some(expected),
+                "courtyard floor {floor:?} broke the gravel court or terracotta circulation"
+            );
+        }
+        assert_eq!(
+            surface_material(plan, TilePos::new(HexCoord::from_axial(0, 5), GROUND_LEVEL)),
+            Some(SolidMaterialRole::Gravel),
+            "the quiet court should remain gravel outside the paved circulation"
+        );
+
+        let rear_wall_walk =
+            TilePos::new(HexCoord::from_axial(-9, 0), GROUND_LEVEL + WALL_WALK_RISE);
+        assert_eq!(
+            surface_material(
+                plan,
+                TilePos::new(rear_wall_walk.coord, rear_wall_walk.level - 1)
+            ),
+            Some(SolidMaterialRole::Limestone)
+        );
+        assert_eq!(
+            surface_material(plan, rear_wall_walk),
+            Some(SolidMaterialRole::Slate)
+        );
+        assert_eq!(
+            surface_material(
+                plan,
+                TilePos::new(HexCoord::from_axial(-10, 0), GROUND_LEVEL + PARAPET_RISE,),
+            ),
+            Some(SolidMaterialRole::WorkedStone)
+        );
+        assert_eq!(
+            surface_material(
+                plan,
+                TilePos::new(HexCoord::from_axial(8, -4), GROUND_LEVEL + FRONT_WALK_RISE,),
+            ),
+            Some(SolidMaterialRole::Slate)
+        );
+        for surface in &template.front_walk {
+            let expected = if template.stair_surfaces.contains(surface) {
+                SolidMaterialRole::Timber
+            } else {
+                SolidMaterialRole::Slate
+            };
+            assert_eq!(
+                surface_material(plan, *surface),
+                Some(expected),
+                "front canopy surface {surface:?} lost its material role"
+            );
+        }
+        for surface in &template.wall_walk {
+            let expected = if template.stair_surfaces.contains(surface) {
+                SolidMaterialRole::Timber
+            } else {
+                SolidMaterialRole::Slate
+            };
+            assert_eq!(
+                surface_material(plan, *surface),
+                Some(expected),
+                "wall-walk or connector surface {surface:?} lost its material role"
+            );
+        }
+
+        for surface in &template.stair_surfaces {
+            assert_eq!(
+                surface_material(plan, *surface),
+                Some(SolidMaterialRole::Timber),
+                "exposed stair or landing {surface:?} is not timber"
+            );
+        }
+        for tower in tower_specs() {
+            let inner_step_coord = transform_local(HexCoord::from_axial(1, 1), tower);
+            assert_eq!(
+                surface_material(plan, TilePos::new(inner_step_coord, GROUND_LEVEL + 1),),
+                Some(SolidMaterialRole::Limestone),
+                "tower {} exposed a non-masonry stair support",
+                tower.index
+            );
+            let shell_coord = shift(tower.center, HexCoord::from_axial(0, 3));
+            assert_eq!(
+                surface_material(plan, TilePos::new(shell_coord, GROUND_LEVEL + 2)),
+                Some(SolidMaterialRole::Limestone)
+            );
+            assert_eq!(
+                surface_material(
+                    plan,
+                    TilePos::new(shell_coord, GROUND_LEVEL + FRONT_WALK_RISE),
+                ),
+                Some(SolidMaterialRole::WorkedStone)
+            );
+            let lookout = template
+                .lookouts
+                .get(usize::from(tower.index))
+                .expect("each tower should retain a lookout");
+            for surface in lookout {
+                let expected = if template.stair_surfaces.contains(surface) {
+                    SolidMaterialRole::Timber
+                } else {
+                    SolidMaterialRole::Slate
+                };
+                assert_eq!(
+                    surface_material(plan, *surface),
+                    Some(expected),
+                    "lookout surface {surface:?} lost its deck treatment"
+                );
+            }
+        }
+
+        let structure_materials = plan
+            .structures
+            .by_id
+            .values()
+            .flat_map(|structure| structure.voxels.iter().copied())
+            .filter_map(|position| surface_material(plan, position))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            structure_materials,
+            BTreeSet::from([
+                SolidMaterialRole::Limestone,
+                SolidMaterialRole::WorkedStone,
+                SolidMaterialRole::Slate,
+                SolidMaterialRole::Timber,
+            ])
+        );
+        assert!(!structure_materials.contains(&SolidMaterialRole::Terracotta));
     }
 
     #[test]
@@ -1480,6 +1935,12 @@ mod tests {
         let template = OutpostTemplate::build(&patch.mask).expect("template should build");
         let ordinary = OrdinaryGraph::from_volume(&template.volume, None);
 
+        assert_eq!(
+            template.hostile_start,
+            TilePos::new(HexCoord::from_axial(-8, 8), GROUND_LEVEL)
+        );
+        assert!(ordinary.contains(template.hostile_start));
+
         let expected_entries = [HexCoord::from_axial(6, -7), HexCoord::from_axial(6, 1)];
         for (tower_index, (path, expected_entry)) in template
             .stair_paths
@@ -1494,12 +1955,42 @@ mod tests {
             let entry = path.first().copied().expect("stair entry");
             assert_eq!(entry.coord, expected_entry);
             assert!(entry.coord.distance(HexCoord::ORIGIN) < WALL_WALK_RADIUS);
-            assert!(ordinary.admits(TilePos::new(ground_door(tower), GROUND_LEVEL), entry));
+            let doorway = TilePos::new(ground_door(tower), GROUND_LEVEL);
+            assert!(ordinary.admits(doorway, entry));
+            let inner_step = TilePos::new(
+                transform_local(HexCoord::from_axial(1, 1), tower),
+                GROUND_LEVEL + 2,
+            );
+            let tower_reach = ordinary.distances_from(doorway);
+            assert!(ordinary.contains(inner_step));
+            assert!(tower_reach.contains_key(&inner_step));
+            assert!(!ordinary.neighbors(inner_step).is_empty());
+            for cycle in 0..STAIR_LOOPS_PER_TOWER {
+                let sill = TilePos::new(
+                    tower_window_coord(tower),
+                    GROUND_LEVEL + i32::try_from(cycle).expect("cycle fits") * STAIR_LOOP_RISE + 3,
+                );
+                assert!(tower_reach.contains_key(&sill));
+            }
             assert!(template
                 .lookouts
                 .get(tower_index)
                 .expect("each tower has one lookout")
                 .contains(path.last().expect("stair exit")));
+            assert!(template.front_walk.contains(
+                path.get(usize::try_from(FRONT_WALK_RISE).expect("front rise fits"))
+                    .expect("each stair reaches +7")
+            ));
+            assert!(template.wall_walk.contains(
+                path.get(usize::try_from(WALL_WALK_RISE).expect("wall rise fits"))
+                    .expect("each stair reaches +11")
+            ));
+            assert!(template
+                .lookouts
+                .get(tower_index)
+                .expect("each tower has one lookout")
+                .iter()
+                .any(|surface| surface.coord.distance(HexCoord::ORIGIN) == REQUIRED_RADIUS));
         }
 
         let [first_lookout, second_lookout] = &template.lookouts;
@@ -1536,7 +2027,7 @@ mod tests {
     }
 
     #[test]
-    fn all_candidate_rejection_uses_the_independent_fallback() {
+    fn all_candidate_rejection_uses_the_valid_canonical_fallback() {
         let layout = resolve_layout(12, &settings()).expect("Outpost layout should resolve");
         let selected = run_recipe(
             &OutpostRecipe {

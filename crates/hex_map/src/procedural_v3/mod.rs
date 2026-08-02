@@ -870,7 +870,7 @@ fn outpost_report_metrics(metrics: &outpost::OutpostMetrics) -> TacticalMetrics 
         reachable_surfaces: metrics.ordinary_surfaces,
         reachable_elevation_levels: metrics.reachable_elevation_levels,
         environment_signature_percent: metrics
-            .worked_stone_surfaces
+            .fortification_surfaces
             .saturating_mul(100)
             .checked_div(metrics.ordinary_surfaces)
             .unwrap_or_default(),

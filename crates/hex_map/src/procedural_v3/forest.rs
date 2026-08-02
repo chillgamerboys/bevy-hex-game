@@ -3336,10 +3336,15 @@ mod tests {
     const GRAVEL: SubstanceId = SubstanceId(5);
     const ICE: SubstanceId = SubstanceId(6);
     const LAVA: SubstanceId = SubstanceId(7);
-    const METAL: SubstanceId = SubstanceId(8);
-    const SNOW: SubstanceId = SubstanceId(9);
-    const STONE: SubstanceId = SubstanceId(10);
-    const WATER: SubstanceId = SubstanceId(11);
+    const LIMESTONE: SubstanceId = SubstanceId(8);
+    const METAL: SubstanceId = SubstanceId(9);
+    const SLATE: SubstanceId = SubstanceId(10);
+    const SNOW: SubstanceId = SubstanceId(11);
+    const STONE: SubstanceId = SubstanceId(12);
+    const TERRACOTTA: SubstanceId = SubstanceId(13);
+    const TIMBER: SubstanceId = SubstanceId(14);
+    const WATER: SubstanceId = SubstanceId(15);
+    const WORKED_STONE: SubstanceId = SubstanceId(16);
 
     fn runtime_art_catalog() -> &'static RuntimeArtCatalog {
         static CATALOG: OnceLock<RuntimeArtCatalog> = OnceLock::new();
@@ -3468,7 +3473,11 @@ mod tests {
             gravel: GRAVEL,
             water: WATER,
             metal: METAL,
-            worked_stone: SubstanceId(12),
+            worked_stone: WORKED_STONE,
+            limestone: LIMESTONE,
+            slate: SLATE,
+            timber: TIMBER,
+            terracotta: TERRACOTTA,
             snow: SNOW,
             ice: ICE,
             basalt: BASALT,
@@ -4012,7 +4021,7 @@ mod tests {
             selected.validated.semantic_fingerprint,
             3_116_162_104_822_374_845
         );
-        assert_eq!(build.report.map_fingerprint, 18_084_914_740_711_593_486);
+        assert_eq!(build.report.map_fingerprint, 3_009_203_185_536_911_801);
         assert_eq!(build.map.len(), 469);
         assert_eq!(
             build.blockers.len(),

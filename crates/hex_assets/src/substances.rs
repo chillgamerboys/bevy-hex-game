@@ -678,7 +678,12 @@ mod tests {
             ("stone", "terrain/stone", (0.55, 0.55, 0.58)),
             ("gravel", "terrain/gravel", (0.42, 0.40, 0.36)),
             ("water", "liquid/water", (0.08, 0.32, 0.65)),
+            ("limestone", "structure/limestone", (0.66, 0.63, 0.54)),
             ("metal", "structure/metal", (0.30, 0.34, 0.40)),
+            ("slate", "structure/slate", (0.25, 0.37, 0.39)),
+            ("terracotta", "structure/terracotta", (0.68, 0.31, 0.18)),
+            ("timber", "structure/timber", (0.38, 0.24, 0.07)),
+            ("worked_stone", "structure/worked-stone", (0.46, 0.48, 0.52)),
             ("snow", "terrain/snow", (0.82, 0.88, 0.92)),
             ("ice", "terrain/ice", (0.42, 0.72, 0.88)),
             ("basalt", "terrain/basalt", (0.20, 0.22, 0.24)),
@@ -1459,6 +1464,14 @@ mod tests {
         let basalt = table.id("basalt").expect("basalt should be registered");
         let lava = table.id("lava").expect("lava should be registered");
         let stone = table.id("stone").expect("stone should be registered");
+        let limestone = table
+            .id("limestone")
+            .expect("limestone should be registered");
+        let slate = table.id("slate").expect("slate should be registered");
+        let terracotta = table
+            .id("terracotta")
+            .expect("terracotta should be registered");
+        let timber = table.id("timber").expect("timber should be registered");
 
         assert!(table.is_solid(gravel));
         assert!(table.is_diggable(gravel));
@@ -1466,7 +1479,15 @@ mod tests {
         assert!(table.is_diggable(water), "water should be clearable");
         assert!(table.is_solid(metal));
         assert!(table.is_diggable(metal));
-        for (name, substance) in [("snow", snow), ("ice", ice), ("basalt", basalt)] {
+        for (name, substance) in [
+            ("snow", snow),
+            ("ice", ice),
+            ("basalt", basalt),
+            ("limestone", limestone),
+            ("slate", slate),
+            ("terracotta", terracotta),
+            ("timber", timber),
+        ] {
             assert!(table.is_solid(substance), "{name} must be footing");
             assert!(table.is_diggable(substance), "{name} must be diggable");
         }
@@ -1482,6 +1503,10 @@ mod tests {
             ("water", water),
             ("lava", lava),
             ("bedrock", bedrock),
+            ("limestone", limestone),
+            ("slate", slate),
+            ("terracotta", terracotta),
+            ("timber", timber),
         ] {
             assert!(
                 !table.is_conjurable(substance),

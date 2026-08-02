@@ -29,6 +29,10 @@ pub(crate) struct TerrainPalette {
     pub(super) water: SubstanceId,
     pub(super) metal: SubstanceId,
     pub(super) worked_stone: SubstanceId,
+    pub(super) limestone: SubstanceId,
+    pub(super) slate: SubstanceId,
+    pub(super) timber: SubstanceId,
+    pub(super) terracotta: SubstanceId,
     pub(super) snow: SubstanceId,
     pub(super) ice: SubstanceId,
     pub(super) basalt: SubstanceId,
@@ -55,6 +59,10 @@ impl TerrainPalette {
             water: optional("water"),
             metal: optional("metal"),
             worked_stone: optional("worked_stone"),
+            limestone: optional("limestone"),
+            slate: optional("slate"),
+            timber: optional("timber"),
+            terracotta: optional("terracotta"),
             snow: optional("snow"),
             ice: optional("ice"),
             basalt: optional("basalt"),
@@ -76,6 +84,10 @@ impl TerrainPalette {
                 palette.water = id("water")?;
                 palette.metal = id("metal")?;
                 palette.worked_stone = id("worked_stone")?;
+                palette.limestone = id("limestone")?;
+                palette.slate = id("slate")?;
+                palette.timber = id("timber")?;
+                palette.terracotta = id("terracotta")?;
                 palette.snow = id("snow")?;
                 palette.ice = id("ice")?;
                 palette.basalt = id("basalt")?;
@@ -349,6 +361,10 @@ mod tests {
             water: WATER,
             metal: METAL,
             worked_stone: SubstanceId(12),
+            limestone: SubstanceId(13),
+            slate: SubstanceId(14),
+            timber: SubstanceId(15),
+            terracotta: SubstanceId(16),
             snow: SubstanceId(8),
             ice: SubstanceId(9),
             basalt: SubstanceId(10),

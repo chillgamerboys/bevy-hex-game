@@ -4614,6 +4614,10 @@ mod tests {
             basalt: BASALT,
             lava: LAVA,
             worked_stone: WORKED_STONE,
+            limestone: SubstanceId(13),
+            slate: SubstanceId(14),
+            timber: SubstanceId(15),
+            terracotta: SubstanceId(16),
         }
     }
 

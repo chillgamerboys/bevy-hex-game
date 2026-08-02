@@ -55,6 +55,10 @@ pub(crate) enum SolidMaterialRole {
     Snow,
     Ice,
     Basalt,
+    Limestone,
+    Slate,
+    Timber,
+    Terracotta,
 }
 
 /// A visible material which occupies volume but cannot support footing.
@@ -597,6 +601,10 @@ const fn solid_substance(role: SolidMaterialRole, palette: &TerrainPalette) -> S
         SolidMaterialRole::Snow => palette.snow,
         SolidMaterialRole::Ice => palette.ice,
         SolidMaterialRole::Basalt => palette.basalt,
+        SolidMaterialRole::Limestone => palette.limestone,
+        SolidMaterialRole::Slate => palette.slate,
+        SolidMaterialRole::Timber => palette.timber,
+        SolidMaterialRole::Terracotta => palette.terracotta,
     }
 }
 
@@ -699,6 +707,10 @@ mod tests {
             water: SubstanceId(6),
             metal: SubstanceId(7),
             worked_stone: SubstanceId(12),
+            limestone: SubstanceId(13),
+            slate: SubstanceId(14),
+            timber: SubstanceId(15),
+            terracotta: SubstanceId(16),
             snow: SubstanceId(8),
             ice: SubstanceId(9),
             basalt: SubstanceId(10),
@@ -707,7 +719,10 @@ mod tests {
     }
 
     fn test_is_solid(substance: SubstanceId) -> bool {
-        matches!(substance.0, 1 | 2 | 3 | 4 | 5 | 7 | 8 | 9 | 10)
+        matches!(
+            substance.0,
+            1 | 2 | 3 | 4 | 5 | 7 | 8 | 9 | 10 | 12 | 13 | 14 | 15 | 16
+        )
     }
 
     fn issues_text(issues: &[VolumeIssue]) -> String {
@@ -983,14 +998,19 @@ mod tests {
             mass(3, 4, SolidMaterialRole::Grass, None),
             mass(4, 5, SolidMaterialRole::Gravel, None),
             mass(5, 6, SolidMaterialRole::Metal, None),
-            mass(6, 7, SolidMaterialRole::Snow, None),
-            mass(7, 8, SolidMaterialRole::Ice, None),
-            mass(8, 9, SolidMaterialRole::Basalt, None),
-            fill(10, 11, FillMaterialRole::Water),
-            fill(12, 13, FillMaterialRole::Lava),
+            mass(6, 7, SolidMaterialRole::WorkedStone, None),
+            mass(7, 8, SolidMaterialRole::Snow, None),
+            mass(8, 9, SolidMaterialRole::Ice, None),
+            mass(9, 10, SolidMaterialRole::Limestone, None),
+            mass(10, 11, SolidMaterialRole::Slate, None),
+            mass(11, 12, SolidMaterialRole::Timber, None),
+            mass(12, 13, SolidMaterialRole::Terracotta, None),
+            mass(13, 14, SolidMaterialRole::Basalt, None),
+            fill(15, 16, FillMaterialRole::Water),
+            fill(17, 18, FillMaterialRole::Lava),
         ];
         plan.surfaces.insert(
-            TilePos::new(coord, 8),
+            TilePos::new(coord, 13),
             surface(SurfaceAccess::NonStandable, None),
         );
 
@@ -1005,8 +1025,13 @@ mod tests {
             palette.grass,
             palette.gravel,
             palette.metal,
+            palette.worked_stone,
             palette.snow,
             palette.ice,
+            palette.limestone,
+            palette.slate,
+            palette.timber,
+            palette.terracotta,
             palette.basalt,
         ];
         for (level, substance) in expected.into_iter().enumerate() {
@@ -1018,10 +1043,10 @@ mod tests {
                 substance
             );
         }
-        assert!(materialized.map.get(TilePos::new(coord, 9)).is_air());
-        assert_eq!(materialized.map.get(TilePos::new(coord, 10)), palette.water);
-        assert!(materialized.map.get(TilePos::new(coord, 11)).is_air());
-        assert_eq!(materialized.map.get(TilePos::new(coord, 12)), palette.lava);
+        assert!(materialized.map.get(TilePos::new(coord, 14)).is_air());
+        assert_eq!(materialized.map.get(TilePos::new(coord, 15)), palette.water);
+        assert!(materialized.map.get(TilePos::new(coord, 16)).is_air());
+        assert_eq!(materialized.map.get(TilePos::new(coord, 17)), palette.lava);
     }
 
     #[test]

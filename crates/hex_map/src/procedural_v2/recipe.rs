@@ -839,6 +839,10 @@ mod tests {
             water: SubstanceId(6),
             metal: SubstanceId(7),
             worked_stone: SubstanceId(12),
+            limestone: SubstanceId(13),
+            slate: SubstanceId(14),
+            timber: SubstanceId(15),
+            terracotta: SubstanceId(16),
             snow: SubstanceId(8),
             ice: SubstanceId(9),
             basalt: SubstanceId(10),
@@ -847,7 +851,10 @@ mod tests {
     }
 
     fn test_is_solid(substance: SubstanceId) -> bool {
-        matches!(substance.0, 1 | 2 | 3 | 4 | 5 | 7 | 8 | 9 | 10)
+        matches!(
+            substance.0,
+            1 | 2 | 3 | 4 | 5 | 7 | 8 | 9 | 10 | 12 | 13 | 14 | 15 | 16
+        )
     }
 
     #[test]

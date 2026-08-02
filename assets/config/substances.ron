@@ -69,6 +69,38 @@
             conjurable: false,
         ),
 
+        // Light load-bearing masonry for walls and tower shells.
+        "limestone": (
+            swatch: Some("structure/limestone"),
+            solid: true,
+            diggable: true,
+            conjurable: false,
+        ),
+
+        // Dark fitted stone used for roofs, walk decks, and weather caps.
+        "slate": (
+            swatch: Some("structure/slate"),
+            solid: true,
+            diggable: true,
+            conjurable: false,
+        ),
+
+        // Warm fired-clay masonry used for distinctive authored floors.
+        "terracotta": (
+            swatch: Some("structure/terracotta"),
+            solid: true,
+            diggable: true,
+            conjurable: false,
+        ),
+
+        // Structural wood used for authored stairs, landings, and beams.
+        "timber": (
+            swatch: Some("structure/timber"),
+            solid: true,
+            diggable: true,
+            conjurable: false,
+        ),
+
         // Cut and fitted masonry used by generated walls, towers, stairs, and keeps.
         // Structural durability remains deferred, so it follows ordinary stone's
         // current solid and diggable behavior.

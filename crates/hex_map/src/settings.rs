@@ -743,7 +743,7 @@ pub struct V3ForestSettings;
 #[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub struct V3FortSettings;
 
-/// Reserved Outpost recipe payload.
+/// Outpost fortification recipe payload.
 #[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub struct V3OutpostSettings;
 

@@ -275,7 +275,7 @@ pub struct FortMetrics {
 /// Exact deterministic measurements of one selected V3 Outpost plan.
 #[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct OutpostMetrics {
-    /// Solid worked-stone voxels assigned to the complete fortification.
+    /// Solid voxels assigned to the authored fortification materials.
     pub structure_voxels: u32,
     /// Ordinary surfaces inside the ground-level courtyard.
     pub courtyard_surfaces: u32,
@@ -3723,6 +3723,10 @@ mod tests {
             water: WATER,
             metal: METAL,
             worked_stone: SubstanceId(12),
+            limestone: SubstanceId(13),
+            slate: SubstanceId(14),
+            timber: SubstanceId(15),
+            terracotta: SubstanceId(16),
             snow: SNOW,
             ice: ICE,
             basalt: BASALT,
@@ -3899,7 +3903,7 @@ mod tests {
                 HERO_SEED,
                 Some(1),
                 4_508_295_216_895_027_881_u64,
-                2_287_003_626_836_917_910_u64,
+                7_743_875_371_644_652_099_u64,
             ),
             (
                 "frozen hills",
@@ -3907,7 +3911,7 @@ mod tests {
                 484_450_342,
                 Some(1),
                 11_000_385_881_747_978_286,
-                15_645_056_389_872_482_358,
+                15_843_045_121_367_853_666,
             ),
             (
                 "volcanic hills",
@@ -3915,7 +3919,7 @@ mod tests {
                 444_211_238,
                 Some(1),
                 15_742_618_080_999_901_279,
-                9_467_682_862_694_642_740,
+                9_758_928_774_036_489_223,
             ),
             (
                 "sky islands",
@@ -3923,7 +3927,7 @@ mod tests {
                 94_445_606,
                 Some(0),
                 6_724_558_830_461_654_069,
-                17_755_945_497_268_195_861,
+                8_426_696_534_120_516_179,
             ),
         ];
 

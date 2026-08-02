@@ -56,10 +56,30 @@
             color: (red: 0.28, green: 0.15, blue: 0.07),
             tags: ["plant", "tree", "wood"],
         ),
+        "structure/limestone": (
+            display_name: "Limestone",
+            color: (red: 0.66, green: 0.63, blue: 0.54),
+            tags: ["construction", "stone", "world"],
+        ),
         "structure/metal": (
             display_name: "Metal",
             color: (red: 0.30, green: 0.34, blue: 0.40),
             tags: ["construction", "metal", "world"],
+        ),
+        "structure/slate": (
+            display_name: "Slate",
+            color: (red: 0.25, green: 0.37, blue: 0.39),
+            tags: ["construction", "roof", "stone", "world"],
+        ),
+        "structure/terracotta": (
+            display_name: "Terracotta Tile",
+            color: (red: 0.68, green: 0.31, blue: 0.18),
+            tags: ["construction", "floor", "masonry", "world"],
+        ),
+        "structure/timber": (
+            display_name: "Structural Timber",
+            color: (red: 0.38, green: 0.24, blue: 0.07),
+            tags: ["construction", "wood", "world"],
         ),
         "structure/worked-stone": (
             display_name: "Worked Stone",

@@ -91,7 +91,7 @@ fn v3_waterfall_publishes_exact_resources_and_report_identity() {
         report.semantic_plan_fingerprint,
         Some(2_940_332_537_625_721_792)
     );
-    assert_eq!(report.map_fingerprint, 18_345_439_249_093_579_610);
+    assert_eq!(report.map_fingerprint, 4_106_737_844_603_651_374);
     assert_ne!(
         report.semantic_plan_fingerprint,
         Some(report.map_fingerprint),
@@ -187,7 +187,7 @@ fn v3_forest_publishes_exact_features_blockers_and_routes() {
         report.semantic_plan_fingerprint,
         Some(3_116_162_104_822_374_845)
     );
-    assert_eq!(report.map_fingerprint, 18_084_914_740_711_593_486);
+    assert_eq!(report.map_fingerprint, 3_009_203_185_536_911_801);
     let Some(ProceduralRecipeMetrics::Forest(metrics)) = &report.recipe_metrics else {
         panic!("V3 Forest should publish exact recipe metrics");
     };
@@ -331,7 +331,7 @@ fn v3_deep_forest_publishes_dense_trees_and_reenters_deterministically() {
         first_report.semantic_plan_fingerprint,
         Some(1_319_216_151_194_471_912)
     );
-    assert_eq!(first_report.map_fingerprint, 15_168_627_475_653_117_104);
+    assert_eq!(first_report.map_fingerprint, 15_031_507_243_791_269_462);
     let Some(ProceduralRecipeMetrics::DeepForest(metrics)) = &first_report.recipe_metrics else {
         panic!("V3 Deep Forest should publish exact recipe metrics");
     };
@@ -538,6 +538,19 @@ fn v3_outpost_publishes_vertical_fortification_and_reenters_deterministically() 
     assert!(!first_report.used_fallback, "{:?}", first_report.notes);
     assert_eq!(first_report.repair_rounds, 0);
     assert!(first_report.repair_actions.is_empty());
+    assert_eq!(
+        first_report.settings_fingerprint, 946_401_891_796_088_627,
+        "update only with an explicit shipped Outpost settings-identity decision"
+    );
+    assert_eq!(
+        first_report.semantic_plan_fingerprint,
+        Some(6_532_253_017_736_694_663),
+        "update only with an explicit shipped Outpost semantic-plan decision"
+    );
+    assert_eq!(
+        first_report.map_fingerprint, 10_316_302_697_158_683_619,
+        "update only with an explicit shipped Outpost materialized-map decision"
+    );
     let Some(ProceduralRecipeMetrics::Outpost(OutpostReportMetrics {
         structure_voxels,
         courtyard_surfaces,
@@ -588,6 +601,7 @@ fn v3_outpost_publishes_vertical_fortification_and_reenters_deterministically() 
         "outpost_front_walk",
         "outpost_wall_walk",
         "outpost_rooftop",
+        "outpost_south_rooftop",
     ] {
         assert!(
             first_anchors.contains_key(name),
@@ -610,38 +624,105 @@ fn v3_outpost_publishes_vertical_fortification_and_reenters_deterministically() 
         .get("outpost_rooftop")
         .copied()
         .expect("Outpost should publish its lookout roof");
+    let south_rooftop = first_anchors
+        .get("outpost_south_rooftop")
+        .copied()
+        .expect("Outpost should publish its south lookout roof");
     assert_eq!(front_walk.level.saturating_sub(courtyard.level), 7);
     assert_eq!(wall_walk.level.saturating_sub(courtyard.level), 11);
     assert_eq!(rooftop.level.saturating_sub(courtyard.level), 27);
+    assert_eq!(south_rooftop.level.saturating_sub(courtyard.level), 27);
+    assert_ne!(rooftop.coord, south_rooftop.coord);
 
-    let worked_stone = app
-        .world()
-        .resource::<SubstanceTable>()
-        .id("worked_stone")
-        .expect("Outpost fixture should register worked stone");
-    let water = app
-        .world()
-        .resource::<SubstanceTable>()
-        .id("water")
-        .expect("Outpost fixture should register water");
-    let lava = app
-        .world()
-        .resource::<SubstanceTable>()
-        .id("lava")
-        .expect("Outpost fixture should register lava");
+    let (worked_stone, limestone, slate, timber, terracotta, water, lava) = {
+        let table = app.world().resource::<SubstanceTable>();
+        let structural_materials = ["worked_stone", "limestone", "slate", "timber", "terracotta"]
+            .map(|name| {
+                let id = table
+                    .id(name)
+                    .unwrap_or_else(|| panic!("Outpost fixture should register {name}"));
+                (name, id)
+            });
+        for (index, (name, id)) in structural_materials.iter().enumerate() {
+            for (other_name, other_id) in structural_materials.iter().skip(index.saturating_add(1))
+            {
+                assert_ne!(
+                    id, other_id,
+                    "Outpost materials {name} and {other_name} share one SubstanceId"
+                );
+            }
+        }
+        let [worked_stone, limestone, slate, timber, terracotta] =
+            structural_materials.map(|(_name, id)| id);
+        let water = table
+            .id("water")
+            .expect("Outpost fixture should register water");
+        let lava = table
+            .id("lava")
+            .expect("Outpost fixture should register lava");
+        (
+            worked_stone,
+            limestone,
+            slate,
+            timber,
+            terracotta,
+            water,
+            lava,
+        )
+    };
     let map = app.world().resource::<VoxelMap>();
-    let worked_stone_voxels = map
+    let structural_ids = [worked_stone, limestone, slate, timber];
+    let structural_voxels = map
         .columns()
         .flat_map(|(_coord, column)| column.iter())
-        .filter(|substance| *substance == worked_stone)
+        .filter(|substance| structural_ids.contains(substance))
         .count();
     assert_eq!(
-        u32::try_from(worked_stone_voxels).unwrap_or(u32::MAX),
-        *structure_voxels
+        u32::try_from(structural_voxels).unwrap_or(u32::MAX),
+        *structure_voxels,
+        "Outpost structure membership must be exactly its masonry, slate, and timber voxels"
     );
-    assert_eq!(map.get(front_walk), worked_stone);
-    assert_eq!(map.get(wall_walk), worked_stone);
-    assert_eq!(map.get(rooftop), worked_stone);
+    for (name, substance) in [
+        ("worked stone", worked_stone),
+        ("limestone", limestone),
+        ("slate", slate),
+        ("timber", timber),
+        ("terracotta", terracotta),
+    ] {
+        assert!(
+            map.columns()
+                .any(|(_coord, column)| column.iter().any(|found| found == substance)),
+            "Outpost did not publish any {name} voxels"
+        );
+    }
+    let north_stair_entry = TilePos::new(HexCoord::from_axial(6, -7), courtyard.level);
+    let south_stair_entry = TilePos::new(HexCoord::from_axial(6, 1), courtyard.level);
+    let wall_masonry = TilePos::new(
+        HexCoord::from_axial(-9, 0),
+        courtyard.level.saturating_add(1),
+    );
+    let parapet_cap = TilePos::new(
+        HexCoord::from_axial(-10, 0),
+        courtyard.level.saturating_add(12),
+    );
+    let first_materials = BTreeMap::from([
+        (courtyard, terracotta),
+        (north_stair_entry, timber),
+        (south_stair_entry, timber),
+        (wall_masonry, limestone),
+        (parapet_cap, worked_stone),
+        (front_walk, slate),
+        (wall_walk, slate),
+        (rooftop, slate),
+        (south_rooftop, slate),
+    ]);
+    for (position, substance) in &first_materials {
+        assert_eq!(
+            map.get(*position),
+            *substance,
+            "Outpost published the wrong material at {position:?}"
+        );
+    }
     assert!(map.columns().all(|(_coord, column)| column
         .iter()
         .all(|substance| substance != water && substance != lava)));
@@ -719,6 +800,13 @@ fn v3_outpost_publishes_vertical_fortification_and_reenters_deterministically() 
     assert_eq!(second_report.metrics, first_report.metrics);
     assert_eq!(second_report.recipe_metrics, first_report.recipe_metrics);
     assert_eq!(second_report.notes, first_report.notes);
+    for (position, substance) in first_materials {
+        assert_eq!(
+            app.world().resource::<VoxelMap>().get(position),
+            substance,
+            "Outpost re-entry changed the material at {position:?}"
+        );
+    }
     assert_eq!(
         app.world()
             .resource::<MapAnchors>()

@@ -200,7 +200,7 @@ fn v3_ring7_materializes_complete_world_and_reenters_deterministically() {
         "update only with an explicit shipped Ring7 semantic-plan decision"
     );
     assert_eq!(
-        report.map_fingerprint, 14_774_674_416_521_441_907,
+        report.map_fingerprint, 4_907_860_698_373_679_485,
         "update only with an explicit shipped Ring7 materialized-map decision"
     );
 
@@ -428,7 +428,7 @@ fn v3_ring19_materializes_complete_world_and_reenters_deterministically() {
         "update only with an explicit shipped Ring19 semantic-plan decision"
     );
     assert_eq!(
-        report.map_fingerprint, 13_502_613_458_185_406_509,
+        report.map_fingerprint, 11_311_977_574_499_463_924,
         "update only with an explicit shipped Ring19 materialized-map decision"
     );
 

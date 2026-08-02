@@ -1212,7 +1212,7 @@ mod tests {
         let palette = shipped_palette();
         let styles = shipped_style_catalog();
 
-        assert_eq!(palette.swatches().len(), 23);
+        assert_eq!(palette.swatches().len(), 27);
         assert_eq!(styles.styles().len(), 8);
         for style_name in [
             "crystal/cyan-body",

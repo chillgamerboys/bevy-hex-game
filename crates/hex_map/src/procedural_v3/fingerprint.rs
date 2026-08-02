@@ -693,6 +693,10 @@ const fn solid_material_tag(material: SolidMaterialRole) -> u8 {
         SolidMaterialRole::Ice => 7,
         SolidMaterialRole::Basalt => 8,
         SolidMaterialRole::WorkedStone => 9,
+        SolidMaterialRole::Limestone => 10,
+        SolidMaterialRole::Slate => 11,
+        SolidMaterialRole::Timber => 12,
+        SolidMaterialRole::Terracotta => 13,
     }
 }
 
