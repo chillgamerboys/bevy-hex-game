@@ -17,8 +17,9 @@ use crate::procedural::{
     CavesMetrics as CavesReportMetrics, DeepForestMetrics as DeepForestReportMetrics,
     ForestMetrics as ForestReportMetrics, FortMetrics as FortReportMetrics, GenerationReport,
     HillsMetrics as HillsReportMetrics, MountainsMetrics as MountainsReportMetrics,
-    PrairieMetrics as PrairieReportMetrics, ProceduralRecipeMetrics, TacticalMetrics,
-    VolcanoMetrics as VolcanoReportMetrics, WaterfallMetrics as WaterfallReportMetrics,
+    OutpostMetrics as OutpostReportMetrics, PrairieMetrics as PrairieReportMetrics,
+    ProceduralRecipeMetrics, TacticalMetrics, VolcanoMetrics as VolcanoReportMetrics,
+    WaterfallMetrics as WaterfallReportMetrics,
 };
 use crate::settings::{ProceduralV3Settings, V3LayoutSettings, V3RecipeSettings};
 use crate::terrain::TerrainPalette;
@@ -54,6 +55,7 @@ pub(crate) use liquid::LiquidFlowState;
 mod materialize;
 pub(crate) use materialize::MapPresentationProjection;
 mod mountains;
+mod outpost;
 mod patch;
 mod prairie;
 mod ring19;
@@ -193,6 +195,7 @@ pub(crate) fn ensure_recipe_available(
                     | V3RecipeSettings::Waterfall(_)
                     | V3RecipeSettings::Forest(_)
                     | V3RecipeSettings::Fort(_)
+                    | V3RecipeSettings::Outpost(_)
                     | V3RecipeSettings::Caves(_)
                     | V3RecipeSettings::DeepForest(_)
                     | V3RecipeSettings::Volcano(_)
@@ -354,6 +357,20 @@ pub(crate) fn build(
                 started,
                 fort_report_metrics,
                 |metrics| ProceduralRecipeMetrics::Fort(fort_recipe_metrics(metrics)),
+            )
+        }
+        V3LayoutSettings::Single(patch) if matches!(patch.recipe, V3RecipeSettings::Outpost(_)) => {
+            finish_build(
+                outpost::generate(grid_radius, level_height, settings, seed)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                outpost_report_metrics,
+                |metrics| ProceduralRecipeMetrics::Outpost(outpost_recipe_metrics(metrics)),
             )
         }
         V3LayoutSettings::Single(patch) if matches!(patch.recipe, V3RecipeSettings::Caves(_)) => {
@@ -843,6 +860,39 @@ fn fort_recipe_metrics(metrics: &fort::FortMetrics) -> FortReportMetrics {
         critical_route_steps: metrics.critical_route_steps,
         independent_gate_routes: metrics.independent_gate_routes,
         worked_stone_surfaces: metrics.worked_stone_surfaces,
+    }
+}
+
+fn outpost_report_metrics(metrics: &outpost::OutpostMetrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: metrics.relief,
+        critical_route_steps: metrics.critical_route_steps,
+        reachable_surfaces: metrics.ordinary_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        environment_signature_percent: metrics
+            .worked_stone_surfaces
+            .saturating_mul(100)
+            .checked_div(metrics.ordinary_surfaces)
+            .unwrap_or_default(),
+        ..Default::default()
+    }
+}
+
+fn outpost_recipe_metrics(metrics: &outpost::OutpostMetrics) -> OutpostReportMetrics {
+    OutpostReportMetrics {
+        structure_voxels: metrics.structure_voxels,
+        courtyard_surfaces: metrics.courtyard_surfaces,
+        wall_walk_surfaces: metrics.wall_walk_surfaces,
+        stair_surfaces: metrics.stair_surfaces,
+        tower_count: metrics.tower_count,
+        stair_loops: metrics.stair_loops,
+        lookout_surfaces: metrics.lookout_surfaces,
+        gate_surfaces: metrics.gate_surfaces,
+        ordinary_surfaces: metrics.ordinary_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        relief: metrics.relief,
+        critical_route_steps: metrics.critical_route_steps,
+        connected_tower_routes: metrics.connected_tower_routes,
     }
 }
 
