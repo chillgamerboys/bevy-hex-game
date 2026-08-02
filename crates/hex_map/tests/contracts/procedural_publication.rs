@@ -517,6 +517,233 @@ fn v3_fort_publishes_worked_stone_structures_and_access_metrics() {
 }
 
 #[test]
+fn v3_outpost_publishes_vertical_fortification_and_reenters_deterministically() {
+    let mut app = v3_outpost_app();
+    enter_gameplay(&mut app);
+
+    assert!(
+        app.world().contains_resource::<TerrainReady>(),
+        "setup failed: {:?}",
+        app.world()
+            .get_resource::<GameplaySetupFailure>()
+            .map(|failure| failure.reason.as_str())
+    );
+    assert!(!app.world().contains_resource::<GameplaySetupFailure>());
+    let first_report = app.world().resource::<GenerationReport>().clone();
+    assert_eq!(first_report.generator_version, 3);
+    assert_eq!(first_report.seed, 1_290_212);
+    assert_eq!(first_report.candidates_evaluated, 8);
+    assert!(first_report.valid_candidates > 0);
+    assert!(first_report.selected_candidate.is_some());
+    assert!(!first_report.used_fallback, "{:?}", first_report.notes);
+    assert_eq!(first_report.repair_rounds, 0);
+    assert!(first_report.repair_actions.is_empty());
+    let Some(ProceduralRecipeMetrics::Outpost(OutpostReportMetrics {
+        structure_voxels,
+        courtyard_surfaces,
+        wall_walk_surfaces,
+        stair_surfaces,
+        tower_count,
+        stair_loops,
+        lookout_surfaces,
+        gate_surfaces,
+        ordinary_surfaces,
+        reachable_elevation_levels,
+        relief,
+        critical_route_steps,
+        connected_tower_routes,
+    })) = first_report.recipe_metrics.as_ref()
+    else {
+        panic!("V3 Outpost should publish exact recipe metrics");
+    };
+    assert!(*structure_voxels > 0);
+    assert!(*courtyard_surfaces > 0);
+    assert!(*wall_walk_surfaces > 0);
+    assert!(*stair_surfaces > 0);
+    assert_eq!(*tower_count, 2);
+    assert_eq!(*stair_loops, tower_count.saturating_mul(3));
+    assert!(*lookout_surfaces >= *tower_count);
+    assert!(*gate_surfaces > 0);
+    assert_eq!(*ordinary_surfaces, first_report.metrics.reachable_surfaces);
+    assert_eq!(*reachable_elevation_levels, 28);
+    assert_eq!(*relief, 27);
+    assert_eq!(*relief, first_report.metrics.relief);
+    assert_eq!(
+        *critical_route_steps,
+        first_report.metrics.critical_route_steps
+    );
+    assert!(*critical_route_steps > 0);
+    assert_eq!(*connected_tower_routes, *tower_count);
+
+    let first_anchors: BTreeMap<String, TilePos> = app
+        .world()
+        .resource::<MapAnchors>()
+        .iter()
+        .map(|(id, position)| (id.as_str().to_owned(), position))
+        .collect();
+    for name in [
+        "party_start",
+        "hostile_start",
+        "outpost_courtyard",
+        "outpost_front_walk",
+        "outpost_wall_walk",
+        "outpost_rooftop",
+    ] {
+        assert!(
+            first_anchors.contains_key(name),
+            "missing Outpost anchor {name}"
+        );
+    }
+    let courtyard = first_anchors
+        .get("outpost_courtyard")
+        .copied()
+        .expect("Outpost should publish its courtyard datum");
+    let front_walk = first_anchors
+        .get("outpost_front_walk")
+        .copied()
+        .expect("Outpost should publish its front walk");
+    let wall_walk = first_anchors
+        .get("outpost_wall_walk")
+        .copied()
+        .expect("Outpost should publish its wall walk");
+    let rooftop = first_anchors
+        .get("outpost_rooftop")
+        .copied()
+        .expect("Outpost should publish its lookout roof");
+    assert_eq!(front_walk.level.saturating_sub(courtyard.level), 7);
+    assert_eq!(wall_walk.level.saturating_sub(courtyard.level), 11);
+    assert_eq!(rooftop.level.saturating_sub(courtyard.level), 27);
+
+    let worked_stone = app
+        .world()
+        .resource::<SubstanceTable>()
+        .id("worked_stone")
+        .expect("Outpost fixture should register worked stone");
+    let water = app
+        .world()
+        .resource::<SubstanceTable>()
+        .id("water")
+        .expect("Outpost fixture should register water");
+    let lava = app
+        .world()
+        .resource::<SubstanceTable>()
+        .id("lava")
+        .expect("Outpost fixture should register lava");
+    let map = app.world().resource::<VoxelMap>();
+    let worked_stone_voxels = map
+        .columns()
+        .flat_map(|(_coord, column)| column.iter())
+        .filter(|substance| *substance == worked_stone)
+        .count();
+    assert_eq!(
+        u32::try_from(worked_stone_voxels).unwrap_or(u32::MAX),
+        *structure_voxels
+    );
+    assert_eq!(map.get(front_walk), worked_stone);
+    assert_eq!(map.get(wall_walk), worked_stone);
+    assert_eq!(map.get(rooftop), worked_stone);
+    assert!(map.columns().all(|(_coord, column)| column
+        .iter()
+        .all(|substance| substance != water && substance != lava)));
+    assert_eq!(map.len(), 469);
+    assert!(app.world().resource::<TraversalBlockers>().is_empty());
+    assert!(app.world().resource::<InteriorRegions>().is_empty());
+    assert!(liquid_presentations(&mut app).is_empty());
+    let first_view = *app.world().resource::<MapViewHint>();
+    assert!(first_view.is_valid());
+    let first_tile_count = tile_count(&mut app);
+    let first_special_regions: BTreeMap<TilePos, SpecialMovementRegion> = app
+        .world()
+        .resource::<SpecialMovementRegions>()
+        .iter()
+        .collect();
+    let first_biomes: BTreeMap<TilePos, BiomeRegionId> =
+        app.world().resource::<BiomeRegions>().iter().collect();
+
+    app.world_mut()
+        .resource_mut::<NextState<Screen>>()
+        .set(Screen::Title);
+    app.update();
+    app.update();
+
+    assert_eq!(tile_count(&mut app), 0);
+    assert!(liquid_presentations(&mut app).is_empty());
+    for absent in [
+        app.world().contains_resource::<VoxelMap>(),
+        app.world().contains_resource::<MapAnchors>(),
+        app.world().contains_resource::<SpecialMovementRegions>(),
+        app.world().contains_resource::<InteriorRegions>(),
+        app.world().contains_resource::<TraversalBlockers>(),
+        app.world().contains_resource::<BiomeRegions>(),
+        app.world().contains_resource::<MapViewHint>(),
+        app.world().contains_resource::<GenerationReport>(),
+        app.world().contains_resource::<TerrainReady>(),
+    ] {
+        assert!(!absent);
+    }
+
+    enter_gameplay(&mut app);
+    assert!(!app.world().contains_resource::<GameplaySetupFailure>());
+    assert_eq!(tile_count(&mut app), first_tile_count);
+    assert_eq!(*app.world().resource::<MapViewHint>(), first_view);
+    let second_report = app.world().resource::<GenerationReport>();
+    assert_eq!(
+        second_report.generator_version,
+        first_report.generator_version
+    );
+    assert_eq!(second_report.seed, first_report.seed);
+    assert_eq!(
+        second_report.selected_candidate,
+        first_report.selected_candidate
+    );
+    assert_eq!(
+        second_report.candidates_evaluated,
+        first_report.candidates_evaluated
+    );
+    assert_eq!(
+        second_report.valid_candidates,
+        first_report.valid_candidates
+    );
+    assert_eq!(second_report.repair_rounds, first_report.repair_rounds);
+    assert_eq!(second_report.repair_actions, first_report.repair_actions);
+    assert_eq!(second_report.used_fallback, first_report.used_fallback);
+    assert_eq!(
+        second_report.settings_fingerprint,
+        first_report.settings_fingerprint
+    );
+    assert_eq!(
+        second_report.semantic_plan_fingerprint,
+        first_report.semantic_plan_fingerprint
+    );
+    assert_eq!(second_report.map_fingerprint, first_report.map_fingerprint);
+    assert_eq!(second_report.metrics, first_report.metrics);
+    assert_eq!(second_report.recipe_metrics, first_report.recipe_metrics);
+    assert_eq!(second_report.notes, first_report.notes);
+    assert_eq!(
+        app.world()
+            .resource::<MapAnchors>()
+            .iter()
+            .map(|(id, position)| (id.as_str().to_owned(), position))
+            .collect::<BTreeMap<_, _>>(),
+        first_anchors
+    );
+    assert_eq!(
+        app.world()
+            .resource::<SpecialMovementRegions>()
+            .iter()
+            .collect::<BTreeMap<_, _>>(),
+        first_special_regions
+    );
+    assert_eq!(
+        app.world()
+            .resource::<BiomeRegions>()
+            .iter()
+            .collect::<BTreeMap<_, _>>(),
+        first_biomes
+    );
+}
+
+#[test]
 fn v3_forest_grass_does_not_block_edits_and_retires_with_its_support() {
     let mut app = v3_forest_app();
     enter_gameplay(&mut app);
