@@ -46,13 +46,14 @@ use hex_core::{
 use hex_map::{
     CavesReportMetrics, CrossingSettings, EnvironmentSettings, GenerationReport, HillsSettings,
     LandformSettings, LayeredSkyIslandsSettings, LinkedIslandsSettings, MapSettings,
-    MountainsSettings, PatchEdgeContractSettings, PatchEdgesSettings, PatchMaskSettings, PatchSpec,
-    PerlinSettings, PerlinStepSettings, ProceduralRecipeMetrics, ProceduralSettings,
-    ProceduralV1Settings, ProceduralV2Settings, ProceduralV3Settings, Ring19Metrics, Ring7Metrics,
-    SkyIslandsSettings, SubstanceRun, TacticalMetrics, TacticalSettings, TerrainSettings,
-    V2EnvironmentSettings, V2HillsSettings, V2RecipeSettings, V3CavesSettings,
-    V3DeepForestSettings, V3EnvironmentSettings, V3ForestSettings, V3FortSettings, V3HillsSettings,
-    V3LayoutSettings, V3RecipeSettings, V3WaterfallSettings, VoxelMap,
+    MountainsSettings, OutpostReportMetrics, PatchEdgeContractSettings, PatchEdgesSettings,
+    PatchMaskSettings, PatchSpec, PerlinSettings, PerlinStepSettings, ProceduralRecipeMetrics,
+    ProceduralSettings, ProceduralV1Settings, ProceduralV2Settings, ProceduralV3Settings,
+    Ring19Metrics, Ring7Metrics, SkyIslandsSettings, SubstanceRun, TacticalMetrics,
+    TacticalSettings, TerrainSettings, V2EnvironmentSettings, V2HillsSettings, V2RecipeSettings,
+    V3CavesSettings, V3DeepForestSettings, V3EnvironmentSettings, V3ForestSettings, V3FortSettings,
+    V3HillsSettings, V3LayoutSettings, V3OutpostSettings, V3RecipeSettings, V3WaterfallSettings,
+    VoxelMap,
 };
 use hex_test_support::{enter_gameplay, TestAppBuilder};
 
@@ -428,6 +429,32 @@ fn v3_fort_app() -> App {
         })),
     });
     app.insert_resource(ResolvedMapSeed(640_367_719));
+    app
+}
+
+fn v3_outpost_app() -> App {
+    let mut app = procedural_app();
+    app.insert_resource(MapSettings {
+        grid_radius: 12,
+        level_height: 0.4,
+        terrain: TerrainSettings::Procedural(ProceduralSettings::V3(ProceduralV3Settings {
+            layout: V3LayoutSettings::Single(PatchSpec {
+                environment: V3EnvironmentSettings::TemperateGrassland,
+                recipe: V3RecipeSettings::Outpost(V3OutpostSettings),
+                overlays: Vec::new(),
+                mask: PatchMaskSettings::WholeWorld,
+                edges: PatchEdgesSettings {
+                    east: PatchEdgeContractSettings::WorldBoundary,
+                    south_east: PatchEdgeContractSettings::WorldBoundary,
+                    south_west: PatchEdgeContractSettings::WorldBoundary,
+                    west: PatchEdgeContractSettings::WorldBoundary,
+                    north_west: PatchEdgeContractSettings::WorldBoundary,
+                    north_east: PatchEdgeContractSettings::WorldBoundary,
+                },
+            }),
+        })),
+    });
+    app.insert_resource(ResolvedMapSeed(1_290_212));
     app
 }
 
