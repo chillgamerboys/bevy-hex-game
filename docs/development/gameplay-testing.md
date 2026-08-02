@@ -18,7 +18,7 @@ scenario binaries continue to run in the residual workspace suite.
 | Pure rules | Value objects, lattice transformations, compact AI policy | Owning crate dependencies only | Return values and immutable state | `python3 tools/test_scope.py run rules` | 60 s total |
 | ECS contracts | Focused commands, effects, movement, turns, occupancy and Channel seams | `hex_test_support`, then the owning gameplay crate dependencies | Components, resources, messages and exact positions | `python3 tools/test_scope.py run contracts` | 60 s per test |
 | Deterministic simulation | Multi-turn composition, tempo profiles, 3v3/6v6, canonical summaries and bounded no-progress | `hex_combat_core` over `hex_core` + `hex_lattice`; never Bevy App, `hex_test_support`, renderer, viewport, wall clock, asset server, ECS entity, perception implementation, or map generator | Full `CombatRunSnapshot` equality across two runs plus named metric assertions | `python3 tools/test_scope.py run simulation` | 60 s |
-| Game/UI behavior | Pure Combat Lab/Creator transitions plus Bevy wiring, re-entry and drawer lifecycle | `hex_gameplay_model` for state/launch/navigation truth; `hex_ui` for rendering; `hex_game` with default-off `test-support` only for Bevy lifecycle | Pure state equality, `GameplayStateSnapshot` for authority facts and explicit presentation-adapter observations, and `UiTreeSnapshot` for presentation structure | `python3 tools/test_scope.py run app` | 60 s |
+| Game/UI behavior | Pure Main Menu, Campaign, Sandbox, Creator, and guided deployment transitions plus Bevy wiring, persistence, re-entry, exact terrain placement, HUD suppression, and outcome lifecycle | `hex_gameplay_model` for route/draft/deployment/launch truth; `hex_ui` for rendering; `hex_game` with default-off `test-support` only for Bevy lifecycle | Pure state equality, `GameplayStateSnapshot` for authority facts and explicit presentation-adapter observations, and `UiTreeSnapshot` for presentation structure | `python3 tools/test_scope.py run app` | 60 s |
 | Visual smoke | Layout, legibility, overlap, responsive composition and presentation regressions | Release-shaped game with `visual-walk`; no `dev` or `test-support` | Reviewed frames plus the human motion/feel walk | Run the one scoped gameplay walk through `/visual-walk` | At most 10 reviewed gameplay frames |
 | Soak/performance | Long stalemates, stress corpora, bounded retention and performance | The scheduled stress workflow | Typed completion/timeout, fingerprints, timing and memory bounds | `.github/workflows/stress.yaml` | Scheduled/manual only |
 
@@ -196,8 +196,9 @@ private gameplay or world truth and turn a test helper into a second authority.
 Owning tests add their system under test on top of the support app.
 
 `hex_game` exposes `GameplayStateSnapshot` only behind `test-support`. It observes
-canonical screen/phase/mode, turn and budgets, pending decisions, command state,
-exact positions, lattice summaries, outcome, and report fingerprints. Its explicitly
+canonical screen/phase/mode, session provenance, turn and budgets, pending decisions,
+command state, exact positions, lattice summaries, `CombatSummary`, terminal outcome,
+and frozen launch/retry identity. Its explicitly
 named `presented_actions` field mirrors `GameplayHudView` only for application-adapter
 parity; it is not a legal-action oracle and cannot replace owning command/contract
 tests. `hex_ui` separately exposes `UiTreeSnapshot` for visible regions,
@@ -210,13 +211,52 @@ schedules on a synthetic window without Winit or a renderer. Use it only with
 authority-backed fields in `GameplayStateSnapshot` and the owning rules, contracts,
 or simulation target.
 
-`hex_gameplay_model` owns renderer-free Combat Lab and Creator transitions. It may
-depend on `bevy_ecs` derive support and `hex_core`, but not on assets, combat, units,
-game, map, world, perception, or the Bevy facade. It is the oracle for roster
-editing, report selection/deletion, report presentation mode, exact Retry/Tune/Copy
-routing, Creator navigation identity, and bounded edit history. Widget systems emit
-typed actions into that model and apply effectful results; they do not duplicate
-those decisions.
+`hex_game/test-support` additionally owns typed internal-scenario and
+deterministic-fixture launch requests, optional combat-rule-profile injection, and
+observation snapshots. Stable IDs such as `ability-lab`, `raider-mirror`, and
+`tempo-matrix` are resolved through the same definitions simulations consume. None
+of those request types, manifests, or injected rules joins the shipping plugin graph.
+
+`hex_gameplay_model` owns renderer-free Main Menu, Campaign, Sandbox, and Creator
+transitions. It may depend on `bevy_ecs` derive support and `hex_core`, but not on
+assets, combat, units, game, map, world, perception, or the Bevy facade. It is the
+oracle for route and Back behavior, pending/committed map and resolved-seed edits,
+fixed six-slot roster identity/order/duplicates, launch-blocker priority, guided
+Party-then-Enemies deployment order, exact placement occupancy, reselection, Undo and
+Review, exact Retry identity, Campaign slot identity, typed Creator destinations, and
+bounded edit history. Widget systems emit typed actions into that model and apply
+effectful results; they do not duplicate those decisions.
+
+The application adapter proves that one ordinary `HexTile` click outside the catalog's
+hidden staging regions is accepted when canonical walker footing admits its exact
+`TilePos`, while invalid footing and occupied surfaces refuse without advancing.
+Headless presentation evidence separately proves that Deployment removes every
+ordinary HUD surface from layout, focus, scrolling, and picking and leaves the compact
+task card reachable. The scoped visual walk places at least one Party and one Enemy
+character before capturing Review; pixels never substitute for the typed placement or
+frozen-launch assertions.
+
+### Campaign persistence evidence
+
+Persistence tests use an isolated `HEX_GAME_DATA_DIR` and exercise all three explicit
+slot IDs, mixed Empty/Available/Invalid projection, `UnitId(0)`, atomic replacement of
+only the bound slot, compatible restore, corrupt/future/build/content/generator
+refusal, and valid and invalid legacy migration. They verify that neither migration
+nor a later save changes or deletes `resume.ron`.
+
+Time tests drive the application clock and prove accumulation only while a
+Campaign-origin session is Gameplay, active, unpaused, and non-terminal. Loading,
+Main Menu, Campaign pages, pause, deployment, outcomes, Sandbox, and deterministic
+test cases must produce a zero delta. A separate access-recording compatibility
+sentinel creates an existing `combat-reports.ron`, exercises legacy migration,
+requires zero read/write operations against that path, then requires byte-for-byte
+identity and unchanged existence. The default-build terminology gate and test-only
+storage path prove that shipping runtime code has no report-history reader, writer,
+or deletion path.
+
+Report-history and comparison regressions are replaced by assertions over canonical
+`CombatSummary`, complete deterministic run snapshots, frozen launch identity, exact
+retry identity, and terminal outcomes.
 
 ## Simulation evidence
 
@@ -247,30 +287,27 @@ that balance is fun.
 
 The complete runtime task inventory and its full headless matrix are defined in
 [Runtime UI verification](ui-verification.md). Every populated interactive task runs
-all viewport/device mappings and semantic scales in one linked binary; a visual route
-samples that contract and does not define the set of UI paths that exist.
+all required logical viewport and semantic-scale combinations in one linked binary;
+separate mapping cases prove that device pixels do not alter logical layout. A visual
+route samples that contract and does not define the set of UI paths that exist.
 
 Screenshots answer presentation questions: whether controls fit, labels read, dense
-rosters remain legible, drawers overlap, and a responsive surface adapts. They do not
-prove occupancy, action accounting, tempo, determinism, state restoration, or report
-identity.
+rosters remain legible, regions overlap, focus remains visible, and a responsive
+surface adapts. They do not prove occupancy, action accounting, tempo, determinism,
+state restoration, Campaign persistence, or launch/retry identity.
 
-A scoped gameplay acceptance run reviews exactly ten deterministic Bevy
-image-target frames. They cover the Compact title and Map Scenario catalog while
-mechanically traversing the independent Demo route, Creator validation, Combat Lab
-setup/deployment, maximum gameplay actions, a 200%
-required decision, the Compact Retina statistics drawer, and the 4K dense Compare report.
+A scoped gameplay acceptance run reviews at most ten deterministic Bevy image-target
+frames: Main Menu, Campaign, Sandbox Overview, Map Browser, one Map Detail, Party,
+Enemies, Character Picker, Tools, and one targeted Compact or 4K duplicate.
 Default-off presentation fixtures create visual state without solving combat.
 Before any capture, the live `UiTreeSnapshot` oracle rejects zero-area targets, inherited
 clipping, off-canvas placement, unreachable scroll content, overlap, missing labels,
-invalid focus order, and targets below 44×44. Authored presentation fixtures also
-apply named composition contracts; for example, the live-statistics frame requires
-every populated lattice edge above the statistics drawer at every semantic scale,
-rather than accepting either surface in isolation. The same contract drives real
-wheel and Tab/Shift-Tab input through the single Inspector scroll owner, requires HUD
-hiding to remove lattice and statistics together, and prevents Compact statistics
-from covering any still-focusable casting control. The scoped gameplay script uses no
-combat-solving steps; generic world-owned walks retain their existing driver verbs.
+invalid focus order, and targets below 44×44. Authored presentation fixtures apply
+named composition contracts, including horizontal Standard/Wide pages, 2×3 rosters,
+Compact stacking, and one scrollable roster column. The same contract drives real
+wheel and Tab/Shift-Tab input through the declared scroll owner. The scoped gameplay
+script uses no combat-solving steps; generic world-owned walks retain their existing
+driver verbs.
 
 Forest, Waterfall, map review, and Alberto's map captures are outside this budget and
 remain unchanged.
@@ -297,11 +334,11 @@ infrastructure exception; it does not convert a known gameplay failure into a pa
 
 ## Anti-patterns
 
-- **Noun-only assertions:** proving an ID, label, node, fixture name, or tab exists
+- **Noun-only assertions:** proving an ID, label, node, deterministic case name, or route exists
   without exercising the behavior it promises.
 - **Screenshots as logic:** reading pixels or frame timing to infer movement budgets,
-  exact occupancy, Channel actions, outcomes, determinism, or report fidelity.
-- **Fixture-description drift:** prose claims a matrix or state the owned fixture
+  exact occupancy, Channel actions, outcomes, determinism, or launch identity.
+- **Fixture-description drift:** prose claims a matrix or state the owned deterministic case
   does not construct and verify directly.
 - **All-feature runtime pollution:** enabling inspector/review/test features in a
   visual run and treating the resulting UI as shipping evidence.

@@ -1,4 +1,4 @@
-//! Headless behavior contracts for game-layer composition and Combat Lab surfaces.
+//! Headless behavior contracts for game-layer composition and Sandbox surfaces.
 //!
 //! This is deliberately one integration binary: linking Bevy once is expensive,
 //! while these assertions share the same immutable game-layer observation API.
@@ -6,26 +6,20 @@
 use bevy::{prelude::*, window::WindowPlugin};
 use hex_anim::Transformation;
 use hex_assets::{
-    ArtPalette, CameraSettings, CombatRulesProfile, CombatSettings, GameAssets, SubstanceFile,
-    SubstanceTable,
+    ArtPalette, CameraSettings, CustomCharacterId, GameAssets, SubstanceFile, SubstanceTable,
 };
-use hex_combat::{
-    CombatSummary, DeliveredEffectKind, EncounterOutcome, EncounterResolution, UnitCombatSummary,
-};
+use hex_combat::{CombatSummary, EncounterOutcome, EncounterResolution, UnitCombatSummary};
 use hex_core::{
     CameraFocusTarget, GameplayPhase, Headroom, HexCoord, HexSpan, HexTile, PresentationOcclusion,
     PresentationOcclusionReason, RunBottom, SubstanceId, TerrainEdit, TilePos, Turn, UnitId,
 };
-use hex_game::combat_reports::{
-    CombatLabReport, CombatLabReportController, CombatLabReportDeployment, CombatLabReportId,
-    CombatLabReportMap, CombatLabReportOrigin, CombatLabReportRosterEntry, CombatLabReportRosters,
-    CombatLabReportTermination, SavedCombatLabReport,
-};
 use hex_game::test_support::{
-    fixture_filter_snapshot, gameplay_state_snapshot, live_statistics_snapshot,
-    live_statistics_visible, production_lab_ui_transition_snapshot, report_transition_snapshot,
-    sandbox_reentry_snapshot, tempo_movement_matrix, wave_seven_fixtures, ReportMode,
+    combat_observation_snapshot, deterministic_fixture_launch_snapshot,
+    gameplay_session_origin_snapshot, gameplay_state_snapshot, install_sandbox_launch_for_test,
+    install_test_fixture_origin, sandbox_launch_identity_snapshot,
+    DeterministicFixtureLaunchRequest, GameplaySessionOriginSnapshot,
 };
+use hex_gameplay_model::{CampaignSlotId, SandboxCharacter};
 use hex_map::{MapSettings, PerlinSettings, TerrainSettings};
 use hex_test_support::{enter_gameplay, TestAppBuilder};
 use hex_units::{HexPathingLine, Standing, StandsOn};
@@ -35,11 +29,10 @@ fn position(q: i32, r: i32, level: i32) -> TilePos {
     TilePos::new(HexCoord::from_axial(q, r), level)
 }
 
-fn sample_report(rounds: u32, player_id: u64, hostile_id: u64) -> CombatLabReport {
-    let shipped = CombatSettings::default();
+fn sample_combat_summary() -> CombatSummary {
     let mut summary = CombatSummary::default();
-    summary.rounds = rounds;
-    summary.turns = rounds.saturating_mul(3);
+    summary.rounds = 4;
+    summary.turns = 12;
     summary.successful_commands = 11;
     summary.refused_commands = 2;
     summary.movement_distance = 7;
@@ -51,53 +44,17 @@ fn sample_report(rounds: u32, player_id: u64, hostile_id: u64) -> CombatLabRepor
     summary.no_progress_max = 2;
     summary.outcome = Some(EncounterOutcome::Victory);
     summary.casts_by_spell.insert("Spark".to_owned(), 1);
-    summary
-        .delivered_effects
-        .insert(DeliveredEffectKind::Disable, 3);
     summary.channelled_mana.insert("Ember".to_owned(), 2);
     summary.units.insert(
-        UnitId(player_id),
+        UnitId(0),
         UnitCombatSummary {
-            turns: rounds,
+            turns: 4,
             movement_distance: 7,
             channels: 1,
             ..Default::default()
         },
     );
-    let result = CombatLabReport::new(
-        CombatRulesProfile::shipped(&shipped),
-        CombatLabReportOrigin::Sandbox,
-        CombatLabReportMap {
-            catalog_id: "flat-arena".to_owned(),
-            scenario: "Ability Lab".to_owned(),
-            resolved_seed: None,
-        },
-        77,
-        CombatLabReportRosters {
-            players: vec![CombatLabReportRosterEntry {
-                unit_id: player_id,
-                archetype: "hedge-mage".to_owned(),
-                display_name: "Hedge Mage".to_owned(),
-                controller: CombatLabReportController::Human,
-            }],
-            hostiles: vec![CombatLabReportRosterEntry {
-                unit_id: hostile_id,
-                archetype: "raider".to_owned(),
-                display_name: "Raider".to_owned(),
-                controller: CombatLabReportController::BaselineAi,
-            }],
-        },
-        CombatLabReportDeployment {
-            players: vec![position(-2, 1, 1)],
-            hostiles: vec![position(3, -1, 2)],
-        },
-        CombatLabReportTermination::Outcome(EncounterOutcome::Victory),
-        summary,
-    );
-    match result {
-        Ok(report) => report,
-        Err(_) => std::process::abort(),
-    }
+    summary
 }
 
 #[expect(
@@ -552,239 +509,225 @@ fn support_limited_upward_look_hides_and_restores_the_real_focus_target() {
 }
 
 #[test]
-fn fixture_search_filters_in_place_and_clear_restores_every_card() {
-    let snapshot = fixture_filter_snapshot("tempo");
-    assert_eq!(snapshot.visible, vec!["tempo-matrix"]);
-    assert_eq!(snapshot.visible_after_clear.len(), 7);
-    assert!(
-        snapshot.input_survived,
-        "filtering must not rebuild and replace the focused editable entity"
-    );
-}
-
-#[test]
-fn report_modes_and_comparison_identity_follow_real_typed_application_transitions() {
-    let current = sample_report(8, 0, 1);
-    let older = sample_report(2, 2, 3);
-    let selected = sample_report(6, 4, 5);
-    let saved = [
-        SavedCombatLabReport {
-            id: CombatLabReportId(17),
-            label: "older".to_owned(),
-            notes: String::new(),
-            report: older,
-        },
-        SavedCombatLabReport {
-            id: CombatLabReportId(23),
-            label: "selected".to_owned(),
-            notes: String::new(),
-            report: selected,
-        },
+fn deterministic_fixture_requests_preserve_stable_identity_without_shipping_navigation() {
+    let cases = [
+        (
+            "ability-lab",
+            "Ability Lab",
+            "flat-arena",
+            &["hedge-mage", "wolf"][..],
+            &["raider"][..],
+        ),
+        (
+            "raider-mirror",
+            "Raider Mirror",
+            "flat-arena",
+            &["raider"][..],
+            &["raider"][..],
+        ),
+        (
+            "creator-spell-matrix",
+            "Ability Lab",
+            "flat-arena",
+            &["custom-character-1001"][..],
+            &["custom-character-1002"][..],
+        ),
+        (
+            "creator-roster-matrix",
+            "Ability Lab",
+            "flat-arena",
+            &["custom-character-1001", "custom-character-1003"][..],
+            &["custom-character-1002", "custom-character-1001"][..],
+        ),
+        (
+            "occupancy-matrix",
+            "Party Trial",
+            "the-crossing",
+            &["raider", "wolf", "raider"][..],
+            &["raider", "wolf", "raider"][..],
+        ),
+        (
+            "channel-attrition",
+            "Ability Lab",
+            "flat-arena",
+            &["hedge-mage", "raider", "wolf"][..],
+            &["hedge-mage", "raider", "wolf"][..],
+        ),
+        (
+            "tempo-matrix",
+            "Party Trial",
+            "the-crossing",
+            &["raider", "wolf", "raider"][..],
+            &["raider", "wolf", "raider"][..],
+        ),
     ];
+    for (stable_id, scenario, sandbox_map, party, enemies) in cases {
+        let request = DeterministicFixtureLaunchRequest::new(stable_id, None)
+            .expect("the stable deterministic fixture must remain available to tests");
+        let snapshot = deterministic_fixture_launch_snapshot(&request);
+        assert_eq!(snapshot.stable_id, stable_id);
+        assert_eq!(snapshot.scenario, scenario);
+        assert_eq!(snapshot.sandbox_map, sandbox_map);
+        assert_eq!(snapshot.party_count, party.len());
+        assert_eq!(snapshot.enemy_count, enemies.len());
+        assert_eq!(snapshot.party, party);
+        assert_eq!(snapshot.enemies, enemies);
+        assert!(!snapshot.rules_override);
+    }
+    assert!(DeterministicFixtureLaunchRequest::new("missing", None).is_err());
+}
 
-    let transition = report_transition_snapshot(&current, &saved, CombatLabReportId(17))
-        .expect("completed reports must drive the production report adapter");
-    assert_eq!(
-        transition
-            .modes
-            .iter()
-            .map(|projection| projection.mode)
-            .collect::<Vec<_>>(),
-        vec![
-            ReportMode::Overview,
-            ReportMode::Units,
-            ReportMode::SpellsEffects,
-            ReportMode::Timeline,
-            ReportMode::Compare,
-        ],
-        "each typed intent must settle through the model and game adapter"
+#[test]
+fn sandbox_launch_and_retry_keep_exact_typed_identity_and_provenance() {
+    let party = vec![
+        SandboxCharacter::Template("hedge-mage".to_owned()),
+        SandboxCharacter::Template("hedge-mage".to_owned()),
+        SandboxCharacter::Custom(CustomCharacterId(5)),
+    ];
+    let enemies = vec![
+        SandboxCharacter::Template("raider".to_owned()),
+        SandboxCharacter::Template("raider".to_owned()),
+    ];
+    let deployment = (
+        vec![position(-2, 1, 1), position(-1, 1, 1), position(-1, 2, 1)],
+        vec![position(2, -1, 1), position(3, -1, 1)],
     );
-    let current_fingerprint = current
-        .fingerprint()
-        .expect("current fixture must have a canonical fingerprint");
-    assert!(transition
-        .modes
-        .iter()
-        .all(|projection| projection.current_fingerprint == current_fingerprint));
-    assert!(transition
-        .modes
-        .iter()
-        .all(|projection| projection.units == [UnitId(0), UnitId(1)]));
-    let Some(comparison) = transition
-        .modes
-        .last()
-        .and_then(|projection| projection.comparison)
-    else {
-        panic!("Compare must preserve the independently selected report");
-    };
-    assert_eq!(comparison.0, CombatLabReportId(17));
-    assert_eq!(
-        comparison.1,
-        saved
-            .first()
-            .expect("comparison fixture exists")
-            .report
-            .fingerprint()
-            .expect("comparison fixture must have a canonical fingerprint")
+    let mut world = World::new();
+    let installed = install_sandbox_launch_for_test(
+        &mut world,
+        "procedural-hills",
+        Some(1_592_598_566),
+        "Procedural Hills",
+        party,
+        enemies,
+        Some(77),
+        Some(deployment.clone()),
     );
-    assert_eq!(transition.after_compare.mode, ReportMode::Overview);
+    assert_eq!(installed, Ok(()));
+
+    let launch = sandbox_launch_identity_snapshot(&world)
+        .expect("the exact Sandbox identity must remain available for Retry Exact");
+    assert_eq!(launch.catalog_id, "procedural-hills");
+    assert_eq!(launch.resolved_seed, Some(1_592_598_566));
+    assert_eq!(launch.scenario, "Procedural Hills");
     assert_eq!(
-        transition.after_compare.comparison,
-        Some(comparison),
-        "leaving Compare must preserve the independently selected canonical report"
+        launch.party,
+        ["hedge-mage", "hedge-mage", "custom-character-5"]
+    );
+    assert_eq!(launch.enemies, ["raider", "raider"]);
+    assert_eq!(launch.content_revision, Some(77));
+    assert_eq!(launch.rules, hex_assets::CombatSettings::default());
+    assert_eq!(launch.deployment, Some(deployment));
+    assert_eq!(
+        sandbox_launch_identity_snapshot(&world),
+        Some(launch),
+        "Retry Exact must observe the same immutable launch rather than resolve a new seed"
     );
     assert_eq!(
-        transition.after_compare.current_fingerprint, current_fingerprint,
-        "presentation transitions must not replace the retained current report"
+        gameplay_session_origin_snapshot(&world),
+        Some(GameplaySessionOriginSnapshot::Sandbox)
+    );
+
+    install_test_fixture_origin(&mut world, "ability-lab");
+    assert_eq!(
+        gameplay_session_origin_snapshot(&world),
+        Some(GameplaySessionOriginSnapshot::TestFixture(
+            "ability-lab".to_owned()
+        ))
     );
 }
 
 #[test]
-fn live_drawer_uses_the_canonical_summary_and_has_a_bounded_lifecycle() {
-    let report = sample_report(4, 0, 1);
-    let snapshot = live_statistics_snapshot(&report.summary);
+fn combat_observation_preserves_canonical_summary_and_zero_unit_identity() {
+    let summary = sample_combat_summary();
+    let snapshot = combat_observation_snapshot(&summary);
     assert_eq!(snapshot.rounds, 4);
     assert_eq!(snapshot.turns, 12);
-    assert_eq!(snapshot.successful_commands, 11);
-    assert_eq!(snapshot.refused_commands, 2);
-    assert_eq!(snapshot.movement_distance, 7);
-    assert_eq!(snapshot.movement_budget_used, 7);
+    assert_eq!(snapshot.commands, (11, 2));
+    assert_eq!(snapshot.movement, (7, 7));
     assert_eq!(snapshot.channels, 1);
     assert_eq!(snapshot.disables, (4, 1, 3));
-    assert_eq!(snapshot.channelled_mana.get("Ember"), Some(&2));
     assert_eq!(snapshot.units, [UnitId(0)]);
+    assert_eq!(snapshot.outcome, Some(EncounterOutcome::Victory));
 
-    assert!(live_statistics_visible(
-        GameplayPhase::Active,
-        Some(EncounterResolution(None))
-    ));
-    assert!(!live_statistics_visible(
-        GameplayPhase::Deployment,
-        Some(EncounterResolution(None))
-    ));
-    assert!(!live_statistics_visible(
-        GameplayPhase::Active,
-        Some(EncounterResolution(Some(EncounterOutcome::Victory)))
-    ));
+    let mut world = World::new();
+    world.insert_resource(summary);
+    let gameplay = gameplay_state_snapshot(&mut world);
+    assert_eq!(gameplay.combat, Some(snapshot));
 }
 
 #[test]
-fn production_lab_toggle_keeps_statistics_below_the_lattice_at_retina_size() {
-    let transition = production_lab_ui_transition_snapshot();
-    assert_eq!(
-        transition.published_own_lattice_cells, 7,
-        "the production lattice publisher must project the canonical player lattice"
-    );
-    assert!(
-        transition.expanded_state,
-        "the typed production intent must toggle application state"
-    );
-    assert_eq!(
-        transition.expanded.metrics.logical_size,
-        bevy::prelude::Vec2::new(1291.0, 721.0),
-        "the contract must use Bevy client pixels, excluding native title-bar chrome"
-    );
-    assert_eq!(
-        transition.expanded.metrics.viewport,
-        hex_ui::UiViewportClass::Compact
-    );
-    assert!(
-        transition.collapsed.layout_issues().is_empty(),
-        "the collapsed production adapter tree must satisfy the structural oracle: {:?}",
-        transition.collapsed.layout_issues()
-    );
-    assert!(
-        transition.expanded.layout_issues().is_empty(),
-        "the expanded production adapter tree must satisfy the structural oracle: {:?}",
-        transition.expanded.layout_issues()
-    );
+fn shipping_main_menu_has_four_actions_and_campaign_has_three_slots() {
+    use hex_ui::test_support::UiTaskCase;
 
-    fn node<'a>(
-        snapshot: &'a hex_ui::test_support::UiTreeSnapshot,
-        name: &str,
-    ) -> &'a hex_ui::test_support::UiNodeObservation {
-        snapshot
-            .nodes
+    assert_eq!(
+        UiTaskCase::MainMenu.contract().immediate_controls,
+        ["Campaign", "Sandbox", "Tools", "Settings"]
+    );
+    let menu = hex_ui::MainMenuView::default();
+    assert_eq!(menu.campaign_slots.len(), 3);
+    assert_eq!(
+        menu.campaign_slots
             .iter()
-            .find(|node| node.name == name)
-            .unwrap_or_else(|| panic!("production tree is missing {name:?}"))
-    }
-    let collapsed_lattice = node(&transition.collapsed, "Lattice Readout Stack");
-    let expanded_lattice = node(&transition.expanded, "Lattice Readout Stack");
-    let drawer = node(&transition.expanded, "Combat Lab Live Statistics Drawer");
-    assert_eq!(
-        expanded_lattice.parent_name.as_deref(),
-        Some("Inspector HUD Region")
-    );
-    assert_eq!(drawer.parent_name.as_deref(), Some("Inspector HUD Region"));
-    assert!(
-        expanded_lattice.center.y + expanded_lattice.size.y * 0.5
-            <= drawer.center.y - drawer.size.y * 0.5 + 0.5,
-        "statistics must follow the persistent lattice in the same scroll flow: lattice={expanded_lattice:?}, drawer={drawer:?}"
-    );
-    assert!(
-        (expanded_lattice.center - collapsed_lattice.center)
-            .abs()
-            .max_element()
-            <= 0.5
-            && (expanded_lattice.size - collapsed_lattice.size)
-                .abs()
-                .max_element()
-                <= 0.5,
-        "expanding through the production intent must not move or resize the lattice: collapsed={collapsed_lattice:?}, expanded={expanded_lattice:?}"
-    );
-}
-
-#[test]
-fn retry_copy_and_tune_restore_exact_frozen_launch_identity_once() {
-    let report = sample_report(8, 0, 1);
-    let expected_profile = report.profile.preset;
-    let expected_players = report.deployment.players.clone();
-    let expected_hostiles = report.deployment.hostiles.clone();
-
-    let restored = sandbox_reentry_snapshot(report);
-    assert_eq!(restored.map, "flat-arena");
-    assert_eq!(restored.preset, expected_profile);
-    assert_eq!(restored.players, ["hedge-mage"]);
-    assert_eq!(restored.hostiles, ["raider"]);
-    assert_eq!(restored.player_positions, expected_players);
-    assert_eq!(restored.hostile_positions, expected_hostiles);
-    assert!(
-        restored.request_consumed,
-        "re-entry handoffs must be one-shot so cold launch cannot inherit stale identity"
-    );
-}
-
-#[test]
-fn canonical_zero_unit_id_is_valid_while_duplicate_nonzero_ids_are_rejected() {
-    let shipped = CombatSettings::default();
-    let zero = sample_report(1, 0, 1);
-    assert!(zero.validate(&shipped).is_ok(), "UnitId(0) is canonical");
-
-    let mut duplicate = sample_report(1, 7, 8);
-    let Some(hostile) = duplicate.rosters.hostiles.first_mut() else {
-        panic!("sample report has one hostile");
-    };
-    hostile.unit_id = 7;
-    assert!(duplicate
-        .validate(&shipped)
-        .is_err_and(|error| error.contains("unique")));
-}
-
-#[test]
-fn wave_seven_fixtures_own_three_by_three_rosters_and_all_tempo_profiles() {
-    let fixtures = wave_seven_fixtures();
-    assert_eq!(
-        fixtures
-            .iter()
-            .map(|fixture| fixture.id)
+            .map(|slot| slot.slot)
             .collect::<Vec<_>>(),
-        ["occupancy-matrix", "channel-attrition", "tempo-matrix"]
+        CampaignSlotId::ALL
     );
-    assert!(fixtures
+}
+
+#[test]
+fn shipping_navigation_has_no_deprecated_lab_scenario_fixture_or_report_surface() {
+    use hex_ui::test_support::UiTaskCase;
+
+    let vocabulary = UiTaskCase::ALL
         .iter()
-        .all(|fixture| fixture.players == 3 && fixture.hostiles == 3));
-    assert_eq!(tempo_movement_matrix(&CombatSettings::default()), [4, 2, 3]);
+        .flat_map(|case| {
+            let contract = case.contract();
+            std::iter::once(contract.id)
+                .chain(contract.immediate_controls.iter().copied())
+                .chain(contract.scrollable_controls.iter().copied())
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_ascii_lowercase();
+    for deprecated in [
+        concat!("combat", " ", "lab"),
+        concat!("combat", "-", "lab"),
+        "scenarios",
+        concat!("de", "mos"),
+        concat!("fixed", " ", "fixtures"),
+        concat!("saved", " ", "reports"),
+    ] {
+        assert!(
+            !vocabulary.contains(deprecated),
+            "shipping task inventory still exposes deprecated navigation {deprecated:?}"
+        );
+    }
+    assert_eq!(
+        UiTaskCase::Tools.contract().immediate_controls,
+        [
+            "Map Creator — Coming Soon",
+            "Character Creator",
+            "Spell Creator",
+            "Back",
+        ]
+    );
+}
+
+#[test]
+fn typed_terminal_outcome_is_observed_without_report_persistence() {
+    use hex_ui::test_support::UiTaskCase;
+
+    let mut world = World::new();
+    world.insert_resource(EncounterResolution(Some(EncounterOutcome::Defeat)));
+
+    let snapshot = gameplay_state_snapshot(&mut world);
+    assert_eq!(snapshot.outcome, Some(EncounterOutcome::Defeat));
+    assert!(snapshot.combat.is_none());
+    assert_eq!(
+        UiTaskCase::SandboxOutcome.contract().immediate_controls,
+        ["Retry Exact", "Return to Sandbox"]
+    );
 }
 
 #[test]
@@ -814,6 +757,7 @@ fn gameplay_snapshot_reads_exact_canonical_position_and_budget_without_rendering
     assert_eq!(unit.turn.map(|turn| turn.movement_left), Some(2));
     assert_eq!(unit.turn.map(|turn| turn.acted), Some(true));
     assert!(snapshot.presented_actions.is_empty());
+    assert!(snapshot.combat.is_none());
 }
 
 #[test]

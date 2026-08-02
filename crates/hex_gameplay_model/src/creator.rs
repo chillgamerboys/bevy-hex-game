@@ -1,5 +1,7 @@
 //! Pure Creator navigation and lifecycle routing.
 
+use crate::{SandboxSide, SandboxSlotIndex};
+
 /// Creator library/editor surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CreatorSurface {
@@ -13,12 +15,27 @@ pub enum CreatorSurface {
 /// Explicit entry intent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CreatorEntry {
-    /// Top-level character library.
-    CharacterLibrary,
-    /// Top-level spell library.
-    SpellLibrary,
+    /// Top-level character library with an exact exit origin.
+    CharacterLibrary(CreatorOrigin),
+    /// Top-level spell library with an exact exit origin.
+    SpellLibrary(CreatorOrigin),
     /// Spell management entered from one character.
     SpellFromCharacter,
+}
+
+/// Typed surface that opened a top-level Creator session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CreatorOrigin {
+    /// Main Menu Tools route.
+    #[default]
+    Tools,
+    /// Create a New Character from one exact Sandbox picker.
+    SandboxCharacterPicker {
+        /// Roster side awaiting the new character.
+        side: SandboxSide,
+        /// Roster slot awaiting the new character.
+        slot: SandboxSlotIndex,
+    },
 }
 
 /// Destination chosen by an unblocked back action.
@@ -26,10 +43,15 @@ pub enum CreatorEntry {
 pub enum CreatorDestination {
     /// Remain within Creator and return to the character editor.
     CharacterEditor,
-    /// Return to Combat Lab.
-    CombatLab,
-    /// Return to the title screen.
-    Title,
+    /// Return to the Main Menu Tools route.
+    Tools,
+    /// Return to one exact Sandbox picker without applying a character.
+    SandboxCharacterPicker {
+        /// Roster side to restore.
+        side: SandboxSide,
+        /// Roster slot to restore.
+        slot: SandboxSlotIndex,
+    },
 }
 
 /// Navigation facts independent of drafts, widgets, and Bevy state resources.
@@ -37,10 +59,10 @@ pub enum CreatorDestination {
 pub struct CreatorNavigation {
     /// Active Creator surface.
     pub tab: CreatorSurface,
-    /// Whether the eventual exit returns to Combat Lab.
-    pub return_to_combat_lab: bool,
-    /// Whether leaving spell management first returns to its character.
-    pub return_to_character_creator: bool,
+    /// Typed eventual exit destination.
+    pub origin: CreatorOrigin,
+    /// Nested surface restored before leaving the Creator session.
+    pub parent_surface: Option<CreatorSurface>,
 }
 
 /// Bounded branch-aware edit history independent of the draft payload type.
@@ -132,33 +154,35 @@ impl CreatorNavigation {
     /// Applies one explicit entry, clearing stale cold-launch identity where required.
     pub fn enter(&mut self, entry: CreatorEntry) {
         match entry {
-            CreatorEntry::CharacterLibrary => {
+            CreatorEntry::CharacterLibrary(origin) => {
                 self.tab = CreatorSurface::Characters;
-                self.return_to_combat_lab = false;
-                self.return_to_character_creator = false;
+                self.origin = origin;
+                self.parent_surface = None;
             }
-            CreatorEntry::SpellLibrary => {
+            CreatorEntry::SpellLibrary(origin) => {
                 self.tab = CreatorSurface::Spells;
-                self.return_to_combat_lab = false;
-                self.return_to_character_creator = false;
+                self.origin = origin;
+                self.parent_surface = None;
             }
             CreatorEntry::SpellFromCharacter => {
                 self.tab = CreatorSurface::Spells;
-                self.return_to_character_creator = true;
+                self.parent_surface = Some(CreatorSurface::Characters);
             }
         }
     }
 
     /// Resolves one clean back action and consumes nested return identity once.
     pub fn back(&mut self) -> CreatorDestination {
-        if self.tab == CreatorSurface::Spells && self.return_to_character_creator {
-            self.tab = CreatorSurface::Characters;
-            self.return_to_character_creator = false;
+        if let Some(parent) = self.parent_surface.take() {
+            self.tab = parent;
             CreatorDestination::CharacterEditor
-        } else if self.return_to_combat_lab {
-            CreatorDestination::CombatLab
         } else {
-            CreatorDestination::Title
+            match self.origin {
+                CreatorOrigin::Tools => CreatorDestination::Tools,
+                CreatorOrigin::SandboxCharacterPicker { side, slot } => {
+                    CreatorDestination::SandboxCharacterPicker { side, slot }
+                }
+            }
         }
     }
 }
@@ -168,33 +192,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cold_library_entry_clears_prior_combat_lab_identity() {
+    fn tools_library_entry_clears_prior_sandbox_identity() {
         let mut navigation = CreatorNavigation {
-            return_to_combat_lab: true,
-            return_to_character_creator: true,
+            origin: CreatorOrigin::SandboxCharacterPicker {
+                side: SandboxSide::Enemies,
+                slot: SandboxSlotIndex::Six,
+            },
+            parent_surface: Some(CreatorSurface::Characters),
             ..Default::default()
         };
-        navigation.enter(CreatorEntry::SpellLibrary);
+        navigation.enter(CreatorEntry::SpellLibrary(CreatorOrigin::Tools));
         assert_eq!(
             navigation,
             CreatorNavigation {
                 tab: CreatorSurface::Spells,
-                return_to_combat_lab: false,
-                return_to_character_creator: false,
+                origin: CreatorOrigin::Tools,
+                parent_surface: None,
             }
         );
-        assert_eq!(navigation.back(), CreatorDestination::Title);
+        assert_eq!(navigation.back(), CreatorDestination::Tools);
     }
 
     #[test]
-    fn spell_management_returns_to_character_then_preserves_lab_route() {
+    fn spell_management_returns_to_character_then_preserves_sandbox_picker() {
         let mut navigation = CreatorNavigation {
-            return_to_combat_lab: true,
+            origin: CreatorOrigin::SandboxCharacterPicker {
+                side: SandboxSide::Party,
+                slot: SandboxSlotIndex::Three,
+            },
             ..Default::default()
         };
         navigation.enter(CreatorEntry::SpellFromCharacter);
         assert_eq!(navigation.back(), CreatorDestination::CharacterEditor);
-        assert_eq!(navigation.back(), CreatorDestination::CombatLab);
+        assert_eq!(
+            navigation.back(),
+            CreatorDestination::SandboxCharacterPicker {
+                side: SandboxSide::Party,
+                slot: SandboxSlotIndex::Three,
+            }
+        );
     }
 
     #[test]

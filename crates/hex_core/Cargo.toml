@@ -5,6 +5,12 @@ edition.workspace = true
 publish = false
 description = "Shared vocabulary and pure domain logic: hex coordinates, voxels, movement contracts, app states."
 
+[features]
+default = []
+# Deterministic scenario inputs are available to tests and review tooling, never the
+# default shipping dependency graph.
+test-support = []
+
 # Deliberately depends on Bevy's sub-crates rather than the `bevy` facade: this
 # crate has no rendering and no `App`, so it must stay buildable and testable
 # without pulling in a renderer. Anything needing `bevy::prelude` belongs in the

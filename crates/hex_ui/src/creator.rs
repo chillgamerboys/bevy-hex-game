@@ -444,9 +444,9 @@ fn spawn_creator_ui(
                                 action_button(
                                     actions,
                                     assets,
-                                    "Test on Map",
-                                    CreatorIntent::TestOnMap,
-                                    130.0,
+                                    "Open in Sandbox",
+                                    CreatorIntent::OpenInSandbox,
+                                    180.0,
                                 );
                             }
                         }
@@ -480,7 +480,7 @@ fn spawn_creator_ui(
                             actions,
                             assets,
                             if session.workspace == CreatorWorkspace::Hub {
-                                "Title"
+                                &session.hub_exit_label
                             } else {
                                 "Library"
                             },
@@ -566,7 +566,7 @@ fn spawn_creator_hub(
                 assets,
                 match session.tab {
                     CreatorTab::Characters => {
-                        "Build saved lattices from templates or start blank. Only clean, Map-ready characters enter Combat Lab."
+                        "Build saved lattices from templates or start blank. Only clean, Map-ready characters can open in Sandbox."
                     }
                     CreatorTab::Spells => {
                         "Build saved spells from templates or start blank. Ready spells can be inscribed by characters."
@@ -748,11 +748,11 @@ fn spawn_creator_hub(
             summary.spawn(heading(assets, "testing loop"));
             summary.spawn(blurb(
                 assets,
-                "Create a spell, save it, inscribe it in a character, then Test on Map to prefill Combat Lab.",
+                "Create a spell, save it, inscribe it in a character, then Open in Sandbox to prefill Party slot 1.",
             ));
             summary.spawn(heading(assets, "status language"));
             summary.spawn(fine(assets, "READY · spell can be inscribed and deployed"));
-            summary.spawn(fine(assets, "MAP READY · character can enter Combat Lab"));
+            summary.spawn(fine(assets, "MAP READY · character can open in Sandbox"));
             summary.spawn(fine(assets, "DRAFT / BLOCKED · saved, editable, not deployable"));
         });
 }
@@ -1225,7 +1225,7 @@ fn spawn_character_tab(
             },
         ));
         if issues.is_empty() {
-            right.spawn(blurb(assets, "Saved, clean versions may enter Combat Lab."));
+            right.spawn(blurb(assets, "Saved, clean versions may open in Sandbox."));
         } else {
             for issue in &issues {
                 right
@@ -1291,9 +1291,9 @@ fn spawn_character_actions(
                 actions.spawn(fine(
                     assets,
                     if session.character_dirty {
-                        "Test on Map blocked · save current changes"
+                        "Open in Sandbox blocked · save current changes"
                     } else {
-                        "Test on Map blocked · resolve checks"
+                        "Open in Sandbox blocked · resolve checks"
                     },
                 ));
             }

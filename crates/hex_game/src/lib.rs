@@ -24,7 +24,6 @@ use hex_core::{
 #[cfg(any(feature = "map-review", feature = "visual-walk"))]
 mod capture;
 mod casting;
-pub mod combat_reports;
 #[cfg(feature = "dev")]
 mod content_debug;
 mod creation_store;
@@ -143,8 +142,8 @@ impl Plugin for AppPlugin {
         #[cfg(any(debug_assertions, feature = "dev", feature = "map-review"))]
         app.add_plugins(bevy::diagnostic::LogDiagnosticsPlugin::default());
 
-        // A scripted walk must never inherit the operator's preferences, resume,
-        // creations, or combat reports. Install its disposable root before any
+        // A scripted walk must never inherit the operator's preferences, campaigns,
+        // or creations. Install its disposable root before any
         // persistence-owning plugin initializes `StoragePaths`.
         #[cfg(feature = "visual-walk")]
         walk::isolate_storage(app);
@@ -215,7 +214,6 @@ impl Plugin for AppPlugin {
                 .in_set(GameplaySetup::Perception),
         );
 
-        app.add_plugins(combat_reports::plugin);
         app.add_plugins((
             hex_assets::plugin,
             creation_store::plugin,
@@ -236,6 +234,9 @@ impl Plugin for AppPlugin {
             readouts::plugin,
         ));
         app.add_plugins(terrain_health_bars::plugin);
+
+        #[cfg(feature = "test-support")]
+        app.add_plugins(test_support::plugin);
 
         #[cfg(feature = "map-review")]
         app.add_plugins(review::plugin);

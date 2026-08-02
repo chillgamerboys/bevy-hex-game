@@ -3,14 +3,15 @@
 use bevy::prelude::*;
 use hex_core::Screen;
 
-pub(crate) mod combat_lab;
 mod creator;
+pub(crate) use creator::CreatorSandboxReturn;
 pub(crate) mod gameplay;
 mod lattice_demo;
 mod loading;
+mod main_menu;
+pub(crate) mod sandbox;
 mod settings;
 mod splash;
-pub(crate) mod title;
 
 pub use hex_ui::despawn_screen;
 
@@ -19,10 +20,10 @@ pub(super) fn plugin(app: &mut App) {
     app.register_type::<Screen>();
     app.add_plugins((
         splash::plugin,
-        title::plugin,
+        main_menu::plugin,
         settings::plugin,
         creator::plugin,
-        combat_lab::plugin,
+        sandbox::plugin,
         lattice_demo::plugin,
         loading::plugin,
         gameplay::plugin,

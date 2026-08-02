@@ -55,12 +55,12 @@ still belong to the crate they change. `docs` is whoever picks it up.
 | Formation traversal | Wave 4: per-segment sextant rotation, deterministic bottleneck compression/reformation, and all-or-nothing exact-path `MoveParty` validation |
 | Outcomes and recovery | Wave 4: retained-world Victory/Defeat, exact same-seed Retry, caster-chosen Renewal restoration with next-round revival, and whole-party exploration Rest |
 | Party-combat checkpoint | Wave 4: deterministic 3v3 Party Trial summary/replay, focused Ability Lab and Raider Mirror walks, and the completed human Crossing playtest |
-| Pre-alpha app shell | Wave 5 foundation, now presented as a responsive primary-route title with independent Map Scenarios and Demos catalogs plus direct Character/Spell Creator routes; Party Trial is the hidden New Game default and Close Quarters retired |
-| Exploration resume | Wave 5 / HEX-15: one atomic, build/content-bound slot, saved only from quiescent paused exploration and restored before first perception <!-- linear: HEX-15 owner: shravan-kumaran --> |
+| Campaign/Sandbox app shell | Main Menu with exactly Campaign, Sandbox, Tools, and Settings; three indexed Campaign slots; one persistent in-memory six-slot-per-side Sandbox; typed Creator destinations; Party Trial remains the canonical new Campaign |
+| Campaign persistence | Three atomic, build/content-bound indexed records, safe manual saves from Campaign exploration, active-play time, invalid-record preservation, and one-time non-destructive migration from the Wave 5 resume <!-- linear: HEX-15 owner: shravan-kumaran --> |
 | Settings and seams | Wave 5 / HEX-16: persistent display and volume preferences, centralized fixed input actions, and empty music/SFX/UI buses <!-- linear: HEX-16 owner: shravan-kumaran --> |
 | Release artifact scaffold | Wave 5 / HEX-17: stable app identity, normalized packages, retained symbol material, and documented future credential slots with no live integrations <!-- linear: HEX-17 owner: shravan-kumaran --> |
-| Creator and Combat Lab | Wave 6: versioned saved character/spell blueprints, immutable templates, Creator-local lattice tests, roster/deployment Sandbox, fixed fixture selector, frozen launches, and deterministic return/retry routing |
-| Tactical integrity and Combat Lab tuning | Wave 7: exact-surface occupancy, Channel, frozen rules profiles, canonical live/post-combat telemetry, comparable reports, deterministic fixtures, and a measured decision to retain the shipped four-hex movement default |
+| Creator foundation (Wave 6; player-facing organization superseded) | Versioned saved character/spell blueprints, immutable templates, Creator-local lattice tests, Map readiness, and frozen custom-content launches retained under typed Tools/Sandbox routing |
+| Tactical integrity (Wave 7; player-facing organization superseded) | Exact-surface occupancy, Channel, deterministic summaries/simulations, and the measured decision to retain the shipped four-hex movement default remain; old tuning/report UI does not |
 | Gameplay foundation and scoped validation | Wave 8: one pure serializable combat authority projected through ECS/animation/UI, renderer-free gameplay screen models, concern-specific integration targets, and fail-closed dependency-scoped validation with unchanged broad owner gates <!-- linear: HEX-28 owner: shravan-kumaran --> |
 | Unified map validation | Map unit, deterministic generation, and real-plugin publication contracts now share the repository scope selector, one explicit integration target, optimized dependency execution, per-concern timing/JUnit evidence, and unchanged PR/stress/visual acceptance |
 | V3 active recipe migration | Hills, Sky Islands, Mountains, Caves, Waterfall, Forest, Fort, Volcano, Deep Forest, and Prairie all use the V3 semantic pipeline in shipped scenarios |
@@ -111,6 +111,15 @@ must separately define aperture and domain semantics before reclassification is 
 The gameplay side delivers in **waves**: a short-lived `wave/N-*` branch collects a
 group of ticket PRs in dependency order, a human walks the integrated build once, and
 the whole wave lands on `dev` in one merge (CONTRIBUTING.md has the rules).
+
+> **Historical organization:** The Wave 5–8 bullets and Wave 7/8 topology records
+> below describe what those merged waves established at the time. The current
+> Campaign/Sandbox cutover supersedes their title, resume, standalone browsing, Lab,
+> fixture, rule-profile, statistics, and report UI claims. Their gameplay authority,
+> exact occupancy, creation persistence, frozen-launch, simulation, and test-boundary
+> provenance remains valid.
+
+#### Historical Waves 3–8 delivery record (player-facing routes superseded)
 
 - **Wave 3 — the slice becomes a game (delivered).** Lattices wired the damage loop
   from casts through disables and downing, alongside persistent effects, knowledge and
@@ -165,7 +174,7 @@ the whole wave lands on `dev` in one merge (CONTRIBUTING.md has the rules).
   map. Broad owner corpora remain unchanged and continue on their owning changes,
   `dev` pushes, schedules, and combined wave/release gates.
 
-#### Wave 8 outcome and topology
+#### Wave 8 outcome and topology (historical; player-facing routes superseded)
 
 Wave 8 is one gameplay/shared-integration wave rather than independent refactors.
 The pure combat authority, ECS and animation adapters, gameplay screen models, and
@@ -203,7 +212,7 @@ Wave 8 does not tune balance, add mechanics or content, upgrade Bevy, or modify
 `hex_map`, `hex_world`, `hex_perception`, `hex_game/src/review.rs`, map visual walks,
 map/perception stress suites, or their acceptance criteria.
 
-#### Wave 7 outcome and topology
+#### Wave 7 outcome and topology (historical; player-facing routes superseded)
 
 Wave 7 landed as one gameplay wave because occupancy and Channel both change canonical
 legal actions and AI, while the Lab UI, fixtures, reports, Retry, and automation prove
@@ -294,26 +303,33 @@ today, and its status, is [contracts.md](../contracts.md).
 
 ### Pre-alpha app shell and default game
 
-The responsive title now keeps Continue, New Game, Character Creator, Spell Creator,
-Combat Lab, Map Scenarios, Demos, Settings, and Quit together as primary routes. Map
-Scenarios and Demos open independently filtered scrollable catalogs. Party Trial is
-the one integrated default game and launches through New Game rather than appearing
-beside diagnostic fixtures.
-Ability Lab and Raider Mirror remain available by stable fixture ID inside Combat Lab
-and also appear in Demos; creator matrices remain Lab-only.
-Close Quarters and the Combat category remain retired. Starting a New Game never reads
-or overwrites the resume slot.
+The responsive Main Menu keeps exactly Campaign, Sandbox, Tools, and Settings as its
+primary routes. Campaign always shows three cards. Party Trial is the canonical new
+Campaign and is bound to the selected empty slot. Sandbox owns the player-facing map
+catalog, pending/committed generated seed, two ordered six-slot rosters, character
+selection, deployment, and frozen launch. Tools owns the two Creators and a disabled
+Map Creator marked Coming Soon.
+
+Scenario definitions remain internal launch inputs. Ability Lab, Raider Mirror, and
+other stable deterministic cases are available only through default-off test support.
+Close Quarters and category-driven player navigation remain retired.
 
 ### Save and load
 
-Wave 5 ships one hand-shaped, versioned, atomic resume file through
-`crates/hex_game/src/save.rs` — domain state, not ECS reflection. It is written only
-from paused, quiescent exploration and records the scenario reference, explicit
-resolved seed and generator version, coarse scenario/content digests, and the party's
-exploration state. Restore rides the existing Loading flow. Corrupt or incompatible
-data is refused visibly rather than partially loaded. Combat state, migrations,
-durable compatibility, and a terrain edit log are outside this scaffold; the resume
-slot can be discarded between builds.
+The app ships one hand-shaped, versioned, atomic `campaigns.ron` through
+`crates/hex_game/src/save.rs` — domain state, not ECS reflection. It contains exactly
+three explicit indexed records. Safe manual saving is limited to paused, quiescent
+Campaign exploration and overwrites only the bound slot. Each occupied record stores
+scenario/build/content/generator identity, party state, selected unit, formation, and
+accumulated active-play milliseconds. Restore rides the existing Loading flow.
+Corrupt or incompatible records are preserved and refused visibly rather than
+partially loaded or treated as empty.
+
+If `campaigns.ron` is absent, a valid legacy `resume.ron` is copied into slot 1 with
+zero prior play time; invalid legacy data and its reason remain visible. The legacy
+file is never overwritten or deleted. Combat state, durable cross-version
+compatibility, deletion/overwrite UI, and a terrain edit log remain outside this
+scaffold.
 
 ### Settings menu, persistence, and audio
 

@@ -81,6 +81,31 @@ where
 struct SettingsHandle<T: Asset> {
     handle: Handle<T>,
     arrived: bool,
+    /// Latest valid hot reload deferred while this fixed setting is frozen.
+    deferred: Option<T>,
+}
+
+/// Typed marker that freezes hot reload publication for one fixed settings resource.
+///
+/// Insert `FixedSettingsFreeze::<T>::default()` after the fixed file has arrived to
+/// keep the active `T` resource stable across asset modifications. The loader still
+/// observes every valid reload and retains the latest value. Removing the marker
+/// publishes that deferred value on the next update, then ordinary hot reload resumes.
+///
+/// Initial fixed-file arrival is never deferred: loading must still establish the
+/// first active resource and advance [`SettingsRegistry`]. Runtime-selected settings
+/// installed through [`choose_settings`] are a separate contract and are not frozen.
+#[derive(Resource, Debug)]
+pub struct FixedSettingsFreeze<T: Asset> {
+    marker: PhantomData<fn() -> T>,
+}
+
+impl<T: Asset> Default for FixedSettingsFreeze<T> {
+    fn default() -> Self {
+        Self {
+            marker: PhantomData,
+        }
+    }
 }
 
 /// Tracks how many settings files have been registered and how many have arrived.
@@ -216,6 +241,7 @@ impl LoadSettings for App {
                 commands.insert_resource(SettingsHandle {
                     handle: asset_server.load::<T>(path),
                     arrived: false,
+                    deferred: None,
                 });
             },
         );
@@ -235,6 +261,7 @@ fn insert_settings<T: Asset + Resource + Clone>(
     assets: Res<Assets<T>>,
     mut events: MessageReader<AssetEvent<T>>,
     mut registry: ResMut<SettingsRegistry>,
+    freeze: Option<Res<FixedSettingsFreeze<T>>>,
 ) {
     let Some(mut handle) = handle else { return };
 
@@ -253,11 +280,24 @@ fn insert_settings<T: Asset + Resource + Clone>(
         return;
     }
 
+    // Removing the typed freeze publishes exactly the newest valid value observed
+    // while it was present. Do this before current-frame modifications so a fresh
+    // unfrozen reload, if any, remains the final insertion from this command queue.
+    if freeze.is_none() {
+        if let Some(value) = handle.deferred.take() {
+            commands.insert_resource(value);
+        }
+    }
+
     // ...and again whenever the file changes on disk.
     for event in events.read() {
         if event.is_modified(&handle.handle) {
             if let Some(value) = assets.get(&handle.handle) {
-                commands.insert_resource(value.clone());
+                if freeze.is_some() {
+                    handle.deferred = Some(value.clone());
+                } else {
+                    commands.insert_resource(value.clone());
+                }
             }
         }
     }
@@ -424,6 +464,13 @@ mod tests {
             .clone()
     }
 
+    fn fixed_handle(app: &App) -> Handle<Probe> {
+        app.world()
+            .resource::<SettingsHandle<Probe>>()
+            .handle
+            .clone()
+    }
+
     /// A file chosen but not yet arrived holds the loading screen.
     #[test]
     fn a_pending_choice_is_not_loaded() {
@@ -519,6 +566,70 @@ mod tests {
         app.update();
 
         assert_eq!(app.world().get_resource::<Probe>(), Some(&Probe(9)));
+    }
+
+    /// A freeze applies only to modifications, never the first fixed-file arrival.
+    #[test]
+    fn a_frozen_fixed_setting_still_installs_its_initial_value() {
+        let mut app = test_app();
+        app.load_settings::<Probe>("config/probe.ron", &["ron"]);
+        app.finish();
+        app.update();
+        app.insert_resource(FixedSettingsFreeze::<Probe>::default());
+
+        let handle = fixed_handle(&app);
+        deliver(&mut app, &handle, Probe(1));
+        app.update();
+
+        assert_eq!(app.world().get_resource::<Probe>(), Some(&Probe(1)));
+        assert!(app.world().resource::<SettingsRegistry>().all_loaded());
+    }
+
+    /// Modified fixed settings remain deferred while frozen, with only the latest
+    /// valid value becoming active after the marker is removed.
+    #[test]
+    fn a_fixed_settings_freeze_defers_the_latest_hot_reload_until_unfreeze() {
+        let mut app = test_app();
+        app.load_settings::<Probe>("config/probe.ron", &["ron"]);
+        app.finish();
+        app.update();
+
+        let handle = fixed_handle(&app);
+        deliver(&mut app, &handle, Probe(1));
+        app.update();
+        assert_eq!(app.world().get_resource::<Probe>(), Some(&Probe(1)));
+
+        app.insert_resource(FixedSettingsFreeze::<Probe>::default());
+        for value in [2, 3] {
+            deliver(&mut app, &handle, Probe(value));
+            // Asset modifications are published from PostUpdate and consumed by
+            // the fixed-settings loader during the following Update.
+            app.update();
+            app.update();
+            assert_eq!(
+                app.world().get_resource::<Probe>(),
+                Some(&Probe(1)),
+                "a frozen resource must not expose hot reload {value}"
+            );
+        }
+
+        app.world_mut()
+            .remove_resource::<FixedSettingsFreeze<Probe>>();
+        app.update();
+        assert_eq!(
+            app.world().get_resource::<Probe>(),
+            Some(&Probe(3)),
+            "unfreeze must publish the latest deferred value"
+        );
+
+        deliver(&mut app, &handle, Probe(4));
+        app.update();
+        app.update();
+        assert_eq!(
+            app.world().get_resource::<Probe>(),
+            Some(&Probe(4)),
+            "ordinary fixed-file hot reload must resume after unfreeze"
+        );
     }
 
     /// Registering the same type twice must not detach the handles already minted.

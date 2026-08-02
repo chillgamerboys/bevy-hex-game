@@ -1,5 +1,6 @@
-// Curated, deterministic maps for the transient Wave 6 Combat Lab Sandbox.
-// Regions are authored separately from encounters because testers place every unit.
+// Curated, deterministic maps for Sandbox.
+// Side regions remain stable only to stage hidden actors before guided deployment.
+// Players may place each current character on any canonical legal, unoccupied surface.
 (
     schema_version: 2,
     maps: [
@@ -8,7 +9,7 @@
             display_name: "Flat Arena",
             description: "A compact, level arena with unobstructed sightlines for isolating combat behavior.",
             tags: ["Flat", "Open", "Combat"],
-            preview: "ui/combat-lab/flat-arena.png",
+            preview: "ui/sandbox/flat-arena.png",
             scenario: "Ability Lab",
             fixed_seed: None,
             player_region: (
@@ -25,7 +26,7 @@
             display_name: "The Crossing",
             description: "A river chokepoint, single bridge, mountain, and switchback reward deliberate deployment.",
             tags: ["Bridge", "Vertical", "Chokepoint"],
-            preview: "ui/combat-lab/the-crossing.png",
+            preview: "ui/sandbox/the-crossing.png",
             scenario: "The Crossing",
             fixed_seed: None,
             player_region: (
@@ -42,7 +43,7 @@
             display_name: "Procedural Hills",
             description: "Temperate hills split by a river, with a bridge and a longer alternate crossing.",
             tags: ["River", "Bridge", "Elevation"],
-            preview: "ui/combat-lab/procedural-hills.png",
+            preview: "ui/sandbox/procedural-hills.png",
             scenario: "Procedural Hills",
             fixed_seed: Some(1592598566),
             player_region: (
@@ -59,7 +60,7 @@
             display_name: "Rolling Hills",
             description: "Open rolling ground without a funnel; distance and elevation are the primary obstacles.",
             tags: ["Open", "Rolling", "Distance"],
-            preview: "ui/combat-lab/rolling-hills.png",
+            preview: "ui/sandbox/rolling-hills.png",
             scenario: "Rolling Hills",
             fixed_seed: None,
             player_region: (
@@ -76,7 +77,7 @@
             display_name: "Frozen Hills",
             description: "A cold crossing with frozen slopes, a divided approach, and meaningful elevation.",
             tags: ["Cold", "River", "Elevation"],
-            preview: "ui/combat-lab/frozen-hills.png",
+            preview: "ui/sandbox/frozen-hills.png",
             scenario: "Frozen Hills",
             fixed_seed: Some(484450342),
             player_region: (
@@ -93,7 +94,7 @@
             display_name: "Volcanic Hills",
             description: "A towering volcano feeds descending lava beneath one elevated stairway bridge.",
             tags: ["Lava", "Bridge", "Hazards"],
-            preview: "ui/combat-lab/volcanic-hills.png",
+            preview: "ui/sandbox/volcanic-hills.png",
             scenario: "Volcanic Hills",
             fixed_seed: Some(444211238),
             player_region: (
@@ -110,7 +111,7 @@
             display_name: "Sky Islands",
             description: "A playable lower battlefield beneath high, flight-gated floating islands.",
             tags: ["Vertical", "Islands", "Gated"],
-            preview: "ui/combat-lab/sky-islands.png",
+            preview: "ui/sandbox/sky-islands.png",
             scenario: "Sky Islands",
             fixed_seed: Some(94445606),
             player_region: (
@@ -127,7 +128,7 @@
             display_name: "Mountains",
             description: "A broad frozen massif offers a high saddle and a longer low-valley bypass.",
             tags: ["Vertical", "Saddle", "Routes"],
-            preview: "ui/combat-lab/mountains.png",
+            preview: "ui/sandbox/mountains.png",
             scenario: "Mountains",
             fixed_seed: Some(129704046),
             player_region: (
@@ -144,7 +145,7 @@
             display_name: "Caves",
             description: "A rocky surface opens into a dense network of full-height underground passages.",
             tags: ["Interior", "Vertical", "Tunnels"],
-            preview: "ui/combat-lab/caves.png",
+            preview: "ui/sandbox/caves.png",
             scenario: "Caves",
             fixed_seed: Some(736283041),
             player_region: (
@@ -161,7 +162,7 @@
             display_name: "Waterfall",
             description: "An elevated river falls through the map with short and long dry routes around it.",
             tags: ["Water", "Vertical", "Routes"],
-            preview: "ui/combat-lab/waterfall.png",
+            preview: "ui/sandbox/waterfall.png",
             scenario: "Waterfall",
             fixed_seed: Some(771203419),
             player_region: (
@@ -178,7 +179,7 @@
             display_name: "Forest",
             description: "Wooded hills open onto prairie through protected clearings and traversable trails.",
             tags: ["Cover", "Clearings", "Trails"],
-            preview: "ui/combat-lab/forest.png",
+            preview: "ui/sandbox/forest.png",
             scenario: "Forest",
             fixed_seed: Some(381654729),
             player_region: (
@@ -195,7 +196,7 @@
             display_name: "Deep Forest",
             description: "Dense authored woodland preserves one winding trail and three irregular clearings.",
             tags: ["Dense", "Woodland", "Trail"],
-            preview: "ui/combat-lab/deep-forest.png",
+            preview: "ui/sandbox/deep-forest.png",
             scenario: "Deep Forest",
             fixed_seed: Some(1592598566),
             player_region: (
@@ -212,7 +213,7 @@
             display_name: "Prairie",
             description: "Open rolling grassland provides long sightlines and dense nonblocking vegetation.",
             tags: ["Open", "Grassland", "Rolling"],
-            preview: "ui/combat-lab/prairie.png",
+            preview: "ui/sandbox/prairie.png",
             scenario: "Prairie",
             fixed_seed: Some(1592598566),
             player_region: (
@@ -229,7 +230,7 @@
             display_name: "Fort",
             description: "A worked-stone stronghold with two gates, broad wall walks, towers, stairs, and a central keep.",
             tags: ["Fortification", "Gates", "Vertical"],
-            preview: "ui/combat-lab/fort.png",
+            preview: "ui/sandbox/fort.png",
             scenario: "Fort",
             fixed_seed: Some(640367719),
             player_region: (
@@ -246,7 +247,7 @@
             display_name: "Seven Regions",
             description: "One connected world joins hills, mountains, waterfall, forest, fort, caves, and sky islands.",
             tags: ["Ring7", "Large", "Mixed"],
-            preview: "ui/combat-lab/seven-regions.png",
+            preview: "ui/sandbox/seven-regions.png",
             scenario: "Seven Regions",
             fixed_seed: Some(703700113),
             player_region: (
@@ -263,7 +264,7 @@
             display_name: "Two Rings",
             description: "Nineteen connected regions form one mountain-fed watershed beside forests, prairies, caves, a fort, and a volcano.",
             tags: ["Ring19", "Large", "Mixed"],
-            preview: "ui/combat-lab/two-rings.png",
+            preview: "ui/sandbox/two-rings.png",
             scenario: "Two Rings",
             fixed_seed: Some(1592598566),
             player_region: (

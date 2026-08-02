@@ -7,6 +7,34 @@ file is the record that travels with the repo.
 
 <!-- /audit-diff appends below this line. Don't insert content between this comment and Wave entries; the skill anchors on this marker. -->
 
+## Wave 26 — feat(game): cut over to Campaign and Sandbox (2026-08-02)
+
+- **PR**: #176 — `shrav-k/campaign-sandbox-cutover`
+- **Outcome**: combined audit and automated candidate gate green after PR #175
+  reconciliation; exact-head named-human runtime sign-off remains pending
+- **Lenses triggered**: 4, 6, 7, 8, D2, plus the fresh-eyes pass
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 6 | `crates/hex_game/src/screens/sandbox.rs` (`on_deployment_tile_clicked`), `crates/hex_ui/src/gameplay_frame.rs` | SHIP-BLOCKER | fixed — guided placement targets canonical terrain directly, validates exact walker footing and occupancy without catalog-region caps, and removes ordinary HUD regions from layout and picking during Deployment |
+| 7 | `crates/hex_gameplay_model/src/sandbox.rs`, `crates/hex_ui/src/deployment.rs` | SHIP-BLOCKER | fixed — the typed queue admits only the next unplaced slot or a prior placed slot, and Undo derives Review again whenever it restores a complete exact deployment |
+| 6 | `crates/hex_core/src/presentation.rs`, `crates/hex_game/src/screens/sandbox.rs`, `crates/hex_game/src/terrain_health_bars.rs` | SHIP-BLOCKER | fixed — staged actors use a composable Sandbox-deployment occlusion reason, while world-space terrain health bars obey effective gameplay chrome; camera cutaways, Start, HUD hiding, Deployment, and outcomes can no longer restore or retain the wrong visibility |
+| 4 | `crates/hex_game/src/screens/gameplay.rs` (`handle_outcome_actions`, `handle_input`) | SHIP-BLOCKER | fixed — Campaign Return and Backspace now reset the persistent menu model to its root before entering `Screen::Title`; typed outcome and keyboard regressions cover both paths without changing Sandbox ownership |
+| 8 | `.github/workflows/manual-runtime-signoff.yaml` | SHIP-BLOCKER | fixed — the exact-head runtime gate now treats every shipped `assets/**` path as runtime-visible instead of omitting menu, scenario, Creator, and Sandbox preview inputs |
+| 7, 8 | `.config/test-scopes.json`, `tools/test_test_scope.py` | NON-BLOCKER | fixed — the deprecated-vocabulary validator is explicit validation infrastructure, with a selector regression proving full coverage and no unknown path |
+| D2 | `docs/design/game.md` | NON-BLOCKER | fixed — removed a link to a nonexistent `magic-outside-combat` fragment while preserving the open design question |
+
+**Notes**: PR #175 landed at `70a212bb` and was merged additively into the cutover at
+`fdd6012`. The reconciled candidate passes formatting, dependency policy, strict
+all-feature Clippy, the full all-feature workspace suite, warning-denied docs, the
+release build, and the focused rules (136), contracts (323), simulation (22), app
+(100 plus 11 postflight), residual (742), and unchanged map-contract (74) scopes.
+The bounded route walk completed all 59 steps and ten captures. A separate 37-step
+release Fort walk selected the canonical map, placed Party then Enemy through exact
+terrain pointer clicks, and captured the HUD-suppressed Review state. Linear was
+unavailable and remains a soft coordination signal. The PR must not merge until its
+body records a named-human runtime PASS for the final head SHA.
+
 ## Wave 25 — feat: add terrain durability and destruction (2026-08-02)
 
 - **PR**: #175 — `wave/terrain-durability`

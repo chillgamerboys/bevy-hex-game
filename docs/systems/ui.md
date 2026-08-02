@@ -27,13 +27,14 @@ The public seam is deliberately small:
   `HeadlessUiPlugin` runs the real Bevy UI, text, focus, and layout schedules on a
   synthetic primary window without Winit, a renderer, or gameplay plugins.
 
-Creator and Combat Lab transitions remain in `hex_gameplay_model`. A widget may
-select or submit a transition, but it must not duplicate the transition policy.
-Combat Lab setup, saved-report controls, and the deployment HUD are rendered from
-`CombatLabScreenView` and `DeploymentView`; `hex_game` alone validates map readiness,
-persists report annotations, resolves exact surfaces, and admits Start Combat. The
-3D deployment highlights and placement tokens remain spatial world presentation,
-not runtime UI.
+Main Menu, Campaign, Sandbox, and Creator transitions remain in
+`hex_gameplay_model`. A widget may select or submit a typed transition, but it must
+not duplicate the transition policy. Route-specific immutable views render the
+Main Menu, three Campaign cards, Sandbox dashboard and child routes, while
+`DeploymentView` renders one compact guided task card and its Review actions.
+`hex_game` alone validates Campaign records and map readiness, resolves exact terrain
+clicks, freezes launch identity, and admits Start. Exact 3D placement tokens remain
+spatial world presentation, not runtime UI.
 
 ## Information hierarchy
 
@@ -49,29 +50,29 @@ Gameplay adds a persistent **Now / Choose / Confirm** rail. It always presents t
 current actor, phase, remaining movement and action, and the currently authorized
 actions. Blocking decisions take `Required` priority and show their progress. The
 rail is outside the HUD visibility tree, so hiding inspectors or the HUD cannot hide
-the required action.
+the required action during active play. Deployment is a stronger phase-level task:
+it removes the rail and every other ordinary HUD region from layout, focus, scrolling,
+and picking, then presents only its compact modal task card over the map. This
+effective suppression does not change the player's ordinary HUD preference.
 
 Party and turn state are primary information. The selected unit's lattice is
-persistent Inspector context, not a replaceable drawer. In Combat Lab sessions,
-statistics are a secondary surface ordered below that lattice; collapsing or
-expanding statistics must never hide, move, or cover the lattice. The event log and
-other optional inspectors remain secondary drawers. The Inspector is one persistent
-vertical scroll owner at every viewport and scale: own/target lattice readouts come
-first and statistics follow them in the same flow. Statistics can never be visible
-without that lattice. On an ultra-constrained blocking decision, the required lattice
-is promoted into the persistent action rail and the ordinary Inspector and statistics
-both hide; this avoids presenting two independently focusable copies of the same
-required choice. Redundant world badges yield so no secondary surface can cover a
-primary action.
+persistent Inspector context, not a replaceable drawer. The event log and other
+optional inspectors remain secondary. The Inspector has one persistent vertical
+scroll owner at every viewport and scale, with own/target lattice readouts first. On
+an ultra-constrained blocking decision, the required lattice is promoted into the
+persistent action rail and the ordinary Inspector hides; this avoids presenting two
+independently focusable copies of the same required choice. Redundant world badges
+yield so no secondary surface can cover a primary action. Sandbox sessions do not add
+live telemetry to this hierarchy; canonical `CombatSummary` remains an observation
+for tests.
 
 Builds with the default-off `dev` feature add a `DEV · TIME` panel to the gameplay
 Inspector region. `hex_ui` renders only the immutable current-hour or unavailable
 projection and emits typed half-hour/preset intents; the `hex_game` adapter remains
 responsible for changing the existing session clock. Static lighting exposes a reason
 instead of controls, and shipping builds contain neither the panel nor its adapter.
-On Compact Combat Lab canvases, live statistics take precedence over this
-development-only panel inside the same Inspector flow so the two secondary surfaces
-cannot compete for space.
+On Compact canvases this development-only panel follows the same one-scroll-owner
+rule and cannot compete with primary lattices or actions for space.
 
 ## Responsive model
 
@@ -123,27 +124,22 @@ Compact                         Standard / Wide
 └──────────────┘                └──────────────────────────────┘
 ```
 
-Structural tests cover 960×540, 1280×720, 1512×949, 1920×1080, 2560×1440, and
-3840×2160 at 1× and 2× device scale in every semantic UI scale mode. Device pixels
-remain separate from logical layout, so 1280×720 @2× and the observed 3024×1898
-physical fullscreen client (1512×949 logical @2×) exercise the same contract.
-The reported 2582×1494 outer window includes native title-bar chrome; its Bevy client
-is approximately 2582×1442 physical, or 1291×721 logical at 2×. Tests use that client
-canvas directly and cover both 699px and 700px effective-height boundary cases so
-native chrome cannot silently select an untested layout.
-Primary controls must be fully visible immediately; secondary catalog/report content
+The required structural matrix covers 1280×720, 1920×1080, and 3840×2160 under Auto
+and 200% semantic UI scale. Additional breakpoint and device-scale cases may extend
+that minimum. Device pixels remain separate from logical layout.
+Primary controls must be fully visible immediately; secondary catalog content
 may instead prove complete scroll reachability. Every required control remains
 unobscured, accessible, and at least 44×44. `UiTreeSnapshot` intersects each node
 and named text node's actual glyph rectangles with the canvas and Bevy's inherited
 `CalculatedClip`; a nonzero `ComputedNode` whose glyphs or box cross a clipped edge
 is not treated as fully visible. The oracle also checks focus order and interactive
 overlap without interpreting the text or pixels as gameplay truth.
-The matrix uses the full production title routes, the independently filtered Map
-Scenarios and Demos catalogs, populated
-Settings, Creator and Combat Lab setup projections, a 6v6 deployment, and the maximum
-ordinary gameplay action rail plus required, aiming, statistics, and report states. A half logical
-pixel is the only target-size tolerance, accounting for physical-pixel rounding at
-fractional Auto scales.
+The matrix uses Main Menu, all three Campaign record states, Sandbox Overview, map
+browser and both map-detail modes, sparse and dense Party/Enemies rosters, character
+picker, Tools, populated Settings, Creator, guided 6v6 Deployment placement and Review,
+and the maximum ordinary gameplay action rail plus required and aiming states. A half
+logical pixel is the only target-size tolerance, accounting for physical-pixel
+rounding at fractional Auto scales.
 
 ## Typography, spacing, and contrast
 
@@ -207,7 +203,7 @@ the renderer resource and is persisted through the existing preferences writer.
 
 The exhaustive player-task inventory, coverage tiers, and fail-closed control
 classification live in [Runtime UI verification](../development/ui-verification.md).
-That inventory is the acceptance source for route and fixture completeness; this
+That inventory is the acceptance source for route and task-case completeness; this
 section defines which oracle may prove each kind of fact.
 
 Use the cheapest authoritative oracle:
@@ -221,7 +217,7 @@ Use the cheapest authoritative oracle:
   only.
 - Deterministic combat and balance evidence belongs to the rules, contracts, and
   simulation partitions.
-- The scoped presentation route reviews exactly ten deterministic Bevy image-target
+- The scoped presentation route reviews at most ten deterministic Bevy image-target
   frames from `walks/gameplay_ui.ron`. Every gameplay `ReviewCapture` declares an
   exact `UiTaskCase` and passes that task's live named-control contract before a PNG
   can be written; merely reaching the right screen is insufficient. A typed review
@@ -232,10 +228,10 @@ Use the cheapest authoritative oracle:
   remain unchanged.
 
 A screenshot must never prove legality, budgets, decisions, damage, Channel,
-outcomes, persistence, deployment, or report identity. The scoped gameplay visual
-script therefore uses no combat-solving steps; presentation fixtures open authored
-states while typed tests prove their canonical facts. Generic world-owned walks keep
-their existing driver verbs and acceptance criteria.
+outcomes, persistence, deployment, or launch/retry identity. The scoped gameplay
+visual script therefore uses no combat-solving steps; presentation fixtures open
+authored states while typed tests prove their canonical facts. Generic world-owned
+walks keep their existing driver verbs and acceptance criteria.
 
 Forest, Waterfall, map-review, V3, and world-owned captures remain outside this
 contract and are unchanged.
@@ -256,15 +252,19 @@ cargo run -p hex_game --features visual-walk
 | Surface | Primary task | Persistent action | Secondary content |
 |---|---|---|---|
 | Splash/loading | understand progress | none | none |
-| Title | choose route | all primary routes initially visible | none |
-| Map Scenarios | choose a map/world presentation fixture | Back | map-only catalog |
-| Demos | choose a focused gameplay demonstration | Back | demo-only catalog |
+| Main Menu | choose route | Campaign, Sandbox, Tools, Settings | none |
+| Campaign | choose one of exactly three slots | Back / New Game or Continue | party, active time, or invalid reason |
+| Sandbox Overview | review temporary encounter and launch | Back / Start Sandbox | committed map and two six-slot roster summaries |
+| Sandbox Map Browser / Detail | choose and confirm one map | Back / Use Map | pending seed, Regenerate only for generated maps |
+| Sandbox Party / Enemies | edit an ordered six-slot side | Back | shared roster component and Map-ready diagnostics |
+| Character Picker | preview then commit one character | Back / Use Character | templates, saved characters, Creator entry |
+| Tools | choose an authoring tool | Back | Character Creator, Spell Creator, disabled Map Creator |
 | Settings | change one preference | Back | persistence notice |
-| Character / Spell Creator | finish the current authoring step | Library / Save / Test where applicable | palettes, catalogs, validation, and history |
-| Combat Lab setup | choose fixture/profile and deploy | Back / Launch | fixture explanation and tuning |
-| Gameplay | act for the current unit | Now / Choose / Confirm rail | inspector, log, statistics |
+| Character / Spell Creator | finish the current authoring step | Library / Save / Test where applicable | palettes, catalogs, validation, history, typed origin |
+| Deployment | place occupied Party then Enemy slots one at a time and review exact choices | Undo / Return to Sandbox / Start Combat in Review | compact current-character card, exact legal-surface and occupancy refusal, no ordinary HUD |
+| Gameplay | act for the current unit | Now / Choose / Confirm rail | inspector and log |
 | Pause | resume, save, or leave | Resume | save notice |
-| Report / Compare | inspect one axis at a time | Back / Retry / Copy / Tune | alternate report views |
+| Sandbox outcome | acknowledge result | Retry Exact / Return to Sandbox | Victory or Defeat only |
 
 When a screen changes, review it against the hierarchy, focus, compact reflow, and
 oracle boundary above before adding a screen-specific workaround.

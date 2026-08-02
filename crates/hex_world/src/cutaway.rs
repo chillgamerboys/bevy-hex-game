@@ -762,6 +762,42 @@ mod tests {
     }
 
     #[test]
+    fn sandbox_deployment_composes_with_character_camera_and_restores_original_visibility() {
+        let target_pos = position(0, 0, 7);
+        let (mut app, target, camera) = test_app(target_pos, InteriorRegionId(2));
+        app.world_mut()
+            .entity_mut(target)
+            .get_mut::<PresentationOcclusion>()
+            .expect("the actor should retain composable occlusion")
+            .insert(PresentationOcclusionReason::SandboxDeployment);
+        app.update();
+        assert_hidden(&app, target);
+
+        *app.world_mut().resource_mut::<CameraMode>() = CameraMode::Character;
+        set_camera_distance(&mut app, camera, 0.8);
+        app.update();
+        let reasons = app
+            .world()
+            .entity(target)
+            .get::<PresentationOcclusion>()
+            .expect("both independent occlusion owners share one reason set");
+        assert!(reasons.contains(PresentationOcclusionReason::SandboxDeployment));
+        assert!(reasons.contains(PresentationOcclusionReason::CharacterCameraProximity));
+
+        app.world_mut()
+            .entity_mut(target)
+            .get_mut::<PresentationOcclusion>()
+            .expect("the actor should retain composable occlusion")
+            .remove(PresentationOcclusionReason::SandboxDeployment);
+        app.update();
+        assert_hidden(&app, target);
+
+        set_camera_distance(&mut app, camera, 1.2);
+        app.update();
+        assert_ordinary(&app, target);
+    }
+
+    #[test]
     fn retarget_and_target_loss_restore_the_previous_character() {
         let target_pos = position(0, 0, 7);
         let (mut app, first, camera) = test_app(target_pos, InteriorRegionId(2));

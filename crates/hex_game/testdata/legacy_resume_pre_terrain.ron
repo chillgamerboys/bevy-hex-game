@@ -1,0 +1,27 @@
+(
+    format_version: 1,
+    build_version: "0.4.0",
+    scenario_name: "Party Trial",
+    // Exact digest written against origin/dev at PR #174 (2f48cdc), before terrain damage joined the resume identity.
+    scenario_digest: 12939654078412479451,
+    resolved_seed: None,
+    generator_version: None,
+    formation: (
+        preset: "Compact",
+        assignments: {
+            (0): (q: 0, r: 0),
+        },
+        facing: A,
+        mode: Group,
+    ),
+    selected: Some((0)),
+    units: [
+        (
+            id: (0),
+            faction: Player,
+            position: (coord: (q: 0, r: 0), level: 0),
+            lattice: None,
+            downed: false,
+        ),
+    ],
+)

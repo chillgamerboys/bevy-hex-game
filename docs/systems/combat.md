@@ -23,7 +23,7 @@ There is **one map** and one set of units either way — this is a change of tem
 a change of place.
 
 `Mode` is a `SubStates` of `Screen::Gameplay`, alongside `Pause`, so "in combat on the
-title screen" is unrepresentable rather than merely unlikely.
+Main Menu" is unrepresentable rather than merely unlikely.
 
 The two thresholds differ on purpose. Without a margin, a unit sitting exactly on the
 boundary would flip in and out of combat every frame it drifted.
@@ -103,7 +103,7 @@ reconciler publishes whole crossed surfaces and clears both at the final surface
 move or unlock the unit, and retaining a strike/cast animation cannot retain the turn.
 
 Keys: `SPACE` ends the current player turn and is ignored while a hostile owns the
-turn. `ESC` and `BACKSPACE` were already taken by pause and quit-to-title.
+turn. `ESC` and `BACKSPACE` were already taken by pause and return-to-owner.
 
 ### A defender choice is command-modal, not Pause
 
@@ -142,9 +142,10 @@ The result is emitted once and stored in `EncounterResolution`.
 
 That resource gates the same `PausableSystems` set as ordinary pause, freezing
 movement, casting, AI, effects, command application, and turns while the world remains
-visible. Outcome UI runs outside the gate. Victory continues into Exploring. Defeat
-can rebuild the retained scenario snapshot with its original resolved seed, or return
-to the title screen.
+visible. Outcome UI runs outside the gate. Campaign Victory continues into Exploring.
+A terminal Sandbox session exposes only Victory/Defeat, Retry Exact over its frozen
+launch snapshot, and Return to Sandbox. Other origins use their own typed return
+contract.
 
 ### Revival waits for a round boundary
 
@@ -488,7 +489,7 @@ removes it with the entity.
 
 `Reach`, click path construction, the movement preview, authoritative `MoveAlong`,
 baseline AI legal actions and traversal, whole-party planning/application, encounter
-placement, and Combat Lab deployment all consume this projection. A route may neither
+placement, and Sandbox deployment all consume this projection. A route may neither
 finish on nor pass through another body. The command refusal preserves that
 distinction as `OccupancyBlock::Destination` or `OccupancyBlock::Route`, including
 the exact surface and stable occupant. Commands drained in one frame reserve their

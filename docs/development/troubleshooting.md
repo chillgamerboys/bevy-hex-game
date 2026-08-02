@@ -33,15 +33,23 @@ setting, because a default that silently diverges from what someone wrote is wor
 than a stall. Once a valid value exists, a failed hot reload keeps it and reports the
 error instead — fix the file and save it again.
 
-**It returned to the title screen with a notice.** Terrain generation or actor
-spawning failed after loading succeeded — the reason is on screen and in the log.
+**It returned to the Main Menu with a notice.** Terrain generation or actor spawning
+failed after loading succeeded — the reason is on screen and in the log. A launch
+owned by Creator returns through Sandbox instead so its retained Creator route remains
+available.
 
-**Continue is unavailable.** The title screen explains whether no `resume.ron`
-exists or whether the current build rejected it. A resume is deliberately disposable
-pre-alpha state: it must match this build, its scenario/content digest, and the
-scenario's generator version. Save again from the pause overlay during exploration;
-combat cannot be saved. Set `HEX_GAME_DATA_DIR` to an isolated directory when testing
-this flow.
+**A Campaign card is Invalid or Continue is unavailable.** The card preserves the
+record and explains the explicit slot, schema, build, scenario/content digest, or
+generator mismatch. There is no in-product overwrite or delete action for an Invalid
+record: reopen it with the compatible build/content, or restore a known-good
+`campaigns.ron` backup. If `campaigns.ron` is absent, startup tries the legacy
+`resume.ron` once: a valid record becomes slot 1, while invalid data and the legacy file
+are preserved. Set `HEX_GAME_DATA_DIR` to an isolated directory when testing this flow.
+
+**Start Sandbox is unavailable.** Resolve the first reason shown: wait for maps,
+choose an available map, add at least one character to each side, then repair the
+first Party or Enemy slot that is not Map-ready. Regeneration changes a pending seed;
+Back intentionally discards it and Use Map commits it.
 
 **Settings reported that defaults were restored.** `preferences.ron` was corrupt or
 from an incompatible version. The game keeps running with safe defaults and reports
@@ -58,9 +66,9 @@ exit is a bug.
 
 **A change had no effect.** Check that you saved the file, and that you are running
 `cargo dev` rather than `cargo run --release`: only the dev build watches files.
-Some values are only read when the world is built — press `BACKSPACE` and use New
-Game or relaunch the development fixture. Which values those are is the hot-reload table in
-[config.md](config.md).
+Some values are only read when the world is built — press `BACKSPACE` and relaunch
+from Campaign, Sandbox, or a test-support request. Which values those are is the
+hot-reload table in [config.md](config.md).
 
 **You want to undo everything.** These files are tracked in git:
 

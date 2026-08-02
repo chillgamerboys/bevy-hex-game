@@ -256,9 +256,22 @@ pub(crate) const fn owner_resolved_control_role() -> impl Bundle {
     SemanticControl::OwnerResolved
 }
 
-/// Standard full-width menu action.
+/// Standard menu action.
 #[must_use]
 pub fn button(name: impl Into<String>) -> impl Bundle {
+    button_with_width(name, Val::Px(440.0), Val::Auto)
+}
+
+/// Menu action that fills a constrained parent such as a campaign card.
+#[must_use]
+pub(crate) fn fluid_button(name: impl Into<String>) -> impl Bundle {
+    // `Percent(100)` resolves against a fixed-width parent's authored content width,
+    // then adds this control's own padding. Let flex stretch own the final width so
+    // the complete bordered target remains inside padded cards.
+    button_with_width(name, Val::Auto, Val::Auto)
+}
+
+fn button_with_width(name: impl Into<String>, width: Val, max_width: Val) -> impl Bundle {
     let name = name.into();
     (
         Name::new(name.clone()),
@@ -268,7 +281,8 @@ pub fn button(name: impl Into<String>) -> impl Bundle {
         crate::DefaultImmediateControl,
         responsive_control_role(),
         Node {
-            width: Val::Px(440.0),
+            width,
+            max_width,
             min_height: Val::Px(48.0),
             padding: UiRect::axes(Val::Px(20.0), Val::Px(12.0)),
             flex_direction: FlexDirection::Column,

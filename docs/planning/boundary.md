@@ -69,11 +69,11 @@ The contracts-first PR introduced the exact projections V3 may publish:
   generated features such as tree roots;
 - a generated light is an entity with an exact `TilePos` and `GameplayLight`;
   its exterior or interior `LightDomain` is derived at use time;
-- `PresentationOcclusion` composes independent fog, explicit review-cutaway, and
-  Character-camera proximity reasons; reason-producing systems never write Bevy
-  `Visibility` independently, and one shared presentation pass applies their combined
-  result. `TreeOccluder` and `TreeFadeAmount` carry whole-tree camera opacity without
-  exposing feature plans.
+- `PresentationOcclusion` composes independent fog, explicit review-cutaway,
+  Character-camera proximity, and Sandbox-deployment reasons; reason-producing
+  systems never write Bevy `Visibility` independently, and one shared presentation
+  pass applies their combined result. `TreeOccluder` and `TreeFadeAmount` carry
+  whole-tree camera opacity without exposing feature plans.
 
 These contracts carry consequences, not instructions. Gameplay can ask whether a
 known surface is blocked or which biome region it belongs to, but it cannot ask the
@@ -586,11 +586,13 @@ legacy generator lifetime.
 **Scheduling note (gameplay side agrees, and has moved to suit).** Your rule that no
 production save may depend on regenerating a V1/V2 seed still makes D2 a
 *prerequisite* for durable saves rather than an optimization — and D1 a prerequisite
-for restoring an edited world. Wave 5's pre-alpha resume slot is a deliberately
-disposable exception: it records an explicit seed, generator version, and content
-digests, then refuses drift instead of migrating or silently rebuilding a different
-world ([roadmap.md](roadmap.md)). It never claims production compatibility and does
-not save combat. D1 and D2 therefore remain asked without blocking that scaffold.
+for restoring an edited world. The former Wave 5 single resume was superseded by
+exactly three Campaign slots plus one-time legacy migration. Those slots remain a
+deliberately disposable pre-alpha exception: each records an explicit seed, generator
+version, and content identities, then refuses drift instead of silently rebuilding a
+different world ([roadmap.md](roadmap.md)). They never claim production compatibility
+and do not save combat. D1 and D2 therefore remain asked without blocking that
+scaffold.
 When they land, contract H's outcome log is what makes a replayed impact reproducible
 without pinning the damage table's version.
 

@@ -35,7 +35,7 @@ will, and no amount of documentation prevents it. A compiler error does.
 | `hex_lattice` | **The lattice**: gems, fusions, spells, mana, disables, enchantments — the game's core rules, as a pure engine | `hex_core` | gameplay |
 | `hex_ai` | Authorized observations, canonical legal-action requests, profile/controller identities, and replaceable algorithm traits; no legality or simulation mutation | `hex_core`, Bevy sub-crates | gameplay |
 | `hex_combat_core` | Frozen combat inputs, serializable state, the command reducer, typed outcomes, canonical snapshots and bounded simulation | `hex_core`, `hex_lattice`, `bevy_ecs` derive support only | gameplay |
-| `hex_gameplay_model` | Pure Combat Lab and Creator state transitions, report selection, launch routing, navigation, and edit history | `hex_core`, `bevy_ecs` derive support only | gameplay |
+| `hex_gameplay_model` | Pure Main Menu, Campaign, Sandbox, and Creator routes; bounded slot identities; draft edits; launch blockers; and edit history | `hex_core`, `bevy_ecs` derive support only | gameplay |
 | `hex_ui` | Runtime UI rendering, immutable presentation models, typed UI intentions, responsive scale, semantic styling, focus/accessibility, and presentation-only observations | Bevy, `hex_core`, `hex_assets`, `hex_gameplay_model`; never gameplay/world implementations | shared presentation |
 | `hex_assets` | Generic asset loading plus domain-owned RON schema and settings modules | `hex_core`, `hex_lattice` | loader infrastructure: gameplay; each schema/settings module and its content: that domain's owner |
 | `hex_objects` | Palette-backed rendering of static authored voxel objects and isolated per-tree fade materials | `hex_core`, `hex_assets` | shared presentation |
@@ -314,7 +314,7 @@ sets make the ordering that crosses crate boundaries explicit:
   `Pause(false)`.
 - **`GameplaySetup`** — `Resources → Terrain → Actors → Restore → Perception →
   View → Finalize`, for `OnEnter(Screen::Gameplay)`. `Restore` applies a validated
-  pre-alpha resume after the scenario terrain and roster exist; `Perception` then
+  bound Campaign slot after the scenario terrain and roster exist; `Perception` then
   derives initial knowledge from the restored actors, and `View` applies generated
   framing and presentation only after that projection exists.
 - **`PerceptionSystems`** — `PublishAmbient → ResolveIllumination →
@@ -366,21 +366,21 @@ forgets to update.
 ## States
 
 ```
-Splash ──► Title ◄──────────────► Settings
-              │  ├──► Character Creator ──► local lattice test
-              │  ├──► Spell Creator
-              │  └──► Combat Lab setup ──► deployment
-              │
-              │ New Game / valid Continue / Sandbox / fixed fixture
-              ▼
-           Loading ──► Gameplay
-                          │
-                          ├── BACKSPACE ──► owning screen or Title
-                          └── Pause (sub-state of Gameplay)
+Splash ──► Title (Main Menu host) ◄──────────────► Settings
+              │  ├──► Campaign (three slots) ───────────┐
+              │  ├──► Sandbox ──► deployment ───────────┤
+              │  └──► Tools ──► Character/Spell Creator │
+              │                    └──► local test       │
+              │                                          ▼
+              └──────────────────────────────────────► Loading ──► Gameplay
+                                                                   │
+                                                                   ├── BACKSPACE ──► typed owner
+                                                                   └── Pause
 ```
 
-`Pause` is a **sub-state** of `Gameplay`, so "paused on the title screen" is
-unrepresentable rather than merely unlikely.
+`Screen::Title` remains the internal coarse state that hosts the player-facing Main
+Menu, Campaign cards, and Tools page. `Pause` is a **sub-state** of `Gameplay`, so
+"paused on the Main Menu" is unrepresentable rather than merely unlikely.
 
 `Loading` is load-bearing, not decorative. It is what makes
 `OnEnter(Screen::Gameplay)` a safe place to build the world: it blocks until every
@@ -388,17 +388,26 @@ settings file has parsed, the derived `SubstanceTable` exists, and every asset h
 has reached a terminal state. Gameplay systems can therefore take resources such as
 `Res<MapSettings>` rather than `Option<Res<…>>`.
 
-New Game and Continue deliberately share that path. New Game resolves the hidden
-Party Trial default and neither reads nor overwrites the resume slot. Continue first
-validates the one pre-alpha resume file, stages it as `PendingResume`, and then lets
-`GameplaySetup::Restore` consume it. An absent, corrupt, or incompatible file stays
-on the title screen with a visible reason instead of constructing a partial session.
+Campaign New Game and Continue deliberately share that path. New Game binds the
+canonical Party Trial to one selected empty `CampaignSlotId`; it does not occupy the
+slot until the first safe manual save. Continue validates that explicit slot and
+stages its scenario, party, selection, formation, and play time for Restore. Empty,
+corrupt, or incompatible records stay on Campaign with a visible reason instead of
+constructing a partial session. `campaigns.ron` always projects exactly three indexed
+records. A valid legacy `resume.ron` is migrated once into slot 1 without changing the
+legacy file.
 
-Creator and Combat Lab launches also share Loading. They install one frozen
+The session provenance carries `Campaign(slot)`, `Sandbox`, or `TestFixture`. Only an
+exact Campaign slot is save-eligible. Its accumulated milliseconds advance only while
+Gameplay is active, unpaused, and non-terminal; Loading, Main Menu and child pages,
+deployment, pause, outcomes, Sandbox, and tests contribute no time.
+
+Creator and Sandbox launches also share Loading. They install one frozen
 shipped-plus-custom spell/content/lattice namespace before terrain and actors enter
-Gameplay. Dynamic Sandbox encounters and their resolved seed live in
-`ActiveScenario`, so Retry cannot observe later local-library edits. These sessions
-refuse resume writes and restore the shipped namespace when they return.
+Gameplay. `SandboxLaunchSnapshot` carries the exact map, resolved seed, ordered
+rosters, accepted content revision, shipped combat rules, and eventual deployment,
+so Retry Exact cannot observe later map, draft, or local-library edits. These sessions
+refuse Campaign writes and restore the shipped namespace when they return.
 
 An asset failure is terminal too. The asset server already reports it, and treating
 failure as "still loading" would turn a visible missing-asset problem into a permanent
@@ -409,7 +418,7 @@ documented plain-blue fallback.
 
 An observer registered with `app.add_observer` fires on **every** matching event,
 in every state. `on_tile_clicked` took `Res<HeightMap>`, which only exists during
-gameplay, so clicking the title screen panicked. Bevy validates system parameters
+gameplay, so clicking the Main Menu panicked. Bevy validates system parameters
 *before* running the body, so the observer's own "is this a tile?" guard never got
 the chance to reject it.
 
@@ -457,11 +466,11 @@ re-inserted on change. Whether that is *visible* depends on when the value is re
 `lighting.ron` used to be split across the first and last rows: the sky shader read its
 values every frame, but the sun and ambient were only applied on
 `OnEnter(Screen::Gameplay)`, so tuning a light angle meant a round trip through the
-title screen. `reload_lighting` now re-applies them on change, which is what makes the
+Main Menu. `reload_lighting` now re-applies them on change, which is what makes the
 lighting worth exposing at all — the values below are only useful if you can see them
 move.
 
-Returning to the title and re-entering rebuilds the world in under a second, so
+Returning to the Main Menu and re-entering rebuilds the world in under a second, so
 this is a mild inconvenience rather than a gap. Regenerating terrain in place on
 change would be a real improvement for anyone tuning it, and is a fair follow-up.
 
@@ -510,10 +519,11 @@ Rendered frames review presentation only; they are not a combat oracle.
 Gameplay screen behavior that does not need a widget tree lives in
 `hex_gameplay_model`. `hex_game` translates clicks and Bevy state changes into typed
 model actions, then performs the resulting filesystem, resource, and navigation
-effects. Combat Lab roster/order rules, report selection (including id zero), exact
-Retry/Tune/Copy routing, Creator return identity, and bounded undo/redo therefore run
-without `App`, assets, renderer, viewport, or screen internals. The headless app target
-retains only wiring and lifecycle claims that require Bevy.
+effects. Sandbox pending/committed maps, resolved seeds, six-slot roster order and
+duplicates, blocker priority, exact Retry identity, Campaign slot identities, typed
+Creator returns, and bounded undo/redo therefore run without `App`, assets, renderer,
+viewport, or screen internals. The headless app target retains only wiring and
+lifecycle claims that require Bevy.
 
 Together the focused contracts cover tile counts, that a tile's transform agrees with its `HexSpan`, headroom
 under open sky and beneath platforms, clean teardown and re-entry, and three specific

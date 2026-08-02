@@ -16,8 +16,8 @@
 
 use bevy::prelude::*;
 use hex_assets::{
-    choose_settings, Encounter, LightingSettings, Scenario, SelectSettings, SettingsRegistry,
-    CONFIG_EXTENSIONS,
+    choose_settings, Encounter, EncounterPlacement, LightingSettings, Scenario, SelectSettings,
+    SettingsRegistry, CONFIG_EXTENSIONS,
 };
 use hex_core::{
     GameplaySetup, GameplaySetupFailure, InteriorRegions, MapAnchors, MapViewHint, ResolvedMapSeed,
@@ -26,6 +26,8 @@ use hex_core::{
 use hex_map::{MapSettings, TerrainSettings};
 use hex_units::Faction;
 use hex_world::TimeOfDay;
+
+use crate::screens::CreatorSandboxReturn;
 
 pub(super) fn plugin(app: &mut App) {
     // `select_settings` rather than `load_settings`: there is no world file to load
@@ -58,13 +60,13 @@ pub(super) fn plugin(app: &mut App) {
         .add_systems(OnExit(Screen::Gameplay), clear_session_resources);
 }
 
-/// The exact scenario and resolved seed whose button was clicked.
+/// The exact scenario and resolved seed frozen by its typed launch owner.
 ///
-/// The library can hot-reload between the title-screen click and the next frame's
-/// `OnEnter(Loading)`. Carrying the entry itself keeps a reorder or removal from
-/// changing what that click means; carrying the seed prevents a later reroll from
-/// changing an already-started load.
-#[derive(Resource, Debug, Clone)]
+/// The library can hot-reload between a Campaign, Sandbox, save, retry, review, or
+/// test request and the next frame's `OnEnter(Loading)`. Carrying the entry itself
+/// keeps a reorder or removal from changing that request; carrying the seed prevents
+/// a later regeneration from changing an already-started load.
+#[derive(Resource, Debug, Clone, PartialEq)]
 pub(super) struct ScenarioToLoad {
     pub(super) scenario: Scenario,
     pub(super) resolved_seed: Option<ResolvedMapSeed>,
@@ -102,6 +104,7 @@ fn apply_selected_scenario(
     asset_server: Res<AssetServer>,
     mut registry: ResMut<SettingsRegistry>,
     pending: Option<Res<ScenarioToLoad>>,
+    creator_return: Option<Res<CreatorSandboxReturn>>,
     mut next: ResMut<NextState<Screen>>,
 ) {
     // These resources describe the previous generated world. Clearing them before the
@@ -129,8 +132,8 @@ fn apply_selected_scenario(
         commands.insert_resource(GameplaySetupFailure::new(
             "Loading started without a selected scenario.",
         ));
-        next.set(Screen::Title);
-        error!("loading entered without a clicked scenario; returning to the title screen");
+        next.set(setup_failure_destination(creator_return.is_some()));
+        error!("loading entered without a typed launch request; returning to Main Menu");
         return;
     };
     let scenario = pending.scenario.clone();
@@ -183,7 +186,9 @@ pub(crate) fn validate_loaded_scenario(
     lighting: Option<Res<LightingSettings>>,
     time_override: Option<Res<ScenarioTimeOverride>>,
     seed: Option<Res<ResolvedMapSeed>>,
+    active: Option<Res<ActiveScenario>>,
     status: Option<Res<ScenarioContractStatus>>,
+    creator_return: Option<Res<CreatorSandboxReturn>>,
     mut next: ResMut<NextState<Screen>>,
 ) {
     if !registry.all_loaded()
@@ -207,15 +212,23 @@ pub(crate) fn validate_loaded_scenario(
         return;
     }
 
-    let contract_error = scenario_contract_error(&map, &encounter, seed.as_deref())
-        .or_else(|| lighting.resolve(time_override.0).err());
+    let allow_resolved_surfaces = active
+        .as_deref()
+        .is_some_and(|active| active.0.encounter_override.is_some());
+    let contract_error = scenario_contract_error_for_launch(
+        &map,
+        &encounter,
+        seed.as_deref(),
+        allow_resolved_surfaces,
+    )
+    .or_else(|| lighting.resolve(time_override.0).err());
     if let Some(reason) = contract_error {
         error!("selected scenario is incompatible with its world: {reason}");
         commands.insert_resource(ScenarioContractStatus::Invalid);
         commands.insert_resource(GameplaySetupFailure::new(format!(
             "The selected scenario is incompatible with its world: {reason}."
         )));
-        next.set(Screen::Title);
+        next.set(setup_failure_destination(creator_return.is_some()));
     } else {
         commands.insert_resource(ScenarioContractStatus::Ready);
     }
@@ -226,6 +239,7 @@ fn initialize_time_of_day(
     mut commands: Commands,
     lighting: Res<LightingSettings>,
     time_override: Res<ScenarioTimeOverride>,
+    creator_return: Option<Res<CreatorSandboxReturn>>,
     mut next: ResMut<NextState<Screen>>,
 ) {
     match lighting.resolve(time_override.0) {
@@ -242,7 +256,7 @@ fn initialize_time_of_day(
             commands.insert_resource(GameplaySetupFailure::new(format!(
                 "The selected scenario cannot initialize its lighting: {reason}."
             )));
-            next.set(Screen::Title);
+            next.set(setup_failure_destination(creator_return.is_some()));
         }
     }
 }
@@ -256,6 +270,7 @@ fn validate_gameplay_lighting_contract(
     mut commands: Commands,
     lighting: Res<LightingSettings>,
     time_override: Res<ScenarioTimeOverride>,
+    creator_return: Option<Res<CreatorSandboxReturn>>,
     mut next: ResMut<NextState<Screen>>,
 ) {
     if !lighting.is_changed() {
@@ -269,7 +284,7 @@ fn validate_gameplay_lighting_contract(
     commands.insert_resource(GameplaySetupFailure::new(format!(
         "The active scenario is incompatible with reloaded lighting: {reason}."
     )));
-    next.set(Screen::Title);
+    next.set(setup_failure_destination(creator_return.is_some()));
 }
 
 /// Whether the chosen encounter can be placed on the world the scenario named.
@@ -278,10 +293,20 @@ fn validate_gameplay_lighting_contract(
 /// and a world cannot see who is standing on it. Every entry is checked rather than a
 /// side at a time — one authored coordinate in an otherwise anchored roster is the same
 /// bug, and it would otherwise only surface as one unit missing from the fight.
+#[cfg(test)]
 fn scenario_contract_error(
     map: &MapSettings,
     encounter: &Encounter,
     seed: Option<&ResolvedMapSeed>,
+) -> Option<String> {
+    scenario_contract_error_for_launch(map, encounter, seed, false)
+}
+
+fn scenario_contract_error_for_launch(
+    map: &MapSettings,
+    encounter: &Encounter,
+    seed: Option<&ResolvedMapSeed>,
+    allow_resolved_surfaces: bool,
 ) -> Option<String> {
     match &map.terrain {
         TerrainSettings::Procedural(_) => {
@@ -289,7 +314,9 @@ fn scenario_contract_error(
                 return Some("procedural terrain has no resolved generation seed".to_owned());
             }
             for unit in encounter.entries() {
-                if !unit.placement.is_generated() {
+                let resolved_override = allow_resolved_surfaces
+                    && matches!(unit.placement, EncounterPlacement::Surface(_));
+                if !unit.placement.is_generated() && !resolved_override {
                     return Some(format!(
                         "the {} {:?} is placed on an authored coordinate, but procedural terrain \
                          must use a map anchor",
@@ -330,6 +357,7 @@ fn finalize_gameplay_setup(
     terrain_ready: Option<Res<TerrainReady>>,
     encounter: Option<Res<Encounter>>,
     units: Query<&Faction>,
+    creator_return: Option<Res<CreatorSandboxReturn>>,
     mut next: ResMut<NextState<Screen>>,
 ) {
     let reason = failure
@@ -347,7 +375,15 @@ fn finalize_gameplay_setup(
         commands.insert_resource(GameplaySetupFailure::new(reason.clone()));
     }
     error!("gameplay setup failed: {reason}");
-    next.set(Screen::Title);
+    next.set(setup_failure_destination(creator_return.is_some()));
+}
+
+fn setup_failure_destination(has_creator_return: bool) -> Screen {
+    if has_creator_return {
+        Screen::Sandbox
+    } else {
+        Screen::Title
+    }
 }
 
 /// Whether every side the encounter rosters actually stands on the map.
@@ -467,13 +503,20 @@ mod tests {
 
     use super::{
         clear_session_resources, finalize_gameplay_setup, initialize_time_of_day,
-        scenario_contract_error, validate_gameplay_lighting_contract, validate_loaded_scenario,
-        ActiveScenario, ScenarioTimeOverride, ScenarioToLoad,
+        scenario_contract_error, scenario_contract_error_for_launch, setup_failure_destination,
+        validate_gameplay_lighting_contract, validate_loaded_scenario, ActiveScenario,
+        ScenarioContractStatus, ScenarioTimeOverride, ScenarioToLoad,
     };
 
     fn library() -> ScenarioLibrary {
         ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
             .expect("the shipped scenarios should parse")
+    }
+
+    #[test]
+    fn setup_failures_preserve_a_creator_origin_via_sandbox() {
+        assert_eq!(setup_failure_destination(false), Screen::Title);
+        assert_eq!(setup_failure_destination(true), Screen::Sandbox);
     }
 
     fn assets_dir() -> PathBuf {
@@ -806,6 +849,60 @@ mod tests {
             scenario_contract_error(&world, &authored, Some(&ResolvedMapSeed(1)))
                 .is_some_and(|error| error.contains("map anchor"))
         );
+    }
+
+    #[test]
+    fn procedural_retry_accepts_typed_resolved_surface_overrides_only() {
+        let entry = library()
+            .scenarios
+            .into_iter()
+            .find(|scenario| scenario.generation_seed.is_some())
+            .expect("the shipped library should include procedural terrain");
+        let world_text = fs::read_to_string(assets_dir().join(&entry.world))
+            .expect("the procedural world should be readable");
+        let world: MapSettings =
+            ron::from_str(&world_text).expect("the procedural world should deserialize");
+        let exact = duel(
+            EncounterPlacement::Surface(TilePos::new(HexCoord::ORIGIN, 2)),
+            EncounterPlacement::Surface(TilePos::new(HexCoord::from_axial(1, -1), 3)),
+        );
+        let seed = ResolvedMapSeed(1);
+
+        assert!(scenario_contract_error(&world, &exact, Some(&seed))
+            .is_some_and(|error| error.contains("map anchor")));
+        assert_eq!(
+            scenario_contract_error_for_launch(&world, &exact, Some(&seed), true),
+            None
+        );
+
+        let lighting_text = fs::read_to_string(assets_dir().join(&entry.lighting))
+            .expect("the procedural lighting should be readable");
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.init_state::<Screen>();
+        app.insert_resource(SettingsRegistry::default());
+        app.insert_resource(world);
+        app.insert_resource(exact.clone());
+        app.insert_resource(
+            ron::from_str::<LightingSettings>(&lighting_text)
+                .expect("the procedural lighting should deserialize"),
+        );
+        app.insert_resource(ScenarioTimeOverride(entry.starting_time_hours));
+        app.insert_resource(seed);
+        app.insert_resource(ActiveScenario(ScenarioToLoad {
+            scenario: entry,
+            resolved_seed: Some(seed),
+            encounter_override: Some(exact),
+        }));
+        app.add_systems(Update, validate_loaded_scenario);
+
+        app.update();
+
+        assert_eq!(
+            *app.world().resource::<ScenarioContractStatus>(),
+            ScenarioContractStatus::Ready
+        );
+        assert!(!app.world().contains_resource::<GameplaySetupFailure>());
     }
 
     #[test]
@@ -1183,7 +1280,7 @@ mod tests {
     /// And every rostered unit starts inside the world it is placed on.
     ///
     /// Not a formality. An authored coordinate outside the grid radius has no surface
-    /// under it, which now fails setup and sends the player back to the title screen —
+    /// under it, which now fails setup and sends the player back to Main Menu —
     /// so a scenario nobody has clicked yet would be broken with nothing to say so.
     ///
     /// Every entry, not one per side: a roster can be wrong about its fourth unit.
@@ -1411,7 +1508,7 @@ mod tests {
         }
     }
 
-    /// Loading is only valid after a scenario button has supplied a snapshot.
+    /// Loading is only valid after a typed launch owner has supplied a snapshot.
     ///
     /// The loading gate runs in PostUpdate, after the return requested from OnEnter
     /// has already taken effect.
@@ -1556,7 +1653,7 @@ mod tests {
             .expect("the scenario's placements should be installed")
             .clone();
 
-        // Back to the title screen, exactly as BACKSPACE does, then pick the other one.
+        // Back to Main Menu, exactly as BACKSPACE does, then issue the other launch.
         app.world_mut()
             .resource_mut::<NextState<Screen>>()
             .set(Screen::Title);
@@ -1584,7 +1681,7 @@ mod tests {
         );
     }
 
-    /// The seed captured by the title-screen click is installed for map generation.
+    /// The seed frozen by the typed launch request is installed for map generation.
     #[test]
     fn selected_generation_seed_is_installed_while_loading() {
         let procedural_index = library()
@@ -2533,7 +2630,7 @@ mod tests {
             .contains("missing map anchor"));
         assert!(
             !app.world().contains_resource::<VoxelMap>(),
-            "failed setup left generated terrain alive on the title screen"
+            "failed setup left generated terrain alive on Main Menu"
         );
         assert!(standing_pos::<Player>(&mut app).is_none());
         assert!(standing_pos::<Enemy>(&mut app).is_none());
