@@ -35,6 +35,8 @@ pub(crate) fn plugin(app: &mut App) {
                 GameplaySystems::Selection,
                 GameplaySystems::Casting,
                 GameplaySystems::UiContext,
+                GameplaySystems::WorldFeedbackRequests,
+                GameplaySystems::WorldFeedback,
             )
                 .chain()
                 .after(CombatSystems::Advance),
@@ -275,6 +277,7 @@ fn hud_context(
                 && (mode == Mode::Exploring || acting == Some(Faction::Player)),
         },
         phase_suppressed: phase != GameplayPhase::Active || encounter_complete,
+        formation_available: mode == Mode::Exploring,
     }
 }
 
@@ -294,7 +297,11 @@ fn publish_hud_view(
     resolution: Option<Res<EncounterResolution>>,
     mut view: ResMut<hex_ui::GameplayChromeView>,
 ) {
-    let decision_required = *phase == GameplayPhase::Active && selection.is_active();
+    let encounter_complete = resolution
+        .as_deref()
+        .is_some_and(EncounterResolution::is_resolved);
+    let decision_required =
+        *phase == GameplayPhase::Active && !encounter_complete && selection.is_active();
     if decision_required {
         let _ = hud.require_decision();
     } else {
@@ -310,6 +317,7 @@ fn publish_hud_view(
         !actions.actions.is_empty(),
         decision_required,
     );
+    let _ = hud.reconcile_context(context);
     let next = hex_ui::GameplayChromeView {
         party_shown: hud.is_component_visible(HudComponent::Party, context),
         initiative_shown: hud.is_component_visible(HudComponent::Initiative, context),

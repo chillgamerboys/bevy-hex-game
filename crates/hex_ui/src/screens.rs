@@ -181,7 +181,7 @@ fn spawn_settings(mut commands: Commands, assets: Res<UiAssets>, view: Res<UiSet
                 SettingsControl(SettingsIntent::Back),
                 crate::UiVisibilityRequirement::Immediate,
             ))
-            .with_child(label(&assets, "Back to Main Menu"));
+            .with_child(label(&assets, "Back"));
             root.spawn((
                 panel(),
                 SettingsSurface,
@@ -295,12 +295,25 @@ fn apply_settings_layout(
         };
     }
     for mut node in &mut backs {
-        node.position_type = PositionType::Absolute;
-        node.top = Val::Px(12.0);
-        node.right = Val::Px(12.0);
+        node.position_type = if compact {
+            PositionType::Relative
+        } else {
+            PositionType::Absolute
+        };
+        node.top = if compact { Val::Auto } else { Val::Px(12.0) };
+        node.right = if compact { Val::Auto } else { Val::Px(12.0) };
         node.width = Val::Px(240.0);
-        node.max_width = Val::Percent(40.0);
+        node.max_width = if compact {
+            Val::Percent(100.0)
+        } else {
+            Val::Percent(40.0)
+        };
         node.min_width = Val::Px(0.0);
+        node.align_self = if compact {
+            AlignSelf::FlexEnd
+        } else {
+            AlignSelf::Auto
+        };
     }
 }
 

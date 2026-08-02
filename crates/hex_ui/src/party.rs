@@ -45,7 +45,7 @@ fn spawn_panels(
 ) {
     let party = commands
         .spawn((
-            Name::new("Party Strip"),
+            Name::new("Party Panel"),
             HudElement,
             Node {
                 width: Val::Percent(100.0),
@@ -127,6 +127,7 @@ fn region(wanted: UiRegionRole, regions: &Query<(Entity, &UiRegionRole)>) -> Opt
 fn rebuild(
     mut commands: Commands,
     view: Res<PartyView>,
+    review: Option<Res<crate::review::UiReviewPresentation>>,
     chrome: Res<crate::GameplayChromeView>,
     party_bodies: Query<Entity, With<PartyBody>>,
     formation_bodies: Query<Entity, With<FormationBody>>,
@@ -134,9 +135,14 @@ fn rebuild(
     metrics: Res<ResolvedUiMetrics>,
     assets: Res<UiAssets>,
 ) {
-    if !view.is_changed() && !metrics.is_changed() && !chrome.is_changed() {
+    let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
+    if !view.is_changed() && !review_changed && !metrics.is_changed() && !chrome.is_changed() {
         return;
     }
+    let view = review
+        .as_ref()
+        .and_then(|review| review.party.as_ref())
+        .unwrap_or(view.as_ref());
     if let Ok(mut panel) = formation_panels.single_mut() {
         panel.display = if view.formation_visible
             && matches!(chrome.main_view, MainViewDestination::Formation)
@@ -420,6 +426,15 @@ mod tests {
                 })
                 .collect(),
         });
+        app.world_mut().insert_resource(crate::GameplayChromeView {
+            party_shown: false,
+            initiative_shown: false,
+            activity_shown: false,
+            action_bar_shown: false,
+            main_view: MainViewDestination::Formation,
+            terrain_health_shown: true,
+            encounter_complete: false,
+        });
         app.world_mut()
             .resource_mut::<NextState<Screen>>()
             .set(Screen::Gameplay);
@@ -448,7 +463,7 @@ mod tests {
     }
 
     #[test]
-    fn enlarged_compact_formation_focus_scrolls_the_final_slot_into_view() {
+    fn enlarged_compact_formation_keeps_the_final_slot_keyboard_reachable() {
         use bevy::input_focus::InputFocus;
 
         let mut app = formation_app(1280, 720, crate::UiScaleMode::Percent200);
@@ -459,7 +474,6 @@ mod tests {
                 .find_map(|(entity, name)| (name.as_str() == wanted).then_some(entity))
                 .unwrap_or_else(|| panic!("missing {wanted:?}"))
         };
-        let inspector = entity_named(&mut app, "Inspector HUD Region");
         let final_slot_name = "Formation Slot (1, 0)";
         let final_slot_entity = entity_named(&mut app, final_slot_name);
         let initial = crate::test_support::ui_tree_snapshot(app.world_mut());
@@ -494,22 +508,16 @@ mod tests {
             .find(|node| node.name == final_slot_name)
             .expect("the populated formation must expose its final slot");
         assert!(
-            !final_slot.fully_visible
+            final_slot.fully_visible
                 && final_slot.in_focus_order
                 && final_slot.keyboard_reachable == Some(true),
-            "the regression fixture must exercise a keyboard-reachable slot below the initial fold: {final_slot:?}"
+            "the full-screen Compact Main View must expose the final formation slot without clipping: {final_slot:?}"
         );
 
         app.insert_resource(InputFocus::from_entity(final_slot_entity));
         for _ in 0..3 {
             app.update();
         }
-        assert!(
-            app.world()
-                .get::<ScrollPosition>(inspector)
-                .is_some_and(|position| position.y > 0.0),
-            "focusing the final formation slot must move the Inspector scroll owner"
-        );
         let focused = crate::test_support::ui_tree_snapshot(app.world_mut());
         let final_slot = focused
             .nodes

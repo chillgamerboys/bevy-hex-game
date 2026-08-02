@@ -45,6 +45,36 @@ pub const fn action_rail_clearance(viewport: UiViewportClass) -> f32 {
 /// for it, while Auto at ordinary desktop sizes keeps the compact baseline.
 pub(crate) fn semantic_action_region_height(metrics: crate::ResolvedUiMetrics) -> f32 {
     92.0 + 160.0 * (metrics.control_scale - 1.0).max(0.0)
+        + 32.0 * (metrics.content_scale - 1.0).max(0.0)
+}
+
+/// Height needed by the controls-only Action Bar as semantic controls grow.
+///
+/// The tallest ordinary action is a disabled control with a visible refusal
+/// reason. Its two lines grow faster than the authored 92px baseline, so the
+/// bar and its parent region must reserve the same additional space.
+pub(crate) fn semantic_action_bar_height(metrics: crate::ResolvedUiMetrics) -> f32 {
+    92.0 + 116.0 * (metrics.control_scale - 1.0).max(0.0)
+}
+
+fn semantic_party_region_width(metrics: crate::ResolvedUiMetrics) -> f32 {
+    let base = match metrics.viewport {
+        UiViewportClass::Compact => 0.0,
+        UiViewportClass::Standard => 216.0,
+        UiViewportClass::Wide => 240.0,
+    };
+    base + 136.0 * (metrics.control_scale - 1.0).max(0.0)
+}
+
+fn semantic_activity_region_width(metrics: crate::ResolvedUiMetrics) -> f32 {
+    let base = match metrics.viewport {
+        UiViewportClass::Compact => 0.0,
+        UiViewportClass::Standard => 264.0,
+        UiViewportClass::Wide => 308.0,
+    };
+    // Three stable text tabs remain horizontal on desktop. Give each one the
+    // same additional label width as body typography grows.
+    base + 144.0 * (metrics.content_scale - 1.0).max(0.0)
 }
 
 pub(crate) fn action_region_height(metrics: crate::ResolvedUiMetrics) -> f32 {
@@ -168,6 +198,57 @@ pub(crate) fn constrain_region_to_canvas(
     node: &mut Node,
 ) {
     apply_region_layout(metrics.viewport, role, node);
+    let base_party_width = match metrics.viewport {
+        UiViewportClass::Compact => 0.0,
+        UiViewportClass::Standard => 216.0,
+        UiViewportClass::Wide => 240.0,
+    };
+    let party_width = semantic_party_region_width(metrics);
+    let party_growth = (party_width - base_party_width).max(0.0);
+    let base_activity_width = match metrics.viewport {
+        UiViewportClass::Compact => 0.0,
+        UiViewportClass::Standard => 264.0,
+        UiViewportClass::Wide => 308.0,
+    };
+    let activity_width = semantic_activity_region_width(metrics);
+    let activity_growth = (activity_width - base_activity_width).max(0.0);
+    let action_growth = (semantic_action_region_height(metrics) - 92.0).max(0.0)
+        + (semantic_action_bar_height(metrics) - 92.0).max(0.0);
+    match (metrics.viewport, role) {
+        (UiViewportClass::Standard | UiViewportClass::Wide, UiRegionRole::Party) => {
+            node.width = Val::Px(party_width);
+        }
+        (UiViewportClass::Standard | UiViewportClass::Wide, UiRegionRole::Turn) => {
+            let Val::Px(left) = node.left else {
+                return;
+            };
+            node.left = Val::Px(left + party_growth);
+        }
+        (UiViewportClass::Standard, UiRegionRole::Inspector) => {
+            node.left = Val::Px(248.0 + party_growth);
+            node.right = Val::Px(296.0 + activity_growth);
+            node.bottom = Val::Px(216.0 + action_growth);
+        }
+        (UiViewportClass::Standard, UiRegionRole::Actions) => {
+            node.left = Val::Px(248.0 + party_growth);
+            node.right = Val::Px(296.0 + activity_growth);
+            node.height = Val::Px(184.0 + action_growth);
+        }
+        (UiViewportClass::Standard | UiViewportClass::Wide, UiRegionRole::Events) => {
+            node.width = Val::Px(activity_width);
+        }
+        (UiViewportClass::Wide, UiRegionRole::Inspector) => {
+            node.left = Val::Px(272.0 + party_growth);
+            node.right = Val::Px(340.0 + activity_growth);
+            node.bottom = Val::Px(220.0 + action_growth);
+        }
+        (UiViewportClass::Wide, UiRegionRole::Actions) => {
+            node.left = Val::Px(272.0 + party_growth);
+            node.right = Val::Px(340.0 + activity_growth);
+            node.height = Val::Px(188.0 + action_growth);
+        }
+        _ => {}
+    }
 }
 
 pub(crate) fn is_ultra_constrained(metrics: crate::ResolvedUiMetrics) -> bool {
@@ -176,21 +257,10 @@ pub(crate) fn is_ultra_constrained(metrics: crate::ResolvedUiMetrics) -> bool {
 }
 
 pub(crate) fn ultra_action_rail_height(metrics: crate::ResolvedUiMetrics) -> f32 {
-    // Enlarged typography needs reflow, not an empty proportional slab. The
-    // rail contains two lines of essential copy and one required control; its
-    // controls grow only to 1.5x, so this bounded allowance keeps the command
-    // visible while returning most of the canvas to the actual decision.
-    let enlarged_density = (metrics.content_scale - 1.5).clamp(0.0, 0.5);
-    let semantic_height =
-        213.0 + 110.0 * (metrics.control_scale - 1.0).max(0.0) + 200.0 * enlarged_density;
-    let narrow_wrap_allowance = if metrics.logical_size.x < 1100.0 && metrics.content_scale >= 1.5 {
-        // At 150% the narrow rail needs an extra row. At larger typography the
-        // density term above already absorbs most of that wrap growth.
-        80.0 - 120.0 * enlarged_density
-    } else {
-        0.0
-    };
-    semantic_height + narrow_wrap_allowance
+    // The minimalist bar owns controls only. Its former multi-line summary and
+    // prompt allowance left a mostly empty slab that pushed the actual buttons
+    // below Compact's initial viewport at enlarged scales.
+    semantic_action_bar_height(metrics)
 }
 
 #[cfg(test)]
@@ -273,5 +343,26 @@ mod tests {
         assert_eq!(node.right, Val::Px(296.0));
         assert_eq!(node.top, Val::Px(88.0));
         assert_eq!(node.bottom, Val::Px(216.0));
+    }
+
+    #[test]
+    fn enlarged_action_region_and_main_view_clearance_grow_together() {
+        let metrics =
+            crate::resolve_ui_metrics(Vec2::new(3840.0, 2160.0), crate::UiScaleMode::Auto);
+        assert_eq!(metrics.viewport, UiViewportClass::Wide);
+        assert!(semantic_action_region_height(metrics) > 92.0);
+        assert!(semantic_action_bar_height(metrics) > 92.0);
+
+        let mut main_view = Node::default();
+        let mut actions = Node::default();
+        constrain_region_to_canvas(metrics, UiRegionRole::Inspector, &mut main_view);
+        constrain_region_to_canvas(metrics, UiRegionRole::Actions, &mut actions);
+
+        let (Val::Px(main_view_bottom), Val::Px(action_height), Val::Px(action_bottom)) =
+            (main_view.bottom, actions.height, actions.bottom)
+        else {
+            panic!("wide Main View and Action Bar regions must have bounded geometry");
+        };
+        assert_eq!(main_view_bottom, action_bottom + action_height + 16.0);
     }
 }

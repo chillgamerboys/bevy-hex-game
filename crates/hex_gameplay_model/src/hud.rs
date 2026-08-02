@@ -172,6 +172,8 @@ pub struct HudContext {
     pub eligibility: HudContextEligibility,
     /// Whether the current gameplay phase suppresses ordinary HUD presentation.
     pub phase_suppressed: bool,
+    /// Whether Formation is a meaningful Main View destination in this context.
+    pub formation_available: bool,
 }
 
 impl Default for HudContext {
@@ -188,6 +190,7 @@ impl HudContext {
             viewport: HudViewportMode::Standard,
             eligibility,
             phase_suppressed: false,
+            formation_available: true,
         }
     }
 
@@ -198,6 +201,7 @@ impl HudContext {
             viewport: HudViewportMode::Compact,
             eligibility,
             phase_suppressed: false,
+            formation_available: true,
         }
     }
 
@@ -205,6 +209,13 @@ impl HudContext {
     #[must_use]
     pub const fn with_phase_suppressed(mut self, suppressed: bool) -> Self {
         self.phase_suppressed = suppressed;
+        self
+    }
+
+    /// Returns the same context with Formation eligibility selected explicitly.
+    #[must_use]
+    pub const fn with_formation_available(mut self, available: bool) -> Self {
+        self.formation_available = available;
         self
     }
 }
@@ -357,6 +368,9 @@ impl HudState {
 
     /// Opens Formation content without changing gameplay authority.
     pub fn open_formation(&mut self, context: HudContext) -> HudActionResult {
+        if !context.formation_available {
+            return HudActionResult::NoChange;
+        }
         self.open_main_view(
             HudTransientSurface::Formation,
             MainViewDestination::Formation,
@@ -400,6 +414,41 @@ impl HudState {
         HudActionResult::RuntimeChanged
     }
 
+    /// Removes runtime-only presentation that is invalid in the current context.
+    ///
+    /// Persisted component choices are never rewritten. This prevents a hidden
+    /// Compact task from swallowing Escape or resurrecting after its mode becomes
+    /// eligible again, and prevents Formation from leaving a blank Main View when
+    /// exploration ends.
+    pub fn reconcile_context(&mut self, context: HudContext) -> HudActionResult {
+        if self.decision_required() {
+            return HudActionResult::NoChange;
+        }
+
+        let main_invalid = context.phase_suppressed
+            || matches!(self.main_view, MainViewDestination::Formation)
+                && !context.formation_available;
+        let transient_invalid = self.transient.is_some_and(|surface| {
+            context.phase_suppressed
+                || matches!(surface, HudTransientSurface::Formation) && !context.formation_available
+                || matches!(surface, HudTransientSurface::Component(component)
+                    if !context.eligibility.is_eligible(component))
+                || context.viewport == HudViewportMode::Standard && !self.master_suppressed
+        });
+
+        if main_invalid {
+            self.main_view = MainViewDestination::Closed;
+        }
+        if transient_invalid {
+            self.transient = None;
+        }
+        if main_invalid || transient_invalid {
+            HudActionResult::RuntimeChanged
+        } else {
+            HudActionResult::NoChange
+        }
+    }
+
     /// Whether one ordinary component is effectively visible in this context.
     #[must_use]
     pub fn is_component_visible(&self, component: HudComponent, context: HudContext) -> bool {
@@ -431,10 +480,15 @@ impl HudState {
             return match transient {
                 HudTransientSurface::Component(_) => MainViewDestination::Closed,
                 HudTransientSurface::Character(unit) => MainViewDestination::Character(unit),
-                HudTransientSurface::Formation => MainViewDestination::Formation,
+                HudTransientSurface::Formation if context.formation_available => {
+                    MainViewDestination::Formation
+                }
+                HudTransientSurface::Formation => MainViewDestination::Closed,
             };
         }
         if self.master_suppressed || context.viewport == HudViewportMode::Compact {
+            MainViewDestination::Closed
+        } else if self.main_view == MainViewDestination::Formation && !context.formation_available {
             MainViewDestination::Closed
         } else {
             self.main_view
@@ -453,6 +507,7 @@ impl HudState {
             {
                 None
             }
+            Some(HudTransientSurface::Formation) if !context.formation_available => None,
             transient => transient,
         }
     }
@@ -676,6 +731,61 @@ mod tests {
         state.activate_component(HudComponent::Activity, context);
         assert_eq!(state.raw_transient(), None);
         assert_eq!(state.preferences(), preferences);
+    }
+
+    #[test]
+    fn reconciliation_prunes_invisible_transients_before_escape_can_consume_them() {
+        let combat = HudContext::compact(HudContextEligibility::all());
+        let exploration = HudContext::compact(HudContextEligibility {
+            initiative: false,
+            ..HudContextEligibility::all()
+        });
+        let mut state = HudState::default();
+        state.activate_component(HudComponent::Initiative, combat);
+
+        assert_eq!(
+            state.reconcile_context(exploration),
+            HudActionResult::RuntimeChanged
+        );
+        assert_eq!(state.raw_transient(), None);
+        assert_eq!(state.close_active_surface(), HudActionResult::NoChange);
+    }
+
+    #[test]
+    fn leaving_compact_closes_its_task_but_master_hidden_summons_remain_owned() {
+        let compact = HudContext::compact(HudContextEligibility::all());
+        let standard = HudContext::standard(HudContextEligibility::all());
+        let mut state = HudState::default();
+        state.activate_component(HudComponent::Party, compact);
+        state.reconcile_context(standard);
+        assert_eq!(state.raw_transient(), None);
+
+        state.toggle_master();
+        state.activate_component(HudComponent::Party, standard);
+        assert_eq!(state.reconcile_context(standard), HudActionResult::NoChange);
+        assert_eq!(
+            state.raw_transient(),
+            Some(HudTransientSurface::Component(HudComponent::Party))
+        );
+    }
+
+    #[test]
+    fn formation_cannot_leave_a_blank_main_view_after_exploration() {
+        let exploration = HudContext::standard(HudContextEligibility::all());
+        let combat = exploration.with_formation_available(false);
+        let mut state = HudState::default();
+        state.open_formation(exploration);
+
+        assert_eq!(
+            state.effective_main_view(combat),
+            MainViewDestination::Closed
+        );
+        assert_eq!(
+            state.reconcile_context(combat),
+            HudActionResult::RuntimeChanged
+        );
+        assert_eq!(state.stored_main_view(), MainViewDestination::Closed);
+        assert_eq!(state.open_formation(combat), HudActionResult::NoChange);
     }
 
     #[test]

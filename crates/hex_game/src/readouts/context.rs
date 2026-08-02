@@ -233,35 +233,34 @@ fn resolve_inspector(
             .map(|target| (InspectorRole::RestoreTarget, target)),
         _ => None,
     };
-    decision
+    if decision.is_some() {
+        return decision;
+    }
+    if let Some(inspected) = inspected {
+        return (inspected.faction == Faction::Player)
+            .then(|| (InspectorRole::SelectedAlly, inspected.clone()));
+    }
+    acting
+        .filter(|unit| unit.faction == Faction::Player)
+        .cloned()
+        .map(|unit| (InspectorRole::ActiveAlly, unit))
         .or_else(|| {
-            inspected
+            selected
+                .filter(|unit| unit.faction == Faction::Player)
                 .cloned()
                 .map(|unit| (InspectorRole::SelectedAlly, unit))
         })
         .or_else(|| {
-            acting
+            retained
                 .filter(|unit| unit.faction == Faction::Player)
                 .cloned()
-                .map(|unit| (InspectorRole::ActiveAlly, unit))
-                .or_else(|| {
-                    selected
-                        .filter(|unit| unit.faction == Faction::Player)
-                        .cloned()
-                        .map(|unit| (InspectorRole::SelectedAlly, unit))
-                })
-                .or_else(|| {
-                    retained
-                        .filter(|unit| unit.faction == Faction::Player)
-                        .cloned()
-                        .map(|unit| (InspectorRole::SelectedAlly, unit))
-                })
-                .or_else(|| {
-                    first_ally
-                        .filter(|unit| unit.faction == Faction::Player)
-                        .cloned()
-                        .map(|unit| (InspectorRole::SelectedAlly, unit))
-                })
+                .map(|unit| (InspectorRole::SelectedAlly, unit))
+        })
+        .or_else(|| {
+            first_ally
+                .filter(|unit| unit.faction == Faction::Player)
+                .cloned()
+                .map(|unit| (InspectorRole::SelectedAlly, unit))
         })
 }
 
@@ -374,6 +373,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             ),
             Some((InspectorRole::SelectedAlly, ally.clone()))
         );
@@ -382,6 +382,7 @@ mod tests {
                 &PendingDecision::None,
                 Some(&ally),
                 Some(&unit(4, Faction::Player)),
+                None,
                 None,
                 None,
                 None,
@@ -398,8 +399,50 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             ),
             Some((InspectorRole::SelectedAlly, ally))
+        );
+    }
+
+    #[test]
+    fn explicit_inspected_ally_owns_the_character_main_view_without_selection_mutation() {
+        let selected = unit(3, Faction::Player);
+        let inspected = unit(4, Faction::Player);
+
+        assert_eq!(
+            resolve_inspector(
+                &PendingDecision::None,
+                None,
+                Some(&selected),
+                None,
+                Some(&inspected),
+                Some(&selected),
+                None,
+                None,
+            ),
+            Some((InspectorRole::SelectedAlly, inspected))
+        );
+    }
+
+    #[test]
+    fn inspected_hostile_remains_a_target_and_never_becomes_the_own_lattice_inspector() {
+        let selected = unit(3, Faction::Player);
+        let hostile = unit(9, Faction::Hostile);
+
+        assert_eq!(
+            resolve_inspector(
+                &PendingDecision::None,
+                None,
+                Some(&selected),
+                None,
+                Some(&hostile),
+                Some(&selected),
+                None,
+                None,
+            ),
+            None,
+            "a hostile Character Main View must not retain an unrelated ally lattice"
         );
     }
 
@@ -422,6 +465,7 @@ mod tests {
                 None,
                 Some(&ally),
                 Some(&ally),
+                Some(&ally),
             ),
             Some((InspectorRole::DamageChoice, ally.clone()))
         );
@@ -438,6 +482,7 @@ mod tests {
                 None,
                 Some(&ally),
                 Some(&restore_target),
+                Some(&restore_target),
             ),
             Some((InspectorRole::RestoreTarget, restore_target.clone()))
         );
@@ -453,6 +498,7 @@ mod tests {
                 Some(&restore_target),
                 None,
                 None,
+                Some(&hostile),
                 Some(&hostile),
                 Some(&hostile),
             ),

@@ -16,11 +16,11 @@ with `ALLY n` from the stable `Party.members` slot and then names the archetype 
 session unit id. Initiative changes, selection changes, and matching hostile
 archetypes never change that slot.
 
-On Standard/Wide, Party is visible by default as one compact ordinary HUD component;
-`P` toggles its persisted preference. On Compact it contributes no collapsed rail or
-handle: `P` opens one temporary full-screen Party task and the same key or Escape
-closes it. While master-hidden, `P` summons Party alone without changing the saved
-preference.
+On Standard/Wide, Party is visible by default as one compact ordinary HUD component.
+The default `P` binding toggles its persisted preference. On Compact it contributes no
+collapsed rail or handle: that binding opens one temporary full-screen Party task and
+the same key or Escape closes it. While master-hidden, it summons Party alone without
+changing the saved preference.
 
 Each card reports stable slot and identity, downed/ready state, gameplay selection,
 and formation-anchor membership. It includes a small non-interactive lattice
@@ -33,10 +33,10 @@ again opens its Character Main View. Character camera mode may follow the inspec
 subject, but neither activation changes `Selected`, `Turn`, casting, command ownership,
 or formation assignment.
 
-Formation editing is a separate Main View destination opened with `F` during
-Exploration. It keeps Group/Solo, presets, and the assignment grid together
-instead of embedding an always-visible editor beside the map. The two movement modes
-remain:
+Formation editing is a separate Main View destination opened by the Formation binding
+(`F` by default) during Exploration. It keeps Group/Solo, presets, and the assignment
+grid together instead of embedding an always-visible editor beside the map. The two
+movement modes remain:
 
 - **Group** applies a destination to the whole formation atomically.
 - **Solo** preserves the ordinary selected-unit `MoveAlong` behavior.
@@ -91,9 +91,9 @@ Solo mode bypasses this planner and continues to emit one selected-unit `MoveAlo
 
 ## Exploration rest
 
-The eligible Action Bar exposes Rest and the `R` shortcut while Exploring. Both emit one
-`GameCommand::Rest`; the applier validates that its issuer belongs to the party and
-then recovers every roster member in stable order.
+The eligible Action Bar exposes Rest and its configurable shortcut (`R` by default)
+while Exploring. Both emit one `GameCommand::Rest`; the applier validates that its
+issuer belongs to the party and then recovers every roster member in stable order.
 
 Rest restores every disabled lattice cell, removes `Downed`, fills live unlocked gems
 to authored capacity, and removes persistent effects targeting party members. Active

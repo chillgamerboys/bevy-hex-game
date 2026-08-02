@@ -19,7 +19,7 @@ pub(super) fn plugin(app: &mut App) {
             (sync_inspection_subject, sync_world_markers)
                 .chain()
                 .in_set(AppSystems::Update)
-                .after(hex_core::GameplaySystems::UiContext)
+                .in_set(hex_core::GameplaySystems::WorldFeedbackRequests)
                 .run_if(in_state(Screen::Gameplay)),
         );
 }

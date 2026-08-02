@@ -703,14 +703,18 @@ mod tests {
             Some(&Visibility::Inherited)
         );
 
-        app.world_mut().resource_mut::<GameplayChromeView>().shown = false;
+        app.world_mut()
+            .resource_mut::<GameplayChromeView>()
+            .terrain_health_shown = false;
         app.update();
         assert_eq!(
             app.world().get::<Visibility>(root),
             Some(&Visibility::Hidden)
         );
 
-        app.world_mut().resource_mut::<GameplayChromeView>().shown = true;
+        app.world_mut()
+            .resource_mut::<GameplayChromeView>()
+            .terrain_health_shown = true;
         app.update();
         assert_eq!(
             app.world().get::<Visibility>(root),

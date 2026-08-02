@@ -202,8 +202,6 @@ pub fn plugin(app: &mut App) {
             (
                 reconcile_selection,
                 reconcile_camera_focus_target,
-                reconcile_rings,
-                reconcile_target_reticles,
                 redraw_overlays,
             )
                 .chain()
@@ -211,6 +209,13 @@ pub fn plugin(app: &mut App) {
                 .in_set(GameplaySystems::Selection)
                 .after(track_terrain_changes)
                 .after(crate::movement::MovementSystems::Reconcile),
+        )
+        .add_systems(
+            Update,
+            (reconcile_rings, reconcile_target_reticles)
+                .chain()
+                .in_set(PausableSystems)
+                .in_set(GameplaySystems::WorldFeedback),
         )
         // Observers are global and fire in every state, including the title screen.
         // These two touch only `HoveredSurface`, which is initialised at startup and
@@ -770,7 +775,20 @@ mod tests {
             .app_mut()
             .insert_resource(overlays)
             .init_resource::<WorldMarkerSuppression>()
-            .add_systems(Update, (reconcile_rings, reconcile_target_reticles).chain());
+            .configure_sets(
+                Update,
+                (
+                    GameplaySystems::WorldFeedbackRequests,
+                    GameplaySystems::WorldFeedback,
+                )
+                    .chain(),
+            )
+            .add_systems(
+                Update,
+                (reconcile_rings, reconcile_target_reticles)
+                    .chain()
+                    .in_set(GameplaySystems::WorldFeedback),
+            );
         let unit = UnitId(12);
         let entity = builder
             .app_mut()
@@ -1003,5 +1021,26 @@ mod tests {
         app.update();
         assert_eq!(reticles.iter(app.world()).count(), 0);
         assert_eq!(rings.iter(app.world()).count(), 1);
+    }
+
+    #[test]
+    fn published_suppression_clears_world_markers_in_the_same_frame() {
+        fn publish_suppression(mut suppression: ResMut<WorldMarkerSuppression>) {
+            suppression.set(true);
+        }
+
+        let (mut app, _, _, _) = marker_app();
+        app.add_systems(
+            Update,
+            publish_suppression.in_set(GameplaySystems::WorldFeedbackRequests),
+        );
+        app.update();
+
+        let mut rings = app.world_mut().query_filtered::<Entity, With<UnitRing>>();
+        let mut reticles = app
+            .world_mut()
+            .query_filtered::<Entity, With<TargetReticle>>();
+        assert_eq!(rings.iter(app.world()).count(), 0);
+        assert_eq!(reticles.iter(app.world()).count(), 0);
     }
 }

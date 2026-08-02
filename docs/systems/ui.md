@@ -65,19 +65,20 @@ decision resolves.
 Default ordinary presentation is Party visible, Initiative eligible only during
 combat, Activity closed, Action Bar visible when actions exist, and Main View closed.
 Effective visibility is the saved component preference, contextual eligibility,
-master suppression, and phase suppression resolved together. `H` changes only the
-transient master suppression; restoring it returns to the exact saved combination.
+master suppression, and phase suppression resolved together. The master binding (`H`
+by default) changes only transient suppression; restoring it returns to the exact
+saved combination.
 Deployment and terminal outcomes suppress ordinary gameplay components without
 rewriting preferences. A hidden component leaves layout, picking, focus order,
 scrolling, and the accessibility tree completely—there are no collapsed rails,
 handles, or invisible hit targets.
 
-`P`, `I`, `L`, and `B` toggle saved Party, Initiative, Activity, and Action Bar
-preferences on Standard/Wide. While the HUD is master-hidden, those keys summon only
-the requested temporary surface and leave everything else hidden. `V` opens the
-inspected character and `F` opens Formation in the Main View; neither changes
-selection, turn, caster, or command authority. The camera remains a separate
-presentation concern on `C`.
+The canonical default component bindings are `P`, `I`, `L`, and `B` for Party,
+Initiative, Activity, and Action Bar. Character and Formation default to `V` and `F`,
+and Camera remains separate on `C`; all are configurable. On Standard/Wide,
+component activation toggles its saved preference. While the HUD is master-hidden,
+it summons only the requested temporary surface and leaves everything else hidden.
+Main View activation changes no selection, turn, caster, or command authority.
 
 Activating a Party or disclosed Initiative entry once inspects and centers that unit.
 Activating the same entry again opens its Character Main View. Map camera centering is
@@ -237,7 +238,7 @@ Preferences schema v3 persists `UiScaleMode`, per-component HUD visibility, and 
 keyboard overrides from canonical defaults. Reading v1 or v2 preserves existing
 display, audio, and UI-scale values while supplying the default HUD combination and
 an empty override map. Changes preview immediately and use the existing atomic
-preferences writer. Master `H` suppression, Compact temporary surfaces, the inspected
+preferences writer. Master suppression, Compact temporary surfaces, the inspected
 unit, and the Main View destination are runtime-only and never survive restart.
 
 ## Testing oracle boundary

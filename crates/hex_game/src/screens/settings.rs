@@ -65,23 +65,22 @@ fn capture_next_key(
     if session.capture.is_none() {
         if (session.conflict.is_some() || session.confirm_restore_all)
             && keys.just_pressed(KeyCode::Escape)
-            && keys.clear_just_pressed(KeyCode::Escape)
         {
+            consume_just_pressed(&mut keys);
             session.dismiss_modal();
         }
         return;
     }
 
-    let Some((key, chord)) = captured_chord(&keys) else {
-        return;
-    };
-    if !keys.clear_just_pressed(key) {
-        return;
-    }
-    if key == KeyCode::Escape {
+    if keys.just_pressed(KeyCode::Escape) {
+        consume_just_pressed(&mut keys);
         session.capture = None;
         return;
     }
+    let Some(chord) = captured_chord(&keys) else {
+        return;
+    };
+    consume_just_pressed(&mut keys);
 
     let Some(action) = session.capture.take() else {
         return;
@@ -94,13 +93,20 @@ fn capture_next_key(
     }
 }
 
-fn captured_chord(input: &ButtonInput<KeyCode>) -> Option<(KeyCode, KeyChord)> {
+fn captured_chord(input: &ButtonInput<KeyCode>) -> Option<KeyChord> {
     let modifiers = KeyModifiers::from_input(input);
     input
         .get_just_pressed()
         .copied()
-        .filter_map(|key| KeyChord::new(key, modifiers).map(|chord| (key, chord)))
-        .min_by_key(|(key, _)| *key)
+        .filter_map(|key| KeyChord::new(key, modifiers))
+        .min_by_key(|chord| chord.key)
+}
+
+fn consume_just_pressed(input: &mut ButtonInput<KeyCode>) {
+    let pressed = input.get_just_pressed().copied().collect::<Vec<_>>();
+    for key in pressed {
+        let _ = input.clear_just_pressed(key);
+    }
 }
 
 fn handle_settings(
@@ -127,7 +133,7 @@ fn handle_settings(
                 dirty.0 = true;
             }
             SettingsIntent::BeginCapture(action) => {
-                if action.metadata().rebindable {
+                if action.metadata().rebindable && action_is_available(action) {
                     session.capture = Some(action);
                     session.conflict = None;
                     session.confirm_restore_all = false;
@@ -149,6 +155,9 @@ fn handle_settings(
             }
             SettingsIntent::CancelConflict => session.conflict = None,
             SettingsIntent::RestoreBinding(action) => {
+                if !action.metadata().rebindable || !action_is_available(action) {
+                    continue;
+                }
                 let mut resolved =
                     InputBindings::from_overrides(preferences.binding_overrides.clone());
                 resolved.restore(action);
@@ -408,7 +417,7 @@ mod tests {
         assert_eq!(captured_chord(&input), None);
 
         input.press(KeyCode::KeyY);
-        let (_, chord) = captured_chord(&input).expect("modified primary key is captured");
+        let chord = captured_chord(&input).expect("modified primary key is captured");
         assert_eq!(chord.label(), "Shift+Y");
     }
 
@@ -440,6 +449,63 @@ mod tests {
             Some(KeyChord::plain(KeyCode::KeyY))
         );
         assert!(world.resource::<PreferencesDirty>().0);
+    }
+
+    #[test]
+    fn capture_consumes_every_simultaneous_key_so_none_leak_to_focus() {
+        let mut world = World::new();
+        world.init_resource::<SettingsSession>();
+        world.init_resource::<UserPreferences>();
+        world.init_resource::<PreferencesDirty>();
+        world.init_resource::<PreferencesNotice>();
+        world.init_resource::<ButtonInput<KeyCode>>();
+        world.resource_mut::<SettingsSession>().capture = Some(InputAction::ToggleParty);
+        {
+            let mut input = world.resource_mut::<ButtonInput<KeyCode>>();
+            input.press(KeyCode::KeyY);
+            input.press(KeyCode::Space);
+        }
+
+        world
+            .run_system_once(capture_next_key)
+            .expect("capture system has all required resources");
+
+        assert!(world
+            .resource::<ButtonInput<KeyCode>>()
+            .get_just_pressed()
+            .next()
+            .is_none());
+    }
+
+    #[test]
+    fn escape_wins_a_simultaneous_capture_batch() {
+        let mut world = World::new();
+        world.init_resource::<SettingsSession>();
+        world.init_resource::<UserPreferences>();
+        world.init_resource::<PreferencesDirty>();
+        world.init_resource::<PreferencesNotice>();
+        world.init_resource::<ButtonInput<KeyCode>>();
+        world.resource_mut::<SettingsSession>().capture = Some(InputAction::ToggleParty);
+        {
+            let mut input = world.resource_mut::<ButtonInput<KeyCode>>();
+            input.press(KeyCode::KeyY);
+            input.press(KeyCode::Escape);
+        }
+
+        world
+            .run_system_once(capture_next_key)
+            .expect("capture system has all required resources");
+
+        assert!(world.resource::<SettingsSession>().capture.is_none());
+        assert!(world
+            .resource::<UserPreferences>()
+            .binding_overrides
+            .is_empty());
+        assert!(world
+            .resource::<ButtonInput<KeyCode>>()
+            .get_just_pressed()
+            .next()
+            .is_none());
     }
 
     #[test]

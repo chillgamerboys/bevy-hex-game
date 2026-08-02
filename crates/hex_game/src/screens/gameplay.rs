@@ -47,6 +47,7 @@ pub(crate) fn plugin(app: &mut App) {
     app.add_systems(
         Update,
         handle_input
+            .after(AppSystems::Update)
             .run_if(in_state(Screen::Gameplay))
             .run_if(resource_equals(GameplayPhase::Active))
             .run_if(hex_combat::encounter_unresolved),
@@ -514,7 +515,7 @@ fn prepare_main_menu_for_gameplay_return(destination: Screen, main_menu: &mut Ma
     }
 }
 
-/// Publishes authoritative game facts to the presentation-only action rail.
+/// Publishes authoritative game facts to the presentation-only Action Bar.
 fn publish_hud_view(
     phase: Res<GameplayPhase>,
     resolution: Res<EncounterResolution>,
@@ -1221,6 +1222,7 @@ mod tests {
             .insert_state(Pause(false))
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<InputBindings>()
+            .init_resource::<HudState>()
             .init_resource::<MainMenuModel>()
             .add_systems(Update, handle_input);
         app.world_mut()
@@ -1241,5 +1243,38 @@ mod tests {
             app.world().resource::<MainMenuModel>().route,
             MainMenuRoute::Root
         );
+    }
+
+    #[test]
+    fn escape_closes_an_ordinary_main_view_before_default_pause() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .insert_state(Screen::Gameplay)
+            .insert_state(Pause(false))
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<InputBindings>()
+            .init_resource::<HudState>()
+            .init_resource::<MainMenuModel>()
+            .add_systems(Update, handle_input);
+        let result = app
+            .world_mut()
+            .resource_mut::<HudState>()
+            .open_formation(hex_gameplay_model::HudContext::default());
+        assert_eq!(result, HudActionResult::RuntimeChanged);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Escape);
+
+        app.update();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<HudState>().stored_main_view(),
+            hex_gameplay_model::MainViewDestination::Closed
+        );
+        assert_eq!(*app.world().resource::<State<Pause>>().get(), Pause(false));
     }
 }

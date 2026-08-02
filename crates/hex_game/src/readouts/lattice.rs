@@ -45,11 +45,12 @@ impl DisableSelection {
         self.decision.is_some()
     }
 
-    pub(crate) fn summary(&self) -> Option<DecisionSummary> {
+    pub(crate) fn summary(&self, confirm_shortcut: String) -> Option<DecisionSummary> {
         self.decision.as_ref().map(|decision| DecisionSummary {
             chosen: self.cells.len(),
             owed: decision.owed,
             restoring: decision.restoring,
+            confirm_shortcut,
         })
     }
 
@@ -259,6 +260,7 @@ pub(crate) fn refresh_readouts(
     knowledge: Res<FactionLatticeKnowledge>,
     elements: Option<Res<ElementCatalog>>,
     spells: Option<Res<SpellBook>>,
+    bindings: Res<hex_core::InputBindings>,
     own: OwnData,
     identities: Query<(&Name, &Faction)>,
 ) {
@@ -316,6 +318,7 @@ pub(crate) fn refresh_readouts(
                         chosen: selection.cells.len(),
                         owed: decision.owed,
                         restoring: decision.restoring,
+                        confirm_shortcut: bindings.chord(hex_core::InputAction::Confirm).label(),
                     }),
             },
         );

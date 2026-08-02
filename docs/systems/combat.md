@@ -50,11 +50,12 @@ The HUD is mode-aware:
   dismissed or replaced until the canonical decision resolves, even while the
   ordinary HUD is hidden.
 
-`H` transiently hides or restores all ordinary components without changing their
-saved preferences. `P`, `I`, `L`, and `B` toggle Party, Initiative, Activity, and
-Action Bar respectively on Standard/Wide; while master-hidden, each shortcut summons
-only its requested surface. `V` opens the inspected character and `F` opens Formation
-in the Main View. On Compact, an ordinary surface closes with the same key or Escape.
+With canonical default bindings, `H` transiently hides or restores all ordinary
+components without changing their saved preferences; `P`, `I`, `L`, and `B` address
+Party, Initiative, Activity, and Action Bar; and `V` and `F` open Character and
+Formation. These bindings are configurable. On Standard/Wide, component activation
+toggles its saved preference; while master-hidden, it summons only its requested
+surface. On Compact, an ordinary surface closes with the same key or Escape.
 
 `hex_game::readouts::GameplayUiContext` is the presentation-private projection that
 keeps acting unit, selected ally, caster, decision owner, decision target, aimed
@@ -73,9 +74,10 @@ combat exits, or the target is no longer valid. Hostile identity, position, and
 lattice contents still pass exclusively through faction knowledge.
 
 Activity is a bounded, disclosure-frozen history with All, Combat, and Activity tabs.
-`L` toggles or summons it. Command refusals use high-priority styling and remain in
-the same 64-event combat history as actions, Rest, revival, and encounter outcomes;
-high-level travel and session notices occupy the Activity category.
+Its binding (`L` by default) toggles or summons it. Command refusals use high-priority
+styling and remain in the same 64-event combat history as actions, Rest, revival, and
+encounter outcomes; high-level travel and session notices occupy the Activity
+category.
 
 The projection asserts rather than conceals producer disagreements. On player turns,
 actor, selected unit, and caster must agree. On hostile turns, player casting cannot
@@ -111,8 +113,9 @@ reconciler publishes whole crossed surfaces and clears both at the final surface
 `Transformation` mirrors that route for presentation only. Removing it early cannot
 move or unlock the unit, and retaining a strike/cast animation cannot retain the turn.
 
-Keys: `SPACE` ends the current player turn and is ignored while a hostile owns the
-turn. `ESC` and `BACKSPACE` were already taken by pause and return-to-owner.
+The End Turn binding (`Space` by default) ends the current player turn and is ignored
+while a hostile owns the turn. Escape and Backspace retain their contextual pause and
+return-to-owner semantics.
 
 ### A defender choice is command-modal, not Pause
 
@@ -253,9 +256,10 @@ So the answer is drawn **before** the click rather than inferred after it:
 | **a faint tint** | over every surface this turn's movement can pay for |
 | **a stronger tint** | along the route to whatever the cursor is over |
 
-A tile that cannot be reached is simply not lit, and hovering it draws no route. When
-the Action Bar is visible it carries the same fact as a number — `your turn, 4 to
-move` — so the tint can be checked against something rather than merely trusted.
+A tile that cannot be reached is simply not lit, and hovering it draws no route. This
+world-space path feedback remains available when every ordinary HUD component is
+hidden; the Action Bar contains controls only and does not duplicate the actor, round,
+or movement summary.
 
 **There is no range tint while exploring.** Movement is unlimited there, so every
 connected surface qualifies and a tint over the whole map would say nothing. The route

@@ -61,7 +61,7 @@ only from the Creator's local mechanics test.
 | Settings key capture | one rebindable row | Cancel capture | next non-modifier key is captured at highest priority and does not reach gameplay; Escape cancels |
 | Settings key conflict | overlapping-context collision | Swap, Cancel | no silent stealing; Swap updates both rows atomically; Cancel preserves both |
 | Gameplay exploration | default preferences | Party and eligible Action Bar | Party visible, Initiative ineligible, Activity closed, Main View closed; no redundant screen residue |
-| Gameplay player turn | maximum eligible actions | Party, Initiative, Action Bar | stable order, acting identity, movement/action budget, every authorized action, world feedback unobscured |
+| Gameplay player turn | maximum eligible actions | Party, Initiative, Action Bar | stable disclosed order and every authorized control; world movement feedback remains unobscured; no duplicate actor/round/budget summary |
 | Gameplay hostile turn | mixed disclosed order | Initiative | no player action affordance; disclosed hostile is inspectable and an unobserved hostile is not activatable or locatable |
 | Character Main View | disclosed Party member | close / replace destination | readable lattice and character detail; inspection never changes gameplay authority |
 | Activity | mixed history | All, Combat, Activity | bounded disclosure-frozen lines filter by selected tab; danger has a non-color cue |
@@ -70,7 +70,7 @@ only from the Creator's local mechanics test.
 | Gameplay casting / aiming | populated and blocked states | cast, target cycle, confirm, cancel | only canonical actions are enabled; retained target and refusal copy remain disclosure-safe |
 | Required decisions | disable and restore | Clear, Confirm | Required Decision forcibly owns Main View and cannot close or be replaced until resolved |
 | Master-hidden required decision | `H` hidden | Clear, Confirm | all ordinary components are absent while the required decision remains fully reachable |
-| Pause | active gameplay | Resume, Return to Main Menu | phase suppression does not mutate component preferences or Main View state |
+| Pause | active gameplay | Resume, Return to Main Menu | overlay presentation leaves component preferences and stored Main View state intact |
 
 Campaign adds no delete, overwrite, difficulty, or character-selection flow. A New
 Game action exists only on an Empty card and cannot replace an occupied or invalid

@@ -391,6 +391,38 @@ mod structural_tests {
         })
     }
 
+    fn settings_binding_snapshot(
+        tab: SettingsTab,
+        size: UVec2,
+        mode: UiScaleMode,
+    ) -> UiTreeSnapshot {
+        let category = tab
+            .input_category()
+            .expect("binding fixture requires a keybinding tab");
+        let bindings = hex_core::InputAction::ALL
+            .into_iter()
+            .filter(|action| action.metadata().category == category)
+            .map(|action| {
+                let metadata = action.metadata();
+                UiBindingRow {
+                    action,
+                    label: metadata.label.to_owned(),
+                    chord: metadata.default_chord.label(),
+                    rebindable: metadata.rebindable,
+                    overridden: action == hex_core::InputAction::EndTurn,
+                }
+            })
+            .collect();
+        settled_snapshot(hex_core::Screen::Settings, size, 1.0, mode, |world| {
+            world.insert_resource(UiSettingsView {
+                tab,
+                bindings,
+                can_restore_all: true,
+                ..default()
+            });
+        })
+    }
+
     fn creator_snapshot(case: UiTaskCase, size: UVec2, mode: UiScaleMode) -> UiTreeSnapshot {
         let screen = case.contract().screen;
         assert!(matches!(
@@ -747,11 +779,19 @@ mod structural_tests {
                     chrome.action_bar_shown = true;
                 }
             }
-            UiTaskCase::PlayerTurnMaxActions | UiTaskCase::Casting | UiTaskCase::AimingBlocked => {
+            UiTaskCase::PlayerTurnMaxActions => {
+                chrome.party_shown = !compact;
                 chrome.action_bar_shown = true;
                 chrome.initiative_shown = !compact;
             }
-            UiTaskCase::HostileTurn => chrome.initiative_shown = !compact,
+            UiTaskCase::Casting | UiTaskCase::AimingBlocked => {
+                chrome.action_bar_shown = true;
+                chrome.initiative_shown = !compact;
+            }
+            UiTaskCase::HostileTurn => {
+                chrome.party_shown = !compact;
+                chrome.initiative_shown = !compact;
+            }
             UiTaskCase::CharacterMainView => {
                 chrome.main_view =
                     hex_gameplay_model::MainViewDestination::Character(hex_core::UnitId(0));
@@ -1184,6 +1224,44 @@ mod structural_tests {
                 issues.is_empty(),
                 "settings failed at {size:?} {mode:?}: {issues:#?}"
             );
+        }
+    }
+
+    #[test]
+    fn settings_binding_tabs_preserve_reachable_controls_across_the_required_matrix() {
+        for (size, mode) in REQUIRED_MATRIX {
+            for tab in SettingsTab::ALL
+                .into_iter()
+                .filter(|tab| *tab != SettingsTab::General)
+            {
+                let snapshot = settings_binding_snapshot(tab, size, mode);
+                let issues = snapshot.layout_issues();
+                assert!(
+                    issues.is_empty(),
+                    "{} bindings failed at {size:?} {mode:?}: {issues:#?}",
+                    tab.label()
+                );
+
+                let last_action = hex_core::InputAction::ALL
+                    .into_iter()
+                    .rev()
+                    .find(|action| {
+                        action.metadata().category == tab.input_category().expect("binding tab")
+                            && action.metadata().rebindable
+                    })
+                    .expect("every binding category has a rebindable action");
+                let last_control = format!("Rebind {}", last_action.metadata().label);
+                let observation = snapshot
+                    .nodes
+                    .iter()
+                    .find(|node| node.name == last_control)
+                    .expect("the final category binding renders");
+                assert!(
+                    observation.scroll_reachable,
+                    "the final {} binding should remain reachable at {size:?} {mode:?}",
+                    tab.label()
+                );
+            }
         }
     }
 
@@ -1826,11 +1904,7 @@ pub mod test_support {
                 Self::Exploration => task(
                     "gameplay-exploration",
                     Screen::Gameplay,
-                    &[
-                        "Primary Action Rail",
-                        "Action Rail Rest",
-                        "Action Rail Pause",
-                    ],
+                    &["Action Bar", "Action Bar Rest", "Action Bar Pause"],
                     &[],
                     true,
                 ),
@@ -1838,10 +1912,10 @@ pub mod test_support {
                     "gameplay-player-turn-max",
                     Screen::Gameplay,
                     &[
-                        "Primary Action Rail",
-                        "Action Rail Channel",
-                        "Action Rail End Turn",
-                        "Action Rail Pause",
+                        "Action Bar",
+                        "Action Bar Channel",
+                        "Action Bar End Turn",
+                        "Action Bar Pause",
                     ],
                     &[],
                     true,
@@ -1889,7 +1963,7 @@ pub mod test_support {
                 Self::Casting => task(
                     "casting",
                     Screen::Gameplay,
-                    &["Primary Action Rail"],
+                    &["Action Bar"],
                     &["Cast Lightning Bolt"],
                     true,
                 ),
@@ -1897,7 +1971,7 @@ pub mod test_support {
                     "aiming-blocked",
                     Screen::Gameplay,
                     &[
-                        "Primary Action Rail",
+                        "Action Bar",
                         "Confirm Cast Disabled",
                         "Next Target Disabled",
                         "Cancel Aim",
@@ -2325,10 +2399,10 @@ pub mod test_support {
             issues.extend(self.task_lattice_issues(case));
             if case == UiTaskCase::HudHiddenRequired {
                 for hidden in [
-                    "Party Strip",
+                    "Party Panel",
                     "Initiative Panel",
                     "Activity Log Panel",
-                    "Primary Action Rail",
+                    "Action Bar",
                 ] {
                     if self.nodes.iter().any(|node| node.name == hidden) {
                         issues.push(format!(
@@ -2338,18 +2412,14 @@ pub mod test_support {
                 }
             }
             if case == UiTaskCase::CustomHudVisibility {
-                for visible in ["Party Strip", "Activity Log Panel"] {
+                for visible in ["Party Panel", "Activity Log Panel"] {
                     if self.nodes.iter().all(|node| node.name != visible) {
                         issues.push(format!(
                             "custom HUD preference did not present requested surface {visible:?}"
                         ));
                     }
                 }
-                for hidden in [
-                    "Initiative Panel",
-                    "Primary Action Rail",
-                    "Lattice Readout Stack",
-                ] {
+                for hidden in ["Initiative Panel", "Action Bar", "Lattice Readout Stack"] {
                     if self.nodes.iter().any(|node| node.name == hidden) {
                         issues.push(format!(
                             "custom HUD preference unexpectedly presented {hidden:?}"
@@ -2365,10 +2435,10 @@ pub mod test_support {
                 }
                 let visible_regions = [
                     "Party HUD Region",
-                    "Turn HUD Region",
-                    "Inspector HUD Region",
-                    "Actions HUD Region",
-                    "Events HUD Region",
+                    "Initiative HUD Region",
+                    "Main View HUD Region",
+                    "Action Bar HUD Region",
+                    "Activity HUD Region",
                 ]
                 .into_iter()
                 .filter(|name| self.nodes.iter().any(|node| node.name == *name))

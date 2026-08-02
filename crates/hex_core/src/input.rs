@@ -489,7 +489,8 @@ impl KeyChord {
 fn key_label(key: KeyCode) -> String {
     match key {
         KeyCode::Space => "Space".to_owned(),
-        KeyCode::Enter | KeyCode::NumpadEnter => "Enter".to_owned(),
+        KeyCode::Enter => "Enter".to_owned(),
+        KeyCode::NumpadEnter => "Numpad Enter".to_owned(),
         KeyCode::Escape => "Esc".to_owned(),
         KeyCode::Backspace => "Backspace".to_owned(),
         KeyCode::Tab => "Tab".to_owned(),
@@ -590,6 +591,7 @@ impl InputBindingOverrides {
             if !chord.valid() {
                 return Err(BindingEditError::ModifierOnly(action));
             }
+            validate_gameplay_escape_reservation(action, chord)?;
         }
         for action in InputAction::ALL {
             if let Some(conflict) = bindings.conflict_for(action, bindings.chord(action)) {
@@ -628,6 +630,8 @@ pub enum BindingEditError {
     FixedAction(InputAction),
     /// A standard modifier cannot be the primary key.
     ModifierOnly(InputAction),
+    /// Escape remains reserved for closing HUD tasks and the Pause fallback.
+    ReservedGameplayEscape(InputAction),
     /// Another action already uses the chord in an overlapping context.
     Conflict(BindingConflict),
 }
@@ -641,6 +645,11 @@ impl fmt::Display for BindingEditError {
             Self::ModifierOnly(action) => write!(
                 formatter,
                 "{} requires a non-modifier key",
+                action.metadata().label
+            ),
+            Self::ReservedGameplayEscape(action) => write!(
+                formatter,
+                "Esc is reserved for closing HUD tasks and cannot be assigned to {}",
                 action.metadata().label
             ),
             Self::Conflict(conflict) => write!(
@@ -789,6 +798,17 @@ fn validate_editable_chord(action: InputAction, chord: KeyChord) -> Result<(), B
     if !chord.valid() {
         return Err(BindingEditError::ModifierOnly(action));
     }
+    validate_gameplay_escape_reservation(action, chord)?;
+    Ok(())
+}
+
+fn validate_gameplay_escape_reservation(
+    action: InputAction,
+    chord: KeyChord,
+) -> Result<(), BindingEditError> {
+    if chord.key == KeyCode::Escape && action != InputAction::Pause {
+        return Err(BindingEditError::ReservedGameplayEscape(action));
+    }
     Ok(())
 }
 
@@ -868,6 +888,15 @@ mod tests {
         input.press(KeyCode::ShiftLeft);
         assert!(bindings.just_pressed(&input, InputAction::ToggleParty));
         assert_eq!(chord.label(), "Shift+P");
+    }
+
+    #[test]
+    fn visually_distinct_keys_have_distinct_labels() {
+        assert_eq!(KeyChord::plain(KeyCode::Enter).label(), "Enter");
+        assert_eq!(
+            KeyChord::plain(KeyCode::NumpadEnter).label(),
+            "Numpad Enter"
+        );
     }
 
     #[test]
@@ -976,6 +1005,41 @@ mod tests {
         assert_eq!(
             bindings.assign(InputAction::Cancel, KeyChord::plain(KeyCode::KeyX)),
             Err(BindingEditError::FixedAction(InputAction::Cancel))
+        );
+    }
+
+    #[test]
+    fn gameplay_escape_cannot_be_assigned_or_swapped_away_from_its_close_precedence() {
+        let mut bindings = InputBindings::default();
+        assert_eq!(
+            bindings.assign(InputAction::ToggleParty, KeyChord::plain(KeyCode::Escape)),
+            Err(BindingEditError::ReservedGameplayEscape(
+                InputAction::ToggleParty
+            ))
+        );
+        assert_eq!(
+            bindings.swap(InputAction::Pause, InputAction::ToggleParty),
+            Err(BindingEditError::ReservedGameplayEscape(
+                InputAction::ToggleParty
+            ))
+        );
+
+        let persisted = InputBindingOverrides(BTreeMap::from([(
+            InputAction::ToggleParty,
+            KeyChord::new(
+                KeyCode::Escape,
+                KeyModifiers {
+                    shift: true,
+                    ..KeyModifiers::default()
+                },
+            )
+            .expect("modified Escape is syntactically a chord"),
+        )]));
+        assert_eq!(
+            persisted.validate(),
+            Err(BindingEditError::ReservedGameplayEscape(
+                InputAction::ToggleParty
+            ))
         );
     }
 }

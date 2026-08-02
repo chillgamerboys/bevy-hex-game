@@ -55,14 +55,14 @@ fn spawn_safe_frame(mut commands: Commands, metrics: Res<ResolvedUiMetrics>) {
             );
             spawn_region(
                 frame,
-                "Turn HUD Region",
+                "Initiative HUD Region",
                 UiRegionRole::Turn,
                 region_node(),
                 metrics.viewport,
             );
             spawn_region(
                 frame,
-                "Inspector HUD Region",
+                "Main View HUD Region",
                 UiRegionRole::Inspector,
                 Node {
                     flex_direction: FlexDirection::Column,
@@ -73,7 +73,7 @@ fn spawn_safe_frame(mut commands: Commands, metrics: Res<ResolvedUiMetrics>) {
             );
             spawn_region(
                 frame,
-                "Actions HUD Region",
+                "Action Bar HUD Region",
                 UiRegionRole::Actions,
                 Node {
                     flex_direction: FlexDirection::Column,
@@ -84,7 +84,7 @@ fn spawn_safe_frame(mut commands: Commands, metrics: Res<ResolvedUiMetrics>) {
             );
             spawn_region(
                 frame,
-                "Events HUD Region",
+                "Activity HUD Region",
                 UiRegionRole::Events,
                 Node {
                     flex_direction: FlexDirection::Column,
@@ -143,9 +143,9 @@ fn apply_responsive_layout(
     {
         return;
     }
-    let chrome = review
-        .as_ref()
-        .map_or(*chrome, |review| review.effective_chrome(*chrome));
+    let chrome = review.as_ref().map_or(*chrome, |review| {
+        review.effective_chrome(*chrome, metrics.viewport)
+    });
     for (role, mut node, mut pickable) in &mut regions {
         constrain_region_to_canvas(*metrics, *role, &mut node);
         let responsive_display = if metrics.viewport == crate::UiViewportClass::Compact {
@@ -195,6 +195,7 @@ fn make_compact_task_surface(node: &mut Node) {
 
 fn apply_visibility(
     view: Res<GameplayChromeView>,
+    metrics: Res<ResolvedUiMetrics>,
     review: Option<Res<crate::review::UiReviewPresentation>>,
     added_roots: Query<(), Added<HudElement>>,
     mut roots: Query<(&mut Visibility, Has<RequiredActionSurface>), With<HudElement>>,
@@ -203,9 +204,9 @@ fn apply_visibility(
     if !view.is_changed() && !review_changed && added_roots.is_empty() {
         return;
     }
-    let view = review
-        .as_ref()
-        .map_or(*view, |review| review.effective_chrome(*view));
+    let view = review.as_ref().map_or(*view, |review| {
+        review.effective_chrome(*view, metrics.viewport)
+    });
     for (mut visibility, required_action) in &mut roots {
         let wanted = if view.encounter_complete {
             Visibility::Hidden
@@ -232,6 +233,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<GameplayChromeView>()
+            .init_resource::<ResolvedUiMetrics>()
             .add_systems(Update, apply_visibility);
         let ordinary = app
             .world_mut()

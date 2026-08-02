@@ -237,9 +237,9 @@ fn rebuild(
         .as_ref()
         .and_then(|review| review.lattices.as_ref())
         .unwrap_or(view.as_ref());
-    let chrome = review
-        .as_ref()
-        .map_or(*chrome, |review| review.effective_chrome(*chrome));
+    let chrome = review.as_ref().map_or(*chrome, |review| {
+        review.effective_chrome(*chrome, metrics.viewport)
+    });
     if let Ok(mut stack) = stacks.single_mut() {
         stack.display = if matches!(
             chrome.main_view,
@@ -279,7 +279,7 @@ fn rebuild(
             let Some((own, decision)) = view
                 .own
                 .as_ref()
-                .and_then(|own| own.decision.map(|decision| (own, decision)))
+                .and_then(|own| own.decision.as_ref().map(|decision| (own, decision)))
             else {
                 return;
             };
@@ -349,7 +349,7 @@ fn rebuild(
                 "Own",
                 OwnCell,
             );
-            if let Some(decision) = own.decision {
+            if let Some(decision) = own.decision.as_ref() {
                 spawn_decision_controls(body, decision, &assets);
             }
         });
@@ -403,7 +403,7 @@ pub(crate) fn compact_decision_visible(
 /// Adds the shared clear/confirm affordances to any required-decision surface.
 pub fn spawn_decision_controls(
     body: &mut ChildSpawnerCommands,
-    decision: crate::DecisionChoiceView,
+    decision: &crate::DecisionChoiceView,
     assets: &UiAssets,
 ) {
     body.spawn(fine(
@@ -445,7 +445,7 @@ pub fn spawn_decision_controls(
                 ))
                 .with_children(|button| {
                     button.spawn(blurb(assets, "confirm"));
-                    button.spawn(fine(assets, "ENTER"));
+                    button.spawn(fine(assets, decision.confirm_shortcut.clone()));
                 });
         } else {
             controls
@@ -516,6 +516,7 @@ mod tests {
                 chosen: 1,
                 owed: 2,
                 restoring: false,
+                confirm_shortcut: "Enter".to_owned(),
             }),
         });
         assert!(

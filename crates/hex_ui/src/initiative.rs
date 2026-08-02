@@ -92,14 +92,20 @@ fn spawn_panel(
 fn rebuild(
     mut commands: Commands,
     view: Res<InitiativeView>,
+    review: Option<Res<crate::review::UiReviewPresentation>>,
     bodies: Query<Entity, With<InitiativeBody>>,
     mut panels: Query<&mut Node, With<InitiativePanel>>,
     mut headings: Query<&mut Text, With<InitiativeHeading>>,
     assets: Res<UiAssets>,
 ) {
-    if !view.is_changed() {
+    let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
+    if !view.is_changed() && !review_changed {
         return;
     }
+    let view = review
+        .as_ref()
+        .and_then(|review| review.initiative.as_ref())
+        .unwrap_or(view.as_ref());
     if let Ok(mut heading) = headings.single_mut() {
         heading.0.clone_from(&view.heading);
     }

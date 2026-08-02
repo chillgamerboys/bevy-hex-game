@@ -468,6 +468,7 @@ fn parse_screen(name: &str) -> Result<Screen, String> {
 fn parse_key(name: &str) -> Result<KeyCode, String> {
     match name {
         "Backspace" => Ok(KeyCode::Backspace),
+        "Escape" => Ok(KeyCode::Escape),
         "B" => Ok(KeyCode::KeyB),
         "C" => Ok(KeyCode::KeyC),
         "F" => Ok(KeyCode::KeyF),
@@ -477,7 +478,7 @@ fn parse_key(name: &str) -> Result<KeyCode, String> {
         "P" => Ok(KeyCode::KeyP),
         "V" => Ok(KeyCode::KeyV),
         _ => Err(format!(
-            "unknown key {name:?}; expected Backspace or a configured HUD/camera review key"
+            "unknown key {name:?}; expected Backspace, Escape, or a configured HUD/camera review key"
         )),
     }
 }
@@ -1695,6 +1696,7 @@ mod tests {
         assert_eq!(parse_key("B"), Ok(KeyCode::KeyB));
         assert_eq!(parse_key("V"), Ok(KeyCode::KeyV));
         assert_eq!(parse_key("F"), Ok(KeyCode::KeyF));
+        assert_eq!(parse_key("Escape"), Ok(KeyCode::Escape));
         assert!(validate_step(&WalkStep::AwaitScreen("Menu".into())).is_err());
         assert!(validate_step(&WalkStep::Key("F13".into())).is_err());
         assert!(validate_step(&WalkStep::Capture(" ".into())).is_err());
@@ -2631,33 +2633,22 @@ mod tests {
         let task_ids = tasks
             .iter()
             .map(|task| task.contract().id)
-            .collect::<std::collections::BTreeSet<_>>();
+            .collect::<Vec<_>>();
         let expected = [
-            "main-menu",
-            "campaign",
-            "sandbox-overview",
-            "sandbox-map-browser",
-            "sandbox-map-detail",
-            "sandbox-party",
-            "sandbox-enemies",
-            "sandbox-character-picker",
-            "tools",
-        ]
-        .into_iter()
-        .collect::<std::collections::BTreeSet<_>>();
+            "gameplay-exploration",
+            "gameplay-player-turn-max",
+            "gameplay-hostile-turn",
+            "decision-disable",
+            "aiming-blocked",
+            "gameplay-activity-tabs",
+            "gameplay-custom-hud-visibility",
+            "gameplay-character-main-view",
+            "hud-hidden-required",
+            "gameplay-compact-temporary-surface",
+        ];
         assert_eq!(
             task_ids, expected,
-            "every cutover route needs one native frame"
-        );
-        assert_eq!(
-            tasks
-                .iter()
-                .filter(|task| {
-                    **task == hex_ui::test_support::UiTaskCase::SandboxCharacterPicker
-                })
-                .count(),
-            2,
-            "the character picker owns the one targeted 4K/200% duplicate"
+            "the scoped HUD route must preserve its authored presentation sequence"
         );
     }
 

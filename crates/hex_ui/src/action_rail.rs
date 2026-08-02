@@ -47,7 +47,7 @@ fn spawn_action_rail(
 ) {
     let rail = commands
         .spawn((
-            Name::new("Primary Action Rail"),
+            Name::new("Action Bar"),
             crate::UiVisibilityRequirement::Immediate,
             ActionRail,
             TabGroup::new(10),
@@ -59,22 +59,22 @@ fn spawn_action_rail(
         ))
         .with_children(|rail| {
             rail.spawn((
-                Name::new("Action Rail Heading"),
+                Name::new("Action Bar Heading"),
                 ActionRailCopy::Heading,
                 hud_heading(&assets, "Now"),
             ));
             rail.spawn((
-                Name::new("Action Rail Summary"),
+                Name::new("Action Bar Summary"),
                 ActionRailCopy::Summary,
                 blurb(&assets, "Preparing actions…"),
             ));
             rail.spawn((
-                Name::new("Action Rail Prompt"),
+                Name::new("Action Bar Prompt"),
                 ActionRailCopy::Prompt,
                 blurb(&assets, ""),
             ));
             rail.spawn((
-                Name::new("Primary Action Rail Controls"),
+                Name::new("Action Bar Controls"),
                 ActionRailActions,
                 Node {
                     width: Val::Percent(100.0),
@@ -224,12 +224,12 @@ fn refresh_action_rail(
                 crate::layout::center_right_inset(*metrics)
             };
             let rail_content_width = (metrics.logical_size.x - left - right - 24.0).max(44.0);
-            let column_count = if metrics.content_scale >= 1.5 {
-                offered.len().min(3)
-            } else {
-                offered.len()
-            }
-            .max(1);
+            // Resolve every offered action against the same row. The former
+            // three-column cap made a fourth action wrap only on wider Compact
+            // canvases, paradoxically hiding Pause at 1920px while 1280px fit.
+            // Each control may wrap its own label, but the complete command set
+            // remains immediately reachable.
+            let column_count = offered.len().max(1);
             let columns = match u16::try_from(column_count) {
                 Ok(columns) => f32::from(columns),
                 Err(_) => f32::from(u16::MAX),
@@ -245,7 +245,7 @@ fn refresh_action_rail(
             } else {
                 ordinary_action_width
             };
-            let name = format!("Action Rail {}", action.label);
+            let name = format!("Action Bar {}", action.label);
             let immediate = matches!(
                 action.priority,
                 crate::ActionPriority::Required | crate::ActionPriority::Primary
@@ -370,12 +370,13 @@ fn apply_action_rail_layout(
         node.top = Val::Auto;
         node.padding = UiRect::axes(Val::Px(14.0), Val::Px(8.0));
         node.row_gap = Val::Px(5.0);
+        let semantic_height = crate::layout::semantic_action_bar_height(metrics);
         node.min_height = Val::Px(if minimal_deployment {
             0.0
         } else if decision_required {
-            116.0
+            semantic_height.max(116.0)
         } else {
-            92.0
+            semantic_height
         });
         node.height = Val::Auto;
         node.overflow = Overflow::default();
@@ -504,7 +505,7 @@ mod tests {
     }
 
     #[test]
-    fn required_rail_remains_reachable_across_the_structural_matrix() {
+    fn action_bar_fills_its_region_without_legacy_screen_insets() {
         for logical_size in [
             Vec2::new(960.0, 540.0),
             Vec2::new(1280.0, 720.0),
@@ -514,27 +515,21 @@ mod tests {
         ] {
             for mode in [UiScaleMode::Auto, UiScaleMode::Percent200] {
                 let metrics = resolve_ui_metrics(logical_size, mode);
-                let node = action_rail_node(metrics.viewport);
-                let Val::Px(left) = node.left else {
-                    panic!("the required rail needs a bounded left inset");
-                };
-                let Val::Px(right) = node.right else {
-                    panic!("the required rail needs a bounded right inset");
-                };
-                let Val::Px(bottom) = node.bottom else {
-                    panic!("the required rail needs a bounded bottom inset");
-                };
+                let mut node = action_rail_node(metrics.viewport);
+                apply_action_rail_layout(metrics, &mut node, false, false);
+
+                assert_eq!(node.position_type, PositionType::Relative);
+                assert_eq!(node.width, Val::Percent(100.0));
+                assert_eq!(node.top, Val::Auto);
+                assert_eq!(node.right, Val::Auto);
+                assert_eq!(node.bottom, Val::Auto);
+                assert_eq!(node.left, Val::Auto);
                 let Val::Px(min_height) = node.min_height else {
-                    panic!("the required rail needs a bounded minimum height");
+                    panic!("the action bar needs a bounded minimum height");
                 };
-                let available_width = metrics.effective_size.x - left - right;
                 assert!(
-                    available_width >= 156.0,
-                    "a required action and its reason must fit at {logical_size:?} in {mode:?}"
-                );
-                assert!(
-                    bottom + min_height <= metrics.effective_size.y,
-                    "the required rail must remain on-canvas at {logical_size:?} in {mode:?}"
+                    min_height.is_finite() && min_height >= 44.0,
+                    "the action bar must retain a usable target-height contract at {logical_size:?} in {mode:?}"
                 );
             }
         }

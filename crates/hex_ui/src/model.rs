@@ -17,7 +17,7 @@ pub enum ActionAvailability {
     },
 }
 
-/// Placement priority inside the persistent action rail.
+/// Placement priority inside the contextual Action Bar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ActionPriority {
     /// Secondary convenience or inspection action.
@@ -184,7 +184,7 @@ pub enum ActivityIntent {
 }
 
 /// Progress for a required damage/restoration lattice choice.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecisionChoiceView {
     /// Selected cell count.
     pub chosen: usize,
@@ -192,12 +192,14 @@ pub struct DecisionChoiceView {
     pub owed: usize,
     /// Whether disabled cells are being restored rather than live cells disabled.
     pub restoring: bool,
+    /// Current player binding for confirming the completed choice.
+    pub confirm_shortcut: String,
 }
 
 /// Player-owned lattice panel projection.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OwnLatticeView {
-    /// Semantic inspector role, already converted to player-facing text.
+    /// Semantic Main View role, already converted to player-facing text.
     pub heading: String,
     /// Disclosure-safe unit identity.
     pub identity: String,
@@ -265,6 +267,12 @@ pub struct CastingAimView {
     pub label: String,
     /// Whether confirm/next/cancel controls are currently legal to offer.
     pub controls_enabled: bool,
+    /// Current player binding for confirming a cast.
+    pub confirm_shortcut: String,
+    /// Current player binding for cycling the target.
+    pub next_target_shortcut: String,
+    /// Current player binding for cancelling aiming.
+    pub cancel_shortcut: String,
 }
 
 /// Mutually exclusive casting-panel presentation states.
