@@ -65,8 +65,9 @@ pub use terrain::{
     ResolvedMapSeed, SpecialMovementRegion, SpecialMovementRegions, TerrainReady,
 };
 pub use terrain_impact::{
-    TerrainBatchId, TerrainImpact, TerrainImpactDisposition, TerrainImpactOutcome,
-    TerrainVoxelOutcome,
+    is_terrain_toughness, DamagedVoxels, TerrainBatchId, TerrainImpact, TerrainImpactDisposition,
+    TerrainImpactOutcome, TerrainImpactRejection, TerrainImpactResult, TerrainSystems,
+    TerrainVoxelHealth, TerrainVoxelOutcome, MAX_TERRAIN_TOUGHNESS,
 };
 pub use traversal::{TraversalEndpoint, TraversalProfile};
 pub use unit_ids::{ControlOwner, PlayerSeat, SimSeeds, UnitId};

@@ -31,7 +31,7 @@ will, and no amount of documentation prevents it. A compiler error does.
 
 | Crate | Holds | Depends on | Owner |
 |---|---|---|---|
-| `hex_core` | Hex coordinates, voxel positions, factions, exact occupancy, substances, headroom, terrain edits, app states, ordering sets, lattice ids | Bevy sub-crates only — no renderer | gameplay |
+| `hex_core` | Hex coordinates, voxel positions, factions, exact occupancy, substances, headroom, terrain edits/impacts/outcomes, app states, ordering sets, lattice ids | Bevy sub-crates only — no renderer | gameplay |
 | `hex_lattice` | **The lattice**: gems, fusions, spells, mana, disables, enchantments — the game's core rules, as a pure engine | `hex_core` | gameplay |
 | `hex_ai` | Authorized observations, canonical legal-action requests, profile/controller identities, and replaceable algorithm traits; no legality or simulation mutation | `hex_core`, Bevy sub-crates | gameplay |
 | `hex_combat_core` | Frozen combat inputs, serializable state, the command reducer, typed outcomes, canonical snapshots and bounded simulation | `hex_core`, `hex_lattice`, `bevy_ecs` derive support only | gameplay |
@@ -140,7 +140,7 @@ Two roles, named so the arrangement survives a change of people:
 
 | Role | Owns |
 |---|---|
-| **World owner** | `hex_map`, `hex_world` (sky, camera, cutaway), `hex_perception`, world/perception schema and settings modules in `hex_assets`, and their content: world files, `substances.ron`, lighting profiles, `perception.ron`, and the future terrain-response table |
+| **World owner** | `hex_map`, `hex_world` (sky, camera, cutaway), `hex_perception`, world/perception schema and settings modules in `hex_assets`, and their content: world files, `substances.ron`, lighting profiles, `perception.ron`, and the agreed `terrain_damage.ron` allow-list |
 | **Gameplay owner** | `hex_core`, `hex_units`, `hex_combat`, `hex_lattice`, `hex_anim`, `hex_dev`, generic `hex_assets` loader infrastructure, and gameplay schema/settings modules and content: `combat.ron`, `spells.ron`, `elements.ron` |
 
 `hex_game` is **shared** — it is wiring, screens, scenarios and review tooling, and
@@ -205,11 +205,12 @@ without anyone noticing.
 extent but knows nothing about what is stacked on it, so gameplay cannot tell a surface
 from the inside of a column — let alone whether a body fits in the space above one.
 
-Writing goes the other way, through the `TerrainEdit` message — gameplay cannot call
-into the map, so a spell that digs or builds requests it and the map applies it. The
-planned second write path, `TerrainImpact`, keeps the same direction and hands the map
-even more authority: gameplay announces which voxels an elemental effect reaches, and
-the map decides what each material does about it ([systems/casting.md](systems/casting.md)).
+Writing goes the other way, through shared messages — gameplay cannot call into the
+map. Live stone construction uses `TerrainEdit::Set`. The reserved second path,
+`TerrainImpact`, keeps the same direction while leaving toughness and damage policy in
+the world: gameplay announces which voxels an elemental effect reaches and its power;
+the map accumulates material health, destroys voxels at zero, and answers through
+`TerrainImpactOutcome` ([systems/casting.md](systems/casting.md)).
 
 See [systems/map.md](systems/map.md) for the voxel model itself. V3's private
 semantic plan and its exact published projections are specified in
@@ -319,6 +320,10 @@ sets make the ordering that crosses crate boundaries explicit:
   ResolveObservation → PublishKnowledge → ApplyPresentation`, nested inside
   `GameplaySetup::Perception` on entry and `AppSystems::Update` thereafter. The first
   phase is the cross-owner hand-off from authored lighting, not a renderer query.
+- **`TerrainSystems`** — reserved for the terrain-durability wave as
+  `ApplyWorld → ReconcileActors`. Once its participants land, rebuilt terrain and
+  unsupported actors settle before illumination, observation, knowledge, and later
+  combat authority; the ordering vocabulary alone does not make that behavior live.
 - **`PresentationSystems`** — `ResolveCameraOcclusion → ApplyMaterials →
   ApplyVisibility`, in `PostUpdate` after final transforms. World presentation
   publishes whole-tree opacity, the object renderer owns isolated material clones,

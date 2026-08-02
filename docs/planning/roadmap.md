@@ -28,7 +28,7 @@ still belong to the crate they change. `docs` is whoever picks it up.
 
 | Epic | Scope | Owner |
 |---|---|---|
-| Terrain magic | permanent `Single`/`Column` evocation construction now uses exact `RunBottom` occupancy, map-approved substances, privacy-stable acceptance/payment, and `TerrainEdit::Set`; remaining work is canonical exact-voxel `TerrainImpact` announcements using runtime `ElementId`, Alberto-owned material responses, deterministic `TerrainImpactOutcome` consumption, and the boundary-I breach decision. Area construction, enchantment-bound terrain, and feature destruction remain deferred | combat | <!-- linear: HEX-19 owner: shravan-kumaran -->
+| Terrain magic | permanent `Single`/`Column` evocation construction now uses exact `RunBottom` occupancy, map-approved substances, privacy-stable acceptance/payment, and `TerrainEdit::Set`; remaining work is canonical exact-voxel `TerrainImpact` announcements using runtime `ElementId`, Alberto-owned material responses, and deterministic `TerrainImpactOutcome` consumption. The initial cave-breach ruling keeps authored Interior membership and defers dynamic daylight. Area construction, enchantment-bound terrain, and feature destruction remain deferred | combat | <!-- linear: HEX-19 owner: shravan-kumaran -->
 | Trajectories and lingering effects | exact `Direct`/`Arc`/`None` material trajectories now share one symmetric integer supercover; faction-facing preview, cycling, and AI use authorized knowledge while full occupancy remains at command authority. Remaining work is area-unit resolution, area-lingering zones, dispel, and later sight reuse | combat | <!-- linear: HEX-24 owner: shravan-kumaran -->
 | Magic outside combat | general real-time casting and its input model; Rest has moved into outcomes/recovery and does not settle this deferred question | combat | <!-- linear: HEX-25 owner: shravan-kumaran -->
 | Co-casting and rituals | variable-mana group casting after Wave 7 supplies a real Channel action and evidence for initiative and action economy | combat | <!-- linear: HEX-26 owner: shravan-kumaran -->
@@ -102,8 +102,9 @@ Until topology-aware rebuilding exists, V3 authored liquid voxels and every lowe
 voxel in their columns remain protected as one atomic semantic dependency. The
 `diggable` flag still governs legacy and non-topological liquids and is not a
 substitute for this policy.
-Dynamic cave-breach illumination remains unresolved: terrain edits do not reclassify
-an entire chamber until aperture and domain semantics are agreed.
+The initial cave-breach ruling deliberately keeps authored Interior membership after a
+roof edit, so the chamber does not gain dynamic daylight. A later topology-aware model
+must separately define aperture and domain semantics before reclassification is safe.
 
 ### The gameplay lane, in waves
 

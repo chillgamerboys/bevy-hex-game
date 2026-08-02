@@ -4,6 +4,11 @@ The world is made of **voxels**: hex prisms stacked in columns, each one made of
 substance. This describes the model, the vocabulary that goes with it, and the rules
 that everything else depends on.
 
+> **Status:** voxel storage, publication, and `TerrainEdit` are live. The toughness,
+> `TerrainImpact`, outcome, partial-health, and cross-owner settlement vocabulary below
+> is reserved/agreed for the terrain-durability wave; its runtime producer and
+> consumers are not live yet.
+
 If you only want to change how the terrain looks, [development/config.md](../development/config.md) is shorter.
 
 ## The pieces
@@ -25,6 +30,11 @@ Zero means it is buried inside a column.
 The list and gameplay properties live in `assets/config/substances.ron`; every
 rendered substance names one exact colour in `assets/art/palette.ron`. Air is the
 only substance without a swatch because it is never drawn.
+
+The agreed damage slice adds optional material toughness. It is maximum voxel health,
+restricted to `1`, `2`, `4`, or `8`; absence means the material does not participate in
+damage. Remaining health is runtime state keyed by exact `TilePos`, never a property of
+the rendered run entity.
 
 > **The vertical axis is always called `level`.** Never `z`. Cube coordinates already
 > use `x`, `y` and `z`, and all three are horizontal — `HexCoord::z()` returns
@@ -265,7 +275,7 @@ hex_core     HexTile, HexCoord, TilePos, RunBottom, HexSpan, SubstanceId, Headro
              TraversalEndpoint, TraversalProfile, SpecialMovementRegion,
              SpecialMovementRegions, InteriorRegionId, InteriorRegions,
              CutawayOccluder, MapViewHint, BiomeRegions, TraversalBlockers,
-             TerrainEdit, and the agreed TerrainImpact vocabulary
+             TerrainEdit, and the reserved TerrainImpact vocabulary
              — the shared vocabulary
 hex_assets   the substance table
 hex_map      voxel storage, generation, rendering — nothing else can see this
@@ -298,6 +308,64 @@ and the map applies it. That is the only live write path. Elemental destruction 
 use the separate agreed `TerrainImpact` announcement so the world, rather than the
 spell, decides how each material responds.
 
+### Toughness and destruction — agreed, not live
+
+Gameplay announces `TerrainImpact { batch, volume, element, power }`; it never sends a
+material outcome. The exact volume is nonempty, sorted, and deduplicated. The map
+resolves each voxel against the world-owned Boolean allow-list in
+`terrain_damage.ron`, subtracts `power` directly from remaining health, and returns an
+applied or rejected `TerrainImpactOutcome` as specified by
+[boundary G/H](../planning/boundary.md).
+
+Initial maximum health is deliberately coarse:
+
+| HP | Materials |
+|---:|---|
+| 1 | grass, snow |
+| 2 | dirt, gravel, ice |
+| 4 | stone, basalt |
+| 8 | worked stone, metal |
+| none | air, water, lava, bedrock |
+
+The map stores only partial health in a private sparse ledger keyed by `TilePos`;
+absence means full health for the voxel's current material. A hit that leaves positive
+health changes no material and does not remesh. A hit that reaches zero clears the
+voxel through the ordinary material-change consequence path. Health never transforms
+one material into another.
+
+Direct edits are resolved before impacts, then impacts in message order. A
+material-changing `Set` discards old damage and creates its new voxel at full health;
+`Clear` discards it. A same-material `Set` remains a no-op and does not heal. Ordinary
+spell construction remains the existing atomic, empty-volume placement of `stone`
+through `TerrainEdit::Set`; it does not use `TerrainImpact`.
+
+All current topology protections still win over the damage table. Bedrock,
+non-diggable voxels, authored V3 liquids and their protected lower supports, feature
+roots, and generated-light protection resist without acquiring damage. Liquids do not
+flow, refill, or redistribute after a neighboring voxel changes, and non-voxel
+features are outside this contract.
+
+### Publication, presentation, and consequences — agreed, not live
+
+`DamagedVoxels` publishes only partial health as exact
+`TilePos → TerrainVoxelHealth` facts. It is authoritative state, not a visibility
+grant. Shared presentation draws a depth-tested camera-facing bar only when that exact
+voxel is a current exposed top surface, currently Observed by the Player faction, and
+still visible after ordinary cutaway/tile and camera culling. Buried/internal,
+Remembered, Unknown, full-health, and destroyed voxels never expose a bar.
+
+A material change rebuilds the same terrain runs, headroom, special/biome/interior
+projections, blockers, illumination, observation, and knowledge that the edited map
+normally publishes. The authored cave membership itself is not regenerated: removing
+a roof voxel updates roof metadata, but the chamber stays in its authored Interior
+domain and does not gain daylight in this slice.
+
+`TerrainSystems::ApplyWorld` owns this map work. Its set boundary flushes rebuilt tile
+facts before gameplay's `TerrainSystems::ReconcileActors`, which settles unsupported
+units before perception and later combat authority. The map never reads a character
+or chooses a landing; that deterministic policy belongs to gameplay and is pinned in
+[boundary H](../planning/boundary.md#cross-owner-ordering-and-unsupported-actors).
+
 ## Things that are true and easy to forget
 
 | | |
@@ -323,9 +391,10 @@ spell, decides how each material responds.
   charges one per step, so the map's substances do not yet affect how far a piece
   gets. **`hexx::a_star` cannot supply that model**, despite being compiled in: it
   keys on `Hex` alone, so it cannot tell a bridge from the ground beneath it.
-- **Whether terrain takes a turn to change.** A turn order exists now — see
-  [systems/combat.md](combat.md) — but `TerrainEdit` is applied the moment it
-  arrives and costs nobody anything. Whether digging is an action is a design question.
+- **What terrain changes cost.** `TerrainEdit` remains applied when it arrives and
+  costs nobody anything. A spell impact keeps its cast pending until the next ordered
+  map answer, but mana/action payment is gameplay policy rather than a property of the
+  map.
 - **Whether stacked surfaces ever connect.** Teleport and tunnel are named in the design
   but not implemented. When they are, they belong in `hex_units` as explicit
   exceptions to the step rule, not as changes to it.

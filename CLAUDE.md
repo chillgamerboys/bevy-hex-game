@@ -219,6 +219,10 @@ and tests without a renderer. It holds the largest share of the test suite.
   ResolveObservation → PublishKnowledge → ApplyPresentation`) orders both initial
   perception and later updates. Authored lighting publishes
   `ExteriorIllumination`; gameplay never samples renderer lights or pixels.
+- **`TerrainSystems`** (`ApplyWorld → ReconcileActors`) is reserved for the
+  terrain-durability wave. The vocabulary may exist before its participants: do not
+  claim live settlement until rebuilt map facts, gameplay reconciliation, and the
+  cross-crate ordering tests have landed.
 - **Same-frame combat knowledge** is ordered `PublishKnowledge → combat spatial
   knowledge synchronization → CombatSystems::Act → Apply → Resolve → Advance`.
   Casting and AI must use that publication; neither preview nor a legal-action request
