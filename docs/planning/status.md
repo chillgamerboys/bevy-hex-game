@@ -57,8 +57,8 @@ sparse authored moss and lichen, and deterministic Bright gameplay lights that c
 the required network while leaving optional branches dark.
 
 Two Rings is mechanically selectable and covered by deterministic generation,
-spawning, regeneration, and re-entry checks. Its mandatory human visual and play
-approval remains pending, so the development wave is not yet a release candidate.
+spawning, regeneration, and re-entry checks. Alberto approved its visual, motion,
+and play feel at the exact reviewed head before the development wave landed.
 
 Authoritative spatial perception now runs headlessly every gameplay frame.
 `hex_world` publishes a renderer-independent Bright or Dim exterior tier;
@@ -279,8 +279,9 @@ Around the game sits its own verification tooling. The Creator's **local lattice
 test** isolates the magic ruleset and shared lattice renderer from a full fight. A
 default-off
 **`visual-walk`** build drives the whole game through scripted RON walks — screens,
-clicks by `Name`, keys, scenario launches — photographing every step through an
-offscreen render target so an agent can read the frames; `/audit-pr` runs it as a
+named UI clicks, exact stack-safe terrain clicks, bounded party-idle waits, keys, and
+scenario launches — photographing every step through an offscreen render target so
+an agent can read the frames; `/audit-pr` runs it as a
 structural and mechanical gate, with usability findings also blocking changes to UI
 or presentation. New Game reaches the 3v3 Party Trial in one click, while fixture walks
 launch Ability Lab and Raider Mirror by stable ID. The menus wear vendored
@@ -319,9 +320,24 @@ variants, a nonblocking grass tuft and snowy variant, cave moss and lichen, and 
 nonblocking emissive crystal silhouettes. Terrain substances, liquids, construction
 metal, and unit presentation resolve exact palette swatches. Forest and Deep Forest
 publish generated vegetation as shared `ObjectInstance`s while retaining exact
-rotated blockers and composable canopy cutaway; Prairie publishes nonblocking grass.
+rotated blockers and stack-safe tree roots. Character mode fades an entire obstructing
+tree through isolated per-tree material clones; authored canopy masks remain art
+metadata. Prairie publishes nonblocking grass.
 Caves publishes authored crystal `ObjectInstance`s with presentation-only
 point-light children at its gameplay-light sites.
+
+Character camera mode gives the player exclusive ownership of yaw, full-range pitch,
+and desired zoom. A conservative probe retracts only the effective boom radius against
+the public stacked-terrain projection, waits for continuous full clearance, then
+restores outward monotonically. Near-first-person retraction hides only the selected
+unit through a composable camera-owned visibility reason. Ordinary gameplay keeps cave
+roofs intact, while explicit map-review capture may still request a complete interior
+cutaway. Automated geometry, control-authority, motion-continuity, lifecycle,
+idle-churn, and release-performance gates are live. Seed-exact multi-azimuth walks now
+exercise ordinary pointer movement to a proved destination on every standalone
+selectable map and every Two Rings region. Alberto approved the corrected camera's
+motion and readability in a native Two Rings release walk at runtime head `2397d8e`
+on 2026-08-01. Map mode remains available without a scenario restriction.
 
 ## What is provisional
 

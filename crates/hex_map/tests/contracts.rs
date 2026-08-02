@@ -41,7 +41,7 @@ use hex_core::{
     GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile, InteriorRegionId,
     InteriorRegions, Level, MapAnchorId, MapAnchors, MapViewHint, PresentationOcclusion,
     ResolvedMapSeed, RunBottom, Screen, SpecialMovementRegion, SpecialMovementRegions, SubstanceId,
-    TerrainEdit, TerrainReady, TilePos, TraversalBlockers, MAX_HEADROOM,
+    TerrainEdit, TerrainReady, TilePos, TraversalBlockers, TreeOccluder, MAX_HEADROOM,
 };
 use hex_map::{
     CavesReportMetrics, CrossingSettings, EnvironmentSettings, GenerationReport, HillsSettings,

@@ -8,7 +8,7 @@ use std::fmt;
 
 use bevy::prelude::*;
 use hex_assets::{ObjectInstance, ObjectInstanceError};
-use hex_core::CanopyOccluder;
+use hex_core::TreeOccluder;
 
 use crate::procedural_v3::{FeatureId, FeatureKind, MapPresentationProjection};
 
@@ -105,7 +105,7 @@ pub(crate) fn spawn_presentations(
             }),
         ));
         if feature.kind == FeatureKind::Tree {
-            root.insert(CanopyOccluder(feature.root));
+            root.insert(TreeOccluder(feature.root));
         }
         roots.push(root.id());
     }
@@ -172,9 +172,10 @@ mod tests {
             TilePos::new(planned.root.coord, planned.root.level + 1)
         );
         assert!((instance.level_height() - 0.4).abs() < f32::EPSILON);
+        assert!(entity.get::<hex_core::CanopyOccluder>().is_none());
         assert_eq!(
-            entity.get::<CanopyOccluder>(),
-            Some(&CanopyOccluder(planned.root))
+            entity.get::<TreeOccluder>(),
+            Some(&TreeOccluder(planned.root))
         );
         assert!(entity.get::<Transform>().is_none());
     }
@@ -195,7 +196,11 @@ mod tests {
         queue.apply(&mut world);
 
         let root = *roots.first().expect("publisher should return one root");
-        assert!(world.entity(root).get::<CanopyOccluder>().is_none());
+        assert!(world
+            .entity(root)
+            .get::<hex_core::CanopyOccluder>()
+            .is_none());
+        assert!(world.entity(root).get::<TreeOccluder>().is_none());
     }
 
     #[test]
@@ -224,7 +229,8 @@ mod tests {
                 .map(ObjectInstance::object_id),
             Some(&planned.object_id)
         );
-        assert!(entity.get::<CanopyOccluder>().is_none());
+        assert!(entity.get::<hex_core::CanopyOccluder>().is_none());
+        assert!(entity.get::<TreeOccluder>().is_none());
     }
 
     #[test]

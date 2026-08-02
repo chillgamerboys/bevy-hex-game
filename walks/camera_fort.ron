@@ -1,0 +1,27 @@
+// Real exterior approach to the eastern gate; interior anchors remain close enough
+// to the hostile to trigger combat and are intentionally not fake-traversed here.
+[
+    AwaitScreen("Title"),
+    StartScenario(name: "Fort", seed: Some(640367719)),
+    AwaitScreen("Gameplay"),
+    AwaitTerrain,
+    Key("H"),
+    Key("C"),
+    Settle(45),
+    Capture("01-fort-character-start"),
+    ClickTile(q: 8, r: -4, level: Some(15)),
+    AwaitPartyIdle(max_frames: 600),
+    AssertSelectedAt(expected: (q: 8, r: -4, level: 15)),
+    Settle(45),
+    Capture("02-fort-east-gate-front"),
+    // Stay outside the curtain wall while reviewing both sides of the gate.
+    // The old ±120° eye positions are physically inside the wall shoulders.
+    OrbitCamera(yaw_turns: 0.16666667),
+    Settle(45),
+    Capture("03-fort-east-gate-side"),
+    OrbitCamera(yaw_turns: -0.33333334),
+    Settle(45),
+    Capture("04-fort-east-gate-rear"),
+    Key("Backspace"),
+    AwaitScreen("Title"),
+]

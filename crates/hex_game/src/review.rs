@@ -14,7 +14,7 @@
 //! generated anchor before framing. This keeps iteration tooling on the same loading
 //! and validation path as manual play while avoiding compositor-dependent screenshots.
 //! `HEX_REVIEW_CUTAWAY=full` exposes the complete active interior for cave overview
-//! captures while leaving the normal local cutaway unchanged.
+//! captures; ordinary gameplay keeps every cave roof intact.
 //! `HEX_REVIEW_ILLUMINATION=overlay` draws the authoritative Dark, Dim, and Bright
 //! gameplay tiers over exact interior surfaces for diagnostic cave captures.
 
@@ -824,9 +824,15 @@ fn apply_character_camera_view(
     let focus = target + Vec3::Y * settings.character_focus_height;
     let offset = horizontal * (settings.character_radius * pitch.cos())
         + Vec3::Y * (settings.character_radius * pitch.sin());
+    let direction = offset.normalize_or_zero();
+    let up = if direction.cross(Vec3::Y).length_squared() <= f32::EPSILON {
+        Vec3::Z
+    } else {
+        Vec3::Y
+    };
 
     transform.translation = focus + offset;
-    transform.look_at(focus, Vec3::Y);
+    transform.look_at(focus, up);
     orbit.focus = focus;
     orbit.radius = settings.character_radius;
 }
@@ -1790,6 +1796,33 @@ mod tests {
     }
 
     #[test]
+    fn character_capture_supports_both_vertical_poles() {
+        let map_focus = Vec3::ZERO;
+        let map_eye = Vec3::new(8.0, 10.0, 6.0);
+        let target = Vec3::new(-2.0, 4.0, 5.0);
+
+        for (pitch, wanted_forward) in [(-1.0, Vec3::Y), (1.0, Vec3::NEG_Y)] {
+            let mut settings = test_camera_settings();
+            settings.character_pitch = pitch;
+            let mut transform = Transform::default();
+            let mut orbit = PanOrbitCamera::default();
+            apply_character_camera_view(
+                map_eye,
+                map_focus,
+                target,
+                &settings,
+                &mut transform,
+                &mut orbit,
+            );
+
+            assert!(transform.translation.is_finite());
+            assert!(transform.rotation.is_finite());
+            assert!((transform.rotation * Vec3::NEG_Z).dot(wanted_forward) > 0.99999);
+            assert!((orbit.radius - settings.character_radius).abs() < f32::EPSILON);
+        }
+    }
+
+    #[test]
     fn invalid_review_camera_poses_are_rejected_without_mutation() {
         let original = Transform::from_xyz(4.0, 5.0, 6.0);
         for (eye, focus) in [
@@ -2151,12 +2184,12 @@ mod tests {
             gameplay_focus: (0.0, 6.0, 0.0),
             character_focus_height: 0.4,
             character_radius: 7.0,
+            character_probe_radius: 0.1,
             character_collision_margin: 0.35,
-            character_min_effective_radius: 1.5,
             character_restoration_speed: 8.0,
+            character_collision_release_delay: 0.2,
+            character_self_hide_radius: 1.0,
             character_pitch: 0.3,
-            character_min_pitch: 0.05,
-            character_max_pitch: 0.95,
             pan_speed: 0.4,
             pan_speed_offset: 10.0,
             min_pitch: 0.25,

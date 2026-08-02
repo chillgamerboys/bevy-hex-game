@@ -1,0 +1,149 @@
+// Character-camera traversal authority for every selectable Map scenario.
+//
+// Generated destinations resolve by stable MapAnchor name. `expected` is only a
+// stale-evidence detector for the pinned hero seed: when generation moves an anchor,
+// the walk must fail until its new view has been reviewed. Authored destinations use
+// Exact. Sky Islands deliberately names only its ordinary ground bridge; the upper
+// surfaces remain flight-gated and are not fake-walked by this manifest.
+// `azimuth_turns` are absolute offsets from the scenario's authored launch yaw;
+// executable `OrbitCamera` gestures are relative and cumulative.
+(
+    schema_version: 1,
+    routes: [
+        (
+            scenario: "The Crossing",
+            seed: None,
+            points: [
+                (label: "bridge deck", destination: Exact((q: 0, r: 0, level: 16)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
+            ],
+        ),
+        (
+            scenario: "Procedural Hills",
+            seed: Some(1592598566),
+            points: [
+                (label: "alternate crossing", destination: Anchor(name: "alternate_crossing", expected: (q: -6, r: 6, level: 15)), azimuth_turns: [0.0, 0.33333334]),
+                (label: "bridge", destination: Anchor(name: "bridge", expected: (q: 0, r: 0, level: 16)), azimuth_turns: [0.0, -0.33333334]),
+            ],
+        ),
+        (
+            scenario: "Rolling Hills",
+            seed: None,
+            points: [
+                (label: "combat-threshold approach", destination: Exact((q: 2, r: -1, level: 3)), azimuth_turns: [0.0, 0.33333334]),
+            ],
+        ),
+        (
+            scenario: "Frozen Hills",
+            seed: Some(484450342),
+            points: [
+                (label: "alternate crossing", destination: Anchor(name: "alternate_crossing", expected: (q: 0, r: -6, level: 15)), azimuth_turns: [0.0, 0.33333334]),
+                (label: "bridge", destination: Anchor(name: "bridge", expected: (q: 0, r: 0, level: 16)), azimuth_turns: [0.0, -0.33333334]),
+            ],
+        ),
+        (
+            scenario: "Volcanic Hills",
+            seed: Some(444211238),
+            points: [
+                (label: "elevated bridge", destination: Anchor(name: "bridge", expected: (q: 0, r: 0, level: 18)), azimuth_turns: [0.0, 0.33333334]),
+                (label: "crater overlook", destination: Anchor(name: "crater_overlook", expected: (q: -6, r: 2, level: 32)), azimuth_turns: [0.0, -0.33333334]),
+            ],
+        ),
+        (
+            scenario: "Sky Islands",
+            seed: Some(94445606),
+            points: [
+                (label: "ordinary ground bridge", destination: Anchor(name: "bridge", expected: (q: 0, r: 0, level: 16)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
+            ],
+        ),
+        (
+            scenario: "Mountains",
+            seed: Some(129704046),
+            points: [
+                (label: "stream overlook", destination: Anchor(name: "stream_fall_overlook", expected: (q: -11, r: 9, level: 19)), azimuth_turns: [0.0, -0.16666667]),
+                (label: "low bypass", destination: Anchor(name: "low_bypass", expected: (q: -12, r: 6, level: 19)), azimuth_turns: [-0.33333334]),
+                (label: "high pass", destination: Anchor(name: "high_pass", expected: (q: 6, r: 0, level: 31)), azimuth_turns: [0.0, -0.33333334]),
+            ],
+        ),
+        (
+            scenario: "Caves",
+            seed: Some(736283041),
+            points: [
+                (label: "root chamber", destination: Anchor(name: "conflict_center", expected: (q: 0, r: 0, level: 6)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
+                (label: "deep chamber", destination: Anchor(name: "deep_chamber", expected: (q: -11, r: 11, level: 10)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
+            ],
+        ),
+        (
+            scenario: "Waterfall",
+            seed: Some(771203419),
+            points: [
+                (label: "fall overlook", destination: Anchor(name: "fall_overlook", expected: (q: -2, r: 4, level: 23)), azimuth_turns: [0.0, -0.16666667, -0.33333334]),
+                (label: "basin overlook", destination: Anchor(name: "basin_overlook", expected: (q: 4, r: 4, level: 18)), azimuth_turns: [0.0, 0.33333334]),
+            ],
+        ),
+        (
+            scenario: "Forest",
+            seed: Some(381654729),
+            points: [
+                (label: "woodland clearing", destination: Anchor(name: "forest_clearing", expected: (q: 9, r: -6, level: 15)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
+                (label: "prairie edge", destination: Anchor(name: "prairie_overlook", expected: (q: -3, r: 6, level: 15)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
+            ],
+        ),
+        (
+            scenario: "Deep Forest",
+            seed: Some(1592598566),
+            points: [
+                (label: "primary clearing", destination: Anchor(name: "deep_forest_clearing", expected: (q: -6, r: -4, level: 15)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
+            ],
+        ),
+        (
+            scenario: "Prairie",
+            seed: Some(1592598566),
+            points: [
+                (label: "grassland overlook", destination: Anchor(name: "prairie_overlook", expected: (q: 0, r: 0, level: 15)), azimuth_turns: [0.0, 0.33333334]),
+            ],
+        ),
+        (
+            scenario: "Fort",
+            seed: Some(640367719),
+            points: [
+                (label: "east gate approach", destination: Exact((q: 8, r: -4, level: 15)), azimuth_turns: [0.0, 0.16666667, -0.16666667]),
+                (label: "courtyard", destination: Anchor(name: "fort_courtyard", expected: (q: 0, r: 0, level: 15)), azimuth_turns: [0.0, 0.33333334]),
+                (label: "wall walk", destination: Anchor(name: "fort_wall_walk", expected: (q: -7, r: 2, level: 20)), azimuth_turns: [0.0, -0.33333334]),
+            ],
+        ),
+        (
+            scenario: "Seven Regions",
+            seed: Some(703700113),
+            points: [
+                (label: "center crossing", destination: Anchor(name: "center_conflict_center", expected: (q: 0, r: 0, level: 16)), azimuth_turns: [0.0, 0.33333334]),
+                (label: "cave entrance", destination: Anchor(name: "caves_cave_entrance", expected: (q: -12, r: -10, level: 17)), azimuth_turns: [0.0, -0.33333334]),
+                (label: "forest clearing", destination: Anchor(name: "forest_forest_clearing", expected: (q: -9, r: 28, level: 15)), azimuth_turns: [0.0, 0.33333334]),
+            ],
+        ),
+        (
+            scenario: "Two Rings",
+            seed: Some(1592598566),
+            points: [
+                (label: "central confluence", destination: Anchor(name: "confluence_overlook", expected: (q: 0, r: 0, level: 18)), azimuth_turns: [0.0, 0.16666667]),
+                (label: "frozen bridge", destination: Anchor(name: "frozen_hills_bridge", expected: (q: 22, r: -22, level: 18)), azimuth_turns: [0.0, 0.33333334]),
+                (label: "forest A gradient", destination: Anchor(name: "vegetation_gradient_overlook", expected: (q: 19, r: 6, level: 15)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
+                (label: "prairie A", destination: Anchor(name: "prairie_a_prairie_overlook", expected: (q: 0, r: 22, level: 17)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
+                (label: "downstream bridge", destination: Anchor(name: "hills_downstream_bridge", expected: (q: -22, r: 22, level: 18)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
+                (label: "waterfall B", destination: Anchor(name: "waterfall_b_fall_overlook", expected: (q: -24, r: 4, level: 26)), azimuth_turns: [0.16666667, -0.16666667]),
+                (label: "waterfall A", destination: Anchor(name: "waterfall_a_fall_overlook", expected: (q: -4, r: -20, level: 26)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
+                (label: "sky-island ground bridge", destination: Anchor(name: "sky_islands_bridge", expected: (q: 48, r: -48, level: 18)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
+                (label: "deep forest A", destination: Anchor(name: "deep_forest_a_deep_forest_clearing", expected: (q: 39, r: -27, level: 16)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
+                (label: "deep forest B", destination: Anchor(name: "deep_forest_b_deep_forest_clearing", expected: (q: 39, r: -5, level: 17)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
+                (label: "forest B", destination: Anchor(name: "forest_b_forest_clearing", expected: (q: 31, r: 15, level: 17)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
+                (label: "prairie B", destination: Anchor(name: "prairie_b_prairie_overlook", expected: (q: 0, r: 44, level: 17)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
+                (label: "outlet fall", destination: Anchor(name: "fort_outlet_overlook", expected: (q: -26, r: 46, level: 13)), azimuth_turns: [0.0, -0.16666667]),
+                (label: "fort courtyard", destination: Anchor(name: "fort_fort_courtyard", expected: (q: -45, r: 44, level: 17)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
+                (label: "cave root", destination: Anchor(name: "caves_conflict_center", expected: (q: -44, r: 22, level: 9)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
+                (label: "volcano bridge", destination: Anchor(name: "volcano_bridge", expected: (q: -44, r: 0, level: 18)), azimuth_turns: [0.0, 0.33333334, -0.33333334]),
+                (label: "mountains A water", destination: Anchor(name: "mountain_waterfall_overlook", expected: (q: -24, r: -13, level: 20)), azimuth_turns: [-0.16666667, -0.083333336]),
+                (label: "mountains B pass", destination: Anchor(name: "mountains_b_high_pass", expected: (q: 10, r: -55, level: 21)), azimuth_turns: [0.33333334, -0.33333334]),
+                (label: "mountains C stream", destination: Anchor(name: "mountains_c_stream_fall_overlook", expected: (q: 19, r: -51, level: 20)), azimuth_turns: [0.0, -0.16666667]),
+            ],
+        ),
+    ],
+)

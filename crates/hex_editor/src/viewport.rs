@@ -136,7 +136,7 @@ pub struct ViewportContent {
     pub semantic_parts: BTreeMap<LocalVoxelCoord, ObjectPart>,
     /// Exact horizontal blocker columns.
     pub blocker_columns: BTreeSet<LocalAxialCoord>,
-    /// Exact occupied canopy-cutaway cells.
+    /// Exact occupied cells in the authored canopy mask.
     pub canopy_cells: BTreeSet<LocalVoxelCoord>,
     /// Whether semantic-role rings are drawn.
     pub show_semantic_overlay: bool,

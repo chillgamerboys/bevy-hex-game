@@ -144,8 +144,9 @@ prop parts are structure and detail.
 
 Part labels, blocker footprints, and canopy cells are author intent. None is inferred
 from colour, opacity, or occupancy, and none automatically creates gameplay damage,
-light, traversal, or interaction. Runtime adapters will consume the exact authored
-consequences in later work.
+light, traversal, or interaction. Forest's live runtime adapter consumes object
+instances and blocker authority; whole-tree camera fading uses the separate exact root.
+The canopy mask remains preserved art metadata until a dedicated consumer is agreed.
 
 ## Editing
 
@@ -373,9 +374,11 @@ footprints or infer gameplay from semantic parts.
 
 Blend chunks use Bevy's native order-independent transparency and remove shared
 internal faces before baking. Bevy 0.19 requires OIT cameras to use `Msaa::Off`, so
-Cutout styles temporarily render as single-sample threshold masks while any Blend
-object is live. The renderer restores each camera's previous MSAA setting after the
-last Blend chunk leaves, which restores true alpha-to-coverage for Cutout styles.
+Cutout styles temporarily render as single-sample threshold masks while any authored
+Blend object or camera-faded tree is live. Tree fading lazily clones materials for
+only that exact tree and restores the shared handles afterward. The renderer restores
+each camera's previous MSAA setting after the last blended presentation leaves, which
+restores true alpha-to-coverage for Cutout styles.
 
 The Workshop and renderer do not synthesize plants, import reference images, animate
 spell effects, or provide a runtime construction system. Forest consumes this contract

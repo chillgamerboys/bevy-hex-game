@@ -1,19 +1,67 @@
 //! Composable reasons for hiding presentation entities.
 //!
-//! Fog, cave roof cutaways, and canopy cutaways may all affect the same
-//! entity. A reason set prevents one owner from restoring visibility while another
-//! owner still requires the entity to remain hidden.
+//! Fog, explicit review cutaways, and near-character camera occlusion may affect the
+//! same entity. A reason set prevents one owner from restoring visibility while
+//! another still requires it hidden.
 
 use bevy_ecs::prelude::*;
 use bevy_reflect::prelude::*;
 
 use crate::TilePos;
 
-/// Marks one rendered tree part as eligible for character-camera canopy cutaway.
+/// Cross-crate ordering for camera-driven world presentation.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PresentationSystems {
+    /// Resolve camera obstruction into renderer-neutral presentation requests.
+    ResolveCameraOcclusion,
+    /// Apply renderer-owned material changes after requests settle.
+    ApplyMaterials,
+    /// Apply composable visibility reasons after material presentation.
+    ApplyVisibility,
+}
+
+/// Marks one rendered chunk as belonging to an exact authored tree root.
+///
+/// Every trunk, branch, and canopy chunk carries this marker. The stack-safe root
+/// lets presentation group a whole tree without importing the generator's private
+/// feature identity.
+#[derive(Component, Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[reflect(Component)]
+pub struct TreeOccluder(pub TilePos);
+
+/// Renderer-neutral opacity requested for one tree render chunk.
+#[derive(Component, Reflect, Debug, Clone, Copy, PartialEq)]
+#[reflect(Component)]
+pub struct TreeFadeAmount(f32);
+
+impl TreeFadeAmount {
+    /// Fully opaque tree presentation.
+    pub const OPAQUE: Self = Self(1.0);
+
+    /// Creates a finite opacity in the inclusive range `0.0..=1.0`.
+    #[must_use]
+    pub fn new(amount: f32) -> Option<Self> {
+        (amount.is_finite() && (0.0..=1.0).contains(&amount)).then_some(Self(amount))
+    }
+
+    /// Current opacity multiplier.
+    #[must_use]
+    pub const fn amount(self) -> f32 {
+        self.0
+    }
+}
+
+impl Default for TreeFadeAmount {
+    fn default() -> Self {
+        Self::OPAQUE
+    }
+}
+
+/// Marks one rendered chunk as part of the exact authored canopy mask.
 ///
 /// The exact root surface keeps stacked forests unambiguous without exposing the
-/// generator's private feature plan. Presentation uses the entity transform for
-/// smooth intersection tests and this position for the bounded horizontal search.
+/// generator's private feature plan. Whole-tree camera fading uses [`TreeOccluder`]
+/// instead, so trunk, branch, and canopy presentation cannot diverge.
 #[derive(Component, Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[reflect(Component)]
 pub struct CanopyOccluder(pub TilePos);
@@ -23,10 +71,10 @@ pub struct CanopyOccluder(pub TilePos);
 pub enum PresentationOcclusionReason {
     /// Faction knowledge does not currently permit normal presentation.
     Fog,
-    /// An interior cutaway hides a cave roof near an actor.
+    /// Explicit capture tooling hides the selected interior's roof.
     InteriorCutaway,
-    /// A character-camera cutaway hides obstructing tree canopy.
-    CanopyCutaway,
+    /// The Character camera is close enough that the selected unit would obscure it.
+    CharacterCameraProximity,
 }
 
 impl PresentationOcclusionReason {
@@ -34,7 +82,7 @@ impl PresentationOcclusionReason {
         match self {
             Self::Fog => 1 << 0,
             Self::InteriorCutaway => 1 << 1,
-            Self::CanopyCutaway => 1 << 2,
+            Self::CharacterCameraProximity => 1 << 2,
         }
     }
 }
@@ -107,6 +155,17 @@ mod tests {
     }
 
     #[test]
+    fn tree_marker_and_fade_amount_preserve_valid_presentation_facts() {
+        let root = TilePos::new(HexCoord::from_axial(2, -1), 12);
+        assert_eq!(TreeOccluder(root).0, root);
+        assert!((TreeFadeAmount::OPAQUE.amount() - 1.0).abs() < f32::EPSILON);
+        let faded = TreeFadeAmount::new(0.2).expect("0.2 is a valid opacity");
+        assert!((faded.amount() - 0.2).abs() < f32::EPSILON);
+        assert!(TreeFadeAmount::new(-0.1).is_none());
+        assert!(TreeFadeAmount::new(f32::NAN).is_none());
+    }
+
+    #[test]
     fn removing_one_reason_does_not_clear_another() {
         let mut occlusion = PresentationOcclusion::from_reason(PresentationOcclusionReason::Fog);
         assert!(occlusion.insert(PresentationOcclusionReason::InteriorCutaway));
@@ -123,9 +182,18 @@ mod tests {
     #[test]
     fn duplicate_reason_operations_report_no_change() {
         let mut occlusion = PresentationOcclusion::default();
-        assert!(occlusion.insert(PresentationOcclusionReason::CanopyCutaway));
-        assert!(!occlusion.insert(PresentationOcclusionReason::CanopyCutaway));
-        assert!(occlusion.remove(PresentationOcclusionReason::CanopyCutaway));
-        assert!(!occlusion.remove(PresentationOcclusionReason::CanopyCutaway));
+        assert!(occlusion.insert(PresentationOcclusionReason::InteriorCutaway));
+        assert!(!occlusion.insert(PresentationOcclusionReason::InteriorCutaway));
+        assert!(occlusion.remove(PresentationOcclusionReason::InteriorCutaway));
+        assert!(!occlusion.remove(PresentationOcclusionReason::InteriorCutaway));
+    }
+
+    #[test]
+    fn camera_proximity_composes_with_other_visibility_owners() {
+        let mut occlusion = PresentationOcclusion::from_reason(PresentationOcclusionReason::Fog);
+        assert!(occlusion.insert(PresentationOcclusionReason::CharacterCameraProximity));
+        assert!(occlusion.remove(PresentationOcclusionReason::CharacterCameraProximity));
+        assert!(occlusion.contains(PresentationOcclusionReason::Fog));
+        assert!(occlusion.is_hidden());
     }
 }

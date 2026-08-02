@@ -35,8 +35,8 @@ pub use hex_core::Faction;
 use hex_core::{
     CommandQueue, ControlOwner, GameCommand, GameplayPhase, GameplaySetup, GameplaySetupFailure,
     Headroom, HexCoord, HexSpan, HexTile, IssuedCommand, MapAnchorId, MapAnchors, Mode,
-    PartyFormation, PartyMovementMode, Pause, PendingDecision, Screen, SubstanceId, TerrainReady,
-    TilePos, TraversalBlockers, TraversalProfile, Turn, UnitId,
+    PartyFormation, PartyMovementMode, Pause, PendingDecision, PresentationOcclusion, Screen,
+    SubstanceId, TerrainReady, TilePos, TraversalBlockers, TraversalProfile, Turn, UnitId,
 };
 
 use crate::movement::{route_with_occupancy, Body, Footing, MovementCrossings, Reach, Standing};
@@ -331,6 +331,7 @@ pub fn plugin(app: &mut App) {
         // shared types registers them.
         .register_type::<UnitId>()
         .register_type::<ControlOwner>()
+        .register_type::<PresentationOcclusion>()
         .register_type::<PartyFormation>()
         .register_type::<PartyMovementMode>()
         .init_resource::<UnitAllocator>()
@@ -1268,6 +1269,7 @@ fn spawn_unit(
     let mut unit = commands.spawn((
         Transform::from_translation(standing.world_position()),
         Visibility::default(),
+        PresentationOcclusion::default(),
         StandsOn(standing),
         spawn.body,
         spawn.faction,

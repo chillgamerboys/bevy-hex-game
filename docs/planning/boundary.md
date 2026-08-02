@@ -69,9 +69,11 @@ The contracts-first PR introduced the exact projections V3 may publish:
   generated features such as tree roots;
 - a generated light is an entity with an exact `TilePos` and `GameplayLight`;
   its exterior or interior `LightDomain` is derived at use time;
-- `PresentationOcclusion` composes independent fog, interior-cutaway, and
-  canopy-cutaway reasons without making any one system the owner of Bevy
-  `Visibility`.
+- `PresentationOcclusion` composes independent fog, explicit review-cutaway, and
+  Character-camera proximity reasons; reason-producing systems never write Bevy
+  `Visibility` independently, and one shared presentation pass applies their combined
+  result. `TreeOccluder` and `TreeFadeAmount` carry whole-tree camera opacity without
+  exposing feature plans.
 
 These contracts carry consequences, not instructions. Gameplay can ask whether a
 known surface is blocked or which biome region it belongs to, but it cannot ask the
@@ -91,9 +93,10 @@ objects are validated, edited, and drawn, but they own no world or gameplay sema
 The split for a Forest tree is therefore explicit:
 
 - Forest publishes its authored `ObjectInstance`, exact rotated roots in
-  `TraversalBlockers`, and a root-keyed `CanopyOccluder` through separate projections;
-- `hex_objects` renders the object and never derives either projection from object
-  parts;
+  `TraversalBlockers`, and one stack-safe whole-tree identity;
+- `hex_objects` renders the object, propagates the supplied root to every chunk, and
+  preserves authored canopy membership as separate, currently unconsumed art
+  metadata; it never derives traversal from object parts;
 - gameplay consumes the blocker and knowledge projections, never the renderer.
 
 This permits authored Forest visuals without moving generation into presentation or

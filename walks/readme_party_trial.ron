@@ -13,6 +13,7 @@
     Click(name: "Formation Preset Column"),
     Settle(8),
     ClickTile(q: 0, r: -4),
+    AwaitPartyIdle(max_frames: 600),
     AwaitButton("Cast"),
     Settle(30),
     Capture("party-trial-combat"),

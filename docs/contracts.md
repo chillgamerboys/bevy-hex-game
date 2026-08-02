@@ -30,7 +30,7 @@ than agreed, the fallback the gameplay side ships without it is in
 | `SpecialMovementRegions` — deliberately opaque region ids | world | gameplay | live | [systems/map.md](systems/map.md) |
 | `TerrainReady` — terrain built and validated | world | gameplay | live | [systems/map.md](systems/map.md) |
 | `MapViewHint` — generated camera framing | world | presentation | live | [systems/map.md](systems/map.md) |
-| `InteriorRegions` / `CutawayOccluder` — interior membership and roof cutaway | world | presentation | live | [systems/map.md](systems/map.md) |
+| `InteriorRegions` / `CutawayOccluder` — interior membership plus review-only roof metadata | world | presentation tooling | live | [systems/map.md](systems/map.md) |
 | `ResolvedMapSeed` — the seed a session actually used | game | world | live | [development/config.md](development/config.md) |
 | `TerrainEdit::Set` / `::Clear` — the write path | gameplay | world | live | [systems/map.md](systems/map.md) |
 | `BiomeRegions` — published by V3; gameplay consumer pending | world | gameplay | **partial** | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
@@ -53,8 +53,9 @@ than agreed, the fallback the gameplay side ships without it is in
 | `LocalMapKnowledge` — faction-generic Observed/Remembered traversal projection; AI consumer live, player movement adapter pending | perception | `hex_combat` / `hex_units` | **partial** | [systems/perception.md](systems/perception.md) |
 | `FactionMapKnowledge` — current observations gate hostile lattice views, cast anchors, and AI identities | perception | `hex_combat` | live | [systems/perception.md](systems/perception.md) |
 | `KnowledgeSource` / `KnowledgeExpiry` — how a lattice fact was learned and when it stops being true | core | combat | live | [systems/combat.md](systems/combat.md) |
-| `CanopyOccluder` — root-keyed generated-feature marker for current camera cutaway | world | presentation | live | [systems/perception.md](systems/perception.md) |
-| `PresentationOcclusion` — cave/canopy reasons live; fog reason pending | shared | presentation | **partial** | [systems/perception.md](systems/perception.md) |
+| `CanopyOccluder` — exact authored canopy membership, separate from whole-tree behavior; runtime consumer pending | shared art / `hex_objects` | pending | **partial** | [systems/asset-workshop.md](systems/asset-workshop.md) |
+| `TreeOccluder` / `TreeFadeAmount` — stack-safe whole-tree identity and renderer-neutral camera opacity | world | presentation | live | [systems/camera.md](systems/camera.md) |
+| `PresentationOcclusion` — review-roof and Character-camera proximity reasons live; faction-fog producer pending | shared | presentation | **partial** | [systems/camera.md](systems/camera.md), [systems/perception.md](systems/perception.md) |
 | `perception.ron` — sight tunables as designer-facing settings | world | perception | live | [planning/boundary.md](planning/boundary.md) J |
 
 ## Ordering
@@ -64,6 +65,7 @@ than agreed, the fallback the gameplay side ships without it is in
 | `GameplaySetup` — `Resources → Terrain → Actors → Restore → Perception → View → Finalize` | core | all | live | [`CLAUDE.md`](../CLAUDE.md) |
 | `PerceptionSystems` — headless phases through `PublishKnowledge` | core | perception | live | [systems/perception.md](systems/perception.md) |
 | `PerceptionSystems::ApplyPresentation` — fog projection phase | core | perception | reserved | [systems/perception.md](systems/perception.md) |
+| `PresentationSystems` — camera obstruction → renderer-owned materials → composed visibility | core | world / presentation | live | [systems/camera.md](systems/camera.md) |
 | `AppSystems`, `PausableSystems` | core | all | live | [`CLAUDE.md`](../CLAUDE.md) |
 | Same-frame combat knowledge — `PublishKnowledge → spatial lattice sync → Act → Apply → Resolve → Advance` | perception / gameplay | combat / AI | live | [systems/ai.md](systems/ai.md) |
 
@@ -84,7 +86,7 @@ than agreed, the fallback the gameplay side ships without it is in
 | `scenarios.ron` — hidden New Game default plus visible Map and focused Demo fixtures | shared | both | live | [development/config.md](development/config.md) |
 | `encounters/*.ron` — rosters by archetype, and where each unit starts | shared | both | live | [development/config.md](development/config.md) |
 | Terrain-response table — authored stable names resolved to `(ElementId, power, SubstanceId)` | world | world | **agreed** | [planning/boundary.md](planning/boundary.md) G |
-| `Substance::conjurable` plus spell-reference validation | world policy / gameplay loader | gameplay | **agreed** | [planning/boundary.md](planning/boundary.md) L |
+| `Substance::conjurable` plus spell-reference validation | world policy / gameplay loader | gameplay | live | [planning/boundary.md](planning/boundary.md) L |
 
 Cross-file references between the two content domains are resolved and validated by
 [`ContentIndex`](../crates/hex_assets/src/content_index.rs) at load, which is what lets

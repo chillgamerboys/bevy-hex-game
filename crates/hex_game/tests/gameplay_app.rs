@@ -1,14 +1,21 @@
-//! Headless behavior contracts for the game-layer Combat Lab surfaces.
+//! Headless behavior contracts for game-layer composition and Combat Lab surfaces.
 //!
 //! This is deliberately one integration binary: linking Bevy once is expensive,
 //! while these assertions share the same immutable game-layer observation API.
 
-use bevy::prelude::World;
-use hex_assets::{CombatRulesProfile, CombatSettings};
+use bevy::{prelude::*, window::WindowPlugin};
+use hex_anim::Transformation;
+use hex_assets::{
+    ArtPalette, CameraSettings, CombatRulesProfile, CombatSettings, GameAssets, SubstanceFile,
+    SubstanceTable,
+};
 use hex_combat::{
     CombatSummary, DeliveredEffectKind, EncounterOutcome, EncounterResolution, UnitCombatSummary,
 };
-use hex_core::{GameplayPhase, HexCoord, HexSpan, TilePos, Turn, UnitId};
+use hex_core::{
+    CameraFocusTarget, GameplayPhase, Headroom, HexCoord, HexSpan, HexTile, PresentationOcclusion,
+    PresentationOcclusionReason, RunBottom, SubstanceId, TerrainEdit, TilePos, Turn, UnitId,
+};
 use hex_game::combat_reports::{
     CombatLabReport, CombatLabReportController, CombatLabReportDeployment, CombatLabReportId,
     CombatLabReportMap, CombatLabReportOrigin, CombatLabReportRosterEntry, CombatLabReportRosters,
@@ -19,7 +26,10 @@ use hex_game::test_support::{
     live_statistics_visible, production_lab_ui_transition_snapshot, report_transition_snapshot,
     sandbox_reentry_snapshot, tempo_movement_matrix, wave_seven_fixtures, ReportMode,
 };
-use hex_units::{Standing, StandsOn};
+use hex_map::{MapSettings, PerlinSettings, TerrainSettings};
+use hex_test_support::{enter_gameplay, TestAppBuilder};
+use hex_units::{HexPathingLine, Standing, StandsOn};
+use hex_world::{CameraMode, PanOrbitCamera};
 
 fn position(q: i32, r: i32, level: i32) -> TilePos {
     TilePos::new(HexCoord::from_axial(q, r), level)
@@ -88,6 +98,457 @@ fn sample_report(rounds: u32, player_id: u64, hostile_id: u64) -> CombatLabRepor
         Ok(report) => report,
         Err(_) => std::process::abort(),
     }
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "invalid tracked content should fail the composition fixture immediately"
+)]
+fn camera_terrain_substances() -> SubstanceTable {
+    let palette: ArtPalette = ron::from_str(include_str!("../../../assets/art/palette.ron"))
+        .expect("the tracked art palette should parse");
+    let substances: SubstanceFile =
+        ron::from_str(include_str!("../../../assets/config/substances.ron"))
+            .expect("the tracked substance catalog should parse");
+    SubstanceTable::from_file(&substances, &palette)
+        .expect("the tracked substances should resolve through the tracked palette")
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "invalid tracked camera settings should fail the composition fixture immediately"
+)]
+fn camera_terrain_settings() -> CameraSettings {
+    let settings: CameraSettings = ron::from_str(include_str!("../../../assets/config/camera.ron"))
+        .expect("the tracked camera settings should parse");
+    settings
+        .validate()
+        .expect("the radius-only camera fixture should remain valid");
+    settings
+}
+
+fn camera_terrain_app() -> App {
+    let mut builder = TestAppBuilder::new();
+    builder
+        .app_mut()
+        .add_plugins(WindowPlugin {
+            primary_window: None,
+            ..default()
+        })
+        .add_plugins(bevy::transform::TransformPlugin)
+        .insert_resource(GameAssets {
+            hex_tile: Handle::default(),
+            player_pieces: [Handle::default(), Handle::default()],
+        })
+        .insert_resource(camera_terrain_substances())
+        .insert_resource(MapSettings {
+            grid_radius: 6,
+            level_height: 0.4,
+            terrain: TerrainSettings::Perlin(PerlinSettings {
+                seed: Some(20_260_801),
+                // An empty octave list is the generator's deterministic flat-ground
+                // case. It still travels through real map generation and publication.
+                steps: Vec::new(),
+            }),
+        })
+        .insert_resource(camera_terrain_settings())
+        .add_plugins((
+            hex_anim::plugin,
+            hex_map::grid::plugin,
+            hex_world::test_support::headless_camera_plugin,
+        ));
+    builder.build()
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "a missing real map surface is the contract failure this assertion helper reports"
+)]
+fn exposed_surface(app: &mut App, coord: HexCoord) -> (TilePos, HexSpan) {
+    let world = app.world_mut();
+    let mut tiles = world.query_filtered::<(&TilePos, &HexSpan, &Headroom), With<HexTile>>();
+    tiles
+        .iter(world)
+        .filter(|(position, _, headroom)| position.coord == coord && headroom.0 > 0)
+        .map(|(position, span, _)| (*position, *span))
+        .max_by_key(|(position, _)| *position)
+        .expect("flat generated terrain should publish one exposed run per coordinate")
+}
+
+fn published_run(
+    app: &mut App,
+    coord: HexCoord,
+    bottom: i32,
+    top: i32,
+    substance: SubstanceId,
+) -> Option<HexSpan> {
+    let world = app.world_mut();
+    let mut tiles =
+        world.query_filtered::<(&TilePos, &RunBottom, &HexSpan, &SubstanceId), With<HexTile>>();
+    tiles
+        .iter(world)
+        .find(|(position, run_bottom, _, material)| {
+            position.coord == coord
+                && position.level == top
+                && run_bottom.0 == bottom
+                && **material == substance
+        })
+        .map(|(_, _, span, _)| *span)
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "invalid production camera cardinality should fail the composition test immediately"
+)]
+fn camera_pose(app: &mut App) -> (Transform, Vec3, f32) {
+    let world = app.world_mut();
+    let mut cameras = world.query::<(&Transform, &PanOrbitCamera)>();
+    let (transform, camera) = cameras
+        .single(world)
+        .expect("the production camera plugin should spawn one orbit camera");
+    (*transform, camera.focus, camera.radius)
+}
+
+fn actual_camera_radius(transform: &Transform, focus: Vec3) -> f32 {
+    transform.translation.distance(focus)
+}
+
+#[test]
+fn terrain_edits_retract_and_restore_the_character_camera_in_projection_order() {
+    let mut app = camera_terrain_app();
+    enter_gameplay(&mut app);
+
+    let origin = HexCoord::ORIGIN;
+    let (support, support_span) = exposed_surface(&mut app, origin);
+    app.world_mut().spawn((
+        Transform::from_translation(origin.to_world(support_span.top)),
+        CameraFocusTarget::new(support),
+    ));
+
+    let settings = app.world().resource::<CameraSettings>().clone();
+    let focus = origin.to_world(support_span.top) + Vec3::Y * settings.character_focus_height;
+    let pitch = settings.character_pitch * std::f32::consts::FRAC_PI_2;
+    let direction = Vec3::new(0.0, pitch.sin(), pitch.cos());
+    {
+        let world = app.world_mut();
+        let mut cameras = world.query::<(&mut Transform, &mut PanOrbitCamera)>();
+        let (mut transform, mut camera) = cameras
+            .single_mut(world)
+            .expect("the production camera plugin should spawn one orbit camera");
+        *transform = Transform::from_translation(focus + direction * settings.character_radius)
+            .looking_at(focus, Vec3::Y);
+        camera.focus = focus;
+        camera.radius = settings.character_radius;
+    }
+    *app.world_mut().resource_mut::<CameraMode>() = CameraMode::Character;
+    app.update();
+
+    assert_eq!(*app.world().resource::<CameraMode>(), CameraMode::Character);
+    let (unobstructed_transform, focus, desired_radius) = camera_pose(&mut app);
+    let unobstructed_radius = actual_camera_radius(&unobstructed_transform, focus);
+    assert!(
+        (unobstructed_radius - desired_radius).abs() < 1e-4,
+        "flat public terrain should leave the desired Character radius clear"
+    );
+
+    // This coordinate is centred on the camera's preserved +z heading. The wall is
+    // high enough to obstruct the exact player-authored boom, and it begins
+    // directly above the real map-published surface rather than replacing a fixture.
+    let wall_coord = HexCoord::from_axial(-1, 2);
+    let (wall_support, _) = exposed_surface(&mut app, wall_coord);
+    let wall_bottom = wall_support.level.saturating_add(1);
+    let wall_top = wall_bottom.saturating_add(38);
+    let stone = app
+        .world()
+        .resource::<SubstanceTable>()
+        .id("stone")
+        .expect("the tracked substance table should contain stone");
+    for level in wall_bottom..=wall_top {
+        app.world_mut().write_message(TerrainEdit::Set {
+            pos: TilePos::new(wall_coord, level),
+            substance: stone,
+        });
+    }
+
+    // `hex_map` applies and republishes in Update. The camera refreshes that public
+    // projection and follows in PostUpdate, so one frame must already be retracted.
+    app.update();
+
+    let wall_span = published_run(&mut app, wall_coord, wall_bottom, wall_top, stone)
+        .expect("the real map edit should publish one exact contiguous stone run");
+    assert!(wall_span.bottom <= support_span.top);
+    assert!(wall_span.top > unobstructed_transform.translation.y);
+    let (blocked_transform, blocked_focus, retained_radius) = camera_pose(&mut app);
+    let blocked_radius = actual_camera_radius(&blocked_transform, blocked_focus);
+    assert!(
+        blocked_radius < desired_radius - 1e-4,
+        "the newly published wall should retract the camera in the edit frame"
+    );
+    assert!((retained_radius - desired_radius).abs() < f32::EPSILON);
+    assert!(
+        blocked_transform
+            .rotation
+            .dot(unobstructed_transform.rotation)
+            .abs()
+            > 0.9999,
+        "terrain collision must preserve the player-authored yaw and pitch"
+    );
+
+    for level in wall_bottom..=wall_top {
+        app.world_mut().write_message(TerrainEdit::Clear {
+            pos: TilePos::new(wall_coord, level),
+        });
+    }
+    app.update();
+
+    assert!(published_run(&mut app, wall_coord, wall_bottom, wall_top, stone).is_none());
+    let (held_transform, held_focus, held_desired_radius) = camera_pose(&mut app);
+    let held_radius = actual_camera_radius(&held_transform, held_focus);
+    assert!(
+        (held_radius - blocked_radius).abs() < 1e-4,
+        "the first clear frame must respect the collision release delay"
+    );
+    assert!((held_desired_radius - desired_radius).abs() < f32::EPSILON);
+    assert!(
+        held_transform
+            .rotation
+            .dot(unobstructed_transform.rotation)
+            .abs()
+            > 0.9999
+    );
+
+    app.update();
+    let (restoring_transform, restoring_focus, restoring_desired_radius) = camera_pose(&mut app);
+    let restoring_radius = actual_camera_radius(&restoring_transform, restoring_focus);
+    assert!(
+        restoring_radius > held_radius + 1e-4,
+        "restoration should begin only after continuous clearance reaches the delay"
+    );
+    assert!(restoring_radius - held_radius <= settings.character_restoration_speed * 0.1 + 1e-4);
+    assert!(restoring_radius <= desired_radius);
+    assert!((restoring_desired_radius - desired_radius).abs() < f32::EPSILON);
+    assert!(
+        restoring_transform
+            .rotation
+            .dot(unobstructed_transform.rotation)
+            .abs()
+            > 0.9999
+    );
+
+    let mut restored = false;
+    let mut previous_radius = restoring_radius;
+    for _ in 0..32 {
+        app.update();
+        let (transform, current_focus, current_desired_radius) = camera_pose(&mut app);
+        let current_radius = actual_camera_radius(&transform, current_focus);
+        assert!(current_radius + 1e-4 >= previous_radius);
+        assert!(
+            current_radius - previous_radius <= settings.character_restoration_speed * 0.1 + 1e-4
+        );
+        assert!(current_radius <= desired_radius + 1e-4);
+        assert!(
+            transform
+                .rotation
+                .dot(unobstructed_transform.rotation)
+                .abs()
+                > 0.9999
+        );
+        if (current_radius - desired_radius).abs() < 1e-4 {
+            assert!((current_desired_radius - desired_radius).abs() < f32::EPSILON);
+            restored = true;
+            break;
+        }
+        previous_radius = current_radius;
+    }
+    assert!(
+        restored,
+        "the cleared camera should restore within 32 frames"
+    );
+
+    let settled = camera_pose(&mut app);
+    app.update();
+    let idle = camera_pose(&mut app);
+    assert!(settled.0.translation.distance(idle.0.translation) < f32::EPSILON);
+    assert!(settled.0.rotation.dot(idle.0.rotation).abs() > 0.9999);
+    assert!((settled.1 - idle.1).length_squared() < f32::EPSILON);
+    assert!((settled.2 - idle.2).abs() < f32::EPSILON);
+}
+
+#[test]
+fn production_animation_walk_preserves_the_ordinary_character_camera_for_120_frames() {
+    let mut app = camera_terrain_app();
+    enter_gameplay(&mut app);
+
+    let (start_pos, start_span) = exposed_surface(&mut app, HexCoord::ORIGIN);
+    let (destination_pos, destination_span) = exposed_surface(&mut app, HexCoord::from_axial(1, 0));
+    let start = Standing {
+        pos: start_pos,
+        span: start_span,
+    };
+    let destination = Standing {
+        pos: destination_pos,
+        span: destination_span,
+    };
+    let animation: Transformation = HexPathingLine::new(&[start, destination], 0.1).into();
+    let target = app
+        .world_mut()
+        .spawn((
+            Transform::from_translation(start.world_position()),
+            CameraFocusTarget::new(start.pos),
+            StandsOn(start),
+            animation,
+        ))
+        .id();
+
+    let settings = app.world().resource::<CameraSettings>().clone();
+    let authored_rotation =
+        Quat::from_rotation_x(-settings.character_pitch * std::f32::consts::FRAC_PI_2);
+    let initial_focus = start.world_position() + Vec3::Y * settings.character_focus_height;
+    {
+        let world = app.world_mut();
+        let mut cameras = world.query::<(&mut Transform, &mut PanOrbitCamera)>();
+        let (mut transform, mut camera) = cameras
+            .single_mut(world)
+            .expect("the production camera plugin should spawn one orbit camera");
+        transform.rotation = authored_rotation;
+        transform.translation =
+            initial_focus + authored_rotation * Vec3::Z * settings.character_radius;
+        camera.focus = initial_focus;
+        camera.radius = settings.character_radius;
+    }
+    *app.world_mut().resource_mut::<CameraMode>() = CameraMode::Character;
+
+    // The animation driver's first frame establishes time zero. Every subsequent
+    // update advances the real path animation in Update, then the production camera
+    // follows that final Transform in PostUpdate.
+    app.update();
+    let mut previous_target = app
+        .world()
+        .entity(target)
+        .get::<Transform>()
+        .expect("the moving focus target should retain its transform")
+        .translation;
+    let mut previous_camera = camera_pose(&mut app).0.translation;
+
+    for frame in 0..120 {
+        app.update();
+
+        let target_translation = app
+            .world()
+            .entity(target)
+            .get::<Transform>()
+            .expect("the moving focus target should retain its transform")
+            .translation;
+        let target_delta = target_translation - previous_target;
+        assert!(
+            target_delta.length() > 1e-6,
+            "production animation stopped before sampled frame {frame}"
+        );
+
+        let (transform, focus, desired_radius) = camera_pose(&mut app);
+        let expected_focus = target_translation + Vec3::Y * settings.character_focus_height;
+        let actual_radius = actual_camera_radius(&transform, focus);
+        assert!(
+            focus.distance(expected_focus) < 1e-5,
+            "frame {frame} followed a stale target position"
+        );
+        assert!(
+            transform.rotation.dot(authored_rotation).abs() > 0.999999,
+            "frame {frame} changed the player-authored rotation"
+        );
+        assert!(
+            (desired_radius - settings.character_radius).abs() < f32::EPSILON,
+            "frame {frame} changed the player-authored zoom"
+        );
+        assert!(
+            (actual_radius - desired_radius).abs() < 1e-5,
+            "frame {frame} retracted the camera on ordinary published terrain"
+        );
+        assert!(
+            transform
+                .translation
+                .distance(expected_focus + authored_rotation * Vec3::Z * desired_radius)
+                < 1e-5,
+            "frame {frame} changed the ordinary player-authored composition"
+        );
+        assert!(
+            ((transform.translation - previous_camera) - target_delta).length() < 1e-5,
+            "frame {frame} introduced camera motion beyond the same-frame target delta"
+        );
+
+        previous_target = target_translation;
+        previous_camera = transform.translation;
+    }
+}
+
+#[test]
+fn support_limited_upward_look_hides_and_restores_the_real_focus_target() {
+    let mut app = camera_terrain_app();
+    enter_gameplay(&mut app);
+
+    let origin = HexCoord::ORIGIN;
+    let (support, support_span) = exposed_surface(&mut app, origin);
+    let target = app
+        .world_mut()
+        .spawn((
+            Transform::from_translation(origin.to_world(support_span.top)),
+            Visibility::Inherited,
+            PresentationOcclusion::default(),
+            CameraFocusTarget::new(support),
+        ))
+        .id();
+    let settings = app.world().resource::<CameraSettings>().clone();
+    let focus = origin.to_world(support_span.top) + Vec3::Y * settings.character_focus_height;
+    let straight_up = Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
+    {
+        let world = app.world_mut();
+        let mut cameras = world.query::<(&mut Transform, &mut PanOrbitCamera)>();
+        let (mut transform, mut camera) = cameras
+            .single_mut(world)
+            .expect("the production plugin should own one camera");
+        transform.rotation = straight_up;
+        transform.translation = focus + straight_up * Vec3::Z * settings.character_radius;
+        camera.focus = focus;
+        camera.radius = settings.character_radius;
+    }
+    *app.world_mut().resource_mut::<CameraMode>() = CameraMode::Character;
+
+    app.update();
+
+    let (retracted, retracted_focus, desired_radius) = camera_pose(&mut app);
+    assert!(actual_camera_radius(&retracted, retracted_focus) <= 1e-4);
+    assert!((desired_radius - settings.character_radius).abs() < f32::EPSILON);
+    assert!(retracted.rotation.dot(straight_up).abs() > 0.9999);
+    let hidden = app.world().entity(target);
+    assert!(hidden
+        .get::<PresentationOcclusion>()
+        .expect("the unit should retain composable visibility ownership")
+        .contains(PresentationOcclusionReason::CharacterCameraProximity));
+    assert_eq!(hidden.get::<Visibility>(), Some(&Visibility::Hidden));
+
+    let ordinary_look =
+        Quat::from_rotation_x(-settings.character_pitch * std::f32::consts::FRAC_PI_2);
+    {
+        let world = app.world_mut();
+        let mut cameras = world.query_filtered::<&mut Transform, With<PanOrbitCamera>>();
+        cameras
+            .single_mut(world)
+            .expect("the orbit camera should remain queryable")
+            .rotation = ordinary_look;
+    }
+    for _ in 0..4 {
+        app.update();
+    }
+
+    let restored = app.world().entity(target);
+    assert_eq!(restored.get::<Visibility>(), Some(&Visibility::Inherited));
+    assert!(!restored
+        .get::<PresentationOcclusion>()
+        .expect("the unit should retain its reason set after recovery")
+        .contains(PresentationOcclusionReason::CharacterCameraProximity));
+    let (restored_camera, restored_focus, _) = camera_pose(&mut app);
+    assert!(actual_camera_radius(&restored_camera, restored_focus) > 1.2);
+    assert!(restored_camera.rotation.dot(ordinary_look).abs() > 0.9999);
 }
 
 #[test]

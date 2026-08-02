@@ -98,7 +98,7 @@ The optional review overrides are:
 | `HEX_REVIEW_TIME` | Sets a cyclic-lighting hour from `0.0` up to, but not including, `24.0` |
 | `HEX_REVIEW_LIQUID_PHASE` | Freezes liquid animation at a finite phase in seconds, wrapped over its visual cycle; captures default to `0.0` |
 | `HEX_REVIEW_FOCUS_ANCHOR` | Moves the selected actor to one exact generated map anchor before framing |
-| `HEX_REVIEW_CUTAWAY` | `full` hides the complete roof of the selected interior instead of the local six-hex opening |
+| `HEX_REVIEW_CUTAWAY` | `full` hides the complete roof of the selected interior; ordinary gameplay never removes it |
 | `HEX_REVIEW_ILLUMINATION` | `overlay` draws exact cave-interior gameplay illumination tiers: charcoal Dark, blue Dim, and cyan-green Bright |
 
 `HEX_REVIEW_VIEW`, `HEX_REVIEW_CAMERA`, `HEX_REVIEW_FOCUS_ANCHOR`, and
@@ -108,8 +108,9 @@ coordinate, so it can target an underground floor beneath a surface. It also app
 the selected actor's normal solidity and headroom rules. An unknown anchor or one the
 actor cannot stand on fails the review process instead of silently capturing the
 wrong place. The full cutaway still requires the selected actor to occupy an exact
-interior surface and affects only that interior; ordinary gameplay retains the local
-cutaway. The illumination overlay reads `ResolvedIllumination` and never changes
+interior surface and affects only that interior; ordinary gameplay retains the opaque
+roof and resolves tight views through camera collision instead. The illumination
+overlay reads `ResolvedIllumination` and never changes
 gameplay light, physical lights, faction knowledge, fog, or picking.
 
 For example, this exposes the complete generated cave network for a top-down overview:

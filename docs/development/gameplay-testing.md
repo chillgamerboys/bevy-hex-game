@@ -55,6 +55,44 @@ targets stay in the residual gate. The three packages set `autotests = false` an
 declare their integration targets explicitly, so adding a helper file cannot silently
 create a new expensive binary or escape its concern selector.
 
+## Scripted movement steps
+
+The default-off `visual-walk` runner may exercise ordinary map movement without a
+gameplay bypass. `ClickTile(q, r)` is valid only when that coordinate has exactly one
+exposed (`Headroom > 0`) surface. A stacked coordinate must use
+`ClickTile(q, r, level: Some(level))`; missing or duplicate exact surfaces fail the
+walk. `ClickAnchor(name, expected)` resolves the generated map's published anchor and
+requires it to equal the authored exact `TilePos` before emitting that same primary
+pointer click; an anchor move therefore invalidates stale evidence instead of silently
+reviewing a new route. `AwaitPartyIdle(max_frames)` waits on public party, registry,
+command-queue, `Busy`, and `MovingTo` facts. Its bound must be positive and exhaustion
+is a failing exit. After that wait,
+`AssertSelectedAt(expected: (q: ..., r: ..., level: ...))` requires exactly one
+selected unit, its authoritative `StandsOn`, and `CameraFocusTarget.surface` to match
+the expected `TilePos`. An ignored or interrupted pointer click therefore cannot
+qualify later captures as route evidence.
+
+Idleness alone is not proof that a pointer request was accepted: an ignored click can
+also leave the party idle. Route evidence therefore follows every movement and
+`AwaitPartyIdle` with `AssertSelectedAt(expected)`, which checks both the selected
+unit's authoritative `StandsOn` and the exact `CameraFocusTarget.surface` before any
+destination capture. Large composite walks may restart the same exact seed and use
+stale-checked intermediate destinations when ordinary combat would otherwise interrupt
+a route; they still may not suppress combat. Five grouped Two Rings walks cover one
+ordinary-network destination in all 19 regions. The Sky Islands case intentionally
+stops at its grounded bridge because upper surfaces require flight.
+
+`OrbitCamera(yaw_turns, pitch_fraction)` injects a bounded, multi-frame held-right-
+button cursor drag. It never writes `PanOrbitCamera` or Character collision state.
+Each gesture is limited to half a yaw turn and one quarter-turn of pitch, and the
+ordinary camera system remains responsible for Character pitch clamping and desired-
+pose authorship. `walks/camera_routes.ron` contains exactly one seed-pinned case for
+every selectable Map scenario, with exact destinations and the azimuths that must be
+reviewed. Scripted destinations must be members of that manifest. These steps provide
+route evidence only when a map owner has authored and validated the waypoint sequence;
+a capture-only script is not a traversal test, and no script may teleport, suppress
+combat, fake flight reachability, or bypass pathfinding.
+
 ## Scope selection
 
 The concern filter is not the Cargo selector. Cargo packages, targets, and features

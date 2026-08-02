@@ -158,8 +158,9 @@ for later audio and rebinding work; Wave 5 does not pretend those products exist
 | Input | Action |
 |---|---|
 | Right-mouse drag | Orbit the camera around its focus |
-| `W` `A` `S` `D` | Pan the camera |
+| `W` `A` `S` `D` | Pan the camera in Map mode |
 | Mouse wheel | Zoom |
+| `C` | Toggle Map / Character camera modes |
 | Hover / left-click a hex tile | Preview a route / move along it |
 | Click a spell row, then a lit target | Aim a cast |
 | `TAB` / `ENTER` / `Q` | Cycle aimed units / confirm the cast / cancel aiming |

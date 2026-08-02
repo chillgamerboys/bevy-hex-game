@@ -156,7 +156,7 @@ impl ClipboardVoxel {
         self.part
     }
 
-    /// Whether this exact copied cell participates in canopy cutaway.
+    /// Whether this exact copied cell carries authored canopy membership.
     #[must_use]
     pub const fn is_canopy_occluder(&self) -> bool {
         self.canopy_occluder
@@ -844,7 +844,7 @@ impl EditorModel {
         })
     }
 
-    /// Adds or removes one exact foliage cell from the canopy cutaway mask.
+    /// Adds or removes one exact foliage cell from the authored canopy mask.
     pub fn set_canopy_occluder(
         &mut self,
         position: LocalVoxelCoord,

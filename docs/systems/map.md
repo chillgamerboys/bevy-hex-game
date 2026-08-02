@@ -201,8 +201,9 @@ its disposable material runs wherever cutaway membership changes and projects
 `CutawayOccluder(region)` onto the resulting roof segments. Digging through a roof
 therefore preserves both surviving fragments without transferring the tag to replacement
 material. A cutaway tag does not remove or make terrain transparent, change voxel
-storage, or change traversal. Cave presentation may hide tagged opaque roof segments
-locally while leaving adjacent untagged columns visible as walls.
+storage, or change traversal. Ordinary gameplay keeps tagged roof segments opaque and
+collision-active. Explicit map-review capture tooling may hide every tagged segment in
+the selected exact interior while leaving other regions and adjacent walls intact.
 
 The plan also publishes a `MapViewHint` so camera setup can frame the generated
 geometry after terrain and actors exist. V1 keeps its frozen single-height plan and

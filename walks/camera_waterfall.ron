@@ -1,0 +1,26 @@
+// Real dry-route movement from the high landing to the fall overlook.
+[
+    AwaitScreen("Title"),
+    StartScenario(name: "Waterfall", seed: Some(771203419)),
+    AwaitScreen("Gameplay"),
+    AwaitTerrain,
+    Key("H"),
+    Key("C"),
+    Settle(45),
+    Capture("01-waterfall-character-start"),
+    ClickAnchor(name: "fall_overlook", expected: (q: -2, r: 4, level: 23)),
+    AwaitPartyIdle(max_frames: 1800),
+    AssertSelectedAt(expected: (q: -2, r: 4, level: 23)),
+    Settle(60),
+    Capture("02-waterfall-fall-front"),
+    // Review symmetric obliques from the open basin side. The old +120° eye
+    // position lies inside the high bank behind this overlook.
+    OrbitCamera(yaw_turns: -0.16666667),
+    Settle(45),
+    Capture("03-waterfall-fall-side"),
+    OrbitCamera(yaw_turns: -0.16666667),
+    Settle(45),
+    Capture("04-waterfall-fall-rear"),
+    Key("Backspace"),
+    AwaitScreen("Title"),
+]

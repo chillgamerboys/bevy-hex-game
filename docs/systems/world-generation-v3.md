@@ -40,8 +40,9 @@ only the shared, exact consequences required by consumers:
 - generated light entities publish an exact origin plus `GameplayLight` radius and
   level; perception derives their current `LightDomain` from that position and the
   interior metadata rather than caching a domain on the source;
-- presentation occlusion composes named reasons rather than letting fog, cave
-  cutaway, or canopy cutaway overwrite one another's `Visibility`.
+- presentation occlusion composes named reasons rather than letting fog or an explicit
+  review cutaway overwrite one another's `Visibility`; camera-facing tree opacity is
+  grouped separately by exact root.
 
 Terrain edits still enter through `TerrainEdit`. V3 may rebuild private derived
 layers after an edit, but no consumer receives mutable access to the plan.
@@ -237,10 +238,11 @@ Small broadleaf and tall narrow trees have one-cell blockers. Old-growth trees r
 seven same-level grounded supports and publish that exact rotated footprint as
 traversal blockers; connectivity validation may deterministically substitute a
 one-cell tree where a large footprint would sever ordinary terrain. Grass tufts are
-visual-only. All features publish renderer-neutral `ObjectInstance`s, and only
-authored canopy chunks receive the composable canopy-cutaway reason. Tree roots cover
-roughly 20-24% of the woodland, while non-blocking tall grass covers 65-75% of the
-prairie. Tall grass has no concealment rule. Trees cannot be chopped in this milestone.
+visual-only. All features publish renderer-neutral `ObjectInstance`s. Every rendered
+tree chunk retains the exact stack-safe root used for whole-tree camera fading, while
+only authored canopy chunks retain canopy art metadata. Tree roots cover roughly
+20-24% of the woodland, while non-blocking tall grass covers 65-75% of the prairie.
+Tall grass has no concealment rule. Trees cannot be chopped in this milestone.
 
 Forest likewise uses candidate rejection rather than semantic repair: its bounded
 repair hook returns `NoChange`, selection advances to the next deterministic
@@ -252,9 +254,11 @@ The recipe requires `party_start`, `hostile_start`, `forest_clearing`, and
 `prairie_overlook` while preserving the open generated-anchor vocabulary. The two
 review anchors are bound to the primary clearing and the recipe's exact prairie
 overlook surface. `walks/forest.ron` pins the shipped hero seed and captures map and
-character-camera presentation. The current walk DSL cannot address map-space tiles,
-so that script is not a route traversal: exact graph validation and recorded manual
-traversal cover topology until the tooling gains that capability.
+character-camera presentation. The walk DSL can click an exact stack-safe `TilePos`
+and wait for party movement to become idle, but the current Forest script has no
+authored waypoint route. It therefore remains a capture walk rather than traversal
+evidence; exact graph validation and the recorded manual traversal still cover its
+topology.
 
 ### Deep Forest and Prairie
 
@@ -402,14 +406,15 @@ they remain:
 - V3 reports and captures compare behavior and visual intent, not identical hashes.
 
 Each active recipe migrates only after its V3 fixed corpus, stress corpus, captures,
-and critical-route traversal pass. Where review tooling cannot yet address map-space
-tiles, exact graph validation plus a recorded manual traversal supplies that gate;
-capture-only scripts must not be described as route walks. Once every shipped scenario
-and review tool uses V3, archive one migration report and remove V1/V2 parsing,
-dispatch, generator code, assets, and runtime tests together. Do not leave a permanent
-three-version matrix. Migration is not a literal geometry port: once the supporting V3
-layers exist, each recipe also receives the appropriate liquid, vegetation, structure,
-and gameplay lighting semantics.
+and critical-route traversal pass. Scripts may express exact stack-safe tile clicks
+and bounded waits for party movement; routes still require validated authored
+waypoints. Until those waypoints exist, exact graph validation plus a recorded manual
+traversal supplies that gate, and capture-only scripts must not be described as route
+walks. Once every shipped scenario and review tool uses V3, archive one migration
+report and remove V1/V2 parsing, dispatch, generator code, assets, and runtime tests
+together. Do not leave a permanent three-version matrix. Migration is not a literal
+geometry port: once the supporting V3 layers exist, each recipe also receives the
+appropriate liquid, vegetation, structure, and gameplay lighting semantics.
 
 ## Verification
 
@@ -428,8 +433,9 @@ traversal; Ring19 generation p95 may not exceed 3.5× Ring7. Perception benchmar
 separately cover fog recomputation. Review packs must include deterministic reports
 and default, rotated, top-down, and character-camera captures. Manual review must
 traverse every critical recipe route and every open composite seam before that
-surface ships. Two Rings is selectable for review, but its final visual and play
-approval remains a mandatory human gate.
+surface ships. The landed Two Rings surface received its final visual and play
+approval at the reviewed wave head; later presentation changes retain their own
+human review gates.
 
 ## Primary precedents
 
