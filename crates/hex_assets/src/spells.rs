@@ -292,7 +292,7 @@ pub enum Effect {
     /// Gameplay names the element and power; the world-owned terrain resolver alone
     /// decides which materials resist, take damage, or are destroyed.
     Impact {
-        /// Element by stable authored name, resolved through [`ContentIndex`].
+        /// Element by stable authored name, resolved through [`ContentIndex`](crate::ContentIndex).
         element: String,
         /// Exact voxel damage announced to the world-owned resolver.
         power: u8,

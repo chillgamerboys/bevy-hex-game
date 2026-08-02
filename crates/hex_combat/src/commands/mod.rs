@@ -845,7 +845,7 @@ fn project_authority_state(
                 actor.id,
             ));
         }
-        let (standing, _, _, busy, _, _, downed) = actors.get(entity).map_err(|error| {
+        let (standing, _, turn, busy, _, _, downed) = actors.get(entity).map_err(|error| {
             format!("authority unit {:?} is not projectable: {error}", actor.id)
         })?;
         if standing.map(|standing| standing.0.pos) != Some(actor.position) {
@@ -855,30 +855,35 @@ fn project_authority_state(
                 standing.map(|standing| standing.0.pos)
             ));
         }
-        match (&actor.lattice, lattices.get(entity).ok()) {
-            (Some(expected), Some((spec, _))) if expected.spec == *spec => {}
-            (None, None) => {}
+        let lattice_changed = match (&actor.lattice, lattices.get(entity).ok()) {
+            (Some(expected), Some((spec, current))) if expected.spec == *spec => {
+                expected.state != *current
+            }
+            (None, None) => false,
             _ => {
                 return Err(format!(
                     "authority lattice shape for {:?} cannot be projected",
                     actor.id
                 ));
             }
-        }
-        targets.push((entity, busy, downed));
+        };
+        targets.push((entity, turn.copied(), busy, downed, lattice_changed));
     }
 
     order.project(&state.order, state.current(), state.round);
     *pending = state.pending.clone();
     revivals.project(&state.pending_revivals);
-    for (actor, (entity, busy, downed)) in state.units.values().zip(targets) {
-        match actor.turn {
-            Some(expected) => {
+    for (actor, (entity, turn, busy, downed, lattice_changed)) in state.units.values().zip(targets)
+    {
+        match (actor.turn, turn) {
+            (Some(expected), Some(current)) if expected == current => {}
+            (Some(expected), _) => {
                 commands.entity(entity).insert(expected);
             }
-            None => {
+            (None, Some(_)) => {
                 commands.entity(entity).remove::<Turn>();
             }
+            (None, None) => {}
         }
         if actor.busy != busy {
             if actor.busy {
@@ -894,8 +899,13 @@ fn project_authority_state(
                 commands.entity(entity).remove::<Downed>();
             }
         }
-        if let Some(expected) = &actor.lattice {
-            commands.entity(entity).insert(expected.state.clone());
+        // Do not enqueue an already-matching mutable projection. An adapter command
+        // may commit a newer turn or lattice later in this system; a stale deferred
+        // insertion from the pre-command checkpoint must not overwrite that commit.
+        if lattice_changed {
+            if let Some(expected) = &actor.lattice {
+                commands.entity(entity).insert(expected.state.clone());
+            }
         }
     }
     Ok(())
