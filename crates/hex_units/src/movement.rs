@@ -44,11 +44,11 @@ use serde::{Deserialize, Serialize};
 
 use hex_assets::SubstanceTable;
 use hex_core::{
-    AppSystems, Headroom, HexCoord, HexSpan, Mode, PausableSystems, SubstanceId, TilePos,
-    TraversalBlockers, TraversalEndpoint, TraversalProfile, UnitId,
+    AppSystems, Headroom, HexCoord, HexSpan, Mode, PausableSystems, SubstanceId, TerrainSystems,
+    TilePos, TraversalBlockers, TraversalEndpoint, TraversalProfile, UnitId,
 };
 
-use crate::UnitOccupancy;
+use crate::{TerrainOccupancySystems, UnitOccupancy};
 
 /// Ordering for systems that consume a unit's logical position.
 #[derive(SystemSet, Copy, Clone, Eq, PartialEq, Hash, Debug)]
@@ -116,8 +116,10 @@ pub fn plugin(app: &mut App) {
         Update,
         crate::units::reconcile_movement
             .in_set(MovementSystems::Reconcile)
+            .in_set(TerrainSystems::RefreshProjections)
             .in_set(AppSystems::Update)
             .in_set(PausableSystems)
+            .after(TerrainOccupancySystems::Publish)
             .before(hex_anim::AnimationSystems::Drive),
     );
     // Committing to a long walk and then being ambushed halfway should leave the piece
