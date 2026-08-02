@@ -10,8 +10,8 @@ file is the record that travels with the repo.
 ## Wave 26 — feat(game): cut over to Campaign and Sandbox (2026-08-02)
 
 - **PR**: #176 — `shrav-k/campaign-sandbox-cutover`
-- **Outcome**: guided-deployment follow-up implemented; final combined audit and
-  exact-head named-human runtime sign-off remain pending after PR #175 reconciliation
+- **Outcome**: combined audit and automated candidate gate green after PR #175
+  reconciliation; exact-head named-human runtime sign-off remains pending
 - **Lenses triggered**: 4, 6, 7, 8, D2, plus the fresh-eyes pass
 
 | Lens | File:line | Severity | Status |
@@ -24,14 +24,16 @@ file is the record that travels with the repo.
 | 7, 8 | `.config/test-scopes.json`, `tools/test_test_scope.py` | NON-BLOCKER | fixed — the deprecated-vocabulary validator is explicit validation infrastructure, with a selector regression proving full coverage and no unknown path |
 | D2 | `docs/design/game.md` | NON-BLOCKER | fixed — removed a link to a nonexistent `magic-outside-combat` fragment while preserving the open design question |
 
-**Notes**: the prior all-feature candidate evidence applied to pre-follow-up head
-`6929212`. The guided-deployment follow-up has green focused model/runtime/UI tests,
-strict affected-package Clippy, the complete six-case deployment structural matrix,
-and a release Fort walk that placed Party and Enemy through ordinary exact terrain
-clicks before capturing Review. PR #175 landed at `70a212bb`; the complete combined
-gate and exact-head human runtime sign-off remain pending on the reconciled candidate.
-Linear was unavailable and remains a soft coordination signal. The PR must not merge
-until its body records a named-human runtime PASS for the final head SHA.
+**Notes**: PR #175 landed at `70a212bb` and was merged additively into the cutover at
+`fdd6012`. The reconciled candidate passes formatting, dependency policy, strict
+all-feature Clippy, the full all-feature workspace suite, warning-denied docs, the
+release build, and the focused rules (136), contracts (323), simulation (22), app
+(100 plus 11 postflight), residual (742), and unchanged map-contract (74) scopes.
+The bounded route walk completed all 59 steps and ten captures. A separate 37-step
+release Fort walk selected the canonical map, placed Party then Enemy through exact
+terrain pointer clicks, and captured the HUD-suppressed Review state. Linear was
+unavailable and remains a soft coordination signal. The PR must not merge until its
+body records a named-human runtime PASS for the final head SHA.
 
 ## Wave 25 — feat: add terrain durability and destruction (2026-08-02)
 
