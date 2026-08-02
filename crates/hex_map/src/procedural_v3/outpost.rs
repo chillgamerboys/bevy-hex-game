@@ -871,9 +871,15 @@ fn author_tower_shell_range(
     for level in bottom..=top {
         let rise = level.saturating_sub(GROUND_LEVEL);
         let worked_stone_band = matches!(rise, FRONT_WALK_RISE | WALL_WALK_RISE | LOOKOUT_RISE);
-        let worked_stone_sill = coord == tower_window_coord(tower) && matches!(rise, 3 | 12 | 21);
+        let worked_stone_window_frame = tower_window_coords(tower).contains(&coord)
+            && (0..STAIR_LOOPS_PER_TOWER).any(|cycle| {
+                let base = i32::try_from(cycle)
+                    .unwrap_or(i32::MAX)
+                    .saturating_mul(STAIR_LOOP_RISE);
+                matches!(rise.saturating_sub(base), 2 | 6)
+            });
         let worked_stone_lintel = coord == ground_door(tower) && rise == 3;
-        let material = if worked_stone_band || worked_stone_sill || worked_stone_lintel {
+        let material = if worked_stone_band || worked_stone_window_frame || worked_stone_lintel {
             SolidMaterialRole::WorkedStone
         } else {
             SolidMaterialRole::Limestone
@@ -892,17 +898,18 @@ fn carve_tower_windows(
     author: &mut VoxelAuthor,
     tower: TowerSpec,
 ) -> Result<(), Vec<WorldValidationIssue>> {
-    let coord = tower_window_coord(tower);
-    for cycle in 0..STAIR_LOOPS_PER_TOWER {
-        let cycle_rise = i32::try_from(cycle)
-            .unwrap_or(i32::MAX)
-            .saturating_mul(STAIR_LOOP_RISE);
-        for rise in [cycle_rise + 4, cycle_rise + 5] {
-            author.remove_masonry_voxel(
-                TilePos::new(coord, GROUND_LEVEL + rise),
-                StructureKind::Tower,
-                tower.index,
-            )?;
+    for coord in tower_window_coords(tower) {
+        for cycle in 0..STAIR_LOOPS_PER_TOWER {
+            let cycle_rise = i32::try_from(cycle)
+                .unwrap_or(i32::MAX)
+                .saturating_mul(STAIR_LOOP_RISE);
+            for opening_rise in cycle_rise + 3..=cycle_rise + 5 {
+                author.remove_masonry_voxel(
+                    TilePos::new(coord, GROUND_LEVEL + opening_rise),
+                    StructureKind::Tower,
+                    tower.index,
+                )?;
+            }
         }
     }
     Ok(())
@@ -1503,11 +1510,9 @@ fn outer_door(tower: TowerSpec) -> HexCoord {
     }
 }
 
-fn tower_window_coord(tower: TowerSpec) -> HexCoord {
-    match tower.index {
-        0 => HexCoord::from_axial(11, -11),
-        _ => HexCoord::from_axial(11, 0),
-    }
+fn tower_window_coords(tower: TowerSpec) -> [HexCoord; 2] {
+    [HexCoord::from_axial(3, -3), HexCoord::from_axial(3, -1)]
+        .map(|local| transform_local(local, tower))
 }
 
 fn front_walk_cells() -> [(HexCoord, StructureKind, u8, bool); 8] {
@@ -1670,7 +1675,22 @@ mod tests {
         assert_eq!(selected.validated.plan.validate(), Vec::new());
 
         let plan = &selected.validated.plan;
+        let ordinary = OrdinaryGraph::from_volume(&plan.volume, None);
         for tower in tower_specs() {
+            let windows = tower_window_coords(tower);
+            let [first_window, second_window] = windows;
+            assert_ne!(first_window, second_window);
+            let expected_windows = match tower.index {
+                0 => [HexCoord::from_axial(8, -11), HexCoord::from_axial(10, -11)],
+                _ => [HexCoord::from_axial(8, 3), HexCoord::from_axial(10, 1)],
+            };
+            assert_eq!(windows, expected_windows);
+            for window in windows {
+                assert_eq!(window.distance(tower.center), TOWER_WALL_RADIUS);
+                assert_ne!(window, ground_door(tower));
+                assert_ne!(window, inner_door(tower));
+                assert_ne!(window, outer_door(tower));
+            }
             for level in GROUND_LEVEL + 1..GROUND_LEVEL + LOOKOUT_RISE {
                 assert_eq!(
                     surface_material(plan, TilePos::new(tower.center, level)),
@@ -1694,28 +1714,62 @@ mod tests {
             }
             for cycle in 0..STAIR_LOOPS_PER_TOWER {
                 let landing_rise = i32::try_from(cycle).expect("cycle fits") * STAIR_LOOP_RISE + 3;
-                let sill = TilePos::new(tower_window_coord(tower), GROUND_LEVEL + landing_rise);
-                assert_eq!(
-                    plan.volume
-                        .surfaces
-                        .get(&sill)
-                        .map(|metadata| metadata.access),
-                    Some(SurfaceAccess::Ordinary)
-                );
-                assert_eq!(
-                    surface_material(plan, sill),
-                    Some(SolidMaterialRole::WorkedStone),
-                    "tower {} lost its loop-{cycle} worked-stone window sill",
-                    tower.index
-                );
-                for opening_rise in [landing_rise + 1, landing_rise + 2] {
+                let sill_rise = landing_rise - 1;
+                let lintel_rise = landing_rise + 3;
+                for window in windows {
+                    let sill = TilePos::new(window, GROUND_LEVEL + sill_rise);
                     assert_eq!(
-                        surface_material(
-                            plan,
-                            TilePos::new(tower_window_coord(tower), GROUND_LEVEL + opening_rise,),
-                        ),
-                        None,
-                        "tower {} sealed its loop-{cycle} outward window",
+                        plan.volume
+                            .surfaces
+                            .get(&sill)
+                            .map(|metadata| metadata.access),
+                        Some(SurfaceAccess::Ordinary)
+                    );
+                    assert_eq!(
+                        surface_material(plan, sill),
+                        Some(SolidMaterialRole::WorkedStone),
+                        "tower {} lost a loop-{cycle} worked-stone window sill",
+                        tower.index
+                    );
+                    for opening_rise in landing_rise..=landing_rise + 2 {
+                        assert_eq!(
+                            surface_material(
+                                plan,
+                                TilePos::new(window, GROUND_LEVEL + opening_rise),
+                            ),
+                            None,
+                            "tower {} sealed a loop-{cycle} stair window",
+                            tower.index
+                        );
+                    }
+                    assert_eq!(
+                        surface_material(plan, TilePos::new(window, GROUND_LEVEL + lintel_rise),),
+                        Some(SolidMaterialRole::WorkedStone),
+                        "tower {} lost a loop-{cycle} worked-stone window lintel",
+                        tower.index
+                    );
+                }
+                for (window, landing_local) in windows
+                    .into_iter()
+                    .zip([HexCoord::from_axial(2, -2), HexCoord::from_axial(2, 0)])
+                {
+                    let sill = TilePos::new(window, GROUND_LEVEL + sill_rise);
+                    let landing = TilePos::new(
+                        transform_local(landing_local, tower),
+                        GROUND_LEVEL + landing_rise,
+                    );
+                    assert!(
+                        ordinary.admits(sill, landing),
+                        "tower {} loop-{cycle} slit sill {sill:?} does not meet its outward landing {landing:?}",
+                        tower.index
+                    );
+                }
+                let pier = transform_local(HexCoord::from_axial(3, -2), tower);
+                for opening_rise in landing_rise..=landing_rise + 2 {
+                    assert_eq!(
+                        surface_material(plan, TilePos::new(pier, GROUND_LEVEL + opening_rise),),
+                        Some(SolidMaterialRole::Limestone),
+                        "tower {} lost the masonry pier between its loop-{cycle} slits",
                         tower.index
                     );
                 }
@@ -1840,7 +1894,7 @@ mod tests {
                 "tower {} exposed a non-masonry stair support",
                 tower.index
             );
-            let shell_coord = shift(tower.center, HexCoord::from_axial(0, 3));
+            let shell_coord = transform_local(HexCoord::from_axial(-3, 0), tower);
             assert_eq!(
                 surface_material(plan, TilePos::new(shell_coord, GROUND_LEVEL + 2)),
                 Some(SolidMaterialRole::Limestone)
@@ -1966,11 +2020,15 @@ mod tests {
             assert!(tower_reach.contains_key(&inner_step));
             assert!(!ordinary.neighbors(inner_step).is_empty());
             for cycle in 0..STAIR_LOOPS_PER_TOWER {
-                let sill = TilePos::new(
-                    tower_window_coord(tower),
-                    GROUND_LEVEL + i32::try_from(cycle).expect("cycle fits") * STAIR_LOOP_RISE + 3,
-                );
-                assert!(tower_reach.contains_key(&sill));
+                let sill_level =
+                    GROUND_LEVEL + i32::try_from(cycle).expect("cycle fits") * STAIR_LOOP_RISE + 2;
+                for window in tower_window_coords(tower) {
+                    let sill = TilePos::new(window, sill_level);
+                    assert!(
+                        tower_reach.contains_key(&sill),
+                        "tower {tower_index} loop-{cycle} window sill {sill:?} is isolated"
+                    );
+                }
             }
             assert!(template
                 .lookouts

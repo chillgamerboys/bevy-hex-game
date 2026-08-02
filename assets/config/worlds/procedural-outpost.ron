@@ -1,5 +1,5 @@
-// A compact worked-stone outpost with a gatehouse, enclosed spiral stairs, wall
-// walks, and two high open lookout decks.
+// A compact worked-stone outpost with a gatehouse, enclosed spiral stairs, paired
+// defensive stair slits, wall walks, and two high open lookout decks.
 (
     grid_radius: 12,
     level_height: 0.4,

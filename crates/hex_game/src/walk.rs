@@ -1901,9 +1901,9 @@ mod tests {
                     }),
                 ),
                 (
-                    "north tower turn +3",
+                    "north tower landing wing +3",
                     CameraRouteDestination::Exact(CameraRouteTile {
-                        q: 9,
+                        q: 8,
                         r: -10,
                         level: 18,
                     }),

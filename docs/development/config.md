@@ -393,7 +393,9 @@ material grammar is content-authored through stable substances: limestone for wa
 worked stone for trim, timber for exposed stair treads and landings, and slate for
 exposed floors, walks, and roofing. Gravel covers the surrounding courtyard; a
 radius-2 terracotta central inlay and terracotta circulation paths link the gate and
-both tower entries. These roles are not renderer tints and remain part of
+both tower entries. Paired defensive slits beside each loop's outward-facing `+3`
+landing use worked-stone sills and lintels around a retained limestone pier. These
+roles are not renderer tints and remain part of
 deterministic map materialization and fingerprinting.
 
 **Compare gameplay sight ranges.** `perception.ron` contains three fixed review

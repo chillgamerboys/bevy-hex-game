@@ -93,9 +93,11 @@ three loops to open level-27 lookout decks. Limestone walls and worked-stone tri
 frame a gravel courtyard whose radius-2 terracotta central inlay and circulation
 paths link the gate and both tower entries. Timber stair treads and landings contrast
 with slate floors, walks, and roofing so load-bearing walls, stairs, ceilings, and
-floors remain visually distinct. Exact graph and material validation covers gate
-access, both climbs, every walk connection, stair headroom, the final open
-stairwells, and exact component membership.
+floors remain visually distinct. Paired worked-stone-framed defensive slits meet the
+outward-facing `+3` landing in each loop, admitting light while retaining a limestone
+pier and the enclosed tower silhouette. Exact graph and material validation covers
+gate access, both climbs, every walk connection, stair headroom, the final open
+stairwells, slit framing, and exact component membership.
 
 Movement is level-based over stacked surfaces, with body size decided by headroom and
 a breadth-first pathfinder that cannot collapse a stack. A movement preview draws the

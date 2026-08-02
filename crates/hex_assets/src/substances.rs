@@ -682,7 +682,7 @@ mod tests {
             ("metal", "structure/metal", (0.30, 0.34, 0.40)),
             ("slate", "structure/slate", (0.25, 0.37, 0.39)),
             ("terracotta", "structure/terracotta", (0.68, 0.31, 0.18)),
-            ("timber", "structure/timber", (0.38, 0.24, 0.07)),
+            ("timber", "structure/timber", (0.50, 0.34, 0.10)),
             ("worked_stone", "structure/worked-stone", (0.46, 0.48, 0.52)),
             ("snow", "terrain/snow", (0.82, 0.88, 0.92)),
             ("ice", "terrain/ice", (0.42, 0.72, 0.88)),

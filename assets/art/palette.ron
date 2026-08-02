@@ -78,7 +78,7 @@
         ),
         "structure/timber": (
             display_name: "Structural Timber",
-            color: (red: 0.38, green: 0.24, blue: 0.07),
+            color: (red: 0.50, green: 0.34, blue: 0.10),
             tags: ["construction", "wood", "world"],
         ),
         "structure/worked-stone": (

@@ -544,11 +544,11 @@ fn v3_outpost_publishes_vertical_fortification_and_reenters_deterministically() 
     );
     assert_eq!(
         first_report.semantic_plan_fingerprint,
-        Some(6_532_253_017_736_694_663),
+        Some(9_058_227_291_961_329_292),
         "update only with an explicit shipped Outpost semantic-plan decision"
     );
     assert_eq!(
-        first_report.map_fingerprint, 10_316_302_697_158_683_619,
+        first_report.map_fingerprint, 14_531_079_195_753_434_664,
         "update only with an explicit shipped Outpost materialized-map decision"
     );
     let Some(ProceduralRecipeMetrics::Outpost(OutpostReportMetrics {

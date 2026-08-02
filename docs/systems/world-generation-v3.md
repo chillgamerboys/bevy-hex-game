@@ -365,6 +365,11 @@ Exposed stair treads and enlarged landings are timber over limestone support, wh
 green-blue slate marks the front canopy, exposed floors and walks, connectors, and
 lookout decks. Walls, stairs, ceilings/roofing, floors, and ground circulation
 therefore remain distinct semantic materials even in a tightly framed view.
+The outward-facing `+3` landing in each loop also meets a pair of defensive slit
+windows. Their worked-stone sills and lintels repeat with the nine-level stair phase,
+while a full limestone pier remains between the openings. The slits admit daylight
+and preserve a usable camera corridor without turning the enclosed towers into
+exposed balconies.
 
 The towers continue through three total nine-level loops to open spotting decks at
 relative level `+27`. Each deck is slightly broader than its tower shell and retains
@@ -374,7 +379,9 @@ validation proves exterior-to-courtyard access, both independent climbs, every w
 connection, and both lookout decks. It also rejects a missing tread, an accidental
 wall shortcut, insufficient gate or stair-exit headroom, mismatched per-component
 material membership, and any Outpost setting outside its radius-12 temperate
-contract. Stable `outpost_rooftop` and `outpost_south_rooftop` anchors identify both
+contract. Exact geometry regressions separately pin every slit opening, sill, lintel,
+central pier, and sill-to-stair connection. Stable `outpost_rooftop` and
+`outpost_south_rooftop` anchors identify both
 review decks without reconstructing private structure geometry. Outpost remains
 static generated geometry; it adds no door object, climbing rule, gameplay blocker,
 or construction mechanic.
