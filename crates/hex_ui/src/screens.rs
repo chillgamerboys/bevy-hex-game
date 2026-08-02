@@ -154,7 +154,7 @@ fn spawn_settings(mut commands: Commands, assets: Res<UiAssets>, view: Res<UiSet
                 SettingsBack,
                 crate::UiVisibilityRequirement::Immediate,
             ))
-            .with_child(label(&assets, "Back to title"));
+            .with_child(label(&assets, "Back to Main Menu"));
             root.spawn((
                 panel(),
                 SettingsSurface,

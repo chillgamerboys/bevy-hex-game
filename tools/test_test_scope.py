@@ -73,15 +73,15 @@ class TestScopeTests(unittest.TestCase):
             ("rules", "contracts", "simulation", "clippy", "docs"),
         )
 
-    def test_combat_lab_change_selects_app_and_shipping(self) -> None:
-        decision = self.classify("crates/hex_game/src/screens/combat_lab.rs")
+    def test_sandbox_change_selects_app_and_shipping(self) -> None:
+        decision = self.classify("crates/hex_game/src/screens/sandbox.rs")
         self.assertFalse(decision.full)
         self.assertEqual(
             decision.concerns, ("app", "clippy", "docs", "shipping")
         )
 
     def test_gameplay_screen_model_change_selects_app_and_shipping(self) -> None:
-        decision = self.classify("crates/hex_gameplay_model/src/combat_lab.rs")
+        decision = self.classify("crates/hex_gameplay_model/src/sandbox.rs")
         self.assertFalse(decision.full)
         self.assertEqual(
             decision.concerns, ("app", "clippy", "docs", "shipping")
@@ -294,7 +294,7 @@ class TestScopeTests(unittest.TestCase):
     def test_mixed_diff_unions_concerns(self) -> None:
         decision = self.classify(
             "crates/hex_lattice/src/cast.rs",
-            "crates/hex_game/src/screens/combat_lab.rs",
+            "crates/hex_game/src/screens/sandbox.rs",
         )
         self.assertFalse(decision.full)
         self.assertEqual(
@@ -333,6 +333,12 @@ class TestScopeTests(unittest.TestCase):
     def test_scope_infrastructure_change_runs_everything(self) -> None:
         decision = self.classify(".config/test-scopes.json")
         self.assertTrue(decision.full)
+
+    def test_deprecated_ui_checker_is_explicit_scope_infrastructure(self) -> None:
+        decision = self.classify("tools/check_deprecated_ui_terms.py")
+        self.assertTrue(decision.full)
+        self.assertEqual(decision.unknown_files, ())
+        self.assertIn("scope-infrastructure", decision.matched_rules)
 
     def test_push_gate_promotes_a_narrow_decision_to_full(self) -> None:
         narrow = self.classify("crates/hex_lattice/src/cast.rs")

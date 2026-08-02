@@ -63,7 +63,7 @@
       ]
     },
     "simulation": {
-      "description": "Deterministic multi-turn combat snapshots.",
+      "description": "Deterministic multi-turn combat and CombatSummary snapshots.",
       "command": [
         "cargo",
         "nextest",
@@ -82,7 +82,7 @@
       "allowed_workspace_packages": ["hex_combat_core", "hex_core", "hex_lattice"]
     },
     "app": {
-      "description": "Headless gameplay application and UI behavior.",
+      "description": "Headless Campaign, Sandbox, Creator, gameplay application, and UI behavior.",
       "preflight_command": [
         "cargo",
         "test",
@@ -264,6 +264,7 @@
       "patterns": [
         ".config/test-scopes.json",
         ".config/nextest.toml",
+        "tools/check_deprecated_ui_terms.py",
         "tools/gameplay_scope.py",
         "tools/test_scope.py",
         "tools/test_test_scope.py",
@@ -386,11 +387,7 @@
       "name": "gameplay-visual",
       "patterns": [
         "walks/gameplay_ui.ron",
-        "walks/gameplay.ron",
-        "walks/menus.ron",
-        "walks/ability_lab.ron",
-        "walks/raider_mirror.ron",
-        "walks/wave7_combat_lab.ron",
+        "walks/readme_creator_sandbox.ron",
         "walks/readme_party_trial.ron"
       ],
       "concerns": ["app", "clippy", "docs", "shipping"],
@@ -418,7 +415,7 @@
       "name": "gameplay-assets",
       "patterns": [
         "crates/hex_assets/src/ai_profiles.rs",
-        "crates/hex_assets/src/combat_lab.rs",
+        "crates/hex_assets/src/sandbox.rs",
         "crates/hex_assets/src/combat_rules.rs",
         "crates/hex_assets/src/content_index.rs",
         "crates/hex_assets/src/creation.rs",
@@ -429,7 +426,7 @@
         "crates/hex_assets/src/spells.rs",
         "assets/config/ai_profiles.ron",
         "assets/config/combat.ron",
-        "assets/config/combat_lab_maps.ron",
+        "assets/config/sandbox_maps.ron",
         "assets/config/creation_presets.ron",
         "assets/config/elements.ron",
         "assets/config/encounters/**",
@@ -449,12 +446,13 @@
     {
       "name": "gameplay-app-model",
       "patterns": [
-        "crates/hex_game/src/screens/combat_lab.rs",
+        "crates/hex_game/src/screens/main_menu.rs",
+        "crates/hex_game/src/screens/sandbox.rs",
         "crates/hex_game/src/screens/creator.rs",
         "crates/hex_game/src/screens/gameplay.rs",
-        "crates/hex_game/src/combat_reports.rs",
-        "crates/hex_game/src/creation_presentation.rs",
         "crates/hex_game/src/creation_store.rs",
+        "crates/hex_game/src/save.rs",
+        "crates/hex_game/src/storage.rs",
         "crates/hex_game/src/casting/**",
         "crates/hex_game/src/readouts/**",
         "crates/hex_game/src/test_support.rs",

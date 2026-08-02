@@ -34,11 +34,12 @@ Manual runtime route: <affected scenarios and failure paths exercised>
 Manual runtime findings/waiver: <none, findings, or explicit maintainer waiver>
 
 <!--
-For the UI foundation/follow-ups, record all applicable checkpoints explicitly:
-1280x720 compact; 1920x1080 standard; high-resolution fullscreen Auto; 200% scale
-plus restart persistence; Creator validation; Combat Lab setup, deployment, live
-drawer, and Compare report; movement, casting, Channel, blocked actions, required
-lattice decision, HUD hiding, and pause.
+For UI work, record all applicable checkpoints explicitly: 1280x720, 1920x1080,
+and 3840x2160 under Auto and 200% scale; Main Menu; all three Campaign card states;
+Sandbox Overview, Map Browser/Detail, Party, Enemies, Character Picker, deployment,
+minimal outcome and Retry Exact; Tools and typed Creator returns; restart persistence;
+movement, casting, Channel, blocked actions, required lattice decision, HUD hiding,
+and pause.
 -->
 
 ### Evidence by concern
@@ -54,7 +55,7 @@ lattice decision, HUD hiding, and pause.
 Screenshots are UI evidence only: layout, hierarchy, legibility, focus visibility,
 contrast, responsive reflow, and presentation state. They are not evidence of
 legality, budgets, decisions, damage, Channel, outcomes, persistence, deployment,
-report identity, exact occupancy, tempo, or determinism. Cite canonical snapshots
+launch/retry identity, exact occupancy, tempo, or determinism. Cite canonical snapshots
 and named metrics for those claims. A timeout or no-progress bound is a typed result,
 not a pass.
 -->
@@ -69,10 +70,12 @@ disagrees with its span floats or sinks. All of them pass CI. The automated walk
 lists layout findings; motion, feel, and taste still need human eyes — /promote
 gates on the human box, never the automated one.
 
-If the change touches rendering, movement, persistence, or state transitions, walk it:
-splash -> title -> New Game -> Party Trial, orbit, move the party, ESC to pause,
-save with F5, BACKSPACE to the title, Continue, then open Settings and persist one
-change across restart. Launch an affected Map or focused Demo separately.
+If the change touches rendering, movement, persistence, or state transitions, walk
+it at the exact candidate head: splash -> Main Menu -> Campaign slot 1 -> Party
+Trial, orbit, move, pause, save with F5, return to Campaign, Continue slot 1, then
+persist one Settings change across restart. Separately traverse Sandbox map selection,
+both rosters, deployment, outcome, Retry Exact, Return to Sandbox, and a Tools-origin
+Creator return.
 -->
 
 ## Boundaries

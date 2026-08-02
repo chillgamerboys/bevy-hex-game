@@ -1,8 +1,8 @@
 //! Composable reasons for hiding presentation entities.
 //!
-//! Fog, explicit review cutaways, and near-character camera occlusion may affect the
-//! same entity. A reason set prevents one owner from restoring visibility while
-//! another still requires it hidden.
+//! Fog, explicit review cutaways, Sandbox deployment, and near-character camera
+//! occlusion may affect the same entity. A reason set prevents one owner from restoring
+//! visibility while another still requires it hidden.
 
 use bevy_ecs::prelude::*;
 use bevy_reflect::prelude::*;
@@ -75,6 +75,8 @@ pub enum PresentationOcclusionReason {
     InteriorCutaway,
     /// The Character camera is close enough that the selected unit would obscure it.
     CharacterCameraProximity,
+    /// Sandbox setup keeps staged actors hidden until exact deployment is committed.
+    SandboxDeployment,
 }
 
 impl PresentationOcclusionReason {
@@ -83,6 +85,7 @@ impl PresentationOcclusionReason {
             Self::Fog => 1 << 0,
             Self::InteriorCutaway => 1 << 1,
             Self::CharacterCameraProximity => 1 << 2,
+            Self::SandboxDeployment => 1 << 3,
         }
     }
 }

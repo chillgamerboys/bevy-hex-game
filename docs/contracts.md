@@ -56,7 +56,7 @@ than agreed, the fallback the gameplay side ships without it is in
 | `KnowledgeSource` / `KnowledgeExpiry` — how a lattice fact was learned and when it stops being true | core | combat | live | [systems/combat.md](systems/combat.md) |
 | `CanopyOccluder` — exact authored canopy membership, separate from whole-tree behavior; runtime consumer pending | shared art / `hex_objects` | pending | **partial** | [systems/asset-workshop.md](systems/asset-workshop.md) |
 | `TreeOccluder` / `TreeFadeAmount` — stack-safe whole-tree identity and renderer-neutral camera opacity | world | presentation | live | [systems/camera.md](systems/camera.md) |
-| `PresentationOcclusion` — review-roof and Character-camera proximity reasons live; faction-fog producer pending | shared | presentation | **partial** | [systems/camera.md](systems/camera.md), [systems/perception.md](systems/perception.md) |
+| `PresentationOcclusion` — review-roof, Character-camera proximity, and Sandbox-deployment reasons live; faction-fog producer pending | shared | presentation | **partial** | [systems/camera.md](systems/camera.md), [systems/perception.md](systems/perception.md) |
 | `perception.ron` — sight tunables as designer-facing settings | world | perception | live | [planning/boundary.md](planning/boundary.md) J |
 
 ## Ordering
@@ -86,7 +86,8 @@ than agreed, the fallback the gameplay side ships without it is in
 | `AcceptedContentRevision` — one deterministic semantic identity across elements, substances, terrain damage, spells, and lattices; Loading requires it | shared loader boundary | game setup | live | [planning/foundation-hardening.md](planning/foundation-hardening.md) |
 | `lattices.ron` — every authored archetype is one contiguous hex arrangement; errors name the archetype | gameplay | lattice spawning | live | [development/config.md](development/config.md#writing-a-lattice) |
 | `combat.ron` — engagement, budgets, policy knobs | gameplay | gameplay | live | [development/config.md](development/config.md) |
-| `scenarios.ron` — hidden New Game default plus visible Map and focused Demo fixtures | shared | both | live | [development/config.md](development/config.md) |
+| `scenarios.ron` / `ScenarioToLoad` — internal world + lighting + encounter launch identity for Campaign, Sandbox, saves, retry, review, and tests | shared | both | live | [development/config.md](development/config.md) |
+| `sandbox_maps.ron` — stable player-facing map IDs and scenario/seed identity, plus Party/Enemy regions retained only as hidden actor-staging compatibility metadata | shared | both | live | [systems/creator-and-sandbox.md](systems/creator-and-sandbox.md) |
 | `encounters/*.ron` — rosters by archetype, and where each unit starts | shared | both | live | [development/config.md](development/config.md) |
 | `terrain_damage.ron` / `TerrainDamageTable` — stable-name Boolean element × substance damage allow-list | world | world | live | [planning/boundary.md](planning/boundary.md) G |
 | `Substance::conjurable` plus spell-reference validation | world policy / gameplay loader | gameplay | live | [planning/boundary.md](planning/boundary.md) L |

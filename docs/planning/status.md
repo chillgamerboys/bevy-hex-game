@@ -106,8 +106,8 @@ fails naming the entry and the reason. It replaced a two-coordinate scaffold tha
 express one player and one enemy and nothing else. **The archetype is looked up in
 `lattices.ron`**, so a roster line is most of what a unit is. The shipped encounters are
 no longer limited to one unit a side. Party Trial fields matching three-member
-hedge-mage, raider, and wolf parties. Ability Lab and Raider Mirror keep focused
-ability and identity checks small inside Combat Lab's fixture selector.
+hedge-mage, raider, and wolf parties. Ability Lab and Raider Mirror retain focused
+ability and identity checks behind default-off deterministic test support.
 
 The element wheel and spells now load as **validated content**: `elements.ron` (the
 six-element wheel, opposition, and fusion recipes, checked acyclic and feedable) and
@@ -161,7 +161,7 @@ made the damage loop playable before any of this existed is gone.
 
 Bodies are one hex wide; there is no footprint for anything larger. Exact `TilePos`
 occupancy now makes those bodies real: movement preview, path construction, command
-validation, party routes, baseline AI, encounter placement, and Combat Lab deployment
+validation, party routes, baseline AI, encounter placement, and Sandbox deployment
 all prevent occupied endpoints and pass-through routes without collapsing stacked
 elevations. In-flight paths reserve their surfaces, command refusals distinguish route
 from endpoint conflicts, and downed bodies retain their surface for revival.
@@ -180,78 +180,76 @@ Victory and Defeat retain the
 battlefield, Retry rebuilds the same resolved seed, Renewal revives at the next round
 boundary, and exploration Rest recovers the whole party. The tactical HUD keeps actor,
 selected ally, decision owner, aimed target, and retained target as explicit roles.
-Party Trial is the 3v3 integration and human regression fixture; Ability Lab and Raider
-Mirror remain its focused automated companions behind stable fixture IDs.
+Party Trial is the 3v3 integration and human regression case; Ability Lab and Raider
+Mirror remain its focused automated companions behind default-off stable fixture IDs.
 
-The **Wave 5 pre-alpha app shell is live**. The title presents one responsive grid of
-primary application routes, including independent Map Scenarios and Demos catalogs
-and direct Character Creator and Spell Creator entries; New Game resolves the hidden
-Party Trial default, while Continue restores one explicit save made from paused
-exploration. That atomic, build-bound
-resume captures scenario/content identity, generator identity, party lattices, and
-exploration positions, rejects corrupt or incompatible files visibly, and cannot be
-written during combat. Settings atomically persists window, presentation, and volume
-preferences, with fixed centralized input actions and audio buses as replaceable
-seams. Builds also carry the Hex Game app identity/icon, normalized package layout,
-and retained crash symbols. These are disposable continuity and artifact scaffolds,
-not a durable save contract, rebinding UI, audio content, signing, storefront, crash
-reporting, or telemetry.
+The **Campaign/Sandbox application shell is live**. The Main Menu exposes exactly
+Campaign, Sandbox, Tools, and Settings. Campaign projects exactly three indexed local
+records as Empty, Available, or Invalid. A new canonical Party Trial is bound to the
+chosen empty slot and occupies it only on its first safe manual save. Available cards
+show their party and accumulated active-play time; invalid records remain preserved
+and visibly refused. `campaigns.ron` is replaced atomically. When it is absent, one
+valid legacy `resume.ron` is copied to slot 1 without modifying the legacy file. Only
+active, unpaused, non-terminal Campaign gameplay accrues time. Manual saving instead
+requires paused, safe, quiescent Campaign exploration.
 
-The **Wave 6 Creator and Combat Lab are live as primary title routes**. One versioned
-atomic creation library owns stable custom character and spell IDs, supports reopen,
-modify, rename, duplicate, and confirmed deletion, and refuses removal of referenced
-spells. Draft/Ready and Map-ready diagnostics fail closed through shared schema and
-combat validation. Immutable human templates are duplicable; automation-only
-creator-format records are isolated from local saves. Separate Character Creator and
-Spell Creator navigation leads to focused libraries and workspaces; the character
-workspace retains a direct spell-management link. The Character Creator provides a
-contiguous 64-cell lattice editor, manual stats, undo/redo, and an unsaved local
-mechanics test. The Spell Creator provides ordered repeatable effects, targeting,
-range, requirements, and permanent Draft/Ready diagnostics.
+Sandbox is the sole player-facing authority for a temporary map, two ordered fixed
+six-slot rosters, character picks, deployment, and launch. Its in-memory default is
+Flat Arena with one Hedge Mage and one Raider. A selected map is pending until Use
+Map; generated maps may regenerate only that pending resolved seed, and Back discards
+it. Sparse slots and duplicates are valid, while launch flattens occupied slots in
+stable order. The draft survives child routes, Main Menu and Creator excursions, and
+gameplay return. Guided deployment places occupied Party slots and then Enemy slots
+one at a time on any canonical legal, unoccupied exact surface. The ordinary gameplay
+HUD is fully suppressed during that phase, leaving a compact task card; the final
+placement enters Review with Undo, Return to Sandbox, and Start Combat. Catalog side
+regions remain only as hidden actor-staging compatibility metadata. Start freezes
+shipped combat rules plus exact map/seed, ordered rosters, content revision, and
+deployment for Loading and Retry Exact. Terminal Sandbox play shows only
+Victory/Defeat, Retry Exact, and Return to Sandbox.
 
-Combat Lab owns transient Sandbox setup for all sixteen distinct supported shipped
-maps, with deterministic renderer previews, tactical descriptions and tags, complete
-ordered one-to-six rosters, deterministic deployment, and creator-origin return routing.
-Its searchable fixture selector coexists with the focused Demos entries and adds
-Lab-only packaged creator spell and roster matrices. Every launch freezes its content
-namespace,
-encounter, and seed for Retry, refuses Continue writes, and restores shipped runtime
-content on exit.
+Tools contains Character Creator, Spell Creator, and a disabled Map Creator marked
+Coming Soon. Creator origins and destinations are typed. Creating from a character
+picker returns to that exact side/slot and highlights without applying. Open in
+Sandbox requires a saved clean Map-ready character, preserves the map and Enemies,
+replaces Party with that character in slot 1, and returns to its Creator owner when
+the flow is left. The local lattice mechanics test remains Creator-only.
 
-The **Wave 7 tactical integrity and tuning workspace is live**. Exact-surface
-occupancy is shared by previews, validation, AI, formation movement, encounter
-placement, and deployment; Channel is a canonical one-action mana recovery path.
-Combat Lab adds frozen Shipped, Tactical, and validated Custom rule profiles,
-direct deployment repositioning, immutable occupancy/channel/tempo fixtures, a
-canonical live dashboard, and versioned reports with functional Overview, Units,
-Spells & Effects, Timeline, and independently selectable Compare modes. Retry Exact,
-Tune & Run Again, and fixture Copy preserve the frozen map, ordered rosters, exact
-deployment, and profile through re-entry. The bounded tempo audit retained the
-shipped four-hex movement default; its measurements and limits are recorded in the
-[Wave 7 decision audit](../development/wave-7-tempo-decision.md).
+Scenario definitions remain the internal world + lighting + encounter launch
+contract for Campaign, Sandbox, saves, Retry, review, and tests. Category metadata is
+temporarily inert for legacy-resume compatibility. Stable Ability Lab, Raider Mirror,
+and Tempo Matrix definitions, optional rules-profile injection, `CombatSummary`, and
+deterministic run snapshots remain behind test support. The default plugin graph has
+no standalone browser for internal launch inputs, deterministic-case selector, rule
+picker, live experiment statistics, local result history, comparison, tuning/copy,
+or result deletion.
+`combat-reports.ron` is never read, modified, migrated, or deleted.
 
-The **Combat Lab strategy-workbench completion is live on the Wave 8 foundation**.
-`hex_combat_core` is the sole
-renderer-free, serializable authority for the commands it reduces, exact positions,
-turns, lattices, and transcripts. Bevy combat resources, unit movement, animation,
-and UI are projections or validated content adapters over that authority rather than
-parallel mutation paths. Supported active-combat single-target Cast, restoration,
-Burn, downing, revival, and annihilation outcomes now reduce there; unsupported
-terrain/area spells, exploration Rest, and party movement remain explicit adapters.
+### Historical Waves 5–8 organization (superseded)
 
-The bounded deterministic simulation target proves canonical state, occupancy,
-turn/action accounting, profile propagation, fingerprints, spell/effect composition,
-and typed command, turn, no-progress, or outcome termination. It consumes exact
-per-unit scripts or a deterministic non-random baseline controller. This is a
-regression workbench, not a claim that the baseline is optimal or that balance is fun.
-Combat Rules and report schemas are version 2: the rules projection mirrors shipping
-numeric and typed policy inputs, reports migrate version 1 outcomes, manual/bounded
-stops no longer invent an outcome, and fingerprint errors fail closed. Saved reports
-carry editable labels/notes and compare frozen inputs plus aggregate, per-unit, spell,
-effect, and no-progress facts. Pure
-`hex_gameplay_model` transitions own Combat Lab and Creator navigation, report
-selection, Retry/Tune/Copy, re-entry identity, and edit history without exposing
-mutable widget state.
+Waves 5–8 originally presented a title grid, one resume, separate Map Scenarios and
+Demos catalogs, and a player-facing Combat Lab with Sandbox, fixtures, alternate rule
+profiles, live statistics, and saved reports. Those releases established creation
+persistence, exact-surface occupancy, deployment, Channel, frozen launches,
+deterministic simulation, `CombatSummary`, and the pure model boundary. The current
+Campaign/Sandbox shell above supersedes that player-facing organization; the retained
+gameplay authority and deterministic evidence do not imply those historical routes
+still ship. The bounded Wave 7 tempo decision remains recorded in the
+[decision audit](../development/wave-7-tempo-decision.md).
+
+`hex_combat_core` remains the sole renderer-free, serializable authority for the
+commands it reduces, exact positions, turns, lattices, summaries, and transcripts.
+Bevy combat resources, movement, animation, and UI are projections or validated
+content adapters over that authority rather than parallel mutation paths. The bounded
+simulation target proves canonical state, occupancy, turn/action accounting, optional
+test profile propagation, fingerprints, spell/effect composition, and typed command,
+turn, no-progress, or outcome termination. It consumes exact per-unit scripts or a
+deterministic non-random baseline controller. This is a regression workbench, not a
+claim that the baseline is optimal or balance is fun.
+
+Pure `hex_gameplay_model` transitions own Main Menu, Campaign, Sandbox, and Creator
+navigation, map/draft edits, slot identity, launch blockers, Retry identity, re-entry,
+and edit history without exposing mutable widget state.
 
 Gameplay validation is split by oracle into pure rules, focused ECS contracts,
 deterministic simulation, and model/headless-app partitions. One fail-closed concern
@@ -284,11 +282,12 @@ named UI clicks, exact stack-safe terrain clicks, bounded party-idle waits, keys
 scenario launches — photographing every step through an offscreen render target so
 an agent can read the frames; `/audit-pr` runs it as a
 structural and mechanical gate, with usability findings also blocking changes to UI
-or presentation. New Game reaches the 3v3 Party Trial in one click, while fixture walks
-launch Ability Lab and Raider Mirror by stable ID. The menus wear vendored
+or presentation. Campaign reaches the 3v3 Party Trial through a selected slot, while
+default-off test-support requests launch Ability Lab and Raider Mirror by stable ID.
+The menus wear vendored
 Cinzel/Inter type over a
 design-token widget set; scenarios carry optional per-scenario lighting, and cyclic
-time-of-day is available to those that opt in. The title screen shows the workspace
+time-of-day is available to those that opt in. The Main Menu shows the workspace
 version, sessions write a `hex_game.log` beside the executable (fresh per launch),
 and a panic hook puts the last words in it.
 
@@ -515,13 +514,13 @@ The first implementation also ships with explicit limitations:
 
 ## The production gap
 
-Most of what makes this a product does not exist yet: no durable saves, audio content,
-input rebinding, signing, or store packaging. Wave 5 now provides one atomic,
-build-bound exploration resume, a persistent settings menu, centralized fixed input
-actions, empty audio buses, normalized release artifacts, and retained symbol
-material. The first hygiene
+Most of what makes this a product does not exist yet: no long-term-compatible save
+contract, audio content, input rebinding, signing, or store packaging. The current
+shell provides three atomic build-bound Campaign slots with one-time legacy-resume
+migration, a persistent Settings menu, centralized fixed input actions, empty audio
+buses, normalized release artifacts, and retained symbol material. The first hygiene
 slice has landed — a per-session log file beside the executable, a panic hook that
-writes into it, and the version on the title screen — but full crash *reporting*
+writes into it, and the version on the Main Menu — but full crash *reporting*
 (symbolication, upload, a dialog) has not. These replaceable seams do not close the
 production gap or promise compatibility. The full checklist and evidence remain
 frozen in [production-audit.md](production-audit.md); the sequenced scaffold is in

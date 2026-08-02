@@ -38,10 +38,10 @@ selected member's old slot. Any unassigned members fill remaining authored slots
 stable order.
 
 `PartyFormation` contains the preset, assignments, facing, and Group/Solo mode.
-Entering an ordinary new gameplay session resets it and spawning a roster selects
-Compact when available. The pre-alpha exploration resume serializes this same
-vocabulary and restores it only when the build, content, roster, and terrain contract
-still match; New Game never inherits the saved formation.
+Entering an ordinary new Campaign resets it and spawning a roster selects Compact
+when available. Its bound Campaign record serializes this same vocabulary and
+restores it only when the explicit slot, build, content, roster, and terrain contract
+still match; a new Campaign never inherits another slot's formation.
 
 The miniature grid is an editor as well as a readout. A diamond marks the authored
 anchor. Its slot positions are the actual axial offsets, so changing a preset's
@@ -95,8 +95,8 @@ cells and refilled mana.
 
 Party Trial on the authored Crossing is the human integration test for the full
 three-member rail, formation editing, compression, reformation, terrain entry into
-combat, and six-unit initiative readability. Focused automated combat UI checks use
-the flat Ability Lab and Raider Mirror fixtures instead. This keeps a spell, decision,
-or identity regression from being hidden behind bridge routing or unrelated AI turns;
-the Crossing remains responsible only for the party dynamics that smaller fixtures
-cannot represent.
+combat, and six-unit initiative readability. Focused automated combat checks use the
+flat Ability Lab and Raider Mirror definitions only through default-off test support.
+This keeps a spell, decision, or identity regression from being hidden behind bridge
+routing or unrelated AI turns; the Crossing remains responsible only for party
+dynamics that smaller deterministic cases cannot represent.

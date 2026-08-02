@@ -1,6 +1,6 @@
 // How the menus look.
 //
-// The splash, title and loading screens. Deliberately NOT the sky: the menus are not
+// The splash, Main Menu and loading screens. Deliberately NOT the sky: the menus are not
 // in the world, and they used to borrow the sky's horizon colour only because the
 // lighting file happened to load before them. Now that each scenario brings its own
 // lighting, that would have meant the menu changing colour depending on which map you

@@ -1,16 +1,16 @@
-// What the Scenarios screen offers.
+// Internal world, lighting, and encounter launch definitions.
 //
-// A scenario is a world plus the units standing on it. `default_game` names the entry
-// launched by New Game; every other entry appears in its development column.
+// A scenario is a world plus the units standing on it. Campaign, Sandbox, saves,
+// retries, review, and tests resolve these records; there is no player-facing browser.
+// `default_game` names the canonical scenario bound by a new Campaign.
 //
 // Order is the order they are listed, so it is your decision rather than an accident.
 //
 // FIELDS
 //
-//   name      what the button says
-//   category  REQUIRED Scenarios column: Map or Demo. The default keeps a category
-//             for schema uniformity but is hidden from both columns.
-//   blurb     one line underneath, saying what is interesting about this one
+//   name      stable internal launch identity
+//   category  REQUIRED inert compatibility metadata. Runtime routing ignores it.
+//   blurb     descriptive compatibility text retained for internal/review inputs
 //   world     the map file, as a path under `assets/`
 //   lighting  OPTIONAL sun/sky/cloud file. Omit it for the shipped look
 //   generation_seed  OPTIONAL Some(reproducible seed) for generated maps
@@ -34,7 +34,7 @@
 // Authored maps place units on exact CUBE coordinates; generated maps use the named
 // anchors the generator publishes after validating the map, so rerolling a seed does not
 // require rewriting coordinates. Either way, a unit that cannot be placed returns to the
-// title screen with the reason — it never silently moves to the centre of the map.
+// Main Menu with the reason — it never silently moves to the centre of the map.
 (
     default_game: "Party Trial",
     scenarios: [

@@ -1,7 +1,8 @@
-//! The scenarios offered in the development Scenarios catalog.
+//! Internal world, lighting, and encounter launch definitions.
 //!
-//! A scenario is a **world plus the units standing on it**: pick one and you get that
-//! terrain with those pieces, without editing a file or restarting.
+//! A scenario is a **world plus the units standing on it**. Campaign, Sandbox, saves,
+//! retries, review, and tests share this contract without exposing a player-facing
+//! browser.
 //!
 //! # Why the world is a string
 //!
@@ -20,18 +21,17 @@
 use bevy::prelude::*;
 use serde::{de::Error as _, Deserialize, Deserializer};
 
-/// `assets/config/scenarios.ron` — the default game and development scenarios.
+/// `assets/config/scenarios.ron` — canonical internal launch definitions.
 ///
 /// Order is the order they appear, so it is a designer's decision rather than an
 /// accident of hashing.
 #[derive(Asset, Resource, Reflect, Debug, Clone, Deserialize)]
 #[reflect(Resource)]
 pub struct ScenarioLibrary {
-    /// Stable name of the scenario launched by New Game.
+    /// Stable name of the scenario bound by a new Campaign.
     ///
     /// The entry remains in `scenarios` so it uses the same validated world,
-    /// lighting, encounter, and seed vocabulary as every development fixture. The
-    /// title screen resolves it independently and the Scenarios catalog omits it.
+    /// lighting, encounter, and seed vocabulary as every other launch owner.
     pub default_game: String,
     /// The scenarios, in the order they are listed.
     pub scenarios: Vec<Scenario>,
@@ -45,21 +45,14 @@ impl ScenarioLibrary {
             .iter()
             .find(|scenario| scenario.name == self.default_game)
     }
-
-    /// Development scenarios visible in the Scenarios catalog's Maps and Demos sections.
-    pub fn visible_scenarios(&self) -> impl Iterator<Item = &Scenario> {
-        self.scenarios
-            .iter()
-            .filter(|scenario| scenario.name != self.default_game)
-    }
 }
 
 /// One playable setup: a world, and where the units start on it.
-#[derive(Reflect, Debug, Clone)]
+#[derive(Reflect, Debug, Clone, PartialEq)]
 pub struct Scenario {
-    /// Player-facing name used by the Scenarios catalog and loading flow.
+    /// Stable launch name used by Campaign, Sandbox, saves, review, and tests.
     pub name: String,
-    /// Which Scenarios catalog section owns this scenario.
+    /// Temporarily retained compatibility metadata; runtime routing must ignore it.
     pub category: ScenarioCategory,
     /// One line under the name, saying what is interesting about it.
     pub blurb: String,
@@ -77,8 +70,8 @@ pub struct Scenario {
     pub lighting: String,
     /// Reproducible terrain seed for a generated world.
     ///
-    /// Authored scenarios omit this. The Scenarios catalog can replace a configured seed
-    /// for the current process, but never writes that replacement back to this asset.
+    /// Authored scenarios omit this. Sandbox may carry a resolved replacement for one
+    /// launch, but never writes that seed back to this asset.
     pub generation_seed: Option<u64>,
     /// Optional time of day at which this scenario starts, in `[0, 24)`.
     ///
@@ -95,12 +88,12 @@ pub struct Scenario {
     pub encounter: String,
 }
 
-/// The Scenarios catalog section a non-default scenario can inhabit.
+/// Inert compatibility metadata retained until legacy Campaign data can migrate.
 #[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
 pub enum ScenarioCategory {
-    /// Worlds whose terrain or traversal is the main attraction.
+    /// Historically map-oriented content; runtime routing ignores this value.
     Map,
-    /// Focused mechanics showcases and rules probes.
+    /// Historically mechanics-oriented content; runtime routing ignores this value.
     Demo,
 }
 
@@ -185,7 +178,7 @@ mod tests {
 
     use super::*;
 
-    /// The shipped file parses, and says enough to build a menu from.
+    /// The shipped file parses and carries a complete internal launch definition.
     ///
     /// Mirrors the camera settings test: content that ships is content that can be
     /// wrong, and a `scenarios.ron` that will not parse is a game stuck on "loading…"
@@ -229,7 +222,7 @@ mod tests {
     }
 
     #[test]
-    fn the_default_is_resolved_independently_from_visible_scenarios() {
+    fn the_default_campaign_scenario_resolves_by_stable_name() {
         let library: ScenarioLibrary =
             ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
                 .expect("the shipped scenarios should parse");
@@ -238,11 +231,14 @@ mod tests {
             .expect("the shipped default should resolve");
 
         assert_eq!(default.name, "Party Trial");
-        assert!(
+        assert_eq!(
             library
-                .visible_scenarios()
-                .all(|scenario| scenario.name != default.name),
-            "the default must not also appear in the development catalog"
+                .scenarios
+                .iter()
+                .filter(|scenario| scenario.name == library.default_game)
+                .count(),
+            1,
+            "the Campaign default must resolve to exactly one launch input"
         );
     }
 

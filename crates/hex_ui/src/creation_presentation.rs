@@ -1,4 +1,4 @@
-//! Read-only presentation projections shared by the Creator and Combat Lab.
+//! Read-only presentation projections shared by Creator and Sandbox.
 //!
 //! These summaries are deliberately derived from creator blueprints instead of stored.
 //! A saved record therefore cannot claim to do something its lattice or spells no

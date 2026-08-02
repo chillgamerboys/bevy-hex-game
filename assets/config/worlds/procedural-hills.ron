@@ -1,5 +1,5 @@
-// Primary procedural review map. The seed lives on the scenario so a title-screen
-// reroll can replace it for this session without mutating this recipe.
+// Primary procedural review map. The seed lives in the internal launch definition;
+// Sandbox may resolve a replacement for one session without mutating this recipe.
 (
     grid_radius: 12,
     level_height: 0.4,

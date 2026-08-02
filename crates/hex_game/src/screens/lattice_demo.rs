@@ -1,4 +1,4 @@
-//! Interactive sandbox for the lattice ruleset, reachable from the title menu.
+//! Local lattice mechanics test reached only from Character Creator.
 //!
 //! Builds a small demonstration lattice out of the *real* content in
 //! `elements.ron` / `spells.ron` and lets a human exercise every rule the
@@ -98,7 +98,6 @@ pub(crate) struct LocalDemoRequest {
     pub(crate) stats: LatticeStats,
     pub(crate) spells: SpellBook,
     pub(crate) index: ContentIndex,
-    pub(crate) return_to: Screen,
 }
 
 fn remove_demo_state(mut commands: Commands) {
@@ -540,7 +539,7 @@ fn handle_input(
 }
 
 fn demo_return_screen(request: Option<&LocalDemoRequest>) -> Screen {
-    request.map_or(Screen::Title, |request| request.return_to)
+    request.map_or(Screen::Title, |_| Screen::CharacterCreator)
 }
 
 #[cfg(test)]
@@ -581,7 +580,7 @@ mod tests {
     }
 
     #[test]
-    fn back_returns_to_the_calling_screen_or_title() {
+    fn back_returns_to_character_creator_or_the_internal_fallback() {
         let assert_back_destination = |request: Option<LocalDemoRequest>, expected| {
             let mut app = App::new();
             app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
@@ -607,7 +606,6 @@ mod tests {
             stats,
             spells,
             index,
-            return_to: Screen::CharacterCreator,
         };
         assert_back_destination(Some(request), Screen::CharacterCreator);
     }

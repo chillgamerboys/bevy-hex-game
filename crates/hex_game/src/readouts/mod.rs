@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 use hex_combat::{CombatSystems, EncounterResolution};
 use hex_core::{AppSystems, GameplayPhase, GameplaySetup, GameplaySystems, Screen};
-pub(crate) use hex_ui::{HudElement, UiHudSetup as HudSetup};
+pub(crate) use hex_ui::UiHudSetup as HudSetup;
 
 mod badges;
 mod context;
@@ -11,12 +11,8 @@ mod initiative;
 mod lattice;
 mod log;
 
-#[cfg(feature = "test-support")]
-pub(crate) use context::refresh as refresh_ui_context;
 pub(crate) use context::{GameplayUiContext, UiUnitIdentity};
 pub(crate) use lattice::DisableSelection;
-#[cfg(feature = "test-support")]
-pub(crate) use lattice::{refresh_readouts as refresh_lattice_readouts, RetainedTarget};
 
 /// Whether ordinary gameplay chrome is currently shown.
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]

@@ -55,18 +55,21 @@ cargo editor -- --project-root /path/to/bevy-hex-game
 
 ## First-run smoke test
 
-The title screen should show the complete primary route grid: **Continue**, **New
-Game**, **Character Creator**, **Spell Creator**, **Combat Lab**, **Map Scenarios**,
-**Demos**, **Settings**, and **Quit**. On a
-fresh data directory, Continue should clearly report that no exploration resume exists.
-Open **Map Scenarios** and **Demos** independently: Party Trial must be hidden from
-both, while Ability Lab and Raider Mirror appear only in Demos. Each Creator route
-must open its exact library directly; cross-navigation remains available inside the
-Creator workspaces.
+The Main Menu should show exactly **Campaign**, **Sandbox**, **Tools**, and
+**Settings**. On a fresh data directory, Campaign must show exactly three empty
+indexed cards. Tools must show Character Creator, Spell Creator, and a disabled Map
+Creator labelled Coming Soon.
 
-Choose **New Game**. It resolves the hidden Party Trial default through the loading
-screen. You should see the Crossing's hex-prism terrain, sky, a three-member player
-party, and a matching hostile party approaching from the opposite bank.
+Open Campaign, choose **New Game** on slot 1, and confirm that the canonical Party
+Trial resolves through Loading. You should see the Crossing's hex-prism terrain, sky,
+a three-member player party, and a matching hostile party approaching from the
+opposite bank. The slot remains empty until the first normal manual save.
+
+Open Sandbox and confirm the default draft: Flat Arena, Hedge Mage in Party slot 1,
+Raider in Enemies slot 1, and five empty slots on each side. In Map Browser, selecting
+a generated map creates a pending seed; Back discards it, while Use Map commits it.
+Authored maps must not show Regenerate. Open both roster routes and confirm the same
+six-slot interaction is used for Party and Enemies.
 
 | Input | Action |
 |---|---|
@@ -82,19 +85,20 @@ party, and a matching hostile party approaching from the opposite bank.
 | `1`–`6` | Select a party member while exploring |
 | Party rail controls | Switch Group/Solo movement, select a formation, and edit assignments |
 | `R` | Recover the party while exploring |
-| `F5` while paused in exploration | Atomically replace the one pre-alpha resume slot |
+| `F5` while paused in Campaign exploration | Atomically replace the bound Campaign slot |
 | `H` | Hide or show ordinary readouts; an active damage choice stays visible |
 | Click lattice cells, then `ENTER` | Choose and confirm which cells incoming damage disables |
-| `ESC` | Pause, or leave the title screen |
-| `BACKSPACE` | Return to the owning Creator, Combat Lab setup, or title screen |
-| New Game | Start the hidden Party Trial default without changing the resume slot |
-| Continue | Restore the compatible exploration slot through Loading |
+| `ESC` | Pause, or leave the Main Menu |
+| `BACKSPACE` | Return to the owning Creator, Sandbox route, or Main Menu |
+| Campaign New Game | Bind the canonical Party Trial to the selected empty slot without occupying it yet |
+| Campaign Continue | Restore the compatible selected slot through Loading |
 
 Select different allies, move the group, orbit the camera, pause, press `F5`, return
-to the title screen, and use Continue. Confirm the party positions, selected ally, and
-formation return. Then open Settings, change one volume, return to the title, restart
-the application, and confirm it persisted. A representative Wave 5 walk should also
-enter combat and verify that `F5` refuses a mid-combat save.
+to Campaign, and Continue slot 1. Confirm the party positions, selected ally,
+formation, and active-play time return. Then open Settings, change one volume, return
+to the Main Menu, restart the application, and confirm it persisted. A representative
+walk should also enter combat and verify that `F5` refuses a mid-combat or Sandbox
+save.
 
 This checks asset loading, terrain and actor spawning, input, screen teardown, atomic
 storage, and world reconstruction. Automated tests cannot tell whether the rendered

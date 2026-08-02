@@ -11,7 +11,7 @@ use hex_core::{
     PerceptionSystems, PresentationSystems, Screen, TerrainSystems, TerrainVoxelHealth, TilePos,
 };
 use hex_perception::{FactionMapKnowledge, ResolvedIllumination};
-use hex_ui::DespawnOnExit;
+use hex_ui::{DespawnOnExit, GameplayChromeView};
 use hex_units::Faction;
 use hex_world::{CameraSystems, PanOrbitCamera};
 
@@ -304,6 +304,7 @@ fn orient_health_bars(
 }
 
 fn compose_health_bar_visibility(
+    chrome: Res<GameplayChromeView>,
     cameras: Query<&Camera, With<PanOrbitCamera>>,
     tiles: Query<&Visibility, (With<HexTile>, Without<TerrainHealthBar>)>,
     mut bars: Query<
@@ -312,11 +313,12 @@ fn compose_health_bar_visibility(
     >,
 ) {
     let camera_ready = cameras.single().is_ok_and(|camera| camera.is_active);
+    let chrome_visible = chrome.shown && !chrome.encounter_complete;
     for (bar, mut visibility) in &mut bars {
         let tile_visible = tiles
             .get(bar.tile)
             .is_ok_and(|visibility| *visibility != Visibility::Hidden);
-        let next = if camera_ready && tile_visible {
+        let next = if chrome_visible && camera_ready && tile_visible {
             Visibility::Inherited
         } else {
             Visibility::Hidden
@@ -389,6 +391,7 @@ mod tests {
             .init_resource::<Assets<Mesh>>()
             .init_resource::<Assets<StandardMaterial>>()
             .init_resource::<TerrainHealthBarAssets>()
+            .init_resource::<GameplayChromeView>()
             .add_systems(Startup, prepare_assets)
             .add_systems(
                 Update,
@@ -677,6 +680,75 @@ mod tests {
                 .iter(app.world())
                 .count(),
             0
+        );
+    }
+
+    #[test]
+    fn gameplay_chrome_hides_and_restores_world_space_health_bars() {
+        let mut app = test_app();
+        let position = pos(0, 2);
+        install_authority(&mut app, &[position], true, IlluminationLevel::Bright);
+        damage(&mut app, &[(position, health(2, 4))]);
+        spawn_tile(&mut app, position, Headroom(4));
+        spawn_camera(&mut app, Quat::IDENTITY);
+        settle(&mut app);
+
+        let root = app
+            .world_mut()
+            .query_filtered::<Entity, With<TerrainHealthBar>>()
+            .single(app.world())
+            .expect("one health bar");
+        assert_eq!(
+            app.world().get::<Visibility>(root),
+            Some(&Visibility::Inherited)
+        );
+
+        app.world_mut().resource_mut::<GameplayChromeView>().shown = false;
+        app.update();
+        assert_eq!(
+            app.world().get::<Visibility>(root),
+            Some(&Visibility::Hidden)
+        );
+
+        app.world_mut().resource_mut::<GameplayChromeView>().shown = true;
+        app.update();
+        assert_eq!(
+            app.world().get::<Visibility>(root),
+            Some(&Visibility::Inherited)
+        );
+    }
+
+    #[test]
+    fn encounter_outcome_hides_world_space_health_bars_until_it_clears() {
+        let mut app = test_app();
+        let position = pos(0, 2);
+        install_authority(&mut app, &[position], true, IlluminationLevel::Bright);
+        damage(&mut app, &[(position, health(2, 4))]);
+        spawn_tile(&mut app, position, Headroom(4));
+        spawn_camera(&mut app, Quat::IDENTITY);
+        settle(&mut app);
+
+        let root = app
+            .world_mut()
+            .query_filtered::<Entity, With<TerrainHealthBar>>()
+            .single(app.world())
+            .expect("one health bar");
+        app.world_mut()
+            .resource_mut::<GameplayChromeView>()
+            .encounter_complete = true;
+        app.update();
+        assert_eq!(
+            app.world().get::<Visibility>(root),
+            Some(&Visibility::Hidden)
+        );
+
+        app.world_mut()
+            .resource_mut::<GameplayChromeView>()
+            .encounter_complete = false;
+        app.update();
+        assert_eq!(
+            app.world().get::<Visibility>(root),
+            Some(&Visibility::Inherited)
         );
     }
 

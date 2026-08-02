@@ -1,8 +1,8 @@
-//! Frozen, session-local Combat Lab rule profiles.
+//! Frozen, session-local deterministic-test rule profiles.
 //!
 //! Authored [`CombatSettings`] remain the shipped source of truth. A profile copies
-//! every shipping authority input. The seven numeric seams the Lab may tune are
-//! bounded explicitly; typed policy variants preserve the currently implemented
+//! every shipping authority input. Seven numeric seams may be varied by tests within
+//! explicit bounds; typed policy variants preserve the currently implemented
 //! algorithms. Effective values remain session-local and never write `combat.ron`.
 
 use bevy::prelude::Reflect;
@@ -10,10 +10,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{ActionEconomy, ChannellingTrickle, CombatSettings, InitiativePolicy, RoutPolicy};
 
-/// Current serialized Combat Lab rules-profile schema.
+/// Current serialized deterministic-test rules-profile schema.
 pub const COMBAT_RULES_PROFILE_VERSION: u16 = 2;
 
-/// Named profile identity shown by Combat Lab.
+/// Named profile identity accepted by test support.
 #[derive(Reflect, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CombatRulesPreset {
     /// The exact values loaded from shipped `combat.ron`.
@@ -24,7 +24,7 @@ pub enum CombatRulesPreset {
     Custom,
 }
 
-/// One numeric seam exposed by Combat Lab.
+/// One numeric seam exposed to deterministic tests.
 #[derive(Reflect, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CombatRuleField {
     /// Movement budget granted at the start of each turn.
@@ -263,7 +263,7 @@ impl CombatRulesProfile {
             || self.rout_policy != shipped.rout_policy
         {
             return Err(
-                "Combat Lab policy variants must preserve the currently implemented shipping algorithms"
+                "Test rule policy variants must preserve the currently implemented shipping algorithms"
                     .to_owned(),
             );
         }

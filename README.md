@@ -108,43 +108,55 @@ cp .context/readme-captures/party-trial/party-trial-combat.png \
 -->
 ![Party Trial entering three-versus-three combat on the Crossing, with the full party rail, initiative order, active lattice, combat history, and action bar visible](readme_assets/party-trial-combat.png)
 
-*New Game's Party Trial entering combat. Exploration, formation traversal, and the
+*A new Campaign's Party Trial entering combat. Exploration, formation traversal, and the
 turn-based fight share one battlefield.*
 
 The surrounding application is still deliberately pre-alpha, but it now has a real
-shell: New Game, one disposable exploration resume, persistent display and volume
-preferences, fixed centralized input actions, normalized unsigned release artifacts,
-separate character and spell creation, and a Combat Lab for deterministic deployment
-and fixture testing. Terrain-changing spells, unit obstruction, rout and surrender,
-durable saves, audio content, input rebinding, signing, storefront integration, and
-much of the larger design remain ahead. The exact boundary is recorded in the
+shell: a three-slot Campaign, a persistent in-memory Sandbox, persistent display and
+volume preferences, fixed centralized input actions, normalized unsigned release
+artifacts, and separate character and spell creation. Terrain-changing spells, unit
+obstruction, rout and surrender, richer campaign management, audio content, input
+rebinding, signing, storefront integration, and much of the larger design remain
+ahead. The exact boundary is recorded in the
 [project status](docs/planning/status.md).
 
 ### Play the current build
 
-The title screen keeps the primary application routes together: **Continue**, **New
-Game**, **Character Creator**, **Spell Creator**, **Combat Lab**, **Map Scenarios**,
-**Demos**, **Settings**, and **Quit**. **New Game** launches Party Trial as the hidden
-integrated default. **Map Scenarios** and **Demos** open separate filtered catalogs;
-the two Creator routes open their exact libraries directly, while **Combat Lab** provides a
-transient roster/deployment Sandbox across all sixteen shipped maps and a searchable
-fixed-fixture selector for Ability Lab, Raider Mirror, and creator-format matrices.
-**Continue** restores one explicitly saved exploration slot through the ordinary
-loading flow. Saving is available only while paused in a safe exploration state;
-combat, movement, and open decisions refuse it. The slot is bound to its build,
-scenario content, generator contract, roster, and terrain, so incompatible or corrupt
-data is reported instead of partially loaded. New Game never overwrites it.
+The Main Menu exposes exactly **Campaign**, **Sandbox**, **Tools**, and **Settings**.
+Campaign contains exactly three indexed cards. An empty card starts the canonical
+Party Trial and binds that session to the selected slot; the card becomes occupied
+only after the first ordinary manual save. An occupied card shows its party and
+accumulated active-play time and can Continue. An invalid card preserves its data,
+shows the refusal, and cannot launch.
+
+Saving is available only while paused in a safe Campaign exploration state; combat,
+movement, open decisions, Sandbox, and test fixtures refuse it. Each occupied slot is
+bound to its explicit slot number, build, scenario content, generator contract,
+party, selected unit, formation, and terrain. `campaigns.ron` is replaced atomically.
+On first run after this cutover, a valid legacy `resume.ron` is copied into Campaign
+slot 1 with zero prior play time; the legacy file is never overwritten or deleted.
+
+Sandbox is the single temporary encounter setup. Its default draft is Flat Arena
+with one Hedge Mage in Party and one Raider in Enemies. Choose one of the shipped
+maps, fill either sparse six-slot ordered roster from templates or saved Map-ready
+characters, then place occupied Party slots followed by Enemy slots one at a time on
+any canonical legal, unoccupied exact surface. Deployment hides the ordinary gameplay
+HUD and leaves one compact task card over the map; after the final placement, Review
+offers Undo, Return to Sandbox, and Start Combat with the shipped rules. The draft
+survives child pages, Main Menu excursions, Creator trips, and gameplay return. Tools
+contains Character Creator, Spell Creator, and a disabled Map Creator marked Coming
+Soon.
 
 <!--
-Regenerate the Creator and deployment screenshots with:
-HEX_WALK_SCRIPT=walks/readme_creator_lab.ron \
-HEX_WALK_OUT=.context/readme-captures/creator-lab \
+Regenerate the Creator and Sandbox deployment screenshots with:
+HEX_WALK_SCRIPT=walks/readme_creator_sandbox.ron \
+HEX_WALK_OUT=.context/readme-captures/creator-sandbox \
 HEX_WALK_VIEWPORT=1280x720@1 \
 cargo run --release -p hex_game --features visual-walk
-cp .context/readme-captures/creator-lab/character-creator.png \
+cp .context/readme-captures/creator-sandbox/character-creator.png \
   readme_assets/character-creator.png
-cp .context/readme-captures/creator-lab/combat-lab-deployment.png \
-  readme_assets/combat-lab-deployment.png
+cp .context/readme-captures/creator-sandbox/sandbox-deployment.png \
+  readme_assets/sandbox-deployment.png
 -->
 ![The Character Creator workspace, with an element-coloured tool palette, a true hexagonal lattice canvas, and the selected cell's stats and channelling controls](readme_assets/character-creator.png)
 
@@ -168,21 +180,22 @@ for later audio and rebinding work; Wave 5 does not pretend those products exist
 | `1`–`6` | Select a party member while exploring |
 | Party rail controls | Switch Group/Solo movement, select a formation, and edit assignments |
 | `R` | Recover the whole party while exploring |
-| `F5` while paused in exploration | Atomically replace the one resume slot |
+| `F5` while paused in Campaign exploration | Atomically replace the bound Campaign slot |
 | `H` | Hide or show ordinary readouts; an active damage choice stays visible |
+| Sandbox Deployment terrain click | Place the current Party or Enemy character on that legal, unoccupied exact surface |
 | Click lattice cells, then `ENTER` | Choose and confirm which cells incoming damage disables |
-| `ESC` | Pause, or leave the title screen |
-| `BACKSPACE` | Return to the owning Creator, Combat Lab setup, or title screen |
+| `ESC` | Pause, or leave the Main Menu |
+| `BACKSPACE` | Return to the owning Creator, Sandbox setup, or Main Menu |
 
 The Creator's local mechanics test remains the focused place to cast, channel,
 disable, restore, and break enchantments without constructing a map combat. See the
-[Creator and Combat Lab contract](docs/systems/creator-and-combat-lab.md) for saved
-content, readiness, fixtures, deployment, and frozen Retry behavior.
+[Creator and Sandbox contract](docs/systems/creator-and-sandbox.md) for saved content,
+readiness, route identity, deployment, and frozen Retry behavior.
 
-![Combat Lab deployment on the Fort map, with exact player and hostile placement regions highlighted directly on the terrain](readme_assets/combat-lab-deployment.png)
+![Guided Sandbox deployment on the Fort map, with one compact character task card and exact placement tokens over the terrain](readme_assets/sandbox-deployment.png)
 
-*Combat Lab loads the real terrain before combat and records exact elevated surfaces
-for every deployed unit.*
+*Sandbox hides the ordinary gameplay HUD while Party then Enemy characters are placed
+one at a time, and records the exact elevated surface chosen for every unit.*
 
 ## Read more
 
