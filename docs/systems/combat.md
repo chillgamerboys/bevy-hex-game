@@ -466,9 +466,11 @@ chosen before anyone knew there was a fight.
 
 The route is kept as the whole path rather than just its endpoint precisely so that
 logical position can advance at each completed leg and interruption has somewhere real
-to put the piece. `HexPathingLine` and `MovingTo` share cumulative, world-space leg
-durations, so climbs take their actual 3D travel time while every waypoint still maps
-back to its surface.
+to put the piece. `HexPathingLine` and `MovingTo` derive cumulative durations from the
+same rendered world-space path. Flat legs stay straight; elevation legs rise over the
+lower surface and cross the voxel edge at the higher surface. Constant configured
+speed therefore reaches each logical waypoint on the frame its presentation lands,
+while every domain waypoint still maps back to a real surface.
 
 Exploration Group movement applies that same contract to every player member. One
 exact-path `MoveParty` is validated in full before any member receives presentation,

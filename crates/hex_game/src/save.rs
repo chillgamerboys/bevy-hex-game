@@ -36,98 +36,51 @@ use crate::storage::{read, write_atomic, StoragePaths};
 const LEGACY_RESUME_VERSION: u32 = 1;
 const CAMPAIGNS_VERSION: u32 = 1;
 
-/// Exact digest translation table for resumes written by PR #174's `dev` head.
+/// Exact digest translation table for resumes written by PR #175's `dev` head.
 ///
-/// The cutover changed comments in two digest-bound assets without changing their
-/// parsed meaning. An old digest is accepted only while the current digest still
-/// equals the corresponding cutover digest, so any later semantic asset change keeps
-/// invalidating the legacy resume as intended.
+/// The cutover changed comment-only text in three digest-bound assets:
+/// `scenarios.ron`, `anchored-skirmish.ron`, and `procedural-hills.ron`. Their parsed
+/// meaning is unchanged. A PR #175 digest is accepted only while the current digest
+/// still equals the corresponding cutover digest, so any later semantic asset change
+/// keeps invalidating the legacy resume as intended.
 const LEGACY_RESUME_DIGESTS: &[(&str, u64, u64)] = &[
-    ("The Crossing", 0x4FE3_7AF1_ED42_E275, 0x878B_132A_EE3C_56E9),
+    ("The Crossing", 0x5FFB_DCD6_C8CF_30CC, 0x7FA0_6763_5993_03EA),
     (
         "Procedural Hills",
-        0x0CA2_8E38_AE9D_0FBE,
-        0xC6E6_E66F_AC88_1AA6,
+        0x8F25_010C_85CF_CAF3,
+        0x2D95_565A_603B_7FF5,
     ),
     (
         "Rolling Hills",
-        0xF0F5_9BD2_B2B4_F2FD,
-        0x7CAC_73F3_AB85_64D1,
+        0x2DE9_1507_D357_ABF4,
+        0xE1AC_F8A1_299C_8B12,
     ),
-    ("Frozen Hills", 0x3AE0_F233_785C_9A54, 0x8F2B_1BC7_40CC_665C),
+    ("Frozen Hills", 0xE6DD_2CCD_12D1_45E5, 0x93CA_427B_A21F_FD4F),
     (
         "Volcanic Hills",
-        0x3DA8_7548_5A92_66CA,
-        0x35A9_7668_EFE5_3722,
+        0xEB7E_01A8_AAA2_286F,
+        0xD6E3_81EF_4AA2_0D31,
     ),
-    ("Sky Islands", 0x839E_37A3_1C68_4BAF, 0x1678_D1D8_1708_4C8B),
-    ("Mountains", 0xC8E5_F366_1693_22AC, 0xC8C7_F78A_02A3_D874),
-    ("Caves", 0x4922_0268_B17F_DEBF, 0x6A34_BC6D_6EC5_FA9B),
-    ("Waterfall", 0x5F92_730F_B230_D810, 0xCF04_4B44_AF02_AAC8),
-    ("Forest", 0x99B8_85E9_0A0E_01E2, 0x7943_EBD8_2132_1A1A),
-    ("Deep Forest", 0x5E2F_C204_F57E_7FF6, 0xD686_3A31_CFCB_F8DE),
-    ("Prairie", 0x5566_A4CC_38B7_F533, 0xCF5F_0F51_1285_700F),
-    ("Fort", 0xA3C0_0405_E270_1C2E, 0x8AF5_16FA_8DAC_4196),
+    ("Sky Islands", 0x8071_6B2B_0888_E4FA, 0x92E4_71E4_CE92_9540),
+    ("Mountains", 0x3DDE_18E7_4C6A_569D, 0x45D5_4558_5A95_FE87),
+    ("Caves", 0x9BCD_C2F9_D17D_D72A, 0xE983_E982_3779_D770),
+    ("Waterfall", 0x5FD0_1EF4_38CE_8941, 0xA4CD_2C7F_6D9A_588B),
+    ("Forest", 0xB4F3_CBD7_781A_03E7, 0x1AAE_3FFC_0F15_22A9),
+    ("Deep Forest", 0xE738_EC86_5931_590B, 0x116B_366C_5C0D_B02D),
+    ("Prairie", 0x61EF_B225_B791_AC6E, 0x9E82_5F15_1AD4_B284),
+    ("Fort", 0x1C14_BC36_4158_CE43, 0xAD18_6CF9_EE68_5985),
     (
         "Seven Regions",
-        0x7855_E22C_790E_292A,
-        0x894C_CB40_04F1_E102,
+        0xA5E5_86ED_155D_1FCF,
+        0x3559_C10F_80C6_5C11,
     ),
-    ("Two Rings", 0x1DB7_0E9A_A443_B8CC, 0x911B_3847_EEAB_1F14),
-    ("Party Trial", 0xB392_E2D3_BC35_DBDB, 0x5847_F52E_E0E5_8697),
-    ("Ability Lab", 0x3DCD_DEE6_C32B_7BF3, 0x5486_D856_33D8_B34F),
+    ("Two Rings", 0xE4C0_B13F_0B78_00BD, 0x0EEA_DE9C_4831_2AA7),
+    ("Party Trial", 0xC8EA_6229_346D_CF96, 0xE64E_D979_1736_586C),
+    ("Ability Lab", 0x26E9_C8E6_07F1_C52E, 0x26A9_E26E_99EB_03C4),
     (
         "Raider Mirror",
-        0xE5EC_54E8_8BC8_EB5D,
-        0xC9A1_CB56_3295_E6B1,
-    ),
-];
-
-/// Earlier `dev` digests invalidated only by PR #172's scenario-browser comment edit.
-///
-/// The previous title/lane wording changed comments in `scenarios.ron`, which the
-/// deliberately coarse resume digest includes byte-for-byte. Keep the exact known
-/// predecessor guarded by the current cutover digest; an unknown saved digest or a
-/// later change to any Campaign input remains incompatible. The predecessor values
-/// are generated from the exact `260809f` `dev` tree.
-const LEGACY_RESUME_DIGEST_ALIASES: &[(&str, u64, u64)] = &[
-    ("The Crossing", 0xFBF2_7A92_7CD0_8F34, 0x878B_132A_EE3C_56E9),
-    (
-        "Procedural Hills",
-        0x7642_0E89_9D06_AE43,
-        0xC6E6_E66F_AC88_1AA6,
-    ),
-    (
-        "Rolling Hills",
-        0xD677_B8BD_04B3_F05C,
-        0x7CAC_73F3_AB85_64D1,
-    ),
-    ("Frozen Hills", 0x6B60_05E5_0F13_8E55, 0x8F2B_1BC7_40CC_665C),
-    (
-        "Volcanic Hills",
-        0x8D04_C7E9_FD70_94DF,
-        0x35A9_7668_EFE5_3722,
-    ),
-    ("Sky Islands", 0x3604_C4A3_7559_A3C2, 0x1678_D1D8_1708_4C8B),
-    ("Mountains", 0x8849_3BE2_DE07_386D, 0xC8C7_F78A_02A3_D874),
-    ("Caves", 0x25F1_9D4B_CA4B_8212, 0x6A34_BC6D_6EC5_FA9B),
-    ("Waterfall", 0x4680_0901_2C45_84F1, 0xCF04_4B44_AF02_AAC8),
-    ("Forest", 0x4B24_C05A_9EBE_9897, 0x7943_EBD8_2132_1A1A),
-    ("Deep Forest", 0xBCBC_87EB_C8F6_FC1B, 0xD686_3A31_CFCB_F8DE),
-    ("Prairie", 0xCFA5_42D7_283F_6B56, 0xCF5F_0F51_1285_700F),
-    ("Fort", 0x78D4_8B75_2CFA_8633, 0x8AF5_16FA_8DAC_4196),
-    (
-        "Seven Regions",
-        0x4A2C_FDB2_4C1F_C13F,
-        0x894C_CB40_04F1_E102,
-    ),
-    ("Two Rings", 0xBA55_FA38_C276_6D8D, 0x911B_3847_EEAB_1F14),
-    ("Party Trial", 0x8737_950D_F612_A47E, 0x5847_F52E_E0E5_8697),
-    ("Ability Lab", 0xEABC_1965_343D_D916, 0x5486_D856_33D8_B34F),
-    (
-        "Raider Mirror",
-        0x17D5_770A_5EF5_5FBC,
-        0xC9A1_CB56_3295_E6B1,
+        0x4D4B_EBCF_B5C8_AB54,
+        0x3E7E_2058_28FC_0E72,
     ),
 ];
 
@@ -231,6 +184,10 @@ const SHIPPED_CAMPAIGN_INPUTS: &[(&str, &str)] = &[
     (
         "config/substances.ron",
         include_str!("../../../assets/config/substances.ron"),
+    ),
+    (
+        "config/terrain_damage.ron",
+        include_str!("../../../assets/config/terrain_damage.ron"),
     ),
     (
         "config/lighting.ron",
@@ -1691,12 +1648,9 @@ fn legacy_resume_digest_is_compatible(
     saved_digest: u64,
     current_digest: u64,
 ) -> bool {
-    LEGACY_RESUME_DIGESTS
-        .iter()
-        .chain(LEGACY_RESUME_DIGEST_ALIASES)
-        .any(|(name, legacy, cutover)| {
-            *name == scenario_name && *legacy == saved_digest && *cutover == current_digest
-        })
+    LEGACY_RESUME_DIGESTS.iter().any(|(name, legacy, cutover)| {
+        *name == scenario_name && *legacy == saved_digest && *cutover == current_digest
+    })
 }
 
 fn build_identity() -> &'static str {
@@ -1713,7 +1667,7 @@ mod tests {
     use bevy::MinimalPlugins;
     use hex_assets::{
         ArtPalette, ContentIndex, ElementFile, LatticeFile, ScenarioCategory, SpellBook, SpellFile,
-        SubstanceFile, SubstanceTable,
+        SubstanceFile, SubstanceTable, TerrainDamageFile, TerrainDamageTable,
     };
     use hex_units::Standing;
 
@@ -1813,12 +1767,18 @@ mod tests {
         let substance_file: SubstanceFile =
             ron::from_str(include_str!("../../../assets/config/substances.ron"))
                 .expect("the shipped substances should parse");
+        let terrain_damage_file: TerrainDamageFile =
+            ron::from_str(include_str!("../../../assets/config/terrain_damage.ron"))
+                .expect("the shipped terrain-damage policy should parse");
         let palette: ArtPalette = ron::from_str(include_str!("../../../assets/art/palette.ron"))
             .expect("the shipped palette should parse");
         let elements = ElementCatalog::from_file(&element_file);
         let spells = SpellBook::from_file(&spell_file);
         let substances = SubstanceTable::from_file(&substance_file, &palette)
             .expect("the shipped substances should resolve");
+        let terrain_damage =
+            TerrainDamageTable::from_file(&terrain_damage_file, &elements, &substances)
+                .expect("the shipped terrain-damage policy should resolve");
         let content = ContentIndex::build(&elements, &spells, &substances)
             .expect("the shipped content should resolve");
         let lattices = LatticeLibrary::build(&lattice_file, &elements, &spells)
@@ -1830,6 +1790,8 @@ mod tests {
             .insert_resource(substance_file)
             .insert_resource(palette)
             .insert_resource(substances)
+            .insert_resource(terrain_damage_file)
+            .insert_resource(terrain_damage)
             .insert_resource(lattice_file)
             .insert_resource(content)
             .insert_resource(lattices);
@@ -2693,13 +2655,13 @@ mod tests {
     }
 
     #[test]
-    fn exact_origin_dev_resume_digest_survives_comment_only_cutover_changes() {
+    fn exact_pr175_dev_resume_digest_survives_comment_only_cutover_changes() {
         let legacy_text = include_str!("../testdata/legacy_resume_origin_dev.ron");
         let legacy: LegacyResumeFile =
-            ron::from_str(legacy_text).expect("the origin/dev resume fixture should parse");
+            ron::from_str(legacy_text).expect("the PR #175 resume fixture should parse");
         assert_eq!(legacy.build_version, build_identity());
-        assert_eq!(legacy.scenario_digest, 0xB392_E2D3_BC35_DBDB);
-        validate_legacy_resume(&legacy).expect("the origin/dev record itself is valid");
+        assert_eq!(legacy.scenario_digest, 0xC8EA_6229_346D_CF96);
+        validate_legacy_resume(&legacy).expect("the PR #175 record itself is valid");
 
         let library: ScenarioLibrary =
             ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
@@ -2709,7 +2671,7 @@ mod tests {
             let (_, _, cutover_digest) = LEGACY_RESUME_DIGESTS
                 .iter()
                 .find(|(name, _, _)| *name == current.name)
-                .expect("every PR #174 scenario has an explicit digest translation");
+                .expect("every PR #175 scenario has an explicit digest translation");
             assert_eq!(scenario_digest(current), *cutover_digest);
         }
         let current = library
@@ -2717,20 +2679,20 @@ mod tests {
             .iter()
             .find(|candidate| candidate.name == legacy.scenario_name)
             .expect("Party Trial remains the canonical Campaign");
-        assert_eq!(scenario_digest(current), 0x5847_F52E_E0E5_8697);
+        assert_eq!(scenario_digest(current), 0xE64E_D979_1736_586C);
         assert!(legacy_resume_digest_is_compatible(
             &current.name,
             legacy.scenario_digest,
             scenario_digest(current),
         ));
 
-        let root = scratch_root("origin-dev-legacy");
+        let root = scratch_root("pr175-dev-legacy");
         let paths = StoragePaths::under(&root);
         write_atomic(&paths.resume, legacy_text).expect("legacy fixture should write");
         let store = migrate_legacy(&paths);
         let migrated = store
             .available(CampaignSlotId::One)
-            .expect("the origin/dev record should migrate to slot one");
+            .expect("the PR #175 record should migrate to slot one");
         assert_eq!(migrated.scenario_digest, legacy.scenario_digest);
         assert_eq!(migrated.active_play_millis, 0);
         assert_eq!(migrated.content_revision, None);
@@ -2746,81 +2708,54 @@ mod tests {
     }
 
     #[test]
-    fn pre_ui_foundation_resumes_survive_comment_only_copy_change() {
+    fn pre_terrain_resume_is_preserved_as_invalid() {
+        let legacy_text = include_str!("../testdata/legacy_resume_pre_terrain.ron");
+        let legacy: LegacyResumeFile =
+            ron::from_str(legacy_text).expect("the pre-terrain resume fixture should parse");
+        assert_eq!(legacy.scenario_digest, 0xB392_E2D3_BC35_DBDB);
+        validate_legacy_resume(&legacy).expect("the pre-terrain record itself is well formed");
+
         let library: ScenarioLibrary =
             ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
                 .expect("the cutover scenario library should parse");
-        assert_eq!(LEGACY_RESUME_DIGEST_ALIASES.len(), library.scenarios.len());
-        for current in &library.scenarios {
-            let (_, predecessor_digest, cutover_digest) = LEGACY_RESUME_DIGEST_ALIASES
-                .iter()
-                .find(|(name, _, _)| *name == current.name)
-                .expect("every pre-UI-foundation scenario should have an explicit alias");
-            assert_ne!(predecessor_digest, cutover_digest);
-            assert_eq!(scenario_digest(current), *cutover_digest);
-            assert!(legacy_resume_digest_is_compatible(
-                &current.name,
-                *predecessor_digest,
-                *cutover_digest,
-            ));
-        }
-
-        let (_, saved_digest, cutover_digest) = LEGACY_RESUME_DIGEST_ALIASES
-            .iter()
-            .find(|(name, _, _)| *name == "Party Trial")
-            .expect("the known pre-UI-foundation Party Trial digest should remain explicit");
-        assert_eq!(*saved_digest, 0x8737_950D_F612_A47E);
         let current = library
             .scenarios
             .iter()
-            .find(|candidate| candidate.name == "Party Trial")
+            .find(|candidate| candidate.name == legacy.scenario_name)
             .expect("Party Trial remains the canonical Campaign");
-        assert_eq!(scenario_digest(current), *cutover_digest);
+        assert!(!legacy_resume_digest_is_compatible(
+            &current.name,
+            legacy.scenario_digest,
+            scenario_digest(current),
+        ));
 
-        let mut legacy = legacy_resume();
-        legacy.scenario_digest = *saved_digest;
-        let legacy_text = ron::ser::to_string_pretty(&legacy, ron::ser::PrettyConfig::new())
-            .expect("the predecessor resume should encode");
-        let root = scratch_root("pre-ui-foundation-legacy");
+        let root = scratch_root("pre-terrain-legacy");
         let paths = StoragePaths::under(&root);
-        write_atomic(&paths.resume, &legacy_text).expect("legacy fixture should write");
+        write_atomic(&paths.resume, legacy_text).expect("legacy fixture should write");
 
-        let store = migrate_legacy(&paths);
+        let mut store = migrate_legacy(&paths);
         let migrated = store
             .available(CampaignSlotId::One)
-            .expect("the known predecessor should migrate to slot one");
-        assert_eq!(migrated.scenario_digest, *saved_digest);
+            .expect("migration should preserve the well-formed legacy record");
+        assert_eq!(migrated.scenario_digest, legacy.scenario_digest);
         assert_eq!(migrated.content_revision, None);
+        let refusal = campaign_content_refusal(&migrated, &library, 0xC0DE_CAFE)
+            .expect("pre-terrain content must not be resumed");
         assert_eq!(
-            campaign_content_refusal(&migrated, &library, 0xC0DE_CAFE),
-            None
+            refusal,
+            "The saved scenario \"Party Trial\" changed and cannot be resumed."
         );
+        store.mark_catalog_invalid(CampaignSlotId::One, refusal.clone());
+        assert_eq!(store.slot(CampaignSlotId::One), Err(refusal.clone()));
 
         let campaigns_text = read(&paths.campaigns).expect("migration should persist campaigns");
-        let reloaded = decode_campaigns(&campaigns_text);
+        let mut reloaded = decode_campaigns(&campaigns_text);
         let persisted = reloaded
             .available(CampaignSlotId::One)
-            .expect("the already-migrated predecessor should remain available");
-        assert_eq!(persisted.scenario_digest, *saved_digest);
-        assert_eq!(
-            campaign_content_refusal(&persisted, &library, 0xC0DE_CAFE),
-            None
-        );
-
-        let mut changed_library = library.clone();
-        changed_library
-            .scenarios
-            .iter_mut()
-            .find(|candidate| candidate.name == "Party Trial")
-            .expect("Party Trial remains present")
-            .encounter = "config/encounters/changed.ron".to_owned();
-        assert!(campaign_content_refusal(&migrated, &changed_library, 0xC0DE_CAFE).is_some());
-        let mut unknown_digest = persisted.clone();
-        unknown_digest.scenario_digest = 0xDEAD_BEEF_DEAD_BEEF;
-        assert_eq!(
-            campaign_content_refusal(&unknown_digest, &library, 0xC0DE_CAFE),
-            Some("The saved scenario \"Party Trial\" changed and cannot be resumed.".to_owned())
-        );
+            .expect("the pre-terrain record should remain persisted");
+        assert_eq!(persisted.scenario_digest, legacy.scenario_digest);
+        reloaded.mark_catalog_invalid(CampaignSlotId::One, refusal.clone());
+        assert_eq!(reloaded.slot(CampaignSlotId::One), Err(refusal));
         assert_eq!(read(&paths.resume).expect("legacy remains"), legacy_text);
         std::fs::remove_dir_all(root).expect("scratch directory should clean up");
     }
@@ -3358,6 +3293,10 @@ mod tests {
             included.len(),
             SHIPPED_CAMPAIGN_INPUTS.len(),
             "campaign inputs must not repeat an asset path"
+        );
+        assert!(
+            included.contains("config/terrain_damage.ron"),
+            "terrain damage changes must invalidate resumable worlds"
         );
 
         for scenario in library.scenarios {

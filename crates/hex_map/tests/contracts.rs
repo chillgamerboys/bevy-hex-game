@@ -32,16 +32,19 @@ use std::time::{Duration, Instant};
 
 use hex_assets::GameAssets;
 use hex_assets::{
-    ArtPalette, ObjectBlueprint, ObjectCatalogFile, ObjectInstance, PaletteSwatch,
-    RuntimeArtCatalog, SrgbColor, Substance, SubstanceFile, SubstanceTable, SwatchId,
-    VoxelStyleCatalog,
+    ArtPalette, ElementCatalog, ElementFile, ObjectBlueprint, ObjectCatalogFile, ObjectInstance,
+    PaletteSwatch, RuntimeArtCatalog, SrgbColor, Substance, SubstanceFile, SubstanceTable,
+    SwatchId, TerrainDamageFile, TerrainDamagePair, TerrainDamageTable, VoxelStyleCatalog,
 };
 use hex_core::{
-    BiomeRegionId, BiomeRegions, CanopyOccluder, CutawayOccluder, GameplayLight,
-    GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile, InteriorRegionId,
-    InteriorRegions, Level, MapAnchorId, MapAnchors, MapViewHint, PresentationOcclusion,
-    ResolvedMapSeed, RunBottom, Screen, SpecialMovementRegion, SpecialMovementRegions, SubstanceId,
-    TerrainEdit, TerrainReady, TilePos, TraversalBlockers, TreeOccluder, MAX_HEADROOM,
+    BiomeRegionId, BiomeRegions, CanopyOccluder, CutawayOccluder, DamagedVoxels, ElementId,
+    GameplayLight, GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile,
+    InteriorRegionId, InteriorRegions, Level, MapAnchorId, MapAnchors, MapViewHint,
+    PausableSystems, Pause, PresentationOcclusion, ResolvedMapSeed, RunBottom, Screen,
+    SpecialMovementRegion, SpecialMovementRegions, SubstanceId, TerrainBatchId, TerrainEdit,
+    TerrainImpact, TerrainImpactDisposition, TerrainImpactOutcome, TerrainImpactRejection,
+    TerrainImpactResult, TerrainReady, TerrainVoxelHealth, TilePos, TraversalBlockers,
+    TreeOccluder, MAX_HEADROOM,
 };
 use hex_map::{
     CavesReportMetrics, CrossingSettings, EnvironmentSettings, GenerationReport, HillsSettings,
@@ -97,6 +100,7 @@ fn test_app() -> App {
     });
 
     app.add_plugins(hex_map::grid::plugin);
+    app.configure_sets(Update, PausableSystems.run_if(in_state(Pause(false))));
     builder.build()
 }
 
@@ -160,14 +164,19 @@ fn substance_table_fixture(omitted_substance: Option<&str>) -> SubstanceTable {
         if omitted_substance == Some(name) {
             continue;
         }
-        substances.insert(
-            name.to_owned(),
-            if name == "air" {
-                Substance::invisible(solid, diggable)
-            } else {
-                Substance::from_swatch(swatch.clone(), solid, diggable)
-            },
-        );
+        let substance = if name == "air" {
+            Substance::invisible(solid, diggable)
+        } else {
+            Substance::from_swatch(swatch.clone(), solid, diggable)
+        };
+        let toughness = match name {
+            "grass" | "snow" => Some(1),
+            "dirt" | "gravel" | "ice" => Some(2),
+            "stone" | "basalt" => Some(4),
+            "worked_stone" | "metal" => Some(8),
+            _ => None,
+        };
+        substances.insert(name.to_owned(), substance.with_toughness(toughness));
     }
     SubstanceTable::from_file(&SubstanceFile { substances }, &palette)
         .expect("the fixture substances should resolve through the fixture palette")
@@ -938,5 +947,7 @@ mod presentation;
 mod procedural_publication;
 #[path = "contracts/publication.rs"]
 mod publication;
+#[path = "contracts/terrain_damage.rs"]
+mod terrain_damage;
 #[path = "contracts/terrain_edits.rs"]
 mod terrain_edits;

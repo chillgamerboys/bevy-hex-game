@@ -8,6 +8,7 @@ you do not need to recompile the game.
 |---|---|
 | `world.ron` | Map size, terrain preset and shape, how tall a voxel is |
 | `substances.ron` | What the world is made of — including water and metal — plus exact art-palette references and gameplay properties |
+| `terrain_damage.ron` | Boolean element × substance damage admission; every missing pair resists |
 | `art/palette.ron` | Canonical authored colours for terrain, liquids, structures, units, and authored objects |
 | `art/voxel_styles.ron` | Palette-backed opaque, cutout, translucent, additive, and emissive object surfaces |
 | `art/object_catalog.ron` + `art/objects/*.ron` | The validated authored plant, effect, and prop catalog; normally edited through `cargo editor` |
@@ -44,6 +45,7 @@ How quickly you *see* the change depends on which file:
 | `display.ron` | Straight away until the player saves a local presentation choice in Settings |
 | `world.ron` | On the next world rebuild |
 | `substances.ron` | On the next world rebuild |
+| `terrain_damage.ron` | On the next world rebuild (re-parsed and cross-file validated on save) |
 | `art/palette.ron` | Authored objects after one coherent art-graph reload; substance and unit colours on the next world rebuild |
 | `art/voxel_styles.ron`, `art/object_catalog.ron`, `art/objects/*.ron` | Rendered object instances after the complete palette → style → object graph validates; a broken revision keeps the last valid graph |
 | `elements.ron` | On the next world rebuild (re-parsed and validated on save) |
@@ -63,14 +65,14 @@ The split exists because some values are read continuously while the game runs a
 others are read once, when the map and pieces are created. Nothing is lost either
 way — the rebuild is quick.
 
-Elements, substances, spells, and lattices form one semantic revision at the Loading
-boundary. A bad cross-file edit may leave the last valid resolved catalogs available
-for inspection, but Loading does not treat their presence as readiness. It waits
-until canonical source fingerprints prove that every raw file, direct catalog,
-`ContentIndex`, and `LatticeLibrary` describes the same accepted revision. Repairing
-or reverting the edit publishes a new `AcceptedContentRevision` and allows the
-rebuild; leaving an invalid edit settled for several frames never admits a mixed
-revision.
+Elements, substances, terrain-damage admission, spells, and lattices form one semantic
+revision at the Loading boundary. A bad cross-file edit may leave the last valid
+resolved catalogs available for inspection, but Loading does not treat their presence
+as readiness. It waits until canonical source fingerprints prove that every raw file,
+direct catalog, `TerrainDamageTable`, `ContentIndex`, and `LatticeLibrary` describes
+the same accepted revision. Repairing or reverting the edit publishes a new
+`AcceptedContentRevision` and allows the rebuild; leaving an invalid edit settled for
+several frames never admits a mixed revision.
 
 (`cargo run --release` runs faster but will not reload files at all. Use `cargo dev`
 while tuning, and `--release` when you just want to play.)
@@ -406,6 +408,8 @@ and exact reference:
     swatch: Some("terrain/sand"),
     solid: true,
     diggable: true,
+    conjurable: false,
+    toughness: Some(2),
 ),
 ```
 
@@ -415,6 +419,20 @@ cross-file update and retains the previous valid runtime table. The rejected sou
 pair is retained too, so repairing only the other file retries the complete on-disk
 candidate instead of accepting a stale fallback. `air` is never drawn and therefore
 uses `swatch: None`; every rendered substance requires `Some(...)`.
+
+`toughness` is maximum voxel health. The initial schema accepts only `Some(1)`,
+`Some(2)`, `Some(4)`, `Some(8)`, or `None`; `None` means the material does not
+participate in terrain damage. To make the new substance damageable, add explicit
+stable-name pairs to `terrain_damage.ron`:
+
+```ron
+(element: "Earth", substance: "sand"),
+```
+
+The matrix is an allow-list, not a multiplier table. A listed pair permits the
+spell's exact authored power, while an absent pair resists. Duplicate pairs, unknown
+elements or substances, and references to `toughness: None` are rejected without
+replacing the last valid resolved table.
 
 **A bigger procedural map.** `grid_radius: 12` gives 469 columns, `20` gives 1261,
 and `40` gives 4921. Procedural recipes accept radii from 12 through 40 and regenerate

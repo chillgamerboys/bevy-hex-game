@@ -196,6 +196,14 @@ class TestScopeTests(unittest.TestCase):
             ("map_unit", "map_contracts", "clippy", "docs", "shipping"),
         )
 
+    def test_map_damage_resolver_selects_unit_and_contract_evidence(self) -> None:
+        decision = self.classify("crates/hex_map/src/terrain_damage.rs")
+        self.assertFalse(decision.full)
+        self.assertEqual(
+            decision.concerns,
+            ("map_unit", "map_contracts", "clippy", "docs", "shipping"),
+        )
+
     def test_map_foundation_selects_every_map_partition(self) -> None:
         decision = self.classify("crates/hex_map/src/voxel.rs")
         self.assertFalse(decision.full)
@@ -422,7 +430,7 @@ class TestScopeTests(unittest.TestCase):
         partition = self.config["partition_checks"]["map"]
         self.assertEqual(
             partition["expected_counts"],
-            {"map_unit": 94, "map_generation": 384, "map_contracts": 61},
+            {"map_unit": 94, "map_generation": 384, "map_contracts": 74},
         )
         self.assertEqual(partition["expected_ignored"], 25)
 

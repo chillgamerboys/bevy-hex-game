@@ -13,7 +13,7 @@ use hex_ai::AiProfileId;
 use hex_assets::{
     AiProfileCatalog, ArtPalette, ContentIndex, Effect, ElementCatalog, ElementFile, Encounter,
     FormationCatalog, LatticeFile, LatticeLibrary, SpellBook, SpellFile, SubstanceFile,
-    SubstanceTable,
+    SubstanceTable, TerrainDamageFile, TerrainDamageTable,
 };
 use hex_core::{LatticeCoord, Sextant};
 use hex_lattice::{castable, CellKind, LatticeState};
@@ -36,6 +36,10 @@ fn parse_substances() -> Result<SubstanceFile, SpannedError> {
 
 fn parse_palette() -> Result<ArtPalette, SpannedError> {
     ron::from_str(include_str!("../../../assets/art/palette.ron"))
+}
+
+fn parse_terrain_damage() -> Result<TerrainDamageFile, SpannedError> {
+    ron::from_str(include_str!("../../../assets/config/terrain_damage.ron"))
 }
 
 fn parse_lattices() -> Result<LatticeFile, SpannedError> {
@@ -316,6 +320,12 @@ fn shipped_content_cross_references_resolve() {
         Ok(index) => index,
         Err(errors) => panic!("shipped content has dangling cross-file references: {errors:#?}"),
     };
+    let terrain_damage = TerrainDamageTable::from_file(
+        &parse_terrain_damage().expect("terrain_damage.ron parses and validates"),
+        &elements,
+        &substances,
+    )
+    .expect("shipped terrain damage has no dangling or indestructible references");
 
     assert!(
         !spells.is_empty(),
@@ -325,6 +335,11 @@ fn shipped_content_cross_references_resolve() {
         index.len(),
         spells.len(),
         "every shipped spell must be resolved in the content index"
+    );
+    assert_eq!(
+        terrain_damage.len(),
+        63,
+        "every current element must damage every toughness-bearing substance"
     );
 
     // Every spell's requirements resolved to real element ids.

@@ -220,6 +220,11 @@ and tests without a renderer. It holds the largest share of the test suite.
   ResolveObservation → PublishKnowledge → ApplyPresentation`) orders both initial
   perception and later updates. Authored lighting publishes
   `ExteriorIllumination`; gameplay never samples renderer lights or pixels.
+- **`TerrainSystems`** (`ApplyWorld → ReconcileActors`) orders terrain durability.
+  Map-owned `ApplyWorld` is live. Gameplay must publish fresh terrain occupancy after
+  it, reconcile movement, and then settle unsupported actors in the still-pending
+  `ReconcileActors` phase before perception and later combat authority. Do not claim
+  live settlement until that adapter and its cross-crate ordering tests have landed.
 - **Same-frame combat knowledge** is ordered `PublishKnowledge → combat spatial
   knowledge synchronization → CombatSystems::Act → Apply → Resolve → Advance`.
   Casting and AI must use that publication; neither preview nor a legal-action request
@@ -244,9 +249,9 @@ and tests without a renderer. It holds the largest share of the test suite.
 - **Settings come from `assets/config/*.ron`.** On initial load, resources are
   absent until parsed rather than defaulted, so a bad file stalls loading. After
   that, a failed hot reload retains the last valid value and reports the error.
-  Elements, substances, spells, and lattices additionally require one matching
-  `AcceptedContentRevision`; resource presence or a settled Bevy change tick cannot
-  admit mixed source revisions.
+  Elements, substances, the terrain-damage matrix, spells, and lattices additionally
+  require one matching `AcceptedContentRevision`; resource presence or a settled Bevy
+  change tick cannot admit mixed source revisions.
 
 ## Bevy 0.19 specifics
 

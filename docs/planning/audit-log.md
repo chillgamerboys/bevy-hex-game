@@ -7,7 +7,7 @@ file is the record that travels with the repo.
 
 <!-- /audit-diff appends below this line. Don't insert content between this comment and Wave entries; the skill anchors on this marker. -->
 
-## Wave 25 — feat(game): cut over to Campaign and Sandbox (2026-08-02)
+## Wave 26 — feat(game): cut over to Campaign and Sandbox (2026-08-02)
 
 - **PR**: #176 — `shrav-k/campaign-sandbox-cutover`
 - **Outcome**: guided-deployment follow-up implemented; final combined audit and
@@ -18,6 +18,7 @@ file is the record that travels with the repo.
 |---|---|---|---|
 | 6 | `crates/hex_game/src/screens/sandbox.rs` (`on_deployment_tile_clicked`), `crates/hex_ui/src/gameplay_frame.rs` | SHIP-BLOCKER | fixed — guided placement targets canonical terrain directly, validates exact walker footing and occupancy without catalog-region caps, and removes ordinary HUD regions from layout and picking during Deployment |
 | 7 | `crates/hex_gameplay_model/src/sandbox.rs`, `crates/hex_ui/src/deployment.rs` | SHIP-BLOCKER | fixed — the typed queue admits only the next unplaced slot or a prior placed slot, and Undo derives Review again whenever it restores a complete exact deployment |
+| 6 | `crates/hex_core/src/presentation.rs`, `crates/hex_game/src/screens/sandbox.rs`, `crates/hex_game/src/terrain_health_bars.rs` | SHIP-BLOCKER | fixed — staged actors use a composable Sandbox-deployment occlusion reason, while world-space terrain health bars obey effective gameplay chrome; camera cutaways, Start, HUD hiding, Deployment, and outcomes can no longer restore or retain the wrong visibility |
 | 4 | `crates/hex_game/src/screens/gameplay.rs` (`handle_outcome_actions`, `handle_input`) | SHIP-BLOCKER | fixed — Campaign Return and Backspace now reset the persistent menu model to its root before entering `Screen::Title`; typed outcome and keyboard regressions cover both paths without changing Sandbox ownership |
 | 8 | `.github/workflows/manual-runtime-signoff.yaml` | SHIP-BLOCKER | fixed — the exact-head runtime gate now treats every shipped `assets/**` path as runtime-visible instead of omitting menu, scenario, Creator, and Sandbox preview inputs |
 | 7, 8 | `.config/test-scopes.json`, `tools/test_test_scope.py` | NON-BLOCKER | fixed — the deprecated-vocabulary validator is explicit validation infrastructure, with a selector regression proving full coverage and no unknown path |
@@ -27,9 +28,34 @@ file is the record that travels with the repo.
 `6929212`. The guided-deployment follow-up has green focused model/runtime/UI tests,
 strict affected-package Clippy, the complete six-case deployment structural matrix,
 and a release Fort walk that placed Party and Enemy through ordinary exact terrain
-clicks before capturing Review. The complete combined gate must be rerun after PR #175
-lands. Linear was unavailable and remains a soft coordination signal. The PR must not
-merge until its body records a named-human runtime PASS for the final head SHA.
+clicks before capturing Review. PR #175 landed at `70a212bb`; the complete combined
+gate and exact-head human runtime sign-off remain pending on the reconciled candidate.
+Linear was unavailable and remains a soft coordination signal. The PR must not merge
+until its body records a named-human runtime PASS for the final head SHA.
+
+## Wave 25 — feat: add terrain durability and destruction (2026-08-02)
+
+- **PR**: #175 — `wave/terrain-durability`
+- **Outcome**: green — one duplicated contract literal and the live-documentation
+  contradictions fixed; one behavior-neutral pure-test expansion deferred to the
+  named post-merge foundation
+- **Lenses triggered**: 2, 7, D3, D4
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 2 | `crates/hex_assets/src/substances.rs`:349 | NON-BLOCKER | fixed — authored substance validation now consumes shared `is_terrain_toughness` instead of repeating the `1/2/4/8` scale |
+| D3, D4 | `docs/systems/casting.md`:170, `docs/planning/roadmap.md`:32 | SHIP-BLOCKER | fixed — PR #162 already landed `Direct`/`Arc`/`None` caster-to-anchor obstruction; only per-voxel effect-volume clipping remains deferred under HEX-24 |
+| D3, D4 | `docs/systems/casting.md`:219, `docs/planning/boundary.md`:200, `docs/contracts.md`:38 | NON-BLOCKER | fixed — every live contract source now describes `RunBottom` as consumed by permanent construction and trajectory checks while cover and obstruction-aware sight remain downstream |
+| D3, D4 | `docs/planning/roadmap.md`:31, `docs/planning/roadmap.md`:116 | NON-BLOCKER | fixed — the living plan now distinguishes permanent construction from deferred save/restore and separates live construction, trajectories, and world durability from the gameplay impact/outcome/settlement and perception residuals |
+| D3, D4 | `docs/planning/status.md`:469, `docs/systems/map.md`:412, `docs/README.md`:79 | NON-BLOCKER | fixed — boundary I is accepted, the pending cast is explicitly future gameplay behavior, and the documentation index describes the boundary ledger's accepted/live decisions as well as open asks |
+| 7 | `crates/hex_core/src/terrain_impact.rs`:386 | NON-BLOCKER | deferred — the post-#175 behavior-neutral spell-resolution foundation already owns the exhaustive malformed-outcome matrix against the now-settled live dispositions |
+
+**Notes**: all eight code lenses and the fresh-eyes pass found no remaining checkpoint
+blocker in content readiness, deterministic map resolution, pause/re-entry lifecycle,
+presentation privacy, or ownership. The shipped 63-pair test deliberately pins the
+initial complete element/material allow-list; later balance work must update that
+fixture when it removes pairs. Exact-head CI, automated visual review, and named human
+runtime sign-off remain separate landing gates rather than claims made by this entry.
 
 ## Wave 24 — feat(map): biome expansion and Two Rings (2026-07-30)
 

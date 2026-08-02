@@ -56,10 +56,11 @@ pub(crate) struct CreatorPickerReturn {
 
 /// One coherent raw-and-derived gameplay content graph.
 ///
-/// The accepted-revision publisher validates all five resources as a unit. Keeping
-/// them bundled prevents Creator sessions from installing a combined `SpellBook`
-/// while leaving the shipped raw files behind, which would make Loading either accept
-/// stale content or wait forever.
+/// The accepted-revision publisher validates these five Creator-overlaid resources
+/// as one subset of the broader graph, which also includes elements, substances, and
+/// terrain damage. Keeping the overlay bundled prevents Creator sessions from
+/// installing a combined `SpellBook` while leaving its shipped raw files behind,
+/// which would make Loading either accept stale content or wait forever.
 #[derive(Debug, Clone)]
 struct CreatorContentBundle {
     spell_file: SpellFile,
@@ -1903,6 +1904,7 @@ mod tests {
     use bevy::state::app::StatesPlugin;
     use hex_assets::{
         ArtPalette, ElementFile, SandboxDeploymentRegion, SandboxRegionCenter, SubstanceFile,
+        TerrainDamageFile, TerrainDamageTable,
     };
     use hex_core::HexCoord;
 
@@ -2717,6 +2719,15 @@ mod tests {
 
     fn app_with_content_fixture(fixture: &ContentFixture) -> App {
         let mut app = App::new();
+        let terrain_damage_file = TerrainDamageFile {
+            damaging_pairs: Vec::new(),
+        };
+        let terrain_damage = TerrainDamageTable::from_file(
+            &terrain_damage_file,
+            &fixture.elements,
+            &fixture.substances,
+        )
+        .expect("the empty terrain-damage fixture should resolve");
         app.add_plugins((MinimalPlugins, StatesPlugin));
         app.insert_state(Screen::Loading);
         app.insert_resource(fixture.element_file.clone());
@@ -2724,6 +2735,8 @@ mod tests {
         app.insert_resource(fixture.substance_file.clone());
         app.insert_resource(fixture.palette.clone());
         app.insert_resource(fixture.substances.clone());
+        app.insert_resource(terrain_damage_file);
+        app.insert_resource(terrain_damage);
         fixture.shipped.insert_into_world(app.world_mut());
         app.add_plugins(hex_assets::content_index::plugin);
         app.add_systems(
@@ -3151,6 +3164,7 @@ mod tests {
                 world.resource::<ContentIndex>(),
                 world.resource::<LatticeLibrary>()
             ));
+            assert!(accepted.matches_terrain_damage(world.resource::<TerrainDamageTable>()));
             assert!(world
                 .resource::<SpellBook>()
                 .matches_source(world.resource::<SpellFile>()));
@@ -3163,6 +3177,9 @@ mod tests {
                 world.resource::<AcceptedContentRevision>().fingerprint(),
                 shipped_revision
             );
+            assert!(world
+                .resource::<AcceptedContentRevision>()
+                .matches_terrain_damage(world.resource::<TerrainDamageTable>()));
             assert!(world
                 .resource::<SpellBook>()
                 .matches_source(world.resource::<SpellFile>()));

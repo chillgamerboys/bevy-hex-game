@@ -6,9 +6,12 @@ that outlive their turn are expressed.
 
 > **Status:** this is the normative contract for the 0.3 casting slice. Unit effects,
 > Burn, Reveal, geometry, aiming, the command path, exact material occupancy, and
-> permanent evocation construction are built. Elemental terrain announcements,
-> obstruction, enchantment-bound terrain, and spell-created illumination remain
-> contracts.
+> permanent stone evocation construction are built. World-owned toughness content,
+> impact resolution, ordered acknowledgments, sparse health, and health presentation
+> are also live. Gameplay still needs to emit elemental terrain announcements, consume
+> their answers while keeping the cast pending, and settle unsupported actors.
+> Effect-volume clipping, enchantment-bound terrain, and spell-created illumination
+> remain later work.
 
 Read [the design](../design/game.md) for the magic system this serves, and
 [combat.md](combat.md) for the turn loop a cast happens inside.
@@ -48,18 +51,18 @@ arbitrary — it tracks whether there is a material with an opinion.
 | Path | Message | Who decides the outcome |
 |---|---|---|
 | **Conjuration** | `TerrainEdit::Set` — **built for permanent evocations** | Gameplay names the substance and the volume; the world validates placement |
-| **Elemental effect** | `TerrainImpact { batch, volume, element, power }` — *contract* | The world owns the entire material response |
+| **Elemental damage** | `TerrainImpact { batch, volume, element, power }` — **world receiver built; gameplay emitter pending** | The world owns toughness, protection, accumulated damage, and destruction |
 
-`batch` is the id the world echoes back in its acknowledgment, so an outcome can be
-matched to the announcement that caused it. Both messages are specified in full in
-[boundary.md](../planning/boundary.md) asks G and H.
+`batch` is the session-unique id the world echoes in its applied or rejected answer, so
+gameplay can match the result to the cast that caused it. Both messages are specified
+in full in [boundary.md](../planning/boundary.md) G and H.
 
 **Destruction has a counterparty; creation does not.** When fire meets a voxel, that
 voxel already has properties its author defined, so the response belongs to that
 author. When a mage conjures, nothing is there to respond — the material *is* the
-spell's identity. "Earthen Wall" summons dirt because that is what the spell is, and if
-that lived in a world-side response table, the spell's identity would drift out of the
-spell file.
+spell's identity. `Stone Shaper` summons stone because that is what the spell is, and
+moving that choice into the world-side damage table would let the spell's identity
+drift out of its own file.
 
 So conjuration keeps naming substances in `spells.ron`, where
 [`ContentIndex`](../../crates/hex_assets/src/content_index.rs) already validates the
@@ -80,9 +83,48 @@ Power will be an explicit content field — `Impact(element, power: N)`, a varia
 inferred from tier. A conjuration may name only a substance the world marks
 `conjurable`; existence alone is insufficient. The content loader validates that
 cross-domain reference before the spell becomes available, as specified by
-[boundary.md](../planning/boundary.md) ask L. This prevents ordinary spell content
+[boundary.md](../planning/boundary.md) L. This prevents ordinary spell content
 from creating protected bedrock or static hazards merely because those substances
 exist.
+
+The first damage model is intentionally literal. `power` subtracts that many hit
+points, capped at the voxel's remaining health. Material maximum health comes from the
+fixed `1/2/4/8` toughness scale, and `terrain_damage.ron` contains only a Boolean
+element × material allow-list. A missing pair resists; there are no multipliers,
+thresholds, healing, replacement materials, or elemental transformations. Gameplay
+does not duplicate either file and cannot predict the outcome before the world answers.
+
+Every current element is initially allowed against every toughness-bearing material.
+That broad table proves the contract without pretending to be final balance. Water,
+lava, air, and bedrock have no toughness; authored liquid topology and the other
+map-owned protections continue to resist.
+
+### World answer live; cast completion pending
+
+The map now answers every processed batch exactly once with
+`TerrainImpactResult::Applied` or `::Rejected`. An applied answer has one ordered
+`TerrainVoxelOutcome` per announced voxel: `NoMaterial`, `Resisted`, `Damaged`, or
+`Destroyed`, with material and valid nonzero health before/after as the disposition
+allows. A rejected answer carries one explicit reason and no voxel payload; it changes
+nothing. Invalid input and unavailable terrain therefore cannot strand a correctly
+implemented pending cast.
+
+The gameplay emitter and consumer are not live yet. They must keep the cast pending
+from emission until the matching answer and any resulting actor settlement finish.
+`TerrainSystems::ApplyWorld` is live and resolves the announcement on the next ordered
+map phase. Gameplay must then republish exact terrain occupancy, reconcile movement,
+and run `TerrainSystems::ReconcileActors` for units left without support before
+perception or another combat action. Falling is gameplay-owned, deterministic, and
+free: first the highest legal unoccupied support below in the same column, then the
+lateral ordering pinned in
+[boundary H](../planning/boundary.md#cross-owner-ordering-and-unsupported-actors), with
+no fall damage, movement cost, action cost, or turn change.
+
+An answer is authoritative simulation truth, not permission to show hidden terrain.
+Faction-facing animation and logs filter its entries through observation. The separate
+`DamagedVoxels` projection permits a depth-tested health bar only for currently
+Observed, exposed, visible partial-health surfaces; it does not turn hidden impact
+results into knowledge.
 
 ## Shaped terrain persists
 
@@ -104,8 +146,9 @@ the same voxels before expiry; that design may be added later without weakening 
 multi-turn persistence rule.
 
 The shipped `Earthen Wall` is an evocation and uses the exact two-voxel permanent
-construction adapter. Content admission rejects terrain creation on enchantments;
-enchantment-bound terrain still waits for provenance and removal.
+stone-construction adapter. Stone is the only currently conjurable substance and the
+complete creation volume must be air. Content admission rejects terrain creation on
+enchantments; enchantment-bound terrain still waits for provenance and removal.
 
 Honest caveat: an entity-shaped barrier does not block movement, because units do not
 obstruct each other yet ([status.md](../planning/status.md)). Terrain walls are the
@@ -124,7 +167,8 @@ applier in `hex_combat` is authoritative.
    trajectory is clear. Range uses
    [`in_reach`](../../crates/hex_units/src/targeting.rs) (**built**), so **spells
    inherit high-ground-buys-range automatically** from the same rule engagement uses.
-   Trajectory is deferred; see *Obstruction*.
+   Direct, authored-rise Arc, and None trajectory checks are built and wired; see
+   *Obstruction*. Per-voxel clipping of the resolved effect volume remains deferred.
 4. **Unit interaction — provisional first-wave safety policy.** The current unit-effect
    applier reaches the unit on the anchor. Content therefore refuses a unit-affecting
    spell only when its resolved shape can contain more than one distinct voxel. Boundary
@@ -132,7 +176,8 @@ applier in `hex_combat` is authoritative.
    unit effects wait until resolution iterates every occupied voxel.
 5. **Announce** — a legal permanent construction volume emits exact
    `TerrainEdit::Set` messages (**built**). Elemental impacts still fail closed as
-   undeliverable rather than charging for no result.
+   undeliverable rather than charging for no result; the world resolver is live, but
+   the gameplay announcement/pending-answer adapter is not.
 
 Rungs 1–2 are gameplay's own state. Rung 4 is gameplay's knowledge too: **where
 characters stand is ours**, so a cast interacts with units through legality, exactly as
@@ -172,7 +217,8 @@ Tiles publish each run's inclusive top (`TilePos`) and bottom
 saturated clearance fact. `hex_units::TerrainOccupancy` now compacts those exact
 inclusive bounds, preserving real air gaps between stacked runs without reconstructing
 occupancy from rendered spans or world units. Construction legality consumes that
-projection; trajectory, cover, and pathing remain downstream consumers.
+projection, as do the live trajectory checks; cover and pathing remain downstream
+consumers.
 
 ### Construction placement
 
@@ -188,6 +234,11 @@ the whole edit batch. Hidden truth cannot become a refusal or payment oracle: th
 is accepted and paid in exactly the same way as a clear placement, while authority
 withholds the unsafe edits. `Headroom` is not used to infer air. The world still
 validates each low-level edit against its private material and topology policy.
+
+For the initial slice, this means exactly **stone into air**. `stone` is the only
+current substance admitted by `conjurable`, every accepted voxel starts at stone's
+full toughness, and neither a same-material placement nor another existing material is
+used as a repair path.
 
 Initial spell content carries exactly one construction effect, cannot mix construction
 with non-construction effects, requires `Evocation`, and uses only fully vertical
@@ -386,6 +437,16 @@ many resolved-cardinality boundary is pinned.
 Volume tests pin the grid-space metric on stacked surfaces — a sphere centred on a
 bridge deck must reach the ground below it exactly when the level distance says so, and
 `Path` rotation must produce congruent shapes in all six sextants.
+
+Terrain-durability content and map tests pin the fixed toughness scale, Boolean matrix
+validation, coherent reloads, canonical-volume rejection, one answer per batch, exact
+ordered outcomes, direct power subtraction, protected topology, sparse exact-voxel
+health, and map rebuild lifecycle. Presentation tests pin observation, darkness,
+burial, composed visibility, grid replacement, and cleanup. The gameplay lane must
+still add the cross-owner
+`ApplyWorld → occupancy publication → movement reconcile → ReconcileActors → perception → later combat`
+tests. Its settlement fixtures must include stacked supports, simultaneous falls,
+occupied candidates, lateral higher-ground fallback, and insertion-order independence.
 
 Replay tests extend the funnel's existing determinism test to casts, including variable
 mana and facing — the same sequence applied twice must land the same world.
