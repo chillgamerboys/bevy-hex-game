@@ -25,13 +25,14 @@
 //! *volume* has no asker and no direction, so the symmetric rule is the right one
 //! there and the wrong one here.
 //!
-//! # A volume is geometric, not obstructed
+//! # Raw resolution is geometric
 //!
-//! A sphere next to a cave wall fills the wall's voxels and the chamber beyond it.
-//! This is wrong, it is documented as wrong in
-//! [status.md](https://github.com/chillgamerboys/bevy-hex-game/blob/main/docs/planning/status.md),
-//! and it is bounded: obstruction-aware clipping arrives with the line-of-sight work,
-//! and nothing here should grow a second raycast in the meantime.
+//! These resolvers name the complete geometric candidate set before material is
+//! consulted. A caller then passes that canonical set through
+//! [`crate::trajectories::clip_effect_volume`] for authority or
+//! [`crate::trajectories::clip_known_effect_volume`] for preview and AI. Both clipping
+//! paths reuse the trajectory supercover; this module remains free of material facts
+//! and must not grow another ray algorithm.
 //!
 //! # Canonical output
 //!

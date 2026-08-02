@@ -1,15 +1,42 @@
-//! Exact material trajectories through the stacked hex voxel grid.
+//! Exact material trajectories and effect-volume clipping through the stacked hex
+//! voxel grid.
 //!
 //! This module deliberately works only in [`hex_core::TilePos`] integer space. It does not
 //! consult rendered spans, transforms, level height, or headroom. A straight segment
 //! uses an inclusive supercover: every voxel whose closed prism touches the segment is
 //! returned, including face, edge, and corner grazes. That conservative boundary rule
-//! makes obstruction stable and direction-independent.
+//! makes obstruction stable and direction-independent. After a cast reaches its
+//! selected anchor, [`clip_effect_volume`] and [`clip_known_effect_volume`] reuse that
+//! same direct supercover to remove candidates hidden behind intermediate material.
+
+use std::fmt;
 
 use hex_assets::Trajectory;
-use hex_core::{HexCoord, Level, TilePos};
+use hex_core::{ElementId, HexCoord, Level, TerrainBatchId, TerrainImpact, TilePos};
 
 use crate::{KnownTerrainOccupancy, TerrainOccupancy};
+
+/// Why a resolved effect volume could not be clipped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EffectVolumeClipError {
+    /// The input was not strictly sorted and deduplicated.
+    NonCanonicalVolume,
+}
+
+impl fmt::Display for EffectVolumeClipError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NonCanonicalVolume => {
+                write!(
+                    formatter,
+                    "effect volume is not strictly sorted and deduplicated"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for EffectVolumeClipError {}
 
 /// Resolves the selected surface into the endpoint a trajectory actually reaches.
 ///
@@ -144,6 +171,70 @@ pub fn known_trajectory_is_clear(
     trajectory_voxels(trajectory, source, destination)
         .into_iter()
         .all(|pos| !terrain.contains(pos))
+}
+
+/// Clips a canonical effect volume against complete authoritative material occupancy.
+///
+/// `Direct` and `Arc` describe how the cast reached `anchor`; once there, both spread
+/// from the anchor to each candidate over the direct symmetric supercover. The radial
+/// endpoints are excluded, so material at the anchor or candidate remains hittable
+/// while intermediate material removes candidates behind it. `None` returns the
+/// canonical input unchanged.
+///
+/// The function only filters. A noncanonical input is rejected rather than sorted,
+/// deduplicated, or otherwise repaired.
+pub fn clip_effect_volume(
+    trajectory: Trajectory,
+    anchor: TilePos,
+    volume: Vec<TilePos>,
+    terrain: &TerrainOccupancy,
+) -> Result<Vec<TilePos>, EffectVolumeClipError> {
+    clip_effect_volume_with(trajectory, anchor, volume, |pos| terrain.contains(pos))
+}
+
+/// Clips a canonical effect volume against faction-authorized known material.
+///
+/// Preview and AI use this optimistic projection so hidden material cannot change
+/// faction-facing volume choices. Authoritative application must use
+/// [`clip_effect_volume`] with complete [`TerrainOccupancy`] instead.
+pub fn clip_known_effect_volume(
+    trajectory: Trajectory,
+    anchor: TilePos,
+    volume: Vec<TilePos>,
+    terrain: &KnownTerrainOccupancy,
+) -> Result<Vec<TilePos>, EffectVolumeClipError> {
+    clip_effect_volume_with(trajectory, anchor, volume, |pos| terrain.contains(pos))
+}
+
+fn clip_effect_volume_with(
+    trajectory: Trajectory,
+    anchor: TilePos,
+    volume: Vec<TilePos>,
+    contains_material: impl Fn(TilePos) -> bool,
+) -> Result<Vec<TilePos>, EffectVolumeClipError> {
+    // Use the announcement contract's own predicate rather than maintaining a
+    // second interpretation of "canonical" beside it. The other fields do not
+    // participate in `is_canonical` and the vector is recovered without cloning.
+    let contract = TerrainImpact {
+        batch: TerrainBatchId(0),
+        volume,
+        element: ElementId(0),
+        power: 1,
+    };
+    if !contract.is_canonical() {
+        return Err(EffectVolumeClipError::NonCanonicalVolume);
+    }
+    let mut volume = contract.volume;
+    if matches!(trajectory, Trajectory::None) {
+        return Ok(volume);
+    }
+
+    volume.retain(|&candidate| {
+        trajectory_voxels(Trajectory::Direct, anchor, candidate)
+            .into_iter()
+            .all(|pos| !contains_material(pos))
+    });
+    Ok(volume)
 }
 
 /// Chooses a source/destination-symmetric horizontal midpoint and raises it.
