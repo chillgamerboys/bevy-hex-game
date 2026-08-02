@@ -29,8 +29,8 @@ use hex_assets::{Substance, SubstanceFile, SubstanceTable};
 use hex_core::{
     Busy, CommandQueue, GameCommand, GameplayPhase, GameplaySetup, GameplaySetupFailure, Headroom,
     HexCoord, HexSpan, HexTile, MapAnchorId, MapAnchors, Mode, PartyFormation, PartyMovementMode,
-    Pause, Screen, SubstanceId, TerrainReady, TilePos, TraversalBlockers, TraversalProfile, Turn,
-    MAX_HEADROOM,
+    Pause, PresentationOcclusion, Screen, SubstanceId, TerrainReady, TilePos, TraversalBlockers,
+    TraversalProfile, Turn, MAX_HEADROOM,
 };
 use hex_test_app::HeadlessAppBuilder;
 use hex_test_support::TestAppBuilder;
@@ -501,6 +501,22 @@ fn gameplay_units_use_the_canonical_walker() {
         TraversalProfile::WALKER,
         "live movement did not use the profile used by map validation"
     );
+}
+
+#[test]
+fn spawned_units_publish_composable_camera_visibility() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+
+    let mut units = app
+        .world_mut()
+        .query_filtered::<(&PresentationOcclusion, &Visibility), With<Player>>();
+    let (occlusion, visibility) = units
+        .iter(app.world())
+        .next()
+        .expect("the spawned player should publish presentation visibility");
+    assert!(!occlusion.is_hidden());
+    assert_eq!(*visibility, Visibility::Inherited);
 }
 
 /// The player records which surface it occupies, not merely which hex.
