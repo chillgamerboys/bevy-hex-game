@@ -440,7 +440,7 @@ mod tests {
         TargetingSpec, Trajectory,
     };
     use crate::substances::{Substance, SubstanceFile};
-    use crate::terrain_damage::{TerrainDamageFile, TerrainDamageTable};
+    use crate::terrain_damage::{TerrainDamageFile, TerrainDamagePair, TerrainDamageTable};
 
     fn elements() -> ElementCatalog {
         let mut fusions = HashMap::default();
@@ -487,7 +487,9 @@ mod tests {
         map.insert("air".to_owned(), Substance::invisible(false, false));
         map.insert(
             "stone".to_owned(),
-            Substance::from_swatch(stone_swatch, true, true).with_conjurable(conjurable),
+            Substance::from_swatch(stone_swatch, true, true)
+                .with_conjurable(conjurable)
+                .with_toughness(Some(4)),
         );
         SubstanceTable::from_file(&SubstanceFile { substances: map }, &palette)
             .expect("the test substances should resolve through the palette")
@@ -745,6 +747,38 @@ mod tests {
             app.world().contains_resource::<AcceptedContentRevision>(),
             "repairing the source graph should publish a new accepted revision"
         );
+    }
+
+    #[test]
+    fn terrain_damage_only_changes_the_accepted_revision_fingerprint() {
+        let elements = elements();
+        let substances = substances();
+        let empty_file = TerrainDamageFile {
+            damaging_pairs: Vec::new(),
+        };
+        let empty = TerrainDamageTable::from_file(&empty_file, &elements, &substances)
+            .expect("the empty matrix should resolve");
+        let changed_file = TerrainDamageFile {
+            damaging_pairs: vec![TerrainDamagePair {
+                element: "Fire".to_owned(),
+                substance: "stone".to_owned(),
+            }],
+        };
+        let changed = TerrainDamageTable::from_file(&changed_file, &elements, &substances)
+            .expect("the changed matrix should resolve");
+
+        let accepted = |terrain_damage: &TerrainDamageTable| AcceptedContentRevision {
+            content_sources: 11,
+            lattice_sources: 22,
+            terrain_damage_sources: terrain_damage.source_revision(),
+        };
+        let before = accepted(&empty);
+        let after = accepted(&changed);
+
+        assert_ne!(before.fingerprint(), after.fingerprint());
+        assert!(before.matches_terrain_damage(&empty));
+        assert!(!before.matches_terrain_damage(&changed));
+        assert!(after.matches_terrain_damage(&changed));
     }
 
     #[test]
