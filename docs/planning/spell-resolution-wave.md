@@ -1,7 +1,7 @@
 # Spell resolution gameplay wave
 
-Status: **draft plan for approval**. No runtime behavior in this branch implements the
-wave yet.
+Status: **approved; implementation in progress**. The draft PR remains the live wave
+tracker, and each reviewed semantic checkpoint is pushed to it.
 
 Base: `origin/dev @ 6cb749adc5168e4480d1f4efedba8097f49bf64d`
 
@@ -50,8 +50,10 @@ A legal area elemental cast will:
    settlement, and authority adoption are all complete.
 
 The first shipped content consumer is Fireball with
-`Impact(element: "Fire", power: 2)`. Its existing `Displace` effect remains explicitly
-deferred.
+`Impact(element: "Fire", power: 2)`. Its still-deferred `Displace` effect is removed
+from the shipped spell instead of advertising a partially delivered effect. A
+Creator-authored full Fire ring can inscribe that Fireball and launch it through the
+existing Creator -> Sandbox route; packaged archetypes and scenarios remain unchanged.
 
 ## Pinned gameplay policy
 
@@ -118,12 +120,12 @@ order:
 ## Integration topology
 
 Only the integration owner edits `crates/hex_combat/src/commands/cast.rs`,
-`crates/hex_combat/src/commands/mod.rs`, `.config/test-scopes.json`, CI topology, and
-shared delivery docs.
+`crates/hex_combat/src/commands/mod.rs`, the combat-authority hold seam,
+`.config/test-scopes.json`, CI topology, and shared delivery docs.
 
 | Lane | Branch | Base/dependency | Owned result |
 |---|---|---|---|
-| Transaction foundation | `wave/spell-resolution` | exact wave base | one private pending transaction, queue, modal gate, and turn/exit gate |
+| Transaction foundation | `wave/spell-resolution` | exact wave base | one private pending transaction, queue, modal gate, explicit combat-authority hold, and turn/exit gate |
 | Effect-volume clipping | `feat/spell-volume-clipping` | exact wave base; parallel | pure clipping helpers and contracts; no cast hot-file edits |
 | Terrain reconciliation | `feat/terrain-reconciliation` | exact wave base; parallel | occupancy/movement phase placement and pure deterministic landing planner |
 | Area + terrain runtime | `feat/spell-resolution-runtime` | combined checkpoint | Impact schema/content, area queue, batch ledger, outcome consumer, settlement and authority adoption |
@@ -167,25 +169,34 @@ workspace corpus.
   Cover malformed input, `None`, endpoints, wall shadows, conservative grazes,
   vertical/stacked cases, canonical preservation, and knowledge-vs-authority privacy.
 - Resolution: add `python3 tools/test_scope.py run spell_resolution_contracts` with an
-  exact nextest filter and JUnit. It includes only the new impact/content, area queue,
-  settlement, pending/outcome, phase-order, and composition prefixes; the ten
+  exact nextest filter and JUnit. It includes the new impact/content, area queue,
+  settlement, pending/outcome, authority-hold, phase-order, and composition coverage;
+  existing non-UI spell validation/fingerprint, cast/payment/refusal/construction,
+  command/authority/turn, and occupancy/movement regression closures; the ten
   `hex_core::terrain_impact` tests; and these two real-map producer seams:
   `terrain_protocol_orders_reserved_phases_before_perception` and
   `overkill_is_capped_and_empty_voxels_report_no_material`.
 - Composition: add explicit `hex_game/tests/spell_resolution.rs` using minimal state
   and the real map/units/perception/combat plugins. It installs no `AppPlugin`,
   renderer, viewport, `hex_ui::UiPlugin`, or test-support UI and uses a tiny authored
-  fixture rather than a V3 seed corpus.
+  fixture rather than a V3 seed corpus. Because `hex_game` has `autotests = false`,
+  register the target explicitly in its manifest and route both files to this concern.
+- Authority: focused renderer-free reducer/host tests prove a held area transaction
+  cannot advance the turn or settle the encounter between defender answers, and that
+  release resumes exactly once. This is intentionally included even though the broad
+  deterministic-simulation partition remains omitted.
 - Non-test checks remain format, dependency policy, strict workspace Clippy,
   warnings-denied docs, and the default-feature shipping release build.
 - Final runtime evidence is one named human Creator -> Sandbox Fireball pass on the
   exact wave head. It is not a UI/visual test; no screenshot review is required.
 
 The scope/profile/CI bootstrap itself currently triggers the repository's fail-closed
-full gate. The user's explicit instruction is the maintainer waiver for this wave's
-`app`/UI test omission. The PR must publish the exact narrow JUnit replacements and
-must label the omitted default full/app gate as waived—not green. Ordinary workflow
-state is restored immediately after the exact merge.
+full gate. The user's explicit instruction and implementation approval are the durable
+one-wave maintainer waiver for this gameplay-only candidate's `app`/UI and automated
+visual-test omission. The PR and canonical testing-policy correction must publish the
+exact narrow JUnit replacements and label the omitted default full/app/visual gates as
+waived—not green. Ordinary unknown-path and integration fail-closed behavior remains;
+the exception is limited to an explicitly declared non-UI gameplay wave.
 
 ## Combined acceptance
 
