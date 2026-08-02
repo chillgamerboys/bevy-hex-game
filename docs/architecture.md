@@ -140,7 +140,7 @@ Two roles, named so the arrangement survives a change of people:
 
 | Role | Owns |
 |---|---|
-| **World owner** | `hex_map`, `hex_world` (sky, camera, cutaway), `hex_perception`, world/perception schema and settings modules in `hex_assets`, and their content: world files, `substances.ron`, lighting profiles, `perception.ron`, and the agreed `terrain_damage.ron` allow-list |
+| **World owner** | `hex_map`, `hex_world` (sky, camera, cutaway), `hex_perception`, world/perception schema and settings modules in `hex_assets`, and their content: world files, `substances.ron`, lighting profiles, `perception.ron`, and the `terrain_damage.ron` allow-list |
 | **Gameplay owner** | `hex_core`, `hex_units`, `hex_combat`, `hex_lattice`, `hex_anim`, `hex_dev`, generic `hex_assets` loader infrastructure, and gameplay schema/settings modules and content: `combat.ron`, `spells.ron`, `elements.ron` |
 
 `hex_game` is **shared** — it is wiring, screens, scenarios and review tooling, and
@@ -206,11 +206,12 @@ extent but knows nothing about what is stacked on it, so gameplay cannot tell a 
 from the inside of a column — let alone whether a body fits in the space above one.
 
 Writing goes the other way, through shared messages — gameplay cannot call into the
-map. Live stone construction uses `TerrainEdit::Set`. The reserved second path,
-`TerrainImpact`, keeps the same direction while leaving toughness and damage policy in
-the world: gameplay announces which voxels an elemental effect reaches and its power;
+map. Live stone construction uses `TerrainEdit::Set`. The map-side receiver for the
+second path, `TerrainImpact`, is also live and keeps toughness and damage policy in the
+world: gameplay will announce which voxels an elemental effect reaches and its power;
 the map accumulates material health, destroys voxels at zero, and answers through
-`TerrainImpactOutcome` ([systems/casting.md](systems/casting.md)).
+`TerrainImpactOutcome`. The gameplay emitter and outcome consumer remain pending
+([systems/casting.md](systems/casting.md)).
 
 See [systems/map.md](systems/map.md) for the voxel model itself. V3's private
 semantic plan and its exact published projections are specified in
@@ -320,10 +321,10 @@ sets make the ordering that crosses crate boundaries explicit:
   ResolveObservation → PublishKnowledge → ApplyPresentation`, nested inside
   `GameplaySetup::Perception` on entry and `AppSystems::Update` thereafter. The first
   phase is the cross-owner hand-off from authored lighting, not a renderer query.
-- **`TerrainSystems`** — reserved for the terrain-durability wave as
-  `ApplyWorld → ReconcileActors`. Once its participants land, rebuilt terrain and
-  unsupported actors settle before illumination, observation, knowledge, and later
-  combat authority; the ordering vocabulary alone does not make that behavior live.
+- **`TerrainSystems`** — `ApplyWorld → ReconcileActors`. Map-owned `ApplyWorld` is
+  live. Gameplay must publish fresh terrain occupancy after it, reconcile movement,
+  and then settle unsupported actors in the still-pending `ReconcileActors` phase
+  before illumination, observation, knowledge, and later combat authority.
 - **`PresentationSystems`** — `ResolveCameraOcclusion → ApplyMaterials →
   ApplyVisibility`, in `PostUpdate` after final transforms. World presentation
   publishes whole-tree opacity, the object renderer owns isolated material clones,

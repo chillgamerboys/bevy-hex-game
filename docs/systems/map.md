@@ -4,10 +4,11 @@ The world is made of **voxels**: hex prisms stacked in columns, each one made of
 substance. This describes the model, the vocabulary that goes with it, and the rules
 that everything else depends on.
 
-> **Status:** voxel storage, publication, and `TerrainEdit` are live. The toughness,
-> `TerrainImpact`, outcome, partial-health, and cross-owner settlement vocabulary below
-> is reserved/agreed for the terrain-durability wave; its runtime producer and
-> consumers are not live yet.
+> **Status:** voxel storage, publication, `TerrainEdit`, toughness content,
+> `TerrainImpact` admission/resolution, ordered outcomes, partial-health publication,
+> and visibility-gated health bars are live. Gameplay spell emission, outcome
+> consumption, and unsupported-actor settlement remain pending; the map does not
+> infer any of them.
 
 If you only want to change how the terrain looks, [development/config.md](../development/config.md) is shorter.
 
@@ -31,7 +32,7 @@ The list and gameplay properties live in `assets/config/substances.ron`; every
 rendered substance names one exact colour in `assets/art/palette.ron`. Air is the
 only substance without a swatch because it is never drawn.
 
-The agreed damage slice adds optional material toughness. It is maximum voxel health,
+The damage slice adds optional material toughness. It is maximum voxel health,
 restricted to `1`, `2`, `4`, or `8`; absence means the material does not participate in
 damage. Remaining health is runtime state keyed by exact `TilePos`, never a property of
 the rendered run entity.
@@ -275,7 +276,7 @@ hex_core     HexTile, HexCoord, TilePos, RunBottom, HexSpan, SubstanceId, Headro
              TraversalEndpoint, TraversalProfile, SpecialMovementRegion,
              SpecialMovementRegions, InteriorRegionId, InteriorRegions,
              CutawayOccluder, MapViewHint, BiomeRegions, TraversalBlockers,
-             TerrainEdit, and the reserved TerrainImpact vocabulary
+             TerrainEdit, TerrainImpact, TerrainImpactOutcome, and DamagedVoxels
              — the shared vocabulary
 hex_assets   the substance table
 hex_map      voxel storage, generation, rendering — nothing else can see this
@@ -303,16 +304,18 @@ TerrainEdit::Set { pos, substance }
 TerrainEdit::Clear { pos }
 ```
 
-Gameplay cannot call into `hex_map`, so a spell that digs or builds writes one of these
-and the map applies it. That is the only live write path. Elemental destruction will
-use the separate agreed `TerrainImpact` announcement so the world, rather than the
-spell, decides how each material responds.
+Gameplay cannot call into `hex_map`, so a spell that builds writes one of these and the
+map applies it. This remains the only terrain write path emitted by gameplay today.
+The map also has a live receiver for the separate `TerrainImpact` announcement, so the
+world rather than the spell decides how each material responds; the gameplay spell
+adapter that emits that announcement is still pending.
 
-### Toughness and destruction — agreed, not live
+### Toughness and destruction — map side live
 
-Gameplay announces `TerrainImpact { batch, volume, element, power }`; it never sends a
-material outcome. The exact volume is nonempty, sorted, and deduplicated. The map
-resolves each voxel against the world-owned Boolean allow-list in
+The gameplay contract announces `TerrainImpact { batch, volume, element, power }`; it
+never sends a material outcome. Its runtime publisher is still pending. The exact
+volume is nonempty, sorted, and deduplicated. The map resolves each voxel against the
+world-owned Boolean allow-list in
 `terrain_damage.ron`, subtracts `power` directly from remaining health, and returns an
 applied or rejected `TerrainImpactOutcome` as specified by
 [boundary G/H](../planning/boundary.md).
@@ -345,7 +348,13 @@ roots, and generated-light protection resist without acquiring damage. Liquids d
 flow, refill, or redistribute after a neighboring voxel changes, and non-voxel
 features are outside this contract.
 
-### Publication, presentation, and consequences — agreed, not live
+The map validates each batch before mutation and always publishes one ordered applied
+or rejected answer for every batch it processes. Reused ids, malformed volumes,
+zero power, unknown elements, and unavailable terrain fail atomically. Gameplay has no
+publisher or pending-batch outcome consumer yet, so ordinary casts do not reach this
+live resolver.
+
+### Publication, presentation, and consequences — map side live
 
 `DamagedVoxels` publishes only partial health as exact
 `TilePos → TerrainVoxelHealth` facts. It is authoritative state, not a visibility
@@ -360,10 +369,13 @@ normally publishes. The authored cave membership itself is not regenerated: remo
 a roof voxel updates roof metadata, but the chamber stays in its authored Interior
 domain and does not gain daylight in this slice.
 
-`TerrainSystems::ApplyWorld` owns this map work. Its set boundary flushes rebuilt tile
-facts before gameplay's `TerrainSystems::ReconcileActors`, which settles unsupported
-units before perception and later combat authority. The map never reads a character
-or chooses a landing; that deterministic policy belongs to gameplay and is pinned in
+`TerrainSystems::ApplyWorld` now owns this map work and completes before perception.
+The gameplay integration must move exact terrain-occupancy publication after
+`ApplyWorld` and before `TerrainSystems::ReconcileActors`, then reconcile current
+movement before settling unsupported units. Only after settlement may perception and
+later combat authority refresh. `ReconcileActors` itself is not live yet. The map
+never reads a character or chooses a landing; that deterministic policy belongs to
+gameplay and is pinned in
 [boundary H](../planning/boundary.md#cross-owner-ordering-and-unsupported-actors).
 
 ## Things that are true and easy to forget

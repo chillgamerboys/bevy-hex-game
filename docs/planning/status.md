@@ -377,8 +377,11 @@ lattice.
 Permanent construction now reaches terrain through exact inclusive `TilePos` and
 `RunBottom` occupancy. Evocations using `Single` or `Column` publish atomic
 `TerrainEdit::Set` batches for map-approved conjurable substances. Hidden material or
-units suppress an unsafe batch without changing acceptance or payment; elemental
-terrain announcements and response outcomes remain downstream.
+units suppress an unsafe batch without changing acceptance or payment. World-owned
+toughness content, damage admission, ordered impact resolution/outcomes, sparse health,
+terrain consequences, and observation-gated health bars are live; gameplay elemental
+announcement, pending-outcome consumption, and unsupported-actor settlement remain
+downstream.
 
 **A cast can now outlast itself.** `Burn` runs through the persistent-effect runtime
 (`hex_combat::effects`, vocabulary in `hex_core::effects`): a cast books a countdown in
@@ -416,11 +419,11 @@ Everything in [the design](../design/game.md#open-questions)'s open questions, p
 
 ## Casting: the playable slice and its remaining boundary
 
-[casting.md](../systems/casting.md) records both the built 0.3 path and the terrain
-contract still ahead. `GameCommand::Cast` is authoritative, pays through the acting
-lattice, emits typed outcomes, and applies the implemented single-target unit effects:
-direct disables, Burn, and Reveal. The panel and aiming flow described above are the
-ordinary player path into that command.
+[casting.md](../systems/casting.md) records the built 0.3 path, live world-side terrain
+durability, and the gameplay integration still ahead. `GameCommand::Cast` is
+authoritative, pays through the acting lattice, emits typed outcomes, and applies the
+implemented single-target unit effects: direct disables, Burn, and Reveal. The panel
+and aiming flow described above are the ordinary player path into that command.
 
 **The shape vocabulary resolves to exact voxels**
 (`hex_units::volumes`): `SelfCast`, `Single`, `Sphere`, `Column`, `Line`, `Cone` and
@@ -467,8 +470,9 @@ The first implementation also ships with explicit limitations:
   a rest action, but real-time casting still needs an interaction and rest flow.
   **Rituals remain deferred** — `co_castable` parses and labels rituals in the demo,
   but has no mechanical effect.
-- **Paid-on-resistance is provisional.** The first wave charges mana and the action
-  after a legal announcement even if every material resists.
+- **Paid-on-resistance is provisional.** The pending gameplay adapter's initial policy
+  is to charge mana and the action after a legal announcement even if every material
+  resists.
 - **No-undermining is provisional.** Permanent evocation construction checks its
   complete volume and emits no edits when it intersects existing material, a unit body,
   or a unit's supporting surface. The cast remains accepted and paid so hidden blockers
@@ -489,8 +493,8 @@ The first implementation also ships with explicit limitations:
   (`LatticeError::AreaEffectUnapplied`). The interface can only paint what a lattice can
   cast, so the preview cannot promise what the applier will not deliver. The refusal
   lifts the day the applier iterates the volume and queues one decision per unit inside
-  it; the terrain side separately waits on the gameplay announcement and legality
-  adapters now that exact run bounds are published.
+  it. The terrain resolver is live; elemental casts separately wait on gameplay's
+  announcement, pending-outcome, and settlement adapters.
 - **Burn attributes one source per tick.** Several burns on one target come due as a
   single count and therefore a single decision, which has room for one `source`. The
   earliest-lit fire fills it. The rules never read `source`, so the imprecision is

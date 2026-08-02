@@ -295,8 +295,10 @@ Feature destruction is outside this contract. V3 trees and structures are semant
 instances rather than substance voxels and need their own occupancy, response, and
 acknowledgment contract.
 
-**Status**: the message vocabulary and this policy are reserved/agreed; spell emission,
-world resolution, content, and outcome consumption are not live yet.
+**Status — partial**: the shared message, toughness schema/content, validated Boolean
+matrix, coherent content readiness, sparse health ledger, protection checks, ordered
+map resolver, and ordinary terrain consequences are live. Gameplay spell emission and
+outcome consumption remain pending.
 
 ## H — Damage acknowledgment, health projection, and settlement (accepted contract)
 
@@ -377,13 +379,29 @@ presentation independently filter outcomes through faction knowledge.
 
 ### Cross-owner ordering and unsupported actors
 
-`TerrainSystems::{ApplyWorld, ReconcileActors}` reserves the cross-crate update order.
-`ApplyWorld` applies edits/impacts, rebuilds material consequences, publishes outcomes,
-and flushes rebuilt tile facts. `ReconcileActors` then refreshes gameplay occupancy and
-settles unsupported actors before illumination, observation, knowledge publication,
-or another combat action. An impact emitted during combat apply on frame N therefore
-settles at the next `ApplyWorld`; combat does not advance past its pending batch before
-the outcome and actor reconciliation complete.
+`TerrainSystems::{ApplyWorld, ReconcileActors}` defines the cross-crate update order.
+The map's live `ApplyWorld` applies edits/impacts, rebuilds material consequences,
+publishes outcomes, and flushes rebuilt tile facts. Gameplay must schedule
+`TerrainOccupancySystems::Publish` after `ApplyWorld` and before `ReconcileActors` so
+it observes those replacement entities rather than the previous grid. Ordinary
+movement reconciliation must also finish before unsupported-actor settlement, fixing
+each unit's current logical position before a stale route is cancelled. The pending
+`ReconcileActors` settlement then completes before illumination, observation,
+knowledge publication, or another combat action. In full integration the order is:
+
+```text
+ApplyWorld
+  → TerrainOccupancySystems::Publish
+  → MovementSystems::Reconcile
+  → ReconcileActors (cancel stale routes, then settle)
+  → perception
+  → combat authority/action
+```
+
+An impact emitted during combat apply on frame N therefore settles at the next
+`ApplyWorld`; combat does not advance past its pending batch before the outcome and
+actor reconciliation complete. `ApplyWorld` is live; the occupancy/movement ordering,
+settlement, and pending-cast combat gate remain gameplay-owned integration work.
 
 Gameplay owns settlement because the map never reads units. After destruction, every
 unit whose exact support is no longer legal is handled in stable `UnitId` order:
@@ -405,8 +423,11 @@ unit whose exact support is no longer legal is handled in stable `UnitId` order:
 `TerrainEdit` still has no batch acknowledgment. Conjuration correlation is not
 inferred from voxel position; it receives a separate contract if one is needed.
 
-**Status**: the shared vocabulary/order is reserved and the behavior is agreed; map,
-presentation, and gameplay producers/consumers remain pending.
+**Status — partial**: the shared vocabulary, map outcome publisher,
+`DamagedVoxels` publisher, visibility-gated shared presentation adapter, and
+`ApplyWorld` ordering participant are live. Gameplay impact emission, outcome
+consumption, occupancy/movement reordering, actor settlement, and the combat pending
+gate remain pending.
 
 ## I — Interior domains after edits (initial ruling)
 
@@ -419,6 +440,9 @@ A breached cave therefore stays in its authored Interior light domain and does n
 new daylight in this initial implementation. No aperture-size, connectivity,
 local-daylight, or repaired-roof rule is implied. That more dynamic model is separate
 future work rather than a condition on terrain damage.
+
+**Status**: the material-change rebuild and retained authored-domain ruling are live
+for direct edits and resolved impacts. Dynamic cave-aperture daylight remains deferred.
 
 ## J — Sight tunables as settings
 

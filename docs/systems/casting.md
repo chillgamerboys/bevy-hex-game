@@ -6,10 +6,12 @@ that outlive their turn are expressed.
 
 > **Status:** this is the normative contract for the 0.3 casting slice. Unit effects,
 > Burn, Reveal, geometry, aiming, the command path, exact material occupancy, and
-> permanent stone evocation construction are built. Elemental terrain announcement,
-> toughness resolution, acknowledgments, health presentation, and actor settlement are
-> reserved/agreed for the terrain-durability wave but are not live yet. Effect-volume
-> clipping, enchantment-bound terrain, and spell-created illumination remain later work.
+> permanent stone evocation construction are built. World-owned toughness content,
+> impact resolution, ordered acknowledgments, sparse health, and health presentation
+> are also live. Gameplay still needs to emit elemental terrain announcements, consume
+> their answers while keeping the cast pending, and settle unsupported actors.
+> Effect-volume clipping, enchantment-bound terrain, and spell-created illumination
+> remain later work.
 
 Read [the design](../design/game.md) for the magic system this serves, and
 [combat.md](combat.md) for the turn loop a cast happens inside.
@@ -49,7 +51,7 @@ arbitrary — it tracks whether there is a material with an opinion.
 | Path | Message | Who decides the outcome |
 |---|---|---|
 | **Conjuration** | `TerrainEdit::Set` — **built for permanent evocations** | Gameplay names the substance and the volume; the world validates placement |
-| **Elemental damage** | `TerrainImpact { batch, volume, element, power }` — *reserved contract* | The world owns toughness, protection, accumulated damage, and destruction |
+| **Elemental damage** | `TerrainImpact { batch, volume, element, power }` — **world receiver built; gameplay emitter pending** | The world owns toughness, protection, accumulated damage, and destruction |
 
 `batch` is the session-unique id the world echoes in its applied or rejected answer, so
 gameplay can match the result to the cast that caused it. Both messages are specified
@@ -97,21 +99,24 @@ That broad table proves the contract without pretending to be final balance. Wat
 lava, air, and bedrock have no toughness; authored liquid topology and the other
 map-owned protections continue to resist.
 
-### World answer and cast completion — agreed, not live
+### World answer live; cast completion pending
 
-The map answers every processed batch exactly once with
+The map now answers every processed batch exactly once with
 `TerrainImpactResult::Applied` or `::Rejected`. An applied answer has one ordered
 `TerrainVoxelOutcome` per announced voxel: `NoMaterial`, `Resisted`, `Damaged`, or
 `Destroyed`, with material and valid nonzero health before/after as the disposition
 allows. A rejected answer carries one explicit reason and no voxel payload; it changes
-nothing. Invalid input and unavailable terrain therefore cannot strand a pending cast.
+nothing. Invalid input and unavailable terrain therefore cannot strand a correctly
+implemented pending cast.
 
-The cast remains pending from emission until the matching answer and any resulting
-actor settlement finish. `TerrainSystems::ApplyWorld` resolves the announcement on the
-next ordered map phase, and `TerrainSystems::ReconcileActors` handles units left
-without support before perception or another combat action. Falling is gameplay-owned,
-deterministic, and free: first the highest legal unoccupied support below in the same
-column, then the lateral ordering pinned in
+The gameplay emitter and consumer are not live yet. They must keep the cast pending
+from emission until the matching answer and any resulting actor settlement finish.
+`TerrainSystems::ApplyWorld` is live and resolves the announcement on the next ordered
+map phase. Gameplay must then republish exact terrain occupancy, reconcile movement,
+and run `TerrainSystems::ReconcileActors` for units left without support before
+perception or another combat action. Falling is gameplay-owned, deterministic, and
+free: first the highest legal unoccupied support below in the same column, then the
+lateral ordering pinned in
 [boundary H](../planning/boundary.md#cross-owner-ordering-and-unsupported-actors), with
 no fall damage, movement cost, action cost, or turn change.
 
@@ -170,7 +175,8 @@ applier in `hex_combat` is authoritative.
    unit effects wait until resolution iterates every occupied voxel.
 5. **Announce** — a legal permanent construction volume emits exact
    `TerrainEdit::Set` messages (**built**). Elemental impacts still fail closed as
-   undeliverable rather than charging for no result.
+   undeliverable rather than charging for no result; the world resolver is live, but
+   the gameplay announcement/pending-answer adapter is not.
 
 Rungs 1–2 are gameplay's own state. Rung 4 is gameplay's knowledge too: **where
 characters stand is ours**, so a cast interacts with units through legality, exactly as
@@ -430,11 +436,15 @@ Volume tests pin the grid-space metric on stacked surfaces — a sphere centred 
 bridge deck must reach the ground below it exactly when the level distance says so, and
 `Path` rotation must produce congruent shapes in all six sextants.
 
-Terrain-durability contract tests additionally pin canonical-volume rejection, one
-answer per batch, exact ordered outcomes, direct power subtraction, privacy filtering,
-and the `ApplyWorld → ReconcileActors → perception → later combat` boundary. Settlement
-fixtures include stacked supports, simultaneous falls, occupied candidates, lateral
-higher-ground fallback, and insertion-order independence.
+Terrain-durability content and map tests pin the fixed toughness scale, Boolean matrix
+validation, coherent reloads, canonical-volume rejection, one answer per batch, exact
+ordered outcomes, direct power subtraction, protected topology, sparse exact-voxel
+health, and map rebuild lifecycle. Presentation tests pin observation, darkness,
+burial, composed visibility, grid replacement, and cleanup. The gameplay lane must
+still add the cross-owner
+`ApplyWorld → occupancy publication → movement reconcile → ReconcileActors → perception → later combat`
+tests. Its settlement fixtures must include stacked supports, simultaneous falls,
+occupied candidates, lateral higher-ground fallback, and insertion-order independence.
 
 Replay tests extend the funnel's existing determinism test to casts, including variable
 mana and facing — the same sequence applied twice must land the same world.
