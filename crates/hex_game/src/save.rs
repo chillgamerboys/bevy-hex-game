@@ -124,6 +124,10 @@ const SHIPPED_RESUME_INPUTS: &[(&str, &str)] = &[
         include_str!("../../../assets/config/substances.ron"),
     ),
     (
+        "config/terrain_damage.ron",
+        include_str!("../../../assets/config/terrain_damage.ron"),
+    ),
+    (
         "config/lighting.ron",
         include_str!("../../../assets/config/lighting.ron"),
     ),
@@ -770,6 +774,10 @@ mod tests {
             included.len(),
             SHIPPED_RESUME_INPUTS.len(),
             "resume inputs must not repeat an asset path"
+        );
+        assert!(
+            included.contains("config/terrain_damage.ron"),
+            "terrain damage changes must invalidate resumable worlds"
         );
 
         for scenario in library.scenarios {

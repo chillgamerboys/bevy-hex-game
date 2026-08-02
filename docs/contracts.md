@@ -35,9 +35,10 @@ than agreed, the fallback the gameplay side ships without it is in
 | `TerrainEdit::Set` / `::Clear` — the write path | gameplay | world | live | [systems/map.md](systems/map.md) |
 | `BiomeRegions` — published by V3; gameplay consumer pending | world | gameplay | **partial** | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
 | `TraversalBlockers` — exact feature-occupied surfaces consumed by validation, perception, and movement | world | perception / `hex_units` | live | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
-| `RunBottom(Level)` — each run's lowest voxel; prerequisite to terrain casting and obstruction-aware trajectories | world | gameplay | **live** | [planning/boundary.md](planning/boundary.md) C |
-| `TerrainImpact { batch, canonical_volume, ElementId, power }` — declarative voxel effect | gameplay | world | **agreed** | [planning/boundary.md](planning/boundary.md) G |
-| `TerrainImpactOutcome` — explicit, deterministically ordered per-voxel dispositions | world | gameplay | **agreed** | [planning/boundary.md](planning/boundary.md) H |
+| `RunBottom(Level)` — each run's lowest voxel; exact occupancy for terrain casting and obstruction-aware trajectories | world | gameplay | **live** | [planning/boundary.md](planning/boundary.md) C |
+| `TerrainImpact { batch, volume, ElementId, power }` — declarative canonical-volume voxel damage | gameplay | world | **partial** — map admission/resolution is live; gameplay spell publisher pending | [planning/boundary.md](planning/boundary.md) G |
+| `TerrainImpactOutcome` — one applied or rejected answer with exact per-voxel health transitions | world | gameplay | **partial** — map publication is live; gameplay pending-batch consumer pending | [planning/boundary.md](planning/boundary.md) H |
+| `DamagedVoxels` — exact partial-health projection, never a visibility grant | world | shared presentation | live | [planning/boundary.md](planning/boundary.md) H |
 | `PendingTerrainEdits` — replay before first spawn | gameplay | world | **asked** | [planning/boundary.md](planning/boundary.md) ask D1 |
 | `TerrainSnapshot` — generator-independent dump | world | gameplay | **asked** | [planning/boundary.md](planning/boundary.md) ask D2 |
 
@@ -66,6 +67,7 @@ than agreed, the fallback the gameplay side ships without it is in
 | `PerceptionSystems` — headless phases through `PublishKnowledge` | core | perception | live | [systems/perception.md](systems/perception.md) |
 | `PerceptionSystems::ApplyPresentation` — fog projection phase | core | perception | reserved | [systems/perception.md](systems/perception.md) |
 | `PresentationSystems` — camera obstruction → renderer-owned materials → composed visibility | core | world / presentation | live | [systems/camera.md](systems/camera.md) |
+| `TerrainSystems` — `ApplyWorld → ReconcileActors` before perception and later combat authority | core | world / gameplay | **partial** — map `ApplyWorld` is live; occupancy reordering and gameplay `ReconcileActors` remain pending | [planning/boundary.md](planning/boundary.md) H |
 | `AppSystems`, `PausableSystems` | core | all | live | [`CLAUDE.md`](../CLAUDE.md) |
 | Same-frame combat knowledge — `PublishKnowledge → spatial lattice sync → Act → Apply → Resolve → Advance` | perception / gameplay | combat / AI | live | [systems/ai.md](systems/ai.md) |
 
@@ -77,24 +79,26 @@ than agreed, the fallback the gameplay side ships without it is in
 | `voxel_styles.ron` + `VoxelStyleCatalog` — palette-bound reusable surface treatments | shared visual contract | `hex_editor`, `hex_objects` | live | [systems/asset-workshop.md](systems/asset-workshop.md) |
 | `object_catalog.ron` + `ObjectBlueprint` — deterministic catalog of validated local hex-voxel plants, effects, and props | shared visual contract | `hex_editor`, `hex_objects` | live | [systems/asset-workshop.md](systems/asset-workshop.md) |
 | `ObjectInstance` — exact object id, origin voxel, level height, and six-way rotation | shared visual contract | world publishers, `hex_objects`; future effects | **partial** — world publishers live for Forest vegetation and cave crystals; effect publishers pending | [systems/asset-workshop.md](systems/asset-workshop.md) |
-| `substances.ron` — substance names, exact palette references, solidity, diggability | world | both | live | [development/config.md](development/config.md) |
+| `substances.ron` — substance names, exact palette references, solidity, diggability, and toughness | world | both | live | [development/config.md](development/config.md) |
+| `Substance::toughness` — optional voxel HP on the fixed 1/2/4/8 scale | world | world | live | [planning/boundary.md](planning/boundary.md) G |
 | World files, lighting profiles | world | world | live | [development/config.md](development/config.md) |
 | `spells.ron`, `elements.ron` — requirements, axes, targeting, effects | gameplay | gameplay | live | [development/config.md](development/config.md) |
-| `AcceptedContentRevision` — one deterministic semantic identity across elements, substances, spells, and lattices; Loading requires it | shared loader boundary | game setup | live | [planning/foundation-hardening.md](planning/foundation-hardening.md) |
+| `AcceptedContentRevision` — one deterministic semantic identity across elements, substances, terrain damage, spells, and lattices; Loading requires it | shared loader boundary | game setup | live | [planning/foundation-hardening.md](planning/foundation-hardening.md) |
 | `lattices.ron` — every authored archetype is one contiguous hex arrangement; errors name the archetype | gameplay | lattice spawning | live | [development/config.md](development/config.md#writing-a-lattice) |
 | `combat.ron` — engagement, budgets, policy knobs | gameplay | gameplay | live | [development/config.md](development/config.md) |
 | `scenarios.ron` — hidden New Game default plus visible Map and focused Demo fixtures | shared | both | live | [development/config.md](development/config.md) |
 | `encounters/*.ron` — rosters by archetype, and where each unit starts | shared | both | live | [development/config.md](development/config.md) |
-| Terrain-response table — authored stable names resolved to `(ElementId, power, SubstanceId)` | world | world | **agreed** | [planning/boundary.md](planning/boundary.md) G |
+| `terrain_damage.ron` / `TerrainDamageTable` — stable-name Boolean element × substance damage allow-list | world | world | live | [planning/boundary.md](planning/boundary.md) G |
 | `Substance::conjurable` plus spell-reference validation | world policy / gameplay loader | gameplay | live | [planning/boundary.md](planning/boundary.md) L |
 
 Cross-file references between the two content domains are resolved and validated by
 [`ContentIndex`](../crates/hex_assets/src/content_index.rs) at load, which is what lets
-a spell name a substance without either side guessing. `ContentIndex` and
-`LatticeLibrary` retain their last valid values across a rejected edit, but
+a spell name a substance without either side guessing. `TerrainDamageTable`,
+`ContentIndex`, and `LatticeLibrary` retain their last valid values across a rejected
+edit, but
 deterministic canonical source fingerprints prevent those retained values from
 masquerading as the new revision. Loading proceeds only when every raw catalog,
-direct catalog, and both derived tables match one published
+direct catalog, and all derived tables match one published
 `AcceptedContentRevision`; resource presence and Bevy change ticks are not readiness
 signals.
 

@@ -76,7 +76,7 @@ doc or the code, not drift.
 | [planning/status.md](planning/status.md) | Everyone | What is built, what is a placeholder, what each placeholder waits on — **the one doc allowed to drift** | Whoever lands a feature; `/update-docs` reports what a diff falsified |
 | [planning/roadmap.md](planning/roadmap.md) | Both devs | The epic table `/seed-tickets` turns into Linear tickets, plus the detail behind each | Whoever claims or finishes a row |
 | [planning/production-audit.md](planning/production-audit.md) | Both devs | Dated snapshot: the July 2026 production-readiness audit and the architecture it recommends — **frozen; not updated as code moves** | Nobody. It is a record |
-| [planning/boundary.md](planning/boundary.md) | Both owners | The open asks in both directions, each with a signature and a fallback if deferred, plus what each side commits to | Whoever adds or retires an ask |
+| [planning/boundary.md](planning/boundary.md) | Both owners | Cross-owner commitments, accepted/live decisions, and remaining asks, with signatures and fallbacks where applicable | Whoever adds or retires an ask |
 | [planning/audit-log.md](planning/audit-log.md) | Reviewers | The durable trail of `/audit-diff` waves, one per audited PR | `/audit-diff`, automatically |
 | [planning/foundation-hardening.md](planning/foundation-hardening.md) | Reviewers and maintainers | July 2026 correctness, scalability, branch, stress, and handoff evidence for the foundation cleanup | Foundation hardening owner |
 

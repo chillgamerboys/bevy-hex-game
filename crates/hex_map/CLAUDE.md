@@ -55,9 +55,11 @@ commands.spawn((
 Gameplay may query `(&TilePos, &RunBottom, &HexSpan, &SubstanceId, &Headroom)` with
 `With<HexTile>` and consumes exact projections such as `TraversalBlockers`.
 `MapAnchors`, `BiomeRegions`, `InteriorRegions`, and view hints use the same shared,
-stack-safe pattern. `TerrainEdit` is the only live write interface; the accepted
-`TerrainImpact`/`TerrainImpactOutcome` pair remains the separate future material-
-response path.
+stack-safe pattern. `TerrainEdit` and `TerrainImpact` are the two live write
+interfaces: direct edits replace or clear material, while impacts resolve numeric
+toughness and publish one ordered `TerrainImpactOutcome` per batch. `DamagedVoxels` is
+the exact partial-health projection, not a visibility grant. Spell emission and the
+gameplay-owned outcome consumer have not landed yet.
 
 ### `Headroom` is not optional, and it is yours to get right
 
@@ -197,6 +199,13 @@ queue is applied. Both halves matter; ordering alone is not enough. This has cau
 real bug (the player spawned before the tiles existed and sank into the ground).
 
 Clean up on `OnExit(Screen::Gameplay)`. There is a test that nothing leaks.
+
+The terrain-durability contract additionally reserves
+`TerrainSystems::ApplyWorld → TerrainSystems::ReconcileActors` for live updates.
+`ApplyWorld` is live and is the map-owned half that flushes rebuilt tile facts;
+gameplay owns actor settlement. `ReconcileActors` remains an ordering reservation: do
+not put settlement behind it until the gameplay implementation and cross-crate ordering
+tests land.
 
 ## Things that fail silently here
 

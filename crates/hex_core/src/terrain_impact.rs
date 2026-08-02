@@ -1,19 +1,12 @@
-//! Announcing an elemental effect on the world, and hearing what it did.
+//! Announcing elemental damage to the world, and hearing exactly what it did.
 //!
-//! The second write path beside [`TerrainEdit`](crate::TerrainEdit), and the
-//! split between them is not arbitrary — it tracks whether there is a material
-//! with an opinion.
-//!
-//! **Conjuration** names its substance, because nothing is there to respond and
-//! the material is the spell's identity. **An elemental effect** names only an
-//! element and a strength, because the voxel it reaches already has properties
-//! its author defined. Gameplay owns the geometry; the world owns the
-//! materiality. See [`systems/casting.md`] and boundary asks G and H.
-//!
-//! Nothing produces or consumes these yet — they are the agreed shape, landed
-//! ahead of the implementation so both sides compile against one vocabulary.
-//!
-//! [`systems/casting.md`]: https://github.com/chillgamerboys/bevy-hex-game/blob/main/docs/systems/casting.md
+//! Gameplay owns the exact affected volume. The world owns substance toughness,
+//! element/material admission, remaining voxel health, and the resulting mutation.
+//! Conjuration remains the separate [`TerrainEdit`](crate::TerrainEdit) path because
+//! it names the material the spell creates rather than asking an existing material
+//! how it responds.
+
+use std::collections::BTreeMap;
 
 use bevy_ecs::prelude::*;
 use bevy_reflect::prelude::*;
@@ -21,41 +14,57 @@ use bevy_reflect::prelude::*;
 use crate::elements::ElementId;
 use crate::voxel::{SubstanceId, TilePos};
 
+/// Highest authored maximum health in the initial four-level terrain scale.
+pub const MAX_TERRAIN_TOUGHNESS: u8 = 8;
+
+/// Whether a maximum health value belongs to the initial authored toughness scale.
+#[must_use]
+pub const fn is_terrain_toughness(value: u8) -> bool {
+    matches!(value, 1 | 2 | 4 | MAX_TERRAIN_TOUGHNESS)
+}
+
 /// Identifies one announcement so its outcome can be matched to it.
 ///
-/// Session-local, like every other runtime handle here. A durable log stores
-/// its own key and converts elements and substances back to stable names.
+/// Session-local, like every other runtime handle here. A durable log stores its own
+/// key and converts elements and substances back to stable names.
 #[derive(Reflect, Debug, Default, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TerrainBatchId(pub u64);
 
+/// Why the world rejected a complete terrain-impact batch without mutating anything.
+#[derive(Reflect, Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub enum TerrainImpactRejection {
+    /// A spell announced no exact voxels.
+    EmptyVolume,
+    /// The volume was not strictly sorted and deduplicated.
+    NonCanonicalVolume,
+    /// Terrain damage must remove at least one health point when admitted.
+    ZeroPower,
+    /// The runtime element handle does not belong to the active element catalog.
+    UnknownElement,
+    /// This session-local batch id was already consumed.
+    ReusedBatch,
+    /// No complete active terrain projection was available to answer the request.
+    TerrainUnavailable,
+}
+
 /// An energetic effect announced over an exact set of voxels.
 ///
-/// The world decides what each material does about it — including nothing.
-/// A fully resisted announcement is not an error: the caster committed and the
-/// mountain won.
+/// The world decides what each material does about it, including resistance. A fully
+/// resisted applied announcement is still a completed cast rather than an error.
 #[derive(Message, Reflect, Debug, Clone, PartialEq, Eq)]
 pub struct TerrainImpact {
     /// Dealt by gameplay; echoed back by [`TerrainImpactOutcome`].
     pub batch: TerrainBatchId,
-    /// Every exact voxel the effect reaches, **sorted and deduplicated**.
-    ///
-    /// Canonical form is part of the contract rather than a convenience: it
-    /// makes the message content-addressable, and stops replay order depending
-    /// on how the publisher happened to build the vector. A consumer rejects a
-    /// non-canonical message rather than quietly applying it.
+    /// Every exact voxel the effect reaches, sorted and deduplicated.
     pub volume: Vec<TilePos>,
-    /// Which element arrived. A runtime handle — the authored response table
-    /// and any durable log use the stable element *name*.
+    /// Which element arrived. Authored response content uses its stable name.
     pub element: ElementId,
-    /// How strong, from the spell's own content.
+    /// Health points removed from every admitted voxel, capped at remaining health.
     pub power: u8,
 }
 
 impl TerrainImpact {
-    /// Whether `volume` is in the canonical form the contract requires.
-    ///
-    /// Sorted, with no repeats. A consumer checks this and refuses rather than
-    /// letting event order depend on input accidents.
+    /// Whether `volume` is strictly sorted and contains no repeats.
     #[must_use]
     pub fn is_canonical(&self) -> bool {
         self.volume.windows(2).all(|pair| match pair {
@@ -63,76 +72,263 @@ impl TerrainImpact {
             _ => true,
         })
     }
+
+    /// The first structural contract failure, before catalog and session checks.
+    #[must_use]
+    pub fn structural_rejection(&self) -> Option<TerrainImpactRejection> {
+        if self.volume.is_empty() {
+            Some(TerrainImpactRejection::EmptyVolume)
+        } else if !self.is_canonical() {
+            Some(TerrainImpactRejection::NonCanonicalVolume)
+        } else if self.power == 0 {
+            Some(TerrainImpactRejection::ZeroPower)
+        } else {
+            None
+        }
+    }
 }
 
-/// What the world decided for one voxel an impact reached.
-///
-/// Explicit rather than inferred: `before`/`after` alone cannot tell empty
-/// space from a material that resisted from one whose response was to do
-/// nothing, and those are three different things to a player.
+/// Current health of one extant destructible voxel.
+#[derive(Reflect, Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub struct TerrainVoxelHealth {
+    /// Health points still present. Zero is never represented: that voxel is gone.
+    pub remaining: u8,
+    /// Authored maximum health for the current substance.
+    pub maximum: u8,
+}
+
+impl TerrainVoxelHealth {
+    /// Creates valid health for an extant voxel in the initial toughness range.
+    #[must_use]
+    pub const fn new(remaining: u8, maximum: u8) -> Option<Self> {
+        if remaining == 0 || remaining > maximum || !is_terrain_toughness(maximum) {
+            None
+        } else {
+            Some(Self { remaining, maximum })
+        }
+    }
+
+    /// Whether this health belongs to an extant voxel in the authored range.
+    #[must_use]
+    pub const fn is_valid(self) -> bool {
+        self.remaining > 0 && self.remaining <= self.maximum && is_terrain_toughness(self.maximum)
+    }
+
+    /// Whether the voxel has lost health but has not been destroyed.
+    #[must_use]
+    pub const fn is_damaged(self) -> bool {
+        self.is_valid() && self.remaining < self.maximum
+    }
+}
+
+/// What the world decided for one voxel an applied impact reached.
 #[derive(Reflect, Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum TerrainImpactDisposition {
     /// There was nothing there to affect.
     NoMaterial,
-    /// Material was present and refused the effect.
+    /// Material was present but the impact was not admitted.
     Resisted,
-    /// Material was present and its response was to stay as it was.
-    Unchanged,
-    /// Material was removed.
-    Cleared,
-    /// Material became a different substance.
-    Replaced,
+    /// Material survived with fewer health points.
+    Damaged,
+    /// Material reached zero health and was removed.
+    Destroyed,
 }
 
-/// One voxel's result.
+/// One exact voxel's authoritative result.
 #[derive(Reflect, Debug, Copy, Clone, PartialEq, Eq)]
 pub struct TerrainVoxelOutcome {
-    /// Which voxel.
+    /// Which voxel was resolved.
     pub pos: TilePos,
     /// What the world decided.
     pub disposition: TerrainImpactDisposition,
-    /// The substance before, if any.
+    /// Substance before resolution, if material existed.
     pub before: Option<SubstanceId>,
-    /// The substance after, if any.
+    /// Substance after resolution, if material remains.
     pub after: Option<SubstanceId>,
+    /// Health before resolution for a destructible substance.
+    pub health_before: Option<TerrainVoxelHealth>,
+    /// Health after resolution for a surviving destructible substance.
+    pub health_after: Option<TerrainVoxelHealth>,
 }
 
 impl TerrainVoxelOutcome {
-    /// Whether the substances agree with the stated disposition.
-    ///
-    /// The dispositions are not free-form: `NoMaterial` means nothing before
-    /// and nothing after, `Resisted` and `Unchanged` mean the same substance
-    /// either side, `Cleared` means something became nothing, and `Replaced`
-    /// means one substance became a *different* one. Anything else is a
-    /// malformed answer.
+    /// Whether material and health agree with the disposition and impact power.
     #[must_use]
-    pub fn is_consistent(&self) -> bool {
+    pub fn is_consistent_with_power(&self, power: u8) -> bool {
         match self.disposition {
-            TerrainImpactDisposition::NoMaterial => self.before.is_none() && self.after.is_none(),
-            TerrainImpactDisposition::Resisted | TerrainImpactDisposition::Unchanged => {
-                self.before.is_some() && self.before == self.after
+            TerrainImpactDisposition::NoMaterial => {
+                self.before.is_none()
+                    && self.after.is_none()
+                    && self.health_before.is_none()
+                    && self.health_after.is_none()
             }
-            TerrainImpactDisposition::Cleared => self.before.is_some() && self.after.is_none(),
-            TerrainImpactDisposition::Replaced => {
-                self.before.is_some() && self.after.is_some() && self.before != self.after
+            TerrainImpactDisposition::Resisted => {
+                self.before.is_some()
+                    && self.before == self.after
+                    && self.health_before == self.health_after
+                    && self.health_before.is_none_or(TerrainVoxelHealth::is_valid)
+            }
+            TerrainImpactDisposition::Damaged => {
+                let (Some(before), Some(after)) = (self.health_before, self.health_after) else {
+                    return false;
+                };
+                power > 0
+                    && self.before.is_some()
+                    && self.before == self.after
+                    && before.is_valid()
+                    && after.is_valid()
+                    && before.maximum == after.maximum
+                    && before.remaining > power
+                    && after.remaining == before.remaining - power
+            }
+            TerrainImpactDisposition::Destroyed => {
+                let Some(before) = self.health_before else {
+                    return false;
+                };
+                self.before.is_some()
+                    && self.after.is_none()
+                    && before.is_valid()
+                    && self.health_after.is_none()
+                    && power >= before.remaining
             }
         }
     }
 }
 
-/// What every voxel in one announced impact became.
+/// Applied per-voxel results or one whole-batch rejection.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq)]
+pub enum TerrainImpactResult {
+    /// Every announced position resolved in the same canonical order.
+    Applied(Vec<TerrainVoxelOutcome>),
+    /// Nothing mutated and there are no partial voxel results.
+    Rejected(TerrainImpactRejection),
+}
+
+/// What one announced impact became.
 ///
-/// **An authoritative simulation message, not permission to reveal its
-/// payload.** An area reaching into terrain a faction cannot see resolves
-/// truthfully, but presentation, logs and faction-facing knowledge filter every
-/// entry through observation — otherwise an acknowledgment leaks the material
-/// of ground nobody has looked at.
+/// This is authoritative simulation truth, not permission to reveal its payload.
+/// Faction-facing logs and presentation must filter applied entries through current
+/// observation.
 #[derive(Message, Reflect, Debug, Clone, PartialEq, Eq)]
 pub struct TerrainImpactOutcome {
     /// Correlates with the announcement that caused it.
     pub batch: TerrainBatchId,
-    /// Exactly one entry per announced voxel, in the same canonical order.
-    pub voxels: Vec<TerrainVoxelOutcome>,
+    /// The complete applied or rejected result.
+    pub result: TerrainImpactResult,
+}
+
+impl TerrainImpactOutcome {
+    /// Whether this answer is structurally compatible with its originating impact.
+    #[must_use]
+    pub fn is_consistent_with(&self, impact: &TerrainImpact) -> bool {
+        if self.batch != impact.batch {
+            return false;
+        }
+        match &self.result {
+            TerrainImpactResult::Applied(voxels) => {
+                impact.structural_rejection().is_none()
+                    && voxels.len() == impact.volume.len()
+                    && voxels
+                        .iter()
+                        .zip(&impact.volume)
+                        .all(|(outcome, position)| {
+                            outcome.pos == *position
+                                && outcome.is_consistent_with_power(impact.power)
+                        })
+            }
+            TerrainImpactResult::Rejected(reason) => match reason {
+                TerrainImpactRejection::EmptyVolume => impact.volume.is_empty(),
+                TerrainImpactRejection::NonCanonicalVolume => {
+                    !impact.volume.is_empty() && !impact.is_canonical()
+                }
+                TerrainImpactRejection::ZeroPower => {
+                    !impact.volume.is_empty() && impact.is_canonical() && impact.power == 0
+                }
+                TerrainImpactRejection::ReusedBatch => true,
+                TerrainImpactRejection::UnknownElement
+                | TerrainImpactRejection::TerrainUnavailable => {
+                    impact.structural_rejection().is_none()
+                }
+            },
+        }
+    }
+}
+
+/// Exact current partial-health projection published by the map.
+///
+/// Entries exist only while `0 < remaining < maximum`. This resource is world truth,
+/// not a disclosure grant: presentation must separately require current faction
+/// observation. `hex_map` is the sole runtime writer.
+#[derive(Resource, Reflect, Debug, Default, Clone, PartialEq, Eq)]
+#[reflect(Resource)]
+pub struct DamagedVoxels {
+    by_position: BTreeMap<TilePos, TerrainVoxelHealth>,
+}
+
+impl DamagedVoxels {
+    /// Creates an empty projection.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            by_position: BTreeMap::new(),
+        }
+    }
+
+    /// Returns partial health at an exact position.
+    #[must_use]
+    pub fn get(&self, pos: TilePos) -> Option<TerrainVoxelHealth> {
+        self.by_position.get(&pos).copied()
+    }
+
+    /// Iterates partial health in exact position order.
+    pub fn iter(&self) -> impl Iterator<Item = (TilePos, TerrainVoxelHealth)> + '_ {
+        self.by_position
+            .iter()
+            .map(|(position, health)| (*position, *health))
+    }
+
+    /// Number of partially damaged voxels.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.by_position.len()
+    }
+
+    /// Whether no voxel is partially damaged.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.by_position.is_empty()
+    }
+
+    /// Publishes valid partial health, removing full or malformed values.
+    ///
+    /// Runtime ownership belongs to `hex_map`; this is public only because the map is
+    /// downstream of the shared contract crate.
+    pub fn publish(&mut self, pos: TilePos, health: TerrainVoxelHealth) {
+        if health.is_damaged() {
+            self.by_position.insert(pos, health);
+        } else {
+            self.by_position.remove(&pos);
+        }
+    }
+
+    /// Removes one position after healing, replacement, or destruction.
+    pub fn remove(&mut self, pos: TilePos) {
+        self.by_position.remove(&pos);
+    }
+
+    /// Clears the projection during world teardown.
+    pub fn clear(&mut self) {
+        self.by_position.clear();
+    }
+}
+
+/// Shared cross-owner ordering for terrain mutation and gameplay reconciliation.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TerrainSystems {
+    /// The map consumes edits/impacts and publishes rebuilt terrain plus outcomes.
+    ApplyWorld,
+    /// Gameplay settles actors and authority against the rebuilt terrain.
+    ReconcileActors,
 }
 
 #[cfg(test)]
@@ -144,64 +340,182 @@ mod tests {
         TilePos::new(HexCoord::from_axial(q, r), level)
     }
 
-    #[test]
-    fn a_sorted_deduplicated_volume_is_canonical() {
-        let impact = TerrainImpact {
-            batch: TerrainBatchId(1),
-            volume: vec![at(0, 0, 1), at(0, 0, 2), at(1, 0, 1)],
-            element: ElementId(0),
-            power: 2,
-        };
-        assert!(impact.is_canonical());
+    fn impact(volume: Vec<TilePos>, power: u8) -> TerrainImpact {
+        TerrainImpact {
+            batch: TerrainBatchId(7),
+            volume,
+            element: ElementId(2),
+            power,
+        }
     }
 
-    /// Order and repeats both break it — the first would make replay depend on
-    /// how the volume was built, the second would apply a voxel twice.
-    #[test]
-    fn unsorted_or_repeated_volumes_are_not_canonical() {
-        let unsorted = TerrainImpact {
-            batch: TerrainBatchId(1),
-            volume: vec![at(1, 0, 1), at(0, 0, 1)],
-            element: ElementId(0),
-            power: 1,
-        };
-        assert!(!unsorted.is_canonical());
-
-        let repeated = TerrainImpact {
-            volume: vec![at(0, 0, 1), at(0, 0, 1)],
-            ..unsorted
-        };
-        assert!(!repeated.is_canonical());
+    fn health(remaining: u8, maximum: u8) -> TerrainVoxelHealth {
+        TerrainVoxelHealth::new(remaining, maximum).expect("fixture health is valid")
     }
 
     #[test]
-    fn each_disposition_pins_its_substances() {
+    fn structural_rejections_are_exact() {
+        assert_eq!(
+            impact(Vec::new(), 1).structural_rejection(),
+            Some(TerrainImpactRejection::EmptyVolume)
+        );
+        assert_eq!(
+            impact(vec![at(1, 0, 1), at(0, 0, 1)], 1).structural_rejection(),
+            Some(TerrainImpactRejection::NonCanonicalVolume)
+        );
+        assert_eq!(
+            impact(vec![at(0, 0, 1)], 0).structural_rejection(),
+            Some(TerrainImpactRejection::ZeroPower)
+        );
+        assert_eq!(impact(vec![at(0, 0, 1)], 1).structural_rejection(), None);
+    }
+
+    #[test]
+    fn health_excludes_zero_and_values_outside_the_authored_range() {
+        for maximum in [1, 2, 4, 8] {
+            assert_eq!(
+                TerrainVoxelHealth::new(maximum, maximum),
+                Some(TerrainVoxelHealth {
+                    remaining: maximum,
+                    maximum,
+                })
+            );
+        }
+        assert_eq!(TerrainVoxelHealth::new(0, 1), None);
+        assert_eq!(TerrainVoxelHealth::new(2, 1), None);
+        assert_eq!(TerrainVoxelHealth::new(1, 3), None);
+        assert_eq!(TerrainVoxelHealth::new(1, 9), None);
+        assert!(health(4, 8).is_damaged());
+        assert!(!health(8, 8).is_damaged());
+    }
+
+    #[test]
+    fn dispositions_pin_material_and_health_transitions() {
         let pos = at(0, 0, 1);
-        let stone = Some(SubstanceId(1));
-        let dirt = Some(SubstanceId(2));
-        let check = |disposition, before, after| {
-            TerrainVoxelOutcome {
-                pos,
-                disposition,
-                before,
-                after,
-            }
-            .is_consistent()
+        let stone = Some(SubstanceId(3));
+        let no_material = TerrainVoxelOutcome {
+            pos,
+            disposition: TerrainImpactDisposition::NoMaterial,
+            before: None,
+            after: None,
+            health_before: None,
+            health_after: None,
+        };
+        let resisted = TerrainVoxelOutcome {
+            pos,
+            disposition: TerrainImpactDisposition::Resisted,
+            before: stone,
+            after: stone,
+            health_before: Some(health(3, 4)),
+            health_after: Some(health(3, 4)),
+        };
+        let damaged = TerrainVoxelOutcome {
+            pos,
+            disposition: TerrainImpactDisposition::Damaged,
+            before: stone,
+            after: stone,
+            health_before: Some(health(4, 4)),
+            health_after: Some(health(2, 4)),
+        };
+        let destroyed = TerrainVoxelOutcome {
+            pos,
+            disposition: TerrainImpactDisposition::Destroyed,
+            before: stone,
+            after: None,
+            health_before: Some(health(2, 4)),
+            health_after: None,
         };
 
-        assert!(check(TerrainImpactDisposition::NoMaterial, None, None));
-        assert!(check(TerrainImpactDisposition::Resisted, stone, stone));
-        assert!(check(TerrainImpactDisposition::Unchanged, stone, stone));
-        assert!(check(TerrainImpactDisposition::Cleared, stone, None));
-        assert!(check(TerrainImpactDisposition::Replaced, stone, dirt));
+        assert!(no_material.is_consistent_with_power(2));
+        assert!(resisted.is_consistent_with_power(2));
+        assert!(damaged.is_consistent_with_power(2));
+        assert!(destroyed.is_consistent_with_power(2));
 
-        // The ones that would otherwise pass unnoticed.
-        assert!(!check(TerrainImpactDisposition::NoMaterial, stone, None));
-        assert!(!check(TerrainImpactDisposition::Resisted, stone, dirt));
-        assert!(!check(TerrainImpactDisposition::Cleared, stone, stone));
-        assert!(
-            !check(TerrainImpactDisposition::Replaced, stone, stone),
-            "replacing a substance with itself is unchanged, not replaced"
+        let malformed = TerrainVoxelOutcome {
+            health_after: Some(health(1, 4)),
+            ..destroyed
+        };
+        assert!(!malformed.is_consistent_with_power(2));
+    }
+
+    #[test]
+    fn applied_outcome_requires_the_exact_announced_order() {
+        let first = at(0, 0, 1);
+        let second = at(1, 0, 1);
+        let impact = impact(vec![first, second], 2);
+        let outcome = |pos| TerrainVoxelOutcome {
+            pos,
+            disposition: TerrainImpactDisposition::NoMaterial,
+            before: None,
+            after: None,
+            health_before: None,
+            health_after: None,
+        };
+        let exact = TerrainImpactOutcome {
+            batch: impact.batch,
+            result: TerrainImpactResult::Applied(vec![outcome(first), outcome(second)]),
+        };
+        assert!(exact.is_consistent_with(&impact));
+
+        let reversed = TerrainImpactOutcome {
+            batch: impact.batch,
+            result: TerrainImpactResult::Applied(vec![outcome(second), outcome(first)]),
+        };
+        assert!(!reversed.is_consistent_with(&impact));
+    }
+
+    #[test]
+    fn rejected_outcomes_acknowledge_structural_failures() {
+        let empty_impact = impact(Vec::new(), 1);
+        let outcome = TerrainImpactOutcome {
+            batch: empty_impact.batch,
+            result: TerrainImpactResult::Rejected(TerrainImpactRejection::EmptyVolume),
+        };
+        assert!(outcome.is_consistent_with(&empty_impact));
+
+        let wrong = TerrainImpactOutcome {
+            result: TerrainImpactResult::Rejected(TerrainImpactRejection::ZeroPower),
+            ..outcome
+        };
+        assert!(!wrong.is_consistent_with(&empty_impact));
+
+        let structurally_valid = impact(vec![at(0, 0, 1)], 1);
+        let unknown_element = TerrainImpactOutcome {
+            batch: structurally_valid.batch,
+            result: TerrainImpactResult::Rejected(TerrainImpactRejection::UnknownElement),
+        };
+        assert!(unknown_element.is_consistent_with(&structurally_valid));
+        assert!(!unknown_element.is_consistent_with(&empty_impact));
+
+        let terrain_unavailable = TerrainImpactOutcome {
+            batch: structurally_valid.batch,
+            result: TerrainImpactResult::Rejected(TerrainImpactRejection::TerrainUnavailable),
+        };
+        assert!(terrain_unavailable.is_consistent_with(&structurally_valid));
+
+        let reused = TerrainImpactOutcome {
+            batch: empty_impact.batch,
+            result: TerrainImpactResult::Rejected(TerrainImpactRejection::ReusedBatch),
+        };
+        assert!(reused.is_consistent_with(&empty_impact));
+    }
+
+    #[test]
+    fn damaged_projection_keeps_only_partial_exact_positions() {
+        let lower = at(0, 0, 1);
+        let upper = at(0, 0, 5);
+        let mut damaged = DamagedVoxels::new();
+        damaged.publish(lower, health(2, 4));
+        damaged.publish(upper, health(7, 8));
+        assert_eq!(damaged.len(), 2);
+        assert_eq!(damaged.get(lower), Some(health(2, 4)));
+        assert_eq!(damaged.get(upper), Some(health(7, 8)));
+
+        damaged.publish(lower, health(4, 4));
+        assert_eq!(damaged.get(lower), None);
+        assert_eq!(
+            damaged.iter().collect::<Vec<_>>(),
+            vec![(upper, health(7, 8))]
         );
     }
 }

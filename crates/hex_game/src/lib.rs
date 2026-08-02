@@ -39,6 +39,7 @@ mod save;
 mod scenarios;
 mod screens;
 mod storage;
+mod terrain_health_bars;
 #[cfg(feature = "test-support")]
 pub mod test_support;
 #[cfg(feature = "visual-walk")]
@@ -234,6 +235,7 @@ impl Plugin for AppPlugin {
             casting::plugin,
             readouts::plugin,
         ));
+        app.add_plugins(terrain_health_bars::plugin);
 
         #[cfg(feature = "map-review")]
         app.add_plugins(review::plugin);
