@@ -133,6 +133,9 @@ jobs:
           if [ -s "$broken" ]; then cat "$broken"; exit 1; fi
           echo "all relative links resolve"
 
+      - name: Check deprecated UI terminology
+        run: python3 tools/check_deprecated_ui_terms.py
+
       - uses: dtolnay/rust-toolchain@stable
         if: needs.changes.outputs.code == 'true'
         with:

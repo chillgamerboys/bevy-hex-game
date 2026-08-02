@@ -73,15 +73,15 @@ class TestScopeTests(unittest.TestCase):
             ("rules", "contracts", "simulation", "clippy", "docs"),
         )
 
-    def test_combat_lab_change_selects_app_and_shipping(self) -> None:
-        decision = self.classify("crates/hex_game/src/screens/combat_lab.rs")
+    def test_sandbox_change_selects_app_and_shipping(self) -> None:
+        decision = self.classify("crates/hex_game/src/screens/sandbox.rs")
         self.assertFalse(decision.full)
         self.assertEqual(
             decision.concerns, ("app", "clippy", "docs", "shipping")
         )
 
     def test_gameplay_screen_model_change_selects_app_and_shipping(self) -> None:
-        decision = self.classify("crates/hex_gameplay_model/src/combat_lab.rs")
+        decision = self.classify("crates/hex_gameplay_model/src/sandbox.rs")
         self.assertFalse(decision.full)
         self.assertEqual(
             decision.concerns, ("app", "clippy", "docs", "shipping")
@@ -286,7 +286,7 @@ class TestScopeTests(unittest.TestCase):
     def test_mixed_diff_unions_concerns(self) -> None:
         decision = self.classify(
             "crates/hex_lattice/src/cast.rs",
-            "crates/hex_game/src/screens/combat_lab.rs",
+            "crates/hex_game/src/screens/sandbox.rs",
         )
         self.assertFalse(decision.full)
         self.assertEqual(
