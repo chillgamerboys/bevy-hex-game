@@ -433,8 +433,9 @@ traversal; Ring19 generation p95 may not exceed 3.5× Ring7. Perception benchmar
 separately cover fog recomputation. Review packs must include deterministic reports
 and default, rotated, top-down, and character-camera captures. Manual review must
 traverse every critical recipe route and every open composite seam before that
-surface ships. Two Rings is selectable for review, but its final visual and play
-approval remains a mandatory human gate.
+surface ships. The landed Two Rings surface received its final visual and play
+approval at the reviewed wave head; later presentation changes retain their own
+human review gates.
 
 ## Primary precedents
 
