@@ -83,6 +83,54 @@ const LEGACY_RESUME_DIGESTS: &[(&str, u64, u64)] = &[
     ),
 ];
 
+/// Earlier `dev` digests invalidated only by PR #172's scenario-browser comment edit.
+///
+/// The previous title/lane wording changed comments in `scenarios.ron`, which the
+/// deliberately coarse resume digest includes byte-for-byte. Keep the exact known
+/// predecessor guarded by the current cutover digest; an unknown saved digest or a
+/// later change to any Campaign input remains incompatible. The predecessor values
+/// are generated from the exact `260809f` `dev` tree.
+const LEGACY_RESUME_DIGEST_ALIASES: &[(&str, u64, u64)] = &[
+    ("The Crossing", 0xFBF2_7A92_7CD0_8F34, 0x878B_132A_EE3C_56E9),
+    (
+        "Procedural Hills",
+        0x7642_0E89_9D06_AE43,
+        0xC6E6_E66F_AC88_1AA6,
+    ),
+    (
+        "Rolling Hills",
+        0xD677_B8BD_04B3_F05C,
+        0x7CAC_73F3_AB85_64D1,
+    ),
+    ("Frozen Hills", 0x6B60_05E5_0F13_8E55, 0x8F2B_1BC7_40CC_665C),
+    (
+        "Volcanic Hills",
+        0x8D04_C7E9_FD70_94DF,
+        0x35A9_7668_EFE5_3722,
+    ),
+    ("Sky Islands", 0x3604_C4A3_7559_A3C2, 0x1678_D1D8_1708_4C8B),
+    ("Mountains", 0x8849_3BE2_DE07_386D, 0xC8C7_F78A_02A3_D874),
+    ("Caves", 0x25F1_9D4B_CA4B_8212, 0x6A34_BC6D_6EC5_FA9B),
+    ("Waterfall", 0x4680_0901_2C45_84F1, 0xCF04_4B44_AF02_AAC8),
+    ("Forest", 0x4B24_C05A_9EBE_9897, 0x7943_EBD8_2132_1A1A),
+    ("Deep Forest", 0xBCBC_87EB_C8F6_FC1B, 0xD686_3A31_CFCB_F8DE),
+    ("Prairie", 0xCFA5_42D7_283F_6B56, 0xCF5F_0F51_1285_700F),
+    ("Fort", 0x78D4_8B75_2CFA_8633, 0x8AF5_16FA_8DAC_4196),
+    (
+        "Seven Regions",
+        0x4A2C_FDB2_4C1F_C13F,
+        0x894C_CB40_04F1_E102,
+    ),
+    ("Two Rings", 0xBA55_FA38_C276_6D8D, 0x911B_3847_EEAB_1F14),
+    ("Party Trial", 0x8737_950D_F612_A47E, 0x5847_F52E_E0E5_8697),
+    ("Ability Lab", 0xEABC_1965_343D_D916, 0x5486_D856_33D8_B34F),
+    (
+        "Raider Mirror",
+        0x17D5_770A_5EF5_5FBC,
+        0xC9A1_CB56_3295_E6B1,
+    ),
+];
+
 /// Build-bound inputs whose semantic changes invalidate every Campaign slot.
 ///
 /// Keep the asset paths beside their compiled contents: tests use the paths to prove
@@ -1639,9 +1687,12 @@ fn legacy_resume_digest_is_compatible(
     saved_digest: u64,
     current_digest: u64,
 ) -> bool {
-    LEGACY_RESUME_DIGESTS.iter().any(|(name, legacy, cutover)| {
-        *name == scenario_name && *legacy == saved_digest && *cutover == current_digest
-    })
+    LEGACY_RESUME_DIGESTS
+        .iter()
+        .chain(LEGACY_RESUME_DIGEST_ALIASES)
+        .any(|(name, legacy, cutover)| {
+            *name == scenario_name && *legacy == saved_digest && *cutover == current_digest
+        })
 }
 
 fn build_identity() -> &'static str {
@@ -2446,6 +2497,86 @@ mod tests {
         let mut non_legacy = migrated.clone();
         non_legacy.content_revision = Some(0xC0DE_CAFE);
         assert!(campaign_content_refusal(&non_legacy, &library, 0xC0DE_CAFE).is_some());
+        assert_eq!(read(&paths.resume).expect("legacy remains"), legacy_text);
+        std::fs::remove_dir_all(root).expect("scratch directory should clean up");
+    }
+
+    #[test]
+    fn pre_ui_foundation_resumes_survive_comment_only_copy_change() {
+        let library: ScenarioLibrary =
+            ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
+                .expect("the cutover scenario library should parse");
+        assert_eq!(LEGACY_RESUME_DIGEST_ALIASES.len(), library.scenarios.len());
+        for current in &library.scenarios {
+            let (_, predecessor_digest, cutover_digest) = LEGACY_RESUME_DIGEST_ALIASES
+                .iter()
+                .find(|(name, _, _)| *name == current.name)
+                .expect("every pre-UI-foundation scenario should have an explicit alias");
+            assert_ne!(predecessor_digest, cutover_digest);
+            assert_eq!(scenario_digest(current), *cutover_digest);
+            assert!(legacy_resume_digest_is_compatible(
+                &current.name,
+                *predecessor_digest,
+                *cutover_digest,
+            ));
+        }
+
+        let (_, saved_digest, cutover_digest) = LEGACY_RESUME_DIGEST_ALIASES
+            .iter()
+            .find(|(name, _, _)| *name == "Party Trial")
+            .expect("the known pre-UI-foundation Party Trial digest should remain explicit");
+        assert_eq!(*saved_digest, 0x8737_950D_F612_A47E);
+        let current = library
+            .scenarios
+            .iter()
+            .find(|candidate| candidate.name == "Party Trial")
+            .expect("Party Trial remains the canonical Campaign");
+        assert_eq!(scenario_digest(current), *cutover_digest);
+
+        let mut legacy = legacy_resume();
+        legacy.scenario_digest = *saved_digest;
+        let legacy_text = ron::ser::to_string_pretty(&legacy, ron::ser::PrettyConfig::new())
+            .expect("the predecessor resume should encode");
+        let root = scratch_root("pre-ui-foundation-legacy");
+        let paths = StoragePaths::under(&root);
+        write_atomic(&paths.resume, &legacy_text).expect("legacy fixture should write");
+
+        let store = migrate_legacy(&paths);
+        let migrated = store
+            .available(CampaignSlotId::One)
+            .expect("the known predecessor should migrate to slot one");
+        assert_eq!(migrated.scenario_digest, *saved_digest);
+        assert_eq!(migrated.content_revision, None);
+        assert_eq!(
+            campaign_content_refusal(&migrated, &library, 0xC0DE_CAFE),
+            None
+        );
+
+        let campaigns_text = read(&paths.campaigns).expect("migration should persist campaigns");
+        let reloaded = decode_campaigns(&campaigns_text);
+        let persisted = reloaded
+            .available(CampaignSlotId::One)
+            .expect("the already-migrated predecessor should remain available");
+        assert_eq!(persisted.scenario_digest, *saved_digest);
+        assert_eq!(
+            campaign_content_refusal(&persisted, &library, 0xC0DE_CAFE),
+            None
+        );
+
+        let mut changed_library = library.clone();
+        changed_library
+            .scenarios
+            .iter_mut()
+            .find(|candidate| candidate.name == "Party Trial")
+            .expect("Party Trial remains present")
+            .encounter = "config/encounters/changed.ron".to_owned();
+        assert!(campaign_content_refusal(&migrated, &changed_library, 0xC0DE_CAFE).is_some());
+        let mut unknown_digest = persisted.clone();
+        unknown_digest.scenario_digest = 0xDEAD_BEEF_DEAD_BEEF;
+        assert_eq!(
+            campaign_content_refusal(&unknown_digest, &library, 0xC0DE_CAFE),
+            Some("The saved scenario \"Party Trial\" changed and cannot be resumed.".to_owned())
+        );
         assert_eq!(read(&paths.resume).expect("legacy remains"), legacy_text);
         std::fs::remove_dir_all(root).expect("scratch directory should clean up");
     }

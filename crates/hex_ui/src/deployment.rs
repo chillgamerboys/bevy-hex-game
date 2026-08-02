@@ -62,6 +62,9 @@ fn render(
                 order: 20,
                 modal: true,
             },
+            // Empty drawer space must not consume world picks. Interactive
+            // descendants still own their ordinary button hit targets.
+            Pickable::IGNORE,
             Node {
                 position_type: PositionType::Absolute,
                 left: Val::Px(22.0),
@@ -321,19 +324,21 @@ fn apply_layout(
     let stacked = compact || metrics.logical_size.x < 1900.0 || metrics.content_scale >= 1.5;
     let ultra_constrained = is_ultra_constrained(*metrics);
     for (entity, mut node) in &mut roots {
-        (node.left, node.right) = if stacked && metrics.content_scale >= 1.5 {
-            (Val::Px(12.0), Val::Px(12.0))
+        (node.left, node.right, node.width) = if stacked {
+            (
+                Val::Auto,
+                Val::Px(if ultra_constrained { 8.0 } else { 12.0 }),
+                Val::Px(stacked_drawer_width(*metrics)),
+            )
         } else {
-            match metrics.viewport {
-                UiViewportClass::Compact if ultra_constrained => (Val::Px(8.0), Val::Px(8.0)),
-                UiViewportClass::Compact => (Val::Px(196.0), Val::Px(12.0)),
-                UiViewportClass::Standard => (Val::Px(244.0), Val::Px(320.0)),
-                UiViewportClass::Wide => (Val::Px(288.0), Val::Px(360.0)),
-            }
+            let (left, right) = match metrics.viewport {
+                UiViewportClass::Compact => (196.0, 12.0),
+                UiViewportClass::Standard => (244.0, 320.0),
+                UiViewportClass::Wide => (288.0, 360.0),
+            };
+            (Val::Px(left), Val::Px(right), Val::Auto)
         };
-        node.top = Val::Px(if ultra_constrained {
-            68.0
-        } else if compact {
+        node.top = Val::Px(if ultra_constrained || compact {
             12.0
         } else if stacked {
             68.0
@@ -429,6 +434,13 @@ fn apply_layout(
     }
 }
 
+fn stacked_drawer_width(metrics: ResolvedUiMetrics) -> f32 {
+    // Deployment is an overlay on an interactive map, so its stacked form must
+    // preserve a substantial world lane. Grow enough for semantic controls, but
+    // never return to the almost-full-canvas slab this drawer replaced.
+    (450.0 * metrics.control_scale.max(1.0)).min(metrics.logical_size.x * 0.66)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -471,6 +483,79 @@ mod tests {
         assert!(actions
             .iter(app.world())
             .any(|action| *action == DeploymentIntent::StartCombat));
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn retina_compact_deployment_preserves_a_clickable_world_lane() {
+        let mut app = App::new();
+        // The reported native window was 2566x1494 physical pixels on Retina,
+        // or approximately this logical UI canvas after window chrome.
+        app.add_plugins(crate::test_support::HeadlessUiPlugin::new(1284, 744));
+        app.world_mut().insert_resource(DeploymentView {
+            active: true,
+            map_name: "Two Rings".to_owned(),
+            notice: "Choose a surface".to_owned(),
+            party: vec![
+                DeploymentRosterEntryView {
+                    index: 0,
+                    name: "Hedge Mage".to_owned(),
+                    selected: true,
+                    position: None,
+                },
+                DeploymentRosterEntryView {
+                    index: 1,
+                    name: "Raider".to_owned(),
+                    selected: false,
+                    position: None,
+                },
+            ],
+            enemies: vec![DeploymentRosterEntryView {
+                index: 0,
+                name: "Raider".to_owned(),
+                selected: false,
+                position: None,
+            }],
+            complete: false,
+        });
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Gameplay);
+        for _ in 0..8 {
+            app.update();
+        }
+
+        let root = app
+            .world_mut()
+            .query_filtered::<Entity, With<DeploymentRoot>>()
+            .single(app.world())
+            .expect("deployment must have one root");
+        let root_size = app
+            .world()
+            .get::<ComputedNode>(root)
+            .map(|node| node.size() * node.inverse_scale_factor)
+            .expect("deployment root must be laid out");
+        let canvas = Vec2::new(1284.0, 744.0);
+        assert!(
+            root_size.x <= canvas.x * 0.5,
+            "the compact drawer must leave at least half the map horizontally visible: {root_size:?}"
+        );
+        assert!(
+            root_size.x * root_size.y <= canvas.x * canvas.y * 0.45,
+            "the deployment overlay must not cover most of the interactive map: {root_size:?}"
+        );
+        assert_eq!(
+            app.world().get::<Pickable>(root),
+            Some(&Pickable::IGNORE),
+            "empty drawer space must pass world picks through"
+        );
+
+        let snapshot = crate::test_support::ui_tree_snapshot(app.world_mut());
+        let issues = snapshot.task_issues(crate::test_support::UiTaskCase::DeploymentIncomplete);
+        assert!(
+            issues.is_empty(),
+            "the bounded drawer must retain its controls and scroll contract: {issues:#?}"
+        );
     }
 
     #[cfg(feature = "test-support")]
