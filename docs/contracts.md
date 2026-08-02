@@ -79,25 +79,26 @@ than agreed, the fallback the gameplay side ships without it is in
 | `voxel_styles.ron` + `VoxelStyleCatalog` — palette-bound reusable surface treatments | shared visual contract | `hex_editor`, `hex_objects` | live | [systems/asset-workshop.md](systems/asset-workshop.md) |
 | `object_catalog.ron` + `ObjectBlueprint` — deterministic catalog of validated local hex-voxel plants, effects, and props | shared visual contract | `hex_editor`, `hex_objects` | live | [systems/asset-workshop.md](systems/asset-workshop.md) |
 | `ObjectInstance` — exact object id, origin voxel, level height, and six-way rotation | shared visual contract | world publishers, `hex_objects`; future effects | **partial** — world publishers live for Forest vegetation and cave crystals; effect publishers pending | [systems/asset-workshop.md](systems/asset-workshop.md) |
-| `substances.ron` — substance names, exact palette references, solidity, diggability | world | both | live | [development/config.md](development/config.md) |
-| `Substance::toughness` — optional voxel HP on the fixed 1/2/4/8 scale | world | world | **agreed** — schema/content and map resolver pending | [planning/boundary.md](planning/boundary.md) G |
+| `substances.ron` — substance names, exact palette references, solidity, diggability, and toughness | world | both | live | [development/config.md](development/config.md) |
+| `Substance::toughness` — optional voxel HP on the fixed 1/2/4/8 scale | world | world | **partial** — schema, authored values, and coherent loading live; map resolver pending | [planning/boundary.md](planning/boundary.md) G |
 | World files, lighting profiles | world | world | live | [development/config.md](development/config.md) |
 | `spells.ron`, `elements.ron` — requirements, axes, targeting, effects | gameplay | gameplay | live | [development/config.md](development/config.md) |
-| `AcceptedContentRevision` — one deterministic semantic identity across elements, substances, spells, and lattices; Loading requires it | shared loader boundary | game setup | live | [planning/foundation-hardening.md](planning/foundation-hardening.md) |
+| `AcceptedContentRevision` — one deterministic semantic identity across elements, substances, terrain damage, spells, and lattices; Loading requires it | shared loader boundary | game setup | live | [planning/foundation-hardening.md](planning/foundation-hardening.md) |
 | `lattices.ron` — every authored archetype is one contiguous hex arrangement; errors name the archetype | gameplay | lattice spawning | live | [development/config.md](development/config.md#writing-a-lattice) |
 | `combat.ron` — engagement, budgets, policy knobs | gameplay | gameplay | live | [development/config.md](development/config.md) |
 | `scenarios.ron` — hidden New Game default plus visible Map and focused Demo fixtures | shared | both | live | [development/config.md](development/config.md) |
 | `encounters/*.ron` — rosters by archetype, and where each unit starts | shared | both | live | [development/config.md](development/config.md) |
-| `terrain_damage.ron` — stable-name Boolean element × substance damage allow-list | world | world | **agreed** — schema/content and coherent revision integration pending | [planning/boundary.md](planning/boundary.md) G |
+| `terrain_damage.ron` / `TerrainDamageTable` — stable-name Boolean element × substance damage allow-list | world | world | **partial** — schema, authored matrix, validation, hot reload, and coherent revision live; map resolver pending | [planning/boundary.md](planning/boundary.md) G |
 | `Substance::conjurable` plus spell-reference validation | world policy / gameplay loader | gameplay | live | [planning/boundary.md](planning/boundary.md) L |
 
 Cross-file references between the two content domains are resolved and validated by
 [`ContentIndex`](../crates/hex_assets/src/content_index.rs) at load, which is what lets
-a spell name a substance without either side guessing. `ContentIndex` and
-`LatticeLibrary` retain their last valid values across a rejected edit, but
+a spell name a substance without either side guessing. `TerrainDamageTable`,
+`ContentIndex`, and `LatticeLibrary` retain their last valid values across a rejected
+edit, but
 deterministic canonical source fingerprints prevent those retained values from
 masquerading as the new revision. Loading proceeds only when every raw catalog,
-direct catalog, and both derived tables match one published
+direct catalog, and all derived tables match one published
 `AcceptedContentRevision`; resource presence and Bevy change ticks are not readiness
 signals.
 

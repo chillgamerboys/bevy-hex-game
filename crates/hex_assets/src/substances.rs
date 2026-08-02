@@ -59,6 +59,13 @@ pub struct Substance {
     /// path. Missing legacy fields fail closed to `false`.
     #[serde(default)]
     pub conjurable: bool,
+    /// Maximum voxel health on the fixed initial durability scale.
+    ///
+    /// `None` means this substance does not participate in terrain damage. Authored
+    /// values are deliberately limited to `1`, `2`, `4`, or `8`, keeping both the
+    /// first resolver and its presentation vocabulary small and exact.
+    #[serde(default)]
+    pub toughness: Option<u8>,
 }
 
 impl Substance {
@@ -71,6 +78,7 @@ impl Substance {
             solid,
             diggable,
             conjurable: false,
+            toughness: None,
         }
     }
 
@@ -83,6 +91,7 @@ impl Substance {
             solid,
             diggable,
             conjurable: false,
+            toughness: None,
         }
     }
 
@@ -90,6 +99,13 @@ impl Substance {
     #[must_use]
     pub fn with_conjurable(mut self, conjurable: bool) -> Self {
         self.conjurable = conjurable;
+        self
+    }
+
+    /// Assigns maximum voxel health on the fixed initial durability scale.
+    #[must_use]
+    pub fn with_toughness(mut self, toughness: Option<u8>) -> Self {
+        self.toughness = toughness;
         self
     }
 }
@@ -184,8 +200,8 @@ pub enum SubstanceTableError {
     },
     /// The explicit air sentinel tried to participate in terrain behavior.
     #[error(
-        "air must be non-solid, non-diggable, and non-conjurable, but found \
-         solid={solid}, diggable={diggable}, conjurable={conjurable}"
+        "air must be non-solid, non-diggable, non-conjurable, and have no toughness, but found \
+         solid={solid}, diggable={diggable}, conjurable={conjurable}, toughness={toughness:?}"
     )]
     InvalidAirBehavior {
         /// Invalid authored solidity.
@@ -194,6 +210,16 @@ pub enum SubstanceTableError {
         diggable: bool,
         /// Invalid authored conjuration admission.
         conjurable: bool,
+        /// Invalid authored maximum health.
+        toughness: Option<u8>,
+    },
+    /// An authored maximum health was outside the fixed initial scale.
+    #[error("substance '{substance}' has toughness {toughness}; expected one of 1, 2, 4, or 8")]
+    InvalidToughness {
+        /// Substance name from `substances.ron`.
+        substance: String,
+        /// Invalid authored maximum health.
+        toughness: u8,
     },
     /// A stable reference did not resolve in `palette.ron`.
     #[error("substance '{substance}' references missing art-palette swatch '{swatch}'")]
@@ -245,6 +271,14 @@ impl SubstanceTable {
     #[must_use]
     pub fn is_conjurable(&self, id: SubstanceId) -> bool {
         self.get(id).is_some_and(|substance| substance.conjurable)
+    }
+
+    /// Maximum health for one damage-participating voxel.
+    ///
+    /// Unknown ids and indestructible substances both return [`None`].
+    #[must_use]
+    pub fn toughness(&self, id: SubstanceId) -> Option<u8> {
+        self.get(id).and_then(|substance| substance.toughness)
     }
 
     /// How many substances the table holds.
@@ -305,16 +339,31 @@ impl SubstanceTable {
                     solid: false,
                     diggable: false,
                     conjurable: false,
+                    toughness: None,
                 });
                 by_name.insert(name.clone(), SubstanceId(0));
                 continue;
             };
             let mut substance = substance.clone();
-            if name == AIR_NAME && (substance.solid || substance.diggable || substance.conjurable) {
+            if let Some(toughness) = substance.toughness {
+                if !matches!(toughness, 1 | 2 | 4 | 8) {
+                    return Err(SubstanceTableError::InvalidToughness {
+                        substance: name.clone(),
+                        toughness,
+                    });
+                }
+            }
+            if name == AIR_NAME
+                && (substance.solid
+                    || substance.diggable
+                    || substance.conjurable
+                    || substance.toughness.is_some())
+            {
                 return Err(SubstanceTableError::InvalidAirBehavior {
                     solid: substance.solid,
                     diggable: substance.diggable,
                     conjurable: substance.conjurable,
+                    toughness: substance.toughness,
                 });
             }
             substance.color = match (name.as_str(), substance.swatch.as_ref()) {
@@ -364,7 +413,7 @@ impl SubstanceTable {
     }
 
     pub(crate) fn semantic_fingerprint(&self) -> u64 {
-        let mut encoder = FingerprintEncoder::new(b"hex-substance-table-v1");
+        let mut encoder = FingerprintEncoder::new(b"hex-substance-table-v2");
         encoder.usize(self.by_id.len());
         for (index, substance) in self.by_id.iter().enumerate() {
             encoder.string(self.names.get(index).map_or("", String::as_str));
@@ -380,6 +429,12 @@ impl SubstanceTable {
             encoder.bool(substance.solid);
             encoder.bool(substance.diggable);
             encoder.bool(substance.conjurable);
+            if let Some(toughness) = substance.toughness {
+                encoder.u8(1);
+                encoder.u8(toughness);
+            } else {
+                encoder.u8(0);
+            }
         }
         encoder.finish()
     }
@@ -587,7 +642,18 @@ mod tests {
             } else {
                 Substance::from_swatch(swatch_id(name), solid, diggable)
             };
-            substances.insert(name.to_owned(), substance.with_conjurable(name == "stone"));
+            let toughness = match name {
+                "grass" => Some(1),
+                "stone" => Some(4),
+                "air" | "bedrock" => None,
+                _ => unreachable!("the test fixture names are exhaustive"),
+            };
+            substances.insert(
+                name.to_owned(),
+                substance
+                    .with_conjurable(name == "stone")
+                    .with_toughness(toughness),
+            );
         }
         SubstanceFile { substances }
     }
@@ -656,6 +722,7 @@ mod tests {
         assert!(table.is_solid(stone));
         assert!(table.is_diggable(stone));
         assert!(table.is_conjurable(stone));
+        assert_eq!(table.toughness(stone), Some(4));
         assert!(table.is_solid(bedrock));
         assert!(
             !table.is_diggable(bedrock),
@@ -663,6 +730,7 @@ mod tests {
         );
         assert!(!table.is_solid(SubstanceId::AIR));
         assert!(!table.is_conjurable(SubstanceId::AIR));
+        assert_eq!(table.toughness(SubstanceId::AIR), None);
     }
 
     #[test]
@@ -765,17 +833,19 @@ mod tests {
 
     #[test]
     fn explicit_air_cannot_participate_in_terrain_behavior() {
-        for (solid, diggable, conjurable) in [
-            (true, false, false),
-            (false, true, false),
-            (true, true, false),
-            (false, false, true),
+        for (solid, diggable, conjurable, toughness) in [
+            (true, false, false, None),
+            (false, true, false, None),
+            (true, true, false, None),
+            (false, false, true, None),
+            (false, false, false, Some(1)),
         ] {
             let mut file = test_file();
             let air = file.substances.get_mut(AIR_NAME).expect("air should exist");
             air.solid = solid;
             air.diggable = diggable;
             air.conjurable = conjurable;
+            air.toughness = toughness;
 
             assert_eq!(
                 SubstanceTable::from_file(&file, &test_palette())
@@ -784,6 +854,27 @@ mod tests {
                     solid,
                     diggable,
                     conjurable,
+                    toughness,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn toughness_is_restricted_to_the_fixed_initial_scale() {
+        for toughness in [0, 3, 5, u8::MAX] {
+            let mut file = test_file();
+            file.substances
+                .get_mut("stone")
+                .expect("stone should exist")
+                .toughness = Some(toughness);
+
+            assert_eq!(
+                SubstanceTable::from_file(&file, &test_palette())
+                    .expect_err("an off-scale toughness must fail"),
+                SubstanceTableError::InvalidToughness {
+                    substance: "stone".to_owned(),
+                    toughness,
                 }
             );
         }
@@ -846,6 +937,7 @@ mod tests {
         assert!(!table.is_solid(unknown));
         assert!(!table.is_diggable(unknown));
         assert!(!table.is_conjurable(unknown));
+        assert_eq!(table.toughness(unknown), None);
     }
 
     /// Reassigning sorted ids under a live world would reinterpret existing voxels.
@@ -1444,6 +1536,7 @@ mod tests {
             .expect("a missing air entry should still resolve");
         assert_eq!(table.name(SubstanceId::AIR), Some("air"));
         assert!(!table.is_solid(SubstanceId::AIR));
+        assert_eq!(table.toughness(SubstanceId::AIR), None);
     }
 
     #[test]
@@ -1477,6 +1570,29 @@ mod tests {
             table.is_conjurable(stone),
             "the substance named by shipped construction spells must be admitted"
         );
+
+        for (name, maximum) in [
+            ("grass", 1),
+            ("snow", 1),
+            ("dirt", 2),
+            ("gravel", 2),
+            ("ice", 2),
+            ("stone", 4),
+            ("basalt", 4),
+            ("worked_stone", 8),
+            ("metal", 8),
+        ] {
+            let id = table
+                .id(name)
+                .unwrap_or_else(|| panic!("{name} should be registered"));
+            assert_eq!(table.toughness(id), Some(maximum), "wrong {name} HP");
+        }
+        for name in ["air", "water", "lava", "bedrock"] {
+            let id = table
+                .id(name)
+                .unwrap_or_else(|| panic!("{name} should be registered"));
+            assert_eq!(table.toughness(id), None, "{name} must be indestructible");
+        }
         for (name, substance) in [
             ("air", SubstanceId::AIR),
             ("water", water),

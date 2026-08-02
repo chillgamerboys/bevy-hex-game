@@ -2511,6 +2511,7 @@ mod tests {
     use bevy::state::app::StatesPlugin;
     use hex_assets::{
         AcceptedContentRevision, ArtPalette, ElementFile, SubstanceFile, SubstanceTable,
+        TerrainDamageFile, TerrainDamageTable,
     };
     use hex_core::COMBAT_LAB_FIXTURES;
 
@@ -2793,6 +2794,15 @@ mod tests {
 
     fn app_with_content_fixture(fixture: &ContentFixture) -> App {
         let mut app = App::new();
+        let terrain_damage_file = TerrainDamageFile {
+            damaging_pairs: Vec::new(),
+        };
+        let terrain_damage = TerrainDamageTable::from_file(
+            &terrain_damage_file,
+            &fixture.elements,
+            &fixture.substances,
+        )
+        .expect("the empty test damage matrix should resolve");
         app.add_plugins((MinimalPlugins, StatesPlugin));
         app.insert_state(Screen::Loading);
         app.insert_resource(fixture.element_file.clone());
@@ -2800,6 +2810,8 @@ mod tests {
         app.insert_resource(fixture.substance_file.clone());
         app.insert_resource(fixture.palette.clone());
         app.insert_resource(fixture.substances.clone());
+        app.insert_resource(terrain_damage_file);
+        app.insert_resource(terrain_damage);
         fixture.shipped.insert_into_world(app.world_mut());
         app.add_plugins(hex_assets::content_index::plugin);
         app.add_systems(
