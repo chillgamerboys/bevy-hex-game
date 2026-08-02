@@ -17,14 +17,15 @@ reviewing any leaf as a completed feature would be misleading.
 
 ## Landed foundation
 
-- PR #162 delivered exact caster-to-anchor `Direct`, authored-rise `Arc`, and `None`
-  trajectories over one symmetric integer supercover.
-- PR #174 superseded the stale PR #173 camera prerequisite.
-- PR #175 delivered the world-owned terrain durability resolver: fixed toughness,
-  protected ordered impact resolution, applied/rejected outcomes, sparse health, and
-  terrain rebuild consequences.
+- PR #162 (merge `84cbd409`) delivered exact caster-to-anchor `Direct`,
+  authored-rise `Arc`, and `None` trajectories over one symmetric integer
+  supercover.
+- PR #174 (merge `2f48cdcb`) superseded the stale PR #173 camera prerequisite.
+- PR #175 (merge `70a212bb`) delivered the world-owned terrain durability resolver:
+  fixed toughness, protected ordered impact resolution, applied/rejected outcomes,
+  sparse health, and terrain rebuild consequences.
 - PR #176 landed independently and no longer overlaps this work.
-- PR #178 delivered exhaustive `TerrainImpactOutcome` validation, configured
+- PR #178 (merge `6cb749ad`) delivered exhaustive `TerrainImpactOutcome` validation, configured
   `TerrainSystems::{ApplyWorld, RefreshProjections, ReconcileActors, ConsumeOutcomes}`
   ordering vocabulary, and the 61-test non-UI trajectory/volume concern.
 
@@ -33,6 +34,28 @@ The live [G/H contracts](../contracts.md) are sufficient. This wave requires no 
 implementation lane. The accepted settlement policy replaces the earlier support
 reservation proposal. A breached cave retains authored Interior membership and gains
 no dynamic daylight in this slice.
+
+## Draft candidate ledger
+
+The following reviewed foundations are on the local wave candidate. They remain draft
+evidence rather than delivered `dev` behavior:
+
+- `ae17f54` adds the pure combat-authority hold that prevents an intermediate area
+  answer from advancing the turn or settling an outcome;
+- `9dc9555` moves exact occupancy and route reconciliation into
+  `TerrainSystems::RefreshProjections` and adds the deterministic unsupported-actor
+  landing planner;
+- `ecc58fc` adds validated `Impact { element, power }` content, makes Fireball the
+  first Fire/power-2 consumer, and removes its deferred `Displace`; and
+- `6286ca8` adds canonical radial effect-volume clipping over the existing symmetric
+  supercover, with separate full-truth and faction-known projections.
+
+At the `6286ca8` helper checkpoint, the paid runtime transaction, area queue, terrain
+outcome consumer, ECS settlement commit, narrow scope wiring, and composition target
+remained integration-owner work on the same draft PR. Later #180 checkpoints compose
+those pieces under the contract below; the PR's exact head is the implementation-state
+authority. No checkpoint in this ledger is a final green gate or manual runtime
+sign-off.
 
 ## Combined outcome
 
@@ -128,7 +151,8 @@ Only the integration owner edits `crates/hex_combat/src/commands/cast.rs`,
 | Transaction foundation | `wave/spell-resolution` | exact wave base | one private pending transaction, queue, modal gate, explicit combat-authority hold, and turn/exit gate |
 | Effect-volume clipping | `feat/spell-volume-clipping` | exact wave base; parallel | pure clipping helpers and contracts; no cast hot-file edits |
 | Terrain reconciliation | `feat/terrain-reconciliation` | exact wave base; parallel | occupancy/movement phase placement and pure deterministic landing planner |
-| Area + terrain runtime | `feat/spell-resolution-runtime` | combined checkpoint | Impact schema/content, area queue, batch ledger, outcome consumer, settlement and authority adoption |
+| Impact content | `feat/spell-impact-content` | exact wave base; integrated as `ecc58fc` | Impact schema/validation/fingerprint, Fireball content, and Creator deployability policy; no runtime hot-file edits |
+| Area + terrain runtime | `wave/spell-resolution` | combined checkpoint | area queue, paid batch ledger, outcome consumer, settlement and authority adoption |
 | Composition | `wave/spell-resolution` | all lanes | dedicated headless composition target, exact scope routing, docs, and delivery reconciliation |
 
 Source branches target the wave or remain source-only. One final wave PR targets
@@ -190,13 +214,25 @@ workspace corpus.
 - Final runtime evidence is one named human Creator -> Sandbox Fireball pass on the
   exact wave head. It is not a UI/visual test; no screenshot review is required.
 
-The scope/profile/CI bootstrap itself currently triggers the repository's fail-closed
+The scope/profile/CI bootstrap itself ordinarily triggers the repository's fail-closed
 full gate. The user's explicit instruction and implementation approval are the durable
-one-wave maintainer waiver for this gameplay-only candidate's `app`/UI and automated
-visual-test omission. The PR and canonical testing-policy correction must publish the
-exact narrow JUnit replacements and label the omitted default full/app/visual gates as
-waived—not green. Ordinary unknown-path and integration fail-closed behavior remains;
-the exception is limited to an explicitly declared non-UI gameplay wave.
+one-wave maintainer waiver for this gameplay-only candidate. Its only gameplay test
+concerns are `trajectory_contracts` and `spell_resolution_contracts`; a focused
+selector regression may additionally prove the waiver manifest itself. The following
+omissions must appear as **WAIVED**, never passed or green: `hex_ui`,
+`hex_game/tests/gameplay_app.rs`, UI snapshots, the automated visual walk,
+deterministic combat simulation, V3/procedural-generation corpora, and the residual
+workspace corpus. Format, dependency policy, strict Clippy, warnings-denied docs, and
+the shipping build remain non-test gates.
+
+The exception is valid only while every changed behavior is exercised by those two
+non-UI producer/consumer closures and every changed path is in the wave's explicit
+allow-list. A UI/presentation change, a `hex_map` implementation or G/H contract
+change, an unclassified path, or a behavior those closures cannot exercise invalidates
+the waiver and restores the ordinary fail-closed gate. It applies to the #180 candidate
+and its exact reviewed merge diff on `dev`, not later unrelated pushes or a
+`dev` → `main` promotion. The PR and canonical testing policy publish the exact narrow
+JUnit replacements and the waiver reason.
 
 ## Combined acceptance
 
@@ -230,9 +266,11 @@ the exception is limited to an explicitly declared non-UI gameplay wave.
 
 ## Delivery-state reconciliation
 
-HEX-19 and HEX-24 remain partial / In Progress while this PR is a draft. Linear is a
+HEX-19 and HEX-24 remain partial / In Progress while PR #180 is a draft. Linear is a
 soft coordination signal and is currently unavailable; the exact recommended update
-is to record #162, #175, and #178 as delivered foundations and retain the residuals
-listed here. Final tracked [casting](../systems/casting.md), status, contracts, roadmap,
-and [gameplay-testing](../development/gameplay-testing.md) corrections land on the
-wave candidate before it is called complete.
+is to record #162, #174 (superseding #173), #175, and #178 as delivered foundations,
+link draft #180 as the active implementation wave, and retain the residuals listed
+here. Final tracked [casting](../systems/casting.md), status, contracts, roadmap, and
+[gameplay-testing](../development/gameplay-testing.md) corrections land on the wave
+candidate before it is called complete. After merge, reconciliation must verify the
+exact `dev` merge SHA before either ticket is reclassified.

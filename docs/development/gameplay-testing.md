@@ -17,13 +17,15 @@ scenario binaries continue to run in the residual workspace suite.
 |---|---|---|---|---|---:|
 | Pure rules | Value objects, lattice transformations, compact AI policy | Owning crate dependencies only | Return values and immutable state | `python3 tools/test_scope.py run rules` | 60 s total |
 | ECS contracts | Focused commands, effects, movement, turns, occupancy and Channel seams | `hex_test_support`, then the owning gameplay crate dependencies | Components, resources, messages and exact positions | `python3 tools/test_scope.py run contracts` | 60 s per test |
+| Spell resolution | Impact/content admission, radial clipping consumers, area queue, paid batch correlation, authority hold, terrain phase order, unsupported settlement/adoption, and typed freeze | Pure/owning crates plus one renderer-free `hex_game` composition target over real map/units/perception/combat plugins; never `hex_ui`, `gameplay_app`, renderer, viewport, or UI snapshot support | Exact values, components, resources, messages, positions, correlation evidence, and bounded transaction state | `python3 tools/test_scope.py run spell_resolution_contracts` | 60 s per test |
 | Deterministic simulation | Multi-turn composition, tempo profiles, 3v3/6v6, canonical summaries and bounded no-progress | `hex_combat_core` over `hex_core` + `hex_lattice`; never Bevy App, `hex_test_support`, renderer, viewport, wall clock, asset server, ECS entity, perception implementation, or map generator | Full `CombatRunSnapshot` equality across two runs plus named metric assertions | `python3 tools/test_scope.py run simulation` | 60 s |
 | Game/UI behavior | Pure Main Menu, Campaign, Sandbox, Creator, and guided deployment transitions plus Bevy wiring, persistence, re-entry, exact terrain placement, HUD suppression, and outcome lifecycle | `hex_gameplay_model` for route/draft/deployment/launch truth; `hex_ui` for rendering; `hex_game` with default-off `test-support` only for Bevy lifecycle | Pure state equality, `GameplayStateSnapshot` for authority facts and explicit presentation-adapter observations, and `UiTreeSnapshot` for presentation structure | `python3 tools/test_scope.py run app` | 60 s |
 | Visual smoke | Layout, legibility, overlap, responsive composition and presentation regressions | Release-shaped game with `visual-walk`; no `dev` or `test-support` | Reviewed frames plus the human motion/feel walk | Run the one scoped gameplay walk through `/visual-walk` | At most 10 reviewed gameplay frames |
 | Soak/performance | Long stalemates, stress corpora, bounded retention and performance | The scheduled stress workflow | Typed completion/timeout, fingerprints, timing and memory bounds | `.github/workflows/stress.yaml` | Scheduled/manual only |
 
-The required gameplay CI job publishes separate JUnit and timing evidence for the
-first four partitions. The residual workspace job keeps all other non-map packages
+The required gameplay CI job publishes separate JUnit and timing evidence for its
+selected partitions, including the dedicated spell-resolution concern when applicable.
+The residual workspace job keeps all other non-map packages
 and cross-owner game/world contract binaries under the existing feature set, CI
 profile, and timeout. Map unit, generation, and publication evidence runs through
 its independently selected world-owned partitions.
@@ -54,6 +56,16 @@ scenario/loading contracts that require private composition details. Those share
 targets stay in the residual gate. The three packages set `autotests = false` and
 declare their integration targets explicitly, so adding a helper file cannot silently
 create a new expensive binary or escape its concern selector.
+
+Draft #180 adds one other explicit target,
+`hex_game/tests/spell_resolution.rs`, solely for the cross-crate spell transaction.
+It builds a minimal deterministic gameplay state with the real map, units, perception,
+and combat plugins. It does not install `AppPlugin`, a renderer, viewport,
+`hex_ui::UiPlugin`, `HeadlessUiPlugin`, or test-support UI. Its tiny authored fixture
+proves phase composition and exact authority state; it is not a procedural V3 seed
+corpus or a presentation test. Because `hex_game` disables automatic integration-test
+discovery, the candidate must register this target explicitly and route it only to
+`spell_resolution_contracts`.
 
 ## Scripted movement steps
 
@@ -172,12 +184,79 @@ It emits JUnit at `target/nextest/gameplay-trajectory/junit.xml`. It does not se
 or residual workspace tests. Changes to broader unit or casting authority continue to
 use their broader producer/consumer closures.
 
+### Spell-resolution wave waiver
+
+Draft PR #180 has an explicit one-wave maintainer waiver for a gameplay-only change
+whose authorities are narrower than the repository's ordinary final-wave gate. Its
+automated gameplay evidence is exactly:
+
+```sh
+python3 tools/test_scope.py run trajectory_contracts
+python3 tools/test_scope.py run spell_resolution_contracts
+```
+
+`trajectory_contracts` proves the shared supercover, canonical radial clipping,
+endpoint behavior, `None` preservation, conservative grazes, vertical/stacked cases,
+and full-truth-versus-faction-known privacy. `spell_resolution_contracts` proves:
+
+- Impact schema, element resolution, fingerprinting, Fireball content, payment and
+  refusal boundaries;
+- authored-effect/stable-`UnitId` area Disable/Burn, friendly fire, queued defender
+  answers, and the independent combat-authority hold;
+- monotonic multi-batch allocation, out-of-order valid answers, all valid rejections,
+  correlation freeze, teardown/re-entry, and no optimistic release;
+- refreshed occupancy/movement, deterministic simultaneous settlement, authority
+  adoption, no-landing freeze, and the reserved terrain-phase order;
+- the ten pure `hex_core::terrain_impact` contracts plus the real map producer seams
+  `terrain_protocol_orders_reserved_phases_before_perception` and
+  `overkill_is_capped_and_empty_voxels_report_no_material`; and
+- the explicit renderer-free `hex_game/tests/spell_resolution.rs` composition target.
+
+The two named map tests exercise the #175 producer and shared schedule directly; they
+do not select the map-generation corpus. Existing non-UI regression closures for
+spell validation/fingerprints, cast payment/refusal/construction, command/authority/
+turn behavior, and occupancy/movement also belong in
+`spell_resolution_contracts`. A focused selector regression may run when the waiver
+manifest or routing changes, but it does not authorize any broader application or UI
+partition.
+
+The following omissions are **WAIVED**, not passed, green, N/A, or silently skipped:
+
+| Omitted gate | Why it cannot exercise this wave's changed authority |
+|---|---|
+| `hex_ui` and `hex_game/tests/gameplay_app.rs` | No UI model, widget, layout, focus, persistence, or application lifecycle behavior changes |
+| UI snapshots and the automated visual walk | No rendered or presentation behavior changes; pixels cannot prove batch correlation, stable ordering, or settlement |
+| Deterministic combat simulation | The renderer-free reducer cannot execute the ECS/world impact and settlement adapter; focused authority-hold tests cover the reducer seam it does own |
+| V3/procedural map corpora | The wave changes no generator, world content, G/H schema, or map implementation; two exact real-map producer tests cover the consumed seam |
+| Residual workspace corpus | Its unrelated owner/application binaries cannot compile or exercise the changed transaction authority |
+
+Format, dependency policy, strict workspace Clippy, warnings-denied docs, and the
+default-feature shipping release build remain required non-test checks. The selector
+must apply this exception only when an explicit waiver manifest is itself in the diff
+and every changed path matches its allow-list. Unknown paths, invalid configuration,
+an empty diff, and ordinary future changes remain fail-closed. The same declaration
+may route the exact #180 merge diff on `dev`; it does not survive into a later unrelated
+push or a `dev` → `main` promotion.
+
+The waiver is invalid as soon as the candidate changes UI/layout/rendering,
+`hex_game` lifecycle outside the dedicated headless adapter, `hex_map` implementation,
+the G/H schema or world response policy, procedural content, or any behavior the two
+named concerns cannot exercise. Invalidation restores the complete ordinary gate; it
+is not permission to expand the allow-list after behavior has expanded.
+
+Before the draft becomes ready, a named human still runs the exact-head Creator →
+Sandbox Fireball route. That bounded gameplay confirmation requires no screenshot
+review and is not an automated UI/visual test. While the PR is draft, its result is
+pending rather than passed or waived.
+
 Pull-request CI applies the selector directly and publishes the decision plus timing
-evidence and JUnit for each nextest-backed concern. Pushes to `dev` or `main` forcibly
-promote the decision to the complete integration gate, regardless of changed paths. Final
-wave/release candidates likewise run the complete gate before the exact-head manual
-sign-off; unknown paths, invalid configuration, and empty diffs also fail closed to
-that same result.
+evidence and JUnit for each nextest-backed concern. Pushes to `dev` or `main`
+ordinarily promote the decision to the complete integration gate regardless of changed
+paths. The explicit, allow-listed one-wave exception above applies to draft #180 and
+its exact merge diff on `dev`; `main` promotions and later unrelated pushes remain
+complete. Unknown paths, invalid configuration, and empty diffs still fail closed. A
+waived gate never contributes green evidence or substitutes for the exact-head manual
+sign-off.
 
 For a gameplay-only change that does not modify `hex_core`, shared application
 composition, scenario/loading lifecycle, or a published world seam, V3/map corpora

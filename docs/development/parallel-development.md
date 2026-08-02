@@ -135,7 +135,7 @@ After each semantic group enters the wave:
 
 ### Final wave candidate
 
-The wave PR is the merge gate. Run the complete repository checks:
+The wave PR is the merge gate. By default, run the complete repository checks:
 
 ```sh
 cargo fmt --all --check
@@ -154,6 +154,43 @@ taste do not become cheaper or more reliable when repeated on incomplete leaves.
 Record that playtest against the full final wave head SHA using the PR template's
 structured manual runtime fields. Any subsequent source or integration commit
 invalidates it and requires a new playtest before merge.
+
+### Explicit one-wave verification waiver
+
+A final-wave default may be narrowed only by an explicit maintainer-approved waiver
+recorded in the tracked wave plan, canonical testing contract, scope manifest, and PR.
+This is appropriate when all changed behavior has a smaller authoritative
+producer/consumer closure and the omitted partitions cannot compile or exercise it.
+It is not a branch-name exception or a way to call an expensive failure irrelevant
+after it runs.
+
+The declaration must name:
+
+- the exact changed-path allow-list and exact test concerns replacing the ordinary
+  broad gate;
+- every omitted test, application, simulation, residual, map, and visual partition;
+- why each omission has no authority over the changed behavior;
+- the non-test format, dependency, Clippy, docs, and shipping checks that remain;
+- the behavior or path changes that invalidate the waiver; and
+- the exact-head human runtime route, or the ordinary verified-maintainer N/A process
+  when the change has no runtime behavior at all.
+
+Every omitted check is reported as **WAIVED**, never passed, green, or silently
+skipped. The selector may apply the waiver only when its tracked declaration is in the
+candidate diff and every changed path is allow-listed. Unknown paths, invalid
+configuration, and empty diffs retain fail-closed behavior. A declaration may cover
+the exact reviewed merge diff on `dev`, but not a later unrelated protected-branch push
+or a `dev` → `main` promotion. Adding behavior that the named narrow concerns cannot
+exercise invalidates the exception instead of expanding it by default.
+
+Draft #180 is the concrete first use: its gameplay tests are
+`trajectory_contracts` plus `spell_resolution_contracts`; it waives `hex_ui`,
+`gameplay_app`, UI snapshots, automated visual walks, deterministic combat simulation,
+procedural map corpora, and the residual workspace corpus. The exact oracle closure,
+real-map seams, and invalidation rules are in the
+[gameplay testing contract](gameplay-testing.md#spell-resolution-wave-waiver). The
+wave remains draft until those narrow checks and its named Creator → Sandbox Fireball
+runtime pass are recorded on the exact final head.
 
 Retry an apparent infrastructure failure once after confirming that no compiler,
 test, lint, or application error preceded it. If the same job reaches the same hard
