@@ -486,9 +486,10 @@ impl HudState {
                 HudTransientSurface::Formation => MainViewDestination::Closed,
             };
         }
-        if self.master_suppressed || context.viewport == HudViewportMode::Compact {
-            MainViewDestination::Closed
-        } else if self.main_view == MainViewDestination::Formation && !context.formation_available {
+        if self.master_suppressed
+            || context.viewport == HudViewportMode::Compact
+            || (self.main_view == MainViewDestination::Formation && !context.formation_available)
+        {
             MainViewDestination::Closed
         } else {
             self.main_view

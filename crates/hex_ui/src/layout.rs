@@ -363,6 +363,6 @@ mod tests {
         else {
             panic!("wide Main View and Action Bar regions must have bounded geometry");
         };
-        assert_eq!(main_view_bottom, action_bottom + action_height + 16.0);
+        assert!((main_view_bottom - (action_bottom + action_height + 16.0)).abs() < f32::EPSILON);
     }
 }

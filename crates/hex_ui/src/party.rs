@@ -248,7 +248,7 @@ fn rebuild(
                     }
                 });
             formation.spawn(blurb(&assets, "ASSIGNMENT GRID · ◆ anchor"));
-            spawn_slot_grid(formation, &view, &assets, metrics.control_scale.max(1.0));
+            spawn_slot_grid(formation, view, &assets, metrics.control_scale.max(1.0));
         });
     }
 }
