@@ -321,10 +321,11 @@ sets make the ordering that crosses crate boundaries explicit:
   ResolveObservation → PublishKnowledge → ApplyPresentation`, nested inside
   `GameplaySetup::Perception` on entry and `AppSystems::Update` thereafter. The first
   phase is the cross-owner hand-off from authored lighting, not a renderer query.
-- **`TerrainSystems`** — `ApplyWorld → ReconcileActors`. Map-owned `ApplyWorld` is
-  live. Gameplay must publish fresh terrain occupancy after it, reconcile movement,
-  and then settle unsupported actors in the still-pending `ReconcileActors` phase
-  before illumination, observation, knowledge, and later combat authority.
+- **`TerrainSystems`** — `ApplyWorld → RefreshProjections → ReconcileActors →
+  ConsumeOutcomes`, configured before illumination and later perception. Only
+  map-owned `ApplyWorld` has live systems. The remaining phases reserve gameplay's
+  occupancy/movement refresh, unsupported-actor settlement, and matching outcome
+  validation/release without claiming those adapters are wired.
 - **`PresentationSystems`** — `ResolveCameraOcclusion → ApplyMaterials →
   ApplyVisibility`, in `PostUpdate` after final transforms. World presentation
   publishes whole-tree opacity, the object renderer owns isolated material clones,

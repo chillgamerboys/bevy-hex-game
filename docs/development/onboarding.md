@@ -152,8 +152,11 @@ python3 tools/test_scope.py run clippy
 ```
 
 The selector chooses the affected gameplay and map concerns and fails closed to the
-complete gate for an unknown or shared path. Broad owner corpora still run for their
-owning changes, on `dev`, and at the final wave/release gate. These checks run
+complete gate for an unknown or unclassified shared path. Classified shared contracts
+use their explicit producer/consumer closure, so a terrain or trajectory rule does not
+compile the application/UI partition merely because both are gameplay-adjacent. Broad
+owner corpora still run for their owning changes, on `dev`, and at the final
+wave/release gate. These checks run
 automatically on pull requests; Markdown-only changes run the documentation link
 check instead.
 

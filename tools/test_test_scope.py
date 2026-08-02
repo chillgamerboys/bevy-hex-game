@@ -118,6 +118,19 @@ class TestScopeTests(unittest.TestCase):
             ("contracts", "app", "clippy", "docs", "shipping"),
         )
 
+    def test_trajectory_geometry_omits_application_and_ui_tests(self) -> None:
+        for path in (
+            "crates/hex_units/src/trajectories.rs",
+            "crates/hex_units/src/volumes.rs",
+        ):
+            with self.subTest(path=path):
+                decision = self.classify(path)
+                self.assertFalse(decision.full)
+                self.assertEqual(
+                    decision.concerns,
+                    ("contracts", "clippy", "docs", "shipping"),
+                )
+
     def test_combat_adapter_change_omits_independent_pure_simulation(self) -> None:
         decision = self.classify("crates/hex_combat/src/authority_host.rs")
         self.assertFalse(decision.full)
@@ -172,6 +185,43 @@ class TestScopeTests(unittest.TestCase):
         decision = self.classify("crates/hex_core/src/position.rs")
         self.assertTrue(decision.full)
         self.assertEqual(decision.concerns, tuple(self.config["all_concerns"]))
+
+    def test_terrain_impact_contract_omits_unrelated_runtime_partitions(self) -> None:
+        decision = self.classify("crates/hex_core/src/terrain_impact.rs")
+        self.assertFalse(decision.full)
+        self.assertEqual(
+            decision.concerns,
+            ("rules", "map_contracts", "clippy", "docs", "shipping"),
+        )
+
+    def test_spell_resolution_foundation_selects_only_its_authority_closure(
+        self,
+    ) -> None:
+        decision = self.classify(
+            "crates/hex_core/src/terrain_impact.rs",
+            "crates/hex_map/src/grid.rs",
+            "crates/hex_map/tests/contracts/terrain_damage.rs",
+        )
+        self.assertFalse(decision.full)
+        self.assertEqual(
+            decision.concerns,
+            (
+                "rules",
+                "map_unit",
+                "map_contracts",
+                "clippy",
+                "docs",
+                "shipping",
+            ),
+        )
+        for unrelated in (
+            "contracts",
+            "simulation",
+            "app",
+            "map_generation",
+            "residual",
+        ):
+            self.assertNotIn(unrelated, decision.concerns)
 
     def test_map_generation_selects_corpus_and_publication_contracts(self) -> None:
         decision = self.classify("crates/hex_map/src/procedural_v3/ring7.rs")
@@ -330,8 +380,26 @@ class TestScopeTests(unittest.TestCase):
             ),
         )
 
-    def test_scope_infrastructure_change_runs_everything(self) -> None:
-        decision = self.classify(".config/test-scopes.json")
+    def test_scope_routing_changes_run_representative_non_ui_closures(self) -> None:
+        decision = self.classify(
+            ".config/test-scopes.json",
+            "tools/test_test_scope.py",
+        )
+        self.assertFalse(decision.full)
+        self.assertEqual(
+            decision.concerns,
+            (
+                "rules",
+                "map_unit",
+                "map_contracts",
+                "clippy",
+                "docs",
+                "shipping",
+            ),
+        )
+
+    def test_scope_engine_change_runs_everything(self) -> None:
+        decision = self.classify("tools/test_scope.py")
         self.assertTrue(decision.full)
 
     def test_push_gate_promotes_a_narrow_decision_to_full(self) -> None:
@@ -424,7 +492,7 @@ class TestScopeTests(unittest.TestCase):
         partition = self.config["partition_checks"]["map"]
         self.assertEqual(
             partition["expected_counts"],
-            {"map_unit": 94, "map_generation": 384, "map_contracts": 74},
+            {"map_unit": 94, "map_generation": 384, "map_contracts": 75},
         )
         self.assertEqual(partition["expected_ignored"], 25)
 

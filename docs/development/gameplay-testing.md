@@ -112,9 +112,14 @@ For a source PR inside a wave, substitute that PR's wave base, for example
 wave source would correctly select every earlier lane, but it would not be a useful
 edit-loop scope.
 
-The selector unions concerns across changed files. Shared vocabulary, validation
-infrastructure, unclassified world-owned paths, an unknown path, an invalid manifest,
-or an empty diff fail closed to the complete gate. A narrow rules graph additionally runs:
+The selector unions concerns across changed files. A classified shared contract uses
+the smallest producer/consumer closure that can compile or exercise its authority;
+unclassified shared vocabulary, selector-engine or CI-topology changes, unclassified
+world-owned paths, an unknown path, an invalid manifest, or an empty diff still fail
+closed to the complete gate. Routing-table changes are different from selector-engine
+changes: the former run the always-on selector unit suite plus representative rules and
+map closures, while changes to `tools/test_scope.py`, nextest configuration, workflows,
+or Cargo topology remain full. A narrow rules graph additionally runs:
 
 ```sh
 python3 tools/test_scope.py check-graph rules
@@ -130,6 +135,27 @@ affect the renderer-free `hex_combat_core` simulation and therefore do not rerun
 Asset and animation changes do select the residual partition because their owning
 inline tests live outside the four explicit gameplay targets. A concern may be
 omitted only when it cannot compile or exercise the changed authority.
+
+The terrain-resolution foundation is an explicit narrow seam. Changes to
+`hex_core::terrain_impact` select pure rules plus the real map producer contracts; a
+co-change to the map's phase configuration also selects map units. Changes confined
+to `hex_units::trajectories` or `hex_units::volumes` select renderer-free ECS contracts.
+Neither path selects deterministic combat simulation or application/UI tests, because
+those partitions cannot add authority evidence for value validation, geometry, or an
+empty reserved schedule phase. The focused edit-loop wedge is:
+
+```sh
+cargo test -p hex_core --lib terrain_impact::tests::
+cargo test -p hex_map --test contracts \
+  terrain_damage::terrain_protocol_orders_reserved_phases_before_perception -- --exact
+cargo test -p hex_map --test contracts \
+  terrain_damage::overkill_is_capped_and_empty_voxels_report_no_material -- --exact
+```
+
+The first command exhausts the pure answer schema. The two headless map tests prove
+the installed `ApplyWorld → RefreshProjections → ReconcileActors → ConsumeOutcomes →
+perception` order and the real mixed material/air producer seam. They do not initialize
+`hex_game`, `hex_ui`, a renderer, or a map-generation corpus.
 
 Pull-request CI applies the selector directly and publishes the decision plus
 per-concern JUnit and timing evidence. Pushes to `dev` or `main` forcibly promote

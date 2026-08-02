@@ -40,11 +40,11 @@ use hex_core::{
     BiomeRegionId, BiomeRegions, CanopyOccluder, CutawayOccluder, DamagedVoxels, ElementId,
     GameplayLight, GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile,
     InteriorRegionId, InteriorRegions, Level, MapAnchorId, MapAnchors, MapViewHint,
-    PausableSystems, Pause, PresentationOcclusion, ResolvedMapSeed, RunBottom, Screen,
-    SpecialMovementRegion, SpecialMovementRegions, SubstanceId, TerrainBatchId, TerrainEdit,
-    TerrainImpact, TerrainImpactDisposition, TerrainImpactOutcome, TerrainImpactRejection,
-    TerrainImpactResult, TerrainReady, TerrainVoxelHealth, TilePos, TraversalBlockers,
-    TreeOccluder, MAX_HEADROOM,
+    PausableSystems, Pause, PerceptionSystems, PresentationOcclusion, ResolvedMapSeed, RunBottom,
+    Screen, SpecialMovementRegion, SpecialMovementRegions, SubstanceId, TerrainBatchId,
+    TerrainEdit, TerrainImpact, TerrainImpactDisposition, TerrainImpactOutcome,
+    TerrainImpactRejection, TerrainImpactResult, TerrainReady, TerrainSystems, TerrainVoxelHealth,
+    TilePos, TraversalBlockers, TreeOccluder, MAX_HEADROOM,
 };
 use hex_map::{
     CavesReportMetrics, CrossingSettings, EnvironmentSettings, GenerationReport, HillsSettings,

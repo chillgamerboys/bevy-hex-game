@@ -144,10 +144,10 @@ ${LINES_STAT}
 - [ ] `cargo fmt --all --check` (unless Markdown-only)
 - [ ] `cargo deny check` (unless Markdown-only)
 - [ ] `cargo clippy --workspace --all-targets --all-features --profile ci -- -D warnings` (unless Markdown-only)
-- [ ] `cargo test --workspace --all-features --profile ci` (unless Markdown-only)
+- [ ] `python3 tools/test_scope.py plan --base origin/dev --head HEAD` recorded; every selected test concern passed
 - [ ] `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features` (unless Markdown-only)
-- [ ] `cargo build --package hex_game --release` (unless Markdown-only; CI builds the shipping package on all three platforms)
-- [ ] Automated visual walk green — `/visual-walk` captured the screens and the agent read every frame
+- [ ] `cargo build --package hex_game --release` (when the scope decision selects `shipping`; CI builds it on all three platforms)
+- [ ] Automated visual walk green, or N/A because no app/UI/rendered runtime concern is selected
 - [ ] **A human ran the game and looked at it**
 
 <!--
@@ -184,7 +184,8 @@ necessary — it is worth a sentence so the people who depend on them know.
 
 The first eight Checks boxes are what `/audit-pr` verifies
 mechanically — the operator can tick them once its receipt is green,
-including the automated visual walk (receipt key `5_visual_walk`).
+including a policy-valid N/A for the automated visual walk (receipt key
+`5_visual_walk`) when the scope has no rendered runtime concern.
 **The last box is the operator's alone**: stills are not play, and
 motion, feel, and taste still need a human at the window.
 

@@ -111,12 +111,14 @@ implemented pending cast.
 
 The gameplay emitter and consumer are not live yet. They must keep the cast pending
 from emission until the matching answer and any resulting actor settlement finish.
-`TerrainSystems::ApplyWorld` is live and resolves the announcement on the next ordered
-map phase. Gameplay must then republish exact terrain occupancy, reconcile movement,
-and run `TerrainSystems::ReconcileActors` for units left without support before
-perception or another combat action. Falling is gameplay-owned, deterministic, and
-free: first the highest legal unoccupied support below in the same column, then the
-lateral ordering pinned in
+The configured `TerrainSystems` protocol reserves `ApplyWorld → RefreshProjections →
+ReconcileActors → ConsumeOutcomes` before perception. Only `ApplyWorld` is live and
+resolves the announcement on the next map phase. The future gameplay adapter will use
+`RefreshProjections` for exact occupancy publication and ordinary movement reconcile,
+`ReconcileActors` for unsupported units, and `ConsumeOutcomes` to validate/correlate
+the answer before releasing the pending cast. Falling is gameplay-owned,
+deterministic, and free: first the highest legal unoccupied support below in the same
+column, then the lateral ordering pinned in
 [boundary H](../planning/boundary.md#cross-owner-ordering-and-unsupported-actors), with
 no fall damage, movement cost, action cost, or turn change.
 
@@ -442,11 +444,14 @@ Terrain-durability content and map tests pin the fixed toughness scale, Boolean 
 validation, coherent reloads, canonical-volume rejection, one answer per batch, exact
 ordered outcomes, direct power subtraction, protected topology, sparse exact-voxel
 health, and map rebuild lifecycle. Presentation tests pin observation, darkness,
-burial, composed visibility, grid replacement, and cleanup. The gameplay lane must
-still add the cross-owner
-`ApplyWorld → occupancy publication → movement reconcile → ReconcileActors → perception → later combat`
-tests. Its settlement fixtures must include stacked supports, simultaneous falls,
-occupied candidates, lateral higher-ground fallback, and insertion-order independence.
+burial, composed visibility, grid replacement, and cleanup. Pure contract tests
+exhaustively reject mismatched batches/positions, schema-invalid material/health
+transitions, and incompatible applied/rejected answers. Substance-catalog
+correspondence remains map/content-owned. The gameplay lane must still add cross-owner
+tests for `ApplyWorld → RefreshProjections → ReconcileActors → ConsumeOutcomes →
+perception → later combat`. Its settlement fixtures must include stacked supports,
+simultaneous falls, occupied candidates, lateral higher-ground fallback, and
+insertion-order independence.
 
 Replay tests extend the funnel's existing determinism test to casts, including variable
 mana and facing — the same sequence applied twice must land the same world.

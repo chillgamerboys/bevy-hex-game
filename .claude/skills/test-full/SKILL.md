@@ -1,6 +1,6 @@
 ---
 name: test-full
-description: Pre-merge gate — chains `/test-local` (fmt/clippy/tests/deny/doc/links) → ship-shape build (default features, what CI's matrix builds) → manual visual-verification reminder. Used as Step 2 of `/audit-pr`. Doc-only diffs short-circuit to `/test-quick`. Stop on first failure.
+description: Pre-merge gate — chains `/test-local` (fmt/clippy/selected tests/deny/doc/links) → ship-shape build when selected → scoped visual applicability. Used as Step 2 of `/audit-pr`. Doc-only diffs short-circuit to `/test-quick`. Stop on first failure.
 ---
 
 When invoked, run this sequence. STOP on first failure.
@@ -39,6 +39,8 @@ If `/test-local` fails → STOP. Surface the failing step + report.
 
 ## Phase 2 — Ship-shape build
 
+Run this phase when the scope decision selects `shipping`:
+
 ```bash
 cargo build --package hex_game --release
 ```
@@ -48,6 +50,9 @@ three-platform matrix builds and what ships — workspace-only binaries, `hex_de
 and the `dev` feature are excluded. It
 catches "builds with the inspector but not without", which Phase 1
 cannot see because every other command runs `--all-features`.
+
+If `shipping` is omitted, record `ship build: not applicable (scope decision)` rather
+than compiling it anyway.
 
 ## Phase 3 — Visual verification (two tiers)
 
@@ -76,6 +81,12 @@ Manual walk (PR checkbox: "A human ran the game and looked at it"):
 Report this phase as `automated walk: <verdict>; human walk: operator
 confirms`. The human box in the PR template belongs to the operator,
 not this skill.
+
+If the selector omits `app` and the diff changes no rendered presentation, runtime
+navigation, movement behavior, persistence, or visual script, record both visual tiers
+as `not applicable` with that reason. Do not launch the UI merely to turn an unrelated
+test into a checkbox. Final combined waves and release promotions keep their broader
+runtime gate.
 
 ## Output
 

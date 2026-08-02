@@ -56,8 +56,9 @@ workspace-wide test count:
 ## When to invoke
 
 - **During iteration**, while writing code. Exact Cargo package, target, and feature
-  selection keeps pure changes out of the renderer graph. A shared or unknown path
-  deliberately selects the full residual concern.
+  selection keeps pure changes out of the renderer graph. An unclassified shared or
+  unknown path deliberately selects the full residual concern; classified shared
+  contracts use their explicit producer/consumer closure.
 - **Before commits**, as a pre-push sanity gate.
 - **In `/audit-diff`** as the verification step when running
   standalone (not from `/audit-pr` — that uses `/test-full`).

@@ -349,7 +349,9 @@ pub struct TerrainImpactOutcome {
 ```
 
 An applied result contains exactly one entry for every announced voxel, in the same
-canonical order. `NoMaterial` is `None → None` with no health. `Resisted` preserves
+canonical order. `SubstanceId::AIR` is absence and is never valid inside `Some`; `None`
+is the only no-material representation. `NoMaterial` is `None → None` with no health.
+`Resisted` preserves
 one material; toughness-bearing material reports equal valid health before and after,
 while material without toughness reports neither. `Damaged` preserves one material
 and reports the same maximum with `0 < after.remaining < before.remaining`.
@@ -381,29 +383,31 @@ presentation independently filter outcomes through faction knowledge.
 
 ### Cross-owner ordering and unsupported actors
 
-`TerrainSystems::{ApplyWorld, ReconcileActors}` defines the cross-crate update order.
-The map's live `ApplyWorld` applies edits/impacts, rebuilds material consequences,
-publishes outcomes, and flushes rebuilt tile facts. Gameplay must schedule
-`TerrainOccupancySystems::Publish` after `ApplyWorld` and before `ReconcileActors` so
-it observes those replacement entities rather than the previous grid. Ordinary
-movement reconciliation must also finish before unsupported-actor settlement, fixing
-each unit's current logical position before a stale route is cancelled. The pending
-`ReconcileActors` settlement then completes before illumination, observation,
-knowledge publication, or another combat action. In full integration the order is:
+`TerrainSystems::{ApplyWorld, RefreshProjections, ReconcileActors, ConsumeOutcomes}`
+defines the configured cross-crate phase order. The map's live `ApplyWorld` applies
+edits/impacts, rebuilds material consequences, publishes outcomes, and flushes rebuilt
+tile facts. The other three phases are empty reservations in this foundation:
+`RefreshProjections` will publish exact terrain occupancy and reconcile ordinary
+movement, `ReconcileActors` will settle unsupported actors, and `ConsumeOutcomes` will
+validate the matching answer before releasing pending gameplay authority. In full
+integration the reserved phases contain:
 
 ```text
 ApplyWorld
-  → TerrainOccupancySystems::Publish
-  → MovementSystems::Reconcile
+  → RefreshProjections
+      → TerrainOccupancySystems::Publish
+      → MovementSystems::Reconcile
   → ReconcileActors (cancel stale routes, then settle)
+  → ConsumeOutcomes (validate/correlate, then release pending work)
   → perception
   → combat authority/action
 ```
 
 An impact emitted during combat apply on frame N therefore settles at the next
-`ApplyWorld`; combat does not advance past its pending batch before the outcome and
-actor reconciliation complete. `ApplyWorld` is live; the occupancy/movement ordering,
-settlement, and pending-cast combat gate remain gameplay-owned integration work.
+`ApplyWorld`. The future gameplay adapter keeps combat behind its pending batch until
+the refreshed projections, actor reconciliation, and matching `ConsumeOutcomes` phase
+complete. `ApplyWorld` is the only live participant today; the downstream phase
+configuration adds no occupancy, movement, settlement, or cast-completion behavior.
 
 Gameplay owns settlement because the map never reads units. After destruction, every
 unit whose exact support is no longer legal is handled in stable `UnitId` order:
@@ -425,11 +429,11 @@ unit whose exact support is no longer legal is handled in stable `UnitId` order:
 `TerrainEdit` still has no batch acknowledgment. Conjuration correlation is not
 inferred from voxel position; it receives a separate contract if one is needed.
 
-**Status — partial**: the shared vocabulary, map outcome publisher,
-`DamagedVoxels` publisher, visibility-gated shared presentation adapter, and
-`ApplyWorld` ordering participant are live. Gameplay impact emission, outcome
-consumption, occupancy/movement reordering, actor settlement, and the combat pending
-gate remain pending.
+**Status — partial**: the four-phase shared vocabulary/configuration, map outcome
+publisher, `DamagedVoxels` publisher, visibility-gated shared presentation adapter,
+and `ApplyWorld` participant are live. The three downstream phases remain empty;
+gameplay impact emission, outcome consumption, occupancy/movement reordering, actor
+settlement, and the combat pending gate remain pending.
 
 ## I — Interior domains after edits (initial ruling)
 

@@ -79,7 +79,7 @@ audit-diff is clean, to avoid burning the cycle on a diff that would
 have failed review anyway.
 
 **What it does:** invokes the `/test-full` skill — `/test-local`
-(fmt, clippy, workspace tests, `cargo deny`, doc build, markdown link
+(fmt, clippy, selector-chosen concern tests, `cargo deny`, doc build, markdown link
 check) then the ship-shape build (`cargo build --package hex_game
 --release`, no `--all-features`), then it prints the manual visual walk.
 Doc-only diffs short-circuit to `/test-quick`.

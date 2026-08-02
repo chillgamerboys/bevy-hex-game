@@ -107,9 +107,16 @@ pub fn plugin(app: &mut App) {
         .add_message::<TerrainEdit>()
         .add_message::<TerrainImpact>()
         .add_message::<TerrainImpactOutcome>()
+        // Only ApplyWorld has participants today. The empty downstream sets reserve
+        // the cross-crate protocol without moving gameplay behavior in this change.
         .configure_sets(
             Update,
-            (TerrainSystems::ApplyWorld, TerrainSystems::ReconcileActors)
+            (
+                TerrainSystems::ApplyWorld,
+                TerrainSystems::RefreshProjections,
+                TerrainSystems::ReconcileActors,
+                TerrainSystems::ConsumeOutcomes,
+            )
                 .chain()
                 .before(PerceptionSystems::ResolveIllumination),
         )

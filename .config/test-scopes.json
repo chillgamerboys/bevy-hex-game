@@ -233,7 +233,7 @@
       "expected_counts": {
         "map_unit": 94,
         "map_generation": 384,
-        "map_contracts": 74
+        "map_contracts": 75
       },
       "expected_ignored": 25,
       "full_command": [
@@ -260,13 +260,20 @@
   },
   "rules": [
     {
-      "name": "scope-infrastructure",
+      "name": "scope-routing-contract",
       "patterns": [
         ".config/test-scopes.json",
+        "tools/test_test_scope.py"
+      ],
+      "concerns": ["rules", "map_unit", "map_contracts", "clippy", "docs", "shipping"],
+      "reason": "Routing-table changes run the always-on selector tests plus representative gameplay/map closures; selector engines and CI topology remain fully fail-closed."
+    },
+    {
+      "name": "scope-infrastructure",
+      "patterns": [
         ".config/nextest.toml",
         "tools/gameplay_scope.py",
         "tools/test_scope.py",
-        "tools/test_test_scope.py",
         ".github/workflows/**",
         "Cargo.toml",
         "Cargo.lock",
@@ -324,6 +331,12 @@
       "reason": "Shared map foundations feed unit, generation, and publication contracts."
     },
     {
+      "name": "terrain-impact-contract",
+      "patterns": ["crates/hex_core/src/terrain_impact.rs"],
+      "concerns": ["rules", "map_contracts", "clippy", "docs", "shipping"],
+      "reason": "Terrain impact vocabulary is exercised by its pure validator tests and the real map producer contract; unrelated simulation and application/UI partitions cannot exercise it."
+    },
+    {
       "name": "shared-core",
       "patterns": ["crates/hex_core/**"],
       "full": true,
@@ -363,6 +376,15 @@
       "patterns": ["crates/hex_anim/**"],
       "concerns": ["contracts", "app", "residual", "clippy", "docs", "shipping"],
       "reason": "Animation owns residual inline tests and crosses unit movement, combat lifecycle, and presentation."
+    },
+    {
+      "name": "unit-trajectory-contracts",
+      "patterns": [
+        "crates/hex_units/src/trajectories.rs",
+        "crates/hex_units/src/volumes.rs"
+      ],
+      "concerns": ["contracts", "clippy", "docs", "shipping"],
+      "reason": "Trajectory and volume geometry are exercised by renderer-free unit/ECS contracts; application/UI tests cannot add authority evidence."
     },
     {
       "name": "units",

@@ -200,12 +200,14 @@ real bug (the player spawned before the tiles existed and sank into the ground).
 
 Clean up on `OnExit(Screen::Gameplay)`. There is a test that nothing leaks.
 
-The terrain-durability contract additionally reserves
-`TerrainSystems::ApplyWorld → TerrainSystems::ReconcileActors` for live updates.
-`ApplyWorld` is live and is the map-owned half that flushes rebuilt tile facts;
-gameplay owns actor settlement. `ReconcileActors` remains an ordering reservation: do
-not put settlement behind it until the gameplay implementation and cross-crate ordering
-tests land.
+The terrain-durability contract configures the reserved update protocol
+`TerrainSystems::ApplyWorld → TerrainSystems::RefreshProjections →
+TerrainSystems::ReconcileActors → TerrainSystems::ConsumeOutcomes` before perception.
+Only `ApplyWorld` has live systems and remains the map-owned phase that flushes rebuilt
+tile facts and outcomes. The other phases are empty gameplay reservations for
+occupancy/movement refresh, actor settlement, and matching outcome consumption; do not
+put systems into them until the gameplay implementation and cross-crate ordering tests
+land together.
 
 ## Things that fail silently here
 

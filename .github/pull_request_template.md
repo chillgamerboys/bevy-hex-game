@@ -8,11 +8,11 @@
 - [ ] `cargo fmt --all --check` (unless Markdown-only)
 - [ ] `cargo deny check` (unless Markdown-only)
 - [ ] `cargo clippy --workspace --all-targets --all-features --profile ci -- -D warnings` (unless Markdown-only)
-- [ ] Gameplay rules, contracts, simulation, and app partitions (report each concern below)
-- [ ] Residual workspace tests and doctests (unless Markdown-only)
+- [ ] `python3 tools/test_scope.py plan --base origin/dev --head HEAD` recorded; every selected test concern passed
+- [ ] Residual workspace tests and doctests (only when the scope decision selects `residual`)
 - [ ] `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features` (unless Markdown-only)
-- [ ] `cargo build --package hex_game --release` (unless Markdown-only; CI builds the shipping package on all three platforms)
-- [ ] Structural UI oracle and scoped Bevy image-target walk green; agent read every frame
+- [ ] `cargo build --package hex_game --release` (when the scope decision selects `shipping`; CI builds it on all three platforms)
+- [ ] Structural UI oracle and scoped Bevy image-target walk green, or N/A because no app/UI/rendered runtime concern is selected
 
 ### Manual runtime sign-off
 
@@ -42,6 +42,8 @@ lattice decision, HUD hiding, and pause.
 -->
 
 ### Evidence by concern
+
+<!-- Record omitted concerns as N/A with the selector reason; do not run them merely to fill this list. -->
 
 - Pure rules:
 - ECS contracts:

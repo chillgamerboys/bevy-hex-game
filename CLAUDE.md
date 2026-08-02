@@ -219,11 +219,12 @@ and tests without a renderer. It holds the largest share of the test suite.
   ResolveObservation → PublishKnowledge → ApplyPresentation`) orders both initial
   perception and later updates. Authored lighting publishes
   `ExteriorIllumination`; gameplay never samples renderer lights or pixels.
-- **`TerrainSystems`** (`ApplyWorld → ReconcileActors`) orders terrain durability.
-  Map-owned `ApplyWorld` is live. Gameplay must publish fresh terrain occupancy after
-  it, reconcile movement, and then settle unsupported actors in the still-pending
-  `ReconcileActors` phase before perception and later combat authority. Do not claim
-  live settlement until that adapter and its cross-crate ordering tests have landed.
+- **`TerrainSystems`** (`ApplyWorld → RefreshProjections → ReconcileActors →
+  ConsumeOutcomes`) reserves the complete terrain-durability protocol before
+  perception. Only map-owned `ApplyWorld` has live participants. The other phases
+  reserve gameplay's occupancy/movement refresh, unsupported-actor settlement, and
+  matching outcome validation/release; do not claim those behaviors are live until
+  their adapters and cross-crate ordering tests land.
 - **Same-frame combat knowledge** is ordered `PublishKnowledge → combat spatial
   knowledge synchronization → CombatSystems::Act → Apply → Resolve → Advance`.
   Casting and AI must use that publication; neither preview nor a legal-action request
@@ -362,6 +363,10 @@ Gameplay and map tests are partitioned by concern in
 evidence comes from rules/contracts/simulation/app data, while map logic uses
 unit/generation/publication data and retains its existing visual criteria. The scoped
 gameplay visual run contains exactly ten reviewed presentation frames.
+Ordinary PRs run only the selector-chosen producer/consumer closure; application/UI
+tests and visual walks are not substitutes for pure contract or trajectory evidence.
+Unknown/unclassified paths, pushes to `dev`/`main`, and final wave/release candidates
+still promote to the complete gate.
 Standalone audits: `/audit-diff`, `/audit-silent-failures`, `/update-docs`,
 `/visual-walk` (the scripted capture walk — audit-pr's Step 2.5; the agent
 reads the frames, and the human walk still owns motion and taste).

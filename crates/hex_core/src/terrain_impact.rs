@@ -141,9 +141,9 @@ pub struct TerrainVoxelOutcome {
     pub pos: TilePos,
     /// What the world decided.
     pub disposition: TerrainImpactDisposition,
-    /// Substance before resolution, if material existed.
+    /// Substance before resolution, if material existed. Air is represented by `None`.
     pub before: Option<SubstanceId>,
-    /// Substance after resolution, if material remains.
+    /// Substance after resolution, if material remains. Air is represented by `None`.
     pub after: Option<SubstanceId>,
     /// Health before resolution for a destructible substance.
     pub health_before: Option<TerrainVoxelHealth>,
@@ -155,6 +155,7 @@ impl TerrainVoxelOutcome {
     /// Whether material and health agree with the disposition and impact power.
     #[must_use]
     pub fn is_consistent_with_power(&self, power: u8) -> bool {
+        let had_material = self.before.is_some_and(|substance| !substance.is_air());
         match self.disposition {
             TerrainImpactDisposition::NoMaterial => {
                 self.before.is_none()
@@ -163,7 +164,7 @@ impl TerrainVoxelOutcome {
                     && self.health_after.is_none()
             }
             TerrainImpactDisposition::Resisted => {
-                self.before.is_some()
+                had_material
                     && self.before == self.after
                     && self.health_before == self.health_after
                     && self.health_before.is_none_or(TerrainVoxelHealth::is_valid)
@@ -173,7 +174,7 @@ impl TerrainVoxelOutcome {
                     return false;
                 };
                 power > 0
-                    && self.before.is_some()
+                    && had_material
                     && self.before == self.after
                     && before.is_valid()
                     && after.is_valid()
@@ -185,7 +186,7 @@ impl TerrainVoxelOutcome {
                 let Some(before) = self.health_before else {
                     return false;
                 };
-                self.before.is_some()
+                had_material
                     && self.after.is_none()
                     && before.is_valid()
                     && self.health_after.is_none()
@@ -322,13 +323,20 @@ impl DamagedVoxels {
     }
 }
 
-/// Shared cross-owner ordering for terrain mutation and gameplay reconciliation.
+/// Shared cross-owner phases for terrain mutation and gameplay reconciliation.
+///
+/// [`ApplyWorld`](Self::ApplyWorld) is live. The remaining variants reserve the
+/// accepted integration protocol without claiming that gameplay participants exist.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TerrainSystems {
     /// The map consumes edits/impacts and publishes rebuilt terrain plus outcomes.
     ApplyWorld,
-    /// Gameplay settles actors and authority against the rebuilt terrain.
+    /// Reserved for gameplay to refresh occupancy and reconcile movement.
+    RefreshProjections,
+    /// Reserved for gameplay to settle actors against the rebuilt terrain.
     ReconcileActors,
+    /// Reserved for gameplay to validate answers and release matching pending work.
+    ConsumeOutcomes,
 }
 
 #[cfg(test)]
@@ -351,6 +359,128 @@ mod tests {
 
     fn health(remaining: u8, maximum: u8) -> TerrainVoxelHealth {
         TerrainVoxelHealth::new(remaining, maximum).expect("fixture health is valid")
+    }
+
+    fn voxel_outcome(
+        pos: TilePos,
+        disposition: TerrainImpactDisposition,
+        before: Option<SubstanceId>,
+        after: Option<SubstanceId>,
+        health_before: Option<TerrainVoxelHealth>,
+        health_after: Option<TerrainVoxelHealth>,
+    ) -> TerrainVoxelOutcome {
+        TerrainVoxelOutcome {
+            pos,
+            disposition,
+            before,
+            after,
+            health_before,
+            health_after,
+        }
+    }
+
+    fn no_material_outcome(pos: TilePos) -> TerrainVoxelOutcome {
+        voxel_outcome(
+            pos,
+            TerrainImpactDisposition::NoMaterial,
+            None,
+            None,
+            None,
+            None,
+        )
+    }
+
+    fn valid_health_cases() -> Vec<TerrainVoxelHealth> {
+        let mut cases = Vec::new();
+        for maximum in [1, 2, 4, 8] {
+            for remaining in 1..=maximum {
+                cases.push(TerrainVoxelHealth { remaining, maximum });
+            }
+        }
+        cases
+    }
+
+    fn health_semantic_cases() -> Vec<Option<TerrainVoxelHealth>> {
+        let mut cases = vec![None];
+        cases.extend(valid_health_cases().into_iter().map(Some));
+        cases.extend([
+            Some(TerrainVoxelHealth {
+                remaining: 0,
+                maximum: 1,
+            }),
+            Some(TerrainVoxelHealth {
+                remaining: 2,
+                maximum: 1,
+            }),
+            Some(TerrainVoxelHealth {
+                remaining: 1,
+                maximum: 0,
+            }),
+            Some(TerrainVoxelHealth {
+                remaining: 1,
+                maximum: 3,
+            }),
+            Some(TerrainVoxelHealth {
+                remaining: 9,
+                maximum: 8,
+            }),
+            Some(TerrainVoxelHealth {
+                remaining: u8::MAX,
+                maximum: u8::MAX,
+            }),
+        ]);
+        cases
+    }
+
+    fn accepted_voxel_outcomes(pos: TilePos, power: u8) -> Vec<TerrainVoxelOutcome> {
+        let mut accepted = vec![no_material_outcome(pos)];
+        let health_cases = valid_health_cases();
+
+        for material in [SubstanceId(3), SubstanceId(9)] {
+            accepted.push(voxel_outcome(
+                pos,
+                TerrainImpactDisposition::Resisted,
+                Some(material),
+                Some(material),
+                None,
+                None,
+            ));
+            for health in &health_cases {
+                accepted.push(voxel_outcome(
+                    pos,
+                    TerrainImpactDisposition::Resisted,
+                    Some(material),
+                    Some(material),
+                    Some(*health),
+                    Some(*health),
+                ));
+                if power > 0 && health.remaining > power {
+                    accepted.push(voxel_outcome(
+                        pos,
+                        TerrainImpactDisposition::Damaged,
+                        Some(material),
+                        Some(material),
+                        Some(*health),
+                        Some(TerrainVoxelHealth {
+                            remaining: health.remaining - power,
+                            maximum: health.maximum,
+                        }),
+                    ));
+                }
+                if power >= health.remaining {
+                    accepted.push(voxel_outcome(
+                        pos,
+                        TerrainImpactDisposition::Destroyed,
+                        Some(material),
+                        None,
+                        Some(*health),
+                        None,
+                    ));
+                }
+            }
+        }
+
+        accepted
     }
 
     #[test]
@@ -465,6 +595,201 @@ mod tests {
     }
 
     #[test]
+    fn applied_outcome_rejects_every_volume_and_batch_mismatch() {
+        let first = at(0, 0, 1);
+        let second = at(1, 0, 1);
+        let third = at(2, 0, 1);
+        let substitute = at(3, 0, 1);
+        let announced = impact(vec![first, second, third], 2);
+        let exact = vec![
+            no_material_outcome(first),
+            no_material_outcome(second),
+            no_material_outcome(third),
+        ];
+
+        let exact_answer = TerrainImpactOutcome {
+            batch: announced.batch,
+            result: TerrainImpactResult::Applied(exact.clone()),
+        };
+        assert!(exact_answer.is_consistent_with(&announced));
+
+        let wrong_batch = TerrainImpactOutcome {
+            batch: TerrainBatchId(99),
+            result: TerrainImpactResult::Applied(exact.clone()),
+        };
+        assert!(!wrong_batch.is_consistent_with(&announced));
+
+        let assert_mismatch = |case: &str, voxels: Vec<TerrainVoxelOutcome>| {
+            let answer = TerrainImpactOutcome {
+                batch: announced.batch,
+                result: TerrainImpactResult::Applied(voxels),
+            };
+            assert!(
+                !answer.is_consistent_with(&announced),
+                "{case} positions were accepted"
+            );
+        };
+
+        for omitted in 0..exact.len() {
+            let voxels = exact
+                .iter()
+                .copied()
+                .enumerate()
+                .filter_map(|(index, outcome)| (index != omitted).then_some(outcome))
+                .collect();
+            assert_mismatch("missing", voxels);
+        }
+
+        for insertion in 0..=announced.volume.len() {
+            let mut voxels = Vec::with_capacity(announced.volume.len() + 1);
+            for (index, pos) in announced.volume.iter().copied().enumerate() {
+                if index == insertion {
+                    voxels.push(no_material_outcome(substitute));
+                }
+                voxels.push(no_material_outcome(pos));
+            }
+            if insertion == announced.volume.len() {
+                voxels.push(no_material_outcome(substitute));
+            }
+            assert_mismatch("extra", voxels);
+        }
+
+        for order in [
+            [first, third, second],
+            [second, first, third],
+            [second, third, first],
+            [third, first, second],
+            [third, second, first],
+        ] {
+            assert_mismatch(
+                "reordered",
+                order.into_iter().map(no_material_outcome).collect(),
+            );
+        }
+
+        for (replaced, original) in announced.volume.iter().copied().enumerate() {
+            for replacement in announced.volume.iter().copied() {
+                if replacement == original {
+                    continue;
+                }
+                let voxels = announced
+                    .volume
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .map(|(index, pos)| {
+                        no_material_outcome(if index == replaced { replacement } else { pos })
+                    })
+                    .collect();
+                assert_mismatch("duplicated", voxels);
+            }
+
+            let voxels = announced
+                .volume
+                .iter()
+                .copied()
+                .enumerate()
+                .map(|(index, pos)| {
+                    no_material_outcome(if index == replaced { substitute } else { pos })
+                })
+                .collect();
+            assert_mismatch("substituted", voxels);
+        }
+    }
+
+    #[test]
+    fn structurally_rejected_impacts_never_accept_applied_answers() {
+        let first = at(0, 0, 1);
+        let second = at(1, 0, 1);
+        for (case, announced, voxels) in [
+            ("empty", impact(Vec::new(), 1), Vec::new()),
+            (
+                "noncanonical order",
+                impact(vec![second, first], 1),
+                vec![no_material_outcome(second), no_material_outcome(first)],
+            ),
+            (
+                "duplicate position",
+                impact(vec![first, first], 1),
+                vec![no_material_outcome(first), no_material_outcome(first)],
+            ),
+            (
+                "zero power",
+                impact(vec![first], 0),
+                vec![no_material_outcome(first)],
+            ),
+        ] {
+            let answer = TerrainImpactOutcome {
+                batch: announced.batch,
+                result: TerrainImpactResult::Applied(voxels),
+            };
+            assert!(
+                !answer.is_consistent_with(&announced),
+                "{case} impact accepted an applied answer"
+            );
+        }
+    }
+
+    #[test]
+    fn voxel_outcome_validation_exhausts_material_and_health_semantics() {
+        let pos = at(0, 0, 1);
+        let materials = [
+            None,
+            Some(SubstanceId::AIR),
+            Some(SubstanceId(3)),
+            Some(SubstanceId(9)),
+        ];
+        let health_cases = health_semantic_cases();
+        let dispositions = [
+            TerrainImpactDisposition::NoMaterial,
+            TerrainImpactDisposition::Resisted,
+            TerrainImpactDisposition::Damaged,
+            TerrainImpactDisposition::Destroyed,
+        ];
+
+        // Powers 0..=9 cover every threshold for the 1/2/4/8 health scale; MAX
+        // proves values above the scale stay in the same semantic class as 9.
+        for power in (0..=9).chain(std::iter::once(u8::MAX)) {
+            let accepted = accepted_voxel_outcomes(pos, power);
+            let announced = impact(vec![pos], power);
+            for disposition in dispositions {
+                for before in materials {
+                    for after in materials {
+                        for health_before in &health_cases {
+                            for health_after in &health_cases {
+                                let candidate = voxel_outcome(
+                                    pos,
+                                    disposition,
+                                    before,
+                                    after,
+                                    *health_before,
+                                    *health_after,
+                                );
+                                let expected = accepted.contains(&candidate);
+                                assert_eq!(
+                                    candidate.is_consistent_with_power(power),
+                                    expected,
+                                    "power={power}, candidate={candidate:?}"
+                                );
+
+                                let answer = TerrainImpactOutcome {
+                                    batch: announced.batch,
+                                    result: TerrainImpactResult::Applied(vec![candidate]),
+                                };
+                                assert_eq!(
+                                    answer.is_consistent_with(&announced),
+                                    power > 0 && expected,
+                                    "integrated power={power}, candidate={candidate:?}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn rejected_outcomes_acknowledge_structural_failures() {
         let empty_impact = impact(Vec::new(), 1);
         let outcome = TerrainImpactOutcome {
@@ -498,6 +823,103 @@ mod tests {
             result: TerrainImpactResult::Rejected(TerrainImpactRejection::ReusedBatch),
         };
         assert!(reused.is_consistent_with(&empty_impact));
+    }
+
+    #[test]
+    fn rejection_compatibility_is_exact_for_every_reason() {
+        let first = at(0, 0, 1);
+        let second = at(1, 0, 1);
+        let reasons = [
+            TerrainImpactRejection::EmptyVolume,
+            TerrainImpactRejection::NonCanonicalVolume,
+            TerrainImpactRejection::ZeroPower,
+            TerrainImpactRejection::UnknownElement,
+            TerrainImpactRejection::ReusedBatch,
+            TerrainImpactRejection::TerrainUnavailable,
+        ];
+        let cases = [
+            (
+                "empty",
+                impact(Vec::new(), 1),
+                vec![
+                    TerrainImpactRejection::EmptyVolume,
+                    TerrainImpactRejection::ReusedBatch,
+                ],
+            ),
+            (
+                "empty precedes zero power",
+                impact(Vec::new(), 0),
+                vec![
+                    TerrainImpactRejection::EmptyVolume,
+                    TerrainImpactRejection::ReusedBatch,
+                ],
+            ),
+            (
+                "noncanonical",
+                impact(vec![second, first], 1),
+                vec![
+                    TerrainImpactRejection::NonCanonicalVolume,
+                    TerrainImpactRejection::ReusedBatch,
+                ],
+            ),
+            (
+                "noncanonical precedes zero power",
+                impact(vec![second, first], 0),
+                vec![
+                    TerrainImpactRejection::NonCanonicalVolume,
+                    TerrainImpactRejection::ReusedBatch,
+                ],
+            ),
+            (
+                "zero power",
+                impact(vec![first], 0),
+                vec![
+                    TerrainImpactRejection::ZeroPower,
+                    TerrainImpactRejection::ReusedBatch,
+                ],
+            ),
+            (
+                "structurally valid",
+                impact(vec![first], 1),
+                vec![
+                    TerrainImpactRejection::UnknownElement,
+                    TerrainImpactRejection::ReusedBatch,
+                    TerrainImpactRejection::TerrainUnavailable,
+                ],
+            ),
+        ];
+
+        for (case, announced, compatible) in cases {
+            for reason in reasons {
+                let answer = TerrainImpactOutcome {
+                    batch: announced.batch,
+                    result: TerrainImpactResult::Rejected(reason),
+                };
+                assert_eq!(
+                    answer.is_consistent_with(&announced),
+                    compatible.contains(&reason),
+                    "case={case}, reason={reason:?}"
+                );
+
+                let wrong_batch = TerrainImpactOutcome {
+                    batch: TerrainBatchId(99),
+                    result: TerrainImpactResult::Rejected(reason),
+                };
+                assert!(
+                    !wrong_batch.is_consistent_with(&announced),
+                    "case={case}, reason={reason:?} accepted a mismatched batch"
+                );
+            }
+        }
+
+        let first_use = impact(vec![first], 1);
+        let structurally_different_reuse = impact(Vec::new(), 1);
+        let reused = TerrainImpactOutcome {
+            batch: first_use.batch,
+            result: TerrainImpactResult::Rejected(TerrainImpactRejection::ReusedBatch),
+        };
+        assert!(reused.is_consistent_with(&first_use));
+        assert!(reused.is_consistent_with(&structurally_different_reuse));
     }
 
     #[test]
