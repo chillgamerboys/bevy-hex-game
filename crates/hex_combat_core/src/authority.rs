@@ -460,6 +460,14 @@ pub struct CombatState {
     pub metrics: CombatMetrics,
     /// One defender choice suspending further simulation commands.
     pub pending: PendingDecision,
+    /// A host-resolved spell transaction still owns completion authority.
+    ///
+    /// Area spell effects and terrain acknowledgements are resolved by the Bevy host,
+    /// but defender answers still reduce here. This hold prevents the first answer
+    /// from advancing the turn or settling the encounter before the host publishes
+    /// every remaining obligation.
+    #[serde(default)]
+    resolution_held: bool,
     /// Exact accepted command transcript.
     pub commands: Vec<IssuedCommand>,
     /// Exact structured outcome transcript, including refusals.
@@ -594,6 +602,7 @@ impl CombatState {
             reveals: BTreeMap::new(),
             metrics: CombatMetrics::default(),
             pending,
+            resolution_held: false,
             commands: Vec::new(),
             events: Vec::new(),
             outcome: None,
@@ -640,6 +649,36 @@ impl CombatState {
     #[must_use]
     pub fn current(&self) -> Option<UnitId> {
         self.order.get(self.current).copied()
+    }
+
+    /// Begins one host-owned spell-resolution transaction.
+    ///
+    /// The hold is deliberately separate from [`PendingDecision`]: the public
+    /// decision names only the one answer currently owed, while terrain and later
+    /// occupants may still be unresolved after that answer clears.
+    pub fn begin_external_resolution(&mut self) -> Result<(), String> {
+        if self.resolution_held {
+            return Err("combat authority already holds an external resolution".to_owned());
+        }
+        self.resolution_held = true;
+        Ok(())
+    }
+
+    /// Releases a complete host-owned spell resolution and resumes authority once.
+    pub fn finish_external_resolution(&mut self) -> Result<(), String> {
+        if !self.resolution_held {
+            return Err("combat authority has no external resolution to finish".to_owned());
+        }
+        self.resolution_held = false;
+        self.detect_outcome();
+        self.advance_if_finished();
+        Ok(())
+    }
+
+    /// Whether a host-owned spell transaction still blocks ordinary authority.
+    #[must_use]
+    pub const fn external_resolution_is_held(&self) -> bool {
+        self.resolution_held
     }
 
     /// Applies one intent through the sole validation and mutation boundary.
@@ -889,6 +928,9 @@ impl CombatState {
                 issued_by: issued.seat,
                 owned_by: actor.seat,
             });
+        }
+        if self.resolution_held && !self.pending.is_open() {
+            return Err(CommandRefusal::Busy);
         }
         let required_answer = match self.pending {
             PendingDecision::None => None,
@@ -1574,7 +1616,7 @@ impl CombatState {
     }
 
     fn advance_if_finished(&mut self) {
-        if self.pending.is_open() {
+        if self.pending.is_open() || self.resolution_held {
             return;
         }
         let Some(unit) = self.current() else {
@@ -1658,6 +1700,9 @@ impl CombatState {
     }
 
     fn detect_outcome(&mut self) {
+        if self.resolution_held {
+            return;
+        }
         let player_alive = self
             .units
             .values()
@@ -3005,6 +3050,83 @@ mod tests {
                 outcome: EncounterOutcome::Victory
             }
         )));
+    }
+
+    #[test]
+    fn external_resolution_holds_turn_and_outcome_between_area_answers() {
+        let cell = LatticeCoord::ORIGIN;
+        let spec = LatticeSpec::default().with(cell, CellKind::Blank);
+        let mut sim = state(
+            vec![
+                CombatUnit::new(
+                    UnitId(0),
+                    PlayerSeat(0),
+                    Faction::Player,
+                    position(0, 0),
+                    20,
+                ),
+                CombatUnit::new(
+                    UnitId(1),
+                    PlayerSeat(0),
+                    Faction::Hostile,
+                    position(1, 0),
+                    10,
+                )
+                .with_lattice(
+                    spec.clone(),
+                    LatticeState::new(&spec, &LatticeStats::default()),
+                    LatticeStats::default(),
+                ),
+            ],
+            4,
+        );
+        let turn = sim
+            .units
+            .get_mut(&UnitId(0))
+            .and_then(|unit| unit.turn.as_mut())
+            .expect("the caster owns the opening turn");
+        turn.acted = true;
+        turn.movement_left = 0;
+        sim.pending = PendingDecision::ChooseDisables {
+            decider: UnitId(1),
+            count: 1,
+            source: UnitId(0),
+        };
+        sim.begin_external_resolution()
+            .expect("the area transaction acquires one hold");
+
+        sim.apply(IssuedCommand {
+            seat: PlayerSeat(0),
+            command: GameCommand::ChooseDisables {
+                unit: UnitId(1),
+                cells: vec![cell],
+            },
+        })
+        .expect("the held defender answer reduces normally");
+
+        assert_eq!(sim.pending, PendingDecision::None);
+        assert!(sim.external_resolution_is_held());
+        assert_eq!(sim.outcome, None, "the held answer cannot settle victory");
+        assert_eq!(sim.metrics.turns, 0, "the held answer cannot pass the turn");
+        assert_eq!(sim.current(), Some(UnitId(0)));
+        assert_eq!(
+            sim.apply(IssuedCommand {
+                seat: PlayerSeat(0),
+                command: GameCommand::EndTurn { unit: UnitId(0) },
+            }),
+            Err(CommandRefusal::Busy),
+            "ordinary commands stay blocked between queued obligations"
+        );
+
+        sim.finish_external_resolution()
+            .expect("the complete transaction releases once");
+        assert!(!sim.external_resolution_is_held());
+        assert_eq!(sim.outcome, Some(EncounterOutcome::Victory));
+        assert_eq!(
+            sim.metrics.turns, 1,
+            "release resumes the finished turn once"
+        );
+        assert!(sim.finish_external_resolution().is_err());
     }
 
     #[test]
