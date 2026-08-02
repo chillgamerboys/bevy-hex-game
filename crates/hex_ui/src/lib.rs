@@ -745,7 +745,7 @@ mod structural_tests {
                             .iter()
                             .any(|node| node.name == format!("Campaign Slot {slot}")));
                     }
-                    for action in ["New Game", "Continue"] {
+                    for action in ["New Game Save Slot 1", "Continue Save Slot 2"] {
                         let controls = snapshot
                             .nodes
                             .iter()
@@ -781,6 +781,76 @@ mod structural_tests {
             }
         }
         assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    #[test]
+    fn campaign_duplicate_slot_states_keep_unique_control_and_accessible_names() {
+        for (action, status) in [
+            ("New Game", CampaignSlotStatusView::Empty),
+            (
+                "Continue",
+                CampaignSlotStatusView::Available {
+                    party: Vec::new(),
+                    active_time: "0m".to_owned(),
+                },
+            ),
+        ] {
+            let snapshot = settled_snapshot(
+                hex_core::Screen::Title,
+                UVec2::new(1920, 1080),
+                1.0,
+                UiScaleMode::Auto,
+                |world| {
+                    world.insert_resource(MainMenuView {
+                        route: MainMenuRoute::Campaign,
+                        setup_failure: None,
+                        campaign_slots: CampaignSlotId::ALL
+                            .into_iter()
+                            .map(|slot| CampaignSlotView {
+                                slot,
+                                status: status.clone(),
+                            })
+                            .collect(),
+                    });
+                },
+            );
+
+            let expected = CampaignSlotId::ALL.map(|slot| {
+                (
+                    format!("{action} Save Slot {}", slot.number()),
+                    format!("{action}, Save Slot {}", slot.number()),
+                )
+            });
+            for (name, accessible_label) in &expected {
+                let matching = snapshot
+                    .nodes
+                    .iter()
+                    .filter(|node| node.name == *name)
+                    .collect::<Vec<_>>();
+                assert_eq!(matching.len(), 1, "missing unique Campaign action {name:?}");
+                assert_eq!(
+                    matching
+                        .first()
+                        .expect("the exact Campaign action count was checked")
+                        .accessible_label
+                        .as_deref(),
+                    Some(accessible_label.as_str())
+                );
+                assert!(
+                    snapshot.focus_order.contains(name),
+                    "{name:?} must remain in keyboard order"
+                );
+            }
+            assert_eq!(
+                snapshot
+                    .nodes
+                    .iter()
+                    .filter(|node| node.name.starts_with(action) && node.focusable)
+                    .count(),
+                3,
+                "all duplicate {action:?} cards must keep distinct controls"
+            );
+        }
     }
 
     #[test]

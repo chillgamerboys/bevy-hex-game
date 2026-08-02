@@ -9,6 +9,9 @@ use crate::{
 };
 
 const OUTCOME_PANEL_BG: Color = Color::srgb(0.02, 0.03, 0.045);
+// Terminal encounter decisions supersede deployment if their lifecycle briefly
+// overlaps during the transition out of placement.
+const OUTCOME_MODAL_Z: i32 = 12;
 
 #[derive(Component)]
 struct OutcomeRoot;
@@ -29,12 +32,14 @@ pub(super) fn plugin(app: &mut App) {
 }
 
 fn spawn(mut commands: Commands) {
-    commands.spawn((
-        overlay_root("Encounter Outcome Modal"),
-        OutcomeRoot,
-        DespawnOnExit(Screen::Gameplay),
-        Visibility::Hidden,
-    ));
+    commands
+        .spawn((
+            overlay_root("Encounter Outcome Modal"),
+            OutcomeRoot,
+            DespawnOnExit(Screen::Gameplay),
+            Visibility::Hidden,
+        ))
+        .insert(GlobalZIndex(OUTCOME_MODAL_Z));
 }
 
 fn render(
@@ -141,6 +146,54 @@ fn emit_intents(
 mod tests {
     use super::*;
 
+    #[cfg(feature = "test-support")]
+    use bevy::{
+        input::{
+            keyboard::{Key, KeyboardInput},
+            ButtonState,
+        },
+        input_focus::InputFocus,
+        window::PrimaryWindow,
+    };
+
+    #[cfg(feature = "test-support")]
+    #[derive(Resource, Default)]
+    struct IntentLog(Vec<UiIntent>);
+
+    #[cfg(feature = "test-support")]
+    fn record_intents(mut intents: MessageReader<UiIntent>, mut log: ResMut<IntentLog>) {
+        log.0.extend(intents.read().cloned());
+    }
+
+    #[cfg(feature = "test-support")]
+    fn press_key(app: &mut App, key_code: KeyCode, logical_key: Key) {
+        let window = app
+            .world_mut()
+            .query_filtered::<Entity, With<PrimaryWindow>>()
+            .single(app.world())
+            .expect("the headless UI owns one primary window");
+        for state in [ButtonState::Pressed, ButtonState::Released] {
+            app.world_mut().write_message(KeyboardInput {
+                key_code,
+                logical_key: logical_key.clone(),
+                state,
+                text: None,
+                repeat: false,
+                window,
+            });
+            app.update();
+        }
+    }
+
+    #[cfg(feature = "test-support")]
+    fn focused_name(app: &App) -> Option<&str> {
+        app.world()
+            .resource::<InputFocus>()
+            .get()
+            .and_then(|entity| app.world().get::<Name>(entity))
+            .map(Name::as_str)
+    }
+
     #[test]
     fn outcome_actions_keep_clear_primary_and_return_targets() {
         assert!((action_width(OutcomeAction::Continue) - 150.0).abs() < f32::EPSILON);
@@ -151,5 +204,60 @@ mod tests {
     #[test]
     fn outcome_surface_is_opaque_over_live_gameplay() {
         assert!((OUTCOME_PANEL_BG.to_srgba().alpha - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn outcome_modal_hands_off_retains_and_activates_keyboard_focus() {
+        let mut app = App::new();
+        app.add_plugins(crate::test_support::HeadlessUiPlugin::new(1280, 720));
+        app.init_resource::<IntentLog>()
+            .add_systems(Last, record_intents);
+        app.world_mut().insert_resource(OutcomeView {
+            visible: true,
+            title: "VICTORY".to_owned(),
+            detail: "The Enemy roster can no longer continue.".to_owned(),
+            actions: vec![
+                crate::OutcomeActionView {
+                    action: OutcomeAction::RetryExact,
+                    label: "Retry Exact".to_owned(),
+                },
+                crate::OutcomeActionView {
+                    action: OutcomeAction::Return,
+                    label: "Return to Sandbox".to_owned(),
+                },
+            ],
+        });
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Gameplay);
+        for _ in 0..8 {
+            app.update();
+        }
+
+        assert_eq!(focused_name(&app), Some("Retry Exact"));
+        press_key(&mut app, KeyCode::Tab, Key::Tab);
+        assert_eq!(
+            focused_name(&app),
+            Some("Return to Sandbox"),
+            "real Tab input must remain trapped in the visible outcome modal"
+        );
+
+        // Outcome copy can refresh while the modal remains visible. Rebuilding its
+        // descendants must preserve the exact action selected by the keyboard.
+        app.world_mut()
+            .resource_mut::<OutcomeView>()
+            .detail
+            .push_str(" Review the exact launch.");
+        app.update();
+        assert_eq!(focused_name(&app), Some("Return to Sandbox"));
+
+        press_key(&mut app, KeyCode::Enter, Key::Enter);
+        assert!(app.world().resource::<IntentLog>().0.iter().any(|intent| {
+            matches!(
+                intent,
+                UiIntent::Outcome(OutcomeIntent::Activate(OutcomeAction::Return))
+            )
+        }));
     }
 }

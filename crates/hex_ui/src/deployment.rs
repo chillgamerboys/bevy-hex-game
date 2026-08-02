@@ -8,8 +8,8 @@ use hex_gameplay_model::SandboxSide;
 
 use crate::{
     blurb, fine, heading, label, layout::is_ultra_constrained, row_button, stacked_row_button,
-    DeploymentIntent, DeploymentRosterEntryView, DeploymentView, ResolvedUiMetrics, UiAssets,
-    UiIntent, UiSystems, UiViewportClass, DANGER,
+    DeploymentIntent, DeploymentRosterEntryView, DeploymentView, DespawnOnExit, ResolvedUiMetrics,
+    UiAssets, UiIntent, UiSystems, UiViewportClass, DANGER,
 };
 
 #[derive(Component)]
@@ -62,9 +62,14 @@ fn render(
                 order: 20,
                 modal: true,
             },
-            // Empty drawer space must not consume world picks. Interactive
-            // descendants still own their ordinary button hit targets.
-            Pickable::IGNORE,
+            crate::focus::ModalFocusScope,
+            DespawnOnExit(Screen::Gameplay),
+            // The painted drawer is opaque interaction chrome: its padding and
+            // gaps block lower map picks without becoming a hover/event target.
+            Pickable {
+                should_block_lower: true,
+                is_hoverable: false,
+            },
             Node {
                 position_type: PositionType::Absolute,
                 left: Val::Px(22.0),
@@ -222,22 +227,28 @@ fn spawn_side(
                     )
                 )
             );
-            side.spawn((
-                stacked_row_button(text.clone(), 235.0),
+            let mut control = side.spawn((
+                stacked_row_button(deployment_slot_name(roster_side, entry.index), 235.0),
                 crate::UiVisibilityRequirement::Scrollable,
                 DeploymentIntent::Select {
                     side: roster_side,
                     index: entry.index,
                 },
-            ))
-            .insert(BorderColor::all(if entry.selected {
-                Color::srgba(0.93, 0.79, 0.46, 0.95)
-            } else {
-                Color::srgba(0.26, 0.29, 0.34, 0.9)
-            }))
-            .with_child(fine(assets, text));
+            ));
+            control
+                .insert(AccessibleLabel::new(text.clone()))
+                .insert(BorderColor::all(if entry.selected {
+                    Color::srgba(0.93, 0.79, 0.46, 0.95)
+                } else {
+                    Color::srgba(0.26, 0.29, 0.34, 0.9)
+                }))
+                .with_child(fine(assets, text));
         }
     });
+}
+
+fn deployment_slot_name(side: SandboxSide, index: usize) -> String {
+    format!("Deployment {side} slot {}", index + 1)
 }
 
 fn deployment_button(
@@ -445,6 +456,54 @@ fn stacked_drawer_width(metrics: ResolvedUiMetrics) -> f32 {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "test-support")]
+    use bevy::{
+        input::{
+            keyboard::{Key, KeyboardInput},
+            ButtonState,
+        },
+        input_focus::InputFocus,
+        window::PrimaryWindow,
+    };
+
+    #[cfg(feature = "test-support")]
+    #[derive(Resource, Default)]
+    struct IntentLog(Vec<UiIntent>);
+
+    #[cfg(feature = "test-support")]
+    fn record_intents(mut intents: MessageReader<UiIntent>, mut log: ResMut<IntentLog>) {
+        log.0.extend(intents.read().cloned());
+    }
+
+    #[cfg(feature = "test-support")]
+    fn press_key(app: &mut App, key_code: KeyCode, logical_key: Key) {
+        let window = app
+            .world_mut()
+            .query_filtered::<Entity, With<PrimaryWindow>>()
+            .single(app.world())
+            .expect("the headless UI owns one primary window");
+        for state in [ButtonState::Pressed, ButtonState::Released] {
+            app.world_mut().write_message(KeyboardInput {
+                key_code,
+                logical_key: logical_key.clone(),
+                state,
+                text: None,
+                repeat: false,
+                window,
+            });
+            app.update();
+        }
+    }
+
+    #[cfg(feature = "test-support")]
+    fn focused_name(app: &App) -> Option<&str> {
+        app.world()
+            .resource::<InputFocus>()
+            .get()
+            .and_then(|entity| app.world().get::<Name>(entity))
+            .map(Name::as_str)
+    }
+
     fn assets() -> UiAssets {
         UiAssets {
             display: Handle::default(),
@@ -487,7 +546,74 @@ mod tests {
 
     #[cfg(feature = "test-support")]
     #[test]
-    fn retina_compact_deployment_preserves_a_clickable_world_lane() {
+    fn deployment_modal_traps_retains_and_activates_keyboard_focus() {
+        let mut app = App::new();
+        app.add_plugins(crate::test_support::HeadlessUiPlugin::new(1280, 720));
+        app.init_resource::<IntentLog>()
+            .add_systems(Last, record_intents);
+        app.world_mut().insert_resource(DeploymentView {
+            active: true,
+            map_name: "Flat Arena".to_owned(),
+            notice: "Choose a surface".to_owned(),
+            party: vec![DeploymentRosterEntryView {
+                index: 0,
+                name: "Hedge Mage".to_owned(),
+                selected: true,
+                position: None,
+            }],
+            enemies: vec![DeploymentRosterEntryView {
+                index: 0,
+                name: "Raider".to_owned(),
+                selected: false,
+                position: None,
+            }],
+            complete: false,
+        });
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Gameplay);
+        for _ in 0..8 {
+            app.update();
+        }
+
+        assert_eq!(focused_name(&app), Some("Deployment Party slot 1"));
+        press_key(&mut app, KeyCode::Tab, Key::Tab);
+        assert_eq!(
+            focused_name(&app),
+            Some("Deployment Enemies slot 1"),
+            "real Tab input must stay inside the deployment modal"
+        );
+
+        // Placement selection redraws the complete drawer. Stable typed slot names
+        // let the modal focus manager retain the exact side/slot identity.
+        {
+            let mut view = app.world_mut().resource_mut::<DeploymentView>();
+            view.party
+                .first_mut()
+                .expect("the fixture has one Party entry")
+                .selected = false;
+            view.enemies
+                .first_mut()
+                .expect("the fixture has one Enemy entry")
+                .selected = true;
+        }
+        app.update();
+        assert_eq!(focused_name(&app), Some("Deployment Enemies slot 1"));
+
+        press_key(&mut app, KeyCode::Tab, Key::Tab);
+        assert_eq!(focused_name(&app), Some("Undo"));
+        press_key(&mut app, KeyCode::Enter, Key::Enter);
+        assert!(app
+            .world()
+            .resource::<IntentLog>()
+            .0
+            .iter()
+            .any(|intent| { matches!(intent, UiIntent::Deployment(DeploymentIntent::Undo)) }));
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn retina_compact_deployment_blocks_covered_picks_and_preserves_the_world_lane() {
         let mut app = App::new();
         // The reported native window was 2566x1494 physical pixels on Retina,
         // or approximately this logical UI canvas after window chrome.
@@ -546,8 +672,11 @@ mod tests {
         );
         assert_eq!(
             app.world().get::<Pickable>(root),
-            Some(&Pickable::IGNORE),
-            "empty drawer space must pass world picks through"
+            Some(&Pickable {
+                should_block_lower: true,
+                is_hoverable: false,
+            }),
+            "the complete painted drawer must block lower map picks without becoming a target"
         );
 
         let snapshot = crate::test_support::ui_tree_snapshot(app.world_mut());
@@ -600,7 +729,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing {wanted:?}"))
         };
         let roster_scroll = entity_named(&mut app, "Deployment Roster Scroll");
-        let final_card_name = "SELECT [E6] Enemy Unit 6\nchoose surface";
+        let final_card_name = "Deployment Enemies slot 6";
         let final_card_entity = entity_named(&mut app, final_card_name);
         let roster_scroll_geometry = app
             .world()

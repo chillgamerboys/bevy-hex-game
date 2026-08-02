@@ -74,6 +74,7 @@ pub fn overlay_root(name: &'static str) -> impl Bundle {
         },
         BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.68)),
         TabGroup::modal(),
+        crate::focus::ModalFocusScope,
         GlobalZIndex(10),
     )
 }

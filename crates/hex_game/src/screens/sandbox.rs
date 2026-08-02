@@ -37,6 +37,8 @@ use hex_ui::{
 };
 
 const MAX_ROSTER: usize = SANDBOX_ROSTER_SIZE;
+const DEPLOYMENT_IDENTITY_REFUSAL: &str =
+    "Sandbox launch identity is unavailable. Return to Sandbox and start again.";
 
 type RosterChoice = SandboxCharacter<CustomCharacterId>;
 pub(crate) type SandboxState = SandboxModel<CustomCharacterId>;
@@ -1754,6 +1756,7 @@ struct DeploymentRuntime<'w, 's> {
     active: Option<ResMut<'w, crate::scenarios::ActiveScenario>>,
     sandbox: Option<ResMut<'w, SandboxSession>>,
     accepted: Option<Res<'w, AcceptedContentRevision>>,
+    origin: Option<Res<'w, GameplaySessionOrigin>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1958,6 +1961,52 @@ fn handle_deployment_actions(
                 continue;
             }
             DeploymentAction::StartCombat => {
+                let identity_issue = if runtime.encounter.is_none() {
+                    Some("Encounter is missing")
+                } else if runtime.active.is_none() {
+                    Some("ActiveScenario is missing")
+                } else if runtime.sandbox.is_none() {
+                    Some("SandboxSession is missing")
+                } else if runtime.accepted.is_none() {
+                    Some("AcceptedContentRevision is missing")
+                } else if !matches!(
+                    runtime.origin.as_deref(),
+                    Some(GameplaySessionOrigin::Sandbox)
+                ) {
+                    Some("Sandbox gameplay provenance is missing or inconsistent")
+                } else {
+                    None
+                };
+                if let Some(issue) = identity_issue {
+                    error!(
+                        "refusing to commit Sandbox deployment because its exact launch identity is incomplete: {issue}"
+                    );
+                    session.notice = DEPLOYMENT_IDENTITY_REFUSAL.to_owned();
+                    continue;
+                }
+                let (Some(encounter), Some(active), Some(sandbox), Some(accepted)) = (
+                    runtime.encounter.as_deref_mut(),
+                    runtime.active.as_deref_mut(),
+                    runtime.sandbox.as_deref_mut(),
+                    runtime.accepted.as_deref(),
+                ) else {
+                    error!(
+                        "refusing to commit Sandbox deployment because its exact launch identity changed during validation"
+                    );
+                    session.notice = DEPLOYMENT_IDENTITY_REFUSAL.to_owned();
+                    continue;
+                };
+                let expected_loading_input = sandbox.launch.loading_input();
+                if active.0 != expected_loading_input
+                    || expected_loading_input.encounter_override.as_ref() != Some(&*encounter)
+                {
+                    error!(
+                        "refusing to commit Sandbox deployment because its active scenario, encounter, and frozen launch identity disagree"
+                    );
+                    session.notice = DEPLOYMENT_IDENTITY_REFUSAL.to_owned();
+                    continue;
+                }
+                let accepted_content_revision = accepted.fingerprint();
                 let Some(table) = runtime.markers.table.as_deref() else {
                     session.notice = "Terrain rules are still loading.".to_owned();
                     continue;
@@ -2026,22 +2075,13 @@ fn handle_deployment_actions(
                     continue;
                 };
                 let exact = exact_deployed_encounter(session);
-                if let Some(encounter) = runtime.encounter.as_deref_mut() {
-                    *encounter = exact.clone();
-                }
-                if let Some(sandbox) = runtime.sandbox.as_deref_mut() {
-                    sandbox.launch.freeze_deployment(
-                        deployment,
-                        exact,
-                        runtime
-                            .accepted
-                            .as_deref()
-                            .map(AcceptedContentRevision::fingerprint),
-                    );
-                    if let Some(active) = runtime.active.as_deref_mut() {
-                        active.0 = sandbox.launch.loading_input();
-                    }
-                }
+                *encounter = exact.clone();
+                sandbox.launch.freeze_deployment(
+                    deployment,
+                    exact,
+                    Some(accepted_content_revision),
+                );
+                active.0 = sandbox.launch.loading_input();
                 for (entity, mut visibility) in &mut runtime.hidden_presentation {
                     *visibility = Visibility::Inherited;
                     commands.entity(entity).remove::<DeploymentHidden>();
@@ -2865,6 +2905,315 @@ mod tests {
                 .before(hex_assets::ContentReadinessSystems::PublishAcceptedRevision),
         );
         app
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum MissingDeploymentIdentity {
+        Encounter,
+        ActiveScenario,
+        SandboxSession,
+        AcceptedContentRevision,
+        GameplaySessionOrigin,
+    }
+
+    impl MissingDeploymentIdentity {
+        fn remove(self, world: &mut World) {
+            let removed = match self {
+                Self::Encounter => world.remove_resource::<Encounter>().is_some(),
+                Self::ActiveScenario => world
+                    .remove_resource::<crate::scenarios::ActiveScenario>()
+                    .is_some(),
+                Self::SandboxSession => world.remove_resource::<SandboxSession>().is_some(),
+                Self::AcceptedContentRevision => {
+                    world.remove_resource::<AcceptedContentRevision>().is_some()
+                }
+                Self::GameplaySessionOrigin => {
+                    world.remove_resource::<GameplaySessionOrigin>().is_some()
+                }
+            };
+            assert!(removed, "{self:?} must exist before the refusal case");
+        }
+    }
+
+    struct DeploymentIdentityFixture {
+        app: App,
+        party_unit: Entity,
+        deployment_world_entity: Entity,
+        original_standing: hex_units::Standing,
+        original_transform: Transform,
+        encounter: Encounter,
+        active: ScenarioToLoad,
+        sandbox: SandboxSession,
+        accepted_fingerprint: u64,
+    }
+
+    fn deployment_identity_fixture() -> DeploymentIdentityFixture {
+        let fixture = content_fixture().expect("the shipped content fixture should resolve");
+        let mut app = app_with_content_fixture(&fixture);
+        app.add_message::<UiIntent>()
+            .insert_resource(GameAssets {
+                hex_tile: Handle::default(),
+                player_pieces: [Handle::default(), Handle::default()],
+            })
+            .insert_resource(PlayerSettings {
+                scale: 1.0,
+                speed: 1.0,
+            })
+            .insert_resource(GameplayPhase::Deployment)
+            .insert_resource(GameplaySessionOrigin::Sandbox)
+            .add_systems(Update, handle_deployment_actions);
+        app.update();
+
+        let accepted_fingerprint = app
+            .world()
+            .resource::<AcceptedContentRevision>()
+            .fingerprint();
+        let rules: CombatSettings = ron::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/config/combat.ron"
+        )))
+        .expect("combat.ron parses");
+        let library: ScenarioLibrary = ron::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/config/scenarios.ron"
+        )))
+        .expect("scenarios.ron parses");
+        let scenario = scenario_named(&library, "Ability Lab").expect("fixture scenario exists");
+        let definition = map_definition();
+        let party = vec![RosterChoice::Template("hedge-mage".to_owned())];
+        let enemies = vec![RosterChoice::Template("raider".to_owned())];
+        let encounter = sandbox_encounter(&party, &enemies, &definition);
+        let launch = SandboxLaunchSnapshot::new(
+            SandboxMapSelection::new(definition.id.clone(), definition.fixed_seed),
+            definition.scenario.clone(),
+            party.clone(),
+            enemies.clone(),
+            Some(accepted_fingerprint),
+            rules,
+            scenario,
+            encounter.clone(),
+        );
+        let active = launch.loading_input();
+        let sandbox = SandboxSession { launch };
+
+        let party_surface = TilePos::new(HexCoord::ORIGIN, 1);
+        let enemy_surface = TilePos::new(HexCoord::from_axial(2, -2), 1);
+        let span = HexSpan::from_ground(1.0);
+        let grass = fixture
+            .substances
+            .id("grass")
+            .expect("the fixture has standable grass");
+        for position in [party_surface, enemy_surface] {
+            app.world_mut()
+                .spawn((HexTile, position, span, grass, Headroom(10)));
+        }
+
+        let original_standing = hex_units::Standing {
+            pos: TilePos::new(HexCoord::from_axial(-4, 4), 1),
+            span,
+        };
+        let original_transform = Transform::from_xyz(-17.0, 3.0, 11.0);
+        let party_unit = app
+            .world_mut()
+            .spawn((
+                UnitId(0),
+                Faction::Player,
+                Archetype("hedge-mage".to_owned()),
+                StandsOn(original_standing),
+                original_transform,
+                Visibility::Hidden,
+                DeploymentHidden,
+            ))
+            .id();
+        app.world_mut().spawn((
+            UnitId(u64::try_from(MAX_ROSTER).expect("the roster bound fits u64")),
+            Faction::Hostile,
+            Archetype("raider".to_owned()),
+            StandsOn(hex_units::Standing {
+                pos: TilePos::new(HexCoord::from_axial(4, -4), 1),
+                span,
+            }),
+            Transform::from_xyz(17.0, 3.0, -11.0),
+            Visibility::Hidden,
+            DeploymentHidden,
+        ));
+        let deployment_world_entity = app.world_mut().spawn(DeploymentWorldEntity).id();
+        app.insert_resource(DeploymentMarkerMaterials {
+            player: Handle::default(),
+            hostile: Handle::default(),
+        });
+        let mut deployment = DeploymentSession::new(definition, party, enemies, None);
+        deployment.party_surfaces = vec![party_surface];
+        deployment.enemy_surfaces = vec![enemy_surface];
+        deployment.party_placements = vec![Some(party_surface)];
+        deployment.enemy_placements = vec![Some(enemy_surface)];
+        assert!(deployment.complete(), "the refusal fixture is commit-ready");
+        app.insert_resource(deployment);
+        app.insert_resource(encounter.clone());
+        app.insert_resource(crate::scenarios::ActiveScenario(active.clone()));
+        app.insert_resource(sandbox.clone());
+
+        DeploymentIdentityFixture {
+            app,
+            party_unit,
+            deployment_world_entity,
+            original_standing,
+            original_transform,
+            encounter,
+            active,
+            sandbox,
+            accepted_fingerprint,
+        }
+    }
+
+    #[test]
+    fn deployment_refuses_each_missing_launch_identity_without_partial_commit() {
+        for missing in [
+            MissingDeploymentIdentity::Encounter,
+            MissingDeploymentIdentity::ActiveScenario,
+            MissingDeploymentIdentity::SandboxSession,
+            MissingDeploymentIdentity::AcceptedContentRevision,
+            MissingDeploymentIdentity::GameplaySessionOrigin,
+        ] {
+            let mut fixture = deployment_identity_fixture();
+            missing.remove(fixture.app.world_mut());
+            fixture
+                .app
+                .world_mut()
+                .write_message(UiIntent::Deployment(DeploymentAction::StartCombat));
+            fixture.app.update();
+
+            let world = fixture.app.world();
+            assert_eq!(
+                world.resource::<DeploymentSession>().notice,
+                DEPLOYMENT_IDENTITY_REFUSAL,
+                "{missing:?} must produce the visible identity refusal"
+            );
+            assert_eq!(
+                *world.resource::<GameplayPhase>(),
+                GameplayPhase::Deployment,
+                "{missing:?} must keep deployment active"
+            );
+            assert!(
+                world.get_entity(fixture.deployment_world_entity).is_ok(),
+                "{missing:?} must not tear down the deployment world"
+            );
+            assert!(
+                world.contains_resource::<DeploymentMarkerMaterials>(),
+                "{missing:?} must not tear down deployment materials"
+            );
+            let party_unit = world
+                .get_entity(fixture.party_unit)
+                .expect("the Party unit must remain spawned");
+            assert_eq!(
+                party_unit.get::<StandsOn>().map(|standing| standing.0),
+                Some(fixture.original_standing),
+                "{missing:?} must not partially move actors"
+            );
+            assert_eq!(
+                party_unit.get::<Transform>(),
+                Some(&fixture.original_transform),
+                "{missing:?} must not partially move presentation"
+            );
+            assert_eq!(party_unit.get::<Visibility>(), Some(&Visibility::Hidden));
+            assert!(party_unit.contains::<DeploymentHidden>());
+
+            if missing == MissingDeploymentIdentity::Encounter {
+                assert!(!world.contains_resource::<Encounter>());
+            } else {
+                assert_eq!(world.resource::<Encounter>(), &fixture.encounter);
+            }
+            if missing == MissingDeploymentIdentity::ActiveScenario {
+                assert!(!world.contains_resource::<crate::scenarios::ActiveScenario>());
+            } else {
+                assert_eq!(
+                    world.resource::<crate::scenarios::ActiveScenario>().0,
+                    fixture.active
+                );
+            }
+            if missing == MissingDeploymentIdentity::SandboxSession {
+                assert!(!world.contains_resource::<SandboxSession>());
+            } else {
+                assert_eq!(world.resource::<SandboxSession>(), &fixture.sandbox);
+                assert_eq!(world.resource::<SandboxSession>().launch.deployment, None);
+            }
+            assert_eq!(
+                world.resource::<AcceptedContentRevision>().fingerprint(),
+                fixture.accepted_fingerprint
+            );
+            if missing == MissingDeploymentIdentity::GameplaySessionOrigin {
+                assert!(!world.contains_resource::<GameplaySessionOrigin>());
+            } else {
+                assert_eq!(
+                    world.resource::<GameplaySessionOrigin>(),
+                    &GameplaySessionOrigin::Sandbox
+                );
+            }
+            assert!(matches!(
+                world.resource::<NextState<Screen>>(),
+                &NextState::Unchanged
+            ));
+        }
+    }
+
+    #[test]
+    fn deployment_refuses_divergent_launch_identity_without_partial_commit() {
+        let mut fixture = deployment_identity_fixture();
+        let mut divergent_active = fixture.active.clone();
+        divergent_active.resolved_seed = Some(ResolvedMapSeed(9_999));
+        fixture
+            .app
+            .insert_resource(crate::scenarios::ActiveScenario(divergent_active.clone()));
+        fixture
+            .app
+            .world_mut()
+            .write_message(UiIntent::Deployment(DeploymentAction::StartCombat));
+        fixture.app.update();
+
+        let world = fixture.app.world();
+        assert_eq!(
+            world.resource::<DeploymentSession>().notice,
+            DEPLOYMENT_IDENTITY_REFUSAL
+        );
+        assert_eq!(
+            *world.resource::<GameplayPhase>(),
+            GameplayPhase::Deployment
+        );
+        assert!(world.get_entity(fixture.deployment_world_entity).is_ok());
+        assert!(world.contains_resource::<DeploymentMarkerMaterials>());
+        let party_unit = world
+            .get_entity(fixture.party_unit)
+            .expect("the Party unit must remain spawned");
+        assert_eq!(
+            party_unit.get::<StandsOn>().map(|standing| standing.0),
+            Some(fixture.original_standing)
+        );
+        assert_eq!(
+            party_unit.get::<Transform>(),
+            Some(&fixture.original_transform)
+        );
+        assert_eq!(party_unit.get::<Visibility>(), Some(&Visibility::Hidden));
+        assert!(party_unit.contains::<DeploymentHidden>());
+        assert_eq!(world.resource::<Encounter>(), &fixture.encounter);
+        assert_eq!(
+            world.resource::<crate::scenarios::ActiveScenario>().0,
+            divergent_active,
+            "the refusal must not overwrite the divergent identity"
+        );
+        assert_eq!(world.resource::<SandboxSession>(), &fixture.sandbox);
+        assert_eq!(world.resource::<SandboxSession>().launch.deployment, None);
+        assert_eq!(
+            world.resource::<AcceptedContentRevision>().fingerprint(),
+            fixture.accepted_fingerprint
+        );
+        assert_eq!(
+            world.resource::<GameplaySessionOrigin>(),
+            &GameplaySessionOrigin::Sandbox
+        );
+        assert!(matches!(
+            world.resource::<NextState<Screen>>(),
+            &NextState::Unchanged
+        ));
     }
 
     #[derive(Resource)]

@@ -9,13 +9,13 @@ use bevy::prelude::*;
 use bevy::time::Real;
 use hex_assets::{
     AcceptedContentRevision, ContentIndex, ElementCatalog, FormationCatalog, LatticeLibrary,
-    Scenario, ScenarioLibrary,
+    Scenario, ScenarioLibrary, SubstanceTable,
 };
 use hex_combat::{CombatSystems, EncounterResolution};
 use hex_core::{
-    Busy, CommandQueue, GameplayPhase, GameplaySetup, GameplaySetupFailure, HexSpan, HexTile,
-    InputAction, InputBindings, Mode, PartyFormation, Pause, PendingDecision, ResolvedMapSeed,
-    Screen, TilePos, UnitId,
+    Busy, CommandQueue, GameplayPhase, GameplaySetup, GameplaySetupFailure, Headroom, HexSpan,
+    HexTile, InputAction, InputBindings, Mode, PartyFormation, Pause, PendingDecision,
+    ResolvedMapSeed, Screen, SubstanceId, TilePos, TraversalBlockers, TraversalProfile, UnitId,
 };
 use hex_gameplay_model::CampaignSlotId;
 use hex_lattice::{CellKind, LatticeState};
@@ -25,7 +25,7 @@ use hex_ui::{
     SandboxLatticeCellKind, SandboxLatticeCellView, UiIntent, UiSystems,
 };
 use hex_units::{
-    Archetype as UnitArchetype, Downed, Faction, MovingTo, Selected, Standing, StandsOn,
+    Archetype as UnitArchetype, Body, Downed, Faction, Footing, MovingTo, Selected, StandsOn,
 };
 use serde::{Deserialize, Serialize};
 
@@ -644,7 +644,7 @@ impl CampaignStore {
                             .iter()
                             .filter(|unit| unit.faction == Faction::Player)
                             .map(|unit| CampaignPartyMemberView {
-                                name: unit.display_name.clone(),
+                                name: campaign_party_member_name(unit, lattices),
                                 lattice: unit.lattice.as_ref().map_or_else(
                                     || "No lattice".to_owned(),
                                     |lattice| format!("{} mana", lattice.total_gem_mana()),
@@ -761,7 +761,7 @@ fn campaign_lattice_cells(
         return Vec::new();
     };
     let archetype = if unit.archetype.is_empty() {
-        infer_legacy_archetype(state, lattices)
+        infer_legacy_archetype(state, lattices).map(|(_, archetype)| archetype)
     } else {
         lattices.get(&unit.archetype)
     };
@@ -797,21 +797,51 @@ fn campaign_lattice_cells(
 fn infer_legacy_archetype<'a>(
     state: &LatticeState,
     lattices: &'a LatticeLibrary,
-) -> Option<&'a hex_assets::Archetype> {
+) -> Option<(&'a str, &'a hex_assets::Archetype)> {
     let saved_gems = state
         .mana_cells()
         .map(|(coord, _)| coord)
         .collect::<BTreeSet<_>>();
-    let mut matches = lattices.iter().filter_map(|(_, archetype)| {
+    let mut matches = lattices.iter().filter_map(|(name, archetype)| {
         let archetype_gems = archetype
             .spec
             .cells()
             .filter_map(|(coord, kind)| matches!(kind, CellKind::Gem { .. }).then_some(coord))
             .collect::<BTreeSet<_>>();
-        (archetype_gems == saved_gems).then_some(archetype)
+        (archetype_gems == saved_gems).then_some((name, archetype))
     });
     let inferred = matches.next()?;
     matches.next().is_none().then_some(inferred)
+}
+
+fn campaign_party_member_name(
+    unit: &CampaignUnitSave,
+    lattices: Option<&LatticeLibrary>,
+) -> String {
+    if !unit.archetype.is_empty() {
+        return unit.display_name.clone();
+    }
+    let inferred = unit
+        .lattice
+        .as_ref()
+        .and_then(|state| lattices.and_then(|lattices| infer_legacy_archetype(state, lattices)));
+    inferred.map_or_else(
+        || unit.display_name.clone(),
+        |(name, _)| campaign_archetype_display_name(name),
+    )
+}
+
+fn campaign_archetype_display_name(name: &str) -> String {
+    name.split(['-', '_'])
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut characters = part.chars();
+            characters.next().map_or_else(String::new, |first| {
+                first.to_uppercase().chain(characters).collect::<String>()
+            })
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn compact_lattice_label(name: Option<&str>) -> String {
@@ -1408,6 +1438,10 @@ fn save_exploration(
     }
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "the full immutable roster and footing maps were preflighted in this same system"
+)]
 fn restore_pending_campaign(
     mut commands: Commands,
     pending: Option<Res<PendingCampaign>>,
@@ -1416,7 +1450,9 @@ fn restore_pending_campaign(
     content: Res<ContentIndex>,
     elements: Res<ElementCatalog>,
     lattices: Res<LatticeLibrary>,
-    tiles: Query<(&TilePos, &HexSpan), With<HexTile>>,
+    substances: Res<SubstanceTable>,
+    blockers: Option<Res<TraversalBlockers>>,
+    tiles: Query<(&TilePos, &HexSpan, &SubstanceId, &Headroom), With<HexTile>>,
     mut units: Query<(
         Entity,
         &UnitId,
@@ -1473,6 +1509,13 @@ fn restore_pending_campaign(
     // and finalization in this frame, so a half-restored world is not an acceptable
     // transient state even though the next screen has already been requested.
     let tables = content.tables(&elements);
+    let footing = Footing::from_tiles(
+        tiles.iter(),
+        &substances,
+        Body::new(TraversalProfile::WALKER),
+        blockers.as_deref(),
+    );
+    let mut restored_standing = BTreeMap::new();
     for (_, id, faction, archetype, _, _, lattice, _, _) in units.iter() {
         let Some(snapshot) = saved.get(id) else {
             fail_restore(
@@ -1498,19 +1541,20 @@ fn restore_pending_campaign(
             fail_restore(&mut commands, &mut next, &mut store, save.slot, reason);
             return;
         }
-        if tiles
-            .iter()
-            .all(|(position, _)| *position != snapshot.position)
-        {
+        let Some(standing) = footing.at(snapshot.position) else {
             fail_restore(
                 &mut commands,
                 &mut next,
                 &mut store,
                 save.slot,
-                format!("The saved position for unit {} no longer exists.", id.0),
+                format!(
+                    "The saved position for unit {} is no longer valid footing.",
+                    id.0
+                ),
             );
             return;
-        }
+        };
+        restored_standing.insert(*id, standing);
         if snapshot.lattice.is_some() != lattice.is_some() {
             fail_restore(
                 &mut commands,
@@ -1523,60 +1567,20 @@ fn restore_pending_campaign(
         }
     }
 
-    for (entity, id, faction, _, mut standing, mut transform, lattice, downed, selected) in
-        &mut units
-    {
-        let Some(snapshot) = saved.get(id) else {
-            fail_restore(
-                &mut commands,
-                &mut next,
-                &mut store,
-                save.slot,
-                format!("The saved roster is missing unit {}.", id.0),
-            );
-            return;
-        };
-        if snapshot.faction != *faction {
-            fail_restore(
-                &mut commands,
-                &mut next,
-                &mut store,
-                save.slot,
-                format!("The saved faction for unit {} changed.", id.0),
-            );
-            return;
-        }
-        let Some((_, span)) = tiles
-            .iter()
-            .find(|(position, _)| **position == snapshot.position)
-        else {
-            fail_restore(
-                &mut commands,
-                &mut next,
-                &mut store,
-                save.slot,
-                format!("The saved position for unit {} no longer exists.", id.0),
-            );
-            return;
-        };
-        standing.0 = Standing {
-            pos: snapshot.position,
-            span: *span,
-        };
+    // Every player-data-dependent refusal above has completed. These lookups are
+    // defensive invariants over the same query and maps; they cannot be changed by
+    // another system while this system is running.
+    for (entity, id, _, _, mut standing, mut transform, lattice, downed, selected) in &mut units {
+        let snapshot = saved
+            .get(id)
+            .expect("every runtime unit was matched during Campaign restore preflight");
+        let restored = restored_standing
+            .get(id)
+            .expect("every saved position produced footing during Campaign restore preflight");
+        standing.0 = *restored;
         transform.translation = standing.0.world_position();
-        match (snapshot.lattice.as_ref(), lattice) {
-            (Some(saved), Some(mut current)) => *current = saved.clone(),
-            (None, None) => {}
-            _ => {
-                fail_restore(
-                    &mut commands,
-                    &mut next,
-                    &mut store,
-                    save.slot,
-                    format!("The saved lattice for unit {} no longer matches.", id.0),
-                );
-                return;
-            }
+        if let (Some(saved), Some(mut current)) = (snapshot.lattice.as_ref(), lattice) {
+            *current = saved.clone();
         }
         if snapshot.downed && !downed {
             commands.entity(entity).insert(Downed);
@@ -1711,6 +1715,7 @@ mod tests {
         ArtPalette, ContentIndex, ElementFile, LatticeFile, ScenarioCategory, SpellBook, SpellFile,
         SubstanceFile, SubstanceTable,
     };
+    use hex_units::Standing;
 
     use super::*;
 
@@ -2055,6 +2060,78 @@ mod tests {
                 .cells,
             explicit_cells
         );
+        assert_eq!(
+            party
+                .first()
+                .expect("the inferred party has one member")
+                .name,
+            "Hedge Mage"
+        );
+    }
+
+    #[test]
+    fn legacy_party_trial_projects_exact_inferred_roster_names() {
+        let (elements, lattices) = shipped_lattice_tables();
+        let party_trial = [
+            (UnitId(0), "hedge-mage", hex_core::HexCoord::ORIGIN),
+            (UnitId(1), "raider", hex_core::HexCoord::from_axial(1, 0)),
+            (UnitId(2), "wolf", hex_core::HexCoord::from_axial(2, 0)),
+        ];
+        let player_ids = party_trial.iter().map(|(id, _, _)| *id).collect::<Vec<_>>();
+        let units = party_trial
+            .iter()
+            .map(|(id, name, position)| {
+                let definition = lattices
+                    .get(name)
+                    .expect("the Party Trial archetype should remain shipped");
+                LegacyUnitResume {
+                    id: *id,
+                    faction: Faction::Player,
+                    position: TilePos::new(*position, 0),
+                    lattice: Some(LatticeState::new(&definition.spec, &definition.stats)),
+                    downed: false,
+                }
+            })
+            .collect();
+        let mut legacy = legacy_resume();
+        legacy.formation = compact_formation(&player_ids);
+        legacy.units = units;
+        let save = CampaignSave::from_legacy(legacy);
+        assert_eq!(
+            save.units
+                .iter()
+                .map(|unit| unit.display_name.as_str())
+                .collect::<Vec<_>>(),
+            ["Unit 0", "Unit 1", "Unit 2"],
+            "the projection must replace the migration-only fallback labels"
+        );
+        let mut file = CampaignsFile::default();
+        *file
+            .slots
+            .first_mut()
+            .expect("Campaign has exactly three slots") = Some(save);
+        let store = CampaignStore {
+            file: Some(file),
+            unreadable: None,
+            runtime_invalid: std::array::from_fn(|_| None),
+            catalog_invalid: std::array::from_fn(|_| None),
+        };
+
+        let views = store.slot_views(Some(&lattices), Some(&elements));
+        let CampaignSlotStatusView::Available { party, .. } = &views
+            .first()
+            .expect("Campaign projects exactly three slots")
+            .status
+        else {
+            panic!("the migrated Party Trial should remain available");
+        };
+        assert_eq!(
+            party
+                .iter()
+                .map(|member| member.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Hedge Mage", "Raider", "Wolf"]
+        );
     }
 
     #[test]
@@ -2174,6 +2251,173 @@ mod tests {
         assert_eq!(entity.get::<LatticeState>(), Some(&lattice));
         assert!(entity.contains::<Downed>());
         assert!(!entity.contains::<Selected>());
+    }
+
+    #[test]
+    fn invalid_saved_footing_is_refused_atomically_for_every_canonical_case() {
+        for (case, substance_name, headroom, blocked) in [
+            ("non-solid", "water", Headroom(8), false),
+            ("buried", "stone", Headroom(0), false),
+            ("cramped", "stone", Headroom(1), false),
+            ("blocked", "stone", Headroom(8), true),
+        ] {
+            let spell_file: SpellFile =
+                ron::from_str(include_str!("../../../assets/config/spells.ron"))
+                    .expect("the shipped spells should parse");
+            let map: MapSettings = ron::from_str(include_str!("../../../assets/config/world.ron"))
+                .expect("the shipped authored map should parse");
+            let formations: FormationCatalog =
+                ron::from_str(include_str!("../../../assets/config/formations.ron"))
+                    .expect("the shipped formations should parse");
+            let saved_player_position = TilePos::ORIGIN;
+            let saved_hostile_position = TilePos::new(hex_core::HexCoord::from_axial(1, 0), 0);
+            let runtime_player_standing = Standing {
+                pos: TilePos::new(hex_core::HexCoord::from_axial(3, 0), 0),
+                span: HexSpan::new(3.0, 4.0),
+            };
+            let runtime_hostile_standing = Standing {
+                pos: TilePos::new(hex_core::HexCoord::from_axial(4, 0), 0),
+                span: HexSpan::new(4.0, 5.0),
+            };
+            let runtime_player_transform = Transform::from_translation(Vec3::new(9.0, 8.0, 7.0));
+            let runtime_hostile_transform = Transform::from_translation(Vec3::new(6.0, 5.0, 4.0));
+            let original_formation = PartyFormation::default();
+            let mut pending = campaign(CampaignSlotId::One);
+            pending
+                .units
+                .first_mut()
+                .expect("the Campaign fixture has one player")
+                .position = saved_player_position;
+            pending.units.push(CampaignUnitSave {
+                id: UnitId(1),
+                faction: Faction::Hostile,
+                position: saved_hostile_position,
+                archetype: "raider".to_owned(),
+                lattice: None,
+                downed: true,
+                display_name: "Raider".to_owned(),
+            });
+
+            let mut app = App::new();
+            app.add_plugins((MinimalPlugins, StatesPlugin))
+                .insert_state(Screen::Gameplay)
+                .insert_resource(map)
+                .insert_resource(formations)
+                .insert_resource(original_formation.clone())
+                .insert_resource(CampaignStore::default())
+                .insert_resource(PendingCampaign(pending))
+                .insert_resource(ActiveCampaign::new(CampaignSlotId::One, 0xC0DE_CAFE, 0))
+                .add_systems(Update, restore_pending_campaign);
+            insert_coherent_content(&mut app, spell_file);
+            let (stone, invalid_substance) = {
+                let substances = app.world().resource::<SubstanceTable>();
+                (
+                    substances
+                        .id("stone")
+                        .expect("the shipped stone should resolve"),
+                    substances
+                        .id(substance_name)
+                        .expect("the invalid-case substance should resolve"),
+                )
+            };
+            app.world_mut().spawn((
+                HexTile,
+                saved_player_position,
+                HexSpan::new(0.0, 1.0),
+                stone,
+                Headroom(8),
+            ));
+            app.world_mut().spawn((
+                HexTile,
+                saved_hostile_position,
+                HexSpan::new(0.0, 1.0),
+                invalid_substance,
+                headroom,
+            ));
+            if blocked {
+                let mut blockers = TraversalBlockers::new();
+                assert!(blockers.insert(saved_hostile_position));
+                app.insert_resource(blockers);
+            }
+            let player = app
+                .world_mut()
+                .spawn((
+                    UnitId(0),
+                    Faction::Player,
+                    UnitArchetype("hedge-mage".to_owned()),
+                    StandsOn(runtime_player_standing),
+                    runtime_player_transform,
+                    Downed,
+                ))
+                .id();
+            let hostile = app
+                .world_mut()
+                .spawn((
+                    UnitId(1),
+                    Faction::Hostile,
+                    UnitArchetype("raider".to_owned()),
+                    StandsOn(runtime_hostile_standing),
+                    runtime_hostile_transform,
+                    Selected,
+                ))
+                .id();
+
+            app.update();
+
+            assert_eq!(
+                app.world().resource::<GameplaySetupFailure>().reason,
+                "Campaign slot 1 is incompatible: The saved position for unit 1 is no longer valid footing.",
+                "{case} footing should be refused visibly"
+            );
+            assert!(
+                !app.world().contains_resource::<PendingCampaign>(),
+                "{case}"
+            );
+            assert!(!app.world().contains_resource::<ActiveCampaign>(), "{case}");
+            assert_eq!(
+                *app.world().resource::<PartyFormation>(),
+                original_formation,
+                "{case} refusal must precede formation mutation"
+            );
+            let player = app.world().entity(player);
+            assert_eq!(
+                player
+                    .get::<StandsOn>()
+                    .expect("the player should remain spawned")
+                    .0,
+                runtime_player_standing,
+                "{case} refusal must preserve an otherwise-restorable unit"
+            );
+            assert_eq!(
+                player
+                    .get::<Transform>()
+                    .expect("the player transform should remain present")
+                    .translation,
+                runtime_player_transform.translation,
+                "{case} refusal must preserve the player transform"
+            );
+            assert!(player.contains::<Downed>(), "{case}");
+            assert!(!player.contains::<Selected>(), "{case}");
+            let hostile = app.world().entity(hostile);
+            assert_eq!(
+                hostile
+                    .get::<StandsOn>()
+                    .expect("the hostile should remain spawned")
+                    .0,
+                runtime_hostile_standing,
+                "{case} refusal must preserve the invalid unit"
+            );
+            assert_eq!(
+                hostile
+                    .get::<Transform>()
+                    .expect("the hostile transform should remain present")
+                    .translation,
+                runtime_hostile_transform.translation,
+                "{case} refusal must preserve the hostile transform"
+            );
+            assert!(!hostile.contains::<Downed>(), "{case}");
+            assert!(hostile.contains::<Selected>(), "{case}");
+        }
     }
 
     #[test]

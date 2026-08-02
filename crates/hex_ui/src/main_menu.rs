@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use bevy::ui::InteractionDisabled;
 use bevy::ui_widgets::ScrollArea;
 use hex_core::Screen;
-use hex_gameplay_model::MainMenuRoute;
+use hex_gameplay_model::{CampaignSlotId, MainMenuRoute};
 
 use crate::{
     blurb, button, despawn_screen, display, fine, fluid_button, heading, label, panel, screen_root,
@@ -190,6 +190,7 @@ fn render_campaign(root: &mut ChildSpawnerCommands, assets: &UiAssets, view: &Ma
                                         card,
                                         assets,
                                         "New Game",
+                                        slot.slot,
                                         MainMenuIntent::NewCampaign(slot.slot),
                                         UiVisibilityRequirement::Scrollable,
                                     );
@@ -240,6 +241,7 @@ fn render_campaign(root: &mut ChildSpawnerCommands, assets: &UiAssets, view: &Ma
                                         card,
                                         assets,
                                         "Continue",
+                                        slot.slot,
                                         MainMenuIntent::ContinueCampaign(slot.slot),
                                         UiVisibilityRequirement::Scrollable,
                                     );
@@ -323,12 +325,22 @@ fn menu_button(
 fn campaign_menu_button(
     parent: &mut ChildSpawnerCommands,
     assets: &UiAssets,
-    name: &'static str,
+    label_text: &'static str,
+    slot: CampaignSlotId,
     intent: MainMenuIntent,
     visibility: UiVisibilityRequirement,
 ) {
-    let mut control = parent.spawn((fluid_button(name), MainMenuControl(intent), visibility));
-    control.with_child(label(assets, name));
+    let control_name = format!("{label_text} Save Slot {}", slot.number());
+    let accessible_label = format!("{label_text}, Save Slot {}", slot.number());
+    let mut control = parent.spawn((
+        fluid_button(control_name),
+        MainMenuControl(intent),
+        visibility,
+    ));
+    control
+        .insert(AccessibleLabel::new(accessible_label))
+        // Player-facing copy remains the short action verb rendered on the card.
+        .with_child(label(assets, label_text));
 }
 
 fn apply_layout(
