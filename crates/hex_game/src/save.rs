@@ -156,6 +156,10 @@ const SHIPPED_RESUME_INPUTS: &[(&str, &str)] = &[
         include_str!("../../../assets/config/worlds/procedural-fort.ron"),
     ),
     (
+        "config/worlds/procedural-outpost.ron",
+        include_str!("../../../assets/config/worlds/procedural-outpost.ron"),
+    ),
+    (
         "config/worlds/procedural-frozen.ron",
         include_str!("../../../assets/config/worlds/procedural-frozen.ron"),
     ),

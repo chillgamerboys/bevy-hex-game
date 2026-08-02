@@ -88,7 +88,7 @@ pub struct Scenario {
     /// Asset path of the encounter file: the roster standing on this world.
     ///
     /// A path for the same reason `world` is one — a scenario is a world, a sky and an
-    /// encounter, each authored on its own and reusable by the next scenario. Six
+    /// encounter, each authored on its own and reusable by the next scenario. The
     /// generated maps share one anchored skirmish today.
     ///
     /// Not optional: a scenario with no encounter has nothing to play.
@@ -333,9 +333,27 @@ mod tests {
             .collect();
 
         assert_eq!(
-            generated.len(),
-            13,
-            "the scenario library should include all thirteen generated maps"
+            generated
+                .iter()
+                .map(|scenario| scenario.name.as_str())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "Caves",
+                "Deep Forest",
+                "Forest",
+                "Fort",
+                "Frozen Hills",
+                "Mountains",
+                "Outpost",
+                "Prairie",
+                "Procedural Hills",
+                "Seven Regions",
+                "Sky Islands",
+                "Two Rings",
+                "Volcanic Hills",
+                "Waterfall",
+            ]),
+            "the scenario library should include all fourteen generated maps"
         );
         let mut by_seed = BTreeMap::<u64, BTreeSet<&str>>::new();
         for scenario in &generated {

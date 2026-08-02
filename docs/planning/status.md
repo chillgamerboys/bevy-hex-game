@@ -23,16 +23,16 @@ high-pass/low-bypass route pair, snow caps, and a peak-fed river and fall. Caves
 places a varied rocky surface above a two-wide entrance and a dense,
 height-validated underground chamber network with exact opaque cutaway roofs.
 
-V3 now has ten complete recipe variants: Hills, Sky Islands, Mountains, Caves,
-Waterfall, Forest, Fort, Volcano, Deep Forest, and Prairie. Ring7 places its fixed
-seven-recipe roster in one connected radius-33 world. Ring19 powers the selectable
-**Two Rings** map: a radius-55, 9,241-column world with 19 fixed regions, 42
-reciprocal seams, 30 outer boundary sides, and a physical ordinary-walker graph that
-keeps all regions reachable after any one seam is removed. Its three mountain-fed
-water branches meet in central Hills before flowing through downstream Hills and an
-outlet Waterfall; the western Volcano owns a separate lava outlet. Single and Ring7
-retain their 4-bit patch namespace, while Ring19 uses 5 patch bits so slots 16–18
-remain collision-free.
+V3 now has eleven complete recipe variants: Hills, Sky Islands, Mountains, Caves,
+Waterfall, Forest, Fort, Outpost, Volcano, Deep Forest, and Prairie. Ring7 places its
+fixed seven-recipe roster in one connected radius-33 world. Ring19 powers the
+selectable **Two Rings** map: a radius-55, 9,241-column world with 19 fixed regions,
+42 reciprocal seams, 30 outer boundary sides, and a physical ordinary-walker graph
+that keeps all regions reachable after any one seam is removed. Its three
+mountain-fed water branches meet in central Hills before flowing through downstream
+Hills and an outlet Waterfall; the western Volcano owns a separate lava outlet.
+Single and Ring7 retain their 4-bit patch namespace, while Ring19 uses 5 patch bits
+so slots 16–18 remain collision-free.
 
 Waterfall authors deterministic directed liquid topology from calm inlet through
 rapids, a contiguous thirteen-level fall, plunge basin, outlet, redundant land
@@ -84,6 +84,13 @@ keep, with six small accessible turrets, two lintelled gates, two broad stair
 terraces, and alternating outer battlements. Exact graph validation proves that
 closing both gates seals the courtyard, either gate independently reconnects it, and
 every usable wall or tower surface remains ordinary-walker accessible.
+
+Outpost adds a distinct compact radius-12 fortification behind its own selectable Map
+scenario. Its east-facing gate opens into a ground-datum courtyard beneath a level-7
+front walk, with connected level-11 side and rear walks. Two mirrored gate towers
+enclose independent three-turn stairs that gain nine levels per loop and continue for
+three loops to open level-27 lookout decks. Exact graph validation covers gate access,
+both climbs, every walk connection, stair headroom, and the final open stairwells.
 
 Movement is level-based over stacked surfaces, with body size decided by headroom and
 a breadth-first pathfinder that cannot collapse a stack. A movement preview draws the
