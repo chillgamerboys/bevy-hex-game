@@ -46,33 +46,55 @@ Every interactive screen uses the same hierarchy:
    affected control.
 4. A persistent footer contains Back and the next or confirm action.
 
-Gameplay adds a persistent **Now / Choose / Confirm** rail. It always presents the
-current actor, phase, remaining movement and action, and the currently authorized
-actions. Blocking decisions take `Required` priority and show their progress. The
-rail is outside the HUD visibility tree, so hiding inspectors or the HUD cannot hide
-the required action during active play. Deployment is a stronger phase-level task:
-it removes the rail and every other ordinary HUD region from layout, focus, scrolling,
-and picking, then presents only its compact modal task card over the map. This
-effective suppression does not change the player's ordinary HUD preference.
+Gameplay is intentionally map-first. Four ordinary components can participate in
+screen-space layout independently:
 
-Party and turn state are primary information. The selected unit's lattice is
-persistent Inspector context, not a replaceable drawer. The event log and other
-optional inspectors remain secondary. The Inspector has one persistent vertical
-scroll owner at every viewport and scale, with own/target lattice readouts first. On
-an ultra-constrained blocking decision, the required lattice is promoted into the
-persistent action rail and the ordinary Inspector hides; this avoids presenting two
-independently focusable copies of the same required choice. Redundant world badges
-yield so no secondary surface can cover a primary action. Sandbox sessions do not add
-live telemetry to this hierarchy; canonical `CombatSummary` remains an observation
-for tests.
+- **Party** — a compact ordered roster with small, non-interactive lattice
+  silhouettes;
+- **Initiative** — the disclosed combat order only;
+- **Activity** — a bounded history with All, Combat, and Activity tabs; and
+- **Action Bar** — only the actions currently authorized by the application adapter.
 
-Builds with the default-off `dev` feature add a `DEV · TIME` panel to the gameplay
-Inspector region. `hex_ui` renders only the immutable current-hour or unavailable
-projection and emits typed half-hour/preset intents; the `hex_game` adapter remains
-responsible for changing the existing session clock. Static lighting exposes a reason
-instead of controls, and shipping builds contain neither the panel nor its adapter.
-On Compact canvases this development-only panel follows the same one-scroll-owner
-rule and cannot compete with primary lattices or actions for space.
+The **Main View** is not a fifth visibility Boolean. It is a typed contextual host:
+`Closed`, `Character(UnitId)`, `Formation`, or `RequiredDecision`. Character and
+Formation are explicit destinations and may be replaced by another ordinary Main
+View request. A required damage or restoration choice is different: it is forcibly
+open, cannot be dismissed or replaced, and remains available until the canonical
+decision resolves.
+
+Default ordinary presentation is Party visible, Initiative eligible only during
+combat, Activity closed, Action Bar visible when actions exist, and Main View closed.
+Effective visibility is the saved component preference, contextual eligibility,
+master suppression, and phase suppression resolved together. `H` changes only the
+transient master suppression; restoring it returns to the exact saved combination.
+Deployment and terminal outcomes suppress ordinary gameplay components without
+rewriting preferences. A hidden component leaves layout, picking, focus order,
+scrolling, and the accessibility tree completely—there are no collapsed rails,
+handles, or invisible hit targets.
+
+`P`, `I`, `L`, and `B` toggle saved Party, Initiative, Activity, and Action Bar
+preferences on Standard/Wide. While the HUD is master-hidden, those keys summon only
+the requested temporary surface and leave everything else hidden. `V` opens the
+inspected character and `F` opens Formation in the Main View; neither changes
+selection, turn, caster, or command authority. The camera remains a separate
+presentation concern on `C`.
+
+Activating a Party or disclosed Initiative entry once inspects and centers that unit.
+Activating the same entry again opens its Character Main View. Map camera centering is
+one-shot; Character camera mode follows the authorized inspected subject. Unobserved
+hostiles cannot be activated and publish neither a camera subject nor a location.
+
+Acting/selected identity, retained target identity, movement range, pathing, and aim
+remain world-space feedback rather than another HUD panel. The continuous foot ring
+marks the acting or selected unit and a shape-distinct reticle marks one disclosed
+target. Both ignore picking, inherit unit visibility, and clear during Deployment and
+outcomes. Existing terrain-health presentation remains unchanged and is not promoted
+into this HUD model. Sandbox sessions add no statistics or report history;
+`CombatSummary` remains a gameplay/test observation.
+
+Builds with the default-off `dev` feature may add development-only time controls, but
+they follow the same effective visibility, phase suppression, and one-scroll-owner
+rules. Shipping builds contain neither that panel nor its adapter.
 
 ## Responsive model
 
@@ -100,9 +122,9 @@ smaller type does not unexpectedly promote an ordinary canvas to Wide.
 
 | Class | Semantic-density-adjusted logical canvas | Behavior |
 |---|---|---|
-| Compact | below 1440×810 | persistent scrollable Inspector with lattice first and secondary content below; blocking lattice choices promote into the always-visible action rail |
-| Standard | at least 1440×810 and below 2400 px wide | primary content plus one secondary region |
-| Wide | at least 2400 px wide | bounded primary content with one persistent secondary region |
+| Compact | below 1440×810 | blank map by default; one explicit shortcut may open one temporary full-screen task surface; a required decision forcibly owns that surface |
+| Standard | at least 1440×810 and below 2400 px wide | map plus independently visible Party, Initiative, Activity, Action Bar, and at most one typed Main View |
+| Wide | at least 2400 px wide | the same component contract with bounded horizontal compositions and more map breathing room |
 
 Compact setup and Creator pages use one vertical page-scroll owner. The Character
 Creator lattice is the sole exception that needs a bounded two-axis pan surface: its
@@ -112,17 +134,22 @@ cell inside that canvas and then reveals the canvas inside the outer page. Idle 
 ScrollArea components are forbidden because Bevy 0.19 consumes wheel events before
 checking whether that child can move.
 
-Representative structure:
+Representative gameplay structure:
 
 ```text
 Compact                         Standard / Wide
-┌ title + step ┐                ┌ title + step ────────────────┐
-│ main content │                │ main content │ one drawer    │
-│ validation   │                │ validation   │ or party info │
-├──────────────┤                ├──────────────────────────────┤
-│ Now / Choose / Confirm        │ Now / Choose / Confirm       │
-└──────────────┘                └──────────────────────────────┘
+┌──────────────────┐            ┌ Party ───── Initiative ─────┐
+│       map        │            │                              │
+│                  │            │ map / typed Main View        │
+│ shortcut: one    │            │                              │
+│ full-screen task │            ├ Activity ────── Action Bar ─┤
+└──────────────────┘            └──────────────────────────────┘
 ```
+
+Compact contains no drawer handle or collapsed residue. The same shortcut or Escape
+closes an ordinary temporary surface and returns to the blank map. A required decision
+captures that route until answered. Every active temporary or Main View surface owns
+at most one vertical scroll route.
 
 The required structural matrix covers 1280×720, 1920×1080, and 3840×2160 under Auto
 and 200% semantic UI scale. Additional breakpoint and device-scale cases may extend
@@ -137,7 +164,8 @@ overlap without interpreting the text or pixels as gameplay truth.
 The matrix uses Main Menu, all three Campaign record states, Sandbox Overview, map
 browser and both map-detail modes, sparse and dense Party/Enemies rosters, character
 picker, Tools, populated Settings, Creator, guided 6v6 Deployment placement and Review,
-and the maximum ordinary gameplay action rail plus required and aiming states. A half
+and the maximum ordinary gameplay component combination plus Main View, required,
+aiming, master-hidden, Compact temporary-surface, and phase-suppressed states. A half
 logical pixel is the only target-size tolerance, accounting for physical-pixel
 rounding at fractional Auto scales.
 
@@ -149,7 +177,7 @@ At 100% scale the semantic type tokens are:
 |---|---:|---|
 | Display | 48 | game/title display |
 | Screen title | 32 | top-level screen heading |
-| Heading | 24 | sections and drawer titles |
+| Heading | 24 | sections and surface titles |
 | Body/control | 20 | required information and controls |
 | Supporting | 18 | guidance and validation detail |
 | Metadata | 16 | optional, nonessential annotations only |
@@ -171,7 +199,9 @@ and [WCAG 2.2](https://www.w3.org/TR/WCAG22/).
 Interactive controls participate in a logical Tab/Shift-Tab order and carry an
 `AccessibleLabel`. Keyboard focus has a visible high-contrast outline. Enter and
 Space activate the focused control through its ordinary interaction handler. Escape
-uses the screen's typed Back/resume intent consistently.
+first closes an ordinary gameplay Main View or Compact temporary task, then uses the
+screen's typed Back/resume intent when no such surface owns it. A Required Decision
+cannot consume Escape and remains open.
 
 When a focusable control owns keyboard focus, Enter, Space, and Tab do not also
 dispatch gameplay confirm, end-turn, or next-target shortcuts. The focused control's
@@ -184,8 +214,16 @@ their original logical index when the surface reopens; focus is cleared if its
 control becomes unreachable.
 
 A true modal uses a Bevy `TabGroup` so focus cannot escape until its blocking choice
-is resolved. Informational drawers are not modals and do not trap focus. Controller
-navigation and remapping are intentionally deferred.
+is resolved. Ordinary HUD components and Main View destinations are not modals and do
+not trap focus. Controller navigation is intentionally deferred.
+
+Settings exposes keyboard bindings by category tabs: Gameplay, Interface, Main View,
+Camera, and System. One action owns one key chord in this slice. Rebinding captures
+the next non-modifier key at highest input priority, Escape cancels, and no captured
+key reaches gameplay. A conflict in an overlapping context offers Swap or Cancel and
+never silently steals a binding; exclusive Menu and Gameplay uses may coexist. Each
+row can restore its default, and Restore All requires confirmation. Tab, focused
+Enter/Space activation, and Escape navigation remain fixed UI semantics.
 
 This foundation uses Bevy's stable tab navigation, focus, accessibility, image
 render targets, and screenshot components. The global `UiScale` remains 1.0;
@@ -195,9 +233,12 @@ stabilization change.
 
 ## Preferences
 
-Preferences schema v2 persists `UiScaleMode`. Reading v1 preserves its display and
-audio settings and defaults UI scale to Auto. A change previews immediately through
-the renderer resource and is persisted through the existing preferences writer.
+Preferences schema v3 persists `UiScaleMode`, per-component HUD visibility, and only
+keyboard overrides from canonical defaults. Reading v1 or v2 preserves existing
+display, audio, and UI-scale values while supplying the default HUD combination and
+an empty override map. Changes preview immediately and use the existing atomic
+preferences writer. Master `H` suppression, Compact temporary surfaces, the inspected
+unit, and the Main View destination are runtime-only and never survive restart.
 
 ## Testing oracle boundary
 
@@ -259,10 +300,10 @@ cargo run -p hex_game --features visual-walk
 | Sandbox Party / Enemies | edit an ordered six-slot side | Back | shared roster component and Map-ready diagnostics |
 | Character Picker | preview then commit one character | Back / Use Character | templates, saved characters, Creator entry |
 | Tools | choose an authoring tool | Back | Character Creator, Spell Creator, disabled Map Creator |
-| Settings | change one preference | Back | persistence notice |
+| Settings | change general preferences or keyboard bindings | Back | category tabs, capture/conflict state, persistence notice |
 | Character / Spell Creator | finish the current authoring step | Library / Save / Test where applicable | palettes, catalogs, validation, history, typed origin |
 | Deployment | place occupied Party then Enemy slots one at a time and review exact choices | Undo / Return to Sandbox / Start Combat in Review | compact current-character card, exact legal-surface and occupancy refusal, no ordinary HUD |
-| Gameplay | act for the current unit | Now / Choose / Confirm rail | inspector and log |
+| Gameplay | act or inspect without obscuring the map | eligible Action Bar or forced required decision | independently persisted Party/Initiative/Activity plus typed Main View |
 | Pause | resume, save, or leave | Resume | save notice |
 | Sandbox outcome | acknowledge result | Retry Exact / Return to Sandbox | Victory or Defeat only |
 

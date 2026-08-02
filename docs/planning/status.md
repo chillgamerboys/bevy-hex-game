@@ -166,9 +166,11 @@ all prevent occupied endpoints and pass-through routes without collapsing stacke
 elevations. In-flight paths reserve their surfaces, command refusals distinguish route
 from endpoint conflicts, and downed bodies retain their surface for revival.
 
-**Complete-party combat is live.** The stable party rail selects up to six members,
-number keys and camera focus follow that roster, and combat hands selection to the
-acting ally. Exploration can switch between Solo movement and atomic Group movement;
+**Complete-party combat is live.** The compact Party component presents up to six
+stable members. A first card or number-key activation inspects and centers without
+changing command authority; repeating it opens Character Main View, while combat
+keeps gameplay selection on the acting ally. Exploration can switch between Solo
+movement and atomic Group movement through Formation Main View;
 authored formations rotate by route segment, compress through the Crossing bottleneck,
 and reform when space returns. Algorithm-neutral AI consumes canonical legal actions
 through the same command funnel as the player. Exact-cell damage and restoration use
@@ -178,8 +180,13 @@ the same replayable command. Movement scoring shares one authorized graph, one a
 reach/predecessor projection, and one reverse distance map per live observed hostile.
 Victory and Defeat retain the
 battlefield, Retry rebuilds the same resolved seed, Renewal revives at the next round
-boundary, and exploration Rest recovers the whole party. The tactical HUD keeps actor,
+boundary, and exploration Rest recovers the whole party. The minimalist tactical HUD
+keeps Party, Initiative, Activity, and Action Bar independently configurable, hosts
+Character/Formation/Required Decision in one typed Main View, and keeps actor,
 selected ally, decision owner, aimed target, and retained target as explicit roles.
+Required decisions remain forced while ordinary components are hidden. Party and
+disclosed Initiative inspection can center Map camera or feed Character follow without
+mutating selection, turn, caster, command ownership, or formation.
 Party Trial is the 3v3 integration and human regression case; Ability Lab and Raider
 Mirror remain its focused automated companions behind default-off stable fixture IDs.
 
@@ -515,10 +522,11 @@ The first implementation also ships with explicit limitations:
 ## The production gap
 
 Most of what makes this a product does not exist yet: no long-term-compatible save
-contract, audio content, input rebinding, signing, or store packaging. The current
+contract, audio content, controller support, signing, or store packaging. The current
 shell provides three atomic build-bound Campaign slots with one-time legacy-resume
-migration, a persistent Settings menu, centralized fixed input actions, empty audio
-buses, normalized release artifacts, and retained symbol material. The first hygiene
+migration, a persistent Settings menu, categorized configurable keyboard actions,
+HUD visibility preferences, empty audio buses, normalized release artifacts, and
+retained symbol material. The first hygiene
 slice has landed — a per-session log file beside the executable, a panic hook that
 writes into it, and the version on the Main Menu — but full crash *reporting*
 (symbolication, upload, a dialog) has not. These replaceable seams do not close the

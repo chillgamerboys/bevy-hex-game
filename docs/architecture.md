@@ -439,9 +439,13 @@ file leaves the authored value in force, and corrupt preferences are rejected vi
 before falling back. Local preferences are user state, not hot-reloaded project
 content.
 
-`InputBindings` centralizes the current fixed action-to-key map without promising
-rebinding UI. `AudioBusVolumes` and the audio facade similarly reserve music, SFX, and
-UI seams without requiring Wave 5 to ship audio content.
+`InputBindings` centralizes stable input actions, canonical defaults, categories, and
+context-aware keyboard overrides. Settings captures one non-modifier key, resolves
+overlapping-context conflicts through explicit Swap or Cancel, and persists only
+overrides in preferences schema v3. Fixed Tab, focused Enter/Space, and Escape UI
+navigation semantics are outside that remapping surface. `AudioBusVolumes` and the
+audio facade similarly reserve music, SFX, and UI seams without requiring Wave 5 to
+ship audio content.
 
 **Hex geometry constants deliberately stayed in Rust.** `HEX_INNER_RADIUS` and its
 derivations in `hex_core::config` describe the dimensions of `hex.glb`. Editing

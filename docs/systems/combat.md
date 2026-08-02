@@ -30,25 +30,31 @@ boundary would flip in and out of combat every frame it drifted.
 
 ## Tactical HUD and role resolution
 
-Gameplay UI is one responsive safe frame with 12px baseline viewport margins and 8px
-baseline inter-panel gaps. Semantic scale and viewport class resolve the party,
-Inspector, top-turn, and bottom-action regions; center bands consume the resolved
-side insets, so no independently positioned panels compete for the same pixels. Most
-read-only regions pass pointer input through to the world. The Inspector participates
-in picking because it is the single scroll owner for lattice and secondary detail,
-and opaque action/history panels catch input intended for their controls.
+Gameplay UI is map-first. Party, Initiative, Activity, and Action Bar are independent
+ordinary components whose saved preferences are resolved against combat eligibility,
+transient master hiding, and phase suppression. A component that is not visible is
+absent from layout, picking, focus, scrolling, and accessibility; no collapsed handle
+or invisible hit target remains. Compact starts with only the map and opens at most
+one temporary full-screen task surface.
 
 The HUD is mode-aware:
 
-- Exploring shows the party rail, selected-ally lattice, formation editor, Group/Solo,
-  presets, Rest, and the exploration hint. Combat-only spell actions are absent.
-- A player turn shows the compact initiative rail, party rail, active ally lattice,
-  movement and action budget, spells, and visible Channel and End Turn buttons.
-- A hostile turn says `ENEMY TURN`, keeps a labeled `SELECTED ALLY` lattice for
-  inspection, and replaces action buttons with `PLAYER COMMANDS LOCKED`.
-- A damage or restoration decision replaces ordinary actions with its exact role,
-  owner and target, quota, Clear, and Confirm. Hiding ordinary HUD chrome cannot hide
-  these required controls.
+- Exploration admits Party and eligible exploration actions; Initiative is absent.
+  Formation is an explicit Main View destination rather than a persistent side panel.
+- A player turn admits disclosed Initiative, Party, and the currently authorized
+  Action Bar. Activity remains available but closed by default.
+- A hostile turn admits disclosed Initiative and inspection, but never invents player
+  actions. An unobserved hostile is neither activatable nor locatable through the HUD.
+- A damage or restoration decision forcibly owns the typed Required Decision Main
+  View with its exact role, owner, target, quota, Clear, and Confirm. It cannot be
+  dismissed or replaced until the canonical decision resolves, even while the
+  ordinary HUD is hidden.
+
+`H` transiently hides or restores all ordinary components without changing their
+saved preferences. `P`, `I`, `L`, and `B` toggle Party, Initiative, Activity, and
+Action Bar respectively on Standard/Wide; while master-hidden, each shortcut summons
+only its requested surface. `V` opens the inspected character and `F` opens Formation
+in the Main View. On Compact, an ordinary surface closes with the same key or Escape.
 
 `hex_game::readouts::GameplayUiContext` is the presentation-private projection that
 keeps acting unit, selected ally, caster, decision owner, decision target, aimed
@@ -58,15 +64,18 @@ which unit is “mine.” Every binding selects one explicit role:
 `PINNED TARGET`. Identity lines always include faction and unit identity, such as
 `ALLY 2 · RAIDER #1` or `HOSTILE · RAIDER #4`.
 
-Only the acting unit and current target receive short world badges. A hostile target
-is retained while an aim moves over empty terrain only as `PINNED TARGET`; it is
-cleared when aim is cancelled, its caster or turn changes, combat exits, or the target
-is no longer valid. Hostile lattice contents still pass exclusively through faction
-knowledge.
+The acting or selected unit receives one continuous world-space foot ring. One
+disclosed current target receives a shape-distinct reticle. These markers ignore
+picking, inherit unit visibility, and clear during Deployment and terminal outcomes.
+A hostile target is retained while an aim moves over empty terrain only as
+`PINNED TARGET`; it is cleared when aim is cancelled, its caster or turn changes,
+combat exits, or the target is no longer valid. Hostile identity, position, and
+lattice contents still pass exclusively through faction knowledge.
 
-The default combat feed is the latest three structured events. `L` opens and closes
-the bounded full-history drawer; command refusals use high-priority styling and remain
-in the same 64-event history as actions, Rest, revival, and encounter outcomes.
+Activity is a bounded, disclosure-frozen history with All, Combat, and Activity tabs.
+`L` toggles or summons it. Command refusals use high-priority styling and remain in
+the same 64-event combat history as actions, Rest, revival, and encounter outcomes;
+high-level travel and session notices occupy the Activity category.
 
 The projection asserts rather than conceals producer disagreements. On player turns,
 actor, selected unit, and caster must agree. On hostile turns, player casting cannot
@@ -112,14 +121,16 @@ simulation command except a `ChooseDisables` answer for that exact defender. Inp
 emitters also stop producing movement, casts, end-turn commands, and AI actions while
 the decision is open, keeping the refusal log quiet during ordinary play.
 
-A `Player` defender uses the explicitly labeled ally lattice: only live cells are
-buttons, additional picks stop at the owed quota, and the bottom decision dock's Clear
-and Confirm controls (or `ENTER`) answer it. If every live cell is owed, all are
-preselected but confirmation is still explicit. Non-player defenders use the
-deterministic policy and issue the answer under their own `ControlOwner`.
+A `Player` defender uses the explicitly labeled Required Decision Main View: only live
+cells are buttons, additional picks stop at the owed quota, and its Clear and Confirm
+controls (or the configured Confirm Decision binding, `Enter` by default) answer it.
+If every live cell is owed, all are preselected but confirmation is still explicit.
+Non-player defenders use the deterministic policy and issue the answer under their
+own `ControlOwner`.
 
-This is not the `Pause` state. Camera and ordinary UI keep running. `H` hides ordinary
-readouts but deliberately leaves an active decision lattice and its controls visible.
+This is not the `Pause` state. Camera and ordinary UI systems keep running. `H` may
+hide ordinary components but deliberately leaves the required decision and its
+controls visible.
 
 Every accepted outcome and refusal is also a public, serde-capable `CombatEvent` or
 `CommandRefusal`. Those contracts use stable unit ids, spell names, positions, and exact
@@ -242,9 +253,9 @@ So the answer is drawn **before** the click rather than inferred after it:
 | **a faint tint** | over every surface this turn's movement can pay for |
 | **a stronger tint** | along the route to whatever the cursor is over |
 
-A tile that cannot be reached is simply not lit, and hovering it draws no route. The
-HUD carries the same fact as a number — `your turn, 4 to move` — so the tint can be
-checked against something rather than merely trusted.
+A tile that cannot be reached is simply not lit, and hovering it draws no route. When
+the Action Bar is visible it carries the same fact as a number — `your turn, 4 to
+move` — so the tint can be checked against something rather than merely trusted.
 
 **There is no range tint while exploring.** Movement is unlimited there, so every
 connected surface qualifies and a tint over the whole map would say nothing. The route
