@@ -63,10 +63,8 @@ fn spawn_panel(
             RequiredActionSurface,
             HudElement,
             Node {
-                position_type: PositionType::Absolute,
-                top: Val::Px(0.0),
-                left: Val::Px(0.0),
-                right: Val::Px(0.0),
+                position_type: PositionType::Relative,
+                width: Val::Percent(100.0),
                 height: Val::Px(88.0),
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(4.0),
@@ -151,13 +149,16 @@ fn rebuild(
     // Required choices have one canonical presentation owner: the persistent
     // rail. Repeating their controls here wastes world space and lets two
     // independently sized surfaces compete at intermediate semantic scales.
-    let promoted_to_rail = matches!(view.content, CastingPanelContentView::Decision { .. });
+    let promoted_to_main_view = matches!(view.content, CastingPanelContentView::Decision { .. });
     let ultra_constrained = crate::layout::is_ultra_constrained(*metrics);
     // The Actions region already reserves the Inspector lane. Do not reserve it
     // again here: doing so needlessly squeezed the production spell catalog on
     // Compact Retina canvases.
-    panel.top = Val::ZERO;
-    panel.right = Val::ZERO;
+    panel.position_type = PositionType::Relative;
+    panel.top = Val::Auto;
+    panel.right = Val::Auto;
+    panel.left = Val::Auto;
+    panel.width = Val::Percent(100.0);
     for mut heading in &mut headings {
         // "Actions" repeats the persistent rail's role and costs a full HUD
         // row. Spell labels already make this strip unambiguous.
@@ -174,12 +175,12 @@ fn rebuild(
         Val::Px(crate::layout::action_region_height(*metrics) - 4.0)
     };
     panel.overflow = Overflow::default();
-    panel.display = if view.visible && !promoted_to_rail {
+    panel.display = if view.visible && !promoted_to_main_view {
         Display::Flex
     } else {
         Display::None
     };
-    if !view.visible || promoted_to_rail {
+    if !view.visible || promoted_to_main_view {
         return;
     }
     let Ok((body, mut body_node)) = bodies.single_mut() else {

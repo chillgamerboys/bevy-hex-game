@@ -21,13 +21,13 @@ use hex_core::{
     InputAction, InputBindings, IssuedCommand, Mode, PartyFormation, PartyMovementMode, Pause,
     PendingDecision, Screen, UnitId,
 };
-use hex_gameplay_model::{MainMenuModel, MainMenuRoute};
-use hex_lattice::{LatticeSpec, LatticeState, LatticeStats};
+use hex_gameplay_model::{HudActionResult, HudState, MainMenuModel, MainMenuRoute};
+use hex_lattice::{CellKind, LatticeSpec, LatticeState, LatticeStats};
 use hex_units::{Archetype, Downed, Party, Player, Selected, UnitRegistry};
 
 use super::despawn_screen;
 use super::sandbox::{CreatorDisplayName, GameplaySessionOrigin, SandboxSession};
-use crate::readouts::{DisableSelection, GameplayUiContext, UiUnitIdentity};
+use crate::readouts::{ActivityNotice, DisableSelection, GameplayUiContext, UiUnitIdentity};
 use crate::scenarios::ActiveScenario;
 use hex_ui::{
     ActionAffordance, ActionAvailability, ActionPriority, GameplayAction, GameplayHudView,
@@ -169,7 +169,6 @@ fn reset_outcome_view(mut view: ResMut<OutcomeView>) {
 }
 
 fn handle_party_strip(
-    mut commands: Commands,
     mode: Res<State<Mode>>,
     party: Res<Party>,
     registry: Res<UnitRegistry>,
@@ -179,6 +178,7 @@ fn handle_party_strip(
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<InputBindings>,
     mut queue: ResMut<CommandQueue>,
+    mut activity: MessageWriter<ActivityNotice>,
     selected_units: Query<(Entity, &UnitId), (With<Player>, With<Selected>)>,
     owners: Query<&ControlOwner>,
 ) {
@@ -192,29 +192,23 @@ fn handle_party_strip(
             continue;
         };
         match intent {
-            hex_ui::PartyIntent::SelectMember(slot) => {
-                if let Some(entity) = party
-                    .members
-                    .get(*slot)
-                    .and_then(|unit| registry.entity_of(*unit))
-                {
-                    for (old, _) in &selected_units {
-                        if old != entity {
-                            commands.entity(old).remove::<Selected>();
-                        }
-                    }
-                    commands.entity(entity).insert(Selected);
-                }
-            }
+            // Inspection is presentation-only and handled by `readouts`; it must
+            // never rewrite gameplay `Selected` or command authority.
+            hex_ui::PartyIntent::ActivateMember(_) => {}
             hex_ui::PartyIntent::ToggleMovementMode => {
                 formation.mode = match formation.mode {
                     PartyMovementMode::Group => PartyMovementMode::Solo,
                     PartyMovementMode::Solo => PartyMovementMode::Group,
                 };
+                activity.write(ActivityNotice(format!(
+                    "Party movement changed to {:?}.",
+                    formation.mode
+                )));
             }
             hex_ui::PartyIntent::SelectPreset(name) => {
                 if let Some(preset) = formations.get(name) {
                     formation.select_preset(preset, &party.members);
+                    activity.write(ActivityNotice(format!("Formation changed to {name}.")));
                 }
             }
             hex_ui::PartyIntent::AssignSlot(offset) => {
@@ -225,6 +219,7 @@ fn handle_party_strip(
                 if preset.slots.iter().any(|slot| slot.offset == *offset) {
                     let _ = formation.assign(member, *offset);
                     formation.fill_unassigned(preset, &party.members);
+                    activity.write(ActivityNotice("Formation assignment changed.".to_owned()));
                 }
             }
             hex_ui::PartyIntent::Rest => rest_requested = true,
@@ -245,6 +240,7 @@ fn handle_party_strip(
                 seat,
                 command: GameCommand::Rest { unit },
             });
+            activity.write(ActivityNotice("Party rest requested.".to_owned()));
         }
     }
 }
@@ -256,6 +252,7 @@ fn publish_party_view(
     registry: Res<UnitRegistry>,
     formations: Res<FormationCatalog>,
     formation: Res<PartyFormation>,
+    elements: Option<Res<ElementCatalog>>,
     units: Query<(
         &UnitId,
         &Archetype,
@@ -306,6 +303,9 @@ fn publish_party_view(
                         ""
                     }
                 ),
+                cells: spec
+                    .map(|spec| party_lattice_cells(spec, elements.as_deref()))
+                    .unwrap_or_default(),
                 active,
                 selected,
             })
@@ -333,6 +333,46 @@ fn publish_party_view(
     if *view != next {
         *view = next;
     }
+}
+
+fn party_lattice_cells(
+    spec: &LatticeSpec,
+    elements: Option<&ElementCatalog>,
+) -> Vec<hex_ui::SandboxLatticeCellView> {
+    spec.cells()
+        .map(|(coord, kind)| {
+            let (label, kind) = match kind {
+                CellKind::Gem { element } => (
+                    elements
+                        .and_then(|elements| elements.name(element))
+                        .map_or_else(|| "G".to_owned(), compact_lattice_label),
+                    hex_ui::SandboxLatticeCellKind::Gem,
+                ),
+                CellKind::Fusion { output } => (
+                    elements
+                        .and_then(|elements| elements.name(output))
+                        .map_or_else(|| "F".to_owned(), compact_lattice_label),
+                    hex_ui::SandboxLatticeCellKind::Fusion,
+                ),
+                CellKind::Spell { .. } => ("S".to_owned(), hex_ui::SandboxLatticeCellKind::Spell),
+                CellKind::Blank => ("·".to_owned(), hex_ui::SandboxLatticeCellKind::Blank),
+            };
+            hex_ui::SandboxLatticeCellView {
+                q: coord.q(),
+                r: coord.r(),
+                label,
+                kind,
+            }
+        })
+        .collect()
+}
+
+fn compact_lattice_label(name: &str) -> String {
+    name.chars()
+        .filter(|character| character.is_alphanumeric())
+        .take(2)
+        .collect::<String>()
+        .to_uppercase()
 }
 fn sync_outcome_view(
     resolution: Res<EncounterResolution>,
@@ -482,6 +522,7 @@ fn publish_hud_view(
     order: Res<TurnOrder>,
     pending: Res<PendingDecision>,
     selection: Res<DisableSelection>,
+    bindings: Res<InputBindings>,
     context: Res<GameplayUiContext>,
     elements: Option<Res<ElementCatalog>>,
     acting: Query<(
@@ -549,14 +590,14 @@ fn publish_hud_view(
                 ActionAffordance {
                     action: GameplayAction::Rest,
                     label: "Rest party".to_owned(),
-                    shortcut: Some("R".to_owned()),
+                    shortcut: Some(bindings.chord(InputAction::Rest).label()),
                     availability: ActionAvailability::Enabled,
                     priority: ActionPriority::Primary,
                 },
                 ActionAffordance {
                     action: GameplayAction::Pause,
                     label: "Pause".to_owned(),
-                    shortcut: Some("Esc".to_owned()),
+                    shortcut: Some(bindings.chord(InputAction::Pause).label()),
                     availability: ActionAvailability::Enabled,
                     priority: ActionPriority::Secondary,
                 },
@@ -578,7 +619,7 @@ fn publish_hud_view(
                 .map_or_else(|| "No active unit".to_owned(), UiUnitIdentity::label);
             let required_prompt = Some(
                 decision_context_hint(&context, &pending)
-                    .unwrap_or_else(|| combat_action_hint(player_turn, &pending).to_owned()),
+                    .unwrap_or_else(|| combat_action_hint(player_turn, &pending, &bindings)),
             );
             let availability = if player_turn && !pending.is_open() {
                 ActionAvailability::Enabled
@@ -623,7 +664,7 @@ fn publish_hud_view(
                 ActionAffordance {
                     action: GameplayAction::EndTurn,
                     label: "End turn".to_owned(),
-                    shortcut: Some("Space".to_owned()),
+                    shortcut: Some(bindings.chord(InputAction::EndTurn).label()),
                     availability,
                     priority: ActionPriority::Primary,
                 },
@@ -634,7 +675,7 @@ fn publish_hud_view(
                     ActionAffordance {
                         action: GameplayAction::ConfirmDecision,
                         label: "Confirm choice".to_owned(),
-                        shortcut: Some("Enter".to_owned()),
+                        shortcut: Some(bindings.chord(InputAction::Confirm).label()),
                         availability: decision_confirmation_availability(
                             selection.remaining_choices(),
                         ),
@@ -721,17 +762,26 @@ fn decision_context_hint(context: &GameplayUiContext, pending: &PendingDecision)
     }
 }
 
-/// The action hint must agree with the command emitters: Space and casting are
-/// player-turn controls, while an open defender choice replaces every ordinary
-/// simulation command.
-fn combat_action_hint(player_turn: bool, pending: &PendingDecision) -> &'static str {
+/// The action hint must agree with the configured command bindings. An open
+/// defender choice replaces every ordinary simulation command.
+fn combat_action_hint(
+    player_turn: bool,
+    pending: &PendingDecision,
+    bindings: &InputBindings,
+) -> String {
+    let confirm = bindings.chord(InputAction::Confirm).label();
     match pending {
-        PendingDecision::ChooseDisables { .. } => "choose a live cell above, then ENTER to confirm",
-        PendingDecision::ChooseRestores { .. } => {
-            "choose a disabled target cell above, then ENTER to confirm"
+        PendingDecision::ChooseDisables { .. } => {
+            format!("choose a live cell above, then {confirm} to confirm")
         }
-        PendingDecision::None if player_turn => "cast from the panel   ·   SPACE to end turn",
-        PendingDecision::None => "waiting for the enemy",
+        PendingDecision::ChooseRestores { .. } => {
+            format!("choose a disabled target cell above, then {confirm} to confirm")
+        }
+        PendingDecision::None if player_turn => format!(
+            "cast from the panel   ·   {} to end turn",
+            bindings.chord(InputAction::EndTurn).label()
+        ),
+        PendingDecision::None => "waiting for the enemy".to_owned(),
     }
 }
 
@@ -740,8 +790,8 @@ fn combat_action_hint(player_turn: bool, pending: &PendingDecision) -> &'static 
 ///
 /// Behind the `dev` feature deliberately: the shipped build has no key that
 /// exposes hidden information, and hidden information is the game's source of
-/// uncertainty rather than dice. `K` for knowledge — `Escape`, `Backspace`,
-/// `Space`, `Tab`, `Q`, `H`, `C`, `Enter` and `WASD` are all taken.
+/// uncertainty rather than dice. The default remains `K`; Settings owns any
+/// collision-safe customization.
 ///
 /// The resource is initialised by `hex_combat`'s plugin, which the binary always
 /// adds, so this cannot be the observer-on-the-title-screen crash: it is a
@@ -781,11 +831,15 @@ fn handle_input(
     sandbox: Option<Res<SandboxSession>>,
     origin: Option<Res<GameplaySessionOrigin>>,
     mut main_menu: ResMut<MainMenuModel>,
+    mut hud: ResMut<HudState>,
 ) {
-    if bindings.just_pressed(&keys, InputAction::Pause) {
+    let escape_closed_surface = keys.just_pressed(KeyCode::Escape)
+        && hud.close_active_surface() != HudActionResult::NoChange;
+    if bindings.just_pressed(&keys, InputAction::Pause) && !escape_closed_surface {
         next_pause.set(toggled_pause(*pause.get()));
     }
-    // Backspace rather than Escape, which is taken by pause.
+    // The return action stays distinct from Escape, which always dismisses an
+    // ordinary HUD task before the configured pause action may run.
     if bindings.just_pressed(&keys, InputAction::ReturnTitle) {
         let destination = gameplay_return_screen(origin.as_deref(), sandbox.is_some());
         prepare_main_menu_for_gameplay_return(destination, &mut main_menu);
@@ -927,12 +981,13 @@ mod tests {
 
     #[test]
     fn combat_hints_never_offer_player_commands_during_an_enemy_turn() {
+        let bindings = InputBindings::default();
         assert_eq!(
-            combat_action_hint(true, &PendingDecision::None),
-            "cast from the panel   ·   SPACE to end turn"
+            combat_action_hint(true, &PendingDecision::None, &bindings),
+            "cast from the panel   ·   Space to end turn"
         );
         assert_eq!(
-            combat_action_hint(false, &PendingDecision::None),
+            combat_action_hint(false, &PendingDecision::None, &bindings),
             "waiting for the enemy"
         );
         assert_eq!(
@@ -942,9 +997,10 @@ mod tests {
                     decider: UnitId(1),
                     count: 1,
                     source: UnitId(2),
-                }
+                },
+                &bindings,
             ),
-            "choose a live cell above, then ENTER to confirm"
+            "choose a live cell above, then Enter to confirm"
         );
     }
 

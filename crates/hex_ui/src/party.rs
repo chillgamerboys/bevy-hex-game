@@ -3,6 +3,7 @@
 use bevy::input_focus::tab_navigation::TabIndex;
 use bevy::prelude::*;
 use hex_core::Screen;
+use hex_gameplay_model::MainViewDestination;
 
 use crate::{
     blurb, hud_heading, hud_text_role, owner_resolved_control_role, responsive_control_role,
@@ -60,7 +61,7 @@ fn spawn_panels(
         ))
         .with_children(|root| {
             root.spawn(hud_heading(&assets, "party"));
-            root.spawn(blurb(&assets, "ALLIES · keys 1–6"));
+            root.spawn(blurb(&assets, "ALLIES"));
             root.spawn((
                 PartyBody,
                 Node {
@@ -126,17 +127,20 @@ fn region(wanted: UiRegionRole, regions: &Query<(Entity, &UiRegionRole)>) -> Opt
 fn rebuild(
     mut commands: Commands,
     view: Res<PartyView>,
+    chrome: Res<crate::GameplayChromeView>,
     party_bodies: Query<Entity, With<PartyBody>>,
     formation_bodies: Query<Entity, With<FormationBody>>,
     mut formation_panels: Query<&mut Node, With<FormationPanel>>,
     metrics: Res<ResolvedUiMetrics>,
     assets: Res<UiAssets>,
 ) {
-    if !view.is_changed() && !metrics.is_changed() {
+    if !view.is_changed() && !metrics.is_changed() && !chrome.is_changed() {
         return;
     }
     if let Ok(mut panel) = formation_panels.single_mut() {
-        panel.display = if view.formation_visible {
+        panel.display = if view.formation_visible
+            && matches!(chrome.main_view, MainViewDestination::Formation)
+        {
             Display::Flex
         } else {
             Display::None
@@ -166,11 +170,16 @@ fn rebuild(
                             Val::Percent(100.0),
                             crate::UiVisibilityRequirement::Immediate,
                         ),
-                        PartyControl(PartyIntent::SelectMember(member.slot)),
+                        PartyControl(PartyIntent::ActivateMember(member.slot)),
                         BorderColor::all(border),
                         BackgroundColor(background),
                     ))
-                    .with_child(body_text(&assets, member.label.clone()));
+                    .with_children(|card| {
+                        card.spawn(body_text(&assets, member.label.clone()));
+                        if !member.cells.is_empty() {
+                            crate::sandbox::spawn_mini_lattice(card, &assets, &member.cells);
+                        }
+                    });
             }
         });
     }
@@ -194,7 +203,7 @@ fn rebuild(
                 .spawn((
                     control_button(
                         "Party Rest",
-                        "REST PARTY · R",
+                        "REST PARTY",
                         Val::Percent(100.0),
                         crate::UiVisibilityRequirement::Scrollable,
                     ),
@@ -202,7 +211,7 @@ fn rebuild(
                     BorderColor::all(EDGE),
                     BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.07)),
                 ))
-                .with_child(body_text(&assets, "REST PARTY · R"));
+                .with_child(body_text(&assets, "REST PARTY"));
             formation
                 .spawn((
                     Node {
@@ -392,6 +401,7 @@ mod tests {
                 .map(|slot| crate::PartyMemberView {
                     slot,
                     label: format!("ALLY {} · formation member", slot + 1),
+                    cells: Vec::new(),
                     active: slot == 0,
                     selected: slot == 0,
                 })

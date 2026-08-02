@@ -45,7 +45,8 @@ pub(super) fn plugin(app: &mut App) {
             PreUpdate,
             activate_focused_button
                 .after(bevy::input::InputSystems)
-                .after(bevy::ui::UiSystems::Focus),
+                .after(bevy::ui::UiSystems::Focus)
+                .after(crate::UiSystems::CaptureInput),
         )
         .add_systems(
             PostUpdate,
@@ -75,9 +76,25 @@ pub(crate) fn begin_route_refresh(
         return;
     }
 
+    request_route_focus(
+        root,
+        names.get(focused).ok().map(|name| name.as_str().to_owned()),
+        focus,
+        requests,
+    );
+}
+
+/// Clears stale focus and asks the post-update focus pass to target a named
+/// control after deferred route descendants have been replaced.
+pub(crate) fn request_route_focus(
+    root: Entity,
+    preferred_name: Option<String>,
+    focus: &mut InputFocus,
+    requests: &mut FocusRefreshRequests,
+) {
     requests.0.push(FocusRefreshRequest {
         root,
-        preferred_name: names.get(focused).ok().map(|name| name.as_str().to_owned()),
+        preferred_name,
     });
     // This must be immediate. The old descendants are removed through deferred
     // Commands, and no later focus system may target one for ScrollIntoView.

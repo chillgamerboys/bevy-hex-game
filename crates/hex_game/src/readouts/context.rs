@@ -9,11 +9,12 @@
 use bevy::prelude::*;
 use hex_combat::TurnOrder;
 use hex_core::{AppSystems, GameplaySystems, Mode, PendingDecision, Screen, UnitId};
+use hex_gameplay_model::{HudState, HudTransientSurface, MainViewDestination};
 use hex_units::{Faction, Party, Player, Selected, StandsOn, UnitRegistry};
 
 use crate::casting::{Aiming, CastReadout};
 
-use super::lattice::RetainedTarget;
+use super::{lattice::RetainedTarget, HudInspection};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InspectorRole {
@@ -38,6 +39,8 @@ impl InspectorRole {
 pub(crate) enum TargetProvenance {
     Aim,
     Pinned,
+    /// Explicit disclosure-safe HUD inspection.
+    Inspected,
 }
 
 impl TargetProvenance {
@@ -45,6 +48,7 @@ impl TargetProvenance {
         match self {
             Self::Aim => "AIM TARGET",
             Self::Pinned => "PINNED TARGET",
+            Self::Inspected => "INSPECTED HOSTILE",
         }
     }
 }
@@ -74,6 +78,7 @@ pub(crate) struct GameplayUiContext {
     pub(crate) mode: Option<Mode>,
     pub(crate) acting: Option<UiUnitIdentity>,
     pub(crate) selected_ally: Option<UiUnitIdentity>,
+    pub(crate) inspected: Option<UiUnitIdentity>,
     pub(crate) caster: Option<UiUnitIdentity>,
     pub(crate) decision_owner: Option<UiUnitIdentity>,
     pub(crate) decision_target: Option<UiUnitIdentity>,
@@ -104,6 +109,8 @@ pub(crate) fn refresh(
     casting: Res<CastReadout>,
     aiming: Res<Aiming>,
     retained: Res<RetainedTarget>,
+    hud: Res<HudState>,
+    inspection: Res<HudInspection>,
     party: Res<Party>,
     registry: Res<UnitRegistry>,
     selected: Query<&UnitId, (With<Player>, With<Selected>)>,
@@ -129,6 +136,15 @@ pub(crate) fn refresh(
 
     let acting = order.current().and_then(identity);
     let selected_ally = selected.iter().next().and_then(|unit| identity(*unit));
+    let inspected = inspection.subject.and_then(identity);
+    let requested_character = match (hud.stored_main_view(), hud.raw_transient()) {
+        (MainViewDestination::Character(unit), _) => Some(unit),
+        (_, Some(HudTransientSurface::Character(unit))) => Some(unit),
+        _ => None,
+    };
+    let inspected_for_main = inspected
+        .as_ref()
+        .filter(|identity| requested_character == Some(identity.unit));
     let caster = casting.caster.and_then(|caster| identity(caster.unit));
     let decision_owner = pending.decider().and_then(identity);
     let decision_target = match *pending {
@@ -143,6 +159,7 @@ pub(crate) fn refresh(
         acting.as_ref(),
         selected_ally.as_ref(),
         retained_ally.as_ref(),
+        inspected_for_main,
         first_ally.as_ref(),
         decision_owner.as_ref(),
         decision_target.as_ref(),
@@ -153,13 +170,19 @@ pub(crate) fn refresh(
             (*faction == Faction::Hostile && standing.0.pos == aim.anchor).then_some(*unit)
         })
     });
-    let target = retained.unit.and_then(identity).map(|unit| {
-        let provenance = if aimed_unit == Some(unit.unit) {
-            TargetProvenance::Aim
-        } else {
-            TargetProvenance::Pinned
-        };
-        (provenance, unit)
+    let inspected_target = inspected_for_main
+        .filter(|identity| identity.faction == Faction::Hostile)
+        .cloned()
+        .map(|unit| (TargetProvenance::Inspected, unit));
+    let target = inspected_target.or_else(|| {
+        retained.unit.and_then(identity).map(|unit| {
+            let provenance = if aimed_unit == Some(unit.unit) {
+                TargetProvenance::Aim
+            } else {
+                TargetProvenance::Pinned
+            };
+            (provenance, unit)
+        })
     });
 
     let invariant_error = invariant_error(
@@ -174,6 +197,7 @@ pub(crate) fn refresh(
         mode: Some(*mode.get()),
         acting,
         selected_ally,
+        inspected,
         caster,
         decision_owner,
         decision_target,
@@ -194,6 +218,7 @@ fn resolve_inspector(
     acting: Option<&UiUnitIdentity>,
     selected: Option<&UiUnitIdentity>,
     retained: Option<&UiUnitIdentity>,
+    inspected: Option<&UiUnitIdentity>,
     first_ally: Option<&UiUnitIdentity>,
     decision_owner: Option<&UiUnitIdentity>,
     decision_target: Option<&UiUnitIdentity>,
@@ -208,30 +233,36 @@ fn resolve_inspector(
             .map(|target| (InspectorRole::RestoreTarget, target)),
         _ => None,
     };
-    decision.or_else(|| {
-        acting
-            .filter(|unit| unit.faction == Faction::Player)
-            .cloned()
-            .map(|unit| (InspectorRole::ActiveAlly, unit))
-            .or_else(|| {
-                selected
-                    .filter(|unit| unit.faction == Faction::Player)
-                    .cloned()
-                    .map(|unit| (InspectorRole::SelectedAlly, unit))
-            })
-            .or_else(|| {
-                retained
-                    .filter(|unit| unit.faction == Faction::Player)
-                    .cloned()
-                    .map(|unit| (InspectorRole::SelectedAlly, unit))
-            })
-            .or_else(|| {
-                first_ally
-                    .filter(|unit| unit.faction == Faction::Player)
-                    .cloned()
-                    .map(|unit| (InspectorRole::SelectedAlly, unit))
-            })
-    })
+    decision
+        .or_else(|| {
+            inspected
+                .cloned()
+                .map(|unit| (InspectorRole::SelectedAlly, unit))
+        })
+        .or_else(|| {
+            acting
+                .filter(|unit| unit.faction == Faction::Player)
+                .cloned()
+                .map(|unit| (InspectorRole::ActiveAlly, unit))
+                .or_else(|| {
+                    selected
+                        .filter(|unit| unit.faction == Faction::Player)
+                        .cloned()
+                        .map(|unit| (InspectorRole::SelectedAlly, unit))
+                })
+                .or_else(|| {
+                    retained
+                        .filter(|unit| unit.faction == Faction::Player)
+                        .cloned()
+                        .map(|unit| (InspectorRole::SelectedAlly, unit))
+                })
+                .or_else(|| {
+                    first_ally
+                        .filter(|unit| unit.faction == Faction::Player)
+                        .cloned()
+                        .map(|unit| (InspectorRole::SelectedAlly, unit))
+                })
+        })
 }
 
 fn invariant_error(

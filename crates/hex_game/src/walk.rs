@@ -347,8 +347,11 @@ fn validate_step(step: &WalkStep) -> Result<(), String> {
                 name.as_str(),
                 "clear"
                     | "normal-gameplay"
+                    | "player-turn-max"
+                    | "hostile-turn"
                     | "casting-list"
                     | "required-decision"
+                    | "restore-decision"
                     | "aiming-disabled"
                     | "sandbox-outcome"
             ) =>
@@ -465,9 +468,17 @@ fn parse_screen(name: &str) -> Result<Screen, String> {
 fn parse_key(name: &str) -> Result<KeyCode, String> {
     match name {
         "Backspace" => Ok(KeyCode::Backspace),
+        "B" => Ok(KeyCode::KeyB),
         "C" => Ok(KeyCode::KeyC),
+        "F" => Ok(KeyCode::KeyF),
         "H" => Ok(KeyCode::KeyH),
-        _ => Err(format!("unknown key {name:?}; expected Backspace, C, or H")),
+        "I" => Ok(KeyCode::KeyI),
+        "L" => Ok(KeyCode::KeyL),
+        "P" => Ok(KeyCode::KeyP),
+        "V" => Ok(KeyCode::KeyV),
+        _ => Err(format!(
+            "unknown key {name:?}; expected Backspace or a configured HUD/camera review key"
+        )),
     }
 }
 
@@ -828,15 +839,24 @@ fn capture_structural_issues(
     );
     if let (Some(fixture), Some(task)) = (presentation, task) {
         let compatible = match fixture {
-            "normal-gameplay" => task == hex_ui::test_support::UiTaskCase::Exploration,
+            "normal-gameplay" => matches!(
+                task,
+                hex_ui::test_support::UiTaskCase::Exploration
+                    | hex_ui::test_support::UiTaskCase::CharacterMainView
+                    | hex_ui::test_support::UiTaskCase::ActivityTabs
+                    | hex_ui::test_support::UiTaskCase::CustomHudVisibility
+                    | hex_ui::test_support::UiTaskCase::CompactTemporarySurface
+            ),
+            "player-turn-max" => task == hex_ui::test_support::UiTaskCase::PlayerTurnMaxActions,
+            "hostile-turn" => task == hex_ui::test_support::UiTaskCase::HostileTurn,
             "casting-list" => task == hex_ui::test_support::UiTaskCase::Casting,
             "aiming-disabled" => task == hex_ui::test_support::UiTaskCase::AimingBlocked,
             "required-decision" => matches!(
                 task,
                 hex_ui::test_support::UiTaskCase::DisableDecision
-                    | hex_ui::test_support::UiTaskCase::RestoreDecision
                     | hex_ui::test_support::UiTaskCase::HudHiddenRequired
             ),
+            "restore-decision" => task == hex_ui::test_support::UiTaskCase::RestoreDecision,
             "sandbox-outcome" => task == hex_ui::test_support::UiTaskCase::SandboxOutcome,
             _ => false,
         };
@@ -1643,12 +1663,38 @@ mod tests {
             issues.iter().any(|issue| issue.contains("Cancel Aim")),
             "a named review capture must reject the right screen with the wrong task contents: {issues:?}"
         );
+        for task in [
+            hex_ui::test_support::UiTaskCase::CharacterMainView,
+            hex_ui::test_support::UiTaskCase::ActivityTabs,
+            hex_ui::test_support::UiTaskCase::CustomHudVisibility,
+            hex_ui::test_support::UiTaskCase::CompactTemporarySurface,
+        ] {
+            let issues = capture_structural_issues(
+                &snapshot,
+                Some("normal-gameplay"),
+                Some(task),
+                Some(Screen::Gameplay),
+            );
+            assert!(
+                issues
+                    .iter()
+                    .all(|issue| !issue.contains("cannot satisfy task")),
+                "normal gameplay fixture must be compatible with {}: {issues:?}",
+                task.contract().id
+            );
+        }
     }
 
     #[test]
     fn unknown_screens_and_keys_are_rejected_at_load() {
         assert_eq!(parse_key("C"), Ok(KeyCode::KeyC));
         assert_eq!(parse_key("H"), Ok(KeyCode::KeyH));
+        assert_eq!(parse_key("P"), Ok(KeyCode::KeyP));
+        assert_eq!(parse_key("I"), Ok(KeyCode::KeyI));
+        assert_eq!(parse_key("L"), Ok(KeyCode::KeyL));
+        assert_eq!(parse_key("B"), Ok(KeyCode::KeyB));
+        assert_eq!(parse_key("V"), Ok(KeyCode::KeyV));
+        assert_eq!(parse_key("F"), Ok(KeyCode::KeyF));
         assert!(validate_step(&WalkStep::AwaitScreen("Menu".into())).is_err());
         assert!(validate_step(&WalkStep::Key("F13".into())).is_err());
         assert!(validate_step(&WalkStep::Capture(" ".into())).is_err());

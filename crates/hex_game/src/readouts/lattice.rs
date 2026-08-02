@@ -178,6 +178,7 @@ type OwnData<'w, 's> = Query<
     (
         &'static UnitId,
         &'static Name,
+        &'static Faction,
         &'static LatticeSpec,
         &'static LatticeState,
         &'static LatticeStats,
@@ -275,7 +276,10 @@ pub(crate) fn refresh_readouts(
         })
         .and_then(|(unit, role, identity)| {
             let entity = registry.entity_of(unit)?;
-            let (unit, _name, spec, state, stats) = own.get(entity).ok()?;
+            let (unit, _name, faction, spec, state, stats) = own.get(entity).ok()?;
+            if *faction != Faction::Player {
+                return None;
+            }
             Some((unit, role, identity, spec, state, stats))
         })
         .map(

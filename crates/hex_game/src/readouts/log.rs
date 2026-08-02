@@ -14,10 +14,11 @@ use hex_perception::FactionMapKnowledge;
 use hex_units::{Faction, Player, StandsOn, UnitRegistry};
 
 use super::lattice::RetainedTarget;
-use hex_ui::{CombatLogLineView, CombatLogView, TargetPulseView};
+use hex_ui::{
+    ActivityKind, ActivityLogLineView, ActivityLogView, ActivityTab, TargetPulseView, UiIntent,
+};
 
 const CAPACITY: usize = 64;
-const FEED_LINES: usize = 3;
 const DRAWER_LINES: usize = 12;
 const PULSE_SECONDS: f32 = 0.28;
 #[derive(Debug, Clone, PartialEq)]
@@ -38,6 +39,25 @@ struct CombatLog {
     /// without retaining the hidden source identity inside presentation state.
     anonymous_causes: BTreeMap<UnitId, DamageCause>,
 }
+
+/// High-level non-combat history kept separate from combat disclosure machinery.
+#[derive(Resource, Default)]
+struct ActivityHistory {
+    lines: VecDeque<LogLine>,
+}
+
+impl ActivityHistory {
+    fn push(&mut self, line: LogLine) {
+        self.lines.push_back(line);
+        while self.lines.len() > CAPACITY {
+            self.lines.pop_front();
+        }
+    }
+}
+
+/// Typed high-level activity emitted by gameplay adapters.
+#[derive(Message, Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ActivityNotice(pub(crate) String);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DamageCause {
@@ -85,12 +105,14 @@ impl DamagePulse {
 }
 
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
-struct LogExpanded(bool);
+struct SelectedActivityTab(ActivityTab);
 
 pub(super) fn plugin(app: &mut App) {
     app.init_resource::<CombatLog>()
+        .init_resource::<ActivityHistory>()
         .init_resource::<DamagePulse>()
-        .init_resource::<LogExpanded>()
+        .init_resource::<SelectedActivityTab>()
+        .add_message::<ActivityNotice>()
         .add_systems(OnEnter(Screen::Gameplay), reset)
         // Not pausable. Bevy messages age out after two frames, so pausing on
         // the resolution frame must not erase the outcome from history.
@@ -104,30 +126,52 @@ pub(super) fn plugin(app: &mut App) {
         )
         .add_systems(
             Update,
-            (toggle_history, publish_view, pulse_panel)
+            (
+                ingest_activity,
+                select_tab.after(hex_ui::UiSystems::EmitIntents),
+                publish_view,
+                pulse_panel,
+            )
                 .chain()
                 .after(ingest)
+                .before(hex_ui::UiSystems::Render)
                 .run_if(in_state(Screen::Gameplay)),
         );
 }
 
 fn reset(
     mut log: ResMut<CombatLog>,
+    mut activity: ResMut<ActivityHistory>,
     mut pulse: ResMut<DamagePulse>,
-    mut expanded: ResMut<LogExpanded>,
+    mut tab: ResMut<SelectedActivityTab>,
 ) {
     *log = CombatLog::default();
+    *activity = ActivityHistory::default();
+    activity.push(LogLine {
+        text: "Entered the battlefield.".to_owned(),
+        danger: false,
+    });
     *pulse = DamagePulse::default();
-    *expanded = LogExpanded::default();
+    *tab = SelectedActivityTab::default();
 }
 
-fn toggle_history(
-    keys: Res<ButtonInput<KeyCode>>,
-    bindings: Res<hex_core::InputBindings>,
-    mut expanded: ResMut<LogExpanded>,
+fn ingest_activity(
+    mut notices: MessageReader<ActivityNotice>,
+    mut activity: ResMut<ActivityHistory>,
 ) {
-    if bindings.just_pressed(&keys, hex_core::InputAction::ToggleLog) {
-        expanded.0 = !expanded.0;
+    for notice in notices.read() {
+        activity.push(LogLine {
+            text: notice.0.clone(),
+            danger: false,
+        });
+    }
+}
+
+fn select_tab(mut intents: MessageReader<UiIntent>, mut selected: ResMut<SelectedActivityTab>) {
+    for intent in intents.read() {
+        if let UiIntent::Activity(hex_ui::ActivityIntent::SelectTab(tab)) = intent {
+            selected.0 = *tab;
+        }
     }
 }
 
@@ -694,19 +738,47 @@ fn refusal_label(refusal: &CommandRefusal) -> &'static str {
     }
 }
 
-fn publish_view(log: Res<CombatLog>, expanded: Res<LogExpanded>, mut view: ResMut<CombatLogView>) {
-    if !log.is_changed() && !expanded.is_changed() {
+fn publish_view(
+    log: Res<CombatLog>,
+    activity: Res<ActivityHistory>,
+    selected: Res<SelectedActivityTab>,
+    mut view: ResMut<ActivityLogView>,
+) {
+    if !log.is_changed() && !activity.is_changed() && !selected.is_changed() {
         return;
     }
-    let next = CombatLogView {
-        heading: if expanded.0 {
-            format!("COMBAT HISTORY · {} EVENTS · L CLOSE", log.lines.len())
-        } else {
-            "RECENT EVENTS · L HISTORY".to_owned()
-        },
-        lines: visible_lines(&log, expanded.0)
+    let mut lines = match selected.0 {
+        ActivityTab::All => activity
+            .lines
+            .iter()
+            .map(|line| (ActivityKind::Activity, line))
+            .chain(log.lines.iter().map(|line| (ActivityKind::Combat, line)))
+            .collect::<Vec<_>>(),
+        ActivityTab::Combat => log
+            .lines
+            .iter()
+            .map(|line| (ActivityKind::Combat, line))
+            .collect(),
+        ActivityTab::Activity => activity
+            .lines
+            .iter()
+            .map(|line| (ActivityKind::Activity, line))
+            .collect(),
+    };
+    let keep_from = lines.len().saturating_sub(DRAWER_LINES);
+    lines.drain(0..keep_from);
+    let count = match selected.0 {
+        ActivityTab::All => log.lines.len() + activity.lines.len(),
+        ActivityTab::Combat => log.lines.len(),
+        ActivityTab::Activity => activity.lines.len(),
+    };
+    let next = ActivityLogView {
+        heading: format!("ACTIVITY · {count} EVENTS"),
+        tab: selected.0,
+        lines: lines
             .into_iter()
-            .map(|line| CombatLogLineView {
+            .map(|(kind, line)| ActivityLogLineView {
+                kind,
                 text: line.text.clone(),
                 danger: line.danger,
             })
@@ -717,8 +789,8 @@ fn publish_view(log: Res<CombatLog>, expanded: Res<LogExpanded>, mut view: ResMu
     }
 }
 
-fn visible_lines(log: &CombatLog, expanded: bool) -> Vec<&LogLine> {
-    let visible = if expanded { DRAWER_LINES } else { FEED_LINES };
+#[cfg(test)]
+fn visible_lines(log: &CombatLog, visible: usize) -> Vec<&LogLine> {
     log.lines
         .iter()
         .rev()
@@ -809,11 +881,11 @@ mod tests {
             });
         }
 
-        let feed: Vec<_> = visible_lines(&log, false)
+        let feed: Vec<_> = visible_lines(&log, 3)
             .iter()
             .map(|line| line.text.as_str())
             .collect();
-        let drawer: Vec<_> = visible_lines(&log, true)
+        let drawer: Vec<_> = visible_lines(&log, DRAWER_LINES)
             .iter()
             .map(|line| line.text.as_str())
             .collect();

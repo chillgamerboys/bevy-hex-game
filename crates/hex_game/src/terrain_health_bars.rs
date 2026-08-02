@@ -313,7 +313,7 @@ fn compose_health_bar_visibility(
     >,
 ) {
     let camera_ready = cameras.single().is_ok_and(|camera| camera.is_active);
-    let chrome_visible = chrome.shown && !chrome.encounter_complete;
+    let chrome_visible = chrome.terrain_health_shown && !chrome.encounter_complete;
     for (bar, mut visibility) in &mut bars {
         let tile_visible = tiles
             .get(bar.tile)

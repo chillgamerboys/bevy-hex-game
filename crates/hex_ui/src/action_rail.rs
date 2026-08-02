@@ -1,12 +1,12 @@
 use bevy::input_focus::tab_navigation::TabGroup;
 use bevy::prelude::*;
-use bevy::ui_widgets::ScrollArea;
 use hex_core::Screen;
 
 use crate::{
     blurb, fine, fixed_row_button, hud_heading, layout::is_ultra_constrained, ActionAvailability,
-    DespawnOnExit, GameplayAction, GameplayHudView, LatticeIntent, ResolvedUiMetrics, UiAssets,
-    UiIntent, UiViewportClass, ACCENT, EDGE, PANEL_BG,
+    DespawnOnExit, GameplayAction, GameplayChromeView, GameplayHudView, LatticeIntent,
+    ResolvedUiMetrics, UiAssets, UiHudSetup, UiIntent, UiRegionRole, UiViewportClass, ACCENT, EDGE,
+    PANEL_BG,
 };
 
 #[derive(Component)]
@@ -26,25 +26,30 @@ struct ActionRailActions;
 struct ActionRailKey(crate::GameplayAction);
 
 pub(super) fn plugin(app: &mut App) {
-    app.add_systems(OnEnter(Screen::Gameplay), spawn_action_rail)
-        .add_systems(
-            Update,
-            (
-                refresh_action_rail.in_set(crate::UiSystems::Render),
-                handle_action_rail.in_set(crate::UiSystems::EmitIntents),
-            )
-                .run_if(in_state(Screen::Gameplay)),
-        );
+    app.add_systems(
+        OnEnter(Screen::Gameplay),
+        spawn_action_rail.in_set(UiHudSetup::Panels),
+    )
+    .add_systems(
+        Update,
+        (
+            refresh_action_rail.in_set(crate::UiSystems::Render),
+            handle_action_rail.in_set(crate::UiSystems::EmitIntents),
+        )
+            .run_if(in_state(Screen::Gameplay)),
+    );
 }
 
-fn spawn_action_rail(mut commands: Commands, assets: Res<UiAssets>) {
-    commands
+fn spawn_action_rail(
+    mut commands: Commands,
+    assets: Res<UiAssets>,
+    regions: Query<(Entity, &UiRegionRole)>,
+) {
+    let rail = commands
         .spawn((
             Name::new("Primary Action Rail"),
             crate::UiVisibilityRequirement::Immediate,
             ActionRail,
-            ScrollArea,
-            ScrollPosition::default(),
             TabGroup::new(10),
             DespawnOnExit(Screen::Gameplay),
             action_rail_node(UiViewportClass::Standard),
@@ -80,11 +85,19 @@ fn spawn_action_rail(mut commands: Commands, assets: Res<UiAssets>) {
                     ..default()
                 },
             ));
-        });
+        })
+        .id();
+    if let Some(actions) = regions
+        .iter()
+        .find_map(|(entity, role)| (*role == UiRegionRole::Actions).then_some(entity))
+    {
+        commands.entity(actions).add_child(rail);
+    }
 }
 
 fn refresh_action_rail(
     view: Res<GameplayHudView>,
+    chrome: Res<GameplayChromeView>,
     review: Option<Res<crate::review::UiReviewPresentation>>,
     metrics: Res<ResolvedUiMetrics>,
     assets: Res<UiAssets>,
@@ -119,7 +132,7 @@ fn refresh_action_rail(
     if !action_rail_needs_refresh(
         view.is_changed(),
         review_changed,
-        metrics.is_changed(),
+        metrics.is_changed() || chrome.is_changed(),
         !added_rails.is_empty(),
     ) {
         return;
@@ -136,24 +149,23 @@ fn refresh_action_rail(
         view.phase == hex_core::GameplayPhase::Deployment && view.actions.is_empty();
     if let Ok((_, mut node, mut border)) = rails.single_mut() {
         apply_action_rail_layout(*metrics, &mut node, minimal_deployment, decision_required);
-        node.display = if minimal_deployment {
-            Display::None
-        } else {
-            Display::Flex
-        };
+        node.display =
+            if minimal_deployment || chrome.encounter_complete || !chrome.action_bar_shown {
+                Display::None
+            } else {
+                Display::Flex
+            };
         *border = BorderColor::all(if decision_required { ACCENT } else { EDGE });
     }
     for (kind, mut text, mut node) in &mut copy {
         node.width = Val::Auto;
         node.min_width = Val::Auto;
         node.flex_shrink = 1.0;
-        node.display = if minimal_deployment
-            || matches!(kind, ActionRailCopy::Heading | ActionRailCopy::Prompt)
-        {
-            Display::None
-        } else {
-            Display::Flex
-        };
+        // The minimalist Action Bar owns actionable controls only. Actor, round,
+        // movement, and required-decision context already have canonical Initiative
+        // or Main View owners; repeating them here made the bar taller than its
+        // actions and caused ordinary map space to disappear.
+        node.display = Display::None;
         match kind {
             ActionRailCopy::Heading => {}
             ActionRailCopy::Summary => {
@@ -306,7 +318,8 @@ fn action_rail_needs_refresh(
 
 fn action_rail_node(viewport: UiViewportClass) -> Node {
     let mut node = Node {
-        position_type: PositionType::Absolute,
+        position_type: PositionType::Relative,
+        width: Val::Percent(100.0),
         min_height: Val::Px(92.0),
         padding: UiRect::axes(Val::Px(14.0), Val::Px(8.0)),
         flex_direction: FlexDirection::Column,
@@ -325,33 +338,17 @@ fn apply_action_rail_layout(
     minimal_deployment: bool,
     decision_required: bool,
 ) {
-    apply_action_rail_insets(metrics.viewport, node);
-    node.right = Val::Px(crate::layout::center_right_inset(metrics));
-    if is_ultra_constrained(metrics) {
-        node.left = Val::Px(12.0);
-        if decision_required {
-            // The ordinary Inspector is hidden while its required lattice is
-            // promoted into this rail, so the blocking choice may use the lane.
-            node.right = Val::Px(12.0);
-        }
-    }
-    let left = match node.left {
-        Val::Px(left) => left,
-        _ => 0.0,
-    };
-    let right = match node.right {
-        Val::Px(right) => right,
-        _ => 0.0,
-    };
-    let horizontal_insets = left + right;
-    node.width = Val::Px((metrics.logical_size.x - horizontal_insets).max(44.0));
+    node.position_type = PositionType::Relative;
+    node.top = Val::Auto;
+    node.right = Val::Auto;
+    node.bottom = Val::Auto;
+    node.left = Val::Auto;
+    node.width = Val::Percent(100.0);
     node.flex_direction = FlexDirection::Column;
     node.align_items = AlignItems::Stretch;
     node.column_gap = Val::Px(0.0);
     if is_ultra_constrained(metrics) {
         let rail_height = crate::layout::ultra_action_rail_height(metrics);
-        node.top = Val::Px(8.0);
-        node.bottom = Val::Auto;
         node.padding = UiRect::axes(Val::Px(10.0), Val::Px(6.0));
         node.row_gap = Val::Px(4.0);
         node.min_height = Val::Px(if minimal_deployment {
@@ -386,14 +383,10 @@ fn apply_action_rail_layout(
 }
 
 fn apply_action_rail_insets(viewport: UiViewportClass, node: &mut Node) {
-    let (left, right, bottom) = match viewport {
-        UiViewportClass::Compact => (12.0, 12.0, 12.0),
-        UiViewportClass::Standard => (244.0, 320.0, 12.0),
-        UiViewportClass::Wide => (280.0, 360.0, 16.0),
-    };
-    node.left = Val::Px(left);
-    node.right = Val::Px(right);
-    node.bottom = Val::Px(bottom);
+    let _ = viewport;
+    node.left = Val::Auto;
+    node.right = Val::Auto;
+    node.bottom = Val::Auto;
 }
 
 fn handle_action_rail(

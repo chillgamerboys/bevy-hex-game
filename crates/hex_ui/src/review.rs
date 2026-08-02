@@ -29,8 +29,8 @@ pub(crate) struct UiReviewPresentation {
 /// chrome such as the player's HUD visibility preference.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct GameplayChromeOverride {
-    shown: Option<bool>,
-    decision_required: Option<bool>,
+    ordinary_shown: Option<bool>,
+    main_view: Option<hex_gameplay_model::MainViewDestination>,
     encounter_complete: Option<bool>,
 }
 
@@ -38,8 +38,8 @@ impl GameplayChromeOverride {
     #[cfg(any(feature = "visual-review", feature = "test-support"))]
     const fn required_decision() -> Self {
         Self {
-            decision_required: Some(true),
-            shown: None,
+            main_view: Some(hex_gameplay_model::MainViewDestination::RequiredDecision),
+            ordinary_shown: None,
             encounter_complete: None,
         }
     }
@@ -48,17 +48,24 @@ impl GameplayChromeOverride {
     const fn encounter_complete() -> Self {
         Self {
             encounter_complete: Some(true),
-            shown: None,
-            decision_required: None,
+            ordinary_shown: None,
+            main_view: None,
         }
     }
 
     pub(crate) fn apply(self, base: GameplayChromeView) -> GameplayChromeView {
-        GameplayChromeView {
-            shown: self.shown.unwrap_or(base.shown),
-            decision_required: self.decision_required.unwrap_or(base.decision_required),
-            encounter_complete: self.encounter_complete.unwrap_or(base.encounter_complete),
+        let mut next = base;
+        if let Some(shown) = self.ordinary_shown {
+            next.party_shown = shown;
+            next.initiative_shown = shown;
+            next.activity_shown = shown;
+            next.action_bar_shown = shown;
         }
+        if let Some(main_view) = self.main_view {
+            next.main_view = main_view;
+        }
+        next.encounter_complete = self.encounter_complete.unwrap_or(base.encounter_complete);
+        next
     }
 }
 

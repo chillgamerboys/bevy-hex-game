@@ -2,6 +2,7 @@
 
 use bevy::prelude::*;
 use hex_core::Screen;
+use hex_gameplay_model::MainViewDestination;
 
 use crate::{
     blurb, fine, hud_heading, panel, row_button, spawn_lattice_cells, GameplayLatticesView,
@@ -24,6 +25,9 @@ struct TargetBody;
 
 #[derive(Component)]
 struct TargetHeading;
+
+#[derive(Component)]
+struct LatticeReadoutStack;
 
 #[derive(Component)]
 struct CompactDecisionPanel;
@@ -63,6 +67,7 @@ fn spawn_panels(
     let stack = commands
         .spawn((
             Name::new("Lattice Readout Stack"),
+            LatticeReadoutStack,
             Node {
                 width: Val::Percent(100.0),
                 flex_shrink: 0.0,
@@ -198,6 +203,14 @@ fn rebuild(
     own_bodies: Query<Entity, With<OwnBody>>,
     target_bodies: Query<Entity, With<TargetBody>>,
     compact_bodies: Query<Entity, With<CompactDecisionBody>>,
+    mut stacks: Query<
+        &mut Node,
+        (
+            With<LatticeReadoutStack>,
+            Without<CompactDecisionPanel>,
+            Without<TargetPanel>,
+        ),
+    >,
     mut compact_panels: Query<&mut Node, (With<CompactDecisionPanel>, Without<TargetPanel>)>,
     mut target_panels: Query<
         (&mut Node, &mut BackgroundColor),
@@ -227,6 +240,16 @@ fn rebuild(
     let chrome = review
         .as_ref()
         .map_or(*chrome, |review| review.effective_chrome(*chrome));
+    if let Ok(mut stack) = stacks.single_mut() {
+        stack.display = if matches!(
+            chrome.main_view,
+            MainViewDestination::Character(_) | MainViewDestination::RequiredDecision
+        ) {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
     let compact_decision = compact_decision_visible(*metrics, &chrome, view);
     if let Ok(mut panel) = compact_panels.single_mut() {
         panel.display = if compact_decision {
@@ -326,6 +349,9 @@ fn rebuild(
                 "Own",
                 OwnCell,
             );
+            if let Some(decision) = own.decision {
+                spawn_decision_controls(body, decision, &assets);
+            }
         });
     }
     if let (Ok(mut heading), Some(own)) = (own_headings.single_mut(), view.own.as_ref()) {
@@ -365,13 +391,13 @@ fn rebuild(
 }
 
 pub(crate) fn compact_decision_visible(
-    metrics: crate::ResolvedUiMetrics,
-    chrome: &crate::GameplayChromeView,
-    view: &GameplayLatticesView,
+    _metrics: crate::ResolvedUiMetrics,
+    _chrome: &crate::GameplayChromeView,
+    _view: &GameplayLatticesView,
 ) -> bool {
-    crate::layout::is_ultra_constrained(metrics)
-        && chrome.decision_required
-        && view.own.as_ref().is_some_and(|own| own.decision.is_some())
+    // Required decisions now own the Compact full-screen Main View. Keeping a
+    // second promoted copy in the Action Bar would create two competing focus scopes.
+    false
 }
 
 /// Adds the shared clear/confirm affordances to any required-decision surface.
@@ -475,7 +501,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn compact_layout_promotes_only_required_lattice_choices() {
+    fn required_main_view_never_creates_a_duplicate_compact_lattice_choice() {
         let mut view = GameplayLatticesView::default();
         let mut chrome = crate::GameplayChromeView::default();
         let ultra =
@@ -496,8 +522,11 @@ mod tests {
             !compact_decision_visible(ultra, &chrome, &view),
             "a stale lattice projection cannot promote before the application names a blocking decision"
         );
-        chrome.decision_required = true;
-        assert!(compact_decision_visible(ultra, &chrome, &view));
+        chrome.main_view = MainViewDestination::RequiredDecision;
+        assert!(
+            !compact_decision_visible(ultra, &chrome, &view),
+            "the forced Main View is the single Compact decision surface"
+        );
 
         let ordinary_compact =
             crate::resolve_ui_metrics(Vec2::new(1280.0, 720.0), crate::UiScaleMode::Auto);

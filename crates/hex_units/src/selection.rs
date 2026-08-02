@@ -26,14 +26,15 @@
 //! tile entity on the map — so the search is rebuilt when the *selection* changes, not
 //! when the cursor does. Moving the mouse redraws; it does not re-solve.
 
+use bevy::light::NotShadowCaster;
 use bevy::picking::events::{Out, Over, Pointer};
 use bevy::picking::Pickable;
 use bevy::prelude::*;
 
 use hex_assets::{GameAssets, SubstanceTable};
 use hex_core::{
-    CameraFocusTarget, GameplaySetup, GameplaySystems, HexTile, InputBindings, Mode,
-    PausableSystems, Screen, TilePos, TraversalBlockers, Turn, UnitId,
+    CameraFocusTarget, GameplaySetup, GameplaySystems, HexTile, Mode, PausableSystems, Screen,
+    TargetReticleRequest, TilePos, TraversalBlockers, Turn, UnitId, WorldMarkerSuppression,
 };
 
 use crate::movement::{Body, Footing, Reach, Standing};
@@ -62,6 +63,15 @@ const PATH_LIFT: f32 = 0.05;
 
 /// How far above a unit's feet the ring sits.
 const RING_LIFT: f32 = 0.03;
+
+/// How far above a unit's feet the segmented target reticle sits.
+const TARGET_RETICLE_LIFT: f32 = 0.07;
+
+/// Radius of the four target-reticle ticks around a unit.
+const TARGET_RETICLE_RADIUS: f32 = 0.94;
+
+/// A four-tick reticle stays unmistakably distinct from the continuous acting ring.
+const TARGET_RETICLE_PARTS: usize = 4;
 
 /// Marks the unit whose movement is being previewed.
 ///
@@ -102,6 +112,14 @@ pub struct PathOverlay;
 #[derive(Component)]
 pub struct UnitRing(Entity);
 
+/// One of the four world-space ticks marking a disclosure-authorized target.
+///
+/// Like [`UnitRing`], retaining the owner makes reconciliation independent of
+/// hierarchy traversal. Each tick remains a child of the unit so composable unit
+/// visibility and animation apply automatically.
+#[derive(Component)]
+pub struct TargetReticle(Entity);
+
 /// Meshes and materials shared by every overlay.
 ///
 /// Four materials and one mesh for the whole game, following the `MaterialCache`
@@ -111,8 +129,10 @@ struct OverlayAssets {
     range: Handle<StandardMaterial>,
     path: Handle<StandardMaterial>,
     ring: Handle<Mesh>,
+    target_tick: Handle<Mesh>,
     player_ring: Handle<StandardMaterial>,
     enemy_ring: Handle<StandardMaterial>,
+    target_reticle: Handle<StandardMaterial>,
 }
 
 /// How many times the terrain has been rebuilt.
@@ -159,12 +179,14 @@ struct MovementPreview {
 pub fn plugin(app: &mut App) {
     app.register_type::<Selected>()
         .register_type::<CameraFocusTarget>()
+        .register_type::<TargetReticleRequest>()
+        .register_type::<WorldMarkerSuppression>()
         .register_type::<RangeOverlay>()
         .register_type::<PathOverlay>()
         .init_resource::<HoveredSurface>()
         .init_resource::<MovementPreview>()
         .init_resource::<TerrainRevision>()
-        .init_resource::<InputBindings>()
+        .init_resource::<WorldMarkerSuppression>()
         .add_systems(
             OnEnter(Screen::Gameplay),
             create_overlay_assets.in_set(GameplaySetup::Resources),
@@ -178,10 +200,10 @@ pub fn plugin(app: &mut App) {
         .add_systems(
             Update,
             (
-                select_party_member_from_keys,
                 reconcile_selection,
                 reconcile_camera_focus_target,
                 reconcile_rings,
+                reconcile_target_reticles,
                 redraw_overlays,
             )
                 .chain()
@@ -262,55 +284,25 @@ fn create_overlay_assets(
     // Sized inside a hex — the grid's circumradius is 1.0, so its inradius is about
     // 0.87 and a ring at 0.78 clears the edge on every side.
     let ring = meshes.add(Mesh::from(Torus::new(0.68, 0.78)));
+    // Four copies form the target reticle. A segmented square language cannot be
+    // confused with the continuous torus used for the acting/selected unit.
+    let target_tick = meshes.add(Mesh::from(Cuboid::new(0.34, 0.025, 0.12)));
 
     // Rings borrow their unit's colour, because a ring *is* about ownership — it says
     // whose turn it is.
     let player_ring = materials.add(cap_material(Color::srgba(1.0, 0.45, 0.4, 0.85), 1.0));
     let enemy_ring = materials.add(cap_material(Color::srgba(0.45, 0.65, 1.0, 0.85), 1.0));
+    let target_reticle = materials.add(cap_material(Color::srgba(1.0, 0.82, 0.34, 0.92), 3.0));
 
     commands.insert_resource(OverlayAssets {
         range,
         path,
         ring,
+        target_tick,
         player_ring,
         enemy_ring,
+        target_reticle,
     });
-}
-
-fn select_party_member_from_keys(
-    keys: Option<Res<ButtonInput<KeyCode>>>,
-    bindings: Res<InputBindings>,
-    mode: Option<Res<State<Mode>>>,
-    party: Res<Party>,
-    registry: Res<UnitRegistry>,
-    mut commands: Commands,
-    selected: Query<Entity, With<Selected>>,
-) {
-    let Some(keys) = keys else {
-        return;
-    };
-    if mode
-        .as_deref()
-        .is_some_and(|mode| *mode.get() == Mode::Combat)
-    {
-        return;
-    }
-    let pressed = bindings.pressed_party_member(&keys);
-    let Some(index) = pressed else {
-        return;
-    };
-    let Some(&member) = party.members.get(index) else {
-        return;
-    };
-    let Some(entity) = registry.entity_of(member) else {
-        return;
-    };
-    for old in &selected {
-        if old != entity {
-            commands.entity(old).remove::<Selected>();
-        }
-    }
-    commands.entity(entity).insert(Selected);
 }
 
 /// Keeps exactly one player selected and forces the acting player during combat.
@@ -399,6 +391,7 @@ fn reconcile_camera_focus_target(
 fn reconcile_rings(
     mut commands: Commands,
     overlays: Option<Res<OverlayAssets>>,
+    suppression: Res<WorldMarkerSuppression>,
     acting: Query<(Entity, &Faction), With<Turn>>,
     selected: Query<(Entity, &Faction), With<Selected>>,
     rings: Query<(Entity, &UnitRing)>,
@@ -408,8 +401,13 @@ fn reconcile_rings(
     };
 
     // Acting first: during combat the selection is still sitting on the player, and
-    // ringing it as well would say two units are up at once.
-    let wanted = acting.iter().next().or_else(|| selected.iter().next());
+    // ringing it as well would say two units are up at once. Phase suppression
+    // deliberately removes both options without mutating either gameplay marker.
+    let wanted = if suppression.is_suppressed() {
+        None
+    } else {
+        acting.iter().next().or_else(|| selected.iter().next())
+    };
 
     for (ring, owner) in &rings {
         if wanted.is_none_or(|(unit, _)| unit != owner.0) {
@@ -436,6 +434,7 @@ fn reconcile_rings(
             Mesh3d(overlays.ring.clone()),
             MeshMaterial3d(material),
             Transform::from_xyz(0.0, RING_LIFT, 0.0),
+            Visibility::Inherited,
             // Without this the ring swallows clicks on the tile its unit stands on,
             // which is the bug `Pickable::IGNORE` on the piece already exists to
             // avoid.
@@ -443,6 +442,85 @@ fn reconcile_rings(
             UnitRing(unit),
             Name::new("UnitRing"),
         ));
+    });
+}
+
+/// Reconciles one four-tick, world-space reticle from a disclosure-authorized request.
+///
+/// Exactly one identity-consistent request is required. Multiple requests fail closed
+/// instead of choosing by query iteration order. Every rendered tick is a child of
+/// the unit, uses ordinary depth testing, casts no shadow, and ignores picking.
+fn reconcile_target_reticles(
+    mut commands: Commands,
+    overlays: Option<Res<OverlayAssets>>,
+    suppression: Res<WorldMarkerSuppression>,
+    requests: Query<(Entity, &UnitId, &TargetReticleRequest)>,
+    reticles: Query<(Entity, &TargetReticle)>,
+) {
+    let Some(overlays) = overlays else {
+        return;
+    };
+
+    let wanted = if suppression.is_suppressed() {
+        None
+    } else {
+        let mut valid = requests
+            .iter()
+            .filter_map(|(entity, unit, request)| (*unit == request.unit).then_some(entity));
+        let first = valid.next();
+        if first.is_some() && valid.next().is_none() {
+            first
+        } else {
+            None
+        }
+    };
+
+    let mut wanted_parts = 0usize;
+    for (reticle, owner) in &reticles {
+        if Some(owner.0) == wanted {
+            wanted_parts += 1;
+        } else {
+            // The owning unit may already have been removed earlier in the frame.
+            commands.entity(reticle).try_despawn();
+        }
+    }
+
+    let Some(unit) = wanted else {
+        return;
+    };
+    if wanted_parts == TARGET_RETICLE_PARTS {
+        return;
+    }
+    if wanted_parts > 0 {
+        for (reticle, owner) in &reticles {
+            if owner.0 == unit {
+                commands.entity(reticle).try_despawn();
+            }
+        }
+    }
+
+    commands.entity(unit).with_children(|parent| {
+        for yaw in [
+            0.0,
+            std::f32::consts::FRAC_PI_2,
+            std::f32::consts::PI,
+            -std::f32::consts::FRAC_PI_2,
+        ] {
+            let direction = Quat::from_rotation_y(yaw) * Vec3::Z;
+            parent.spawn((
+                Mesh3d(overlays.target_tick.clone()),
+                MeshMaterial3d(overlays.target_reticle.clone()),
+                Transform::from_translation(
+                    direction * TARGET_RETICLE_RADIUS + Vec3::Y * TARGET_RETICLE_LIFT,
+                )
+                .with_rotation(Quat::from_rotation_y(yaw)),
+                Visibility::Inherited,
+                Pickable::IGNORE,
+                NotShadowCaster,
+                TargetReticle(unit),
+                Name::new("TargetReticle"),
+            ));
+        }
     });
 }
 
@@ -630,14 +708,20 @@ fn cap(
 fn clear_overlays(
     mut commands: Commands,
     drawn: Query<Entity, DrawnOverlays>,
+    markers: Query<Entity, Or<(With<UnitRing>, With<TargetReticle>)>>,
     mut preview: ResMut<MovementPreview>,
     mut hovered: ResMut<HoveredSurface>,
+    mut suppression: ResMut<WorldMarkerSuppression>,
 ) {
     for overlay in &drawn {
         commands.entity(overlay).despawn();
     }
+    for marker in &markers {
+        commands.entity(marker).try_despawn();
+    }
     *preview = MovementPreview::default();
     hovered.0 = None;
+    *suppression = WorldMarkerSuppression::default();
 }
 
 #[cfg(test)]
@@ -651,6 +735,56 @@ mod tests {
             pos: position,
             span: HexSpan::new(0.0, 1.0),
         })
+    }
+
+    fn marker_overlay_assets() -> (OverlayAssets, Handle<Mesh>, Handle<Mesh>) {
+        let mut meshes = Assets::<Mesh>::default();
+        let ring = meshes.add(Mesh::from(Torus::new(0.68, 0.78)));
+        let target_tick = meshes.add(Mesh::from(Cuboid::new(0.34, 0.025, 0.12)));
+        let mut materials = Assets::<StandardMaterial>::default();
+        let range = materials.add(StandardMaterial::default());
+        let path = materials.add(StandardMaterial::default());
+        let player_ring = materials.add(StandardMaterial::default());
+        let enemy_ring = materials.add(StandardMaterial::default());
+        let target_reticle = materials.add(StandardMaterial::default());
+
+        (
+            OverlayAssets {
+                range,
+                path,
+                ring: ring.clone(),
+                target_tick: target_tick.clone(),
+                player_ring,
+                enemy_ring,
+                target_reticle,
+            },
+            ring,
+            target_tick,
+        )
+    }
+
+    fn marker_app() -> (App, Entity, Handle<Mesh>, Handle<Mesh>) {
+        let mut builder = HeadlessAppBuilder::new().with_minimal_plugins();
+        let (overlays, ring_mesh, reticle_mesh) = marker_overlay_assets();
+        builder
+            .app_mut()
+            .insert_resource(overlays)
+            .init_resource::<WorldMarkerSuppression>()
+            .add_systems(Update, (reconcile_rings, reconcile_target_reticles).chain());
+        let unit = UnitId(12);
+        let entity = builder
+            .app_mut()
+            .world_mut()
+            .spawn((
+                unit,
+                Faction::Player,
+                Selected,
+                TargetReticleRequest::new(unit),
+                Transform::default(),
+                Visibility::Hidden,
+            ))
+            .id();
+        (builder.build(), entity, ring_mesh, reticle_mesh)
     }
 
     #[test]
@@ -761,52 +895,14 @@ mod tests {
     }
 
     #[test]
-    fn number_keys_select_members_in_stable_party_order() {
-        let mut builder = HeadlessAppBuilder::new();
-        builder
-            .app_mut()
-            .init_resource::<ButtonInput<KeyCode>>()
-            .init_resource::<InputBindings>()
-            .add_systems(
-                Update,
-                (select_party_member_from_keys, reconcile_selection).chain(),
-            );
-        let mut app = builder.build();
-        let first_id = UnitId(4);
-        let second_id = UnitId(8);
-        let first = app.world_mut().spawn((Player, first_id, Selected)).id();
-        let second = app.world_mut().spawn((Player, second_id)).id();
-        let mut registry = UnitRegistry::default();
-        registry.register(first_id, first);
-        registry.register(second_id, second);
-        app.insert_resource(registry);
-        app.insert_resource(Party {
-            members: vec![first_id, second_id],
-        });
-        app.world_mut()
-            .resource_mut::<ButtonInput<KeyCode>>()
-            .press(KeyCode::Digit2);
-
-        app.update();
-
-        assert!(!app.world().entity(first).contains::<Selected>());
-        assert!(app.world().entity(second).contains::<Selected>());
-    }
-
-    #[test]
     fn combat_forces_selection_to_the_acting_player() {
         let mut builder = HeadlessAppBuilder::new()
             .with_minimal_plugins()
             .with_state_plugin();
         builder
             .app_mut()
-            .init_resource::<ButtonInput<KeyCode>>()
-            .init_resource::<InputBindings>()
             .init_state::<Mode>()
-            .add_systems(
-                Update,
-                (select_party_member_from_keys, reconcile_selection).chain(),
-            );
+            .add_systems(Update, reconcile_selection);
         let mut app = builder.build();
         let first_id = UnitId(4);
         let second_id = UnitId(8);
@@ -838,5 +934,74 @@ mod tests {
 
         assert!(!app.world().entity(first).contains::<Selected>());
         assert!(app.world().entity(second).contains::<Selected>());
+    }
+
+    #[test]
+    fn target_reticle_is_shape_distinct_depth_tested_and_non_pickable() {
+        let (mut app, unit, ring_mesh, reticle_mesh) = marker_app();
+
+        app.update();
+
+        let mut reticles =
+            app.world_mut()
+                .query::<(&TargetReticle, &Mesh3d, &Pickable, &ChildOf, &Visibility)>();
+        let parts = reticles
+            .iter(app.world())
+            .map(|(reticle, mesh, pickable, parent, visibility)| {
+                assert_eq!(reticle.0, unit);
+                assert_eq!(mesh.0, reticle_mesh);
+                assert_eq!(*pickable, Pickable::IGNORE);
+                assert_eq!(parent.parent(), unit);
+                assert_eq!(*visibility, Visibility::Inherited);
+            })
+            .count();
+        assert_eq!(parts, TARGET_RETICLE_PARTS);
+
+        let mut rings = app
+            .world_mut()
+            .query::<(&UnitRing, &Mesh3d, &Pickable, &ChildOf)>();
+        let (ring, mesh, pickable, parent) = rings
+            .single(app.world())
+            .expect("the selected unit should keep one continuous acting ring");
+        assert_eq!(ring.0, unit);
+        assert_eq!(mesh.0, ring_mesh);
+        assert_ne!(mesh.0, reticle_mesh);
+        assert_eq!(*pickable, Pickable::IGNORE);
+        assert_eq!(parent.parent(), unit);
+    }
+
+    #[test]
+    fn target_reticle_and_ring_clear_under_phase_suppression_without_mutating_requests() {
+        let (mut app, unit, _, _) = marker_app();
+        app.update();
+
+        app.world_mut()
+            .resource_mut::<WorldMarkerSuppression>()
+            .set(true);
+        app.update();
+
+        let mut rings = app.world_mut().query_filtered::<Entity, With<UnitRing>>();
+        assert_eq!(rings.iter(app.world()).count(), 0);
+        let mut reticles = app
+            .world_mut()
+            .query_filtered::<Entity, With<TargetReticle>>();
+        assert_eq!(reticles.iter(app.world()).count(), 0);
+        let unit_entity = app.world().entity(unit);
+        assert!(unit_entity.contains::<Selected>());
+        assert!(unit_entity.contains::<TargetReticleRequest>());
+
+        app.world_mut()
+            .resource_mut::<WorldMarkerSuppression>()
+            .set(false);
+        app.update();
+        assert_eq!(rings.iter(app.world()).count(), 1);
+        assert_eq!(reticles.iter(app.world()).count(), TARGET_RETICLE_PARTS);
+
+        app.world_mut()
+            .entity_mut(unit)
+            .remove::<TargetReticleRequest>();
+        app.update();
+        assert_eq!(reticles.iter(app.world()).count(), 0);
+        assert_eq!(rings.iter(app.world()).count(), 1);
     }
 }

@@ -89,7 +89,7 @@ fn spawn_panel(
             Pickable::IGNORE,
             GlobalZIndex(3),
         ))
-        .insert(panel_node(*metrics, chrome.decision_required))
+        .insert(panel_node(*metrics, chrome.decision_required()))
         .with_children(|panel| {
             panel.spawn((DevTimeHeading, heading(&assets, "DEV · TIME")));
             panel.spawn((
@@ -212,7 +212,7 @@ fn reconcile_layout(
         .as_ref()
         .map_or(*chrome, |review| review.effective_chrome(*chrome));
     if let Ok(mut node) = panels.single_mut() {
-        *node = panel_node(*metrics, chrome.decision_required);
+        *node = panel_node(*metrics, chrome.decision_required());
     }
     if let Ok(mut node) = roots.single_mut() {
         *node = controls_node(*metrics);
@@ -352,8 +352,12 @@ mod tests {
         transition.0 = false;
         *hud = required_hud();
         *chrome = GameplayChromeView {
-            shown: true,
-            decision_required: true,
+            party_shown: false,
+            initiative_shown: false,
+            activity_shown: false,
+            action_bar_shown: false,
+            main_view: hex_gameplay_model::MainViewDestination::RequiredDecision,
+            terrain_health_shown: false,
             encounter_complete: false,
         };
     }
@@ -645,11 +649,8 @@ mod tests {
                     .insert_resource(crate::UiScalePreference(mode));
                 app.world_mut()
                     .insert_resource(DevTimeView::Available { hours: 12.0 });
-                app.world_mut().insert_resource(crate::GameplayChromeView {
-                    shown: true,
-                    decision_required: false,
-                    encounter_complete: false,
-                });
+                app.world_mut()
+                    .insert_resource(crate::GameplayChromeView::default());
                 app.world_mut()
                     .resource_mut::<NextState<Screen>>()
                     .set(Screen::Gameplay);
@@ -792,11 +793,7 @@ mod tests {
             .expect("the required action rail must remain visible");
         assert!(rail.size.cmpgt(Vec2::ZERO).all());
 
-        *app.world_mut().resource_mut::<GameplayChromeView>() = GameplayChromeView {
-            shown: true,
-            decision_required: false,
-            encounter_complete: false,
-        };
+        *app.world_mut().resource_mut::<GameplayChromeView>() = GameplayChromeView::default();
         app.world_mut()
             .insert_resource(crate::UiScalePreference(crate::UiScaleMode::Auto));
         app.insert_resource(crate::GameplayHudView::default());

@@ -40,11 +40,6 @@ pub const fn action_rail_clearance(viewport: UiViewportClass) -> f32 {
     }
 }
 
-/// Vertical clearance required by the rail after semantic control growth.
-pub(crate) fn semantic_action_rail_clearance(metrics: crate::ResolvedUiMetrics) -> f32 {
-    action_rail_clearance(metrics.viewport) + 160.0 * (metrics.content_scale - 1.0).max(0.0)
-}
-
 /// Height needed by the horizontal casting strip as semantic controls grow.
 /// Enlarged text wraps before a simple proportional control scale would account
 /// for it, while Auto at ordinary desktop sizes keeps the compact baseline.
@@ -92,83 +87,76 @@ pub fn apply_region_layout(viewport: UiViewportClass, role: UiRegionRole, node: 
     node.height = Val::Auto;
     match (viewport, role) {
         (UiViewportClass::Compact, UiRegionRole::Party) => {
-            node.top = Val::Px(8.0);
-            node.bottom = Val::Px(8.0);
-            node.left = Val::Px(8.0);
-            node.width = Val::Px(180.0);
+            node.display = Display::None;
         }
         (UiViewportClass::Compact, UiRegionRole::Turn) => {
-            node.top = Val::Px(12.0);
-            node.left = Val::Px(196.0);
-            node.right = Val::Px(268.0);
-            node.height = Val::Px(72.0);
+            node.display = Display::None;
         }
         (UiViewportClass::Compact, UiRegionRole::Inspector | UiRegionRole::Events) => {
             node.display = Display::None;
         }
         (UiViewportClass::Compact, UiRegionRole::Actions) => {
-            node.left = Val::Px(196.0);
-            node.right = Val::Px(12.0);
-            node.bottom = Val::Px(action_rail_clearance(viewport));
-            node.height = Val::Px(92.0);
+            node.display = Display::None;
         }
         (UiViewportClass::Standard, UiRegionRole::Party) => {
-            node.top = Val::Px(12.0);
-            node.bottom = Val::Px(12.0);
-            node.left = Val::Px(12.0);
-            node.width = Val::Px(224.0);
-        }
-        (UiViewportClass::Standard, UiRegionRole::Turn) => {
-            node.top = Val::Px(12.0);
-            node.left = Val::Px(244.0);
-            node.right = Val::Px(320.0);
-            node.height = Val::Px(72.0);
-        }
-        (UiViewportClass::Standard, UiRegionRole::Inspector) => {
-            node.top = Val::Px(12.0);
-            node.right = Val::Px(12.0);
-            node.bottom = Val::Px(12.0);
-            node.width = Val::Px(300.0);
-        }
-        (UiViewportClass::Standard, UiRegionRole::Actions) => {
-            node.left = Val::Px(244.0);
-            node.right = Val::Px(320.0);
-            node.bottom = Val::Px(action_rail_clearance(viewport));
-            node.height = Val::Px(92.0);
-        }
-        (UiViewportClass::Standard, UiRegionRole::Events) => {
-            node.left = Val::Px(244.0);
-            node.right = Val::Px(320.0);
-            node.bottom = Val::Px(264.0);
-        }
-        (UiViewportClass::Wide, UiRegionRole::Party) => {
-            node.top = Val::Px(16.0);
+            node.top = Val::Px(88.0);
             node.bottom = Val::Px(16.0);
             node.left = Val::Px(16.0);
-            node.width = Val::Px(260.0);
+            node.width = Val::Px(216.0);
+        }
+        (UiViewportClass::Standard, UiRegionRole::Turn) => {
+            node.top = Val::Px(16.0);
+            node.left = Val::Px(248.0);
+            node.right = Val::Px(16.0);
+            node.height = Val::Px(60.0);
+        }
+        (UiViewportClass::Standard, UiRegionRole::Inspector) => {
+            node.top = Val::Px(88.0);
+            node.right = Val::Px(296.0);
+            node.bottom = Val::Px(216.0);
+            node.left = Val::Px(248.0);
+        }
+        (UiViewportClass::Standard, UiRegionRole::Actions) => {
+            node.left = Val::Px(248.0);
+            node.right = Val::Px(296.0);
+            node.bottom = Val::Px(16.0);
+            node.height = Val::Px(184.0);
+        }
+        (UiViewportClass::Standard, UiRegionRole::Events) => {
+            node.top = Val::Px(88.0);
+            node.right = Val::Px(16.0);
+            node.bottom = Val::Px(16.0);
+            node.width = Val::Px(264.0);
+        }
+        (UiViewportClass::Wide, UiRegionRole::Party) => {
+            node.top = Val::Px(92.0);
+            node.bottom = Val::Px(16.0);
+            node.left = Val::Px(16.0);
+            node.width = Val::Px(240.0);
         }
         (UiViewportClass::Wide, UiRegionRole::Turn) => {
             node.top = Val::Px(16.0);
-            node.left = Val::Px(288.0);
-            node.right = Val::Px(360.0);
-            node.height = Val::Px(76.0);
+            node.left = Val::Px(272.0);
+            node.right = Val::Px(16.0);
+            node.height = Val::Px(64.0);
         }
         (UiViewportClass::Wide, UiRegionRole::Inspector) => {
-            node.top = Val::Px(16.0);
-            node.right = Val::Px(16.0);
-            node.bottom = Val::Px(12.0);
-            node.width = Val::Px(332.0);
+            node.top = Val::Px(92.0);
+            node.right = Val::Px(340.0);
+            node.bottom = Val::Px(220.0);
+            node.left = Val::Px(272.0);
         }
         (UiViewportClass::Wide, UiRegionRole::Actions) => {
-            node.left = Val::Px(288.0);
-            node.right = Val::Px(360.0);
-            node.bottom = Val::Px(action_rail_clearance(viewport));
-            node.height = Val::Px(92.0);
+            node.left = Val::Px(272.0);
+            node.right = Val::Px(340.0);
+            node.bottom = Val::Px(16.0);
+            node.height = Val::Px(188.0);
         }
         (UiViewportClass::Wide, UiRegionRole::Events) => {
-            node.left = Val::Px(288.0);
-            node.right = Val::Px(360.0);
-            node.bottom = Val::Px(268.0);
+            node.top = Val::Px(92.0);
+            node.right = Val::Px(16.0);
+            node.bottom = Val::Px(16.0);
+            node.width = Val::Px(308.0);
         }
     }
 }
@@ -180,56 +168,6 @@ pub(crate) fn constrain_region_to_canvas(
     node: &mut Node,
 ) {
     apply_region_layout(metrics.viewport, role, node);
-    // The lattice is persistent context at every semantic scale. The Inspector
-    // is a real scroll owner, so a short canvas reflows secondary content below
-    // the lattice instead of deleting it.
-    let inspector_width = inspector_width(metrics);
-    match role {
-        UiRegionRole::Inspector => {
-            node.display = Display::Flex;
-            node.width = Val::Px(inspector_width);
-            if metrics.viewport == UiViewportClass::Compact {
-                node.top = Val::Px(12.0);
-                node.right = Val::Px(12.0);
-                node.bottom = Val::Px(12.0);
-            }
-        }
-        UiRegionRole::Turn | UiRegionRole::Actions | UiRegionRole::Events => {
-            node.right = Val::Px(center_right_inset(metrics));
-        }
-        UiRegionRole::Party => {}
-    }
-    if role == UiRegionRole::Actions {
-        let semantic_clearance = semantic_action_rail_clearance(metrics);
-        node.bottom = Val::Px(semantic_clearance);
-        node.height = Val::Px(action_region_height(metrics));
-        if metrics.content_scale >= 1.5 {
-            let top = match metrics.viewport {
-                UiViewportClass::Compact | UiViewportClass::Standard => 92.0,
-                UiViewportClass::Wide => 96.0,
-            };
-            node.top = Val::Px(top);
-            node.height = Val::Px((metrics.logical_size.y - semantic_clearance - top).max(44.0));
-        }
-    }
-    if metrics.viewport != UiViewportClass::Compact {
-        return;
-    }
-    if is_ultra_constrained(metrics) {
-        match role {
-            UiRegionRole::Party | UiRegionRole::Turn => node.display = Display::None,
-            UiRegionRole::Actions => {
-                let top = ultra_action_rail_height(metrics) + 8.0;
-                node.top = Val::Px(top);
-                node.left = Val::Px(8.0);
-                node.right = Val::Px(center_right_inset(metrics));
-                node.bottom = Val::ZERO;
-                node.height = Val::Px((metrics.logical_size.y - top).max(44.0));
-            }
-            UiRegionRole::Events => node.display = Display::None,
-            UiRegionRole::Inspector => {}
-        }
-    }
 }
 
 pub(crate) fn is_ultra_constrained(metrics: crate::ResolvedUiMetrics) -> bool {
@@ -260,34 +198,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn coarse_compact_layout_collapses_secondary_regions_before_effective_constraints() {
-        let mut inspector = Node::default();
-        let mut events = Node::default();
-        let mut actions = Node::default();
-        apply_region_layout(
-            UiViewportClass::Compact,
+    fn coarse_compact_layout_starts_with_every_hud_region_fully_suppressed() {
+        for role in [
+            UiRegionRole::Party,
+            UiRegionRole::Turn,
             UiRegionRole::Inspector,
-            &mut inspector,
-        );
-        apply_region_layout(UiViewportClass::Compact, UiRegionRole::Events, &mut events);
-        apply_region_layout(
-            UiViewportClass::Compact,
             UiRegionRole::Actions,
-            &mut actions,
-        );
-        assert_eq!(inspector.display, Display::None);
-        assert_eq!(events.display, Display::None);
-        assert_eq!(actions.display, Display::Flex);
-        assert_eq!(actions.top, Val::Auto);
-        assert_eq!(
-            actions.bottom,
-            Val::Px(action_rail_clearance(UiViewportClass::Compact))
-        );
-        assert_eq!(actions.right, Val::Px(12.0));
+            UiRegionRole::Events,
+        ] {
+            let mut node = Node::default();
+            apply_region_layout(UiViewportClass::Compact, role, &mut node);
+            assert_eq!(node.display, Display::None, "role={role:?}");
+            assert_eq!(node.top, Val::Auto);
+            assert_eq!(node.right, Val::Auto);
+            assert_eq!(node.bottom, Val::Auto);
+            assert_eq!(node.left, Val::Auto);
+        }
     }
 
     #[test]
-    fn ordinary_compact_retains_the_inspector_and_reserves_its_lane() {
+    fn compact_constraints_do_not_reserve_a_hidden_inspector_or_action_lane() {
         let metrics = crate::resolve_ui_metrics(Vec2::new(1291.0, 747.0), crate::UiScaleMode::Auto);
         assert_eq!(metrics.viewport, UiViewportClass::Compact);
         assert!(!is_ultra_constrained(metrics));
@@ -296,13 +226,14 @@ mod tests {
         let mut actions = Node::default();
         constrain_region_to_canvas(metrics, UiRegionRole::Inspector, &mut inspector);
         constrain_region_to_canvas(metrics, UiRegionRole::Actions, &mut actions);
-        assert_eq!(inspector.display, Display::Flex);
-        assert_eq!(inspector.width, Val::Px(inspector_width(metrics)));
-        assert_eq!(actions.right, Val::Px(center_right_inset(metrics)));
+        assert_eq!(inspector.display, Display::None);
+        assert_eq!(actions.display, Display::None);
+        assert_eq!(inspector.width, Val::Auto);
+        assert_eq!(actions.width, Val::Auto);
     }
 
     #[test]
-    fn ultra_constrained_canvas_keeps_a_scrollable_inspector_beside_actions() {
+    fn ultra_constrained_canvas_also_starts_without_drawers_or_reserved_lanes() {
         let metrics = crate::ResolvedUiMetrics {
             logical_size: Vec2::new(960.0, 540.0),
             content_scale: 2.0,
@@ -319,19 +250,12 @@ mod tests {
         constrain_region_to_canvas(metrics, UiRegionRole::Actions, &mut actions);
         constrain_region_to_canvas(metrics, UiRegionRole::Inspector, &mut inspector);
         assert_eq!(party.display, Display::None);
-        assert_eq!(
-            actions.top,
-            Val::Px(ultra_action_rail_height(metrics) + 8.0)
-        );
-        assert_eq!(actions.left, Val::Px(8.0));
-        assert_eq!(actions.right, Val::Px(center_right_inset(metrics)));
-        assert_eq!(actions.bottom, Val::ZERO);
-        assert_eq!(
-            actions.height,
-            Val::Px((metrics.logical_size.y - ultra_action_rail_height(metrics) - 8.0).max(44.0))
-        );
-        assert_eq!(inspector.display, Display::Flex);
-        assert_eq!(inspector.width, Val::Px(inspector_width(metrics)));
+        assert_eq!(actions.display, Display::None);
+        assert_eq!(inspector.display, Display::None);
+        assert_eq!(actions.left, Val::Auto);
+        assert_eq!(actions.right, Val::Auto);
+        assert_eq!(actions.height, Val::Auto);
+        assert_eq!(inspector.width, Val::Auto);
     }
 
     #[test]
@@ -344,6 +268,10 @@ mod tests {
             &mut node,
         );
         assert_eq!(node.display, Display::Flex);
-        assert_eq!(node.width, Val::Px(300.0));
+        assert_eq!(node.width, Val::Auto);
+        assert_eq!(node.left, Val::Px(248.0));
+        assert_eq!(node.right, Val::Px(296.0));
+        assert_eq!(node.top, Val::Px(88.0));
+        assert_eq!(node.bottom, Val::Px(216.0));
     }
 }

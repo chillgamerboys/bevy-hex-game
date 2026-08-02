@@ -6,6 +6,8 @@
 
 use bevy::prelude::*;
 
+pub use hex_gameplay_model::{HudComponent, MainViewDestination};
+
 mod action_rail;
 mod casting_panel;
 mod combat_log;
@@ -31,7 +33,6 @@ mod scale;
 mod screens;
 mod shell;
 mod theme;
-mod unit_badges;
 
 pub use creation_presentation::{effect_summary, CharacterBuildSummary, SpellBuildSummary};
 pub use gameplay_lattices::spawn_decision_controls;
@@ -44,19 +45,20 @@ pub use layout::{
     READ_ONLY_HUD,
 };
 pub use model::{
-    ActionAffordance, ActionAvailability, ActionPriority, BadgeKind, CampaignPartyMemberView,
+    ActionAffordance, ActionAvailability, ActionPriority, ActivityIntent, ActivityKind,
+    ActivityLogLineView, ActivityLogView, ActivityTab, CampaignPartyMemberView,
     CampaignSlotStatusView, CampaignSlotView, CastingAimView, CastingIntent,
-    CastingPanelContentView, CastingPanelView, CastingSpellView, CombatLogLineView, CombatLogView,
-    CreatorEffectKind, CreatorIntent, CreatorLibraryView, CreatorNameField, CreatorScreenView,
-    CreatorWorkspace, DecisionChoiceView, DeploymentIntent, DeploymentQueueEntryView,
-    DeploymentView, FormationSlotView, GameplayAction, GameplayChromeView, GameplayHudView,
-    GameplayLatticesView, InitiativeEntryView, InitiativeSide, InitiativeView, LatticeDemoIntent,
-    LatticeDemoSpellView, LatticeDemoView, LatticeIntent, MainMenuIntent, MainMenuView,
-    OutcomeAction, OutcomeActionView, OutcomeIntent, OutcomeView, OwnLatticeView, PartyIntent,
-    PartyMemberView, PartyView, PauseView, SandboxCharacterView, SandboxIntent,
-    SandboxLatticeCellKind, SandboxLatticeCellView, SandboxMapView, SandboxRosterSlotView,
-    SandboxView, TargetLatticeStateView, TargetLatticeView, TargetPulseView, UiIntent, UiSetting,
-    UiSettingRow, UiSettingsView, UnitBadgeView, UnitBadgesView,
+    CastingPanelContentView, CastingPanelView, CastingSpellView, CreatorEffectKind, CreatorIntent,
+    CreatorLibraryView, CreatorNameField, CreatorScreenView, CreatorWorkspace, DecisionChoiceView,
+    DeploymentIntent, DeploymentQueueEntryView, DeploymentView, FormationSlotView, GameplayAction,
+    GameplayChromeView, GameplayHudView, GameplayLatticesView, InitiativeEntryView,
+    InitiativeIntent, InitiativeSide, InitiativeView, LatticeDemoIntent, LatticeDemoSpellView,
+    LatticeDemoView, LatticeIntent, MainMenuIntent, MainMenuView, OutcomeAction, OutcomeActionView,
+    OutcomeIntent, OutcomeView, OwnLatticeView, PartyIntent, PartyMemberView, PartyView, PauseView,
+    SandboxCharacterView, SandboxIntent, SandboxLatticeCellKind, SandboxLatticeCellView,
+    SandboxMapView, SandboxRosterSlotView, SandboxView, SettingsIntent, SettingsModalView,
+    SettingsTab, TargetLatticeStateView, TargetLatticeView, TargetPulseView, UiBindingRow,
+    UiIntent, UiSetting, UiSettingRow, UiSettingsView,
 };
 #[cfg(feature = "dev-tools")]
 pub use model::{DevTimeIntent, DevTimeView};
@@ -87,6 +89,8 @@ pub struct UiPlugin;
 /// Public ordering seam for composition-root intent handlers.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UiSystems {
+    /// A blocking input-capture task may consume raw input before focus activation.
+    CaptureInput,
     /// Pointer and keyboard interactions have been translated into [`UiIntent`].
     EmitIntents,
     /// Immutable projections have been converted into runtime presentation.
@@ -382,6 +386,7 @@ mod structural_tests {
                 })
                 .collect(),
                 notice: Some("Settings save immediately.".to_owned()),
+                ..default()
             });
         })
     }
@@ -543,9 +548,8 @@ mod structural_tests {
     fn sandbox_outcome_snapshot(size: UVec2, mode: UiScaleMode) -> UiTreeSnapshot {
         settled_snapshot(hex_core::Screen::Gameplay, size, 1.0, mode, |world| {
             world.insert_resource(GameplayChromeView {
-                shown: true,
-                decision_required: false,
                 encounter_complete: true,
+                ..default()
             });
             world.insert_resource(OutcomeView {
                 visible: true,
@@ -607,11 +611,113 @@ mod structural_tests {
         })
     }
 
+    fn gameplay_party_view() -> PartyView {
+        let silhouette = vec![
+            SandboxLatticeCellView {
+                q: 0,
+                r: 0,
+                label: "A".to_owned(),
+                kind: SandboxLatticeCellKind::Gem,
+            },
+            SandboxLatticeCellView {
+                q: 1,
+                r: 0,
+                label: "F".to_owned(),
+                kind: SandboxLatticeCellKind::Fusion,
+            },
+            SandboxLatticeCellView {
+                q: 0,
+                r: 1,
+                label: "S".to_owned(),
+                kind: SandboxLatticeCellKind::Spell,
+            },
+        ];
+        PartyView {
+            members: (0..6)
+                .map(|slot| PartyMemberView {
+                    slot,
+                    label: format!(
+                        "{} · {}",
+                        if slot == 0 { "Hedge Mage" } else { "Ally" },
+                        if slot == 0 { "selected" } else { "ready" }
+                    ),
+                    cells: silhouette.clone(),
+                    active: slot == 0,
+                    selected: slot == 0,
+                })
+                .collect(),
+            formation_visible: true,
+            movement_mode: "GROUP · formation follows the selected anchor".to_owned(),
+            presets: vec!["Column".to_owned(), "Wedge".to_owned()],
+            slots: vec![FormationSlotView {
+                offset: hex_core::HexCoord::from_axial(0, 0),
+                anchor: true,
+            }],
+        }
+    }
+
+    fn gameplay_initiative_view(hostile_turn: bool) -> InitiativeView {
+        InitiativeView {
+            heading: if hostile_turn {
+                "enemy turn"
+            } else {
+                "your turn"
+            }
+            .to_owned(),
+            entries: vec![
+                InitiativeEntryView {
+                    unit: hex_core::UnitId(0),
+                    name: "Hedge Mage".to_owned(),
+                    side: InitiativeSide::Ally,
+                    current: !hostile_turn,
+                    inspectable: true,
+                },
+                InitiativeEntryView {
+                    unit: hex_core::UnitId(1),
+                    name: "Observed Raider".to_owned(),
+                    side: InitiativeSide::Hostile,
+                    current: hostile_turn,
+                    inspectable: true,
+                },
+                InitiativeEntryView {
+                    unit: hex_core::UnitId(2),
+                    name: "Unavailable hostile".to_owned(),
+                    side: InitiativeSide::Hostile,
+                    current: false,
+                    inspectable: false,
+                },
+            ],
+        }
+    }
+
+    fn gameplay_activity_view() -> ActivityLogView {
+        ActivityLogView {
+            heading: "ACTIVITY · L".to_owned(),
+            tab: ActivityTab::All,
+            lines: vec![
+                ActivityLogLineView {
+                    kind: ActivityKind::Combat,
+                    text: "Hedge Mage cast Lightning Bolt".to_owned(),
+                    danger: false,
+                },
+                ActivityLogLineView {
+                    kind: ActivityKind::Activity,
+                    text: "Party formation changed to Wedge".to_owned(),
+                    danger: false,
+                },
+            ],
+        }
+    }
+
     fn gameplay_snapshot(case: UiTaskCase, size: UVec2, mode: UiScaleMode) -> UiTreeSnapshot {
         let fixture = match case {
             UiTaskCase::Exploration => "normal-gameplay",
             UiTaskCase::PlayerTurnMaxActions => "player-turn-max",
             UiTaskCase::HostileTurn => "hostile-turn",
+            UiTaskCase::CharacterMainView
+            | UiTaskCase::ActivityTabs
+            | UiTaskCase::CustomHudVisibility
+            | UiTaskCase::CompactTemporarySurface => "normal-gameplay",
             UiTaskCase::Casting => "casting-list",
             UiTaskCase::AimingBlocked => "aiming-disabled",
             UiTaskCase::DisableDecision | UiTaskCase::HudHiddenRequired => "required-decision",
@@ -622,38 +728,66 @@ mod structural_tests {
         let mut app = App::new();
         app.add_plugins(HeadlessUiPlugin::new(size.x, size.y));
         app.world_mut().insert_resource(UiScalePreference(mode));
-        app.world_mut().insert_resource(GameplayChromeView {
-            shown: case != UiTaskCase::HudHiddenRequired,
-            decision_required: matches!(
-                case,
-                UiTaskCase::DisableDecision
-                    | UiTaskCase::RestoreDecision
-                    | UiTaskCase::HudHiddenRequired
-            ),
+        let compact = resolve_ui_metrics(size.as_vec2(), mode).viewport == UiViewportClass::Compact;
+        let mut chrome = GameplayChromeView {
+            party_shown: false,
+            initiative_shown: false,
+            activity_shown: false,
+            action_bar_shown: false,
+            main_view: hex_gameplay_model::MainViewDestination::Closed,
+            terrain_health_shown: true,
             encounter_complete: false,
-        });
-        if case == UiTaskCase::Exploration {
-            app.world_mut().insert_resource(PartyView {
-                members: (0..6)
-                    .map(|slot| PartyMemberView {
-                        slot,
-                        label: format!(
-                            "{} · {}",
-                            if slot == 0 { "Hedge Mage" } else { "Ally" },
-                            if slot == 0 { "selected" } else { "ready" }
-                        ),
-                        active: slot == 0,
-                        selected: slot == 0,
-                    })
-                    .collect(),
-                formation_visible: true,
-                movement_mode: "GROUP · formation follows the selected anchor".to_owned(),
-                presets: vec!["Column".to_owned(), "Wedge".to_owned()],
-                slots: vec![FormationSlotView {
-                    offset: hex_core::HexCoord::from_axial(0, 0),
-                    anchor: true,
-                }],
-            });
+        };
+        match case {
+            UiTaskCase::Exploration => {
+                if compact {
+                    chrome.action_bar_shown = true;
+                } else {
+                    chrome.party_shown = true;
+                    chrome.action_bar_shown = true;
+                }
+            }
+            UiTaskCase::PlayerTurnMaxActions | UiTaskCase::Casting | UiTaskCase::AimingBlocked => {
+                chrome.action_bar_shown = true;
+                chrome.initiative_shown = !compact;
+            }
+            UiTaskCase::HostileTurn => chrome.initiative_shown = !compact,
+            UiTaskCase::CharacterMainView => {
+                chrome.main_view =
+                    hex_gameplay_model::MainViewDestination::Character(hex_core::UnitId(0));
+                if !compact {
+                    chrome.party_shown = true;
+                    chrome.action_bar_shown = true;
+                }
+            }
+            UiTaskCase::ActivityTabs => chrome.activity_shown = true,
+            UiTaskCase::CustomHudVisibility => {
+                chrome.party_shown = true;
+                chrome.activity_shown = !compact;
+            }
+            UiTaskCase::CompactTemporarySurface => chrome.party_shown = true,
+            UiTaskCase::DisableDecision | UiTaskCase::RestoreDecision => {
+                chrome.main_view = hex_gameplay_model::MainViewDestination::RequiredDecision;
+                chrome.party_shown = !compact;
+                chrome.initiative_shown = !compact;
+            }
+            UiTaskCase::HudHiddenRequired => {
+                chrome.main_view = hex_gameplay_model::MainViewDestination::RequiredDecision;
+                chrome.terrain_health_shown = false;
+            }
+            UiTaskCase::Pause => chrome.terrain_health_shown = false,
+            other => panic!("{other:?} is not a live gameplay task"),
+        }
+        app.world_mut().insert_resource(chrome);
+        if chrome.party_shown {
+            app.world_mut().insert_resource(gameplay_party_view());
+        }
+        if chrome.initiative_shown {
+            app.world_mut()
+                .insert_resource(gameplay_initiative_view(case == UiTaskCase::HostileTurn));
+        }
+        if chrome.activity_shown {
+            app.world_mut().insert_resource(gameplay_activity_view());
         }
         if case == UiTaskCase::Pause {
             app.world_mut().insert_resource(PauseView {
@@ -1133,11 +1267,13 @@ mod structural_tests {
     }
 
     #[test]
-    fn gameplay_decisions_and_pause_preserve_their_structural_matrix() {
+    fn minimalist_gameplay_surfaces_preserve_their_structural_matrix() {
         let cases = [
             UiTaskCase::Exploration,
             UiTaskCase::PlayerTurnMaxActions,
             UiTaskCase::HostileTurn,
+            UiTaskCase::CharacterMainView,
+            UiTaskCase::ActivityTabs,
             UiTaskCase::Casting,
             UiTaskCase::AimingBlocked,
             UiTaskCase::DisableDecision,
@@ -1156,6 +1292,60 @@ mod structural_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn custom_visibility_and_compact_temporary_surface_are_structurally_distinct() {
+        for (size, mode) in [
+            (UVec2::new(1920, 1080), UiScaleMode::Auto),
+            (UVec2::new(3840, 2160), UiScaleMode::Auto),
+        ] {
+            let snapshot = gameplay_snapshot(UiTaskCase::CustomHudVisibility, size, mode);
+            let issues = snapshot.task_issues(UiTaskCase::CustomHudVisibility);
+            assert!(
+                issues.is_empty(),
+                "custom visibility failed at {size:?} {mode:?}: {issues:#?}"
+            );
+        }
+
+        for (size, mode) in [
+            (UVec2::new(1280, 720), UiScaleMode::Auto),
+            (UVec2::new(1920, 1080), UiScaleMode::Percent200),
+        ] {
+            let snapshot = gameplay_snapshot(UiTaskCase::CompactTemporarySurface, size, mode);
+            let issues = snapshot.task_issues(UiTaskCase::CompactTemporarySurface);
+            assert!(
+                issues.is_empty(),
+                "Compact temporary surface failed at {size:?} {mode:?}: {issues:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn initiative_fixture_exposes_only_disclosed_units_as_inspection_controls() {
+        let snapshot = gameplay_snapshot(
+            UiTaskCase::PlayerTurnMaxActions,
+            UVec2::new(1920, 1080),
+            UiScaleMode::Auto,
+        );
+        for name in ["Initiative Unit 0", "Initiative Unit 1"] {
+            let node = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.name == name)
+                .unwrap_or_else(|| panic!("missing disclosed initiative control {name:?}"));
+            assert!(node.focusable && node.keyboard_reachable == Some(true));
+        }
+        let unavailable = snapshot
+            .nodes
+            .iter()
+            .find(|node| node.name == "Initiative Unit 2 Unavailable")
+            .expect("the undisclosed hostile must retain an unavailable row without a control");
+        assert!(!unavailable.focusable);
+        assert!(snapshot
+            .focus_order
+            .iter()
+            .all(|name| name != "Initiative Unit 2 Unavailable"));
     }
 
     #[test]
@@ -1218,7 +1408,7 @@ impl Plugin for UiPlugin {
             (UiHudSetup::Frame, UiHudSetup::Panels, UiHudSetup::Tooling).chain(),
         )
         .add_message::<UiIntent>()
-        .init_resource::<CombatLogView>()
+        .init_resource::<ActivityLogView>()
         .init_resource::<CastingPanelView>()
         .init_resource::<GameplayChromeView>()
         .init_resource::<GameplayHudView>()
@@ -1234,7 +1424,6 @@ impl Plugin for UiPlugin {
         .init_resource::<InitiativeView>()
         .init_resource::<MainMenuView>()
         .init_resource::<TargetPulseView>()
-        .init_resource::<UnitBadgesView>()
         .add_plugins((
             theme::plugin,
             casting_panel::plugin,
@@ -1249,7 +1438,6 @@ impl Plugin for UiPlugin {
             screens::plugin,
             action_rail::plugin,
             main_menu::plugin,
-            unit_badges::plugin,
         ))
         .add_plugins((
             sandbox::plugin,
@@ -1375,6 +1563,10 @@ pub mod test_support {
         Exploration,
         PlayerTurnMaxActions,
         HostileTurn,
+        CharacterMainView,
+        ActivityTabs,
+        CustomHudVisibility,
+        CompactTemporarySurface,
         Casting,
         AimingBlocked,
         DisableDecision,
@@ -1408,15 +1600,14 @@ pub mod test_support {
         Own,
         /// Both the selected-player lattice and an authored disclosed target must be populated.
         OwnAndTarget,
-        /// A blocking choice must present either its persistent own lattice or the
-        /// promoted Compact choice used when the Inspector yields at extreme scales.
+        /// A blocking choice must present its forced Main View lattice at every scale.
         RequiredChoice,
     }
 
     impl UiTaskCase {
         /// Every known task case. Adding a task requires adding it here and to the
         /// exhaustive contract match below.
-        pub const ALL: [Self; 34] = [
+        pub const ALL: [Self; 38] = [
             Self::Splash,
             Self::Loading,
             Self::MainMenu,
@@ -1444,6 +1635,10 @@ pub mod test_support {
             Self::Exploration,
             Self::PlayerTurnMaxActions,
             Self::HostileTurn,
+            Self::CharacterMainView,
+            Self::ActivityTabs,
+            Self::CustomHudVisibility,
+            Self::CompactTemporarySurface,
             Self::Casting,
             Self::AimingBlocked,
             Self::DisableDecision,
@@ -1651,12 +1846,45 @@ pub mod test_support {
                     &[],
                     true,
                 ),
-                Self::HostileTurn => task(
-                    "gameplay-hostile-turn",
+                Self::HostileTurn => {
+                    task("gameplay-hostile-turn", Screen::Gameplay, &[], &[], true)
+                }
+                Self::CharacterMainView => task(
+                    "gameplay-character-main-view",
                     Screen::Gameplay,
-                    &["Primary Action Rail"],
+                    &[],
                     &[],
                     true,
+                ),
+                Self::ActivityTabs => task(
+                    "gameplay-activity-tabs",
+                    Screen::Gameplay,
+                    &[
+                        "Activity Tab All",
+                        "Activity Tab Combat",
+                        "Activity Tab Activity",
+                    ],
+                    &[],
+                    true,
+                ),
+                Self::CustomHudVisibility => task(
+                    "gameplay-custom-hud-visibility",
+                    Screen::Gameplay,
+                    &[
+                        "Party Member 1",
+                        "Activity Tab All",
+                        "Activity Tab Combat",
+                        "Activity Tab Activity",
+                    ],
+                    &[],
+                    false,
+                ),
+                Self::CompactTemporarySurface => task(
+                    "gameplay-compact-temporary-surface",
+                    Screen::Gameplay,
+                    &["Party Member 1"],
+                    &[],
+                    false,
                 ),
                 Self::Casting => task(
                     "casting",
@@ -1680,21 +1908,21 @@ pub mod test_support {
                 Self::DisableDecision => task(
                     "decision-disable",
                     Screen::Gameplay,
-                    &["Primary Action Rail", "Action Rail Confirm 2 / 3"],
+                    &["Clear Disable Selection"],
                     &[],
                     true,
                 ),
                 Self::RestoreDecision => task(
                     "decision-restore",
                     Screen::Gameplay,
-                    &["Primary Action Rail", "Action Rail Confirm 2 / 3"],
+                    &["Clear Disable Selection"],
                     &[],
                     true,
                 ),
                 Self::HudHiddenRequired => task(
                     "hud-hidden-required",
                     Screen::Gameplay,
-                    &["Primary Action Rail", "Action Rail Confirm 2 / 3"],
+                    &["Clear Disable Selection"],
                     &[],
                     true,
                 ),
@@ -1713,12 +1941,7 @@ pub mod test_support {
         #[must_use]
         pub const fn lattice_requirement(self) -> UiTaskLatticeRequirement {
             match self {
-                Self::Exploration
-                | Self::PlayerTurnMaxActions
-                | Self::HostileTurn
-                | Self::AimingBlocked
-                | Self::Pause => UiTaskLatticeRequirement::Own,
-                Self::Casting => UiTaskLatticeRequirement::OwnAndTarget,
+                Self::CharacterMainView => UiTaskLatticeRequirement::Own,
                 Self::DisableDecision | Self::RestoreDecision | Self::HudHiddenRequired => {
                     UiTaskLatticeRequirement::RequiredChoice
                 }
@@ -2101,12 +2324,59 @@ pub mod test_support {
             }
             issues.extend(self.task_lattice_issues(case));
             if case == UiTaskCase::HudHiddenRequired {
-                for hidden in ["Party Strip", "Initiative Panel", "Combat Log Panel"] {
+                for hidden in [
+                    "Party Strip",
+                    "Initiative Panel",
+                    "Activity Log Panel",
+                    "Primary Action Rail",
+                ] {
                     if self.nodes.iter().any(|node| node.name == hidden) {
                         issues.push(format!(
                             "ordinary HUD surface {hidden:?} remained visible while the HUD was hidden"
                         ));
                     }
+                }
+            }
+            if case == UiTaskCase::CustomHudVisibility {
+                for visible in ["Party Strip", "Activity Log Panel"] {
+                    if self.nodes.iter().all(|node| node.name != visible) {
+                        issues.push(format!(
+                            "custom HUD preference did not present requested surface {visible:?}"
+                        ));
+                    }
+                }
+                for hidden in [
+                    "Initiative Panel",
+                    "Primary Action Rail",
+                    "Lattice Readout Stack",
+                ] {
+                    if self.nodes.iter().any(|node| node.name == hidden) {
+                        issues.push(format!(
+                            "custom HUD preference unexpectedly presented {hidden:?}"
+                        ));
+                    }
+                }
+            }
+            if case == UiTaskCase::CompactTemporarySurface {
+                if self.metrics.viewport != crate::UiViewportClass::Compact {
+                    issues.push(
+                        "Compact temporary-surface fixture resolved outside Compact".to_owned(),
+                    );
+                }
+                let visible_regions = [
+                    "Party HUD Region",
+                    "Turn HUD Region",
+                    "Inspector HUD Region",
+                    "Actions HUD Region",
+                    "Events HUD Region",
+                ]
+                .into_iter()
+                .filter(|name| self.nodes.iter().any(|node| node.name == *name))
+                .collect::<Vec<_>>();
+                if visible_regions != ["Party HUD Region"] {
+                    issues.push(format!(
+                        "Compact temporary surface must own exactly one HUD region, found {visible_regions:?}"
+                    ));
                 }
             }
             issues

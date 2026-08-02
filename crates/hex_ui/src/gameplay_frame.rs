@@ -4,6 +4,7 @@ use bevy::input_focus::tab_navigation::TabGroup;
 use bevy::prelude::*;
 use bevy::ui_widgets::ScrollArea;
 use hex_core::{AppSystems, Screen};
+use hex_gameplay_model::MainViewDestination;
 
 use crate::{
     layout::constrain_region_to_canvas, DespawnOnExit, GameplayChromeView, HudElement,
@@ -109,9 +110,7 @@ fn spawn_region(
     mut node: Node,
     viewport: crate::UiViewportClass,
 ) {
-    if matches!(role, UiRegionRole::Inspector | UiRegionRole::Actions) {
-        node.overflow = Overflow::scroll_y();
-    }
+    node.overflow = Overflow::scroll_y();
     constrain_region_to_canvas(
         ResolvedUiMetrics {
             viewport,
@@ -120,72 +119,78 @@ fn spawn_region(
         role,
         &mut node,
     );
-    let picking = if matches!(role, UiRegionRole::Inspector | UiRegionRole::Actions) {
-        // A ScrollArea must itself participate in picking so wheel/trackpad input
-        // over read-only descendants can target it and be consumed before the
-        // world camera. Read-only, non-scrollable HUD regions remain transparent.
-        Pickable::default()
-    } else {
-        Pickable::IGNORE
-    };
-    let mut region = frame.spawn((Name::new(name), role, node, picking));
-    if matches!(role, UiRegionRole::Inspector | UiRegionRole::Actions) {
-        region.insert((ScrollArea, ScrollPosition::default()));
-    }
+    // Every visible surface may become the Compact layout's sole full-screen
+    // scroll owner. Hidden regions are removed from picking by `apply_responsive_layout`.
+    frame.spawn((
+        Name::new(name),
+        role,
+        node,
+        Pickable::default(),
+        ScrollArea,
+        ScrollPosition::default(),
+    ));
 }
 
 fn apply_responsive_layout(
     metrics: Res<ResolvedUiMetrics>,
     chrome: Res<GameplayChromeView>,
-    lattices: Res<crate::GameplayLatticesView>,
     review: Option<Res<crate::review::UiReviewPresentation>>,
     added_regions: Query<(), Added<UiRegionRole>>,
     mut regions: Query<(&UiRegionRole, &mut Node, &mut Pickable)>,
 ) {
     let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
-    if !metrics.is_changed()
-        && !chrome.is_changed()
-        && !lattices.is_changed()
-        && !review_changed
-        && added_regions.is_empty()
+    if !metrics.is_changed() && !chrome.is_changed() && !review_changed && added_regions.is_empty()
     {
         return;
     }
-    let lattices = review
-        .as_ref()
-        .and_then(|review| review.lattices.as_ref())
-        .unwrap_or(lattices.as_ref());
     let chrome = review
         .as_ref()
         .map_or(*chrome, |review| review.effective_chrome(*chrome));
-    let promoted_decision =
-        crate::gameplay_lattices::compact_decision_visible(*metrics, &chrome, lattices);
-    let ordinary_shown = chrome.shown && !chrome.encounter_complete;
-    let decision_required = chrome.decision_required && !chrome.encounter_complete;
     for (role, mut node, mut pickable) in &mut regions {
         constrain_region_to_canvas(*metrics, *role, &mut node);
-        let responsive_display = node.display;
+        let responsive_display = if metrics.viewport == crate::UiViewportClass::Compact {
+            Display::Flex
+        } else {
+            node.display
+        };
         // Layout recomputation restores each region's canonical geometry. Apply
         // phase/user suppression after it so resizing cannot resurrect invisible
         // chrome as an interaction layer over the map.
-        let shown = match *role {
-            UiRegionRole::Party | UiRegionRole::Turn | UiRegionRole::Events => ordinary_shown,
-            UiRegionRole::Inspector => (ordinary_shown || decision_required) && !promoted_decision,
-            UiRegionRole::Actions => ordinary_shown || (decision_required && promoted_decision),
-        };
+        let shown = !chrome.encounter_complete
+            && match *role {
+                UiRegionRole::Party => chrome.party_shown,
+                UiRegionRole::Turn => chrome.initiative_shown,
+                UiRegionRole::Inspector => !matches!(chrome.main_view, MainViewDestination::Closed),
+                UiRegionRole::Actions => chrome.action_bar_shown,
+                UiRegionRole::Events => chrome.activity_shown,
+            };
+        if shown && metrics.viewport == crate::UiViewportClass::Compact {
+            make_compact_task_surface(&mut node);
+        }
         node.display = if shown {
             responsive_display
         } else {
             Display::None
         };
         let participates = node.display != Display::None;
-        *pickable =
-            if participates && matches!(*role, UiRegionRole::Inspector | UiRegionRole::Actions) {
-                Pickable::default()
-            } else {
-                Pickable::IGNORE
-            };
+        *pickable = if participates {
+            Pickable::default()
+        } else {
+            Pickable::IGNORE
+        };
     }
+}
+
+fn make_compact_task_surface(node: &mut Node) {
+    node.position_type = PositionType::Absolute;
+    node.top = Val::Px(8.0);
+    node.right = Val::Px(8.0);
+    node.bottom = Val::Px(8.0);
+    node.left = Val::Px(8.0);
+    node.width = Val::Auto;
+    node.height = Val::Auto;
+    node.overflow = Overflow::scroll_y();
+    node.flex_direction = FlexDirection::Column;
 }
 
 fn apply_visibility(
@@ -204,7 +209,7 @@ fn apply_visibility(
     for (mut visibility, required_action) in &mut roots {
         let wanted = if view.encounter_complete {
             Visibility::Hidden
-        } else if view.shown || (required_action && view.decision_required) {
+        } else if view.any_ordinary_shown() || (required_action && view.decision_required()) {
             Visibility::Inherited
         } else {
             Visibility::Hidden
@@ -238,8 +243,12 @@ mod tests {
             .id();
 
         app.world_mut().insert_resource(GameplayChromeView {
-            shown: false,
-            decision_required: true,
+            party_shown: false,
+            initiative_shown: false,
+            activity_shown: false,
+            action_bar_shown: false,
+            main_view: MainViewDestination::RequiredDecision,
+            terrain_health_shown: false,
             encounter_complete: false,
         });
         app.update();
@@ -300,8 +309,12 @@ mod tests {
         }
 
         app.world_mut().insert_resource(GameplayChromeView {
-            shown: false,
-            decision_required: false,
+            party_shown: false,
+            initiative_shown: false,
+            activity_shown: false,
+            action_bar_shown: false,
+            main_view: MainViewDestination::Closed,
+            terrain_health_shown: false,
             encounter_complete: false,
         });
         app.update();
