@@ -33,7 +33,7 @@ use thiserror::Error;
 
 use crate::elements::ElementCatalog;
 use crate::fingerprint::FingerprintEncoder;
-use crate::spells::{Effect, SpellBook, TargetShape};
+use crate::spells::{Effect, SpellBook};
 use crate::{LoadSettings, CONFIG_EXTENSIONS};
 
 /// A name in `lattices.ron` that resolves to nothing.
@@ -94,25 +94,23 @@ pub enum LatticeError {
         /// Which archetype.
         archetype: String,
     },
-    /// A spell cell holding an area spell whose effects reach units.
+    /// A spell cell holding an area spell with an unsupported unit effect.
     ///
-    /// **This is a temporary refusal, and it names what it waits on.** `hex_units::volumes`
-    /// resolves a shape to an exact voxel set and the interface paints all of it, but
-    /// `hex_combat`'s applier still routes every unit-affecting effect through the single
-    /// unit standing on the anchor. Inscribing a `Sphere` or a `Line` damage spell today
-    /// would light up a dozen surfaces and hurt exactly one of them, which is a lie the
-    /// player cannot see through and cannot be told about.
+    /// `hex_units::volumes` resolves a shape to an exact voxel set and the area applier
+    /// delivers Disable and Burn to every snapshotted occupant. Restore and Reveal
+    /// remain fail-closed because their exact-choice and hidden-information policies
+    /// are not settled for an area.
     ///
-    /// Refusing at load is the honest reading while that gap is open: the content that
-    /// would be misapplied does not load, and the message says why. It lifts the day the
-    /// applier iterates the volume — see `docs/planning/status.md`.
+    /// Refusing at load keeps the unsupported promise out of gameplay rather than
+    /// silently reducing it to the selected anchor.
     #[error(
-        "archetype '{archetype}' inscribes '{spell}', whose shape reaches more than one          surface while the applier still affects only the unit on the anchor — area          effects wait on the applier iterating the resolved volume"
+        "archetype '{archetype}' inscribes '{spell}', whose area shape carries a unit \
+         effect that is not safely delivered to every occupant"
     )]
     AreaEffectUnapplied {
         /// Which archetype.
         archetype: String,
-        /// The spell whose shape outruns the applier.
+        /// The spell whose area effect remains unsupported.
         spell: String,
     },
     /// A file that defines nobody.
@@ -461,48 +459,27 @@ fn lattice_file_fingerprint(file: &LatticeFile) -> u64 {
 
 /// Whether `spell` would have the interface promise more than the applier delivers.
 ///
-/// True when the shape covers more than the anchor **and** at least one effect reaches a
-/// unit. Both halves matter. A terrain-shaping area spell is fine — it has no per-unit
-/// application to get wrong — and a `Single` damage spell is fine, because the anchor's
-/// occupant is the whole volume. It is only their combination that lies.
+/// True when the shape covers more than the anchor and at least one effect still lacks
+/// an accepted area policy. Disable and Burn now reach every snapshotted occupant;
+/// targeted Disable, Restore, one-shot wards, and Reveal remain fail-closed.
 ///
 /// See [`LatticeError::AreaEffectUnapplied`] for why this is refused rather than clamped.
 fn area_effect_is_unapplied(spells: &SpellBook, spell: SpellId) -> bool {
     let Some(spell) = spells.spell(spell) else {
         return false;
     };
-    if !shape_can_cover_multiple_voxels(&spell.targeting.shape) {
+    if !spell.targeting.shape.can_cover_multiple_voxels() {
         return false;
     }
     spell.effects.iter().any(|effect| {
         matches!(
             effect,
-            Effect::DisableHexes { .. }
-                | Effect::Burn { .. }
+            Effect::DisableHexes { targeted: true, .. }
                 | Effect::RestoreHexes { .. }
                 | Effect::ModifyIncomingDisables { .. }
                 | Effect::Reveal { .. }
         )
     })
-}
-
-/// Whether resolving `shape` can produce more than one distinct voxel.
-///
-/// This mirrors the cardinality boundaries in `hex_units::volumes` without resolving a
-/// concrete anchor or facing (and without introducing a dependency cycle back from
-/// assets to units). Content validation rejects the empty boundaries; treating them as
-/// non-area here still makes this predicate total for hand-built test content.
-fn shape_can_cover_multiple_voxels(shape: &TargetShape) -> bool {
-    match shape {
-        TargetShape::SelfCast | TargetShape::Single => false,
-        TargetShape::Sphere { radius } => *radius > 0,
-        TargetShape::Column { height } => *height > 1,
-        TargetShape::Line { length, width } => *length > 1 || (*length == 1 && *width > 0),
-        TargetShape::Cone { length, spread } => *length > 1 || (*length == 1 && *spread > 0),
-        TargetShape::Path { offsets } => offsets
-            .first()
-            .is_some_and(|first| offsets.iter().skip(1).any(|candidate| candidate != first)),
-    }
 }
 
 /// Resolves one element name, recording the failure and yielding `None` if it is unknown.
@@ -657,9 +634,13 @@ fn build_lattice_library(
 
 #[cfg(test)]
 mod tests {
+    use bevy::platform::collections::HashMap;
     use hex_core::{HexCoord, Level};
 
-    use crate::spells::VoxelOffset;
+    use crate::spells::{
+        CastingAxis, ManaAxis, Spell, SpellFile, TargetShape, TargetingSpec, Trajectory,
+        VoxelOffset,
+    };
 
     use super::*;
 
@@ -749,7 +730,7 @@ mod tests {
         ];
         for shape in single_cardinality {
             assert!(
-                !shape_can_cover_multiple_voxels(&shape),
+                !shape.can_cover_multiple_voxels(),
                 "{shape:?} resolves to at most one distinct voxel"
             );
         }
@@ -782,9 +763,75 @@ mod tests {
         ];
         for shape in multiple_cardinality {
             assert!(
-                shape_can_cover_multiple_voxels(&shape),
+                shape.can_cover_multiple_voxels(),
                 "{shape:?} can resolve to multiple distinct voxels"
             );
+        }
+    }
+
+    fn area_spell_book(effects: Vec<Effect>) -> SpellBook {
+        let mut spells = HashMap::default();
+        spells.insert(
+            "Area".to_owned(),
+            Spell {
+                requirements: Vec::new(),
+                casting: CastingAxis::Evocation,
+                mana: ManaAxis::Fixed,
+                co_castable: false,
+                targeting: TargetingSpec {
+                    range: 3,
+                    shape: TargetShape::Sphere { radius: 2 },
+                    trajectory: Trajectory::None,
+                },
+                effects,
+            },
+        );
+        SpellBook::from_file(&SpellFile { spells })
+    }
+
+    fn file_with_area_spell() -> LatticeFile {
+        file_with_cells(vec![UnvalidatedEntry {
+            at: AxialPair { q: 0, r: 0 },
+            kind: UnvalidatedCell::Spell("Area".to_owned()),
+        }])
+    }
+
+    #[test]
+    fn area_disable_burn_and_impact_are_admitted_to_lattices() {
+        let spells = area_spell_book(vec![
+            Effect::DisableHexes {
+                count: 3,
+                targeted: false,
+            },
+            Effect::Burn { turns: 2 },
+            Effect::Impact {
+                element: "Fire".to_owned(),
+                power: 2,
+            },
+        ]);
+
+        LatticeLibrary::build(&file_with_area_spell(), &ElementCatalog::default(), &spells)
+            .expect("supported area effects should be inscribable");
+    }
+
+    #[test]
+    fn area_restore_reveal_and_targeted_disable_remain_fail_closed() {
+        for effect in [
+            Effect::RestoreHexes { count: 1 },
+            Effect::Reveal { tier: 1 },
+            Effect::DisableHexes {
+                count: 1,
+                targeted: true,
+            },
+        ] {
+            let spells = area_spell_book(vec![effect]);
+            let errors =
+                LatticeLibrary::build(&file_with_area_spell(), &ElementCatalog::default(), &spells)
+                    .expect_err("unsupported area unit policy must remain fail-closed");
+            assert!(errors.iter().any(|error| matches!(
+                error,
+                LatticeError::AreaEffectUnapplied { spell, .. } if spell == "Area"
+            )));
         }
     }
 }

@@ -1171,16 +1171,13 @@ pub(super) fn character_map_issues(
             CreationCellKind::Spell(SpellReference::Shipped(name)) => {
                 if let Some(id) = spells.id(name) {
                     if let Some(spell) = spells.spell(id) {
-                        if !matches!(
-                            spell.targeting.shape,
-                            hex_assets::TargetShape::SelfCast | hex_assets::TargetShape::Single
-                        ) {
-                            issues.push(format!(
-                                "{name}: shipped spell uses an unsupported target shape"
-                            ));
-                        }
-                        if !hex_combat::delivers_anything(spell) {
-                            issues.push(format!("{name}: shipped spell has no delivered behavior"));
+                        if let Err(runtime_issues) = hex_combat::creator_spell_deployability(spell)
+                        {
+                            issues.extend(
+                                runtime_issues
+                                    .into_iter()
+                                    .map(|issue| format!("{name}: {issue}")),
+                            );
                         }
                     }
                 }

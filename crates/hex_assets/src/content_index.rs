@@ -41,6 +41,16 @@ pub enum ContentError {
         /// The element name that did not resolve.
         element: String,
     },
+    /// A spell impact names an element no `elements.ron` entry defines.
+    #[error(
+        "spell '{spell}' Impact names element '{element}', which is not defined in elements.ron"
+    )]
+    UnknownEffectElement {
+        /// The spell with the dangling impact element.
+        spell: String,
+        /// The element name that did not resolve.
+        element: String,
+    },
     /// A spell effect names a substance no `substances.ron` entry defines.
     #[error(
         "spell '{spell}' effect names substance '{substance}', which is not defined in substances.ron"
@@ -115,6 +125,14 @@ impl ContentIndex {
                 }
             }
             for effect in &spell.effects {
+                if let Some(element) = effect.element() {
+                    if elements.id(element).is_none() {
+                        errors.push(ContentError::UnknownEffectElement {
+                            spell: name.to_owned(),
+                            element: element.to_owned(),
+                        });
+                    }
+                }
                 if let Some(substance) = effect.substance() {
                     match substances.id(substance) {
                         None => errors.push(ContentError::UnknownSubstance {
@@ -581,6 +599,26 @@ mod tests {
         assert!(errors.iter().any(|error| matches!(
             error,
             ContentError::UnknownElement { element, .. } if element == "Aether"
+        )));
+    }
+
+    #[test]
+    fn a_dangling_impact_element_fails_cross_file_admission() {
+        let book = book(vec![(
+            "Void Strike",
+            spell(
+                vec![gem("Fire")],
+                vec![Effect::Impact {
+                    element: "Aether".to_owned(),
+                    power: 2,
+                }],
+            ),
+        )]);
+        let errors = ContentIndex::build(&elements(), &book, &substances())
+            .expect_err("an Impact element must resolve through elements.ron");
+        assert!(errors.iter().any(|error| matches!(
+            error,
+            ContentError::UnknownEffectElement { element, .. } if element == "Aether"
         )));
     }
 

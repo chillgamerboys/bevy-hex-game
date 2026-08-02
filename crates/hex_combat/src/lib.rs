@@ -28,7 +28,7 @@
 //! the same order.
 
 use bevy::prelude::*;
-use hex_assets::{Effect, ManaAxis, Spell, TargetShape};
+use hex_assets::{Effect, ManaAxis, Spell};
 use hex_core::{AppSystems, PerceptionSystems};
 
 /// What an enemy does with its turn. A placeholder, and says so.
@@ -95,32 +95,35 @@ pub fn publish_combat_adapter_facts(world: &mut World) -> Result<(), String> {
 /// creator restriction one reviewable change.
 pub fn creator_spell_deployability(spell: &Spell) -> Result<(), Vec<String>> {
     let mut issues = Vec::new();
+    let area = spell.targeting.shape.can_cover_multiple_voxels();
+    let mut delivers = matches!(
+        spell.casting,
+        hex_assets::CastingAxis::Enchantment { defense } if defense > 0
+    );
     if spell.mana != ManaAxis::Fixed {
         issues.push("variable mana is not implemented".to_owned());
     }
     if spell.co_castable {
         issues.push("co-casting is not implemented".to_owned());
     }
-    if !matches!(
-        spell.targeting.shape,
-        TargetShape::SelfCast | TargetShape::Single
-    ) {
-        issues.push("unit effects are delivered only to Self or Single targets".to_owned());
-    }
     for effect in &spell.effects {
-        if !matches!(
-            effect,
+        match effect {
             Effect::DisableHexes {
-                targeted: false,
-                ..
-            } | Effect::Burn { .. }
-                | Effect::RestoreHexes { .. }
-                | Effect::Reveal { .. }
-        ) {
-            issues.push(format!("effect {effect:?} is not completely delivered"));
+                targeted: false, ..
+            }
+            | Effect::Burn { .. }
+            | Effect::Impact { .. } => delivers = true,
+            Effect::RestoreHexes { .. } | Effect::Reveal { .. } if !area => delivers = true,
+            Effect::RestoreHexes { .. } => {
+                issues.push("area Restore is not safely delivered".to_owned());
+            }
+            Effect::Reveal { .. } => {
+                issues.push("area Reveal is not safely delivered".to_owned());
+            }
+            _ => issues.push(format!("effect {effect:?} is not completely delivered")),
         }
     }
-    if !delivers_anything(spell) {
+    if !delivers {
         issues.push(UNDELIVERABLE.to_owned());
     }
     if issues.is_empty() {
@@ -199,7 +202,7 @@ pub fn plugin(app: &mut App) {
 #[cfg(test)]
 mod creator_tests {
     use super::*;
-    use hex_assets::{CastingAxis, GemRequirement, TargetingSpec, Trajectory};
+    use hex_assets::{CastingAxis, GemRequirement, TargetShape, TargetingSpec, Trajectory};
 
     fn ready_spell(effect: Effect) -> Spell {
         Spell {
@@ -220,7 +223,7 @@ mod creator_tests {
     }
 
     #[test]
-    fn creator_delivery_accepts_only_the_closed_wave_six_behavior_set() {
+    fn creator_delivery_accepts_the_supported_single_target_behavior_set() {
         for effect in [
             Effect::DisableHexes {
                 count: 1,
@@ -238,6 +241,57 @@ mod creator_tests {
             targeted: true,
         });
         assert!(creator_spell_deployability(&targeted).is_err());
+    }
+
+    #[test]
+    fn creator_delivery_admits_area_disable_burn_and_impact() {
+        let mut spell = ready_spell(Effect::Impact {
+            element: "Fire".to_owned(),
+            power: 2,
+        });
+        spell.targeting.shape = TargetShape::Sphere { radius: 2 };
+        spell.effects = vec![
+            Effect::DisableHexes {
+                count: 3,
+                targeted: false,
+            },
+            Effect::Burn { turns: 2 },
+            Effect::Impact {
+                element: "Fire".to_owned(),
+                power: 2,
+            },
+        ];
+
+        assert!(
+            creator_spell_deployability(&spell).is_ok(),
+            "the supported area transaction should be Creator-deployable"
+        );
+
+        spell.effects = vec![Effect::Impact {
+            element: "Fire".to_owned(),
+            power: 2,
+        }];
+        assert!(
+            creator_spell_deployability(&spell).is_ok(),
+            "an impact-only area spell still delivers terrain behavior"
+        );
+    }
+
+    #[test]
+    fn creator_delivery_keeps_area_restore_and_reveal_fail_closed() {
+        for effect in [
+            Effect::RestoreHexes { count: 1 },
+            Effect::Reveal { tier: 1 },
+        ] {
+            let mut spell = ready_spell(effect);
+            spell.targeting.shape = TargetShape::Sphere { radius: 2 };
+            let issues = creator_spell_deployability(&spell)
+                .expect_err("unsettled area information policy must fail closed");
+            assert!(
+                issues.iter().any(|issue| issue.contains("area")),
+                "{issues:?}"
+            );
+        }
     }
 
     #[test]

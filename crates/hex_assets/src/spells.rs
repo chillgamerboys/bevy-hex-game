@@ -127,6 +127,26 @@ pub enum TargetShape {
     },
 }
 
+impl TargetShape {
+    /// Whether this shape can resolve to more than one distinct voxel.
+    ///
+    /// This is a content-admission property rather than concrete geometry: it keeps
+    /// lattice and Creator gates aligned without either crate resolving a live cast.
+    #[must_use]
+    pub fn can_cover_multiple_voxels(&self) -> bool {
+        match self {
+            Self::SelfCast | Self::Single => false,
+            Self::Sphere { radius } => *radius > 0,
+            Self::Column { height } => *height > 1,
+            Self::Line { length, width } => *length > 1 || (*length == 1 && *width > 0),
+            Self::Cone { length, spread } => *length > 1 || (*length == 1 && *spread > 0),
+            Self::Path { offsets } => offsets
+                .first()
+                .is_some_and(|first| offsets.iter().skip(1).any(|candidate| candidate != first)),
+        }
+    }
+}
+
 /// Where a spell can be cast, reusing `hex_units::targeting`'s height-advantage
 /// geometry at cast time. Pure data here.
 #[derive(Reflect, Debug, Clone, PartialEq, Eq, Serialize)]
@@ -267,6 +287,16 @@ pub enum Effect {
         /// The substance the wall is made of, by name.
         substance: String,
     },
+    /// Announce elemental damage over the resolved canonical terrain volume.
+    ///
+    /// Gameplay names the element and power; the world-owned terrain resolver alone
+    /// decides which materials resist, take damage, or are destroyed.
+    Impact {
+        /// Element by stable authored name, resolved through [`ContentIndex`].
+        element: String,
+        /// Exact voxel damage announced to the world-owned resolver.
+        power: u8,
+    },
     /// Legacy creator-save spelling for terrain removal.
     ///
     /// Retained only so schema-v1 libraries still deserialize and can surface a
@@ -286,6 +316,16 @@ impl Effect {
     pub fn substance(&self) -> Option<&str> {
         match self {
             Self::SetTerrain { substance } | Self::SpawnWall { substance } => Some(substance),
+            _ => None,
+        }
+    }
+
+    /// The element name this effect references, if any — the cross-file reference
+    /// [`ContentIndex`](crate::ContentIndex) must resolve.
+    #[must_use]
+    pub fn element(&self) -> Option<&str> {
+        match self {
+            Self::Impact { element, .. } => Some(element),
             _ => None,
         }
     }
@@ -599,6 +639,14 @@ fn validate_effects(name: &str, spell: &Spell) -> Result<(), String> {
             }
             Effect::Reveal { tier } if *tier == 0 => return Err(zero("Reveal.tier")),
             Effect::Illuminate { radius } if *radius == 0 => return Err(zero("Illuminate.radius")),
+            Effect::Impact { element, power } => {
+                if element.trim().is_empty() {
+                    return Err(format!("spell '{name}' Impact names a blank element"));
+                }
+                if *power == 0 {
+                    return Err(zero("Impact.power"));
+                }
+            }
             Effect::Displace { distance } if *distance == 0 => {
                 return Err(zero("Displace.distance"));
             }
@@ -841,6 +889,11 @@ fn fingerprint_effect(encoder: &mut FingerprintEncoder, effect: &Effect) {
             encoder.u8(9);
             encoder.u8(*distance);
         }
+        Effect::Impact { element, power } => {
+            encoder.u8(10);
+            encoder.string(element);
+            encoder.u8(*power);
+        }
     }
 }
 
@@ -875,6 +928,7 @@ fn build_spellbook(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::reflect::ReflectRef;
     use hex_test_app::HeadlessAppBuilder;
 
     fn targeting() -> TargetingSpec {
@@ -942,10 +996,10 @@ mod tests {
         assert!(book.id("Fireball").is_some());
     }
 
-    /// Every closed-enum effect variant must appear in the shipped content, or the
-    /// pipeline is not actually exercised end to end.
+    /// Every effect currently advertised by shipped content must stay represented.
+    /// Decode-only `ClearTerrain` and deferred `Displace` deliberately remain absent.
     #[test]
-    fn shipped_spells_cover_every_effect_variant() {
+    fn shipped_spells_cover_every_advertised_effect_variant() {
         let file = shipped_file();
         let mut seen = std::collections::HashSet::new();
         for spell in file.spells.values() {
@@ -971,7 +1025,10 @@ mod tests {
             Effect::SpawnWall {
                 substance: "stone".to_owned(),
             },
-            Effect::Displace { distance: 1 },
+            Effect::Impact {
+                element: "Fire".to_owned(),
+                power: 2,
+            },
         ];
         for effect in &all {
             assert!(
@@ -979,6 +1036,103 @@ mod tests {
                 "shipped spells never use {effect:?}"
             );
         }
+    }
+
+    #[test]
+    fn shipped_fireball_announces_fire_impact_without_deferred_displacement() {
+        let file = shipped_file();
+        let fireball = file
+            .spells
+            .get("Fireball")
+            .expect("the shipped spell roster defines Fireball");
+
+        assert!(fireball.effects.contains(&Effect::Impact {
+            element: "Fire".to_owned(),
+            power: 2,
+        }));
+        assert!(
+            !fireball
+                .effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::Displace { .. })),
+            "Fireball must not advertise deferred forced movement"
+        );
+    }
+
+    #[test]
+    fn impact_rejects_blank_elements_and_zero_power_before_indexing() {
+        let mut blank = test_file();
+        blank
+            .spells
+            .get_mut("Ember")
+            .expect("the fixture contains Ember")
+            .effects = vec![Effect::Impact {
+            element: "   ".to_owned(),
+            power: 2,
+        }];
+        let error = blank
+            .validate()
+            .expect_err("blank impact elements must fail spell validation");
+        assert!(error.contains("blank element"), "{error}");
+
+        let mut powerless = test_file();
+        powerless
+            .spells
+            .get_mut("Ember")
+            .expect("the fixture contains Ember")
+            .effects = vec![Effect::Impact {
+            element: "Fire".to_owned(),
+            power: 0,
+        }];
+        let error = powerless
+            .validate()
+            .expect_err("zero-power impacts must fail spell validation");
+        assert!(error.contains("Impact.power must be at least 1"), "{error}");
+    }
+
+    #[test]
+    fn impact_round_trips_reflects_and_has_complete_fingerprint_fields() {
+        let impact = Effect::Impact {
+            element: "Fire".to_owned(),
+            power: 2,
+        };
+        let encoded = ron::to_string(&impact).expect("Impact should serialize");
+        let decoded: Effect = ron::from_str(&encoded).expect("Impact should deserialize");
+        assert_eq!(decoded, impact);
+
+        let ReflectRef::Enum(reflected) = impact.reflect_ref() else {
+            panic!("Effect reflection must remain enum-shaped");
+        };
+        assert_eq!(reflected.variant_name(), "Impact");
+        assert_eq!(
+            reflected
+                .field("element")
+                .and_then(|field| field.try_downcast_ref::<String>())
+                .map(String::as_str),
+            Some("Fire")
+        );
+        assert_eq!(
+            reflected
+                .field("power")
+                .and_then(|field| field.try_downcast_ref::<u8>()),
+            Some(&2),
+            "derived reflection must retain both Impact fields"
+        );
+
+        let fingerprint = |element: &str, power: u8| {
+            let mut file = test_file();
+            file.spells
+                .get_mut("Ember")
+                .expect("the fixture contains Ember")
+                .effects = vec![Effect::Impact {
+                element: element.to_owned(),
+                power,
+            }];
+            SpellBook::from_file(&file).source_fingerprint()
+        };
+        assert_eq!(fingerprint("Fire", 2), fingerprint("Fire", 2));
+        assert_ne!(fingerprint("Fire", 2), fingerprint("Water", 2));
+        assert_ne!(fingerprint("Fire", 2), fingerprint("Fire", 3));
     }
 
     #[test]

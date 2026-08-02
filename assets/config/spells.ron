@@ -25,7 +25,8 @@
             ],
         ),
 
-        // Tier-6 evocation: a full ring of Fire gems, disables three and knocks back.
+        // Tier-6 evocation: a full ring of Fire gems, disables three and announces a
+        // power-2 Fire impact across the resolved terrain volume.
         "Fireball": (
             requirements: [
                 (element: "Fire", mana: 1),
@@ -41,7 +42,7 @@
             targeting: (range: 4, shape: Sphere(radius: 2), trajectory: Direct),
             effects: [
                 DisableHexes(count: 3, targeted: false),
-                Displace(distance: 1),
+                Impact(element: "Fire", power: 2),
             ],
         ),
 
