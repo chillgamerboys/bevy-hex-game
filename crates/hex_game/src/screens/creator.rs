@@ -205,6 +205,7 @@ fn apply_entry_request(session: &mut CreatorSession, entry: CreatorEntry) {
 
 fn handle_escape(
     keys: Res<ButtonInput<KeyCode>>,
+    bindings: Res<hex_core::InputBindings>,
     mut commands: Commands,
     mut next: ResMut<NextState<Screen>>,
     mut session: ResMut<CreatorSession>,
@@ -214,7 +215,7 @@ fn handle_escape(
         CreatorTab::Characters => session.character_dirty,
         CreatorTab::Spells => session.spell_dirty,
     };
-    if keys.just_pressed(KeyCode::Escape) && !dirty {
+    if bindings.just_pressed(&keys, hex_core::InputAction::Cancel) && !dirty {
         let destination = session.navigation.back();
         route_destination(
             destination,

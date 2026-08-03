@@ -77,9 +77,9 @@ fn spawn_panel(
     else {
         return;
     };
-    let chrome = review
-        .as_ref()
-        .map_or(*chrome, |review| review.effective_chrome(*chrome));
+    let chrome = review.as_ref().map_or(*chrome, |review| {
+        review.effective_chrome(*chrome, metrics.viewport)
+    });
     let panel = commands
         .spawn((
             Name::new("Dev Time Panel"),
@@ -89,7 +89,7 @@ fn spawn_panel(
             Pickable::IGNORE,
             GlobalZIndex(3),
         ))
-        .insert(panel_node(*metrics, chrome.decision_required))
+        .insert(panel_node(*metrics, chrome.decision_required()))
         .with_children(|panel| {
             panel.spawn((DevTimeHeading, heading(&assets, "DEV · TIME")));
             panel.spawn((
@@ -136,7 +136,7 @@ fn panel_node(metrics: ResolvedUiMetrics, decision_required: bool) -> Node {
         }
     }
     // Development tooling is secondary. At extreme semantic density there is
-    // not enough room for six legible 44px controls beside the action rail, so
+    // not enough room for six legible 44px controls beside the Action Bar, so
     // collapse the panel instead of clipping it or covering player actions.
     if panel_is_collapsed(metrics, decision_required) {
         node.display = Display::None;
@@ -208,11 +208,11 @@ fn reconcile_layout(
         return;
     }
 
-    let chrome = review
-        .as_ref()
-        .map_or(*chrome, |review| review.effective_chrome(*chrome));
+    let chrome = review.as_ref().map_or(*chrome, |review| {
+        review.effective_chrome(*chrome, metrics.viewport)
+    });
     if let Ok(mut node) = panels.single_mut() {
-        *node = panel_node(*metrics, chrome.decision_required);
+        *node = panel_node(*metrics, chrome.decision_required());
     }
     if let Ok(mut node) = roots.single_mut() {
         *node = controls_node(*metrics);
@@ -341,6 +341,19 @@ mod tests {
     struct RequiredChoiceTransition(bool);
 
     #[cfg(feature = "test-support")]
+    fn character_main_view_chrome() -> GameplayChromeView {
+        GameplayChromeView {
+            party_shown: false,
+            initiative_shown: false,
+            activity_shown: false,
+            action_bar_shown: false,
+            main_view: hex_gameplay_model::MainViewDestination::Character(hex_core::UnitId(0)),
+            terrain_health_shown: true,
+            encounter_complete: false,
+        }
+    }
+
+    #[cfg(feature = "test-support")]
     fn activate_required_choice_for_render(
         mut transition: ResMut<RequiredChoiceTransition>,
         mut hud: ResMut<crate::GameplayHudView>,
@@ -352,8 +365,12 @@ mod tests {
         transition.0 = false;
         *hud = required_hud();
         *chrome = GameplayChromeView {
-            shown: true,
-            decision_required: true,
+            party_shown: false,
+            initiative_shown: false,
+            activity_shown: false,
+            action_bar_shown: false,
+            main_view: hex_gameplay_model::MainViewDestination::RequiredDecision,
+            terrain_health_shown: false,
             encounter_complete: false,
         };
     }
@@ -490,7 +507,7 @@ mod tests {
             .id();
         let inspector = app
             .world_mut()
-            .spawn((Name::new("Inspector HUD Region"), UiRegionRole::Inspector))
+            .spawn((Name::new("Main View HUD Region"), UiRegionRole::Inspector))
             .id();
         app.world_mut()
             .entity_mut(gameplay_group)
@@ -543,7 +560,7 @@ mod tests {
             .id();
         let inspector = app
             .world_mut()
-            .spawn((Name::new("Inspector HUD Region"), UiRegionRole::Inspector))
+            .spawn((Name::new("Main View HUD Region"), UiRegionRole::Inspector))
             .id();
         app.world_mut().entity_mut(frame).add_child(inspector);
 
@@ -645,11 +662,8 @@ mod tests {
                     .insert_resource(crate::UiScalePreference(mode));
                 app.world_mut()
                     .insert_resource(DevTimeView::Available { hours: 12.0 });
-                app.world_mut().insert_resource(crate::GameplayChromeView {
-                    shown: true,
-                    decision_required: false,
-                    encounter_complete: false,
-                });
+                app.world_mut()
+                    .insert_resource(character_main_view_chrome());
                 app.world_mut()
                     .resource_mut::<NextState<Screen>>()
                     .set(Screen::Gameplay);
@@ -725,10 +739,10 @@ mod tests {
 
                 for primary_name in [
                     "Party HUD Region",
-                    "Turn HUD Region",
-                    "Actions HUD Region",
+                    "Initiative HUD Region",
+                    "Action Bar HUD Region",
                     "Casting Panel",
-                    "Primary Action Rail",
+                    "Action Bar",
                 ] {
                     let Some(primary) =
                         snapshot.nodes.iter().find(|node| node.name == primary_name)
@@ -785,18 +799,14 @@ mod tests {
             .iter()
             .all(|(name, _, _)| required.nodes.iter().all(|node| node.name != *name)));
         assert_eq!(app.world().resource::<InputFocus>().get(), None);
-        let rail = required
+        let required_surface = required
             .nodes
             .iter()
-            .find(|node| node.name == "Primary Action Rail")
-            .expect("the required action rail must remain visible");
-        assert!(rail.size.cmpgt(Vec2::ZERO).all());
+            .find(|node| node.name == "Own Lattice Panel")
+            .expect("the required Main View must remain visible");
+        assert!(required_surface.size.cmpgt(Vec2::ZERO).all());
 
-        *app.world_mut().resource_mut::<GameplayChromeView>() = GameplayChromeView {
-            shown: true,
-            decision_required: false,
-            encounter_complete: false,
-        };
+        *app.world_mut().resource_mut::<GameplayChromeView>() = character_main_view_chrome();
         app.world_mut()
             .insert_resource(crate::UiScalePreference(crate::UiScaleMode::Auto));
         app.insert_resource(crate::GameplayHudView::default());

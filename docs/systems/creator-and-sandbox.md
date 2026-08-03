@@ -134,7 +134,7 @@ Sandbox loading has an explicit `Preparing → Deployment → Active` phase boun
 Preparing installs the frozen content and terrain. During Deployment the terrain and
 camera run while actors, AI, combat, casting, campaign saving, and the ordinary
 gameplay HUD remain inactive. Phase-level suppression removes every ordinary HUD
-surface, including the action rail, from layout, focus, scrolling, and picking without
+surface, including the Action Bar, from layout, focus, scrolling, and picking without
 changing the player's stored HUD preference. One compact modal task card remains over
 the interactive map.
 

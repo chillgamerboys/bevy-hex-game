@@ -209,4 +209,8 @@ pub enum GameplaySystems {
     Casting,
     /// The explicit gameplay UI role context is ready for panels to consume.
     UiContext,
+    /// Disclosure-safe world-marker requests and suppression are published.
+    WorldFeedbackRequests,
+    /// World-space rings and reticles realize the published presentation request.
+    WorldFeedback,
 }

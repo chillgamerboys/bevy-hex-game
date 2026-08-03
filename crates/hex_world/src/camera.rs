@@ -8,8 +8,9 @@ use bevy::window::{CursorMoved, PrimaryWindow};
 
 use hex_assets::{to_color, CameraSettings, ResolvedLighting, Rgb};
 use hex_core::{
-    config::HEX_CIRCUMRADIUS, AppSystems, CameraFocusTarget, GameplaySetup, HexSpan, HexTile,
-    InputAction, InputBindings, MapViewHint, Screen, TilePos,
+    config::HEX_CIRCUMRADIUS, AppSystems, CameraFocusTarget, CenterInspectionCamera, GameplaySetup,
+    HexSpan, HexTile, InputAction, InputBindings, InspectionCameraSubject, MapViewHint, Screen,
+    TilePos, UnitId,
 };
 
 use crate::{
@@ -50,8 +51,11 @@ pub enum CameraSystems {
 pub fn plugin(app: &mut App) {
     app.register_type::<PanOrbitCamera>()
         .register_type::<CameraMode>()
+        .register_type::<InspectionCameraSubject>()
+        .register_type::<CenterInspectionCamera>()
         .register_type::<MapViewHint>()
         .register_type::<SkyDome>()
+        .add_message::<CenterInspectionCamera>()
         .init_resource::<CameraMode>()
         .init_resource::<SavedMapCamera>()
         .init_resource::<CameraObstructionIndex>()
@@ -97,6 +101,17 @@ pub fn plugin(app: &mut App) {
             )
                 .chain()
                 .in_set(AppSystems::RecordInput)
+                .run_if(in_state(Screen::Gameplay)),
+        )
+        // Inspection input is recorded after ordinary camera input, then the app
+        // publishes a disclosure-validated subject through WorldFeedbackRequests.
+        // Centering here observes that same-frame projection instead of consuming
+        // and dropping the one-shot request before its subject exists.
+        .add_systems(
+            Update,
+            center_inspection_camera
+                .in_set(AppSystems::Update)
+                .in_set(hex_core::GameplaySystems::WorldFeedback)
                 .run_if(in_state(Screen::Gameplay)),
         )
         // Unit animation writes its Transform in Update. Following in PostUpdate
@@ -228,6 +243,56 @@ impl CharacterCameraCollision {
 struct CameraClearance {
     radius: f32,
     obstructed: bool,
+}
+
+/// Copy-only presentation target resolved from shared projections.
+#[derive(Debug, Clone, Copy)]
+struct ResolvedCameraTarget {
+    entity: Entity,
+    translation: Vec3,
+    surface: TilePos,
+}
+
+/// Prefers one disclosure-authorized inspection subject, then falls back to the
+/// gameplay-owned selection projection used before HUD inspection existed.
+///
+/// Multiple inspection subjects are a malformed adapter publication. Failing closed
+/// to selection prevents query iteration order from choosing which disclosed unit the
+/// camera follows.
+fn resolve_camera_target<'a>(
+    inspections: impl Iterator<
+        Item = (
+            Entity,
+            &'a UnitId,
+            &'a Transform,
+            &'a InspectionCameraSubject,
+        ),
+    >,
+    selections: impl Iterator<Item = (Entity, &'a Transform, &'a CameraFocusTarget)>,
+) -> Option<ResolvedCameraTarget> {
+    let mut authorized = inspections.filter_map(|(entity, unit, transform, subject)| {
+        (*unit == subject.unit).then_some(ResolvedCameraTarget {
+            entity,
+            translation: transform.translation,
+            surface: subject.surface,
+        })
+    });
+    let inspected = authorized.next();
+    if inspected.is_some() && authorized.next().is_none() {
+        return inspected;
+    }
+
+    let mut selected = selections.map(|(entity, transform, target)| ResolvedCameraTarget {
+        entity,
+        translation: transform.translation,
+        surface: target.surface,
+    });
+    let target = selected.next();
+    if target.is_some() && selected.next().is_none() {
+        target
+    } else {
+        None
+    }
 }
 
 /// Spawn the game camera and the procedural sky dome.
@@ -364,6 +429,44 @@ fn pitch_limits(mode: CameraMode, settings: &CameraSettings) -> (f32, f32) {
     }
 }
 
+/// Applies explicit HUD inspection requests to the free Map camera exactly once.
+///
+/// The request is accepted only when exactly one entity carries a matching,
+/// identity-consistent [`InspectionCameraSubject`]. Character mode drains and ignores
+/// center messages because its normal follow pass already tracks that subject.
+fn center_inspection_camera(
+    mut requests: MessageReader<CenterInspectionCamera>,
+    mode: Res<CameraMode>,
+    settings: Res<CameraSettings>,
+    subjects: Query<(&UnitId, &Transform, &InspectionCameraSubject), Without<PanOrbitCamera>>,
+    mut cameras: Query<(&mut Transform, &mut PanOrbitCamera), With<PanOrbitCamera>>,
+) {
+    for request in requests.read() {
+        if *mode != CameraMode::Map {
+            continue;
+        }
+        let mut matches = subjects
+            .iter()
+            .filter(|(unit, _, subject)| **unit == request.unit && subject.unit == request.unit);
+        let Some((_, target, _)) = matches.next() else {
+            continue;
+        };
+        if matches.next().is_some() {
+            continue;
+        }
+        let Ok((mut transform, mut camera)) = cameras.single_mut() else {
+            continue;
+        };
+        let wanted_focus = target.translation + Vec3::Y * settings.character_focus_height;
+        let translation = wanted_focus - camera.focus;
+        if translation.length_squared() <= f32::EPSILON {
+            continue;
+        }
+        transform.translation += translation;
+        camera.focus = wanted_focus;
+    }
+}
+
 /// Snaps between the current free-map pose and a close orbit around the selected unit.
 fn toggle_camera_mode(
     keys: Res<ButtonInput<KeyCode>>,
@@ -372,8 +475,12 @@ fn toggle_camera_mode(
     mut mode: ResMut<CameraMode>,
     mut saved: ResMut<SavedMapCamera>,
     mut collision: ResMut<CharacterCameraCollision>,
-    targets: Query<(Entity, &Transform, &CameraFocusTarget), Without<PanOrbitCamera>>,
-    mut cameras: Query<(&mut Transform, &mut PanOrbitCamera), Without<CameraFocusTarget>>,
+    inspected: Query<
+        (Entity, &UnitId, &Transform, &InspectionCameraSubject),
+        Without<PanOrbitCamera>,
+    >,
+    selected: Query<(Entity, &Transform, &CameraFocusTarget), Without<PanOrbitCamera>>,
+    mut cameras: Query<(&mut Transform, &mut PanOrbitCamera), With<PanOrbitCamera>>,
 ) {
     if !bindings.just_pressed(&keys, InputAction::ToggleCamera) {
         return;
@@ -384,8 +491,10 @@ fn toggle_camera_mode(
     };
     match *mode {
         CameraMode::Map => {
-            let Ok((target_entity, target, _focus_target)) = targets.single() else {
-                warn!("cannot enter character camera without exactly one selected focus target");
+            let Some(target) = resolve_camera_target(inspected.iter(), selected.iter()) else {
+                warn!(
+                    "cannot enter character camera without exactly one inspection or selection target"
+                );
                 return;
             };
             saved.0 = Some(CameraPose::capture(&transform, &camera));
@@ -396,7 +505,7 @@ fn toggle_camera_mode(
 
             camera.focus = target.translation + Vec3::Y * settings.character_focus_height;
             camera.radius = settings.character_radius;
-            collision.begin_target(target_entity, camera.radius);
+            collision.begin_target(target.entity, camera.radius);
             transform.translation = camera.focus
                 + Mat3::from_quat(transform.rotation).mul_vec3(Vec3::new(0.0, 0.0, camera.radius));
             *mode = CameraMode::Character;
@@ -411,7 +520,7 @@ fn toggle_camera_mode(
     }
 }
 
-/// Keeps a close orbit centred on the selected unit's rendered position.
+/// Keeps a close orbit centred on the inspected or selected unit's rendered position.
 fn follow_character_camera(
     mut mode: ResMut<CameraMode>,
     mut saved: ResMut<SavedMapCamera>,
@@ -419,8 +528,12 @@ fn follow_character_camera(
     time: Res<Time>,
     obstruction_index: Res<CameraObstructionIndex>,
     mut collision: ResMut<CharacterCameraCollision>,
-    targets: Query<(Entity, &Transform, &CameraFocusTarget), Without<PanOrbitCamera>>,
-    mut cameras: Query<(&mut Transform, &mut PanOrbitCamera), Without<CameraFocusTarget>>,
+    inspected: Query<
+        (Entity, &UnitId, &Transform, &InspectionCameraSubject),
+        Without<PanOrbitCamera>,
+    >,
+    selected: Query<(Entity, &Transform, &CameraFocusTarget), Without<PanOrbitCamera>>,
+    mut cameras: Query<(&mut Transform, &mut PanOrbitCamera), With<PanOrbitCamera>>,
 ) {
     if *mode != CameraMode::Character {
         return;
@@ -428,7 +541,7 @@ fn follow_character_camera(
     let Ok((mut transform, mut camera)) = cameras.single_mut() else {
         return;
     };
-    let Ok((target_entity, target_transform, target)) = targets.single() else {
+    let Some(target) = resolve_camera_target(inspected.iter(), selected.iter()) else {
         if let Some(pose) = saved.0.take() {
             pose.restore(&mut transform, &mut camera);
         }
@@ -440,11 +553,11 @@ fn follow_character_camera(
     // Collision history belongs to one selected unit. A new target must resolve its
     // own corridor immediately instead of inheriting the prior target's close boom or
     // release timer.
-    if collision.target != Some(target_entity) {
-        collision.begin_target(target_entity, camera.radius);
+    if collision.target != Some(target.entity) {
+        collision.begin_target(target.entity, camera.radius);
     }
 
-    let wanted_focus = target_transform.translation + Vec3::Y * settings.character_focus_height;
+    let wanted_focus = target.translation + Vec3::Y * settings.character_focus_height;
     if wanted_focus.distance_squared(camera.focus) > f32::EPSILON {
         camera.focus = wanted_focus;
     }
@@ -1288,6 +1401,24 @@ mod tests {
     struct CameraChangeCounts {
         transforms: usize,
         controls: usize,
+    }
+
+    #[derive(Resource)]
+    struct InspectionSubjectToPublish {
+        entity: Entity,
+        unit: UnitId,
+    }
+
+    fn publish_inspection_subject(
+        mut commands: Commands,
+        pending: Res<InspectionSubjectToPublish>,
+    ) {
+        commands
+            .entity(pending.entity)
+            .insert(InspectionCameraSubject::new(
+                pending.unit,
+                hex_core::TilePos::ORIGIN,
+            ));
     }
 
     fn count_camera_changes(
@@ -2795,6 +2926,248 @@ mod tests {
             .get::<PanOrbitCamera>()
             .expect("the camera should have pan/orbit state");
         (transform, camera.focus, camera.radius)
+    }
+
+    #[test]
+    fn map_inspection_centers_once_without_mutating_gameplay_authority() {
+        let mut builder = HeadlessAppBuilder::new().with_minimal_plugins();
+        builder
+            .app_mut()
+            .insert_resource(camera_settings())
+            .init_resource::<CameraMode>()
+            .add_message::<CenterInspectionCamera>()
+            .add_systems(Update, center_inspection_camera);
+        let eye = Vec3::new(0.0, 14.0, 12.0);
+        let camera = builder
+            .app_mut()
+            .world_mut()
+            .spawn((
+                Transform::from_translation(eye).looking_at(Vec3::ZERO, Vec3::Y),
+                PanOrbitCamera {
+                    focus: Vec3::ZERO,
+                    radius: eye.length(),
+                },
+            ))
+            .id();
+        let selected_surface = TilePos::new(hex_core::HexCoord::from_axial(-2, 1), 4);
+        let selected = builder
+            .app_mut()
+            .world_mut()
+            .spawn((
+                UnitId(1),
+                Transform::from_xyz(-3.0, 2.0, 1.0),
+                CameraFocusTarget::new(selected_surface),
+                hex_core::Turn {
+                    movement_left: 3,
+                    acted: false,
+                },
+            ))
+            .id();
+        let inspected_id = UnitId(2);
+        let inspected_surface = TilePos::new(hex_core::HexCoord::from_axial(3, -2), 9);
+        let inspected_position = Vec3::new(7.0, 3.0, -5.0);
+        let inspected = builder
+            .app_mut()
+            .world_mut()
+            .spawn((
+                inspected_id,
+                Transform::from_translation(inspected_position),
+                InspectionCameraSubject::new(inspected_id, inspected_surface),
+            ))
+            .id();
+        let mut app = builder.build();
+        let before = camera_pose(&app, camera);
+
+        app.world_mut()
+            .write_message(CenterInspectionCamera::new(inspected_id));
+        app.update();
+
+        let centered = camera_pose(&app, camera);
+        let wanted_focus = inspected_position + Vec3::Y * camera_settings().character_focus_height;
+        let offset = wanted_focus - before.1;
+        assert!(centered.1.distance(wanted_focus) < 1e-5);
+        assert!(
+            centered
+                .0
+                .translation
+                .distance(before.0.translation + offset)
+                < 1e-5
+        );
+        assert_eq!(centered.0.rotation, before.0.rotation);
+        assert!((centered.2 - before.2).abs() < f32::EPSILON);
+
+        let movement = Vec3::new(5.0, 0.5, 2.0);
+        app.world_mut()
+            .entity_mut(inspected)
+            .get_mut::<Transform>()
+            .expect("the inspected unit should have a transform")
+            .translation += movement;
+        app.update();
+        let held = camera_pose(&app, camera);
+        assert_eq!(held.0, centered.0);
+        assert_eq!(held.1, centered.1);
+
+        app.world_mut()
+            .write_message(CenterInspectionCamera::new(inspected_id));
+        app.update();
+        let recentered = camera_pose(&app, camera);
+        assert!(recentered.1.distance(wanted_focus + movement) < 1e-5);
+
+        app.world_mut()
+            .write_message(CenterInspectionCamera::new(UnitId(99)));
+        app.update();
+        let refused = camera_pose(&app, camera);
+        assert_eq!(refused.0, recentered.0);
+        assert_eq!(refused.1, recentered.1);
+
+        let selected_entity = app.world().entity(selected);
+        assert_eq!(
+            selected_entity
+                .get::<CameraFocusTarget>()
+                .map(|target| target.surface),
+            Some(selected_surface)
+        );
+        assert_eq!(
+            selected_entity
+                .get::<hex_core::Turn>()
+                .map(|turn| (turn.movement_left, turn.acted)),
+            Some((3, false))
+        );
+        assert!(
+            !app.world()
+                .entity(inspected)
+                .contains::<CameraFocusTarget>(),
+            "presentation inspection must not become gameplay selection authority"
+        );
+    }
+
+    #[test]
+    fn same_frame_subject_projection_precedes_inspection_centering() {
+        let mut builder = HeadlessAppBuilder::new().with_minimal_plugins();
+        builder
+            .app_mut()
+            .insert_resource(camera_settings())
+            .init_resource::<CameraMode>()
+            .add_message::<CenterInspectionCamera>()
+            .configure_sets(
+                Update,
+                (AppSystems::RecordInput, AppSystems::Update).chain(),
+            )
+            .configure_sets(
+                Update,
+                (
+                    hex_core::GameplaySystems::WorldFeedbackRequests,
+                    hex_core::GameplaySystems::WorldFeedback,
+                )
+                    .chain()
+                    .in_set(AppSystems::Update),
+            )
+            .add_systems(
+                Update,
+                publish_inspection_subject
+                    .in_set(AppSystems::Update)
+                    .in_set(hex_core::GameplaySystems::WorldFeedbackRequests),
+            )
+            .add_systems(
+                Update,
+                center_inspection_camera
+                    .in_set(AppSystems::Update)
+                    .in_set(hex_core::GameplaySystems::WorldFeedback),
+            );
+        let camera = builder
+            .app_mut()
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(0.0, 14.0, 12.0),
+                PanOrbitCamera {
+                    focus: Vec3::ZERO,
+                    radius: 12.0,
+                },
+            ))
+            .id();
+        let unit = UnitId(7);
+        let position = Vec3::new(8.0, 3.0, -4.0);
+        let subject = builder
+            .app_mut()
+            .world_mut()
+            .spawn((unit, Transform::from_translation(position)))
+            .id();
+        builder
+            .app_mut()
+            .insert_resource(InspectionSubjectToPublish {
+                entity: subject,
+                unit,
+            });
+        let mut app = builder.build();
+
+        app.world_mut()
+            .write_message(CenterInspectionCamera::new(unit));
+        app.update();
+
+        let (_, focus, _) = camera_pose(&app, camera);
+        let wanted = position + Vec3::Y * camera_settings().character_focus_height;
+        assert!(focus.distance(wanted) < 1e-5);
+    }
+
+    #[test]
+    fn character_camera_follows_authorized_inspection_then_falls_back_to_selection() {
+        let selected_position = Vec3::new(-4.0, 1.0, 2.0);
+        let (mut app, camera, selected) = prototype_camera_app(Some(selected_position));
+        let selected = selected.expect("the fixture should retain its selected target");
+        app.world_mut().entity_mut(selected).insert(hex_core::Turn {
+            movement_left: 2,
+            acted: false,
+        });
+        let inspected_id = UnitId(27);
+        let inspected_position = Vec3::new(8.0, 2.0, -6.0);
+        let inspected = app
+            .world_mut()
+            .spawn((
+                inspected_id,
+                Transform::from_translation(inspected_position),
+                InspectionCameraSubject::new(inspected_id, TilePos::ORIGIN),
+            ))
+            .id();
+
+        toggle_camera(&mut app);
+
+        assert_eq!(*app.world().resource::<CameraMode>(), CameraMode::Character);
+        let inspected_pose = camera_pose(&app, camera);
+        let inspected_focus =
+            inspected_position + Vec3::Y * camera_settings().character_focus_height;
+        assert!(inspected_pose.1.distance(inspected_focus) < 1e-5);
+
+        let movement = Vec3::new(1.25, 0.4, -0.75);
+        app.world_mut()
+            .entity_mut(inspected)
+            .get_mut::<Transform>()
+            .expect("the inspected unit should retain its transform")
+            .translation += movement;
+        app.update();
+        assert!(
+            camera_pose(&app, camera)
+                .1
+                .distance(inspected_focus + movement)
+                < 1e-5
+        );
+
+        app.world_mut()
+            .entity_mut(inspected)
+            .remove::<InspectionCameraSubject>();
+        app.update();
+        let fallback = camera_pose(&app, camera);
+        let selected_focus = selected_position + Vec3::Y * camera_settings().character_focus_height;
+        assert!(fallback.1.distance(selected_focus) < 1e-5);
+        assert_eq!(*app.world().resource::<CameraMode>(), CameraMode::Character);
+
+        let selected_entity = app.world().entity(selected);
+        assert!(selected_entity.contains::<CameraFocusTarget>());
+        assert_eq!(
+            selected_entity
+                .get::<hex_core::Turn>()
+                .map(|turn| (turn.movement_left, turn.acted)),
+            Some((2, false))
+        );
     }
 
     fn install_tall_camera_wall(app: &mut App, focus: Vec3, direction: Vec3, distance: f32) {

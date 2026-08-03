@@ -1,14 +1,16 @@
+use bevy::input_focus::InputFocus;
 use bevy::prelude::*;
+use bevy::ui::InteractionDisabled;
 use hex_core::Screen;
 
 use crate::{
-    blurb, button, despawn_screen, display, fine, heading, label, panel, screen_root, screen_title,
-    GameplayAction, PauseView, ResolvedUiMetrics, UiAssets, UiIntent, UiSetting, UiSettingsView,
-    UiSystems, UiViewportClass,
+    blurb, button, despawn_screen, display, heading, label, panel, row_button, screen_root,
+    screen_title, DespawnOnExit, GameplayAction, PauseView, ResolvedUiMetrics, SettingsIntent,
+    SettingsModalView, SettingsTab, UiAssets, UiIntent, UiSettingsView, UiSystems, UiViewportClass,
 };
 
 #[derive(Component)]
-struct SettingControl(UiSetting);
+struct SettingsControl(SettingsIntent);
 
 #[derive(Component)]
 struct SettingNotice;
@@ -19,8 +21,33 @@ struct SettingsBack;
 #[derive(Component)]
 struct SettingsSurface;
 
+#[derive(Component, Debug, Clone, PartialEq, Eq)]
+struct RenderedSettingsContent {
+    tab: SettingsTab,
+    rows: Vec<crate::UiSettingRow>,
+    bindings: Vec<crate::UiBindingRow>,
+    can_restore_all: bool,
+}
+
+impl From<&UiSettingsView> for RenderedSettingsContent {
+    fn from(view: &UiSettingsView) -> Self {
+        Self {
+            tab: view.tab,
+            rows: view.rows.clone(),
+            bindings: view.bindings.clone(),
+            can_restore_all: view.can_restore_all,
+        }
+    }
+}
+
 #[derive(Component)]
 struct SettingsRoot;
+
+#[derive(Component)]
+struct SettingsBindingRow;
+
+#[derive(Component)]
+struct SettingsModalRoot;
 
 #[derive(Component)]
 struct PauseOverlay;
@@ -46,7 +73,7 @@ pub(super) fn plugin(app: &mut App) {
                 (refresh_settings, apply_settings_layout)
                     .chain()
                     .in_set(UiSystems::Render),
-                handle_settings_controls,
+                handle_settings_controls.in_set(UiSystems::EmitIntents),
             )
                 .run_if(in_state(Screen::Settings)),
         )
@@ -76,7 +103,6 @@ fn spawn_pause(mut commands: Commands, assets: Res<UiAssets>, view: Res<PauseVie
             root.spawn((button("Resume"), ResumeControl))
                 .with_children(|resume| {
                     resume.spawn(label(&assets, "Resume"));
-                    resume.spawn(fine(&assets, "ESC"));
                 });
         });
 }
@@ -147,22 +173,24 @@ fn spawn_settings(mut commands: Commands, assets: Res<UiAssets>, view: Res<UiSet
             root.spawn(screen_title(&assets, "Settings"));
             root.spawn(blurb(
                 &assets,
-                "Display, readable UI scale, presentation, and volume.",
+                "Display, audio, interface, gameplay, and camera controls.",
             ));
             root.spawn((
                 button("Back"),
                 SettingsBack,
+                SettingsControl(SettingsIntent::Back),
                 crate::UiVisibilityRequirement::Immediate,
             ))
-            .with_child(label(&assets, "Back to Main Menu"));
+            .with_child(label(&assets, "Back"));
             root.spawn((
                 panel(),
                 SettingsSurface,
+                RenderedSettingsContent::from(view.as_ref()),
                 bevy::ui_widgets::ScrollArea,
                 ScrollPosition::default(),
             ))
             .insert(Node {
-                width: Val::Px(700.0),
+                width: Val::Px(860.0),
                 max_width: Val::Percent(94.0),
                 max_height: Val::Percent(78.0),
                 padding: UiRect::all(Val::Px(18.0)),
@@ -174,41 +202,42 @@ fn spawn_settings(mut commands: Commands, assets: Res<UiAssets>, view: Res<UiSet
                 ..default()
             })
             .with_children(|surface| {
-                spawn_settings_rows(surface, &assets, &view);
+                spawn_settings_content(surface, &assets, &view);
             });
             root.spawn((
                 SettingNotice,
                 blurb(&assets, view.notice.clone().unwrap_or_default()),
             ));
         });
+    spawn_settings_modal(&mut commands, &assets, view.modal.as_ref());
 }
 
 fn apply_settings_layout(
     mut commands: Commands,
     metrics: Res<ResolvedUiMetrics>,
     added: Query<(), Added<SettingsSurface>>,
+    added_rows: Query<(), Added<SettingsBindingRow>>,
     mut roots: Query<&mut Node, (With<SettingsRoot>, Without<SettingsSurface>)>,
     mut surfaces: Query<(Entity, &mut Node), (With<SettingsSurface>, Without<SettingsRoot>)>,
-    mut controls: Query<
+    mut binding_rows: Query<
         &mut Node,
         (
-            With<SettingControl>,
+            With<SettingsBindingRow>,
             Without<SettingsRoot>,
             Without<SettingsSurface>,
-            Without<SettingsBack>,
         ),
     >,
     mut backs: Query<
         &mut Node,
         (
             With<SettingsBack>,
-            Without<SettingControl>,
             Without<SettingsRoot>,
             Without<SettingsSurface>,
+            Without<SettingsBindingRow>,
         ),
     >,
 ) {
-    if !metrics.is_changed() && added.is_empty() {
+    if !metrics.is_changed() && added.is_empty() && added_rows.is_empty() {
         return;
     }
     let compact = metrics.viewport == UiViewportClass::Compact;
@@ -253,20 +282,38 @@ fn apply_settings_layout(
                 .insert((bevy::ui_widgets::ScrollArea, ScrollPosition::default()));
         }
     }
-    for mut node in &mut controls {
-        node.width = Val::Percent(100.0);
-        node.max_width = Val::Px(440.0);
-        node.min_width = Val::Px(0.0);
-        node.min_height = Val::Px(64.0 * metrics.content_scale.max(1.0));
-        node.flex_shrink = 0.0;
+    for mut node in &mut binding_rows {
+        node.flex_direction = if compact {
+            FlexDirection::Column
+        } else {
+            FlexDirection::Row
+        };
+        node.align_items = if compact {
+            AlignItems::Stretch
+        } else {
+            AlignItems::Center
+        };
     }
     for mut node in &mut backs {
-        node.position_type = PositionType::Absolute;
-        node.top = Val::Px(12.0);
-        node.right = Val::Px(12.0);
+        node.position_type = if compact {
+            PositionType::Relative
+        } else {
+            PositionType::Absolute
+        };
+        node.top = if compact { Val::Auto } else { Val::Px(12.0) };
+        node.right = if compact { Val::Auto } else { Val::Px(12.0) };
         node.width = Val::Px(240.0);
-        node.max_width = Val::Percent(40.0);
+        node.max_width = if compact {
+            Val::Percent(100.0)
+        } else {
+            Val::Percent(40.0)
+        };
         node.min_width = Val::Px(0.0);
+        node.align_self = if compact {
+            AlignSelf::FlexEnd
+        } else {
+            AlignSelf::Auto
+        };
     }
 }
 
@@ -274,69 +321,337 @@ fn refresh_settings(
     view: Res<UiSettingsView>,
     assets: Res<UiAssets>,
     mut commands: Commands,
-    surfaces: Query<Entity, With<SettingsSurface>>,
-    controls: Query<(&SettingControl, &Children)>,
-    mut labels: Query<&mut Text, Without<SettingNotice>>,
-    mut notices: Query<&mut Text, (With<SettingNotice>, Without<SettingControl>)>,
+    mut surfaces: Query<(Entity, &mut RenderedSettingsContent), With<SettingsSurface>>,
+    modal_roots: Query<Entity, With<SettingsModalRoot>>,
+    mut focus: ResMut<InputFocus>,
+    parents: Query<&ChildOf>,
+    names: Query<&Name>,
+    mut focus_refreshes: ResMut<crate::focus::FocusRefreshRequests>,
+    mut notices: Query<&mut Text, With<SettingNotice>>,
+    mut returning_control: Local<Option<String>>,
 ) {
     if !view.is_changed() {
         return;
     }
-    if controls.iter().count() != view.rows.len() {
-        for surface in &surfaces {
-            commands.entity(surface).despawn_related::<Children>();
-            commands
-                .entity(surface)
-                .with_children(|surface| spawn_settings_rows(surface, &assets, &view));
-        }
-    }
-    for (control, children) in &controls {
-        let Some(row) = view.rows.iter().find(|row| row.setting == control.0) else {
-            continue;
-        };
-        if let Some(child) = children.first() {
-            if let Ok(mut text) = labels.get_mut(*child) {
-                text.0 = format!("{} · {}", row.label, row.value);
+    if let Some(modal) = view.modal.as_ref() {
+        *returning_control = Some(match modal {
+            SettingsModalView::Capture { action, .. } => {
+                format!("Rebind {}", action.metadata().label)
             }
-        }
+            SettingsModalView::Conflict { requested, .. } => {
+                format!("Rebind {requested}")
+            }
+            SettingsModalView::ConfirmRestoreAll => "Restore All Keybindings".to_owned(),
+        });
     }
+    let returning_name = if view.modal.is_none() {
+        returning_control.take()
+    } else {
+        None
+    };
+    let next_content = RenderedSettingsContent::from(view.as_ref());
+    for (surface, mut rendered) in &mut surfaces {
+        if *rendered == next_content {
+            continue;
+        }
+        if let Some(name) = returning_name.clone() {
+            crate::focus::request_route_focus(
+                surface,
+                Some(name),
+                &mut focus,
+                &mut focus_refreshes,
+            );
+        } else {
+            crate::focus::begin_route_refresh(
+                surface,
+                &mut focus,
+                &parents,
+                &names,
+                &mut focus_refreshes,
+            );
+        }
+        commands.entity(surface).despawn_related::<Children>();
+        commands
+            .entity(surface)
+            .with_children(|surface| spawn_settings_content(surface, &assets, &view));
+        *rendered = next_content.clone();
+    }
+    for modal in &modal_roots {
+        commands.entity(modal).despawn();
+    }
+    spawn_settings_modal(&mut commands, &assets, view.modal.as_ref());
     for mut notice in &mut notices {
         notice.0 = view.notice.clone().unwrap_or_default();
     }
 }
 
-fn spawn_settings_rows(
+fn spawn_settings_content(
     surface: &mut ChildSpawnerCommands,
     assets: &UiAssets,
     view: &UiSettingsView,
 ) {
-    surface.spawn(heading(assets, "Display and audio"));
+    surface
+        .spawn(Node {
+            width: Val::Percent(100.0),
+            max_width: Val::Px(820.0),
+            display: Display::Flex,
+            flex_direction: FlexDirection::Row,
+            flex_wrap: FlexWrap::Wrap,
+            column_gap: Val::Px(8.0),
+            row_gap: Val::Px(8.0),
+            ..default()
+        })
+        .with_children(|tabs| {
+            for tab in SettingsTab::ALL {
+                let selected = tab == view.tab;
+                tabs.spawn((
+                    row_button(
+                        format!("Settings Tab {}", tab.label()),
+                        if tab == SettingsTab::MainView {
+                            132.0
+                        } else {
+                            112.0
+                        },
+                    ),
+                    SettingsControl(SettingsIntent::SelectTab(tab)),
+                    crate::UiVisibilityRequirement::Immediate,
+                ))
+                .with_children(|button| {
+                    button.spawn(label(
+                        assets,
+                        if selected {
+                            format!("{} · Selected", tab.label())
+                        } else {
+                            tab.label().to_owned()
+                        },
+                    ));
+                });
+            }
+        });
+    surface.spawn(heading(assets, view.tab.label()));
+    if view.tab == SettingsTab::General {
+        spawn_general_settings(surface, assets, view);
+    } else {
+        spawn_binding_settings(surface, assets, view);
+    }
+}
+
+fn spawn_general_settings(
+    surface: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    view: &UiSettingsView,
+) {
+    surface.spawn(blurb(
+        assets,
+        "Display and audio changes preview and save immediately.",
+    ));
     for row in &view.rows {
         surface
             .spawn((
                 button(format!("Setting {:?}", row.setting)),
-                SettingControl(row.setting),
+                SettingsControl(SettingsIntent::Adjust(row.setting)),
                 crate::UiVisibilityRequirement::Scrollable,
             ))
             .with_child(label(assets, format!("{} · {}", row.label, row.value)));
     }
 }
 
+fn spawn_binding_settings(
+    surface: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    view: &UiSettingsView,
+) {
+    surface.spawn(blurb(
+        assets,
+        "Select a binding, then press one key with optional modifiers. Escape cancels capture.",
+    ));
+    for row in &view.bindings {
+        spawn_binding_row(surface, assets, row);
+    }
+    let mut restore = surface.spawn((
+        button("Restore All Keybindings"),
+        SettingsControl(SettingsIntent::RequestRestoreAll),
+        crate::UiVisibilityRequirement::Scrollable,
+    ));
+    if !view.can_restore_all {
+        restore.insert(InteractionDisabled);
+    }
+    restore.with_child(label(
+        assets,
+        if view.can_restore_all {
+            "Restore All…"
+        } else {
+            "All bindings use defaults"
+        },
+    ));
+}
+
+fn spawn_binding_row(
+    surface: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    row: &crate::UiBindingRow,
+) {
+    surface
+        .spawn((
+            Name::new(format!("Binding Row {}", row.label)),
+            SettingsBindingRow,
+            Node {
+                width: Val::Percent(100.0),
+                max_width: Val::Px(820.0),
+                min_height: Val::Px(56.0),
+                padding: UiRect::all(Val::Px(8.0)),
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(8.0),
+                row_gap: Val::Px(8.0),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(6.0)),
+                ..default()
+            },
+            BackgroundColor(crate::PANEL_BG),
+            BorderColor::all(crate::EDGE),
+        ))
+        .with_children(|binding| {
+            binding
+                .spawn(Node {
+                    flex_grow: 1.0,
+                    min_width: Val::Px(180.0),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(3.0),
+                    ..default()
+                })
+                .with_children(|copy| {
+                    copy.spawn(label(assets, row.label.clone()));
+                    copy.spawn(blurb(
+                        assets,
+                        if row.rebindable {
+                            format!("Current · {}", row.chord)
+                        } else {
+                            format!("Fixed navigation · {}", row.chord)
+                        },
+                    ));
+                });
+            if !row.rebindable {
+                return;
+            }
+            binding
+                .spawn((
+                    row_button(format!("Rebind {}", row.label), 150.0),
+                    SettingsControl(SettingsIntent::BeginCapture(row.action)),
+                    crate::UiVisibilityRequirement::Scrollable,
+                ))
+                .with_child(label(assets, format!("Rebind · {}", row.chord)));
+            let mut restore = binding.spawn((
+                row_button(format!("Restore {}", row.label), 116.0),
+                SettingsControl(SettingsIntent::RestoreBinding(row.action)),
+                crate::UiVisibilityRequirement::Scrollable,
+            ));
+            if !row.overridden {
+                restore.insert(InteractionDisabled);
+            }
+            restore.with_child(label(
+                assets,
+                if row.overridden { "Restore" } else { "Default" },
+            ));
+        });
+}
+
+fn spawn_settings_modal(
+    commands: &mut Commands,
+    assets: &UiAssets,
+    modal: Option<&SettingsModalView>,
+) {
+    let Some(modal) = modal else { return };
+    commands
+        .spawn((
+            crate::overlay_root("Settings Modal"),
+            SettingsModalRoot,
+            DespawnOnExit(Screen::Settings),
+        ))
+        .with_children(|overlay| {
+            overlay
+                .spawn(panel())
+                .insert(Node {
+                    width: Val::Px(520.0),
+                    max_width: Val::Percent(92.0),
+                    padding: UiRect::all(Val::Px(20.0)),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(12.0),
+                    border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::all(Val::Px(8.0)),
+                    ..default()
+                })
+                .with_children(|card| match modal {
+                    SettingsModalView::Capture { label: action, .. } => {
+                        card.spawn(heading(assets, "Press a key"));
+                        card.spawn(blurb(
+                            assets,
+                            format!("New binding for {action}. Modifiers may be held."),
+                        ));
+                        card.spawn(blurb(
+                            assets,
+                            "Pure modifier keys are ignored. Escape cancels.",
+                        ));
+                        card.spawn((
+                            button("Cancel Key Capture"),
+                            SettingsControl(SettingsIntent::CancelCapture),
+                            crate::UiVisibilityRequirement::Immediate,
+                        ))
+                        .with_child(label(assets, "Cancel"));
+                    }
+                    SettingsModalView::Conflict {
+                        requested,
+                        existing,
+                        chord,
+                    } => {
+                        card.spawn(heading(assets, "Binding conflict"));
+                        card.spawn(blurb(
+                            assets,
+                            format!("{chord} is assigned to {existing}. Swap it with {requested}?"),
+                        ));
+                        card.spawn((
+                            button("Swap Conflicting Bindings"),
+                            SettingsControl(SettingsIntent::SwapConflict),
+                            crate::UiVisibilityRequirement::Immediate,
+                        ))
+                        .with_child(label(assets, "Swap"));
+                        card.spawn((
+                            button("Cancel Binding Conflict"),
+                            SettingsControl(SettingsIntent::CancelConflict),
+                            crate::UiVisibilityRequirement::Immediate,
+                        ))
+                        .with_child(label(assets, "Cancel"));
+                    }
+                    SettingsModalView::ConfirmRestoreAll => {
+                        card.spawn(heading(assets, "Restore all bindings?"));
+                        card.spawn(blurb(
+                            assets,
+                            "Every binding shown in Settings will return to its canonical default.",
+                        ));
+                        card.spawn((
+                            button("Confirm Restore All Keybindings"),
+                            SettingsControl(SettingsIntent::ConfirmRestoreAll),
+                            crate::UiVisibilityRequirement::Immediate,
+                        ))
+                        .with_child(label(assets, "Restore All"));
+                        card.spawn((
+                            button("Cancel Restore All Keybindings"),
+                            SettingsControl(SettingsIntent::CancelRestoreAll),
+                            crate::UiVisibilityRequirement::Immediate,
+                        ))
+                        .with_child(label(assets, "Cancel"));
+                    }
+                });
+        });
+}
+
 fn handle_settings_controls(
-    controls: Query<(&Interaction, &SettingControl), Changed<Interaction>>,
-    back: Query<&Interaction, (Changed<Interaction>, With<SettingsBack>)>,
+    controls: Query<(&Interaction, &SettingsControl), Changed<Interaction>>,
     mut intents: MessageWriter<UiIntent>,
 ) {
     for (interaction, control) in &controls {
         if *interaction == Interaction::Pressed {
-            intents.write(UiIntent::AdjustSetting(control.0));
+            intents.write(UiIntent::Settings(control.0));
         }
-    }
-    if back
-        .iter()
-        .any(|interaction| *interaction == Interaction::Pressed)
-    {
-        intents.write(UiIntent::Back);
     }
 }
 
@@ -357,5 +672,188 @@ mod tests {
                 .map(|tag| tag.0),
             Some(Screen::Loading)
         );
+    }
+
+    #[cfg(feature = "test-support")]
+    mod focus_regressions {
+        use bevy::input_focus::{tab_navigation::TabIndex, FocusCause, InputFocus};
+
+        use super::*;
+        use crate::test_support::HeadlessUiPlugin;
+
+        fn binding_row(
+            action: hex_core::InputAction,
+            chord: &str,
+            overridden: bool,
+        ) -> crate::UiBindingRow {
+            crate::UiBindingRow {
+                action,
+                label: action.metadata().label.to_owned(),
+                chord: chord.to_owned(),
+                rebindable: true,
+                overridden,
+            }
+        }
+
+        fn settings_view(
+            bindings: Vec<crate::UiBindingRow>,
+            can_restore_all: bool,
+            modal: Option<SettingsModalView>,
+        ) -> UiSettingsView {
+            UiSettingsView {
+                tab: SettingsTab::Interface,
+                rows: Vec::new(),
+                bindings,
+                can_restore_all,
+                modal,
+                notice: None,
+            }
+        }
+
+        fn settle(app: &mut App) {
+            for _ in 0..4 {
+                app.update();
+            }
+        }
+
+        fn settings_app(view: UiSettingsView) -> App {
+            let mut app = App::new();
+            app.add_plugins(HeadlessUiPlugin::default());
+            *app.world_mut().resource_mut::<UiSettingsView>() = view;
+            app.world_mut()
+                .resource_mut::<NextState<Screen>>()
+                .set(Screen::Settings);
+            settle(&mut app);
+            app
+        }
+
+        fn named_entity(world: &mut World, wanted: &str) -> Entity {
+            let mut names = world.query::<(Entity, &Name)>();
+            names
+                .iter(world)
+                .find_map(|(entity, name)| (name.as_str() == wanted).then_some(entity))
+                .unwrap_or_else(|| panic!("missing named UI entity {wanted}"))
+        }
+
+        fn focus_named(app: &mut App, name: &str) -> Entity {
+            let entity = named_entity(app.world_mut(), name);
+            app.world_mut()
+                .resource_mut::<InputFocus>()
+                .set(entity, FocusCause::Navigated);
+            entity
+        }
+
+        fn replace_view(app: &mut App, view: UiSettingsView) {
+            *app.world_mut().resource_mut::<UiSettingsView>() = view;
+            settle(app);
+        }
+
+        fn assert_live_reachable_focus(app: &mut App) -> (Entity, String) {
+            let focused = app
+                .world()
+                .resource::<InputFocus>()
+                .get()
+                .expect("Settings should retain a focused control");
+            assert!(app.world().get_entity(focused).is_ok());
+            assert!(app
+                .world()
+                .get::<TabIndex>(focused)
+                .is_some_and(|index| index.0 >= 0));
+
+            let mut current = Some(focused);
+            while let Some(entity) = current {
+                assert!(app.world().get::<InteractionDisabled>(entity).is_none());
+                assert!(!app
+                    .world()
+                    .get::<Visibility>(entity)
+                    .is_some_and(|visibility| *visibility == Visibility::Hidden));
+                assert!(!app
+                    .world()
+                    .get::<Node>(entity)
+                    .is_some_and(|node| node.display == Display::None));
+                current = app.world().get::<ChildOf>(entity).map(ChildOf::parent);
+            }
+
+            let name = app
+                .world()
+                .get::<Name>(focused)
+                .expect("focused Settings controls have stable names")
+                .as_str()
+                .to_owned();
+            (focused, name)
+        }
+
+        #[test]
+        fn restore_conflict_swap_returns_focus_to_the_live_binding_row() {
+            let swapped = vec![
+                binding_row(hex_core::InputAction::ToggleParty, "I", true),
+                binding_row(hex_core::InputAction::ToggleInitiative, "P", true),
+            ];
+            let mut app = settings_app(settings_view(swapped.clone(), true, None));
+            let stale_restore = focus_named(&mut app, "Restore Party");
+
+            replace_view(
+                &mut app,
+                settings_view(
+                    swapped,
+                    true,
+                    Some(SettingsModalView::Conflict {
+                        requested: "Party".to_owned(),
+                        existing: "Initiative".to_owned(),
+                        chord: "P".to_owned(),
+                    }),
+                ),
+            );
+            assert_eq!(
+                assert_live_reachable_focus(&mut app).1,
+                "Swap Conflicting Bindings"
+            );
+
+            replace_view(
+                &mut app,
+                settings_view(
+                    vec![
+                        binding_row(hex_core::InputAction::ToggleParty, "P", false),
+                        binding_row(hex_core::InputAction::ToggleInitiative, "I", false),
+                    ],
+                    false,
+                    None,
+                ),
+            );
+
+            assert!(app.world().get_entity(stale_restore).is_err());
+            assert_eq!(assert_live_reachable_focus(&mut app).1, "Rebind Party");
+        }
+
+        #[test]
+        fn confirmed_restore_all_falls_back_to_a_live_settings_control() {
+            let overridden = vec![binding_row(hex_core::InputAction::ToggleParty, "Y", true)];
+            let mut app = settings_app(settings_view(overridden.clone(), true, None));
+            let stale_restore_all = focus_named(&mut app, "Restore All Keybindings");
+
+            replace_view(
+                &mut app,
+                settings_view(overridden, true, Some(SettingsModalView::ConfirmRestoreAll)),
+            );
+            assert_eq!(
+                assert_live_reachable_focus(&mut app).1,
+                "Confirm Restore All Keybindings"
+            );
+
+            replace_view(
+                &mut app,
+                settings_view(
+                    vec![binding_row(hex_core::InputAction::ToggleParty, "P", false)],
+                    false,
+                    None,
+                ),
+            );
+
+            assert!(app.world().get_entity(stale_restore_all).is_err());
+            assert_eq!(
+                assert_live_reachable_focus(&mut app).1,
+                "Settings Tab General"
+            );
+        }
     }
 }

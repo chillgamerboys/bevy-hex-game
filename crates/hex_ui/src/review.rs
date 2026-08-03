@@ -3,20 +3,26 @@
 use bevy::prelude::*;
 
 use crate::{
-    CastingPanelView, GameplayChromeView, GameplayHudView, GameplayLatticesView, OutcomeView,
+    ActivityLogView, CastingPanelView, GameplayChromeView, GameplayHudView, GameplayLatticesView,
+    InitiativeView, OutcomeView, PartyView,
 };
 
 #[cfg(any(feature = "visual-review", feature = "test-support"))]
 use crate::{
     ActionAffordance, ActionAvailability, ActionPriority, CastingAimView, CastingPanelContentView,
-    CastingSpellView, CellInteraction, DecisionChoiceView, GameplayAction, LatticeCellView,
-    OutcomeAction, OutcomeActionView, OwnLatticeView, TargetLatticeStateView, TargetLatticeView,
+    CastingSpellView, CellInteraction, DecisionChoiceView, GameplayAction, InitiativeEntryView,
+    InitiativeSide, LatticeCellView, OutcomeAction, OutcomeActionView, OwnLatticeView,
+    PartyMemberView, SandboxLatticeCellKind, SandboxLatticeCellView, TargetLatticeStateView,
+    TargetLatticeView,
 };
 
 #[derive(Resource, Default)]
 pub(crate) struct UiReviewPresentation {
     pub(crate) chrome: Option<GameplayChromeOverride>,
     pub(crate) hud: Option<GameplayHudView>,
+    pub(crate) party: Option<PartyView>,
+    pub(crate) initiative: Option<InitiativeView>,
+    pub(crate) activity: Option<ActivityLogView>,
     pub(crate) casting: Option<CastingPanelView>,
     pub(crate) lattices: Option<GameplayLatticesView>,
     pub(crate) outcome: Option<OutcomeView>,
@@ -29,8 +35,11 @@ pub(crate) struct UiReviewPresentation {
 /// chrome such as the player's HUD visibility preference.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct GameplayChromeOverride {
-    shown: Option<bool>,
-    decision_required: Option<bool>,
+    party_shown: Option<bool>,
+    initiative_shown: Option<bool>,
+    activity_shown: Option<bool>,
+    action_bar_shown: Option<bool>,
+    main_view: Option<hex_gameplay_model::MainViewDestination>,
     encounter_complete: Option<bool>,
 }
 
@@ -38,9 +47,30 @@ impl GameplayChromeOverride {
     #[cfg(any(feature = "visual-review", feature = "test-support"))]
     const fn required_decision() -> Self {
         Self {
-            decision_required: Some(true),
-            shown: None,
-            encounter_complete: None,
+            main_view: Some(hex_gameplay_model::MainViewDestination::RequiredDecision),
+            ..Self::none()
+        }
+    }
+
+    #[cfg(any(feature = "visual-review", feature = "test-support"))]
+    const fn player_turn() -> Self {
+        Self {
+            // Preserve the viewport-aware Party projection: visible by default on
+            // Standard/Wide, suppressed on Compact when another task surface owns it.
+            party_shown: None,
+            initiative_shown: Some(true),
+            activity_shown: Some(false),
+            action_bar_shown: Some(true),
+            main_view: Some(hex_gameplay_model::MainViewDestination::Closed),
+            encounter_complete: Some(false),
+        }
+    }
+
+    #[cfg(any(feature = "visual-review", feature = "test-support"))]
+    const fn hostile_turn() -> Self {
+        Self {
+            action_bar_shown: Some(false),
+            ..Self::player_turn()
         }
     }
 
@@ -48,23 +78,53 @@ impl GameplayChromeOverride {
     const fn encounter_complete() -> Self {
         Self {
             encounter_complete: Some(true),
-            shown: None,
-            decision_required: None,
+            ..Self::none()
         }
     }
 
-    pub(crate) fn apply(self, base: GameplayChromeView) -> GameplayChromeView {
-        GameplayChromeView {
-            shown: self.shown.unwrap_or(base.shown),
-            decision_required: self.decision_required.unwrap_or(base.decision_required),
-            encounter_complete: self.encounter_complete.unwrap_or(base.encounter_complete),
+    #[cfg(any(feature = "visual-review", feature = "test-support"))]
+    const fn none() -> Self {
+        Self {
+            party_shown: None,
+            initiative_shown: None,
+            activity_shown: None,
+            action_bar_shown: None,
+            main_view: None,
+            encounter_complete: None,
         }
+    }
+
+    pub(crate) fn apply(
+        self,
+        base: GameplayChromeView,
+        viewport: crate::UiViewportClass,
+    ) -> GameplayChromeView {
+        let mut next = base;
+        // Review fixtures may populate canonical combat content while a live walk
+        // remains in Exploration. They may not bypass Compact's one-surface policy:
+        // the renderer-free model (or the headless case) still owns that choice.
+        if viewport != crate::UiViewportClass::Compact {
+            next.party_shown = self.party_shown.unwrap_or(base.party_shown);
+            next.initiative_shown = self.initiative_shown.unwrap_or(base.initiative_shown);
+            next.activity_shown = self.activity_shown.unwrap_or(base.activity_shown);
+            next.action_bar_shown = self.action_bar_shown.unwrap_or(base.action_bar_shown);
+        }
+        if let Some(main_view) = self.main_view {
+            next.main_view = main_view;
+        }
+        next.encounter_complete = self.encounter_complete.unwrap_or(base.encounter_complete);
+        next
     }
 }
 
 impl UiReviewPresentation {
-    pub(crate) fn effective_chrome(&self, base: GameplayChromeView) -> GameplayChromeView {
-        self.chrome.map_or(base, |override_| override_.apply(base))
+    pub(crate) fn effective_chrome(
+        &self,
+        base: GameplayChromeView,
+        viewport: crate::UiViewportClass,
+    ) -> GameplayChromeView {
+        self.chrome
+            .map_or(base, |override_| override_.apply(base, viewport))
     }
 }
 
@@ -78,6 +138,8 @@ pub fn apply_ui_review_fixture(commands: &mut Commands, name: &str) -> Result<()
     match name {
         "clear" => {}
         "normal-gameplay" => {
+            review.party = Some(review_party());
+            review.activity = Some(review_activity());
             review.hud = Some(GameplayHudView {
                 phase: hex_core::GameplayPhase::Active,
                 actor: Some(hex_core::UnitId(0)),
@@ -106,10 +168,16 @@ pub fn apply_ui_review_fixture(commands: &mut Commands, name: &str) -> Result<()
             review.lattices = Some(populated_own_lattice());
         }
         "player-turn-max" => {
+            review.chrome = Some(GameplayChromeOverride::player_turn());
+            review.party = Some(review_party());
+            review.initiative = Some(review_initiative(false));
             review.hud = Some(ordinary_hud());
             review.lattices = Some(populated_own_lattice());
         }
         "hostile-turn" => {
+            review.chrome = Some(GameplayChromeOverride::hostile_turn());
+            review.party = Some(review_party());
+            review.initiative = Some(review_initiative(true));
             review.hud = Some(GameplayHudView {
                 phase: hex_core::GameplayPhase::Active,
                 actor: Some(hex_core::UnitId(1)),
@@ -139,6 +207,7 @@ pub fn apply_ui_review_fixture(commands: &mut Commands, name: &str) -> Result<()
                         chosen: 2,
                         owed: 3,
                         restoring: false,
+                        confirm_shortcut: "Enter".to_owned(),
                     },
                 },
             });
@@ -156,6 +225,7 @@ pub fn apply_ui_review_fixture(commands: &mut Commands, name: &str) -> Result<()
                         chosen: 2,
                         owed: 3,
                         restoring: true,
+                        confirm_shortcut: "Enter".to_owned(),
                     },
                 },
             });
@@ -177,6 +247,9 @@ pub fn apply_ui_review_fixture(commands: &mut Commands, name: &str) -> Result<()
                         label: "AIMING · Lightning Bolt · Confirm unavailable: no legal target in range. Cancel or cycle target."
                             .to_owned(),
                         controls_enabled: false,
+                        confirm_shortcut: "Enter".to_owned(),
+                        next_target_shortcut: "Tab".to_owned(),
+                        cancel_shortcut: "Q".to_owned(),
                     }),
                 },
             });
@@ -348,6 +421,7 @@ fn decision_lattices() -> GameplayLatticesView {
                 chosen: 2,
                 owed: 3,
                 restoring: false,
+                confirm_shortcut: "Enter".to_owned(),
             }),
         }),
         target: None,
@@ -410,4 +484,192 @@ fn populated_own_lattice() -> GameplayLatticesView {
     let mut lattices = populated_lattices();
     lattices.target = None;
     lattices
+}
+
+#[cfg(any(feature = "visual-review", feature = "test-support"))]
+fn review_party() -> PartyView {
+    let cells = vec![
+        SandboxLatticeCellView {
+            q: 0,
+            r: 0,
+            label: "G".to_owned(),
+            kind: SandboxLatticeCellKind::Gem,
+        },
+        SandboxLatticeCellView {
+            q: 1,
+            r: 0,
+            label: "F".to_owned(),
+            kind: SandboxLatticeCellKind::Fusion,
+        },
+        SandboxLatticeCellView {
+            q: 0,
+            r: 1,
+            label: "S".to_owned(),
+            kind: SandboxLatticeCellKind::Spell,
+        },
+    ];
+    PartyView {
+        members: ["Hedge Mage", "Raider", "Wolf"]
+            .into_iter()
+            .enumerate()
+            .map(|(slot, name)| PartyMemberView {
+                slot,
+                label: format!("{name} · {}", if slot == 0 { "active" } else { "ready" }),
+                cells: cells.clone(),
+                active: slot == 0,
+                selected: slot == 0,
+            })
+            .collect(),
+        formation_visible: true,
+        movement_mode: "GROUP · formation follows the selected anchor".to_owned(),
+        presets: vec!["Column".to_owned(), "Wedge".to_owned()],
+        slots: Vec::new(),
+    }
+}
+
+#[cfg(any(feature = "visual-review", feature = "test-support"))]
+fn review_initiative(hostile_turn: bool) -> InitiativeView {
+    InitiativeView {
+        heading: if hostile_turn {
+            "enemy turn"
+        } else {
+            "your turn"
+        }
+        .to_owned(),
+        entries: vec![
+            InitiativeEntryView {
+                unit: hex_core::UnitId(0),
+                name: "Hedge Mage".to_owned(),
+                side: InitiativeSide::Ally,
+                current: !hostile_turn,
+                inspectable: true,
+            },
+            InitiativeEntryView {
+                unit: hex_core::UnitId(1),
+                name: "Observed Raider".to_owned(),
+                side: InitiativeSide::Hostile,
+                current: hostile_turn,
+                inspectable: true,
+            },
+            InitiativeEntryView {
+                unit: hex_core::UnitId(2),
+                name: "Unobserved hostile".to_owned(),
+                side: InitiativeSide::Hostile,
+                current: false,
+                inspectable: false,
+            },
+        ],
+    }
+}
+
+#[cfg(any(feature = "visual-review", feature = "test-support"))]
+fn review_activity() -> ActivityLogView {
+    ActivityLogView {
+        heading: "ACTIVITY · L".to_owned(),
+        tab: crate::ActivityTab::All,
+        lines: vec![
+            crate::ActivityLogLineView {
+                kind: crate::ActivityKind::Combat,
+                text: "Hedge Mage cast Lightning Bolt".to_owned(),
+                danger: false,
+            },
+            crate::ActivityLogLineView {
+                kind: crate::ActivityKind::Activity,
+                text: "Party formation changed to Wedge".to_owned(),
+                danger: false,
+            },
+        ],
+    }
+}
+
+#[cfg(all(test, any(feature = "visual-review", feature = "test-support")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn combat_turn_fixtures_override_only_the_authored_component_combination() {
+        let base = GameplayChromeView {
+            party_shown: true,
+            initiative_shown: false,
+            activity_shown: true,
+            action_bar_shown: false,
+            main_view: hex_gameplay_model::MainViewDestination::RequiredDecision,
+            terrain_health_shown: false,
+            encounter_complete: true,
+        };
+
+        assert_eq!(
+            GameplayChromeOverride::player_turn().apply(base, crate::UiViewportClass::Standard),
+            GameplayChromeView {
+                party_shown: true,
+                initiative_shown: true,
+                activity_shown: false,
+                action_bar_shown: true,
+                main_view: hex_gameplay_model::MainViewDestination::Closed,
+                terrain_health_shown: false,
+                encounter_complete: false,
+            }
+        );
+        assert_eq!(
+            GameplayChromeOverride::hostile_turn().apply(base, crate::UiViewportClass::Standard),
+            GameplayChromeView {
+                party_shown: true,
+                initiative_shown: true,
+                activity_shown: false,
+                action_bar_shown: false,
+                main_view: hex_gameplay_model::MainViewDestination::Closed,
+                terrain_health_shown: false,
+                encounter_complete: false,
+            }
+        );
+    }
+
+    #[test]
+    fn required_fixture_preserves_ordinary_and_phase_chrome() {
+        let base = GameplayChromeView {
+            party_shown: false,
+            initiative_shown: true,
+            activity_shown: true,
+            action_bar_shown: false,
+            main_view: hex_gameplay_model::MainViewDestination::Closed,
+            terrain_health_shown: false,
+            encounter_complete: true,
+        };
+        let expected = GameplayChromeView {
+            main_view: hex_gameplay_model::MainViewDestination::RequiredDecision,
+            ..base
+        };
+
+        assert_eq!(
+            GameplayChromeOverride::required_decision()
+                .apply(base, crate::UiViewportClass::Standard),
+            expected
+        );
+    }
+
+    #[test]
+    fn combat_fixture_cannot_bypass_compact_single_surface_policy() {
+        let base = GameplayChromeView {
+            action_bar_shown: true,
+            ..GameplayChromeView::default()
+        };
+        assert_eq!(
+            GameplayChromeOverride::player_turn().apply(base, crate::UiViewportClass::Compact),
+            base
+        );
+    }
+
+    #[test]
+    fn turn_fixture_content_is_populated_and_disclosure_safe() {
+        let party = review_party();
+        let initiative = review_initiative(true);
+        let activity = review_activity();
+
+        assert_eq!(party.members.len(), 3);
+        assert!(party.members.iter().all(|member| !member.cells.is_empty()));
+        assert_eq!(initiative.entries.len(), 3);
+        assert!(initiative.entries.iter().any(|entry| entry.current));
+        assert!(initiative.entries.iter().any(|entry| !entry.inspectable));
+        assert!(activity.lines.len() >= 2);
+    }
 }

@@ -21,13 +21,15 @@ use hex_core::{
     InputAction, InputBindings, IssuedCommand, Mode, PartyFormation, PartyMovementMode, Pause,
     PendingDecision, Screen, UnitId,
 };
-use hex_gameplay_model::{MainMenuModel, MainMenuRoute};
-use hex_lattice::{LatticeSpec, LatticeState, LatticeStats};
+use hex_gameplay_model::{HudActionResult, HudState, MainMenuModel, MainMenuRoute};
+use hex_lattice::{CellKind, LatticeSpec, LatticeState, LatticeStats};
 use hex_units::{Archetype, Downed, Party, Player, Selected, UnitRegistry};
 
 use super::despawn_screen;
 use super::sandbox::{CreatorDisplayName, GameplaySessionOrigin, SandboxSession};
-use crate::readouts::{DisableSelection, GameplayUiContext, UiUnitIdentity};
+use crate::readouts::{
+    ActivityNotice, DisableSelection, GameplayHudContext, GameplayUiContext, UiUnitIdentity,
+};
 use crate::scenarios::ActiveScenario;
 use hex_ui::{
     ActionAffordance, ActionAvailability, ActionPriority, GameplayAction, GameplayHudView,
@@ -47,6 +49,7 @@ pub(crate) fn plugin(app: &mut App) {
     app.add_systems(
         Update,
         handle_input
+            .after(AppSystems::Update)
             .run_if(in_state(Screen::Gameplay))
             .run_if(resource_equals(GameplayPhase::Active))
             .run_if(hex_combat::encounter_unresolved),
@@ -179,42 +182,65 @@ fn handle_party_strip(
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<InputBindings>,
     mut queue: ResMut<CommandQueue>,
-    selected_units: Query<(Entity, &UnitId), (With<Player>, With<Selected>)>,
+    mut activity: MessageWriter<ActivityNotice>,
+    party_units: Query<(Entity, &UnitId, Has<Selected>), With<Player>>,
     owners: Query<&ControlOwner>,
 ) {
     if *mode.get() != Mode::Exploring {
         return;
     }
-    let selected = selected_units.iter().next().map(|(_, unit)| *unit);
+    let mut selected = party_units
+        .iter()
+        .find_map(|(_, unit, selected)| selected.then_some(*unit));
     let mut rest_requested = bindings.just_pressed(&keys, InputAction::Rest);
     for intent in intents.read() {
         let hex_ui::UiIntent::Party(intent) = intent else {
             continue;
         };
         match intent {
-            hex_ui::PartyIntent::SelectMember(slot) => {
-                if let Some(entity) = party
-                    .members
-                    .get(*slot)
-                    .and_then(|unit| registry.entity_of(*unit))
-                {
-                    for (old, _) in &selected_units {
-                        if old != entity {
-                            commands.entity(old).remove::<Selected>();
-                        }
-                    }
-                    commands.entity(entity).insert(Selected);
+            // Inspection is presentation-only and handled by `readouts`; it must
+            // never rewrite gameplay `Selected` or command authority.
+            hex_ui::PartyIntent::ActivateMember(_) => {}
+            hex_ui::PartyIntent::SelectFormationMember(slot) => {
+                let Some(member) = party.members.get(*slot).copied() else {
+                    continue;
+                };
+                let Some(target) = registry.entity_of(member) else {
+                    continue;
+                };
+                let Ok((_, registered, _)) = party_units.get(target) else {
+                    continue;
+                };
+                if *registered != member {
+                    continue;
                 }
+                for (entity, _, _) in &party_units {
+                    if entity == target {
+                        commands.entity(entity).insert(Selected);
+                    } else {
+                        commands.entity(entity).remove::<Selected>();
+                    }
+                }
+                selected = Some(member);
+                activity.write(ActivityNotice(format!(
+                    "Ally {} now owns formation assignment and Solo movement.",
+                    slot + 1
+                )));
             }
             hex_ui::PartyIntent::ToggleMovementMode => {
                 formation.mode = match formation.mode {
                     PartyMovementMode::Group => PartyMovementMode::Solo,
                     PartyMovementMode::Solo => PartyMovementMode::Group,
                 };
+                activity.write(ActivityNotice(format!(
+                    "Party movement changed to {:?}.",
+                    formation.mode
+                )));
             }
             hex_ui::PartyIntent::SelectPreset(name) => {
                 if let Some(preset) = formations.get(name) {
                     formation.select_preset(preset, &party.members);
+                    activity.write(ActivityNotice(format!("Formation changed to {name}.")));
                 }
             }
             hex_ui::PartyIntent::AssignSlot(offset) => {
@@ -225,6 +251,7 @@ fn handle_party_strip(
                 if preset.slots.iter().any(|slot| slot.offset == *offset) {
                     let _ = formation.assign(member, *offset);
                     formation.fill_unassigned(preset, &party.members);
+                    activity.write(ActivityNotice("Formation assignment changed.".to_owned()));
                 }
             }
             hex_ui::PartyIntent::Rest => rest_requested = true,
@@ -245,6 +272,7 @@ fn handle_party_strip(
                 seat,
                 command: GameCommand::Rest { unit },
             });
+            activity.write(ActivityNotice("Party rest requested.".to_owned()));
         }
     }
 }
@@ -256,6 +284,7 @@ fn publish_party_view(
     registry: Res<UnitRegistry>,
     formations: Res<FormationCatalog>,
     formation: Res<PartyFormation>,
+    elements: Option<Res<ElementCatalog>>,
     units: Query<(
         &UnitId,
         &Archetype,
@@ -306,6 +335,9 @@ fn publish_party_view(
                         ""
                     }
                 ),
+                cells: spec
+                    .map(|spec| party_lattice_cells(spec, elements.as_deref()))
+                    .unwrap_or_default(),
                 active,
                 selected,
             })
@@ -333,6 +365,46 @@ fn publish_party_view(
     if *view != next {
         *view = next;
     }
+}
+
+fn party_lattice_cells(
+    spec: &LatticeSpec,
+    elements: Option<&ElementCatalog>,
+) -> Vec<hex_ui::SandboxLatticeCellView> {
+    spec.cells()
+        .map(|(coord, kind)| {
+            let (label, kind) = match kind {
+                CellKind::Gem { element } => (
+                    elements
+                        .and_then(|elements| elements.name(element))
+                        .map_or_else(|| "G".to_owned(), compact_lattice_label),
+                    hex_ui::SandboxLatticeCellKind::Gem,
+                ),
+                CellKind::Fusion { output } => (
+                    elements
+                        .and_then(|elements| elements.name(output))
+                        .map_or_else(|| "F".to_owned(), compact_lattice_label),
+                    hex_ui::SandboxLatticeCellKind::Fusion,
+                ),
+                CellKind::Spell { .. } => ("S".to_owned(), hex_ui::SandboxLatticeCellKind::Spell),
+                CellKind::Blank => ("·".to_owned(), hex_ui::SandboxLatticeCellKind::Blank),
+            };
+            hex_ui::SandboxLatticeCellView {
+                q: coord.q(),
+                r: coord.r(),
+                label,
+                kind,
+            }
+        })
+        .collect()
+}
+
+fn compact_lattice_label(name: &str) -> String {
+    name.chars()
+        .filter(|character| character.is_alphanumeric())
+        .take(2)
+        .collect::<String>()
+        .to_uppercase()
 }
 fn sync_outcome_view(
     resolution: Res<EncounterResolution>,
@@ -474,7 +546,7 @@ fn prepare_main_menu_for_gameplay_return(destination: Screen, main_menu: &mut Ma
     }
 }
 
-/// Publishes authoritative game facts to the presentation-only action rail.
+/// Publishes authoritative game facts to the presentation-only Action Bar.
 fn publish_hud_view(
     phase: Res<GameplayPhase>,
     resolution: Res<EncounterResolution>,
@@ -482,6 +554,7 @@ fn publish_hud_view(
     order: Res<TurnOrder>,
     pending: Res<PendingDecision>,
     selection: Res<DisableSelection>,
+    bindings: Res<InputBindings>,
     context: Res<GameplayUiContext>,
     elements: Option<Res<ElementCatalog>>,
     acting: Query<(
@@ -549,14 +622,14 @@ fn publish_hud_view(
                 ActionAffordance {
                     action: GameplayAction::Rest,
                     label: "Rest party".to_owned(),
-                    shortcut: Some("R".to_owned()),
+                    shortcut: Some(bindings.chord(InputAction::Rest).label()),
                     availability: ActionAvailability::Enabled,
                     priority: ActionPriority::Primary,
                 },
                 ActionAffordance {
                     action: GameplayAction::Pause,
                     label: "Pause".to_owned(),
-                    shortcut: Some("Esc".to_owned()),
+                    shortcut: Some(bindings.chord(InputAction::Pause).label()),
                     availability: ActionAvailability::Enabled,
                     priority: ActionPriority::Secondary,
                 },
@@ -578,7 +651,7 @@ fn publish_hud_view(
                 .map_or_else(|| "No active unit".to_owned(), UiUnitIdentity::label);
             let required_prompt = Some(
                 decision_context_hint(&context, &pending)
-                    .unwrap_or_else(|| combat_action_hint(player_turn, &pending).to_owned()),
+                    .unwrap_or_else(|| combat_action_hint(player_turn, &pending, &bindings)),
             );
             let availability = if player_turn && !pending.is_open() {
                 ActionAvailability::Enabled
@@ -623,7 +696,7 @@ fn publish_hud_view(
                 ActionAffordance {
                     action: GameplayAction::EndTurn,
                     label: "End turn".to_owned(),
-                    shortcut: Some("Space".to_owned()),
+                    shortcut: Some(bindings.chord(InputAction::EndTurn).label()),
                     availability,
                     priority: ActionPriority::Primary,
                 },
@@ -634,7 +707,7 @@ fn publish_hud_view(
                     ActionAffordance {
                         action: GameplayAction::ConfirmDecision,
                         label: "Confirm choice".to_owned(),
-                        shortcut: Some("Enter".to_owned()),
+                        shortcut: Some(bindings.chord(InputAction::Confirm).label()),
                         availability: decision_confirmation_availability(
                             selection.remaining_choices(),
                         ),
@@ -721,17 +794,26 @@ fn decision_context_hint(context: &GameplayUiContext, pending: &PendingDecision)
     }
 }
 
-/// The action hint must agree with the command emitters: Space and casting are
-/// player-turn controls, while an open defender choice replaces every ordinary
-/// simulation command.
-fn combat_action_hint(player_turn: bool, pending: &PendingDecision) -> &'static str {
+/// The action hint must agree with the configured command bindings. An open
+/// defender choice replaces every ordinary simulation command.
+fn combat_action_hint(
+    player_turn: bool,
+    pending: &PendingDecision,
+    bindings: &InputBindings,
+) -> String {
+    let confirm = bindings.chord(InputAction::Confirm).label();
     match pending {
-        PendingDecision::ChooseDisables { .. } => "choose a live cell above, then ENTER to confirm",
-        PendingDecision::ChooseRestores { .. } => {
-            "choose a disabled target cell above, then ENTER to confirm"
+        PendingDecision::ChooseDisables { .. } => {
+            format!("choose a live cell above, then {confirm} to confirm")
         }
-        PendingDecision::None if player_turn => "cast from the panel   ·   SPACE to end turn",
-        PendingDecision::None => "waiting for the enemy",
+        PendingDecision::ChooseRestores { .. } => {
+            format!("choose a disabled target cell above, then {confirm} to confirm")
+        }
+        PendingDecision::None if player_turn => format!(
+            "cast from the panel   ·   {} to end turn",
+            bindings.chord(InputAction::EndTurn).label()
+        ),
+        PendingDecision::None => "waiting for the enemy".to_owned(),
     }
 }
 
@@ -740,8 +822,8 @@ fn combat_action_hint(player_turn: bool, pending: &PendingDecision) -> &'static 
 ///
 /// Behind the `dev` feature deliberately: the shipped build has no key that
 /// exposes hidden information, and hidden information is the game's source of
-/// uncertainty rather than dice. `K` for knowledge — `Escape`, `Backspace`,
-/// `Space`, `Tab`, `Q`, `H`, `C`, `Enter` and `WASD` are all taken.
+/// uncertainty rather than dice. The default remains `K`; Settings owns any
+/// collision-safe customization.
 ///
 /// The resource is initialised by `hex_combat`'s plugin, which the binary always
 /// adds, so this cannot be the observer-on-the-title-screen crash: it is a
@@ -781,11 +863,16 @@ fn handle_input(
     sandbox: Option<Res<SandboxSession>>,
     origin: Option<Res<GameplaySessionOrigin>>,
     mut main_menu: ResMut<MainMenuModel>,
+    hud_context: Res<GameplayHudContext>,
+    mut hud: ResMut<HudState>,
 ) {
-    if bindings.just_pressed(&keys, InputAction::Pause) {
+    let escape_closed_surface = keys.just_pressed(KeyCode::Escape)
+        && hud.close_active_surface(hud_context.0) != HudActionResult::NoChange;
+    if bindings.just_pressed(&keys, InputAction::Pause) && !escape_closed_surface {
         next_pause.set(toggled_pause(*pause.get()));
     }
-    // Backspace rather than Escape, which is taken by pause.
+    // The return action stays distinct from Escape, which always dismisses an
+    // ordinary HUD task before the configured pause action may run.
     if bindings.just_pressed(&keys, InputAction::ReturnTitle) {
         let destination = gameplay_return_screen(origin.as_deref(), sandbox.is_some());
         prepare_main_menu_for_gameplay_return(destination, &mut main_menu);
@@ -927,12 +1014,13 @@ mod tests {
 
     #[test]
     fn combat_hints_never_offer_player_commands_during_an_enemy_turn() {
+        let bindings = InputBindings::default();
         assert_eq!(
-            combat_action_hint(true, &PendingDecision::None),
-            "cast from the panel   ·   SPACE to end turn"
+            combat_action_hint(true, &PendingDecision::None, &bindings),
+            "cast from the panel   ·   Space to end turn"
         );
         assert_eq!(
-            combat_action_hint(false, &PendingDecision::None),
+            combat_action_hint(false, &PendingDecision::None, &bindings),
             "waiting for the enemy"
         );
         assert_eq!(
@@ -942,9 +1030,10 @@ mod tests {
                     decider: UnitId(1),
                     count: 1,
                     source: UnitId(2),
-                }
+                },
+                &bindings,
             ),
-            "choose a live cell above, then ENTER to confirm"
+            "choose a live cell above, then Enter to confirm"
         );
     }
 
@@ -979,6 +1068,85 @@ mod tests {
         .expect("restoration is a decision");
         assert!(restore.contains("CASTER ALLY 1 · HEDGE-MAGE #1"));
         assert!(restore.contains("RESTORE TARGET ALLY 2 · RAIDER #2"));
+    }
+
+    #[test]
+    fn only_the_explicit_formation_member_control_changes_gameplay_selection() {
+        let first_id = UnitId(41);
+        let second_id = UnitId(42);
+        let party = Party {
+            members: vec![first_id, second_id],
+        };
+        let formations: FormationCatalog =
+            ron::from_str(include_str!("../../../../assets/config/formations.ron"))
+                .expect("shipped formations parse");
+        let preset = formations.get("Compact").expect("Compact formation exists");
+        let anchor = preset.anchor().expect("Compact formation has an anchor");
+        let mut formation = PartyFormation::default();
+        formation.select_preset(preset, &party.members);
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .insert_state(Screen::Gameplay)
+            .add_sub_state::<Mode>()
+            .insert_resource(party)
+            .insert_resource(formations)
+            .insert_resource(formation)
+            .init_resource::<UnitRegistry>()
+            .init_resource::<CommandQueue>()
+            .init_resource::<InputBindings>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .add_message::<hex_ui::UiIntent>()
+            .add_message::<ActivityNotice>()
+            .add_systems(Update, handle_party_strip);
+        let first = app.world_mut().spawn((Player, first_id, Selected)).id();
+        let second = app.world_mut().spawn((Player, second_id)).id();
+        app.world_mut()
+            .resource_mut::<UnitRegistry>()
+            .register(first_id, first);
+        app.world_mut()
+            .resource_mut::<UnitRegistry>()
+            .register(second_id, second);
+        app.update();
+
+        app.world_mut().write_message(hex_ui::UiIntent::Party(
+            hex_ui::PartyIntent::ActivateMember(1),
+        ));
+        app.update();
+
+        assert!(app.world().entity(first).contains::<Selected>());
+        assert!(!app.world().entity(second).contains::<Selected>());
+
+        app.world_mut().write_message(hex_ui::UiIntent::Party(
+            hex_ui::PartyIntent::SelectFormationMember(1),
+        ));
+        app.world_mut()
+            .write_message(hex_ui::UiIntent::Party(hex_ui::PartyIntent::AssignSlot(
+                anchor,
+            )));
+        app.update();
+
+        assert!(!app.world().entity(first).contains::<Selected>());
+        assert!(app.world().entity(second).contains::<Selected>());
+        assert_eq!(
+            app.world()
+                .resource::<PartyFormation>()
+                .assignments
+                .get(&second_id),
+            Some(&anchor),
+            "the same explicit member must own a same-frame formation assignment"
+        );
+
+        app.world_mut().write_message(hex_ui::UiIntent::Party(
+            hex_ui::PartyIntent::SelectFormationMember(0),
+        ));
+        app.world_mut().write_message(hex_ui::UiIntent::Party(
+            hex_ui::PartyIntent::SelectFormationMember(1),
+        ));
+        app.update();
+
+        assert!(!app.world().entity(first).contains::<Selected>());
+        assert!(app.world().entity(second).contains::<Selected>());
     }
 
     #[test]
@@ -1165,6 +1333,8 @@ mod tests {
             .insert_state(Pause(false))
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<InputBindings>()
+            .init_resource::<HudState>()
+            .init_resource::<GameplayHudContext>()
             .init_resource::<MainMenuModel>()
             .add_systems(Update, handle_input);
         app.world_mut()
@@ -1185,5 +1355,74 @@ mod tests {
             app.world().resource::<MainMenuModel>().route,
             MainMenuRoute::Root
         );
+    }
+
+    #[test]
+    fn escape_closes_an_ordinary_main_view_before_default_pause() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .insert_state(Screen::Gameplay)
+            .insert_state(Pause(false))
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<InputBindings>()
+            .init_resource::<HudState>()
+            .init_resource::<GameplayHudContext>()
+            .init_resource::<MainMenuModel>()
+            .add_systems(Update, handle_input);
+        let result = app
+            .world_mut()
+            .resource_mut::<HudState>()
+            .open_formation(hex_gameplay_model::HudContext::default());
+        assert_eq!(result, HudActionResult::RuntimeChanged);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Escape);
+
+        app.update();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<HudState>().stored_main_view(),
+            hex_gameplay_model::MainViewDestination::Closed
+        );
+        assert_eq!(*app.world().resource::<State<Pause>>().get(), Pause(false));
+    }
+
+    #[test]
+    fn escape_pauses_without_discarding_a_master_hidden_main_view() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .insert_state(Screen::Gameplay)
+            .insert_state(Pause(false))
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<InputBindings>()
+            .init_resource::<HudState>()
+            .init_resource::<GameplayHudContext>()
+            .init_resource::<MainMenuModel>()
+            .add_systems(Update, handle_input);
+        let mut hud = app.world_mut().resource_mut::<HudState>();
+        assert_eq!(
+            hud.open_formation(hex_gameplay_model::HudContext::default()),
+            HudActionResult::RuntimeChanged
+        );
+        hud.toggle_master();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Escape);
+
+        app.update();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<HudState>().stored_main_view(),
+            hex_gameplay_model::MainViewDestination::Formation
+        );
+        assert_eq!(*app.world().resource::<State<Pause>>().get(), Pause(true));
     }
 }

@@ -63,10 +63,8 @@ fn spawn_panel(
             RequiredActionSurface,
             HudElement,
             Node {
-                position_type: PositionType::Absolute,
-                top: Val::Px(0.0),
-                left: Val::Px(0.0),
-                right: Val::Px(0.0),
+                position_type: PositionType::Relative,
+                width: Val::Percent(100.0),
                 height: Val::Px(88.0),
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(4.0),
@@ -145,21 +143,24 @@ fn rebuild(
     let Ok(mut panel) = panels.single_mut() else {
         return;
     };
-    // On the compact canvas a blocking decision is promoted into the persistent
-    // action rail. Repeating its full prompt and controls in the fixed-height
+    // On the compact canvas a blocking decision is promoted into the forced Main
+    // View. Repeating its full prompt and controls in the fixed-height
     // casting region competes with that required surface at enlarged scales.
-    // Required choices have one canonical presentation owner: the persistent
-    // rail. Repeating their controls here wastes world space and lets two
+    // Required choices have one canonical presentation owner: Main View. Repeating
+    // their controls here wastes world space and lets two
     // independently sized surfaces compete at intermediate semantic scales.
-    let promoted_to_rail = matches!(view.content, CastingPanelContentView::Decision { .. });
+    let promoted_to_main_view = matches!(view.content, CastingPanelContentView::Decision { .. });
     let ultra_constrained = crate::layout::is_ultra_constrained(*metrics);
-    // The Actions region already reserves the Inspector lane. Do not reserve it
+    // The Action Bar region already reserves the Main View lane. Do not reserve it
     // again here: doing so needlessly squeezed the production spell catalog on
     // Compact Retina canvases.
-    panel.top = Val::ZERO;
-    panel.right = Val::ZERO;
+    panel.position_type = PositionType::Relative;
+    panel.top = Val::Auto;
+    panel.right = Val::Auto;
+    panel.left = Val::Auto;
+    panel.width = Val::Percent(100.0);
     for mut heading in &mut headings {
-        // "Actions" repeats the persistent rail's role and costs a full HUD
+        // "Actions" repeats the Action Bar's role and costs a full HUD
         // row. Spell labels already make this strip unambiguous.
         heading.display = Display::None;
     }
@@ -174,12 +175,12 @@ fn rebuild(
         Val::Px(crate::layout::action_region_height(*metrics) - 4.0)
     };
     panel.overflow = Overflow::default();
-    panel.display = if view.visible && !promoted_to_rail {
+    panel.display = if view.visible && !promoted_to_main_view {
         Display::Flex
     } else {
         Display::None
     };
-    if !view.visible || promoted_to_rail {
+    if !view.visible || promoted_to_main_view {
         return;
     }
     let Ok((body, mut body_node)) = bodies.single_mut() else {
@@ -209,7 +210,7 @@ fn rebuild(
             }
             CastingPanelContentView::Decision { prompt, choice } => {
                 rows.spawn(blurb(&assets, prompt.clone()));
-                spawn_decision_controls(rows, *choice, &assets);
+                spawn_decision_controls(rows, choice, &assets);
             }
             CastingPanelContentView::Spells {
                 unavailable,
@@ -221,9 +222,9 @@ fn rebuild(
                 }
                 if let Some(aiming) = aiming {
                     // Keep the escape hatch ahead of explanatory copy on short
-                    // enlarged canvases. The action rail already carries the
+                    // enlarged canvases. The Action Bar already carries the
                     // current phase; cancellation must never be pushed below it.
-                    spawn_aim_controls(rows, &assets, aiming.controls_enabled);
+                    spawn_aim_controls(rows, &assets, aiming);
                     rows.spawn(blurb(&assets, aiming.label.clone()));
                 } else {
                     for spell in spells {
@@ -361,7 +362,11 @@ fn spell_button_node(stacked: bool, semantic_control_scale: f32) -> Node {
     }
 }
 
-fn spawn_aim_controls(rows: &mut ChildSpawnerCommands, assets: &UiAssets, controls_enabled: bool) {
+fn spawn_aim_controls(
+    rows: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    aiming: &crate::CastingAimView,
+) {
     rows.spawn((
         Name::new("Aim Controls"),
         Node {
@@ -372,12 +377,8 @@ fn spawn_aim_controls(rows: &mut ChildSpawnerCommands, assets: &UiAssets, contro
         Pickable::IGNORE,
     ))
     .with_children(|controls| {
-        for (name, label, shortcut, control) in [
-            ("Confirm Cast", "cast", "ENTER", CastingControl::Confirm),
-            ("Next Target", "next", "TAB", CastingControl::Next),
-            ("Cancel Aim", "cancel", "Q", CastingControl::Cancel),
-        ] {
-            if controls_enabled || matches!(&control, CastingControl::Cancel) {
+        for (name, label, shortcut, control) in aim_control_specs(aiming) {
+            if aiming.controls_enabled || matches!(&control, CastingControl::Cancel) {
                 controls
                     .spawn((row_button(name, CONTROL_WIDTH), control))
                     .with_children(|button| {
@@ -420,6 +421,31 @@ fn spawn_aim_controls(rows: &mut ChildSpawnerCommands, assets: &UiAssets, contro
     });
 }
 
+fn aim_control_specs(
+    aiming: &crate::CastingAimView,
+) -> [(&'static str, &'static str, &str, CastingControl); 3] {
+    [
+        (
+            "Confirm Cast",
+            "cast",
+            aiming.confirm_shortcut.as_str(),
+            CastingControl::Confirm,
+        ),
+        (
+            "Next Target",
+            "next",
+            aiming.next_target_shortcut.as_str(),
+            CastingControl::Next,
+        ),
+        (
+            "Cancel Aim",
+            "cancel",
+            aiming.cancel_shortcut.as_str(),
+            CastingControl::Cancel,
+        ),
+    ]
+}
+
 fn emit_intents(
     controls: Query<(&Interaction, &CastingControl), Changed<Interaction>>,
     mut intents: MessageWriter<UiIntent>,
@@ -458,14 +484,18 @@ mod tests {
     }
 
     #[test]
-    fn casting_controls_keep_keyboard_parity_labels() {
-        let controls = [
-            ("Confirm Cast", "ENTER"),
-            ("Next Target", "TAB"),
-            ("Cancel Aim", "Q"),
-        ];
-        assert!(controls
-            .iter()
-            .all(|(label, key)| !label.is_empty() && !key.is_empty()));
+    fn casting_controls_render_projection_owned_shortcuts() {
+        let aiming = crate::CastingAimView {
+            label: "aiming".to_owned(),
+            controls_enabled: true,
+            confirm_shortcut: "Ctrl+G".to_owned(),
+            next_target_shortcut: "N".to_owned(),
+            cancel_shortcut: "Backspace".to_owned(),
+        };
+        let shortcuts: Vec<_> = aim_control_specs(&aiming)
+            .into_iter()
+            .map(|(_, _, shortcut, _)| shortcut)
+            .collect();
+        assert_eq!(shortcuts, ["Ctrl+G", "N", "Backspace"]);
     }
 }

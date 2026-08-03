@@ -1,79 +1,75 @@
-// Ten deterministic Bevy image-target frames for the shipping application shell.
+// Ten deterministic Bevy image-target frames for the minimalist gameplay HUD.
 // Every ReviewCapture first runs the named UiTaskCase structural oracle; pixels
-// remain presentation evidence only. Nine distinct frames cover each cutover route;
-// frame 09 repeats the character picker at 4K/200% as the single targeted responsive
-// duplicate.
+// remain presentation evidence only. Authored fixtures populate readable gameplay
+// facts without solving combat, while real configured shortcuts exercise HUD state.
 [
     AwaitScreen("Title"),
+    StartScenario(name: "Party Trial"),
+    AwaitScreen("Gameplay"),
+    AwaitTerrain,
     SetViewport(width: 1920, height: 1080, device_scale: 1.0),
     SetUiScale(Auto),
     Settle(8),
-    ReviewCapture(name: "ui-01-main-menu", task: MainMenu),
 
-    Click(name: "Campaign"),
-    AwaitButton("Back"),
+    PresentUi("normal-gameplay"),
     Settle(4),
-    ReviewCapture(name: "ui-02-campaign", task: Campaign),
-    Click(name: "Back"),
-    AwaitButton("Sandbox"),
+    ReviewCapture(name: "hud-01-minimal-exploration", task: Exploration),
 
-    Click(name: "Sandbox"),
-    AwaitScreen("Sandbox"),
-    AwaitButton("Choose Sandbox map"),
-    Settle(4),
-    ReviewCapture(name: "ui-03-sandbox-overview", task: SandboxOverview),
-
-    Click(name: "Choose Sandbox map"),
-    AwaitButton("Inspect Flat Arena"),
-    Settle(4),
-    ReviewCapture(name: "ui-04-map-selector", task: SandboxMapBrowser),
-    Click(name: "Inspect Flat Arena"),
-    AwaitButton("Use Map"),
-    Settle(4),
-    ReviewCapture(name: "ui-05-map-confirmation", task: SandboxMapDetail),
-    Click(name: "Use Map"),
-    AwaitButton("Choose Party characters"),
-
-    Click(name: "Choose Party characters"),
-    AwaitButton("Party slot 1"),
-    Settle(4),
-    ReviewCapture(name: "ui-06-party", task: SandboxParty),
-    Click(name: "Back"),
-    AwaitButton("Choose Enemies characters"),
-
-    Click(name: "Choose Enemies characters"),
-    AwaitButton("Enemies slot 1"),
-    Settle(4),
-    ReviewCapture(name: "ui-07-enemies", task: SandboxEnemies),
-    Click(name: "Enemies slot 1"),
-    AwaitButton("Preview Hedge Mage"),
-    Click(name: "Preview Hedge Mage"),
-    AwaitButton("Use Character"),
+    PresentUi("player-turn-max"),
     Settle(4),
     ReviewCapture(
-        name: "ui-08-character-selector",
-        task: SandboxCharacterPicker,
+        name: "hud-02-player-turn-max-actions",
+        task: PlayerTurnMaxActions,
     ),
 
-    SetViewport(width: 3840, height: 2160, device_scale: 1.0),
-    SetUiScale(Percent200),
-    Settle(6),
+    PresentUi("hostile-turn"),
+    Settle(4),
+    ReviewCapture(name: "hud-03-hostile-turn", task: HostileTurn),
+
+    PresentUi("required-decision"),
+    Settle(4),
+    ReviewCapture(name: "hud-04-required-decision", task: DisableDecision),
+
+    PresentUi("aiming-disabled"),
+    Settle(4),
+    ReviewCapture(name: "hud-05-aiming-action-bar", task: AimingBlocked),
+
+    PresentUi("normal-gameplay"),
+    Key("L"),
+    Settle(4),
+    ReviewCapture(name: "hud-06-activity", task: ActivityTabs),
+
+    Key("B"),
+    Settle(4),
     ReviewCapture(
-        name: "ui-09-character-selector-4k-200",
-        task: SandboxCharacterPicker,
+        name: "hud-07-custom-party-activity",
+        task: CustomHudVisibility,
     ),
 
-    SetViewport(width: 1920, height: 1080, device_scale: 1.0),
+    Key("V"),
+    Settle(4),
+    ReviewCapture(
+        name: "hud-08-character-main-view",
+        task: CharacterMainView,
+    ),
+
+    PresentUi("required-decision"),
+    Key("H"),
+    Settle(4),
+    ReviewCapture(
+        name: "hud-09-master-hidden-required",
+        task: HudHiddenRequired,
+    ),
+
+    PresentUi("normal-gameplay"),
+    Key("H"),
+    SetViewport(width: 1280, height: 720, device_scale: 1.0),
     SetUiScale(Auto),
-    Click(name: "Back"),
-    AwaitButton("Enemies slot 1"),
-    Click(name: "Back"),
-    AwaitButton("Choose Sandbox map"),
-    Click(name: "Back"),
-    AwaitScreen("Title"),
-    AwaitButton("Tools"),
-    Click(name: "Tools"),
-    AwaitButton("Character Creator"),
     Settle(4),
-    ReviewCapture(name: "ui-10-tools", task: Tools),
+    Key("P"),
+    Settle(4),
+    ReviewCapture(
+        name: "hud-10-compact-party-task",
+        task: CompactTemporarySurface,
+    ),
 ]

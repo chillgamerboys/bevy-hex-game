@@ -1,8 +1,8 @@
 use bevy::prelude::*;
-use hex_core::{GameplayPhase, UnitId};
+use hex_core::{GameplayPhase, InputAction, UnitId};
 use hex_gameplay_model::{
-    CampaignSlotId, MainMenuRoute, SandboxCharacter, SandboxDeploymentSlot, SandboxDeploymentStage,
-    SandboxRoute, SandboxSide, SandboxSlotIndex, SandboxStartBlocker,
+    CampaignSlotId, MainMenuRoute, MainViewDestination, SandboxCharacter, SandboxDeploymentSlot,
+    SandboxDeploymentStage, SandboxRoute, SandboxSide, SandboxSlotIndex, SandboxStartBlocker,
 };
 
 /// Whether an action can currently be taken, with the canonical refusal when it cannot.
@@ -17,7 +17,7 @@ pub enum ActionAvailability {
     },
 }
 
-/// Placement priority inside the persistent action rail.
+/// Placement priority inside the contextual Action Bar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ActionPriority {
     /// Secondary convenience or inspection action.
@@ -79,13 +79,21 @@ pub struct GameplayHudView {
     pub actions: Vec<ActionAffordance>,
 }
 
-/// Immutable visibility projection for gameplay chrome.
+/// Immutable per-surface projection for minimalist gameplay chrome.
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GameplayChromeView {
-    /// Whether ordinary HUD surfaces are shown.
-    pub shown: bool,
-    /// Whether a command-modal decision must remain reachable.
-    pub decision_required: bool,
+    /// Whether the Party surface participates in layout and interaction.
+    pub party_shown: bool,
+    /// Whether the combat-only Initiative surface participates.
+    pub initiative_shown: bool,
+    /// Whether the categorized Activity surface participates.
+    pub activity_shown: bool,
+    /// Whether the available-actions surface participates.
+    pub action_bar_shown: bool,
+    /// Typed Main View destination; required decisions cannot be dismissed.
+    pub main_view: MainViewDestination,
+    /// Existing terrain-health presentation gate retained without making it a HUD component.
+    pub terrain_health_shown: bool,
     /// Whether terminal encounter presentation supersedes stale decisions.
     pub encounter_complete: bool,
 }
@@ -93,64 +101,90 @@ pub struct GameplayChromeView {
 impl Default for GameplayChromeView {
     fn default() -> Self {
         Self {
-            shown: true,
-            decision_required: false,
+            party_shown: true,
+            initiative_shown: false,
+            activity_shown: false,
+            action_bar_shown: true,
+            main_view: MainViewDestination::Closed,
+            terrain_health_shown: true,
             encounter_complete: false,
         }
     }
 }
 
-/// One disclosure-frozen combat history line.
+impl GameplayChromeView {
+    /// Whether a command-modal decision must remain reachable.
+    #[must_use]
+    pub const fn decision_required(self) -> bool {
+        matches!(self.main_view, MainViewDestination::RequiredDecision)
+    }
+
+    /// Whether any ordinary screen-space HUD component is currently visible.
+    #[must_use]
+    pub const fn any_ordinary_shown(self) -> bool {
+        self.party_shown
+            || self.initiative_shown
+            || self.activity_shown
+            || self.action_bar_shown
+            || matches!(
+                self.main_view,
+                MainViewDestination::Character(_) | MainViewDestination::Formation
+            )
+    }
+}
+
+/// Category of one disclosure-frozen activity line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivityKind {
+    /// Combat command, consequence, or refusal.
+    Combat,
+    /// Exploration, party, or other high-level gameplay activity.
+    Activity,
+}
+
+/// One disclosure-frozen gameplay-history line.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CombatLogLineView {
+pub struct ActivityLogLineView {
+    /// Stable category used by the selected tab.
+    pub kind: ActivityKind,
     /// Player-facing event description.
     pub text: String,
     /// Whether the line receives danger emphasis in addition to its wording.
     pub danger: bool,
 }
 
-/// Immutable visible portion of the combat history.
+/// Activity-log tab selected by the application adapter.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum ActivityTab {
+    /// Combat and high-level activity in chronological order.
+    #[default]
+    All,
+    /// Combat events only.
+    Combat,
+    /// Exploration and party activity only.
+    Activity,
+}
+
+/// Immutable visible portion of gameplay history.
 #[derive(Resource, Debug, Default, Clone, PartialEq, Eq)]
-pub struct CombatLogView {
-    /// Drawer/feed heading including its keyboard affordance.
+pub struct ActivityLogView {
+    /// Compact heading including the keyboard affordance.
     pub heading: String,
+    /// Active typed category tab.
+    pub tab: ActivityTab,
     /// Already-filtered visible lines in chronological order.
-    pub lines: Vec<CombatLogLineView>,
+    pub lines: Vec<ActivityLogLineView>,
 }
 
-/// Semantic unit-badge treatment.
+/// Typed activity-log actions emitted by presentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BadgeKind {
-    /// Current initiative actor.
-    Acting,
-    /// Current disclosed target.
-    Target,
-}
-
-/// One screen-space identity badge projection.
-#[derive(Debug, Clone, PartialEq)]
-pub struct UnitBadgeView {
-    /// Canonical identity retained for immutable observation.
-    pub unit: UnitId,
-    /// Presentation role.
-    pub kind: BadgeKind,
-    /// Disclosure-safe player-facing label.
-    pub label: String,
-    /// Projected viewport anchor, or `None` when the unit is offscreen.
-    pub anchor: Option<Vec2>,
-}
-
-/// Immutable acting and target badge projections.
-#[derive(Resource, Debug, Default, Clone, PartialEq)]
-pub struct UnitBadgesView {
-    /// Acting-unit badge.
-    pub acting: Option<UnitBadgeView>,
-    /// Target badge.
-    pub target: Option<UnitBadgeView>,
+pub enum ActivityIntent {
+    /// Select one stable category tab.
+    SelectTab(ActivityTab),
 }
 
 /// Progress for a required damage/restoration lattice choice.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecisionChoiceView {
     /// Selected cell count.
     pub chosen: usize,
@@ -158,12 +192,14 @@ pub struct DecisionChoiceView {
     pub owed: usize,
     /// Whether disabled cells are being restored rather than live cells disabled.
     pub restoring: bool,
+    /// Current player binding for confirming the completed choice.
+    pub confirm_shortcut: String,
 }
 
 /// Player-owned lattice panel projection.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OwnLatticeView {
-    /// Semantic inspector role, already converted to player-facing text.
+    /// Semantic Main View role, already converted to player-facing text.
     pub heading: String,
     /// Disclosure-safe unit identity.
     pub identity: String,
@@ -231,6 +267,12 @@ pub struct CastingAimView {
     pub label: String,
     /// Whether confirm/next/cancel controls are currently legal to offer.
     pub controls_enabled: bool,
+    /// Current player binding for confirming a cast.
+    pub confirm_shortcut: String,
+    /// Current player binding for cycling the target.
+    pub next_target_shortcut: String,
+    /// Current player binding for cancelling aiming.
+    pub cancel_shortcut: String,
 }
 
 /// Mutually exclusive casting-panel presentation states.
@@ -299,6 +341,8 @@ pub struct PartyMemberView {
     pub slot: usize,
     /// Complete non-color status label.
     pub label: String,
+    /// Small, non-interactive lattice silhouette.
+    pub cells: Vec<SandboxLatticeCellView>,
     /// Whether this member owns the current turn.
     pub active: bool,
     /// Whether this member is selected for movement/formation work.
@@ -332,8 +376,10 @@ pub struct PartyView {
 /// Typed party/formation actions emitted by presentation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PartyIntent {
-    /// Select one stable party slot.
-    SelectMember(usize),
+    /// Inspect one stable party slot without changing gameplay selection authority.
+    ActivateMember(usize),
+    /// Make one stable party slot authoritative for formation edits and Solo movement.
+    SelectFormationMember(usize),
     /// Toggle group/solo movement.
     ToggleMovementMode,
     /// Select an authored formation preset.
@@ -900,6 +946,8 @@ pub struct InitiativeEntryView {
     pub side: InitiativeSide,
     /// Whether this is the current actor.
     pub current: bool,
+    /// Whether activating this row may issue a presentation-only inspection request.
+    pub inspectable: bool,
 }
 
 /// Immutable initiative presentation supplied by the game adapter.
@@ -909,6 +957,13 @@ pub struct InitiativeView {
     pub heading: String,
     /// Stable combat order.
     pub entries: Vec<InitiativeEntryView>,
+}
+
+/// Typed initiative actions emitted by presentation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InitiativeIntent {
+    /// Inspect one disclosed unit without changing turn or selection authority.
+    ActivateUnit(UnitId),
 }
 
 /// Development-only projection of the current cyclic map time.
@@ -975,6 +1030,62 @@ pub enum UiSetting {
     UiVolume,
 }
 
+/// Direct Settings route selected by one persistent tab.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsTab {
+    /// Display, scale, and audio preferences.
+    #[default]
+    General,
+    /// Unit, turn, save, and Party-slot bindings.
+    Gameplay,
+    /// Ordinary HUD visibility bindings.
+    Interface,
+    /// Typed central Main View bindings.
+    MainView,
+    /// Camera-mode and camera-movement bindings.
+    Camera,
+    /// Pause, navigation, and development bindings.
+    System,
+}
+
+impl SettingsTab {
+    /// Every direct tab in stable focus order.
+    pub const ALL: [Self; 6] = [
+        Self::General,
+        Self::Gameplay,
+        Self::Interface,
+        Self::MainView,
+        Self::Camera,
+        Self::System,
+    ];
+
+    /// Player-facing tab label.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::General => "General",
+            Self::Gameplay => "Gameplay",
+            Self::Interface => "Interface",
+            Self::MainView => "Main View",
+            Self::Camera => "Camera",
+            Self::System => "System",
+        }
+    }
+
+    /// Input category represented by this tab, or `None` for General.
+    #[must_use]
+    pub const fn input_category(self) -> Option<hex_core::InputCategory> {
+        match self {
+            Self::General => None,
+            Self::Gameplay => Some(hex_core::InputCategory::Gameplay),
+            Self::Interface => Some(hex_core::InputCategory::Interface),
+            Self::MainView => Some(hex_core::InputCategory::MainView),
+            Self::Camera => Some(hex_core::InputCategory::Camera),
+            Self::System => Some(hex_core::InputCategory::System),
+        }
+    }
+}
+
 /// Immutable label and current value for one setting.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UiSettingRow {
@@ -986,13 +1097,86 @@ pub struct UiSettingRow {
     pub value: String,
 }
 
+/// Immutable keybinding row supplied by the Settings adapter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UiBindingRow {
+    /// Stable action returned by rebind and restore controls.
+    pub action: InputAction,
+    /// Player-facing action label.
+    pub label: String,
+    /// Current resolved chord label.
+    pub chord: String,
+    /// Whether capture is available for this action.
+    pub rebindable: bool,
+    /// Whether the current chord differs from the canonical default.
+    pub overridden: bool,
+}
+
+/// Blocking Settings task presented above the tab content.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SettingsModalView {
+    /// Capture the next non-modifier key chord for one action.
+    Capture {
+        /// Action being rebound.
+        action: InputAction,
+        /// Player-facing action label.
+        label: String,
+    },
+    /// A captured chord collides with another action in the same context.
+    Conflict {
+        /// Action receiving the captured chord.
+        requested: String,
+        /// Existing action currently using the chord.
+        existing: String,
+        /// Player-facing captured chord.
+        chord: String,
+    },
+    /// Confirm destructive restoration of every canonical default.
+    ConfirmRestoreAll,
+}
+
 /// Immutable Settings screen projection.
 #[derive(Resource, Debug, Default, Clone, PartialEq, Eq)]
 pub struct UiSettingsView {
-    /// Ordered controls.
+    /// Active direct tab.
+    pub tab: SettingsTab,
+    /// Ordered General controls; empty on keybinding tabs.
     pub rows: Vec<UiSettingRow>,
+    /// Ordered keybindings for the active category; empty on General.
+    pub bindings: Vec<UiBindingRow>,
+    /// Whether at least one persisted override can be restored.
+    pub can_restore_all: bool,
+    /// Highest-priority blocking Settings task.
+    pub modal: Option<SettingsModalView>,
     /// Persistence or validation notice.
     pub notice: Option<String>,
+}
+
+/// Typed Settings actions emitted by presentation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsIntent {
+    /// Select one direct Settings tab.
+    SelectTab(SettingsTab),
+    /// Cycle one General preference.
+    Adjust(UiSetting),
+    /// Begin capture for one rebindable action.
+    BeginCapture(InputAction),
+    /// Cancel active key capture.
+    CancelCapture,
+    /// Swap the requested and conflicting effective chords.
+    SwapConflict,
+    /// Keep both bindings unchanged and dismiss the conflict.
+    CancelConflict,
+    /// Restore one canonical action chord.
+    RestoreBinding(InputAction),
+    /// Open the Restore All confirmation.
+    RequestRestoreAll,
+    /// Restore every canonical action chord after confirmation.
+    ConfirmRestoreAll,
+    /// Dismiss the Restore All confirmation.
+    CancelRestoreAll,
+    /// Return to the Main Menu.
+    Back,
 }
 
 /// Immutable pause overlay projection.
@@ -1128,6 +1312,10 @@ pub enum UiIntent {
     Casting(CastingIntent),
     /// Act on party selection or formation configuration.
     Party(PartyIntent),
+    /// Inspect one disclosed initiative entry.
+    Initiative(InitiativeIntent),
+    /// Select one gameplay-history category.
+    Activity(ActivityIntent),
     /// Act on the encounter outcome.
     Outcome(OutcomeIntent),
     /// Act on the isolated Lattice Demo.
@@ -1141,10 +1329,10 @@ pub enum UiIntent {
     /// Adjust the development-only cyclic map clock.
     #[cfg(feature = "dev-tools")]
     DevTime(DevTimeIntent),
+    /// Adjust Settings, bindings, or the active Settings tab.
+    Settings(SettingsIntent),
     /// Navigate back through the current screen's canonical route.
     Back,
-    /// Cycle one Settings value.
-    AdjustSetting(UiSetting),
     /// Navigate the Main Menu, Campaign, and Tools hierarchy.
     MainMenu(MainMenuIntent),
 }
@@ -1174,6 +1362,16 @@ mod tests {
             return;
         };
         assert!(!reason.trim().is_empty());
+    }
+
+    #[test]
+    fn settings_tabs_directly_cover_general_and_every_input_category() {
+        assert_eq!(SettingsTab::ALL.first(), Some(&SettingsTab::General));
+        let categories = SettingsTab::ALL
+            .into_iter()
+            .filter_map(SettingsTab::input_category)
+            .collect::<Vec<_>>();
+        assert_eq!(categories, hex_core::InputCategory::ALL);
     }
 
     #[test]

@@ -4,11 +4,14 @@ use bevy::input_focus::tab_navigation::TabGroup;
 use bevy::prelude::*;
 use bevy::ui_widgets::ScrollArea;
 use hex_core::{AppSystems, Screen};
+use hex_gameplay_model::MainViewDestination;
 
 use crate::{
     layout::constrain_region_to_canvas, DespawnOnExit, GameplayChromeView, HudElement,
     RequiredActionSurface, ResolvedUiMetrics, UiHudSetup, UiRegionRole,
 };
+
+const COMPACT_TASK_BG: Color = Color::srgb(0.02, 0.03, 0.045);
 
 pub(super) fn plugin(app: &mut App) {
     app.add_systems(
@@ -54,14 +57,14 @@ fn spawn_safe_frame(mut commands: Commands, metrics: Res<ResolvedUiMetrics>) {
             );
             spawn_region(
                 frame,
-                "Turn HUD Region",
+                "Initiative HUD Region",
                 UiRegionRole::Turn,
                 region_node(),
                 metrics.viewport,
             );
             spawn_region(
                 frame,
-                "Inspector HUD Region",
+                "Main View HUD Region",
                 UiRegionRole::Inspector,
                 Node {
                     flex_direction: FlexDirection::Column,
@@ -72,7 +75,7 @@ fn spawn_safe_frame(mut commands: Commands, metrics: Res<ResolvedUiMetrics>) {
             );
             spawn_region(
                 frame,
-                "Actions HUD Region",
+                "Action Bar HUD Region",
                 UiRegionRole::Actions,
                 Node {
                     flex_direction: FlexDirection::Column,
@@ -83,7 +86,7 @@ fn spawn_safe_frame(mut commands: Commands, metrics: Res<ResolvedUiMetrics>) {
             );
             spawn_region(
                 frame,
-                "Events HUD Region",
+                "Activity HUD Region",
                 UiRegionRole::Events,
                 Node {
                     flex_direction: FlexDirection::Column,
@@ -109,9 +112,7 @@ fn spawn_region(
     mut node: Node,
     viewport: crate::UiViewportClass,
 ) {
-    if matches!(role, UiRegionRole::Inspector | UiRegionRole::Actions) {
-        node.overflow = Overflow::scroll_y();
-    }
+    node.overflow = Overflow::scroll_y();
     constrain_region_to_canvas(
         ResolvedUiMetrics {
             viewport,
@@ -120,76 +121,99 @@ fn spawn_region(
         role,
         &mut node,
     );
-    let picking = if matches!(role, UiRegionRole::Inspector | UiRegionRole::Actions) {
-        // A ScrollArea must itself participate in picking so wheel/trackpad input
-        // over read-only descendants can target it and be consumed before the
-        // world camera. Read-only, non-scrollable HUD regions remain transparent.
-        Pickable::default()
-    } else {
-        Pickable::IGNORE
-    };
-    let mut region = frame.spawn((Name::new(name), role, node, picking));
-    if matches!(role, UiRegionRole::Inspector | UiRegionRole::Actions) {
-        region.insert((ScrollArea, ScrollPosition::default()));
-    }
+    // Every visible surface may become the Compact layout's sole full-screen
+    // scroll owner. Hidden regions are removed from picking by `apply_responsive_layout`.
+    frame.spawn((
+        Name::new(name),
+        role,
+        node,
+        BackgroundColor(Color::NONE),
+        Pickable::default(),
+        ScrollArea,
+        ScrollPosition::default(),
+    ));
 }
 
 fn apply_responsive_layout(
     metrics: Res<ResolvedUiMetrics>,
     chrome: Res<GameplayChromeView>,
-    lattices: Res<crate::GameplayLatticesView>,
     review: Option<Res<crate::review::UiReviewPresentation>>,
     added_regions: Query<(), Added<UiRegionRole>>,
-    mut regions: Query<(&UiRegionRole, &mut Node, &mut Pickable)>,
+    mut regions: Query<(
+        &UiRegionRole,
+        &mut Node,
+        &mut BackgroundColor,
+        &mut Pickable,
+    )>,
 ) {
     let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
-    if !metrics.is_changed()
-        && !chrome.is_changed()
-        && !lattices.is_changed()
-        && !review_changed
-        && added_regions.is_empty()
+    if !metrics.is_changed() && !chrome.is_changed() && !review_changed && added_regions.is_empty()
     {
         return;
     }
-    let lattices = review
-        .as_ref()
-        .and_then(|review| review.lattices.as_ref())
-        .unwrap_or(lattices.as_ref());
-    let chrome = review
-        .as_ref()
-        .map_or(*chrome, |review| review.effective_chrome(*chrome));
-    let promoted_decision =
-        crate::gameplay_lattices::compact_decision_visible(*metrics, &chrome, lattices);
-    let ordinary_shown = chrome.shown && !chrome.encounter_complete;
-    let decision_required = chrome.decision_required && !chrome.encounter_complete;
-    for (role, mut node, mut pickable) in &mut regions {
+    let chrome = review.as_ref().map_or(*chrome, |review| {
+        review.effective_chrome(*chrome, metrics.viewport)
+    });
+    for (role, mut node, mut background, mut pickable) in &mut regions {
         constrain_region_to_canvas(*metrics, *role, &mut node);
-        let responsive_display = node.display;
+        let responsive_display = if metrics.viewport == crate::UiViewportClass::Compact {
+            Display::Flex
+        } else {
+            node.display
+        };
         // Layout recomputation restores each region's canonical geometry. Apply
         // phase/user suppression after it so resizing cannot resurrect invisible
         // chrome as an interaction layer over the map.
-        let shown = match *role {
-            UiRegionRole::Party | UiRegionRole::Turn | UiRegionRole::Events => ordinary_shown,
-            UiRegionRole::Inspector => (ordinary_shown || decision_required) && !promoted_decision,
-            UiRegionRole::Actions => ordinary_shown || (decision_required && promoted_decision),
-        };
+        let shown = !chrome.encounter_complete
+            && match *role {
+                UiRegionRole::Party => chrome.party_shown,
+                UiRegionRole::Turn => chrome.initiative_shown,
+                UiRegionRole::Inspector => !matches!(chrome.main_view, MainViewDestination::Closed),
+                UiRegionRole::Actions => chrome.action_bar_shown,
+                UiRegionRole::Events => chrome.activity_shown,
+            };
+        if shown && metrics.viewport == crate::UiViewportClass::Compact {
+            make_compact_task_surface(&mut node);
+        }
         node.display = if shown {
             responsive_display
         } else {
             Display::None
         };
+        *background = if shown && metrics.viewport == crate::UiViewportClass::Compact {
+            BackgroundColor(COMPACT_TASK_BG)
+        } else {
+            BackgroundColor(Color::NONE)
+        };
         let participates = node.display != Display::None;
-        *pickable =
-            if participates && matches!(*role, UiRegionRole::Inspector | UiRegionRole::Actions) {
-                Pickable::default()
-            } else {
-                Pickable::IGNORE
-            };
+        // Desktop regions are transparent layout/scroll wrappers around their
+        // visible descendants. Ignoring the wrapper lets the world remain
+        // pickable through unused rail area; pointer events from an actual child
+        // panel still bubble to this ScrollArea. A Compact task owns the complete
+        // opaque surface and therefore blocks the world everywhere.
+        *pickable = if participates && metrics.viewport == crate::UiViewportClass::Compact {
+            Pickable::default()
+        } else {
+            Pickable::IGNORE
+        };
     }
+}
+
+fn make_compact_task_surface(node: &mut Node) {
+    node.position_type = PositionType::Absolute;
+    node.top = Val::Px(8.0);
+    node.right = Val::Px(8.0);
+    node.bottom = Val::Px(8.0);
+    node.left = Val::Px(8.0);
+    node.width = Val::Auto;
+    node.height = Val::Auto;
+    node.overflow = Overflow::scroll_y();
+    node.flex_direction = FlexDirection::Column;
 }
 
 fn apply_visibility(
     view: Res<GameplayChromeView>,
+    metrics: Res<ResolvedUiMetrics>,
     review: Option<Res<crate::review::UiReviewPresentation>>,
     added_roots: Query<(), Added<HudElement>>,
     mut roots: Query<(&mut Visibility, Has<RequiredActionSurface>), With<HudElement>>,
@@ -198,13 +222,13 @@ fn apply_visibility(
     if !view.is_changed() && !review_changed && added_roots.is_empty() {
         return;
     }
-    let view = review
-        .as_ref()
-        .map_or(*view, |review| review.effective_chrome(*view));
+    let view = review.as_ref().map_or(*view, |review| {
+        review.effective_chrome(*view, metrics.viewport)
+    });
     for (mut visibility, required_action) in &mut roots {
         let wanted = if view.encounter_complete {
             Visibility::Hidden
-        } else if view.shown || (required_action && view.decision_required) {
+        } else if view.any_ordinary_shown() || (required_action && view.decision_required()) {
             Visibility::Inherited
         } else {
             Visibility::Hidden
@@ -227,6 +251,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<GameplayChromeView>()
+            .init_resource::<ResolvedUiMetrics>()
             .add_systems(Update, apply_visibility);
         let ordinary = app
             .world_mut()
@@ -238,8 +263,12 @@ mod tests {
             .id();
 
         app.world_mut().insert_resource(GameplayChromeView {
-            shown: false,
-            decision_required: true,
+            party_shown: false,
+            initiative_shown: false,
+            activity_shown: false,
+            action_bar_shown: false,
+            main_view: MainViewDestination::RequiredDecision,
+            terrain_health_shown: false,
             encounter_complete: false,
         });
         app.update();
@@ -295,13 +324,21 @@ mod tests {
             UiRegionRole::Actions,
             UiRegionRole::Events,
         ] {
-            app.world_mut()
-                .spawn((role, Node::default(), Pickable::default()));
+            app.world_mut().spawn((
+                role,
+                Node::default(),
+                BackgroundColor(Color::NONE),
+                Pickable::default(),
+            ));
         }
 
         app.world_mut().insert_resource(GameplayChromeView {
-            shown: false,
-            decision_required: false,
+            party_shown: false,
+            initiative_shown: false,
+            activity_shown: false,
+            action_bar_shown: false,
+            main_view: MainViewDestination::Closed,
+            terrain_health_shown: false,
             encounter_complete: false,
         });
         app.update();
@@ -310,10 +347,111 @@ mod tests {
             .logical_size = Vec2::new(960.0, 540.0);
         app.update();
 
-        let mut regions = app.world_mut().query::<(&Node, &Pickable)>();
-        for (node, pickable) in regions.iter(app.world()) {
+        let mut regions = app
+            .world_mut()
+            .query::<(&Node, &BackgroundColor, &Pickable)>();
+        for (node, background, pickable) in regions.iter(app.world()) {
             assert_eq!(node.display, Display::None);
+            assert_eq!(*background, BackgroundColor(Color::NONE));
             assert_eq!(*pickable, Pickable::IGNORE);
+        }
+    }
+
+    #[test]
+    fn compact_task_owns_one_opaque_full_screen_region() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(crate::resolve_ui_metrics(
+                Vec2::new(1280.0, 720.0),
+                crate::UiScaleMode::Auto,
+            ))
+            .insert_resource(GameplayChromeView {
+                party_shown: true,
+                initiative_shown: false,
+                activity_shown: false,
+                action_bar_shown: false,
+                main_view: MainViewDestination::Closed,
+                terrain_health_shown: true,
+                encounter_complete: false,
+            })
+            .add_systems(Update, apply_responsive_layout);
+        for role in [
+            UiRegionRole::Party,
+            UiRegionRole::Turn,
+            UiRegionRole::Inspector,
+            UiRegionRole::Actions,
+            UiRegionRole::Events,
+        ] {
+            app.world_mut().spawn((
+                role,
+                Node::default(),
+                BackgroundColor(Color::NONE),
+                Pickable::default(),
+            ));
+        }
+
+        app.update();
+
+        let mut regions = app
+            .world_mut()
+            .query::<(&UiRegionRole, &Node, &BackgroundColor, &Pickable)>();
+        for (role, node, background, pickable) in regions.iter(app.world()) {
+            if *role == UiRegionRole::Party {
+                assert_eq!(node.display, Display::Flex);
+                assert_eq!(node.top, Val::Px(8.0));
+                assert_eq!(node.right, Val::Px(8.0));
+                assert_eq!(node.bottom, Val::Px(8.0));
+                assert_eq!(node.left, Val::Px(8.0));
+                assert_eq!(*background, BackgroundColor(COMPACT_TASK_BG));
+                assert_eq!(*pickable, Pickable::default());
+            } else {
+                assert_eq!(node.display, Display::None, "role={role:?}");
+                assert_eq!(*background, BackgroundColor(Color::NONE));
+                assert_eq!(*pickable, Pickable::IGNORE);
+            }
+        }
+    }
+
+    #[test]
+    fn desktop_region_wrappers_leave_transparent_space_map_pickable() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<ResolvedUiMetrics>()
+            .insert_resource(GameplayChromeView {
+                party_shown: true,
+                initiative_shown: false,
+                activity_shown: true,
+                action_bar_shown: true,
+                main_view: MainViewDestination::Closed,
+                terrain_health_shown: true,
+                encounter_complete: false,
+            })
+            .add_systems(Update, apply_responsive_layout);
+        for role in [
+            UiRegionRole::Party,
+            UiRegionRole::Turn,
+            UiRegionRole::Inspector,
+            UiRegionRole::Actions,
+            UiRegionRole::Events,
+        ] {
+            app.world_mut().spawn((
+                role,
+                Node::default(),
+                BackgroundColor(Color::NONE),
+                Pickable::default(),
+            ));
+        }
+
+        app.update();
+
+        let mut regions = app.world_mut().query::<(&UiRegionRole, &Node, &Pickable)>();
+        for (role, node, pickable) in regions.iter(app.world()) {
+            let shown = matches!(
+                role,
+                UiRegionRole::Party | UiRegionRole::Actions | UiRegionRole::Events
+            );
+            assert_eq!(node.display != Display::None, shown, "role={role:?}");
+            assert_eq!(*pickable, Pickable::IGNORE, "role={role:?}");
         }
     }
 }
