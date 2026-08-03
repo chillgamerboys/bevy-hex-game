@@ -391,16 +391,13 @@ mod structural_tests {
         })
     }
 
-    fn settings_binding_snapshot(
-        tab: SettingsTab,
-        size: UVec2,
-        mode: UiScaleMode,
-    ) -> UiTreeSnapshot {
+    fn settings_binding_view(tab: SettingsTab) -> UiSettingsView {
         let category = tab
             .input_category()
             .expect("binding fixture requires a keybinding tab");
-        let bindings = hex_core::InputAction::ALL
-            .into_iter()
+        let bindings = hex_core::InputActionInventory::active()
+            .iter()
+            .filter(|action| *action != hex_core::InputAction::RevealAll)
             .filter(|action| action.metadata().category == category)
             .map(|action| {
                 let metadata = action.metadata();
@@ -413,13 +410,33 @@ mod structural_tests {
                 }
             })
             .collect();
+        UiSettingsView {
+            tab,
+            bindings,
+            can_restore_all: true,
+            ..default()
+        }
+    }
+
+    fn settings_binding_snapshot(
+        tab: SettingsTab,
+        size: UVec2,
+        mode: UiScaleMode,
+    ) -> UiTreeSnapshot {
         settled_snapshot(hex_core::Screen::Settings, size, 1.0, mode, |world| {
-            world.insert_resource(UiSettingsView {
-                tab,
-                bindings,
-                can_restore_all: true,
-                ..default()
-            });
+            world.insert_resource(settings_binding_view(tab));
+        })
+    }
+
+    fn settings_modal_snapshot(
+        modal: SettingsModalView,
+        size: UVec2,
+        mode: UiScaleMode,
+    ) -> UiTreeSnapshot {
+        settled_snapshot(hex_core::Screen::Settings, size, 1.0, mode, |world| {
+            let mut view = settings_binding_view(SettingsTab::Gameplay);
+            view.modal = Some(modal);
+            world.insert_resource(view);
         })
     }
 
@@ -750,6 +767,7 @@ mod structural_tests {
             | UiTaskCase::ActivityTabs
             | UiTaskCase::CustomHudVisibility
             | UiTaskCase::CompactTemporarySurface => "normal-gameplay",
+            UiTaskCase::FormationMainView => "clear",
             UiTaskCase::Casting => "casting-list",
             UiTaskCase::AimingBlocked => "aiming-disabled",
             UiTaskCase::DisableDecision | UiTaskCase::HudHiddenRequired => "required-decision",
@@ -800,6 +818,13 @@ mod structural_tests {
                     chrome.action_bar_shown = true;
                 }
             }
+            UiTaskCase::FormationMainView => {
+                chrome.main_view = hex_gameplay_model::MainViewDestination::Formation;
+                if !compact {
+                    chrome.party_shown = true;
+                    chrome.action_bar_shown = true;
+                }
+            }
             UiTaskCase::ActivityTabs => chrome.activity_shown = true,
             UiTaskCase::CustomHudVisibility => {
                 chrome.party_shown = true;
@@ -819,7 +844,7 @@ mod structural_tests {
             other => panic!("{other:?} is not a live gameplay task"),
         }
         app.world_mut().insert_resource(chrome);
-        if chrome.party_shown {
+        if chrome.party_shown || case == UiTaskCase::FormationMainView {
             app.world_mut().insert_resource(gameplay_party_view());
         }
         if chrome.initiative_shown {
@@ -877,6 +902,13 @@ mod structural_tests {
                 .filter(|case| case.contract().screen == hex_core::Screen::Sandbox)
                 .count(),
             6
+        );
+        assert_eq!(
+            UiTaskCase::ALL
+                .into_iter()
+                .filter(|case| case.contract().screen == hex_core::Screen::Settings)
+                .count(),
+            4
         );
     }
 
@@ -1235,20 +1267,21 @@ mod structural_tests {
                 .filter(|tab| *tab != SettingsTab::General)
             {
                 let snapshot = settings_binding_snapshot(tab, size, mode);
-                let issues = snapshot.layout_issues();
+                let issues = snapshot.task_issues(UiTaskCase::SettingsKeybindings);
                 assert!(
                     issues.is_empty(),
                     "{} bindings failed at {size:?} {mode:?}: {issues:#?}",
                     tab.label()
                 );
 
-                let last_action = hex_core::InputAction::ALL
-                    .into_iter()
-                    .rev()
-                    .find(|action| {
+                let last_action = hex_core::InputActionInventory::active()
+                    .iter()
+                    .filter(|action| *action != hex_core::InputAction::RevealAll)
+                    .filter(|action| {
                         action.metadata().category == tab.input_category().expect("binding tab")
                             && action.metadata().rebindable
                     })
+                    .last()
                     .expect("every binding category has a rebindable action");
                 let last_control = format!("Rebind {}", last_action.metadata().label);
                 let observation = snapshot
@@ -1260,6 +1293,54 @@ mod structural_tests {
                     observation.scroll_reachable,
                     "the final {} binding should remain reachable at {size:?} {mode:?}",
                     tab.label()
+                );
+                assert!(
+                    snapshot
+                        .nodes
+                        .iter()
+                        .all(|node| !node.name.contains("Reveal Knowledge (Development)")),
+                    "shipping Settings fixture exposed the development-only action"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn settings_blocking_tasks_pass_the_required_matrix() {
+        for (size, mode) in REQUIRED_MATRIX {
+            let capture = settings_modal_snapshot(
+                SettingsModalView::Capture {
+                    action: hex_core::InputAction::EndTurn,
+                    label: "End Turn".to_owned(),
+                },
+                size,
+                mode,
+            );
+            let capture_issues = capture.task_issues(UiTaskCase::SettingsCapture);
+            assert!(
+                capture_issues.is_empty(),
+                "Settings capture failed at {size:?} {mode:?}: {capture_issues:#?}"
+            );
+
+            for (fixture, modal) in [
+                (
+                    "binding conflict",
+                    SettingsModalView::Conflict {
+                        requested: "End Turn".to_owned(),
+                        existing: "Confirm Decision".to_owned(),
+                        chord: "Space".to_owned(),
+                    },
+                ),
+                (
+                    "Restore All confirmation",
+                    SettingsModalView::ConfirmRestoreAll,
+                ),
+            ] {
+                let conflict = settings_modal_snapshot(modal, size, mode);
+                let conflict_issues = conflict.task_issues(UiTaskCase::SettingsConflict);
+                assert!(
+                    conflict_issues.is_empty(),
+                    "Settings {fixture} failed at {size:?} {mode:?}: {conflict_issues:#?}"
                 );
             }
         }
@@ -1369,6 +1450,22 @@ mod structural_tests {
                     case.contract().id
                 );
             }
+        }
+    }
+
+    #[test]
+    fn formation_main_view_passes_the_required_matrix() {
+        for (size, mode) in REQUIRED_MATRIX {
+            let snapshot = gameplay_snapshot(UiTaskCase::FormationMainView, size, mode);
+            let issues = snapshot.task_issues(UiTaskCase::FormationMainView);
+            assert!(
+                issues.is_empty(),
+                "Formation Main View failed at {size:?} {mode:?}: {issues:#?}"
+            );
+            assert!(snapshot
+                .nodes
+                .iter()
+                .any(|node| node.name == "Formation Panel"));
         }
     }
 
@@ -1620,6 +1717,9 @@ pub mod test_support {
         Campaign,
         Tools,
         Settings,
+        SettingsKeybindings,
+        SettingsCapture,
+        SettingsConflict,
         CharacterLibrary,
         SpellLibrary,
         CreatorLibraryRecovery,
@@ -1642,6 +1742,7 @@ pub mod test_support {
         PlayerTurnMaxActions,
         HostileTurn,
         CharacterMainView,
+        FormationMainView,
         ActivityTabs,
         CustomHudVisibility,
         CompactTemporarySurface,
@@ -1685,13 +1786,16 @@ pub mod test_support {
     impl UiTaskCase {
         /// Every known task case. Adding a task requires adding it here and to the
         /// exhaustive contract match below.
-        pub const ALL: [Self; 38] = [
+        pub const ALL: [Self; 42] = [
             Self::Splash,
             Self::Loading,
             Self::MainMenu,
             Self::Campaign,
             Self::Tools,
             Self::Settings,
+            Self::SettingsKeybindings,
+            Self::SettingsCapture,
+            Self::SettingsConflict,
             Self::CharacterLibrary,
             Self::SpellLibrary,
             Self::CreatorLibraryRecovery,
@@ -1714,6 +1818,7 @@ pub mod test_support {
             Self::PlayerTurnMaxActions,
             Self::HostileTurn,
             Self::CharacterMainView,
+            Self::FormationMainView,
             Self::ActivityTabs,
             Self::CustomHudVisibility,
             Self::CompactTemporarySurface,
@@ -1754,6 +1859,23 @@ pub mod test_support {
                     &["Setting UiScale", "Setting UiVolume"],
                     true,
                 ),
+                Self::SettingsKeybindings => task(
+                    "settings-keybindings",
+                    Screen::Settings,
+                    SETTINGS_NAV_CONTROLS,
+                    &["Restore All Keybindings"],
+                    true,
+                ),
+                Self::SettingsCapture => task(
+                    "settings-capture",
+                    Screen::Settings,
+                    &["Cancel Key Capture"],
+                    &[],
+                    true,
+                ),
+                Self::SettingsConflict => {
+                    task("settings-conflict", Screen::Settings, &[], &[], true)
+                }
                 Self::CharacterLibrary => task(
                     "creator-character-library",
                     Screen::CharacterCreator,
@@ -1930,6 +2052,20 @@ pub mod test_support {
                     &[],
                     true,
                 ),
+                Self::FormationMainView => task(
+                    "gameplay-formation-main-view",
+                    Screen::Gameplay,
+                    &[],
+                    &[
+                        "Formation Member 1",
+                        "Formation Member 6",
+                        "Party Movement Mode",
+                        "Party Rest",
+                        "Formation Preset Wedge",
+                        "Formation Slot (0, 0)",
+                    ],
+                    true,
+                ),
                 Self::ActivityTabs => task(
                     "gameplay-activity-tabs",
                     Screen::Gameplay,
@@ -2032,12 +2168,30 @@ pub mod test_support {
             match self {
                 Self::MainMenu => MAIN_MENU_CONTROLS,
                 Self::Tools => &["Character Creator", "Spell Creator", "Back"],
+                Self::SettingsKeybindings => SETTINGS_NAV_CONTROLS,
+                Self::FormationMainView => &[
+                    "Formation Member 1",
+                    "Formation Member 6",
+                    "Party Movement Mode",
+                    "Party Rest",
+                    "Formation Preset Wedge",
+                    "Formation Slot (0, 0)",
+                ],
                 _ => &[],
             }
         }
     }
 
     const MAIN_MENU_CONTROLS: &[&str] = &["Campaign", "Sandbox", "Tools", "Settings"];
+    const SETTINGS_NAV_CONTROLS: &[&str] = &[
+        "Back",
+        "Settings Tab General",
+        "Settings Tab Gameplay",
+        "Settings Tab Interface",
+        "Settings Tab Main View",
+        "Settings Tab Camera",
+        "Settings Tab System",
+    ];
 
     const fn task(
         id: &'static str,
@@ -2197,6 +2351,10 @@ pub mod test_support {
         /// infer any gameplay fact from rendered text.
         #[must_use]
         pub fn layout_issues(&self) -> Vec<String> {
+            self.layout_issues_with_overlap_scope(false)
+        }
+
+        fn layout_issues_with_overlap_scope(&self, active_focus_only: bool) -> Vec<String> {
             let mut issues = Vec::new();
             for node in self.nodes.iter().filter(|node| {
                 !node.focusable
@@ -2303,6 +2461,7 @@ pub mod test_support {
                 .iter()
                 .filter(|node| {
                     node.visible
+                        && (node.in_focus_order || !active_focus_only)
                         && (node.in_focus_order
                             || (node.visibility_requirement
                                 == Some(crate::UiVisibilityRequirement::Immediate)
@@ -2344,6 +2503,9 @@ pub mod test_support {
             let contract = case.contract();
             let mut issues = match case {
                 UiTaskCase::Casting => self.review_fixture_issues("casting-list"),
+                UiTaskCase::SettingsCapture | UiTaskCase::SettingsConflict => {
+                    self.layout_issues_with_overlap_scope(true)
+                }
                 _ => self.layout_issues(),
             };
             for name in contract.immediate_controls {
@@ -2397,6 +2559,43 @@ pub mod test_support {
                 previous_focus = Some(position);
             }
             issues.extend(self.task_lattice_issues(case));
+            issues.extend(self.task_settings_issues(case));
+            if case == UiTaskCase::FormationMainView {
+                for required in ["Main View HUD Region", "Formation Panel"] {
+                    if self.nodes.iter().all(|node| node.name != required) {
+                        issues.push(format!(
+                            "Formation Main View is missing required surface {required:?}"
+                        ));
+                    }
+                }
+                if self
+                    .nodes
+                    .iter()
+                    .any(|node| node.name == "Lattice Readout Stack")
+                {
+                    issues.push(
+                        "Formation Main View presented the Character lattice destination"
+                            .to_owned(),
+                    );
+                }
+                if self.metrics.viewport == crate::UiViewportClass::Compact {
+                    let visible_regions = [
+                        "Party HUD Region",
+                        "Initiative HUD Region",
+                        "Main View HUD Region",
+                        "Action Bar HUD Region",
+                        "Activity HUD Region",
+                    ]
+                    .into_iter()
+                    .filter(|name| self.nodes.iter().any(|node| node.name == *name))
+                    .collect::<Vec<_>>();
+                    if visible_regions != ["Main View HUD Region"] {
+                        issues.push(format!(
+                            "Compact Formation Main View must own exactly one HUD region, found {visible_regions:?}"
+                        ));
+                    }
+                }
+            }
             if case == UiTaskCase::HudHiddenRequired {
                 for hidden in [
                     "Party Panel",
@@ -2450,6 +2649,123 @@ pub mod test_support {
                 }
             }
             issues
+        }
+
+        fn task_settings_issues(&self, case: UiTaskCase) -> Vec<String> {
+            let mut issues = Vec::new();
+            match case {
+                UiTaskCase::SettingsKeybindings => {
+                    if self
+                        .nodes
+                        .iter()
+                        .all(|node| !node.name.starts_with("Binding Row "))
+                    {
+                        issues.push(
+                            "Settings Keybindings contains no immutable binding rows".to_owned(),
+                        );
+                    }
+                    for prefix in ["Rebind ", "Restore "] {
+                        if self.nodes.iter().all(|node| !node.name.starts_with(prefix)) {
+                            issues.push(format!(
+                                "Settings Keybindings contains no named {prefix:?} controls"
+                            ));
+                        }
+                    }
+                    if self
+                        .nodes
+                        .iter()
+                        .any(|node| node.name.contains("Reveal Knowledge (Development)"))
+                    {
+                        issues.push(
+                            "shipping Settings Keybindings presented a development-only action"
+                                .to_owned(),
+                        );
+                    }
+                    if self.nodes.iter().any(|node| node.name == "Settings Modal") {
+                        issues.push(
+                            "Settings Keybindings unexpectedly presented a blocking modal"
+                                .to_owned(),
+                        );
+                    }
+                }
+                UiTaskCase::SettingsCapture => {
+                    self.require_settings_modal(case, &["Cancel Key Capture"], &mut issues)
+                }
+                UiTaskCase::SettingsConflict => {
+                    const CONFLICT: &[&str] =
+                        &["Swap Conflicting Bindings", "Cancel Binding Conflict"];
+                    const RESTORE_ALL: &[&str] = &[
+                        "Confirm Restore All Keybindings",
+                        "Cancel Restore All Keybindings",
+                    ];
+                    let has_conflict = CONFLICT
+                        .iter()
+                        .any(|name| self.nodes.iter().any(|node| node.name == *name));
+                    let has_restore_all = RESTORE_ALL
+                        .iter()
+                        .any(|name| self.nodes.iter().any(|node| node.name == *name));
+                    match (has_conflict, has_restore_all) {
+                        (true, false) => {
+                            self.require_settings_modal(case, CONFLICT, &mut issues);
+                        }
+                        (false, true) => {
+                            self.require_settings_modal(case, RESTORE_ALL, &mut issues);
+                        }
+                        (false, false) => issues.push(
+                            "Settings Conflict requires a binding-conflict or Restore All confirmation modal"
+                                .to_owned(),
+                        ),
+                        (true, true) => issues.push(
+                            "Settings Conflict presented two mutually exclusive modal tasks"
+                                .to_owned(),
+                        ),
+                    }
+                }
+                _ => {}
+            }
+            issues
+        }
+
+        fn require_settings_modal(
+            &self,
+            case: UiTaskCase,
+            expected_controls: &[&str],
+            issues: &mut Vec<String>,
+        ) {
+            if self.nodes.iter().all(|node| node.name != "Settings Modal") {
+                issues.push(format!(
+                    "{} is missing its blocking Settings Modal",
+                    case.contract().id
+                ));
+            }
+            for name in expected_controls {
+                let Some(node) = self.nodes.iter().find(|node| node.name == *name) else {
+                    issues.push(format!(
+                        "{} is missing modal control {name:?}",
+                        case.contract().id
+                    ));
+                    continue;
+                };
+                if node.visibility_requirement != Some(crate::UiVisibilityRequirement::Immediate) {
+                    issues.push(format!(
+                        "{} modal control {name:?} is not explicitly Immediate",
+                        case.contract().id
+                    ));
+                }
+                if !node.fully_visible {
+                    issues.push(format!(
+                        "{} modal control {name:?} is not initially visible: {node:?}",
+                        case.contract().id
+                    ));
+                }
+            }
+            if self.focus_order != expected_controls {
+                issues.push(format!(
+                    "{} modal must trap focus in {expected_controls:?}, found {:?}",
+                    case.contract().id,
+                    self.focus_order
+                ));
+            }
         }
 
         fn task_lattice_issues(&self, case: UiTaskCase) -> Vec<String> {

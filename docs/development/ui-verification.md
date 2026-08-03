@@ -5,6 +5,11 @@ route below must have a populated immutable presentation fixture, named primary 
 secondary actions, a renderer-free model transition, a structural oracle, and a
 bounded native frame when its visual composition is distinct.
 
+The structural registry gives materially distinct HUD and Settings compositions their
+own cases. `FormationMainView`, `SettingsKeybindings`, `SettingsCapture`, and
+`SettingsConflict` therefore cannot be hidden inside a generic Gameplay or Settings
+fixture merely because they share the same coarse `Screen`.
+
 `hex_ui` renders route-specific views and emits only typed `MainMenuIntent` and
 `SandboxIntent` values. It owns no navigation, persistence, map/seed selection,
 roster, character, deployment, content, or launch state. `hex_gameplay_model` owns
@@ -64,6 +69,7 @@ only from the Creator's local mechanics test.
 | Gameplay player turn | maximum eligible actions | Party, Initiative, Action Bar | stable disclosed order and every authorized control; world movement feedback remains unobscured; no duplicate actor/round/budget summary |
 | Gameplay hostile turn | mixed disclosed order | Initiative | no player action affordance; disclosed hostile is inspectable and an unobserved hostile is not activatable or locatable |
 | Character Main View | disclosed Party member | close / replace destination | readable lattice and character detail; inspection never changes gameplay authority |
+| Formation Main View | six-member exploration party | movement mode, member, preset, and formation-slot controls | one scroll owner; every control is reachable; explicit member selection is the only HUD path that changes formation movement authority |
 | Activity | mixed history | All, Combat, Activity | bounded disclosure-frozen lines filter by selected tab; danger has a non-color cue |
 | Custom HUD visibility | Party + Activity only | component shortcuts | saved combination is exact; Initiative, Action Bar, and Main View leave no layout or focus residue |
 | Compact temporary surface | Party | Escape / same shortcut | blank map becomes exactly one full-screen task; no handle, drawer, or second scroll owner |
