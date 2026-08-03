@@ -20,7 +20,8 @@ use crate::{
     blurb, body_text_role, compact_glyph_role, display, effect_summary, element_color, fine,
     heading, label, owner_resolved_control_role, panel, panel_node, responsive_control_role,
     row_button, screen_root, short_name, CharacterBuildSummary, CreatorEffectKind, CreatorIntent,
-    CreatorLibraryView, CreatorNameField, CreatorScreenView, CreatorWorkspace, OwnColors,
+    CreatorLibraryView, CreatorNameField, CreatorScreenView, CreatorWorkspace,
+    ElementClassification, ElementVisualCatalog, OwnColors, ResolvedElementVisual,
     ResolvedUiMetrics, SpellBuildSummary, UiAssets, UiIntent, UiSystems, UiViewportClass, ACCENT,
     ACCENT_EDGE, DANGER, EDGE, FUSION_COLOR, LABEL,
 };
@@ -297,8 +298,9 @@ fn render(
     view: Res<CreatorScreenView>,
     metrics: Res<ResolvedUiMetrics>,
     assets: Res<UiAssets>,
+    element_visuals: Res<ElementVisualCatalog>,
 ) {
-    if !view.is_changed() && !metrics.is_changed() {
+    if !view.is_changed() && !metrics.is_changed() && !element_visuals.is_changed() {
         return;
     }
     for root in &roots {
@@ -310,6 +312,7 @@ fn render(
     spawn_creator_ui(
         &mut commands,
         &assets,
+        &element_visuals,
         &view,
         &view.library,
         view.elements.as_ref(),
@@ -347,6 +350,7 @@ fn emit_name_changes(
 fn spawn_creator_ui(
     commands: &mut Commands,
     assets: &UiAssets,
+    element_visuals: &ElementVisualCatalog,
     session: &CreatorScreenView,
     store: &CreatorLibraryView,
     elements: Option<&ElementCatalog>,
@@ -518,6 +522,7 @@ fn spawn_creator_ui(
                 CreatorWorkspace::Character => spawn_character_tab(
                     body,
                     assets,
+                    element_visuals,
                     session,
                     store,
                     elements,
@@ -878,6 +883,7 @@ fn name_input(
 fn spawn_character_tab(
     body: &mut ChildSpawnerCommands,
     assets: &UiAssets,
+    element_visuals: &ElementVisualCatalog,
     session: &CreatorScreenView,
     store: &CreatorLibraryView,
     elements: Option<&ElementCatalog>,
@@ -894,13 +900,13 @@ fn spawn_character_tab(
 
     body.spawn((
         CreatorBodyPanel::Sidebar {
-            width: 250.0,
+            width: 330.0,
             compact_row: 2,
         },
         panel(),
     ))
     .insert(Node {
-        width: Val::Px(250.0),
+        width: Val::Px(330.0),
         min_height: Val::Px(0.0),
         overflow: Overflow::scroll_y(),
         ..panel_node()
@@ -934,36 +940,14 @@ fn spawn_character_tab(
             session.active_tool == Some(CreationCellKind::Blank),
         );
         if let Some(elements) = elements {
-            palette.spawn(heading(assets, "gems and fusions"));
-            for index in 0..elements.len() {
-                let Some(id) = u16::try_from(index).ok().map(hex_core::ElementId) else {
-                    continue;
-                };
-                let Some(name) = elements.name(id) else {
-                    continue;
-                };
-                let kind = if elements.is_higher_order(id) {
-                    CreationCellKind::Fusion(name.to_owned())
-                } else {
-                    CreationCellKind::Gem(name.to_owned())
-                };
-                colored_tool_button(
-                    palette,
-                    assets,
-                    if elements.is_higher_order(id) {
-                        format!("Fusion · {name}")
-                    } else {
-                        format!("Gem · {name}")
-                    },
-                    CreatorIntent::ChooseTool(kind.clone()),
-                    if elements.is_higher_order(id) {
-                        FUSION_COLOR
-                    } else {
-                        element_color(Some(id), elements)
-                    },
-                    session.active_tool.as_ref() == Some(&kind),
-                );
-            }
+            spawn_element_grid(
+                palette,
+                assets,
+                element_visuals,
+                elements,
+                session.active_tool.as_ref(),
+                semantic_control_scale,
+            );
         }
         palette.spawn(heading(assets, "ready spells"));
         if let Some(spells) = spell_book {
@@ -1111,6 +1095,7 @@ fn spawn_character_tab(
                                 session.selected_cell,
                                 session.zoom_step,
                                 elements,
+                                element_visuals,
                                 &store.file,
                                 semantic_control_scale,
                             );
@@ -1300,6 +1285,192 @@ fn spawn_character_actions(
         });
 }
 
+fn spawn_element_grid(
+    palette: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    visuals: &ElementVisualCatalog,
+    elements: &ElementCatalog,
+    active_tool: Option<&CreationCellKind>,
+    semantic_control_scale: f32,
+) {
+    let resolved = visuals
+        .entries()
+        .iter()
+        .filter_map(|visual| {
+            let live = visuals.resolve(visual.name, elements)?;
+            let kind = if live.classification == ElementClassification::Basic {
+                CreationCellKind::Gem(visual.name.to_owned())
+            } else {
+                CreationCellKind::Fusion(visual.name.to_owned())
+            };
+            Some((visual, live, kind))
+        })
+        .collect::<Vec<_>>();
+
+    palette.spawn(heading(assets, "elemental grid"));
+    palette.spawn(blurb(
+        assets,
+        "Inner ring: basic gems. Outer ring: direct pair and triple fusions.",
+    ));
+    if resolved.len() != visuals.entries().len() || resolved.len() != elements.len() {
+        palette
+            .spawn(blurb(
+                assets,
+                "The elemental grid is waiting for the complete accepted element catalog.",
+            ))
+            .insert(TextColor(DANGER));
+    }
+
+    let scale = semantic_control_scale.max(1.0);
+    let chart_size = Vec2::new(264.0, 228.0) * scale;
+    palette
+        .spawn((
+            Name::new("Elemental Grid"),
+            Node {
+                width: Val::Px(chart_size.x),
+                height: Val::Px(chart_size.y),
+                min_width: Val::Px(chart_size.x),
+                min_height: Val::Px(chart_size.y),
+                position_type: PositionType::Relative,
+                align_self: AlignSelf::Center,
+                flex_shrink: 0.0,
+                ..default()
+            },
+        ))
+        .with_children(|grid| {
+            for (visual, live, kind) in &resolved {
+                let selected = active_tool == Some(kind);
+                let cell_size = Vec2::new(52.0, 60.0) * scale;
+                let axial = visual.coord.as_vec2();
+                let center = Vec2::new(
+                    chart_size.x * 0.5 + (axial.x + axial.y * 0.5) * 48.0 * scale,
+                    chart_size.y * 0.5 + axial.y * 45.0 * scale,
+                );
+                let top_left = center - cell_size * 0.5;
+                let accessible = element_tool_accessible_label(visual.name, live, selected);
+                grid.spawn((
+                    Name::new(format!("Element Tool {}", visual.name)),
+                    AccessibleLabel::new(accessible),
+                    crate::lattice::TessellatedControl,
+                    Button,
+                    TabIndex(0),
+                    crate::UiVisibilityRequirement::Scrollable,
+                    owner_resolved_control_role(),
+                    CreatorIntent::ChooseTool(kind.clone()),
+                    OwnColors,
+                    BorderColor::all(if selected { ACCENT } else { EDGE }),
+                    BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.0)),
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: Val::Px(top_left.x),
+                        top: Val::Px(top_left.y),
+                        width: Val::Px(cell_size.x),
+                        height: Val::Px(cell_size.y),
+                        min_width: Val::Px(44.0),
+                        min_height: Val::Px(44.0),
+                        align_items: AlignItems::Center,
+                        justify_content: JustifyContent::Center,
+                        border: UiRect::all(Val::Px(if selected { 3.0 } else { 1.0 })),
+                        border_radius: BorderRadius::all(Val::Px(8.0)),
+                        ..default()
+                    },
+                ))
+                .with_children(|control| {
+                    control.spawn((
+                        ImageNode {
+                            image: assets.hex_cell.clone(),
+                            color: visual.tint,
+                            ..default()
+                        },
+                        Node {
+                            position_type: PositionType::Absolute,
+                            width: Val::Percent(100.0),
+                            height: Val::Percent(100.0),
+                            ..default()
+                        },
+                        Pickable::IGNORE,
+                    ));
+                    control.spawn((
+                        Name::new(format!("Element Icon {}", visual.name)),
+                        ImageNode::new(visual.icon.clone()),
+                        Node {
+                            width: Val::Px(30.0 * scale),
+                            height: Val::Px(30.0 * scale),
+                            ..default()
+                        },
+                        Pickable::IGNORE,
+                    ));
+                    if selected {
+                        control.spawn((
+                            Name::new(format!("Selected Element {}", visual.name)),
+                            Text::new("✓"),
+                            compact_glyph_role(14.0),
+                            TextFont {
+                                font: assets.body.clone().into(),
+                                ..TextFont::from_font_size(14.0)
+                            },
+                            TextColor(LABEL),
+                            Node {
+                                position_type: PositionType::Absolute,
+                                right: Val::Px(2.0),
+                                top: Val::Px(0.0),
+                                ..default()
+                            },
+                            Pickable::IGNORE,
+                        ));
+                    }
+                });
+            }
+        });
+
+    palette.spawn(heading(assets, "formula guide"));
+    for (visual, live, _) in &resolved {
+        palette.spawn((
+            Name::new(format!("Element Formula {}", visual.name)),
+            AccessibleLabel::new(format!(
+                "{}; {}; {}",
+                visual.name,
+                live.classification.label(),
+                live.formula
+            )),
+            crate::UiVisibilityRequirement::Scrollable,
+            blurb(
+                assets,
+                match live.classification {
+                    ElementClassification::Basic => format!("BASIC · {}", visual.name),
+                    ElementClassification::Pair => {
+                        format!("PAIR · {} = {}", visual.name, live.formula)
+                    }
+                    ElementClassification::Triple => {
+                        format!("TRIPLE · {} = {}", visual.name, live.formula)
+                    }
+                    ElementClassification::HigherOrder(inputs) => {
+                        format!("FUSION ({inputs}) · {} = {}", visual.name, live.formula)
+                    }
+                },
+            ),
+        ));
+    }
+}
+
+fn element_tool_accessible_label(
+    name: &str,
+    live: &ResolvedElementVisual,
+    selected: bool,
+) -> String {
+    let tool = if live.classification == ElementClassification::Basic {
+        "gem"
+    } else {
+        "fusion"
+    };
+    format!(
+        "{name}; {}; formula {}; {}; choose {tool} tool",
+        live.classification.label(),
+        live.formula,
+        if selected { "selected" } else { "not selected" }
+    )
+}
+
 fn spawn_lattice_cells(
     surface: &mut ChildSpawnerCommands,
     assets: &UiAssets,
@@ -1307,6 +1478,7 @@ fn spawn_lattice_cells(
     selected: Option<LatticeCoord>,
     zoom_step: i8,
     elements: Option<&ElementCatalog>,
+    element_visuals: &ElementVisualCatalog,
     library: &hex_assets::CreationLibraryFile,
     semantic_control_scale: f32,
 ) {
@@ -1328,7 +1500,7 @@ fn spawn_lattice_cells(
         let (left, top) = lattice_pixel(coord, scale);
         let selected_cell = selected == Some(coord);
         let color = brighten(
-            cell_color(&cell.kind, elements),
+            cell_color(&cell.kind, elements, element_visuals),
             if selected_cell { 0.24 } else { 0.0 },
         );
         surface
@@ -1455,13 +1627,23 @@ fn resolved_cell_label(
     }
 }
 
-fn cell_color(kind: &CreationCellKind, elements: Option<&ElementCatalog>) -> Color {
+fn cell_color(
+    kind: &CreationCellKind,
+    elements: Option<&ElementCatalog>,
+    element_visuals: &ElementVisualCatalog,
+) -> Color {
     match kind {
-        CreationCellKind::Gem(name) => elements
-            .map_or(Color::srgba(0.16, 0.45, 0.52, 0.96), |elements| {
-                element_color(elements.id(name), elements)
-            }),
-        CreationCellKind::Fusion(_) => FUSION_COLOR,
+        CreationCellKind::Gem(name) => element_visuals.get(name).map_or_else(
+            || {
+                elements.map_or(Color::srgba(0.16, 0.45, 0.52, 0.96), |elements| {
+                    element_color(elements.id(name), elements)
+                })
+            },
+            |visual| visual.tint,
+        ),
+        CreationCellKind::Fusion(name) => element_visuals
+            .get(name)
+            .map_or(FUSION_COLOR, |visual| visual.tint),
         CreationCellKind::Spell(_) => Color::srgba(0.30, 0.33, 0.40, 0.96),
         CreationCellKind::Blank => Color::srgba(0.28, 0.29, 0.32, 0.9),
     }

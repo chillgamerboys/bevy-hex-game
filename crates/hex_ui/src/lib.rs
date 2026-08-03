@@ -16,6 +16,7 @@ mod creator;
 mod deployment;
 #[cfg(feature = "dev-tools")]
 mod dev_time;
+mod element_visual;
 mod focus;
 mod gameplay_frame;
 mod gameplay_lattices;
@@ -35,6 +36,9 @@ mod shell;
 mod theme;
 
 pub use creation_presentation::{effect_summary, CharacterBuildSummary, SpellBuildSummary};
+pub use element_visual::{
+    ElementClassification, ElementVisual, ElementVisualCatalog, ResolvedElementVisual,
+};
 pub use gameplay_lattices::spawn_decision_controls;
 pub use lattice::{
     paint_interactions as paint_lattice_interactions, short_name, spawn_lattice_cells,
@@ -517,6 +521,7 @@ mod structural_tests {
                     .iter()
                     .find(|record| record.audience == hex_assets::PresetAudience::HumanTemplate)
                     .map(|record| record.character.clone());
+                view.active_tool = Some(hex_assets::CreationCellKind::Gem("Air".to_owned()));
                 if case == UiTaskCase::CharacterConfirmDelete {
                     view.confirm_delete = true;
                     view.notice = "Press Confirm Delete to remove this saved character.".to_owned();
@@ -1368,8 +1373,93 @@ mod structural_tests {
                     "{} failed at {size:?} {mode:?}: {issues:#?}",
                     case.contract().id
                 );
+                if case == UiTaskCase::CharacterReady {
+                    assert_element_grid_contract(&snapshot, size, mode);
+                }
             }
         }
+    }
+
+    fn assert_element_grid_contract(snapshot: &UiTreeSnapshot, size: UVec2, mode: UiScaleMode) {
+        let expected = [
+            "Element Tool Air",
+            "Element Tool Fire",
+            "Element Tool Metal",
+            "Element Tool Earth",
+            "Element Tool Life",
+            "Element Tool Water",
+            "Element Tool Lightning",
+            "Element Tool Volcano",
+            "Element Tool Crystal",
+            "Element Tool Transmutation",
+            "Element Tool Divination",
+            "Element Tool Illusion",
+            "Element Tool Destruction",
+            "Element Tool Artifice",
+            "Element Tool Necromancy",
+            "Element Tool Wild",
+            "Element Tool Storm",
+            "Element Tool Space",
+        ];
+        let focus_order = snapshot
+            .focus_order
+            .iter()
+            .filter(|name| name.starts_with("Element Tool "))
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            focus_order, expected,
+            "element keyboard order drifted at {size:?} {mode:?}"
+        );
+
+        for name in expected {
+            let node = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.name == name)
+                .expect("every canonical element tool must be rendered");
+            assert!(
+                node.size.x >= 43.5 && node.size.y >= 43.5,
+                "{name} fell below the 44×44 target at {size:?} {mode:?}: {node:?}"
+            );
+            assert!(
+                node.scroll_reachable,
+                "{name} lost its single-owner scroll route at {size:?} {mode:?}: {node:?}"
+            );
+            assert!(
+                node.accessible_label
+                    .as_deref()
+                    .is_some_and(|label| label.contains("formula")),
+                "{name} must expose classification and formula copy: {node:?}"
+            );
+        }
+        assert_eq!(
+            snapshot
+                .nodes
+                .iter()
+                .filter(|node| node.name.starts_with("Element Formula "))
+                .count(),
+            18,
+            "the visible formula fallback must cover every element"
+        );
+        assert!(
+            snapshot
+                .nodes
+                .iter()
+                .any(|node| node.name == "Selected Element Air"),
+            "active selection needs a visible shape marker in addition to tint"
+        );
+        let air = snapshot
+            .nodes
+            .iter()
+            .find(|node| node.name == "Element Tool Air")
+            .expect("Air tool must exist");
+        assert!(
+            air.accessible_label
+                .as_deref()
+                .is_some_and(|label| label.contains("; selected;")),
+            "active selection must also be spoken: {air:?}"
+        );
     }
 
     #[test]
@@ -1599,6 +1689,7 @@ impl Plugin for UiPlugin {
         .init_resource::<InitiativeView>()
         .init_resource::<MainMenuView>()
         .init_resource::<TargetPulseView>()
+        .add_plugins(element_visual::plugin)
         .add_plugins((
             theme::plugin,
             casting_panel::plugin,
