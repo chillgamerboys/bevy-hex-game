@@ -16,8 +16,15 @@ pub(super) fn plugin(app: &mut App) {
     app.add_message::<hex_core::CenterInspectionCamera>()
         .add_systems(
             Update,
-            (sync_inspection_subject, sync_world_markers)
-                .chain()
+            sync_inspection_subject
+                .in_set(AppSystems::Update)
+                .after(hex_core::GameplaySystems::Casting)
+                .before(hex_core::GameplaySystems::UiContext)
+                .run_if(in_state(Screen::Gameplay)),
+        )
+        .add_systems(
+            Update,
+            sync_world_markers
                 .in_set(AppSystems::Update)
                 .in_set(hex_core::GameplaySystems::WorldFeedbackRequests)
                 .run_if(in_state(Screen::Gameplay)),
@@ -50,8 +57,10 @@ fn sync_inspection_subject(
             .then_some((entity, InspectionCameraSubject::new(unit, standing.0.pos)))
     });
 
-    if wanted.is_none() && inspection.subject.take().is_some() {
-        let _ = hud.close_active_surface();
+    if wanted.is_none() {
+        if let Some(stale) = inspection.subject.take() {
+            let _ = hud.close_character(stale);
+        }
     }
     for (entity, subject) in &projected {
         if wanted.is_none_or(|(wanted_entity, wanted_subject)| {
@@ -121,9 +130,92 @@ fn sync_world_markers(
 mod tests {
     use super::*;
 
+    #[derive(Resource, Default)]
+    struct InspectionAtUiContext {
+        subject: Option<hex_core::UnitId>,
+        main_view: hex_gameplay_model::MainViewDestination,
+    }
+
+    fn observe_inspection_at_ui_context(
+        inspection: Res<HudInspection>,
+        hud: Res<HudState>,
+        mut observed: ResMut<InspectionAtUiContext>,
+    ) {
+        observed.subject = inspection.subject;
+        observed.main_view = hud.stored_main_view();
+    }
+
     #[test]
     fn player_identity_never_requires_hostile_knowledge() {
         assert!(is_disclosed(hex_core::UnitId(1), Faction::Player, None));
         assert!(!is_disclosed(hex_core::UnitId(9), Faction::Hostile, None));
+    }
+
+    #[test]
+    fn disclosure_loss_closes_inspection_before_ui_context_projection() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<HudState>()
+            .init_resource::<HudInspection>()
+            .init_resource::<UnitRegistry>()
+            .init_resource::<InspectionAtUiContext>()
+            .configure_sets(
+                Update,
+                (
+                    hex_core::GameplaySystems::Casting,
+                    hex_core::GameplaySystems::UiContext,
+                )
+                    .chain()
+                    .in_set(AppSystems::Update),
+            )
+            .add_systems(
+                Update,
+                sync_inspection_subject
+                    .in_set(AppSystems::Update)
+                    .after(hex_core::GameplaySystems::Casting)
+                    .before(hex_core::GameplaySystems::UiContext),
+            )
+            .add_systems(
+                Update,
+                observe_inspection_at_ui_context
+                    .in_set(AppSystems::Update)
+                    .in_set(hex_core::GameplaySystems::UiContext),
+            );
+        let unit = hex_core::UnitId(9);
+        let entity = app
+            .world_mut()
+            .spawn((
+                unit,
+                Faction::Hostile,
+                StandsOn(hex_units::Standing {
+                    pos: hex_core::TilePos::ORIGIN,
+                    span: hex_core::HexSpan::from_ground(1.0),
+                }),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<UnitRegistry>()
+            .register(unit, entity);
+        app.world_mut().resource_mut::<HudInspection>().subject = Some(unit);
+        app.world_mut().resource_mut::<HudState>().open_character(
+            unit,
+            hex_gameplay_model::HudContext::standard(
+                hex_gameplay_model::HudContextEligibility::all(),
+            ),
+        );
+
+        app.update();
+
+        let observed = app.world().resource::<InspectionAtUiContext>();
+        assert_eq!(observed.subject, None);
+        assert_eq!(
+            observed.main_view,
+            hex_gameplay_model::MainViewDestination::Closed
+        );
+        assert_eq!(
+            app.world().resource::<HudState>().stored_main_view(),
+            hex_gameplay_model::MainViewDestination::Closed
+        );
+        assert!(app.world().get::<InspectionCameraSubject>(entity).is_none());
     }
 }

@@ -97,11 +97,21 @@ pub fn plugin(app: &mut App) {
             (
                 orbit_camera,
                 pan_camera.run_if(map_camera_active),
-                center_inspection_camera,
                 toggle_camera_mode,
             )
                 .chain()
                 .in_set(AppSystems::RecordInput)
+                .run_if(in_state(Screen::Gameplay)),
+        )
+        // Inspection input is recorded after ordinary camera input, then the app
+        // publishes a disclosure-validated subject through WorldFeedbackRequests.
+        // Centering here observes that same-frame projection instead of consuming
+        // and dropping the one-shot request before its subject exists.
+        .add_systems(
+            Update,
+            center_inspection_camera
+                .in_set(AppSystems::Update)
+                .in_set(hex_core::GameplaySystems::WorldFeedback)
                 .run_if(in_state(Screen::Gameplay)),
         )
         // Unit animation writes its Transform in Update. Following in PostUpdate
@@ -1391,6 +1401,24 @@ mod tests {
     struct CameraChangeCounts {
         transforms: usize,
         controls: usize,
+    }
+
+    #[derive(Resource)]
+    struct InspectionSubjectToPublish {
+        entity: Entity,
+        unit: UnitId,
+    }
+
+    fn publish_inspection_subject(
+        mut commands: Commands,
+        pending: Res<InspectionSubjectToPublish>,
+    ) {
+        commands
+            .entity(pending.entity)
+            .insert(InspectionCameraSubject::new(
+                pending.unit,
+                hex_core::TilePos::ORIGIN,
+            ));
     }
 
     fn count_camera_changes(
@@ -3011,6 +3039,74 @@ mod tests {
                 .contains::<CameraFocusTarget>(),
             "presentation inspection must not become gameplay selection authority"
         );
+    }
+
+    #[test]
+    fn same_frame_subject_projection_precedes_inspection_centering() {
+        let mut builder = HeadlessAppBuilder::new().with_minimal_plugins();
+        builder
+            .app_mut()
+            .insert_resource(camera_settings())
+            .init_resource::<CameraMode>()
+            .add_message::<CenterInspectionCamera>()
+            .configure_sets(
+                Update,
+                (AppSystems::RecordInput, AppSystems::Update).chain(),
+            )
+            .configure_sets(
+                Update,
+                (
+                    hex_core::GameplaySystems::WorldFeedbackRequests,
+                    hex_core::GameplaySystems::WorldFeedback,
+                )
+                    .chain()
+                    .in_set(AppSystems::Update),
+            )
+            .add_systems(
+                Update,
+                publish_inspection_subject
+                    .in_set(AppSystems::Update)
+                    .in_set(hex_core::GameplaySystems::WorldFeedbackRequests),
+            )
+            .add_systems(
+                Update,
+                center_inspection_camera
+                    .in_set(AppSystems::Update)
+                    .in_set(hex_core::GameplaySystems::WorldFeedback),
+            );
+        let camera = builder
+            .app_mut()
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(0.0, 14.0, 12.0),
+                PanOrbitCamera {
+                    focus: Vec3::ZERO,
+                    radius: 12.0,
+                },
+            ))
+            .id();
+        let unit = UnitId(7);
+        let position = Vec3::new(8.0, 3.0, -4.0);
+        let subject = builder
+            .app_mut()
+            .world_mut()
+            .spawn((unit, Transform::from_translation(position)))
+            .id();
+        builder
+            .app_mut()
+            .insert_resource(InspectionSubjectToPublish {
+                entity: subject,
+                unit,
+            });
+        let mut app = builder.build();
+
+        app.world_mut()
+            .write_message(CenterInspectionCamera::new(unit));
+        app.update();
+
+        let (_, focus, _) = camera_pose(&app, camera);
+        let wanted = position + Vec3::Y * camera_settings().character_focus_height;
+        assert!(focus.distance(wanted) < 1e-5);
     }
 
     #[test]

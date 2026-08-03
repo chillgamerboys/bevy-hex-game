@@ -64,6 +64,7 @@ pub(crate) fn plugin(app: &mut App) {
             Update,
             handle_inspection_input
                 .after(hex_ui::UiSystems::EmitIntents)
+                .after(AppSystems::RecordInput)
                 .before(AppSystems::Update)
                 .before(hex_ui::UiSystems::Render)
                 .run_if(resource_equals(GameplayPhase::Active))

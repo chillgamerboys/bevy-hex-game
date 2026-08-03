@@ -2,6 +2,7 @@
 
 use std::{
     collections::{BTreeMap, VecDeque},
+    ops::Deref,
     time::Duration,
 };
 
@@ -27,9 +28,40 @@ struct LogLine {
     danger: bool,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct RecordedLine {
+    sequence: u64,
+    line: LogLine,
+}
+
+impl Deref for RecordedLine {
+    type Target = LogLine;
+
+    fn deref(&self) -> &Self::Target {
+        &self.line
+    }
+}
+
+/// Shared ordering across combat and high-level activity ingestion.
+#[derive(Resource, Default)]
+struct ActivityChronology {
+    next: u64,
+}
+
+impl ActivityChronology {
+    fn record(&mut self, line: LogLine) -> RecordedLine {
+        let recorded = RecordedLine {
+            sequence: self.next,
+            line,
+        };
+        self.next = self.next.saturating_add(1);
+        recorded
+    }
+}
+
 #[derive(Resource, Default)]
 struct CombatLog {
-    lines: VecDeque<LogLine>,
+    lines: VecDeque<RecordedLine>,
     /// Damage outcomes follow a typed cause event. This freezes that stable cause by
     /// source/target pair until the resulting defender answer resolves.
     causes: BTreeMap<(UnitId, UnitId), DamageCause>,
@@ -43,12 +75,12 @@ struct CombatLog {
 /// High-level non-combat history kept separate from combat disclosure machinery.
 #[derive(Resource, Default)]
 struct ActivityHistory {
-    lines: VecDeque<LogLine>,
+    lines: VecDeque<RecordedLine>,
 }
 
 impl ActivityHistory {
-    fn push(&mut self, line: LogLine) {
-        self.lines.push_back(line);
+    fn push(&mut self, line: LogLine, chronology: &mut ActivityChronology) {
+        self.lines.push_back(chronology.record(line));
         while self.lines.len() > CAPACITY {
             self.lines.pop_front();
         }
@@ -66,8 +98,8 @@ enum DamageCause {
 }
 
 impl CombatLog {
-    fn push(&mut self, line: LogLine) {
-        self.lines.push_back(line);
+    fn push(&mut self, line: LogLine, chronology: &mut ActivityChronology) {
+        self.lines.push_back(chronology.record(line));
         while self.lines.len() > CAPACITY {
             self.lines.pop_front();
         }
@@ -110,6 +142,7 @@ struct SelectedActivityTab(ActivityTab);
 pub(super) fn plugin(app: &mut App) {
     app.init_resource::<CombatLog>()
         .init_resource::<ActivityHistory>()
+        .init_resource::<ActivityChronology>()
         .init_resource::<DamagePulse>()
         .init_resource::<SelectedActivityTab>()
         .add_message::<ActivityNotice>()
@@ -142,15 +175,20 @@ pub(super) fn plugin(app: &mut App) {
 fn reset(
     mut log: ResMut<CombatLog>,
     mut activity: ResMut<ActivityHistory>,
+    mut chronology: ResMut<ActivityChronology>,
     mut pulse: ResMut<DamagePulse>,
     mut tab: ResMut<SelectedActivityTab>,
 ) {
     *log = CombatLog::default();
     *activity = ActivityHistory::default();
-    activity.push(LogLine {
-        text: "Entered the battlefield.".to_owned(),
-        danger: false,
-    });
+    *chronology = ActivityChronology::default();
+    activity.push(
+        LogLine {
+            text: "Entered the battlefield.".to_owned(),
+            danger: false,
+        },
+        &mut chronology,
+    );
     *pulse = DamagePulse::default();
     *tab = SelectedActivityTab::default();
 }
@@ -158,12 +196,16 @@ fn reset(
 fn ingest_activity(
     mut notices: MessageReader<ActivityNotice>,
     mut activity: ResMut<ActivityHistory>,
+    mut chronology: ResMut<ActivityChronology>,
 ) {
     for notice in notices.read() {
-        activity.push(LogLine {
-            text: notice.0.clone(),
-            danger: false,
-        });
+        activity.push(
+            LogLine {
+                text: notice.0.clone(),
+                danger: false,
+            },
+            &mut chronology,
+        );
     }
 }
 
@@ -192,6 +234,7 @@ type IdentityQuery<'w, 's> = Query<
 fn ingest(
     mut events: MessageReader<CombatEvent>,
     mut log: ResMut<CombatLog>,
+    mut chronology: ResMut<ActivityChronology>,
     mut pulse: ResMut<DamagePulse>,
     registry: Res<UnitRegistry>,
     identities: IdentityQuery,
@@ -235,7 +278,7 @@ fn ingest(
             elements.as_deref(),
             spells.as_deref(),
         ) {
-            log.push(line);
+            log.push(line, &mut chronology);
         }
         clear_resolved_cause(event, &mut log);
     }
@@ -748,12 +791,16 @@ fn publish_view(
         return;
     }
     let mut lines = match selected.0 {
-        ActivityTab::All => activity
-            .lines
-            .iter()
-            .map(|line| (ActivityKind::Activity, line))
-            .chain(log.lines.iter().map(|line| (ActivityKind::Combat, line)))
-            .collect::<Vec<_>>(),
+        ActivityTab::All => {
+            let mut combined = activity
+                .lines
+                .iter()
+                .map(|line| (ActivityKind::Activity, line))
+                .chain(log.lines.iter().map(|line| (ActivityKind::Combat, line)))
+                .collect::<Vec<_>>();
+            combined.sort_by_key(|(_, line)| line.sequence);
+            combined
+        }
         ActivityTab::Combat => log
             .lines
             .iter()
@@ -795,6 +842,7 @@ fn visible_lines(log: &CombatLog, visible: usize) -> Vec<&LogLine> {
         .iter()
         .rev()
         .take(visible)
+        .map(|recorded| &recorded.line)
         .collect::<Vec<_>>()
         .into_iter()
         .rev()
@@ -860,11 +908,15 @@ mod tests {
     #[test]
     fn the_log_keeps_sixty_four_entries() {
         let mut log = CombatLog::default();
+        let mut chronology = ActivityChronology::default();
         for number in 0..80 {
-            log.push(LogLine {
-                text: number.to_string(),
-                danger: false,
-            });
+            log.push(
+                LogLine {
+                    text: number.to_string(),
+                    danger: false,
+                },
+                &mut chronology,
+            );
         }
         assert_eq!(log.lines.len(), CAPACITY);
         assert_eq!(log.lines.front().map(|line| line.text.as_str()), Some("16"));
@@ -874,11 +926,15 @@ mod tests {
     #[test]
     fn the_feed_is_three_lines_without_discarding_drawer_history() {
         let mut log = CombatLog::default();
+        let mut chronology = ActivityChronology::default();
         for number in 0..8 {
-            log.push(LogLine {
-                text: number.to_string(),
-                danger: number == 6,
-            });
+            log.push(
+                LogLine {
+                    text: number.to_string(),
+                    danger: number == 6,
+                },
+                &mut chronology,
+            );
         }
 
         let feed: Vec<_> = visible_lines(&log, 3)
@@ -893,6 +949,61 @@ mod tests {
         assert_eq!(drawer, ["0", "1", "2", "3", "4", "5", "6", "7"]);
         assert!(log.lines.get(6).is_some_and(|line| line.danger));
         assert_eq!(log.lines.len(), 8, "opening the drawer is non-destructive");
+    }
+
+    #[test]
+    fn all_tab_keeps_late_activity_after_dense_combat_history() {
+        let mut chronology = ActivityChronology::default();
+        let mut activity = ActivityHistory::default();
+        let mut log = CombatLog::default();
+        activity.push(
+            LogLine {
+                text: "entered".to_owned(),
+                danger: false,
+            },
+            &mut chronology,
+        );
+        for number in 0..12 {
+            log.push(
+                LogLine {
+                    text: format!("combat {number}"),
+                    danger: false,
+                },
+                &mut chronology,
+            );
+        }
+        activity.push(
+            LogLine {
+                text: "formation changed".to_owned(),
+                danger: false,
+            },
+            &mut chronology,
+        );
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(log)
+            .insert_resource(activity)
+            .init_resource::<SelectedActivityTab>()
+            .init_resource::<ActivityLogView>()
+            .add_systems(Update, publish_view);
+        app.update();
+
+        let view = app.world().resource::<ActivityLogView>();
+        assert_eq!(view.lines.len(), DRAWER_LINES);
+        assert_eq!(
+            view.lines
+                .last()
+                .map(|line| (line.kind, line.text.as_str())),
+            Some((ActivityKind::Activity, "formation changed"))
+        );
+        assert_eq!(
+            view.lines
+                .iter()
+                .filter(|line| line.text == "formation changed")
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -917,6 +1028,7 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .add_message::<CombatEvent>()
             .init_resource::<CombatLog>()
+            .init_resource::<ActivityChronology>()
             .init_resource::<DamagePulse>()
             .init_resource::<UnitRegistry>()
             .init_resource::<FactionLatticeKnowledge>()
@@ -1015,6 +1127,7 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .add_message::<CombatEvent>()
             .init_resource::<CombatLog>()
+            .init_resource::<ActivityChronology>()
             .init_resource::<DamagePulse>()
             .init_resource::<UnitRegistry>()
             .init_resource::<FactionLatticeKnowledge>()
@@ -1083,6 +1196,7 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .add_message::<CombatEvent>()
             .init_resource::<CombatLog>()
+            .init_resource::<ActivityChronology>()
             .init_resource::<DamagePulse>()
             .init_resource::<UnitRegistry>()
             .init_resource::<FactionLatticeKnowledge>()
@@ -1184,6 +1298,7 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .add_message::<CombatEvent>()
             .init_resource::<CombatLog>()
+            .init_resource::<ActivityChronology>()
             .init_resource::<DamagePulse>()
             .init_resource::<UnitRegistry>()
             .init_resource::<FactionLatticeKnowledge>()

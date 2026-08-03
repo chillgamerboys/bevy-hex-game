@@ -395,6 +395,30 @@ impl HudState {
         HudActionResult::RuntimeChanged
     }
 
+    /// Closes Character content only when it belongs to the specified stale subject.
+    ///
+    /// Disclosure loss is not a generic Back action: an unrelated Compact Party or
+    /// Activity task opened after inspection must remain owned by the player.
+    pub fn close_character(&mut self, unit: UnitId) -> HudActionResult {
+        if self.decision_required() {
+            return HudActionResult::NoChange;
+        }
+        let mut changed = false;
+        if self.transient == Some(HudTransientSurface::Character(unit)) {
+            self.transient = None;
+            changed = true;
+        }
+        if self.main_view == MainViewDestination::Character(unit) {
+            self.main_view = MainViewDestination::Closed;
+            changed = true;
+        }
+        if changed {
+            HudActionResult::RuntimeChanged
+        } else {
+            HudActionResult::NoChange
+        }
+    }
+
     /// Forces the required-decision Main View and clears any competing temporary task.
     pub fn require_decision(&mut self) -> HudActionResult {
         if self.decision_required() {
@@ -732,6 +756,56 @@ mod tests {
         state.activate_component(HudComponent::Activity, context);
         assert_eq!(state.raw_transient(), None);
         assert_eq!(state.preferences(), preferences);
+    }
+
+    #[test]
+    fn stale_character_closure_never_dismisses_an_unrelated_task() {
+        let context = HudContext::compact(HudContextEligibility::all());
+        let mut state = HudState::default();
+        state.open_character(UnitId(7), context);
+        assert_eq!(state.close_character(UnitId(8)), HudActionResult::NoChange);
+        assert_eq!(
+            state.raw_transient(),
+            Some(HudTransientSurface::Character(UnitId(7)))
+        );
+        assert_eq!(
+            state.close_character(UnitId(7)),
+            HudActionResult::RuntimeChanged
+        );
+
+        state.activate_component(HudComponent::Party, context);
+        assert_eq!(state.close_character(UnitId(7)), HudActionResult::NoChange);
+        assert_eq!(
+            state.raw_transient(),
+            Some(HudTransientSurface::Component(HudComponent::Party))
+        );
+    }
+
+    #[test]
+    fn stale_character_closure_clears_stored_and_compact_routes_together() {
+        let standard = HudContext::standard(HudContextEligibility::all());
+        let compact = HudContext::compact(HudContextEligibility::all());
+        let unit = UnitId(7);
+        let mut state = HudState::default();
+
+        state.open_character(unit, standard);
+        state.open_character(unit, compact);
+        assert_eq!(
+            state.stored_main_view(),
+            MainViewDestination::Character(unit)
+        );
+        assert_eq!(
+            state.raw_transient(),
+            Some(HudTransientSurface::Character(unit))
+        );
+
+        assert_eq!(state.close_character(unit), HudActionResult::RuntimeChanged);
+        assert_eq!(state.stored_main_view(), MainViewDestination::Closed);
+        assert_eq!(state.raw_transient(), None);
+        assert_eq!(
+            state.effective_main_view(standard),
+            MainViewDestination::Closed
+        );
     }
 
     #[test]
