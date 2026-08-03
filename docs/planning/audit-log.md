@@ -7,6 +7,24 @@ file is the record that travels with the repo.
 
 <!-- /audit-diff appends below this line. Don't insert content between this comment and Wave entries; the skill anchors on this marker. -->
 
+## Wave 28 — feat(ui): add SVG-backed hex-grid logo (2026-08-02)
+
+- **PR**: #181 — `shrav-k/logo-elemental-grid-assets`
+- **Outcome**: green
+- **Lenses triggered**: none; all eight code lenses, the documentation lenses, and
+  the fresh-eyes pass were reviewed
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| — | — | — | no findings |
+
+**Notes**: the editable SVG masters parse cleanly and regenerate the checked-in
+transparent PNGs byte-for-byte at their authored dimensions. Runtime use remains
+presentation-only, preserves the logo's aspect ratio and spoken label, and stages the
+dedicated compact mark without claiming native icon embedding. Responsive native
+captures were crisp and unobstructed; the automated full walk and named-human
+visual/taste review remain separate merge gates.
+
 ## Wave 27 — feat: establish spell resolution contract foundation (2026-08-02)
 
 - **PR**: #178 — `feat/spell-resolution-foundation`
