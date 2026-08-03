@@ -69,7 +69,11 @@ pub enum InputAction {
 }
 
 impl InputAction {
-    /// All actions in their stable Settings presentation order.
+    /// All serializable actions in their stable presentation order.
+    ///
+    /// Consumers which dispatch or present actions must use
+    /// [`InputActionInventory::active`] instead. This complete vocabulary also
+    /// contains actions which are absent from the shipping product graph.
     pub const ALL: [Self; 28] = [
         Self::Cancel,
         Self::Pause,
@@ -268,6 +272,48 @@ impl InputAction {
             Self::PartySlot6 => Some(5),
             _ => None,
         }
+    }
+
+    const fn is_development_only(self) -> bool {
+        matches!(self, Self::RevealAll)
+    }
+
+    const fn yields_to_focused_activation(self) -> bool {
+        matches!(self, Self::Confirm | Self::NextTarget | Self::EndTurn)
+    }
+}
+
+/// Compile-selected set of keyboard actions active in this product graph.
+///
+/// Development-only variants remain part of [`InputAction`]'s serialized
+/// vocabulary so preferences can cross between development and shipping builds.
+/// They participate in presentation and conflict detection only when the
+/// `dev-input` feature is enabled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InputActionInventory {
+    include_development: bool,
+}
+
+impl InputActionInventory {
+    /// Inventory active for the current compile-time feature graph.
+    #[must_use]
+    pub const fn active() -> Self {
+        Self {
+            include_development: cfg!(feature = "dev-input"),
+        }
+    }
+
+    /// Whether this product graph contains an action.
+    #[must_use]
+    pub const fn contains(self, action: InputAction) -> bool {
+        self.include_development || !action.is_development_only()
+    }
+
+    /// Iterate active actions in stable Settings presentation order.
+    pub fn iter(self) -> impl Iterator<Item = InputAction> {
+        InputAction::ALL
+            .into_iter()
+            .filter(move |action| self.contains(*action))
     }
 }
 
@@ -564,6 +610,58 @@ impl InputBindingOverrides {
         self.0.is_empty()
     }
 
+    /// Whether any override belongs to the active product graph.
+    ///
+    /// A shipping build can therefore retain a serialized development override
+    /// without exposing a phantom Restore All affordance.
+    #[must_use]
+    pub fn has_active_overrides(&self) -> bool {
+        let inventory = InputActionInventory::active();
+        self.0.keys().any(|action| inventory.contains(*action))
+    }
+
+    /// Rehomes development-only bindings which collide after crossing product graphs.
+    ///
+    /// Shipping builds deliberately neither reserve chords for inactive tooling nor
+    /// discard its serialized preferences. When those preferences are opened by a
+    /// development build again, this gives the tooling action a deterministic free
+    /// fallback rather than rejecting unrelated player settings.
+    ///
+    /// # Errors
+    ///
+    /// Returns the original conflict if no fallback chord can be found. The override
+    /// map remains unchanged on failure.
+    pub fn reconcile_active_development_conflicts(&mut self) -> Result<bool, BindingEditError> {
+        let inventory = InputActionInventory::active();
+        if !inventory.include_development {
+            return Ok(false);
+        }
+
+        let mut repaired = self.clone();
+        let mut changed = false;
+        for action in InputAction::ALL
+            .into_iter()
+            .filter(|action| action.is_development_only())
+        {
+            let bindings = InputBindings::from_overrides(repaired.clone());
+            let requested = bindings.chord(action);
+            let Some(conflict) = bindings.conflict_for(action, requested) else {
+                continue;
+            };
+            let Some(fallback) = development_fallback_chords()
+                .find(|chord| bindings.conflict_for(action, *chord).is_none())
+            else {
+                return Err(BindingEditError::Conflict(conflict));
+            };
+            repaired.store(action, fallback);
+            changed = true;
+        }
+        if changed {
+            *self = repaired;
+        }
+        Ok(changed)
+    }
+
     /// Persisted override for one action, if present.
     #[must_use]
     pub fn get(&self, action: InputAction) -> Option<KeyChord> {
@@ -581,10 +679,14 @@ impl InputBindingOverrides {
     ///
     /// Returns the first deterministic binding error.
     pub fn validate(&self) -> Result<(), BindingEditError> {
+        let inventory = InputActionInventory::active();
         let bindings = InputBindings {
             overrides: self.clone(),
         };
-        for (action, chord) in self.iter() {
+        for (action, chord) in self
+            .iter()
+            .filter(|(action, _)| inventory.contains(*action))
+        {
             if !action.metadata().rebindable {
                 return Err(BindingEditError::FixedAction(action));
             }
@@ -592,8 +694,9 @@ impl InputBindingOverrides {
                 return Err(BindingEditError::ModifierOnly(action));
             }
             validate_gameplay_escape_reservation(action, chord)?;
+            validate_focus_activation_reservation(action, chord)?;
         }
-        for action in InputAction::ALL {
+        for action in inventory.iter() {
             if let Some(conflict) = bindings.conflict_for(action, bindings.chord(action)) {
                 if action < conflict.existing {
                     return Err(BindingEditError::Conflict(conflict));
@@ -610,6 +713,59 @@ impl InputBindingOverrides {
             self.0.insert(action, chord);
         }
     }
+
+    fn clear_active(&mut self) {
+        let inventory = InputActionInventory::active();
+        self.0.retain(|action, _| !inventory.contains(*action));
+    }
+}
+
+fn development_fallback_chords() -> impl Iterator<Item = KeyChord> {
+    const KEYS: [KeyCode; 13] = [
+        KeyCode::KeyK,
+        KeyCode::F1,
+        KeyCode::F2,
+        KeyCode::F3,
+        KeyCode::F4,
+        KeyCode::F5,
+        KeyCode::F6,
+        KeyCode::F7,
+        KeyCode::F8,
+        KeyCode::F9,
+        KeyCode::F10,
+        KeyCode::F11,
+        KeyCode::F12,
+    ];
+    const MODIFIERS: [KeyModifiers; 4] = [
+        KeyModifiers {
+            control: false,
+            alt: false,
+            shift: true,
+            super_key: false,
+        },
+        KeyModifiers {
+            control: true,
+            alt: false,
+            shift: false,
+            super_key: false,
+        },
+        KeyModifiers {
+            control: false,
+            alt: true,
+            shift: false,
+            super_key: false,
+        },
+        KeyModifiers {
+            control: false,
+            alt: false,
+            shift: false,
+            super_key: true,
+        },
+    ];
+
+    MODIFIERS
+        .into_iter()
+        .flat_map(|modifiers| KEYS.into_iter().map(move |key| KeyChord { key, modifiers }))
 }
 
 /// One existing action that would collide with a requested binding.
@@ -626,12 +782,16 @@ pub struct BindingConflict {
 /// Refusal from a binding edit or persisted-override validation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BindingEditError {
+    /// The action is not compiled into this product graph.
+    UnavailableAction(InputAction),
     /// Fixed navigation actions cannot be overridden.
     FixedAction(InputAction),
     /// A standard modifier cannot be the primary key.
     ModifierOnly(InputAction),
     /// Escape remains reserved for closing HUD tasks and the Pause fallback.
     ReservedGameplayEscape(InputAction),
+    /// Enter and Space activate a focused UI control before ordinary gameplay.
+    ReservedFocusedActivation(InputAction),
     /// Another action already uses the chord in an overlapping context.
     Conflict(BindingConflict),
 }
@@ -639,6 +799,9 @@ pub enum BindingEditError {
 impl fmt::Display for BindingEditError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::UnavailableAction(action) => {
+                write!(formatter, "{} is unavailable", action.metadata().label)
+            }
             Self::FixedAction(action) => {
                 write!(formatter, "{} is fixed", action.metadata().label)
             }
@@ -652,6 +815,11 @@ impl fmt::Display for BindingEditError {
                 "Esc is reserved for closing HUD tasks and cannot be assigned to {}",
                 action.metadata().label
             ),
+            Self::ReservedFocusedActivation(action) => write!(
+                formatter,
+                "Enter and Space are reserved for focused controls and cannot be assigned to {}",
+                action.metadata().label
+            ),
             Self::Conflict(conflict) => write!(
                 formatter,
                 "{} is already assigned to {}",
@@ -663,6 +831,15 @@ impl fmt::Display for BindingEditError {
 }
 
 impl std::error::Error for BindingEditError {}
+
+/// Successful result of restoring one action's canonical chord.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BindingRestoreOutcome {
+    /// The action already used its canonical chord.
+    Unchanged,
+    /// A persisted override was removed.
+    Restored,
+}
 
 /// Resolved default-plus-override keyboard bindings.
 #[derive(Resource, Debug, Clone, Default)]
@@ -722,7 +899,8 @@ impl InputBindings {
     ///
     /// # Errors
     ///
-    /// Refuses fixed actions, modifier-only chords, or an overlapping conflict.
+    /// Refuses unavailable or fixed actions, modifier-only chords, reserved UI
+    /// activation keys, or an overlapping conflict.
     pub fn assign(&mut self, action: InputAction, chord: KeyChord) -> Result<(), BindingEditError> {
         validate_editable_chord(action, chord)?;
         if let Some(conflict) = self.conflict_for(action, chord) {
@@ -736,7 +914,8 @@ impl InputBindings {
     ///
     /// # Errors
     ///
-    /// Refuses fixed actions or any third-action conflict created by the swap.
+    /// Refuses unavailable or fixed actions, modifier-only or reserved chords, or
+    /// any third-action conflict created by the swap.
     pub fn swap(
         &mut self,
         first: InputAction,
@@ -760,14 +939,33 @@ impl InputBindings {
         Ok(())
     }
 
-    /// Restore one action's canonical default.
-    pub fn restore(&mut self, action: InputAction) {
-        self.overrides.0.remove(&action);
+    /// Restore one action's canonical default without stealing another chord.
+    ///
+    /// # Errors
+    ///
+    /// Refuses an unavailable or fixed action, or an overlapping conflict. The
+    /// override map is left byte-for-byte unchanged on refusal.
+    pub fn restore(
+        &mut self,
+        action: InputAction,
+    ) -> Result<BindingRestoreOutcome, BindingEditError> {
+        let default = action.metadata().default_chord;
+        validate_editable_chord(action, default)?;
+        if let Some(conflict) = self.conflict_for(action, default) {
+            return Err(BindingEditError::Conflict(conflict));
+        }
+        let outcome = if self.overrides.get(action).is_some() {
+            BindingRestoreOutcome::Restored
+        } else {
+            BindingRestoreOutcome::Unchanged
+        };
+        self.overrides.store(action, default);
+        Ok(outcome)
     }
 
     /// Restore every canonical default.
     pub fn restore_all(&mut self) {
-        self.overrides.0.clear();
+        self.overrides.clear_active();
     }
 
     fn conflict_for_except(
@@ -777,7 +975,7 @@ impl InputBindings {
         except: Option<InputAction>,
     ) -> Option<BindingConflict> {
         let requested_context = requested.metadata().context;
-        InputAction::ALL.into_iter().find_map(|existing| {
+        InputActionInventory::active().iter().find_map(|existing| {
             (existing != requested
                 && Some(existing) != except
                 && requested_context.overlaps(existing.metadata().context)
@@ -792,6 +990,9 @@ impl InputBindings {
 }
 
 fn validate_editable_chord(action: InputAction, chord: KeyChord) -> Result<(), BindingEditError> {
+    if !InputActionInventory::active().contains(action) {
+        return Err(BindingEditError::UnavailableAction(action));
+    }
     if !action.metadata().rebindable {
         return Err(BindingEditError::FixedAction(action));
     }
@@ -799,6 +1000,7 @@ fn validate_editable_chord(action: InputAction, chord: KeyChord) -> Result<(), B
         return Err(BindingEditError::ModifierOnly(action));
     }
     validate_gameplay_escape_reservation(action, chord)?;
+    validate_focus_activation_reservation(action, chord)?;
     Ok(())
 }
 
@@ -808,6 +1010,18 @@ fn validate_gameplay_escape_reservation(
 ) -> Result<(), BindingEditError> {
     if chord.key == KeyCode::Escape && action != InputAction::Pause {
         return Err(BindingEditError::ReservedGameplayEscape(action));
+    }
+    Ok(())
+}
+
+fn validate_focus_activation_reservation(
+    action: InputAction,
+    chord: KeyChord,
+) -> Result<(), BindingEditError> {
+    if matches!(chord.key, KeyCode::Enter | KeyCode::Space)
+        && !action.yields_to_focused_activation()
+    {
+        return Err(BindingEditError::ReservedFocusedActivation(action));
     }
     Ok(())
 }
@@ -923,9 +1137,16 @@ mod tests {
         assert_eq!(bindings.overrides().iter().count(), 1);
         assert_eq!(bindings.chord(InputAction::ToggleParty).key, KeyCode::KeyY);
 
-        bindings.restore(InputAction::ToggleParty);
+        assert_eq!(
+            bindings.restore(InputAction::ToggleParty),
+            Ok(BindingRestoreOutcome::Restored)
+        );
         assert!(bindings.overrides().is_empty());
         assert_eq!(bindings.chord(InputAction::ToggleParty).key, KeyCode::KeyP);
+        assert_eq!(
+            bindings.restore(InputAction::ToggleParty),
+            Ok(BindingRestoreOutcome::Unchanged)
+        );
     }
 
     #[test]
@@ -952,6 +1173,162 @@ mod tests {
             KeyCode::KeyP
         );
         assert_eq!(bindings.overrides().iter().count(), 2);
+    }
+
+    #[test]
+    fn restoring_one_side_of_a_swap_is_conflict_safe_and_atomic() {
+        let mut bindings = InputBindings::default();
+        bindings
+            .swap(InputAction::ToggleParty, InputAction::ToggleInitiative)
+            .expect("two ordinary HUD bindings can swap");
+        let before = bindings.overrides().clone();
+
+        let conflict = bindings
+            .restore(InputAction::ToggleParty)
+            .expect_err("initiative still owns Party's canonical P chord");
+        assert_eq!(
+            conflict,
+            BindingEditError::Conflict(BindingConflict {
+                requested: InputAction::ToggleParty,
+                existing: InputAction::ToggleInitiative,
+                chord: KeyChord::plain(KeyCode::KeyP),
+            })
+        );
+        assert_eq!(bindings.overrides(), &before, "restore refusal is atomic");
+        bindings
+            .overrides()
+            .validate()
+            .expect("refused restore preserves valid persisted preferences");
+
+        bindings
+            .swap(InputAction::ToggleParty, InputAction::ToggleInitiative)
+            .expect("the explicit conflict swap restores both canonical chords");
+        assert!(bindings.overrides().is_empty());
+    }
+
+    #[test]
+    fn focused_activation_keys_are_limited_to_focus_aware_gameplay_actions() {
+        let mut bindings = InputBindings::default();
+        let before = bindings.overrides().clone();
+        assert_eq!(
+            bindings.assign(InputAction::ToggleParty, KeyChord::plain(KeyCode::Enter)),
+            Err(BindingEditError::ReservedFocusedActivation(
+                InputAction::ToggleParty
+            ))
+        );
+        assert_eq!(bindings.overrides(), &before);
+        assert_eq!(
+            bindings.swap(InputAction::ToggleParty, InputAction::Confirm),
+            Err(BindingEditError::ReservedFocusedActivation(
+                InputAction::ToggleParty
+            ))
+        );
+        assert_eq!(bindings.overrides(), &before, "refused swap is atomic");
+
+        bindings
+            .swap(InputAction::Confirm, InputAction::EndTurn)
+            .expect("both actions yield Enter and Space to a focused control");
+        assert_eq!(bindings.chord(InputAction::Confirm).key, KeyCode::Space);
+        assert_eq!(bindings.chord(InputAction::EndTurn).key, KeyCode::Enter);
+    }
+
+    #[cfg(not(feature = "dev-input"))]
+    #[test]
+    fn shipping_inventory_neither_reserves_nor_surfaces_development_actions() {
+        let overrides = InputBindingOverrides(BTreeMap::from([(
+            InputAction::RevealAll,
+            KeyChord::plain(KeyCode::KeyP),
+        )]));
+        overrides
+            .validate()
+            .expect("shipping validation ignores an inactive development override");
+        assert!(!InputActionInventory::active().contains(InputAction::RevealAll));
+        assert!(!overrides.has_active_overrides());
+
+        let mut bindings = InputBindings::from_overrides(overrides.clone());
+        bindings
+            .assign(InputAction::ToggleParty, KeyChord::plain(KeyCode::KeyK))
+            .expect("shipping does not reserve Reveal All's canonical chord");
+        bindings.restore_all();
+        assert_eq!(bindings.overrides(), &overrides);
+        let mut preserved = overrides.clone();
+        assert_eq!(
+            preserved.reconcile_active_development_conflicts(),
+            Ok(false)
+        );
+        assert_eq!(preserved, overrides);
+        assert_eq!(
+            bindings.assign(InputAction::RevealAll, KeyChord::plain(KeyCode::KeyY)),
+            Err(BindingEditError::UnavailableAction(InputAction::RevealAll))
+        );
+    }
+
+    #[cfg(feature = "dev-input")]
+    #[test]
+    fn development_inventory_detects_reveal_all_collisions() {
+        assert!(InputActionInventory::active().contains(InputAction::RevealAll));
+        let mut bindings = InputBindings::default();
+        assert_eq!(
+            bindings.conflict_for(InputAction::ToggleParty, KeyChord::plain(KeyCode::KeyK)),
+            Some(BindingConflict {
+                requested: InputAction::ToggleParty,
+                existing: InputAction::RevealAll,
+                chord: KeyChord::plain(KeyCode::KeyK),
+            })
+        );
+        assert!(matches!(
+            bindings.assign(InputAction::ToggleParty, KeyChord::plain(KeyCode::KeyK)),
+            Err(BindingEditError::Conflict(BindingConflict {
+                existing: InputAction::RevealAll,
+                ..
+            }))
+        ));
+
+        let persisted = InputBindingOverrides(BTreeMap::from([(
+            InputAction::RevealAll,
+            KeyChord::plain(KeyCode::KeyP),
+        )]));
+        assert!(matches!(
+            persisted.validate(),
+            Err(BindingEditError::Conflict(BindingConflict {
+                requested: InputAction::ToggleParty,
+                existing: InputAction::RevealAll,
+                ..
+            }))
+        ));
+    }
+
+    #[cfg(feature = "dev-input")]
+    #[test]
+    fn development_inventory_repairs_cross_build_conflicts_without_losing_player_bindings() {
+        for mut overrides in [
+            InputBindingOverrides(BTreeMap::from([(
+                InputAction::RevealAll,
+                KeyChord::plain(KeyCode::KeyP),
+            )])),
+            InputBindingOverrides(BTreeMap::from([(
+                InputAction::ToggleParty,
+                KeyChord::plain(KeyCode::KeyK),
+            )])),
+        ] {
+            let player_binding = overrides.get(InputAction::ToggleParty);
+            assert!(overrides.validate().is_err());
+            assert_eq!(overrides.reconcile_active_development_conflicts(), Ok(true));
+            overrides
+                .validate()
+                .expect("development tooling is moved to a free fallback chord");
+            assert_eq!(overrides.get(InputAction::ToggleParty), player_binding);
+            assert_eq!(
+                InputBindings::from_overrides(overrides).chord(InputAction::RevealAll),
+                KeyChord {
+                    key: KeyCode::KeyK,
+                    modifiers: KeyModifiers {
+                        shift: true,
+                        ..KeyModifiers::default()
+                    },
+                }
+            );
+        }
     }
 
     #[test]

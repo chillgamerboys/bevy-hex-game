@@ -57,9 +57,9 @@ only from the Creator's local mechanics test.
 | Deployment Review | complete 1v1 and sparse 6v6 | Undo, Return to Sandbox, Start Combat | every occupied slot has one unique exact surface; earlier slots can be selected for repositioning; exact launch remains frozen only after Start |
 | Sandbox outcome | Victory and Defeat | Retry Exact, Return to Sandbox | no telemetry/report controls; retry retains launch snapshot identity |
 | Settings General | authored and persisted values | Back | changes save immediately; all controls have labels; chosen presentation survives restart |
-| Settings Keybindings | all categories | Back, category tabs, Restore per row, Restore All | Gameplay, Interface, Main View, Camera, and System are complete and stably ordered; fixed UI navigation is identified |
+| Settings Keybindings | all categories | Back, category tabs, Restore per row, Restore All | Gameplay, Interface, Main View, Camera, and System are complete and stably ordered; shipping omits development-only actions; fixed UI navigation is identified |
 | Settings key capture | one rebindable row | Cancel capture | next non-modifier key is captured at highest priority and does not reach gameplay; Escape cancels |
-| Settings key conflict | overlapping-context collision | Swap, Cancel | no silent stealing; Swap updates both rows atomically; Cancel preserves both |
+| Settings key conflict | overlapping-context collision or row restore after Swap | Swap, Cancel | no silent stealing; Swap updates both rows atomically; Cancel preserves both; a refused restore leaves persisted overrides valid and unchanged |
 | Gameplay exploration | default preferences | Party and eligible Action Bar | Party visible, Initiative ineligible, Activity closed, Main View closed; no redundant screen residue |
 | Gameplay player turn | maximum eligible actions | Party, Initiative, Action Bar | stable disclosed order and every authorized control; world movement feedback remains unobscured; no duplicate actor/round/budget summary |
 | Gameplay hostile turn | mixed disclosed order | Initiative | no player action affordance; disclosed hostile is inspectable and an unobserved hostile is not activatable or locatable |

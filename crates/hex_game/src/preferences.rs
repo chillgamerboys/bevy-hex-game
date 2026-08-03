@@ -185,19 +185,25 @@ fn load_preferences(
     paths: Res<StoragePaths>,
     mut preferences: ResMut<UserPreferences>,
     mut notice: ResMut<PreferencesNotice>,
+    mut dirty: ResMut<PreferencesDirty>,
     mut origin: ResMut<PreferencesOrigin>,
 ) {
     match read(&paths.preferences) {
         Ok(text) => match ron::from_str::<UserPreferences>(&text)
             .map_err(|error| error.to_string())
             .and_then(|loaded| {
-                let loaded = loaded.upgrade()?;
+                let mut loaded = loaded.upgrade()?;
+                let repaired_development_binding = loaded
+                    .binding_overrides
+                    .reconcile_active_development_conflicts()
+                    .map_err(|error| format!("input bindings are invalid: {error}"))?;
                 loaded.validate()?;
-                Ok(loaded)
+                Ok((loaded, repaired_development_binding))
             }) {
-            Ok(loaded) => {
+            Ok((loaded, repaired_development_binding)) => {
                 *preferences = loaded;
                 origin.persisted = true;
+                dirty.0 = repaired_development_binding;
             }
             Err(reason) => {
                 notice.0 = Some(format!(

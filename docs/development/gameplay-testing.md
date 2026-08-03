@@ -258,7 +258,11 @@ HUD adapter evidence exhausts saved preferences, contextual eligibility, master 
 phase suppression, Standard/Compact behavior, temporary summons, and required
 decisions without using pixels. It drives configurable bindings through the real
 highest-priority capture seam, including Escape cancellation, Swap/Cancel conflicts,
-row restore, confirmed Restore All, and schema-v3 restart. Inspection cases prove
+conflict-safe row restore after a swap, focused Enter/Space refusal, confirmed Restore
+All, shipping/development action-inventory separation, and schema-v3 restart.
+Cross-build restart coverage also proves a development-only binding is deterministically
+rehomed when a shipping edit later occupies its chord without rewriting player actions.
+Inspection cases prove
 first activation centers one disclosed subject, repeated activation opens Character
 Main View, Character camera follows, and selection, turn, caster, command ownership,
 formation, and unobserved hostile location remain unchanged.

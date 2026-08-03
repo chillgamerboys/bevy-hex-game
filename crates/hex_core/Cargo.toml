@@ -7,6 +7,10 @@ description = "Shared vocabulary and pure domain logic: hex coordinates, voxels,
 
 [features]
 default = []
+# Compile development-only keyboard actions into the active binding inventory.
+# The variants remain serializable without this feature so a shipping build can
+# safely read preferences last written by a development build.
+dev-input = []
 # Deterministic scenario inputs are available to tests and review tooling, never the
 # default shipping dependency graph.
 test-support = []

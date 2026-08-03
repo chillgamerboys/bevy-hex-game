@@ -441,12 +441,21 @@ before falling back. Local preferences are user state, not hot-reloaded project
 content.
 
 `InputBindings` centralizes stable input actions, canonical defaults, categories, and
-context-aware keyboard overrides. Settings captures one non-modifier key, resolves
-overlapping-context conflicts through explicit Swap or Cancel, and persists only
-overrides in preferences schema v3. Fixed Tab, focused Enter/Space, and Escape UI
-navigation semantics are outside that remapping surface. `AudioBusVolumes` and the
-audio facade similarly reserve music, SFX, and UI seams without requiring Wave 5 to
-ship audio content.
+context-aware keyboard overrides. A compile-selected `InputActionInventory` excludes
+development-only actions from shipping presentation and conflict validation while
+retaining their serialized overrides for a later development build. If shipping edits
+later occupy that tooling chord, development startup rehomes only the tooling action to
+a deterministic free modified chord and atomically persists the repaired preferences.
+Settings captures
+one non-modifier key, resolves overlapping-context conflicts through explicit Swap or
+Cancel, and persists only overrides in preferences schema v3. Row restore is an atomic
+binding edit: if another row owns the canonical chord it opens the same explicit
+conflict flow instead of creating a duplicate. Fixed Tab and Escape UI navigation stay
+outside that remapping surface. Enter and Space may bind only to the gameplay actions
+whose handlers explicitly yield to a focused control, preventing one press from also
+dispatching an unrelated gameplay action. `AudioBusVolumes` and the audio facade
+similarly reserve music, SFX, and UI seams without requiring Wave 5 to ship audio
+content.
 
 **Hex geometry constants deliberately stayed in Rust.** `HEX_INNER_RADIUS` and its
 derivations in `hex_core::config` describe the dimensions of `hex.glb`. Editing

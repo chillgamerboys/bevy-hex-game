@@ -619,7 +619,7 @@ fn spawn_settings_modal(
                         card.spawn(heading(assets, "Restore all bindings?"));
                         card.spawn(blurb(
                             assets,
-                            "Every keyboard override will return to its canonical default.",
+                            "Every binding shown in Settings will return to its canonical default.",
                         ));
                         card.spawn((
                             button("Confirm Restore All Keybindings"),

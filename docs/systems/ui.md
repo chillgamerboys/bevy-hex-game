@@ -223,8 +223,16 @@ Camera, and System. One action owns one key chord in this slice. Rebinding captu
 the next non-modifier key at highest input priority, Escape cancels, and no captured
 key reaches gameplay. A conflict in an overlapping context offers Swap or Cancel and
 never silently steals a binding; exclusive Menu and Gameplay uses may coexist. Each
-row can restore its default, and Restore All requires confirmation. Tab, focused
-Enter/Space activation, and Escape navigation remain fixed UI semantics.
+row can restore its default, but a default currently owned after a swap reuses that
+conflict modal and leaves preferences unchanged until the player chooses. Restore All
+requires confirmation and affects only the active action inventory. Shipping excludes
+the development-only Reveal Knowledge action from rows, conflicts, and Restore All,
+while preserving its serialized override for a later development run. If a shipping
+edit occupies that chord, development startup moves only Reveal Knowledge to the first
+free deterministic modified chord instead of rejecting the player's other settings.
+Enter and Space are accepted only for Confirm Decision, Next Target, and End Turn,
+whose handlers already yield to a focused control. Tab and Escape navigation remain
+fixed UI semantics.
 
 This foundation uses Bevy's stable tab navigation, focus, accessibility, image
 render targets, and screenshot components. The global `UiScale` remains 1.0;

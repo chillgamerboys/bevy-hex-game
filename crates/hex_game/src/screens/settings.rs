@@ -2,7 +2,8 @@
 
 use bevy::prelude::*;
 use hex_core::{
-    BindingConflict, BindingEditError, InputAction, InputBindings, KeyChord, KeyModifiers, Screen,
+    BindingConflict, BindingEditError, BindingRestoreOutcome, InputAction, InputActionInventory,
+    InputBindings, KeyChord, KeyModifiers, Screen,
 };
 use hex_ui::{
     SettingsIntent, SettingsModalView, SettingsTab, UiBindingRow, UiIntent, UiSetting,
@@ -133,7 +134,7 @@ fn handle_settings(
                 dirty.0 = true;
             }
             SettingsIntent::BeginCapture(action) => {
-                if action.metadata().rebindable && action_is_available(action) {
+                if action.metadata().rebindable && InputActionInventory::active().contains(action) {
                     session.capture = Some(action);
                     session.conflict = None;
                     session.confirm_restore_all = false;
@@ -155,16 +156,20 @@ fn handle_settings(
             }
             SettingsIntent::CancelConflict => session.conflict = None,
             SettingsIntent::RestoreBinding(action) => {
-                if !action.metadata().rebindable || !action_is_available(action) {
+                if !action.metadata().rebindable || !InputActionInventory::active().contains(action)
+                {
                     continue;
                 }
-                let mut resolved =
-                    InputBindings::from_overrides(preferences.binding_overrides.clone());
-                resolved.restore(action);
-                store_bindings(&mut preferences, &mut dirty, &resolved);
+                restore_binding(
+                    action,
+                    &mut session,
+                    &mut preferences,
+                    &mut dirty,
+                    &mut notice,
+                );
             }
             SettingsIntent::RequestRestoreAll => {
-                if !preferences.binding_overrides.is_empty() {
+                if preferences.binding_overrides.has_active_overrides() {
                     session.confirm_restore_all = true;
                     session.capture = None;
                     session.conflict = None;
@@ -173,7 +178,9 @@ fn handle_settings(
             SettingsIntent::ConfirmRestoreAll => {
                 if session.confirm_restore_all {
                     session.confirm_restore_all = false;
-                    let resolved = InputBindings::default();
+                    let mut resolved =
+                        InputBindings::from_overrides(preferences.binding_overrides.clone());
+                    resolved.restore_all();
                     store_bindings(&mut preferences, &mut dirty, &resolved);
                 }
             }
@@ -195,6 +202,22 @@ fn store_bindings(
     if preferences.binding_overrides != *bindings.overrides() {
         preferences.binding_overrides = bindings.overrides().clone();
         dirty.0 = true;
+    }
+}
+
+fn restore_binding(
+    action: InputAction,
+    session: &mut SettingsSession,
+    preferences: &mut UserPreferences,
+    dirty: &mut PreferencesDirty,
+    notice: &mut PreferencesNotice,
+) {
+    let mut resolved = InputBindings::from_overrides(preferences.binding_overrides.clone());
+    match resolved.restore(action) {
+        Ok(BindingRestoreOutcome::Restored) => store_bindings(preferences, dirty, &resolved),
+        Ok(BindingRestoreOutcome::Unchanged) => {}
+        Err(BindingEditError::Conflict(conflict)) => session.conflict = Some(conflict),
+        Err(error) => notice.0 = Some(format!("Binding could not be restored: {error}")),
     }
 }
 
@@ -253,11 +276,9 @@ fn project_settings_view(
         .tab
         .input_category()
         .map_or_else(Vec::new, |category| {
-            InputAction::ALL
-                .into_iter()
-                .filter(|action| {
-                    action.metadata().category == category && action_is_available(*action)
-                })
+            InputActionInventory::active()
+                .iter()
+                .filter(|action| action.metadata().category == category)
                 .map(|action| {
                     let metadata = action.metadata();
                     UiBindingRow {
@@ -290,14 +311,10 @@ fn project_settings_view(
         tab: session.tab,
         rows,
         bindings,
-        can_restore_all: !preferences.binding_overrides.is_empty(),
+        can_restore_all: preferences.binding_overrides.has_active_overrides(),
         modal,
         notice,
     }
-}
-
-fn action_is_available(action: InputAction) -> bool {
-    action != InputAction::RevealAll || cfg!(feature = "dev")
 }
 
 fn general_rows(preferences: &UserPreferences) -> Vec<UiSettingRow> {
@@ -384,10 +401,30 @@ mod tests {
             .collect::<BTreeSet<_>>();
         assert_eq!(
             projected,
-            InputAction::ALL
-                .into_iter()
-                .filter(|action| action_is_available(*action))
+            InputActionInventory::active()
+                .iter()
                 .collect::<BTreeSet<_>>()
+        );
+    }
+
+    #[test]
+    fn development_binding_visibility_matches_the_feature_graph() {
+        let active = InputActionInventory::active().contains(InputAction::RevealAll);
+        assert_eq!(active, cfg!(feature = "dev"));
+
+        let view = project_settings_view(
+            &UserPreferences::default(),
+            &SettingsSession {
+                tab: SettingsTab::System,
+                ..default()
+            },
+            None,
+        );
+        assert_eq!(
+            view.bindings
+                .iter()
+                .any(|row| row.action == InputAction::RevealAll),
+            cfg!(feature = "dev")
         );
     }
 
@@ -534,5 +571,81 @@ mod tests {
         assert!(!world
             .resource::<ButtonInput<KeyCode>>()
             .just_pressed(KeyCode::Escape));
+    }
+
+    #[test]
+    fn capture_refuses_focused_activation_keys_for_non_focus_aware_actions() {
+        let mut world = World::new();
+        world.init_resource::<SettingsSession>();
+        world.init_resource::<UserPreferences>();
+        world.init_resource::<PreferencesDirty>();
+        world.init_resource::<PreferencesNotice>();
+        world.init_resource::<ButtonInput<KeyCode>>();
+        world.resource_mut::<SettingsSession>().capture = Some(InputAction::ToggleParty);
+        world
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Enter);
+
+        world
+            .run_system_once(capture_next_key)
+            .expect("capture system has all required resources");
+
+        assert!(world.resource::<SettingsSession>().capture.is_none());
+        assert!(world.resource::<SettingsSession>().conflict.is_none());
+        assert!(world
+            .resource::<UserPreferences>()
+            .binding_overrides
+            .is_empty());
+        assert!(!world.resource::<PreferencesDirty>().0);
+        assert!(world
+            .resource::<PreferencesNotice>()
+            .0
+            .as_deref()
+            .is_some_and(|notice| notice.contains("focused controls")));
+        assert!(!world
+            .resource::<ButtonInput<KeyCode>>()
+            .just_pressed(KeyCode::Enter));
+    }
+
+    #[test]
+    fn row_restore_after_swap_opens_conflict_without_mutating_preferences() {
+        let mut bindings = InputBindings::default();
+        bindings
+            .swap(InputAction::ToggleParty, InputAction::ToggleInitiative)
+            .expect("ordinary HUD chords can swap");
+        let mut preferences = UserPreferences::default();
+        preferences.binding_overrides = bindings.overrides().clone();
+        let before = preferences.binding_overrides.clone();
+        let mut session = SettingsSession::default();
+        let mut dirty = PreferencesDirty::default();
+        let mut notice = PreferencesNotice::default();
+
+        restore_binding(
+            InputAction::ToggleParty,
+            &mut session,
+            &mut preferences,
+            &mut dirty,
+            &mut notice,
+        );
+
+        assert_eq!(preferences.binding_overrides, before);
+        preferences
+            .binding_overrides
+            .validate()
+            .expect("restore refusal preserves valid persisted preferences");
+        assert!(!dirty.0);
+        assert!(notice.0.is_none());
+        assert_eq!(
+            session.conflict,
+            Some(BindingConflict {
+                requested: InputAction::ToggleParty,
+                existing: InputAction::ToggleInitiative,
+                chord: KeyChord::plain(KeyCode::KeyP),
+            })
+        );
+        assert!(matches!(
+            project_settings_view(&preferences, &session, None).modal,
+            Some(SettingsModalView::Conflict { ref chord, .. }) if chord == "P"
+        ));
     }
 }

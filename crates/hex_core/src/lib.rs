@@ -52,8 +52,9 @@ pub use formation::{
 };
 pub use hex::{HexCoord, HexGrid, HexSpan, HexTile, Sextant};
 pub use input::{
-    BindingConflict, BindingEditError, InputAction, InputActionMetadata, InputBindingOverrides,
-    InputBindings, InputCategory, InputContext, KeyChord, KeyModifiers,
+    BindingConflict, BindingEditError, BindingRestoreOutcome, InputAction, InputActionInventory,
+    InputActionMetadata, InputBindingOverrides, InputBindings, InputCategory, InputContext,
+    KeyChord, KeyModifiers,
 };
 pub use lattice_ids::{EnchantId, LatticeCoord};
 pub use occupancy::{OccupancyBlock, UnitOccupancy};
