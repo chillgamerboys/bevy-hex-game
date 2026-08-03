@@ -1059,6 +1059,38 @@ class TestScopeTests(unittest.TestCase):
                 "spell_resolution_contracts", self.config
             )
 
+    def test_nextest_listing_disables_color_for_stable_identities(self) -> None:
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="hex_core::contracts exact_identity: test\n",
+            stderr="",
+        )
+        with mock.patch.object(
+            test_scope.subprocess,
+            "run",
+            return_value=completed,
+        ) as run:
+            listed = test_scope._listed_tests(
+                ["cargo", "nextest", "list", "--profile", "ci"]
+            )
+
+        self.assertEqual(
+            listed, {"hex_core::contracts exact_identity: test"}
+        )
+        self.assertEqual(
+            run.call_args.args[0],
+            [
+                "cargo",
+                "nextest",
+                "list",
+                "--color",
+                "never",
+                "--profile",
+                "ci",
+            ],
+        )
+
     def test_local_skill_checks_selection_and_splits_portably(self) -> None:
         skill = (ROOT / ".claude" / "skills" / "test-local" / "SKILL.md").read_text(
             encoding="utf-8"

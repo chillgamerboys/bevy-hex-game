@@ -770,8 +770,11 @@ def check_workspace_graph(concern: str, config: dict[str, Any]) -> None:
 def _listed_tests(command: list[str]) -> set[str]:
     """Run one list command and return its stable test identities."""
 
+    stable_command = list(command)
+    if stable_command[:3] == ["cargo", "nextest", "list"]:
+        stable_command[3:3] = ["--color", "never"]
     result = subprocess.run(
-        command,
+        stable_command,
         cwd=REPOSITORY_ROOT,
         check=True,
         capture_output=True,
