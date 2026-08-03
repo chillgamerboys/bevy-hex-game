@@ -170,6 +170,7 @@ fn reset_outcome_view(mut view: ResMut<OutcomeView>) {
 }
 
 fn handle_party_strip(
+    mut commands: Commands,
     mode: Res<State<Mode>>,
     party: Res<Party>,
     registry: Res<UnitRegistry>,
@@ -180,13 +181,15 @@ fn handle_party_strip(
     bindings: Res<InputBindings>,
     mut queue: ResMut<CommandQueue>,
     mut activity: MessageWriter<ActivityNotice>,
-    selected_units: Query<(Entity, &UnitId), (With<Player>, With<Selected>)>,
+    party_units: Query<(Entity, &UnitId, Has<Selected>), With<Player>>,
     owners: Query<&ControlOwner>,
 ) {
     if *mode.get() != Mode::Exploring {
         return;
     }
-    let selected = selected_units.iter().next().map(|(_, unit)| *unit);
+    let mut selected = party_units
+        .iter()
+        .find_map(|(_, unit, selected)| selected.then_some(*unit));
     let mut rest_requested = bindings.just_pressed(&keys, InputAction::Rest);
     for intent in intents.read() {
         let hex_ui::UiIntent::Party(intent) = intent else {
@@ -196,6 +199,32 @@ fn handle_party_strip(
             // Inspection is presentation-only and handled by `readouts`; it must
             // never rewrite gameplay `Selected` or command authority.
             hex_ui::PartyIntent::ActivateMember(_) => {}
+            hex_ui::PartyIntent::SelectFormationMember(slot) => {
+                let Some(member) = party.members.get(*slot).copied() else {
+                    continue;
+                };
+                let Some(target) = registry.entity_of(member) else {
+                    continue;
+                };
+                let Ok((_, registered, _)) = party_units.get(target) else {
+                    continue;
+                };
+                if *registered != member {
+                    continue;
+                }
+                for (entity, _, _) in &party_units {
+                    if entity == target {
+                        commands.entity(entity).insert(Selected);
+                    } else {
+                        commands.entity(entity).remove::<Selected>();
+                    }
+                }
+                selected = Some(member);
+                activity.write(ActivityNotice(format!(
+                    "Ally {} now owns formation assignment and Solo movement.",
+                    slot + 1
+                )));
+            }
             hex_ui::PartyIntent::ToggleMovementMode => {
                 formation.mode = match formation.mode {
                     PartyMovementMode::Group => PartyMovementMode::Solo,
@@ -1036,6 +1065,85 @@ mod tests {
         .expect("restoration is a decision");
         assert!(restore.contains("CASTER ALLY 1 · HEDGE-MAGE #1"));
         assert!(restore.contains("RESTORE TARGET ALLY 2 · RAIDER #2"));
+    }
+
+    #[test]
+    fn only_the_explicit_formation_member_control_changes_gameplay_selection() {
+        let first_id = UnitId(41);
+        let second_id = UnitId(42);
+        let party = Party {
+            members: vec![first_id, second_id],
+        };
+        let formations: FormationCatalog =
+            ron::from_str(include_str!("../../../../assets/config/formations.ron"))
+                .expect("shipped formations parse");
+        let preset = formations.get("Compact").expect("Compact formation exists");
+        let anchor = preset.anchor().expect("Compact formation has an anchor");
+        let mut formation = PartyFormation::default();
+        formation.select_preset(preset, &party.members);
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .insert_state(Screen::Gameplay)
+            .add_sub_state::<Mode>()
+            .insert_resource(party)
+            .insert_resource(formations)
+            .insert_resource(formation)
+            .init_resource::<UnitRegistry>()
+            .init_resource::<CommandQueue>()
+            .init_resource::<InputBindings>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .add_message::<hex_ui::UiIntent>()
+            .add_message::<ActivityNotice>()
+            .add_systems(Update, handle_party_strip);
+        let first = app.world_mut().spawn((Player, first_id, Selected)).id();
+        let second = app.world_mut().spawn((Player, second_id)).id();
+        app.world_mut()
+            .resource_mut::<UnitRegistry>()
+            .register(first_id, first);
+        app.world_mut()
+            .resource_mut::<UnitRegistry>()
+            .register(second_id, second);
+        app.update();
+
+        app.world_mut().write_message(hex_ui::UiIntent::Party(
+            hex_ui::PartyIntent::ActivateMember(1),
+        ));
+        app.update();
+
+        assert!(app.world().entity(first).contains::<Selected>());
+        assert!(!app.world().entity(second).contains::<Selected>());
+
+        app.world_mut().write_message(hex_ui::UiIntent::Party(
+            hex_ui::PartyIntent::SelectFormationMember(1),
+        ));
+        app.world_mut()
+            .write_message(hex_ui::UiIntent::Party(hex_ui::PartyIntent::AssignSlot(
+                anchor,
+            )));
+        app.update();
+
+        assert!(!app.world().entity(first).contains::<Selected>());
+        assert!(app.world().entity(second).contains::<Selected>());
+        assert_eq!(
+            app.world()
+                .resource::<PartyFormation>()
+                .assignments
+                .get(&second_id),
+            Some(&anchor),
+            "the same explicit member must own a same-frame formation assignment"
+        );
+
+        app.world_mut().write_message(hex_ui::UiIntent::Party(
+            hex_ui::PartyIntent::SelectFormationMember(0),
+        ));
+        app.world_mut().write_message(hex_ui::UiIntent::Party(
+            hex_ui::PartyIntent::SelectFormationMember(1),
+        ));
+        app.update();
+
+        assert!(!app.world().entity(first).contains::<Selected>());
+        assert!(app.world().entity(second).contains::<Selected>());
     }
 
     #[test]

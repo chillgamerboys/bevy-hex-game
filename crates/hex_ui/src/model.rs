@@ -378,6 +378,8 @@ pub struct PartyView {
 pub enum PartyIntent {
     /// Inspect one stable party slot without changing gameplay selection authority.
     ActivateMember(usize),
+    /// Make one stable party slot authoritative for formation edits and Solo movement.
+    SelectFormationMember(usize),
     /// Toggle group/solo movement.
     ToggleMovementMode,
     /// Select an authored formation preset.

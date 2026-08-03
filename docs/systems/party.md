@@ -35,18 +35,24 @@ or formation assignment.
 
 Formation editing is a separate Main View destination opened by the Formation binding
 (`F` by default) during Exploration. It keeps Group/Solo, presets, and the assignment
-grid together instead of embedding an always-visible editor beside the map. The two
-movement modes remain:
+grid together instead of embedding an always-visible editor beside the map. The Main
+View also repeats the stable party roster as a dedicated **movement member** selector.
+That typed control is the only HUD action that changes authoritative `Selected` during
+Exploration: it chooses the member used by assignment-grid edits and Solo movement.
+Party cards and number keys remain inspection-only. Because the selector lives inside
+Formation, it remains available on Compact where Party and Main View cannot coexist.
+The two movement modes remain:
 
 - **Group** applies a destination to the whole formation atomically.
-- **Solo** preserves the ordinary selected-unit `MoveAlong` behavior.
+- **Solo** preserves the ordinary `MoveAlong` behavior for the explicitly chosen
+  movement member.
 
 Formation presets are content in `assets/config/formations.ron`. Each has one to six
 unique, connected axial slots and exactly one anchor. Compact, Column, and Wedge ship
 as the initial set. Picking a preset assigns members in stable party order. Picking a
-slot assigns the selected member; an occupied slot swaps its occupant into the
-selected member's old slot. Any unassigned members fill remaining authored slots in
-stable order.
+slot assigns the Formation Main View's chosen movement member; an occupied slot swaps
+its occupant into that member's old slot. Any unassigned members fill remaining
+authored slots in stable order.
 
 `PartyFormation` contains the preset, assignments, facing, and Group/Solo mode.
 Entering an ordinary new Campaign resets it and spawning a roster selects Compact
@@ -87,7 +93,8 @@ unit obstruction remains deferred, but they cannot finish together.
 
 If combat begins during presentation, the existing movement interruption reconciles
 every moving party member to its nearest whole route surface before turn construction.
-Solo mode bypasses this planner and continues to emit one selected-unit `MoveAlong`.
+Solo mode bypasses this planner and continues to emit one `MoveAlong` for the member
+chosen by the explicit Formation control.
 
 ## Exploration rest
 
