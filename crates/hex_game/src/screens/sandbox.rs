@@ -2694,16 +2694,24 @@ mod tests {
         for capacity in character.attunement.values_mut() {
             *capacity = 0;
         }
-        let mut library = hex_assets::CreationLibraryFile::default();
-        library.characters.push(character.clone());
+        let mut library = presets.library_for(PresetAudience::HumanTemplate);
+        let stored_character = library
+            .characters
+            .iter_mut()
+            .find(|saved| saved.id == character.id)
+            .expect("the packaged Hedge Mage should remain in its isolated library");
+        *stored_character = character.clone();
         let shipped_book = SpellBook::from_file(&fixture.shipped.spell_file);
-        assert!(super::super::creator::character_map_issues(
+        let issues = super::super::creator::character_map_issues(
             &character,
             &library,
             &fixture.elements,
             &shipped_book,
-        )
-        .is_empty());
+        );
+        assert!(
+            issues.is_empty(),
+            "fixture should be structurally ready: {issues:?}"
+        );
 
         let refusal = creator_character_map_readiness(
             character.id,
