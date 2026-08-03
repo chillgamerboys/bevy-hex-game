@@ -83,6 +83,8 @@ pub struct UiAssets {
     pub display: Handle<Font>,
     /// Readable body face.
     pub body: Handle<Font>,
+    /// Hex-cell wordmark used on branded menu surfaces.
+    pub logo: Handle<Image>,
     /// Tintable pointy-top hexagon.
     pub hex_cell: Handle<Image>,
 }
@@ -92,6 +94,7 @@ pub(super) fn plugin(app: &mut App) {
     app.insert_resource(UiAssets {
         display: asset_server.load("fonts/Cinzel.ttf"),
         body: asset_server.load("fonts/Inter.ttf"),
+        logo: asset_server.load("ui/hex-logo.png"),
         hex_cell: asset_server.load("ui/hex-cell.png"),
     });
     app.add_systems(Update, paint_interactions).add_systems(
@@ -100,6 +103,32 @@ pub(super) fn plugin(app: &mut App) {
             .in_set(crate::scale::SemanticMetricsSystems::Apply)
             .before(bevy::ui::UiSystems::Prepare),
     );
+}
+
+pub(crate) fn brand_logo(assets: &UiAssets, width: f32) -> impl Bundle {
+    (
+        Name::new("Hex Logo"),
+        AccessibleLabel::new("Hex"),
+        ImageNode::new(assets.logo.clone()),
+        Node {
+            width: Val::Px(width),
+            max_width: Val::Percent(92.0),
+            aspect_ratio: Some(1290.0 / 480.0),
+            flex_shrink: 1.0,
+            ..default()
+        },
+        Pickable::IGNORE,
+        // Bevy derives an image's accessibility label from descendant text in
+        // PostUpdate. Keep a non-rendered name here so that sync cannot clear the
+        // explicit label above after the image is first inserted.
+        children![(
+            Text::new("Hex"),
+            Node {
+                display: Display::None,
+                ..default()
+            },
+        )],
+    )
 }
 
 /// Resolves an element's presentation tint from authored wheel order.
@@ -581,6 +610,25 @@ mod tests {
             app.world().get::<Node>(control).map(|node| node.min_height),
             Some(Val::Px(66.0))
         );
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn brand_logo_keeps_its_spoken_name_after_image_accessibility_sync() {
+        let mut app = App::new();
+        app.add_plugins(crate::test_support::HeadlessUiPlugin::new(1280, 720));
+        let assets = app.world().resource::<UiAssets>().clone();
+        let logo = app.world_mut().spawn(brand_logo(&assets, 420.0)).id();
+
+        for _ in 0..4 {
+            app.update();
+        }
+
+        let accessibility = app
+            .world()
+            .get::<bevy::a11y::AccessibilityNode>(logo)
+            .expect("the logo image must participate in the accessibility tree");
+        assert_eq!(accessibility.label(), Some("Hex"));
     }
 
     #[derive(Resource, Default)]

@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 1024 1024"
+     width="1024"
+     height="1024"
+     preserveAspectRatio="xMidYMid meet"
+     role="img"
+     aria-labelledby="title desc">
+  <title id="title">Hex mark</title>
+  <desc id="desc">A gold letter X made from hexagonal cells inside a charcoal hexagonal badge.</desc>
+  <defs>
+    <g id="cell">
+      <path d="M 0,-52 L 45,-26 L 45,26 L 0,52 L -45,26 L -45,-26 Z" />
+    </g>
+  </defs>
+
+  <path d="M 512,32 L 928,272 L 928,752 L 512,992 L 96,752 L 96,272 Z"
+        fill="#1a1c24"
+        stroke="#edc975"
+        stroke-width="18"
+        stroke-linejoin="round" />
+  <g fill="#edc975"
+     stroke="#1a1c24"
+     stroke-width="7"
+     stroke-linejoin="round"
+     shape-rendering="geometricPrecision"
+     transform="translate(512 512) scale(1.55)">
+    <use href="#cell" transform="translate(-90 -156)" />
+    <use href="#cell" transform="translate(90 -156)" />
+    <use href="#cell" transform="translate(-45 -78)" />
+    <use href="#cell" transform="translate(45 -78)" />
+    <use href="#cell" transform="translate(0 0)" />
+    <use href="#cell" transform="translate(-45 78)" />
+    <use href="#cell" transform="translate(45 78)" />
+    <use href="#cell" transform="translate(-90 156)" />
+    <use href="#cell" transform="translate(90 156)" />
+  </g>
+</svg>

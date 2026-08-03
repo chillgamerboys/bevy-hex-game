@@ -76,8 +76,8 @@ pub use theme::{
     LABEL_SIZE, MUTED, PANEL_BG, SCREEN_TITLE_SIZE, SMALL_BUTTON_WIDTH, TITLE_SIZE,
 };
 pub(crate) use theme::{
-    body_text_role, compact_glyph_role, fixed_row_button, fluid_button, hud_heading, hud_text_role,
-    owner_resolved_control_role, responsive_control_role, supporting_text_role,
+    body_text_role, brand_logo, compact_glyph_role, fixed_row_button, fluid_button, hud_heading,
+    hud_text_role, owner_resolved_control_role, responsive_control_role, supporting_text_role,
 };
 
 #[cfg(any(feature = "visual-review", feature = "test-support"))]
