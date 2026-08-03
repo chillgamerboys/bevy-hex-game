@@ -571,7 +571,7 @@ mod tests {
             }
         }
         assert_eq!(table.len(), expected);
-        assert_eq!(expected, 63);
+        assert_eq!(expected, 70);
     }
 
     #[test]

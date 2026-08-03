@@ -1027,7 +1027,7 @@ fn deep_mountain_levels(
     // five-cell wedge in the broad 60-76 shoulder band.
     let summit_radius = maximum_depth.saturating_sub(2).max(16);
     let shoulder_radius = maximum_depth.max(14);
-    let outer_shoulder_depth = maximum_depth.min(6).max(1);
+    let outer_shoulder_depth = maximum_depth.clamp(1, 6);
     let inner_shoulder_depth = maximum_depth.saturating_sub(outer_shoulder_depth).max(1);
     let summit_level = settings.summit_level.min(settings.hard_cap);
     let subordinate_cap = summit_level.saturating_sub(1);

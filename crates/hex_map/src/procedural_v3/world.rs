@@ -197,15 +197,15 @@ impl GeneratedWorldPlan {
 
     /// Checks semantic layers after the caller has validated the authoritative layout.
     ///
-    /// Patch composition uses this for an isolated fragment projection whose
-    /// coordinates and complete-world radius do not form a standalone layout.
-    #[cfg(test)]
+    /// Single, Ring7, and Ring19 patch composition use this for an isolated
+    /// fragment projection whose coordinates and complete-world radius do not
+    /// form a standalone layout.
     #[must_use]
     pub(crate) fn validate_semantic_layers(&self) -> Vec<WorldValidationIssue> {
         self.validate_internal(false, true)
     }
 
-    /// Checks a fragment projection without inventing a local actor anchor.
+    /// Checks a Macro fragment projection without inventing a local actor anchor.
     ///
     /// Aquatic and scenic Macro instances may legitimately publish none; the
     /// composed complete world remains subject to [`Self::validate`].

@@ -49,7 +49,7 @@ use hex_core::{
 };
 use hex_map::{
     CavesReportMetrics, CrossingSettings, EnvironmentSettings, GenerationReport, HillsSettings,
-    LandformSettings, LayeredSkyIslandsSettings, LinkedIslandsSettings,
+    LandformSettings, LayeredSkyIslandsSettings, LinkedIslandsSettings, MacroHeadwaterSettings,
     MacroLiquidConnectionSettings, MacroMetrics, MapSettings, MountainRangeMetrics,
     MountainsSettings, PatchEdgeContractSettings, PatchEdgesSettings, PatchMaskSettings, PatchSpec,
     PerlinSettings, PerlinStepSettings, ProceduralRecipeMetrics, ProceduralSettings,

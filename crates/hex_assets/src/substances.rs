@@ -120,15 +120,16 @@ pub struct SubstanceFile {
 
 /// Substances, indexed by the [`SubstanceId`] stored in every voxel.
 ///
-/// # Ids are assigned from stable name order, not file order
+/// # Ids follow a frozen compatibility order, not file order
 ///
 /// A voxel stores a `SubstanceId`, so if ids were handed out in the order entries
 /// appear in the file, **reordering the file would silently rewrite the world** —
-/// every stone voxel would become dirt without anything being edited. Sorting the
-/// original names first makes the mapping independent of file order. Shipped
-/// additive vocabularies occupy a fixed compatibility tail (including inert slots
-/// for a sibling wave), so adding the corresponding authored entry does not move
-/// any accepted id.
+/// every stone voxel would become dirt without anything being edited. The original
+/// shipped vocabulary therefore keeps its accepted numeric ids, while additive
+/// vocabularies occupy a fixed compatibility tail (including inert slots for a
+/// sibling wave). Adding a corresponding authored entry does not move any accepted
+/// id. Names outside that complete registry are rejected rather than inserted into
+/// the ordering.
 ///
 /// [`SubstanceId::AIR`] is pinned to 0 regardless, because it is a compile-time
 /// constant that the rest of the game compares against.
@@ -189,6 +190,14 @@ struct AcceptedSubstanceSourceRestoration;
 /// A cross-file failure while resolving authored substances through the art palette.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum SubstanceTableError {
+    /// An authored name has no assigned compatibility id.
+    #[error(
+        "substance '{substance}' is not registered; assign it a stable compatibility id before authoring it"
+    )]
+    UnregisteredSubstance {
+        /// Unregistered name from `substances.ron`.
+        substance: String,
+    },
     /// A rendered substance omitted its required stable palette reference.
     #[error("rendered substance '{substance}' must reference an art-palette swatch")]
     MissingSwatch {
@@ -326,33 +335,30 @@ impl SubstanceTable {
 
     /// Builds a table from a loaded file, assigning ids deterministically.
     ///
-    /// `air` takes id 0 to match [`SubstanceId::AIR`]. The original vocabulary
-    /// follows in alphabetical order; additive names in the compatibility tail
-    /// are assigned after it so shipped voxel ids and fingerprints do not move.
+    /// `air` takes id 0 to match [`SubstanceId::AIR`]. The original shipped
+    /// vocabulary retains its frozen compatibility positions; additive names use
+    /// assigned tail slots so shipped voxel ids and id-derived materialized-map
+    /// fingerprints do not move. An authored name without a registry slot is
+    /// rejected. The table's semantic fingerprint still changes when an authored
+    /// substance changes.
     pub fn from_file(
         file: &SubstanceFile,
         palette: &ArtPalette,
     ) -> Result<Self, SubstanceTableError> {
-        let mut names: Vec<String> = file
+        if let Some(unregistered) = file
             .substances
             .keys()
-            .filter(|name| name.as_str() != AIR_NAME)
-            .cloned()
-            .collect();
-        // The first four entries are reserved by the complete Outpost draft.
-        // Once any additive vocabulary is present, materialize the complete tail
-        // with inert placeholders. That lets either feature land first without
-        // moving its ids when the other vocabulary appears later.
-        const COMPATIBILITY_TAIL: &[&str] = &["limestone", "slate", "timber", "terracotta", "sand"];
-        let uses_compatibility_tail = names
-            .iter()
-            .any(|candidate| COMPATIBILITY_TAIL.contains(&candidate.as_str()));
-        names.retain(|candidate| !COMPATIBILITY_TAIL.contains(&candidate.as_str()));
-        names.sort();
-        if uses_compatibility_tail {
-            names.extend(COMPATIBILITY_TAIL.iter().map(|name| (*name).to_owned()));
+            .filter(|name| !SUBSTANCE_COMPATIBILITY_REGISTRY.contains(&name.as_str()))
+            .min()
+        {
+            return Err(SubstanceTableError::UnregisteredSubstance {
+                substance: unregistered.clone(),
+            });
         }
-        names.insert(0, AIR_NAME.to_owned());
+        let names = SUBSTANCE_COMPATIBILITY_REGISTRY
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect::<Vec<_>>();
 
         let mut by_id = Vec::with_capacity(names.len());
         let mut authored = Vec::with_capacity(names.len());
@@ -485,6 +491,32 @@ impl SubstanceTable {
 
 /// The name reserved for empty space.
 const AIR_NAME: &str = "air";
+
+/// Every accepted substance name at its permanent voxel id.
+///
+/// Missing entries remain inert, but their slots are always materialized so neither
+/// adding a reserved substance nor editing a partial test fixture can renumber a
+/// previously accepted name.
+const SUBSTANCE_COMPATIBILITY_REGISTRY: &[&str] = &[
+    AIR_NAME,
+    "basalt",
+    "bedrock",
+    "dirt",
+    "grass",
+    "gravel",
+    "ice",
+    "lava",
+    "metal",
+    "snow",
+    "stone",
+    "water",
+    "worked_stone",
+    "limestone",
+    "slate",
+    "timber",
+    "terracotta",
+    "sand",
+];
 
 /// Turns the loaded file into the indexed table, and rebuilds it on hot-reload.
 ///
@@ -733,13 +765,34 @@ mod tests {
     }
 
     #[test]
-    fn non_air_substances_are_alphabetical() {
+    fn partial_files_keep_the_full_registry_ids() {
         let table = SubstanceTable::from_file(&test_file(), &test_palette())
             .expect("test substances should resolve");
-        // air is pinned to 0; bedrock, grass, stone follow in order.
-        assert_eq!(table.name(SubstanceId(1)), Some("bedrock"));
-        assert_eq!(table.name(SubstanceId(2)), Some("grass"));
-        assert_eq!(table.name(SubstanceId(3)), Some("stone"));
+        assert_eq!(table.id("bedrock"), Some(SubstanceId(2)));
+        assert_eq!(table.id("grass"), Some(SubstanceId(4)));
+        assert_eq!(table.id("stone"), Some(SubstanceId(10)));
+        assert_eq!(table.id("basalt"), None);
+        assert_eq!(table.name(SubstanceId(1)), None);
+        assert_eq!(table.len(), 18);
+    }
+
+    #[test]
+    fn unregistered_names_are_rejected_before_they_can_renumber_voxels() {
+        let mut file = test_file();
+        for name in ["zircon", "adamant"] {
+            file.substances.insert(
+                name.to_owned(),
+                Substance::from_swatch(swatch_id("stone"), true, true),
+            );
+        }
+
+        assert_eq!(
+            SubstanceTable::from_file(&file, &test_palette())
+                .expect_err("an unregistered substance name must fail closed"),
+            SubstanceTableError::UnregisteredSubstance {
+                substance: "adamant".to_owned(),
+            }
+        );
     }
 
     #[test]
@@ -753,12 +806,12 @@ mod tests {
         let mountain = SubstanceTable::from_file(&mountain_file, &palette)
             .expect("Mountain vocabulary should resolve");
         let sand = mountain.id("sand").expect("sand should resolve");
-        assert_eq!(sand, SubstanceId(8));
+        assert_eq!(sand, SubstanceId(17));
         for (id, reserved) in [
-            (4, "limestone"),
-            (5, "slate"),
-            (6, "timber"),
-            (7, "terracotta"),
+            (13, "limestone"),
+            (14, "slate"),
+            (15, "timber"),
+            (16, "terracotta"),
         ] {
             let id = SubstanceId(id);
             assert_eq!(mountain.name(id), None, "{reserved} is only reserved");
@@ -766,6 +819,8 @@ mod tests {
             assert_eq!(mountain.get(id), None);
             assert!(!mountain.is_solid(id));
             assert!(!mountain.is_diggable(id));
+            assert!(!mountain.is_conjurable(id));
+            assert_eq!(mountain.toughness(id), None);
         }
 
         let mut combined_file = mountain_file;
@@ -811,7 +866,52 @@ mod tests {
             );
         }
         assert_eq!(outpost.id("sand"), None);
-        assert_eq!(outpost.get(SubstanceId(8)), None);
+        assert_eq!(outpost.get(SubstanceId(17)), None);
+        assert!(!outpost.is_solid(SubstanceId(17)));
+        assert!(!outpost.is_diggable(SubstanceId(17)));
+        assert!(!outpost.is_conjurable(SubstanceId(17)));
+        assert_eq!(outpost.toughness(SubstanceId(17)), None);
+    }
+
+    #[test]
+    fn shipped_substance_ids_preserve_the_origin_dev_vocabulary() {
+        let table = SubstanceTable::from_file(&shipped_file(), &shipped_palette())
+            .expect("shipped substances should resolve");
+
+        for (name, id) in [
+            ("air", 0),
+            ("basalt", 1),
+            ("bedrock", 2),
+            ("dirt", 3),
+            ("grass", 4),
+            ("gravel", 5),
+            ("ice", 6),
+            ("lava", 7),
+            ("metal", 8),
+            ("snow", 9),
+            ("stone", 10),
+            ("water", 11),
+            ("worked_stone", 12),
+            ("sand", 17),
+        ] {
+            assert_eq!(
+                table.id(name),
+                Some(SubstanceId(id)),
+                "shipped id for {name} moved"
+            );
+        }
+        for (id, reserved) in [
+            (13, "limestone"),
+            (14, "slate"),
+            (15, "timber"),
+            (16, "terracotta"),
+        ] {
+            let id = SubstanceId(id);
+            assert_eq!(table.id(reserved), None, "{reserved} is only reserved");
+            assert_eq!(table.name(id), None, "{reserved} is only reserved");
+            assert_eq!(table.get(id), None, "{reserved} is only reserved");
+        }
+        assert_eq!(table.len(), 18);
     }
 
     #[test]
@@ -1047,13 +1147,14 @@ mod tests {
         assert_eq!(table.toughness(unknown), None);
     }
 
-    /// Reassigning sorted ids under a live world would reinterpret existing voxels.
+    /// Replacing the accepted id table under a live world could reinterpret existing
+    /// voxels, so even compatibility-preserving rebuilds wait for gameplay to end.
     #[test]
     fn table_rebuild_waits_until_gameplay_ends() {
         let original = test_file();
         let mut replacement = test_file();
         replacement.substances.insert(
-            "clay".to_owned(),
+            "dirt".to_owned(),
             Substance::from_swatch(swatch_id("clay"), true, true),
         );
         let palette = test_palette();
@@ -1071,7 +1172,7 @@ mod tests {
         assert!(
             app.world()
                 .resource::<SubstanceTable>()
-                .id("clay")
+                .id("dirt")
                 .is_none(),
             "the live world must keep the table its voxel ids were generated from"
         );
@@ -1083,7 +1184,7 @@ mod tests {
         assert!(
             app.world()
                 .resource::<SubstanceTable>()
-                .id("clay")
+                .id("dirt")
                 .is_some(),
             "the table should rebuild once gameplay has torn down"
         );
@@ -1690,6 +1791,7 @@ mod tests {
             ("dirt", 2),
             ("gravel", 2),
             ("ice", 2),
+            ("sand", 2),
             ("stone", 4),
             ("basalt", 4),
             ("worked_stone", 8),

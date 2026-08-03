@@ -99,18 +99,21 @@ impl GeneratedPatchPlan {
         }
 
         let isolated = self.isolated_world_unchecked(layout, resolved_patch);
-        issues.extend(
-            isolated
-                .validate_fragment_semantic_layers()
-                .into_iter()
-                .map(|issue| {
-                    PatchValidationIssue::new(
-                        self.patch_id,
-                        PatchIssueCode::Semantic(issue.code),
-                        issue.detail,
-                    )
-                }),
-        );
+        // Macro alone contains aquatic and scenic instances that are not actor
+        // destinations. Fixed-ring recipes retain the historical nonempty-anchor
+        // contract for every generated fragment.
+        let semantic_issues = if layout.kind == LayoutKind::Macro {
+            isolated.validate_fragment_semantic_layers()
+        } else {
+            isolated.validate_semantic_layers()
+        };
+        issues.extend(semantic_issues.into_iter().map(|issue| {
+            PatchValidationIssue::new(
+                self.patch_id,
+                PatchIssueCode::Semantic(issue.code),
+                issue.detail,
+            )
+        }));
         self.validate_boundary_liquid_outlets(layout, &mut issues);
         issues
     }
@@ -1119,7 +1122,7 @@ mod tests {
     use hex_core::{BiomeRegionId, HexCoord, IlluminationLevel};
 
     use super::*;
-    use crate::procedural_v3::layout::resolve_layout;
+    use crate::procedural_v3::layout::{resolve_layout, ResolvedElevationBand};
     use crate::procedural_v3::liquid::{LiquidBodyPlan, LiquidFlowState, LiquidNode};
     use crate::procedural_v3::patch::PatchRecipeContext;
     use crate::procedural_v3::seam::shape_walker_seams;
@@ -1132,15 +1135,19 @@ mod tests {
         ProtectedFeatureRoute, StructureKind,
     };
     use crate::settings::{
-        EdgeElevationSettings, EdgeLiquidPortSettings, EdgeLiquidSettings,
+        EdgeElevationSettings, EdgeLiquidPortSettings, EdgeLiquidSettings, MapSettings,
         PatchEdgeContractSettings, PatchEdgesSettings, PatchMaskSettings, PatchSpec,
-        ProceduralV3Settings, SharedEdgeSettings, V3CavesSettings, V3EnvironmentSettings,
-        V3ForestSettings, V3FortSettings, V3HillsSettings, V3LayoutSettings, V3MountainsSettings,
-        V3RecipeSettings, V3Ring7Settings, V3SkyIslandsSettings, V3WaterfallSettings,
-        WalkerPortSettings,
+        ProceduralSettings, ProceduralV3Settings, SharedEdgeSettings, TerrainSettings,
+        V3CavesSettings, V3EnvironmentSettings, V3ForestSettings, V3FortSettings, V3HillsSettings,
+        V3LayoutSettings, V3MountainsSettings, V3RecipeSettings, V3Ring7Settings,
+        V3SkyIslandsSettings, V3WaterfallSettings, WalkerPortSettings,
     };
 
     const TEST_VIEW: MapViewHint = MapViewHint::new((0.0, 40.0, 40.0), (0.0, 5.0, 0.0));
+    const RING19_WORLD_RON: &str =
+        include_str!("../../../../assets/config/worlds/procedural-two-rings.ron");
+    const MACRO_WORLD_RON: &str =
+        include_str!("../../../../assets/config/worlds/procedural-mountain-range.ron");
 
     #[test]
     fn patch_validation_requires_exact_resolved_mask_and_biome_membership() {
@@ -1171,6 +1178,36 @@ mod tests {
         assert!(issues
             .iter()
             .any(|issue| { issue.code == PatchIssueCode::Semantic(WorldIssueCode::Biome) }));
+    }
+
+    #[test]
+    fn only_macro_patch_fragments_may_omit_actor_anchors() {
+        for (name, layout) in [("Ring7", ring7_layout()), ("Ring19", ring19_layout())] {
+            let mut fragment = complete_patch(&layout, PatchId(0));
+            assert_eq!(
+                fragment.validate_against(&layout),
+                Vec::new(),
+                "the complete {name} fixture should establish a valid baseline"
+            );
+            fragment.anchors.clear();
+            let issues = fragment.validate_against(&layout);
+            assert!(
+                issues.iter().any(|issue| {
+                    issue.code == PatchIssueCode::Semantic(WorldIssueCode::Anchor)
+                        && issue.detail == "generated world publishes no actor anchors"
+                }),
+                "anchorless {name} fragments must retain the strict actor-anchor invariant: {issues:?}"
+            );
+        }
+
+        let layout = macro_layout();
+        let mut fragment = complete_patch(&layout, PatchId(0));
+        fragment.anchors.clear();
+        assert_eq!(
+            fragment.validate_against(&layout),
+            Vec::new(),
+            "Macro aquatic and scenic fragments may legitimately omit actor anchors"
+        );
     }
 
     #[test]
@@ -2041,6 +2078,35 @@ mod tests {
             layout: V3LayoutSettings::Ring7(valid_ring7_settings()),
         };
         resolve_layout(33, &settings).expect("the fixed dry Ring7 settings should resolve")
+    }
+
+    fn ring19_layout() -> ResolvedLayoutPlan {
+        tracked_layout(RING19_WORLD_RON, LayoutKind::Ring19)
+    }
+
+    fn macro_layout() -> ResolvedLayoutPlan {
+        tracked_layout(MACRO_WORLD_RON, LayoutKind::Macro)
+    }
+
+    fn tracked_layout(source: &str, expected_kind: LayoutKind) -> ResolvedLayoutPlan {
+        let map: MapSettings = ron::from_str(source).expect("tracked world settings should parse");
+        let TerrainSettings::Procedural(ProceduralSettings::V3(settings)) = map.terrain else {
+            panic!("tracked world should use procedural V3");
+        };
+        let mut layout = resolve_layout(map.grid_radius, &settings)
+            .expect("tracked world layout should resolve for the fragment contract fixture");
+        assert_eq!(layout.kind, expected_kind);
+        for edge in layout.shared_edges.values_mut() {
+            edge.elevation = ResolvedElevationBand {
+                preferred: 15,
+                min: 14,
+                max: 16,
+            };
+        }
+        layout
+            .validate()
+            .expect("normalized fixture seam elevations should remain valid");
+        layout
     }
 
     fn directed_ring7_layout() -> ResolvedLayoutPlan {

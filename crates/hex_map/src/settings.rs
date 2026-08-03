@@ -1568,9 +1568,14 @@ impl MacroLayoutSettings {
                     ));
                 }
                 if let Some(previous) = owners.insert(coord, index) {
+                    let previous = self.instances.get(previous).ok_or_else(|| {
+                        format!(
+                            "V3 Macro macro cell {coord:?} resolved an invalid previous owner index"
+                        )
+                    })?;
                     return Err(format!(
                         "V3 Macro macro cell {coord:?} is owned by both {:?} and {:?}",
-                        self.instances[previous].name, instance.name
+                        previous.name, instance.name
                     ));
                 }
             }
@@ -1582,7 +1587,7 @@ impl MacroLayoutSettings {
             }
         }
 
-        let expected = all_macro_cells();
+        let expected = all_macro_cells()?;
         if owners.len() != V3_MACRO_CELL_COUNT
             || owners.keys().copied().collect::<BTreeSet<_>>() != expected
         {
@@ -1595,7 +1600,7 @@ impl MacroLayoutSettings {
             ));
         }
 
-        let adjacency = macro_instance_adjacency(self.instances.len(), &owners);
+        let adjacency = macro_instance_adjacency(self.instances.len(), &owners)?;
         validate_macro_adjacency(&self.instances, &adjacency)?;
         self.validate_liquid_connections(&names, &adjacency)?;
         self.validate_headwaters(&names)?;
@@ -1630,7 +1635,10 @@ impl MacroLayoutSettings {
             let second = *names.get(second_name.as_str()).ok_or_else(|| {
                 format!("V3 Macro liquid connection references unknown instance {second_name:?}")
             })?;
-            if first == second || !adjacency[first].contains(&second) {
+            let instances_are_adjacent = adjacency
+                .get(first)
+                .is_some_and(|neighbors| neighbors.contains(&second));
+            if first == second || !instances_are_adjacent {
                 return Err(format!(
                     "V3 Macro liquid connection {first_name:?} -> {second_name:?} must use one external instance seam"
                 ));
@@ -1714,7 +1722,9 @@ impl MacroLayoutSettings {
             let index = *names.get(name.as_str()).ok_or_else(|| {
                 format!("V3 Macro headwater references unknown instance {name:?}")
             })?;
-            let instance = &self.instances[index];
+            let instance = self.instances.get(index).ok_or_else(|| {
+                format!("V3 Macro headwater {name:?} resolved invalid instance index {index}")
+            })?;
             if !matches!(instance.recipe, V3RecipeSettings::Mountains(_)) {
                 return Err(format!(
                     "V3 Macro headwater instance {name:?} must use the Mountains recipe"
@@ -1774,7 +1784,12 @@ impl MacroLayoutSettings {
             let index = *names.get(name.as_str()).ok_or_else(|| {
                 format!("V3 Macro critical_route references unknown instance {name:?}")
             })?;
-            if !matches!(self.instances[index].access, MacroAccessSettings::Land) {
+            let instance = self.instances.get(index).ok_or_else(|| {
+                format!(
+                    "V3 Macro critical_route instance {name:?} resolved invalid instance index {index}"
+                )
+            })?;
+            if !matches!(instance.access, MacroAccessSettings::Land) {
                 return Err(format!(
                     "V3 Macro critical_route instance {name:?} must use Land access"
                 ));
@@ -1782,10 +1797,15 @@ impl MacroLayoutSettings {
             if !visited.insert(index) {
                 return Err(format!("V3 Macro critical_route repeats instance {name:?}"));
             }
-            if previous.is_some_and(|previous| !adjacency[previous].contains(&index)) {
-                return Err(format!(
-                    "V3 Macro critical_route consecutive instances are not adjacent at {name:?}"
-                ));
+            if let Some(previous) = previous {
+                let instances_are_adjacent = adjacency
+                    .get(previous)
+                    .is_some_and(|neighbors| neighbors.contains(&index));
+                if !instances_are_adjacent {
+                    return Err(format!(
+                        "V3 Macro critical_route consecutive instances are not adjacent at {name:?}"
+                    ));
+                }
             }
             previous = Some(index);
         }
@@ -1901,19 +1921,33 @@ fn validate_macro_adjacency(
     instances: &[MacroBiomeInstanceSettings],
     adjacency: &[BTreeSet<usize>],
 ) -> Result<(), String> {
+    if adjacency.len() != instances.len() {
+        return Err(format!(
+            "V3 Macro adjacency requires one neighbor set per instance; got {} for {} instances",
+            adjacency.len(),
+            instances.len()
+        ));
+    }
     for (first_index, neighbors) in adjacency.iter().enumerate() {
-        let first = &instances[first_index];
+        let first = instances.get(first_index).ok_or_else(|| {
+            format!("V3 Macro adjacency references invalid instance index {first_index}")
+        })?;
         let first_kind = MacroBiomeKind::of(&first.recipe);
-        let neighbor_kinds = neighbors
-            .iter()
-            .map(|index| MacroBiomeKind::of(&instances[*index].recipe))
-            .collect::<BTreeSet<_>>();
+        let mut neighbor_kinds = BTreeSet::new();
+        for &index in neighbors {
+            let neighbor = instances.get(index).ok_or_else(|| {
+                format!("V3 Macro adjacency references invalid neighbor index {index}")
+            })?;
+            neighbor_kinds.insert(MacroBiomeKind::of(&neighbor.recipe));
+        }
         for second_index in neighbors
             .iter()
             .copied()
             .filter(|index| *index > first_index)
         {
-            let second = &instances[second_index];
+            let second = instances.get(second_index).ok_or_else(|| {
+                format!("V3 Macro adjacency references invalid neighbor index {second_index}")
+            })?;
             let second_kind = MacroBiomeKind::of(&second.recipe);
             let forbidden_kind =
                 MACRO_ADJACENCY_REGISTRY
@@ -1991,16 +2025,18 @@ fn macro_cell_tuple(cell: CubeCoord) -> Result<(i32, i32, i32), String> {
     Ok(coord)
 }
 
-fn all_macro_cells() -> BTreeSet<(i32, i32, i32)> {
-    let radius = i32::try_from(MACRO_CELL_RADIUS).expect("macro radius fits i32");
-    (-radius..=radius)
+fn all_macro_cells() -> Result<BTreeSet<(i32, i32, i32)>, String> {
+    let radius = i32::try_from(MACRO_CELL_RADIUS).map_err(|error| {
+        format!("V3 Macro macro_radius does not fit signed cube coordinates: {error}")
+    })?;
+    Ok((-radius..=radius)
         .flat_map(|x| {
             (-radius..=radius).filter_map(move |y| {
                 let z = -x - y;
                 (z.abs() <= radius).then_some((x, y, z))
             })
         })
-        .collect()
+        .collect())
 }
 
 fn macro_cells_are_connected(cells: &BTreeSet<(i32, i32, i32)>) -> bool {
@@ -2023,7 +2059,7 @@ fn macro_cells_are_connected(cells: &BTreeSet<(i32, i32, i32)>) -> bool {
 fn macro_instance_adjacency(
     instance_count: usize,
     owners: &BTreeMap<(i32, i32, i32), usize>,
-) -> Vec<BTreeSet<usize>> {
+) -> Result<Vec<BTreeSet<usize>>, String> {
     let mut adjacency = vec![BTreeSet::new(); instance_count];
     for (cell, owner) in owners {
         for delta in CUBE_NEIGHBORS {
@@ -2032,11 +2068,19 @@ fn macro_instance_adjacency(
                 continue;
             };
             if *owner != neighbor_owner {
-                adjacency[*owner].insert(neighbor_owner);
+                if adjacency.get(neighbor_owner).is_none() {
+                    return Err(format!(
+                        "V3 Macro cell {neighbor:?} resolved invalid owner index {neighbor_owner}"
+                    ));
+                }
+                let neighbors = adjacency.get_mut(*owner).ok_or_else(|| {
+                    format!("V3 Macro cell {cell:?} resolved invalid owner index {owner}")
+                })?;
+                neighbors.insert(neighbor_owner);
             }
         }
     }
-    adjacency
+    Ok(adjacency)
 }
 
 fn validate_macro_liquid_width(width: u32) -> Result<(), String> {
@@ -4268,8 +4312,12 @@ mod tests {
         let mut adjacency = vec![BTreeSet::new(); instance_count];
         for &(first, second) in pairs {
             assert!(first < instance_count && second < instance_count && first != second);
-            adjacency[first].insert(second);
-            adjacency[second].insert(first);
+            if let Some(neighbors) = adjacency.get_mut(first) {
+                neighbors.insert(second);
+            }
+            if let Some(neighbors) = adjacency.get_mut(second) {
+                neighbors.insert(first);
+            }
         }
         adjacency
     }
@@ -4475,7 +4523,10 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(authored_cells.len(), 37);
         let unique_cells = authored_cells.into_iter().collect::<BTreeSet<_>>();
-        assert_eq!(unique_cells, all_macro_cells());
+        let expected_cells = all_macro_cells().unwrap_or_else(|error| {
+            panic!("the fixed Macro radius must be representable: {error}")
+        });
+        assert_eq!(unique_cells, expected_cells);
 
         let raw_adjacencies = unique_cells
             .iter()
@@ -4601,18 +4652,19 @@ mod tests {
         let deep_non_mountain = named_macro_instances(layout, &["deep-mountain", "hills-center"]);
         let mut frozen_volcanic =
             named_macro_instances(layout, &["mountains-tier1-lower", "hills-lower"]);
-        frozen_volcanic[0].environment = V3EnvironmentSettings::Frozen;
-        frozen_volcanic[1].environment = V3EnvironmentSettings::Volcanic;
+        let [frozen, volcanic] = frozen_volcanic.as_mut_slice() else {
+            panic!("the forbidden-environment fixture needs exactly two instances");
+        };
+        frozen.environment = V3EnvironmentSettings::Frozen;
+        volcanic.environment = V3EnvironmentSettings::Volcanic;
 
         for (instances, first_name, second_name) in [
             (shallow_mountain, "shallow-sea", "mountains-tier1-center"),
             (deep_non_mountain, "deep-mountain", "hills-center"),
             (frozen_volcanic, "mountains-tier1-lower", "hills-lower"),
         ] {
-            for ordered in [
-                instances.clone(),
-                vec![instances[1].clone(), instances[0].clone()],
-            ] {
+            let reversed = instances.iter().rev().cloned().collect::<Vec<_>>();
+            for ordered in [instances.clone(), reversed] {
                 let error = validate_macro_adjacency(
                     &ordered,
                     &adjacency_for_pairs(ordered.len(), &[(0, 1)]),

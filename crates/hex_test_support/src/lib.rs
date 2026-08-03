@@ -24,7 +24,7 @@ use hex_test_app::HeadlessAppBuilder;
 pub use hex_test_app::{enter_gameplay, run_until, RunLimitExceeded};
 
 /// Stable synthetic stone id produced by [`fixture_assets`].
-pub const STONE: SubstanceId = SubstanceId(1);
+pub const STONE: SubstanceId = SubstanceId(10);
 
 /// One exact surface published by a synthetic arena.
 #[derive(Debug, Clone, Copy, PartialEq)]

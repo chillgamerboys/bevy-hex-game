@@ -19,7 +19,9 @@ use crate::settings::{
 use super::composition::{
     compose_world, GeneratedPatchPlan, PatchAnchorRef, WorldCompositionSettings,
 };
-use super::layout::{resolve_layout, PatchId, ResolvedLiquidElevation, ResolvedLiquidPort};
+use super::layout::{
+    resolve_layout, PatchId, ResolvedLayoutPlan, ResolvedLiquidElevation, ResolvedLiquidPort,
+};
 use super::liquid::{LiquidBodyId, LiquidBodyPlan, LiquidFlowState, LiquidNode, LiquidPlan};
 use super::patch::PatchRecipeContext;
 use super::seam::shape_walker_seams;
@@ -52,6 +54,9 @@ const MASSIF_FRONT_REVIEW: &str = "massif_front_review";
 const DEEP_MOUNTAIN_REVIEW: &str = "deep_mountain_review";
 const CAVE_SOURCE_REVIEW: &str = "cave_source_review";
 const RIVULET_SOURCE_REVIEW: &str = "rivulet_source_review";
+const DEFAULT_ALPINE_TREELINE: Level = 36;
+const DEFAULT_ALPINE_SNOWLINE: Level = 52;
+const MACRO_GRASS_CEILING: Level = 36;
 
 #[derive(Debug, Clone)]
 pub(crate) struct MacroWorldMetrics {
@@ -62,6 +67,22 @@ pub(crate) struct MacroWorldMetrics {
 struct MacroWorldRecipe<'a> {
     level_height: f32,
     art_catalog: &'a RuntimeArtCatalog,
+    #[cfg(test)]
+    force_candidate_construction_failure: bool,
+}
+
+struct MacroWorldSetup<'a> {
+    layout: ResolvedLayoutPlan,
+    settings: &'a MacroLayoutSettings,
+    vegetation: TemperateVegetationSet,
+    canonical_anchors: BTreeMap<String, PatchAnchorRef>,
+    alpine_climate: MacroAlpineClimate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct MacroAlpineClimate {
+    treeline: Level,
+    snowline: Level,
 }
 
 pub(crate) fn generate(
@@ -75,6 +96,8 @@ pub(crate) fn generate(
         &MacroWorldRecipe {
             level_height,
             art_catalog,
+            #[cfg(test)]
+            force_candidate_construction_failure: false,
         },
         settings,
         grid_radius,
@@ -92,14 +115,22 @@ impl V3Recipe for MacroWorldRecipe<'_> {
         context: CandidateContext,
         settings: &Self::Settings,
     ) -> Result<GeneratedWorldPlan, CandidateAttemptError> {
+        let setup = resolve_macro_world_setup(context.grid_radius, settings, self.art_catalog)
+            .map_err(CandidateAttemptError::Fatal)?;
+        #[cfg(test)]
+        if self.force_candidate_construction_failure {
+            return Err(reject_candidate_construction(
+                V3GenerationError::RecipeContract(
+                    "forced candidate-local Macro construction failure".to_owned(),
+                ),
+            ));
+        }
         construct_world(
-            context.grid_radius,
             self.level_height,
-            settings,
+            setup,
             Some((context.seed, context.candidate)),
-            self.art_catalog,
         )
-        .map_err(CandidateAttemptError::Fatal)
+        .map_err(reject_candidate_construction)
     }
 
     fn validate(
@@ -142,23 +173,16 @@ impl V3Recipe for MacroWorldRecipe<'_> {
         context: FallbackContext,
         settings: &Self::Settings,
     ) -> Result<GeneratedWorldPlan, V3GenerationError> {
-        construct_world(
-            context.grid_radius,
-            self.level_height,
-            settings,
-            None,
-            self.art_catalog,
-        )
+        let setup = resolve_macro_world_setup(context.grid_radius, settings, self.art_catalog)?;
+        construct_world(self.level_height, setup, None)
     }
 }
 
-fn construct_world(
+fn resolve_macro_world_setup<'a>(
     grid_radius: u32,
-    level_height: f32,
-    settings: &ProceduralV3Settings,
-    candidate: Option<(u64, u8)>,
+    settings: &'a ProceduralV3Settings,
     art_catalog: &RuntimeArtCatalog,
-) -> Result<GeneratedWorldPlan, V3GenerationError> {
+) -> Result<MacroWorldSetup<'a>, V3GenerationError> {
     let V3LayoutSettings::Macro(macro_settings) = &settings.layout else {
         return Err(V3GenerationError::RecipeContract(
             "Macro runner requires V3LayoutSettings::Macro".to_owned(),
@@ -170,6 +194,54 @@ fn construct_world(
     let layout = resolve_layout(grid_radius, settings).map_err(|error| {
         V3GenerationError::RecipeContract(format!("Macro layout resolution failed: {error}"))
     })?;
+    let canonical_anchors = canonical_anchor_settings(macro_settings)?;
+    let alpine_climate = resolve_macro_alpine_climate(macro_settings)?;
+    Ok(MacroWorldSetup {
+        layout,
+        settings: macro_settings,
+        vegetation,
+        canonical_anchors,
+        alpine_climate,
+    })
+}
+
+fn resolve_macro_alpine_climate(
+    settings: &MacroLayoutSettings,
+) -> Result<MacroAlpineClimate, V3GenerationError> {
+    let climates = settings
+        .instances
+        .iter()
+        .filter_map(|instance| match instance.recipe {
+            V3RecipeSettings::DeepMountain(settings) => Some(MacroAlpineClimate {
+                treeline: settings.treeline,
+                snowline: settings.snowline,
+            }),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    if climates.len() > 1 {
+        return Err(V3GenerationError::RecipeContract(
+            "Macro Deep Mountain instances must agree on treeline and snowline".to_owned(),
+        ));
+    }
+    Ok(climates.first().copied().unwrap_or(MacroAlpineClimate {
+        treeline: DEFAULT_ALPINE_TREELINE,
+        snowline: DEFAULT_ALPINE_SNOWLINE,
+    }))
+}
+
+fn construct_world(
+    level_height: f32,
+    setup: MacroWorldSetup<'_>,
+    candidate: Option<(u64, u8)>,
+) -> Result<GeneratedWorldPlan, V3GenerationError> {
+    let MacroWorldSetup {
+        layout,
+        settings: macro_settings,
+        vegetation,
+        canonical_anchors,
+        alpine_climate,
+    } = setup;
     let natural_levels =
         super::macro_landform::plan_base_surface_levels(&layout, macro_settings, candidate)?;
     let alpine_levels =
@@ -217,6 +289,7 @@ fn construct_world(
             patch,
             instance,
             macro_settings,
+            alpine_climate,
             natural_levels
                 .get(&patch_id)
                 .or_else(|| alpine_levels.get(&patch_id)),
@@ -239,7 +312,6 @@ fn construct_world(
         fragment.view_hint = view_hint;
     }
 
-    let canonical_anchors = canonical_anchor_settings(macro_settings)?;
     compose_world(
         layout,
         fragments,
@@ -253,10 +325,19 @@ fn construct_world(
     })
 }
 
+fn reject_candidate_construction(error: V3GenerationError) -> CandidateAttemptError {
+    let detail = match error {
+        V3GenerationError::RecipeContract(detail) => detail,
+        error => error.to_string(),
+    };
+    CandidateAttemptError::Rejected(vec![macro_issue(detail)])
+}
+
 fn construct_fragment(
     patch: PatchRecipeContext<'_>,
     instance: &MacroBiomeInstanceSettings,
     macro_settings: &MacroLayoutSettings,
+    alpine_climate: MacroAlpineClimate,
     planned_levels: Option<&BTreeMap<HexCoord, Level>>,
     alpine_levels: &super::macro_alpine::AlpineHeightField,
     world_support: &BTreeMap<HexCoord, Level>,
@@ -332,6 +413,7 @@ fn construct_fragment(
     let mut volume = build_volume(
         patch.mask(),
         instance,
+        alpine_climate,
         &levels,
         &liquid_geometry.top_by_coord,
         &liquid_geometry.plan,
@@ -397,6 +479,7 @@ fn construct_fragment(
         instance,
         &patch,
         &volume,
+        alpine_climate,
         &anchors,
         &protected,
         world_support,
@@ -892,9 +975,12 @@ fn shape_internal_land_route(
         .collect::<BTreeSet<_>>();
 
     for pair in groups.windows(2) {
-        let Some((start, goal)) = pair[0]
+        let [first_group, second_group] = pair else {
+            continue;
+        };
+        let Some((start, goal)) = first_group
             .iter()
-            .flat_map(|start| pair[1].iter().map(move |goal| (*start, *goal)))
+            .flat_map(|start| second_group.iter().map(move |goal| (*start, *goal)))
             .min_by_key(|(start, goal)| (start.distance(*goal), *start, *goal))
         else {
             continue;
@@ -1319,7 +1405,7 @@ fn plan_liquids(
             let mut available = (0..outgoing_lanes.len()).collect::<BTreeSet<_>>();
             let clearable_route = bridgeable_route;
             let relaxed_protected = protected
-                .difference(&clearable_route)
+                .difference(clearable_route)
                 .copied()
                 .collect::<BTreeSet<_>>();
             for (start, start_level) in incoming_lanes {
@@ -1764,10 +1850,6 @@ fn select_headwater_sources(
     )))
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "parallel headwater routing consumes the complete authored river exclusion set"
-)]
 fn route_headwater_paths(
     mask: &BTreeSet<HexCoord>,
     sources: &[HexCoord],
@@ -2522,6 +2604,7 @@ fn replace_liquid_surface(
 fn build_volume(
     mask: &BTreeSet<HexCoord>,
     instance: &MacroBiomeInstanceSettings,
+    alpine_climate: MacroAlpineClimate,
     levels: &BTreeMap<HexCoord, Level>,
     liquid_tops: &BTreeMap<HexCoord, Level>,
     liquids: &LiquidPlan,
@@ -2560,7 +2643,8 @@ fn build_volume(
             .map(|fall_level| ordinary_ground_level.min(fall_level))
             .unwrap_or(ordinary_ground_level);
         let coastal_distance = coastal_distances.get(&coord).copied();
-        let ground_material = surface_material(instance, ground_level, coastal_distance);
+        let ground_material =
+            surface_material(instance, ground_level, coastal_distance, alpine_climate);
         let mut column = solid_column(instance, ground_level, ground_material);
         if let Some(water_top) = liquid_top {
             column.elements.push(VolumeElement::Fill(NonSolidFill {
@@ -2575,7 +2659,7 @@ fn build_volume(
             column.elements.push(solid(
                 bridge_level,
                 bridge_level.saturating_add(1),
-                surface_material(instance, bridge_level, coastal_distance),
+                surface_material(instance, bridge_level, coastal_distance, alpine_climate),
             ));
             surfaces.insert(
                 TilePos::new(coord, bridge_level),
@@ -2699,6 +2783,7 @@ fn surface_material(
     instance: &MacroBiomeInstanceSettings,
     surface: Level,
     coastal_distance: Option<u32>,
+    alpine_climate: MacroAlpineClimate,
 ) -> SolidMaterialRole {
     match &instance.recipe {
         V3RecipeSettings::ShallowSea(_) => SolidMaterialRole::Sand,
@@ -2706,7 +2791,9 @@ fn surface_material(
             SolidMaterialRole::Sand
         }
         V3RecipeSettings::Shore(_) if surface <= 10 => SolidMaterialRole::Sand,
-        V3RecipeSettings::Mountains(_) | V3RecipeSettings::DeepMountain(_) if surface >= 52 => {
+        V3RecipeSettings::Mountains(_) | V3RecipeSettings::DeepMountain(_)
+            if surface >= alpine_climate.snowline =>
+        {
             SolidMaterialRole::Snow
         }
         V3RecipeSettings::Mountains(_) | V3RecipeSettings::DeepMountain(_) => {
@@ -2892,6 +2979,7 @@ fn place_vegetation(
     instance: &MacroBiomeInstanceSettings,
     patch: &PatchRecipeContext<'_>,
     volume: &VolumePlan,
+    alpine_climate: MacroAlpineClimate,
     anchors: &BTreeMap<String, TilePos>,
     protected: &BTreeSet<HexCoord>,
     world_support: &BTreeMap<HexCoord, Level>,
@@ -3010,7 +3098,7 @@ fn place_vegetation(
                     && !blockers
                         .iter()
                         .any(|blocker: &TilePos| blocker.coord == surface.coord)
-                    && surface.level < 36
+                    && vegetation_below_climate_ceiling(layer.kind, surface.level, alpine_climate)
             })
             .collect::<Vec<_>>();
         eligible.sort_unstable_by_key(|surface| {
@@ -3095,6 +3183,19 @@ fn place_vegetation(
         },
         blockers,
     ))
+}
+
+fn vegetation_below_climate_ceiling(
+    kind: FeatureKind,
+    level: Level,
+    alpine_climate: MacroAlpineClimate,
+) -> bool {
+    let ceiling = if kind == FeatureKind::Tree {
+        alpine_climate.treeline
+    } else {
+        MACRO_GRASS_CEILING
+    };
+    level < ceiling
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -4181,6 +4282,7 @@ mod tests {
 
     use hex_core::TraversalProfile;
 
+    use super::super::selection::{CandidateNote, CANDIDATE_COUNT};
     use super::*;
     use crate::settings::{MapSettings, ProceduralSettings, TerrainSettings};
 
@@ -4233,6 +4335,140 @@ mod tests {
         assert_eq!(adjacencies, 90);
         assert_eq!(outer_sides, 42);
         assert_eq!(HexCoord::ORIGIN.within_radius(77).len(), 18_019);
+    }
+
+    #[test]
+    fn deep_mountain_thresholds_drive_macro_snow_and_vegetation_ceilings() {
+        let map = mountain_range_map();
+        let V3LayoutSettings::Macro(mut settings) = v3_settings(map).layout.clone() else {
+            panic!("tracked Mountain Range should use the Macro layout");
+        };
+        assert_eq!(
+            resolve_macro_alpine_climate(&settings)
+                .expect("tracked Mountain Range climate should resolve"),
+            MacroAlpineClimate {
+                treeline: 36,
+                snowline: 52,
+            }
+        );
+
+        let deep_mountain = settings
+            .instances
+            .iter_mut()
+            .find(|instance| matches!(instance.recipe, V3RecipeSettings::DeepMountain(_)))
+            .expect("tracked Mountain Range should contain Deep Mountain");
+        let V3RecipeSettings::DeepMountain(deep_settings) = &mut deep_mountain.recipe else {
+            unreachable!("the selected instance is Deep Mountain");
+        };
+        deep_settings.treeline = 40;
+        deep_settings.snowline = 60;
+
+        let climate = resolve_macro_alpine_climate(&settings)
+            .expect("mutated valid Mountain Range climate should resolve");
+        assert_eq!(
+            climate,
+            MacroAlpineClimate {
+                treeline: 40,
+                snowline: 60,
+            }
+        );
+        let mountain = settings
+            .instances
+            .iter()
+            .find(|instance| matches!(instance.recipe, V3RecipeSettings::Mountains(_)))
+            .expect("tracked Mountain Range should contain a Mountains tier");
+        assert_eq!(
+            surface_material(mountain, 59, None, climate),
+            SolidMaterialRole::Stone
+        );
+        assert_eq!(
+            surface_material(mountain, 60, None, climate),
+            SolidMaterialRole::Snow
+        );
+        assert!(vegetation_below_climate_ceiling(
+            FeatureKind::Tree,
+            39,
+            climate
+        ));
+        assert!(!vegetation_below_climate_ceiling(
+            FeatureKind::Tree,
+            40,
+            climate
+        ));
+        assert!(vegetation_below_climate_ceiling(
+            FeatureKind::TallGrass,
+            35,
+            climate
+        ));
+        assert!(!vegetation_below_climate_ceiling(
+            FeatureKind::TallGrass,
+            36,
+            climate
+        ));
+    }
+
+    #[test]
+    fn macro_runner_rejects_candidate_construction_but_keeps_setup_failures_fatal() {
+        let map = mountain_range_map();
+        let recipe = MacroWorldRecipe {
+            level_height: map.level_height,
+            art_catalog: runtime_art_catalog(),
+            force_candidate_construction_failure: true,
+        };
+        let selection = run_recipe(&recipe, v3_settings(map), map.grid_radius, 129_704_046)
+            .expect("candidate-local Macro failures should leave the canonical fallback available");
+
+        assert!(selection.used_fallback);
+        assert_eq!(selection.selected_candidate, None);
+        assert_eq!(selection.candidates_evaluated, CANDIDATE_COUNT);
+        assert_eq!(selection.valid_candidates, 0);
+        let rejected = selection
+            .notes
+            .iter()
+            .filter_map(|note| match note {
+                CandidateNote::ConstructionRejected { candidate, issues } => {
+                    Some((*candidate, issues))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(rejected.len(), usize::from(CANDIDATE_COUNT));
+        for (expected, (candidate, issues)) in (0..CANDIDATE_COUNT).zip(rejected) {
+            assert_eq!(candidate, expected);
+            assert_eq!(issues.len(), 1);
+            let issue = issues
+                .first()
+                .expect("each rejected Macro candidate should retain one typed diagnostic");
+            assert_eq!(issue.code, WorldIssueCode::Recipe("mountain_range"));
+            assert_eq!(
+                issue.detail,
+                "forced candidate-local Macro construction failure"
+            );
+        }
+        assert!(matches!(
+            selection.notes.last(),
+            Some(CandidateNote::FallbackSelected)
+        ));
+
+        let non_macro = two_rings_map();
+        let error = run_recipe(
+            &recipe,
+            v3_settings(non_macro),
+            non_macro.grid_radius,
+            129_704_046,
+        )
+        .expect_err("candidate-independent Macro setup failures must stop the runner");
+        assert!(matches!(
+            error,
+            V3GenerationError::FatalCandidateConstruction {
+                candidate: 0,
+                source,
+            } if matches!(
+                *source,
+                V3GenerationError::RecipeContract(ref detail)
+                    if detail == "Macro runner requires V3LayoutSettings::Macro"
+            )
+        ));
     }
 
     #[test]
@@ -4608,7 +4844,13 @@ mod tests {
             .first_key_value()
             .map(|(body_id, _)| *body_id)
             .expect("Mountain Range should contain its watershed");
-        let severed_nodes = selection.validated.plan.liquids.bodies[&body_id]
+        let severed_nodes = selection
+            .validated
+            .plan
+            .liquids
+            .bodies
+            .get(&body_id)
+            .expect("Mountain Range watershed body should remain present")
             .nodes
             .iter()
             .filter_map(|(position, node)| {
@@ -4661,7 +4903,14 @@ mod tests {
             }
         }
 
-        let (fall_source, fall_target) = selection.validated.plan.liquids.bodies[&body_id]
+        let watershed = selection
+            .validated
+            .plan
+            .liquids
+            .bodies
+            .get(&body_id)
+            .expect("Mountain Range watershed body should remain present");
+        let (fall_source, fall_target) = watershed
             .nodes
             .iter()
             .find_map(|(source, node)| {
@@ -4670,7 +4919,11 @@ mod tests {
                     .map(|target| (*source, target))
             })
             .expect("Mountain Range tributaries should contain a descending flow edge");
-        let original_target = selection.validated.plan.liquids.bodies[&body_id].nodes[&fall_target];
+        let original_target = watershed
+            .nodes
+            .get(&fall_target)
+            .copied()
+            .expect("descending flow target should remain in the watershed body");
         selection
             .validated
             .plan

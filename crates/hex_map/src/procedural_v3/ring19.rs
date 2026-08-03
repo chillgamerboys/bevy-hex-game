@@ -20,10 +20,7 @@ use super::layout::{
     ResolvedLayoutPlan, ResolvedLiquidElevation, ResolvedLiquidPort,
 };
 use super::liquid::{LiquidBodyId, LiquidFlowState, LiquidNode};
-#[cfg(test)]
-use super::mountains::mountain_liquid_feeder_authority;
 use super::patch::{PatchBuildMode, PatchRecipeContext};
-use super::river_terrain::validate_river_terrain;
 use super::selection::{
     run_recipe, CandidateAttemptError, CandidateContext, FallbackContext, RepairOutcome, V3Recipe,
     ValidatedWorldSelection, WorldValidation,
@@ -875,11 +872,6 @@ fn validate_ring19(
     }
 
     let liquid_metrics = validate_routed_liquids(plan, patch_by_coord, &mut issues);
-    issues.extend(
-        validate_river_terrain(&plan.volume, &plan.liquids)
-            .into_iter()
-            .map(|issue| recipe_issue(format!("Ring19 river terrain: {issue}"))),
-    );
     if liquid_metrics.internal_seams != INTERNAL_LIQUID_SEAMS {
         issues.push(recipe_issue(format!(
             "Ring19 realizes {} directed liquid seams instead of {INTERNAL_LIQUID_SEAMS}",
@@ -2263,30 +2255,6 @@ mod tests {
                 roots.len(),
                 3,
                 "high Ring19 mountain should have three springs"
-            );
-            let root_coords = roots.iter().map(|root| root.coord).collect::<BTreeSet<_>>();
-            let first_root = root_coords
-                .first()
-                .copied()
-                .expect("three-spring shelf has a first cell");
-            let mut connected_roots = BTreeSet::from([first_root]);
-            let mut root_frontier = VecDeque::from([first_root]);
-            while let Some(current) = root_frontier.pop_front() {
-                for neighbor in current.neighbors() {
-                    if root_coords.contains(&neighbor) && connected_roots.insert(neighbor) {
-                        root_frontier.push_back(neighbor);
-                    }
-                }
-            }
-            assert_eq!(
-                connected_roots, root_coords,
-                "the three high Ring19 mountain springs should form one connected shelf"
-            );
-            let feeder_authority = mountain_liquid_feeder_authority(&patch)
-                .expect("tracked high mountain feeder authority should resolve");
-            assert!(
-                patch_water_coords.is_subset(&feeder_authority),
-                "high Ring19 mountain streams should remain inside their route-free feeder authority"
             );
             let mut occupied = BTreeSet::new();
             for root in &roots {

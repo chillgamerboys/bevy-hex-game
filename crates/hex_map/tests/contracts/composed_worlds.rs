@@ -279,16 +279,16 @@ fn mountain_range_materializes_the_authored_macro_world() {
     assert_eq!(report.generator_version, 3);
     assert_eq!(report.seed, 129_704_046);
     assert_eq!(
-        report.settings_fingerprint, 4_424_876_981_301_009_471,
+        report.settings_fingerprint, 2_843_243_527_997_079_402,
         "update only with an explicit shipped Mountain Range settings-identity decision"
     );
     assert_eq!(
         report.semantic_plan_fingerprint,
-        Some(62_205_835_816_753_322),
+        Some(347_825_722_077_974_933),
         "update only with an explicit shipped Mountain Range semantic-plan decision"
     );
     assert_eq!(
-        report.map_fingerprint, 14_676_104_456_262_176_393,
+        report.map_fingerprint, 4_089_854_997_773_874_143,
         "update only with an explicit shipped Mountain Range materialized-map decision"
     );
     let Some(ProceduralRecipeMetrics::MountainRange(metrics)) = report.recipe_metrics.as_ref()
@@ -301,18 +301,18 @@ fn mountain_range_materializes_the_authored_macro_world() {
             world_columns: 18_019,
             macro_cells: 37,
             biome_regions: 30,
-            reciprocal_seams: 78,
+            reciprocal_seams: 74,
             outer_macro_sides: 42,
-            ordinary_surfaces: 12_200,
-            reachable_surfaces: 1_437,
-            reachable_elevation_levels: 44,
+            ordinary_surfaces: 11_858,
+            reachable_surfaces: 2_482,
+            reachable_elevation_levels: 51,
             relief: 92,
-            critical_route_steps: 97,
+            critical_route_steps: 99,
             standing_water_seams: 9,
             directed_liquid_seams: 6,
-            liquid_cells: 3_505,
+            liquid_cells: 3_579,
             summit_level: 96,
-            high_massif_surfaces: 1_199,
+            high_massif_surfaces: 1_053,
         },
         "update only with an explicit shipped Mountain Range aggregate-contract decision"
     );
@@ -347,7 +347,7 @@ fn mountain_range_materializes_the_authored_macro_world() {
         ),
         (
             "foothill_review",
-            TilePos::new(HexCoord::new_cubic(-8, 13, -5), 20),
+            TilePos::new(HexCoord::new_cubic(-7, 13, -6), 20),
         ),
         (
             "massif_front_review",
@@ -355,11 +355,11 @@ fn mountain_range_materializes_the_authored_macro_world() {
         ),
         (
             "deep_mountain_review",
-            TilePos::new(HexCoord::new_cubic(53, 5, -58), 48),
+            TilePos::new(HexCoord::new_cubic(54, 5, -59), 48),
         ),
         (
             "deep_mountain_base",
-            TilePos::new(HexCoord::new_cubic(53, 5, -58), 48),
+            TilePos::new(HexCoord::new_cubic(53, 6, -59), 48),
         ),
     ];
     let first_anchors = app
@@ -468,8 +468,14 @@ fn macro_world_generation_is_not_coupled_to_mountain_range_instance_names() {
             .enumerate()
             .map(|(index, instance)| (instance.name.clone(), format!("generic-region-{index:02}")))
             .collect::<BTreeMap<_, _>>();
+        let renamed_instance = |name: &str| {
+            let Some(renamed) = renamed.get(name) else {
+                panic!("generic Macro rename table omitted instance {name:?}");
+            };
+            renamed.clone()
+        };
         for instance in &mut layout.instances {
-            instance.name = renamed[&instance.name].clone();
+            instance.name = renamed_instance(&instance.name);
         }
         for connection in &mut layout.liquid_connections {
             match connection {
@@ -478,21 +484,29 @@ fn macro_world_generation_is_not_coupled_to_mountain_range_instance_names() {
                     second_instance,
                     ..
                 } => {
-                    *first_instance = renamed[first_instance.as_str()].clone();
-                    *second_instance = renamed[second_instance.as_str()].clone();
+                    *first_instance = renamed_instance(first_instance);
+                    *second_instance = renamed_instance(second_instance);
                 }
                 MacroLiquidConnectionSettings::Directed {
                     source_instance,
                     sink_instance,
                     ..
                 } => {
-                    *source_instance = renamed[source_instance.as_str()].clone();
-                    *sink_instance = renamed[sink_instance.as_str()].clone();
+                    *source_instance = renamed_instance(source_instance);
+                    *sink_instance = renamed_instance(sink_instance);
+                }
+            }
+        }
+        for headwater in &mut layout.headwaters {
+            match headwater {
+                MacroHeadwaterSettings::CaveFall { instance, .. }
+                | MacroHeadwaterSettings::RivuletConfluence { instance, .. } => {
+                    *instance = renamed_instance(instance);
                 }
             }
         }
         for route_instance in &mut layout.critical_route {
-            *route_instance = renamed[route_instance.as_str()].clone();
+            *route_instance = renamed_instance(route_instance);
         }
     }
 
@@ -511,7 +525,7 @@ fn macro_world_generation_is_not_coupled_to_mountain_range_instance_names() {
     assert_eq!(metrics.world_columns, 18_019);
     assert_eq!(metrics.macro_cells, 37);
     assert_eq!(metrics.biome_regions, 30);
-    assert_eq!(metrics.reciprocal_seams, 78);
+    assert_eq!(metrics.reciprocal_seams, 74);
     assert!(metrics.critical_route_steps > 0);
     let anchors = app.world().resource::<MapAnchors>();
     for required in ["party_start", "hostile_start", "macro_route_end"] {

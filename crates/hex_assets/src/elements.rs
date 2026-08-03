@@ -6,12 +6,13 @@
 //!
 //! # Two orderings, deliberately separate
 //!
-//! [`ElementId`] is assigned from **sorted names** (the same reason
-//! [`SubstanceTable`](crate::SubstanceTable) sorts: reordering the file must never
-//! silently rewrite what an id means). The **wheel** is a *different* ordering — the
-//! six basic elements in the order that makes opposition `wheel[(i + len/2) % len]`,
-//! index arithmetic over the array. An element's id says nothing about where it sits
-//! on the wheel, and it must not: the two orderings answer different questions.
+//! [`ElementId`] is assigned from **sorted names**, so reordering the file never
+//! silently rewrites what an id means. This is distinct from
+//! [`SubstanceTable`](crate::SubstanceTable), whose ids follow a frozen material-
+//! compatibility registry. The **wheel** is a *different* ordering — the six basic
+//! elements in the order that makes opposition `wheel[(i + len/2) % len]`, index
+//! arithmetic over the array. An element's id says nothing about where it sits on the
+//! wheel, and it must not: the two orderings answer different questions.
 //!
 //! # Higher-order elements
 //!

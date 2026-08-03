@@ -926,9 +926,14 @@ fn resolve_macro(
         .collect::<BTreeSet<_>>();
 
     let mut shared_edges = BTreeMap::new();
-    for first_index in 0..settings.instances.len() {
+    for (first_index, first_instance) in settings.instances.iter().enumerate() {
         let first_id = PatchId(u32::try_from(first_index).unwrap_or(u32::MAX));
-        for second_index in (first_index + 1)..settings.instances.len() {
+        for (second_index, second_instance) in settings
+            .instances
+            .iter()
+            .enumerate()
+            .skip(first_index.saturating_add(1))
+        {
             let second_id = PatchId(u32::try_from(second_index).unwrap_or(u32::MAX));
             let all_pairs = boundary_pairs(
                 masks.get(&first_id).unwrap_or(&BTreeSet::new()),
@@ -943,8 +948,6 @@ fn resolve_macro(
                 ))
             })?;
             let second_side = first_side.opposite();
-            let first_instance = &settings.instances[first_index];
-            let second_instance = &settings.instances[second_index];
             let pair = ordered_patch_pair(first_id, second_id);
             let liquid = liquids.get(&pair).copied();
             let walker_connection = critical_walker_pairs.contains(&pair);
@@ -2448,11 +2451,7 @@ fn validate_resolved_edge(
         return;
     };
     let all_pairs = boundary_pairs(&first.mask, &second.mask);
-    let boundary_valid = if kind == LayoutKind::Macro {
-        !edge.boundary_pairs.is_empty() && edge.boundary_pairs == all_pairs
-    } else {
-        !edge.boundary_pairs.is_empty() && edge.boundary_pairs == all_pairs
-    };
+    let boundary_valid = !edge.boundary_pairs.is_empty() && edge.boundary_pairs == all_pairs;
     if !boundary_valid {
         issues.push(LayoutIssue::InvalidBoundaryPairs(id));
     }
@@ -3309,8 +3308,14 @@ mod tests {
             let PatchId(second_id) = edge.second.0;
             let first_index = usize::try_from(first_id).expect("patch id fits usize");
             let second_index = usize::try_from(second_id).expect("patch id fits usize");
-            let first_instance = &macro_settings.instances[first_index];
-            let second_instance = &macro_settings.instances[second_index];
+            let first_instance = macro_settings
+                .instances
+                .get(first_index)
+                .expect("first patch id should name a Macro instance");
+            let second_instance = macro_settings
+                .instances
+                .get(second_index)
+                .expect("second patch id should name a Macro instance");
             let touches_deep = [&first_instance.recipe, &second_instance.recipe]
                 .into_iter()
                 .any(|recipe| matches!(recipe, V3RecipeSettings::DeepMountain(_)));
@@ -3340,11 +3345,13 @@ mod tests {
             }
         }
         assert!(first.shared_edges.values().all(|edge| {
-            edge.boundary_pairs
-                == boundary_pairs(
-                    &first.patches[&edge.first.0].mask,
-                    &first.patches[&edge.second.0].mask,
-                )
+            first
+                .patches
+                .get(&edge.first.0)
+                .zip(first.patches.get(&edge.second.0))
+                .is_some_and(|(first_patch, second_patch)| {
+                    edge.boundary_pairs == boundary_pairs(&first_patch.mask, &second_patch.mask)
+                })
         }));
 
         let segments_by_logical_side = first
