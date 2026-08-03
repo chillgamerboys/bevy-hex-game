@@ -51,6 +51,15 @@
             conjurable: false,
         ),
 
+        // Loose coastal terrain. Swimming and erosion rules remain deferred, so
+        // sand currently follows the ordinary diggable-solid contract.
+        "sand": (
+            swatch: Some("terrain/sand"),
+            solid: true,
+            diggable: true,
+            conjurable: false,
+        ),
+
         // Rendered as a voxel but excluded from movement footing. It remains
         // clearable through the same terrain-edit rule as dirt and stone.
         "water": (

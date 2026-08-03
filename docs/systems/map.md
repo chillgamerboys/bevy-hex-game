@@ -178,8 +178,9 @@ looks across the range so both routes remain legible.
 Caves keeps a playable rocky surface above one rooted underground network. A two-wide
 open entrance descends one level per row to six through twelve chambers joined by
 two-wide critical corridors. The selected scenario has twelve chambers, selected
-loop connections, two walkable floor bands, varied ceiling levels, larger chambers,
-and five levels of surface relief. The original six-through-eight-room path remains
+loop connections, three walkable floor terraces at relative levels `+0/+2/+4`, varied
+ceiling levels, larger chambers, and five levels of surface relief. The original
+six-through-eight-room path remains
 frozen for side-by-side V3 review. Every corridor retains at least three clear levels,
 every chamber at least four, and cutaway roofs remain at least three solid levels
 thick.

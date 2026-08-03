@@ -231,11 +231,11 @@
     "map": {
       "concerns": ["map_unit", "map_generation", "map_contracts"],
       "expected_counts": {
-        "map_unit": 94,
-        "map_generation": 384,
-        "map_contracts": 61
+        "map_unit": 99,
+        "map_generation": 388,
+        "map_contracts": 66
       },
-      "expected_ignored": 25,
+      "expected_ignored": 28,
       "full_command": [
         "cargo",
         "nextest",

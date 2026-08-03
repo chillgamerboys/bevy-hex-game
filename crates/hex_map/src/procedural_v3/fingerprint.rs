@@ -10,10 +10,12 @@ use hex_core::{HexCoord, IlluminationLevel, MapViewHint, TilePos};
 use xxhash_rust::xxh3::xxh3_64;
 
 use crate::settings::{
-    EdgeLiquidSettings, NamedOverlaySettings, PatchEdgeContractSettings, PatchEdgesSettings,
-    PatchMaskSettings, PatchSpec, ProceduralV3Settings, Ring19BoundarySide, Ring19RegionSettings,
-    SharedEdgeSettings, V3EnvironmentSettings, V3LayoutSettings, V3OverlaySettings,
-    V3RecipeSettings, V3Ring19Settings, V3Ring7Settings,
+    EdgeLiquidSettings, MacroAccessSettings, MacroAxisSettings, MacroHeadwaterSettings,
+    MacroLayoutSettings, MacroLiquidConnectionSettings, NamedOverlaySettings,
+    PatchEdgeContractSettings, PatchEdgesSettings, PatchMaskSettings, PatchSpec,
+    ProceduralV3Settings, Ring19BoundarySide, Ring19RegionSettings, SharedEdgeSettings,
+    V3EnvironmentSettings, V3LayoutSettings, V3OverlaySettings, V3RecipeSettings, V3Ring19Settings,
+    V3Ring7Settings,
 };
 
 use super::layout::{
@@ -198,8 +200,121 @@ pub(crate) fn settings_fingerprint(
             encoder.tag(2);
             encode_ring19_settings(&mut encoder, ring)?;
         }
+        V3LayoutSettings::Macro(macro_layout) => {
+            encoder.tag(3);
+            encode_macro_settings(&mut encoder, macro_layout)?;
+        }
     }
     Ok(encoder.finish_settings())
+}
+
+fn encode_macro_settings(
+    encoder: &mut FingerprintEncoder,
+    settings: &MacroLayoutSettings,
+) -> Result<(), String> {
+    encoder.u32(settings.macro_radius);
+    encoder.u32(settings.approach_depth);
+    encoder.collection_count(settings.instances.len())?;
+    for instance in &settings.instances {
+        encoder.str(&instance.name)?;
+        let mut cells = instance
+            .cells
+            .iter()
+            .map(|cell| (cell.x, cell.y, cell.z))
+            .collect::<Vec<_>>();
+        cells.sort_unstable();
+        encoder.collection_count(cells.len())?;
+        for (x, y, z) in cells {
+            encoder.i32(x);
+            encoder.i32(y);
+            encoder.i32(z);
+        }
+        encoder.tag(environment_tag(instance.environment));
+        encode_recipe_settings(encoder, &instance.recipe);
+        encoder.u8(instance.rotation_turns);
+        encoder.tag(match instance.access {
+            MacroAccessSettings::Aquatic => 0,
+            MacroAccessSettings::Land => 1,
+            MacroAccessSettings::Scenic => 2,
+        });
+        encoder.i32(instance.elevation.low);
+        encoder.i32(instance.elevation.high);
+        encoder.tag(macro_axis_tag(instance.elevation.grade_axis));
+    }
+    let mut liquids = settings.liquid_connections.clone();
+    liquids.sort_unstable();
+    encoder.collection_count(liquids.len())?;
+    for liquid in liquids {
+        match liquid {
+            MacroLiquidConnectionSettings::Standing {
+                first_instance,
+                second_instance,
+                width,
+                level,
+            } => {
+                encoder.tag(0);
+                encoder.str(&first_instance)?;
+                encoder.str(&second_instance)?;
+                encoder.u32(width);
+                encoder.i32(level);
+            }
+            MacroLiquidConnectionSettings::Directed {
+                source_instance,
+                sink_instance,
+                width,
+                level,
+            } => {
+                encoder.tag(1);
+                encoder.str(&source_instance)?;
+                encoder.str(&sink_instance)?;
+                encoder.u32(width);
+                encoder.i32(level);
+            }
+        }
+    }
+    let mut headwaters = settings.headwaters.clone();
+    headwaters.sort_unstable();
+    encoder.collection_count(headwaters.len())?;
+    for headwater in headwaters {
+        match headwater {
+            MacroHeadwaterSettings::CaveFall {
+                instance,
+                source_level,
+                overhang_depth,
+            } => {
+                encoder.tag(0);
+                encoder.str(&instance)?;
+                encoder.i32(source_level);
+                encoder.u8(overhang_depth);
+            }
+            MacroHeadwaterSettings::RivuletConfluence {
+                instance,
+                source_level,
+                branch_count,
+            } => {
+                encoder.tag(1);
+                encoder.str(&instance)?;
+                encoder.i32(source_level);
+                encoder.u8(branch_count);
+            }
+        }
+    }
+    encoder.collection_count(settings.critical_route.len())?;
+    for instance in &settings.critical_route {
+        encoder.str(instance)?;
+    }
+    Ok(())
+}
+
+const fn macro_axis_tag(axis: MacroAxisSettings) -> u8 {
+    match axis {
+        MacroAxisSettings::East => 0,
+        MacroAxisSettings::SouthEast => 1,
+        MacroAxisSettings::SouthWest => 2,
+        MacroAxisSettings::West => 3,
+        MacroAxisSettings::NorthWest => 4,
+        MacroAxisSettings::NorthEast => 5,
+    }
 }
 
 /// Fingerprints the complete private semantic output of one V3 candidate.
@@ -394,6 +509,28 @@ fn encode_recipe_settings(encoder: &mut FingerprintEncoder, recipe: &V3RecipeSet
             encoder.i32(settings.max_relief);
             encoder.u8(settings.grass_coverage_percent);
         }
+        V3RecipeSettings::ShallowSea(settings) => {
+            encoder.tag(11);
+            encoder.i32(settings.sea_level);
+        }
+        V3RecipeSettings::Beach(settings) => {
+            encoder.tag(12);
+            encoder.u8(settings.water_coverage_percent);
+            encoder.u8(settings.tree_coverage_percent);
+        }
+        V3RecipeSettings::Shore(settings) => {
+            encoder.tag(13);
+            encoder.u8(settings.water_coverage_percent);
+            encoder.u8(settings.tree_coverage_percent);
+            encoder.i32(settings.cliff_height);
+        }
+        V3RecipeSettings::DeepMountain(settings) => {
+            encoder.tag(14);
+            encoder.i32(settings.summit_level);
+            encoder.i32(settings.hard_cap);
+            encoder.i32(settings.treeline);
+            encoder.i32(settings.snowline);
+        }
     }
 }
 
@@ -423,6 +560,8 @@ const fn environment_tag(environment: V3EnvironmentSettings) -> u8 {
         V3EnvironmentSettings::Frozen => 1,
         V3EnvironmentSettings::Volcanic => 2,
         V3EnvironmentSettings::Rocky => 3,
+        V3EnvironmentSettings::Coastal => 4,
+        V3EnvironmentSettings::Alpine => 5,
     }
 }
 
@@ -481,6 +620,10 @@ fn encode_shared_edge_settings(encoder: &mut FingerprintEncoder, shared: &Shared
             encoder.tag(2);
             encoder.u32(port.width);
         }
+        EdgeLiquidSettings::Standing(port) => {
+            encoder.tag(3);
+            encoder.u32(port.width);
+        }
     }
     encoder.u32(shared.approach_depth);
 }
@@ -493,6 +636,7 @@ fn encode_layout_plan(
         LayoutKind::Single => 0,
         LayoutKind::Ring7 => 1,
         LayoutKind::Ring19 => 2,
+        LayoutKind::Macro => 3,
     });
     encoder.u32(layout.grid_radius);
     encode_coord_set(encoder, &layout.footprint)?;
@@ -500,7 +644,7 @@ fn encode_layout_plan(
     for (id, patch) in &layout.patches {
         encoder.u32(id.0);
         encoder.u32(patch.biome_region.0);
-        if layout.kind == LayoutKind::Ring19 {
+        if matches!(layout.kind, LayoutKind::Ring19 | LayoutKind::Macro) {
             encoder.u8(patch.rotation_turns);
         }
         encode_coord_set(encoder, &patch.mask)?;
@@ -578,6 +722,21 @@ fn encode_resolved_edge(
             encoder.tag(2);
             encoder.u32(source.0);
             encoder.u32(sink.0);
+            encode_resolved_port(encoder, port)?;
+            encoder.i32(*level);
+        }
+        ResolvedLiquidPort::Standing {
+            port,
+            elevation: ResolvedLiquidElevation::EdgeBand,
+        } => {
+            encoder.tag(3);
+            encode_resolved_port(encoder, port)?;
+        }
+        ResolvedLiquidPort::Standing {
+            port,
+            elevation: ResolvedLiquidElevation::Exact(level),
+        } => {
+            encoder.tag(4);
             encode_resolved_port(encoder, port)?;
             encoder.i32(*level);
         }
@@ -692,6 +851,10 @@ const fn solid_material_tag(material: SolidMaterialRole) -> u8 {
         SolidMaterialRole::Ice => 7,
         SolidMaterialRole::Basalt => 8,
         SolidMaterialRole::WorkedStone => 9,
+        // Tags 10..=13 are reserved by the complete Outpost draft for
+        // Limestone, Slate, Timber, and Terracotta. Keeping Sand after that
+        // range makes either wave additive whichever one lands first.
+        SolidMaterialRole::Sand => 14,
     }
 }
 
@@ -1079,6 +1242,28 @@ mod tests {
             encoder.finish_settings(),
             1_560_625_848_665_618_143,
             "update only with an explicit V3 fingerprint-encoding decision"
+        );
+    }
+
+    #[test]
+    fn solid_material_tags_are_append_only() {
+        let roles = [
+            SolidMaterialRole::Bedrock,
+            SolidMaterialRole::Stone,
+            SolidMaterialRole::Dirt,
+            SolidMaterialRole::Grass,
+            SolidMaterialRole::Gravel,
+            SolidMaterialRole::Metal,
+            SolidMaterialRole::Snow,
+            SolidMaterialRole::Ice,
+            SolidMaterialRole::Basalt,
+            SolidMaterialRole::WorkedStone,
+            SolidMaterialRole::Sand,
+        ];
+
+        assert_eq!(
+            roles.map(solid_material_tag),
+            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 14]
         );
     }
 

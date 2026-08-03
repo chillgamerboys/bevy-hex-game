@@ -96,6 +96,11 @@
             color: (red: 0.42, green: 0.72, blue: 0.88),
             tags: ["frozen", "terrain", "world"],
         ),
+        "terrain/sand": (
+            display_name: "Sand",
+            color: (red: 0.76, green: 0.66, blue: 0.42),
+            tags: ["earth", "terrain", "world"],
+        ),
         "terrain/snow": (
             display_name: "Snow",
             color: (red: 0.82, green: 0.88, blue: 0.92),

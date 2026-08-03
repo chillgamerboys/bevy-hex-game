@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use hex_assets::{HexObjectRotation, ObjectAssetId, ObjectCategory};
-use hex_core::{BiomeRegionId, IlluminationLevel, InteriorRegionId, MapViewHint, TilePos};
+use hex_core::{BiomeRegionId, IlluminationLevel, InteriorRegionId, Level, MapViewHint, TilePos};
 
 use super::layout::{
     ResolvedEdgeContract, ResolvedLayoutPlan, ResolvedLiquidElevation, ResolvedLiquidPort,
@@ -192,19 +192,33 @@ impl GeneratedWorldPlan {
     /// Checks recipe-independent relationships across every semantic layer.
     #[must_use]
     pub(crate) fn validate(&self) -> Vec<WorldValidationIssue> {
-        self.validate_internal(true)
+        self.validate_internal(true, true)
     }
 
     /// Checks semantic layers after the caller has validated the authoritative layout.
     ///
     /// Patch composition uses this for an isolated fragment projection whose
     /// coordinates and complete-world radius do not form a standalone layout.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn validate_semantic_layers(&self) -> Vec<WorldValidationIssue> {
-        self.validate_internal(false)
+        self.validate_internal(false, true)
     }
 
-    fn validate_internal(&self, validate_layout: bool) -> Vec<WorldValidationIssue> {
+    /// Checks a fragment projection without inventing a local actor anchor.
+    ///
+    /// Aquatic and scenic Macro instances may legitimately publish none; the
+    /// composed complete world remains subject to [`Self::validate`].
+    #[must_use]
+    pub(crate) fn validate_fragment_semantic_layers(&self) -> Vec<WorldValidationIssue> {
+        self.validate_internal(false, false)
+    }
+
+    fn validate_internal(
+        &self,
+        validate_layout: bool,
+        require_actor_anchor: bool,
+    ) -> Vec<WorldValidationIssue> {
         let mut issues = Vec::new();
 
         if validate_layout {
@@ -232,7 +246,7 @@ impl GeneratedWorldPlan {
         self.validate_biomes(&mut issues);
         self.validate_interiors(&mut issues);
         self.validate_lights(&mut issues);
-        self.validate_anchors(&mut issues);
+        self.validate_anchors(require_actor_anchor, &mut issues);
         if !self.view_hint.is_valid() {
             issues.push(WorldValidationIssue::new(
                 WorldIssueCode::View,
@@ -287,6 +301,81 @@ impl GeneratedWorldPlan {
                         ));
                     }
                     validate_dry_seam_contacts(*edge_id, edge, &runs_by_coord, issues);
+                }
+                ResolvedLiquidPort::Standing { port, elevation } => {
+                    for crossing in &crossings {
+                        issues.push(WorldValidationIssue::new(
+                            WorldIssueCode::Liquid,
+                            format!(
+                                "standing-water seam {edge_id:?} must not invent a current: {:?} -> {:?}",
+                                crossing.source, crossing.target
+                            ),
+                        ));
+                    }
+                    let (minimum_level, maximum_level) = match elevation {
+                        ResolvedLiquidElevation::EdgeBand => {
+                            (edge.elevation.min, edge.elevation.max)
+                        }
+                        ResolvedLiquidElevation::Exact(level) => (*level, *level),
+                    };
+                    let mut realized = BTreeMap::new();
+                    for lane in &port.lanes {
+                        let first = unique_world_liquid_endpoint(
+                            &self.liquids,
+                            lane.0,
+                            minimum_level,
+                            maximum_level,
+                        );
+                        let second = unique_world_liquid_endpoint(
+                            &self.liquids,
+                            lane.1,
+                            minimum_level,
+                            maximum_level,
+                        );
+                        let Some((first_body, first_position, first_node)) = first else {
+                            issues.push(WorldValidationIssue::new(
+                                WorldIssueCode::Liquid,
+                                format!(
+                                    "standing-water seam {edge_id:?} has no unique endpoint at {:?}",
+                                    lane.0
+                                ),
+                            ));
+                            continue;
+                        };
+                        let Some((second_body, second_position, second_node)) = second else {
+                            issues.push(WorldValidationIssue::new(
+                                WorldIssueCode::Liquid,
+                                format!(
+                                    "standing-water seam {edge_id:?} has no unique endpoint at {:?}",
+                                    lane.1
+                                ),
+                            ));
+                            continue;
+                        };
+                        if first_body != second_body
+                            || first_position.level != second_position.level
+                            || first_node.state != super::liquid::LiquidFlowState::Still
+                            || second_node.state != super::liquid::LiquidFlowState::Still
+                            || first_node.downstream.is_some()
+                            || second_node.downstream.is_some()
+                        {
+                            issues.push(WorldValidationIssue::new(
+                                WorldIssueCode::Liquid,
+                                format!(
+                                    "standing-water seam {edge_id:?} lane {lane:?} must join one level Still body with no downstream"
+                                ),
+                            ));
+                            continue;
+                        }
+                        realized.insert(*lane, (first_position, second_position));
+                    }
+                    validate_directed_seam_contacts(
+                        *edge_id,
+                        edge,
+                        &realized,
+                        &runs_by_coord,
+                        issues,
+                    );
                 }
                 ResolvedLiquidPort::Directed {
                     source,
@@ -806,8 +895,8 @@ impl GeneratedWorldPlan {
         }
     }
 
-    fn validate_anchors(&self, issues: &mut Vec<WorldValidationIssue>) {
-        if self.anchors.is_empty() {
+    fn validate_anchors(&self, require_actor_anchor: bool, issues: &mut Vec<WorldValidationIssue>) {
+        if require_actor_anchor && self.anchors.is_empty() {
             issues.push(WorldValidationIssue::new(
                 WorldIssueCode::Anchor,
                 "generated world publishes no actor anchors",
@@ -877,6 +966,22 @@ fn oriented_seam_lane(
     } else {
         None
     }
+}
+
+fn unique_world_liquid_endpoint(
+    liquids: &LiquidPlan,
+    coord: hex_core::HexCoord,
+    minimum_level: Level,
+    maximum_level: Level,
+) -> Option<(LiquidBodyId, TilePos, super::liquid::LiquidNode)> {
+    let mut candidates = liquids.bodies.iter().flat_map(|(body, plan)| {
+        plan.nodes.iter().filter_map(move |(position, node)| {
+            (position.coord == coord && (minimum_level..=maximum_level).contains(&position.level))
+                .then_some((*body, *position, *node))
+        })
+    });
+    let first = candidates.next()?;
+    candidates.next().is_none().then_some(first)
 }
 
 fn level_in_edge_band(level: i32, edge: &ResolvedEdgeContract) -> bool {

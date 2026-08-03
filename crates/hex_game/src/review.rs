@@ -456,6 +456,7 @@ impl ReviewIlluminationMaterials {
 enum ReviewView {
     Default,
     Rotated,
+    Rear,
     TopDown,
 }
 
@@ -482,9 +483,10 @@ impl ReviewView {
         match value {
             "default" => Ok(Self::Default),
             "rotated" => Ok(Self::Rotated),
+            "rear" => Ok(Self::Rear),
             "top-down" | "top_down" => Ok(Self::TopDown),
             _ => Err(format!(
-                "{VIEW_ENV} must be default, rotated, or top-down; got {value:?}"
+                "{VIEW_ENV} must be default, rotated, rear, or top-down; got {value:?}"
             )),
         }
     }
@@ -1003,6 +1005,10 @@ fn apply_camera_view(
                 focus,
             ),
         ),
+        ReviewView::Rear => {
+            let eye = focus + Quat::from_rotation_y(std::f32::consts::PI) * offset;
+            (eye, camera_up(eye, focus))
+        }
         ReviewView::TopDown => (focus + Vec3::Y * offset.length(), Vec3::NEG_Z),
     };
     transform.translation = eye;
@@ -1715,10 +1721,12 @@ mod tests {
 
     #[test]
     fn review_views_have_exact_deterministic_poses() {
+        assert_eq!(ReviewView::parse("rear"), Ok(ReviewView::Rear));
         let focus = Vec3::new(1.0, 2.0, 3.0);
         let eye = focus + Vec3::new(0.0, 4.0, 3.0);
         let offset = eye - focus;
         let rotated_eye = focus + Quat::from_rotation_y(2.0 * std::f32::consts::PI / 3.0) * offset;
+        let rear_eye = focus + Quat::from_rotation_y(std::f32::consts::PI) * offset;
         let top_down_eye = focus + Vec3::Y * offset.length();
         for (view, expected_eye, expected_up) in [
             (ReviewView::Default, eye, camera_up(eye, focus)),
@@ -1727,6 +1735,7 @@ mod tests {
                 rotated_eye,
                 camera_up(rotated_eye, focus),
             ),
+            (ReviewView::Rear, rear_eye, camera_up(rear_eye, focus)),
             (ReviewView::TopDown, top_down_eye, Vec3::NEG_Z),
         ] {
             let mut transform = Transform::from_translation(eye);
@@ -1760,6 +1769,7 @@ mod tests {
         for view in [
             ReviewView::Default,
             ReviewView::Rotated,
+            ReviewView::Rear,
             ReviewView::TopDown,
         ] {
             let mut transform = Transform::default();

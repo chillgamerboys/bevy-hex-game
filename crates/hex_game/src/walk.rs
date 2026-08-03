@@ -1449,6 +1449,7 @@ mod tests {
         ("../../walks/camera_fort.ron", "Fort"),
         ("../../walks/camera_seven_regions.ron", "Seven Regions"),
         ("../../walks/camera_two_rings.ron", "Two Rings"),
+        ("../../walks/camera_mountain_range.ron", "Mountain Range"),
     ];
 
     const TWO_RINGS_ROUTE_SCRIPTS: &[&str] = &[
@@ -1801,7 +1802,7 @@ mod tests {
             routes, maps,
             "Map scenarios and camera routes must be a bijection"
         );
-        assert_eq!(routes.len(), 15);
+        assert_eq!(routes.len(), 16);
 
         for route in &manifest.routes {
             assert!(
@@ -1850,6 +1851,162 @@ mod tests {
                 CameraRouteDestination::Anchor { name, .. } if name == "bridge"
             )
         }));
+    }
+
+    #[test]
+    fn mountain_range_walk_pins_review_route_and_rear_silhouette() {
+        let steps: Vec<WalkStep> =
+            ron::from_str(include_str!("../../../walks/camera_mountain_range.ron"))
+                .expect("the Mountain Range camera walk parses");
+        let manifest: CameraRouteManifest =
+            ron::from_str(include_str!("../../../walks/camera_routes.ron"))
+                .expect("the camera route manifest parses");
+
+        let captures = steps
+            .iter()
+            .filter_map(|step| match step {
+                WalkStep::Capture(name) => Some(name.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            captures,
+            vec![
+                "01-mountain-range-front-massif",
+                "02-mountain-range-rear-silhouette",
+                "03-mountain-range-coast",
+                "04-mountain-range-watershed",
+                "05-mountain-range-foothills",
+                "06-mountain-range-mountain-tiers-front",
+                "07-mountain-range-deep-mountain-base",
+            ]
+        );
+
+        let orbits = steps
+            .iter()
+            .filter_map(|step| match step {
+                WalkStep::OrbitCamera { yaw_turns, .. } => Some(yaw_turns.to_bits()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(orbits, vec![0.5_f32.to_bits(), (-0.5_f32).to_bits()]);
+
+        let clicks = steps
+            .iter()
+            .filter_map(|step| match step {
+                WalkStep::ClickAnchor { name, expected } => Some((name.as_str(), *expected)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            clicks,
+            vec![
+                (
+                    "coast_review",
+                    CameraRouteTile {
+                        q: -52,
+                        r: 25,
+                        level: 12,
+                    },
+                ),
+                (
+                    "inland_review",
+                    CameraRouteTile {
+                        q: -9,
+                        r: 14,
+                        level: 20,
+                    },
+                ),
+                (
+                    "foothill_review",
+                    CameraRouteTile {
+                        q: -8,
+                        r: 13,
+                        level: 20,
+                    },
+                ),
+                (
+                    "massif_front_review",
+                    CameraRouteTile {
+                        q: 31,
+                        r: 5,
+                        level: 34,
+                    },
+                ),
+                (
+                    "deep_mountain_base",
+                    CameraRouteTile {
+                        q: 53,
+                        r: 5,
+                        level: 48,
+                    },
+                ),
+            ]
+        );
+
+        let route = manifest
+            .routes
+            .iter()
+            .find(|route| route.scenario == "Mountain Range")
+            .expect("Mountain Range is present in the route manifest");
+        assert_eq!(route.seed, Some(129704046));
+        let manifested_clicks = route
+            .points
+            .iter()
+            .filter_map(|point| match &point.destination {
+                CameraRouteDestination::Anchor { name, expected } => {
+                    Some((name.as_str(), *expected))
+                }
+                CameraRouteDestination::Exact(_) => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(manifested_clicks.len(), route.points.len());
+        assert_eq!(manifested_clicks, clicks);
+        assert!(route.points.iter().any(|point| {
+            point.label == "massif front and rear silhouette"
+                && point
+                    .azimuth_turns
+                    .iter()
+                    .map(|azimuth| azimuth.to_bits())
+                    .eq([0.0_f32.to_bits(), 0.5_f32.to_bits()])
+        }));
+
+        let front = steps
+            .iter()
+            .position(|step| step == &WalkStep::Capture("01-mountain-range-front-massif".into()))
+            .expect("the front massif capture exists");
+        let turn_rear = steps
+            .iter()
+            .position(|step| {
+                matches!(
+                    step,
+                    WalkStep::OrbitCamera { yaw_turns, .. }
+                        if yaw_turns.to_bits() == 0.5_f32.to_bits()
+                )
+            })
+            .expect("the rear orbit exists");
+        let rear = steps
+            .iter()
+            .position(|step| step == &WalkStep::Capture("02-mountain-range-rear-silhouette".into()))
+            .expect("the rear silhouette capture exists");
+        let restore_front = steps
+            .iter()
+            .position(|step| {
+                matches!(
+                    step,
+                    WalkStep::OrbitCamera { yaw_turns, .. }
+                        if yaw_turns.to_bits() == (-0.5_f32).to_bits()
+                )
+            })
+            .expect("the front orbit restoration exists");
+        let character_mode = steps
+            .iter()
+            .position(|step| step == &WalkStep::Key("C".into()))
+            .expect("the walk enters Character camera mode");
+        assert!(front < turn_rear);
+        assert!(turn_rear < rear);
+        assert!(rear < restore_front);
+        assert!(restore_front < character_mode);
     }
 
     #[test]

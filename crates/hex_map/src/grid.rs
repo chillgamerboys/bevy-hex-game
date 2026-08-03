@@ -40,8 +40,9 @@ use crate::terrain::{build_non_procedural_map, TerrainPalette};
 use crate::voxel::{runs, Column, SubstanceRun, VoxelMap};
 use crate::{
     CavesReportMetrics, DeepForestReportMetrics, ForestReportMetrics, FortReportMetrics,
-    GenerationReport, PrairieReportMetrics, ProceduralRecipeMetrics, Ring19Metrics, Ring7Metrics,
-    VolcanoReportMetrics, WaterfallReportMetrics,
+    GenerationReport, MacroMetrics, MountainRangeMetrics, PrairieReportMetrics,
+    ProceduralRecipeMetrics, Ring19Metrics, Ring7Metrics, VolcanoReportMetrics,
+    WaterfallReportMetrics,
 };
 
 /// Registers world construction and tile spawning.
@@ -72,6 +73,8 @@ pub fn plugin(app: &mut App) {
         .register_type::<DeepForestReportMetrics>()
         .register_type::<PrairieReportMetrics>()
         .register_type::<Ring19Metrics>()
+        .register_type::<MacroMetrics>()
+        .register_type::<MountainRangeMetrics>()
         .add_message::<TerrainEdit>()
         // Split across two sets rather than chained locally: `hex_units` spawns
         // the player into `Actors`, which must come after the tiles here, and a

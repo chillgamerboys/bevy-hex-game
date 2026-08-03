@@ -104,13 +104,15 @@ pub struct SubstanceFile {
 
 /// Substances, indexed by the [`SubstanceId`] stored in every voxel.
 ///
-/// # Ids are assigned from sorted names, not file order
+/// # Ids are assigned from stable name order, not file order
 ///
 /// A voxel stores a `SubstanceId`, so if ids were handed out in the order entries
 /// appear in the file, **reordering the file would silently rewrite the world** —
 /// every stone voxel would become dirt without anything being edited. Sorting the
-/// names first makes the mapping depend only on the set of names, so entries can be
-/// moved around freely and adding one only shifts ids alphabetically after it.
+/// original names first makes the mapping independent of file order. Shipped
+/// additive vocabularies occupy a fixed compatibility tail (including inert slots
+/// for a sibling wave), so adding the corresponding authored entry does not move
+/// any accepted id.
 ///
 /// [`SubstanceId::AIR`] is pinned to 0 regardless, because it is a compile-time
 /// constant that the rest of the game compares against.
@@ -119,6 +121,7 @@ pub struct SubstanceFile {
 pub struct SubstanceTable {
     by_id: Vec<Substance>,
     names: Vec<String>,
+    authored: Vec<bool>,
     #[reflect(ignore)]
     by_name: HashMap<String, SubstanceId>,
     #[reflect(ignore)]
@@ -209,7 +212,13 @@ impl SubstanceTable {
     /// Properties of a substance, or [`None`] if the id is not in the table.
     #[must_use]
     pub fn get(&self, id: SubstanceId) -> Option<&Substance> {
-        self.by_id.get(id.0 as usize)
+        let index = id.0 as usize;
+        self.authored
+            .get(index)
+            .copied()
+            .unwrap_or(false)
+            .then(|| self.by_id.get(index))
+            .flatten()
     }
 
     /// The id a name maps to, or [`None`] if the table has no such substance.
@@ -221,7 +230,13 @@ impl SubstanceTable {
     /// The name of a substance, for logs and debugging.
     #[must_use]
     pub fn name(&self, id: SubstanceId) -> Option<&str> {
-        self.names.get(id.0 as usize).map(String::as_str)
+        let index = id.0 as usize;
+        self.authored
+            .get(index)
+            .copied()
+            .unwrap_or(false)
+            .then(|| self.names.get(index).map(String::as_str))
+            .flatten()
     }
 
     /// Whether something can stand on this substance. Unknown ids are not solid,
@@ -277,8 +292,9 @@ impl SubstanceTable {
 
     /// Builds a table from a loaded file, assigning ids deterministically.
     ///
-    /// `air` takes id 0 to match [`SubstanceId::AIR`]; everything else follows in
-    /// alphabetical order.
+    /// `air` takes id 0 to match [`SubstanceId::AIR`]. The original vocabulary
+    /// follows in alphabetical order; additive names in the compatibility tail
+    /// are assigned after it so shipped voxel ids and fingerprints do not move.
     pub fn from_file(
         file: &SubstanceFile,
         palette: &ArtPalette,
@@ -289,16 +305,29 @@ impl SubstanceTable {
             .filter(|name| name.as_str() != AIR_NAME)
             .cloned()
             .collect();
+        // The first four entries are reserved by the complete Outpost draft.
+        // Once any additive vocabulary is present, materialize the complete tail
+        // with inert placeholders. That lets either feature land first without
+        // moving its ids when the other vocabulary appears later.
+        const COMPATIBILITY_TAIL: &[&str] = &["limestone", "slate", "timber", "terracotta", "sand"];
+        let uses_compatibility_tail = names
+            .iter()
+            .any(|candidate| COMPATIBILITY_TAIL.contains(&candidate.as_str()));
+        names.retain(|candidate| !COMPATIBILITY_TAIL.contains(&candidate.as_str()));
         names.sort();
+        if uses_compatibility_tail {
+            names.extend(COMPATIBILITY_TAIL.iter().map(|name| (*name).to_owned()));
+        }
         names.insert(0, AIR_NAME.to_owned());
 
         let mut by_id = Vec::with_capacity(names.len());
+        let mut authored = Vec::with_capacity(names.len());
         let mut by_name = HashMap::default();
 
         for (index, name) in names.iter().enumerate() {
             let Some(substance) = file.substances.get(name) else {
-                // Only reachable for `air` when the file omits it; the fallback keeps
-                // id 0 meaning empty space rather than shifting every other id down.
+                // Air and reserved compatibility slots fail closed. Reserved names
+                // do not enter `by_name` until their authored substance exists.
                 by_id.push(Substance {
                     swatch: None,
                     color: (0.0, 0.0, 0.0),
@@ -306,9 +335,13 @@ impl SubstanceTable {
                     diggable: false,
                     conjurable: false,
                 });
-                by_name.insert(name.clone(), SubstanceId(0));
+                authored.push(name == AIR_NAME);
+                if name == AIR_NAME {
+                    by_name.insert(name.clone(), SubstanceId(0));
+                }
                 continue;
             };
+            authored.push(true);
             let mut substance = substance.clone();
             if name == AIR_NAME && (substance.solid || substance.diggable || substance.conjurable) {
                 return Err(SubstanceTableError::InvalidAirBehavior {
@@ -349,6 +382,7 @@ impl SubstanceTable {
         Ok(Self {
             by_id,
             names,
+            authored,
             by_name,
             source_substances: file.substances.clone(),
             source_palette: Some(palette.clone()),
@@ -643,6 +677,78 @@ mod tests {
     }
 
     #[test]
+    fn additive_substance_tail_reserves_sibling_wave_ids() {
+        let palette = test_palette();
+        let mut mountain_file = test_file();
+        mountain_file.substances.insert(
+            "sand".to_owned(),
+            Substance::from_swatch(swatch_id("stone"), true, true),
+        );
+        let mountain = SubstanceTable::from_file(&mountain_file, &palette)
+            .expect("Mountain vocabulary should resolve");
+        let sand = mountain.id("sand").expect("sand should resolve");
+        assert_eq!(sand, SubstanceId(8));
+        for (id, reserved) in [
+            (4, "limestone"),
+            (5, "slate"),
+            (6, "timber"),
+            (7, "terracotta"),
+        ] {
+            let id = SubstanceId(id);
+            assert_eq!(mountain.name(id), None, "{reserved} is only reserved");
+            assert_eq!(mountain.id(reserved), None);
+            assert_eq!(mountain.get(id), None);
+            assert!(!mountain.is_solid(id));
+            assert!(!mountain.is_diggable(id));
+        }
+
+        let mut combined_file = mountain_file;
+        for name in ["limestone", "slate", "timber", "terracotta"] {
+            combined_file.substances.insert(
+                name.to_owned(),
+                Substance::from_swatch(swatch_id("stone"), true, true),
+            );
+        }
+        let combined = SubstanceTable::from_file(&combined_file, &palette)
+            .expect("combined Mountain and Outpost vocabulary should resolve");
+        for name in ["air", "bedrock", "grass", "stone", "sand"] {
+            assert_eq!(
+                mountain.id(name),
+                combined.id(name),
+                "adding the sibling wave moved {name}"
+            );
+        }
+
+        let mut outpost_file = test_file();
+        for name in ["limestone", "slate", "timber", "terracotta"] {
+            outpost_file.substances.insert(
+                name.to_owned(),
+                Substance::from_swatch(swatch_id("stone"), true, true),
+            );
+        }
+        let outpost = SubstanceTable::from_file(&outpost_file, &palette)
+            .expect("Outpost vocabulary should resolve with a reserved Sand slot");
+        for name in [
+            "air",
+            "bedrock",
+            "grass",
+            "stone",
+            "limestone",
+            "slate",
+            "timber",
+            "terracotta",
+        ] {
+            assert_eq!(
+                outpost.id(name),
+                combined.id(name),
+                "adding Mountain vocabulary moved {name}"
+            );
+        }
+        assert_eq!(outpost.id("sand"), None);
+        assert_eq!(outpost.get(SubstanceId(8)), None);
+    }
+
+    #[test]
     fn properties_survive_the_round_trip() {
         let table = SubstanceTable::from_file(&test_file(), &test_palette())
             .expect("test substances should resolve");
@@ -677,6 +783,7 @@ mod tests {
             ("dirt", "terrain/dirt", (0.45, 0.33, 0.22)),
             ("stone", "terrain/stone", (0.55, 0.55, 0.58)),
             ("gravel", "terrain/gravel", (0.42, 0.40, 0.36)),
+            ("sand", "terrain/sand", (0.76, 0.66, 0.42)),
             ("water", "liquid/water", (0.08, 0.32, 0.65)),
             ("metal", "structure/metal", (0.30, 0.34, 0.40)),
             ("snow", "terrain/snow", (0.82, 0.88, 0.92)),
@@ -1454,6 +1561,7 @@ mod tests {
         let water = table.id("water").expect("water should be registered");
         let metal = table.id("metal").expect("metal should be registered");
         let bedrock = table.id("bedrock").expect("bedrock should be registered");
+        let sand = table.id("sand").expect("sand should be registered");
         let snow = table.id("snow").expect("snow should be registered");
         let ice = table.id("ice").expect("ice should be registered");
         let basalt = table.id("basalt").expect("basalt should be registered");
@@ -1466,7 +1574,12 @@ mod tests {
         assert!(table.is_diggable(water), "water should be clearable");
         assert!(table.is_solid(metal));
         assert!(table.is_diggable(metal));
-        for (name, substance) in [("snow", snow), ("ice", ice), ("basalt", basalt)] {
+        for (name, substance) in [
+            ("sand", sand),
+            ("snow", snow),
+            ("ice", ice),
+            ("basalt", basalt),
+        ] {
             assert!(table.is_solid(substance), "{name} must be footing");
             assert!(table.is_diggable(substance), "{name} must be diggable");
         }
@@ -1482,6 +1595,7 @@ mod tests {
             ("water", water),
             ("lava", lava),
             ("bedrock", bedrock),
+            ("sand", sand),
         ] {
             assert!(
                 !table.is_conjurable(substance),

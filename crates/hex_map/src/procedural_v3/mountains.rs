@@ -15,6 +15,7 @@ use super::composition::{compose_single_patch, GeneratedPatchPlan};
 use super::layout::{resolve_layout, HexSide, PatchId, ResolvedLayoutPlan, ResolvedPort};
 use super::liquid::{LiquidBodyId, LiquidBodyPlan, LiquidFlowState, LiquidNode, LiquidPlan};
 use super::patch::{PatchBuildMode, PatchRecipeContext};
+use super::river_terrain::{fit_river_terrain, validate_river_terrain};
 use super::routing::vertex_disjoint_paths;
 use super::seam::{shape_walker_seams, validate_patch_walker_seams};
 use super::seed::SeedStream;
@@ -91,6 +92,30 @@ struct MountainStream {
     source: TilePos,
     fall: TilePos,
     peak: HexCoord,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Ring19StreamHeadwater {
+    peak: HexCoord,
+    sources: BTreeSet<HexCoord>,
+}
+
+fn mountain_liquid_plan(streams: &[MountainStream]) -> LiquidPlan {
+    LiquidPlan {
+        bodies: streams
+            .iter()
+            .enumerate()
+            .map(|(index, stream)| {
+                (
+                    LiquidBodyId(u32::try_from(index).unwrap_or(u32::MAX)),
+                    LiquidBodyPlan {
+                        material: FillMaterialRole::Water,
+                        nodes: stream.nodes.clone(),
+                    },
+                )
+            })
+            .collect(),
+    }
 }
 
 /// Runs the common eight-candidate selector for one native V3 Mountains world.
@@ -259,6 +284,10 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
         V3RecipeSettings::Volcano(_) => "Volcano",
         V3RecipeSettings::DeepForest(_) => "DeepForest",
         V3RecipeSettings::Prairie(_) => "Prairie",
+        V3RecipeSettings::ShallowSea(_) => "ShallowSea",
+        V3RecipeSettings::Beach(_) => "Beach",
+        V3RecipeSettings::Shore(_) => "Shore",
+        V3RecipeSettings::DeepMountain(_) => "DeepMountain",
     }
 }
 
@@ -402,10 +431,22 @@ fn construct_patch_with_streams(
         })
         .collect::<BTreeSet<_>>();
     let excluded: BTreeSet<_> = route_cells.union(&seam_buffer).copied().collect();
+    let stream_headwater = if patch.layout().kind == super::layout::LayoutKind::Ring19 {
+        ring19_stream_headwater(
+            &patch,
+            &liquid_feeder_authority,
+            &excluded,
+            &route_cells,
+            settings.base_level,
+        )?
+    } else {
+        None
+    };
     let peaks = select_peaks(
         &mask,
         usize::from(settings.peak_count),
         &excluded,
+        stream_headwater.as_ref().map(|headwater| headwater.peak),
         streams.map(|streams| streams.peaks),
     )?;
 
@@ -462,7 +503,21 @@ fn construct_patch_with_streams(
         &route_cells,
         settings.base_level,
         settings.relief,
+        stream_headwater.as_ref(),
     )?;
+    if patch.layout().kind == super::layout::LayoutKind::Ring19 {
+        let protected = route_cells
+            .union(&walker_seam_approaches)
+            .copied()
+            .collect::<BTreeSet<_>>();
+        fit_ring19_stream_landform(
+            patch.mask(),
+            &mut surface_by_coord,
+            &mountain_streams,
+            &protected,
+        )
+        .map_err(|error| vec![recipe_issue(error)])?;
+    }
     let stream_nodes_by_coord = mountain_streams
         .iter()
         .enumerate()
@@ -514,6 +569,39 @@ fn construct_patch_with_streams(
         columns,
         surfaces,
     };
+    let liquids = mountain_liquid_plan(&mountain_streams);
+    if patch.layout().kind == super::layout::LayoutKind::Ring19 {
+        let protected_river_surfaces = route_cells
+            .iter()
+            .chain(walker_seam_approaches.iter())
+            .filter_map(|coord| {
+                surface_by_coord
+                    .get(coord)
+                    .copied()
+                    .map(|level| TilePos::new(*coord, level))
+            })
+            .collect::<BTreeSet<_>>();
+        let river_fit = fit_river_terrain(
+            &mut volume,
+            &liquids,
+            &protected_river_surfaces,
+            SolidMaterialRole::Gravel,
+        )
+        .map_err(|issues| {
+            issues
+                .into_iter()
+                .map(|issue| recipe_issue(format!("Mountains river terrain: {issue}")))
+                .collect::<Vec<_>>()
+        })?;
+        for (before, after) in river_fit.raised_banks {
+            if surface_by_coord.get(&before.coord).copied() != Some(before.level) {
+                return Err(vec![recipe_issue(format!(
+                    "Mountains river terrain moved stale bank {before:?} to {after:?}"
+                ))]);
+            }
+            surface_by_coord.insert(after.coord, after.level);
+        }
+    }
     seam_shape.apply(&mut volume)?;
     let party = exact_position(&surface_by_coord, party_coord)?;
     let hostile = exact_position(&surface_by_coord, hostile_coord)?;
@@ -660,21 +748,7 @@ fn construct_patch_with_streams(
     let fragment = GeneratedPatchPlan {
         patch_id: patch.id,
         volume,
-        liquids: LiquidPlan {
-            bodies: mountain_streams
-                .into_iter()
-                .enumerate()
-                .map(|(index, stream)| {
-                    (
-                        LiquidBodyId(u32::try_from(index).unwrap_or(u32::MAX)),
-                        LiquidBodyPlan {
-                            material: FillMaterialRole::Water,
-                            nodes: stream.nodes,
-                        },
-                    )
-                })
-                .collect(),
-        },
+        liquids,
         features,
         structures: StructurePlan::default(),
         blockers,
@@ -701,6 +775,95 @@ fn construct_patch_with_streams(
     } else {
         Err(issues)
     }
+}
+
+fn fit_ring19_stream_landform(
+    mask: &BTreeSet<HexCoord>,
+    levels: &mut BTreeMap<HexCoord, Level>,
+    streams: &[MountainStream],
+    protected: &BTreeSet<HexCoord>,
+) -> Result<(), String> {
+    let water = streams
+        .iter()
+        .flat_map(|stream| stream.nodes.keys().map(|position| position.coord))
+        .collect::<BTreeSet<_>>();
+    let mut desired = BTreeMap::<HexCoord, Level>::new();
+    let mut banks = BTreeMap::<HexCoord, Level>::new();
+
+    for (position, node) in streams.iter().flat_map(|stream| {
+        stream
+            .nodes
+            .iter()
+            .map(|(position, node)| (*position, *node))
+    }) {
+        if node.state != LiquidFlowState::Fall {
+            desired
+                .entry(position.coord)
+                .and_modify(|level| *level = (*level).max(position.level.saturating_add(1)))
+                .or_insert_with(|| position.level.saturating_add(1));
+        }
+        let bank_level = position.level.saturating_add(1);
+        for neighbor in position.coord.neighbors() {
+            if !mask.contains(&neighbor) || water.contains(&neighbor) {
+                continue;
+            }
+            let previous = banks.get(&neighbor).copied().unwrap_or_default();
+            if bank_level > previous {
+                banks.insert(neighbor, bank_level);
+            }
+        }
+    }
+
+    for (coord, required) in &banks {
+        desired
+            .entry(*coord)
+            .and_modify(|level| *level = (*level).max(*required))
+            .or_insert(*required);
+    }
+    for (bank, required) in &banks {
+        let Some(authored) = levels.get(bank).copied() else {
+            return Err(format!(
+                "Ring19 Mountains river bank leaves its patch at {bank:?}"
+            ));
+        };
+        if authored.max(*required) != *required {
+            continue;
+        }
+        let apron_level = required.saturating_sub(1);
+        for neighbor in bank.neighbors() {
+            if !mask.contains(&neighbor) || water.contains(&neighbor) {
+                continue;
+            }
+            let previous = desired.get(&neighbor).copied().unwrap_or_default();
+            if apron_level > previous {
+                desired.insert(neighbor, apron_level);
+            }
+        }
+    }
+
+    for (coord, required) in &desired {
+        let Some(authored) = levels.get(&coord).copied() else {
+            return Err(format!(
+                "Ring19 Mountains river shoulder leaves its patch at {coord:?}"
+            ));
+        };
+        if protected.contains(&coord) && authored < *required {
+            return Err(format!(
+                "Ring19 Mountains water needs protected terrain {coord:?} at level {required}, \
+                 above its authored level {authored}"
+            ));
+        }
+    }
+
+    for (coord, required) in desired {
+        let Some(level) = levels.get_mut(&coord) else {
+            return Err(format!(
+                "Ring19 Mountains river shoulder leaves its patch at {coord:?}"
+            ));
+        };
+        *level = (*level).max(required);
+    }
+    Ok(())
 }
 
 fn seam_landing_candidates(patch: &PatchRecipeContext<'_>) -> BTreeSet<HexCoord> {
@@ -732,7 +895,7 @@ fn mountain_liquid_source_approaches(patch: &PatchRecipeContext<'_>) -> BTreeSet
         .collect()
 }
 
-fn mountain_liquid_feeder_authority(
+pub(super) fn mountain_liquid_feeder_authority(
     patch: &PatchRecipeContext<'_>,
 ) -> Result<BTreeSet<HexCoord>, Vec<WorldValidationIssue>> {
     let exact = mountain_liquid_source_approaches(patch);
@@ -775,10 +938,155 @@ fn mountain_liquid_feeder_authority(
     }) {
         authority.extend(inward.line_between(frame.center()));
     }
+    authority.extend(frame.center().within_radius(1));
     Ok(authority
         .into_iter()
         .filter(|coord| patch.mask().contains(coord) && !walker.contains(coord))
         .collect())
+}
+
+fn ring19_stream_headwater(
+    patch: &PatchRecipeContext<'_>,
+    authority: &BTreeSet<HexCoord>,
+    excluded: &BTreeSet<HexCoord>,
+    route_cells: &BTreeSet<HexCoord>,
+    base_level: Level,
+) -> Result<Option<Ring19StreamHeadwater>, Vec<WorldValidationIssue>> {
+    let frame = patch.local_frame().map_err(|error| {
+        vec![recipe_issue(format!(
+            "Mountains stream summit frame failed: {error}"
+        ))]
+    })?;
+    let high_outlets = patch
+        .shared_edges()
+        .filter_map(|edge| {
+            let liquid = edge.liquid_port()?;
+            if !liquid.is_source {
+                return None;
+            }
+            let super::layout::ResolvedLiquidElevation::Exact(level) = liquid.elevation else {
+                return None;
+            };
+            (level > base_level.saturating_add(4)).then_some((edge.side, liquid.port))
+        })
+        .collect::<Vec<_>>();
+    if high_outlets.is_empty() {
+        return Ok(None);
+    }
+    let [(side, port)] = high_outlets.as_slice() else {
+        return Err(vec![recipe_issue(format!(
+            "Ring19 Mountains has {} high liquid outlets; expected one",
+            high_outlets.len()
+        ))]);
+    };
+    let tails = ring19_mountain_approach_tails(*side, port).ok_or_else(|| {
+        vec![recipe_issue(
+            "Ring19 Mountains could not partition its high feeder into three lane tails",
+        )]
+    })?;
+    let terminals = tails.keys().copied().collect::<BTreeSet<_>>();
+    if terminals.len() != 3 {
+        return Err(vec![recipe_issue(format!(
+            "Ring19 Mountains high feeder has {} lane terminals; expected three",
+            terminals.len()
+        ))]);
+    }
+
+    let walker = patch.walker_protected_approaches();
+    let protected = route_cells.union(&walker).copied().collect::<BTreeSet<_>>();
+    let authority_forbidden = authority
+        .intersection(&protected)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let source_candidates = authority
+        .iter()
+        .copied()
+        .filter(|coord| !excluded.contains(coord))
+        .filter(|coord| {
+            coord
+                .neighbors()
+                .into_iter()
+                .all(|neighbor| patch.mask().contains(&neighbor))
+        })
+        .filter(|coord| {
+            protected
+                .iter()
+                .all(|protected| protected.distance(*coord) > 1)
+        })
+        .collect::<Vec<_>>();
+    let source_shelves = connected_source_triples(&source_candidates)
+        .into_iter()
+        .filter(|sources| {
+            vertex_disjoint_mountain_paths(authority, &authority_forbidden, sources, &terminals)
+                .is_some()
+        })
+        .collect::<Vec<_>>();
+
+    let mut headwaters = Vec::new();
+    for sources in source_shelves {
+        let peak = authority
+            .iter()
+            .copied()
+            .filter(|coord| !excluded.contains(coord) && !sources.contains(coord))
+            .filter(|coord| {
+                coord
+                    .neighbors()
+                    .into_iter()
+                    .all(|neighbor| patch.mask().contains(&neighbor))
+            })
+            .filter(|coord| {
+                sources
+                    .iter()
+                    .all(|source| (1..=2).contains(&source.distance(*coord)))
+            })
+            .filter(|coord| {
+                protected
+                    .iter()
+                    .all(|protected| protected.distance(*coord) > 1)
+            })
+            .min_by_key(|coord| {
+                (
+                    sources
+                        .iter()
+                        .map(|source| source.distance(*coord))
+                        .sum::<u32>(),
+                    coord.distance(frame.center()),
+                    *coord,
+                )
+            });
+        let Some(peak) = peak else {
+            continue;
+        };
+        let clearance = sources
+            .iter()
+            .copied()
+            .chain(std::iter::once(peak))
+            .flat_map(|coord| {
+                protected
+                    .iter()
+                    .map(move |protected| coord.distance(*protected))
+            })
+            .min()
+            .unwrap_or(u32::MAX);
+        let center_distance = sources
+            .iter()
+            .map(|source| source.distance(frame.center()))
+            .sum::<u32>();
+        headwaters.push((
+            (Reverse(clearance), center_distance, sources.clone(), peak),
+            Ring19StreamHeadwater { peak, sources },
+        ));
+    }
+    headwaters
+        .into_iter()
+        .min_by_key(|(score, _)| score.clone())
+        .map(|(_, headwater)| Some(headwater))
+        .ok_or_else(|| {
+            vec![recipe_issue(
+                "Ring19 Mountains has no connected three-spring shelf with three route-free \
+                 feeder paths",
+            )]
+        })
 }
 
 fn opposing_landings(
@@ -961,6 +1269,7 @@ fn build_mountain_streams(
     route_cells: &BTreeSet<HexCoord>,
     base_level: Level,
     relief: Level,
+    headwater: Option<&Ring19StreamHeadwater>,
 ) -> Result<Vec<MountainStream>, Vec<WorldValidationIssue>> {
     let boundary = patch
         .mask()
@@ -1058,6 +1367,7 @@ fn build_mountain_streams(
             *endpoint_level,
             base_level,
             relief,
+            headwater,
         )
         .map_err(|error| vec![recipe_issue(error)]);
     }
@@ -1180,6 +1490,7 @@ fn build_joint_ring19_mountain_streams(
     outlet_level: Level,
     base_level: Level,
     relief: Level,
+    headwater: Option<&Ring19StreamHeadwater>,
 ) -> Result<Vec<MountainStream>, String> {
     let tails = ring19_mountain_approach_tails(side, port).ok_or_else(|| {
         "Ring19 Mountains could not partition its exact liquid approach into lane tails".to_owned()
@@ -1205,9 +1516,27 @@ fn build_joint_ring19_mountain_streams(
                 .any(|neighbor| !patch.mask().contains(&neighbor))
         })
         .collect::<BTreeSet<_>>();
-    let mut forbidden = route_cells
+    let protected = route_cells
         .union(&walker_protected)
         .copied()
+        .collect::<BTreeSet<_>>();
+    let protected_clearance = protected
+        .iter()
+        .flat_map(|coord| {
+            let surface = levels.get(coord).copied().unwrap_or_default();
+            let radius = if surface < outlet_level.saturating_add(1) {
+                1
+            } else {
+                0
+            };
+            coord.within_radius(radius)
+        })
+        .filter(|coord| patch.mask().contains(coord))
+        .collect::<BTreeSet<_>>();
+    let mut forbidden = protected
+        .iter()
+        .copied()
+        .chain(protected_clearance)
         .chain(boundary.iter().copied())
         .chain(peaks.iter().copied())
         .chain(port.first_approach.iter().copied())
@@ -1215,6 +1544,17 @@ fn build_joint_ring19_mountain_streams(
     for terminal in &terminals {
         forbidden.remove(terminal);
     }
+    let routing_mask = if headwater.is_some() {
+        mountain_liquid_feeder_authority(patch).map_err(|issues| {
+            issues
+                .into_iter()
+                .map(|issue| issue.detail)
+                .collect::<Vec<_>>()
+                .join("; ")
+        })?
+    } else {
+        patch.mask().clone()
+    };
 
     let source_minimum = base_level.saturating_add(relief / 3);
     let source_land_minimum = base_level.saturating_add(relief / 2);
@@ -1231,6 +1571,7 @@ fn build_joint_ring19_mountain_streams(
     });
 
     let mut attempted_groups = 0_usize;
+    let mut attempted_landforms = 0_usize;
     for peak in ordered_peaks {
         let mut candidates = levels
             .iter()
@@ -1257,7 +1598,14 @@ fn build_joint_ring19_mountain_streams(
                 *coord,
             )
         });
-        let mut source_groups = connected_source_triples(&candidates);
+        let mut source_groups = headwater.map_or_else(
+            || connected_source_triples(&candidates),
+            |headwater| {
+                (headwater.peak == peak)
+                    .then_some(vec![headwater.sources.clone()])
+                    .unwrap_or_default()
+            },
+        );
         source_groups.sort_by_key(|sources| {
             (
                 sources
@@ -1281,7 +1629,7 @@ fn build_joint_ring19_mountain_streams(
         'source_groups: for sources in source_groups {
             attempted_groups = attempted_groups.saturating_add(1);
             let Some(ingress_paths) =
-                vertex_disjoint_mountain_paths(patch.mask(), &forbidden, &sources, &terminals)
+                vertex_disjoint_mountain_paths(&routing_mask, &forbidden, &sources, &terminals)
             else {
                 continue;
             };
@@ -1310,9 +1658,14 @@ fn build_joint_ring19_mountain_streams(
 
             let mut fitted = Vec::new();
             for path in full_paths {
-                let Some(water_levels) =
-                    fitted_mountain_water_profile(&path, outlet_level, source_minimum)
-                else {
+                let Some(water_levels) = fitted_mountain_water_profile(
+                    &path,
+                    outlet_level,
+                    source_minimum,
+                    levels,
+                    &corridor,
+                    &protected,
+                ) else {
                     continue 'source_groups;
                 };
                 let Some(stream) = mountain_stream_from_profile(&path, &water_levels, peak) else {
@@ -1328,23 +1681,26 @@ fn build_joint_ring19_mountain_streams(
             {
                 continue;
             }
-            for (path, water_levels, _) in &fitted {
-                for (coord, water_level) in path.iter().copied().zip(water_levels) {
-                    let Some(surface) = levels.get_mut(&coord) else {
-                        return Err(format!(
-                            "Ring19 Mountains joint stream leaves its patch at {coord:?}"
-                        ));
-                    };
-                    *surface = (*surface).max(water_level.saturating_add(1));
-                }
+            let streams = fitted
+                .into_iter()
+                .map(|(_, _, stream)| stream)
+                .collect::<Vec<_>>();
+            let mut fitted_levels = levels.clone();
+            attempted_landforms = attempted_landforms.saturating_add(1);
+            if fit_ring19_stream_landform(patch.mask(), &mut fitted_levels, &streams, &protected)
+                .is_err()
+            {
+                continue 'source_groups;
             }
-            return Ok(fitted.into_iter().map(|(_, _, stream)| stream).collect());
+            *levels = fitted_levels;
+            return Ok(streams);
         }
     }
 
     Err(format!(
         "Ring19 Mountains could not jointly route {} liquid lanes from one summit after \
-         {attempted_groups} connected source-group attempts",
+         {attempted_groups} connected source-group attempts and {attempted_landforms} terrain \
+         fits",
         tails.len()
     ))
 }
@@ -1646,6 +2002,9 @@ fn fitted_mountain_water_profile(
     path: &[HexCoord],
     outlet_level: Level,
     source_minimum: Level,
+    surface_levels: &BTreeMap<HexCoord, Level>,
+    corridor: &BTreeSet<HexCoord>,
+    protected: &BTreeSet<HexCoord>,
 ) -> Option<Vec<Level>> {
     let edges = path.len().checked_sub(1)?;
     let source_level = source_minimum.max(outlet_level.saturating_add(MOUNTAIN_FALL_HEIGHT));
@@ -1656,25 +2015,89 @@ fn fitted_mountain_water_profile(
     if edges < gradual_drop.saturating_add(1) {
         return None;
     }
-    let fall_edge = edges / 2;
-    let mut drops = vec![0; edges];
-    *drops.get_mut(fall_edge)? = MOUNTAIN_FALL_HEIGHT;
-    let mut remaining = gradual_drop;
-    for index in (0..edges).rev() {
-        if index == fall_edge || remaining == 0 {
-            continue;
+    let midpoint = edges / 2;
+    (0..edges)
+        .filter_map(|fall_edge| {
+            let mut drops = vec![0; edges];
+            *drops.get_mut(fall_edge)? = MOUNTAIN_FALL_HEIGHT;
+            let mut remaining = gradual_drop;
+            for index in (0..edges).rev() {
+                if index == fall_edge || remaining == 0 {
+                    continue;
+                }
+                *drops.get_mut(index)? = 1;
+                remaining = remaining.saturating_sub(1);
+            }
+            if remaining != 0 {
+                return None;
+            }
+            let mut levels = vec![source_level];
+            for drop in drops {
+                levels.push(levels.last().copied()?.saturating_sub(drop));
+            }
+            (levels.last().copied() == Some(outlet_level)).then_some((fall_edge, levels))
+        })
+        .filter_map(|(fall_edge, levels)| {
+            let cost = mountain_profile_landform_cost(
+                path,
+                &levels,
+                fall_edge,
+                surface_levels,
+                corridor,
+                protected,
+            )?;
+            (cost.0 == 0).then_some((cost.1, cost.2, fall_edge.abs_diff(midpoint), levels))
+        })
+        .min_by_key(|candidate| candidate.clone())
+        .map(|(_, _, _, levels)| levels)
+}
+
+fn mountain_profile_landform_cost(
+    path: &[HexCoord],
+    water_levels: &[Level],
+    fall_edge: usize,
+    surface_levels: &BTreeMap<HexCoord, Level>,
+    corridor: &BTreeSet<HexCoord>,
+    protected: &BTreeSet<HexCoord>,
+) -> Option<(u32, u32, u32)> {
+    let mut protected_deficits = 0_u32;
+    let mut maximum_deficit = 0_u32;
+    let mut total_deficit = 0_u32;
+    for (index, (coord, water_level)) in path
+        .iter()
+        .copied()
+        .zip(water_levels.iter().copied())
+        .enumerate()
+    {
+        let required = water_level.saturating_add(1);
+        let terrain = if index == fall_edge {
+            coord
+                .neighbors()
+                .into_iter()
+                .filter(|neighbor| !corridor.contains(neighbor))
+                .collect::<Vec<_>>()
+        } else {
+            let mut terrain = coord
+                .neighbors()
+                .into_iter()
+                .filter(|neighbor| !corridor.contains(neighbor))
+                .collect::<Vec<_>>();
+            terrain.push(coord);
+            terrain
+        };
+        for terrain_coord in terrain {
+            let Some(authored) = surface_levels.get(&terrain_coord).copied() else {
+                continue;
+            };
+            let deficit = u32::try_from(required.saturating_sub(authored).max(0)).ok()?;
+            if protected.contains(&terrain_coord) && deficit > 0 {
+                protected_deficits = protected_deficits.saturating_add(deficit);
+            }
+            maximum_deficit = maximum_deficit.max(deficit);
+            total_deficit = total_deficit.saturating_add(deficit);
         }
-        *drops.get_mut(index)? = 1;
-        remaining = remaining.saturating_sub(1);
     }
-    if remaining != 0 {
-        return None;
-    }
-    let mut levels = vec![source_level];
-    for drop in drops {
-        levels.push(levels.last().copied()?.saturating_sub(drop));
-    }
-    (levels.last().copied() == Some(outlet_level)).then_some(levels)
+    Some((protected_deficits, maximum_deficit, total_deficit))
 }
 
 fn fitted_mountain_water_profile_around_routes(
@@ -2083,6 +2506,7 @@ fn select_peaks(
     mask: &BTreeSet<HexCoord>,
     count: usize,
     excluded: &BTreeSet<HexCoord>,
+    required: Option<HexCoord>,
     stream: Option<SeedStream<'_>>,
 ) -> Result<Vec<HexCoord>, Vec<WorldValidationIssue>> {
     let mut candidates: Vec<_> = mask
@@ -2104,7 +2528,7 @@ fn select_peaks(
             *coord,
         )
     });
-    let mut peaks = Vec::new();
+    let mut peaks = required.into_iter().collect::<Vec<_>>();
     for separation in [4_u32, 3, 2] {
         for candidate in &candidates {
             if peaks.contains(candidate)
@@ -2850,6 +3274,13 @@ fn validate_mountain_streams(
             &falls,
             STREAM_OVERLOOK_RADIUS,
             issues,
+        );
+    }
+    if plan.layout.kind == super::layout::LayoutKind::Ring19 {
+        issues.extend(
+            validate_river_terrain(&plan.volume, &plan.liquids)
+                .into_iter()
+                .map(|issue| recipe_issue(format!("Mountains river terrain: {issue}"))),
         );
     }
 }

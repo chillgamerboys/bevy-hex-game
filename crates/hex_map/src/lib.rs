@@ -60,24 +60,28 @@ pub use liquid_render::LiquidVisualTime;
 pub use procedural::{
     CavesMetrics as CavesReportMetrics, DeepForestMetrics as DeepForestReportMetrics,
     ForestMetrics as ForestReportMetrics, FortMetrics as FortReportMetrics, GenerationReport,
-    PrairieMetrics as PrairieReportMetrics, ProceduralRecipeMetrics, Ring19Metrics, Ring7Metrics,
-    TacticalMetrics, VolcanoMetrics as VolcanoReportMetrics,
-    WaterfallMetrics as WaterfallReportMetrics,
+    MacroMetrics, MountainRangeMetrics, PrairieMetrics as PrairieReportMetrics,
+    ProceduralRecipeMetrics, Ring19Metrics, Ring7Metrics, TacticalMetrics,
+    VolcanoMetrics as VolcanoReportMetrics, WaterfallMetrics as WaterfallReportMetrics,
 };
 pub use settings::{
     BridgeSettings, CavesSettings, CrossingSettings, CubeCoord, DerivedHillsCrossing,
     EdgeElevationSettings, EdgeLiquidPortSettings, EdgeLiquidSettings, EnvironmentSettings,
-    HillsSettings, LandformSettings, LayeredSkyIslandsSettings, LinkedIslandsSettings, MapSettings,
+    HillsSettings, LandformSettings, LayeredSkyIslandsSettings, LinkedIslandsSettings,
+    MacroAccessSettings, MacroAxisSettings, MacroBiomeInstanceSettings, MacroElevationSettings,
+    MacroHeadwaterSettings, MacroLayoutSettings, MacroLiquidConnectionSettings, MapSettings,
     MountainSettings, MountainsSettings, NamedOverlaySettings, PatchEdgeContractSettings,
     PatchEdgesSettings, PatchMaskSettings, PatchSpec, PerlinSettings, PerlinStepSettings,
     ProceduralSettings, ProceduralV1Settings, ProceduralV2Settings, ProceduralV3Settings,
     Ring19BoundaryOutletSettings, Ring19BoundarySide, Ring19LiquidConnectionSettings,
     Ring19RegionSettings, RiverSettings, SharedEdgeSettings, ShowcaseSettings, SkyIslandsSettings,
     TacticalSettings, TerrainSettings, V2EnvironmentSettings, V2HillsSettings, V2RecipeSettings,
-    V3CavesSettings, V3DeepForestSettings, V3EnvironmentSettings, V3ForestSettings, V3FortSettings,
-    V3HillsSettings, V3LayoutSettings, V3MountainsSettings, V3OverlaySettings, V3PrairieSettings,
-    V3RecipeSettings, V3Ring19Settings, V3Ring7Settings, V3SkyIslandsSettings, V3VolcanoSettings,
-    V3WaterfallSettings, WalkerPortSettings, V3_RING19_REGION_COUNT,
+    V3BeachSettings, V3CavesSettings, V3DeepForestSettings, V3DeepMountainSettings,
+    V3EnvironmentSettings, V3ForestSettings, V3FortSettings, V3HillsSettings, V3LayoutSettings,
+    V3MountainsSettings, V3OverlaySettings, V3PrairieSettings, V3RecipeSettings, V3Ring19Settings,
+    V3Ring7Settings, V3ShallowSeaSettings, V3ShoreSettings, V3SkyIslandsSettings,
+    V3VolcanoSettings, V3WaterfallSettings, WalkerPortSettings, V3_MACRO_CELL_COUNT,
+    V3_MOUNTAIN_RANGE_REGION_COUNT, V3_RING19_REGION_COUNT,
 };
 pub use voxel::{runs, Column, SubstanceRun, VoxelMap};
 

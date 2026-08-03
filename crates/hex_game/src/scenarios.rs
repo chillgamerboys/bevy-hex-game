@@ -2552,6 +2552,7 @@ mod tests {
             "Deep Forest",
             "Prairie",
             "Two Rings",
+            "Mountain Range",
         ] {
             let scenario = library()
                 .scenarios
@@ -2610,7 +2611,18 @@ mod tests {
                     assert_eq!(metrics.reciprocal_seams, 42);
                     assert_eq!(metrics.redundant_regions, 19);
                 }
-                ("Deep Forest" | "Prairie" | "Two Rings", metrics) => {
+                ("Mountain Range", Some(ProceduralRecipeMetrics::MountainRange(metrics))) => {
+                    assert_eq!(metrics.world_columns, 18_019);
+                    assert_eq!(metrics.macro_cells, 37);
+                    assert_eq!(metrics.biome_regions, 30);
+                    assert_eq!(metrics.outer_macro_sides, 42);
+                    assert!(metrics.critical_route_steps > 0);
+                    assert!(metrics.standing_water_seams > 0);
+                    assert!(metrics.directed_liquid_seams > 0);
+                    assert!((92..=104).contains(&metrics.summit_level));
+                    assert!(metrics.high_massif_surfaces >= 100);
+                }
+                ("Deep Forest" | "Prairie" | "Two Rings" | "Mountain Range", metrics) => {
                     panic!("{scenario_name} published unexpected metrics: {metrics:?}");
                 }
                 _ => {}
@@ -2643,6 +2655,15 @@ mod tests {
                     "vegetation_gradient_overlook",
                     "fort_outlet_overlook",
                 ],
+                "Mountain Range" => &[
+                    "beach_review",
+                    "coast_review",
+                    "inland_review",
+                    "foothill_review",
+                    "massif_front_review",
+                    "deep_mountain_base",
+                    "deep_mountain_review",
+                ],
                 _ => &["conflict_center", "bridge", "alternate_crossing"],
             };
             for required in recipe_anchors {
@@ -2656,6 +2677,10 @@ mod tests {
                 "Sky Islands" | "Two Rings" => assert!(
                     !special_regions.is_empty(),
                     "{scenario_name} dropped its flight-gated upper layer"
+                ),
+                "Mountain Range" => assert!(
+                    !special_regions.is_empty(),
+                    "Mountain Range dropped its closed non-route macro seams"
                 ),
                 "Mountains" => {}
                 "Waterfall" => {
@@ -2707,79 +2732,88 @@ mod tests {
 
     #[cfg(feature = "test-support")]
     #[test]
-    #[ignore = "manual release-mode shipped Two Rings Character-camera timing diagnostic"]
-    fn shipped_two_rings_character_collision_release_timing() {
-        let mut app = procedural_gameplay_app("Two Rings");
-        enter_screen(&mut app, Screen::Gameplay);
-        assert!(
-            app.world().contains_resource::<TerrainReady>(),
-            "Two Rings did not finish terrain generation: {:?}",
-            app.world()
-                .get_resource::<GameplaySetupFailure>()
-                .map(|failure| failure.reason.as_str())
-        );
+    #[ignore = "manual release-mode shipped large-map Character-camera timing diagnostic"]
+    fn shipped_large_maps_character_collision_release_timing() {
+        for (scenario_name, expected_columns, budget) in [
+            ("Two Rings", 9_241, std::time::Duration::from_millis(1)),
+            (
+                "Mountain Range",
+                18_019,
+                std::time::Duration::from_millis(2),
+            ),
+        ] {
+            let mut app = procedural_gameplay_app(scenario_name);
+            enter_screen(&mut app, Screen::Gameplay);
+            assert!(
+                app.world().contains_resource::<TerrainReady>(),
+                "{scenario_name} did not finish terrain generation: {:?}",
+                app.world()
+                    .get_resource::<GameplaySetupFailure>()
+                    .map(|failure| failure.reason.as_str())
+            );
 
-        let settings: hex_assets::CameraSettings =
-            ron::from_str(include_str!("../../../assets/config/camera.ron"))
-                .expect("the shipped camera settings should deserialize");
-        let mut supports = app
-            .world()
-            .resource::<MapAnchors>()
-            .iter()
-            .map(|(_id, position)| position)
-            .collect::<Vec<_>>();
-        supports.sort_unstable();
-        supports.dedup();
-        let projection = {
-            let world = app.world_mut();
-            let mut tiles = world.query_filtered::<(&TilePos, &HexSpan), With<HexTile>>();
-            tiles
-                .iter(world)
-                .map(|(position, span)| (*position, *span))
-                .collect::<Vec<_>>()
-        };
+            let settings: hex_assets::CameraSettings =
+                ron::from_str(include_str!("../../../assets/config/camera.ron"))
+                    .expect("the shipped camera settings should deserialize");
+            let mut supports = app
+                .world()
+                .resource::<MapAnchors>()
+                .iter()
+                .map(|(_id, position)| position)
+                .collect::<Vec<_>>();
+            supports.sort_unstable();
+            supports.dedup();
+            let projection = {
+                let world = app.world_mut();
+                let mut tiles = world.query_filtered::<(&TilePos, &HexSpan), With<HexTile>>();
+                tiles
+                    .iter(world)
+                    .map(|(position, span)| (*position, *span))
+                    .collect::<Vec<_>>()
+            };
 
-        let profile = hex_world::camera::test_support::profile_character_collision(
-            &projection,
-            &supports,
-            &settings,
-            10_000,
-        )
-        .expect("the shipped public terrain projection should support camera diagnostics");
+            let profile = hex_world::camera::test_support::profile_character_collision(
+                &projection,
+                &supports,
+                &settings,
+                10_000,
+            )
+            .expect("the shipped public terrain projection should support camera diagnostics");
 
-        assert_eq!(
-            profile.columns, 9_241,
-            "the camera diagnostic must use every shipped Two Rings column"
-        );
-        assert!(
-            profile.spans >= profile.columns,
-            "each public column should publish at least one exact material run"
-        );
-        assert_eq!(profile.supports, supports.len());
-        assert_ne!(
-            profile.result_checksum, 0,
-            "the timed collision results must remain observable"
-        );
-        eprintln!(
-            "shipped Two Rings Character collision diagnostic (release): \
+            assert_eq!(
+                profile.columns, expected_columns,
+                "the camera diagnostic must use every shipped {scenario_name} column"
+            );
+            assert!(
+                profile.spans >= profile.columns,
+                "each public column should publish at least one exact material run"
+            );
+            assert_eq!(profile.supports, supports.len());
+            assert_ne!(
+                profile.result_checksum, 0,
+                "the timed collision results must remain observable"
+            );
+            eprintln!(
+                "shipped {scenario_name} Character collision diagnostic (release): \
              columns={}, spans={}, supports={}, queries={}, index_build={:?}, \
              index_rebuild_p95={:?}, index_rebuild_worst={:?}, query_p95={:?}, \
              query_worst={:?}",
-            profile.columns,
-            profile.spans,
-            profile.supports,
-            profile.queries,
-            profile.index_build,
-            profile.index_rebuild_p95,
-            profile.index_rebuild_worst,
-            profile.query_p95,
-            profile.query_worst,
-        );
-        assert!(
-            profile.query_p95 < std::time::Duration::from_millis(1),
-            "shipped Two Rings Character collision p95 {:?} breached the 1 ms release budget",
-            profile.query_p95
-        );
+                profile.columns,
+                profile.spans,
+                profile.supports,
+                profile.queries,
+                profile.index_build,
+                profile.index_rebuild_p95,
+                profile.index_rebuild_worst,
+                profile.query_p95,
+                profile.query_worst,
+            );
+            assert!(
+                profile.query_p95 < budget,
+                "shipped {scenario_name} Character collision p95 {:?} breached the {budget:?} release budget",
+                profile.query_p95
+            );
+        }
     }
 
     #[test]
