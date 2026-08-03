@@ -967,6 +967,11 @@ Each spell by name:
 
   `SetTerrain` and `SpawnWall` name a substance from `substances.ron`.
 
+  This is the schema vocabulary, not a promise that every primitive has a delivered
+  runtime consumer. `ModifyIncomingDisables` remains reserved for a future one-shot
+  ward lifecycle and is absent from shipped spell content. `Renewal` currently ships
+  only `RestoreHexes(count: 2)`.
+
   The E0 content candidate gives `Scrying Eye` one Divination requirement and retains
   the supported single-target `Reveal` behavior. Its later off-sight live-feed
   lifecycle is not implied by this content migration. `Illuminate` remains in the

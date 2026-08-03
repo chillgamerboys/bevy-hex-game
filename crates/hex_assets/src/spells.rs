@@ -14,10 +14,11 @@
 //! # Effects are a closed enum, never a script
 //!
 //! [`Effect`] is a fixed vocabulary of primitives (audit §8). A closed enum can be
-//! bounds-checked at parse and makes runtime failure unrepresentable — the whole
-//! reason there is no scripting engine. Extension is one variant plus one match arm.
-//! These effects are *applied* downstream (hex_combat, when casting lands); this crate
-//! only parses and validates them.
+//! bounds-checked at parse and gives downstream admission an exhaustive checklist —
+//! the whole reason there is no scripting engine. Extension is one variant plus one
+//! match arm. Delivered effects are applied downstream (hex_combat, when casting
+//! lands); this crate also retains schema variants whose runtime lifecycle is deferred,
+//! and shipped content must not advertise those variants meanwhile.
 //!
 //! Element and substance references are by **name**; resolving them against the
 //! element and substance tables is [`ContentIndex`](crate::ContentIndex)'s job.
@@ -1046,6 +1047,21 @@ mod tests {
                 "deferred effect leaked into shipped content: {deferred:?}"
             );
         }
+    }
+
+    #[test]
+    fn shipped_renewal_only_restores_hexes() {
+        let file = shipped_file();
+        let renewal = file
+            .spells
+            .get("Renewal")
+            .expect("the shipped spell roster defines Renewal");
+
+        assert_eq!(
+            renewal.effects,
+            vec![Effect::RestoreHexes { count: 2 }],
+            "Renewal must not advertise the deferred one-shot ward effect",
+        );
     }
 
     #[test]

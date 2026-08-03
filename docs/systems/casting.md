@@ -13,6 +13,9 @@ that outlive their turn are expressed.
 > Enchantment-bound terrain, spell-created illumination, area Restore/Reveal, and
 > area-lingering zones remain later work.
 
+One-shot wards also remain deferred: the schema can decode
+`ModifyIncomingDisables`, but no runtime state owns that effect yet.
+
 Read [the design](../design/game.md) for the magic system this serves, and
 [combat.md](combat.md) for the turn loop a cast happens inside.
 
@@ -470,7 +473,9 @@ without touching the framework, which is the point of having one.
   `PendingDecision::ChooseRestores`; a player caster selects disabled cells on the
   target lattice, while a non-player caster uses its registered deterministic
   algorithm. The answer remains a replayable `ChooseRestores` command rather than an
-  internal healing policy.
+  internal healing policy. Shipped Renewal carries only `RestoreHexes(count: 2)`;
+  its former `ModifyIncomingDisables` entry was removed because one-shot wards have
+  no delivered runtime lifecycle.
 - **Only one exact-cell choice is public at a time.** Content validation still prevents
   incompatible choice-producing effects, while the implementation may queue several
   area Disable recipients behind the existing `PendingDecision`. It publishes the next
