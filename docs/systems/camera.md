@@ -165,19 +165,36 @@ inspection follow and selected-target fallback, no gameplay-authority mutation, 
 synthetic flat radius-55 lower-level benchmark,
 a 2,048-render-chunk tree-fade
 performance gate, 10,000 unchanged frames, whole-tree/material isolation, review-only
-roofs, and 100 gameplay lifecycles. An
-ignored release composition diagnostic generates the pinned shipped Two Rings
-scenario, builds and repeatedly rebuilds the camera index from its public
+roofs, and 100 gameplay lifecycles. An ignored release composition diagnostic
+generates the pinned shipped Two Rings and Mountain Range scenarios, builds and
+repeatedly rebuilds the camera index from each public
 `HexTile`/`TilePos`/`HexSpan` projection, and keeps steady Character collision below
-1 ms p95 across its exact published anchors and six yaws.
+1 ms p95 for Two Rings and defines a 2 ms p95 budget for Mountain Range across their
+exact published anchors and six yaws.
 
-The tracked route manifest pins 15 camera-walk Sandbox catalog maps—every entry except
+The tracked route manifest pins 16 camera-walk Sandbox catalog maps—every entry except
 the deployment-only Flat Arena—to their exact scenario seed and representative
 stack-safe destinations. Each has an executable multi-azimuth Character walk using
 ordinary pointer movement and bounded party-idle waiting, followed by an exact check
 that the selected unit's authoritative footing and the camera-focus surface both equal
 the requested destination. Sky Islands exercises only its reachable ordinary ground
 bridge.
+
+Mountain Range's presentation walk explicitly removes hostile rosters before actor
+setup, behind the default-off `visual-walk` feature. This keeps combat outside a
+terrain-and-camera capture route whose inland review anchors intentionally sit near the
+shipped skirmish. Normal launches retain the authored hostile encounter, and typed map
+and scenario contracts—not these frames—remain the authority for terrain connectivity,
+spawning, and gameplay behavior.
+
+The tracked Mountain Range card completes 45 steps and eight frames: Map overview and
+rear silhouette, followed by Character-route coast, watershed, foothills, front and
+rear massif azimuths, and Deep Mountain base. Ordinary pointer movement and camera
+orbit input drive the route; exact selected-unit and camera-focus assertions establish
+arrival independently of the frames. `@shrav-k` approved the overview and rear-
+silhouette static presentation on 2026-08-03. The maintainer explicitly waived the
+separate native motion/control-feel replay to unblock unrelated work. That waiver is
+not a human motion PASS, and the automated input path does not substitute for one.
 
 Five seed-pinned Two Rings groups cover one ordinary-network destination in all 19
 regions, require at least two captured azimuths after exact selected-unit and

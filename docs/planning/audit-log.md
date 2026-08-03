@@ -7,6 +7,41 @@ file is the record that travels with the repo.
 
 <!-- /audit-diff appends below this line. Don't insert content between this comment and Wave entries; the skill anchors on this marker. -->
 
+## Wave 29 — feat(map): ship procedural Mountain Range (2026-08-03)
+
+- **PR**: #182 — `progress-status-check`
+- **Outcome**: green after takeover reconciliation and audit fixes; no remaining
+  ship blockers, with release-only corpus/performance and native-motion gates explicitly
+  waived
+- **Lenses triggered**: 1, 2, 4, 6, 7, 8, D3, D4, plus the fresh-eyes pass
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 1, 7 | `crates/hex_map/src/procedural_v3/macro_world.rs` | SHIP-BLOCKER | fixed — candidate-local construction errors become typed rejections so all eight candidates and the canonical fallback remain reachable; setup failures stay fatal |
+| 4, 7 | `crates/hex_map/src/procedural_v3/macro_world.rs` | SHIP-BLOCKER | fixed — Deep Mountain treeline and snowline settings now drive Macro vegetation and surface material, with mutation coverage and unchanged canonical output |
+| 2, 8, D3, D4 | `crates/hex_assets/src/substances.rs`, `docs/{contracts.md,development/config.md,planning/boundary.md}` | SHIP-BLOCKER | fixed — one frozen registry preserves original ids 0–12, reserves inert 13–16, pins Sand to 17, rejects unregistered names, and corrects stale sorted-id claims |
+| 6, 7, 8 | `crates/hex_game/src/walk.rs`, `walks/camera_mountain_range.ron` | NON-BLOCKER | fixed — feature-only one-shot hostile suppression runs before actor setup for Mountain Range only, preserves Player rosters, and leaves later and production launches unchanged |
+| 7, D3 | `crates/hex_game/src/save.rs`, `docs/planning/status.md` | NON-BLOCKER | fixed — PR #175's legacy resume is preserved but visibly refused after the semantic shipped-world digest changes |
+
+**Notes**: the complete functional selector closure is green: contracts 345,
+simulation 24, app 138 plus 11 postflight checks, map unit 99, map generation 413,
+map contracts 80, and residual 786. Canonical generation, materialization, spawning,
+regeneration, and re-entry remain typed evidence; neither screenshots nor the walk are
+used for those claims. The automated Mountain Range route completed all 45 steps and
+eight frames, and the four-view capture pack was inspected. `@shrav-k` approved the
+overview (`3b36aaff163828b762b23d65fc3c8bcfea00b47e06bc551c44d4c60c558ab8ab`)
+and rear silhouette
+(`a8e36f44370f4b3ccfd5fbd49d7d6739310f9e33899a649ee2636626a5afddb9`)
+as static presentation only. The Mountain Range walk's Hostile-roster suppression is
+default-off, consumed once before actors, and absent from the production encounter.
+
+On 2026-08-03, `@shrav-k` explicitly waived and cancelled the remaining 128-seed and
+10,000-seed release corpora, generation benchmark, large-map camera performance
+diagnostic, and native human motion/control-feel replay to unblock unrelated pull
+requests. They are WAIVED, not passed; no fallback, timing, or human-motion result is
+claimed. Linear was unavailable, so no ticket state was inspected; if a Mountain
+Range ticket exists, mark it Done after #182 reaches `dev` and attach the merge SHA.
+
 ## Wave 28 — feat(ui): add SVG-backed hex-grid logo (2026-08-02)
 
 - **PR**: #181 — `shrav-k/logo-elemental-grid-assets`

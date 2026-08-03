@@ -81,10 +81,28 @@ Two Rings is mechanically selectable and covered by deterministic generation,
 spawning, regeneration, and re-entry checks. Alberto approved its visual, motion,
 and play feel at the exact reviewed head before the development wave landed. Mountain
 Range is mechanically selectable and its generator validates the authored geometry,
-coast, watershed, elevations, massif, anchors, and critical route. Its 128-seed and
-ignored stress corpora, release benchmark, complete capture pack, automated visual
-walk, and final-SHA human orbit/walk have not yet been recorded; the current
-implementation is not a completed release gate until that evidence exists.
+coast, watershed, elevations, massif, anchors, and critical route. The complete
+selector-chosen functional closure passes, including map generation, real-plugin
+publication, regeneration, and re-entry. Its four-view deterministic capture pack and
+45-step, eight-frame automated walk cover the overview, rear silhouette, coast,
+watershed, foothills, both massif azimuths, and the Deep Mountain base.
+
+The Mountain Range walk removes Hostile rosters once, before actor setup and only
+behind the default-off `visual-walk` feature, so combat cannot interrupt terrain and
+camera evidence. Normal launches retain the authored encounter; typed map and scenario
+contracts, not the rendered frames, remain authoritative for connectivity, spawning,
+and gameplay. On 2026-08-03, `@shrav-k` approved the overview and rear-silhouette
+static presentation. The reviewed frames have SHA-256 hashes
+`3b36aaff163828b762b23d65fc3c8bcfea00b47e06bc551c44d4c60c558ab8ab` and
+`a8e36f44370f4b3ccfd5fbd49d7d6739310f9e33899a649ee2636626a5afddb9`.
+That approval does not claim human motion or control-feel evidence.
+
+To unblock unrelated pull requests, `@shrav-k` explicitly waived and cancelled the
+remaining release-only 128-seed corpus, 10,000-seed stress corpus, generation
+benchmark, large-map camera performance diagnostic, and native human motion/control-
+feel replay on 2026-08-03. Those gates are **WAIVED**, not passed; no fallback-rate,
+timing, or human-motion result is inferred from the functional tests, screenshots, or
+automated walk.
 
 Authoritative spatial perception now runs headlessly every gameplay frame.
 `hex_world` publishes a renderer-independent Bright or Dim exterior tier;
@@ -145,8 +163,10 @@ library from being paired with newer raw catalogs: Loading requires one
 `AcceptedContentRevision` spanning elements, substances, the terrain-damage matrix,
 spells, and lattices. A test opens everything shipped so a broken reference cannot
 ship.
-`ElementId` and `SpellId` are opaque `hex_core` ids assigned from sorted names, like
-`SubstanceId`. A dev-feature content dump remains available for inspecting the resolved
+`ElementId` and `SpellId` are opaque `hex_core` ids assigned from sorted names.
+`SubstanceId` instead preserves the frozen original vocabulary and an additive reserved
+compatibility tail, so independently landing terrain catalogs cannot renumber existing
+materials. A dev-feature content dump remains available for inspecting the resolved
 spell list, while gameplay now consumes the same catalogs through its lattices and cast
 panel. Every externally authored archetype must also form one contiguous lattice;
 disconnected islands fail with the archetype named in the error.
@@ -229,9 +249,13 @@ records as Empty, Available, or Invalid. A new canonical Party Trial is bound to
 chosen empty slot and occupies it only on its first safe manual save. Available cards
 show their party and accumulated active-play time; invalid records remain preserved
 and visibly refused. `campaigns.ron` is replaced atomically. When it is absent, one
-valid legacy `resume.ron` is copied to slot 1 without modifying the legacy file. Only
-active, unpaused, non-terminal Campaign gameplay accrues time. Manual saving instead
-requires paused, safe, quiescent Campaign exploration.
+structurally valid legacy `resume.ron` is copied to slot 1 without modifying the
+legacy file, then checked against the current semantic content. Mountain Range changes
+those digest-bound shipped world inputs, so the narrow PR #175 legacy translation is
+intentionally no longer compatible: the imported record remains preserved as Invalid
+with a visible scenario-changed refusal. Only active, unpaused, non-terminal Campaign
+gameplay accrues time. Manual saving instead requires paused, safe, quiescent Campaign
+exploration.
 
 Sandbox is the sole player-facing authority for a temporary map, two ordered fixed
 six-slot rosters, character picks, deployment, and launch. Its in-memory default is
@@ -591,9 +615,9 @@ The live implementation retains these explicit limitations:
 Most of what makes this a product does not exist yet: no long-term-compatible save
 contract, audio content, controller support, signing, or store packaging. The current
 shell provides three atomic build-bound Campaign slots with one-time legacy-resume
-migration, a persistent Settings menu, categorized configurable keyboard actions,
-HUD visibility preferences, empty audio buses, normalized release artifacts, and
-retained symbol material. The first hygiene
+import and invalid-record preservation, a persistent Settings menu, categorized
+configurable keyboard actions, HUD visibility preferences, empty audio buses,
+normalized release artifacts, and retained symbol material. The first hygiene
 slice has landed — a per-session log file beside the executable, a panic hook that
 writes into it, and the version on the Main Menu — but full crash *reporting*
 (symbolication, upload, a dialog) has not. These replaceable seams do not close the

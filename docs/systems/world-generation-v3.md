@@ -187,8 +187,9 @@ three-back/two-front wedge; neither publishes internal seams.
 The elevation progression is sea level 8, coast levels 9–13, green terrain 12–18,
 Hills approximately 16–24, first-tier mountain seam datums 24–34 with peaks near 44,
 second-tier datums 34–48 with peaks near 62, and a Deep Mountain base near 48 rising
-toward a broad level-96 summit under a hard cap of 104. Alpine surfaces become snowy
-at level 52.
+toward a broad level-96 summit under a hard cap of 104. The Deep Mountain climate
+payload supplies Macro's alpine thresholds: its shipped treeline is level 36 and its
+shipped snowline makes Mountain and Deep Mountain surfaces snowy from level 52.
 
 Two directed Waterfall tributaries descend through the green and coastal bands and
 join one shared water body at its still sea footprint. Their generated channels
@@ -546,8 +547,15 @@ Mountain Range additionally requires coast, watershed, both mountain tiers,
 front-massif, and rear-silhouette views. Manual review must traverse every critical
 recipe route and every open composite seam before that surface ships. The landed Two
 Rings surface received its final visual and play approval at the reviewed wave head;
-Mountain Range requires its own final-SHA orbit and walk, and any later integration
-commit invalidates that approval.
+Mountain Range's 2026-08-03 delivery record contains its four-view deterministic pack
+and a 45-step, eight-frame feature-only walk with exact arrival and focus assertions.
+`@shrav-k` approved the overview and rear-silhouette static presentation. Hostile
+suppression in that walk is presentation-only and cannot establish spawning or
+gameplay. To unblock unrelated work, the same maintainer explicitly waived and
+cancelled the release-only 128-seed and 10,000-seed corpora, generation and camera
+performance diagnostics, and native human motion/control-feel replay. Those gates are
+WAIVED, not passed, and this one-delivery exception does not weaken the evidence
+requirements for later world or camera behavior changes.
 
 ## Primary precedents
 
