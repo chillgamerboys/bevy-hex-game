@@ -29,6 +29,7 @@ WAIVER_KEYS = {
     "description",
     "concerns",
     "allowed_patterns",
+    "applies_to",
 }
 
 
@@ -72,6 +73,17 @@ class ScopeDecision:
                 concern: concern in selected for concern in all_concerns
             },
         }
+
+
+@dataclass(frozen=True)
+class ScopeContext:
+    """GitHub event identity used to constrain one-wave waivers."""
+
+    event_name: str
+    base_ref: str = ""
+    head_ref: str = ""
+    ref: str = ""
+    pull_request_number: int | None = None
 
 
 def load_config(path: pathlib.Path = DEFAULT_CONFIG) -> dict[str, Any]:
@@ -169,6 +181,45 @@ def load_config(path: pathlib.Path = DEFAULT_CONFIG) -> dict[str, Any]:
             raise ScopeConfigurationError(
                 f"partition check {name} needs expected_ignored"
             )
+
+    selection_checks = raw.get("selection_checks", {})
+    if not isinstance(selection_checks, dict):
+        raise ScopeConfigurationError("selection_checks must be an object")
+    for concern, expected_commands in selection_checks.items():
+        definition = concerns.get(concern)
+        if not isinstance(definition, dict) or not isinstance(
+            expected_commands, dict
+        ):
+            raise ScopeConfigurationError(
+                "selection checks need known concern objects"
+            )
+        command_names = {
+            name
+            for name in (
+                "preflight_command",
+                "command",
+                "postflight_command",
+            )
+            if name in definition
+        }
+        if set(expected_commands) != command_names:
+            raise ScopeConfigurationError(
+                f"selection check {concern} must cover exactly "
+                f"{sorted(command_names)}"
+            )
+        for command_name, expected_tests in expected_commands.items():
+            if (
+                not isinstance(expected_tests, list)
+                or not expected_tests
+                or not all(
+                    isinstance(test, str) and test for test in expected_tests
+                )
+                or len(set(expected_tests)) != len(expected_tests)
+            ):
+                raise ScopeConfigurationError(
+                    f"selection check {concern} {command_name} needs "
+                    "unique test identities"
+                )
 
     for concern, definition in concerns.items():
         if not isinstance(definition, dict):
@@ -305,6 +356,7 @@ def _load_waiver(
     description = waiver.get("description")
     concerns = waiver.get("concerns")
     patterns = waiver.get("allowed_patterns")
+    applies_to = waiver.get("applies_to")
     if (
         not isinstance(name, str)
         or not name
@@ -342,13 +394,61 @@ def _load_waiver(
         raise ScopeConfigurationError(
             f"waiver {manifest_path} has unsafe patterns or does not admit itself"
         )
+    if not isinstance(applies_to, dict) or set(applies_to) != {
+        "pull_request",
+        "push",
+    }:
+        raise ScopeConfigurationError(
+            f"waiver {manifest_path} needs exact pull_request and push contexts"
+        )
+    pull_request = applies_to.get("pull_request")
+    push = applies_to.get("push")
+    if (
+        not isinstance(pull_request, dict)
+        or set(pull_request) != {"number", "base_ref", "head_ref"}
+        or not isinstance(pull_request.get("number"), int)
+        or isinstance(pull_request["number"], bool)
+        or pull_request["number"] <= 0
+        or not isinstance(pull_request.get("base_ref"), str)
+        or pull_request["base_ref"] != "dev"
+        or not isinstance(pull_request.get("head_ref"), str)
+        or not pull_request["head_ref"]
+        or not isinstance(push, dict)
+        or set(push) != {"ref"}
+        or not isinstance(push.get("ref"), str)
+        or push["ref"] != "refs/heads/dev"
+    ):
+        raise ScopeConfigurationError(
+            f"waiver {manifest_path} has invalid event context values"
+        )
     return waiver
+
+
+def _waiver_applies_to_context(
+    waiver: dict[str, Any], context: ScopeContext | None
+) -> bool:
+    """Return whether one waiver is authorized for the exact GitHub event."""
+
+    if context is None:
+        return False
+    applies_to = waiver["applies_to"]
+    if context.event_name == "pull_request":
+        expected = applies_to["pull_request"]
+        return (
+            context.pull_request_number == expected["number"]
+            and context.base_ref == expected["base_ref"]
+            and context.head_ref == expected["head_ref"]
+        )
+    if context.event_name == "push":
+        return context.ref == applies_to["push"]["ref"]
+    return False
 
 
 def _apply_waiver(
     decision: ScopeDecision,
     config: dict[str, Any],
     repository_root: pathlib.Path,
+    context: ScopeContext | None,
 ) -> ScopeDecision:
     """Apply one tracked, self-declared, exact-diff waiver or fail closed."""
 
@@ -402,6 +502,14 @@ def _apply_waiver(
             str(error),
         )
 
+    if not _waiver_applies_to_context(waiver, context):
+        return _full_decision(
+            decision,
+            all_concerns,
+            "fail-closed-waiver-context",
+            "The one-wave waiver does not apply to this event, ref, or PR.",
+        )
+
     if decision.unknown_files:
         return _full_decision(
             decision,
@@ -447,6 +555,7 @@ def classify(
     paths: Iterable[str],
     config: dict[str, Any],
     repository_root: pathlib.Path = REPOSITORY_ROOT,
+    context: ScopeContext | None = None,
 ) -> ScopeDecision:
     """Classify changed paths, failing closed to the full gate."""
 
@@ -509,7 +618,7 @@ def classify(
         unknown_files=tuple(unknown_files),
         waiver=None,
     )
-    return _apply_waiver(decision, config, repository_root)
+    return _apply_waiver(decision, config, repository_root, context)
 
 
 def force_full(decision: ScopeDecision, all_concerns: Iterable[str]) -> ScopeDecision:
@@ -675,6 +784,31 @@ def _listed_tests(command: list[str]) -> set[str]:
     }
 
 
+def check_selection(concern: str, config: dict[str, Any]) -> None:
+    """Prove one concern's nextest filters select the exact reviewed tests."""
+
+    expected_commands = config.get("selection_checks", {}).get(concern)
+    if expected_commands is None:
+        raise ScopeConfigurationError(f"unknown selection check: {concern}")
+    definition = config["concerns"][concern]
+    for command_name, expected_tests in expected_commands.items():
+        command = list(definition[command_name])
+        if command[:3] != ["cargo", "nextest", "run"]:
+            raise ScopeConfigurationError(
+                f"selection check {concern} {command_name} is not nextest"
+            )
+        command[2] = "list"
+        actual = _listed_tests(command)
+        expected = set(expected_tests)
+        if actual != expected:
+            raise ScopeConfigurationError(
+                f"selection {concern} {command_name} differs from its "
+                f"{len(expected)} reviewed tests: "
+                f"missing={sorted(expected - actual)}, "
+                f"extra={sorted(actual - expected)}"
+            )
+
+
 def check_partitions(name: str, config: dict[str, Any]) -> None:
     """Prove a configured test partition is exhaustive and disjoint."""
 
@@ -735,6 +869,11 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--head", default="HEAD")
     plan.add_argument("--json-out", type=pathlib.Path)
     plan.add_argument("--github-output", type=pathlib.Path)
+    plan.add_argument("--event-name", default="")
+    plan.add_argument("--base-ref", default="")
+    plan.add_argument("--head-ref", default="")
+    plan.add_argument("--ref", default="")
+    plan.add_argument("--pull-request-number", type=int)
     plan.add_argument(
         "--force-full",
         action="store_true",
@@ -762,6 +901,10 @@ def build_parser() -> argparse.ArgumentParser:
         "check-partitions", help="verify one exhaustive test partition"
     )
     partitions.add_argument("name")
+    selection = subparsers.add_parser(
+        "check-selection", help="verify one exact nextest selection"
+    )
+    selection.add_argument("concern")
     return parser
 
 
@@ -799,6 +942,8 @@ def main() -> int:
                 raise ScopeConfigurationError(
                     f"unknown concern: {arguments.concern}"
                 )
+            if arguments.concern in config.get("selection_checks", {}):
+                check_selection(arguments.concern, config)
             commands = [
                 *(
                     [("preflight", definition["preflight_command"])]
@@ -861,6 +1006,10 @@ def main() -> int:
             check_partitions(arguments.name, config)
             print(f"{arguments.name} test partitions are exhaustive and disjoint")
             return 0
+        if arguments.subcommand == "check-selection":
+            check_selection(arguments.concern, config)
+            print(f"{arguments.concern} test selection matches reviewed identities")
+            return 0
 
         if arguments.paths_file is not None:
             paths = arguments.paths_file.read_text(encoding="utf-8").splitlines()
@@ -868,7 +1017,17 @@ def main() -> int:
             paths = arguments.path
         else:
             paths = changed_paths(arguments.base, arguments.head)
-        decision = classify(paths, config)
+        decision = classify(
+            paths,
+            config,
+            context=ScopeContext(
+                event_name=arguments.event_name,
+                base_ref=arguments.base_ref,
+                head_ref=arguments.head_ref,
+                ref=arguments.ref,
+                pull_request_number=arguments.pull_request_number,
+            ),
+        )
         if arguments.force_full:
             decision = force_full(decision, config["all_concerns"])
         output = decision.as_dict(config["all_concerns"])

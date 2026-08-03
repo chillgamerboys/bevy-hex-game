@@ -280,8 +280,14 @@ Draft #180 carries one explicit gameplay-only wave waiver from that default comb
 gate. Its authoritative automated closures are `trajectory_contracts` and
 `spell_resolution_contracts`; `hex_ui`, `gameplay_app`, UI snapshots, automated visual
 walks, deterministic simulation, procedural map corpora, and the residual workspace
-corpus are **WAIVED**, not passed. The waiver becomes invalid if the wave gains UI,
-presentation, map-implementation, G/H-schema, or otherwise unclassified behavior.
+corpus are **WAIVED**, not passed. The waiver becomes invalid if the wave gains UI
+model/widget/layout/rendering behavior beyond its exact thin Creator-deployability and
+semantic casting-preview consumers, map-implementation, G/H-schema, or otherwise
+unclassified behavior. Those two consumers are covered by content/trajectory
+contracts, the renderer-free composition target, and the named manual route; no
+automated UI/app test is reclassified as run. A conditionally empty green GitHub job
+shell records routing only, while omitted gates remain **WAIVED** and the exact-head
+human route remains **PENDING**.
 
 The **knowledge seam is live** as `hex_combat::knowledge`:
 `FactionLatticeKnowledge::view` is the one read path for a hostile lattice.

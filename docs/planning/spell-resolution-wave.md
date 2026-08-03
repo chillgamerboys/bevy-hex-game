@@ -107,7 +107,8 @@ existing Creator -> Sandbox route; packaged archetypes and scenarios remain unch
   implementation.
 - The existing gameplay deployability gate may expose shipped Fireball to a
   Creator-authored full Fire ring after area damage lands. Packaged archetypes and
-  scenario balance stay unchanged; no UI layout or presentation work belongs here.
+  scenario balance stay unchanged. This changes the thin Creator eligibility consumer,
+  not its UI model, widgets, layout, or rendering.
 
 ### Terrain transaction and failure
 
@@ -204,6 +205,9 @@ workspace corpus.
   `hex_core::terrain_impact` tests; and these two real-map producer seams:
   `terrain_protocol_orders_reserved_phases_before_perception` and
   `overkill_is_capped_and_empty_voxels_report_no_material`.
+  Before execution, an exact nextest-list contract pins 56 domain identities, those
+  two map identities, and five composition identities so filter drift cannot reduce
+  evidence silently.
 - Composition: add explicit `hex_game/tests/spell_resolution.rs` using minimal state
   and the real map/units/perception/combat plugins. It installs no `AppPlugin`,
   renderer, viewport, `hex_ui::UiPlugin`, or test-support UI and uses a tiny authored
@@ -230,13 +234,22 @@ workspace corpus. Format, dependency policy, strict Clippy, warnings-denied docs
 the shipping build remain non-test gates.
 
 The exception is valid only while every changed behavior is exercised by those two
-non-UI producer/consumer closures and every changed path is in the wave's explicit
-allow-list. A UI/presentation change, a `hex_map` implementation or G/H contract
-change, an unclassified path, or a behavior those closures cannot exercise invalidates
-the waiver and restores the ordinary fail-closed gate. It applies to the #180 candidate
-and its exact reviewed merge diff on `dev`, not later unrelated pushes or a
-`dev` → `main` promotion. The PR and canonical testing policy publish the exact narrow
-JUnit replacements and the waiver reason.
+non-UI producer/consumer closures and every changed path is in the wave's exact-file
+allow-list. This wave does change two thin gameplay consumers: Creator deployability
+and the casting preview's semantic clipped voxel set. Their policy is covered by the
+content/trajectory contracts, renderer-free composition target, and named manual
+route; all automated UI/app tests remain waived. A UI model, widget, layout or
+rendering change, a `hex_map` implementation or G/H contract change, an unclassified
+path, or behavior those closures cannot exercise invalidates the waiver and restores
+the ordinary fail-closed gate. It applies only to PR #180 from
+`wave/spell-resolution` to `dev` and its exact reviewed merge diff pushed to `dev`,
+never a `main`-target PR, push to `main`, or later unrelated push. The PR and canonical
+testing policy publish the exact narrow JUnit replacements and the waiver reason.
+
+GitHub still enters required job shells whose expensive steps are conditionally
+omitted. A green shell reports successful routing and required non-waived checks, not
+an omitted partition passing: the scope artifact continues to label those partitions
+**WAIVED**, and the named exact-head runtime route remains **PENDING** until recorded.
 
 ## Combined acceptance
 
@@ -265,8 +278,9 @@ JUnit replacements and the waiver reason.
   authority, or edits an integration-owned hot file.
 - Area Restore/Reveal would be admitted without a separately accepted hidden
   information/choice policy.
-- Layout, rendering, or presentation behavior becomes necessary. That invalidates the
-  non-UI waiver and requires a new scope decision.
+- UI model, widget, layout, rendering, or presentation behavior beyond the two thin
+  Creator/preview gameplay consumers becomes necessary. That invalidates the non-UI
+  waiver and requires a new scope decision.
 
 ## Delivery-state reconciliation
 

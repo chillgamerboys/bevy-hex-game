@@ -176,12 +176,15 @@ The declaration must name:
   when the change has no runtime behavior at all.
 
 Every omitted check is reported as **WAIVED**, never passed, green, or silently
-skipped. The selector may apply the waiver only when its tracked declaration is in the
-candidate diff and every changed path is allow-listed. Unknown paths, invalid
+skipped. A green shell for a conditionally entered GitHub job reports routing, not an
+omitted gate passing; the scope artifact remains the semantic record of **WAIVED** and
+**PENDING** work. The selector may apply the waiver only when its tracked declaration
+is in the candidate diff, every changed path is allow-listed, and the event identity
+matches its exact PR/base/head or merge-push declaration. Unknown paths, invalid
 configuration, and empty diffs retain fail-closed behavior. A declaration may cover
-the exact reviewed merge diff on `dev`, but not a later unrelated protected-branch push
-or a `dev` → `main` promotion. Adding behavior that the named narrow concerns cannot
-exercise invalidates the exception instead of expanding it by default.
+the exact reviewed merge diff on `dev`, but never a `main`-target PR, a push to `main`,
+or a later unrelated protected-branch push. Adding behavior that the named narrow
+concerns cannot exercise invalidates the exception instead of expanding it by default.
 
 Draft #180 is the concrete first use: its gameplay tests are
 `trajectory_contracts` plus `spell_resolution_contracts`; it waives `hex_ui`,

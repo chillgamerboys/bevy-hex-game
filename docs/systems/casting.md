@@ -105,7 +105,9 @@ The first draft consumer is Fireball with `Impact(element: "Fire", power: 2)`. I
 previous `Displace` is removed rather than advertising forced movement the runtime
 does not implement. A Creator-authored full Fire ring may inscribe it through the
 existing Creator → Sandbox route; packaged archetypes and scenario balance are
-unchanged, and the wave adds no UI or presentation behavior.
+unchanged. The wave updates the thin Creator deployability consumer and the casting
+preview's semantic clipped voxel set, but adds no UI model, widget, layout, or rendering
+behavior.
 
 ### World answer live; gameplay completion is the draft candidate
 
@@ -517,6 +519,9 @@ Every omission is recorded as **WAIVED**, never passed. The dedicated headless g
 composition target installs no renderer or UI and proves only the real
 map/units/perception/combat protocol. See the exact authority and invalidation rules in
 [gameplay testing](../development/gameplay-testing.md#spell-resolution-wave-waiver).
+The thin Creator and preview consumers are covered by content/trajectory contracts,
+that composition target, and the named manual route; their presence does not turn any
+waived automated UI/app suite green.
 
 Before draft #180 becomes ready, one named human must exercise the Creator → Sandbox
 Fireball route on the exact final head. That is a gameplay runtime check, not an

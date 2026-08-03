@@ -220,12 +220,18 @@ turn behavior, and occupancy/movement also belong in
 manifest or routing changes, but it does not authorize any broader application or UI
 partition.
 
+Before executing that concern, the selector lists and compares all three exact
+partitions against the reviewed identities: 56 domain tests, two real-map seam tests,
+and five renderer-free composition tests. A renamed, removed, newly captured, or
+zero-match filter fails the concern instead of silently shrinking or widening its
+evidence.
+
 The following omissions are **WAIVED**, not passed, green, N/A, or silently skipped:
 
 | Omitted gate | Why it cannot exercise this wave's changed authority |
 |---|---|
-| `hex_ui` and `hex_game/tests/gameplay_app.rs` | No UI model, widget, layout, focus, persistence, or application lifecycle behavior changes |
-| UI snapshots and the automated visual walk | No rendered or presentation behavior changes; pixels cannot prove batch correlation, stable ordering, or settlement |
+| `hex_ui` and `hex_game/tests/gameplay_app.rs` | The wave changes two thin gameplay consumers—Creator deployability and semantic casting-preview clipping—but no UI model, widget, layout, focus, persistence, or broad application lifecycle authority. The content/trajectory contracts and renderer-free composition target cover those policies directly |
+| UI snapshots and the automated visual walk | The preview's gameplay voxel set changes, but widget/layout/rendering mechanics do not. Trajectory contracts prove the set, while the named manual Creator → Sandbox route checks the visible gameplay result; neither UI suite can prove batch correlation, stable ordering, or settlement |
 | Deterministic combat simulation | The renderer-free reducer cannot execute the ECS/world impact and settlement adapter; focused authority-hold tests cover the reducer seam it does own |
 | V3/procedural map corpora | The wave changes no generator, world content, G/H schema, or map implementation; two exact real-map producer tests cover the consumed seam |
 | Residual workspace corpus | Its unrelated owner/application binaries cannot compile or exercise the changed transaction authority |
@@ -235,14 +241,16 @@ default-feature shipping release build remain required non-test checks. The sele
 must apply this exception only when an explicit waiver manifest is itself in the diff
 and every changed path matches its allow-list. Unknown paths, invalid configuration,
 an empty diff, and ordinary future changes remain fail-closed. The same declaration
-may route the exact #180 merge diff on `dev`; it does not survive into a later unrelated
-push or a `dev` → `main` promotion.
+may route only PR #180 from `wave/spell-resolution` to `dev` and the exact #180 merge
+diff pushed to `dev`; it does not apply to any `main`-target PR, any push to `main`, or
+a later unrelated push.
 
-The waiver is invalid as soon as the candidate changes UI/layout/rendering,
-`hex_game` lifecycle outside the dedicated headless adapter, `hex_map` implementation,
-the G/H schema or world response policy, procedural content, or any behavior the two
-named concerns cannot exercise. Invalidation restores the complete ordinary gate; it
-is not permission to expand the allow-list after behavior has expanded.
+The waiver is invalid as soon as the candidate changes UI models, widgets, layout,
+rendering, `hex_game` lifecycle outside the two exact thin consumers and dedicated
+headless adapter, `hex_map` implementation, the G/H schema or world response policy,
+procedural content, or any behavior the two named concerns cannot exercise.
+Invalidation restores the complete ordinary gate; it is not permission to expand the
+allow-list after behavior has expanded.
 
 Before the draft becomes ready, a named human still runs the exact-head Creator →
 Sandbox Fireball route. That bounded gameplay confirmation requires no screenshot
@@ -257,6 +265,13 @@ its exact merge diff on `dev`; `main` promotions and later unrelated pushes rema
 complete. Unknown paths, invalid configuration, and empty diffs still fail closed. A
 waived gate never contributes green evidence or substitutes for the exact-head manual
 sign-off.
+
+GitHub deliberately enters each required job even when all of that job's expensive
+steps are conditional, so a green job shell can mean only that scope detection and the
+non-waived checks completed. The `test-scope-decision` artifact is authoritative: its
+omitted partitions remain **WAIVED**. The human Creator → Sandbox result remains
+**PENDING** until a named exact-head pass is recorded; neither state is converted to a
+pass by a green shell.
 
 For a gameplay-only change that does not modify `hex_core`, shared application
 composition, scenario/loading lifecycle, or a published world seam, V3/map corpora

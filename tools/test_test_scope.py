@@ -10,6 +10,7 @@ import sys
 import tempfile
 import tomllib
 import unittest
+from unittest import mock
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -24,6 +25,18 @@ SPEC.loader.exec_module(test_scope)
 
 class TestScopeTests(unittest.TestCase):
     """The selector chooses the required concern closure and fails closed."""
+
+    PR_180_CONTEXT = test_scope.ScopeContext(
+        event_name="pull_request",
+        base_ref="dev",
+        head_ref="wave/spell-resolution",
+        ref="refs/pull/180/merge",
+        pull_request_number=180,
+    )
+    DEV_PUSH_CONTEXT = test_scope.ScopeContext(
+        event_name="push",
+        ref="refs/heads/dev",
+    )
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -71,6 +84,7 @@ class TestScopeTests(unittest.TestCase):
         waiver: dict | str | None = None,
         tracked: bool = True,
         remove_after_track: bool = False,
+        context: test_scope.ScopeContext | None = PR_180_CONTEXT,
     ):
         """Classify against an isolated tracked or deliberately invalid waiver."""
 
@@ -98,7 +112,12 @@ class TestScopeTests(unittest.TestCase):
                 )
             if remove_after_track:
                 destination.unlink()
-            return test_scope.classify(paths, self.config, repository)
+            return test_scope.classify(
+                paths,
+                self.config,
+                repository,
+                context=context,
+            )
 
     def test_lattice_change_selects_rules_contracts_and_simulation(self) -> None:
         decision = self.classify("crates/hex_lattice/src/cast.rs")
@@ -360,6 +379,64 @@ class TestScopeTests(unittest.TestCase):
         self.assertTrue(decision.full)
         self.assertIsNone(decision.waiver)
 
+    def test_waiver_requires_the_exact_pr_number_base_and_head(self) -> None:
+        manifest = self.config["waiver_manifests"][0]
+        invalid_contexts = (
+            None,
+            test_scope.ScopeContext(
+                event_name="pull_request",
+                base_ref="dev",
+                head_ref="wave/spell-resolution",
+                pull_request_number=181,
+            ),
+            test_scope.ScopeContext(
+                event_name="pull_request",
+                base_ref="main",
+                head_ref="dev",
+                pull_request_number=180,
+            ),
+            test_scope.ScopeContext(
+                event_name="pull_request",
+                base_ref="main",
+                head_ref="wave/spell-resolution",
+                pull_request_number=180,
+            ),
+        )
+        for context in invalid_contexts:
+            with self.subTest(context=context):
+                decision = self.classify_with_waiver(
+                    manifest,
+                    "crates/hex_combat/src/spell_resolution.rs",
+                    context=context,
+                )
+                self.assertTrue(decision.full)
+                self.assertIsNone(decision.waiver)
+                self.assertIn(
+                    "fail-closed-waiver-context", decision.matched_rules
+                )
+
+    def test_waiver_applies_only_to_the_exact_dev_push(self) -> None:
+        manifest = self.config["waiver_manifests"][0]
+        dev = self.classify_with_waiver(
+            manifest,
+            "crates/hex_combat/src/spell_resolution.rs",
+            context=self.DEV_PUSH_CONTEXT,
+        )
+        main = self.classify_with_waiver(
+            manifest,
+            "crates/hex_combat/src/spell_resolution.rs",
+            context=test_scope.ScopeContext(
+                event_name="push",
+                ref="refs/heads/main",
+            ),
+        )
+
+        self.assertFalse(dev.full)
+        self.assertEqual(dev.waiver, "spell-resolution-wave")
+        self.assertTrue(main.full)
+        self.assertIsNone(main.waiver)
+        self.assertIn("fail-closed-waiver-context", main.matched_rules)
+
     def test_untracked_or_missing_waiver_manifest_fails_closed(self) -> None:
         manifest = self.config["waiver_manifests"][0]
         for tracked, remove_after_track, marker in (
@@ -391,11 +468,21 @@ class TestScopeTests(unittest.TestCase):
             (ROOT / manifest).read_text(encoding="utf-8")
         )
         unhashable_pattern["allowed_patterns"] = [{}]
+        main_push = json.loads(
+            (ROOT / manifest).read_text(encoding="utf-8")
+        )
+        main_push["applies_to"]["push"]["ref"] = "refs/heads/main"
+        main_target = json.loads(
+            (ROOT / manifest).read_text(encoding="utf-8")
+        )
+        main_target["applies_to"]["pull_request"]["base_ref"] = "main"
         for waiver in (
             "{",
             unknown,
             unhashable_concern,
             unhashable_pattern,
+            main_push,
+            main_target,
         ):
             with self.subTest(waiver=waiver):
                 decision = self.classify_with_waiver(
@@ -437,6 +524,32 @@ class TestScopeTests(unittest.TestCase):
             "fail-closed-waiver-unknown-path", unknown.matched_rules
         )
 
+    def test_waiver_rejects_unrelated_files_in_its_changed_crates(self) -> None:
+        manifest = self.config["waiver_manifests"][0]
+        for path in (
+            "crates/hex_combat/src/commands/channel.rs",
+            "crates/hex_units/src/animation.rs",
+        ):
+            with self.subTest(path=path):
+                decision = self.classify_with_waiver(
+                    manifest,
+                    "crates/hex_combat/src/spell_resolution.rs",
+                    path,
+                )
+                self.assertTrue(decision.full)
+                self.assertIn(
+                    "fail-closed-waiver-outside-allowlist",
+                    decision.matched_rules,
+                )
+
+        waiver = json.loads((ROOT / manifest).read_text(encoding="utf-8"))
+        self.assertNotIn("crates/hex_combat/**", waiver["allowed_patterns"])
+        self.assertNotIn("crates/hex_units/**", waiver["allowed_patterns"])
+        self.assertIn(
+            "crates/hex_game/tests/spell_resolution.rs",
+            waiver["allowed_patterns"],
+        )
+
     def test_unknown_waiver_manifest_path_fails_closed(self) -> None:
         decision = self.classify(
             ".config/test-waivers/not-approved.json",
@@ -468,6 +581,13 @@ class TestScopeTests(unittest.TestCase):
                     postflight_command=[]
                 ),
                 "concern app postflight_command must be non-empty strings",
+            ),
+            (
+                lambda config: config["selection_checks"][
+                    "spell_resolution_contracts"
+                ].update(command=[]),
+                "selection check spell_resolution_contracts command needs "
+                "unique test identities",
             ),
         )
         for mutate, expected in cases:
@@ -573,6 +693,7 @@ class TestScopeTests(unittest.TestCase):
         waived = self.classify_with_waiver(
             manifest,
             "crates/hex_combat/src/spell_resolution.rs",
+            context=self.DEV_PUSH_CONTEXT,
         )
         decision = test_scope.force_full(
             waived, self.config["all_concerns"]
@@ -857,8 +978,14 @@ class TestScopeTests(unittest.TestCase):
             "binary(gameplay_app)",
             "binary(simulation)",
             "procedural",
+            "commands::spell_resolution::tests::",
+            "test(/^loop::",
         ):
             self.assertNotIn(forbidden, profile)
+        self.assertIn(
+            "loop_contract::adapter_spending_the_turn_advances_both_projections",
+            profile,
+        )
         self.assertIn(
             'path = "junit.xml"',
             nextest.split(
@@ -886,6 +1013,51 @@ class TestScopeTests(unittest.TestCase):
             maxsplit=1,
         )[0]
         self.assertIn("package(hex_game) & kind(test)", composition_profile)
+
+        expected = self.config["selection_checks"][
+            "spell_resolution_contracts"
+        ]
+        self.assertEqual(len(expected["preflight_command"]), 56)
+        self.assertEqual(len(expected["command"]), 2)
+        self.assertEqual(len(expected["postflight_command"]), 5)
+        self.assertIn(
+            "hex_combat::contracts loop_contract::"
+            "adapter_spending_the_turn_advances_both_projections_in_the_same_frame",
+            expected["preflight_command"],
+        )
+
+    def test_spell_resolution_list_check_is_exact_and_fails_on_drift(
+        self,
+    ) -> None:
+        expected_commands = self.config["selection_checks"][
+            "spell_resolution_contracts"
+        ]
+        listed = [set(tests) for tests in expected_commands.values()]
+        with mock.patch.object(
+            test_scope,
+            "_listed_tests",
+            side_effect=listed,
+        ) as list_tests:
+            test_scope.check_selection(
+                "spell_resolution_contracts", self.config
+            )
+        self.assertEqual(list_tests.call_count, 3)
+        for call in list_tests.call_args_list:
+            self.assertEqual(call.args[0][:3], ["cargo", "nextest", "list"])
+
+        missing = [set(tests) for tests in expected_commands.values()]
+        missing[0].remove(next(iter(missing[0])))
+        with mock.patch.object(
+            test_scope,
+            "_listed_tests",
+            side_effect=missing,
+        ), self.assertRaisesRegex(
+            test_scope.ScopeConfigurationError,
+            "differs from its 56 reviewed tests",
+        ):
+            test_scope.check_selection(
+                "spell_resolution_contracts", self.config
+            )
 
     def test_local_skill_checks_selection_and_splits_portably(self) -> None:
         skill = (ROOT / ".claude" / "skills" / "test-local" / "SKILL.md").read_text(
@@ -988,6 +1160,14 @@ class TestScopeTests(unittest.TestCase):
         self.assertIn(
             "waiver: ${{ steps.filter.outputs.waiver }}", workflow
         )
+        for context_argument in (
+            '--event-name "${{ github.event_name }}"',
+            '--base-ref "${{ github.base_ref }}"',
+            '--head-ref "${{ github.head_ref }}"',
+            '--ref "${{ github.ref }}"',
+            '--pull-request-number "${{ github.event.pull_request.number }}"',
+        ):
+            self.assertIn(context_argument, workflow)
         self.assertIn(
             "spell_resolution_contracts: "
             "${{ steps.filter.outputs.spell_resolution_contracts }}",
