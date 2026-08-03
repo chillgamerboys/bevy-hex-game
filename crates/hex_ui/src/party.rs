@@ -1,11 +1,15 @@
 //! Party and formation presentation from an immutable gameplay projection.
 
-use bevy::input_focus::tab_navigation::TabIndex;
-use bevy::prelude::*;
+use bevy::{
+    ecs::system::SystemParam,
+    input_focus::{tab_navigation::TabIndex, InputFocus},
+    prelude::*,
+};
 use hex_core::Screen;
+use hex_gameplay_model::MainViewDestination;
 
 use crate::{
-    blurb, hud_heading, hud_text_role, owner_resolved_control_role, responsive_control_role,
+    blurb, fine, hud_heading, hud_text_role, owner_resolved_control_role, responsive_control_role,
     HudElement, PartyIntent, PartyView, ResolvedUiMetrics, UiAssets, UiHudSetup, UiIntent,
     UiRegionRole, UiSystems, ACCENT, ACCENT_EDGE, BLURB_SIZE, EDGE, LABEL, PANEL_BG,
 };
@@ -21,6 +25,14 @@ struct FormationBody;
 
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
 struct PartyControl(PartyIntent);
+
+#[derive(SystemParam)]
+struct PartyFocus<'w, 's> {
+    focus: ResMut<'w, InputFocus>,
+    parents: Query<'w, 's, &'static ChildOf>,
+    names: Query<'w, 's, &'static Name>,
+    refreshes: ResMut<'w, crate::focus::FocusRefreshRequests>,
+}
 
 pub(super) fn plugin(app: &mut App) {
     app.add_systems(
@@ -44,7 +56,7 @@ fn spawn_panels(
 ) {
     let party = commands
         .spawn((
-            Name::new("Party Strip"),
+            Name::new("Party Panel"),
             HudElement,
             Node {
                 width: Val::Percent(100.0),
@@ -60,7 +72,7 @@ fn spawn_panels(
         ))
         .with_children(|root| {
             root.spawn(hud_heading(&assets, "party"));
-            root.spawn(blurb(&assets, "ALLIES · keys 1–6"));
+            root.spawn(blurb(&assets, "ALLIES"));
             root.spawn((
                 PartyBody,
                 Node {
@@ -95,7 +107,7 @@ fn spawn_panels(
             root.spawn(hud_heading(&assets, "formation"));
             root.spawn(blurb(
                 &assets,
-                "Select an ally, then choose a slot. Occupied slots swap.",
+                "Choose a movement member, then choose a slot. Occupied slots swap.",
             ));
             root.spawn((
                 FormationBody,
@@ -126,23 +138,40 @@ fn region(wanted: UiRegionRole, regions: &Query<(Entity, &UiRegionRole)>) -> Opt
 fn rebuild(
     mut commands: Commands,
     view: Res<PartyView>,
+    review: Option<Res<crate::review::UiReviewPresentation>>,
+    chrome: Res<crate::GameplayChromeView>,
     party_bodies: Query<Entity, With<PartyBody>>,
     formation_bodies: Query<Entity, With<FormationBody>>,
     mut formation_panels: Query<&mut Node, With<FormationPanel>>,
     metrics: Res<ResolvedUiMetrics>,
     assets: Res<UiAssets>,
+    mut route_focus: PartyFocus,
 ) {
-    if !view.is_changed() && !metrics.is_changed() {
+    let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
+    if !view.is_changed() && !review_changed && !metrics.is_changed() && !chrome.is_changed() {
         return;
     }
+    let view = review
+        .as_ref()
+        .and_then(|review| review.party.as_ref())
+        .unwrap_or(view.as_ref());
     if let Ok(mut panel) = formation_panels.single_mut() {
-        panel.display = if view.formation_visible {
+        panel.display = if view.formation_visible
+            && matches!(chrome.main_view, MainViewDestination::Formation)
+        {
             Display::Flex
         } else {
             Display::None
         };
     }
     if let Ok(body) = party_bodies.single() {
+        crate::focus::begin_route_refresh(
+            body,
+            &mut route_focus.focus,
+            &route_focus.parents,
+            &route_focus.names,
+            &mut route_focus.refreshes,
+        );
         commands.entity(body).despawn_related::<Children>();
         commands.entity(body).with_children(|members| {
             for member in &view.members {
@@ -158,25 +187,104 @@ fn rebuild(
                 } else {
                     Color::srgba(1.0, 1.0, 1.0, 0.07)
                 };
+                let accessible_label = if member.selected {
+                    format!("Selected · {}", member.label)
+                } else {
+                    member.label.clone()
+                };
                 members
                     .spawn((
                         control_button(
                             format!("Party Member {}", member.slot + 1),
-                            member.label.clone(),
+                            accessible_label,
                             Val::Percent(100.0),
                             crate::UiVisibilityRequirement::Immediate,
                         ),
-                        PartyControl(PartyIntent::SelectMember(member.slot)),
+                        PartyControl(PartyIntent::ActivateMember(member.slot)),
                         BorderColor::all(border),
                         BackgroundColor(background),
                     ))
-                    .with_child(body_text(&assets, member.label.clone()));
+                    .with_children(|card| {
+                        if member.selected {
+                            card.spawn((
+                                fine(&assets, "✓"),
+                                Node {
+                                    position_type: PositionType::Absolute,
+                                    top: Val::Px(3.0),
+                                    right: Val::Px(5.0),
+                                    ..default()
+                                },
+                            ));
+                        }
+                        card.spawn(body_text(&assets, member.label.clone()));
+                        if !member.cells.is_empty() {
+                            crate::sandbox::spawn_mini_lattice(card, &assets, &member.cells);
+                        }
+                    });
             }
         });
     }
     if let Ok(body) = formation_bodies.single() {
+        crate::focus::begin_route_refresh(
+            body,
+            &mut route_focus.focus,
+            &route_focus.parents,
+            &route_focus.names,
+            &mut route_focus.refreshes,
+        );
         commands.entity(body).despawn_related::<Children>();
         commands.entity(body).with_children(|formation| {
+            formation.spawn(blurb(
+                &assets,
+                "MOVEMENT MEMBER · formation assignment and Solo movement",
+            ));
+            formation
+                .spawn((
+                    Node {
+                        width: Val::Percent(100.0),
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(6.0),
+                        ..default()
+                    },
+                    Pickable::IGNORE,
+                ))
+                .with_children(|members| {
+                    for member in &view.members {
+                        let label = if member.selected {
+                            format!("SELECTED · {}", member.label)
+                        } else {
+                            member.label.clone()
+                        };
+                        let accessible_label = if member.selected {
+                            format!(
+                                "Choose {} for formation assignment and Solo movement, selected",
+                                member.label
+                            )
+                        } else {
+                            format!(
+                                "Choose {} for formation assignment and Solo movement",
+                                member.label
+                            )
+                        };
+                        members
+                            .spawn((
+                                control_button(
+                                    format!("Formation Member {}", member.slot + 1),
+                                    accessible_label,
+                                    Val::Percent(100.0),
+                                    crate::UiVisibilityRequirement::Scrollable,
+                                ),
+                                PartyControl(PartyIntent::SelectFormationMember(member.slot)),
+                                BorderColor::all(if member.selected { ACCENT } else { EDGE }),
+                                BackgroundColor(if member.selected {
+                                    Color::srgba(0.93, 0.79, 0.46, 0.16)
+                                } else {
+                                    Color::srgba(1.0, 1.0, 1.0, 0.07)
+                                }),
+                            ))
+                            .with_child(body_text(&assets, label));
+                    }
+                });
             formation
                 .spawn((
                     control_button(
@@ -194,7 +302,7 @@ fn rebuild(
                 .spawn((
                     control_button(
                         "Party Rest",
-                        "REST PARTY · R",
+                        "REST PARTY",
                         Val::Percent(100.0),
                         crate::UiVisibilityRequirement::Scrollable,
                     ),
@@ -202,7 +310,7 @@ fn rebuild(
                     BorderColor::all(EDGE),
                     BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.07)),
                 ))
-                .with_child(body_text(&assets, "REST PARTY · R"));
+                .with_child(body_text(&assets, "REST PARTY"));
             formation
                 .spawn((
                     Node {
@@ -233,7 +341,7 @@ fn rebuild(
                     }
                 });
             formation.spawn(blurb(&assets, "ASSIGNMENT GRID · ◆ anchor"));
-            spawn_slot_grid(formation, &view, &assets, metrics.control_scale.max(1.0));
+            spawn_slot_grid(formation, view, &assets, metrics.control_scale.max(1.0));
         });
     }
 }
@@ -392,6 +500,7 @@ mod tests {
                 .map(|slot| crate::PartyMemberView {
                     slot,
                     label: format!("ALLY {} · formation member", slot + 1),
+                    cells: Vec::new(),
                     active: slot == 0,
                     selected: slot == 0,
                 })
@@ -409,6 +518,15 @@ mod tests {
                     anchor: q == 0 && r == 0,
                 })
                 .collect(),
+        });
+        app.world_mut().insert_resource(crate::GameplayChromeView {
+            party_shown: false,
+            initiative_shown: false,
+            activity_shown: false,
+            action_bar_shown: false,
+            main_view: MainViewDestination::Formation,
+            terrain_health_shown: true,
+            encounter_complete: false,
         });
         app.world_mut()
             .resource_mut::<NextState<Screen>>()
@@ -438,7 +556,7 @@ mod tests {
     }
 
     #[test]
-    fn enlarged_compact_formation_focus_scrolls_the_final_slot_into_view() {
+    fn enlarged_compact_formation_keeps_the_final_slot_keyboard_reachable() {
         use bevy::input_focus::InputFocus;
 
         let mut app = formation_app(1280, 720, crate::UiScaleMode::Percent200);
@@ -449,7 +567,6 @@ mod tests {
                 .find_map(|(entity, name)| (name.as_str() == wanted).then_some(entity))
                 .unwrap_or_else(|| panic!("missing {wanted:?}"))
         };
-        let inspector = entity_named(&mut app, "Inspector HUD Region");
         let final_slot_name = "Formation Slot (1, 0)";
         let final_slot_entity = entity_named(&mut app, final_slot_name);
         let initial = crate::test_support::ui_tree_snapshot(app.world_mut());
@@ -458,13 +575,14 @@ mod tests {
             .iter()
             .filter(|node| {
                 matches!(node.name.as_str(), "Party Movement Mode" | "Party Rest")
+                    || node.name.starts_with("Formation Member ")
                     || node.name.starts_with("Formation Preset ")
                     || node.name.starts_with("Formation Slot (")
             })
             .collect::<Vec<_>>();
         assert_eq!(
             formation_controls.len(),
-            11,
+            17,
             "the populated fixture must cover every secondary formation control"
         );
         for control in formation_controls {
@@ -484,22 +602,16 @@ mod tests {
             .find(|node| node.name == final_slot_name)
             .expect("the populated formation must expose its final slot");
         assert!(
-            !final_slot.fully_visible
+            final_slot.scroll_reachable
                 && final_slot.in_focus_order
                 && final_slot.keyboard_reachable == Some(true),
-            "the regression fixture must exercise a keyboard-reachable slot below the initial fold: {final_slot:?}"
+            "the full-screen Compact Main View must make the final formation slot reachable through its one scroll owner: {final_slot:?}"
         );
 
         app.insert_resource(InputFocus::from_entity(final_slot_entity));
         for _ in 0..3 {
             app.update();
         }
-        assert!(
-            app.world()
-                .get::<ScrollPosition>(inspector)
-                .is_some_and(|position| position.y > 0.0),
-            "focusing the final formation slot must move the Inspector scroll owner"
-        );
         let focused = crate::test_support::ui_tree_snapshot(app.world_mut());
         let final_slot = focused
             .nodes
@@ -510,5 +622,119 @@ mod tests {
             final_slot.fully_visible && final_slot.focused,
             "the complete slot and focus ring must be visible after keyboard navigation: {final_slot:?}"
         );
+    }
+
+    #[test]
+    fn formation_main_view_owns_distinct_typed_member_controls() {
+        let mut app = formation_app(1280, 720, crate::UiScaleMode::Auto);
+        let controls = app
+            .world_mut()
+            .query::<(&Name, &PartyControl)>()
+            .iter(app.world())
+            .filter_map(|(name, control)| {
+                name.as_str()
+                    .starts_with("Formation Member ")
+                    .then_some(control.0.clone())
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            controls,
+            (0..6)
+                .map(PartyIntent::SelectFormationMember)
+                .collect::<Vec<_>>()
+        );
+        assert!(app
+            .world_mut()
+            .query::<(&Name, &PartyControl)>()
+            .iter(app.world())
+            .filter(|(name, _)| name.as_str().starts_with("Party Member "))
+            .all(|(_, control)| matches!(control.0, PartyIntent::ActivateMember(_))));
+        let selected_label = app
+            .world_mut()
+            .query::<(&Name, &AccessibleLabel)>()
+            .iter(app.world())
+            .find(|(name, _)| name.as_str() == "Formation Member 1")
+            .map(|(_, label)| label.0.clone())
+            .expect("selected movement member is exposed");
+        assert!(selected_label.ends_with(", selected"));
+    }
+
+    #[test]
+    fn formation_projection_rebuild_restores_the_activated_named_control() {
+        let mut app = formation_app(1280, 720, crate::UiScaleMode::Auto);
+        let original = app
+            .world_mut()
+            .query::<(Entity, &Name)>()
+            .iter(app.world())
+            .find_map(|(entity, name)| (name.as_str() == "Formation Member 2").then_some(entity))
+            .expect("second movement member control exists");
+        app.insert_resource(InputFocus::from_entity(original));
+
+        {
+            let mut view = app.world_mut().resource_mut::<PartyView>();
+            for member in &mut view.members {
+                member.selected = member.slot == 1;
+            }
+        }
+        app.update();
+
+        assert!(app.world().get_entity(original).is_err());
+        let replacement = app
+            .world_mut()
+            .query::<(Entity, &Name)>()
+            .iter(app.world())
+            .find_map(|(entity, name)| (name.as_str() == "Formation Member 2").then_some(entity))
+            .expect("selected movement member is rebuilt by stable name");
+        assert_eq!(
+            app.world().resource::<InputFocus>().get(),
+            Some(replacement)
+        );
+    }
+
+    #[test]
+    fn ordinary_party_cards_expose_selection_in_copy_and_accessibility() {
+        let mut app = formation_app(1920, 1080, crate::UiScaleMode::Auto);
+        app.world_mut()
+            .resource_mut::<crate::GameplayChromeView>()
+            .party_shown = true;
+        app.update();
+
+        let cards = {
+            let world = app.world_mut();
+            let mut query = world.query::<(&Name, &AccessibleLabel, &Children)>();
+            query
+                .iter(world)
+                .filter(|(name, _, _)| name.as_str().starts_with("Party Member "))
+                .map(|(name, label, children)| {
+                    (
+                        name.as_str().to_owned(),
+                        label.0.clone(),
+                        children.iter().collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let visible_copy = |children: &[Entity]| {
+            children
+                .iter()
+                .filter_map(|child| app.world().get::<Text>(*child))
+                .map(|text| text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let selected = cards
+            .iter()
+            .find(|(name, _, _)| name == "Party Member 1")
+            .expect("selected Party card exists");
+        let ordinary = cards
+            .iter()
+            .find(|(name, _, _)| name == "Party Member 2")
+            .expect("ordinary Party card exists");
+
+        assert!(visible_copy(&selected.2).starts_with("✓ "));
+        assert!(selected.1.starts_with("Selected · "));
+        assert!(!visible_copy(&ordinary.2).contains("SELECTED"));
+        assert!(!ordinary.1.contains("Selected"));
     }
 }

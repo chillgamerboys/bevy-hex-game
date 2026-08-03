@@ -1,7 +1,7 @@
 //! Pause application adapter. The overlay is rendered by `hex_ui`.
 
 use bevy::prelude::*;
-use hex_core::Pause;
+use hex_core::{InputAction, InputBindings, Pause};
 use hex_ui::PauseView;
 
 use crate::save::CampaignSaveNotice;
@@ -14,14 +14,18 @@ pub(super) fn plugin(app: &mut App) {
 fn publish_pause_view(
     sandbox: Option<Res<SandboxSession>>,
     notice: Option<Res<CampaignSaveNotice>>,
+    bindings: Res<InputBindings>,
     mut view: ResMut<PauseView>,
 ) {
     let is_sandbox = sandbox.is_some();
+    let resume = bindings.chord(InputAction::Pause).label();
+    let save = bindings.chord(InputAction::Save).label();
+    let exit = bindings.chord(InputAction::ReturnTitle).label();
     let next = PauseView {
         hint: if is_sandbox {
-            "Esc to resume · F5 save unavailable in Sandbox · Backspace to return".to_owned()
+            format!("{resume} to resume · {save} save unavailable in Sandbox · {exit} to return")
         } else {
-            "Esc to resume · F5 save exploration · Backspace to Main Menu".to_owned()
+            format!("{resume} to resume · {save} save exploration · {exit} to Main Menu")
         },
         notice: visible_campaign_notice(is_sandbox, notice.as_deref()),
     };

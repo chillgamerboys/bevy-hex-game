@@ -2,7 +2,10 @@
 
 use bevy::prelude::*;
 use hex_combat::TurnOrder;
-use hex_core::{CommandQueue, ControlOwner, GameCommand, IssuedCommand, Mode, PendingDecision};
+use hex_core::{
+    CommandQueue, ControlOwner, GameCommand, InputAction, InputBindings, IssuedCommand, Mode,
+    PendingDecision,
+};
 use hex_ui::{CastingAimView, CastingPanelContentView, CastingPanelView, CastingSpellView};
 use hex_units::{Faction, UnitRegistry};
 
@@ -19,10 +22,12 @@ pub(super) fn publish_view(
     context: Res<GameplayUiContext>,
     decision: Res<DisableSelection>,
     pending: Res<PendingDecision>,
+    bindings: Res<InputBindings>,
     mut view: ResMut<CastingPanelView>,
 ) {
     let visible = *mode.get() == Mode::Combat;
-    let content = if let Some(choice) = decision.summary() {
+    let confirm_shortcut = bindings.chord(InputAction::Confirm).label();
+    let content = if let Some(choice) = decision.summary(confirm_shortcut.clone()) {
         let owner = context
             .decision_owner
             .as_ref()
@@ -93,6 +98,9 @@ pub(super) fn publish_view(
                     volume.painted
                 ),
                 controls_enabled: readout.unavailable.is_none(),
+                confirm_shortcut: confirm_shortcut.clone(),
+                next_target_shortcut: bindings.chord(InputAction::NextTarget).label(),
+                cancel_shortcut: bindings.chord(InputAction::CancelCast).label(),
             }),
         }
     };

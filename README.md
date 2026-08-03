@@ -83,10 +83,16 @@ an early skeleton, not the complete game described above: deterministic
 procedural terrain, stacked-surface movement and path preview lead into combat on the
 same map, where live lattices power spells and absorb wounds.
 
-The combat HUD shows the stable initiative order, acting unit, selected ally, aimed or
-retained hostile, and decision owner without conflating those roles. It keeps the
-relevant lattices visible and records a bounded, knowledge-safe event log. A hostile
-starts as only a known presence—its formation and capacity stay hidden. Scrying Eye
+The combat HUD is deliberately minimalist. Party is compact and visible by default,
+Initiative appears only in combat, the Action Bar appears only when actions are
+eligible, and Activity plus the contextual Main View start closed. Each ordinary
+component can be hidden independently, while one master shortcut clears all ordinary
+chrome without losing that combination. Character lattices open on demand; a required
+damage or restoration decision forcibly stays open until answered.
+
+The Initiative, Character view, target feedback, and bounded Activity history all
+preserve faction disclosure. A hostile starts as only a known presence—its formation,
+location through UI inspection, and capacity stay hidden until observed. Scrying Eye
 reveals the complete live lattice for a bounded number of rounds, including current
 mana and disabled cells, without exposing earlier hidden choices retroactively.
 
@@ -94,31 +100,31 @@ Ember deals direct damage and applies Burn for two of the target's actual turns.
 Incoming damage is command-modal: movement, casting, and ending the turn wait while
 the player chooses and confirms which live cells to disable. A unit with no live cells
 is downed and retained for restoration rather than erased. Complete-party controls
-provide a stable ally rail, Group/Solo exploration, formation editing and bottleneck
-compression, recovery, deterministic AI, retained outcomes, and the integrated 3v3
-Party Trial.
+provide a stable ordered Party component, presentation-only character inspection,
+Group/Solo exploration, a dedicated Formation Main View, bottleneck compression,
+recovery, deterministic AI, retained outcomes, and the integrated 3v3 Party Trial.
 
 <!--
 Regenerate readme_assets/party-trial-combat.png with:
 HEX_WALK_SCRIPT=walks/readme_party_trial.ron \
 HEX_WALK_OUT=.context/readme-captures/party-trial \
-HEX_WALK_VIEWPORT=1280x720@1 \
+HEX_WALK_VIEWPORT=1920x1080@1 \
 cargo run --release -p hex_game --features visual-walk
 cp .context/readme-captures/party-trial/party-trial-combat.png \
   readme_assets/party-trial-combat.png
 -->
-![Party Trial entering three-versus-three combat on the Crossing, with the full party rail, initiative order, active lattice, combat history, and action bar visible](readme_assets/party-trial-combat.png)
+![Party Trial entering three-versus-three combat on the Crossing, with compact Party, Initiative, and Action Bar components around an unobstructed battlefield](readme_assets/party-trial-combat.png)
 
-*A new Campaign's Party Trial entering combat. Exploration, formation traversal, and the
-turn-based fight share one battlefield.*
+*A new Campaign's Party Trial entering combat with the default minimalist HUD.
+Exploration, formation traversal, and the turn-based fight share one battlefield.*
 
 The surrounding application is still deliberately pre-alpha, but it now has a real
 shell: a three-slot Campaign, a persistent in-memory Sandbox, persistent display and
-volume preferences, fixed centralized input actions, normalized unsigned release
-artifacts, and separate character and spell creation. Terrain-changing spells, unit
-obstruction, rout and surrender, richer campaign management, audio content, input
-rebinding, signing, storefront integration, and much of the larger design remain
-ahead. The exact boundary is recorded in the
+volume preferences, configurable keyboard actions and HUD visibility, normalized
+unsigned release artifacts, and separate character and spell creation.
+Terrain-changing spells, unit obstruction, rout and surrender, richer campaign
+management, audio content, controller support, signing, storefront integration, and
+much of the larger design remain ahead. The exact boundary is recorded in the
 [project status](docs/planning/status.md).
 
 ### Play the current build
@@ -164,11 +170,13 @@ cp .context/readme-captures/creator-sandbox/sandbox-deployment.png \
 *Characters are built as the same true-colour lattice used by combat, then saved
 before they can enter a map.*
 
-**Settings** persists fullscreen/window size, presentation mode, and master,
-music, effects, and UI volume values. The volume buses and fixed action map are seams
-for later audio and rebinding work; Wave 5 does not pretend those products exist yet.
+**Settings** persists fullscreen/window size, presentation mode, master/music/effects/UI
+volume values, ordinary HUD visibility, and keyboard overrides. Keybindings are sorted
+into Gameplay, Interface, Main View, Camera, and System tabs. Capturing a conflicting
+gameplay key requires an explicit Swap or Cancel; each row can restore its default,
+and Restore All requires confirmation.
 
-| Input | Action |
+| Default input | Action |
 |---|---|
 | Right-mouse drag | Orbit the camera around its focus |
 | `W` `A` `S` `D` | Pan the camera in Map mode |
@@ -176,17 +184,24 @@ for later audio and rebinding work; Wave 5 does not pretend those products exist
 | `C` | Toggle Map / Character camera modes |
 | Hover / left-click a hex tile | Preview a route / move along it |
 | Click a spell row, then a lit target | Aim a cast |
-| `TAB` / `ENTER` / `Q` | Cycle aimed units / confirm the cast / cancel aiming |
+| `Tab` / `Enter` / `Q` | Cycle aimed units / confirm the cast or decision / cancel aiming |
 | `SPACE` | End the current player turn; hostile turns cannot be skipped |
-| `1`–`6` | Select a party member while exploring |
-| Party rail controls | Switch Group/Solo movement, select a formation, and edit assignments |
+| `1`–`6` or a Party card | First activation inspects and centers that stable Party slot; repeated activation opens its Character Main View |
+| `H` | Hide or restore all ordinary HUD components without changing their saved combination |
+| `P` / `I` / `L` / `B` | Toggle or temporarily summon Party / Initiative / Activity / Action Bar |
+| `V` / `F` | Open the inspected Character / Formation Main View |
+| Formation Main View | Switch Group/Solo movement, select a formation, and edit assignments |
 | `R` | Recover the whole party while exploring |
 | `F5` while paused in Campaign exploration | Atomically replace the bound Campaign slot |
-| `H` | Hide or show ordinary readouts; an active damage choice stays visible |
 | Sandbox Deployment terrain click | Place the current Party or Enemy character on that legal, unoccupied exact surface |
-| Click lattice cells, then `ENTER` | Choose and confirm which cells incoming damage disables |
-| `ESC` | Pause, or leave the Main Menu |
-| `BACKSPACE` | Return to the owning Creator, Sandbox setup, or Main Menu |
+| Click lattice cells, then `Enter` | Choose and confirm which cells incoming damage disables; the Required Decision view cannot close first |
+| `Escape` | Pause, leave a menu, cancel key capture, or close an ordinary Compact task as context allows |
+| `Backspace` | Return to the owning Creator, Sandbox setup, or Main Menu |
+
+Gameplay bindings are configurable except fixed UI navigation semantics. While the
+HUD is master-hidden, a component shortcut summons only that surface. On Compact the
+map otherwise has no HUD drawer, handle, or shortcut residue; the same shortcut or
+Escape closes its one temporary surface.
 
 The Creator's local mechanics test remains the focused place to cast, channel,
 disable, restore, and break enchantments without constructing a map combat. See the

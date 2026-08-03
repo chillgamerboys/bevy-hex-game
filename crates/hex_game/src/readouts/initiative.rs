@@ -3,6 +3,7 @@
 use bevy::prelude::*;
 use hex_combat::{CombatSystems, TurnOrder};
 use hex_core::{AppSystems, GameplaySystems, Screen};
+use hex_perception::FactionMapKnowledge;
 use hex_ui::{InitiativeEntryView, InitiativeSide, InitiativeView};
 use hex_units::{Faction, UnitRegistry};
 
@@ -23,6 +24,7 @@ fn publish_view(
     order: Res<TurnOrder>,
     registry: Res<UnitRegistry>,
     identities: Query<(&Name, &Faction)>,
+    knowledge: Option<Res<FactionMapKnowledge>>,
     context: Option<Res<GameplayUiContext>>,
     mut view: ResMut<InitiativeView>,
 ) {
@@ -33,14 +35,23 @@ fn publish_view(
         .filter_map(|unit| {
             let entity = registry.entity_of(*unit)?;
             let (name, faction) = identities.get(entity).ok()?;
+            let inspectable = *faction == Faction::Player
+                || knowledge.as_deref().is_some_and(|knowledge| {
+                    knowledge.faction(Faction::Player).unit(*unit).is_some()
+                });
             Some(InitiativeEntryView {
                 unit: *unit,
-                name: name.as_str().to_owned(),
+                name: if inspectable {
+                    name.as_str().to_owned()
+                } else {
+                    "Unobserved hostile".to_owned()
+                },
                 side: match faction {
                     Faction::Player => InitiativeSide::Ally,
                     Faction::Hostile => InitiativeSide::Hostile,
                 },
                 current: current == Some(*unit),
+                inspectable,
             })
         })
         .collect();
@@ -76,12 +87,14 @@ mod tests {
                     name: "mage #4".to_owned(),
                     side: InitiativeSide::Ally,
                     current: true,
+                    inspectable: true,
                 },
                 InitiativeEntryView {
                     unit: UnitId(9),
                     name: "wolf #9".to_owned(),
                     side: InitiativeSide::Hostile,
                     current: false,
+                    inspectable: false,
                 },
             ],
         };

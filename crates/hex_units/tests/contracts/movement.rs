@@ -470,8 +470,8 @@ fn a_missing_required_unit_swatch_fails_before_spawning_or_allocating_materials(
     let materials = app.world().resource::<Assets<StandardMaterial>>();
     assert_eq!(
         materials.len(),
-        4,
-        "only the range, path, player-ring, and hostile-ring overlay materials should exist"
+        5,
+        "only range, path, player-ring, hostile-ring, and target-reticle presentation materials should exist"
     );
     assert!(
         materials.iter().all(|(_, material)| {

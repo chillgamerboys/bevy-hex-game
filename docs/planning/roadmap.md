@@ -51,13 +51,13 @@ still belong to the crate they change. `docs` is whoever picks it up.
 | AI host | Wave 4: pure request/action contracts, authoritative canonical legal actions, profile/algorithm dispatch, encounter overrides, and deterministic `baseline-v1` |
 | Knowledge-safe AI and casting | Foundation hardening: faction-authorized AI identities, terrain, traversal, turn/effect fields and legal commands; Observed-only cast anchors from preview through authoritative application |
 | Persistent effects | HEX-20: `{source, target, payload, start, end}` vocabulary and combat runtime, including personal-turn Burn and enchantment-bound expiry <!-- linear: HEX-20 owner: shravan-kumaran --> |
-| Party controls | Wave 4: stable six-member strip and number-key selection, camera focus, combat-owned acting selection, Group/Solo mode, and preset/member-slot editing |
+| Party controls | Stable six-member roster and combat-owned acting selection; Party/Initiative activation is presentation-only inspection, while typed Formation Main View owns explicit movement-member selection, Group/Solo mode, and preset/member-slot editing |
 | Formation traversal | Wave 4: per-segment sextant rotation, deterministic bottleneck compression/reformation, and all-or-nothing exact-path `MoveParty` validation |
 | Outcomes and recovery | Wave 4: retained-world Victory/Defeat, exact same-seed Retry, caster-chosen Renewal restoration with next-round revival, and whole-party exploration Rest |
 | Party-combat checkpoint | Wave 4: deterministic 3v3 Party Trial summary/replay, focused Ability Lab and Raider Mirror walks, and the completed human Crossing playtest |
 | Campaign/Sandbox app shell | Main Menu with exactly Campaign, Sandbox, Tools, and Settings; three indexed Campaign slots; one persistent in-memory six-slot-per-side Sandbox; typed Creator destinations; Party Trial remains the canonical new Campaign |
 | Campaign persistence | Three atomic, build/content-bound indexed records, safe manual saves from Campaign exploration, active-play time, invalid-record preservation, and one-time non-destructive migration from the Wave 5 resume <!-- linear: HEX-15 owner: shravan-kumaran --> |
-| Settings and seams | Wave 5 / HEX-16: persistent display and volume preferences, centralized fixed input actions, and empty music/SFX/UI buses <!-- linear: HEX-16 owner: shravan-kumaran --> |
+| Settings and seams | Persistent display, semantic UI scale, volume, ordinary HUD visibility, and categorized keyboard overrides with explicit capture/conflict/restore behavior; empty music/SFX/UI buses remain ready for later content <!-- linear: HEX-16 owner: shravan-kumaran --> |
 | Release artifact scaffold | Wave 5 / HEX-17: stable app identity, normalized packages, retained symbol material, and documented future credential slots with no live integrations <!-- linear: HEX-17 owner: shravan-kumaran --> |
 | Creator foundation (Wave 6; player-facing organization superseded) | Versioned saved character/spell blueprints, immutable templates, Creator-local lattice tests, Map readiness, and frozen custom-content launches retained under typed Tools/Sandbox routing |
 | Tactical integrity (Wave 7; player-facing organization superseded) | Exact-surface occupancy, Channel, deterministic summaries/simulations, and the measured decision to retain the shipped four-hex movement default remain; old tuning/report UI does not |
@@ -333,11 +333,15 @@ scaffold.
 
 ### Settings menu, persistence, and audio
 
-The pre-alpha options surface persists display/window presentation and music, SFX,
-and UI volume values across sessions. Input actions are centralized so systems stop
-owning raw keys, but there is no rebinding UI. Audio sits behind music/SFX/UI buses
-ready for later content; Wave 5 does not ship audio. The frozen production audit
-remains the research record, not a requirement to adopt every integration now.
+The pre-alpha options surface persists display/window presentation, music/SFX/UI
+volume values, ordinary HUD visibility, and keyboard overrides across sessions.
+Keybindings are grouped into Gameplay, Interface, Main View, Camera, and System;
+capture consumes the next non-modifier key, overlapping conflicts require explicit
+Swap or Cancel, each row can restore its default, and Restore All requires
+confirmation. Input actions remain centralized so gameplay systems do not own raw
+keys. Audio sits behind music/SFX/UI buses ready for later content; Wave 5 did not
+ship audio. The frozen production audit remains the research record, not a
+requirement to adopt every integration now.
 
 ### Steam packaging and crash reporting
 

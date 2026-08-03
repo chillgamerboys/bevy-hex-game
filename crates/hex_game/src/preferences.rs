@@ -3,11 +3,14 @@
 use bevy::prelude::*;
 use bevy::window::{MonitorSelection, PresentMode, WindowMode};
 use hex_assets::{DisplaySettings, PresentModeSetting};
+use hex_core::input::InputBindingOverrides;
+use hex_core::InputBindings;
+use hex_gameplay_model::HudComponentPreferences;
 use serde::{Deserialize, Serialize};
 
 use crate::storage::{read, write_atomic, StoragePaths};
 
-const PREFERENCES_VERSION: u32 = 2;
+const PREFERENCES_VERSION: u32 = 3;
 
 /// Persisted frame-presentation choice.
 #[derive(Serialize, Deserialize, Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -64,6 +67,10 @@ pub(crate) struct UserPreferences {
     pub(crate) music_volume: f32,
     pub(crate) effects_volume: f32,
     pub(crate) ui_volume: f32,
+    #[serde(default)]
+    pub(crate) binding_overrides: InputBindingOverrides,
+    #[serde(default)]
+    pub(crate) hud_visibility: HudComponentPreferences,
 }
 
 impl Default for UserPreferences {
@@ -79,6 +86,8 @@ impl Default for UserPreferences {
             music_volume: 0.8,
             effects_volume: 0.8,
             ui_volume: 0.8,
+            binding_overrides: InputBindingOverrides::default(),
+            hud_visibility: HudComponentPreferences::default(),
         }
     }
 }
@@ -89,6 +98,10 @@ impl UserPreferences {
             1 => {
                 self.version = PREFERENCES_VERSION;
                 self.ui_scale = hex_ui::UiScaleMode::Auto;
+                Ok(self)
+            }
+            2 => {
+                self.version = PREFERENCES_VERSION;
                 Ok(self)
             }
             PREFERENCES_VERSION => Ok(self),
@@ -119,6 +132,9 @@ impl UserPreferences {
                 return Err(format!("{name} must be finite and in 0.0..=1.0"));
             }
         }
+        self.binding_overrides
+            .validate()
+            .map_err(|error| format!("input bindings are invalid: {error}"))?;
         Ok(())
     }
 }
@@ -148,6 +164,7 @@ struct PreferencesOrigin {
 pub(crate) fn plugin(app: &mut App) {
     app.init_resource::<StoragePaths>()
         .init_resource::<UserPreferences>()
+        .init_resource::<InputBindings>()
         .init_resource::<AudioBusVolumes>()
         .init_resource::<PreferencesNotice>()
         .init_resource::<PreferencesDirty>()
@@ -168,19 +185,25 @@ fn load_preferences(
     paths: Res<StoragePaths>,
     mut preferences: ResMut<UserPreferences>,
     mut notice: ResMut<PreferencesNotice>,
+    mut dirty: ResMut<PreferencesDirty>,
     mut origin: ResMut<PreferencesOrigin>,
 ) {
     match read(&paths.preferences) {
         Ok(text) => match ron::from_str::<UserPreferences>(&text)
             .map_err(|error| error.to_string())
             .and_then(|loaded| {
-                let loaded = loaded.upgrade()?;
+                let mut loaded = loaded.upgrade()?;
+                let repaired_development_binding = loaded
+                    .binding_overrides
+                    .reconcile_active_development_conflicts()
+                    .map_err(|error| format!("input bindings are invalid: {error}"))?;
                 loaded.validate()?;
-                Ok(loaded)
+                Ok((loaded, repaired_development_binding))
             }) {
-            Ok(loaded) => {
+            Ok((loaded, repaired_development_binding)) => {
                 *preferences = loaded;
                 origin.persisted = true;
+                dirty.0 = repaired_development_binding;
             }
             Err(reason) => {
                 notice.0 = Some(format!(
@@ -218,6 +241,8 @@ fn adopt_authored_presentation(
 fn apply_preferences(
     preferences: Res<UserPreferences>,
     mut buses: ResMut<AudioBusVolumes>,
+    mut bindings: ResMut<InputBindings>,
+    mut hud: Option<ResMut<hex_gameplay_model::HudState>>,
     mut ui_scale: ResMut<hex_ui::UiScalePreference>,
     mut windows: Query<&mut Window>,
 ) {
@@ -227,6 +252,10 @@ fn apply_preferences(
     buses.music = preferences.master_volume * preferences.music_volume;
     buses.effects = preferences.master_volume * preferences.effects_volume;
     buses.ui = preferences.master_volume * preferences.ui_volume;
+    *bindings = InputBindings::from_overrides(preferences.binding_overrides.clone());
+    if let Some(hud) = hud.as_deref_mut() {
+        hud.replace_preferences(preferences.hud_visibility);
+    }
     ui_scale.0 = preferences.ui_scale;
     for mut window in &mut windows {
         window.mode = if preferences.fullscreen {
@@ -275,6 +304,8 @@ fn persist_changed_preferences(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hex_core::input::KeyChord;
+    use hex_core::InputAction;
 
     #[test]
     fn invalid_volumes_and_versions_are_refused() {
@@ -312,22 +343,82 @@ mod tests {
         assert!(loaded.fullscreen);
         assert_eq!(loaded.window_width, 1600);
         assert_eq!(loaded.ui_scale, hex_ui::UiScaleMode::Auto);
+        assert!(loaded.binding_overrides.is_empty());
+        assert_eq!(loaded.hud_visibility, HudComponentPreferences::default());
         assert!((loaded.master_volume - 0.5).abs() < f32::EPSILON);
     }
 
     #[test]
-    fn version_two_ui_scale_survives_a_restart_round_trip() {
-        let preferences = UserPreferences {
-            ui_scale: hex_ui::UiScaleMode::Percent200,
-            ..default()
-        };
-        let encoded = ron::ser::to_string(&preferences).expect("v2 preferences encode");
-        let restarted = ron::from_str::<UserPreferences>(&encoded)
-            .expect("v2 preferences decode")
+    fn version_two_ui_scale_survives_migration_and_new_fields_default() {
+        let text = r#"(
+            version: 2,
+            fullscreen: false,
+            window_width: 1920,
+            window_height: 1080,
+            presentation: Vsync,
+            ui_scale: Percent200,
+            master_volume: 0.9,
+            music_volume: 0.8,
+            effects_volume: 0.7,
+            ui_volume: 0.6,
+        )"#;
+        let restarted = ron::from_str::<UserPreferences>(text)
+            .expect("v2 shape remains readable")
             .upgrade()
-            .expect("v2 preferences remain current");
+            .expect("v2 preferences upgrade");
         assert_eq!(restarted.ui_scale, hex_ui::UiScaleMode::Percent200);
         assert_eq!(restarted.version, PREFERENCES_VERSION);
+        assert!(restarted.binding_overrides.is_empty());
+        assert_eq!(restarted.hud_visibility, HudComponentPreferences::default());
+    }
+
+    #[test]
+    fn version_three_round_trip_persists_only_binding_overrides_and_hud_preferences() {
+        let mut bindings = InputBindings::default();
+        bindings
+            .assign(InputAction::ToggleParty, KeyChord::plain(KeyCode::KeyY))
+            .expect("unused binding is accepted");
+        let preferences = UserPreferences {
+            binding_overrides: bindings.overrides().clone(),
+            hud_visibility: HudComponentPreferences {
+                party: false,
+                initiative: true,
+                activity: true,
+                action_bar: false,
+            },
+            ..default()
+        };
+        let encoded = ron::ser::to_string(&preferences).expect("v3 preferences encode");
+        assert!(encoded.contains("ToggleParty"));
+        assert!(
+            !encoded.contains("ToggleCamera"),
+            "defaults are not persisted"
+        );
+
+        let restarted = ron::from_str::<UserPreferences>(&encoded)
+            .expect("v3 preferences decode")
+            .upgrade()
+            .expect("v3 preferences remain current");
+        restarted.validate().expect("round trip remains valid");
+        assert_eq!(restarted, preferences);
+        assert_eq!(
+            InputBindings::from_overrides(restarted.binding_overrides)
+                .chord(InputAction::ToggleParty),
+            KeyChord::plain(KeyCode::KeyY)
+        );
+    }
+
+    #[test]
+    fn hud_visibility_defaults_match_the_minimal_gameplay_contract() {
+        assert_eq!(
+            HudComponentPreferences::default(),
+            HudComponentPreferences {
+                party: true,
+                initiative: true,
+                activity: false,
+                action_bar: true,
+            }
+        );
     }
 
     #[test]

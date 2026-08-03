@@ -6,6 +6,8 @@
 
 use bevy::prelude::*;
 
+pub use hex_gameplay_model::{HudComponent, MainViewDestination};
+
 mod action_rail;
 mod casting_panel;
 mod combat_log;
@@ -31,7 +33,6 @@ mod scale;
 mod screens;
 mod shell;
 mod theme;
-mod unit_badges;
 
 pub use creation_presentation::{effect_summary, CharacterBuildSummary, SpellBuildSummary};
 pub use gameplay_lattices::spawn_decision_controls;
@@ -44,19 +45,20 @@ pub use layout::{
     READ_ONLY_HUD,
 };
 pub use model::{
-    ActionAffordance, ActionAvailability, ActionPriority, BadgeKind, CampaignPartyMemberView,
+    ActionAffordance, ActionAvailability, ActionPriority, ActivityIntent, ActivityKind,
+    ActivityLogLineView, ActivityLogView, ActivityTab, CampaignPartyMemberView,
     CampaignSlotStatusView, CampaignSlotView, CastingAimView, CastingIntent,
-    CastingPanelContentView, CastingPanelView, CastingSpellView, CombatLogLineView, CombatLogView,
-    CreatorEffectKind, CreatorIntent, CreatorLibraryView, CreatorNameField, CreatorScreenView,
-    CreatorWorkspace, DecisionChoiceView, DeploymentIntent, DeploymentQueueEntryView,
-    DeploymentView, FormationSlotView, GameplayAction, GameplayChromeView, GameplayHudView,
-    GameplayLatticesView, InitiativeEntryView, InitiativeSide, InitiativeView, LatticeDemoIntent,
-    LatticeDemoSpellView, LatticeDemoView, LatticeIntent, MainMenuIntent, MainMenuView,
-    OutcomeAction, OutcomeActionView, OutcomeIntent, OutcomeView, OwnLatticeView, PartyIntent,
-    PartyMemberView, PartyView, PauseView, SandboxCharacterView, SandboxIntent,
-    SandboxLatticeCellKind, SandboxLatticeCellView, SandboxMapView, SandboxRosterSlotView,
-    SandboxView, TargetLatticeStateView, TargetLatticeView, TargetPulseView, UiIntent, UiSetting,
-    UiSettingRow, UiSettingsView, UnitBadgeView, UnitBadgesView,
+    CastingPanelContentView, CastingPanelView, CastingSpellView, CreatorEffectKind, CreatorIntent,
+    CreatorLibraryView, CreatorNameField, CreatorScreenView, CreatorWorkspace, DecisionChoiceView,
+    DeploymentIntent, DeploymentQueueEntryView, DeploymentView, FormationSlotView, GameplayAction,
+    GameplayChromeView, GameplayHudView, GameplayLatticesView, InitiativeEntryView,
+    InitiativeIntent, InitiativeSide, InitiativeView, LatticeDemoIntent, LatticeDemoSpellView,
+    LatticeDemoView, LatticeIntent, MainMenuIntent, MainMenuView, OutcomeAction, OutcomeActionView,
+    OutcomeIntent, OutcomeView, OwnLatticeView, PartyIntent, PartyMemberView, PartyView, PauseView,
+    SandboxCharacterView, SandboxIntent, SandboxLatticeCellKind, SandboxLatticeCellView,
+    SandboxMapView, SandboxRosterSlotView, SandboxView, SettingsIntent, SettingsModalView,
+    SettingsTab, TargetLatticeStateView, TargetLatticeView, TargetPulseView, UiBindingRow,
+    UiIntent, UiSetting, UiSettingRow, UiSettingsView,
 };
 #[cfg(feature = "dev-tools")]
 pub use model::{DevTimeIntent, DevTimeView};
@@ -87,6 +89,8 @@ pub struct UiPlugin;
 /// Public ordering seam for composition-root intent handlers.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UiSystems {
+    /// A blocking input-capture task may consume raw input before focus activation.
+    CaptureInput,
     /// Pointer and keyboard interactions have been translated into [`UiIntent`].
     EmitIntents,
     /// Immutable projections have been converted into runtime presentation.
@@ -382,7 +386,57 @@ mod structural_tests {
                 })
                 .collect(),
                 notice: Some("Settings save immediately.".to_owned()),
+                ..default()
             });
+        })
+    }
+
+    fn settings_binding_view(tab: SettingsTab) -> UiSettingsView {
+        let category = tab
+            .input_category()
+            .expect("binding fixture requires a keybinding tab");
+        let bindings = hex_core::InputActionInventory::active()
+            .iter()
+            .filter(|action| *action != hex_core::InputAction::RevealAll)
+            .filter(|action| action.metadata().category == category)
+            .map(|action| {
+                let metadata = action.metadata();
+                UiBindingRow {
+                    action,
+                    label: metadata.label.to_owned(),
+                    chord: metadata.default_chord.label(),
+                    rebindable: metadata.rebindable,
+                    overridden: action == hex_core::InputAction::EndTurn,
+                }
+            })
+            .collect();
+        UiSettingsView {
+            tab,
+            bindings,
+            can_restore_all: true,
+            ..default()
+        }
+    }
+
+    fn settings_binding_snapshot(
+        tab: SettingsTab,
+        size: UVec2,
+        mode: UiScaleMode,
+    ) -> UiTreeSnapshot {
+        settled_snapshot(hex_core::Screen::Settings, size, 1.0, mode, |world| {
+            world.insert_resource(settings_binding_view(tab));
+        })
+    }
+
+    fn settings_modal_snapshot(
+        modal: SettingsModalView,
+        size: UVec2,
+        mode: UiScaleMode,
+    ) -> UiTreeSnapshot {
+        settled_snapshot(hex_core::Screen::Settings, size, 1.0, mode, |world| {
+            let mut view = settings_binding_view(SettingsTab::Gameplay);
+            view.modal = Some(modal);
+            world.insert_resource(view);
         })
     }
 
@@ -543,9 +597,8 @@ mod structural_tests {
     fn sandbox_outcome_snapshot(size: UVec2, mode: UiScaleMode) -> UiTreeSnapshot {
         settled_snapshot(hex_core::Screen::Gameplay, size, 1.0, mode, |world| {
             world.insert_resource(GameplayChromeView {
-                shown: true,
-                decision_required: false,
                 encounter_complete: true,
+                ..default()
             });
             world.insert_resource(OutcomeView {
                 visible: true,
@@ -607,11 +660,114 @@ mod structural_tests {
         })
     }
 
+    fn gameplay_party_view() -> PartyView {
+        let silhouette = vec![
+            SandboxLatticeCellView {
+                q: 0,
+                r: 0,
+                label: "A".to_owned(),
+                kind: SandboxLatticeCellKind::Gem,
+            },
+            SandboxLatticeCellView {
+                q: 1,
+                r: 0,
+                label: "F".to_owned(),
+                kind: SandboxLatticeCellKind::Fusion,
+            },
+            SandboxLatticeCellView {
+                q: 0,
+                r: 1,
+                label: "S".to_owned(),
+                kind: SandboxLatticeCellKind::Spell,
+            },
+        ];
+        PartyView {
+            members: (0..6)
+                .map(|slot| PartyMemberView {
+                    slot,
+                    label: format!(
+                        "{} · {}",
+                        if slot == 0 { "Hedge Mage" } else { "Ally" },
+                        if slot == 0 { "selected" } else { "ready" }
+                    ),
+                    cells: silhouette.clone(),
+                    active: slot == 0,
+                    selected: slot == 0,
+                })
+                .collect(),
+            formation_visible: true,
+            movement_mode: "GROUP · formation follows the selected anchor".to_owned(),
+            presets: vec!["Column".to_owned(), "Wedge".to_owned()],
+            slots: vec![FormationSlotView {
+                offset: hex_core::HexCoord::from_axial(0, 0),
+                anchor: true,
+            }],
+        }
+    }
+
+    fn gameplay_initiative_view(hostile_turn: bool) -> InitiativeView {
+        InitiativeView {
+            heading: if hostile_turn {
+                "enemy turn"
+            } else {
+                "your turn"
+            }
+            .to_owned(),
+            entries: vec![
+                InitiativeEntryView {
+                    unit: hex_core::UnitId(0),
+                    name: "Hedge Mage".to_owned(),
+                    side: InitiativeSide::Ally,
+                    current: !hostile_turn,
+                    inspectable: true,
+                },
+                InitiativeEntryView {
+                    unit: hex_core::UnitId(1),
+                    name: "Observed Raider".to_owned(),
+                    side: InitiativeSide::Hostile,
+                    current: hostile_turn,
+                    inspectable: true,
+                },
+                InitiativeEntryView {
+                    unit: hex_core::UnitId(2),
+                    name: "Unavailable hostile".to_owned(),
+                    side: InitiativeSide::Hostile,
+                    current: false,
+                    inspectable: false,
+                },
+            ],
+        }
+    }
+
+    fn gameplay_activity_view() -> ActivityLogView {
+        ActivityLogView {
+            heading: "ACTIVITY · L".to_owned(),
+            tab: ActivityTab::All,
+            lines: vec![
+                ActivityLogLineView {
+                    kind: ActivityKind::Combat,
+                    text: "Hedge Mage cast Lightning Bolt".to_owned(),
+                    danger: false,
+                },
+                ActivityLogLineView {
+                    kind: ActivityKind::Activity,
+                    text: "Party formation changed to Wedge".to_owned(),
+                    danger: false,
+                },
+            ],
+        }
+    }
+
     fn gameplay_snapshot(case: UiTaskCase, size: UVec2, mode: UiScaleMode) -> UiTreeSnapshot {
         let fixture = match case {
             UiTaskCase::Exploration => "normal-gameplay",
             UiTaskCase::PlayerTurnMaxActions => "player-turn-max",
             UiTaskCase::HostileTurn => "hostile-turn",
+            UiTaskCase::CharacterMainView
+            | UiTaskCase::ActivityTabs
+            | UiTaskCase::CustomHudVisibility
+            | UiTaskCase::CompactTemporarySurface => "normal-gameplay",
+            UiTaskCase::FormationMainView => "clear",
             UiTaskCase::Casting => "casting-list",
             UiTaskCase::AimingBlocked => "aiming-disabled",
             UiTaskCase::DisableDecision | UiTaskCase::HudHiddenRequired => "required-decision",
@@ -622,38 +778,81 @@ mod structural_tests {
         let mut app = App::new();
         app.add_plugins(HeadlessUiPlugin::new(size.x, size.y));
         app.world_mut().insert_resource(UiScalePreference(mode));
-        app.world_mut().insert_resource(GameplayChromeView {
-            shown: case != UiTaskCase::HudHiddenRequired,
-            decision_required: matches!(
-                case,
-                UiTaskCase::DisableDecision
-                    | UiTaskCase::RestoreDecision
-                    | UiTaskCase::HudHiddenRequired
-            ),
+        let compact = resolve_ui_metrics(size.as_vec2(), mode).viewport == UiViewportClass::Compact;
+        let mut chrome = GameplayChromeView {
+            party_shown: false,
+            initiative_shown: false,
+            activity_shown: false,
+            action_bar_shown: false,
+            main_view: hex_gameplay_model::MainViewDestination::Closed,
+            terrain_health_shown: true,
             encounter_complete: false,
-        });
-        if case == UiTaskCase::Exploration {
-            app.world_mut().insert_resource(PartyView {
-                members: (0..6)
-                    .map(|slot| PartyMemberView {
-                        slot,
-                        label: format!(
-                            "{} · {}",
-                            if slot == 0 { "Hedge Mage" } else { "Ally" },
-                            if slot == 0 { "selected" } else { "ready" }
-                        ),
-                        active: slot == 0,
-                        selected: slot == 0,
-                    })
-                    .collect(),
-                formation_visible: true,
-                movement_mode: "GROUP · formation follows the selected anchor".to_owned(),
-                presets: vec!["Column".to_owned(), "Wedge".to_owned()],
-                slots: vec![FormationSlotView {
-                    offset: hex_core::HexCoord::from_axial(0, 0),
-                    anchor: true,
-                }],
-            });
+        };
+        match case {
+            UiTaskCase::Exploration => {
+                if compact {
+                    chrome.action_bar_shown = true;
+                } else {
+                    chrome.party_shown = true;
+                    chrome.action_bar_shown = true;
+                }
+            }
+            UiTaskCase::PlayerTurnMaxActions => {
+                chrome.party_shown = !compact;
+                chrome.action_bar_shown = true;
+                chrome.initiative_shown = !compact;
+            }
+            UiTaskCase::Casting | UiTaskCase::AimingBlocked => {
+                chrome.action_bar_shown = true;
+                chrome.initiative_shown = !compact;
+            }
+            UiTaskCase::HostileTurn => {
+                chrome.party_shown = !compact;
+                chrome.initiative_shown = !compact;
+            }
+            UiTaskCase::CharacterMainView => {
+                chrome.main_view =
+                    hex_gameplay_model::MainViewDestination::Character(hex_core::UnitId(0));
+                if !compact {
+                    chrome.party_shown = true;
+                    chrome.action_bar_shown = true;
+                }
+            }
+            UiTaskCase::FormationMainView => {
+                chrome.main_view = hex_gameplay_model::MainViewDestination::Formation;
+                if !compact {
+                    chrome.party_shown = true;
+                    chrome.action_bar_shown = true;
+                }
+            }
+            UiTaskCase::ActivityTabs => chrome.activity_shown = true,
+            UiTaskCase::CustomHudVisibility => {
+                chrome.party_shown = true;
+                chrome.activity_shown = !compact;
+            }
+            UiTaskCase::CompactTemporarySurface => chrome.party_shown = true,
+            UiTaskCase::DisableDecision | UiTaskCase::RestoreDecision => {
+                chrome.main_view = hex_gameplay_model::MainViewDestination::RequiredDecision;
+                chrome.party_shown = !compact;
+                chrome.initiative_shown = !compact;
+            }
+            UiTaskCase::HudHiddenRequired => {
+                chrome.main_view = hex_gameplay_model::MainViewDestination::RequiredDecision;
+                chrome.terrain_health_shown = false;
+            }
+            UiTaskCase::Pause => chrome.terrain_health_shown = false,
+            other => panic!("{other:?} is not a live gameplay task"),
+        }
+        app.world_mut().insert_resource(chrome);
+        if chrome.party_shown || case == UiTaskCase::FormationMainView {
+            app.world_mut().insert_resource(gameplay_party_view());
+        }
+        if chrome.initiative_shown {
+            app.world_mut()
+                .insert_resource(gameplay_initiative_view(case == UiTaskCase::HostileTurn));
+        }
+        if chrome.activity_shown {
+            app.world_mut().insert_resource(gameplay_activity_view());
         }
         if case == UiTaskCase::Pause {
             app.world_mut().insert_resource(PauseView {
@@ -703,6 +902,13 @@ mod structural_tests {
                 .filter(|case| case.contract().screen == hex_core::Screen::Sandbox)
                 .count(),
             6
+        );
+        assert_eq!(
+            UiTaskCase::ALL
+                .into_iter()
+                .filter(|case| case.contract().screen == hex_core::Screen::Settings)
+                .count(),
+            4
         );
     }
 
@@ -1054,6 +1260,93 @@ mod structural_tests {
     }
 
     #[test]
+    fn settings_binding_tabs_preserve_reachable_controls_across_the_required_matrix() {
+        for (size, mode) in REQUIRED_MATRIX {
+            for tab in SettingsTab::ALL
+                .into_iter()
+                .filter(|tab| *tab != SettingsTab::General)
+            {
+                let snapshot = settings_binding_snapshot(tab, size, mode);
+                let issues = snapshot.task_issues(UiTaskCase::SettingsKeybindings);
+                assert!(
+                    issues.is_empty(),
+                    "{} bindings failed at {size:?} {mode:?}: {issues:#?}",
+                    tab.label()
+                );
+
+                let last_action = hex_core::InputActionInventory::active()
+                    .iter()
+                    .filter(|action| *action != hex_core::InputAction::RevealAll)
+                    .filter(|action| {
+                        action.metadata().category == tab.input_category().expect("binding tab")
+                            && action.metadata().rebindable
+                    })
+                    .last()
+                    .expect("every binding category has a rebindable action");
+                let last_control = format!("Rebind {}", last_action.metadata().label);
+                let observation = snapshot
+                    .nodes
+                    .iter()
+                    .find(|node| node.name == last_control)
+                    .expect("the final category binding renders");
+                assert!(
+                    observation.scroll_reachable,
+                    "the final {} binding should remain reachable at {size:?} {mode:?}",
+                    tab.label()
+                );
+                assert!(
+                    snapshot
+                        .nodes
+                        .iter()
+                        .all(|node| !node.name.contains("Reveal Knowledge (Development)")),
+                    "shipping Settings fixture exposed the development-only action"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn settings_blocking_tasks_pass_the_required_matrix() {
+        for (size, mode) in REQUIRED_MATRIX {
+            let capture = settings_modal_snapshot(
+                SettingsModalView::Capture {
+                    action: hex_core::InputAction::EndTurn,
+                    label: "End Turn".to_owned(),
+                },
+                size,
+                mode,
+            );
+            let capture_issues = capture.task_issues(UiTaskCase::SettingsCapture);
+            assert!(
+                capture_issues.is_empty(),
+                "Settings capture failed at {size:?} {mode:?}: {capture_issues:#?}"
+            );
+
+            for (fixture, modal) in [
+                (
+                    "binding conflict",
+                    SettingsModalView::Conflict {
+                        requested: "End Turn".to_owned(),
+                        existing: "Confirm Decision".to_owned(),
+                        chord: "Space".to_owned(),
+                    },
+                ),
+                (
+                    "Restore All confirmation",
+                    SettingsModalView::ConfirmRestoreAll,
+                ),
+            ] {
+                let conflict = settings_modal_snapshot(modal, size, mode);
+                let conflict_issues = conflict.task_issues(UiTaskCase::SettingsConflict);
+                assert!(
+                    conflict_issues.is_empty(),
+                    "Settings {fixture} failed at {size:?} {mode:?}: {conflict_issues:#?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn creator_routes_preserve_their_structural_matrix() {
         let cases = [
             UiTaskCase::CharacterLibrary,
@@ -1133,11 +1426,13 @@ mod structural_tests {
     }
 
     #[test]
-    fn gameplay_decisions_and_pause_preserve_their_structural_matrix() {
+    fn minimalist_gameplay_surfaces_preserve_their_structural_matrix() {
         let cases = [
             UiTaskCase::Exploration,
             UiTaskCase::PlayerTurnMaxActions,
             UiTaskCase::HostileTurn,
+            UiTaskCase::CharacterMainView,
+            UiTaskCase::ActivityTabs,
             UiTaskCase::Casting,
             UiTaskCase::AimingBlocked,
             UiTaskCase::DisableDecision,
@@ -1156,6 +1451,76 @@ mod structural_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn formation_main_view_passes_the_required_matrix() {
+        for (size, mode) in REQUIRED_MATRIX {
+            let snapshot = gameplay_snapshot(UiTaskCase::FormationMainView, size, mode);
+            let issues = snapshot.task_issues(UiTaskCase::FormationMainView);
+            assert!(
+                issues.is_empty(),
+                "Formation Main View failed at {size:?} {mode:?}: {issues:#?}"
+            );
+            assert!(snapshot
+                .nodes
+                .iter()
+                .any(|node| node.name == "Formation Panel"));
+        }
+    }
+
+    #[test]
+    fn custom_visibility_and_compact_temporary_surface_are_structurally_distinct() {
+        for (size, mode) in [
+            (UVec2::new(1920, 1080), UiScaleMode::Auto),
+            (UVec2::new(3840, 2160), UiScaleMode::Auto),
+        ] {
+            let snapshot = gameplay_snapshot(UiTaskCase::CustomHudVisibility, size, mode);
+            let issues = snapshot.task_issues(UiTaskCase::CustomHudVisibility);
+            assert!(
+                issues.is_empty(),
+                "custom visibility failed at {size:?} {mode:?}: {issues:#?}"
+            );
+        }
+
+        for (size, mode) in [
+            (UVec2::new(1280, 720), UiScaleMode::Auto),
+            (UVec2::new(1920, 1080), UiScaleMode::Percent200),
+        ] {
+            let snapshot = gameplay_snapshot(UiTaskCase::CompactTemporarySurface, size, mode);
+            let issues = snapshot.task_issues(UiTaskCase::CompactTemporarySurface);
+            assert!(
+                issues.is_empty(),
+                "Compact temporary surface failed at {size:?} {mode:?}: {issues:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn initiative_fixture_exposes_only_disclosed_units_as_inspection_controls() {
+        let snapshot = gameplay_snapshot(
+            UiTaskCase::PlayerTurnMaxActions,
+            UVec2::new(1920, 1080),
+            UiScaleMode::Auto,
+        );
+        for name in ["Initiative Unit 0", "Initiative Unit 1"] {
+            let node = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.name == name)
+                .unwrap_or_else(|| panic!("missing disclosed initiative control {name:?}"));
+            assert!(node.focusable && node.keyboard_reachable == Some(true));
+        }
+        let unavailable = snapshot
+            .nodes
+            .iter()
+            .find(|node| node.name == "Initiative Unit 2 Unavailable")
+            .expect("the undisclosed hostile must retain an unavailable row without a control");
+        assert!(!unavailable.focusable);
+        assert!(snapshot
+            .focus_order
+            .iter()
+            .all(|name| name != "Initiative Unit 2 Unavailable"));
     }
 
     #[test]
@@ -1218,7 +1583,7 @@ impl Plugin for UiPlugin {
             (UiHudSetup::Frame, UiHudSetup::Panels, UiHudSetup::Tooling).chain(),
         )
         .add_message::<UiIntent>()
-        .init_resource::<CombatLogView>()
+        .init_resource::<ActivityLogView>()
         .init_resource::<CastingPanelView>()
         .init_resource::<GameplayChromeView>()
         .init_resource::<GameplayHudView>()
@@ -1234,7 +1599,6 @@ impl Plugin for UiPlugin {
         .init_resource::<InitiativeView>()
         .init_resource::<MainMenuView>()
         .init_resource::<TargetPulseView>()
-        .init_resource::<UnitBadgesView>()
         .add_plugins((
             theme::plugin,
             casting_panel::plugin,
@@ -1249,7 +1613,6 @@ impl Plugin for UiPlugin {
             screens::plugin,
             action_rail::plugin,
             main_menu::plugin,
-            unit_badges::plugin,
         ))
         .add_plugins((
             sandbox::plugin,
@@ -1354,6 +1717,9 @@ pub mod test_support {
         Campaign,
         Tools,
         Settings,
+        SettingsKeybindings,
+        SettingsCapture,
+        SettingsConflict,
         CharacterLibrary,
         SpellLibrary,
         CreatorLibraryRecovery,
@@ -1375,6 +1741,11 @@ pub mod test_support {
         Exploration,
         PlayerTurnMaxActions,
         HostileTurn,
+        CharacterMainView,
+        FormationMainView,
+        ActivityTabs,
+        CustomHudVisibility,
+        CompactTemporarySurface,
         Casting,
         AimingBlocked,
         DisableDecision,
@@ -1408,21 +1779,23 @@ pub mod test_support {
         Own,
         /// Both the selected-player lattice and an authored disclosed target must be populated.
         OwnAndTarget,
-        /// A blocking choice must present either its persistent own lattice or the
-        /// promoted Compact choice used when the Inspector yields at extreme scales.
+        /// A blocking choice must present its forced Main View lattice at every scale.
         RequiredChoice,
     }
 
     impl UiTaskCase {
         /// Every known task case. Adding a task requires adding it here and to the
         /// exhaustive contract match below.
-        pub const ALL: [Self; 34] = [
+        pub const ALL: [Self; 42] = [
             Self::Splash,
             Self::Loading,
             Self::MainMenu,
             Self::Campaign,
             Self::Tools,
             Self::Settings,
+            Self::SettingsKeybindings,
+            Self::SettingsCapture,
+            Self::SettingsConflict,
             Self::CharacterLibrary,
             Self::SpellLibrary,
             Self::CreatorLibraryRecovery,
@@ -1444,6 +1817,11 @@ pub mod test_support {
             Self::Exploration,
             Self::PlayerTurnMaxActions,
             Self::HostileTurn,
+            Self::CharacterMainView,
+            Self::FormationMainView,
+            Self::ActivityTabs,
+            Self::CustomHudVisibility,
+            Self::CompactTemporarySurface,
             Self::Casting,
             Self::AimingBlocked,
             Self::DisableDecision,
@@ -1481,6 +1859,23 @@ pub mod test_support {
                     &["Setting UiScale", "Setting UiVolume"],
                     true,
                 ),
+                Self::SettingsKeybindings => task(
+                    "settings-keybindings",
+                    Screen::Settings,
+                    SETTINGS_NAV_CONTROLS,
+                    &["Restore All Keybindings"],
+                    true,
+                ),
+                Self::SettingsCapture => task(
+                    "settings-capture",
+                    Screen::Settings,
+                    &["Cancel Key Capture"],
+                    &[],
+                    true,
+                ),
+                Self::SettingsConflict => {
+                    task("settings-conflict", Screen::Settings, &[], &[], true)
+                }
                 Self::CharacterLibrary => task(
                     "creator-character-library",
                     Screen::CharacterCreator,
@@ -1631,11 +2026,7 @@ pub mod test_support {
                 Self::Exploration => task(
                     "gameplay-exploration",
                     Screen::Gameplay,
-                    &[
-                        "Primary Action Rail",
-                        "Action Rail Rest",
-                        "Action Rail Pause",
-                    ],
+                    &["Action Bar", "Action Bar Rest", "Action Bar Pause"],
                     &[],
                     true,
                 ),
@@ -1643,25 +2034,72 @@ pub mod test_support {
                     "gameplay-player-turn-max",
                     Screen::Gameplay,
                     &[
-                        "Primary Action Rail",
-                        "Action Rail Channel",
-                        "Action Rail End Turn",
-                        "Action Rail Pause",
+                        "Action Bar",
+                        "Action Bar Channel",
+                        "Action Bar End Turn",
+                        "Action Bar Pause",
                     ],
                     &[],
                     true,
                 ),
-                Self::HostileTurn => task(
-                    "gameplay-hostile-turn",
+                Self::HostileTurn => {
+                    task("gameplay-hostile-turn", Screen::Gameplay, &[], &[], true)
+                }
+                Self::CharacterMainView => task(
+                    "gameplay-character-main-view",
                     Screen::Gameplay,
-                    &["Primary Action Rail"],
+                    &[],
                     &[],
                     true,
+                ),
+                Self::FormationMainView => task(
+                    "gameplay-formation-main-view",
+                    Screen::Gameplay,
+                    &[],
+                    &[
+                        "Formation Member 1",
+                        "Formation Member 6",
+                        "Party Movement Mode",
+                        "Party Rest",
+                        "Formation Preset Wedge",
+                        "Formation Slot (0, 0)",
+                    ],
+                    true,
+                ),
+                Self::ActivityTabs => task(
+                    "gameplay-activity-tabs",
+                    Screen::Gameplay,
+                    &[
+                        "Activity Tab All",
+                        "Activity Tab Combat",
+                        "Activity Tab Activity",
+                    ],
+                    &[],
+                    true,
+                ),
+                Self::CustomHudVisibility => task(
+                    "gameplay-custom-hud-visibility",
+                    Screen::Gameplay,
+                    &[
+                        "Party Member 1",
+                        "Activity Tab All",
+                        "Activity Tab Combat",
+                        "Activity Tab Activity",
+                    ],
+                    &[],
+                    false,
+                ),
+                Self::CompactTemporarySurface => task(
+                    "gameplay-compact-temporary-surface",
+                    Screen::Gameplay,
+                    &["Party Member 1"],
+                    &[],
+                    false,
                 ),
                 Self::Casting => task(
                     "casting",
                     Screen::Gameplay,
-                    &["Primary Action Rail"],
+                    &["Action Bar"],
                     &["Cast Lightning Bolt"],
                     true,
                 ),
@@ -1669,7 +2107,7 @@ pub mod test_support {
                     "aiming-blocked",
                     Screen::Gameplay,
                     &[
-                        "Primary Action Rail",
+                        "Action Bar",
                         "Confirm Cast Disabled",
                         "Next Target Disabled",
                         "Cancel Aim",
@@ -1680,21 +2118,21 @@ pub mod test_support {
                 Self::DisableDecision => task(
                     "decision-disable",
                     Screen::Gameplay,
-                    &["Primary Action Rail", "Action Rail Confirm 2 / 3"],
+                    &["Clear Disable Selection"],
                     &[],
                     true,
                 ),
                 Self::RestoreDecision => task(
                     "decision-restore",
                     Screen::Gameplay,
-                    &["Primary Action Rail", "Action Rail Confirm 2 / 3"],
+                    &["Clear Disable Selection"],
                     &[],
                     true,
                 ),
                 Self::HudHiddenRequired => task(
                     "hud-hidden-required",
                     Screen::Gameplay,
-                    &["Primary Action Rail", "Action Rail Confirm 2 / 3"],
+                    &["Clear Disable Selection"],
                     &[],
                     true,
                 ),
@@ -1713,12 +2151,7 @@ pub mod test_support {
         #[must_use]
         pub const fn lattice_requirement(self) -> UiTaskLatticeRequirement {
             match self {
-                Self::Exploration
-                | Self::PlayerTurnMaxActions
-                | Self::HostileTurn
-                | Self::AimingBlocked
-                | Self::Pause => UiTaskLatticeRequirement::Own,
-                Self::Casting => UiTaskLatticeRequirement::OwnAndTarget,
+                Self::CharacterMainView => UiTaskLatticeRequirement::Own,
                 Self::DisableDecision | Self::RestoreDecision | Self::HudHiddenRequired => {
                     UiTaskLatticeRequirement::RequiredChoice
                 }
@@ -1735,12 +2168,30 @@ pub mod test_support {
             match self {
                 Self::MainMenu => MAIN_MENU_CONTROLS,
                 Self::Tools => &["Character Creator", "Spell Creator", "Back"],
+                Self::SettingsKeybindings => SETTINGS_NAV_CONTROLS,
+                Self::FormationMainView => &[
+                    "Formation Member 1",
+                    "Formation Member 6",
+                    "Party Movement Mode",
+                    "Party Rest",
+                    "Formation Preset Wedge",
+                    "Formation Slot (0, 0)",
+                ],
                 _ => &[],
             }
         }
     }
 
     const MAIN_MENU_CONTROLS: &[&str] = &["Campaign", "Sandbox", "Tools", "Settings"];
+    const SETTINGS_NAV_CONTROLS: &[&str] = &[
+        "Back",
+        "Settings Tab General",
+        "Settings Tab Gameplay",
+        "Settings Tab Interface",
+        "Settings Tab Main View",
+        "Settings Tab Camera",
+        "Settings Tab System",
+    ];
 
     const fn task(
         id: &'static str,
@@ -1900,6 +2351,10 @@ pub mod test_support {
         /// infer any gameplay fact from rendered text.
         #[must_use]
         pub fn layout_issues(&self) -> Vec<String> {
+            self.layout_issues_with_overlap_scope(false)
+        }
+
+        fn layout_issues_with_overlap_scope(&self, active_focus_only: bool) -> Vec<String> {
             let mut issues = Vec::new();
             for node in self.nodes.iter().filter(|node| {
                 !node.focusable
@@ -2006,6 +2461,7 @@ pub mod test_support {
                 .iter()
                 .filter(|node| {
                     node.visible
+                        && (node.in_focus_order || !active_focus_only)
                         && (node.in_focus_order
                             || (node.visibility_requirement
                                 == Some(crate::UiVisibilityRequirement::Immediate)
@@ -2047,6 +2503,9 @@ pub mod test_support {
             let contract = case.contract();
             let mut issues = match case {
                 UiTaskCase::Casting => self.review_fixture_issues("casting-list"),
+                UiTaskCase::SettingsCapture | UiTaskCase::SettingsConflict => {
+                    self.layout_issues_with_overlap_scope(true)
+                }
                 _ => self.layout_issues(),
             };
             for name in contract.immediate_controls {
@@ -2100,8 +2559,50 @@ pub mod test_support {
                 previous_focus = Some(position);
             }
             issues.extend(self.task_lattice_issues(case));
+            issues.extend(self.task_settings_issues(case));
+            if case == UiTaskCase::FormationMainView {
+                for required in ["Main View HUD Region", "Formation Panel"] {
+                    if self.nodes.iter().all(|node| node.name != required) {
+                        issues.push(format!(
+                            "Formation Main View is missing required surface {required:?}"
+                        ));
+                    }
+                }
+                if self
+                    .nodes
+                    .iter()
+                    .any(|node| node.name == "Lattice Readout Stack")
+                {
+                    issues.push(
+                        "Formation Main View presented the Character lattice destination"
+                            .to_owned(),
+                    );
+                }
+                if self.metrics.viewport == crate::UiViewportClass::Compact {
+                    let visible_regions = [
+                        "Party HUD Region",
+                        "Initiative HUD Region",
+                        "Main View HUD Region",
+                        "Action Bar HUD Region",
+                        "Activity HUD Region",
+                    ]
+                    .into_iter()
+                    .filter(|name| self.nodes.iter().any(|node| node.name == *name))
+                    .collect::<Vec<_>>();
+                    if visible_regions != ["Main View HUD Region"] {
+                        issues.push(format!(
+                            "Compact Formation Main View must own exactly one HUD region, found {visible_regions:?}"
+                        ));
+                    }
+                }
+            }
             if case == UiTaskCase::HudHiddenRequired {
-                for hidden in ["Party Strip", "Initiative Panel", "Combat Log Panel"] {
+                for hidden in [
+                    "Party Panel",
+                    "Initiative Panel",
+                    "Activity Log Panel",
+                    "Action Bar",
+                ] {
                     if self.nodes.iter().any(|node| node.name == hidden) {
                         issues.push(format!(
                             "ordinary HUD surface {hidden:?} remained visible while the HUD was hidden"
@@ -2109,7 +2610,162 @@ pub mod test_support {
                     }
                 }
             }
+            if case == UiTaskCase::CustomHudVisibility {
+                for visible in ["Party Panel", "Activity Log Panel"] {
+                    if self.nodes.iter().all(|node| node.name != visible) {
+                        issues.push(format!(
+                            "custom HUD preference did not present requested surface {visible:?}"
+                        ));
+                    }
+                }
+                for hidden in ["Initiative Panel", "Action Bar", "Lattice Readout Stack"] {
+                    if self.nodes.iter().any(|node| node.name == hidden) {
+                        issues.push(format!(
+                            "custom HUD preference unexpectedly presented {hidden:?}"
+                        ));
+                    }
+                }
+            }
+            if case == UiTaskCase::CompactTemporarySurface {
+                if self.metrics.viewport != crate::UiViewportClass::Compact {
+                    issues.push(
+                        "Compact temporary-surface fixture resolved outside Compact".to_owned(),
+                    );
+                }
+                let visible_regions = [
+                    "Party HUD Region",
+                    "Initiative HUD Region",
+                    "Main View HUD Region",
+                    "Action Bar HUD Region",
+                    "Activity HUD Region",
+                ]
+                .into_iter()
+                .filter(|name| self.nodes.iter().any(|node| node.name == *name))
+                .collect::<Vec<_>>();
+                if visible_regions != ["Party HUD Region"] {
+                    issues.push(format!(
+                        "Compact temporary surface must own exactly one HUD region, found {visible_regions:?}"
+                    ));
+                }
+            }
             issues
+        }
+
+        fn task_settings_issues(&self, case: UiTaskCase) -> Vec<String> {
+            let mut issues = Vec::new();
+            match case {
+                UiTaskCase::SettingsKeybindings => {
+                    if self
+                        .nodes
+                        .iter()
+                        .all(|node| !node.name.starts_with("Binding Row "))
+                    {
+                        issues.push(
+                            "Settings Keybindings contains no immutable binding rows".to_owned(),
+                        );
+                    }
+                    for prefix in ["Rebind ", "Restore "] {
+                        if self.nodes.iter().all(|node| !node.name.starts_with(prefix)) {
+                            issues.push(format!(
+                                "Settings Keybindings contains no named {prefix:?} controls"
+                            ));
+                        }
+                    }
+                    if self
+                        .nodes
+                        .iter()
+                        .any(|node| node.name.contains("Reveal Knowledge (Development)"))
+                    {
+                        issues.push(
+                            "shipping Settings Keybindings presented a development-only action"
+                                .to_owned(),
+                        );
+                    }
+                    if self.nodes.iter().any(|node| node.name == "Settings Modal") {
+                        issues.push(
+                            "Settings Keybindings unexpectedly presented a blocking modal"
+                                .to_owned(),
+                        );
+                    }
+                }
+                UiTaskCase::SettingsCapture => {
+                    self.require_settings_modal(case, &["Cancel Key Capture"], &mut issues)
+                }
+                UiTaskCase::SettingsConflict => {
+                    const CONFLICT: &[&str] =
+                        &["Swap Conflicting Bindings", "Cancel Binding Conflict"];
+                    const RESTORE_ALL: &[&str] = &[
+                        "Confirm Restore All Keybindings",
+                        "Cancel Restore All Keybindings",
+                    ];
+                    let has_conflict = CONFLICT
+                        .iter()
+                        .any(|name| self.nodes.iter().any(|node| node.name == *name));
+                    let has_restore_all = RESTORE_ALL
+                        .iter()
+                        .any(|name| self.nodes.iter().any(|node| node.name == *name));
+                    match (has_conflict, has_restore_all) {
+                        (true, false) => {
+                            self.require_settings_modal(case, CONFLICT, &mut issues);
+                        }
+                        (false, true) => {
+                            self.require_settings_modal(case, RESTORE_ALL, &mut issues);
+                        }
+                        (false, false) => issues.push(
+                            "Settings Conflict requires a binding-conflict or Restore All confirmation modal"
+                                .to_owned(),
+                        ),
+                        (true, true) => issues.push(
+                            "Settings Conflict presented two mutually exclusive modal tasks"
+                                .to_owned(),
+                        ),
+                    }
+                }
+                _ => {}
+            }
+            issues
+        }
+
+        fn require_settings_modal(
+            &self,
+            case: UiTaskCase,
+            expected_controls: &[&str],
+            issues: &mut Vec<String>,
+        ) {
+            if self.nodes.iter().all(|node| node.name != "Settings Modal") {
+                issues.push(format!(
+                    "{} is missing its blocking Settings Modal",
+                    case.contract().id
+                ));
+            }
+            for name in expected_controls {
+                let Some(node) = self.nodes.iter().find(|node| node.name == *name) else {
+                    issues.push(format!(
+                        "{} is missing modal control {name:?}",
+                        case.contract().id
+                    ));
+                    continue;
+                };
+                if node.visibility_requirement != Some(crate::UiVisibilityRequirement::Immediate) {
+                    issues.push(format!(
+                        "{} modal control {name:?} is not explicitly Immediate",
+                        case.contract().id
+                    ));
+                }
+                if !node.fully_visible {
+                    issues.push(format!(
+                        "{} modal control {name:?} is not initially visible: {node:?}",
+                        case.contract().id
+                    ));
+                }
+            }
+            if self.focus_order != expected_controls {
+                issues.push(format!(
+                    "{} modal must trap focus in {expected_controls:?}, found {:?}",
+                    case.contract().id,
+                    self.focus_order
+                ));
+            }
         }
 
         fn task_lattice_issues(&self, case: UiTaskCase) -> Vec<String> {

@@ -943,14 +943,27 @@ file and fails if any reference dangles, so the shipped game never carries a bro
 
 ## Local Settings are not authored config
 
-The in-game Settings screen writes `preferences.ron` beside `campaigns.ron`,
-`creations.ron`, and any legacy local files; it never edits
-`assets/config/display.ron`. Campaign persistence contains exactly three indexed
-records and is replaced atomically. On first load without `campaigns.ron`, a valid
-legacy `resume.ron` is copied into slot 1 with zero prior active-play time. Invalid
-legacy data is preserved with its refusal, and `resume.ron` is never overwritten or
-deleted. An existing obsolete `combat-reports.ron` is likewise never read, modified,
-or deleted.
+The in-game Settings screen atomically writes schema-v3 `preferences.ron` beside
+`campaigns.ron`, `creations.ron`, and any legacy local files; it never edits
+`assets/config/display.ron`. The file stores display/window presentation, semantic UI
+scale, volume values, the four ordinary HUD visibility preferences, and only keyboard
+bindings that differ from their canonical defaults. Transient master HUD suppression,
+Compact temporary surfaces, inspected-unit identity, and the current Main View are
+session state and are never persisted.
+
+Reading schema v1 preserves its display and audio values while supplying Auto UI
+scale, the minimalist default HUD combination, and no keyboard overrides. Reading
+schema v2 also preserves its UI-scale choice while supplying the same new HUD and
+binding defaults. A missing file uses the authored display default plus built-in UI,
+volume, HUD, and input defaults. A corrupt, invalid, or unknown-version file is
+reported on the Settings screen and rejected as a whole rather than partially
+applied.
+
+Campaign persistence contains exactly three indexed records and is replaced
+atomically. On first load without `campaigns.ron`, a valid legacy `resume.ron` is
+copied into slot 1 with zero prior active-play time. Invalid legacy data is preserved
+with its refusal, and `resume.ron` is never overwritten or deleted. An existing
+obsolete `combat-reports.ron` is likewise never read, modified, or deleted.
 
 Set `HEX_GAME_DATA_DIR` to an explicit directory when a test or review needs isolated
 local state. Otherwise the files live under:
@@ -959,9 +972,7 @@ local state. Otherwise the files live under:
 - Windows: `%APPDATA%/Hex Game/`
 - Linux: `$XDG_DATA_HOME/hex-game/`, or `~/.local/share/hex-game/`
 
-A missing preferences file uses the authored display default and built-in volume
-defaults. A corrupt or incompatible file is reported on the Settings screen and those
-defaults are restored. The file is version-bound pre-alpha state, not a durable
+The preferences file remains version-bound pre-alpha state, not a durable
 configuration format.
 
 ## Frame presentation on macOS
