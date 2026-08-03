@@ -300,8 +300,9 @@ disagreement between gameplay knowledge and picking.
 - automatically advancing time and gameplay effects beyond exterior illumination
 - carried, destructible, extinguishable, faction-private, and spell-created lights
 - stealth, concealment, hearing, and hidden-unit detection
-- spatial divination that reveals unknown terrain; lattice divination and its
-  persistent knowledge are live in `hex_combat`
+- spatial divination that reveals unknown terrain; Divination's current
+  observed-subject, bounded lattice Reveal is live in `hex_combat`, while Scrying
+  Eye's proposed readable off-sight live feed remains later work
 - cross-domain sight through entrances and other portals
 - saved-game persistence for remembered terrain
 

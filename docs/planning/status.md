@@ -109,8 +109,8 @@ no longer limited to one unit a side. Party Trial fields matching three-member
 hedge-mage, raider, and wolf parties. Ability Lab and Raider Mirror retain focused
 ability and identity checks behind default-off deterministic test support.
 
-The element wheel and spells now load as **validated content**: `elements.ron` (the
-six-element wheel, opposition, and fusion recipes, checked acyclic and feedable) and
+The element wheel and spells load as **validated content**: `elements.ron` (the
+six-basic wheel, opposition, and fusion recipes, checked acyclic and feedable) and
 `spells.ron` (requirements as an element multiset with tier ≤ 6, casting and mana axes,
 targeting, and a closed effect enum). A `ContentIndex` resolves every element and
 substance name a spell references; a dangling reference is logged and the last valid
@@ -125,10 +125,23 @@ spell list, while gameplay now consumes the same catalogs through its lattices a
 panel. Every externally authored archetype must also form one contiguous lattice;
 disconnected islands fail with the archetype named in the error.
 
+> **Elemental-grid foundation E0 (HEX-37/HEX-56/HEX-57) is in progress, not
+> delivered.** The combined candidate migrates packaged content to the canonical Air,
+> Fire, Metal, Earth, Life, Water wheel; six direct pairs; six direct triples; and a
+> neutral 18-element × 9-substance terrain-damage table. It moves the current
+> single-target Scrying Eye content to Divination, removes Daylight, and adds the
+> presentation-only radius-two Creator chart plus editable vector/runtime glyph
+> assets. Light is removed and Life is newly authored; no Light-to-Life save or
+> Creator-draft rewrite exists. Old-revision campaign records remain preserved and
+> incompatible, while Creator drafts remain preserved with unresolved-name
+> diagnostics. This remains In Progress until the coherent content, Creator
+> presentation, validation, and final candidate land together; it ships none of the
+> later basic/pair/triple school mechanics.
+
 **Damage exists.** The lattice engine (`hex_lattice`) is joined to the game at last:
 `lattices.ron` authors the three archetypes the design names — a wolf of four hexes and
-a bite, a raider of eight around a metal shield, a hedge-mage of thirteen with the
-roster's only fusion chain and Scrying Eye — and units spawn carrying them, keyed by the
+a bite, a raider of eight around a metal shield, a hedge-mage of thirteen with fused
+elements and Scrying Eye — and units spawn carrying them, keyed by the
 archetype their encounter rostered. A cast goes through the command funnel and the
 legality ladder, and drains the lattice that paid for it. Damage names a count; **the defender
 chooses which hexes go down**, answering through a `ChooseDisables` command so the choice
@@ -307,10 +320,13 @@ The **knowledge seam is live** as `hex_combat::knowledge`:
 World-owned `FactionMapKnowledge` gates which subjects currently exist to each viewer;
 the gameplay adapter publishes only existence and faction, while capacity and cells
 remain opaque until Reveal.
-Scrying Eye writes a complete, expiring projection whose known cells refresh from live
-mana and disabled state without extending its lifetime. The HUD renders that projection,
-retains a valid aimed hostile, and freezes legal disclosure when each typed combat event
-enters the bounded log. The dev reveal-all toggle remains `K` under the `dev` feature.
+Scrying Eye's current single-target Reveal writes a complete, expiring projection for
+an already-observed subject. While the subject remains observable, its known cells
+refresh from live mana and disabled state without extending the lifetime; loss of
+ordinary observation hides the view. The later Divination release owns the proposed
+readable off-sight live feed. The HUD renders the current projection, retains a valid
+aimed hostile, and freezes legal disclosure when each typed combat event enters the
+bounded log. The dev reveal-all toggle remains `K` under the `dev` feature.
 
 Around the game sits its own verification tooling. The Creator's **local lattice
 test** isolates the magic ruleset and shared lattice renderer from a full fight. A

@@ -46,16 +46,43 @@ explicit design question below; the overview does not settle it by implication.
 
 ## Elements and spells
 
-### The six basic elements
+### The canonical elemental grid
 
-Arranged around a hex, from the top clockwise:
+The six basic elements follow this clockwise inner-ring order:
 
-**Light · Air · Fire · Metal · Earth · Water**
+**Air · Fire · Metal · Earth · Life · Water**
 
-Elements three steps apart are opposed: Light/Metal, Air/Earth, Fire/Water. Metal as
-the anti-Light is deliberate — Light is the information element, and Metal is dense,
-opaque, and blocks sight. Opposition is mechanically live: some special gems recharge
-when the opposing element is used.
+Elements three steps apart are opposed: Air/Earth, Fire/Life, and Metal/Water. The
+wheel defines and exposes those relationships, but the current combat rules do not
+yet grant an opposition-triggered recharge or other opposition bonus.
+
+The complete initial catalog has six direct pair fusions and six direct triple
+fusions:
+
+| Kind | Result | Direct basic inputs |
+|---|---|---|
+| Pair | Lightning | Air + Fire |
+| Pair | Volcano | Fire + Metal |
+| Pair | Crystal | Metal + Earth |
+| Pair | Transmutation | Earth + Life |
+| Pair | Divination | Life + Water |
+| Pair | Illusion | Water + Air |
+| Triple | Destruction | Air + Fire + Metal |
+| Triple | Artifice | Fire + Metal + Earth |
+| Triple | Necromancy | Metal + Earth + Life |
+| Triple | Wild | Earth + Life + Water |
+| Triple | Storm | Life + Water + Air |
+| Triple | Space | Water + Air + Fire |
+
+Every recipe in this catalog draws directly from two or three distinct basic
+feeders. A triple is not a pair-plus-basic chain.
+
+The Creator may present these elements as a radius-two chart with an empty centre.
+Its inner ring is the basic wheel above; its outer ring, beginning along the
+upper-left edge and proceeding clockwise, is Space, Lightning, Destruction, Volcano,
+Artifice, Crystal, Necromancy, Transmutation, Wild, Divination, Storm, and Illusion.
+That layout, its colours, and its vector glyphs are presentation aids. Stable names,
+the wheel, and the authored recipes remain the gameplay authority.
 
 ### Gems and adjacency
 
@@ -85,8 +112,9 @@ does in other games.**
 
 ### Fusions
 
-A fusion hex combines adjacent basic elements into a higher-order one. Lightning
-requires an adjacent light gem and an adjacent fire gem.
+A fusion hex combines its adjacent feeders into one authored higher-order element.
+Lightning, for example, requires adjacent Air and Fire gems; Space requires adjacent
+Water, Air, and Fire gems.
 
 - A fusion is a **build commitment** — its output is fixed when inscribed, not
   chosen dynamically from whichever neighbours are live.
@@ -95,13 +123,14 @@ requires an adjacent light gem and an adjacent fire gem.
   consumers, so breaking any link kills everything downstream. Long chains are
   efficient and brittle — gem sharing, one level up.
 
-Complex-element spells require **very few** gems of that element, or chains become
-unbuildable: a six-source complex spell would need six fusions with their own
-feeders, nineteen hexes minimum.
+Complex-element spells require **very few** fusions of that element, or their feeder
+geometry becomes unbuildable. A six-source complex spell would need six fusions with
+their own feeders, far beyond an ordinary lattice.
 
 High-tier spells therefore scale by **recipe complexity, not volume**. A spell hex's
-six neighbours are ingredients, not a quantity. Thunderstorm is not "six of
-something" — it is storm plus lightning in adjacent slots.
+six neighbours are ingredients, not merely a quantity. The initial catalog stops at
+direct two- and three-basic recipes; a later chained recipe would be a deliberate
+extension rather than an alternate way to build one of these twelve elements.
 
 ### Evocation and enchantment
 
@@ -232,8 +261,8 @@ thing that can go wrong is something they could in principle have known.
 
 ### Information and divination
 
-Enemy lattices and intent are hidden by default. Light and higher-order divination
-reveal them.
+Enemy lattices and intent are hidden by default. The Divination school owns spells
+that reveal them.
 
 Spatial perception and lattice knowledge are separate. Seeing an enemy establishes
 where it is and permits targeting; it does not reveal the enemy's lattice or intent.
@@ -248,28 +277,32 @@ engagement, ordinary-attack, and one-round lost-contact adapters are not wired y
 the prototype currently starts and ends combat from distance and
 `disengage_margin` alone.
 
-- What a divination reveals scales with tier: full lattice or partial, one enemy or
-  all, everything in a radius.
-- Revealed information **decays or is one-time**, unless the divination is an
-  enchantment. Seeing is a recurring action expense, which argues strongly for
-  divination enchantments being worth their locked mana.
-- Every faction has the same base sight profile, pooled across its active characters.
-- Simple divination is **two-way** — standing lit makes you readable. Cheap sight
-  announces you.
-- Light gems feed both divination and fusions like lightning, so Light-heavy builds
-  choose between seeing and striking.
-- Consumables can patch structural weaknesses (no Light, no revival) at high cost.
+- **Scrying Eye belongs to Divination.** Its current playable form targets one
+  already-observed unit and writes a complete, bounded lattice projection. Keeping
+  that feed readable and live after the subject leaves ordinary sight is later
+  Divination work, not part of the elemental-grid foundation.
+- What a later divination reveals may scale with tier: full or partial lattice, one
+  enemy or several, and expiring versus sustained knowledge.
+- Every faction has the same base spatial sight profile, pooled across its active
+  characters; divination changes lattice knowledge, not that base sight rule.
+- Illusion is a separate Water + Air school. Its first planned showcase spell is
+  Invisibility. Spell-created illumination also belongs to Illusion, but no such
+  spell ships in the foundation wave; the former Daylight spell is withdrawn rather
+  than migrated into the new catalog.
+- Consumables can eventually patch structural weaknesses such as missing Divination
+  or revival at high cost.
 
 ### Enemies
 
 **An enemy's lattice is its entire stat block.** There is no separate authoring
 system. A wolf is four hexes with a bite. A raider is eight with a metal shield. A
-hedge-mage is thirteen with a fusion chain and Scrying Eye. Difficulty is the size and
-complexity of the drawing, and every enemy runs on the player's rules.
+hedge-mage is thirteen with direct Lightning and Divination fusions plus Scrying Eye.
+Difficulty is the size and complexity of the drawing, and every enemy runs on the
+player's rules.
 
 This makes the information layer self-balancing. Small enemies are learnable — once
 you know a wolf, divining one is a wasted action. Bosses and novel enemies stay
-genuinely unknown, so Light investment pays off exactly where it should.
+genuinely unknown, so Divination investment pays off exactly where it should.
 
 Most enemies are weaker than playable characters and have a **surrender or fatality
 mechanic**. With no dialogue, surrender must read through posture and animation.
@@ -460,11 +493,6 @@ disable more, or the rout threshold arrives well before zero.
 Tabled. Six characters with permanent death is severe for a campaign this length. Is
 there a recruitable roster? Do you play down a member? Is a death a run-ender? How
 accessible are revival spells — that number sets the whole difficulty tone.
-
-### Complex elements
-
-The full list of higher-order elements and their recipes is unspecified. Known:
-lightning (light + fire), storm, thunderstorm (storm + lightning).
 
 ### Map shape
 

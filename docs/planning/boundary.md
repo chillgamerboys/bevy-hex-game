@@ -268,12 +268,15 @@ initial scale `1`, `2`, `4`, and `8`:
 
 `assets/config/terrain_damage.ron` is a world-owned allow-list of stable
 `(element_name, substance_name)` pairs. A listed pair permits damage; a missing pair
-resists. The initial file lists every current element against every substance with a
-numeric toughness, so the first slice tests the Boolean contract without pretending
-to settle elemental balance. Validation rejects unknown names, duplicate pairs, and
-pairs naming a substance without toughness. The resolved matrix participates in the
-same coherent content revision and deterministic fingerprint as elements, substances,
-spells, and lattices; a failed reload retains the last complete accepted revision.
+resists. The neutral elemental-grid migration lists all 18 canonical elements against
+all nine substances with numeric toughness, exactly **162 unique pairs**, so the
+content continues to exercise the Boolean contract without pretending to settle
+elemental balance. Expanding that table changes no resolver behavior and does not
+claim any of HEX-19's remaining terrain mechanics. Validation rejects unknown names,
+duplicate pairs, and pairs naming a substance without toughness. The resolved matrix
+participates in the same coherent content revision and deterministic fingerprint as
+elements, substances, spells, and lattices; a failed reload retains the last complete
+accepted revision.
 
 For an allowed, unprotected voxel, effective damage is exactly `power`,
 capped at its remaining health. A voxel with no sparse damage entry starts at its

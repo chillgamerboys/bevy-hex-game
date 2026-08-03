@@ -345,10 +345,14 @@ a `LatticeSpec`, `LatticeState` and `LatticeStats` keyed by the unit's
 `view()` returns base visibility only for currently observed subjects.
 
 The target panel reads no hostile `LatticeSpec` or `LatticeState`; it projects only
-`FactionLatticeKnowledge::view`. A complete Reveal (the shipped Scrying Eye) learns capacity
-and every cell. While it lasts, already-divined cells refresh mana and disabled state
-from live truth without resetting their expiry. Tier one lasts through the current
-partial round and the next complete round, expiring at the following rollover.
+`FactionLatticeKnowledge::view`. A complete Reveal learns capacity and every cell for
+one already-observed target; Scrying Eye is the current spell, and the E0 content
+candidate moves its requirement to Divination. While that target remains observable
+and the reveal lasts, already-divined cells refresh mana and disabled state from live
+truth without resetting their expiry. Tier one lasts through the current partial
+round and the next complete round, expiring at the following rollover. Retaining a
+readable live feed after the subject leaves ordinary sight is a separate Divination
+release; the elemental-grid migration does not change this observation gate.
 
 A cast must still anchor on a currently Observed position — the rule is
 [absolute, including for divination](casting.md#observation), because Reveal targets a

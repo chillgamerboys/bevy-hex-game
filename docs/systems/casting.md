@@ -95,10 +95,12 @@ element × material allow-list. A missing pair resists; there are no multipliers
 thresholds, healing, replacement materials, or elemental transformations. Gameplay
 does not duplicate either file and cannot predict the outcome before the world answers.
 
-Every current element is initially allowed against every toughness-bearing material.
-That broad table proves the contract without pretending to be final balance. Water,
-lava, air, and bedrock have no toughness; authored liquid topology and the other
-map-owned protections continue to resist.
+The neutral elemental-grid content lists each of the 18 canonical elements against
+each of the nine toughness-bearing substances: **162 unique allowed pairs**. That
+broad table proves coherent admission without pretending to be final balance. Its
+expansion is content migration, not a new terrain-damage mechanic and not completion
+of the residual HEX-19 work. Water, lava, air, and bedrock have no toughness; authored
+liquid topology and the other map-owned protections continue to resist.
 
 The first consumer is Fireball with `Impact(element: "Fire", power: 2)`. Its
 previous `Displace` is removed rather than advertising forced movement the runtime
@@ -474,9 +476,13 @@ without touching the framework, which is the point of having one.
   area Disable recipients behind the existing `PendingDecision`. It publishes the next
   stable-`UnitId` decision only after the previous answer is adopted, and the separate
   authority hold prevents the cleared public slot from advancing the turn early.
-- **`Reveal` is live; `Illuminate` still rejects with a reason.** Reveal writes a
-  complete tier-bounded view through the knowledge seam. Spell-created lights still
-  wait on the perception lane and must not silently do nothing.
+- **Single-target `Reveal` is live; `Illuminate` still rejects with a reason.** The
+  E0 content candidate assigns Scrying Eye to Divination while retaining the current
+  observed-subject, complete tier-bounded view through the knowledge seam. A
+  continuous off-sight live feed is separate later Divination work. Spell-created
+  illumination belongs to Illusion, still waits on the perception lane, and must not
+  silently do nothing; the former Daylight spell is not part of the canonical
+  migrated content.
 - **Generated features are unaffected initially.** Destructible trees, tall grass,
   and other feature effects wait on an explicit world response and outcome contract.
 
