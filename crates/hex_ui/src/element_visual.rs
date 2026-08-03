@@ -84,8 +84,8 @@ impl FromWorld for ElementVisualCatalog {
 }
 
 impl ElementVisualCatalog {
-    /// All 18 visuals in deterministic keyboard order: basics, pairs, then triples,
-    /// clockwise within each ring.
+    /// All 18 visuals in deterministic spatial keyboard order: the basic inner ring,
+    /// then the alternating pair/triple outer ring, clockwise within each ring.
     #[must_use]
     pub fn entries(&self) -> &[ElementVisual] {
         &self.entries
@@ -160,40 +160,16 @@ const ELEMENT_VISUAL_SPECS: [ElementVisualSpec; 18] = [
         coord: IVec2::new(-1, 0),
     },
     ElementVisualSpec {
+        name: "Space",
+        icon_path: "ui/elements/space.png",
+        tint: Color::srgb(0.23, 0.18, 0.42),
+        coord: IVec2::new(0, -2),
+    },
+    ElementVisualSpec {
         name: "Lightning",
         icon_path: "ui/elements/lightning.png",
         tint: Color::srgb(0.55, 0.43, 0.08),
         coord: IVec2::new(1, -2),
-    },
-    ElementVisualSpec {
-        name: "Volcano",
-        icon_path: "ui/elements/volcano.png",
-        tint: Color::srgb(0.50, 0.13, 0.07),
-        coord: IVec2::new(2, -1),
-    },
-    ElementVisualSpec {
-        name: "Crystal",
-        icon_path: "ui/elements/crystal.png",
-        tint: Color::srgb(0.16, 0.45, 0.47),
-        coord: IVec2::new(1, 1),
-    },
-    ElementVisualSpec {
-        name: "Transmutation",
-        icon_path: "ui/elements/transmutation.png",
-        tint: Color::srgb(0.32, 0.47, 0.13),
-        coord: IVec2::new(-1, 2),
-    },
-    ElementVisualSpec {
-        name: "Divination",
-        icon_path: "ui/elements/divination.png",
-        tint: Color::srgb(0.12, 0.43, 0.39),
-        coord: IVec2::new(-2, 1),
-    },
-    ElementVisualSpec {
-        name: "Illusion",
-        icon_path: "ui/elements/illusion.png",
-        tint: Color::srgb(0.34, 0.27, 0.56),
-        coord: IVec2::new(-1, -1),
     },
     ElementVisualSpec {
         name: "Destruction",
@@ -202,10 +178,22 @@ const ELEMENT_VISUAL_SPECS: [ElementVisualSpec; 18] = [
         coord: IVec2::new(2, -2),
     },
     ElementVisualSpec {
+        name: "Volcano",
+        icon_path: "ui/elements/volcano.png",
+        tint: Color::srgb(0.50, 0.13, 0.07),
+        coord: IVec2::new(2, -1),
+    },
+    ElementVisualSpec {
         name: "Artifice",
         icon_path: "ui/elements/artifice.png",
         tint: Color::srgb(0.49, 0.29, 0.12),
         coord: IVec2::new(2, 0),
+    },
+    ElementVisualSpec {
+        name: "Crystal",
+        icon_path: "ui/elements/crystal.png",
+        tint: Color::srgb(0.16, 0.45, 0.47),
+        coord: IVec2::new(1, 1),
     },
     ElementVisualSpec {
         name: "Necromancy",
@@ -214,10 +202,22 @@ const ELEMENT_VISUAL_SPECS: [ElementVisualSpec; 18] = [
         coord: IVec2::new(0, 2),
     },
     ElementVisualSpec {
+        name: "Transmutation",
+        icon_path: "ui/elements/transmutation.png",
+        tint: Color::srgb(0.32, 0.47, 0.13),
+        coord: IVec2::new(-1, 2),
+    },
+    ElementVisualSpec {
         name: "Wild",
         icon_path: "ui/elements/wild.png",
         tint: Color::srgb(0.11, 0.41, 0.27),
         coord: IVec2::new(-2, 2),
+    },
+    ElementVisualSpec {
+        name: "Divination",
+        icon_path: "ui/elements/divination.png",
+        tint: Color::srgb(0.12, 0.43, 0.39),
+        coord: IVec2::new(-2, 1),
     },
     ElementVisualSpec {
         name: "Storm",
@@ -226,10 +226,10 @@ const ELEMENT_VISUAL_SPECS: [ElementVisualSpec; 18] = [
         coord: IVec2::new(-2, 0),
     },
     ElementVisualSpec {
-        name: "Space",
-        icon_path: "ui/elements/space.png",
-        tint: Color::srgb(0.23, 0.18, 0.42),
-        coord: IVec2::new(0, -2),
+        name: "Illusion",
+        icon_path: "ui/elements/illusion.png",
+        tint: Color::srgb(0.34, 0.27, 0.56),
+        coord: IVec2::new(-1, -1),
     },
 ];
 
