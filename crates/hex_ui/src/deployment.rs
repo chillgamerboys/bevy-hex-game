@@ -451,6 +451,7 @@ mod tests {
         UiAssets {
             display: Handle::default(),
             body: Handle::default(),
+            logo: Handle::default(),
             hex_cell: Handle::default(),
         }
     }

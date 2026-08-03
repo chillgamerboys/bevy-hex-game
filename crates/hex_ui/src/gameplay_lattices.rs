@@ -618,6 +618,7 @@ mod tests {
             .insert_resource(UiAssets {
                 display: Handle::default(),
                 body: Handle::default(),
+                logo: Handle::default(),
                 hex_cell: Handle::default(),
             })
             .insert_resource(crate::GameplayChromeView {

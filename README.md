@@ -3,9 +3,10 @@
 > **A deterministic tactical RPG where every character, spell, and wound is a
 > pattern of hexagons.**
 
-![The original Hex logo: a white hexagon over a person standing on a beach](readme_assets/game_logo.jpg)
+![The Hex wordmark, constructed from a grid of gold hexagonal cells](brand/hex-logo.svg)
 
-*The original 2022 logo, kept as a fond artifact of where the project started.*
+The [original 2022 logo](readme_assets/game_logo.jpg) remains as a fond artifact
+of where the project started.
 
 **Hex** is the working title for a party-based magic game built around one shape.
 A party of up to six characters explores an isometric world in real time, then

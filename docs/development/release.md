@@ -2,13 +2,13 @@
 
 Releases produce unsigned pre-alpha archives. Every platform uses the
 `hex-game-<platform>` artifact name and contains a `hex-game` executable (or
-`hex-game.exe`), assets, the current placeholder `app-icon.png`, README, and any
-platform symbol companions emitted by Rust. Release builds retain line-table debug
+`hex-game.exe`), assets, the compact Hex brand mark as `app-icon.png`, README, and
+any platform symbol companions emitted by Rust. Release builds retain line-table debug
 information. Symbols stay in the artifact; nothing uploads crash data.
 
 The application identity is `com.chillgamerboys.hex-game`, with the player-facing name
-**Hex Game**. The icon is deliberately the existing hex UI mark until product art
-replaces it.
+**Hex Game**. The PNG is currently staged beside the executable as a release companion;
+it is not yet embedded as a native platform icon.
 
 ## Procedure
 

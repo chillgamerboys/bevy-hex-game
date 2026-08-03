@@ -277,6 +277,7 @@ mod tests {
         app.insert_resource(UiAssets {
             display: Handle::default(),
             body: Handle::default(),
+            logo: Handle::default(),
             hex_cell: Handle::default(),
         });
         app.add_systems(Startup, |mut commands: Commands, assets: Res<UiAssets>| {
