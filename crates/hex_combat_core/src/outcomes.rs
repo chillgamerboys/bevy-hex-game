@@ -614,7 +614,7 @@ mod tests {
                 spell: "Ember".to_owned(),
             },
             CommandRefusal::UndeliverableSpell {
-                spell: "Daylight".to_owned(),
+                spell: "Placeholder".to_owned(),
             },
             CommandRefusal::MissingFacing {
                 spell: "Flamethrower".to_owned(),

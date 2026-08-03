@@ -1407,37 +1407,20 @@ mod tests {
     ///
     /// The failure without this is invisible and expensive: the cast is *legal*, so the
     /// applier charges for it — the mana goes, the turn goes — and the only trace is a
-    /// `warn!` a release build does not show a console for. Several shipped spells are in
-    /// that state, so this is a live case rather than a hypothetical one.
+    /// `warn!` a release build does not show a console for. The canonical roster keeps
+    /// no such placeholder spell, so every shipped definition is the live regression.
     #[test]
-    fn a_spell_with_nothing_built_is_blocked_rather_than_offered() {
+    fn every_shipped_spell_has_a_delivered_effect_path() {
         let (_, spells) = shipped_content();
-        let undeliverable = ["Daylight"];
-        for name in undeliverable {
-            let id = spells.id(name).expect("the test names a shipped spell");
-            let definition = spells.spell(id).expect("a shipped spell has a definition");
-            assert!(
-                !hex_combat::delivers_anything(definition),
-                "{name} has nothing built, so the panel must not offer it"
-            );
-        }
-        // The control, and the reason this is not just a ban on everything: the spells
-        // the wave actually delivers stay castable.
-        for name in [
-            "Ember",
-            "Kindle",
-            "Metal Shield",
-            "Renewal",
-            "Scrying Eye",
-            "Stone Shaper",
-            "Earthen Wall",
-        ] {
-            let Some(id) = spells.id(name) else { continue };
-            let definition = spells.spell(id).expect("a shipped spell has a definition");
+        for (id, name, definition) in spells.iter() {
             assert!(
                 hex_combat::delivers_anything(definition),
-                "{name} has a delivered combat result and must stay offered"
+                "{name} ({id:?}) has no delivered combat result and must not ship"
             );
         }
+        assert!(
+            spells.id("Daylight").is_none(),
+            "Illuminate remains deferred"
+        );
     }
 }

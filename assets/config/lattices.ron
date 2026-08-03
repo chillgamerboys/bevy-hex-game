@@ -69,30 +69,29 @@
             channelling: {"Metal": 2, "Earth": 1},
         ),
 
-        // Thirteen hexes, and the roster's only fusion chain. The Lightning cell is not a
-        // gem — it holds nothing itself. It combines the Light and Fire gems beside it
-        // into an element neither of them is, which the bolt then draws on. That makes
-        // the two feeder gems worth more than their own hexes: taking either one down
-        // kills the fusion and everything downstream of it.
+        // Thirteen hexes and the roster's only fusion chains. Lightning draws directly
+        // from Air and Fire; Divination draws directly from Life and Water. The four
+        // inscriptions remain castable from this one contiguous drawing, so taking a
+        // feeder down can disable both its basic spell and a downstream fusion.
         "hedge-mage": (
             ai_profile: Some("baseline"),
             cells: [
                 (at: (q: 0, r: 0), kind: Fusion("Lightning")),
-                (at: (q: 1, r: 0), kind: Gem("Light")),
+                (at: (q: 1, r: 0), kind: Gem("Air")),
                 (at: (q: 0, r: -1), kind: Gem("Fire")),
                 (at: (q: 1, r: -1), kind: Spell("Lightning Bolt")),
-                (at: (q: -1, r: 0), kind: Gem("Fire")),
-                (at: (q: -1, r: 1), kind: Gem("Fire")),
-                (at: (q: 0, r: 1), kind: Gem("Fire")),
-                (at: (q: -1, r: -1), kind: Gem("Light")),
-                (at: (q: -2, r: -1), kind: Spell("Scrying Eye")),
-                (at: (q: 1, r: 1), kind: Spell("Ember")),
-                (at: (q: -1, r: 2), kind: Gem("Water")),
+                (at: (q: -1, r: -1), kind: Spell("Ember")),
+                (at: (q: -2, r: -1), kind: Gem("Fire")),
+                (at: (q: -1, r: 0), kind: Fusion("Divination")),
+                (at: (q: -2, r: 0), kind: Gem("Life")),
+                (at: (q: -1, r: 1), kind: Gem("Water")),
+                (at: (q: -2, r: 1), kind: Spell("Scrying Eye")),
+                (at: (q: 0, r: 1), kind: Spell("Renewal")),
                 (at: (q: 0, r: 2), kind: Gem("Water")),
-                (at: (q: -1, r: 3), kind: Spell("Renewal")),
+                (at: (q: -1, r: 2), kind: Gem("Water")),
             ],
-            attunement: {"Fire": 3, "Light": 3, "Water": 2},
-            channelling: {"Fire": 2, "Light": 2, "Water": 1},
+            attunement: {"Air": 3, "Fire": 3, "Life": 3, "Water": 2},
+            channelling: {"Air": 2, "Fire": 2, "Life": 2, "Water": 1},
         ),
     },
 )

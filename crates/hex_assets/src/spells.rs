@@ -996,8 +996,9 @@ mod tests {
         assert!(book.id("Fireball").is_some());
     }
 
-    /// Every effect currently advertised by shipped content must stay represented.
-    /// Decode-only `ClearTerrain` and deferred `Displace` deliberately remain absent.
+    /// Every effect intentionally exercised by the shipped roster stays represented.
+    /// Decode-only `ClearTerrain` plus deferred `Illuminate` and `Displace` deliberately
+    /// remain absent until a spell with delivered mechanics owns them.
     #[test]
     fn shipped_spells_cover_every_advertised_effect_variant() {
         let file = shipped_file();
@@ -1007,8 +1008,8 @@ mod tests {
                 seen.insert(std::mem::discriminant(effect));
             }
         }
-        // Every spell-authored effect variant. Destruction is `TerrainImpact`, not a
-        // spell-side clear instruction.
+        // Every spell-authored effect variant intentionally present in current content.
+        // Destruction is `TerrainImpact`, not a spell-side clear instruction.
         let all = [
             Effect::DisableHexes {
                 count: 1,
@@ -1018,7 +1019,6 @@ mod tests {
             Effect::RestoreHexes { count: 1 },
             Effect::ModifyIncomingDisables { amount: 1 },
             Effect::Reveal { tier: 1 },
-            Effect::Illuminate { radius: 1 },
             Effect::SetTerrain {
                 substance: "stone".to_owned(),
             },
@@ -1034,6 +1034,16 @@ mod tests {
             assert!(
                 seen.contains(&std::mem::discriminant(effect)),
                 "shipped spells never use {effect:?}"
+            );
+        }
+        for deferred in [
+            Effect::Illuminate { radius: 1 },
+            Effect::Displace { distance: 1 },
+            Effect::ClearTerrain,
+        ] {
+            assert!(
+                !seen.contains(&std::mem::discriminant(&deferred)),
+                "deferred effect leaked into shipped content: {deferred:?}"
             );
         }
     }
