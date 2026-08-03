@@ -271,7 +271,11 @@ fn a_creator_draft_with_removed_light_is_preserved_but_visibly_invalid() {
         ElementCatalog::from_file(&parse_elements().expect("elements.ron parses and validates"));
     let spells = SpellBook::from_file(&parse_spells().expect("spells.ron parses and validates"));
     let mut draft = SavedCharacter::blank(CustomCharacterId(91), "Old Light Draft");
-    draft.cells[0].kind = CreationCellKind::Gem("Light".to_owned());
+    draft
+        .cells
+        .first_mut()
+        .expect("a blank Creator character retains its origin cell")
+        .kind = CreationCellKind::Gem("Light".to_owned());
     draft.attunement.insert("Light".to_owned(), 3);
     draft.channelling.insert("Light".to_owned(), 1);
     let library = CreationLibraryFile {
@@ -284,7 +288,11 @@ fn a_creator_draft_with_removed_light_is_preserved_but_visibly_invalid() {
     let decoded: CreationLibraryFile =
         ron::from_str(&encoded).expect("legacy name-based draft remains structurally readable");
     assert_eq!(decoded.characters, vec![draft]);
-    let issues = creator_character_issues(&decoded.characters[0], &decoded, &elements, &spells);
+    let decoded_draft = decoded
+        .characters
+        .first()
+        .expect("the round trip preserves the one draft");
+    let issues = creator_character_issues(decoded_draft, &decoded, &elements, &spells);
     assert!(
         issues
             .iter()
@@ -292,7 +300,11 @@ fn a_creator_draft_with_removed_light_is_preserved_but_visibly_invalid() {
         "removed Light must be diagnosed without rewriting the draft: {issues:#?}"
     );
     assert_eq!(
-        decoded.characters[0].cells[0].kind,
+        decoded_draft
+            .cells
+            .first()
+            .expect("the round trip preserves the origin cell")
+            .kind,
         CreationCellKind::Gem("Light".to_owned()),
         "no Light to Life/Air/Divination/Illusion substitution is permitted"
     );
