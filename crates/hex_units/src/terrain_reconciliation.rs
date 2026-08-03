@@ -2,7 +2,7 @@
 //!
 //! This module chooses one landing from gameplay-visible surface facts. It does not
 //! mutate ECS state or combat authority: the integration layer applies actors in
-//! stable [`UnitId`] order, reserves each accepted destination in
+//! stable [`hex_core::UnitId`] order, reserves each accepted destination in
 //! [`UnitOccupancy`], and commits the resulting position transactionally.
 
 use std::fmt;

@@ -6,8 +6,9 @@
 //! uses an inclusive supercover: every voxel whose closed prism touches the segment is
 //! returned, including face, edge, and corner grazes. That conservative boundary rule
 //! makes obstruction stable and direction-independent. After a cast reaches its
-//! selected anchor, [`clip_effect_volume`] and [`clip_known_effect_volume`] reuse that
-//! same direct supercover to remove candidates hidden behind intermediate material.
+//! selected anchor, [`clip_effect_volume`](crate::trajectories::clip_effect_volume) and
+//! [`clip_known_effect_volume`](crate::trajectories::clip_known_effect_volume) reuse
+//! that same direct supercover to remove candidates hidden behind intermediate material.
 
 use std::fmt;
 
