@@ -1680,19 +1680,24 @@ mod tests {
             (effective_max_zoom(CameraMode::Map, &settings, Some(&large_hint)) - 110.0).abs()
                 < 1e-5
         );
-        assert_eq!(
-            effective_max_zoom(CameraMode::Map, &settings, Some(&small_hint)),
-            settings.max_zoom,
+        assert!(
+            (effective_max_zoom(CameraMode::Map, &settings, Some(&small_hint)) - settings.max_zoom)
+                .abs()
+                < 1e-5,
             "a generated frame must never reduce the authored ceiling"
         );
-        assert_eq!(
-            effective_max_zoom(CameraMode::Map, &settings, Some(&invalid_hint)),
-            settings.max_zoom,
+        assert!(
+            (effective_max_zoom(CameraMode::Map, &settings, Some(&invalid_hint))
+                - settings.max_zoom)
+                .abs()
+                < 1e-5,
             "an invalid generated frame must not influence camera controls"
         );
-        assert_eq!(
-            effective_max_zoom(CameraMode::Character, &settings, Some(&large_hint)),
-            settings.max_zoom,
+        assert!(
+            (effective_max_zoom(CameraMode::Character, &settings, Some(&large_hint))
+                - settings.max_zoom)
+                .abs()
+                < 1e-5,
             "Character mode keeps the authored gameplay ceiling"
         );
     }

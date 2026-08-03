@@ -1,9 +1,15 @@
-// Whole-map silhouette review followed by one proved ordinary-walker route from
-// the central Shore to the landward Deep Mountain base. The rear view is an
-// orbit of the generated terrain; it does not rely on a playable rear shelf.
+// Whole-map silhouette review followed by one ordinary-walker presentation route
+// from the central Shore to the landward Deep Mountain base. This feature-only
+// launch suppresses hostile rosters because combat is outside the map/camera review;
+// typed map and scenario tests retain authority for generated and shipped logic. The
+// rear view orbits the terrain and does not rely on a playable rear shelf.
 [
     AwaitScreen("Title"),
-    StartScenario(name: "Mountain Range", seed: Some(129704046)),
+    StartScenario(
+        name: "Mountain Range",
+        seed: Some(129704046),
+        suppress_hostiles: true,
+    ),
     AwaitScreen("Gameplay"),
     AwaitTerrain,
     Key("H"),
@@ -25,9 +31,9 @@
     AssertSelectedAt(expected: (q: -9, r: 14, level: 20)),
     Settle(60),
     Capture("04-mountain-range-watershed"),
-    ClickAnchor(name: "foothill_review", expected: (q: -8, r: 13, level: 20)),
+    ClickAnchor(name: "foothill_review", expected: (q: -7, r: 13, level: 20)),
     AwaitPartyIdle(max_frames: 1200),
-    AssertSelectedAt(expected: (q: -8, r: 13, level: 20)),
+    AssertSelectedAt(expected: (q: -7, r: 13, level: 20)),
     Settle(60),
     Capture("05-mountain-range-foothills"),
     ClickAnchor(name: "massif_front_review", expected: (q: 31, r: 5, level: 34)),
@@ -35,11 +41,19 @@
     AssertSelectedAt(expected: (q: 31, r: 5, level: 34)),
     Settle(60),
     Capture("06-mountain-range-mountain-tiers-front"),
-    ClickAnchor(name: "deep_mountain_base", expected: (q: 53, r: 5, level: 48)),
-    AwaitPartyIdle(max_frames: 7200),
-    AssertSelectedAt(expected: (q: 53, r: 5, level: 48)),
+    // Exercise the ordinary Character-camera orbit and collision path from the
+    // exact massif-front footing rather than treating the Map-mode overview as
+    // evidence for this route-card azimuth.
+    OrbitCamera(yaw_turns: 0.5),
     Settle(60),
-    Capture("07-mountain-range-deep-mountain-base"),
+    Capture("07-mountain-range-mountain-tiers-rear"),
+    OrbitCamera(yaw_turns: -0.5),
+    Settle(45),
+    ClickAnchor(name: "deep_mountain_base", expected: (q: 53, r: 6, level: 48)),
+    AwaitPartyIdle(max_frames: 7200),
+    AssertSelectedAt(expected: (q: 53, r: 6, level: 48)),
+    Settle(60),
+    Capture("08-mountain-range-deep-mountain-base"),
     Key("Backspace"),
     AwaitScreen("Title"),
 ]

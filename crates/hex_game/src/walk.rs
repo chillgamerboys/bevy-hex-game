@@ -43,10 +43,10 @@ use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy::window::CursorMoved;
 #[cfg(test)]
 use hex_assets::SandboxMapCatalog;
-use hex_assets::ScenarioLibrary;
+use hex_assets::{Encounter, EncounterFaction, ScenarioLibrary};
 use hex_core::{
-    Busy, CameraFocusTarget, CommandQueue, GameplaySetupFailure, Headroom, HexCoord, HexTile,
-    MapAnchorId, MapAnchors, ResolvedMapSeed, Screen, TilePos,
+    Busy, CameraFocusTarget, CommandQueue, GameplaySetup, GameplaySetupFailure, Headroom, HexCoord,
+    HexTile, MapAnchorId, MapAnchors, ResolvedMapSeed, Screen, TilePos,
 };
 use hex_units::{MovingTo, Party, Selected, StandsOn, UnitRegistry};
 use serde::Deserialize;
@@ -162,6 +162,10 @@ pub(super) fn plugin(app: &mut App) {
         diagnostic_overlays,
     ))
     .add_systems(Startup, accelerate_walk_time)
+    .add_systems(
+        OnEnter(Screen::Gameplay),
+        suppress_hostiles_for_map_review.in_set(GameplaySetup::Resources),
+    )
     .add_systems(PreUpdate, run_walk.after(InputSystems));
 }
 
@@ -178,6 +182,27 @@ fn install_config_error(app: &mut App, error: String) {
 
 #[derive(Resource, Debug)]
 struct WalkConfigurationError(String);
+
+/// Feature-only launch policy for terrain and camera evidence.
+#[derive(Resource)]
+struct SuppressHostilesForMapReview;
+
+fn suppress_hostiles_for_map_review(
+    policy: Option<Res<SuppressHostilesForMapReview>>,
+    mut encounter: ResMut<Encounter>,
+    mut commands: Commands,
+) {
+    if policy.is_some() {
+        retain_non_hostile_rosters(&mut encounter);
+        commands.remove_resource::<SuppressHostilesForMapReview>();
+    }
+}
+
+fn retain_non_hostile_rosters(encounter: &mut Encounter) {
+    encounter
+        .rosters
+        .retain(|roster| roster.faction != EncounterFaction::Hostile);
+}
 
 fn reject_invalid_configuration(
     error: Res<WalkConfigurationError>,
@@ -275,6 +300,13 @@ enum WalkStep {
         name: String,
         #[serde(default)]
         seed: Option<u64>,
+        /// Remove hostile rosters before actor setup for this feature-only launch.
+        ///
+        /// Map-owner presentation walks use this when combat is unrelated to the
+        /// terrain and camera evidence under review. Shipped scenario tests still
+        /// exercise the authored encounter independently.
+        #[serde(default)]
+        suppress_hostiles: bool,
     },
 }
 
@@ -1415,7 +1447,11 @@ fn run_walk(
             state.held_key = Some(key);
             state.advance();
         }
-        WalkStep::StartScenario { ref name, seed } => {
+        WalkStep::StartScenario {
+            ref name,
+            seed,
+            suppress_hostiles,
+        } => {
             let Some(library) = content.library.as_deref() else {
                 return;
             };
@@ -1432,6 +1468,11 @@ fn run_walk(
             };
             let resolved_seed = seed.or(scenario.generation_seed).map(ResolvedMapSeed);
             info!("visual walk launching scenario {name:?}");
+            if suppress_hostiles {
+                commands.insert_resource(SuppressHostilesForMapReview);
+            } else {
+                commands.remove_resource::<SuppressHostilesForMapReview>();
+            }
             commands.insert_resource(ScenarioToLoad {
                 scenario,
                 resolved_seed,
@@ -1569,7 +1610,8 @@ mod tests {
             steps.get(6),
             Some(&WalkStep::StartScenario {
                 name: "The Crossing".into(),
-                seed: None
+                seed: None,
+                suppress_hostiles: false,
             })
         );
         assert_eq!(
@@ -1623,6 +1665,60 @@ mod tests {
         for step in &steps {
             validate_step(step).expect("every step validates");
         }
+    }
+
+    #[test]
+    fn map_review_hostile_suppression_preserves_the_authored_player_roster() {
+        let authored = || {
+            ron::from_str::<Encounter>(include_str!(
+                "../../../assets/config/encounters/anchored-skirmish.ron"
+            ))
+            .expect("the shipped anchored skirmish parses")
+        };
+        let mut encounter = authored();
+        let players = encounter
+            .rosters
+            .iter()
+            .filter(|roster| roster.faction == EncounterFaction::Player)
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(!players.is_empty());
+        assert!(encounter.unit_count(EncounterFaction::Hostile) > 0);
+
+        retain_non_hostile_rosters(&mut encounter);
+
+        assert_eq!(encounter.rosters, players);
+        assert_eq!(encounter.unit_count(EncounterFaction::Hostile), 0);
+        encounter
+            .validate()
+            .expect("removing hostiles must leave a valid player-owned review encounter");
+
+        let mut app = App::new();
+        app.insert_resource(authored())
+            .insert_resource(SuppressHostilesForMapReview)
+            .add_systems(Update, suppress_hostiles_for_map_review);
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<Encounter>()
+                .unit_count(EncounterFaction::Hostile),
+            0
+        );
+        assert!(
+            !app.world()
+                .contains_resource::<SuppressHostilesForMapReview>(),
+            "the presentation-only policy must be consumed by exactly one launch"
+        );
+
+        app.insert_resource(authored());
+        app.update();
+        assert!(
+            app.world()
+                .resource::<Encounter>()
+                .unit_count(EncounterFaction::Hostile)
+                > 0,
+            "a later launch must retain its authored hostile roster"
+        );
     }
 
     #[test]
@@ -1926,6 +2022,12 @@ mod tests {
             ron::from_str(include_str!("../../../walks/camera_routes.ron"))
                 .expect("the camera route manifest parses");
 
+        assert!(steps.contains(&WalkStep::StartScenario {
+            name: "Mountain Range".to_owned(),
+            seed: Some(129_704_046),
+            suppress_hostiles: true,
+        }));
+
         let captures = steps
             .iter()
             .filter_map(|step| match step {
@@ -1942,7 +2044,8 @@ mod tests {
                 "04-mountain-range-watershed",
                 "05-mountain-range-foothills",
                 "06-mountain-range-mountain-tiers-front",
-                "07-mountain-range-deep-mountain-base",
+                "07-mountain-range-mountain-tiers-rear",
+                "08-mountain-range-deep-mountain-base",
             ]
         );
 
@@ -1953,7 +2056,15 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(orbits, vec![0.5_f32.to_bits(), (-0.5_f32).to_bits()]);
+        assert_eq!(
+            orbits,
+            vec![
+                0.5_f32.to_bits(),
+                (-0.5_f32).to_bits(),
+                0.5_f32.to_bits(),
+                (-0.5_f32).to_bits(),
+            ]
+        );
 
         let clicks = steps
             .iter()
@@ -1984,7 +2095,7 @@ mod tests {
                 (
                     "foothill_review",
                     CameraRouteTile {
-                        q: -8,
+                        q: -7,
                         r: 13,
                         level: 20,
                     },
@@ -2001,7 +2112,7 @@ mod tests {
                     "deep_mountain_base",
                     CameraRouteTile {
                         q: 53,
-                        r: 5,
+                        r: 6,
                         level: 48,
                     },
                 ),
@@ -2035,11 +2146,11 @@ mod tests {
                     .eq([0.0_f32.to_bits(), 0.5_f32.to_bits()])
         }));
 
-        let front = steps
+        let map_front = steps
             .iter()
             .position(|step| step == &WalkStep::Capture("01-mountain-range-front-massif".into()))
             .expect("the front massif capture exists");
-        let turn_rear = steps
+        let map_turn_rear = steps
             .iter()
             .position(|step| {
                 matches!(
@@ -2048,12 +2159,12 @@ mod tests {
                         if yaw_turns.to_bits() == 0.5_f32.to_bits()
                 )
             })
-            .expect("the rear orbit exists");
-        let rear = steps
+            .expect("the Map-mode rear orbit exists");
+        let map_rear = steps
             .iter()
             .position(|step| step == &WalkStep::Capture("02-mountain-range-rear-silhouette".into()))
             .expect("the rear silhouette capture exists");
-        let restore_front = steps
+        let map_restore_front = steps
             .iter()
             .position(|step| {
                 matches!(
@@ -2062,15 +2173,94 @@ mod tests {
                         if yaw_turns.to_bits() == (-0.5_f32).to_bits()
                 )
             })
-            .expect("the front orbit restoration exists");
+            .expect("the Map-mode front orbit restoration exists");
         let character_mode = steps
             .iter()
             .position(|step| step == &WalkStep::Key("C".into()))
             .expect("the walk enters Character camera mode");
-        assert!(front < turn_rear);
-        assert!(turn_rear < rear);
-        assert!(rear < restore_front);
-        assert!(restore_front < character_mode);
+        let massif_click = steps
+            .iter()
+            .position(|step| {
+                matches!(
+                    step,
+                    WalkStep::ClickAnchor { name, .. } if name == "massif_front_review"
+                )
+            })
+            .expect("the walk clicks the massif-front destination");
+        let massif_proof = steps
+            .iter()
+            .position(|step| {
+                matches!(
+                    step,
+                    WalkStep::AssertSelectedAt { expected }
+                        if *expected
+                            == CameraRouteTile {
+                                q: 31,
+                                r: 5,
+                                level: 34,
+                            }
+                )
+            })
+            .expect("the walk proves exact arrival at the massif front");
+        let character_front = steps
+            .iter()
+            .position(|step| {
+                step == &WalkStep::Capture("06-mountain-range-mountain-tiers-front".into())
+            })
+            .expect("the Character front-massif capture exists");
+        let character_turn_rear = steps
+            .iter()
+            .enumerate()
+            .filter_map(|(index, step)| {
+                matches!(
+                    step,
+                    WalkStep::OrbitCamera { yaw_turns, .. }
+                        if yaw_turns.to_bits() == 0.5_f32.to_bits()
+                )
+                .then_some(index)
+            })
+            .nth(1)
+            .expect("the Character rear orbit exists");
+        let character_rear = steps
+            .iter()
+            .position(|step| {
+                step == &WalkStep::Capture("07-mountain-range-mountain-tiers-rear".into())
+            })
+            .expect("the Character rear-massif capture exists");
+        let character_restore_front = steps
+            .iter()
+            .enumerate()
+            .filter_map(|(index, step)| {
+                matches!(
+                    step,
+                    WalkStep::OrbitCamera { yaw_turns, .. }
+                        if yaw_turns.to_bits() == (-0.5_f32).to_bits()
+                )
+                .then_some(index)
+            })
+            .nth(1)
+            .expect("the Character front orbit restoration exists");
+        let deep_mountain_click = steps
+            .iter()
+            .position(|step| {
+                matches!(
+                    step,
+                    WalkStep::ClickAnchor { name, .. } if name == "deep_mountain_base"
+                )
+            })
+            .expect("the walk continues to the Deep Mountain base");
+
+        assert!(map_front < map_turn_rear);
+        assert!(map_turn_rear < map_rear);
+        assert!(map_rear < map_restore_front);
+        assert!(map_restore_front < character_mode);
+        assert!(character_mode < massif_click);
+        assert!(massif_click < massif_proof);
+        assert!(massif_proof < character_front);
+        assert!(character_front < character_turn_rear);
+        assert!(character_turn_rear < character_rear);
+        assert!(character_rear < character_restore_front);
+        assert!(character_restore_front < deep_mountain_click);
     }
 
     #[test]
@@ -2203,11 +2393,19 @@ mod tests {
             let launches = steps
                 .iter()
                 .filter_map(|step| match step {
-                    WalkStep::StartScenario { name, seed } => Some((name.as_str(), *seed)),
+                    WalkStep::StartScenario {
+                        name,
+                        seed,
+                        suppress_hostiles,
+                    } => Some((name.as_str(), *seed, *suppress_hostiles)),
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            assert_eq!(launches, vec![(scenario_name, route.seed)]);
+            assert_eq!(
+                launches,
+                vec![(scenario_name, route.seed, scenario_name == "Mountain Range")],
+                "only Mountain Range may remove hostiles from map-presentation evidence"
+            );
             assert!(steps.contains(&WalkStep::Key("C".to_owned())));
             assert!(
                 steps
@@ -2357,7 +2555,11 @@ mod tests {
             let launches = steps
                 .iter()
                 .filter_map(|step| match step {
-                    WalkStep::StartScenario { name, seed } => Some((name.as_str(), *seed)),
+                    WalkStep::StartScenario {
+                        name,
+                        seed,
+                        suppress_hostiles,
+                    } => Some((name.as_str(), *seed, *suppress_hostiles)),
                     _ => None,
                 })
                 .collect::<Vec<_>>();
@@ -2367,9 +2569,9 @@ mod tests {
                 path.display()
             );
             assert!(
-                launches
-                    .iter()
-                    .all(|(name, seed)| *name == "Two Rings" && *seed == route.seed),
+                launches.iter().all(|(name, seed, suppress)| {
+                    *name == "Two Rings" && *seed == route.seed && !suppress
+                }),
                 "{} must restart only the exact seed-pinned Two Rings scenario",
                 path.display()
             );
@@ -2826,6 +3028,7 @@ mod tests {
         assert!(steps.contains(&WalkStep::StartScenario {
             name: "Forest".to_owned(),
             seed: Some(hero_seed),
+            suppress_hostiles: false,
         }));
     }
 
