@@ -276,7 +276,8 @@ terrain-impact source stays full because it also carries an application-consumed
 health projection. Trajectory/volume-only changes instead run their pure/direct
 contract modules and casting consumers; they do not select application/UI partitions
 that cannot exercise those authorities. The residual workspace corpus ordinarily runs
-on its owning changes, `dev` pushes, schedules, and combined wave/release candidates.
+on its owning changes, protected-branch pushes, schedules, and candidates whose exact
+combined diff selects it.
 Screenshots are valid for static camera/UI/rendered-map presentation; video/human
 checks are valid for motion, input response, control feel, and taste. They may judge
 how hook-established state is rendered, but must never be collected, requested, or
@@ -288,19 +289,13 @@ for that logic. The dependency ceilings, commands, budgets, and anti-patterns ar
 [gameplay](../development/gameplay-testing.md) and
 [map](../development/map-testing.md) testing contracts.
 
-PR #180 used one explicit gameplay-only wave waiver from that default combined gate.
-Its authoritative automated closures are `trajectory_contracts` and
-`spell_resolution_contracts`; `hex_ui`, `gameplay_app`, UI snapshots, automated visual
-walks, deterministic simulation, procedural map corpora, and the residual workspace
-corpus are **WAIVED**, not passed. The waiver becomes invalid if the wave gains UI
-model/widget/layout/rendering behavior beyond its exact thin Creator-deployability and
-semantic casting-preview consumers, map-implementation, G/H-schema, or otherwise
-unclassified behavior. Those two consumers are covered by content/trajectory
-contracts, the renderer-free composition target, and instrumented gameplay hooks; no
-automated UI/app test is reclassified as run. A conditionally empty green GitHub job
-shell records routing only, while omitted gates remain **WAIVED** and the exact-head
-gameplay result is established by renderer-free contracts and instrumented gameplay
-hooks. Screenshots neither satisfy nor supplement those logic gates.
+PR #180's spell-resolution work now lives under the ordinary fail-closed concern
+graph. Trajectory and volume rules use `trajectory_contracts`; rules, ECS, map seam,
+and application consumers use their owning concerns; and the renderer-free
+`hex_game/tests/spell_resolution.rs` composition target runs as the `contracts`
+postflight. The
+temporary delivery-only routing used while that wave was in review has been retired.
+Screenshots neither satisfy nor supplement those gameplay-logic gates.
 
 The **knowledge seam is live** as `hex_combat::knowledge`:
 `FactionLatticeKnowledge::view` is the one read path for a hostile lattice.

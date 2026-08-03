@@ -45,14 +45,7 @@ Ask the selector what this diff owns, then run only those concerns:
 
 ```bash
 BASE_REF=$(gh pr view --json baseRefName --jq .baseRefName 2>/dev/null || printf dev)
-HEAD_REF=$(gh pr view --json headRefName --jq .headRefName 2>/dev/null || \
-  git branch --show-current)
-PR_NUMBER=$(gh pr view --json number --jq .number 2>/dev/null || true)
 SCOPE_ARGS=(--base "origin/$BASE_REF" --head HEAD)
-if [ -n "$PR_NUMBER" ]; then
-  SCOPE_ARGS+=(--event-name pull_request --base-ref "$BASE_REF" \
-    --head-ref "$HEAD_REF" --pull-request-number "$PR_NUMBER")
-fi
 python3 tools/test_scope.py plan "${SCOPE_ARGS[@]}"
 SELECTED_TESTS=$(python3 tools/test_scope.py selected-tests \
   "${SCOPE_ARGS[@]}") || exit $?
@@ -74,9 +67,8 @@ For a Rust-affecting diff, also run `cargo fmt --all --check` and `cargo deny ch
 Run `python3 tools/test_scope.py run clippy`, `python3 tools/test_scope.py run docs`,
 and `cargo build --package hex_game --release` only when the printed plan selects
 `clippy`, `docs`, or `shipping`, respectively. Run graph/partition completeness checks
-only when the selector or configuration files that define them changed. An explicit
-waiver may replace selected concerns only through its exact checked-in path and concern
-allow-list; label every omission **WAIVED**, never passed.
+only when the selector or configuration files that define them changed. Never edit the
+selector result by hand or report an omitted concern as passed.
 
 CI runs the final shipping-package build command on Linux, Windows, and macOS. Run it
 on your local platform; the CI matrix covers the other two. Markdown-only changes

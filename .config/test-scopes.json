@@ -4,7 +4,6 @@
     "selector",
     "rules",
     "trajectory_contracts",
-    "spell_resolution_contracts",
     "contracts",
     "simulation",
     "app",
@@ -20,7 +19,6 @@
     "selector",
     "rules",
     "trajectory_contracts",
-    "spell_resolution_contracts",
     "contracts",
     "simulation",
     "app",
@@ -80,62 +78,8 @@
         "gameplay-trajectory"
       ]
     },
-    "spell_resolution_contracts": {
-      "description": "Exact non-UI spell impact, area resolution, settlement, authority, and real terrain-protocol seams.",
-      "preflight_command": [
-        "cargo",
-        "nextest",
-        "run",
-        "--package",
-        "hex_core",
-        "--package",
-        "hex_assets",
-        "--package",
-        "hex_units",
-        "--package",
-        "hex_combat_core",
-        "--package",
-        "hex_combat",
-        "--lib",
-        "--test",
-        "contracts",
-        "--cargo-profile",
-        "ci",
-        "--profile",
-        "gameplay-spell-resolution"
-      ],
-      "command": [
-        "cargo",
-        "nextest",
-        "run",
-        "--package",
-        "hex_map",
-        "--test",
-        "contracts",
-        "--cargo-profile",
-        "ci",
-        "--profile",
-        "gameplay-spell-resolution-map"
-      ],
-      "postflight_command": [
-        "cargo",
-        "nextest",
-        "run",
-        "--package",
-        "hex_game",
-        "--lib",
-        "--test",
-        "spell_resolution",
-        "--test",
-        "game_content_contracts",
-        "--cargo-profile",
-        "ci",
-        "--profile",
-        "gameplay-spell-resolution-composition"
-      ]
-    },
     "contracts": {
-      "description": "Focused gameplay ECS contracts.",
+      "description": "Focused gameplay ECS contracts plus the renderer-free spell-resolution composition seam.",
       "command": [
         "cargo",
         "nextest",
@@ -150,6 +94,16 @@
         "ci",
         "--profile",
         "gameplay-contracts"
+      ],
+      "postflight_command": [
+        "cargo",
+        "test",
+        "--package",
+        "hex_game",
+        "--test",
+        "spell_resolution",
+        "--profile",
+        "ci"
       ]
     },
     "simulation": {
@@ -348,84 +302,6 @@
       ]
     }
   },
-  "selection_checks": {
-    "spell_resolution_contracts": {
-      "preflight_command": [
-        "hex_assets content_index::tests::a_dangling_impact_element_fails_cross_file_admission",
-        "hex_assets lattices::tests::area_disable_burn_and_impact_are_admitted_to_lattices",
-        "hex_assets lattices::tests::area_restore_reveal_and_targeted_disable_remain_fail_closed",
-        "hex_assets spells::tests::impact_rejects_blank_elements_and_zero_power_before_indexing",
-        "hex_assets spells::tests::impact_round_trips_reflects_and_has_complete_fingerprint_fields",
-        "hex_assets spells::tests::shipped_fireball_announces_fire_impact_without_deferred_displacement",
-        "hex_assets spells::tests::shipped_spells_cover_every_advertised_effect_variant",
-        "hex_assets spells::tests::shipped_spells_parse",
-        "hex_combat commands::cast::tests::ai_and_authority_share_public_construction_admission",
-        "hex_combat commands::cast::tests::redundant_spell_resolution_prefers_a_live_copy",
-        "hex_combat commands::tests::a_disable_decision_is_modal_for_every_other_command",
-        "hex_combat resolution::tests::a_retained_outcome_blocks_pausable_simulation",
-        "hex_combat resolution::tests::simultaneous_elimination_is_defeat",
-        "hex_combat resolution::tests::terminal_outcome_emits_once",
-        "hex_combat spell_resolution::tests::each_late_applied_batch_invalidates_an_older_settlement_adoption",
-        "hex_combat spell_resolution::tests::foreign_and_structurally_inconsistent_outcomes_retain_evidence",
-        "hex_combat spell_resolution::tests::terrain_batches_are_monotonic_and_release_only_after_every_answer",
-        "hex_combat spell_resolution::tests::unit_work_is_fifo_and_session_reset_restarts_the_allocator",
-        "hex_combat spell_resolution::tests::valid_unavailable_rejection_completes_but_reused_and_duplicate_freeze",
-        "hex_combat::contracts damage::a_disable_decision_is_answered_through_the_command_log",
-        "hex_combat::contracts damage::a_mismatched_answer_is_refused",
-        "hex_combat::contracts effects::a_damage_cast_on_a_downed_unit_is_refused_before_payment",
-        "hex_combat::contracts effects::an_earthen_wall_publishes_two_complete_voxels_above_the_selected_surface",
-        "hex_combat::contracts effects::casting_a_burn_starts_a_countdown_rather_than_landing_damage",
-        "hex_combat::contracts effects::hidden_air_material_and_unit_truth_have_the_same_acceptance_and_payment",
-        "hex_combat::contracts effects::settled_construction_replaces_stale_movement_authority_before_the_next_command",
-        "hex_combat::contracts effects::terrain_creation_emits_exact_air_voxels_only_after_legality_and_payment",
-        "hex_combat::contracts funnel::a_busy_unit_cannot_start_a_second_move",
-        "hex_combat::contracts funnel::combat_commands_fail_closed_when_the_authority_cannot_initialize",
-        "hex_combat::contracts loop_contract::adapter_spending_the_turn_advances_both_projections_in_the_same_frame",
-        "hex_combat_core authority::tests::external_resolution_holds_turn_and_outcome_between_area_answers",
-        "hex_core terrain_impact::tests::applied_outcome_rejects_every_volume_and_batch_mismatch",
-        "hex_core terrain_impact::tests::applied_outcome_requires_the_exact_announced_order",
-        "hex_core terrain_impact::tests::damaged_projection_keeps_only_partial_exact_positions",
-        "hex_core terrain_impact::tests::dispositions_pin_material_and_health_transitions",
-        "hex_core terrain_impact::tests::health_excludes_zero_and_values_outside_the_authored_range",
-        "hex_core terrain_impact::tests::rejected_outcomes_acknowledge_structural_failures",
-        "hex_core terrain_impact::tests::rejection_compatibility_is_exact_for_every_reason",
-        "hex_core terrain_impact::tests::structural_rejections_are_exact",
-        "hex_core terrain_impact::tests::structurally_rejected_impacts_never_accept_applied_answers",
-        "hex_core terrain_impact::tests::voxel_outcome_validation_exhausts_material_and_health_semantics",
-        "hex_units terrain_occupancy::tests::authorized_occupancy_contains_only_explicit_observed_surface_voxels",
-        "hex_units terrain_occupancy::tests::downstream_actor_sees_same_frame_addition_and_removal",
-        "hex_units terrain_occupancy::tests::entity_replacement_republishes_the_complete_stack",
-        "hex_units terrain_occupancy::tests::incomplete_entity_publication_withdraws_the_projection",
-        "hex_units terrain_occupancy::tests::malformed_bounds_are_rejected_instead_of_inferred",
-        "hex_units terrain_occupancy::tests::malformed_entity_publication_withdraws_the_projection",
-        "hex_units terrain_occupancy::tests::ordinary_run_includes_exact_bottom_and_top",
-        "hex_units terrain_occupancy::tests::presentation_splits_union_without_filling_real_air",
-        "hex_units terrain_occupancy::tests::stacked_runs_preserve_the_air_gap_under_a_platform",
-        "hex_units::contracts terrain_reconciliation::body_headroom_solidity_blockers_and_reservations_all_fail_closed",
-        "hex_units::contracts terrain_reconciliation::highest_legal_unoccupied_support_below_wins_before_any_lateral_surface",
-        "hex_units::contracts terrain_reconciliation::lateral_order_is_distance_then_level_difference_then_lower_then_tile_position",
-        "hex_units::contracts terrain_reconciliation::no_surface_returns_typed_no_landing",
-        "hex_units::contracts terrain_reconciliation::refresh_phase_publishes_occupancy_then_reconciles_movement_before_actors",
-        "hex_units::contracts terrain_reconciliation::relocating_the_earlier_actor_reserves_its_landing_for_the_next_plan"
-      ],
-      "command": [
-        "hex_map::contracts terrain_damage::overkill_is_capped_and_empty_voxels_report_no_material",
-        "hex_map::contracts terrain_damage::terrain_protocol_orders_reserved_phases_before_perception"
-      ],
-      "postflight_command": [
-        "hex_game screens::creator::tests::shipped_fireball_is_available_to_creator_characters",
-        "hex_game::game_content_contracts shipped_fireball_is_admitted_and_castable_from_a_full_fire_ring",
-        "hex_game::spell_resolution applied_impact_rebuilds_occupancy_settles_the_actor_and_releases_exact_authority",
-        "hex_game::spell_resolution foreign_answer_freezes_and_an_outstanding_defender_answer_cannot_mutate",
-        "hex_game::spell_resolution reversed_multi_batch_answers_and_a_later_cast_never_reuse_settlement_adoption",
-        "hex_game::spell_resolution terrain_release_precedes_end_turn_and_the_next_actors_start_effect",
-        "hex_game::spell_resolution terrain_unavailable_rejection_releases_without_tentative_settlement"
-      ]
-    }
-  },
-  "waiver_manifests": [
-    ".config/test-waivers/spell-resolution-wave.json"
-  ],
   "rules": [
     {
       "name": "scope-routing-contract",
@@ -440,7 +316,6 @@
       "patterns": [
         ".config/test-scopes.json",
         ".config/nextest.toml",
-        ".config/test-waivers/**",
         "tools/check_deprecated_ui_terms.py",
         "tools/gameplay_scope.py",
         "tools/test_scope.py",

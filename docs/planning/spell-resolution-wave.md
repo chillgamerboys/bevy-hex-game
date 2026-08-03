@@ -3,6 +3,11 @@
 Status: **delivered by PR #180**. This document retains the approved topology,
 contracts, exact verification closure, and residual scope for that wave.
 
+The temporary concern, manifest, and waiver mechanics named below were delivery
+artifacts, not permanent test tiers. They were retired after the PR landed; current
+changes use the ordinary fail-closed concern graph documented in
+[gameplay testing](../development/gameplay-testing.md).
+
 Original planning base: `origin/dev @ 6cb749adc5168e4480d1f4efedba8097f49bf64d`
 
 Integration branch: `wave/spell-resolution`

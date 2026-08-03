@@ -143,12 +143,11 @@ map-owned behavior with its palette entry rather than embedding another RGB lite
 
 ## Knowing you have not broken anything
 
-Use the exact PR-context selector loop in
-[`CONTRIBUTING.md`](../../CONTRIBUTING.md#before-opening-a-pr). It passes the current
-PR number/base/head to both `plan` and `selected-tests`, then runs only the returned
-test concerns and the non-test gates whose plan booleans are true. Do not call
-`selected-tests` without the same context when an exact waiver is present; that
-deliberately fails closed to the complete gate.
+Use the exact PR-diff selector loop in
+[`CONTRIBUTING.md`](../../CONTRIBUTING.md#before-opening-a-pr). It resolves the current
+PR base, compares it with the exact local head, then runs only the returned test
+concerns and the non-test gates whose plan booleans are true. Unknown paths, invalid
+configuration, and empty diffs deliberately fail closed to the complete gate.
 
 The selector chooses the affected gameplay and map concerns and fails closed to the
 complete gate for an unknown or unclassified shared path. Trajectory/volume-only
@@ -156,9 +155,9 @@ changes use their dedicated pure/direct-consumer concern, so they do not select 
 execute the application/UI partition merely because both are gameplay-adjacent. The
 combined terrain-impact source stays full until its projection and protocol
 authorities are split by file. Broad owner corpora still run for their owning changes
-and ordinarily on `dev` or a final wave/release gate. A checked-in exact-path waiver
-may replace only its named concerns with a narrow authoritative closure and reports
-every omission as WAIVED. These checks run automatically on pull requests;
+and on protected-branch pushes; final wave and release candidates run the
+selector-chosen gate over their exact combined diff. These checks run automatically
+on pull requests;
 Markdown-only changes run the documentation link check instead.
 
 If the diff changes camera/UI/rendered-map presentation or a visual script, inspect
