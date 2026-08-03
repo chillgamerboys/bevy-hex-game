@@ -997,8 +997,8 @@ mod tests {
     }
 
     /// Every effect intentionally exercised by the shipped roster stays represented.
-    /// Decode-only `ClearTerrain` plus deferred `Illuminate` and `Displace` deliberately
-    /// remain absent until a spell with delivered mechanics owns them.
+    /// Decode-only `ClearTerrain` plus deferred ward, illumination, and displacement
+    /// effects deliberately remain absent until spells with delivered mechanics own them.
     #[test]
     fn shipped_spells_cover_every_advertised_effect_variant() {
         let file = shipped_file();
@@ -1017,7 +1017,6 @@ mod tests {
             },
             Effect::Burn { turns: 1 },
             Effect::RestoreHexes { count: 1 },
-            Effect::ModifyIncomingDisables { amount: 1 },
             Effect::Reveal { tier: 1 },
             Effect::SetTerrain {
                 substance: "stone".to_owned(),
@@ -1037,6 +1036,7 @@ mod tests {
             );
         }
         for deferred in [
+            Effect::ModifyIncomingDisables { amount: 1 },
             Effect::Illuminate { radius: 1 },
             Effect::Displace { distance: 1 },
             Effect::ClearTerrain,

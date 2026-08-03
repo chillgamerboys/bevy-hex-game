@@ -2697,13 +2697,13 @@ mod tests {
         let mut library = hex_assets::CreationLibraryFile::default();
         library.characters.push(character.clone());
         let shipped_book = SpellBook::from_file(&fixture.shipped.spell_file);
-        assert!(super::super::creator::character_map_issues(
+        let issues = super::super::creator::character_map_issues(
             &character,
             &library,
             &fixture.elements,
             &shipped_book,
-        )
-        .is_empty());
+        );
+        assert!(issues.is_empty(), "shipped Hedge Mage issues: {issues:?}");
 
         let refusal = creator_character_map_readiness(
             character.id,

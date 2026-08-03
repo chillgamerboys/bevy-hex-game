@@ -876,7 +876,8 @@ changes the accepted content revision.
 names with different meanings. The elemental-grid migration removes Light references
 from packaged content and authors Life references where intended; it does not rewrite
 local Creator drafts or campaign data. Campaign records bound to the old content
-revision remain preserved and incompatible. Creator drafts remain preserved with an
+revision remain preserved and incompatible, including legacy digest-bound resumes
+that predate explicit content revisions. Creator drafts remain preserved with an
 unresolved-Light diagnostic until the user edits them. Neither path silently changes
 a build.
 

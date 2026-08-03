@@ -2655,55 +2655,69 @@ mod tests {
     }
 
     #[test]
-    fn exact_pr175_dev_resume_digest_survives_comment_only_cutover_changes() {
-        let legacy_text = include_str!("../testdata/legacy_resume_origin_dev.ron");
-        let legacy: LegacyResumeFile =
-            ron::from_str(legacy_text).expect("the PR #175 resume fixture should parse");
-        assert_eq!(legacy.build_version, build_identity());
-        assert_eq!(legacy.scenario_digest, 0xC8EA_6229_346D_CF96);
-        validate_legacy_resume(&legacy).expect("the PR #175 record itself is valid");
-
+    fn pr175_digest_translation_is_retired_by_elemental_cutover() {
         let library: ScenarioLibrary =
             ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
                 .expect("the cutover scenario library should parse");
         assert_eq!(LEGACY_RESUME_DIGESTS.len(), library.scenarios.len());
         for current in &library.scenarios {
-            let (_, _, cutover_digest) = LEGACY_RESUME_DIGESTS
+            let (_, legacy_digest, cutover_digest) = LEGACY_RESUME_DIGESTS
                 .iter()
                 .find(|(name, _, _)| *name == current.name)
                 .expect("every PR #175 scenario has an explicit digest translation");
-            assert_eq!(scenario_digest(current), *cutover_digest);
+            assert!(legacy_resume_digest_is_compatible(
+                &current.name,
+                *legacy_digest,
+                *cutover_digest,
+            ));
+            let live_digest = scenario_digest(current);
+            assert_ne!(
+                live_digest, *cutover_digest,
+                "{} must reflect the elemental content cutover",
+                current.name
+            );
+            assert!(!legacy_resume_digest_is_compatible(
+                &current.name,
+                *legacy_digest,
+                live_digest,
+            ));
         }
+    }
+
+    #[test]
+    fn elemental_example_resume_migrates_as_compatible() {
+        let example_text = include_str!("../testdata/example_resume_elemental_grid.ron");
+        let example: LegacyResumeFile =
+            ron::from_str(example_text).expect("the elemental example resume should parse");
+        assert_eq!(example.build_version, build_identity());
+        assert_eq!(example.scenario_digest, 0xB95E_588C_D920_0534);
+        validate_legacy_resume(&example).expect("the elemental example record itself is valid");
+
+        let library: ScenarioLibrary =
+            ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
+                .expect("the elemental scenario library should parse");
         let current = library
             .scenarios
             .iter()
-            .find(|candidate| candidate.name == legacy.scenario_name)
+            .find(|candidate| candidate.name == example.scenario_name)
             .expect("Party Trial remains the canonical Campaign");
-        assert_eq!(scenario_digest(current), 0xE64E_D979_1736_586C);
-        assert!(legacy_resume_digest_is_compatible(
-            &current.name,
-            legacy.scenario_digest,
-            scenario_digest(current),
-        ));
+        assert_eq!(scenario_digest(current), example.scenario_digest);
 
-        let root = scratch_root("pr175-dev-legacy");
+        let root = scratch_root("elemental-grid-example");
         let paths = StoragePaths::under(&root);
-        write_atomic(&paths.resume, legacy_text).expect("legacy fixture should write");
+        write_atomic(&paths.resume, example_text).expect("example fixture should write");
         let store = migrate_legacy(&paths);
         let migrated = store
             .available(CampaignSlotId::One)
-            .expect("the PR #175 record should migrate to slot one");
-        assert_eq!(migrated.scenario_digest, legacy.scenario_digest);
+            .expect("the elemental example should migrate to slot one");
+        assert_eq!(migrated.scenario_digest, example.scenario_digest);
         assert_eq!(migrated.active_play_millis, 0);
         assert_eq!(migrated.content_revision, None);
         assert_eq!(
             campaign_content_refusal(&migrated, &library, 0xC0DE_CAFE),
             None
         );
-        let mut non_legacy = migrated.clone();
-        non_legacy.content_revision = Some(0xC0DE_CAFE);
-        assert!(campaign_content_refusal(&non_legacy, &library, 0xC0DE_CAFE).is_some());
-        assert_eq!(read(&paths.resume).expect("legacy remains"), legacy_text);
+        assert_eq!(read(&paths.resume).expect("example remains"), example_text);
         std::fs::remove_dir_all(root).expect("scratch directory should clean up");
     }
 

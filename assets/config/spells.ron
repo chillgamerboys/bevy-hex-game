@@ -120,7 +120,7 @@
             effects: [Reveal(tier: 1)],
         ),
 
-        // Restorative evocation: re-enables disabled hexes and blunts the next hit.
+        // Restorative evocation: re-enables disabled hexes.
         "Renewal": (
             requirements: [
                 (element: "Water", mana: 1),
@@ -130,10 +130,7 @@
             mana: Fixed,
             co_castable: false,
             targeting: (range: 3, shape: Single, trajectory: Direct),
-            effects: [
-                RestoreHexes(count: 2),
-                ModifyIncomingDisables(amount: 1),
-            ],
+            effects: [RestoreHexes(count: 2)],
         ),
     },
 )
