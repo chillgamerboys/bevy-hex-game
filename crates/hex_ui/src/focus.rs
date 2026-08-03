@@ -535,10 +535,20 @@ mod tests {
     #[derive(Component)]
     struct RouteRefreshReplacement;
 
+    #[derive(Component)]
+    struct ModalRefreshReplacement;
+
     #[derive(Resource)]
     struct RouteRefreshFixture {
         root: Entity,
         requested: bool,
+    }
+
+    #[derive(Resource)]
+    struct ModalRefreshFixture {
+        root: Entity,
+        requested: bool,
+        include_first_cell: bool,
     }
 
     #[derive(Resource)]
@@ -578,6 +588,34 @@ mod tests {
                 Button,
                 TabIndex(0),
                 RouteRefreshReplacement,
+            ));
+        });
+    }
+
+    fn rebuild_modal_route(
+        mut fixture: ResMut<ModalRefreshFixture>,
+        mut focus: ResMut<InputFocus>,
+        mut requests: ResMut<FocusRefreshRequests>,
+        parents: Query<&ChildOf>,
+        names: Query<&Name>,
+        mut commands: Commands,
+    ) {
+        if !fixture.requested {
+            return;
+        }
+        fixture.requested = false;
+        let root = fixture.root;
+        begin_route_refresh(root, &mut focus, &parents, &names, &mut requests);
+        commands.entity(root).despawn_related::<Children>();
+        commands.entity(root).with_children(|scope| {
+            if fixture.include_first_cell {
+                scope.spawn((Name::new("Required Cell (0, 0)"), Button, TabIndex(0)));
+            }
+            scope.spawn((
+                Name::new("Required Cell (1, 0)"),
+                Button,
+                TabIndex(0),
+                ModalRefreshReplacement,
             ));
         });
     }
@@ -707,5 +745,100 @@ mod tests {
         let observation = app.world().resource::<ScrollObservation>();
         assert!(observation.all_targets_were_live);
         assert_eq!(observation.targets.last(), Some(&replacement));
+    }
+
+    #[test]
+    fn modal_refresh_preserves_or_advances_named_focus_inside_the_blocking_scope() {
+        let mut app = App::new();
+        app.init_resource::<InputFocus>()
+            .init_resource::<FocusRefreshRequests>()
+            .init_resource::<ModalFocusMemory>()
+            .add_systems(Update, rebuild_modal_route)
+            .add_systems(
+                PostUpdate,
+                (
+                    prepare_buttons,
+                    sync_focusability,
+                    restore_focus_after_refresh,
+                    retain_topmost_modal_focus,
+                )
+                    .chain(),
+            );
+        let ordinary = app
+            .world_mut()
+            .spawn((Name::new("Ordinary HUD Action"), Button, TabIndex(0)))
+            .id();
+        let modal = app
+            .world_mut()
+            .spawn((
+                Name::new("Required Decision Focus Scope"),
+                TabGroup {
+                    order: 20,
+                    modal: true,
+                },
+                ModalFocusScope,
+                Node::default(),
+                Visibility::Inherited,
+            ))
+            .id();
+        let first = app
+            .world_mut()
+            .spawn((Name::new("Required Cell (0, 0)"), Button, TabIndex(0)))
+            .id();
+        let second = app
+            .world_mut()
+            .spawn((
+                Name::new("Required Cell (1, 0)"),
+                Button,
+                TabIndex(0),
+                ModalRefreshReplacement,
+            ))
+            .id();
+        app.world_mut()
+            .entity_mut(modal)
+            .add_children(&[first, second]);
+        app.insert_resource(ModalRefreshFixture {
+            root: modal,
+            requested: false,
+            include_first_cell: true,
+        });
+
+        app.update();
+        assert_eq!(app.world().resource::<InputFocus>().get(), Some(first));
+
+        app.world_mut()
+            .resource_mut::<ModalRefreshFixture>()
+            .include_first_cell = false;
+        app.world_mut()
+            .resource_mut::<ModalRefreshFixture>()
+            .requested = true;
+        app.update();
+
+        assert!(app.world().get_entity(first).is_err());
+        assert!(app.world().get_entity(second).is_err());
+        let advanced = app
+            .world_mut()
+            .query_filtered::<Entity, With<ModalRefreshReplacement>>()
+            .single(app.world())
+            .unwrap();
+        assert_eq!(app.world().resource::<InputFocus>().get(), Some(advanced));
+        assert_ne!(app.world().resource::<InputFocus>().get(), Some(ordinary));
+
+        app.world_mut()
+            .resource_mut::<ModalRefreshFixture>()
+            .requested = true;
+        app.update();
+
+        let replacement = app
+            .world_mut()
+            .query_filtered::<Entity, With<ModalRefreshReplacement>>()
+            .single(app.world())
+            .unwrap();
+        assert_ne!(replacement, advanced);
+        assert_eq!(
+            app.world().resource::<InputFocus>().get(),
+            Some(replacement)
+        );
+        assert_ne!(app.world().resource::<InputFocus>().get(), Some(ordinary));
     }
 }

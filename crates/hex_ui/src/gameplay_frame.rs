@@ -11,6 +11,8 @@ use crate::{
     RequiredActionSurface, ResolvedUiMetrics, UiHudSetup, UiRegionRole,
 };
 
+const COMPACT_TASK_BG: Color = Color::srgb(0.02, 0.03, 0.045);
+
 pub(super) fn plugin(app: &mut App) {
     app.add_systems(
         OnEnter(Screen::Gameplay),
@@ -125,6 +127,7 @@ fn spawn_region(
         Name::new(name),
         role,
         node,
+        BackgroundColor(Color::NONE),
         Pickable::default(),
         ScrollArea,
         ScrollPosition::default(),
@@ -136,7 +139,12 @@ fn apply_responsive_layout(
     chrome: Res<GameplayChromeView>,
     review: Option<Res<crate::review::UiReviewPresentation>>,
     added_regions: Query<(), Added<UiRegionRole>>,
-    mut regions: Query<(&UiRegionRole, &mut Node, &mut Pickable)>,
+    mut regions: Query<(
+        &UiRegionRole,
+        &mut Node,
+        &mut BackgroundColor,
+        &mut Pickable,
+    )>,
 ) {
     let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
     if !metrics.is_changed() && !chrome.is_changed() && !review_changed && added_regions.is_empty()
@@ -146,7 +154,7 @@ fn apply_responsive_layout(
     let chrome = review.as_ref().map_or(*chrome, |review| {
         review.effective_chrome(*chrome, metrics.viewport)
     });
-    for (role, mut node, mut pickable) in &mut regions {
+    for (role, mut node, mut background, mut pickable) in &mut regions {
         constrain_region_to_canvas(*metrics, *role, &mut node);
         let responsive_display = if metrics.viewport == crate::UiViewportClass::Compact {
             Display::Flex
@@ -172,8 +180,18 @@ fn apply_responsive_layout(
         } else {
             Display::None
         };
+        *background = if shown && metrics.viewport == crate::UiViewportClass::Compact {
+            BackgroundColor(COMPACT_TASK_BG)
+        } else {
+            BackgroundColor(Color::NONE)
+        };
         let participates = node.display != Display::None;
-        *pickable = if participates {
+        // Desktop regions are transparent layout/scroll wrappers around their
+        // visible descendants. Ignoring the wrapper lets the world remain
+        // pickable through unused rail area; pointer events from an actual child
+        // panel still bubble to this ScrollArea. A Compact task owns the complete
+        // opaque surface and therefore blocks the world everywhere.
+        *pickable = if participates && metrics.viewport == crate::UiViewportClass::Compact {
             Pickable::default()
         } else {
             Pickable::IGNORE
@@ -306,8 +324,12 @@ mod tests {
             UiRegionRole::Actions,
             UiRegionRole::Events,
         ] {
-            app.world_mut()
-                .spawn((role, Node::default(), Pickable::default()));
+            app.world_mut().spawn((
+                role,
+                Node::default(),
+                BackgroundColor(Color::NONE),
+                Pickable::default(),
+            ));
         }
 
         app.world_mut().insert_resource(GameplayChromeView {
@@ -325,10 +347,111 @@ mod tests {
             .logical_size = Vec2::new(960.0, 540.0);
         app.update();
 
-        let mut regions = app.world_mut().query::<(&Node, &Pickable)>();
-        for (node, pickable) in regions.iter(app.world()) {
+        let mut regions = app
+            .world_mut()
+            .query::<(&Node, &BackgroundColor, &Pickable)>();
+        for (node, background, pickable) in regions.iter(app.world()) {
             assert_eq!(node.display, Display::None);
+            assert_eq!(*background, BackgroundColor(Color::NONE));
             assert_eq!(*pickable, Pickable::IGNORE);
+        }
+    }
+
+    #[test]
+    fn compact_task_owns_one_opaque_full_screen_region() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(crate::resolve_ui_metrics(
+                Vec2::new(1280.0, 720.0),
+                crate::UiScaleMode::Auto,
+            ))
+            .insert_resource(GameplayChromeView {
+                party_shown: true,
+                initiative_shown: false,
+                activity_shown: false,
+                action_bar_shown: false,
+                main_view: MainViewDestination::Closed,
+                terrain_health_shown: true,
+                encounter_complete: false,
+            })
+            .add_systems(Update, apply_responsive_layout);
+        for role in [
+            UiRegionRole::Party,
+            UiRegionRole::Turn,
+            UiRegionRole::Inspector,
+            UiRegionRole::Actions,
+            UiRegionRole::Events,
+        ] {
+            app.world_mut().spawn((
+                role,
+                Node::default(),
+                BackgroundColor(Color::NONE),
+                Pickable::default(),
+            ));
+        }
+
+        app.update();
+
+        let mut regions = app
+            .world_mut()
+            .query::<(&UiRegionRole, &Node, &BackgroundColor, &Pickable)>();
+        for (role, node, background, pickable) in regions.iter(app.world()) {
+            if *role == UiRegionRole::Party {
+                assert_eq!(node.display, Display::Flex);
+                assert_eq!(node.top, Val::Px(8.0));
+                assert_eq!(node.right, Val::Px(8.0));
+                assert_eq!(node.bottom, Val::Px(8.0));
+                assert_eq!(node.left, Val::Px(8.0));
+                assert_eq!(*background, BackgroundColor(COMPACT_TASK_BG));
+                assert_eq!(*pickable, Pickable::default());
+            } else {
+                assert_eq!(node.display, Display::None, "role={role:?}");
+                assert_eq!(*background, BackgroundColor(Color::NONE));
+                assert_eq!(*pickable, Pickable::IGNORE);
+            }
+        }
+    }
+
+    #[test]
+    fn desktop_region_wrappers_leave_transparent_space_map_pickable() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<ResolvedUiMetrics>()
+            .insert_resource(GameplayChromeView {
+                party_shown: true,
+                initiative_shown: false,
+                activity_shown: true,
+                action_bar_shown: true,
+                main_view: MainViewDestination::Closed,
+                terrain_health_shown: true,
+                encounter_complete: false,
+            })
+            .add_systems(Update, apply_responsive_layout);
+        for role in [
+            UiRegionRole::Party,
+            UiRegionRole::Turn,
+            UiRegionRole::Inspector,
+            UiRegionRole::Actions,
+            UiRegionRole::Events,
+        ] {
+            app.world_mut().spawn((
+                role,
+                Node::default(),
+                BackgroundColor(Color::NONE),
+                Pickable::default(),
+            ));
+        }
+
+        app.update();
+
+        let mut regions = app.world_mut().query::<(&UiRegionRole, &Node, &Pickable)>();
+        for (role, node, pickable) in regions.iter(app.world()) {
+            let shown = matches!(
+                role,
+                UiRegionRole::Party | UiRegionRole::Actions | UiRegionRole::Events
+            );
+            assert_eq!(node.display != Display::None, shown, "role={role:?}");
+            assert_eq!(*pickable, Pickable::IGNORE, "role={role:?}");
         }
     }
 }

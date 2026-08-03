@@ -82,6 +82,7 @@ impl GameplayChromeOverride {
         }
     }
 
+    #[cfg(any(feature = "visual-review", feature = "test-support"))]
     const fn none() -> Self {
         Self {
             party_shown: None,

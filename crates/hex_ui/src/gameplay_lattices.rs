@@ -1,6 +1,10 @@
 //! Player and disclosed-target lattice panels from immutable projections.
 
-use bevy::prelude::*;
+use bevy::{
+    ecs::system::SystemParam,
+    input_focus::{tab_navigation::TabGroup, InputFocus},
+    prelude::*,
+};
 use hex_core::Screen;
 use hex_gameplay_model::MainViewDestination;
 
@@ -13,6 +17,9 @@ use crate::{
 
 #[derive(Component)]
 struct OwnBody;
+
+#[derive(Component)]
+struct OwnPanel;
 
 #[derive(Component)]
 struct OwnHeading;
@@ -52,7 +59,9 @@ pub(super) fn plugin(app: &mut App) {
     .add_systems(
         Update,
         (
-            rebuild.in_set(UiSystems::Render),
+            (sync_required_decision_focus_scope, rebuild)
+                .chain()
+                .in_set(UiSystems::Render),
             emit_intents.in_set(UiSystems::EmitIntents),
         )
             .run_if(in_state(Screen::Gameplay)),
@@ -81,6 +90,7 @@ fn spawn_panels(
             stack
                 .spawn((
                     Name::new("Own Lattice Panel"),
+                    OwnPanel,
                     RequiredActionSurface,
                     HudElement,
                     panel(),
@@ -191,6 +201,42 @@ fn compact_decision_node(display: Display) -> Node {
     }
 }
 
+fn sync_required_decision_focus_scope(
+    mut commands: Commands,
+    chrome: Res<crate::GameplayChromeView>,
+    review: Option<Res<crate::review::UiReviewPresentation>>,
+    metrics: Res<crate::ResolvedUiMetrics>,
+    panels: Query<(Entity, Has<crate::focus::ModalFocusScope>), With<OwnPanel>>,
+) {
+    let chrome = review.as_ref().map_or(*chrome, |review| {
+        review.effective_chrome(*chrome, metrics.viewport)
+    });
+    for (panel, owns_modal_focus) in &panels {
+        if chrome.decision_required() && !owns_modal_focus {
+            commands.entity(panel).insert((
+                TabGroup {
+                    order: 20,
+                    modal: true,
+                },
+                crate::focus::ModalFocusScope,
+            ));
+        } else if !chrome.decision_required() && owns_modal_focus {
+            commands
+                .entity(panel)
+                .remove::<TabGroup>()
+                .remove::<crate::focus::ModalFocusScope>();
+        }
+    }
+}
+
+#[derive(SystemParam)]
+struct DecisionFocus<'w, 's> {
+    focus: ResMut<'w, InputFocus>,
+    parents: Query<'w, 's, &'static ChildOf>,
+    names: Query<'w, 's, &'static Name>,
+    refreshes: ResMut<'w, crate::focus::FocusRefreshRequests>,
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "the renderer updates two independently scoped panels from one atomic view"
@@ -221,6 +267,7 @@ fn rebuild(
     assets: Res<UiAssets>,
     metrics: Res<crate::ResolvedUiMetrics>,
     chrome: Res<crate::GameplayChromeView>,
+    mut decision_focus: DecisionFocus,
 ) {
     let view_changed = view.is_changed();
     let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
@@ -333,6 +380,13 @@ fn rebuild(
         }
     }
     if let Ok(body) = own_bodies.single() {
+        crate::focus::begin_route_refresh(
+            body,
+            &mut decision_focus.focus,
+            &decision_focus.parents,
+            &decision_focus.names,
+            &mut decision_focus.refreshes,
+        );
         commands.entity(body).despawn_related::<Children>();
         commands.entity(body).with_children(|body| {
             let Some(own) = view.own.as_ref() else {
@@ -498,7 +552,25 @@ fn emit_intents(
 
 #[cfg(test)]
 mod tests {
+    use bevy::input_focus::tab_navigation::TabIndex;
+    use bevy::MinimalPlugins;
+
     use super::*;
+    use crate::CellInteraction;
+
+    fn actionable_cell(coord: hex_core::LatticeCoord) -> crate::LatticeCellView {
+        crate::LatticeCellView {
+            coord,
+            label: "Fire".to_owned(),
+            detail: "2 mana".to_owned(),
+            color: Color::srgb(0.3, 0.2, 0.1),
+            known_mana: Some(2),
+            known_locked: Some(false),
+            disabled: false,
+            selected: false,
+            interaction: CellInteraction::Actionable,
+        }
+    }
 
     #[test]
     fn required_main_view_never_creates_a_duplicate_compact_lattice_choice() {
@@ -533,5 +605,91 @@ mod tests {
             crate::resolve_ui_metrics(Vec2::new(1280.0, 720.0), crate::UiScaleMode::Auto);
         assert_eq!(ordinary_compact.viewport, crate::UiViewportClass::Compact);
         assert!(!compact_decision_visible(ordinary_compact, &chrome, &view));
+    }
+
+    #[test]
+    fn required_decision_owns_an_accessibly_named_modal_focus_scope() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<InputFocus>()
+            .init_resource::<crate::focus::FocusRefreshRequests>()
+            .init_resource::<TargetPulseView>()
+            .insert_resource(crate::ResolvedUiMetrics::default())
+            .insert_resource(UiAssets {
+                display: Handle::default(),
+                body: Handle::default(),
+                hex_cell: Handle::default(),
+            })
+            .insert_resource(crate::GameplayChromeView {
+                main_view: MainViewDestination::RequiredDecision,
+                ..default()
+            })
+            .insert_resource(GameplayLatticesView {
+                own: Some(crate::OwnLatticeView {
+                    heading: "required choice".to_owned(),
+                    identity: "Hedge Mage".to_owned(),
+                    cells: vec![
+                        actionable_cell(hex_core::LatticeCoord::ORIGIN),
+                        actionable_cell(hex_core::LatticeCoord::new(1, 0)),
+                    ],
+                    decision: Some(crate::DecisionChoiceView {
+                        chosen: 0,
+                        owed: 2,
+                        restoring: false,
+                        confirm_shortcut: "Enter".to_owned(),
+                    }),
+                }),
+                target: None,
+            })
+            .add_systems(Startup, spawn_panels)
+            .add_systems(
+                Update,
+                (sync_required_decision_focus_scope, rebuild).chain(),
+            );
+        app.world_mut().spawn(UiRegionRole::Inspector);
+        app.world_mut().spawn(UiRegionRole::Actions);
+
+        app.update();
+
+        let panel = app
+            .world_mut()
+            .query_filtered::<Entity, With<OwnPanel>>()
+            .single(app.world())
+            .unwrap();
+        assert!(app
+            .world()
+            .get::<crate::focus::ModalFocusScope>(panel)
+            .is_some());
+        assert!(app
+            .world()
+            .get::<TabGroup>(panel)
+            .is_some_and(|group| group.modal));
+        let cells = {
+            let world = app.world_mut();
+            let mut query =
+                world.query_filtered::<(&Name, &AccessibleLabel, &TabIndex), With<OwnCell>>();
+            query
+                .iter(world)
+                .map(|(name, label, index)| (name.as_str().to_owned(), label.0.clone(), index.0))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(cells.len(), 2);
+        assert!(cells.iter().all(|(name, label, index)| {
+            name.starts_with("Own Cell (")
+                && label.contains("lattice cell")
+                && !label.is_empty()
+                && *index == 0
+        }));
+
+        app.world_mut()
+            .resource_mut::<crate::GameplayChromeView>()
+            .main_view = MainViewDestination::Closed;
+        app.update();
+
+        assert!(app
+            .world()
+            .get::<crate::focus::ModalFocusScope>(panel)
+            .is_none());
+        assert!(app.world().get::<TabGroup>(panel).is_none());
     }
 }
