@@ -7,7 +7,7 @@ use hex_assets::{ElementCatalog, SpellBook};
 use hex_core::LatticeCoord;
 use hex_lattice::{CellKind, LatticeState, LatticeStats};
 
-use hex_ui::{element_color, FUSION_COLOR};
+use hex_ui::element_color;
 pub(crate) use hex_ui::{
     paint_lattice_interactions as paint_interactions, short_name, CellInteraction, LatticeCellView,
 };
@@ -35,7 +35,7 @@ pub(crate) fn known_cell_view(
     } else {
         match kind {
             CellKind::Gem { element } => element_color(Some(element), elements),
-            CellKind::Fusion { .. } => FUSION_COLOR,
+            CellKind::Fusion { output } => element_color(Some(output), elements),
             _ => SPELL_COLOR,
         }
     };
@@ -97,7 +97,7 @@ pub(crate) fn live_cell_view(
     } else {
         match kind {
             CellKind::Gem { element } => element_color(Some(element), elements),
-            CellKind::Fusion { .. } => FUSION_COLOR,
+            CellKind::Fusion { output } => element_color(Some(output), elements),
             _ => SPELL_COLOR,
         }
     };
@@ -135,5 +135,39 @@ pub(crate) fn live_cell_view(
         disabled,
         selected,
         interaction,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use hex_assets::ElementFile;
+
+    use super::*;
+
+    fn shipped_elements() -> ElementCatalog {
+        let file: ElementFile = ron::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/config/elements.ron"
+        )))
+        .expect("elements.ron parses");
+        ElementCatalog::from_file(&file)
+    }
+
+    #[test]
+    fn known_lattice_fusions_use_their_authored_school_tint() {
+        let elements = shipped_elements();
+        let lightning = elements.id("Lightning").expect("Lightning ships");
+        let view = known_cell_view(
+            LatticeCoord::ORIGIN,
+            CellKind::Fusion { output: lightning },
+            None,
+            None,
+            false,
+            &elements,
+            &SpellBook::default(),
+        );
+
+        assert_eq!(view.color, element_color(Some(lightning), &elements));
+        assert_ne!(view.color, hex_ui::FUSION_COLOR);
     }
 }

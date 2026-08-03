@@ -3,6 +3,8 @@ use bevy::prelude::*;
 use hex_assets::ElementCatalog;
 use hex_core::ElementId;
 
+use crate::element_visual::authored_element_tint;
+
 // Keep controls visually inside the dark arcane surface instead of rendering
 // large translucent grey slabs. Opaque resting paint also makes their contrast
 // independent of the world or menu color behind them.
@@ -23,9 +25,9 @@ pub const DANGER: Color = Color::srgb(0.94, 0.36, 0.30);
 pub const EDGE: Color = Color::srgba(1.0, 1.0, 1.0, 0.20);
 /// Opaque-enough backing for text over any world surface.
 pub const PANEL_BG: Color = Color::srgba(0.02, 0.03, 0.045, 0.96);
-/// Basic gem tint.
+/// Generic gem tint and missing-element fallback.
 pub const GEM_COLOR: Color = Color::srgba(0.16, 0.45, 0.52, 0.92);
-/// Fusion tint.
+/// Generic fusion tint and custom-fusion fallback.
 pub const FUSION_COLOR: Color = Color::srgba(0.42, 0.30, 0.62, 0.92);
 
 /// Display title size at 100% scale.
@@ -131,10 +133,17 @@ pub(crate) fn brand_logo(assets: &UiAssets, width: f32) -> impl Bundle {
     )
 }
 
-/// Resolves an element's presentation tint from authored wheel order.
+/// Resolves an element's presentation tint.
+///
+/// Canonical elements use the authored visual catalog shared with their icons. A
+/// custom basic element falls back to a deterministic wheel hue, a custom fusion to
+/// [`FUSION_COLOR`], and an absent element to [`GEM_COLOR`].
 #[must_use]
 pub fn element_color(element: Option<ElementId>, elements: &ElementCatalog) -> Color {
     let Some(id) = element else { return GEM_COLOR };
+    if let Some(tint) = elements.name(id).and_then(authored_element_tint) {
+        return tint;
+    }
     let wheel = elements.wheel();
     let Some(step) = wheel.iter().position(|candidate| *candidate == id) else {
         return FUSION_COLOR;

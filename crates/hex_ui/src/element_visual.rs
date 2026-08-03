@@ -233,6 +233,18 @@ const ELEMENT_VISUAL_SPECS: [ElementVisualSpec; 18] = [
     },
 ];
 
+/// Returns the authored tint for one canonical element name.
+///
+/// This lookup deliberately shares [`ELEMENT_VISUAL_SPECS`] with the loaded icon
+/// catalog. Pure presentation adapters can therefore resolve the same color without
+/// acquiring an `AssetServer` merely to construct image handles.
+pub(crate) fn authored_element_tint(name: &str) -> Option<Color> {
+    ELEMENT_VISUAL_SPECS
+        .iter()
+        .find(|spec| spec.name == name)
+        .map(|spec| spec.tint)
+}
+
 fn resolve_live_element(name: &str, elements: &ElementCatalog) -> Option<ResolvedElementVisual> {
     let id = elements.id(name)?;
     if elements.is_basic(id) {
@@ -437,5 +449,18 @@ mod tests {
         let lightning = resolve_live_element("Lightning", &reordered)
             .expect("Lightning visual must resolve against live content");
         assert_eq!(lightning.formula, "Fire + Air");
+    }
+
+    #[test]
+    fn shared_element_color_resolves_every_authored_visual_tint() {
+        let catalog = ElementCatalog::from_file(&production_elements());
+        for spec in ELEMENT_VISUAL_SPECS {
+            assert_eq!(
+                crate::theme::element_color(catalog.id(spec.name), &catalog),
+                spec.tint,
+                "{} must use its authored visual tint on every presentation surface",
+                spec.name
+            );
+        }
     }
 }

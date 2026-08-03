@@ -172,6 +172,13 @@ rounding at fractional Auto scales.
 
 ## Typography, spacing, and contrast
 
+Canonical element colors come from the same `ElementVisualCatalog` that owns the
+Creator grid glyph treatments. Spell requirements, cast rows and previews, Creator
+cells, and combat/demo lattice cells resolve that authored tint wherever the element's
+stable identity is present. Unknown custom basics retain deterministic wheel hues,
+and unknown custom fusions retain the generic fusion tint, so extensible content never
+disappears.
+
 At 100% scale the semantic type tokens are:
 
 | Token | Size | Use |

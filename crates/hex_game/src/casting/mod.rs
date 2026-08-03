@@ -946,7 +946,7 @@ fn forget_aim(mut aiming: ResMut<Aiming>) {
 #[cfg(test)]
 mod tests {
     use hex_assets::{ArtPalette, ElementFile, SpellFile, SubstanceFile, SubstanceTable};
-    use hex_core::Level;
+    use hex_core::{ElementId, Level};
 
     use super::*;
 
@@ -1046,24 +1046,25 @@ mod tests {
         assert_eq!(step_target(&[], at(1, 0, 4)), None);
     }
 
-    /// Every element on the wheel gets its own colour, and a fusion gets the demo's.
+    /// Every canonical element gets its own authored colour, including fusions.
     #[test]
-    fn the_wheel_gives_every_element_a_distinct_colour() {
+    fn canonical_elements_have_distinct_authored_colours() {
         let (elements, _) = shipped_content();
         let mut seen: Vec<Color> = Vec::new();
-        for id in elements.wheel() {
-            let name = elements.name(*id).expect("a wheel element has a name");
+        for raw_id in 0..elements.len() {
+            let id = ElementId(u16::try_from(raw_id).expect("element catalog fits in an id"));
+            let name = elements.name(id).expect("a catalog element has a name");
             let color = element_color(elements.id(name), &elements);
             assert!(
                 !seen.contains(&color),
-                "{name} shares a colour with an element already on the wheel"
+                "{name} shares a colour with another canonical element"
             );
             seen.push(color);
         }
-        assert_eq!(
+        assert_ne!(
             element_color(elements.id("Lightning"), &elements),
             FUSION_COLOR,
-            "a fusion output is not on the wheel and should read as a fusion"
+            "canonical fusions use their authored school tint"
         );
         assert_eq!(
             element_color(elements.id("not an element"), &elements),
@@ -1072,11 +1073,22 @@ mod tests {
         );
     }
 
-    /// Opposed elements sit half a turn apart on the hue circle, because they sit half
-    /// a turn apart on the wheel. The property the rotation was chosen for.
+    /// A custom catalog remains legible even though it has no authored icon catalog.
     #[test]
-    fn opposed_elements_get_opposed_hues() {
-        let (elements, _) = shipped_content();
+    fn custom_elements_keep_deterministic_fallback_colours() {
+        let custom: ElementFile = ron::from_str(
+            r#"(
+                wheel: ["Aether", "Flame", "Stone", "Void", "Frost", "Bloom"],
+                fusions: {
+                    "Tempest": [
+                        (element: "Aether", mana: 1),
+                        (element: "Flame", mana: 1),
+                    ],
+                },
+            )"#,
+        )
+        .expect("custom elements parse");
+        let elements = ElementCatalog::from_file(&custom);
         let wheel = elements.wheel();
         let half = wheel.len() / 2;
         for (step, id) in wheel.iter().enumerate() {
@@ -1093,6 +1105,11 @@ mod tests {
                 "{name} and {against} are {apart} degrees apart, not 180"
             );
         }
+        assert_eq!(
+            element_color(elements.id("Tempest"), &elements),
+            FUSION_COLOR,
+            "a custom fusion retains the generic fusion fallback"
+        );
     }
 
     /// Every shipped spell becomes a row that says what it costs and how far it reaches.

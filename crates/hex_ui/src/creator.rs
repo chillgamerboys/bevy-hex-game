@@ -1340,18 +1340,23 @@ fn spawn_element_grid(
         .with_children(|grid| {
             for (visual, live, kind) in &resolved {
                 let selected = active_tool == Some(kind);
-                let cell_size = Vec2::new(52.0, 60.0) * scale;
+                // Bevy picks UI nodes by their rectangular bounds. Keep those
+                // bounds to one non-overlapping 44px target even though the
+                // pointy-top glyph itself is narrower. The previous 52×60
+                // rectangles overlapped at the chart's 48×45 centre spacing,
+                // which made the chosen tool depend on sibling paint order.
+                let control_size = Vec2::splat(44.0) * scale;
+                let hex_size = Vec2::new(38.0, 44.0) * scale;
                 let axial = visual.coord.as_vec2();
                 let center = Vec2::new(
                     chart_size.x * 0.5 + (axial.x + axial.y * 0.5) * 48.0 * scale,
                     chart_size.y * 0.5 + axial.y * 45.0 * scale,
                 );
-                let top_left = center - cell_size * 0.5;
+                let top_left = center - control_size * 0.5;
                 let accessible = element_tool_accessible_label(visual.name, live, selected);
                 grid.spawn((
                     Name::new(format!("Element Tool {}", visual.name)),
                     AccessibleLabel::new(accessible),
-                    crate::lattice::TessellatedControl,
                     Button,
                     TabIndex(0),
                     crate::UiVisibilityRequirement::Scrollable,
@@ -1364,14 +1369,14 @@ fn spawn_element_grid(
                         position_type: PositionType::Absolute,
                         left: Val::Px(top_left.x),
                         top: Val::Px(top_left.y),
-                        width: Val::Px(cell_size.x),
-                        height: Val::Px(cell_size.y),
+                        width: Val::Px(control_size.x),
+                        height: Val::Px(control_size.y),
                         min_width: Val::Px(44.0),
                         min_height: Val::Px(44.0),
                         align_items: AlignItems::Center,
                         justify_content: JustifyContent::Center,
                         border: UiRect::all(Val::Px(if selected { 3.0 } else { 1.0 })),
-                        border_radius: BorderRadius::all(Val::Px(8.0)),
+                        border_radius: BorderRadius::all(Val::Percent(50.0)),
                         ..default()
                     },
                 ))
@@ -1384,8 +1389,10 @@ fn spawn_element_grid(
                         },
                         Node {
                             position_type: PositionType::Absolute,
-                            width: Val::Percent(100.0),
-                            height: Val::Percent(100.0),
+                            left: Val::Px((control_size.x - hex_size.x) * 0.5),
+                            top: Val::Px((control_size.y - hex_size.y) * 0.5),
+                            width: Val::Px(hex_size.x),
+                            height: Val::Px(hex_size.y),
                             ..default()
                         },
                         Pickable::IGNORE,
@@ -1394,8 +1401,8 @@ fn spawn_element_grid(
                         Name::new(format!("Element Icon {}", visual.name)),
                         ImageNode::new(visual.icon.clone()),
                         Node {
-                            width: Val::Px(30.0 * scale),
-                            height: Val::Px(30.0 * scale),
+                            width: Val::Px(26.0 * scale),
+                            height: Val::Px(26.0 * scale),
                             ..default()
                         },
                         Pickable::IGNORE,
