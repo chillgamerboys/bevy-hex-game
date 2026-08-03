@@ -44,6 +44,9 @@ mod hills;
 )]
 mod layout;
 mod local_frame;
+mod macro_alpine;
+mod macro_landform;
+mod macro_world;
 pub(crate) use layout::HexSide;
 #[expect(
     dead_code,
@@ -58,6 +61,7 @@ mod patch;
 mod prairie;
 mod ring19;
 mod ring7;
+mod river_terrain;
 mod routing;
 mod seam;
 mod seed;
@@ -206,6 +210,7 @@ pub(crate) fn ensure_recipe_available(
         ))),
         V3LayoutSettings::Ring7(_) => Ok(()),
         V3LayoutSettings::Ring19(_) => Ok(()),
+        V3LayoutSettings::Macro(_) => Ok(()),
     }
 }
 
@@ -470,6 +475,42 @@ pub(crate) fn build(
                 |metrics| ProceduralRecipeMetrics::Ring19(ring19_recipe_metrics(metrics)),
             )
         }
+        V3LayoutSettings::Macro(_) => {
+            let art_catalog = art_catalog.ok_or_else(|| {
+                V3GenerationError::RecipeContract(
+                    "Macro worlds require the accepted runtime art catalog".to_owned(),
+                )
+            })?;
+            finish_build(
+                macro_world::generate(grid_radius, level_height, settings, seed, art_catalog)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                macro_report_metrics,
+                |metrics| {
+                    metrics.mountain_range.map_or_else(
+                        || ProceduralRecipeMetrics::Macro(metrics.report),
+                        ProceduralRecipeMetrics::MountainRange,
+                    )
+                },
+            )
+        }
+    }
+}
+
+fn macro_report_metrics(metrics: &macro_world::MacroWorldMetrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: metrics.report.relief,
+        barrier_cells: metrics.report.liquid_cells,
+        critical_route_steps: metrics.report.critical_route_steps,
+        reachable_surfaces: metrics.report.reachable_surfaces,
+        reachable_elevation_levels: metrics.report.reachable_elevation_levels,
+        environment_signature_percent: 0,
+        ..Default::default()
     }
 }
 
@@ -937,6 +978,10 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
         V3RecipeSettings::Volcano(_) => "Volcano",
         V3RecipeSettings::DeepForest(_) => "DeepForest",
         V3RecipeSettings::Prairie(_) => "Prairie",
+        V3RecipeSettings::ShallowSea(_) => "ShallowSea",
+        V3RecipeSettings::Beach(_) => "Beach",
+        V3RecipeSettings::Shore(_) => "Shore",
+        V3RecipeSettings::DeepMountain(_) => "DeepMountain",
     }
 }
 

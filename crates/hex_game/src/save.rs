@@ -234,6 +234,10 @@ const SHIPPED_CAMPAIGN_INPUTS: &[(&str, &str)] = &[
         include_str!("../../../assets/config/worlds/procedural-mountains.ron"),
     ),
     (
+        "config/worlds/procedural-mountain-range.ron",
+        include_str!("../../../assets/config/worlds/procedural-mountain-range.ron"),
+    ),
+    (
         "config/worlds/procedural-prairie.ron",
         include_str!("../../../assets/config/worlds/procedural-prairie.ron"),
     ),

@@ -94,7 +94,7 @@ The optional review overrides are:
 | Variable | Effect |
 |---|---|
 | `HEX_REVIEW_SEED` | Replaces the configured seed of a seeded scenario |
-| `HEX_REVIEW_VIEW` | Uses `default`, `rotated`, or `top-down` map azimuth |
+| `HEX_REVIEW_VIEW` | Uses `default`, `rotated`, `rear` (180° orbit), or `top-down` map view |
 | `HEX_REVIEW_CAMERA` | Uses the `map` or close `character` camera |
 | `HEX_REVIEW_TIME` | Sets a cyclic-lighting hour from `0.0` up to, but not including, `24.0` |
 | `HEX_REVIEW_LIQUID_PHASE` | Freezes liquid animation at a finite phase in seconds, wrapped over its visual cycle; captures default to `0.0` |
@@ -319,9 +319,9 @@ terrain: Procedural((
 It publishes a two-wide descending entrance, a rooted network of six to twelve
 chambers, at least three clear levels in critical corridors, at least four in
 chambers, and at least three solid roof levels. The selected scenario uses twelve
-chambers, two floor bands, loop corridors, varied chamber heights, and the most
-developed rocky surface. Six-through-eight-room settings retain their deterministic
-compatibility geometry.
+chambers, three `+0/+2/+4` floor terraces, loop corridors, varied chamber heights,
+and the most developed rocky surface. Six-through-eight-room settings retain their
+deterministic compatibility geometry.
 Exact floor, entrance, and cutaway-roof memberships remain keyed by `TilePos`, so the
 underground floor cannot be confused with the surface above it. The hostile remains
 inside the deepest chamber on the floor with the greatest minimum horizontal

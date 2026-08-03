@@ -36,6 +36,7 @@ still belong to the crate they change. `docs` is whoever picks it up.
 | Perception presentation | faction fog, remembered rendering, picking gates, and composition with explicit review-roof visibility and whole-tree opacity | perception |
 | Scenario camera policy | decide when Map mode is appropriate and limit its availability by scenario now that the human-approved Character view is live | world / presentation |
 | Remaining movement and combat perception adapters | unknown-route restriction; detection, engagement, ordinary-attack targeting, and one-round last-known-position behavior in isolated owner-reviewed PRs; AI and casting anchors are already live | units/combat |
+| Mountain Range: biome adjacency, macro-biomes, coastal recipes, and three-ring composition | the selectable radius-77 Macro implementation, adjacency rules, coastal/alpine recipes, joined watershed, graded massif, and generated camera framing are present on the integration candidate; complete the 128-seed and ignored stress corpora, release benchmark, deterministic capture pack, automated visual walk, and exact-final-SHA human orbit/walk before landing | map |
 | V1/V2 legacy removal | remove the frozen V1/V2 parsers, generators, assets, and runtime tests now that every active shipped procedural scenario resolves through V3 | map |
 | Named rule regions | revisit a content-addressable exact-surface overlay when the first region-sensitive spell lands; do not combine biome identity, lighting, and anti-magic into generic tile tags | map/combat |
 | Pre-spawn terrain edit replay | drain a `PendingTerrainEdits` resource after map build and before first spawn, so save-restore and authored pre-battle terrain cost zero respawns | map |
@@ -81,7 +82,9 @@ harnesses only mirror the expanded shared setup chain. Both implementation lanes
 branched from updated `dev` after that contract merged.
 
 **Map lane:** every active shipped procedural scenario now uses V3; `Ring7` and
-`Ring19` are live, and Two Rings is selectable without replacing Seven Regions.
+`Ring19` are live, and Two Rings is selectable without replacing Seven Regions. The
+Mountain Range wave candidate adds the authored `Macro` layout and its selectable
+coast-to-massif scenario without changing those legacy layouts or fingerprints.
 `RunBottom` publication is live; frozen V1/V2 removal remains independent cleanup.
 The map owner keeps semantic plans private and publishes exact shared consequences.
 Recipe PRs do not edit gameplay-owned crates. Two Rings received the wave's final
@@ -296,8 +299,8 @@ replay (D1) remain prerequisites for durable saves, but do not block this scaffo
 The casting contract those waves implement — the announce model, the legality ladder,
 volumes, and persistent effects — is [casting.md](../systems/casting.md).
 
-The complete V3 map contract, fixed Ring7 and Ring19 rosters, fingerprint policy,
-recipe stages, and removal gate live in
+The complete V3 map contract, fixed Ring7 and Ring19 rosters, authored Mountain Range
+Macro composition, fingerprint policy, recipe stages, and removal gate live in
 [world-generation-v3.md](../systems/world-generation-v3.md). Publication asks and
 fallbacks in both directions are [boundary.md](boundary.md); what crosses the boundary
 today, and its status, is [contracts.md](../contracts.md).
@@ -374,6 +377,16 @@ six first-ring regions, and twelve second-ring regions inside one radius-55
 footprint. Shared edges, routes, elevation datums, and hydrology are resolved before
 patch interiors, so the system never tries to disguise incompatible maps with a
 material blend.
+
+The in-flight Mountain Range wave adds an authored `Macro` path: 37 atomic cells
+cover one radius-77 footprint, while 30 named logical biome instances own connected
+cell unions and receive one recipe invocation and region id each. Macro-only
+allowed-by-default adjacency rules reject the initial coastal, Deep Mountain, and
+Frozen–Volcanic mismatches. Standing-water joins keep the shared coast and sea still,
+while directed tributaries remain explicit. Mountain Range uses that foundation for
+coastal recipes, graded Alpine tiers, one five-cell massif, and a declared central
+Shore-to-massif-base land route. Procedural placement, deep water, swimming, boats,
+and playable terrain behind or atop the massif remain outside this milestone.
 
 Waterfall establishes the liquid layer, Forest establishes surface features and
 exact blockers, and Fort establishes structures and circulation. Deep Forest and

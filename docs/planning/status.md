@@ -23,16 +23,37 @@ high-pass/low-bypass route pair, snow caps, and a peak-fed river and fall. Caves
 places a varied rocky surface above a two-wide entrance and a dense,
 height-validated underground chamber network with exact opaque cutaway roofs.
 
-V3 now has ten complete recipe variants: Hills, Sky Islands, Mountains, Caves,
-Waterfall, Forest, Fort, Volcano, Deep Forest, and Prairie. Ring7 places its fixed
-seven-recipe roster in one connected radius-33 world. Ring19 powers the selectable
-**Two Rings** map: a radius-55, 9,241-column world with 19 fixed regions, 42
-reciprocal seams, 30 outer boundary sides, and a physical ordinary-walker graph that
-keeps all regions reachable after any one seam is removed. Its three mountain-fed
-water branches meet in central Hills before flowing through downstream Hills and an
-outlet Waterfall; the western Volcano owns a separate lava outlet. Single and Ring7
-retain their 4-bit patch namespace, while Ring19 uses 5 patch bits so slots 16–18
-remain collision-free.
+V3 now has fourteen recipe variants: Hills, Sky Islands, Mountains, Caves, Waterfall,
+Forest, Fort, Volcano, Deep Forest, Prairie, Shallow Sea, Beach, Shore, and Deep
+Mountain. Ring7 places its fixed seven-recipe roster in one connected radius-33
+world. Ring19 powers the selectable **Two Rings** map: a radius-55, 9,241-column
+world with 19 fixed regions, 42 reciprocal seams, 30 outer boundary sides, and a
+physical ordinary-walker graph that keeps all regions reachable after any one seam is
+removed. Its three mountain-fed water branches meet in central Hills before flowing
+through downstream Hills and an outlet Waterfall; the western Volcano owns a separate
+lava outlet. Single and Ring7 retain their 4-bit patch namespace, while Ring19 uses 5
+patch bits so slots 16–18 remain collision-free.
+
+The new authored Macro path powers the selectable **Mountain Range** map. It covers a
+radius-77, 18,019-column world with 37 atomic radius-12-scale cells collapsed into 30
+logical biome regions; the four-cell Shallow Sea and five-cell Deep Mountain are each
+generated once over a union mask and publish one region id. Macro uses a six-bit
+instance namespace without changing legacy fingerprints. Its allowed-by-default
+adjacency check rejects direct Frozen–Volcanic contact, non-coastal Shallow Sea
+neighbors, Deep Mountain neighbors other than Mountains, and Beach or Shore without
+both sea and inland context. These rules gate Macro only.
+
+Mountain Range progresses through Shallow Sea, Beach/Shore, alternating Forest and
+Prairie, Hills and two Waterfalls, two graded Alpine mountain tiers, and one broad
+Deep Mountain massif. Sand backs the exact sea bed and coastal surfaces, Prairie
+instances place nonblocking authored grass, and the two Waterfall instances retain
+rapid, fall, and current stages. Standing seams join the submerged coast to the
+shared water body's still sea footprint, while the two directed tributaries descend
+and merge without an uphill edge or cycle. The required ordinary route runs from
+central Shore through Prairie, central Hills, both mountain tiers, and the landward
+Deep Mountain base; summit and through-massif access are deliberately optional. The
+party and hostile anchors live on central Shore and central Hills, with additional
+coast-to-massif review anchors.
 
 Waterfall authors deterministic directed liquid topology from calm inlet through
 rapids, a contiguous thirteen-level fall, plunge basin, outlet, redundant land
@@ -58,7 +79,12 @@ the required network while leaving optional branches dark.
 
 Two Rings is mechanically selectable and covered by deterministic generation,
 spawning, regeneration, and re-entry checks. Alberto approved its visual, motion,
-and play feel at the exact reviewed head before the development wave landed.
+and play feel at the exact reviewed head before the development wave landed. Mountain
+Range is mechanically selectable and its generator validates the authored geometry,
+coast, watershed, elevations, massif, anchors, and critical route. Its 128-seed and
+ignored stress corpora, release benchmark, complete capture pack, automated visual
+walk, and final-SHA human orbit/walk have not yet been recorded; the current
+implementation is not a completed release gate until that evidence exists.
 
 Authoritative spatial perception now runs headlessly every gameplay frame.
 `hex_world` publishes a renderer-independent Bright or Dim exterior tier;
@@ -375,7 +401,10 @@ idle-churn, and release-performance gates are live. Seed-exact multi-azimuth wal
 exercise ordinary pointer movement to a proved destination on every standalone
 selectable map and every Two Rings region. Alberto approved the corrected camera's
 motion and readability in a native Two Rings release walk at runtime head `2397d8e`
-on 2026-08-01. Map mode remains available without a scenario restriction.
+on 2026-08-01. Map mode remains available without a scenario restriction. A
+generated `MapViewHint` may now extend Map mode's zoom ceiling with ten percent
+headroom, so a large initial frame such as Mountain Range does not snap inward on the
+first scroll; Character mode retains its authored ceiling.
 
 ## What is provisional
 

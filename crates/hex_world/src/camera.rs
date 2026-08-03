@@ -27,6 +27,8 @@ const HEX_FACE_DISTANCE: f32 = HEX_CIRCUMRADIUS * 0.866_025_4;
 /// Lets ordinary upward free-look keep the character near the lower third of the
 /// view before unusual-angle assistance starts lowering and retracting the boom.
 const CHARACTER_UPWARD_COMPOSITION_ALLOWANCE: f32 = std::f32::consts::PI / 12.0;
+/// Extra room beyond a generated map's initial frame for deliberate zooming out.
+const MAP_VIEW_ZOOM_HEADROOM: f32 = 1.1;
 /// Marks the sky-dome entity so `follow_camera` can pin it to the camera.
 #[derive(Component, Reflect)]
 #[reflect(Component)]
@@ -465,6 +467,32 @@ fn center_inspection_camera(
         transform.translation += translation;
         camera.focus = wanted_focus;
     }
+}
+
+/// Returns the zoom ceiling for the active camera perspective.
+///
+/// Generated maps may need an initial frame farther away than the designer-authored
+/// ceiling. Map mode preserves that frame and allows a little additional zoom-out,
+/// while Character mode remains bounded by its authored gameplay controls.
+fn effective_max_zoom(
+    mode: CameraMode,
+    settings: &CameraSettings,
+    hint: Option<&MapViewHint>,
+) -> f32 {
+    if mode == CameraMode::Character {
+        return settings.max_zoom;
+    }
+
+    let hinted_max = hint
+        .copied()
+        .filter(|hint| hint.is_valid())
+        .and_then(|hint| {
+            let eye = Vec3::from(hint.eye);
+            let focus = Vec3::from(hint.focus);
+            let maximum = eye.distance(focus) * MAP_VIEW_ZOOM_HEADROOM;
+            maximum.is_finite().then_some(maximum)
+        });
+    hinted_max.map_or(settings.max_zoom, |maximum| settings.max_zoom.max(maximum))
 }
 
 /// Snaps between the current free-map pose and a close orbit around the selected unit.
@@ -1152,6 +1180,7 @@ fn orbit_camera(
     input_mouse: Res<ButtonInput<MouseButton>>,
     settings: Res<CameraSettings>,
     mode: Res<CameraMode>,
+    hint: Option<Res<MapViewHint>>,
     mut last_cursor: Local<Option<Vec2>>,
     mut query: Query<(&mut PanOrbitCamera, &mut Transform)>,
 ) {
@@ -1202,7 +1231,10 @@ fn orbit_camera(
             pan_orbit.radius -= scroll * pan_orbit.radius * settings.zoom_sensitivity;
             // dont allow zoom to reach zero or you get stuck
             pan_orbit.radius = f32::max(pan_orbit.radius, settings.min_zoom);
-            pan_orbit.radius = f32::min(pan_orbit.radius, settings.max_zoom);
+            pan_orbit.radius = f32::min(
+                pan_orbit.radius,
+                effective_max_zoom(*mode, &settings, hint.as_deref()),
+            );
         }
 
         if any {
@@ -1635,6 +1667,89 @@ mod tests {
             (-1.0, 1.0),
             "Character mode must expose the full vertical look arc"
         );
+    }
+
+    #[test]
+    fn generated_hint_extends_only_the_map_zoom_ceiling() {
+        let settings = camera_settings();
+        let large_hint = MapViewHint::new((0.0, 0.0, 100.0), (0.0, 0.0, 0.0));
+        let small_hint = MapViewHint::new((0.0, 0.0, 10.0), (0.0, 0.0, 0.0));
+        let invalid_hint = MapViewHint::new((0.0, 0.0, 0.0), (0.0, 0.0, 0.0));
+
+        assert!(
+            (effective_max_zoom(CameraMode::Map, &settings, Some(&large_hint)) - 110.0).abs()
+                < 1e-5
+        );
+        assert_eq!(
+            effective_max_zoom(CameraMode::Map, &settings, Some(&small_hint)),
+            settings.max_zoom,
+            "a generated frame must never reduce the authored ceiling"
+        );
+        assert_eq!(
+            effective_max_zoom(CameraMode::Map, &settings, Some(&invalid_hint)),
+            settings.max_zoom,
+            "an invalid generated frame must not influence camera controls"
+        );
+        assert_eq!(
+            effective_max_zoom(CameraMode::Character, &settings, Some(&large_hint)),
+            settings.max_zoom,
+            "Character mode keeps the authored gameplay ceiling"
+        );
+    }
+
+    #[test]
+    fn first_scroll_from_generated_map_frame_does_not_snap_inward() {
+        let mut builder = HeadlessAppBuilder::new()
+            .with_minimal_plugins()
+            .with_input();
+        builder
+            .app_mut()
+            .add_message::<CursorMoved>()
+            .add_message::<MouseWheel>()
+            .insert_resource(camera_settings())
+            .insert_resource(CameraMode::Map)
+            .insert_resource(MapViewHint::new((0.0, 0.0, 100.0), (0.0, 0.0, 0.0)))
+            .add_systems(Update, orbit_camera);
+        let window = builder
+            .app_mut()
+            .world_mut()
+            .spawn((Window::default(), PrimaryWindow))
+            .id();
+        let camera = builder
+            .app_mut()
+            .world_mut()
+            .spawn((
+                PanOrbitCamera {
+                    focus: Vec3::ZERO,
+                    radius: 100.0,
+                },
+                Transform::from_xyz(0.0, 0.0, 100.0),
+            ))
+            .id();
+        let mut app = builder.build();
+
+        app.world_mut().write_message(MouseWheel {
+            unit: bevy::input::mouse::MouseScrollUnit::Line,
+            x: 0.0,
+            y: 1.0,
+            window,
+            phase: bevy::input::touch::TouchPhase::Moved,
+        });
+        app.update();
+
+        let entity = app.world().entity(camera);
+        let orbit = entity
+            .get::<PanOrbitCamera>()
+            .expect("the orbit target should retain its controls");
+        let transform = entity
+            .get::<Transform>()
+            .expect("the orbit target should retain its transform");
+        assert!((orbit.radius - 80.0).abs() < 1e-5);
+        assert!(
+            orbit.radius > camera_settings().max_zoom,
+            "the first zoom-in step must be relative to the generated frame"
+        );
+        assert!(transform.translation.distance(Vec3::Z * 80.0) < 1e-5);
     }
 
     #[test]

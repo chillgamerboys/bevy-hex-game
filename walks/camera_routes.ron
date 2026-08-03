@@ -145,5 +145,16 @@
                 (label: "mountains C stream", destination: Anchor(name: "mountains_c_stream_fall_overlook", expected: (q: 19, r: -51, level: 20)), azimuth_turns: [0.0, -0.16666667]),
             ],
         ),
+        (
+            scenario: "Mountain Range",
+            seed: Some(129704046),
+            points: [
+                (label: "coast", destination: Anchor(name: "coast_review", expected: (q: -52, r: 25, level: 12)), azimuth_turns: [0.0]),
+                (label: "inland watershed", destination: Anchor(name: "inland_review", expected: (q: -9, r: 14, level: 20)), azimuth_turns: [0.0]),
+                (label: "foothills", destination: Anchor(name: "foothill_review", expected: (q: -8, r: 13, level: 20)), azimuth_turns: [0.0]),
+                (label: "massif front and rear silhouette", destination: Anchor(name: "massif_front_review", expected: (q: 31, r: 5, level: 34)), azimuth_turns: [0.0, 0.5]),
+                (label: "Deep Mountain base", destination: Anchor(name: "deep_mountain_base", expected: (q: 53, r: 5, level: 48)), azimuth_turns: [0.0]),
+            ],
+        ),
     ],
 )
