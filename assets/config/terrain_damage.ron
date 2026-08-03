@@ -1,9 +1,9 @@
 // Boolean elemental admission for voxel damage.
 //
 // A listed (element, substance) pair permits damage. Every missing pair resists.
-// The initial balance deliberately admits every current element against every
-// toughness-bearing material; later balance changes can remove individual pairs
-// without changing the resolver contract.
+// The initial balance deliberately admits every canonical element against every
+// toughness-bearing material: 18 elements x 9 substances = 162 unique pairs.
+// Later balance may remove pairs without changing the resolver contract.
 (
     damaging_pairs: [
         (element: "Air", substance: "basalt"),
@@ -15,6 +15,46 @@
         (element: "Air", substance: "snow"),
         (element: "Air", substance: "stone"),
         (element: "Air", substance: "worked_stone"),
+
+        (element: "Artifice", substance: "basalt"),
+        (element: "Artifice", substance: "dirt"),
+        (element: "Artifice", substance: "grass"),
+        (element: "Artifice", substance: "gravel"),
+        (element: "Artifice", substance: "ice"),
+        (element: "Artifice", substance: "metal"),
+        (element: "Artifice", substance: "snow"),
+        (element: "Artifice", substance: "stone"),
+        (element: "Artifice", substance: "worked_stone"),
+
+        (element: "Crystal", substance: "basalt"),
+        (element: "Crystal", substance: "dirt"),
+        (element: "Crystal", substance: "grass"),
+        (element: "Crystal", substance: "gravel"),
+        (element: "Crystal", substance: "ice"),
+        (element: "Crystal", substance: "metal"),
+        (element: "Crystal", substance: "snow"),
+        (element: "Crystal", substance: "stone"),
+        (element: "Crystal", substance: "worked_stone"),
+
+        (element: "Destruction", substance: "basalt"),
+        (element: "Destruction", substance: "dirt"),
+        (element: "Destruction", substance: "grass"),
+        (element: "Destruction", substance: "gravel"),
+        (element: "Destruction", substance: "ice"),
+        (element: "Destruction", substance: "metal"),
+        (element: "Destruction", substance: "snow"),
+        (element: "Destruction", substance: "stone"),
+        (element: "Destruction", substance: "worked_stone"),
+
+        (element: "Divination", substance: "basalt"),
+        (element: "Divination", substance: "dirt"),
+        (element: "Divination", substance: "grass"),
+        (element: "Divination", substance: "gravel"),
+        (element: "Divination", substance: "ice"),
+        (element: "Divination", substance: "metal"),
+        (element: "Divination", substance: "snow"),
+        (element: "Divination", substance: "stone"),
+        (element: "Divination", substance: "worked_stone"),
 
         (element: "Earth", substance: "basalt"),
         (element: "Earth", substance: "dirt"),
@@ -36,15 +76,25 @@
         (element: "Fire", substance: "stone"),
         (element: "Fire", substance: "worked_stone"),
 
-        (element: "Light", substance: "basalt"),
-        (element: "Light", substance: "dirt"),
-        (element: "Light", substance: "grass"),
-        (element: "Light", substance: "gravel"),
-        (element: "Light", substance: "ice"),
-        (element: "Light", substance: "metal"),
-        (element: "Light", substance: "snow"),
-        (element: "Light", substance: "stone"),
-        (element: "Light", substance: "worked_stone"),
+        (element: "Illusion", substance: "basalt"),
+        (element: "Illusion", substance: "dirt"),
+        (element: "Illusion", substance: "grass"),
+        (element: "Illusion", substance: "gravel"),
+        (element: "Illusion", substance: "ice"),
+        (element: "Illusion", substance: "metal"),
+        (element: "Illusion", substance: "snow"),
+        (element: "Illusion", substance: "stone"),
+        (element: "Illusion", substance: "worked_stone"),
+
+        (element: "Life", substance: "basalt"),
+        (element: "Life", substance: "dirt"),
+        (element: "Life", substance: "grass"),
+        (element: "Life", substance: "gravel"),
+        (element: "Life", substance: "ice"),
+        (element: "Life", substance: "metal"),
+        (element: "Life", substance: "snow"),
+        (element: "Life", substance: "stone"),
+        (element: "Life", substance: "worked_stone"),
 
         (element: "Lightning", substance: "basalt"),
         (element: "Lightning", substance: "dirt"),
@@ -66,6 +116,56 @@
         (element: "Metal", substance: "stone"),
         (element: "Metal", substance: "worked_stone"),
 
+        (element: "Necromancy", substance: "basalt"),
+        (element: "Necromancy", substance: "dirt"),
+        (element: "Necromancy", substance: "grass"),
+        (element: "Necromancy", substance: "gravel"),
+        (element: "Necromancy", substance: "ice"),
+        (element: "Necromancy", substance: "metal"),
+        (element: "Necromancy", substance: "snow"),
+        (element: "Necromancy", substance: "stone"),
+        (element: "Necromancy", substance: "worked_stone"),
+
+        (element: "Space", substance: "basalt"),
+        (element: "Space", substance: "dirt"),
+        (element: "Space", substance: "grass"),
+        (element: "Space", substance: "gravel"),
+        (element: "Space", substance: "ice"),
+        (element: "Space", substance: "metal"),
+        (element: "Space", substance: "snow"),
+        (element: "Space", substance: "stone"),
+        (element: "Space", substance: "worked_stone"),
+
+        (element: "Storm", substance: "basalt"),
+        (element: "Storm", substance: "dirt"),
+        (element: "Storm", substance: "grass"),
+        (element: "Storm", substance: "gravel"),
+        (element: "Storm", substance: "ice"),
+        (element: "Storm", substance: "metal"),
+        (element: "Storm", substance: "snow"),
+        (element: "Storm", substance: "stone"),
+        (element: "Storm", substance: "worked_stone"),
+
+        (element: "Transmutation", substance: "basalt"),
+        (element: "Transmutation", substance: "dirt"),
+        (element: "Transmutation", substance: "grass"),
+        (element: "Transmutation", substance: "gravel"),
+        (element: "Transmutation", substance: "ice"),
+        (element: "Transmutation", substance: "metal"),
+        (element: "Transmutation", substance: "snow"),
+        (element: "Transmutation", substance: "stone"),
+        (element: "Transmutation", substance: "worked_stone"),
+
+        (element: "Volcano", substance: "basalt"),
+        (element: "Volcano", substance: "dirt"),
+        (element: "Volcano", substance: "grass"),
+        (element: "Volcano", substance: "gravel"),
+        (element: "Volcano", substance: "ice"),
+        (element: "Volcano", substance: "metal"),
+        (element: "Volcano", substance: "snow"),
+        (element: "Volcano", substance: "stone"),
+        (element: "Volcano", substance: "worked_stone"),
+
         (element: "Water", substance: "basalt"),
         (element: "Water", substance: "dirt"),
         (element: "Water", substance: "grass"),
@@ -75,5 +175,16 @@
         (element: "Water", substance: "snow"),
         (element: "Water", substance: "stone"),
         (element: "Water", substance: "worked_stone"),
+
+        (element: "Wild", substance: "basalt"),
+        (element: "Wild", substance: "dirt"),
+        (element: "Wild", substance: "grass"),
+        (element: "Wild", substance: "gravel"),
+        (element: "Wild", substance: "ice"),
+        (element: "Wild", substance: "metal"),
+        (element: "Wild", substance: "snow"),
+        (element: "Wild", substance: "stone"),
+        (element: "Wild", substance: "worked_stone"),
+
     ],
 )
