@@ -19,7 +19,7 @@ scenario binaries continue to run in the residual workspace suite.
 | ECS contracts | Focused commands, effects, movement, turns, occupancy and Channel seams | `hex_test_support`, then the owning gameplay crate dependencies | Components, resources, messages and exact positions | `python3 tools/test_scope.py run contracts` | 60 s per test |
 | Spell resolution | Impact/content admission, radial clipping consumers, area queue, paid batch correlation, authority hold, terrain phase order, unsupported settlement/adoption, and typed freeze | Pure/owning crates plus one renderer-free `hex_game` composition target over real map/units/perception/combat plugins; never `hex_ui`, `gameplay_app`, renderer, viewport, or UI snapshot support | Exact values, components, resources, messages, positions, correlation evidence, and bounded transaction state | `python3 tools/test_scope.py run spell_resolution_contracts` | 60 s per test |
 | Deterministic simulation | Multi-turn composition, tempo profiles, 3v3/6v6, canonical summaries and bounded no-progress | `hex_combat_core` over `hex_core` + `hex_lattice`; never Bevy App, `hex_test_support`, renderer, viewport, wall clock, asset server, ECS entity, perception implementation, or map generator | Full `CombatRunSnapshot` equality across two runs plus named metric assertions | `python3 tools/test_scope.py run simulation` | 60 s |
-| Game/UI behavior | Pure Main Menu, Campaign, Sandbox, Creator, and guided deployment transitions plus Bevy wiring, persistence, re-entry, exact terrain placement, HUD suppression, and outcome lifecycle | `hex_gameplay_model` for route/draft/deployment/launch truth; `hex_ui` for rendering; `hex_game` with default-off `test-support` only for Bevy lifecycle | Pure state equality, `GameplayStateSnapshot` for authority facts and explicit presentation-adapter observations, and `UiTreeSnapshot` for presentation structure | `python3 tools/test_scope.py run app` | 60 s |
+| Game/UI behavior | Pure Main Menu, Campaign, Sandbox, Creator, guided deployment, HUD visibility/Main View, and input-binding transitions plus Bevy wiring, persistence, inspection, exact terrain placement, suppression, and outcome lifecycle | `hex_gameplay_model` for route/draft/deployment/launch/HUD truth; `hex_core` for stable input actions; `hex_ui` for rendering; `hex_game` with default-off `test-support` only for Bevy lifecycle | Pure state equality, `GameplayStateSnapshot` for authority facts and explicit presentation-adapter observations, and `UiTreeSnapshot` for presentation structure | `python3 tools/test_scope.py run app` | 60 s |
 | Visual smoke | Layout, legibility, overlap, responsive composition and presentation regressions | Release-shaped game with `visual-walk`; no `dev` or `test-support` | Reviewed frames plus the human motion/feel walk | Run the one scoped gameplay walk through `/visual-walk` | At most 10 reviewed gameplay frames |
 | Soak/performance | Long stalemates, stress corpora, bounded retention and performance | The scheduled stress workflow | Typed completion/timeout, fingerprints, timing and memory bounds | `.github/workflows/stress.yaml` | Scheduled/manual only |
 
@@ -48,8 +48,8 @@ default-feature `hex_game` library-test target in package isolation. That prefli
 prevents workspace feature unification from hiding a test-only field or import that
 the ordinary shipping-shaped crate cannot compile. A focused postflight runs only the
 development-time UI tests with `hex_ui`'s `dev-tools,test-support` features. This keeps
-optional inspector/clock coverage without allowing those surfaces to alter or mask
-the primary matrix.
+optional development controls and clock coverage without allowing those surfaces to
+alter or mask the primary matrix.
 `hex_game/tests/game_content_contracts.rs` is the separately selectable shared
 shipped-content seam, and the `hex_game` library target retains inline
 scenario/loading contracts that require private composition details. Those shared
@@ -307,7 +307,8 @@ Owning tests add their system under test on top of the support app.
 `hex_game` exposes `GameplayStateSnapshot` only behind `test-support`. It observes
 canonical screen/phase/mode, session provenance, turn and budgets, pending decisions,
 command state, exact positions, lattice summaries, `CombatSummary`, terminal outcome,
-and frozen launch/retry identity. Its explicitly
+frozen launch/retry identity, effective HUD presentation, typed Main View, and the
+disclosure-authorized inspection subject. Its explicitly
 named `presented_actions` field mirrors `GameplayHudView` only for application-adapter
 parity; it is not a legal-action oracle and cannot replace owning command/contract
 tests. `hex_ui` separately exposes `UiTreeSnapshot` for visible regions,
@@ -326,15 +327,17 @@ observation snapshots. Stable IDs such as `ability-lab`, `raider-mirror`, and
 `tempo-matrix` are resolved through the same definitions simulations consume. None
 of those request types, manifests, or injected rules joins the shipping plugin graph.
 
-`hex_gameplay_model` owns renderer-free Main Menu, Campaign, Sandbox, and Creator
+`hex_gameplay_model` owns renderer-free Main Menu, Campaign, Sandbox, Creator, and HUD
 transitions. It may depend on `bevy_ecs` derive support and `hex_core`, but not on
 assets, combat, units, game, map, world, perception, or the Bevy facade. It is the
 oracle for route and Back behavior, pending/committed map and resolved-seed edits,
 fixed six-slot roster identity/order/duplicates, launch-blocker priority, guided
 Party-then-Enemies deployment order, exact placement occupancy, reselection, Undo and
-Review, exact Retry identity, Campaign slot identity, typed Creator destinations, and
-bounded edit history. Widget systems emit typed actions into that model and apply
-effectful results; they do not duplicate those decisions.
+Review, exact Retry identity, Campaign slot identity, typed Creator destinations,
+bounded edit history, component preference/eligibility/master/phase resolution,
+Compact transient surfaces, and forced Main View ownership. Widget systems emit typed
+actions into that model and apply effectful results; they do not duplicate those
+decisions.
 
 The application adapter proves that one ordinary `HexTile` click outside the catalog's
 hidden staging regions is accepted when canonical walker footing admits its exact
@@ -344,6 +347,19 @@ ordinary HUD surface from layout, focus, scrolling, and picking and leaves the c
 task card reachable. The scoped visual walk places at least one Party and one Enemy
 character before capturing Review; pixels never substitute for the typed placement or
 frozen-launch assertions.
+
+HUD adapter evidence exhausts saved preferences, contextual eligibility, master and
+phase suppression, Standard/Compact behavior, temporary summons, and required
+decisions without using pixels. It drives configurable bindings through the real
+highest-priority capture seam, including Escape cancellation, Swap/Cancel conflicts,
+conflict-safe row restore after a swap, focused Enter/Space refusal, confirmed Restore
+All, shipping/development action-inventory separation, and schema-v3 restart.
+Cross-build restart coverage also proves a development-only binding is deterministically
+rehomed when a shipping edit later occupies its chord without rewriting player actions.
+Inspection cases prove
+first activation centers one disclosed subject, repeated activation opens Character
+Main View, Character camera follows, and selection, turn, caster, command ownership,
+formation, and unobserved hostile location remain unchanged.
 
 ### Campaign persistence evidence
 
@@ -406,17 +422,19 @@ surface adapts. They do not prove occupancy, action accounting, tempo, determini
 state restoration, Campaign persistence, or launch/retry identity.
 
 A scoped gameplay acceptance run reviews at most ten deterministic Bevy image-target
-frames: Main Menu, Campaign, Sandbox Overview, Map Browser, one Map Detail, Party,
-Enemies, Character Picker, Tools, and one targeted Compact or 4K duplicate.
+frames: minimal Exploration, player turn, hostile turn, Character Main View, Required
+Decision, aiming/Action Bar, Activity, custom visibility, master-hidden Required
+Decision, and one targeted Compact or 4K/200% duplicate.
 Default-off presentation fixtures create visual state without solving combat.
 Before any capture, the live `UiTreeSnapshot` oracle rejects zero-area targets, inherited
 clipping, off-canvas placement, unreachable scroll content, overlap, missing labels,
 invalid focus order, and targets below 44×44. Authored presentation fixtures apply
-named composition contracts, including horizontal Standard/Wide pages, 2×3 rosters,
-Compact stacking, and one scrollable roster column. The same contract drives real
-wheel and Tab/Shift-Tab input through the declared scroll owner. The scoped gameplay
-script uses no combat-solving steps; generic world-owned walks retain their existing
-driver verbs.
+named composition contracts, including independently visible Standard/Wide
+components, at most one typed Main View, Compact map-only presentation, exactly one
+temporary full-screen Compact task, and forced decision ownership. The same contract
+drives real wheel and Tab/Shift-Tab input through the declared scroll owner. The
+scoped gameplay script uses no combat-solving steps; generic world-owned walks retain
+their existing driver verbs.
 
 Forest, Waterfall, map review, and Alberto's map captures are outside this budget and
 remain unchanged.
@@ -446,6 +464,12 @@ an agent named as the human reviewer. An N/A waiver is available only for a
 non-rendered change and only to a verified maintainer; it does not convert a known
 gameplay failure into a pass. Combined wave PRs and release promotions still require
 the named-human PASS.
+
+HUD sign-off includes every default shortcut, a custom visibility combination,
+master-hidden one-surface summons, Map centering and Character follow, a blocking
+decision, deployment/outcome suppression, Compact map-only presentation, one binding
+conflict resolved through Swap, and restart persistence. The reviewer confirms that
+ordinary hidden components leave no drawer, handle, tooltip, or hit region behind.
 
 ## Anti-patterns
 

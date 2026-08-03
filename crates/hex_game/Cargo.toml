@@ -39,7 +39,12 @@ hex_test_support = { workspace = true }
 default = []
 # Development tooling: world inspector, debug overlays, and live asset reload so
 # editing a file under assets/config/ takes effect without restarting.
-dev = ["dep:hex_dev", "bevy/file_watcher", "hex_ui/dev-tools"]
+dev = [
+    "dep:hex_dev",
+    "bevy/file_watcher",
+    "hex_core/dev-input",
+    "hex_ui/dev-tools",
+]
 # Deterministic procedural-map launch and renderer capture automation. Kept
 # separate from `dev` so review packs exercise an otherwise release-shaped build.
 map-review = []

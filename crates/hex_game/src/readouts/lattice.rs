@@ -45,11 +45,12 @@ impl DisableSelection {
         self.decision.is_some()
     }
 
-    pub(crate) fn summary(&self) -> Option<DecisionSummary> {
+    pub(crate) fn summary(&self, confirm_shortcut: String) -> Option<DecisionSummary> {
         self.decision.as_ref().map(|decision| DecisionSummary {
             chosen: self.cells.len(),
             owed: decision.owed,
             restoring: decision.restoring,
+            confirm_shortcut,
         })
     }
 
@@ -178,6 +179,7 @@ type OwnData<'w, 's> = Query<
     (
         &'static UnitId,
         &'static Name,
+        &'static Faction,
         &'static LatticeSpec,
         &'static LatticeState,
         &'static LatticeStats,
@@ -258,6 +260,7 @@ pub(crate) fn refresh_readouts(
     knowledge: Res<FactionLatticeKnowledge>,
     elements: Option<Res<ElementCatalog>>,
     spells: Option<Res<SpellBook>>,
+    bindings: Res<hex_core::InputBindings>,
     own: OwnData,
     identities: Query<(&Name, &Faction)>,
 ) {
@@ -275,7 +278,10 @@ pub(crate) fn refresh_readouts(
         })
         .and_then(|(unit, role, identity)| {
             let entity = registry.entity_of(unit)?;
-            let (unit, _name, spec, state, stats) = own.get(entity).ok()?;
+            let (unit, _name, faction, spec, state, stats) = own.get(entity).ok()?;
+            if *faction != Faction::Player {
+                return None;
+            }
             Some((unit, role, identity, spec, state, stats))
         })
         .map(
@@ -312,6 +318,7 @@ pub(crate) fn refresh_readouts(
                         chosen: selection.cells.len(),
                         owed: decision.owed,
                         restoring: decision.restoring,
+                        confirm_shortcut: bindings.chord(hex_core::InputAction::Confirm).label(),
                     }),
             },
         );

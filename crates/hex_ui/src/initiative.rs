@@ -1,11 +1,13 @@
 //! Initiative rendering from an immutable, disclosure-safe view.
 
+use bevy::input_focus::tab_navigation::TabIndex;
 use bevy::prelude::*;
 use hex_core::Screen;
 
 use crate::{
-    hud_heading, hud_text_role, panel, HudElement, InitiativeSide, InitiativeView, UiAssets,
-    UiHudSetup, UiRegionRole, ACCENT, BLURB_SIZE, LABEL, READ_ONLY_HUD,
+    hud_heading, hud_text_role, panel, HudElement, InitiativeIntent, InitiativeSide,
+    InitiativeView, UiAssets, UiHudSetup, UiIntent, UiRegionRole, UiSystems, ACCENT, BLURB_SIZE,
+    EDGE, LABEL, READ_ONLY_HUD,
 };
 
 #[derive(Component)]
@@ -17,6 +19,9 @@ struct InitiativeBody;
 #[derive(Component)]
 struct InitiativeHeading;
 
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+struct InitiativeControl(hex_core::UnitId);
+
 pub(super) fn plugin(app: &mut App) {
     app.add_systems(
         OnEnter(Screen::Gameplay),
@@ -24,8 +29,10 @@ pub(super) fn plugin(app: &mut App) {
     )
     .add_systems(
         Update,
-        rebuild
-            .in_set(crate::UiSystems::Render)
+        (
+            rebuild.in_set(UiSystems::Render),
+            emit_intents.in_set(UiSystems::EmitIntents),
+        )
             .run_if(in_state(Screen::Gameplay)),
     );
 }
@@ -85,14 +92,20 @@ fn spawn_panel(
 fn rebuild(
     mut commands: Commands,
     view: Res<InitiativeView>,
+    review: Option<Res<crate::review::UiReviewPresentation>>,
     bodies: Query<Entity, With<InitiativeBody>>,
     mut panels: Query<&mut Node, With<InitiativePanel>>,
     mut headings: Query<&mut Text, With<InitiativeHeading>>,
     assets: Res<UiAssets>,
 ) {
-    if !view.is_changed() {
+    let review_changed = review.as_ref().is_some_and(|review| review.is_changed());
+    if !view.is_changed() && !review_changed {
         return;
     }
+    let view = review
+        .as_ref()
+        .and_then(|review| review.initiative.as_ref())
+        .unwrap_or(view.as_ref());
     if let Ok(mut heading) = headings.single_mut() {
         heading.0.clone_from(&view.heading);
     }
@@ -108,8 +121,8 @@ fn rebuild(
     commands.entity(body).with_children(|rows| {
         let dense = view.entries.len() > 8;
         for entry in &view.entries {
-            rows.spawn((
-                Name::new(format!("Initiative Unit {}", entry.unit.0)),
+            let name = format!("Initiative Unit {}", entry.unit.0);
+            let copy = (
                 Text::new(entry_label(entry, dense)),
                 hud_text_role(),
                 TextFont {
@@ -117,14 +130,61 @@ fn rebuild(
                     ..TextFont::from_font_size(BLURB_SIZE)
                 },
                 TextColor(if entry.current { ACCENT } else { LABEL }),
-                Node {
-                    flex_shrink: 0.0,
-                    ..default()
-                },
                 Pickable::IGNORE,
-            ));
+            );
+            if entry.inspectable {
+                rows.spawn((
+                    Name::new(name),
+                    AccessibleLabel::new(format!("Inspect {}", entry.name)),
+                    Button,
+                    TabIndex(0),
+                    crate::UiVisibilityRequirement::Immediate,
+                    InitiativeControl(entry.unit),
+                    Node {
+                        min_width: Val::Px(44.0),
+                        min_height: Val::Px(44.0),
+                        flex_shrink: 0.0,
+                        padding: UiRect::axes(Val::Px(8.0), Val::Px(5.0)),
+                        align_items: AlignItems::Center,
+                        justify_content: JustifyContent::Center,
+                        border: UiRect::all(Val::Px(1.0)),
+                        border_radius: BorderRadius::all(Val::Px(5.0)),
+                        ..default()
+                    },
+                    BorderColor::all(if entry.current { ACCENT } else { EDGE }),
+                    BackgroundColor(Color::srgba(0.02, 0.03, 0.045, 0.82)),
+                ))
+                .with_child(copy);
+            } else {
+                rows.spawn((
+                    Name::new(format!("{name} Unavailable")),
+                    AccessibleLabel::new(format!("{} is not currently observable", entry.name)),
+                    Node {
+                        min_height: Val::Px(44.0),
+                        flex_shrink: 0.0,
+                        padding: UiRect::axes(Val::Px(8.0), Val::Px(5.0)),
+                        align_items: AlignItems::Center,
+                        ..default()
+                    },
+                    Pickable::IGNORE,
+                ))
+                .with_child(copy);
+            }
         }
     });
+}
+
+fn emit_intents(
+    controls: Query<(&Interaction, &InitiativeControl), Changed<Interaction>>,
+    mut intents: MessageWriter<UiIntent>,
+) {
+    for (interaction, control) in &controls {
+        if *interaction == Interaction::Pressed {
+            intents.write(UiIntent::Initiative(InitiativeIntent::ActivateUnit(
+                control.0,
+            )));
+        }
+    }
 }
 
 fn entry_label(entry: &crate::InitiativeEntryView, dense: bool) -> String {
@@ -157,6 +217,7 @@ mod tests {
                         InitiativeSide::Hostile
                     },
                     current: id == 0,
+                    inspectable: id < 6,
                 })
                 .collect(),
         };

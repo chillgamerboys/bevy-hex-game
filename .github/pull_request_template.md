@@ -40,8 +40,14 @@ For UI work, record all applicable checkpoints explicitly: 1280x720, 1920x1080,
 and 3840x2160 under Auto and 200% scale; Main Menu; all three Campaign card states;
 Sandbox Overview, Map Browser/Detail, Party, Enemies, Character Picker, deployment,
 minimal outcome and Retry Exact; Tools and typed Creator returns; restart persistence;
-movement, casting, Channel, blocked actions, required lattice decision, HUD hiding,
-and pause.
+movement, casting, Channel, blocked actions, and pause. HUD work additionally records
+every default component and Main View shortcut, a custom visibility combination,
+master-hidden one-surface summons, first/repeated Party and disclosed-Initiative
+inspection in Map and Character camera modes, a blocking required decision,
+deployment/outcome suppression, Compact map-only presentation, one keybinding conflict
+resolved through Swap, and restart persistence of HUD preferences and keyboard
+overrides. Confirm that hidden components leave no drawer, handle, tooltip, focusable
+control, or hit region behind.
 -->
 
 ### Evidence by concern
@@ -77,9 +83,11 @@ gates on the structured exact-head human PASS fields, never the automated tier.
 If the change touches rendering, movement, persistence, or state transitions, walk
 it at the exact candidate head: splash -> Main Menu -> Campaign slot 1 -> Party
 Trial, orbit, move, pause, save with F5, return to Campaign, Continue slot 1, then
-persist one Settings change across restart. Separately traverse Sandbox map selection,
-both rosters, deployment, outcome, Retry Exact, Return to Sandbox, and a Tools-origin
-Creator return.
+persist one volume, one HUD visibility preference, and one keyboard override across
+restart. Separately traverse Sandbox map selection, both rosters, deployment, outcome,
+Retry Exact, Return to Sandbox, and a Tools-origin Creator return. For HUD changes,
+exercise the complete HUD checkpoint list above rather than treating a single hide/show
+toggle as sign-off.
 -->
 
 ## Boundaries

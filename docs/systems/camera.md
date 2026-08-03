@@ -2,8 +2,12 @@
 
 The gameplay camera has two modes with separate authority:
 
-- **Map** is a free pan/orbit view framed by the generated `MapViewHint`.
-- **Character** follows the selected `CameraFocusTarget`; the player exclusively owns
+- **Map** is a free pan/orbit view framed by the generated `MapViewHint`. A typed
+  `CenterInspectionCamera` request may translate that pose once to a disclosed
+  `InspectionCameraSubject` without changing its look or zoom.
+- **Character** follows exactly one disclosure-authorized
+  `InspectionCameraSubject`, falling back to the gameplay-selected
+  `CameraFocusTarget` when no inspection subject exists. The player exclusively owns
   look direction and desired zoom. A deterministic upward-look composition keeps
   ordinary free-look above the supporting floor, while terrain may shorten only the
   rendered boom along that placement ray.
@@ -12,6 +16,13 @@ This is presentation only. Camera geometry never grants sight, changes gameplay
 targeting legality, brightens darkness, or becomes an occupancy fact. A unit hidden
 by the near-camera presentation envelope is also ignored by Bevy picking until it is
 shown again; that suppression does not alter gameplay command authority.
+
+Party and disclosed Initiative activation publish inspection state through the
+gameplay adapter. The first activation centers Map mode; Character mode follows that
+subject until it changes or becomes unavailable. Publishing inspection never mutates
+`Selected`, `Turn`, caster, command ownership, or formation state. An unobserved
+hostile publishes no inspection subject or center request. Multiple simultaneous
+inspection subjects are malformed and fail closed to the unique gameplay selection.
 
 ## Character motion regression contract
 
@@ -72,9 +83,9 @@ collision keeps only an independent effective radius:
    more than the configured world-units-per-second rate. Recovery is one monotonic
    outward run unless a new obstruction requires an immediate retraction.
 6. At or below the configured `character_self_hide_radius` (shipped as `1.0`), add the
-   camera-owned composable visibility reason to the selected unit root. Restore the
-   unit only beyond the threshold plus exit hysteresis, so a near-first-person view
-   remains clear without visibility chatter.
+   camera-owned composable visibility reason to the resolved inspected or selected
+   unit root. Restore the unit only beyond the threshold plus exit hysteresis, so a
+   near-first-person view remains clear without visibility chatter.
 
 The probe and collision margin expand all six prism faces and the vertical span,
 conservatively enclosing the close camera's near plane around faces, corners, bridge
@@ -143,13 +154,15 @@ material changes settle before composed visibility, and fog/review reasons remai
 independent. Near-character hiding adds and removes only its own composable reason.
 Gameplay exit clears collision indexes, effective-radius recovery state, proximity
 ownership, fade timelines, temporary material clones, and OIT ownership. Retargeting
-also discards the previous unit's collision history and resolves the new unit's own
-clear or obstructed corridor in the same frame.
+inspection or gameplay selection also discards the previous unit's collision history
+and resolves the new unit's own clear or obstructed corridor in the same frame.
 
 Focused tests cover prism faces/corners and stacked spans, exact player-rotation
 authority, both vertical poles, simultaneous orbit/zoom input, 120 open-motion frames,
 blocked-clearance chatter, delayed monotonic recovery, proximity occlusion composition,
-a clear and obstructed focus retarget, a synthetic flat radius-55 lower-level benchmark,
+a clear and obstructed focus retarget, one-shot Map inspection centering, Character
+inspection follow and selected-target fallback, no gameplay-authority mutation, a
+synthetic flat radius-55 lower-level benchmark,
 a 2,048-render-chunk tree-fade
 performance gate, 10,000 unchanged frames, whole-tree/material isolation, review-only
 roofs, and 100 gameplay lifecycles. An

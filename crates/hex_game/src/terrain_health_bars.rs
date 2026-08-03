@@ -313,7 +313,7 @@ fn compose_health_bar_visibility(
     >,
 ) {
     let camera_ready = cameras.single().is_ok_and(|camera| camera.is_active);
-    let chrome_visible = chrome.shown && !chrome.encounter_complete;
+    let chrome_visible = chrome.terrain_health_shown && !chrome.encounter_complete;
     for (bar, mut visibility) in &mut bars {
         let tile_visible = tiles
             .get(bar.tile)
@@ -703,14 +703,18 @@ mod tests {
             Some(&Visibility::Inherited)
         );
 
-        app.world_mut().resource_mut::<GameplayChromeView>().shown = false;
+        app.world_mut()
+            .resource_mut::<GameplayChromeView>()
+            .terrain_health_shown = false;
         app.update();
         assert_eq!(
             app.world().get::<Visibility>(root),
             Some(&Visibility::Hidden)
         );
 
-        app.world_mut().resource_mut::<GameplayChromeView>().shown = true;
+        app.world_mut()
+            .resource_mut::<GameplayChromeView>()
+            .terrain_health_shown = true;
         app.update();
         assert_eq!(
             app.world().get::<Visibility>(root),

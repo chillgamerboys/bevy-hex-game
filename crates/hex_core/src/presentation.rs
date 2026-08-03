@@ -7,7 +7,7 @@
 use bevy_ecs::prelude::*;
 use bevy_reflect::prelude::*;
 
-use crate::TilePos;
+use crate::{TilePos, UnitId};
 
 /// Cross-crate ordering for camera-driven world presentation.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -18,6 +18,50 @@ pub enum PresentationSystems {
     ApplyMaterials,
     /// Apply composable visibility reasons after material presentation.
     ApplyVisibility,
+}
+
+/// Presentation-only request for a world-space reticle on one authorized unit.
+///
+/// The game adapter owns disclosure and may insert this only after deciding the unit
+/// is currently presentable to the local player. Renderers consume the request but it
+/// grants no target legality, observation, selection, or command authority.
+#[derive(Component, Reflect, Debug, Clone, Copy, PartialEq, Eq)]
+#[reflect(Component)]
+pub struct TargetReticleRequest {
+    /// Stable identity of the entity carrying the request.
+    pub unit: UnitId,
+}
+
+impl TargetReticleRequest {
+    /// Requests a presentation reticle for `unit`.
+    #[must_use]
+    pub const fn new(unit: UnitId) -> Self {
+        Self { unit }
+    }
+}
+
+/// Phase-level suppression for transient unit markers in the rendered world.
+///
+/// Deployment and terminal outcomes use this to remove acting rings and target
+/// reticles without deleting the underlying presentation requests. The resource is
+/// presentation state only and must never be consulted for gameplay legality.
+#[derive(Resource, Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[reflect(Resource)]
+pub struct WorldMarkerSuppression {
+    suppressed: bool,
+}
+
+impl WorldMarkerSuppression {
+    /// Whether unit rings and target reticles should currently be absent.
+    #[must_use]
+    pub const fn is_suppressed(self) -> bool {
+        self.suppressed
+    }
+
+    /// Sets phase-level presentation suppression.
+    pub fn set(&mut self, suppressed: bool) {
+        self.suppressed = suppressed;
+    }
 }
 
 /// Marks one rendered chunk as belonging to an exact authored tree root.
@@ -198,5 +242,18 @@ mod tests {
         assert!(occlusion.remove(PresentationOcclusionReason::CharacterCameraProximity));
         assert!(occlusion.contains(PresentationOcclusionReason::Fog));
         assert!(occlusion.is_hidden());
+    }
+
+    #[test]
+    fn world_marker_requests_and_suppression_have_no_gameplay_authority() {
+        let request = TargetReticleRequest::new(crate::UnitId(9));
+        let mut suppression = WorldMarkerSuppression::default();
+
+        assert_eq!(request.unit, crate::UnitId(9));
+        assert!(!suppression.is_suppressed());
+        suppression.set(true);
+        assert!(suppression.is_suppressed());
+        suppression.set(false);
+        assert!(!suppression.is_suppressed());
     }
 }
