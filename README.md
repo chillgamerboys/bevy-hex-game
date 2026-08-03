@@ -107,7 +107,7 @@ recovery, deterministic AI, retained outcomes, and the integrated 3v3 Party Tria
 Regenerate readme_assets/party-trial-combat.png with:
 HEX_WALK_SCRIPT=walks/readme_party_trial.ron \
 HEX_WALK_OUT=.context/readme-captures/party-trial \
-HEX_WALK_VIEWPORT=1280x720@1 \
+HEX_WALK_VIEWPORT=1920x1080@1 \
 cargo run --release -p hex_game --features visual-walk
 cp .context/readme-captures/party-trial/party-trial-combat.png \
   readme_assets/party-trial-combat.png

@@ -333,11 +333,15 @@ scaffold.
 
 ### Settings menu, persistence, and audio
 
-The pre-alpha options surface persists display/window presentation and music, SFX,
-and UI volume values across sessions. Input actions are centralized so systems stop
-owning raw keys, but there is no rebinding UI. Audio sits behind music/SFX/UI buses
-ready for later content; Wave 5 does not ship audio. The frozen production audit
-remains the research record, not a requirement to adopt every integration now.
+The pre-alpha options surface persists display/window presentation, music/SFX/UI
+volume values, ordinary HUD visibility, and keyboard overrides across sessions.
+Keybindings are grouped into Gameplay, Interface, Main View, Camera, and System;
+capture consumes the next non-modifier key, overlapping conflicts require explicit
+Swap or Cancel, each row can restore its default, and Restore All requires
+confirmation. Input actions remain centralized so gameplay systems do not own raw
+keys. Audio sits behind music/SFX/UI buses ready for later content; Wave 5 did not
+ship audio. The frozen production audit remains the research record, not a
+requirement to adopt every integration now.
 
 ### Steam packaging and crash reporting
 

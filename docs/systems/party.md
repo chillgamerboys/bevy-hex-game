@@ -112,9 +112,10 @@ cells and refilled mana.
 ## Test boundary
 
 Party Trial on the authored Crossing is the human integration test for the full
-three-member rail, formation editing, compression, reformation, terrain entry into
-combat, and six-unit initiative readability. Focused automated combat checks use the
-flat Ability Lab and Raider Mirror definitions only through default-off test support.
+three-member Party component, formation editing, compression, reformation, terrain
+entry into combat, and six-unit initiative readability. Focused automated combat
+checks use the flat Ability Lab and Raider Mirror definitions only through default-off
+test support.
 This keeps a spell, decision, or identity regression from being hidden behind bridge
 routing or unrelated AI turns; the Crossing remains responsible only for party
 dynamics that smaller deterministic cases cannot represent.
