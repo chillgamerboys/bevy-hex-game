@@ -5,6 +5,27 @@ catalog of every test. The goal is to choose the cheapest authoritative oracle f
 each concern and reserve rendered frames for facts only a renderer or a person can
 judge.
 
+## Non-negotiable oracle boundary
+
+Screenshots and rendered frames are valid evidence for static presentation: camera
+framing and occlusion, UI hierarchy/layout/legibility/focus/contrast/reflow, and a
+rendered map's visible geometry, materials, lighting, cutaways, seams, and
+composition. Video and human checks are valid for camera motion, native-input
+response, animation, control feel, and taste. A visual artifact may show how a state
+already established by hooks is rendered, but it does not establish the state.
+
+Screenshots, rendered frames, video, and human visual observation are never evidence
+for gameplay or exact world logic when the claim can be represented by typed hooks,
+components, resources, messages, logs, canonical snapshots, or deterministic
+contracts. This rule applies even when a visual artifact appears to corroborate the
+expected result: pixels cannot pass, strengthen, or substitute for a logical
+assertion.
+
+If the required hook does not exist, add the narrow renderer-free hook or contract.
+Do not use visual observation to infer legality, occupancy, payment, damage, decisions,
+settlement, authority release, turn order, persistence, launch identity, or
+determinism. A static frame does not prove motion or control feel.
+
 This partition does not own `hex_map`, the map review runner, Forest or Waterfall
 walks, perception/map stress suites, or their acceptance criteria. The complementary
 [map testing contract](map-testing.md) keeps those oracles world-owned while both
@@ -57,14 +78,14 @@ targets stay in the residual gate. The three packages set `autotests = false` an
 declare their integration targets explicitly, so adding a helper file cannot silently
 create a new expensive binary or escape its concern selector.
 
-Draft #180 adds one other explicit target,
+PR #180 added one other explicit target,
 `hex_game/tests/spell_resolution.rs`, solely for the cross-crate spell transaction.
 It builds a minimal deterministic gameplay state with the real map, units, perception,
 and combat plugins. It does not install `AppPlugin`, a renderer, viewport,
 `hex_ui::UiPlugin`, `HeadlessUiPlugin`, or test-support UI. Its tiny authored fixture
 proves phase composition and exact authority state; it is not a procedural V3 seed
 corpus or a presentation test. Because `hex_game` disables automatic integration-test
-discovery, the candidate must register this target explicitly and route it only to
+discovery, the wave registered this target explicitly and routed it only to
 `spell_resolution_contracts`.
 
 ## Scripted movement steps
@@ -186,7 +207,7 @@ use their broader producer/consumer closures.
 
 ### Spell-resolution wave waiver
 
-Draft PR #180 has an explicit one-wave maintainer waiver for a gameplay-only change
+PR #180 used an explicit one-wave maintainer waiver for a gameplay-only change
 whose authorities are narrower than the repository's ordinary final-wave gate. Its
 automated gameplay evidence is exactly:
 
@@ -231,7 +252,7 @@ The following omissions are **WAIVED**, not passed, green, N/A, or silently skip
 | Omitted gate | Why it cannot exercise this wave's changed authority |
 |---|---|
 | `hex_ui` and `hex_game/tests/gameplay_app.rs` | The wave changes two thin gameplay consumers—Creator deployability and semantic casting-preview clipping—but no UI model, widget, layout, focus, persistence, or broad application lifecycle authority. The content/trajectory contracts and renderer-free composition target cover those policies directly |
-| UI snapshots and the automated visual walk | The preview's gameplay voxel set changes, but widget/layout/rendering mechanics do not. Trajectory contracts prove the set, while the named manual Creator → Sandbox route checks the visible gameplay result; neither UI suite can prove batch correlation, stable ordering, or settlement |
+| UI snapshots and the automated visual walk | The preview's gameplay voxel set changes, but widget/layout/rendering mechanics do not. Trajectory and composition hooks prove the set and downstream state directly; screenshots and visual walks have no authority over batch correlation, stable ordering, settlement, or release |
 | Deterministic combat simulation | The renderer-free reducer cannot execute the ECS/world impact and settlement adapter; focused authority-hold tests cover the reducer seam it does own |
 | V3/procedural map corpora | The wave changes no generator, world content, G/H schema, or map implementation; two exact real-map producer tests cover the consumed seam |
 | Residual workspace corpus | Its unrelated owner/application binaries cannot compile or exercise the changed transaction authority |
@@ -252,26 +273,27 @@ procedural content, or any behavior the two named concerns cannot exercise.
 Invalidation restores the complete ordinary gate; it is not permission to expand the
 allow-list after behavior has expanded.
 
-Before the draft becomes ready, a named human still runs the exact-head Creator →
-Sandbox Fireball route. That bounded gameplay confirmation requires no screenshot
-review and is not an automated UI/visual test. While the PR is draft, its result is
-pending rather than passed or waived.
+This wave has no changed presentation, native-input, motion, or feel claim. Its final
+candidate therefore used a verified-maintainer exact-head N/A sign-off naming the
+renderer-free hook closure and the reason no visual oracle applied. A Creator →
+Sandbox launch may remain a diagnostic, but neither that route nor a screenshot is
+acceptance evidence for the logic proved by the contracts.
 
 Pull-request CI applies the selector directly and publishes the decision plus timing
 evidence and JUnit for each nextest-backed concern. Pushes to `dev` or `main`
 ordinarily promote the decision to the complete integration gate regardless of changed
-paths. The explicit, allow-listed one-wave exception above applies to draft #180 and
-its exact merge diff on `dev`; `main` promotions and later unrelated pushes remain
+paths. The explicit, allow-listed one-wave exception above applied to PR #180 and its
+exact merge diff on `dev`; `main` promotions and later unrelated pushes remain
 complete. Unknown paths, invalid configuration, and empty diffs still fail closed. A
-waived gate never contributes green evidence or substitutes for the exact-head manual
-sign-off.
+waived gate never contributes green evidence or substitutes for the exact-head
+verified sign-off classification.
 
 GitHub deliberately enters each required job even when all of that job's expensive
 steps are conditional, so a green job shell can mean only that scope detection and the
 non-waived checks completed. The `test-scope-decision` artifact is authoritative: its
-omitted partitions remain **WAIVED**. The human Creator → Sandbox result remains
-**PENDING** until a named exact-head pass is recorded; neither state is converted to a
-pass by a green shell.
+omitted partitions remain **WAIVED**. The verified-maintainer N/A was recorded against
+the exact final head before merge; neither state was converted to a pass by a green
+shell.
 
 For a gameplay-only change that does not modify `hex_core`, shared application
 composition, scenario/loading lifecycle, or a published world seam, V3/map corpora
@@ -416,10 +438,18 @@ all required logical viewport and semantic-scale combinations in one linked bina
 separate mapping cases prove that device pixels do not alter logical layout. A visual
 route samples that contract and does not define the set of UI paths that exist.
 
-Screenshots answer presentation questions: whether controls fit, labels read, dense
-rosters remain legible, regions overlap, focus remains visible, and a responsive
-surface adapts. They do not prove occupancy, action accounting, tempo, determinism,
-state restoration, Campaign persistence, or launch/retry identity.
+Screenshots answer static presentation questions: whether camera framing and
+occlusion look right; whether controls fit, labels read, dense rosters remain legible,
+regions overlap, focus remains visible, and a responsive surface adapts; and whether
+rendered-map geometry, materials, lighting, cutaways, seams, and composition look
+right. Video and human checks answer camera-motion, native-input, animation,
+control-feel, and taste questions. A visual artifact can judge the rendering of a
+hook-established state, but it does not prove occupancy, action accounting, tempo,
+determinism, state restoration, Campaign persistence, or launch/retry identity.
+
+This boundary is absolute whenever a typed gameplay hook can express the claim. A
+frame may help navigate or diagnose a presentation symptom, but it must not be cited
+as corroborating logical evidence. Add a missing hook instead.
 
 A scoped gameplay acceptance run reviews at most ten deterministic Bevy image-target
 frames: minimal Exploration, player turn, hostile turn, Character Main View, Required
@@ -441,42 +471,50 @@ remain unchanged.
 
 ## Manual runtime sign-off
 
-The automated Bevy visual walk, an agent frame review, and a named human playtest are
-distinct evidence. Gameplay runtime-surface PRs record the human PASS in the structured
-PR fields together with the full final head SHA, reviewer, date, and exact route
-exercised. When a conservative runtime classification has no rendered presentation,
-navigation, movement, persistence, or visual-script surface, a maintainer may instead
-record an exact-head N/A waiver. The waiver names that maintainer's GitHub login and its
-specific reason; the workflow requires the same maintain/admin account to trigger the
-check. A later push makes either form of evidence stale. On a draft, the
-`Current-head manual runtime sign-off` workflow may remain green because enforcement
-is deferred; that is not a PASS or waiver. The required check must validate the new
-head before the PR can leave draft.
+The automated Bevy visual walk, an agent frame review, video, and a named human
+playtest are distinct presentation/experiential evidence. Frames judge static camera,
+UI, and rendered-map presentation; video and the human route judge motion, input,
+control feel, and taste. None proves gameplay or exact world logic that typed hooks can
+express. Gameplay runtime-surface PRs record the human PASS in the structured PR fields
+together with the full final head SHA, reviewer, date, and exact route exercised. When
+a candidate has no changed presentation, native-input, motion, feel, or visual-script
+claim, a maintainer records an exact-head N/A waiver even if the renderer-free runtime
+logic changed. The waiver names that maintainer's GitHub login and the authoritative
+hook closure; the workflow requires the same maintain/admin account to trigger the
+check. A later push makes either form of evidence stale. On a draft, the `Current-head
+manual runtime sign-off` workflow may remain green because enforcement is deferred;
+that is not a PASS or waiver. The required check must validate the new head before the
+PR can leave draft.
 
 Source-lane PRs targeting `wave/*` defer this gate because they are not independently
 shippable runtime candidates. The combined wave PR targeting `dev` must carry the
-named human sign-off for its exact final head; merging a lane into a wave never
-inherits, substitutes for, or weakens that release gate.
+correct exact-head classification: a named human PASS for affected presentation or
+experiential surfaces, otherwise a verified-maintainer N/A naming the logic hooks.
+Merging a lane into a wave never inherits an earlier classification.
 
 Draft PRs may omit the sign-off while implementation is moving. A gameplay PR may not
 be marked ready or merged with a placeholder, a blocked result, a different commit, or
-an agent named as the human reviewer. An N/A waiver is available only for a
-non-rendered change and only to a verified maintainer; it does not convert a known
-gameplay failure into a pass. Combined wave PRs and release promotions still require
-the named-human PASS.
+an agent named as the human reviewer. An N/A waiver is available only when no changed
+claim requires visual or experiential judgment and only to a verified maintainer; it
+does not convert a known gameplay failure into a pass. Release promotions still
+require the named-human presentation PASS over the complete shipped build.
 
 HUD sign-off includes every default shortcut, a custom visibility combination,
 master-hidden one-surface summons, Map centering and Character follow, a blocking
 decision, deployment/outcome suppression, Compact map-only presentation, one binding
-conflict resolved through Swap, and restart persistence. The reviewer confirms that
-ordinary hidden components leave no drawer, handle, tooltip, or hit region behind.
+conflict resolved through Swap, and the post-restart presentation of hook-proven
+preference state. The reviewer confirms that ordinary hidden components leave no
+drawer, handle, tooltip, or hit region behind; typed restart contracts prove exactly
+what persisted.
 
 ## Anti-patterns
 
 - **Noun-only assertions:** proving an ID, label, node, deterministic case name, or route exists
   without exercising the behavior it promises.
-- **Screenshots as logic:** reading pixels or frame timing to infer movement budgets,
-  exact occupancy, Channel actions, outcomes, determinism, or launch identity.
+- **Screenshots as logic:** using pixels, rendered frames, video, or human visual
+  observation to infer or corroborate any claim available through gameplay hooks,
+  including movement budgets, exact occupancy, Channel actions, outcomes,
+  determinism, or launch identity. Add the missing hook instead.
 - **Fixture-description drift:** prose claims a matrix or state the owned deterministic case
   does not construct and verify directly.
 - **All-feature runtime pollution:** enabling inspector/review/test features in a

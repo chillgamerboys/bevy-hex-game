@@ -28,8 +28,8 @@ still belong to the crate they change. `docs` is whoever picks it up.
 
 | Epic | Scope | Owner |
 |---|---|---|
-| Terrain magic | **Partial / In Progress:** permanent `Single`/`Column` stone evocation and the #175/#178 world resolver, answer schema, and ordering foundation are live. Draft #180 is the active gameplay candidate for explicit Impact/Fireball content, paid monotonic `TerrainImpact` emission, matching-outcome consumption, fresh occupancy/movement ordering, deterministic unsupported-actor settlement, authority adoption, and typed frozen failure before perception/combat resume. Until it merges, those items remain undelivered. The cave-breach ruling still keeps authored Interior membership; area construction, enchantment-bound terrain, fluid dynamics, feature destruction, and terrain save/restore persistence remain deferred | combat | <!-- linear: HEX-19 owner: shravan-kumaran -->
-| Trajectories and lingering effects | **Partial / In Progress:** #162's exact `Direct`/`Arc`/`None` material trajectories share one symmetric integer supercover; faction-facing preview, cycling, and AI use authorized knowledge while command authority retains full occupancy. Draft #180 adds radial per-voxel clipping and stable friendly-fire area Disable/Burn behind one held resolution transaction. Until it merges, those items remain undelivered. Area Restore/Reveal policy, area-lingering zones, dispel, and later sight reuse remain | combat | <!-- linear: HEX-24 owner: shravan-kumaran -->
+| Terrain magic | **Partial / In Progress:** permanent `Single`/`Column` stone evocation, the #175/#178 world resolver, answer schema, and ordering foundation, and #180's explicit Impact/Fireball content, paid monotonic `TerrainImpact` emission, matching-outcome consumption, fresh occupancy/movement ordering, deterministic unsupported-actor settlement, authority adoption, and typed frozen failure are live. Remaining HEX-19 work keeps authored Interior membership with no dynamic cave daylight and defers area construction, enchantment-bound terrain, fluid dynamics, feature destruction, and terrain save/restore persistence | combat | <!-- linear: HEX-19 owner: shravan-kumaran -->
+| Trajectories and lingering effects | **Partial / In Progress:** #162's exact `Direct`/`Arc`/`None` material trajectories share one symmetric integer supercover; faction-facing preview, cycling, and AI use authorized knowledge while command authority retains full occupancy. #180 adds live radial per-voxel clipping and stable friendly-fire area Disable/Burn behind one held resolution transaction. Remaining HEX-24 work is area Restore/Reveal policy, area-lingering zones, dispel, and later sight reuse | combat | <!-- linear: HEX-24 owner: shravan-kumaran -->
 | Magic outside combat | general real-time casting and its input model; Rest has moved into outcomes/recovery and does not settle this deferred question | combat | <!-- linear: HEX-25 owner: shravan-kumaran -->
 | Co-casting and rituals | variable-mana group casting after Wave 7 supplies a real Channel action and evidence for initiative and action economy | combat | <!-- linear: HEX-26 owner: shravan-kumaran -->
 | Engine upkeep | the one budgeted Bevy 0.20 upgrade (~Q4 2026) plus the feature trim, landed together in a quiet window before any release | game | <!-- linear: HEX-18 owner: shravan-kumaran -->
@@ -109,8 +109,10 @@ must separately define aperture and domain semantics before reclassification is 
 ### The gameplay lane, in waves
 
 The gameplay side delivers in **waves**: a short-lived `wave/N-*` branch collects a
-group of ticket PRs in dependency order, a human walks the integrated build once, and
-the whole wave lands on `dev` in one merge (CONTRIBUTING.md has the rules).
+group of ticket PRs in dependency order, the integrated candidate runs its
+selector-chosen gate, and the whole wave lands on `dev` in one merge. Affected
+presentation or experience gets one visual/human route; a logic-only wave uses
+exact-head hook-backed evidence (CONTRIBUTING.md has the rules).
 
 > **Historical organization:** The Wave 5–8 bullets and Wave 7/8 topology records
 > below describe what those merged waves established at the time. The current
@@ -125,9 +127,9 @@ the whole wave lands on `dev` in one merge (CONTRIBUTING.md has the rules).
   from casts through disables and downing, alongside persistent effects, knowledge and
   divination, and authored encounters. Later work now consumes the live `RunBottom`
   projection for permanent construction and obstruction-aware trajectories, and the
-  world side of terrain durability is live. Gameplay still owns elemental declaration,
-  outcome consumption, refreshed occupancy/movement, and unsupported-actor settlement;
-  those are active draft #180 work rather than a delivered Wave 3 claim.
+  world side of terrain durability is live. Gameplay's elemental declaration, outcome
+  consumption, refreshed occupancy/movement, and unsupported-actor settlement landed
+  later in #180 rather than forming part of the original Wave 3 claim.
 - **Wave 4 — complete party combat (delivered).** Algorithm-neutral AI hosting, party
   controls, formation traversal, outcomes, Renewal, Rest, and one integrated 3v3
   scenario through a mandatory human playtest checkpoint. Casting UX and combat

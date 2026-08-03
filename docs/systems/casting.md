@@ -6,11 +6,10 @@ that outlive their turn are expressed.
 
 > **Status:** this is the normative contract for the 0.3 casting slice. Unit effects,
 > Burn, Reveal, geometry, aiming, the command path, exact material occupancy,
-> permanent stone evocation construction, and the world-owned terrain resolver are
-> live on `dev`. Draft PR #180 is the gameplay integration candidate for radial
+> permanent stone evocation construction, the world-owned terrain resolver, radial
 > effect-volume clipping, area Disable/Burn, elemental impact publication, paid
-> monotonic correlation, combat-authority hold, and deterministic unsupported-actor
-> settlement. Those candidate behaviors are not live until the wave merges.
+> monotonic correlation, the combat-authority hold, and deterministic
+> unsupported-actor settlement are live.
 > Enchantment-bound terrain, spell-created illumination, area Restore/Reveal, and
 > area-lingering zones remain later work.
 
@@ -29,7 +28,7 @@ know what will become of them.
 
 ## Casting is committing — provisionally
 
-The initial wave charges a cast that reaches the world: mana is spent, the action is
+The initial policy charges a cast that reaches the world: mana is spent, the action is
 taken, and the presentation plays even when no material changes. **That payment policy
 is provisional.** The binding boundary is that gameplay announces the effect and the
 world decides the material response; playtesting may change when or how a fully
@@ -52,7 +51,7 @@ arbitrary — it tracks whether there is a material with an opinion.
 | Path | Message | Who decides the outcome |
 |---|---|---|
 | **Conjuration** | `TerrainEdit::Set` — **built for permanent evocations** | Gameplay names the substance and the volume; the world validates placement |
-| **Elemental damage** | `TerrainImpact { batch, volume, element, power }` — **world receiver live; gameplay emitter is in draft #180** | The world owns toughness, protection, accumulated damage, and destruction |
+| **Elemental damage** | `TerrainImpact { batch, volume, element, power }` — **world receiver and gameplay emitter live** | The world owns toughness, protection, accumulated damage, and destruction |
 
 `batch` is the session-unique id the world echoes in its applied or rejected answer, so
 gameplay can match the result to the cast that caused it. Both messages are specified
@@ -79,10 +78,10 @@ only `SetTerrain(substance: "stone")`**. Spell-authored `ClearTerrain` was remov
 destruction becomes an `Impact` when terrain magic lands. The lower-level
 `TerrainEdit::Clear` remains available for save restoration and authored terrain.
 
-Power is an explicit candidate content field — `Impact(element, power: N)` — so
-designers tune it directly rather than having it inferred from tier. Draft #180
-rejects blank or unknown element names and zero power before a spell is admitted. A
-conjuration may name only a substance the world marks
+Power is an explicit content field — `Impact(element, power: N)` — so designers tune
+it directly rather than having it inferred from tier. Content admission rejects blank
+or unknown element names and zero power before a spell is admitted. A conjuration may
+name only a substance the world marks
 `conjurable`; existence alone is insufficient. The content loader validates that
 cross-domain reference before the spell becomes available, as specified by
 [boundary.md](../planning/boundary.md) L. This prevents ordinary spell content
@@ -101,15 +100,15 @@ That broad table proves the contract without pretending to be final balance. Wat
 lava, air, and bedrock have no toughness; authored liquid topology and the other
 map-owned protections continue to resist.
 
-The first draft consumer is Fireball with `Impact(element: "Fire", power: 2)`. Its
+The first consumer is Fireball with `Impact(element: "Fire", power: 2)`. Its
 previous `Displace` is removed rather than advertising forced movement the runtime
 does not implement. A Creator-authored full Fire ring may inscribe it through the
 existing Creator → Sandbox route; packaged archetypes and scenario balance are
-unchanged. The wave updates the thin Creator deployability consumer and the casting
+unchanged. PR #180 updates the thin Creator deployability consumer and the casting
 preview's semantic clipped voxel set, but adds no UI model, widget, layout, or rendering
 behavior.
 
-### World answer live; gameplay completion is the draft candidate
+### World answer and gameplay completion are live
 
 The map now answers every processed batch exactly once with
 `TerrainImpactResult::Applied` or `::Rejected`. An applied answer has one ordered
@@ -119,10 +118,10 @@ allows. A rejected answer carries one explicit reason and no voxel payload; it c
 nothing. Invalid input and unavailable terrain therefore cannot strand a correctly
 implemented pending cast.
 
-The gameplay emitter and consumer are not live on `dev`. Draft #180 keeps the cast
-pending from its one payment and emission until every area decision, matching terrain
-answer, actor settlement, and authority adoption finishes. It preflights checked,
-session-local, monotonic batch ids before payment, records one exact
+The gameplay emitter and consumer keep the cast pending from its one payment and
+emission until every area decision, matching terrain answer, actor settlement, and
+authority adoption finishes. It preflights checked, session-local, monotonic batch ids
+before payment, records one exact
 `TerrainBatchId → TerrainImpact` obligation per authored Impact, and accepts valid
 answers in any order. `Applied` and every structurally valid `Rejected` answer,
 including `TerrainUnavailable`, retain payment and complete their batch. Unknown,
@@ -130,7 +129,7 @@ duplicate, reused, mismatched, or structurally inconsistent answers preserve typ
 correlation evidence and freeze the transaction; there is no timeout or optimistic
 release.
 
-The candidate wires the configured `TerrainSystems` protocol as
+The implementation wires the configured `TerrainSystems` protocol as
 `ApplyWorld → RefreshProjections → ReconcileActors → ConsumeOutcomes` before
 perception and later combat. `RefreshProjections` republishes exact terrain occupancy
 and reconciles ordinary movement. A separate outcome reader stages only whether a
@@ -203,19 +202,16 @@ applier in `hex_combat` is authoritative.
    [`in_reach`](../../crates/hex_units/src/targeting.rs) (**built**), so **spells
    inherit high-ground-buys-range automatically** from the same rule engagement uses.
    Direct, authored-rise Arc, and None trajectory checks are built and wired; see
-   *Obstruction*. Draft #180 adds radial per-voxel clipping after the anchor remains
-   legal; `dev` still has anchor-only obstruction until that wave merges.
-4. **Unit interaction — exact commit snapshot.** The draft candidate snapshots every
+   *Obstruction*. Radial per-voxel clipping runs after the anchor remains legal.
+4. **Unit interaction — exact commit snapshot.** The implementation snapshots every
    exact `StandsOn` occupant in the clipped volume when the cast commits, then resolves
    authored effects and stable `UnitId`s in that order without a faction filter. It
    delivers area `DisableHexes` and `Burn`, one public defender decision at a time.
    Area `RestoreHexes` and `Reveal` remain fail-closed because their hidden-information
-   and choice policy is not settled. On current `dev`, all genuinely area-shaped unit
-   effects remain refused at content admission.
+   and choice policy is not settled.
 5. **Announce** — a legal permanent construction volume emits exact
-   `TerrainEdit::Set` messages (**built**). Draft #180 adds paid `TerrainImpact`
-   publication and the pending-answer transaction; until it merges, elemental impacts
-   still fail closed as undeliverable rather than charging for no result.
+   `TerrainEdit::Set` messages (**built**). Paid `TerrainImpact` publication and the
+   pending-answer transaction are built and wired.
 
 Rungs 1–2 are gameplay's own state. Rung 4 is gameplay's knowledge too: **where
 characters stand is ours**, so a cast interacts with units through legality, exactly as
@@ -334,17 +330,16 @@ the empty volume. Content validation refuses to author most of those, but the ge
 does not depend on it having done so.
 
 The binding contract is that **one clipped volume affects every supported unit and
-terrain voxel inside it**, including allies, enemies, and the caster. Draft #180
-implements that contract for `DisableHexes`, `Burn`, and `Impact`: it snapshots exact
-occupants at commit, processes effects in authored order and occupants in stable
-`UnitId` order, and reaches each body at most once per effect. A selected downed damage
-target retains the current pre-payment refusal; an incidental downed spill target is
-skipped without becoming an information oracle. The current `dev` implementation
-still admits only zero/one-cardinality unit effects until the wave merges.
+terrain voxel inside it**, including allies, enemies, and the caster. The live
+implementation honors that contract for `DisableHexes`, `Burn`, and `Impact`: it
+snapshots exact occupants at commit, processes effects in authored order and occupants
+in stable `UnitId` order, and reaches each body at most once per effect. A selected
+downed damage target retains the current pre-payment refusal; an incidental downed
+spill target is skipped without becoming an information oracle.
 
 Area `RestoreHexes` stays closed because choosing exact cells on a hidden target would
 expose its lattice. Area `Reveal` stays closed because the live divination policy
-requires an observed subject. The candidate does not infer either policy merely to
+requires an observed subject. The implementation does not infer either policy merely to
 make the generic volume loop total.
 
 Initial conjured walls are **2 voxels tall**. The canonical walker is 2 tall and climbs
@@ -385,11 +380,11 @@ RecordInput target cycle intentionally uses the last published faction knowledge
 a same-frame edit, then redraws after the next knowledge publication. Authored target
 range and `Arc.rise` are both capped at 16 as a technical traversal guardrail.
 
-Draft #180 clips the canonical effect volume after the cast reaches its selected
-anchor. `Direct` and `Arc` both spread radially from that anchor to each candidate over
-the same direct symmetric supercover; they do not introduce an arc-shaped radial
-algorithm. Both radial endpoints are excluded, so the anchor and candidate material
-remain hittable while intermediate material removes only voxels behind it.
+The canonical effect volume clips after the cast reaches its selected anchor. `Direct`
+and `Arc` both spread radially from that anchor to each candidate over the same direct
+symmetric supercover; they do not introduce an arc-shaped radial algorithm. Both
+radial endpoints are excluded, so the anchor and candidate material remain hittable
+while intermediate material removes only voxels behind it.
 `Trajectory::None` returns the raw canonical volume byte-for-byte. A noncanonical
 volume is rejected rather than sorted, deduplicated, normalized, or repaired.
 
@@ -397,8 +392,7 @@ Authority clips against complete `TerrainOccupancy`; preview and AI clip against
 `KnownTerrainOccupancy`. Hidden blockers therefore cannot change faction-facing
 choices even though full physical truth may remove a candidate at application.
 Obstruction-aware sight, when it lands, must reuse this supercover rather than grow an
-independently rounded ray. On current `dev`, effect volumes remain geometric and may
-still cross a wall; that limitation disappears only when the draft wave merges.
+independently rounded ray.
 
 ## The command
 
@@ -452,9 +446,9 @@ without touching the framework, which is the point of having one.
 ## Rulings worth writing down
 
 - **There is no ally/enemy targeting filter, and there will not be one.** You may heal
-  an enemy and immolate a friend. Draft #180 honors this for area Disable/Burn across
-  caster, allies, and enemies; unsupported area Restore/Reveal remain fail-closed for
-  their information policy, not because of faction.
+  an enemy and immolate a friend. Area Disable/Burn honors this across caster, allies,
+  and enemies; unsupported area Restore/Reveal remain fail-closed for their information
+  policy, not because of faction.
 - **Combat-only casting is provisional in 0.3.** Shaping terrain out of combat is
   attractive, and the mana half of that question now has an answer: recovery between
   fights is an explicit **rest action** (ruled 2026-07-27 — see
@@ -476,8 +470,8 @@ without touching the framework, which is the point of having one.
   algorithm. The answer remains a replayable `ChooseRestores` command rather than an
   internal healing policy.
 - **Only one exact-cell choice is public at a time.** Content validation still prevents
-  incompatible choice-producing effects, while draft #180 may queue several area
-  Disable recipients behind the existing `PendingDecision`. It publishes the next
+  incompatible choice-producing effects, while the implementation may queue several
+  area Disable recipients behind the existing `PendingDecision`. It publishes the next
   stable-`UnitId` decision only after the previous answer is adopted, and the separate
   authority hold prevents the cleared public slot from advancing the turn early.
 - **`Reveal` is live; `Illuminate` still rejects with a reason.** Reveal writes a
@@ -504,8 +498,8 @@ health, and map rebuild lifecycle. Presentation tests pin observation, darkness,
 burial, composed visibility, grid replacement, and cleanup. Pure contract tests
 exhaustively reject mismatched batches/positions, schema-invalid material/health
 transitions, and incompatible applied/rejected answers. Substance-catalog
-correspondence remains map/content-owned. Draft #180 adds the gameplay consumer wedge
-for `ApplyWorld → RefreshProjections → ReconcileActors → ConsumeOutcomes → perception
+correspondence remains map/content-owned. The gameplay consumer wedge covers
+`ApplyWorld → RefreshProjections → ReconcileActors → ConsumeOutcomes → perception
 → later combat`. Its settlement fixtures include stacked supports, simultaneous falls,
 occupied candidates, lateral higher-ground fallback, insertion-order independence,
 and typed no-landing freeze.
@@ -520,12 +514,15 @@ composition target installs no renderer or UI and proves only the real
 map/units/perception/combat protocol. See the exact authority and invalidation rules in
 [gameplay testing](../development/gameplay-testing.md#spell-resolution-wave-waiver).
 The thin Creator and preview consumers are covered by content/trajectory contracts,
-that composition target, and the named manual route; their presence does not turn any
-waived automated UI/app suite green.
+that composition target, and instrumented gameplay hooks; their presence does not turn
+any waived automated UI/app suite green.
 
-Before draft #180 becomes ready, one named human must exercise the Creator → Sandbox
-Fireball route on the exact final head. That is a gameplay runtime check, not an
-automated UI/visual suite, and no pass has been recorded while the candidate is moving.
+Gameplay hooks, typed events, canonical snapshots, and renderer-free contracts are the
+authoritative evidence for casting logic. Screenshots may judge static camera/UI/map
+presentation of a hook-established casting state, and video/human checks may judge
+motion and control feel. None may be collected, requested, or cited as evidence of
+casting legality, payment, settlement, authority release, or turn resumption when
+hooks can prove the claim; they neither satisfy nor supplement a gameplay-logic gate.
 
 Replay tests extend the funnel's existing determinism test to casts, including variable
 mana and facing — the same sequence applied twice must land the same world.

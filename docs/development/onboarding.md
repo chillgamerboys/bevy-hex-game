@@ -143,37 +143,34 @@ map-owned behavior with its palette entry rather than embedding another RGB lite
 
 ## Knowing you have not broken anything
 
-```sh
-python3 tools/test_scope.py plan --base origin/dev --head HEAD
-SELECTED=$(python3 tools/test_scope.py selected-tests) || exit $?
-while [ -n "$SELECTED" ]; do
-  concern=${SELECTED%% *}
-  case "$SELECTED" in
-    *" "*) SELECTED=${SELECTED#* } ;;
-    *) SELECTED= ;;
-  esac
-  python3 tools/test_scope.py run "$concern" || exit $?
-done
-python3 tools/test_scope.py run clippy
-```
+Use the exact PR-context selector loop in
+[`CONTRIBUTING.md`](../../CONTRIBUTING.md#before-opening-a-pr). It passes the current
+PR number/base/head to both `plan` and `selected-tests`, then runs only the returned
+test concerns and the non-test gates whose plan booleans are true. Do not call
+`selected-tests` without the same context when an exact waiver is present; that
+deliberately fails closed to the complete gate.
 
 The selector chooses the affected gameplay and map concerns and fails closed to the
 complete gate for an unknown or unclassified shared path. Trajectory/volume-only
 changes use their dedicated pure/direct-consumer concern, so they do not select or
 execute the application/UI partition merely because both are gameplay-adjacent. The
-combined terrain-impact source stays full until its projection and protocol authorities
-are split by file. Broad owner corpora still run for their owning changes, on `dev`, and
-at the final wave/release gate. These checks run automatically on pull requests;
+combined terrain-impact source stays full until its projection and protocol
+authorities are split by file. Broad owner corpora still run for their owning changes
+and ordinarily on `dev` or a final wave/release gate. A checked-in exact-path waiver
+may replace only its named concerns with a narrow authoritative closure and reports
+every omission as WAIVED. These checks run automatically on pull requests;
 Markdown-only changes run the documentation link check instead.
 
-If the diff changes rendering, movement behavior, persistence, runtime navigation, or
-a visual script, **run the game and look at it**. This matters more than it sounds: a
-crash and a piece sunk into the ground both once passed every automated check. Pure
-contract or trajectory changes instead record the visual/runtime gate as not
-applicable; launching the UI cannot add authority evidence for them. Visual
-applicability is independent of a conservative `app` selection caused only by changing
-validation infrastructure. Final waves and release promotions retain their broader
-human walk.
+If the diff changes camera/UI/rendered-map presentation or a visual script, inspect
+the applicable static frames; if it changes camera motion, native-input response,
+animation, control feel, or taste, use video and a human check. This matters more than
+it sounds: a crash and a piece sunk into the ground both once passed every automated
+check. Visual evidence may judge how hook-established state is presented but never
+proves the underlying gameplay/world state. Pure contract or trajectory changes
+instead record the visual/runtime gate as not applicable; launching the UI cannot add
+authority evidence for them. Visual applicability is independent of a conservative
+`app` selection caused only by changing validation infrastructure. Final waves follow
+the same affected-surface rule; release promotions retain their broader human walk.
 
 ## When it will not build
 

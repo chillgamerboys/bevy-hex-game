@@ -6,9 +6,9 @@ that everything else depends on.
 
 > **Status:** voxel storage, publication, `TerrainEdit`, toughness content,
 > `TerrainImpact` admission/resolution, ordered outcomes, partial-health publication,
-> and visibility-gated health bars are live. Gameplay spell emission, outcome
-> consumption, and unsupported-actor settlement remain pending; the map does not
-> infer any of them.
+> visibility-gated health bars, gameplay spell emission/outcome consumption, and
+> deterministic unsupported-actor settlement are live. The map still does not infer
+> gameplay payment, landing, correlation, or authority policy.
 
 If you only want to change how the terrain looks, [development/config.md](../development/config.md) is shorter.
 
@@ -305,17 +305,16 @@ TerrainEdit::Clear { pos }
 ```
 
 Gameplay cannot call into `hex_map`, so a spell that builds writes one of these and the
-map applies it. This remains the only terrain write path emitted by gameplay today.
-The map also has a live receiver for the separate `TerrainImpact` announcement, so the
-world rather than the spell decides how each material responds; the gameplay spell
-adapter that emits that announcement is still pending.
+map applies it. Elemental damage uses the separate live `TerrainImpact` announcement,
+so gameplay publishes exact affected voxels and authored power while the world decides
+how each material responds.
 
 ### Toughness and destruction — map side live
 
 The gameplay contract announces `TerrainImpact { batch, volume, element, power }`; it
-never sends a material outcome. Its runtime publisher is still pending. The exact
-volume is nonempty, sorted, and deduplicated. The map resolves each voxel against the
-world-owned Boolean allow-list in
+never sends a material outcome. Its runtime publisher is live. The exact volume is
+nonempty, sorted, and deduplicated. The map resolves each voxel against the world-owned
+Boolean allow-list in
 `terrain_damage.ron`, subtracts `power` directly from remaining health, and returns an
 applied or rejected `TerrainImpactOutcome` as specified by
 [boundary G/H](../planning/boundary.md).
@@ -355,9 +354,9 @@ features are outside this contract.
 
 The map validates each batch before mutation and always publishes one ordered applied
 or rejected answer for every batch it processes. Reused ids, malformed volumes,
-zero power, unknown elements, and unavailable terrain fail atomically. Gameplay has no
-publisher or pending-batch outcome consumer yet, so ordinary casts do not reach this
-live resolver.
+zero power, unknown elements, and unavailable terrain fail atomically. Gameplay's
+live publisher and pending-batch consumer correlate that answer before releasing the
+held cast authority.
 
 ### Publication, presentation, and consequences — map side live
 
@@ -374,15 +373,14 @@ normally publishes. The authored cave membership itself is not regenerated: remo
 a roof voxel updates roof metadata, but the chamber stays in its authored Interior
 domain and does not gain daylight in this slice.
 
-The configured terrain protocol is `TerrainSystems::ApplyWorld →
-RefreshProjections → ReconcileActors → ConsumeOutcomes` before perception. Only
-`ApplyWorld` owns live systems and performs this map work. The future gameplay
-integration will use `RefreshProjections` for exact terrain-occupancy publication and
-ordinary movement reconcile, `ReconcileActors` for unsupported units, and
-`ConsumeOutcomes` for matching answer validation before perception and later combat
-authority refresh. Those three phases are empty reservations in this foundation. The
-map never reads a character, chooses a landing, or releases a pending cast; those
-deterministic policies belong to gameplay and are pinned in
+The configured live terrain protocol is `TerrainSystems::ApplyWorld →
+RefreshProjections → ReconcileActors → ConsumeOutcomes` before perception. Map-owned
+`ApplyWorld` performs world mutation and publication. Gameplay-owned
+`RefreshProjections` republishes exact terrain occupancy and reconciles ordinary
+movement, `ReconcileActors` deterministically settles or adopts unsupported units,
+and `ConsumeOutcomes` validates/correlates the matching answer before later combat
+authority resumes. The map never reads a character, chooses a landing, or releases a
+pending cast; those deterministic policies belong to gameplay and are pinned in
 [boundary H](../planning/boundary.md#cross-owner-ordering-and-unsupported-actors).
 
 ## Things that are true and easy to forget
@@ -411,9 +409,9 @@ deterministic policies belong to gameplay and are pinned in
   gets. **`hexx::a_star` cannot supply that model**, despite being compiled in: it
   keys on `Hex` alone, so it cannot tell a bridge from the ground beneath it.
 - **What terrain changes cost.** `TerrainEdit` remains applied when it arrives and
-  costs nobody anything. The pending gameplay adapter must keep an elemental cast
-  pending until the next ordered map answer, but mana/action payment is gameplay
-  policy rather than a property of the map.
+  costs nobody anything. The live gameplay adapter keeps an elemental cast pending
+  until the ordered map answer, but mana/action payment remains gameplay policy rather
+  than a property of the map.
 - **Whether stacked surfaces ever connect.** Teleport and tunnel are named in the design
   but not implemented. When they are, they belong in `hex_units` as explicit
   exceptions to the step rule, not as changes to it.

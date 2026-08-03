@@ -150,11 +150,13 @@ opens Character Main View, Character mode follows, and none of those paths mutat
 selection, turn, caster, command ownership, or formation. Hostile cases must prove
 that missing observation publishes no identity or location.
 
-Screenshots prove only presentation structure: hierarchy, layout, legibility,
-contrast, responsive reflow, focus visibility, and the pictured state. They do not
-prove map selection, save semantics, readiness, placement, exact occupancy, combat
-rules, outcome, or Retry identity. Those claims require typed state and canonical
-snapshots.
+Screenshots prove static presentation structure: hierarchy, layout, legibility,
+contrast, responsive reflow, focus visibility, camera framing/occlusion, and how the
+hook-established pictured state is rendered. Video and human checks prove camera
+motion, native-input response, animation, control feel, and taste. A still frame does
+not prove motion. No visual artifact proves map selection, save semantics, readiness,
+placement, exact occupancy, combat rules, outcome, or Retry identity; those claims
+require typed state and canonical snapshots.
 
 ## Bounded native review
 
@@ -182,9 +184,9 @@ selected image; a successful capture process is not itself approval.
 The exact-head human playthrough remains the final gate for motion, control feel,
 native text rendering, and taste. It follows Main Menu → Campaign save/Continue,
 Main Menu → Sandbox map/rosters/deployment/outcome/retry/return, Tools → Creator
-return, and persistence after restart. During gameplay it exercises `H`, every
+return, and post-restart presentation. During gameplay it exercises `H`, every
 component shortcut, both Main View shortcuts, first/repeated Party and disclosed
 Initiative activation in Map and Character camera modes, required-decision ownership,
 deployment/outcome suppression, Compact map-only presentation, key capture and one
-Swap conflict, then restarts to verify that only saved preferences and key overrides
-persisted.
+Swap conflict, then restarts to inspect how the saved preference/keybinding state is
+presented. Typed restart hooks separately prove exactly what persisted.

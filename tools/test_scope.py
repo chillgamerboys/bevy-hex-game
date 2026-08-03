@@ -886,8 +886,21 @@ def build_parser() -> argparse.ArgumentParser:
     selected = subparsers.add_parser(
         "selected-tests", help="print selected local test concerns in run order"
     )
+    selected_source = selected.add_mutually_exclusive_group()
+    selected_source.add_argument("--paths-file", type=pathlib.Path)
+    selected_source.add_argument("--path", action="append", default=[])
     selected.add_argument("--base", default="origin/dev")
     selected.add_argument("--head", default="HEAD")
+    selected.add_argument("--event-name", default="")
+    selected.add_argument("--base-ref", default="")
+    selected.add_argument("--head-ref", default="")
+    selected.add_argument("--ref", default="")
+    selected.add_argument("--pull-request-number", type=int)
+    selected.add_argument(
+        "--force-full",
+        action="store_true",
+        help="promote the decision to the complete integration gate",
+    )
 
     command = subparsers.add_parser("command", help="print one canonical command")
     command.add_argument("concern")
@@ -989,9 +1002,25 @@ def main() -> int:
                 write_output(arguments.timing_out, rendered_timing + "\n")
             return returncode
         if arguments.subcommand == "selected-tests":
+            if arguments.paths_file is not None:
+                paths = arguments.paths_file.read_text(encoding="utf-8").splitlines()
+            elif arguments.path:
+                paths = arguments.path
+            else:
+                paths = changed_paths(arguments.base, arguments.head)
             decision = classify(
-                changed_paths(arguments.base, arguments.head), config
+                paths,
+                config,
+                context=ScopeContext(
+                    event_name=arguments.event_name,
+                    base_ref=arguments.base_ref,
+                    head_ref=arguments.head_ref,
+                    ref=arguments.ref,
+                    pull_request_number=arguments.pull_request_number,
+                ),
             )
+            if arguments.force_full:
+                decision = force_full(decision, config["all_concerns"])
             selected_concerns = set(decision.concerns)
             print(
                 " ".join(

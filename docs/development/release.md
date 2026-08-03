@@ -37,6 +37,13 @@ is retried once after confirming no compiler, test, packaging, or application er
 preceded it. A second identical hard timeout requires an explicit maintainer waiver in
 the release notes; it is never silently called a pass.
 
+The release gate uses screenshots/frames for static camera, UI, and rendered-map
+presentation, and video/human checks for camera motion, native-input response,
+animation, control feel, and taste. These may judge the rendering of hook-established
+state, but never prove gameplay or exact world logic that typed hooks, state,
+messages, logs, snapshots, or deterministic contracts can express; those logical
+gates must already be green before presentation review begins.
+
 ## Reserved integrations
 
 No job reads these names yet. They document the future credential boundary so enabling

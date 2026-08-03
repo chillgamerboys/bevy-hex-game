@@ -7,16 +7,17 @@ When invoked, follow these steps. Stop on first failure within any
 step. If a step blocks, surface the finding + skill name and do not
 proceed.
 
-**What this gate can and cannot see:** since `/visual-walk` (Step 2.5)
-it CAN see the window — the game photographs itself along a scripted
-walk and the agent reads every frame, so renders-nothing and
-renders-broken failures (blue window, black sky, missing panel, dead
-screen transition) are mechanical failures here, not surprises for a
-human. What it still cannot judge is motion and taste: whether the thing that renders
-correctly also looks *good*. That stays in the PR's structured exact-head human runtime
-evidence, and is why combined waves and `main` promotion require a human PASS. A
-verified maintainer may record N/A only for an ordinary feature diff with no rendered
-or runtime-interaction surface.
+**What this gate can and cannot see:** `/visual-walk` (Step 2.5) sees rendered
+presentation — the game photographs itself along a scripted walk and the agent reads
+every frame, so renders-nothing and renders-broken failures (blue window, black sky,
+missing panel, dead rendered transition) are mechanical presentation failures here.
+Screenshots and frames judge static camera, UI, and rendered-map presentation; video
+and human checks judge motion, input response, control feel, and taste. None proves or
+corroborates gameplay/world logic that typed hooks, state, messages, logs, snapshots,
+or deterministic contracts can express; add a missing hook instead. A combined wave
+with affected presentation/experience requires a human PASS; a logic-only feature or
+wave records an exact-head verified-maintainer N/A naming its authoritative hook
+closure. `main` promotion retains its human presentation PASS.
 
 ## Pre-flight: Require a PR
 
@@ -82,7 +83,8 @@ have failed review anyway.
 **What it does:** invokes the `/test-full` skill — `/test-local`
 (fmt, clippy, selector-chosen concern tests, `cargo deny`, doc build, markdown link
 check) then the ship-shape build (`cargo build --package hex_game
---release`, no `--all-features`), then it prints the manual visual walk.
+--release`, no `--all-features`), then it prints either the applicable visual/human
+route or the exact-head hook-backed not-applicable classification.
 Doc-only diffs short-circuit to `/test-quick`.
 
 See the `test-*` SKILL.mds for current expected counts (these grow as
@@ -91,7 +93,8 @@ the suite expands; embedding them here would drift).
 **Decision:**
 - ✓ `test-full` returns all-green → proceed to Step 3. Its Phase 3
   reports either the operator's structured exact-head runtime evidence or an
-  exact-head N/A reason when the reviewed diff has no rendered/runtime surface;
+  exact-head verified-maintainer N/A reason and hook closure when the reviewed diff has
+  no affected presentation or experiential surface;
   the receipt does not claim a human walk happened.
 - ✗ Any step fails → **STOP**. Surface the failing suite/step and
   report back. Do not run Step 3 — a silent-failures audit on a
@@ -105,21 +108,23 @@ should exist before the cheap textual steps wrap up.
 **What it does:** invokes the `/visual-walk` skill — builds with the
 `visual-walk` feature, drives the game through `walks/*.ron` (real
 button wiring, injected input), captures a PNG per scripted step, and
-the agent READS every frame. Two tiers: mechanical (stall, black
-frame, wrong/missing screen) and review (layout, overflow, contrast).
+the agent READS every frame. Typed script assertions and exit status own route/state
+facts; PNGs own presentation only. Two visual tiers remain: mechanical (stall, black
+frame, wrong/missing rendered surface) and review (layout, overflow, contrast).
 Review findings block when UI or presentation is the changed surface and remain
 advisory for other runtime changes.
 
 **Decision:**
-- ✓ all frames ok → status `pass`, proceed to Step 3.
+- ✓ all frames visually ok → presentation status `pass`, proceed to Step 3; this is
+  never gameplay/world logic evidence.
 - ⚠ review-tier findings in a non-UI runtime diff only → status `warn`, proceed.
   Findings ride the receipt into the merge report; the human judges them.
 - ✗ any review-tier finding in a UI/presentation diff → **STOP**, status `fail`.
   Usability is part of the changed surface and cannot be downgraded to advisory.
 - ✗ any mechanical failure → **STOP**, status `fail`. A game that
   cannot walk its own screens is not merge-ready.
-- — no runtime surface in the diff → status `skipped`, proceed. Same
-  trigger rule as audit-diff's visual flag.
+- — no affected presentation or experiential surface in the diff → status `skipped`,
+  proceed even when renderer-free runtime logic changed. Cite its hooks/contracts.
 
 ## Step 3 — `audit-silent-failures` (explicit log, ~5s)
 
@@ -200,13 +205,13 @@ receipt at `/tmp/audit-pr-receipt-{PR_NUM}.json` using the
 - `"skipped"` — step did not apply to the diff or a prior step failed.
 
 `5_visual_walk` additionally requires `review_policy`: `"blocking"` for a
-UI/presentation diff, `"advisory"` for another runtime diff, or
+UI/presentation diff, `"advisory"` for another visually applicable runtime diff, or
 `"not_applicable"` when skipped. A `warn` is valid only with `"advisory"`.
 
 **`overall_status` values:**
 
 - `"green"` — all required steps, including `5_visual_walk`, are `pass` or a
-  policy-valid `warn`; a no-runtime visual walk may be `skipped`.
+  policy-valid `warn`; a visually inapplicable walk may be `skipped`.
 - `"failed"` — at least one required step, including `5_visual_walk`, is `fail`.
   Subsequent
   steps are typically `"skipped"`.
@@ -267,7 +272,7 @@ of the receipt means `/merge-pr` STOPs — "no receipt" is a hard block.
 | 0 audit-linear | ✓ HEX-N (state) / ⚠ no tie / ⚠ HEX-N (terminal state) |
 | 1 audit-diff | ✓ clean / ✗ N findings |
 | 2 test-full | ✓ all green / ✗ failed at [step] |
-| 2.5 visual-walk | ✓ N frames ok / ⚠ N non-UI review findings / ✗ UI review or mechanical failure / — skipped (no runtime surface) |
+| 2.5 visual-walk | ✓ N presentation frames ok / ⚠ N non-UI review findings / ✗ UI review or mechanical failure / — skipped (no affected presentation surface) |
 | 3 audit-silent-failures | ✓ 0 real / ✗ N findings |
 | 4 update-docs | ✓ current / ✓ N files updated (committed `<sha>`) |
 | receipt | ✓ wrote `/tmp/audit-pr-receipt-<N>.json` (overall_status: green / failed) |

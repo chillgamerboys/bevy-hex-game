@@ -1,9 +1,9 @@
 # Spell resolution gameplay wave
 
-Status: **approved; implementation in progress**. The draft PR remains the live wave
-tracker, and each reviewed semantic checkpoint is pushed to it.
+Status: **delivered by PR #180**. This document retains the approved topology,
+contracts, exact verification closure, and residual scope for that wave.
 
-Base: `origin/dev @ 6cb749adc5168e4480d1f4efedba8097f49bf64d`
+Original planning base: `origin/dev @ 6cb749adc5168e4480d1f4efedba8097f49bf64d`
 
 Integration branch: `wave/spell-resolution`
 
@@ -35,10 +35,9 @@ implementation lane. The accepted settlement policy replaces the earlier support
 reservation proposal. A breached cave retains authored Interior membership and gains
 no dynamic daylight in this slice.
 
-## Draft candidate ledger
+## Delivered checkpoint ledger
 
-The following reviewed foundations are on the local wave candidate. They remain draft
-evidence rather than delivered `dev` behavior:
+The following reviewed foundations were composed and delivered by PR #180:
 
 - `ae17f54` adds the pure combat-authority hold that prevents an intermediate area
   answer from advancing the turn or settling an outcome;
@@ -52,14 +51,13 @@ evidence rather than delivered `dev` behavior:
 
 At the `6286ca8` helper checkpoint, the paid runtime transaction, area queue, terrain
 outcome consumer, ECS settlement commit, narrow scope wiring, and composition target
-remained integration-owner work on the same draft PR. Later #180 checkpoints compose
-those pieces under the contract below; the PR's exact head is the implementation-state
-authority. No checkpoint in this ledger is a final green gate or manual runtime
-sign-off.
+remained integration-owner work. Later #180 checkpoints composed those pieces under
+the contract below; the merged PR head is the implementation-state authority rather
+than any intermediate helper SHA.
 
 ## Combined outcome
 
-A legal area elemental cast will:
+A legal area elemental cast now:
 
 1. resolve one canonical effect volume and obstruction-clip it without changing the
    already-live caster-to-anchor trajectory;
@@ -156,8 +154,8 @@ Only the integration owner edits `crates/hex_combat/src/commands/cast.rs`,
 | Area + terrain runtime | `wave/spell-resolution` | combined checkpoint | area queue, paid batch ledger, outcome consumer, settlement and authority adoption |
 | Composition | `wave/spell-resolution` | all lanes | dedicated headless composition target, exact scope routing, docs, and delivery reconciliation |
 
-Source branches target the wave or remain source-only. One final wave PR targets
-`dev`; there is no leaf PR per helper by default.
+Source branches targeted the wave or remained source-only. PR #180 was the single
+final wave PR to `dev`; no leaf PR per helper was required.
 
 ## Exact runtime order
 
@@ -187,17 +185,17 @@ Valid rejected answers never invoke settlement; the early Applied staging reader
 no completion authority and exists only to keep rejection and settlement failure paths
 disjoint.
 
-## Narrow non-UI verification
+## Executed narrow non-UI verification
 
 The automated test evidence is limited to authorities that can exercise these changes.
 It does **not** run `hex_ui`, `hex_game/tests/gameplay_app.rs`, UI snapshots, visual
 walks, deterministic combat simulation, procedural-generation corpora, or the residual
 workspace corpus.
 
-- Clipping: extend and run `python3 tools/test_scope.py run trajectory_contracts`.
+- Clipping: `python3 tools/test_scope.py run trajectory_contracts`.
   Cover malformed input, `None`, endpoints, wall shadows, conservative grazes,
   vertical/stacked cases, canonical preservation, and knowledge-vs-authority privacy.
-- Resolution: add `python3 tools/test_scope.py run spell_resolution_contracts` with an
+- Resolution: `python3 tools/test_scope.py run spell_resolution_contracts` with an
   exact nextest filter and JUnit. It includes the new impact/content, area queue,
   settlement, pending/outcome, authority-hold, phase-order, and composition coverage;
   existing non-UI spell validation/fingerprint, cast/payment/refusal/construction,
@@ -208,7 +206,7 @@ workspace corpus.
   Before execution, an exact nextest-list contract pins 56 domain identities, those
   two map identities, and seven renderer-free game-consumer/composition identities so
   filter drift cannot reduce evidence silently.
-- Composition: add explicit `hex_game/tests/spell_resolution.rs` using minimal state
+- Composition: `hex_game/tests/spell_resolution.rs` uses minimal state
   and the real map/units/perception/combat plugins. It installs no `AppPlugin`,
   renderer, viewport, `hex_ui::UiPlugin`, or test-support UI and uses a tiny authored
   fixture rather than a V3 seed corpus. Because `hex_game` has `autotests = false`,
@@ -219,12 +217,14 @@ workspace corpus.
   deterministic-simulation partition remains omitted.
 - Non-test checks remain format, dependency policy, strict workspace Clippy,
   warnings-denied docs, and the default-feature shipping release build.
-- Final runtime evidence is one named human Creator -> Sandbox Fireball pass on the
-  exact wave head. It is not a UI/visual test; no screenshot review is required.
+- Final sign-off is a verified-maintainer exact-head N/A naming the renderer-free
+  trajectory and spell-resolution hook closure. The wave changes no presentation,
+  native-input, motion, or feel claim, so a Creator -> Sandbox launch may be used only
+  as a diagnostic and screenshots are not acceptance evidence.
 
 The scope/profile/CI bootstrap itself ordinarily triggers the repository's fail-closed
-full gate. The user's explicit instruction and implementation approval are the durable
-one-wave maintainer waiver for this gameplay-only candidate. Its only gameplay test
+full gate. The user's explicit instruction and implementation approval were the durable
+one-wave maintainer waiver for this gameplay-only delivery. Its only gameplay test
 concerns are `trajectory_contracts` and `spell_resolution_contracts`; a focused
 selector regression may additionally prove the waiver manifest itself. The following
 omissions must appear as **WAIVED**, never passed or green: `hex_ui`,
@@ -233,23 +233,25 @@ deterministic combat simulation, V3/procedural-generation corpora, and the resid
 workspace corpus. Format, dependency policy, strict Clippy, warnings-denied docs, and
 the shipping build remain non-test gates.
 
-The exception is valid only while every changed behavior is exercised by those two
+The exception was valid only while every changed behavior was exercised by those two
 non-UI producer/consumer closures and every changed path is in the wave's exact-file
 allow-list. This wave does change two thin gameplay consumers: Creator deployability
 and the casting preview's semantic clipped voxel set. Their policy is covered by the
-content/trajectory contracts, renderer-free composition target, and named manual
-route; all automated UI/app tests remain waived. A UI model, widget, layout or
+content/trajectory contracts and renderer-free composition target; screenshots and a
+manual route cannot strengthen those logic assertions, and all automated UI/app tests
+remain waived. A UI model, widget, layout or
 rendering change, a `hex_map` implementation or G/H contract change, an unclassified
-path, or behavior those closures cannot exercise invalidates the waiver and restores
-the ordinary fail-closed gate. It applies only to PR #180 from
+path, or behavior those closures could not exercise would have invalidated the waiver
+and restored the ordinary fail-closed gate. It applied only to PR #180 from
 `wave/spell-resolution` to `dev` and its exact reviewed merge diff pushed to `dev`,
 never a `main`-target PR, push to `main`, or later unrelated push. The PR and canonical
 testing policy publish the exact narrow JUnit replacements and the waiver reason.
 
 GitHub still enters required job shells whose expensive steps are conditionally
 omitted. A green shell reports successful routing and required non-waived checks, not
-an omitted partition passing: the scope artifact continues to label those partitions
-**WAIVED**, and the named exact-head runtime route remains **PENDING** until recorded.
+an omitted partition passing: the scope artifact labels those partitions **WAIVED**.
+The verified-maintainer N/A named the renderer-free hook closure on the exact final
+head before merge; it did not convert any omitted partition into a pass.
 
 ## Combined acceptance
 
@@ -284,11 +286,10 @@ an omitted partition passing: the scope artifact continues to label those partit
 
 ## Delivery-state reconciliation
 
-HEX-19 and HEX-24 remain partial / In Progress while PR #180 is a draft. Linear is a
-soft coordination signal and is currently unavailable; the exact recommended update
-is to record #162, #174 (superseding #173), #175, and #178 as delivered foundations,
-link draft #180 as the active implementation wave, and retain the residuals listed
-here. Final tracked [casting](../systems/casting.md), status, contracts, roadmap, and
-[gameplay-testing](../development/gameplay-testing.md) corrections land on the wave
-candidate before it is called complete. After merge, reconciliation must verify the
-exact `dev` merge SHA before either ticket is reclassified.
+PR #180 is delivered, but HEX-19 and HEX-24 remain partial / In Progress. HEX-19 still
+owns area construction, enchantment-bound terrain, fluid/feature interactions,
+terrain persistence, and the authored-Interior/no-dynamic-daylight residual. HEX-24
+still owns area Restore/Reveal policy, lingering zones, dispel, and later sight reuse.
+Linear was unavailable during reconciliation; the exact recommended update is to link
+#180 as the delivered implementation wave while retaining those residuals rather than
+marking either ticket Done.

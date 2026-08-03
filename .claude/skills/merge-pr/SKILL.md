@@ -1,6 +1,6 @@
 ---
 name: merge-pr
-description: Finalize a PR after `/audit-pr` is green — strict schema-v3 receipt check with structured findings (no warn-but-proceed paths), cheap pre-flights (base branch, mergeable, worktree-free, branch pushed), then `gh pr merge --merge` (merge commits, never squash) + optional Linear state-sync to Done + `git fetch origin --prune`. Four merge classes by base/head: feature→dev and ticket→wave delete the head branch (into-wave merges skip the Done sync — tickets wait for the wave); a wave→dev landing requires structured exact-head human runtime PASS evidence and batch-syncs only complete epics; a dev→main promotion deletes nothing. The receipt is a hard merge contract; a `failed` overall_status STOPs the merge with the failing step names + exact findings.
+description: Finalize a PR after `/audit-pr` is green — strict schema-v3 receipt check with structured findings (no warn-but-proceed paths), cheap pre-flights (base branch, mergeable, worktree-free, branch pushed), then `gh pr merge --merge` (merge commits, never squash) + optional Linear state-sync to Done + `git fetch origin --prune`. Four merge classes by base/head: feature→dev and ticket→wave delete the head branch (into-wave merges skip the Done sync — tickets wait for the wave); a wave→dev landing requires the correct structured exact-head runtime classification (human PASS for affected presentation/experience, verified-maintainer N/A for hook-backed logic only) and batch-syncs only complete epics; a dev→main promotion deletes nothing. The receipt is a hard merge contract; a `failed` overall_status STOPs the merge with the failing step names + exact findings.
 ---
 
 When invoked, follow these steps. STOP on any pre-flight failure
@@ -40,7 +40,8 @@ the receipt cannot prove the gate that produced it: **STOP** and rerun
    png_path, check, message}` in the report so the operator sees what the
    agent's eyes flagged before finalizing. A `fail` on
    `5_visual_walk` flips `overall_status` to failed like any other
-   step; `skipped` means the diff had no runtime surface.)
+   step; `skipped` means the diff had no affected presentation or experiential
+   surface, even if renderer-free runtime logic changed.)
 
 2. **Receipt present, SHA and green overall status match, but `completed_at`
    > 60 min old**
@@ -144,16 +145,20 @@ State can change between audit and merge — these checks are fast
    plain feature case; it must be classified as a landing):
 
    - `baseRefName == "dev"` AND `headRefName` matches `wave/*` →
-     **wave landing** (the one walked merge): `--merge
+     **wave landing** (the one classified merge): `--merge
      --delete-branch` (the wave branch dies here — never `dev`), and
      Step 4 becomes the **batch** state-sync: Done for every wave
      ticket whose epic is COMPLETE; partially-delivered epics stay In
-     Review (wave 1's HEX-6 precedent). Pre-flight extra: the PR body
-     must contain `Manual runtime result: PASS`, `Manual runtime commit:
-     <headRefOid>`, and non-placeholder named reviewer, date, and route
-     fields. Validate the same exact-head structured contract as
-     `.github/workflows/manual-runtime-signoff.yaml`; a wave landing
-     without that evidence is exactly what the model forbids.
+     Review (wave 1's HEX-6 precedent). Pre-flight extra: the PR body must
+     contain `Manual runtime commit: <headRefOid>` and one valid classification:
+     `PASS` with a non-placeholder named human reviewer, date, and affected
+     presentation/experiential route; or `N/A` with a verified maintainer, date,
+     the authoritative hook/contract closure, and the reason no changed claim needs
+     visual or experiential judgment. Validate the same exact-head structured
+     contract as `.github/workflows/manual-runtime-signoff.yaml`. Screenshots/frames
+     may judge static camera, UI, and rendered-map presentation; video/human checks
+     may judge motion and control feel. None supplies or strengthens logic evidence,
+     and wave topology alone never forces a PASS.
    - `baseRefName == "dev"` → **feature merge** (the normal path):
      `--merge --delete-branch` (Step 2) + single-ticket state-sync to
      Done (Step 4).
@@ -419,12 +424,13 @@ double-firing anything.
 - **Audit-pr was not run.** Run it first. `/merge-pr` is the
   finalize-after-gate step, not the gate itself.
 - **Drafts / WIP PRs.** Mark `gh pr ready` first.
-- **A PR nobody has played.** The receipt now carries the agent's
-  scripted walk (`5_visual_walk`) — stills of the real screens, read
-  by the agent — but stills are not play. If the change touches
-  motion, feel, or anything the walk scripts don't photograph, and no
-  human walked it, the merge is premature even with a green receipt —
-  that's what `dev` is for, and what `/promote` gates on.
+- **Affected presentation or experiential work nobody has reviewed.** The receipt may
+  carry the agent's scripted walk (`5_visual_walk`) — stills of the real screens, read
+  by the agent — but stills are not play. If the change touches native presentation,
+  motion, control feel, seams, or taste and no human walked it, the merge is premature
+  even with a green receipt. A logic-only PR with authoritative hooks may instead use
+  the exact-head verified-maintainer N/A. `/promote` retains its human presentation
+  gate for the complete shipped build.
 
 ## Self-updating
 

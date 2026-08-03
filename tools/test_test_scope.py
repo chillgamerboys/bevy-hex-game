@@ -1104,10 +1104,53 @@ class TestScopeTests(unittest.TestCase):
         skill = (ROOT / ".claude" / "skills" / "test-local" / "SKILL.md").read_text(
             encoding="utf-8"
         )
-        self.assertIn("--head HEAD) || exit $?", skill)
+        self.assertIn('"${SCOPE_ARGS[@]}") || exit $?', skill)
+        self.assertIn("--event-name pull_request", skill)
+        self.assertIn("--pull-request-number \"$PR_NUMBER\"", skill)
         self.assertIn("REMAINING=$SELECTED", skill)
         self.assertIn("concern=${REMAINING%% *}", skill)
         self.assertNotIn("for concern in $SELECTED", skill)
+
+    def test_selected_tests_honors_exact_waiver_context(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(MODULE_PATH),
+                "selected-tests",
+                "--path",
+                ".config/test-waivers/spell-resolution-wave.json",
+                "--path",
+                "docs/development/gameplay-testing.md",
+                "--event-name",
+                "pull_request",
+                "--base-ref",
+                "dev",
+                "--head-ref",
+                "wave/spell-resolution",
+                "--pull-request-number",
+                "180",
+            ],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            result.stdout.strip().split(),
+            [
+                "selector",
+                "trajectory_contracts",
+                "spell_resolution_contracts",
+            ],
+        )
+
+    def test_contributor_selector_loop_splits_portably(self) -> None:
+        contributing = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+        self.assertIn("REMAINING=$SELECTED_TESTS", contributing)
+        self.assertIn("concern=${REMAINING%% *}", contributing)
+        self.assertNotIn("for concern in $SELECTED_TESTS", contributing)
 
     def test_repository_relative_paths_are_required(self) -> None:
         with self.assertRaises(test_scope.ScopeConfigurationError):

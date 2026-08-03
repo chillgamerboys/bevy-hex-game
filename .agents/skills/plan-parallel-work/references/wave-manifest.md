@@ -36,8 +36,9 @@ Required contract changes:
 - <runtime path>
 - <composition or failure path>
 - regeneration and return-to-title/re-entry when relevant
-- automated visual walk frames to inspect
-- human play route
+- affected static camera/UI/rendered-map frames to inspect, or verified-maintainer N/A
+- affected video/human camera-motion/input/animation/feel route, or verified-maintainer N/A
+- typed gameplay/world hooks that prove every logical claim
 
 ## Stop conditions
 

@@ -159,13 +159,12 @@ require the exact anchor to be Observed. An authorized area may still spill into
 hidden space without revealing the result. The `1`-casts-something placeholder that
 made the damage loop playable before any of this existed is gone.
 
-> **Draft delivery note — not live on `dev`:** PR #180 is the active spell-resolution
-> wave. Its candidate contract adds radial volume clipping, stable friendly-fire area
-> Disable/Burn, explicit Fire/power-2 Fireball terrain Impact, one paid monotonic batch
-> transaction, combat-authority hold, deterministic unsupported-actor settlement, and
-> typed fatal freeze. It remains draft; this note is not a green test result, manual
-> runtime pass, or Delivered classification. HEX-19 and HEX-24 remain partial / In
-> Progress until the exact candidate merges and delivery state is reconciled.
+> **Spell-resolution delivery:** PR #180 makes radial volume clipping, stable
+> friendly-fire area Disable/Burn, explicit Fire/power-2 Fireball terrain Impact, one
+> paid monotonic batch transaction, the combat-authority hold, deterministic
+> unsupported-actor settlement, and typed fatal freeze live. HEX-19 and HEX-24 remain
+> partial / In Progress for the residual work named in the roadmap; landing this
+> coherent gameplay slice does not complete either epic.
 
 Bodies are one hex wide; there is no footprint for anything larger. Exact `TilePos`
 occupancy now makes those bodies real: movement preview, path construction, command
@@ -276,25 +275,32 @@ selector-command/CI-topology changes promote to the complete gate. The combined
 terrain-impact source stays full because it also carries an application-consumed
 health projection. Trajectory/volume-only changes instead run their pure/direct
 contract modules and casting consumers; they do not select application/UI partitions
-that cannot exercise those authorities. The residual workspace corpus still runs on
-its owning changes, `dev` pushes, schedules, and combined wave/release candidates.
-Screenshots remain presentation evidence only; the dependency ceilings, commands,
-budgets, and anti-patterns are recorded in the
+that cannot exercise those authorities. The residual workspace corpus ordinarily runs
+on its owning changes, `dev` pushes, schedules, and combined wave/release candidates.
+Screenshots are valid for static camera/UI/rendered-map presentation; video/human
+checks are valid for motion, input response, control feel, and taste. They may judge
+how hook-established state is rendered, but must never be collected, requested, or
+cited to establish gameplay behavior, state transitions, ordering, settlement,
+authority release, or any other logic when a gameplay hook, canonical snapshot,
+renderer-free contract, or headless composition test can prove the claim. When such a
+hook exists, it is the authoritative evidence and visual observation is inadmissible
+for that logic. The dependency ceilings, commands, budgets, and anti-patterns are recorded in the
 [gameplay](../development/gameplay-testing.md) and
 [map](../development/map-testing.md) testing contracts.
 
-Draft #180 carries one explicit gameplay-only wave waiver from that default combined
-gate. Its authoritative automated closures are `trajectory_contracts` and
+PR #180 used one explicit gameplay-only wave waiver from that default combined gate.
+Its authoritative automated closures are `trajectory_contracts` and
 `spell_resolution_contracts`; `hex_ui`, `gameplay_app`, UI snapshots, automated visual
 walks, deterministic simulation, procedural map corpora, and the residual workspace
 corpus are **WAIVED**, not passed. The waiver becomes invalid if the wave gains UI
 model/widget/layout/rendering behavior beyond its exact thin Creator-deployability and
 semantic casting-preview consumers, map-implementation, G/H-schema, or otherwise
 unclassified behavior. Those two consumers are covered by content/trajectory
-contracts, the renderer-free composition target, and the named manual route; no
+contracts, the renderer-free composition target, and instrumented gameplay hooks; no
 automated UI/app test is reclassified as run. A conditionally empty green GitHub job
 shell records routing only, while omitted gates remain **WAIVED** and the exact-head
-human route remains **PENDING**.
+gameplay result is established by renderer-free contracts and instrumented gameplay
+hooks. Screenshots neither satisfy nor supplement those logic gates.
 
 The **knowledge seam is live** as `hex_combat::knowledge`:
 `FactionLatticeKnowledge::view` is the one read path for a hostile lattice.
@@ -411,9 +417,10 @@ Permanent construction now reaches terrain through exact inclusive `TilePos` and
 `TerrainEdit::Set` batches for map-approved conjurable substances. Hidden material or
 units suppress an unsafe batch without changing acceptance or payment. World-owned
 toughness content, damage admission, ordered impact resolution/outcomes, sparse health,
-terrain consequences, and observation-gated health bars are live. Gameplay elemental
-announcement, pending-outcome consumption, and unsupported-actor settlement remain
-downstream on `dev`; draft #180 is the active candidate that supplies them.
+terrain consequences, and observation-gated health bars are live. PR #180 makes
+gameplay elemental announcement, matching-outcome consumption, refreshed
+occupancy/movement, deterministic unsupported-actor settlement, authority adoption,
+and exact release live as one held transaction.
 
 **A cast can now outlast itself.** `Burn` runs through the persistent-effect runtime
 (`hex_combat::effects`, vocabulary in `hex_core::effects`): a cast books a countdown in
@@ -452,10 +459,11 @@ Everything in [the design](../design/game.md#open-questions)'s open questions, p
 ## Casting: the playable slice and its remaining boundary
 
 [casting.md](../systems/casting.md) records the built 0.3 path, live world-side terrain
-durability, and draft #180's gameplay integration. On `dev`, `GameCommand::Cast` is
+durability, and #180's live gameplay integration. `GameCommand::Cast` is
 authoritative, pays through the acting lattice, emits typed outcomes, and applies the
-implemented single-target unit effects: direct disables, Burn, and Reveal. The panel
-and aiming flow described above are the ordinary player path into that command.
+implemented unit effects: direct and area disables, Burn, and observed-subject Reveal.
+The panel and aiming flow described above are the ordinary player path into that
+command.
 
 **The shape vocabulary resolves to exact voxels**
 (`hex_units::volumes`): `SelfCast`, `Single`, `Sphere`, `Column`, `Line`, `Cone` and
@@ -463,14 +471,14 @@ and aiming flow described above are the ordinary player path into that command.
 handing back the sorted, deduplicated form an announcement requires. `spells.ron`'s
 `TargetShape` carries the matching extents — `Blast` is now `Sphere(radius: N)` — and
 validation caps them. The casting preview resolves the aimed shape and paints every
-surface in it, and the cast applier refuses a shape that cannot resolve. Current `dev`
-still lacks the wider half: no cast announces a terrain volume, no unit effect iterates
-every occupant of a multi-voxel volume, and no volume clips itself to obstruction.
-Draft #180 closes those exact gaps for Impact and area Disable/Burn while retaining
-fail-closed area Restore/Reveal.
+surface in it, and the cast applier refuses a shape that cannot resolve. PR #180 makes
+the wider half live: Impact casts announce exact terrain volumes, area Disable/Burn
+iterates every snapshotted occupant, and supported effect volumes clip radially to
+obstruction. Area Restore/Reveal remains fail-closed pending its hidden-information
+policy.
 
-The candidate preflights monotonic session-local batch ids, pays once, and keeps a
-separate combat-authority hold until every queued defender answer, terrain outcome,
+The live transaction preflights monotonic session-local batch ids, pays once, and keeps
+a separate combat-authority hold until every queued defender answer, terrain outcome,
 settlement, and exact-position adoption completes. Valid applied/rejected answers may
 arrive out of order and complete independently. Foreign, duplicate, reused,
 mismatched, or structurally inconsistent evidence freezes resolution instead of
@@ -490,19 +498,18 @@ The binding parts are:
   `conjurable`; the generic `TerrainEdit::Set` path remains available for authored
   restoration and other non-spell uses.
 
-The live implementation and draft candidate retain these explicit limitations:
+The live implementation retains these explicit limitations:
 
-- **Trajectories are obstruction-aware; effect volumes are not clipped.** `Direct`
-  and authored-rise `Arc` casts test exact material occupancy with one
-  direction-symmetric integer supercover, while `None` deliberately bypasses it.
-  Authoritative casting uses complete `RunBottom` occupancy; preview anchors, target
-  cycling, and AI use only explicitly Observed material positions, so Unknown terrain
-  cannot change faction-facing choices. Authored range and arc rise are technically
-  capped at 16. A sphere may still include rock and the chamber beyond it after its
-  anchor is reached on current `dev`. Draft #180 removes that limitation by filtering
-  the canonical volume from the selected anchor over the same direct supercover:
-  radial endpoints stay hittable, `None` stays byte-for-byte unchanged, and preview/AI
-  use only faction-known occupancy. Obstruction-aware sight remains later work.
+- **Trajectories and supported effect volumes are obstruction-aware.** `Direct` and
+  authored-rise `Arc` casts test exact material occupancy with one direction-symmetric
+  integer supercover, while `None` deliberately bypasses it. After an anchor is legal,
+  the canonical effect volume is filtered radially from that anchor over the same
+  direct supercover: radial endpoints stay hittable, `None` stays byte-for-byte
+  unchanged, and preview/AI use only faction-known occupancy. Authoritative casting
+  uses complete `RunBottom` occupancy, so Unknown terrain cannot change
+  faction-facing choices while full truth can still clip the applied volume. Authored
+  range and arc rise are technically capped at 16. Obstruction-aware sight remains
+  later work.
 - **A breached cave roof will not admit daylight.** Terrain edits already keep the
   interior *roof* projection current, but interior **membership** is never re-derived,
   so a chamber you blow open still counts as inside. Live perception therefore
@@ -512,36 +519,27 @@ The live implementation and draft candidate retain these explicit limitations:
   a rest action, but real-time casting still needs an interaction and rest flow.
   **Rituals remain deferred** — `co_castable` parses and labels rituals in the demo,
   but has no mechanical effect.
-- **Paid-on-resistance is provisional.** The pending gameplay adapter's initial policy
-  is to charge mana and the action after a legal announcement even if every material
-  resists. Draft #180 implements that policy once per cast and also retains payment for
-  every valid rejection, including unavailable terrain.
+- **Paid-on-resistance is provisional.** The gameplay adapter charges mana and the
+  action once after a legal announcement even if every material resists, and retains
+  payment for every valid rejection, including unavailable terrain. Playtesting may
+  still change that policy without moving material authority out of the world.
 - **No-undermining is provisional.** Permanent evocation construction checks its
   complete volume and emits no edits when it intersects existing material, a unit body,
   or a unit's supporting surface. The cast remains accepted and paid so hidden blockers
-  are not an oracle. Current `dev` destructive terrain impacts still wait for falling
-  and footing reconciliation; draft #180 settles unsupported actors deterministically
-  and freezes with a typed diagnostic if no legal landing exists.
+  are not an oracle. Destructive terrain impacts refresh footing and movement, settle
+  unsupported actors deterministically, adopt their exact positions into combat
+  authority, and freeze with a typed diagnostic if no legal landing exists.
 - **Downed-first death is provisional.** A fully disabled unit initially leaves the
   turn order and retains its lattice. Renewal restores it into the next round and Rest
   recovers it after combat; functional death and permadeath remain open.
-- **On current `dev`, a unit effect reaches the unit on the anchor, not everyone in the
-  volume — and an area spell is therefore refused at load.** `volumes::resolve`
-  produces the full voxel list and the preview paints it, but `DisableHexes` and `Burn`
-  both apply to whoever stands on the target voxel. The friendly-fire contract above
-  is unchanged and unweakened — nothing filters by faction — but a fireball *would*
-  damage one unit rather than every unit inside it.
-
-  Rather than ship that as a silent lie, `lattices.ron` **rejects an inscribed spell
-  whose shape covers more than the anchor and whose effects reach units**
-  (`LatticeError::AreaEffectUnapplied`). The interface can only paint what a lattice can
-  cast, so the preview cannot promise what the applier will not deliver. The refusal
-  lifts in draft #180 for area Disable/Burn and Impact. That candidate snapshots exact
+- **Supported area unit effects reach every exact occupant in the clipped volume.**
+  `volumes::resolve` produces the full voxel list, and the transaction snapshots exact
   occupants at payment, orders authored effect then stable `UnitId`, queues one public
   defender decision at a time, includes caster/allies/enemies, and skips incidental
-  downed spill targets without disclosure. Area Restore/Reveal stay refused pending a
-  separately accepted hidden-information policy. Fireball becomes the first playable
-  Impact consumer (`Fire`, power 2) and drops its deferred `Displace`.
+  downed spill targets without disclosure. Area Disable/Burn and Impact are live. Area
+  Restore/Reveal stay refused pending a separately accepted hidden-information policy.
+  Fireball is the first playable Impact consumer (`Fire`, power 2) and drops its
+  deferred `Displace`.
 - **Burn attributes one source per tick.** Several burns on one target come due as a
   single count and therefore a single decision, which has room for one `source`. The
   earliest-lit fire fills it. The rules never read `source`, so the imprecision is

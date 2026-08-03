@@ -65,9 +65,10 @@ and optional Codex setup are in
   Inspect its merge base and transplant or merge only the intended unique work.
 - Keep source branches until the wave lands. Retarget open child PRs before deleting
   any branch they use as a base.
-- Run focused checks while a lane is changing. Run the complete CI-equivalent suite
-  and automated visual walk on the combined wave candidate; the human runtime walk
-  remains the final visual gate.
+- Run focused checks while a lane is changing. Run the complete selector-chosen
+  CI-equivalent gate on the combined wave candidate. Run the automated visual walk
+  and human runtime route only when the candidate affects presentation or experience;
+  a logic-only candidate records the exact-head hook-backed classification instead.
 
 ## Code review rules
 
@@ -78,3 +79,23 @@ and optional Codex setup are in
 - Treat an exact infrastructure timeout differently from a compiler, test, or lint
   failure, but never silently convert it to a pass. Record retries and any maintainer
   waiver on the wave PR.
+
+## Evidence boundary
+
+- Screenshots and rendered frames are valid evidence for static presentation: camera
+  framing and occlusion, UI hierarchy/layout/legibility/focus/contrast/reflow, and a
+  rendered map's visible geometry, materials, lighting, cutaways, seams, and
+  composition. They may show how a state already established by hooks is rendered;
+  they do not establish the underlying state.
+- Video and human checks are valid for motion and experience, including camera motion,
+  native input, animation, control feel, and taste. A static screenshot cannot prove
+  motion or control feel.
+- Screenshots, rendered frames, video, and human observation must never be used to
+  prove or corroborate gameplay or exact world logic when that claim can be observed
+  through typed hooks, components, resources, messages, logs, canonical snapshots, or
+  deterministic contracts.
+- If an authoritative logic hook is missing, add the narrow hook or contract. Do not
+  infer legality, occupancy, payment, damage, settlement, turn release, persistence,
+  determinism, or any other state transition from pixels or frame timing.
+- Presentation and experiential evidence does not duplicate, strengthen, or
+  substitute for logical evidence.

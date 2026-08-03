@@ -115,6 +115,18 @@ scenario. Named anchor clicks carry an expected `TilePos` stale detector, and ca
 orbits pass through the ordinary held-right-button plus cursor-motion input path;
 neither action mutates unit or camera state directly.
 
+Screenshots and rendered frames are evidence for static presentation: camera framing
+and occlusion, UI hierarchy/layout/legibility/focus/contrast/reflow, and rendered-map
+geometry, materials, lighting, cutaways, seams, and composition. Video and human
+checks are the evidence for camera motion, native-input response, animation, control
+feel, and taste; a still frame cannot establish motion. A visual artifact may prove
+how a hook-established state is rendered, but it never proves the underlying state.
+
+**Never use screenshots, rendered frames, video, or human observation as gameplay or
+exact world-logic evidence when typed hooks, state, events, logs, snapshots, or
+deterministic contracts can prove the claim.** If the hook is missing, add it; do not
+infer state transitions from pixels.
+
 ## Workspace
 
 ```
@@ -221,11 +233,11 @@ and tests without a renderer. It holds the largest share of the test suite.
   perception and later updates. Authored lighting publishes
   `ExteriorIllumination`; gameplay never samples renderer lights or pixels.
 - **`TerrainSystems`** (`ApplyWorld → RefreshProjections → ReconcileActors →
-  ConsumeOutcomes`) reserves the complete terrain-durability protocol before
-  perception. Only map-owned `ApplyWorld` has live participants. The other phases
-  reserve gameplay's occupancy/movement refresh, unsupported-actor settlement, and
-  matching outcome validation/release; do not claim those behaviors are live until
-  their adapters and cross-crate ordering tests land.
+  ConsumeOutcomes`) runs the complete terrain-durability protocol before perception.
+  Map-owned `ApplyWorld` applies impacts and publishes rebuilt facts/outcomes;
+  `RefreshProjections` republishes occupancy and reconciles movement;
+  `ReconcileActors` deterministically settles or adopts unsupported actors; and
+  `ConsumeOutcomes` validates the matching batch before releasing gameplay authority.
 - **Same-frame combat knowledge** is ordered `PublishKnowledge → combat spatial
   knowledge synchronization → CombatSystems::Act → Apply → Resolve → Advance`.
   Casting and AI must use that publication; neither preview nor a legal-action request
@@ -287,8 +299,10 @@ and `Component`, and every query names concrete components.
 
 ## Traps
 
-Several failure modes produce **no log output**. A clean log is not evidence a
-change worked — look at the window. The sharpest three:
+Several presentation failures produce **no log output**. A clean log is not evidence
+that the window is correct, so inspect it for visual symptoms. That inspection is not
+a gameplay oracle; logical claims still require typed hooks or deterministic state.
+The sharpest three:
 
 - **Plain blue window** — assets not found (see "Always run through cargo").
 - **Black sky** — the sky shader failed to load, or the dome was culled.
@@ -309,15 +323,17 @@ Menu.
 
 ```
 feat/whatever  ──PR──►  dev  ──PR──►  main
-feat/ticket    ──PR──►  wave/N-name  ──one walked PR──►  dev
+feat/ticket    ──PR──►  wave/N-name  ──one reviewed PR──►  dev
 ```
 
 `dev` is permanent — it is the integration branch, not a release branch that gets
 cleaned up. Standalone work PRs straight onto it; **related work with shared contracts,
 hot files, or one meaningful runtime checkpoint goes through a short-lived
 `wave/*` branch**. Source branches are work lanes and need leaf PRs only when focused
-review is useful. The combined wave gets the full audit and human walk, then lands on
-`dev` in one merge and is deleted (never `dev`). See
+review is useful. The combined wave gets the selector-chosen audit; affected
+presentation or experiential surfaces also get the applicable visual/human route,
+while logic-only waves record exact-head hook-backed evidence. It then lands on `dev`
+in one merge and is deleted (never `dev`). See
 [parallel development](docs/development/parallel-development.md) for the topology
 decision table and reconciliation rules.
 
@@ -357,7 +373,7 @@ Conventional Commits — `/release` computes the version bump from them.
 `/audit-pr` writes `/tmp/audit-pr-receipt-<PR>.json`; `/merge-pr` refuses to
 merge without a green receipt for the current HEAD.
 Test tiers: `/test-quick` (fmt+clippy+tests) → `/test-local` (+deny, doc,
-links) → `/test-full` (+ship build; the visual walk stays manual).
+links) → `/test-full` (+ship build; applicable visual/human review stays manual).
 Gameplay and map tests are partitioned by concern in
 [`docs/development/gameplay-testing.md`](docs/development/gameplay-testing.md) and
 [`docs/development/map-testing.md`](docs/development/map-testing.md); logical combat
@@ -367,11 +383,14 @@ gameplay visual run contains exactly ten reviewed presentation frames.
 Ordinary PRs run only the selector-chosen producer/consumer closure; trajectory-only
 changes use their dedicated pure/direct-consumer concern without application/UI tests.
 The combined terrain-impact source, unknown/unclassified paths, command-manifest or CI
-changes, pushes to `dev`/`main`, and final wave/release candidates still promote to the
-complete gate.
+changes, pushes to `dev`/`main`, and final wave/release candidates ordinarily promote
+to the complete gate. An explicit exact-path waiver may replace only the concerns it
+names with an authoritative narrow closure; omitted concerns are reported as WAIVED,
+not passed.
 Standalone audits: `/audit-diff`, `/audit-silent-failures`, `/update-docs`,
 `/visual-walk` (the scripted capture walk — audit-pr's Step 2.5; the agent
-reads the frames, and the human walk still owns motion and taste).
+reads static camera/UI/rendered-map frames, and video/human checks own motion, input
+response, control feel, and taste).
 Tickets live in Linear (team HEX): `/plan-ticket` to start from one,
 `/update-linear` to bind a PR, `/seed-tickets` to turn a roadmap into
 tickets. Binding is encouraged, never required.

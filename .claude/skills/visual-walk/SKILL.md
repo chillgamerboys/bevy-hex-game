@@ -1,36 +1,49 @@
 ---
 name: visual-walk
-description: Run the scripted visual walk — build with the visual-walk feature, drive the game through its screens from walks/*.ron, capture PNGs, then READ every frame and judge it. Structural and mechanical failures always fail; usability findings also block UI/presentation PRs. Step 2.5 of /audit-pr, receipt key 5_visual_walk. Local-only — CI has no GPU.
+description: Run the presentation-only scripted visual walk — build with the visual-walk feature, drive the game through its screens from walks/*.ron, capture PNGs, then READ every frame and judge rendered output only. Structural and mechanical presentation failures always fail; usability findings also block UI/presentation PRs. Step 2.5 of /audit-pr, receipt key 5_visual_walk. Local-only — CI has no GPU.
 ---
 
 When invoked, follow these steps. The point of this skill is the part no
-other gate does: **an agent actually looks at the game.**
+other gate does: **an agent actually looks at rendered presentation.**
 
 ## What this skill can and cannot judge
 
 Two tiers, and the split is the contract:
 
+Screenshots and rendered frames may judge static camera framing/occlusion, UI
+hierarchy/layout/legibility/focus/contrast/reflow, and rendered-map geometry,
+materials, lighting, cutaways, visible seams, and composition. Video and human checks
+may judge camera motion, native-input response, animation, control feel, and taste. A
+visual artifact may show how hook-established state is rendered, but screenshots,
+frames, video, and human observation never prove, corroborate, or strengthen
+gameplay/world logic that typed hooks, state, messages, logs, snapshots, or
+deterministic contracts can express. If the needed hook is missing, add it instead of
+inferring state from pixels or frame timing.
+
 - **Structural tier (hard fail):** before every capture, the live UI tree checks
   effective bounds, inherited clipping, scroll reachability, accessible labels,
   focus order, interactive overlap, and 44×44 targets. A nonzero node inside a
   clipped ancestor is not visible. Structural findings block capture and merge.
-- **Mechanical tier (hard fail):** the walk stalls, a capture comes back black,
-  the wrong screen is visible, a panel is entirely missing, or text renders as
-  nothing. These block the merge exactly like a failing test.
+- **Mechanical tier (hard fail):** a typed walk step stalls, a capture comes back
+  black, the wrong rendered surface is visible, a panel is entirely missing, or text
+  renders as nothing. These are presentation failures and block the merge exactly like
+  a failing presentation test; they do not establish underlying gameplay state.
 - **Review tier:** hierarchy, cramped or dead space, visual contrast, and
   inconsistent styling that no geometry oracle can judge remain human-readable
   findings. They block UI/presentation PRs; other runtime changes may record them
   as warnings for the human.
-- **Not covered:** motion (movement speed, animation feel), sub-pixel seams,
-  and final taste. The human walk owns those — this skill narrows the
-  human's job, it does not replace it.
+- **Not covered by frames:** any gameplay/world logic, plus camera/movement/animation
+  motion, control feel, native-input response, and final taste. Typed hooks own logic;
+  video and the human walk own the experiential remainder. This skill narrows the
+  human's presentation job; it does not replace it.
 
 ## Step 0 — Applicability
 
-Diffs with no runtime surface (docs, CI, pure data with no renderer path)
-skip the walk: report `skipped — no runtime surface` and stop. The trigger
-rule is the same one audit-diff uses for its visual flag: rendering, UI,
-transforms, movement, screen/state transitions → walk.
+Diffs with no affected presentation or experiential surface skip the walk: report
+`skipped — no affected presentation surface` and stop, even when renderer-free runtime
+logic changed. Trigger on rendering, UI presentation, native-input experience, motion,
+seams, or visual scripts—not on a gameplay/world state transition already proved by
+hooks.
 
 ## Step 1 — Build and run the walks
 
@@ -56,23 +69,27 @@ session must not be disturbed — check first).
 Each `Capture` owns a fresh shared 3D/UI image target and waits four complete render
 frames before screenshotting. The tooling UI camera tracks the 3D camera's MSAA so
 OIT tree fading cannot leave world pixels stale while UI pixels continue updating.
-Identical frames across movement or orbit are therefore a mechanical failure unless
-the script explicitly establishes that no visible state should change.
+Identical frames across movement or orbit are therefore a rendered-response failure
+unless the script explicitly establishes that no visible output should change. Typed
+state assertions, never image differences, prove whether movement or orbit occurred.
 
-A walk drives the REAL binary through the REAL wiring: named UI clicks are injected
+A walk drives the real binary through real wiring: named UI clicks are injected
 as `Interaction::Pressed`; `ClickTile` emits the ordinary primary `Pointer<Click>`
 after resolving one exact exposed surface; `ClickAnchor` first checks the published
 anchor against its authored exact position and then emits that same pointer click;
 `OrbitCamera` uses bounded cursor messages while the ordinary right mouse button is
 held; keys go through `ButtonInput`; and scenario launches use the same bypass as
 map-review. Route scripts may not mutate camera/unit state, teleport, suppress combat,
-or fake flight reachability. If a script's click target or anchor moved, fix and
+or fake flight reachability. Typed DSL assertions and exit status may prove route/state
+facts; the captures cannot. If a script's click target or anchor moved, fix and
 re-review the script in the same PR — scripts are part of the UI's contract now.
 
 ## Step 2 — Read every frame
 
-Open each PNG with the Read tool, in script order, and judge it against the
-step's intent (the script comments say what each frame should show). For
+Open each PNG with the Read tool, in script order, and judge it only against the
+step's presentation intent (the script comments say what each frame should render).
+Comments must not ask a frame to prove gameplay/world logic; add a typed assertion for
+that claim. For
 each frame record: `ok`, or a finding
 `{step, png_path, check: mechanical|review, message}`.
 
@@ -87,7 +104,7 @@ Say what is GOOD too when it is — the operator uses this to calibrate trust.
 Print a table: frame × verdict × finding. Then the receipt entry for
 `/audit-pr` (this skill is its Step 2.5, key `5_visual_walk`):
 
-- All frames ok → `"status": "pass"`, summary like
+- All frames visually ok → presentation-only `"status": "pass"`, summary like
   `"10 Bevy image-target frames, 0 structural, 0 mechanical, 0 review findings"`.
 - A review finding in a UI/presentation diff → `"status": "fail"` + the findings
   array. An ordinary non-UI runtime diff may report review findings as `warn`, but
@@ -106,16 +123,18 @@ always `fail`.
 
 - **In GitHub CI** — runners have no GPU; this is a local gate on the dev
   machine, like the rest of the audit chain's heavy steps.
-- **Doc-only / no-runtime diffs** — that's Step 0's `skipped`.
-- **As a substitute for the human walk.** The PR template keeps automated visual
-  evidence separate from structured exact-head human runtime evidence. A feature PR
-  with no rendered/runtime surface may carry a verified maintainer N/A waiver;
-  `/promote` still gates on the human PASS, always.
+- **No affected presentation/experiential surface** — that's Step 0's `skipped`, even
+  for a renderer-free runtime-logic change.
+- **As gameplay/world logic evidence.** Use or add typed hooks/contracts instead.
+- **As a substitute for applicable human presentation review.** The PR template keeps
+  automated visual evidence separate from structured exact-head human presentation
+  evidence. A logic-only feature or wave may carry a verified-maintainer N/A naming
+  its hooks; `/promote` still gates on the human presentation PASS, always.
 
 ## Self-updating
 
-- New screen or interaction worth photographing → extend `walks/*.ron` (and
-  add a step comment saying what the frame should show).
+- New screen or interaction with presentation worth photographing → extend
+  `walks/*.ron` (and add a step comment saying what the frame should render).
 - New mechanical or geometry check → add to the
   harness (`crates/hex_game/src/walk.rs`) first, then note it here.
 - If the walk scripts' click names drift from the UI, the walk fails loudly —

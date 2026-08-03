@@ -54,7 +54,9 @@ PR records a narrower exact validator/schedule/producer wedge as review evidence
 than weakening that fail-closed route. Unclassified shared core/assets, other world
 crates, selector-command or CI-topology changes, unknown paths, invalid configuration,
 and empty diffs fail closed.
-Pushes to `dev` or `main` and final wave candidates force the complete gate.
+Pushes to `dev` or `main` and final wave candidates ordinarily force the complete
+gate. A checked-in exact-path waiver may replace only its named concerns with a narrow
+authoritative closure; every omission remains visibly WAIVED rather than passed.
 
 The executable completeness guard is:
 
@@ -68,8 +70,17 @@ timing JSON, and logs for all three ordinary concerns.
 
 ## Evidence boundaries
 
-- A screenshot cannot prove exact `TilePos`, `RunBottom`, `HexSpan`, `Headroom`,
-  region membership, edit rebuilding, determinism, or teardown.
+- Screenshots and rendered frames are valid evidence for a rendered map's visible
+  geometry, materials, lighting, cutaways, seams, composition, and static camera
+  framing/occlusion. Video and human checks are valid for camera motion, native-input
+  response, animation, control feel, and taste. A static screenshot does not prove
+  motion or control feel.
+- A visual artifact may show how exact map state already established by hooks is
+  rendered, but screenshots, frames, video, and human observation must never prove or
+  corroborate world logic that typed map hooks or contracts can express. Add a narrow
+  hook instead of inferring state from pixels.
+- In particular, a screenshot cannot prove exact `TilePos`, `RunBottom`, `HexSpan`,
+  `Headroom`, region membership, edit rebuilding, determinism, or teardown.
 - A synthetic gameplay surface cannot prove the real map publisher.
 - World floats, transforms, `level_height`, and saturated headroom cannot reconstruct
   voxel occupancy; publication tests assert the integer contract directly.

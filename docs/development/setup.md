@@ -95,19 +95,18 @@ six-slot interaction is used for Party and Enemies.
 | Campaign New Game | Bind the canonical Party Trial to the selected empty slot without occupying it yet |
 | Campaign Continue | Restore the compatible selected slot through Loading |
 
-Inspect different allies without changing gameplay selection, move the group, orbit
-the camera, pause, press `F5`, return to Campaign, and Continue slot 1. Confirm the
-party positions, selected ally, formation, and active-play time return. Exercise every
-HUD shortcut, including a master-hidden one-surface summon and Compact map-only state.
-Then open Settings, change one volume, one HUD preference, and one keyboard binding;
-return to the Main Menu, restart, and confirm all three persisted. A representative
-walk should also enter combat and verify that `F5` refuses a mid-combat or Sandbox
-save and a required decision remains reachable while ordinary HUD components are
-hidden.
+Inspect different allies, move the group, orbit the camera, pause, press `F5`, return
+to Campaign, and Continue slot 1. Exercise every HUD shortcut, including a
+master-hidden one-surface summon and Compact map-only state. Then open Settings,
+change one volume, one HUD preference, and one keyboard binding; return to the Main
+Menu and restart. A representative walk should also enter combat, exercise the
+mid-combat/Sandbox save refusal, and inspect required-decision presentation while
+ordinary HUD components are hidden.
 
-This checks asset loading, terrain and actor spawning, input, screen teardown, atomic
-storage, and world reconstruction. Automated tests cannot tell whether the rendered
-window actually looks or feels right.
+This human route judges asset/native rendering, camera motion, input response, layout,
+control feel, and post-restart presentation. Typed hooks and canonical snapshots—not
+observation of the route—prove gameplay selection, positions, formation, active-play
+time, exact persistence, save refusal, teardown, storage, and world reconstruction.
 
 ## Diagnostics
 

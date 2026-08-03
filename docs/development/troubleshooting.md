@@ -1,9 +1,13 @@
 # When something looks wrong
 
-**Several failure modes here produce no log output at all.** A clean log is not
-evidence that a change worked — look at the window. This is the single list of
-symptoms; the copies that used to live in `CLAUDE.md`, the architecture doc and the
-config guide had already drifted apart from each other.
+**Several presentation failures here produce no log output at all.** A clean log is
+not evidence that the window is correct, so inspect it for these visual symptoms.
+Screenshots/frames are valid for static camera, UI, and rendered-map symptoms;
+video/human checks are valid for motion, input response, control feel, and taste. That
+inspection is never gameplay or exact world logic evidence when typed hooks, state,
+messages, logs, snapshots, or deterministic contracts can prove the claim. This is
+the single symptom list; the copies that used to live in `CLAUDE.md`, the architecture
+doc and the config guide had already drifted apart from each other.
 
 Symptoms specific to the map's internals — a tile in the wrong place, a piece sunk
 into terrain, a dig that removes the wrong thing — are in

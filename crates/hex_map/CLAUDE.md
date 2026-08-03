@@ -58,8 +58,8 @@ Gameplay may query `(&TilePos, &RunBottom, &HexSpan, &SubstanceId, &Headroom)` w
 stack-safe pattern. `TerrainEdit` and `TerrainImpact` are the two live write
 interfaces: direct edits replace or clear material, while impacts resolve numeric
 toughness and publish one ordered `TerrainImpactOutcome` per batch. `DamagedVoxels` is
-the exact partial-health projection, not a visibility grant. Spell emission and the
-gameplay-owned outcome consumer have not landed yet.
+the exact partial-health projection, not a visibility grant. PR #180 adds the live
+paid spell emitter plus gameplay-owned correlation, settlement, and outcome consumer.
 
 ### `Headroom` is not optional, and it is yours to get right
 
@@ -203,15 +203,19 @@ Clean up on `OnExit(Screen::Gameplay)`. There is a test that nothing leaks.
 The terrain-durability contract configures the reserved update protocol
 `TerrainSystems::ApplyWorld → TerrainSystems::RefreshProjections →
 TerrainSystems::ReconcileActors → TerrainSystems::ConsumeOutcomes` before perception.
-Only `ApplyWorld` has live systems and remains the map-owned phase that flushes rebuilt
-tile facts and outcomes. The other phases are empty gameplay reservations for
-occupancy/movement refresh, actor settlement, and matching outcome consumption; do not
-put systems into them until the gameplay implementation and cross-crate ordering tests
-land together.
+`ApplyWorld` remains the map-owned phase that flushes rebuilt tile facts and
+outcomes. PR #180 fills the gameplay-owned refresh, deterministic actor settlement,
+authority adoption, and matching-outcome consumption phases under cross-crate ordering
+contracts.
 
 ## Things that fail silently here
 
-A clean log is not evidence a change worked. **Look at the window.**
+A clean log is not evidence that presentation is correct, so inspect static frames for
+camera framing/occlusion and rendered geometry, materials, lighting, cutaways, seams,
+and composition; use video/human checks for camera motion, input response, control
+feel, and taste. Those artifacts may show how hook-established state is rendered but
+never prove map or gameplay logic when typed hooks or contracts can assert it; add the
+missing hook instead.
 
 | Symptom | Cause |
 |---|---|
@@ -252,8 +256,8 @@ depending on what has been looked at.
 1. `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 2. `python3 tools/test_scope.py check-partitions map`
 3. Run the selected map concerns from `python3 tools/test_scope.py plan`.
-4. **Run the game and look at it.** Every bug found in this codebase so far was found
-   by a human looking at the window, not by CI.
+4. Inspect the game only for affected geometry, materials, lighting, composition, or
+   motion. Logical map claims must already be proved through typed contracts.
 
 ## Where your work goes
 
@@ -266,10 +270,9 @@ gh pr create --base dev        # <- the --base matters
 ```
 
 `main` moves only when `dev` is promoted into it, after someone has played the game.
-This is not ceremony: **CI cannot see anything**. A black sky, a gap between every
-tile, a piece standing inside the terrain — all three have shipped here, green across
-clippy, the whole test suite and every CI check. `dev` is where work is allowed to be
-wrong until a person has looked at it.
+This is not ceremony: typed hooks cannot judge a black sky, a gap between every tile,
+or native presentation quality. Those visual claims need human eyes; map and gameplay
+logic still require typed evidence.
 
 `dev` is permanent. Delete your feature branch after it merges; never delete `dev`.
 
