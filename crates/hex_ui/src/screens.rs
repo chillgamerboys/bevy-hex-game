@@ -1,7 +1,7 @@
 use bevy::input_focus::InputFocus;
 use bevy::prelude::*;
 use bevy::ui::InteractionDisabled;
-use hex_core::{InputAction, Screen};
+use hex_core::Screen;
 
 use crate::{
     blurb, button, despawn_screen, display, heading, label, panel, row_button, screen_root,
@@ -328,18 +328,24 @@ fn refresh_settings(
     names: Query<&Name>,
     mut focus_refreshes: ResMut<crate::focus::FocusRefreshRequests>,
     mut notices: Query<&mut Text, With<SettingNotice>>,
-    mut returning_binding: Local<Option<InputAction>>,
+    mut returning_control: Local<Option<String>>,
 ) {
     if !view.is_changed() {
         return;
     }
-    if let Some(SettingsModalView::Capture { action, .. }) = view.modal.as_ref() {
-        *returning_binding = Some(*action);
+    if let Some(modal) = view.modal.as_ref() {
+        *returning_control = Some(match modal {
+            SettingsModalView::Capture { action, .. } => {
+                format!("Rebind {}", action.metadata().label)
+            }
+            SettingsModalView::Conflict { requested, .. } => {
+                format!("Rebind {requested}")
+            }
+            SettingsModalView::ConfirmRestoreAll => "Restore All Keybindings".to_owned(),
+        });
     }
     let returning_name = if view.modal.is_none() {
-        returning_binding
-            .take()
-            .map(|action| format!("Rebind {}", action.metadata().label))
+        returning_control.take()
     } else {
         None
     };
@@ -666,5 +672,188 @@ mod tests {
                 .map(|tag| tag.0),
             Some(Screen::Loading)
         );
+    }
+
+    #[cfg(feature = "test-support")]
+    mod focus_regressions {
+        use bevy::input_focus::{tab_navigation::TabIndex, FocusCause, InputFocus};
+
+        use super::*;
+        use crate::test_support::HeadlessUiPlugin;
+
+        fn binding_row(
+            action: hex_core::InputAction,
+            chord: &str,
+            overridden: bool,
+        ) -> crate::UiBindingRow {
+            crate::UiBindingRow {
+                action,
+                label: action.metadata().label.to_owned(),
+                chord: chord.to_owned(),
+                rebindable: true,
+                overridden,
+            }
+        }
+
+        fn settings_view(
+            bindings: Vec<crate::UiBindingRow>,
+            can_restore_all: bool,
+            modal: Option<SettingsModalView>,
+        ) -> UiSettingsView {
+            UiSettingsView {
+                tab: SettingsTab::Interface,
+                rows: Vec::new(),
+                bindings,
+                can_restore_all,
+                modal,
+                notice: None,
+            }
+        }
+
+        fn settle(app: &mut App) {
+            for _ in 0..4 {
+                app.update();
+            }
+        }
+
+        fn settings_app(view: UiSettingsView) -> App {
+            let mut app = App::new();
+            app.add_plugins(HeadlessUiPlugin::default());
+            *app.world_mut().resource_mut::<UiSettingsView>() = view;
+            app.world_mut()
+                .resource_mut::<NextState<Screen>>()
+                .set(Screen::Settings);
+            settle(&mut app);
+            app
+        }
+
+        fn named_entity(world: &mut World, wanted: &str) -> Entity {
+            let mut names = world.query::<(Entity, &Name)>();
+            names
+                .iter(world)
+                .find_map(|(entity, name)| (name.as_str() == wanted).then_some(entity))
+                .unwrap_or_else(|| panic!("missing named UI entity {wanted}"))
+        }
+
+        fn focus_named(app: &mut App, name: &str) -> Entity {
+            let entity = named_entity(app.world_mut(), name);
+            app.world_mut()
+                .resource_mut::<InputFocus>()
+                .set(entity, FocusCause::Navigated);
+            entity
+        }
+
+        fn replace_view(app: &mut App, view: UiSettingsView) {
+            *app.world_mut().resource_mut::<UiSettingsView>() = view;
+            settle(app);
+        }
+
+        fn assert_live_reachable_focus(app: &mut App) -> (Entity, String) {
+            let focused = app
+                .world()
+                .resource::<InputFocus>()
+                .get()
+                .expect("Settings should retain a focused control");
+            assert!(app.world().get_entity(focused).is_ok());
+            assert!(app
+                .world()
+                .get::<TabIndex>(focused)
+                .is_some_and(|index| index.0 >= 0));
+
+            let mut current = Some(focused);
+            while let Some(entity) = current {
+                assert!(app.world().get::<InteractionDisabled>(entity).is_none());
+                assert!(!app
+                    .world()
+                    .get::<Visibility>(entity)
+                    .is_some_and(|visibility| *visibility == Visibility::Hidden));
+                assert!(!app
+                    .world()
+                    .get::<Node>(entity)
+                    .is_some_and(|node| node.display == Display::None));
+                current = app.world().get::<ChildOf>(entity).map(ChildOf::parent);
+            }
+
+            let name = app
+                .world()
+                .get::<Name>(focused)
+                .expect("focused Settings controls have stable names")
+                .as_str()
+                .to_owned();
+            (focused, name)
+        }
+
+        #[test]
+        fn restore_conflict_swap_returns_focus_to_the_live_binding_row() {
+            let swapped = vec![
+                binding_row(hex_core::InputAction::ToggleParty, "I", true),
+                binding_row(hex_core::InputAction::ToggleInitiative, "P", true),
+            ];
+            let mut app = settings_app(settings_view(swapped.clone(), true, None));
+            let stale_restore = focus_named(&mut app, "Restore Party");
+
+            replace_view(
+                &mut app,
+                settings_view(
+                    swapped,
+                    true,
+                    Some(SettingsModalView::Conflict {
+                        requested: "Party".to_owned(),
+                        existing: "Initiative".to_owned(),
+                        chord: "P".to_owned(),
+                    }),
+                ),
+            );
+            assert_eq!(
+                assert_live_reachable_focus(&mut app).1,
+                "Swap Conflicting Bindings"
+            );
+
+            replace_view(
+                &mut app,
+                settings_view(
+                    vec![
+                        binding_row(hex_core::InputAction::ToggleParty, "P", false),
+                        binding_row(hex_core::InputAction::ToggleInitiative, "I", false),
+                    ],
+                    false,
+                    None,
+                ),
+            );
+
+            assert!(app.world().get_entity(stale_restore).is_err());
+            assert_eq!(assert_live_reachable_focus(&mut app).1, "Rebind Party");
+        }
+
+        #[test]
+        fn confirmed_restore_all_falls_back_to_a_live_settings_control() {
+            let overridden = vec![binding_row(hex_core::InputAction::ToggleParty, "Y", true)];
+            let mut app = settings_app(settings_view(overridden.clone(), true, None));
+            let stale_restore_all = focus_named(&mut app, "Restore All Keybindings");
+
+            replace_view(
+                &mut app,
+                settings_view(overridden, true, Some(SettingsModalView::ConfirmRestoreAll)),
+            );
+            assert_eq!(
+                assert_live_reachable_focus(&mut app).1,
+                "Confirm Restore All Keybindings"
+            );
+
+            replace_view(
+                &mut app,
+                settings_view(
+                    vec![binding_row(hex_core::InputAction::ToggleParty, "P", false)],
+                    false,
+                    None,
+                ),
+            );
+
+            assert!(app.world().get_entity(stale_restore_all).is_err());
+            assert_eq!(
+                assert_live_reachable_focus(&mut app).1,
+                "Settings Tab General"
+            );
+        }
     }
 }

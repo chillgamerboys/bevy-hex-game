@@ -378,10 +378,33 @@ impl HudState {
         )
     }
 
-    /// Closes a temporary surface or ordinary Main View, matching Escape behavior.
+    /// Closes an effectively visible temporary surface or ordinary Main View.
     ///
-    /// Required decisions are deliberately non-dismissible through this path.
-    pub fn close_active_surface(&mut self) -> HudActionResult {
+    /// Required decisions and stored destinations hidden by responsive, master, or
+    /// phase suppression are deliberately non-dismissible through this Escape path.
+    pub fn close_active_surface(&mut self, context: HudContext) -> HudActionResult {
+        if self.decision_required() {
+            return HudActionResult::NoChange;
+        }
+        if self.effective_transient(context).is_some() {
+            self.transient = None;
+            return HudActionResult::RuntimeChanged;
+        }
+        if !matches!(
+            self.effective_main_view(context),
+            MainViewDestination::Character(_) | MainViewDestination::Formation
+        ) {
+            return HudActionResult::NoChange;
+        }
+        self.main_view = MainViewDestination::Closed;
+        HudActionResult::RuntimeChanged
+    }
+
+    /// Clears any ordinary route for an explicit inspection-context change.
+    ///
+    /// Unlike Escape, this intentionally clears stored state even when presentation
+    /// policy currently hides it, so restoring the HUD cannot reveal a stale subject.
+    pub fn clear_active_surface(&mut self) -> HudActionResult {
         if self.decision_required() {
             return HudActionResult::NoChange;
         }
@@ -734,7 +757,7 @@ mod tests {
         );
 
         assert_eq!(
-            state.close_active_surface(),
+            state.close_active_surface(context),
             HudActionResult::RuntimeChanged
         );
         assert_eq!(state.effective_transient(context), None);
@@ -823,7 +846,10 @@ mod tests {
             HudActionResult::RuntimeChanged
         );
         assert_eq!(state.raw_transient(), None);
-        assert_eq!(state.close_active_surface(), HudActionResult::NoChange);
+        assert_eq!(
+            state.close_active_surface(exploration),
+            HudActionResult::NoChange
+        );
     }
 
     #[test]
@@ -913,7 +939,10 @@ mod tests {
             HudActionResult::NoChange
         );
         assert_eq!(state.open_formation(normal), HudActionResult::NoChange);
-        assert_eq!(state.close_active_surface(), HudActionResult::NoChange);
+        assert_eq!(
+            state.close_active_surface(compact_suppressed),
+            HudActionResult::NoChange
+        );
         assert_eq!(state.raw_transient(), None);
         assert_eq!(
             state.stored_main_view(),
@@ -957,7 +986,7 @@ mod tests {
         );
         assert_eq!(state.open_formation(context), HudActionResult::NoChange);
         assert_eq!(
-            state.close_active_surface(),
+            state.close_active_surface(context),
             HudActionResult::RuntimeChanged
         );
         assert_eq!(
@@ -992,6 +1021,42 @@ mod tests {
         assert_eq!(
             state.effective_main_view(context),
             MainViewDestination::Formation
+        );
+    }
+
+    #[test]
+    fn escape_does_not_discard_a_master_hidden_main_view() {
+        let context = HudContext::standard(HudContextEligibility::all());
+        let mut state = HudState::default();
+        state.open_formation(context);
+        state.toggle_master();
+
+        assert_eq!(
+            state.close_active_surface(context),
+            HudActionResult::NoChange
+        );
+        state.toggle_master();
+        assert_eq!(
+            state.effective_main_view(context),
+            MainViewDestination::Formation
+        );
+    }
+
+    #[test]
+    fn escape_does_not_discard_a_main_view_hidden_by_compact_projection() {
+        let standard = HudContext::standard(HudContextEligibility::all());
+        let compact = HudContext::compact(HudContextEligibility::all());
+        let unit = UnitId(31);
+        let mut state = HudState::default();
+        state.open_character(unit, standard);
+
+        assert_eq!(
+            state.close_active_surface(compact),
+            HudActionResult::NoChange
+        );
+        assert_eq!(
+            state.effective_main_view(standard),
+            MainViewDestination::Character(unit)
         );
     }
 

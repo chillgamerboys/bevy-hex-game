@@ -608,6 +608,40 @@ mod tests {
     }
 
     #[test]
+    fn capture_refuses_and_consumes_tab_for_a_non_focus_aware_action() {
+        let mut world = World::new();
+        world.init_resource::<SettingsSession>();
+        world.init_resource::<UserPreferences>();
+        world.init_resource::<PreferencesDirty>();
+        world.init_resource::<PreferencesNotice>();
+        world.init_resource::<ButtonInput<KeyCode>>();
+        world.resource_mut::<SettingsSession>().capture = Some(InputAction::ToggleParty);
+        world
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Tab);
+
+        world
+            .run_system_once(capture_next_key)
+            .expect("capture system has all required resources");
+
+        assert!(world.resource::<SettingsSession>().capture.is_none());
+        assert!(world.resource::<SettingsSession>().conflict.is_none());
+        assert!(world
+            .resource::<UserPreferences>()
+            .binding_overrides
+            .is_empty());
+        assert!(!world.resource::<PreferencesDirty>().0);
+        assert!(world
+            .resource::<PreferencesNotice>()
+            .0
+            .as_deref()
+            .is_some_and(|notice| notice.contains("focused controls")));
+        assert!(!world
+            .resource::<ButtonInput<KeyCode>>()
+            .just_pressed(KeyCode::Tab));
+    }
+
+    #[test]
     fn row_restore_after_swap_opens_conflict_without_mutating_preferences() {
         let mut bindings = InputBindings::default();
         bindings

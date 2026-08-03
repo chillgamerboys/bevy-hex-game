@@ -25,10 +25,15 @@ pub(crate) struct HudInspection {
     pub(crate) subject: Option<UnitId>,
 }
 
+/// Canonical effective HUD context published before screen-level Escape handling.
+#[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct GameplayHudContext(pub(crate) HudContext);
+
 pub(crate) fn plugin(app: &mut App) {
     app.init_resource::<hex_core::InputBindings>();
     app.init_resource::<HudState>()
         .init_resource::<HudInspection>()
+        .init_resource::<GameplayHudContext>()
         .configure_sets(
             Update,
             (
@@ -147,7 +152,7 @@ fn handle_inspection_input(
             let _ = hud.open_character(unit, context);
         } else {
             inspection.subject = Some(unit);
-            let _ = hud.close_active_surface();
+            let _ = hud.clear_active_surface();
             center_camera.write(hex_core::CenterInspectionCamera::new(unit));
         }
     }
@@ -164,9 +169,14 @@ fn add_chrome_publisher(app: &mut App) {
     );
 }
 
-fn reset_hud_runtime(mut hud: ResMut<HudState>, mut inspection: ResMut<HudInspection>) {
+fn reset_hud_runtime(
+    mut hud: ResMut<HudState>,
+    mut inspection: ResMut<HudInspection>,
+    mut context: ResMut<GameplayHudContext>,
+) {
     *hud = HudState::new(hud.preferences());
     *inspection = HudInspection::default();
+    *context = GameplayHudContext::default();
 }
 
 #[expect(
@@ -189,9 +199,6 @@ fn handle_hud_shortcuts(
     mut preferences: ResMut<crate::preferences::UserPreferences>,
     mut dirty: ResMut<crate::preferences::PreferencesDirty>,
 ) {
-    if bindings.just_pressed(&keys, hex_core::InputAction::ToggleHud) {
-        let _ = hud.toggle_master();
-    }
     let context = hud_context(
         *metrics,
         *phase,
@@ -202,6 +209,9 @@ fn handle_hud_shortcuts(
         !actions.actions.is_empty(),
         selection.is_active(),
     );
+    if !context.phase_suppressed && bindings.just_pressed(&keys, hex_core::InputAction::ToggleHud) {
+        let _ = hud.toggle_master();
+    }
     let mut preferences_changed = false;
     for (action, component) in [
         (hex_core::InputAction::ToggleParty, HudComponent::Party),
@@ -296,6 +306,7 @@ fn publish_hud_view(
     actions: Res<hex_ui::GameplayHudView>,
     selection: Res<lattice::DisableSelection>,
     resolution: Option<Res<EncounterResolution>>,
+    mut current_context: ResMut<GameplayHudContext>,
     mut view: ResMut<hex_ui::GameplayChromeView>,
 ) {
     let encounter_complete = resolution
@@ -318,6 +329,9 @@ fn publish_hud_view(
         !actions.actions.is_empty(),
         decision_required,
     );
+    if current_context.0 != context {
+        current_context.0 = context;
+    }
     let _ = hud.reconcile_context(context);
     let next = hex_ui::GameplayChromeView {
         party_shown: hud.is_component_visible(HudComponent::Party, context),
@@ -379,6 +393,7 @@ mod tests {
             .init_resource::<GameplayUiContext>()
             .init_resource::<hex_ui::GameplayHudView>()
             .init_resource::<lattice::DisableSelection>()
+            .init_resource::<GameplayHudContext>()
             .init_resource::<hex_ui::GameplayChromeView>();
         app
     }
@@ -480,6 +495,27 @@ mod tests {
         assert!(view.encounter_complete);
         assert!(!view.any_ordinary_shown());
         assert!(!view.terrain_health_shown);
+    }
+
+    #[test]
+    fn a_resolved_outcome_refuses_hidden_master_toggle_input() {
+        let mut app = chrome_app(GameplayPhase::Active);
+        app.insert_resource(EncounterResolution(Some(
+            hex_combat::EncounterOutcome::Victory,
+        )))
+        .init_resource::<ButtonInput<KeyCode>>()
+        .init_resource::<hex_core::InputBindings>()
+        .init_resource::<HudInspection>()
+        .init_resource::<crate::preferences::UserPreferences>()
+        .init_resource::<crate::preferences::PreferencesDirty>()
+        .add_systems(Update, handle_hud_shortcuts);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyH);
+
+        app.update();
+
+        assert!(!app.world().resource::<HudState>().master_suppressed());
     }
 
     #[test]

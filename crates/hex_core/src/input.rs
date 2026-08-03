@@ -790,7 +790,7 @@ pub enum BindingEditError {
     ModifierOnly(InputAction),
     /// Escape remains reserved for closing HUD tasks and the Pause fallback.
     ReservedGameplayEscape(InputAction),
-    /// Enter and Space activate a focused UI control before ordinary gameplay.
+    /// Tab navigation and Enter/Space activation belong to focused UI controls.
     ReservedFocusedActivation(InputAction),
     /// Another action already uses the chord in an overlapping context.
     Conflict(BindingConflict),
@@ -817,7 +817,7 @@ impl fmt::Display for BindingEditError {
             ),
             Self::ReservedFocusedActivation(action) => write!(
                 formatter,
-                "Enter and Space are reserved for focused controls and cannot be assigned to {}",
+                "Tab, Enter, and Space are reserved for focused controls and cannot be assigned to {}",
                 action.metadata().label
             ),
             Self::Conflict(conflict) => write!(
@@ -1018,7 +1018,7 @@ fn validate_focus_activation_reservation(
     action: InputAction,
     chord: KeyChord,
 ) -> Result<(), BindingEditError> {
-    if matches!(chord.key, KeyCode::Enter | KeyCode::Space)
+    if matches!(chord.key, KeyCode::Tab | KeyCode::Enter | KeyCode::Space)
         && !action.yields_to_focused_activation()
     {
         return Err(BindingEditError::ReservedFocusedActivation(action));
@@ -1210,12 +1210,14 @@ mod tests {
     fn focused_activation_keys_are_limited_to_focus_aware_gameplay_actions() {
         let mut bindings = InputBindings::default();
         let before = bindings.overrides().clone();
-        assert_eq!(
-            bindings.assign(InputAction::ToggleParty, KeyChord::plain(KeyCode::Enter)),
-            Err(BindingEditError::ReservedFocusedActivation(
-                InputAction::ToggleParty
-            ))
-        );
+        for key in [KeyCode::Tab, KeyCode::Enter, KeyCode::Space] {
+            assert_eq!(
+                bindings.assign(InputAction::ToggleParty, KeyChord::plain(key)),
+                Err(BindingEditError::ReservedFocusedActivation(
+                    InputAction::ToggleParty
+                ))
+            );
+        }
         assert_eq!(bindings.overrides(), &before);
         assert_eq!(
             bindings.swap(InputAction::ToggleParty, InputAction::Confirm),
@@ -1224,12 +1226,39 @@ mod tests {
             ))
         );
         assert_eq!(bindings.overrides(), &before, "refused swap is atomic");
+        assert_eq!(
+            bindings.swap(InputAction::ToggleParty, InputAction::NextTarget),
+            Err(BindingEditError::ReservedFocusedActivation(
+                InputAction::ToggleParty
+            ))
+        );
+        assert_eq!(bindings.overrides(), &before, "refused Tab swap is atomic");
 
         bindings
             .swap(InputAction::Confirm, InputAction::EndTurn)
             .expect("both actions yield Enter and Space to a focused control");
         assert_eq!(bindings.chord(InputAction::Confirm).key, KeyCode::Space);
         assert_eq!(bindings.chord(InputAction::EndTurn).key, KeyCode::Enter);
+        bindings
+            .swap(InputAction::Confirm, InputAction::NextTarget)
+            .expect("focus-aware actions may exchange Enter and Tab");
+        assert_eq!(bindings.chord(InputAction::Confirm).key, KeyCode::Tab);
+        assert_eq!(bindings.chord(InputAction::NextTarget).key, KeyCode::Space);
+    }
+
+    #[test]
+    fn persisted_tab_override_for_a_non_focus_aware_action_is_refused() {
+        let overrides = InputBindingOverrides(BTreeMap::from([(
+            InputAction::ToggleParty,
+            KeyChord::plain(KeyCode::Tab),
+        )]));
+
+        assert_eq!(
+            overrides.validate(),
+            Err(BindingEditError::ReservedFocusedActivation(
+                InputAction::ToggleParty
+            ))
+        );
     }
 
     #[cfg(not(feature = "dev-input"))]

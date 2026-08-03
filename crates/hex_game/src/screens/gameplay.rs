@@ -27,7 +27,9 @@ use hex_units::{Archetype, Downed, Party, Player, Selected, UnitRegistry};
 
 use super::despawn_screen;
 use super::sandbox::{CreatorDisplayName, GameplaySessionOrigin, SandboxSession};
-use crate::readouts::{ActivityNotice, DisableSelection, GameplayUiContext, UiUnitIdentity};
+use crate::readouts::{
+    ActivityNotice, DisableSelection, GameplayHudContext, GameplayUiContext, UiUnitIdentity,
+};
 use crate::scenarios::ActiveScenario;
 use hex_ui::{
     ActionAffordance, ActionAvailability, ActionPriority, GameplayAction, GameplayHudView,
@@ -861,10 +863,11 @@ fn handle_input(
     sandbox: Option<Res<SandboxSession>>,
     origin: Option<Res<GameplaySessionOrigin>>,
     mut main_menu: ResMut<MainMenuModel>,
+    hud_context: Res<GameplayHudContext>,
     mut hud: ResMut<HudState>,
 ) {
     let escape_closed_surface = keys.just_pressed(KeyCode::Escape)
-        && hud.close_active_surface() != HudActionResult::NoChange;
+        && hud.close_active_surface(hud_context.0) != HudActionResult::NoChange;
     if bindings.just_pressed(&keys, InputAction::Pause) && !escape_closed_surface {
         next_pause.set(toggled_pause(*pause.get()));
     }
@@ -1331,6 +1334,7 @@ mod tests {
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<InputBindings>()
             .init_resource::<HudState>()
+            .init_resource::<GameplayHudContext>()
             .init_resource::<MainMenuModel>()
             .add_systems(Update, handle_input);
         app.world_mut()
@@ -1362,6 +1366,7 @@ mod tests {
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<InputBindings>()
             .init_resource::<HudState>()
+            .init_resource::<GameplayHudContext>()
             .init_resource::<MainMenuModel>()
             .add_systems(Update, handle_input);
         let result = app
@@ -1384,5 +1389,40 @@ mod tests {
             hex_gameplay_model::MainViewDestination::Closed
         );
         assert_eq!(*app.world().resource::<State<Pause>>().get(), Pause(false));
+    }
+
+    #[test]
+    fn escape_pauses_without_discarding_a_master_hidden_main_view() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .insert_state(Screen::Gameplay)
+            .insert_state(Pause(false))
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<InputBindings>()
+            .init_resource::<HudState>()
+            .init_resource::<GameplayHudContext>()
+            .init_resource::<MainMenuModel>()
+            .add_systems(Update, handle_input);
+        let mut hud = app.world_mut().resource_mut::<HudState>();
+        assert_eq!(
+            hud.open_formation(hex_gameplay_model::HudContext::default()),
+            HudActionResult::RuntimeChanged
+        );
+        hud.toggle_master();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Escape);
+
+        app.update();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<HudState>().stored_main_view(),
+            hex_gameplay_model::MainViewDestination::Formation
+        );
+        assert_eq!(*app.world().resource::<State<Pause>>().get(), Pause(true));
     }
 }
