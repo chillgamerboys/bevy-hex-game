@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 256 256"
+     width="256"
+     height="256"
+     role="img"
+     aria-labelledby="title desc">
+  <title id="title">Space elemental glyph</title>
+  <desc id="desc">Two opposed arms curling into a balanced vortex.</desc>
+  <g fill="none" stroke="#fff" stroke-width="16" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M185 74C158 43 105 48 78 81C55 109 57 146 78 169C98 191 127 196 150 183" />
+    <path d="M71 182C98 213 151 208 178 175C201 147 199 110 178 87C158 65 129 60 106 73" />
+    <path d="M150 183C170 168 174 143 159 128C146 115 124 114 111 126" />
+    <path d="M106 73C86 88 82 113 97 128C110 141 132 142 145 130" />
+  </g>
+</svg>

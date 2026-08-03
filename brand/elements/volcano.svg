@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 256 256"
+     width="256"
+     height="256"
+     role="img"
+     aria-labelledby="title desc">
+  <title id="title">Volcano elemental glyph</title>
+  <desc id="desc">Two rising vents with branching eruptions.</desc>
+  <g fill="none" stroke="#fff" stroke-width="16" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M64 194C86 169 94 136 94 91M94 125L67 104M94 139L120 112" />
+    <path d="M192 194C170 169 162 136 162 91M162 125L189 104M162 139L136 112" />
+  </g>
+</svg>

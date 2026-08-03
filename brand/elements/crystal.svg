@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 256 256"
+     width="256"
+     height="256"
+     role="img"
+     aria-labelledby="title desc">
+  <title id="title">Crystal elemental glyph</title>
+  <desc id="desc">A tall pointed prism divided into three facets.</desc>
+  <g fill="none" stroke="#fff" stroke-width="16" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M64 75H192L128 194Z" />
+    <path d="M64 75L163 132L128 194M192 75L93 132L128 194" />
+  </g>
+</svg>

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 256 256"
+     width="256"
+     height="256"
+     role="img"
+     aria-labelledby="title desc">
+  <title id="title">Storm elemental glyph</title>
+  <desc id="desc">A broad S-shaped gust ending in two hooks.</desc>
+  <path d="M65 86C76 56 111 47 139 59C164 70 175 94 161 114C149 132 124 135 107 148C89 162 88 184 104 196C122 209 150 198 161 174"
+        fill="none" stroke="#fff" stroke-width="16" stroke-linecap="round" stroke-linejoin="round" />
+</svg>
