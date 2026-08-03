@@ -938,7 +938,7 @@ class TestScopeTests(unittest.TestCase):
         self.assertEqual(
             composition[composition.index("--package") + 1], "hex_game"
         )
-        self.assertNotIn("--lib", composition)
+        self.assertIn("--lib", composition)
         self.assertEqual(
             composition[composition.index("--test") + 1],
             "spell_resolution",
@@ -1012,14 +1012,23 @@ class TestScopeTests(unittest.TestCase):
             "[profile.gameplay-spell-resolution-composition.junit]",
             maxsplit=1,
         )[0]
-        self.assertIn("package(hex_game) & kind(test)", composition_profile)
+        for required in (
+            "package(hex_game)",
+            "binary(hex_game)",
+            "binary(spell_resolution)",
+            "binary(game_content_contracts)",
+            "shipped_fireball_is_available_to_creator_characters",
+            "shipped_fireball_is_admitted_and_castable_from_a_full_fire_ring",
+        ):
+            self.assertIn(required, composition_profile)
+        self.assertNotIn("kind(test)", composition_profile)
 
         expected = self.config["selection_checks"][
             "spell_resolution_contracts"
         ]
         self.assertEqual(len(expected["preflight_command"]), 56)
         self.assertEqual(len(expected["command"]), 2)
-        self.assertEqual(len(expected["postflight_command"]), 5)
+        self.assertEqual(len(expected["postflight_command"]), 7)
         self.assertIn(
             "hex_combat::contracts loop_contract::"
             "adapter_spending_the_turn_advances_both_projections_in_the_same_frame",

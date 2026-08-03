@@ -123,8 +123,11 @@
         "run",
         "--package",
         "hex_game",
+        "--lib",
         "--test",
         "spell_resolution",
+        "--test",
+        "game_content_contracts",
         "--cargo-profile",
         "ci",
         "--profile",
@@ -410,6 +413,8 @@
         "hex_map::contracts terrain_damage::terrain_protocol_orders_reserved_phases_before_perception"
       ],
       "postflight_command": [
+        "hex_game screens::creator::tests::shipped_fireball_is_available_to_creator_characters",
+        "hex_game::game_content_contracts shipped_fireball_is_admitted_and_castable_from_a_full_fire_ring",
         "hex_game::spell_resolution applied_impact_rebuilds_occupancy_settles_the_actor_and_releases_exact_authority",
         "hex_game::spell_resolution foreign_answer_freezes_and_an_outstanding_defender_answer_cannot_mutate",
         "hex_game::spell_resolution reversed_multi_batch_answers_and_a_later_cast_never_reuse_settlement_adoption",

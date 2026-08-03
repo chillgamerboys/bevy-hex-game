@@ -222,9 +222,9 @@ partition.
 
 Before executing that concern, the selector lists and compares all three exact
 partitions against the reviewed identities: 56 domain tests, two real-map seam tests,
-and five renderer-free composition tests. A renamed, removed, newly captured, or
-zero-match filter fails the concern instead of silently shrinking or widening its
-evidence.
+and seven renderer-free game-consumer/composition tests. A renamed, removed, newly
+captured, or zero-match filter fails the concern instead of silently shrinking or
+widening its evidence.
 
 The following omissions are **WAIVED**, not passed, green, N/A, or silently skipped:
 

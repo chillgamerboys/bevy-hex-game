@@ -44,6 +44,7 @@
     "crates/hex_game/Cargo.toml",
     "crates/hex_game/src/casting/preview.rs",
     "crates/hex_game/src/screens/creator.rs",
+    "crates/hex_game/tests/game_content_contracts.rs",
     "crates/hex_game/tests/spell_resolution.rs",
     "crates/hex_units/src/lib.rs",
     "crates/hex_units/src/movement.rs",

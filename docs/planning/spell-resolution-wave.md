@@ -206,8 +206,8 @@ workspace corpus.
   `terrain_protocol_orders_reserved_phases_before_perception` and
   `overkill_is_capped_and_empty_voxels_report_no_material`.
   Before execution, an exact nextest-list contract pins 56 domain identities, those
-  two map identities, and five composition identities so filter drift cannot reduce
-  evidence silently.
+  two map identities, and seven renderer-free game-consumer/composition identities so
+  filter drift cannot reduce evidence silently.
 - Composition: add explicit `hex_game/tests/spell_resolution.rs` using minimal state
   and the real map/units/perception/combat plugins. It installs no `AppPlugin`,
   renderer, viewport, `hex_ui::UiPlugin`, or test-support UI and uses a tiny authored

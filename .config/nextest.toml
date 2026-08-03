@@ -71,7 +71,13 @@ store-failure-output = true
 [profile.gameplay-spell-resolution-composition]
 fail-fast = false
 slow-timeout = "60s"
-default-filter = "package(hex_game) & kind(test)"
+default-filter = """
+package(hex_game) & (
+  (binary(hex_game) & test(/^screens::creator::tests::shipped_fireball_is_available_to_creator_characters$/)) |
+  (binary(spell_resolution) & test(/^(applied_impact_rebuilds_occupancy_settles_the_actor_and_releases_exact_authority|foreign_answer_freezes_and_an_outstanding_defender_answer_cannot_mutate|reversed_multi_batch_answers_and_a_later_cast_never_reuse_settlement_adoption|terrain_release_precedes_end_turn_and_the_next_actors_start_effect|terrain_unavailable_rejection_releases_without_tentative_settlement)$/)) |
+  (binary(game_content_contracts) & test(/^shipped_fireball_is_admitted_and_castable_from_a_full_fire_ring$/))
+)
+"""
 
 [profile.gameplay-spell-resolution-composition.junit]
 path = "junit.xml"

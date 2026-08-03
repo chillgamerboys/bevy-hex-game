@@ -291,18 +291,9 @@ fn publish_creator_view(
             |elements| spell_map_issues(spell, elements),
         )
     });
-    let deployable_shipped_spells = spell_book.as_deref().map_or_else(Vec::new, |spells| {
-        spells
-            .iter()
-            .filter(|(_, _, spell)| {
-                matches!(
-                    spell.targeting.shape,
-                    TargetShape::SelfCast | TargetShape::Single
-                ) && hex_combat::delivers_anything(spell)
-            })
-            .map(|(_, name, _)| name.to_owned())
-            .collect()
-    });
+    let deployable_shipped_spells = spell_book
+        .as_deref()
+        .map_or_else(Vec::new, deployable_shipped_spell_names);
     let deployable_custom_spells = elements.as_deref().map_or_else(Vec::new, |elements| {
         store
             .file
@@ -1152,6 +1143,14 @@ fn spell_map_issues(saved: &SavedSpell, elements: &ElementCatalog) -> Vec<String
     issues
 }
 
+fn deployable_shipped_spell_names(spells: &SpellBook) -> Vec<String> {
+    spells
+        .iter()
+        .filter(|(_, _, spell)| hex_combat::creator_spell_deployability(spell).is_ok())
+        .map(|(_, name, _)| name.to_owned())
+        .collect()
+}
+
 pub(super) fn character_map_issues(
     character: &SavedCharacter,
     library: &hex_assets::CreationLibraryFile,
@@ -1273,6 +1272,18 @@ fn adjust_u8(value: u8, delta: i8, max: u8) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shipped_fireball_is_available_to_creator_characters() {
+        let file: SpellFile = ron::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/config/spells.ron"
+        )))
+        .expect("shipped spells parse");
+        let deployable = deployable_shipped_spell_names(&SpellBook::from_file(&file));
+
+        assert!(deployable.iter().any(|name| name == "Fireball"));
+    }
 
     #[test]
     fn generated_names_are_case_insensitively_unique_and_bounded() {
