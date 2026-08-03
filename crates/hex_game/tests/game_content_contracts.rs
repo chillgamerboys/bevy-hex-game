@@ -371,71 +371,68 @@ fn shipped_wheel_opposition_is_symmetric() {
     }
 }
 
-/// An area spell on a lattice must not load while the applier only reaches the anchor.
+/// The Creator route promised by this wave can inscribe and fund shipped Fireball.
 ///
-/// This is the wave's one place where the interface could tell a lie the player has no
-/// way to catch. `hex_units::volumes` resolves a shape to an exact voxel set and the
-/// casting preview paints every surface in it; `hex_combat`'s applier still routes each
-/// unit-affecting effect through the single unit standing on the anchor. Inscribe
-/// Fireball on a lattice and the player would light up thirty-odd surfaces, spend the
-/// mana and the turn, and hurt one of them.
-///
-/// So it is refused at load. The test builds the failing content on purpose rather than
-/// asserting the shipped file happens to be clean, because the shipped file being clean
-/// is what would make this silently stop covering anything: every current lattice
-/// inscribes `Single` spells, so nothing here exercises the check by accident.
+/// This deliberately builds the same full Fire ring a player must author rather than
+/// relying on the shipped archetypes, which still inscribe only single-target spells.
+/// It protects both sides of the runtime route: area Impact/Disable is admitted now
+/// that the applier reaches the resolved volume, and the resulting lattice can actually
+/// pay Fireball's six requirements.
 #[test]
-fn an_area_spell_on_a_lattice_is_refused_while_the_applier_only_reaches_the_anchor() {
+fn shipped_fireball_is_admitted_and_castable_from_a_full_fire_ring() {
     use hex_assets::{AxialPair, UnvalidatedArchetype, UnvalidatedCell, UnvalidatedEntry};
     use std::collections::BTreeMap;
 
     let elements =
         ElementCatalog::from_file(&parse_elements().expect("elements.ron parses and validates"));
     let spells = SpellBook::from_file(&parse_spells().expect("spells.ron parses and validates"));
-
-    // Fireball is shipped, and its shape is a sphere — see spells.ron.
-    let cell = |kind| UnvalidatedEntry {
-        at: AxialPair { q: 0, r: 0 },
+    let entry = |q, r, kind| UnvalidatedEntry {
+        at: AxialPair { q, r },
         kind,
     };
-    let with_spell = |name: &str, q: i32| UnvalidatedEntry {
-        at: AxialPair { q, r: 0 },
-        kind: UnvalidatedCell::Spell(name.to_owned()),
-    };
-    let archetype = |entries: Vec<UnvalidatedEntry>| UnvalidatedArchetype {
-        cells: entries,
-        attunement: BTreeMap::from([("Fire".to_owned(), 3)]),
-        channelling: BTreeMap::from([("Fire".to_owned(), 3)]),
-        ai_profile: None,
-    };
-
-    let mut file = LatticeFile {
+    let fire_gem = |q, r| entry(q, r, UnvalidatedCell::Gem("Fire".to_owned()));
+    let file = LatticeFile {
         archetypes: BTreeMap::from([(
-            "area-caster".to_owned(),
-            archetype(vec![
-                cell(UnvalidatedCell::Gem("Fire".to_owned())),
-                with_spell("Fireball", 1),
-            ]),
+            "fireball-adept".to_owned(),
+            UnvalidatedArchetype {
+                cells: vec![
+                    entry(0, 0, UnvalidatedCell::Spell("Fireball".to_owned())),
+                    fire_gem(1, 0),
+                    fire_gem(0, 1),
+                    fire_gem(-1, 1),
+                    fire_gem(-1, 0),
+                    fire_gem(0, -1),
+                    fire_gem(1, -1),
+                ],
+                attunement: BTreeMap::from([("Fire".to_owned(), 3)]),
+                channelling: BTreeMap::from([("Fire".to_owned(), 2)]),
+                ai_profile: None,
+            },
         )]),
     };
-    let errors = LatticeLibrary::build(&file, &elements, &spells)
-        .expect_err("an area damage spell on a lattice must not resolve");
-    let reported = format!("{:?}", errors);
-    assert!(
-        reported.contains("AreaEffectUnapplied"),
-        "the refusal must name the gap it waits on, got: {reported}"
+    let library = LatticeLibrary::build(&file, &elements, &spells)
+        .expect("supported shipped area effects should resolve from Creator content");
+    let archetype = library
+        .get("fireball-adept")
+        .expect("the resolved library retains the authored character");
+    let fireball = spells.id("Fireball").expect("Fireball is shipped");
+    assert_eq!(
+        archetype.spec.get(LatticeCoord::ORIGIN),
+        Some(CellKind::Spell { spell: fireball })
     );
 
-    // The positive control, and the one that keeps the check from being a blanket ban on
-    // shapes: the same lattice with a Single spell resolves. Without this, deleting the
-    // shape test and refusing every spell cell would still pass.
-    file.archetypes.insert(
-        "area-caster".to_owned(),
-        archetype(vec![
-            cell(UnvalidatedCell::Gem("Fire".to_owned())),
-            with_spell("Ember", 1),
-        ]),
-    );
-    LatticeLibrary::build(&file, &elements, &spells)
-        .expect("a Single-shaped spell on the same lattice resolves");
+    let substances = SubstanceTable::from_file(
+        &parse_substances().expect("substances.ron parses"),
+        &parse_palette().expect("palette.ron parses and validates"),
+    )
+    .expect("shipped substances resolve through the art palette");
+    let index = ContentIndex::build(&elements, &spells, &substances).expect("content resolves");
+    let state = LatticeState::new(&archetype.spec, &archetype.stats);
+    castable(
+        &archetype.spec,
+        &state,
+        LatticeCoord::ORIGIN,
+        &index.tables(&elements),
+    )
+    .expect("the full Fire ring pays all six Fireball requirements");
 }

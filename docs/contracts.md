@@ -36,8 +36,8 @@ than agreed, the fallback the gameplay side ships without it is in
 | `BiomeRegions` — published by V3; gameplay consumer pending | world | gameplay | **partial** | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
 | `TraversalBlockers` — exact feature-occupied surfaces consumed by validation, perception, and movement | world | perception / `hex_units` | live | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
 | `RunBottom(Level)` — each run's lowest voxel; exact occupancy for terrain casting and obstruction-aware trajectories | world | gameplay | **live** | [planning/boundary.md](planning/boundary.md) C |
-| `TerrainImpact { batch, volume, ElementId, power }` — declarative canonical-volume voxel damage | gameplay | world | **partial** — map admission/resolution is live; gameplay spell publisher pending | [planning/boundary.md](planning/boundary.md) G |
-| `TerrainImpactOutcome` — one applied or rejected answer with exact per-voxel health transitions | world | gameplay | **partial** — map publication is live; gameplay pending-batch consumer pending | [planning/boundary.md](planning/boundary.md) H |
+| `TerrainImpact { batch, volume, ElementId, power }` — declarative canonical-volume voxel damage | gameplay | world | **live** — #175 owns map admission/resolution; #180 adds the paid gameplay spell publisher and monotonic batch ledger | [planning/boundary.md](planning/boundary.md) G |
+| `TerrainImpactOutcome` — one applied or rejected answer with exact per-voxel health transitions | world | gameplay | **live** — #175 publishes the answer, #178 validates it exhaustively, and #180 correlates it under the authority hold before settlement and release | [planning/boundary.md](planning/boundary.md) H |
 | `DamagedVoxels` — exact partial-health projection, never a visibility grant | world | shared presentation | live | [planning/boundary.md](planning/boundary.md) H |
 | `PendingTerrainEdits` — replay before first spawn | gameplay | world | **asked** | [planning/boundary.md](planning/boundary.md) ask D1 |
 | `TerrainSnapshot` — generator-independent dump | world | gameplay | **asked** | [planning/boundary.md](planning/boundary.md) ask D2 |
@@ -69,7 +69,7 @@ than agreed, the fallback the gameplay side ships without it is in
 | `PerceptionSystems` — headless phases through `PublishKnowledge` | core | perception | live | [systems/perception.md](systems/perception.md) |
 | `PerceptionSystems::ApplyPresentation` — fog projection phase | core | perception | reserved | [systems/perception.md](systems/perception.md) |
 | `PresentationSystems` — camera obstruction → renderer-owned materials → composed visibility | core | world / presentation | live | [systems/camera.md](systems/camera.md) |
-| `TerrainSystems` — reserved `ApplyWorld → RefreshProjections → ReconcileActors → ConsumeOutcomes` before perception and later combat authority | core | world / gameplay | **partial** — map `ApplyWorld` is live; the configured downstream phases are empty until gameplay lands occupancy/movement refresh, actor settlement, and outcome consumption | [planning/boundary.md](planning/boundary.md) H |
+| `TerrainSystems` — `ApplyWorld → RefreshProjections → ReconcileActors → ConsumeOutcomes` before perception and later combat authority | core | world / gameplay | **live** — #175 supplies map `ApplyWorld`, #178 supplies the shared ordering, and #180 wires occupancy/movement refresh, deterministic actor settlement and authority adoption, then matching-outcome consumption | [planning/boundary.md](planning/boundary.md) H |
 | `AppSystems`, `PausableSystems` | core | all | live | [`CLAUDE.md`](../CLAUDE.md) |
 | Same-frame combat knowledge — `PublishKnowledge → spatial lattice sync → Act → Apply → Resolve → Advance` | perception / gameplay | combat / AI | live | [systems/ai.md](systems/ai.md) |
 

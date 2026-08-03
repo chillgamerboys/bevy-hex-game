@@ -148,31 +148,35 @@ ${LINES_STAT}
 - [ ] Residual workspace tests and doctests (only when the scope decision selects `residual`)
 - [ ] `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features` (unless Markdown-only)
 - [ ] `cargo build --package hex_game --release` (when the scope decision selects `shipping`; CI builds it on all three platforms)
-- [ ] Structural UI oracle and scoped Bevy image-target walk green, or exact-head N/A because the reviewed diff has no rendered runtime concern
+- [ ] Structural UI oracle: green when selected, selector-N/A when unselected, or explicit WAIVED under a checked-in exact-path waiver
+- [ ] Scoped Bevy image-target walk: green for affected static presentation, or exact-head N/A because the reviewed diff has no affected presentation concern
 
 ### Manual runtime sign-off
 
 <!--
-Gameplay runtime-surface changes may be marked ready only after a named human runs the
-release-shaped build at the exact final PR head. A named maintainer may instead record
-an exact-head N/A waiver when the reviewed change has no rendered presentation,
-navigation, movement, persistence, or visual-script surface. Any later push invalidates
-either result. Source lanes targeting wave/* defer this evidence to the combined wave
-PR.
+A named human PASS is required only when the changed surface includes rendered
+presentation, native input, motion, control feel, seams, or taste. A logic-only runtime
+change backed by typed hooks, state, messages, logs, snapshots, or deterministic
+contracts records an exact-head verified-maintainer N/A instead. Screenshots/frames
+judge static camera, UI, and rendered-map presentation; video/human checks judge
+motion, input response, control feel, and taste. None proves or corroborates
+gameplay/world logic; add a missing hook rather than infer state from pixels. Any later
+push invalidates either classification. Source lanes targeting wave/* defer it to the
+combined wave PR.
 -->
 
 - Agent-operated Bevy visual review:
 
 Manual runtime result: <PASS, BLOCKED, or N/A>
-Manual runtime commit: <full 40-character PR head SHA for PASS/waiver, or N/A only when no runtime path changed>
-Manual runtime reviewer: <named human for PASS; @maintainer-login for waiver; N/A only when no runtime path changed>
-Manual runtime date: <YYYY-MM-DD for PASS/waiver, or N/A only when no runtime path changed>
-Manual runtime route: <affected route for PASS; exact non-rendered reason for waiver; N/A only when no runtime path changed>
-Manual runtime findings/waiver: <findings or explicit maintainer waiver; N/A only when no runtime path changed>
+Manual runtime commit: <full 40-character PR head SHA for PASS or N/A waiver>
+Manual runtime reviewer: <named human for PASS; @maintainer-login for N/A waiver>
+Manual runtime date: <YYYY-MM-DD for PASS or N/A waiver>
+Manual runtime route: <affected presentation/experiential route for PASS; authoritative hook closure and no-visual reason for N/A>
+Manual runtime findings/waiver: <presentation findings for PASS; explicit logic-only maintainer waiver naming hooks/contracts for N/A>
 
 ### Evidence by concern
 
-<!-- Record omitted concerns as N/A with the selector reason; do not run them merely to fill this list. -->
+<!-- Record selector-omitted concerns as N/A with the selector reason. Record concerns omitted by an explicit waiver as WAIVED, never N/A. Do not run either merely to fill this list. -->
 
 - Pure rules:
 - ECS contracts:
@@ -182,19 +186,26 @@ Manual runtime findings/waiver: <findings or explicit maintainer waiver; N/A onl
 - Scheduled/manual soak or performance (when applicable):
 
 <!--
-Those last two are different gates, not a formality and not each other's
-substitute. Several failure modes here produce a clean log and a wrong window:
-missing assets render a plain blue screen, a missed skybox event renders a black
-sky, a wrong speed unit just looks slightly off, and a tile whose transform
-disagrees with its span floats or sinks. All of them pass CI. The automated walk
-(receipt key 5_visual_walk) catches the renders-nothing/renders-broken class and
-lists layout findings; motion, feel, and taste still need human eyes — /promote
-gates on the structured exact-head human PASS fields, never the automated tier.
+Screenshots and rendered frames prove static presentation: camera framing/occlusion,
+UI layout/hierarchy/legibility/focus/contrast/reflow, and rendered-map geometry,
+materials, lighting, cutaways, seams, and composition. Video and human checks prove
+camera motion, native-input response, animation, control feel, and taste. These may
+judge how a hook-established state is rendered, but must never prove, corroborate, or
+strengthen gameplay/world logic. Add a missing hook instead of inferring state from
+pixels or frame timing.
 
-If the change touches rendering, movement, persistence, or state transitions, walk it
-at the exact candidate head: splash -> Main Menu -> Campaign slot 1 -> Party Trial,
-orbit, move, pause, save with F5, return to Campaign, Continue slot 1, then persist one
-Settings change across restart. Traverse affected Sandbox or Tools routes separately.
+Those last two are different gates, not a formality and not each other's
+substitute. Several presentation failures produce a clean log and a wrong window:
+missing assets render a plain blue screen, a missed skybox event renders a black sky,
+native text can be unreadable, and motion can feel wrong. The automated walk (receipt
+key 5_visual_walk) catches the renders-nothing/renders-broken class and lists layout
+findings; motion, feel, and taste still need human eyes — /promote retains its
+structured exact-head human presentation PASS gate, never the automated tier.
+
+If the change affects presentation, native input, motion, control feel, seams, or
+taste, walk the affected route at the exact candidate head. Do not record route
+observation as gameplay/world logic evidence; cite the typed hooks or contracts that
+prove each underlying state transition separately.
 -->
 
 ## Boundaries
@@ -215,10 +226,11 @@ necessary — it is worth a sentence so the people who depend on them know.
 
 The Checks list is what `/audit-pr` verifies mechanically, including a policy-valid
 N/A for the automated visual walk (receipt key `5_visual_walk`) when the reviewed diff
-has no rendered runtime concern. This applicability decision is independent of a
-fail-closed automated `app` selection. The named human fields belong to the operator; stills are
-not play, and motion, feel, and taste still need a human at the window when runtime
-sign-off applies.
+has no affected presentation concern. This applicability decision is independent of a
+fail-closed automated `app` selection or renderer-free runtime-logic change. The named
+human fields belong to the operator when presentation or experiential sign-off applies;
+a logic-only candidate instead uses the exact-head verified-maintainer N/A and names
+its authoritative hook closure. Release promotion retains its human presentation gate.
 
 **TODO-marker design:** the literal `TODO: ... the skill leaves this
 TODO marker` text is intentionally obvious in the rendered PR. A
@@ -254,7 +266,7 @@ PR_URL=$(gh pr view --json url --jq .url)
 The explicit `--base` is load-bearing. **Everything lands on `dev`;
 nothing is merged straight to `main`** — but gameplay-ticket work
 grouped into a wave targets its `wave/N-*` integration branch, and the
-wave reaches `dev` in one walked merge (see CONTRIBUTING.md's wave
+wave reaches `dev` in one exact-head classified merge (see CONTRIBUTING.md's wave
 section). Accept a base via the invocation ("create-pr onto
 wave/2-command-flow"); default `dev`. An explicit base also defends
 against GitHub picking a parent feature branch as the default when the
@@ -305,8 +317,8 @@ Never close the PR over a bind failure.
 
 Next: /audit-pr when ready to gate for merge.
 
-Reminder: fill the `<!-- TODO -->` markers (What-and-why, Changelog)
-and run the game before ticking the last Checks box.
+Reminder: fill the `<!-- TODO -->` markers (What-and-why, Changelog),
+then record the applicable exact-head human PASS or hook-backed N/A classification.
 ```
 
 ## Troubleshooting

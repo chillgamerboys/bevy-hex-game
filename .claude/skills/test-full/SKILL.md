@@ -58,43 +58,46 @@ than compiling it anyway.
 
 **The automated tier is `/visual-walk`** — as `/audit-pr` Step 2.5 it
 drives the game through `walks/*.ron`, photographs every screen, and
-the agent reads the frames. Blue windows, black skies, dead screens
-and missing panels are caught there mechanically. When running
-`/test-full` standalone on a runtime-surface change, invoke
+the agent reads the frames. It judges static camera framing/occlusion, UI
+presentation, and rendered-map geometry/materials/lighting/cutaways/seams/composition.
+Blue windows, black skies, dead rendered surfaces, and missing panels are caught there
+mechanically. Typed hooks, not images, own all gameplay/world logic. When running
+`/test-full` standalone on a presentation-surface change, invoke
 `/visual-walk` here rather than skipping straight to the reminder.
 
-**The human tier must not be skipped silently.** Stills are not play:
-motion, feel, hairline seams and taste are still found by a person
-looking at the window — as every serious bug here was before the walk
-existed. Print the walk for the operator:
+**The human tier must not be skipped silently when it applies.** Stills are not play:
+video or a human check owns camera/movement/animation motion, native-input response,
+control feel, and taste. Human observation is presentation/experience evidence only
+and must never prove or corroborate logic available through hooks or contracts. Print
+the scoped walk for the operator:
 
 ```
-Manual walk (record exact-head result, commit, reviewer, date, and route in the PR):
+Manual presentation/experience walk (record exact-head result, commit, reviewer, date, and route in the PR):
   cargo dev
   splash → title → New Game → Party Trial
   orbit (right-drag), WASD pan, zoom
-  select and move the party; range tint + route preview draw
-  ESC pause, F5 save, BACKSPACE to title, Continue
-  Settings change → restart → verify; launch affected fixtures separately
+  select and move the party; judge motion, control feel, range tint, and route rendering
+  inspect only affected presentation routes; cite hooks separately for state/persistence
 ```
 
-Report this phase as `automated walk: <verdict>; human walk: operator
-records structured evidence`. The human runtime fields in the PR template belong to
-the operator, not this skill.
+Report this phase as `automated presentation walk: <verdict>; human presentation walk:
+operator records structured evidence`, or as an exact-head verified-maintainer N/A
+naming the renderer-free hook closure. The PR fields belong to the operator, not this
+skill.
 
-If the diff changes no rendered presentation, runtime navigation, movement behavior,
-persistence, or visual script, record both visual tiers as `not applicable` with that
-reason. This applicability decision is independent of a fail-closed selector choosing
-`app` because validation infrastructure changed: automated closure and visual evidence
-answer different questions. Record an exact-head maintainer waiver when a runtime path
-is conservatively classified but the reviewed diff has no rendered/runtime surface.
-Do not launch the UI merely to turn an unrelated test into a checkbox. Final combined
-waves and release promotions keep their broader runtime gate.
+If the diff changes no rendered presentation, native-input experience, motion, control
+feel, seams, taste, or visual script, record both visual tiers as `not applicable` with
+that reason even when renderer-free runtime logic changed. This applicability decision
+is independent of a fail-closed selector choosing `app`: automated logic closure and
+visual evidence answer different questions. Record an exact-head verified-maintainer
+waiver naming the authoritative hooks/contracts. Do not launch the UI merely to turn
+an unrelated logic test into a checkbox. Combined waves use the same classification;
+release promotions retain their broader human presentation gate.
 
 ## Output
 
 ```
-✓ /test-full — local green, ship build green, visual applicability: <manual evidence | exact-head N/A reason>
+✓ /test-full — local green, ship build green, visual applicability: <human presentation evidence | exact-head hook-backed N/A reason>
 ```
 
 ## Findings shape (for audit-pr receipt v3)
@@ -117,9 +120,10 @@ operator sees the exact failures without re-running.
 
 ## When invoked from `/audit-pr`
 
-Automatic as Step 2. The receipt's `2_test_full` step records the
-outcome with per-suite findings. The human runtime walk stays the operator's to record
-in the structured PR fields — the receipt does not claim it.
+Automatic as Step 2. The receipt's `2_test_full` step records the outcome with per-suite
+findings. Applicable human presentation review stays the operator's to record in the
+structured PR fields; logic-only changes instead name the exact hook-backed N/A. The
+receipt does not invent either result.
 
 ## When invoked standalone
 
@@ -128,6 +132,6 @@ a PR, or to reproduce a CI failure.
 
 ## Self-updating
 
-- When a new test tier earns its place (e.g., a rendered-frame
+- When a new test tier earns its place (e.g., a presentation-only rendered-frame
   comparison if screenshot testing ever lands) → add a Phase 4 here.
 - When CI's build matrix changes → update Phase 2 to match.

@@ -39,6 +39,7 @@ use bevy::prelude::*;
 use hex_assets::{GameAssets, TargetShape, Trajectory};
 use hex_core::{Headroom, HexSpan, HexTile, KnowledgeState, Pause, TilePos};
 use hex_perception::FactionMapKnowledge;
+use hex_units::trajectories::clip_known_effect_volume;
 use hex_units::Faction;
 use hex_units::{
     known_trajectory_is_clear, resolve_creation_volume, trajectory_destination, volumes,
@@ -281,6 +282,12 @@ pub(super) fn redraw_preview(
         volumes::resolve(&row.shape, key.from, key.aim.anchor, facing)
     }
     .unwrap_or_default();
+    let voxels = if row.creates_terrain {
+        voxels
+    } else {
+        clip_known_effect_volume(row.trajectory, key.aim.anchor, voxels, &known_terrain)
+            .unwrap_or_default()
+    };
     let mut painted = 0;
     for (pos, top) in &surfaces {
         // A resolver hands back its volume sorted and deduplicated — the canonical form

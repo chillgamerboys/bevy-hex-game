@@ -42,6 +42,48 @@ path = "junit.xml"
 store-success-output = false
 store-failure-output = true
 
+[profile.gameplay-spell-resolution]
+fail-fast = false
+slow-timeout = "60s"
+default-filter = """
+(package(hex_core) & binary(hex_core) & test(/^terrain_impact::tests::/)) |
+(package(hex_assets) & binary(hex_assets) & (test(/^spells::tests::(shipped_spells_parse|shipped_spells_cover_every_advertised_effect_variant|shipped_fireball_announces_fire_impact_without_deferred_displacement|impact_rejects_blank_elements_and_zero_power_before_indexing|impact_round_trips_reflects_and_has_complete_fingerprint_fields)$/) | test(/^content_index::tests::a_dangling_impact_element_fails_cross_file_admission$/) | test(/^lattices::tests::(area_disable_burn_and_impact_are_admitted_to_lattices|area_restore_reveal_and_targeted_disable_remain_fail_closed)$/))) |
+(package(hex_units) & ((binary(hex_units) & test(/^terrain_occupancy::tests::/)) | (binary(contracts) & test(/^terrain_reconciliation::/)))) |
+(package(hex_combat_core) & binary(hex_combat_core) & test(/^authority::tests::external_resolution_holds_turn_and_outcome_between_area_answers$/)) |
+(package(hex_combat) & ((binary(hex_combat) & (test(/^spell_resolution::tests::/) | test(/^commands::cast::tests::/) | test(/^commands::tests::a_disable_decision_is_modal_for_every_other_command$/) | test(/^resolution::tests::(terminal_outcome_emits_once|simultaneous_elimination_is_defeat|a_retained_outcome_blocks_pausable_simulation)$/))) | (binary(contracts) & (test(/^effects::(casting_a_burn_starts_a_countdown_rather_than_landing_damage|terrain_creation_emits_exact_air_voxels_only_after_legality_and_payment|an_earthen_wall_publishes_two_complete_voxels_above_the_selected_surface|settled_construction_replaces_stale_movement_authority_before_the_next_command|hidden_air_material_and_unit_truth_have_the_same_acceptance_and_payment|a_damage_cast_on_a_downed_unit_is_refused_before_payment)$/) | test(/^damage::(a_disable_decision_is_answered_through_the_command_log|a_mismatched_answer_is_refused)$/) | test(/^funnel::(combat_commands_fail_closed_when_the_authority_cannot_initialize|a_busy_unit_cannot_start_a_second_move)$/) | test(/^loop_contract::adapter_spending_the_turn_advances_both_projections_in_the_same_frame$/)))))
+"""
+
+[profile.gameplay-spell-resolution.junit]
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true
+
+[profile.gameplay-spell-resolution-map]
+fail-fast = false
+slow-timeout = "60s"
+default-filter = "package(hex_map) & binary(contracts) & test(/^terrain_damage::(terrain_protocol_orders_reserved_phases_before_perception|overkill_is_capped_and_empty_voxels_report_no_material)$/)"
+
+[profile.gameplay-spell-resolution-map.junit]
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true
+
+[profile.gameplay-spell-resolution-composition]
+fail-fast = false
+slow-timeout = "60s"
+default-filter = """
+package(hex_game) & (
+  (binary(hex_game) & test(/^screens::creator::tests::shipped_fireball_is_available_to_creator_characters$/)) |
+  (binary(spell_resolution) & test(/^(applied_impact_rebuilds_occupancy_settles_the_actor_and_releases_exact_authority|foreign_answer_freezes_and_an_outstanding_defender_answer_cannot_mutate|reversed_multi_batch_answers_and_a_later_cast_never_reuse_settlement_adoption|terrain_release_precedes_end_turn_and_the_next_actors_start_effect|terrain_unavailable_rejection_releases_without_tentative_settlement)$/)) |
+  (binary(game_content_contracts) & test(/^shipped_fireball_is_admitted_and_castable_from_a_full_fire_ring$/))
+)
+"""
+
+[profile.gameplay-spell-resolution-composition.junit]
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true
+
 [profile.gameplay-simulation]
 fail-fast = false
 slow-timeout = "60s"

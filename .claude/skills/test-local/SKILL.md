@@ -1,30 +1,52 @@
 ---
 name: test-local
-description: PR-local check loop — fmt + clippy + concern-selected tests + cargo-deny + doc build + markdown link check. Mirrors the affected CI closure on the developer machine. Use before pushing for review; `/test-full` adds the selected ship-shape and visual applicability gates.
+description: PR-local check loop — exact PR-context planning, selector-chosen tests and non-test gates, plus Markdown links. Mirrors only the affected CI closure on the developer machine. Use before pushing for review; `/test-full` adds the selected ship-shape and visual applicability gates.
 ---
 
 When invoked, run this sequence. STOP on first failure.
 
-## Step 1 — Format
+## Step 1 — Exact PR-context scope
+
+```bash
+BASE=$(gh pr view --json baseRefName --jq .baseRefName 2>/dev/null || printf dev)
+HEAD_REF=$(gh pr view --json headRefName --jq .headRefName 2>/dev/null || \
+  git branch --show-current)
+PR_NUMBER=$(gh pr view --json number --jq .number 2>/dev/null || true)
+SCOPE_ARGS=(--base "origin/$BASE" --head HEAD)
+if [ -n "$PR_NUMBER" ]; then
+  SCOPE_ARGS+=(--event-name pull_request --base-ref "$BASE" \
+    --head-ref "$HEAD_REF" --pull-request-number "$PR_NUMBER")
+fi
+python3 tools/test_scope.py plan "${SCOPE_ARGS[@]}" || exit $?
+```
+
+The printed booleans are authoritative for every later phase. An exact tracked waiver
+applies only when this context matches; an absent or mismatched context fails closed.
+Keep `SCOPE_ARGS` in the same shell through Step 3; repeat the Step 1 setup if the
+command runner starts a fresh shell per block.
+
+## Step 2 — Format, dependency policy, and Clippy
+
+For `code: true`, run:
 
 ```bash
 cargo fmt --all --check
+cargo deny check
 ```
 
-## Step 2 — Clippy
+When the decision selects `clippy`, additionally run:
 
 ```bash
 python3 tools/test_scope.py run clippy
 ```
 
+Do not run Clippy merely because another test concern exists.
+
 ## Step 3 — Selected concern closure
 
 ```bash
-BASE=$(gh pr view --json baseRefName -q .baseRefName 2>/dev/null || \
-  git rev-parse --abbrev-ref '@{upstream}' 2>/dev/null | sed 's#^[^/]*/##')
-python3 tools/test_scope.py plan --base "origin/${BASE:-dev}" --head HEAD || exit $?
 SELECTED=$(python3 tools/test_scope.py selected-tests \
-  --base "origin/${BASE:-dev}" --head HEAD) || exit $?
+  "${SCOPE_ARGS[@]}") || exit $?
 REMAINING=$SELECTED
 while [ -n "$REMAINING" ]; do
   concern=${REMAINING%% *}
@@ -41,24 +63,19 @@ esac
 
 Report the decision and each selected concern independently. Do not manually promote
 an omitted application/UI, simulation, generation, or residual concern merely because
-it exists. Unknown/unclassified paths and empty diffs already fail closed; pushes to
-`dev`/`main` and final wave or release candidates force the complete gate.
+it exists. Unknown/unclassified paths and empty diffs already fail closed. Protected
+pushes and final candidates ordinarily promote to the complete gate, while an exact
+tracked waiver retains only its authorized narrow closure.
 
-## Step 4 — Dependency audit
+## Step 4 — Selected doc build
 
-```bash
-cargo deny check
-```
-
-(Install once with `cargo install cargo-deny --locked` if missing.)
-
-## Step 5 — Doc build
+Run only when the decision selects `docs`:
 
 ```bash
 python3 tools/test_scope.py run docs
 ```
 
-## Step 6 — Markdown relative links
+## Step 5 — Markdown relative links
 
 The exact loop CI runs (keep in sync with `.github/workflows/ci.yaml`):
 
@@ -82,7 +99,7 @@ echo "all relative links resolve"
 ## Output
 
 ```
-✓ /test-local — fmt, clippy, concerns <names>, deny, doc, links green (<elapsed>s)
+✓ /test-local — selected gates <names>, links green (<elapsed>s)
 ```
 
 ## When to invoke

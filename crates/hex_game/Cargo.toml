@@ -69,5 +69,9 @@ name = "gameplay_app"
 path = "tests/gameplay_app.rs"
 required-features = ["test-support"]
 
+[[test]]
+name = "spell_resolution"
+path = "tests/spell_resolution.rs"
+
 [lints]
 workspace = true

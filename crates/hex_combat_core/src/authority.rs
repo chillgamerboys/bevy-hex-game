@@ -460,6 +460,21 @@ pub struct CombatState {
     pub metrics: CombatMetrics,
     /// One defender choice suspending further simulation commands.
     pub pending: PendingDecision,
+    /// A host-resolved spell transaction still owns completion authority.
+    ///
+    /// Area spell effects and terrain acknowledgements are resolved by the Bevy host,
+    /// but defender answers still reduce here. This hold prevents the first answer
+    /// from advancing the turn or settling the encounter before the host publishes
+    /// every remaining obligation.
+    #[serde(default)]
+    resolution_held: bool,
+    /// Removing the current unit during an external resolution deferred its handoff.
+    ///
+    /// The successor remains current for stable initiative indexing, but it receives
+    /// neither a [`Turn`] nor start-of-turn effects until the host releases the whole
+    /// transaction.
+    #[serde(default)]
+    turn_handoff_deferred: bool,
     /// Exact accepted command transcript.
     pub commands: Vec<IssuedCommand>,
     /// Exact structured outcome transcript, including refusals.
@@ -594,6 +609,8 @@ impl CombatState {
             reveals: BTreeMap::new(),
             metrics: CombatMetrics::default(),
             pending,
+            resolution_held: false,
+            turn_handoff_deferred: false,
             commands: Vec::new(),
             events: Vec::new(),
             outcome: None,
@@ -640,6 +657,39 @@ impl CombatState {
     #[must_use]
     pub fn current(&self) -> Option<UnitId> {
         self.order.get(self.current).copied()
+    }
+
+    /// Begins one host-owned spell-resolution transaction.
+    ///
+    /// The hold is deliberately separate from [`PendingDecision`]: the public
+    /// decision names only the one answer currently owed, while terrain and later
+    /// occupants may still be unresolved after that answer clears.
+    pub fn begin_external_resolution(&mut self) -> Result<(), String> {
+        if self.resolution_held {
+            return Err("combat authority already holds an external resolution".to_owned());
+        }
+        self.resolution_held = true;
+        Ok(())
+    }
+
+    /// Releases a complete host-owned spell resolution and resumes authority once.
+    pub fn finish_external_resolution(&mut self) -> Result<(), String> {
+        if !self.resolution_held {
+            return Err("combat authority has no external resolution to finish".to_owned());
+        }
+        self.resolution_held = false;
+        self.detect_outcome();
+        if std::mem::take(&mut self.turn_handoff_deferred) && self.outcome.is_none() {
+            self.grant_current_turn();
+        }
+        self.advance_if_finished();
+        Ok(())
+    }
+
+    /// Whether a host-owned spell transaction still blocks ordinary authority.
+    #[must_use]
+    pub const fn external_resolution_is_held(&self) -> bool {
+        self.resolution_held
     }
 
     /// Applies one intent through the sole validation and mutation boundary.
@@ -764,7 +814,8 @@ impl CombatState {
                     projection.id
                 ));
             }
-            if projection.turn.is_some() != (current == Some(projection.id)) {
+            let expects_turn = current == Some(projection.id) && !self.turn_handoff_deferred;
+            if projection.turn.is_some() != expects_turn {
                 return Err(format!(
                     "adapter turn marker disagrees for unit {:?}",
                     projection.id
@@ -889,6 +940,9 @@ impl CombatState {
                 issued_by: issued.seat,
                 owned_by: actor.seat,
             });
+        }
+        if self.resolution_held && !self.pending.is_open() {
+            return Err(CommandRefusal::Busy);
         }
         let required_answer = match self.pending {
             PendingDecision::None => None,
@@ -1574,7 +1628,7 @@ impl CombatState {
     }
 
     fn advance_if_finished(&mut self) {
-        if self.pending.is_open() {
+        if self.pending.is_open() || self.resolution_held {
             return;
         }
         let Some(unit) = self.current() else {
@@ -1653,11 +1707,18 @@ impl CombatState {
             // Removing the current actor slides the index onto its successor. That
             // successor did not pass through `advance_if_finished`, so it has no turn
             // until this explicit handoff. The ECS projection follows the same rule.
-            self.grant_current_turn();
+            if self.resolution_held {
+                self.turn_handoff_deferred = true;
+            } else {
+                self.grant_current_turn();
+            }
         }
     }
 
     fn detect_outcome(&mut self) {
+        if self.resolution_held {
+            return;
+        }
         let player_alive = self
             .units
             .values()
@@ -3005,6 +3066,232 @@ mod tests {
                 outcome: EncounterOutcome::Victory
             }
         )));
+    }
+
+    #[test]
+    fn external_resolution_holds_turn_and_outcome_between_area_answers() {
+        let cell = LatticeCoord::ORIGIN;
+        let spec = LatticeSpec::default().with(cell, CellKind::Blank);
+        let mut sim = state(
+            vec![
+                CombatUnit::new(
+                    UnitId(0),
+                    PlayerSeat(0),
+                    Faction::Player,
+                    position(0, 0),
+                    20,
+                ),
+                CombatUnit::new(
+                    UnitId(1),
+                    PlayerSeat(0),
+                    Faction::Hostile,
+                    position(1, 0),
+                    10,
+                )
+                .with_lattice(
+                    spec.clone(),
+                    LatticeState::new(&spec, &LatticeStats::default()),
+                    LatticeStats::default(),
+                ),
+            ],
+            4,
+        );
+        let turn = sim
+            .units
+            .get_mut(&UnitId(0))
+            .and_then(|unit| unit.turn.as_mut())
+            .expect("the caster owns the opening turn");
+        turn.acted = true;
+        turn.movement_left = 0;
+        sim.pending = PendingDecision::ChooseDisables {
+            decider: UnitId(1),
+            count: 1,
+            source: UnitId(0),
+        };
+        sim.begin_external_resolution()
+            .expect("the area transaction acquires one hold");
+
+        sim.apply(IssuedCommand {
+            seat: PlayerSeat(0),
+            command: GameCommand::ChooseDisables {
+                unit: UnitId(1),
+                cells: vec![cell],
+            },
+        })
+        .expect("the held defender answer reduces normally");
+
+        assert_eq!(sim.pending, PendingDecision::None);
+        assert!(sim.external_resolution_is_held());
+        assert_eq!(sim.outcome, None, "the held answer cannot settle victory");
+        assert_eq!(sim.metrics.turns, 0, "the held answer cannot pass the turn");
+        assert_eq!(sim.current(), Some(UnitId(0)));
+        assert_eq!(
+            sim.apply(IssuedCommand {
+                seat: PlayerSeat(0),
+                command: GameCommand::EndTurn { unit: UnitId(0) },
+            }),
+            Err(CommandRefusal::Busy),
+            "ordinary commands stay blocked between queued obligations"
+        );
+
+        sim.finish_external_resolution()
+            .expect("the complete transaction releases once");
+        assert!(!sim.external_resolution_is_held());
+        assert_eq!(sim.outcome, Some(EncounterOutcome::Victory));
+        assert_eq!(
+            sim.metrics.turns, 1,
+            "release resumes the finished turn once"
+        );
+        assert!(sim.finish_external_resolution().is_err());
+    }
+
+    #[test]
+    fn held_area_answer_defers_current_caster_handoff_until_release() {
+        let cell = LatticeCoord::ORIGIN;
+        let spec = LatticeSpec::default().with(cell, CellKind::Blank);
+        let mut sim = CombatState::start_with_session(
+            rules(4),
+            corridor(3),
+            ElementNames::default(),
+            [
+                CombatUnit::new(
+                    UnitId(0),
+                    PlayerSeat(0),
+                    Faction::Player,
+                    position(0, 0),
+                    20,
+                )
+                .with_lattice(
+                    spec.clone(),
+                    LatticeState::new(&spec, &LatticeStats::default()),
+                    LatticeStats::default(),
+                ),
+                CombatUnit::new(
+                    UnitId(1),
+                    PlayerSeat(0),
+                    Faction::Hostile,
+                    position(1, 0),
+                    10,
+                )
+                .with_lattice(
+                    spec.clone(),
+                    LatticeState::new(&spec, &LatticeStats::default()),
+                    LatticeStats::default(),
+                ),
+                CombatUnit::new(UnitId(2), PlayerSeat(0), Faction::Player, position(2, 0), 5),
+            ],
+            PendingDecision::ChooseDisables {
+                decider: UnitId(0),
+                count: 1,
+                source: UnitId(0),
+            },
+            BTreeMap::new(),
+        )
+        .expect("fixture state");
+        let caster_turn = sim
+            .units
+            .get_mut(&UnitId(0))
+            .and_then(|unit| unit.turn.as_mut())
+            .expect("the caster owns the opening turn");
+        caster_turn.acted = true;
+        caster_turn.movement_left = 0;
+        sim.effects.insert(
+            EffectId(0),
+            PersistentEffect {
+                source: UnitId(2),
+                target: UnitId(1),
+                payload: EffectPayload::Burn,
+                start: 0,
+                end: EffectEnd::AfterTurns(2),
+                ticks: 0,
+            },
+        );
+        sim.next_effect_id = 1;
+        sim.begin_external_resolution()
+            .expect("the area transaction acquires one hold");
+
+        sim.apply(IssuedCommand {
+            seat: PlayerSeat(0),
+            command: GameCommand::ChooseDisables {
+                unit: UnitId(0),
+                cells: vec![cell],
+            },
+        })
+        .expect("the held area answer downs the current caster");
+
+        assert_eq!(sim.current(), Some(UnitId(1)));
+        assert_eq!(sim.units.get(&UnitId(1)).and_then(|unit| unit.turn), None);
+        assert_eq!(
+            sim.effects.get(&EffectId(0)).map(|effect| effect.ticks),
+            Some(0),
+            "the successor's turn effect cannot tick under the area hold"
+        );
+        assert!(!sim.events.iter().any(|event| matches!(
+            event,
+            CombatEvent::BurnTicked {
+                target: UnitId(1),
+                ..
+            }
+        )));
+
+        let projection = sim
+            .units
+            .values()
+            .map(|unit| CombatUnitProjection {
+                id: unit.id,
+                position: unit.position,
+                turn: unit.turn,
+                busy: unit.busy,
+                downed: unit.downed,
+                lattice: unit.lattice.as_ref().map(|lattice| lattice.state.clone()),
+            })
+            .collect::<Vec<_>>();
+        sim.adopt_projection(
+            sim.order.clone(),
+            sim.current(),
+            sim.round,
+            sim.pending.clone(),
+            sim.pending_revivals.clone(),
+            projection,
+        )
+        .expect("the held no-turn successor is a valid adapter projection");
+
+        sim.finish_external_resolution()
+            .expect("the complete transaction releases once");
+        assert_eq!(
+            sim.units.get(&UnitId(1)).and_then(|unit| unit.turn),
+            Some(Turn {
+                movement_left: 4,
+                acted: false,
+            })
+        );
+        assert!(matches!(
+            sim.pending,
+            PendingDecision::ChooseDisables {
+                decider: UnitId(1),
+                count: 1,
+                source: UnitId(2)
+            }
+        ));
+        assert_eq!(
+            sim.effects.get(&EffectId(0)).map(|effect| effect.ticks),
+            Some(1)
+        );
+        assert_eq!(
+            sim.events
+                .iter()
+                .filter(|event| matches!(event, CombatEvent::BurnTicked { .. }))
+                .count(),
+            1,
+            "release must grant and tick the successor exactly once"
+        );
+
+        let released = sim.clone();
+        assert!(sim.finish_external_resolution().is_err());
+        assert_eq!(
+            sim, released,
+            "a duplicate release cannot repeat the handoff"
+        );
     }
 
     #[test]

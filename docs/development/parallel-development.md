@@ -32,9 +32,9 @@ docs so the two tool-specific layers cannot silently diverge.
 
 | Shape | Use it when | Branch and PR shape | Validation |
 |---|---|---|---|
-| Independent | Each change is shippable alone, shares no unsettled contract, and has little risky file overlap | Each branch starts from `dev` and gets its own PR to `dev` | Full review and CI per PR |
-| Stacked | One small change strictly depends on one other change and reviewing the child alone is still useful | Parent targets `dev`; child targets parent until the parent lands, then is retargeted | Focused checks per level; full CI on each mergeable PR |
-| Wave | Three or more related lanes, shared contracts or hot files, a common runtime checkpoint, or a branch stack deeper than two | One `wave/<name>` branch starts from `dev`; source lanes feed it; one wave PR targets `dev` | Focused lane checks; combined audit, full CI, visual walk, and human walk once on the wave |
+| Independent | Each change is shippable alone, shares no unsettled contract, and has little risky file overlap | Each branch starts from `dev` and gets its own PR to `dev` | Full review and selector-chosen CI per PR |
+| Stacked | One small change strictly depends on one other change and reviewing the child alone is still useful | Parent targets `dev`; child targets parent until the parent lands, then is retargeted | Focused checks per level; selector-chosen CI on each mergeable PR |
+| Wave | Three or more related lanes, shared contracts or hot files, a common runtime checkpoint, or a branch stack deeper than two | One `wave/<name>` branch starts from `dev`; source lanes feed it; one wave PR targets `dev` | Focused lane checks; combined audit and selector-chosen CI, plus visual/human review only for affected presentation or experiential surfaces |
 
 These are defaults, not arithmetic. Two branches that both change world composition
 belong in a wave even though there are only two. Ten genuinely unrelated fixes should
@@ -129,31 +129,74 @@ After each semantic group enters the wave:
 
 - inspect the aggregate diff and changed contracts;
 - run affected workspace tests;
-- run the relevant deterministic scenario captures or visual walk; and
+- run relevant deterministic scenario captures or a visual walk only for affected
+  presentation claims; and
 - test composition, regeneration, state exit/re-entry, and failure paths that no
   source lane owns alone.
 
 ### Final wave candidate
 
-The wave PR is the merge gate. Run the complete repository checks:
-
-```sh
-cargo fmt --all --check
-cargo deny check
-cargo clippy --workspace --all-targets --all-features --profile ci -- -D warnings
-cargo test --workspace --all-features --profile ci
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
-cargo build --package hex_game --release
-```
+The wave PR is the merge gate. Run the exact PR-context selector loop from
+`CONTRIBUTING.md`, including only the selected test concerns and selected non-test
+format/dependency/Clippy/docs/shipping gates. Do not replace that plan with an
+unconditional workspace, application/UI, simulation, map-corpus, or residual run. A
+checked-in exact-path waiver may narrow only its named concerns and must label every
+omission WAIVED.
 
 GitHub CI additionally runs that shipping-package build on the other supported
-platforms and runs domain coverage.
-Run the automated visual walk and inspect every frame, then have a human play the
-combined build. Human review belongs here because motion, seams, composition, and
-taste do not become cheaper or more reliable when repeated on incomplete leaves.
-Record that playtest against the full final wave head SHA using the PR template's
-structured manual runtime fields. Any subsequent source or integration commit
-invalidates it and requires a new playtest before merge.
+platforms and runs domain coverage. Screenshots/frames may judge static camera, UI,
+and rendered-map presentation; video/human checks may judge motion, input response,
+control feel, and taste. They may show how hook-established state is rendered, but
+never prove gameplay or exact world logic that hooks, state, messages, logs,
+snapshots, or deterministic contracts can express; add a missing hook rather than
+infer logic from pixels.
+
+For affected presentation, native-input, motion, feel, seams, composition, or taste,
+run the automated visual walk, inspect every frame, and have a human play the combined
+build. Record that playtest against the full final wave head SHA. A wave with no such
+changed claim uses the verified-maintainer N/A classification and names its
+authoritative hook closure. Any subsequent commit invalidates either classification.
+
+### Explicit one-wave verification waiver
+
+A final-wave default may be narrowed only by an explicit maintainer-approved waiver
+recorded in the tracked wave plan, canonical testing contract, scope manifest, and PR.
+This is appropriate when all changed behavior has a smaller authoritative
+producer/consumer closure and the omitted partitions cannot compile or exercise it.
+It is not a branch-name exception or a way to call an expensive failure irrelevant
+after it runs.
+
+The declaration must name:
+
+- the exact changed-path allow-list and exact test concerns replacing the ordinary
+  broad gate;
+- every omitted test, application, simulation, residual, map, and visual partition;
+- why each omission has no authority over the changed behavior;
+- the non-test format, dependency, Clippy, docs, and shipping checks that remain;
+- the behavior or path changes that invalidate the waiver; and
+- the exact-head human presentation/runtime route, or the ordinary
+  verified-maintainer N/A process when every changed claim is renderer-free and
+  covered by authoritative hooks.
+
+Every omitted check is reported as **WAIVED**, never passed, green, or silently
+skipped. A green shell for a conditionally entered GitHub job reports routing, not an
+omitted gate passing; the scope artifact remains the semantic record of **WAIVED** and
+**PENDING** work. The selector may apply the waiver only when its tracked declaration
+is in the candidate diff, every changed path is allow-listed, and the event identity
+matches its exact PR/base/head or merge-push declaration. Unknown paths, invalid
+configuration, and empty diffs retain fail-closed behavior. A declaration may cover
+the exact reviewed merge diff on `dev`, but never a `main`-target PR, a push to `main`,
+or a later unrelated protected-branch push. Adding behavior that the named narrow
+concerns cannot exercise invalidates the exception instead of expanding it by default.
+
+PR #180 was the concrete first use: its gameplay tests were
+`trajectory_contracts` plus `spell_resolution_contracts`; it waives `hex_ui`,
+`gameplay_app`, UI snapshots, automated visual walks, deterministic combat simulation,
+procedural map corpora, and the residual workspace corpus. The exact oracle closure,
+real-map seams, and invalidation rules are in the
+[gameplay testing contract](gameplay-testing.md#spell-resolution-wave-waiver). The
+wave remained draft until those narrow checks and its verified-maintainer N/A
+classification naming the hook closure were recorded on the exact final head.
 
 Retry an apparent infrastructure failure once after confirming that no compiler,
 test, lint, or application error preceded it. If the same job reaches the same hard

@@ -151,7 +151,15 @@ pub(super) fn apply(
     // hexes go down. Nothing about melee is special except where the number comes from.
     let count = ctx.combat.map_or(0, |settings| settings.strike_disables);
     if count > 0 {
-        open_disable_decision(ctx, lattices, target, target_entity, unit, count);
+        open_disable_decision(
+            ctx.pending,
+            ctx.events,
+            lattices,
+            target,
+            target_entity,
+            unit,
+            count,
+        );
     }
     info!("strike: {unit:?} hits {target:?}");
     Ok(())

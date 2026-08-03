@@ -208,10 +208,10 @@ from the inside of a column — let alone whether a body fits in the space above
 Writing goes the other way, through shared messages — gameplay cannot call into the
 map. Live stone construction uses `TerrainEdit::Set`. The map-side receiver for the
 second path, `TerrainImpact`, is also live and keeps toughness and damage policy in the
-world: gameplay will announce which voxels an elemental effect reaches and its power;
-the map accumulates material health, destroys voxels at zero, and answers through
-`TerrainImpactOutcome`. The gameplay emitter and outcome consumer remain pending
-([systems/casting.md](systems/casting.md)).
+world: gameplay announces which voxels an elemental effect reaches and its power; the
+map accumulates material health, destroys voxels at zero, and answers through
+`TerrainImpactOutcome`; gameplay correlates that answer before releasing its pending
+authority ([systems/casting.md](systems/casting.md)).
 
 See [systems/map.md](systems/map.md) for the voxel model itself. V3's private
 semantic plan and its exact published projections are specified in
@@ -322,10 +322,11 @@ sets make the ordering that crosses crate boundaries explicit:
   `GameplaySetup::Perception` on entry and `AppSystems::Update` thereafter. The first
   phase is the cross-owner hand-off from authored lighting, not a renderer query.
 - **`TerrainSystems`** — `ApplyWorld → RefreshProjections → ReconcileActors →
-  ConsumeOutcomes`, configured before illumination and later perception. Only
-  map-owned `ApplyWorld` has live systems. The remaining phases reserve gameplay's
-  occupancy/movement refresh, unsupported-actor settlement, and matching outcome
-  validation/release without claiming those adapters are wired.
+  ConsumeOutcomes`, configured before illumination and later perception. Map-owned
+  `ApplyWorld` applies impacts and publishes rebuilt facts/outcomes;
+  `RefreshProjections` republishes occupancy and reconciles movement;
+  `ReconcileActors` deterministically settles or adopts unsupported actors; and
+  `ConsumeOutcomes` validates the matching batch before releasing gameplay authority.
 - **`PresentationSystems`** — `ResolveCameraOcclusion → ApplyMaterials →
   ApplyVisibility`, in `PostUpdate` after final transforms. World presentation
   publishes whole-tree opacity, the object renderer owns isolated material clones,
@@ -500,10 +501,10 @@ setting is real on Windows and Linux.
 
 ## When it fails silently
 
-Several failure modes here produce no log output at all, and a clean log is not
-evidence that a change worked. The list of symptoms and their causes is
-[development/troubleshooting.md](development/troubleshooting.md); the habit it
-asks for is looking at the window.
+Several presentation failures here produce no log output at all, and a clean log is
+not evidence that the window is correct. The list of visual symptoms and their causes
+is [development/troubleshooting.md](development/troubleshooting.md). Inspecting those
+symptoms never substitutes for typed gameplay or world evidence.
 
 ## Testing
 
@@ -511,6 +512,15 @@ Testing is partitioned by the authority needed for the claim. The complete matri
 commands, dependency ceilings, budgets, and anti-patterns are the
 [gameplay](development/gameplay-testing.md) and
 [map](development/map-testing.md) testing contracts.
+
+Screenshots and rendered frames prove static presentation: camera framing/occlusion,
+UI hierarchy/layout/legibility/focus/contrast/reflow, and rendered-map geometry,
+materials, lighting, cutaways, seams, and composition. Video and human checks prove
+camera motion, native-input response, animation, control feel, and taste. A visual
+artifact may show how hook-established state is rendered, but whenever hooks,
+components, resources, messages, logs, canonical snapshots, or deterministic
+contracts can express gameplay or exact world state, those typed oracles are
+mandatory; if one is missing, add it instead of inferring logic from pixels.
 
 **Pure unit tests** live beside behavior throughout the workspace and do not need a GPU:
 coordinate round-tripping, the cube invariant, lattice properties, content validation,

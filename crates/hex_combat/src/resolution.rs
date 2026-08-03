@@ -39,12 +39,16 @@ pub fn encounter_unresolved(resolution: Res<EncounterResolution>) -> bool {
 /// Opens a result once both the command and downing phases have settled.
 pub(crate) fn detect_outcome(
     pending: Res<PendingDecision>,
+    spell_resolution: Res<crate::SpellResolutionState>,
     mut resolution: ResMut<EncounterResolution>,
     authority: Option<Res<crate::authority_host::CombatAuthority>>,
     units: Query<&Faction, Without<Downed>>,
     mut queue: ResMut<CommandQueue>,
     mut events: MessageWriter<CombatEvent>,
 ) {
+    if spell_resolution.is_blocking() {
+        return;
+    }
     if let Some(authority) = authority {
         resolution.0 = authority.state.outcome;
         if resolution.is_resolved() {
@@ -95,6 +99,7 @@ mod tests {
         builder
             .app_mut()
             .init_resource::<PendingDecision>()
+            .init_resource::<crate::SpellResolutionState>()
             .init_resource::<CommandQueue>()
             .init_resource::<EncounterResolution>()
             .add_message::<CombatEvent>()

@@ -297,10 +297,10 @@ Feature destruction is outside this contract. V3 trees and structures are semant
 instances rather than substance voxels and need their own occupancy, response, and
 acknowledgment contract.
 
-**Status — partial**: the shared message, toughness schema/content, validated Boolean
+**Status — live**: the shared message, toughness schema/content, validated Boolean
 matrix, coherent content readiness, sparse health ledger, protection checks, ordered
-map resolver, and ordinary terrain consequences are live. Gameplay spell emission and
-outcome consumption remain pending.
+map resolver, ordinary terrain consequences, paid gameplay spell emission, monotonic
+batch allocation, and correlated outcome consumption are wired in the shipped build.
 
 ## H — Damage acknowledgment, health projection, and settlement (accepted contract)
 
@@ -384,13 +384,12 @@ presentation independently filter outcomes through faction knowledge.
 ### Cross-owner ordering and unsupported actors
 
 `TerrainSystems::{ApplyWorld, RefreshProjections, ReconcileActors, ConsumeOutcomes}`
-defines the configured cross-crate phase order. The map's live `ApplyWorld` applies
-edits/impacts, rebuilds material consequences, publishes outcomes, and flushes rebuilt
-tile facts. The other three phases are empty reservations in this foundation:
-`RefreshProjections` will publish exact terrain occupancy and reconcile ordinary
-movement, `ReconcileActors` will settle unsupported actors, and `ConsumeOutcomes` will
-validate the matching answer before releasing pending gameplay authority. In full
-integration the reserved phases contain:
+defines the live configured cross-crate phase order. The map-owned `ApplyWorld`
+applies edits/impacts, rebuilds material consequences, publishes outcomes, and flushes
+rebuilt tile facts. Gameplay-owned `RefreshProjections` republishes exact terrain
+occupancy and reconciles ordinary movement; `ReconcileActors` deterministically
+settles unsupported actors and adopts the resulting authority; and `ConsumeOutcomes`
+validates/correlates the matching answer before releasing pending gameplay authority:
 
 ```text
 ApplyWorld
@@ -404,10 +403,9 @@ ApplyWorld
 ```
 
 An impact emitted during combat apply on frame N therefore settles at the next
-`ApplyWorld`. The future gameplay adapter keeps combat behind its pending batch until
-the refreshed projections, actor reconciliation, and matching `ConsumeOutcomes` phase
-complete. `ApplyWorld` is the only live participant today; the downstream phase
-configuration adds no occupancy, movement, settlement, or cast-completion behavior.
+`ApplyWorld`. The gameplay adapter keeps combat behind its pending batch until the
+refreshed projections, actor reconciliation, authority adoption, and matching
+`ConsumeOutcomes` phase complete.
 
 Gameplay owns settlement because the map never reads units. After destruction, every
 unit whose exact support is no longer legal is handled in stable `UnitId` order:
@@ -429,11 +427,11 @@ unit whose exact support is no longer legal is handled in stable `UnitId` order:
 `TerrainEdit` still has no batch acknowledgment. Conjuration correlation is not
 inferred from voxel position; it receives a separate contract if one is needed.
 
-**Status — partial**: the four-phase shared vocabulary/configuration, map outcome
-publisher, `DamagedVoxels` publisher, visibility-gated shared presentation adapter,
-and `ApplyWorld` participant are live. The three downstream phases remain empty;
-gameplay impact emission, outcome consumption, occupancy/movement reordering, actor
-settlement, and the combat pending gate remain pending.
+**Status — live**: the four-phase shared vocabulary/configuration, map outcome and
+`DamagedVoxels` publishers, visibility-gated shared presentation adapter, gameplay
+impact emission, occupancy/movement refresh, deterministic actor settlement and
+authority adoption, matching-outcome consumption, and combat pending gate are wired
+in the shipped build.
 
 ## I — Interior domains after edits (initial ruling)
 

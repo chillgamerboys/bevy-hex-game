@@ -17,15 +17,30 @@
 //!   than a re-implementation of it.
 //! - **Degenerate inputs.** Radius 0, height 0, an empty path, a zero-length cone.
 
-use hex_assets::{TargetShape, VoxelOffset};
-use hex_core::{ElementId, HexCoord, Level, Sextant, TerrainBatchId, TerrainImpact, TilePos};
+use hex_assets::{TargetShape, Trajectory, VoxelOffset};
+use hex_core::{
+    ElementId, HexCoord, Level, RunBottom, Sextant, TerrainBatchId, TerrainImpact, TilePos,
+};
+use hex_units::trajectories::{
+    clip_effect_volume, clip_known_effect_volume, EffectVolumeClipError,
+};
 use hex_units::volumes::{
     canonical, column, cone, grid_distance, line, needs_facing, path, resolve, rotated, self_cast,
     single, sphere,
 };
+use hex_units::{KnownTerrainOccupancy, TerrainOccupancy};
 
 fn at(x: i32, y: i32, z: i32, level: Level) -> TilePos {
     TilePos::new(HexCoord::new_cubic(x, y, z), level)
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "invalid deterministic single-voxel fixture runs must fail at construction"
+)]
+fn occupied(voxels: impl IntoIterator<Item = TilePos>) -> TerrainOccupancy {
+    TerrainOccupancy::from_runs(voxels.into_iter().map(|pos| (pos, RunBottom(pos.level))))
+        .expect("single-voxel runs are valid")
 }
 
 /// Asserts a volume is in the exact form an announcement requires, using the
@@ -376,6 +391,158 @@ fn a_path_that_repeats_itself_still_resolves_canonically() {
     let volume = path(anchor, Sextant::A, &[repeated, repeated, repeated]);
     assert_canonical(&volume, "a repeated path");
     assert_eq!(volume.len(), 1);
+}
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// Obstruction-clipped effect volumes
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+#[test]
+fn effect_volume_clipping_rejects_noncanonical_input_without_repairing_it() {
+    let anchor = at(0, 0, 0, 2);
+    let far = at(3, 0, -3, 2);
+    let mut reversed = canonical([anchor, far]);
+    reversed.reverse();
+    let duplicate = vec![anchor, anchor];
+    let terrain = TerrainOccupancy::default();
+
+    for trajectory in [
+        Trajectory::Direct,
+        Trajectory::Arc { rise: 3 },
+        Trajectory::None,
+    ] {
+        for malformed in [reversed.clone(), duplicate.clone()] {
+            assert_eq!(
+                clip_effect_volume(trajectory, anchor, malformed, &terrain),
+                Err(EffectVolumeClipError::NonCanonicalVolume),
+                "{trajectory:?} repaired malformed input"
+            );
+        }
+    }
+}
+
+#[test]
+fn effect_volume_none_preserves_the_canonical_input_exactly() {
+    let anchor = at(0, 0, 0, 2);
+    let volume = canonical([anchor, at(1, 0, -1, 1), at(2, -1, -1, 4), at(3, 0, -3, 2)]);
+    let terrain = occupied(volume.iter().copied());
+    let known = KnownTerrainOccupancy::from_observed_surfaces(volume.iter().copied());
+
+    assert_eq!(
+        clip_effect_volume(Trajectory::None, anchor, volume.clone(), &terrain)
+            .expect("canonical input should clip"),
+        volume
+    );
+    assert_eq!(
+        clip_known_effect_volume(Trajectory::None, anchor, volume.clone(), &known)
+            .expect("canonical input should clip"),
+        volume
+    );
+}
+
+#[test]
+fn effect_volume_endpoints_remain_hittable_while_a_wall_shadows_far_candidates() {
+    let anchor = at(0, 0, 0, 2);
+    let wall = at(1, 0, -1, 2);
+    let behind = at(3, 0, -3, 2);
+    let volume = canonical([anchor, wall, behind]);
+    let terrain = occupied([anchor, wall, behind]);
+    let expected = canonical([anchor, wall]);
+
+    for trajectory in [Trajectory::Direct, Trajectory::Arc { rise: 8 }] {
+        let clipped = clip_effect_volume(trajectory, anchor, volume.clone(), &terrain)
+            .expect("canonical input should clip");
+        assert_eq!(clipped, expected, "{trajectory:?} changed radial policy");
+        assert_canonical(&clipped, "a clipped effect volume");
+    }
+}
+
+#[test]
+fn effect_volume_clipping_honors_conservative_face_edge_and_corner_grazes() {
+    let anchor = at(0, 0, 0, 0);
+    let diagonal = at(2, 1, -3, 0);
+    for blocker in [at(1, 0, -1, 0), at(1, 1, -2, 0)] {
+        assert!(
+            clip_effect_volume(
+                Trajectory::Direct,
+                anchor,
+                vec![diagonal],
+                &occupied([blocker]),
+            )
+            .expect("one candidate is canonical")
+            .is_empty(),
+            "the diagonal ray ignored conservative graze {blocker:?}"
+        );
+    }
+
+    let rising = at(2, 0, -2, 2);
+    for blocker in [at(1, 0, -1, 0), at(1, 0, -1, 1), at(1, 0, -1, 2)] {
+        assert!(
+            clip_effect_volume(
+                Trajectory::Direct,
+                anchor,
+                vec![rising],
+                &occupied([blocker]),
+            )
+            .expect("one candidate is canonical")
+            .is_empty(),
+            "the rising ray ignored conservative graze {blocker:?}"
+        );
+    }
+}
+
+#[test]
+fn effect_volume_clipping_preserves_real_air_gaps_between_stacked_runs() {
+    let anchor = at(0, 0, 0, 3);
+    let below_bridge = at(2, 0, -2, 3);
+    let bridge_height = at(2, 0, -2, 7);
+    let terrain = TerrainOccupancy::from_runs([
+        (at(1, 0, -1, 1), RunBottom(0)),
+        (at(1, 0, -1, 6), RunBottom(5)),
+    ])
+    .expect("stacked runs are valid");
+
+    assert_eq!(
+        clip_effect_volume(
+            Trajectory::Direct,
+            anchor,
+            canonical([below_bridge, bridge_height]),
+            &terrain,
+        )
+        .expect("canonical input should clip"),
+        vec![below_bridge],
+        "the low ray should cross real air while the high ray meets the bridge"
+    );
+}
+
+#[test]
+fn effect_volume_authority_sees_hidden_material_that_known_clipping_cannot_infer() {
+    let anchor = at(0, 0, 0, 2);
+    let hidden_wall = at(1, 0, -1, 2);
+    let candidate = at(3, 0, -3, 2);
+    let volume = vec![candidate];
+    let full_truth = occupied([hidden_wall]);
+    let hidden = KnownTerrainOccupancy::default();
+    let observed = KnownTerrainOccupancy::from_observed_surfaces([hidden_wall]);
+
+    assert!(
+        clip_effect_volume(Trajectory::Direct, anchor, volume.clone(), &full_truth)
+            .expect("canonical input should clip")
+            .is_empty(),
+        "authority must clip against complete material truth"
+    );
+    assert_eq!(
+        clip_known_effect_volume(Trajectory::Direct, anchor, volume.clone(), &hidden)
+            .expect("canonical input should clip"),
+        volume,
+        "hidden material must not change faction-facing volume choices"
+    );
+    assert!(
+        clip_known_effect_volume(Trajectory::Direct, anchor, volume, &observed)
+            .expect("canonical input should clip")
+            .is_empty(),
+        "explicit observed material should clip the authorized projection"
+    );
 }
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

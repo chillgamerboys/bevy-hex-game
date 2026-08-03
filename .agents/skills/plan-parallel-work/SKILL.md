@@ -71,9 +71,12 @@ or a mechanical integration detail is not.
 ## 4. Set the review budget
 
 Define focused lane checks and combined acceptance separately. Put composition,
-regeneration, failure paths, return-to-title/re-entry, automated visual review, and
-human play on the combined candidate. Full platform CI belongs on every independent
-release unit or once on the wave; do not manufacture leaf PRs solely to repeat it.
+regeneration, failure paths, and return-to-title/re-entry on the combined candidate.
+Add automated visual review and human play only for affected presentation, native
+input, motion, or feel. Screenshots/frames judge static camera, UI, or rendered-map
+presentation; video/human checks judge motion and feel. None proves logic available
+through hooks or contracts. Full platform CI belongs on every independent release
+unit or once on the wave; do not manufacture leaf PRs solely to repeat it.
 
 ## 5. Produce the plan
 

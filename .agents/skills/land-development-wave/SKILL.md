@@ -7,7 +7,8 @@ description: Reconcile related source branches or PRs into one reviewed wave and
 
 Turn a branch or PR batch into one coherent candidate while preserving authorship,
 owner boundaries, and useful provenance. Apply focused scrutiny to each source diff,
-then spend full CI and runtime review on the combined wave.
+then run the selector-chosen candidate gate and applicable runtime review once on the
+combined wave.
 
 Merging PRs and changing remote branches require explicit user authorization. Without
 it, prepare and validate the wave but stop before remote mutation.
@@ -82,8 +83,15 @@ After each semantic group:
 - inspect source intent and the aggregate diff;
 - run affected checks and deterministic scenarios;
 - test composition, failure behavior, regeneration, and state re-entry;
-- inspect automated visual-walk frames for affected surfaces; and
+- inspect automated visual-walk frames for affected presentation surfaces; and
 - update the wave manifest with findings and fixes.
+
+Screenshots/frames may judge static camera, UI, and rendered-map presentation;
+video/human checks may judge motion, input response, control feel, and taste. They may
+show how hook-established state is rendered, but never prove or corroborate gameplay
+or exact world logic when typed hooks, state, messages, logs, snapshots, or
+deterministic contracts can prove the claim. If that oracle is missing, add the narrow
+hook or contract instead of inferring logic from pixels.
 
 Do not demand a separate full workspace run after every mechanically integrated leaf.
 Escalate validation when a semantic group becomes coherent.
@@ -95,11 +103,12 @@ visible warning and handoff item, never a merge blocker.
 
 ## 5. Gate the wave
 
-On the final candidate, run the complete checks listed in
+On the final candidate, run the selector-chosen checks listed in
 `docs/development/parallel-development.md`, push the exact reviewed state, and let the
-wave PR run the full platform matrix and coverage. Run the automated visual walk and
-inspect its frames. Record the human play route and confirmation required by the
-repository's merge workflow.
+wave PR run its selected platform and coverage jobs. Run the automated visual walk and
+human play route only for affected presentation, native-input, motion, or feel claims.
+A logic-only wave uses its authoritative hooks and the verified-maintainer N/A process
+from the testing contract; wave topology alone does not manufacture a visual gate.
 
 A compiler, lint, test, documentation, coverage, or application failure blocks
 landing. Retry a likely infrastructure failure once. A second identical hard timeout
@@ -128,6 +137,6 @@ Return:
 - wave PR and merge SHA, or the exact remaining blocker;
 - source PR disposition and preserved provenance;
 - shared concerns consolidated and ownership decisions made;
-- checks, visual evidence, retries, and waivers;
+- checks, presentation evidence, retries, and waivers;
 - branches retained or deleted and why; and
 - instructions for ongoing branches to absorb updated `dev`.

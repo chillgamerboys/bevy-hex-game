@@ -1,25 +1,28 @@
 ---
 name: update-docs
-description: Audit documentation for stale test-count anchors, status claims, and index coverage. Verifies the current workspace suite, updates an optional live count mechanically when one exists, and commits allowlisted fixes. Atomic — historical baselines and human-observed numbers are NEVER overwritten. Runs automatically as step 4 of /audit-pr.
+description: Audit documentation for stale test-count anchors, status claims, and index coverage. Reuses exact-head selector-chosen test evidence, updates an optional live count only when complete evidence already exists, and commits allowlisted fixes. Atomic — historical baselines and human-observed numbers are NEVER overwritten. Runs automatically as step 4 of /audit-pr.
 ---
 
 When invoked, follow these steps:
 
-1. **Extract current test counts.** Run the workspace suite and sum
-   across all crates + doctests — a twelve-crate workspace prints one
-   `test result:` line per suite, so taking the first line
-   undercounts badly:
+1. **Check whether a live test-count anchor exists.** Do this before considering test
+   counts:
 
    ```bash
-   OUT=$(cargo test --workspace --all-features --profile ci 2>&1)
-   UNIT=$(echo "$OUT" | grep -E '^test result:' | grep -oE '[0-9]+ passed' | awk '{s+=$1} END {print s}')
-   FAILED=$(echo "$OUT" | grep -E '^test result:' | grep -oE '[0-9]+ failed' | awk '{s+=$1} END {print s}')
+   grep -nE 'and [0-9]+ tests' CLAUDE.md
    ```
 
-   These are the source of truth for the rest of the run. If the
-   test command fails, `$FAILED` is non-zero, or `$UNIT` is empty,
-   **STOP** — don't propagate broken counts into docs. Tell the user
-   the test suite is broken.
+   If this prints nothing, there is no live count task: set no `$UNIT`, run no tests,
+   and continue to the status/index audit. This is the normal current state.
+
+   If an anchor exists, reuse only complete exact-head output already produced by the
+   selector-chosen `/test-full` gate. Sum its workspace + doctest `test result:` lines
+   only when the selector actually ran the complete workspace/residual closure. If the
+   current gate was narrow or waived, report `live count not recomputed — exact-head
+   selector did not authorize a complete workspace count`, leave the anchor unchanged,
+   and continue. **Never launch `cargo test --workspace` from this documentation skill
+   and never broaden the test plan merely to refresh a number.** A failed selected test
+   remains a test-gate failure; do not propagate its counts.
 
 2. **Read the PR or commit context.**
    - Run `gh pr view --json number,title,body,url 2>/dev/null`
@@ -61,12 +64,6 @@ When invoked, follow these steps:
    If you find a stale count outside the allowlist and want to update
    it, **STOP and ask the operator** — don't unilaterally rewrite
    history.
-
-   Concrete anchor recipe (currently expected to produce no output):
-
-   ```bash
-   grep -nE 'and [0-9]+ tests' CLAUDE.md
-   ```
 
    Two further anchors, live since the docs restructure:
 
@@ -208,16 +205,16 @@ If nothing drifted, `findings: []` and step status `pass`.
 
 ## Troubleshooting
 
-**Test command fails:** stop. Don't update counts. Surface the test
-failure to the user.
+**Selected test evidence failed:** do not update counts. Surface the existing
+test-gate failure; this skill must not retry or broaden it.
 
-**Live counts diverge:** the source of truth is the summed test output, not existing
-doc values. Every allowlisted live anchor gets `$UNIT`; dated or historical counts
-remain untouched. Don't average them.
+**Live counts diverge:** only complete exact-head selector-authorized output may update
+the anchor. Narrow or waived evidence cannot manufacture a workspace total; leave the
+anchor untouched and report why. Dated or historical counts remain untouched.
 
-**Doctests:** `cargo test` emits separate `test result:` lines for doctests — the
-summing grep includes them by design. Any live count therefore means "tests the
-suite runs", not "#[test] fns".
+**Doctests:** complete pre-existing output includes their separate `test result:`
+lines. Any live count therefore means "tests the selected complete suite ran", not
+"#[test] fns".
 
 **Grep false positives:** historical text ("more than 180 tests" in
 an old commit message) is fine — only the CLAUDE.md anchor line is

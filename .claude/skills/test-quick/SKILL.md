@@ -27,21 +27,29 @@ denied outside tests.)
 
 ## Step 3 — Tests
 
-First inspect and record the fail-closed decision:
+First inspect and record the fail-closed decision using the exact current PR identity:
 
 ```bash
-BASE=$(gh pr view --json baseRefName -q .baseRefName 2>/dev/null || \
-  git rev-parse --abbrev-ref '@{upstream}' 2>/dev/null | sed 's#^[^/]*/##')
-python3 tools/test_scope.py plan --base "origin/${BASE:-dev}" --head HEAD || exit $?
+BASE=$(gh pr view --json baseRefName --jq .baseRefName 2>/dev/null || printf dev)
+HEAD_REF=$(gh pr view --json headRefName --jq .headRefName 2>/dev/null || \
+  git branch --show-current)
+PR_NUMBER=$(gh pr view --json number --jq .number 2>/dev/null || true)
+SCOPE_ARGS=(--base "origin/$BASE" --head HEAD)
+if [ -n "$PR_NUMBER" ]; then
+  SCOPE_ARGS+=(--event-name pull_request --base-ref "$BASE" \
+    --head-ref "$HEAD_REF" --pull-request-number "$PR_NUMBER")
+fi
+python3 tools/test_scope.py plan "${SCOPE_ARGS[@]}" || exit $?
 ```
+
+Keep `SCOPE_ARGS` in the same shell for the selected-tests command below; repeat this
+setup if the command runner starts a fresh shell per block.
 
 Then run the selected test concerns in canonical order:
 
 ```bash
-BASE=$(gh pr view --json baseRefName -q .baseRefName 2>/dev/null || \
-  git rev-parse --abbrev-ref '@{upstream}' 2>/dev/null | sed 's#^[^/]*/##')
 SELECTED=$(python3 tools/test_scope.py selected-tests \
-  --base "origin/${BASE:-dev}" --head HEAD) || exit $?
+  "${SCOPE_ARGS[@]}") || exit $?
 while [ -n "$SELECTED" ]; do
   concern=${SELECTED%% *}
   case "$SELECTED" in
@@ -58,6 +66,10 @@ workspace-wide test count:
 ```
 ✓ /test-quick — fmt clean, clippy clean, concerns <names> passed (<elapsed>s)
 ```
+
+The identical context on `plan` and `selected-tests` is load-bearing. It lets an exact
+tracked PR waiver select its narrow closure; an absent or mismatched context fails
+closed rather than silently broadening or narrowing the run.
 
 ## When to invoke
 

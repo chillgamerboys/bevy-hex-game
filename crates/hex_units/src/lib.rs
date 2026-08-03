@@ -40,6 +40,8 @@ pub mod targeting;
 pub mod terrain_creation;
 /// Exact material occupancy derived from published integer run bounds.
 pub mod terrain_occupancy;
+/// Deterministic landing choices after terrain withdraws a unit's support.
+pub mod terrain_reconciliation;
 /// Exact material obstruction along spell trajectories.
 pub mod trajectories;
 /// The units themselves: the player, enemies, and click-to-move.
@@ -66,6 +68,7 @@ pub use terrain_creation::{
 pub use terrain_occupancy::{
     InvalidTerrainRun, KnownTerrainOccupancy, TerrainOccupancy, TerrainOccupancySystems,
 };
+pub use terrain_reconciliation::{plan_unsupported_actor_landing, NoLanding};
 pub use trajectories::{
     known_trajectory_is_clear, supercover, trajectory_destination, trajectory_is_clear,
     trajectory_voxels,

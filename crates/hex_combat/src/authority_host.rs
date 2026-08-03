@@ -19,7 +19,7 @@ use hex_combat_core::{
 };
 use hex_core::{
     Busy, ControlOwner, Faction, GameCommand, Headroom, HexSpan, HexTile, KnowledgeState,
-    PendingDecision, SubstanceId, TilePos, Turn, UnitId,
+    PendingDecision, SubstanceId, TerrainSystems, TilePos, Turn, UnitId,
 };
 use hex_lattice::{LatticeSpec, LatticeState, LatticeStats};
 use hex_perception::FactionMapKnowledge;
@@ -156,6 +156,13 @@ pub(crate) fn plugin(app: &mut App) {
             .after(hex_units::MovementSystems::HaltOnCombat),
     )
     .add_systems(OnExit(hex_core::Mode::Combat), clear)
+    .add_systems(
+        Update,
+        refresh_arena_after_terrain_publication
+            .after(TerrainOccupancySystems::Publish)
+            .before(TerrainSystems::ReconcileActors)
+            .run_if(in_state(hex_core::Mode::Combat)),
+    )
     .add_systems(
         Update,
         refresh_arena_after_terrain_publication
