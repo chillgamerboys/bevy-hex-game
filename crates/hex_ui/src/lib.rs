@@ -1648,6 +1648,137 @@ mod structural_tests {
     }
 
     #[test]
+    fn accepted_noncanonical_elements_remain_complete_creator_tools() {
+        let mut custom_file: hex_assets::ElementFile =
+            ron::from_str(include_str!("../../../assets/config/elements.ron"))
+                .expect("the production element catalog must parse");
+        custom_file.wheel.push("Aether".to_owned());
+        custom_file.wheel.push("Void".to_owned());
+        custom_file.fusions.insert(
+            "Tempest".to_owned(),
+            vec![
+                hex_assets::FusionInput {
+                    element: "Aether".to_owned(),
+                    mana: 1,
+                },
+                hex_assets::FusionInput {
+                    element: "Air".to_owned(),
+                    mana: 1,
+                },
+            ],
+        );
+        custom_file
+            .validate()
+            .expect("the extended element catalog must remain valid");
+        let custom = hex_assets::ElementCatalog::from_file(&custom_file);
+        let (screen, mut view) = creator_view(UiTaskCase::CharacterReady);
+        view.elements = Some(custom);
+        view.active_tool = Some(hex_assets::CreationCellKind::Gem("Aether".to_owned()));
+
+        let mut app = App::new();
+        app.add_plugins(HeadlessUiPlugin::new(1920, 1080))
+            .init_resource::<CreatorIntentLog>()
+            .init_resource::<PointerActivation>()
+            .init_resource::<KeyboardActivation>()
+            .add_systems(
+                PreUpdate,
+                apply_keyboard_activation
+                    .after(bevy::input::InputSystems)
+                    .before(UiSystems::CaptureInput),
+            )
+            .add_systems(
+                Update,
+                (
+                    apply_pointer_activation.before(UiSystems::EmitIntents),
+                    record_creator_intents.after(UiSystems::EmitIntents),
+                ),
+            );
+        app.world_mut().insert_resource(view);
+        app.world_mut()
+            .resource_mut::<NextState<hex_core::Screen>>()
+            .set(screen);
+        for _ in 0..8 {
+            app.update();
+        }
+
+        named_entity(app.world_mut(), "Element Tool Air");
+        for name in ["Aether", "Void"] {
+            let entity = named_entity(app.world_mut(), &format!("Element Tool {name}"));
+            assert_eq!(
+                app.world().get::<CreatorIntent>(entity),
+                Some(&CreatorIntent::ChooseTool(
+                    hex_assets::CreationCellKind::Gem(name.to_owned())
+                )),
+                "custom basic {name} must remain authorable"
+            );
+        }
+        let aether = named_entity(app.world_mut(), "Element Tool Aether");
+        let aether_label = app
+            .world()
+            .get::<AccessibleLabel>(aether)
+            .expect("Aether has an accessible label");
+        assert!(aether_label.0.contains("basic element"));
+        assert!(aether_label.0.contains("formula basic element"));
+        assert!(aether_label.0.contains("; selected;"));
+        named_entity(app.world_mut(), "Selected Element Aether");
+
+        let tempest = named_entity(app.world_mut(), "Element Tool Tempest");
+        assert_eq!(
+            app.world().get::<CreatorIntent>(tempest),
+            Some(&CreatorIntent::ChooseTool(
+                hex_assets::CreationCellKind::Fusion("Tempest".to_owned())
+            )),
+            "custom fusion must remain authorable"
+        );
+        let tempest_label = app
+            .world()
+            .get::<AccessibleLabel>(tempest)
+            .expect("Tempest has an accessible label");
+        assert!(tempest_label.0.contains("pair fusion"));
+        assert!(tempest_label.0.contains("formula Aether + Air"));
+        assert!(tempest_label.0.contains("; not selected;"));
+        for name in ["Aether", "Void", "Tempest"] {
+            named_entity(app.world_mut(), &format!("Element Formula {name}"));
+        }
+        {
+            let world = app.world_mut();
+            let mut text = world.query::<&Text>();
+            assert!(
+                text.iter(world).all(|text| !text
+                    .as_str()
+                    .contains("does not contain every canonical chart school")),
+                "a valid catalog superset must not be described as incomplete"
+            );
+        }
+
+        app.world_mut().resource_mut::<CreatorIntentLog>().0.clear();
+        app.world_mut().resource_mut::<PointerActivation>().0 = Some(aether);
+        app.update();
+        assert_eq!(
+            app.world().resource::<CreatorIntentLog>().0.as_slice(),
+            &[CreatorIntent::ChooseTool(
+                hex_assets::CreationCellKind::Gem("Aether".to_owned())
+            )],
+            "pointer activation must emit the exact custom basic tool"
+        );
+
+        *app.world_mut()
+            .get_mut::<Interaction>(aether)
+            .expect("the Aether tool remains interactive") = Interaction::None;
+        app.update();
+        app.world_mut().resource_mut::<CreatorIntentLog>().0.clear();
+        app.world_mut().resource_mut::<KeyboardActivation>().0 = Some(tempest);
+        app.update();
+        assert_eq!(
+            app.world().resource::<CreatorIntentLog>().0.as_slice(),
+            &[CreatorIntent::ChooseTool(
+                hex_assets::CreationCellKind::Fusion("Tempest".to_owned())
+            )],
+            "keyboard activation must emit the exact custom fusion tool"
+        );
+    }
+
+    #[test]
     fn local_lattice_test_preserves_its_structural_matrix() {
         for (size, mode) in REQUIRED_MATRIX {
             let snapshot = lattice_demo_snapshot(size, mode);

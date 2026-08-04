@@ -104,7 +104,7 @@ impl ElementVisualCatalog {
     #[must_use]
     pub fn resolve(&self, name: &str, elements: &ElementCatalog) -> Option<ResolvedElementVisual> {
         self.get(name)?;
-        resolve_live_element(name, elements)
+        resolve_catalog_element(name, elements)
     }
 }
 
@@ -245,7 +245,10 @@ pub(crate) fn authored_element_tint(name: &str) -> Option<Color> {
         .map(|spec| spec.tint)
 }
 
-fn resolve_live_element(name: &str, elements: &ElementCatalog) -> Option<ResolvedElementVisual> {
+pub(crate) fn resolve_catalog_element(
+    name: &str,
+    elements: &ElementCatalog,
+) -> Option<ResolvedElementVisual> {
     let id = elements.id(name)?;
     if elements.is_basic(id) {
         return Some(ResolvedElementVisual {
@@ -414,7 +417,7 @@ mod tests {
         let catalog = ElementCatalog::from_file(&file);
         let classes = ELEMENT_VISUAL_SPECS
             .iter()
-            .filter_map(|spec| resolve_live_element(spec.name, &catalog))
+            .filter_map(|spec| resolve_catalog_element(spec.name, &catalog))
             .map(|resolved| resolved.classification)
             .collect::<Vec<_>>();
         assert_eq!(
@@ -446,7 +449,7 @@ mod tests {
             .expect("Lightning recipe must exist")
             .reverse();
         let reordered = ElementCatalog::from_file(&reordered);
-        let lightning = resolve_live_element("Lightning", &reordered)
+        let lightning = resolve_catalog_element("Lightning", &reordered)
             .expect("Lightning visual must resolve against live content");
         assert_eq!(lightning.formula, "Fire + Air");
     }

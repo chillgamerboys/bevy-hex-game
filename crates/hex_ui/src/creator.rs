@@ -13,9 +13,10 @@ use hex_assets::{
     PresetAudience, SavedCharacter, SpellBook, SpellFile, SpellReference, TargetShape,
     MAX_CREATION_NAME_CHARS,
 };
-use hex_core::{LatticeCoord, Screen};
+use hex_core::{ElementId, LatticeCoord, Screen};
 use hex_gameplay_model::CreatorSurface as CreatorTab;
 
+use crate::element_visual::resolve_catalog_element;
 use crate::{
     blurb, body_text_role, compact_glyph_role, display, effect_summary, element_color, fine,
     heading, label, owner_resolved_control_role, panel, panel_node, responsive_control_role,
@@ -1306,17 +1307,33 @@ fn spawn_element_grid(
             Some((visual, live, kind))
         })
         .collect::<Vec<_>>();
+    let additional = (0..elements.len())
+        .filter_map(|index| {
+            let id = u16::try_from(index).ok().map(ElementId)?;
+            let name = elements.name(id)?;
+            if visuals.get(name).is_some() {
+                return None;
+            }
+            let live = resolve_catalog_element(name, elements)?;
+            let kind = if elements.is_basic(id) {
+                CreationCellKind::Gem(name.to_owned())
+            } else {
+                CreationCellKind::Fusion(name.to_owned())
+            };
+            Some((name.to_owned(), live, kind))
+        })
+        .collect::<Vec<_>>();
 
     palette.spawn(heading(assets, "elemental grid"));
     palette.spawn(blurb(
         assets,
         "Inner ring: basic gems. Outer ring: direct pair and triple fusions.",
     ));
-    if resolved.len() != visuals.entries().len() || resolved.len() != elements.len() {
+    if resolved.len() != visuals.entries().len() {
         palette
             .spawn(blurb(
                 assets,
-                "The elemental grid is waiting for the complete accepted element catalog.",
+                "The accepted catalog does not contain every canonical chart school. Matching schools remain in the chart.",
             ))
             .insert(TextColor(DANGER));
     }
@@ -1430,34 +1447,99 @@ fn spawn_element_grid(
             }
         });
 
+    if !additional.is_empty() {
+        palette.spawn(heading(assets, "additional elements"));
+        palette.spawn(blurb(
+            assets,
+            "Accepted elements without a canonical glyph remain available as complete authoring tools.",
+        ));
+        for (name, live, kind) in &additional {
+            let selected = active_tool == Some(kind);
+            spawn_additional_element_tool(palette, assets, name, live, kind, elements, selected);
+        }
+    }
+
     palette.spawn(heading(assets, "formula guide"));
     for (visual, live, _) in &resolved {
-        palette.spawn((
-            Name::new(format!("Element Formula {}", visual.name)),
-            AccessibleLabel::new(format!(
-                "{}; {}; {}",
-                visual.name,
-                live.classification.label(),
-                live.formula
-            )),
-            crate::UiVisibilityRequirement::Scrollable,
-            blurb(
-                assets,
-                match live.classification {
-                    ElementClassification::Basic => format!("BASIC · {}", visual.name),
-                    ElementClassification::Pair => {
-                        format!("PAIR · {} = {}", visual.name, live.formula)
-                    }
-                    ElementClassification::Triple => {
-                        format!("TRIPLE · {} = {}", visual.name, live.formula)
-                    }
-                    ElementClassification::HigherOrder(inputs) => {
-                        format!("FUSION ({inputs}) · {} = {}", visual.name, live.formula)
-                    }
-                },
-            ),
-        ));
+        spawn_element_formula(palette, assets, visual.name, live);
     }
+    for (name, live, _) in &additional {
+        spawn_element_formula(palette, assets, name, live);
+    }
+}
+
+fn spawn_additional_element_tool(
+    palette: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    name: &str,
+    live: &ResolvedElementVisual,
+    kind: &CreationCellKind,
+    elements: &ElementCatalog,
+    selected: bool,
+) {
+    let visible = if live.classification == ElementClassification::Basic {
+        format!("Gem · {name}")
+    } else {
+        format!("Fusion · {name}")
+    };
+    palette
+        .spawn((
+            row_button(visible.clone(), 200.0),
+            CreatorIntent::ChooseTool(kind.clone()),
+            crate::UiVisibilityRequirement::Scrollable,
+        ))
+        .insert((
+            Name::new(format!("Element Tool {name}")),
+            AccessibleLabel::new(element_tool_accessible_label(name, live, selected)),
+            OwnColors,
+            BackgroundColor(brighten(
+                element_color(Some(live.id), elements),
+                if selected { 0.26 } else { 0.0 },
+            )),
+            BorderColor::all(if selected { ACCENT } else { EDGE }),
+        ))
+        .with_children(|button| {
+            button.spawn(label(assets, visible));
+            if selected {
+                button.spawn((
+                    Name::new(format!("Selected Element {name}")),
+                    label(assets, "✓ SELECTED"),
+                ));
+            }
+        });
+}
+
+fn spawn_element_formula(
+    palette: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    name: &str,
+    live: &ResolvedElementVisual,
+) {
+    palette.spawn((
+        Name::new(format!("Element Formula {name}")),
+        AccessibleLabel::new(format!(
+            "{}; {}; {}",
+            name,
+            live.classification.label(),
+            live.formula
+        )),
+        crate::UiVisibilityRequirement::Scrollable,
+        blurb(
+            assets,
+            match live.classification {
+                ElementClassification::Basic => format!("BASIC · {name}"),
+                ElementClassification::Pair => {
+                    format!("PAIR · {name} = {}", live.formula)
+                }
+                ElementClassification::Triple => {
+                    format!("TRIPLE · {name} = {}", live.formula)
+                }
+                ElementClassification::HigherOrder(inputs) => {
+                    format!("FUSION ({inputs}) · {name} = {}", live.formula)
+                }
+            },
+        ),
+    ));
 }
 
 fn element_tool_accessible_label(
