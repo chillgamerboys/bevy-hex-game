@@ -73,6 +73,22 @@ Use `$reconcile-delivery-state` for this workflow. If Linear is unavailable, rep
 visible warning and a concrete update list rather than silently treating repository
 state as a proxy.
 
+## UI bug intake
+
+Initial UI defect capture is deliberately smaller than delivery reconciliation. Use
+`$linear-ui-bug-intake` to reproduce one independently fixable root cause, search for
+an existing issue, and either update it or create one child under the current HUD/UI
+bug-bash parent. Record the route, build identity, viewport/scale, reproduction steps,
+expected and actual behavior, severity rationale, and durable evidence. Re-fetch the
+issue after writing it. Do not implement the fix as part of intake.
+
+Resolve the Linear team, labels, workflow states, members, and parent by live
+name or identifier on every run. Repository instructions may publish human-readable
+defaults such as `HEX-67`, `Backlog`, `Bug`, and the assignee, but skills must not
+embed workspace UUIDs or assume a state name is accepted where an API requires a
+state identifier. If Linear is unavailable, preserve the complete proposed issue in
+the handoff and continue other repository work.
+
 ## Optional Linear setup for Codex
 
 Linear is useful for cross-owner visibility. A contributor who wants it can connect

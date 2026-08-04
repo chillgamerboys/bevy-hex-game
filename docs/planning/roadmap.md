@@ -1,22 +1,19 @@
 # Roadmap
 
-The remaining epics between the current build and a shippable game. The table under
-**Upcoming** is the one ticket-seeding workflow can turn into Linear `HEX-*` tickets.
-What is already built lives in [status.md](status.md); release history lives in the
-root changelog. Where each epic came from, and the
+The remaining epics between the current build and a shippable game. What is already
+built lives in [status.md](status.md); release history lives in the root changelog.
+Where each epic came from, and the
 evidence behind it, is [production-audit.md](production-audit.md) — a dated
 snapshot that does not change. This file is the living plan: rows get claimed,
 split, and retired.
 
-**How this file works.** Each unmarked row of the Upcoming table becomes one Linear
-ticket when someone runs the repository's ticket-seeding workflow (Claude exposes it
-as `/seed-tickets`), which writes an HTML-comment marker back onto the row recording
-the ticket and who claimed it. Never write those
-markers by hand, and never take a row someone else's marker claims. Rows are
-epics, not implementation plans. Planning starts by reconciling the live delivery
-state: Codex uses `$reconcile-delivery-state` before `$plan-parallel-work`, while
-Claude's `/plan-ticket` produces its plan from the per-epic sections below. Splitting
-a row later is safe: seeding is create-only and idempotent.
+**How this file works.** Rows are epics, not implementation plans. Linear and this
+roadmap are separate projections of the same delivery state; reconcile both before
+planning or declaring work complete, then update each deliberately. Existing
+`<!-- linear: ... -->` markers are historical cross-references and claim provenance,
+not an active ticket-seeding protocol. Do not infer current status from a marker
+alone. Start broad planning with `$reconcile-delivery-state`, then choose the work
+topology with `$plan-parallel-work`.
 
 The `Owner` column names the crate-ownership area
 ([architecture.md](../architecture.md#ownership-cuts-both-ways)). `map` rows

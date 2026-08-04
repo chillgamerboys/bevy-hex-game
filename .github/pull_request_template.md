@@ -12,7 +12,7 @@
 - [ ] Residual workspace tests and doctests (only when the scope decision selects `residual`)
 - [ ] `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features` (unless Markdown-only)
 - [ ] `cargo build --package hex_game --release` (when the scope decision selects `shipping`; CI builds it on all three platforms)
-- [ ] Structural UI oracle: green when selected, selector-N/A when unselected, or explicit WAIVED under a checked-in exact-path waiver
+- [ ] Structural UI oracle: green when selected, or selector-N/A when unselected
 - [ ] Scoped Bevy image-target walk: green for affected static presentation, or exact-head N/A because the reviewed diff has no affected presentation concern
 
 ### Manual runtime sign-off
@@ -59,7 +59,7 @@ underlying state transition and persistence claim.
 
 ### Evidence by concern
 
-<!-- Record selector-omitted concerns as N/A with the selector reason. Record concerns omitted by an explicit waiver as WAIVED, never N/A. Do not run either merely to fill this list. -->
+<!-- Record selector-omitted concerns as N/A with the selector reason. Do not run an unselected concern merely to fill this list. -->
 
 - Pure rules:
 - ECS contracts:

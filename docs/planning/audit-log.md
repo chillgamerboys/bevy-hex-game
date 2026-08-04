@@ -1,11 +1,8 @@
 # Audit log
 
-Wave entries appended by `/audit-diff` — one per audited PR, the
-durable trail of which lenses fired and what was fixed or deferred.
-The receipt at `/tmp/audit-pr-receipt-<N>.json` is ephemeral; this
-file is the record that travels with the repo.
-
-<!-- /audit-diff appends below this line. Don't insert content between this comment and Wave entries; the skill anchors on this marker. -->
+Historical wave entries from the former audit-log workflow. Current `/audit-diff` is
+read-only, and `/audit-pr` records exact-head evidence in an ephemeral receipt instead
+of changing the candidate after review. Preserve the entries below as provenance.
 
 ## Wave 29 — feat(map): ship procedural Mountain Range (2026-08-03)
 

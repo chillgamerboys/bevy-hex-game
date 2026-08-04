@@ -1,6 +1,6 @@
 ---
 name: reconcile-delivery-state
-description: Reconcile shipped implementation, repository status/design/roadmap documents, GitHub PR state, and—when available—Linear HEX tickets. Use before calling a PR or wave complete, after landing work on dev, when planning from existing tickets, or whenever tickets and docs may describe different delivery state. Linear is strongly recommended but remains a soft coordination signal, never a merge gate.
+description: Reconcile shipped implementation, repository status/design/roadmap documents, GitHub PR state, and—when available—Linear HEX tickets. Use before calling a PR or wave complete, after landing work on dev, when planning from existing tickets, or when those delivery projections may disagree. Do not use for initial UI bug capture; use linear-ui-bug-intake. Linear is strongly recommended but remains a soft coordination signal, never a merge gate.
 ---
 
 # Reconcile Delivery State
@@ -39,6 +39,10 @@ the complete backlog.
 
 Use Linear's live team/status queries instead of copying workflow-state IDs into this
 skill. Re-fetch an issue before modifying it.
+
+Initial defect capture is outside this skill. Route UI observations through
+`$linear-ui-bug-intake`; reconcile them here only when implementation begins, enters
+review, lands, becomes obsolete, or changes residual scope.
 
 ## 2. Classify each outcome
 

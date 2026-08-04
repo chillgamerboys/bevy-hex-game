@@ -73,11 +73,11 @@ doc or the code, not drift.
 | [development/config.md](development/config.md) | Designers, non-programmers | Changing the game through `assets/config/*.ron` without recompiling | Whoever adds or renames a setting |
 | [development/release.md](development/release.md) | Release contributors | Promotion, versioning, tagging, artifact verification, application identity, retained symbols, and reserved credential boundaries | Whoever changes packaging |
 | [development/troubleshooting.md](development/troubleshooting.md) | Everyone | The single list of failure modes, including the ones that log nothing at all | Whoever hits a new one |
-| [planning/status.md](planning/status.md) | Everyone | What is built, what is a placeholder, what each placeholder waits on — **the one doc allowed to drift** | Whoever lands a feature; `/update-docs` reports what a diff falsified |
-| [planning/roadmap.md](planning/roadmap.md) | Both devs | The epic table `/seed-tickets` turns into Linear tickets, plus the detail behind each | Whoever claims or finishes a row |
+| [planning/status.md](planning/status.md) | Everyone | What is built, what is a placeholder, what each placeholder waits on — **the one doc allowed to drift** | Whoever lands a feature; reconcile it before completion |
+| [planning/roadmap.md](planning/roadmap.md) | Both devs | The living epic plan and its historical Linear cross-references | Whoever claims or finishes a row |
 | [planning/production-audit.md](planning/production-audit.md) | Both devs | Dated snapshot: the July 2026 production-readiness audit and the architecture it recommends — **frozen; not updated as code moves** | Nobody. It is a record |
 | [planning/boundary.md](planning/boundary.md) | Both owners | Cross-owner commitments, accepted/live decisions, and remaining asks, with signatures and fallbacks where applicable | Whoever adds or retires an ask |
-| [planning/audit-log.md](planning/audit-log.md) | Reviewers | The durable trail of `/audit-diff` waves, one per audited PR | `/audit-diff`, automatically |
+| [planning/audit-log.md](planning/audit-log.md) | Reviewers | Historical audit-wave provenance from the retired append workflow | Nobody; preserve as history |
 | [planning/foundation-hardening.md](planning/foundation-hardening.md) | Reviewers and maintainers | July 2026 correctness, scalability, branch, stress, and handoff evidence for the foundation cleanup | Foundation hardening owner |
 
 Outside this directory: the root [`README.md`](../README.md) introduces the game,
