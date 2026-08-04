@@ -536,6 +536,7 @@ mod tests {
             dirt: DIRT,
             grass: GRASS,
             gravel: GRAVEL,
+            sand: SubstanceId::AIR,
             water: WATER,
             metal: METAL,
             worked_stone: SubstanceId(12),

@@ -18,6 +18,8 @@ const LEGACY_SEAM_CLOSURE_REGION_BASE: u32 = 0x0ffe_0000;
 const LEGACY_SEAM_CLOSURE_REGION_LIMIT: u32 = LEGACY_SEAM_CLOSURE_REGION_BASE + 0x1_0000;
 const RING19_SEAM_CLOSURE_REGION_BASE: u32 = 0x07fe_0000;
 const RING19_SEAM_CLOSURE_REGION_LIMIT: u32 = RING19_SEAM_CLOSURE_REGION_BASE + 0x1_0000;
+const MACRO_SEAM_CLOSURE_REGION_BASE: u32 = 0x03fe_0000;
+const MACRO_SEAM_CLOSURE_REGION_LIMIT: u32 = MACRO_SEAM_CLOSURE_REGION_BASE + 0x1_0000;
 
 /// Whether an access marker is an exact shared-seam closure rather than a
 /// recipe-owned special-movement region.
@@ -30,6 +32,8 @@ pub(crate) const fn is_seam_closure_access(access: SurfaceAccess) -> bool {
                 && region.0 < LEGACY_SEAM_CLOSURE_REGION_LIMIT)
                 || (region.0 >= RING19_SEAM_CLOSURE_REGION_BASE
                     && region.0 < RING19_SEAM_CLOSURE_REGION_LIMIT)
+                || (region.0 >= MACRO_SEAM_CLOSURE_REGION_BASE
+                    && region.0 < MACRO_SEAM_CLOSURE_REGION_LIMIT)
     )
 }
 
@@ -37,6 +41,7 @@ const fn seam_closure_region(kind: LayoutKind, edge: ResolvedEdgeId) -> SpecialM
     let base = match kind {
         LayoutKind::Single | LayoutKind::Ring7 => LEGACY_SEAM_CLOSURE_REGION_BASE,
         LayoutKind::Ring19 => RING19_SEAM_CLOSURE_REGION_BASE,
+        LayoutKind::Macro => MACRO_SEAM_CLOSURE_REGION_BASE,
     };
     SpecialMovementRegion(base.saturating_add(edge.0))
 }
@@ -88,8 +93,14 @@ impl WalkerSeamShape {
                 volume.surfaces.get(surface).map(|metadata| metadata.access),
                 Some(SurfaceAccess::Ordinary)
             ) {
+                let actual = volume
+                    .surfaces
+                    .iter()
+                    .filter(|(candidate, _)| candidate.coord == surface.coord)
+                    .map(|(candidate, metadata)| (*candidate, metadata.access))
+                    .collect::<Vec<_>>();
                 issues.push(seam_issue(format!(
-                    "declared seam aperture has no exact ordinary surface at {surface:?}"
+                    "declared seam aperture has no exact ordinary surface at {surface:?}; actual surfaces at the coordinate: {actual:?}"
                 )));
             }
         }
@@ -133,6 +144,30 @@ pub(crate) fn shape_walker_seams(
         return Err(issues);
     }
 
+    let mut fixed_macro_approaches = BTreeMap::<HexCoord, Level>::new();
+    if patch.layout().kind == LayoutKind::Macro {
+        for (edge, ports) in &edges {
+            let preferred = edge.preferred_level();
+            for coord in ports
+                .iter()
+                .flat_map(|port| port.first_approach.iter().copied())
+            {
+                if fixed_macro_approaches
+                    .insert(coord, preferred)
+                    .is_some_and(|existing| existing != preferred)
+                {
+                    issues.push(seam_issue(format!(
+                        "patch {} Macro route approaches require conflicting levels at {coord:?}",
+                        patch.id.0
+                    )));
+                }
+            }
+        }
+    }
+    if !issues.is_empty() {
+        return Err(issues);
+    }
+
     for (edge, ports) in &edges {
         let preferred = edge.preferred_level();
         let approaches: BTreeSet<_> = ports
@@ -140,6 +175,9 @@ pub(crate) fn shape_walker_seams(
             .flat_map(|port| port.first_approach.iter().copied())
             .collect();
         for (coord, level) in levels.iter_mut() {
+            if fixed_macro_approaches.contains_key(coord) {
+                continue;
+            }
             let distance = approaches
                 .iter()
                 .map(|approach| approach.distance(*coord))

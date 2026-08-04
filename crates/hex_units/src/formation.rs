@@ -310,7 +310,7 @@ mod tests {
     use super::*;
     use crate::route;
 
-    const STONE: SubstanceId = SubstanceId(1);
+    const STONE: SubstanceId = SubstanceId(10);
     const BODY: crate::Body = crate::Body::new(TraversalProfile::WALKER);
 
     fn table() -> SubstanceTable {

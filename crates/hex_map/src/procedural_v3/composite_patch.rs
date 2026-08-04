@@ -88,6 +88,12 @@ pub(crate) fn construct_fragment(
             mode,
             art_catalog,
         ),
+        V3RecipeSettings::ShallowSea(_)
+        | V3RecipeSettings::Beach(_)
+        | V3RecipeSettings::Shore(_)
+        | V3RecipeSettings::DeepMountain(_) => Err(vec![composite_issue(
+            "Macro-only recipes are constructed by the authored Macro runner",
+        )]),
     }
 }
 
@@ -163,6 +169,12 @@ pub(crate) fn validate_fragment(
             fragment,
             art_catalog,
         )),
+        V3RecipeSettings::ShallowSea(_)
+        | V3RecipeSettings::Beach(_)
+        | V3RecipeSettings::Shore(_)
+        | V3RecipeSettings::DeepMountain(_) => WorldValidation::Invalid(vec![composite_issue(
+            "Macro-only recipes are validated by the authored Macro runner",
+        )]),
     };
     match validation {
         WorldValidation::Valid(()) => Ok(()),

@@ -1418,6 +1418,10 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
         V3RecipeSettings::Volcano(_) => "Volcano",
         V3RecipeSettings::DeepForest(_) => "DeepForest",
         V3RecipeSettings::Prairie(_) => "Prairie",
+        V3RecipeSettings::ShallowSea(_) => "ShallowSea",
+        V3RecipeSettings::Beach(_) => "Beach",
+        V3RecipeSettings::Shore(_) => "Shore",
+        V3RecipeSettings::DeepMountain(_) => "DeepMountain",
     }
 }
 
@@ -1463,6 +1467,7 @@ mod tests {
             dirt: SubstanceId(3),
             grass: SubstanceId(4),
             gravel: SubstanceId(5),
+            sand: SubstanceId::AIR,
             water: WATER,
             metal: SubstanceId(7),
             worked_stone: SubstanceId(12),

@@ -155,6 +155,388 @@ fn ring19_recipe_metrics_are_public_reflected_and_exhaustive() {
 }
 
 #[test]
+fn generic_macro_metrics_are_public_reflected_and_exhaustive() {
+    let metrics = MacroMetrics {
+        world_columns: 1,
+        macro_cells: 2,
+        biome_regions: 3,
+        reciprocal_seams: 4,
+        outer_macro_sides: 5,
+        ordinary_surfaces: 6,
+        reachable_surfaces: 7,
+        reachable_elevation_levels: 8,
+        relief: 9,
+        critical_route_steps: 10,
+        standing_water_seams: 11,
+        directed_liquid_seams: 12,
+        liquid_cells: 13,
+    };
+    let ProceduralRecipeMetrics::Macro(reflected) = ProceduralRecipeMetrics::Macro(metrics) else {
+        panic!("the generic Macro report must retain its exact aggregate metrics");
+    };
+    assert_eq!(reflected, metrics);
+
+    let app = test_app();
+    let registry = app.world().resource::<AppTypeRegistry>().read();
+    assert!(registry.get(TypeId::of::<MacroMetrics>()).is_some());
+}
+
+#[test]
+fn mountain_range_metrics_are_public_reflected_and_exhaustive() {
+    let recipe_metrics = ProceduralRecipeMetrics::MountainRange(MountainRangeMetrics {
+        world_columns: 1,
+        macro_cells: 2,
+        biome_regions: 3,
+        reciprocal_seams: 4,
+        outer_macro_sides: 5,
+        ordinary_surfaces: 6,
+        reachable_surfaces: 7,
+        reachable_elevation_levels: 8,
+        relief: 9,
+        critical_route_steps: 10,
+        standing_water_seams: 11,
+        directed_liquid_seams: 12,
+        liquid_cells: 13,
+        summit_level: 14,
+        high_massif_surfaces: 15,
+    });
+    let ProceduralRecipeMetrics::MountainRange(MountainRangeMetrics {
+        world_columns,
+        macro_cells,
+        biome_regions,
+        reciprocal_seams,
+        outer_macro_sides,
+        ordinary_surfaces,
+        reachable_surfaces,
+        reachable_elevation_levels,
+        relief,
+        critical_route_steps,
+        standing_water_seams,
+        directed_liquid_seams,
+        liquid_cells,
+        summit_level,
+        high_massif_surfaces,
+    }) = recipe_metrics
+    else {
+        panic!("the Mountain Range report must retain its exact aggregate metrics");
+    };
+    assert_eq!(
+        (
+            world_columns,
+            macro_cells,
+            biome_regions,
+            reciprocal_seams,
+            outer_macro_sides,
+            ordinary_surfaces,
+            reachable_surfaces,
+            reachable_elevation_levels,
+            relief,
+            critical_route_steps,
+        ),
+        (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+    );
+    assert_eq!(
+        (
+            standing_water_seams,
+            directed_liquid_seams,
+            liquid_cells,
+            summit_level,
+            high_massif_surfaces,
+        ),
+        (11, 12, 13, 14, 15)
+    );
+
+    let app = test_app();
+    let registry = app.world().resource::<AppTypeRegistry>().read();
+    for type_id in [
+        TypeId::of::<ProceduralRecipeMetrics>(),
+        TypeId::of::<MountainRangeMetrics>(),
+    ] {
+        assert!(
+            registry.get(type_id).is_some(),
+            "Mountain Range report vocabulary is missing reflection registration"
+        );
+    }
+}
+
+#[test]
+fn mountain_range_materializes_the_authored_macro_world() {
+    const RADIUS_77_COLUMNS: usize = 1 + 3 * 77 * 78;
+
+    let mut app = v3_mountain_range_app();
+    enter_gameplay(&mut app);
+
+    assert!(
+        app.world().contains_resource::<TerrainReady>(),
+        "setup failed: {:?}",
+        app.world()
+            .get_resource::<GameplaySetupFailure>()
+            .map(|failure| failure.reason.as_str())
+    );
+    assert_eq!(app.world().resource::<VoxelMap>().len(), RADIUS_77_COLUMNS);
+
+    let report = app.world().resource::<GenerationReport>().clone();
+    assert_eq!(report.generator_version, 3);
+    assert_eq!(report.seed, 129_704_046);
+    assert_eq!(
+        report.settings_fingerprint, 2_843_243_527_997_079_402,
+        "update only with an explicit shipped Mountain Range settings-identity decision"
+    );
+    assert_eq!(
+        report.semantic_plan_fingerprint,
+        Some(347_825_722_077_974_933),
+        "update only with an explicit shipped Mountain Range semantic-plan decision"
+    );
+    assert_eq!(
+        report.map_fingerprint, 4_089_854_997_773_874_143,
+        "update only with an explicit shipped Mountain Range materialized-map decision"
+    );
+    let Some(ProceduralRecipeMetrics::MountainRange(metrics)) = report.recipe_metrics.as_ref()
+    else {
+        panic!("Mountain Range should publish its exact aggregate metrics");
+    };
+    assert_eq!(
+        metrics,
+        &MountainRangeMetrics {
+            world_columns: 18_019,
+            macro_cells: 37,
+            biome_regions: 30,
+            reciprocal_seams: 74,
+            outer_macro_sides: 42,
+            ordinary_surfaces: 11_858,
+            reachable_surfaces: 2_482,
+            reachable_elevation_levels: 51,
+            relief: 92,
+            critical_route_steps: 99,
+            standing_water_seams: 9,
+            directed_liquid_seams: 6,
+            liquid_cells: 3_579,
+            summit_level: 96,
+            high_massif_surfaces: 1_053,
+        },
+        "update only with an explicit shipped Mountain Range aggregate-contract decision"
+    );
+
+    let represented_regions = app
+        .world()
+        .resource::<BiomeRegions>()
+        .iter()
+        .map(|(_, region)| region)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(represented_regions, (0..30).map(BiomeRegionId).collect());
+    let expected_anchors = [
+        (
+            "party_start",
+            TilePos::new(HexCoord::new_cubic(-36, 27, 9), 13),
+        ),
+        (
+            "hostile_start",
+            TilePos::new(HexCoord::new_cubic(-8, 13, -5), 20),
+        ),
+        (
+            "coast_review",
+            TilePos::new(HexCoord::new_cubic(-52, 25, 27), 12),
+        ),
+        (
+            "beach_review",
+            TilePos::new(HexCoord::new_cubic(-46, -31, 77), 10),
+        ),
+        (
+            "inland_review",
+            TilePos::new(HexCoord::new_cubic(-9, 14, -5), 20),
+        ),
+        (
+            "foothill_review",
+            TilePos::new(HexCoord::new_cubic(-7, 13, -6), 20),
+        ),
+        (
+            "massif_front_review",
+            TilePos::new(HexCoord::new_cubic(31, 5, -36), 34),
+        ),
+        (
+            "deep_mountain_review",
+            TilePos::new(HexCoord::new_cubic(54, 5, -59), 48),
+        ),
+        (
+            "deep_mountain_base",
+            TilePos::new(HexCoord::new_cubic(53, 6, -59), 48),
+        ),
+    ];
+    let first_anchors = app
+        .world()
+        .resource::<MapAnchors>()
+        .iter()
+        .map(|(id, position)| (id.as_str().to_owned(), position))
+        .collect::<BTreeMap<_, _>>();
+    for (name, expected) in expected_anchors {
+        assert_eq!(
+            first_anchors.get(name),
+            Some(&expected),
+            "Mountain Range anchor {name} drifted"
+        );
+    }
+    let first_view = *app.world().resource::<MapViewHint>();
+    assert!(first_view.is_valid());
+    let (generated_maximum, horizontal_span) = {
+        let map = app.world().resource::<VoxelMap>();
+        let generated_maximum = map
+            .columns()
+            .filter_map(|(_, column)| column.surface())
+            .max()
+            .expect("Mountain Range should have generated terrain");
+        let bounds = map.columns().map(|(coord, _)| coord.to_world(0.0)).fold(
+            None::<(f32, f32, f32, f32)>,
+            |bounds, point| match bounds {
+                None => Some((point.x, point.x, point.z, point.z)),
+                Some((min_x, max_x, min_z, max_z)) => Some((
+                    min_x.min(point.x),
+                    max_x.max(point.x),
+                    min_z.min(point.z),
+                    max_z.max(point.z),
+                )),
+            },
+        );
+        let (min_x, max_x, min_z, max_z) = bounds.expect("Mountain Range has footprint bounds");
+        (generated_maximum, (max_x - min_x).hypot(max_z - min_z))
+    };
+    assert_eq!(generated_maximum, metrics.summit_level);
+    let eye = Vec3::from(first_view.eye);
+    let focus = Vec3::from(first_view.focus);
+    let generated_height = f32::from(
+        i16::try_from(generated_maximum).expect("Mountain Range elevation fits camera math"),
+    ) * 0.4;
+    assert!((focus.y - generated_height * 0.36).abs() < 1e-4);
+    let derived_frame = (eye.z - focus.z).abs() / 0.82;
+    assert!(derived_frame + 1e-3 >= horizontal_span * 0.78);
+    let camera: CameraSettings =
+        ron::from_str(include_str!("../../../../assets/config/camera.ron"))
+            .expect("shipped camera settings should parse");
+    assert!(
+        eye.distance(focus) * 1.1 > camera.max_zoom,
+        "Mountain Range hint must extend the ordinary Map zoom ceiling"
+    );
+
+    app.world_mut()
+        .resource_mut::<NextState<Screen>>()
+        .set(Screen::Title);
+    app.update();
+    app.update();
+    assert!(!app.world().contains_resource::<VoxelMap>());
+    assert!(!app.world().contains_resource::<MapAnchors>());
+    assert!(!app.world().contains_resource::<BiomeRegions>());
+    assert!(!app.world().contains_resource::<GenerationReport>());
+    assert!(!app.world().contains_resource::<TerrainReady>());
+
+    enter_gameplay(&mut app);
+    assert!(app.world().contains_resource::<TerrainReady>());
+    assert!(!app.world().contains_resource::<GameplaySetupFailure>());
+    let second_report = app.world().resource::<GenerationReport>();
+    assert_eq!(
+        second_report.settings_fingerprint,
+        report.settings_fingerprint
+    );
+    assert_eq!(
+        second_report.semantic_plan_fingerprint,
+        report.semantic_plan_fingerprint
+    );
+    assert_eq!(second_report.map_fingerprint, report.map_fingerprint);
+    assert_eq!(second_report.recipe_metrics, report.recipe_metrics);
+    assert_eq!(*app.world().resource::<MapViewHint>(), first_view);
+    let second_anchors = app
+        .world()
+        .resource::<MapAnchors>()
+        .iter()
+        .map(|(id, position)| (id.as_str().to_owned(), position))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(second_anchors, first_anchors);
+}
+
+#[test]
+fn macro_world_generation_is_not_coupled_to_mountain_range_instance_names() {
+    let mut app = v3_mountain_range_app();
+    {
+        let mut settings = app.world_mut().resource_mut::<MapSettings>();
+        let TerrainSettings::Procedural(ProceduralSettings::V3(v3)) = &mut settings.terrain else {
+            unreachable!("Mountain Range fixture uses procedural V3");
+        };
+        let V3LayoutSettings::Macro(layout) = &mut v3.layout else {
+            unreachable!("Mountain Range fixture uses Macro layout");
+        };
+        let renamed = layout
+            .instances
+            .iter()
+            .enumerate()
+            .map(|(index, instance)| (instance.name.clone(), format!("generic-region-{index:02}")))
+            .collect::<BTreeMap<_, _>>();
+        let renamed_instance = |name: &str| {
+            let Some(renamed) = renamed.get(name) else {
+                panic!("generic Macro rename table omitted instance {name:?}");
+            };
+            renamed.clone()
+        };
+        for instance in &mut layout.instances {
+            instance.name = renamed_instance(&instance.name);
+        }
+        for connection in &mut layout.liquid_connections {
+            match connection {
+                MacroLiquidConnectionSettings::Standing {
+                    first_instance,
+                    second_instance,
+                    ..
+                } => {
+                    *first_instance = renamed_instance(first_instance);
+                    *second_instance = renamed_instance(second_instance);
+                }
+                MacroLiquidConnectionSettings::Directed {
+                    source_instance,
+                    sink_instance,
+                    ..
+                } => {
+                    *source_instance = renamed_instance(source_instance);
+                    *sink_instance = renamed_instance(sink_instance);
+                }
+            }
+        }
+        for headwater in &mut layout.headwaters {
+            match headwater {
+                MacroHeadwaterSettings::CaveFall { instance, .. }
+                | MacroHeadwaterSettings::RivuletConfluence { instance, .. } => {
+                    *instance = renamed_instance(instance);
+                }
+            }
+        }
+        for route_instance in &mut layout.critical_route {
+            *route_instance = renamed_instance(route_instance);
+        }
+    }
+
+    enter_gameplay(&mut app);
+    assert!(
+        app.world().contains_resource::<TerrainReady>(),
+        "generic Macro setup failed: {:?}",
+        app.world()
+            .get_resource::<GameplaySetupFailure>()
+            .map(|failure| failure.reason.as_str())
+    );
+    let report = app.world().resource::<GenerationReport>();
+    let Some(ProceduralRecipeMetrics::Macro(metrics)) = report.recipe_metrics.as_ref() else {
+        panic!("a non-Mountain-Range Macro layout must publish generic Macro metrics");
+    };
+    assert_eq!(metrics.world_columns, 18_019);
+    assert_eq!(metrics.macro_cells, 37);
+    assert_eq!(metrics.biome_regions, 30);
+    assert_eq!(metrics.reciprocal_seams, 74);
+    assert!(metrics.critical_route_steps > 0);
+    let anchors = app.world().resource::<MapAnchors>();
+    for required in ["party_start", "hostile_start", "macro_route_end"] {
+        assert!(
+            anchors.get(&MapAnchorId::from(required)).is_some(),
+            "generic Macro world omitted canonical anchor {required:?}"
+        );
+    }
+}
+
+#[test]
 fn v3_ring7_materializes_complete_world_and_reenters_deterministically() {
     const RADIUS_33_COLUMNS: usize = 1 + 3 * 33 * 34;
 

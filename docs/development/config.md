@@ -94,7 +94,7 @@ The optional review overrides are:
 | Variable | Effect |
 |---|---|
 | `HEX_REVIEW_SEED` | Replaces the configured seed of a seeded scenario |
-| `HEX_REVIEW_VIEW` | Uses `default`, `rotated`, or `top-down` map azimuth |
+| `HEX_REVIEW_VIEW` | Uses `default`, `rotated`, `rear` (180° orbit), or `top-down` map view |
 | `HEX_REVIEW_CAMERA` | Uses the `map` or close `character` camera |
 | `HEX_REVIEW_TIME` | Sets a cyclic-lighting hour from `0.0` up to, but not including, `24.0` |
 | `HEX_REVIEW_LIQUID_PHASE` | Freezes liquid animation at a finite phase in seconds, wrapped over its visual cycle; captures default to `0.0` |
@@ -319,9 +319,9 @@ terrain: Procedural((
 It publishes a two-wide descending entrance, a rooted network of six to twelve
 chambers, at least three clear levels in critical corridors, at least four in
 chambers, and at least three solid roof levels. The selected scenario uses twelve
-chambers, two floor bands, loop corridors, varied chamber heights, and the most
-developed rocky surface. Six-through-eight-room settings retain their deterministic
-compatibility geometry.
+chambers, three `+0/+2/+4` floor terraces, loop corridors, varied chamber heights,
+and the most developed rocky surface. Six-through-eight-room settings retain their
+deterministic compatibility geometry.
 Exact floor, entrance, and cutaway-roof memberships remain keyed by `TilePos`, so the
 underground floor cannot be confused with the surface above it. The hostile remains
 inside the deepest chamber on the floor with the greatest minimum horizontal
@@ -399,9 +399,9 @@ steps: [
 ],
 ```
 
-**A new substance.** First create or deliberately reuse a swatch in the canonical
-palette. Then, in the map-owned `substances.ron`, copy an entry and change its name
-and exact reference:
+**A substance entry.** First create or deliberately reuse a swatch in the canonical
+palette. The shipped Sand material is a complete example of the corresponding entry
+in the map-owned `substances.ron`:
 
 ```ron
 "sand": (
@@ -420,9 +420,20 @@ pair is retained too, so repairing only the other file retries the complete on-d
 candidate instead of accepting a stale fallback. `air` is never drawn and therefore
 uses `swatch: None`; every rendered substance requires `Some(...)`.
 
+Substance ids are a frozen compatibility contract, not RON entry order. `air` is 0;
+the original shipped vocabulary remains `basalt=1`, `bedrock=2`, `dirt=3`, `grass=4`,
+`gravel=5`, `ice=6`, `lava=7`, `metal=8`, `snow=9`, `stone=10`, `water=11`, and
+`worked_stone=12`. The additive tail reserves `limestone=13`, `slate=14`, `timber=15`,
+and `terracotta=16` for Outpost, followed by `sand=17`. A reserved but unauthored slot
+is inert and does not resolve through `id`, `name`, or `get`. This lets Mountain Range
+or Outpost land first without moving the other feature's ids or existing id-derived
+map fingerprints. Before adding another name, extend this stable registry and its
+exact-id regression; the loader rejects an arbitrary name added only to the RON file
+so it cannot shift accepted ids.
+
 `toughness` is maximum voxel health. The initial schema accepts only `Some(1)`,
 `Some(2)`, `Some(4)`, `Some(8)`, or `None`; `None` means the material does not
-participate in terrain damage. To make the new substance damageable, add explicit
+participate in terrain damage. To make an added substance damageable, add explicit
 stable-name pairs to `terrain_damage.ron`:
 
 ```ron

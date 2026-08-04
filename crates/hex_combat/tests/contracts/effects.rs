@@ -1808,6 +1808,7 @@ fn a_burn_ignores_the_armour_that_would_absorb_a_spell() {
             "precondition: this defence absorbs a one-hex spell entirely"
         );
     }
+    publish_adapter_facts(&mut app);
 
     kindle(&mut app, UnitId(1), fight.defender_pos);
     run_until_acting(&mut app, UnitId(2));

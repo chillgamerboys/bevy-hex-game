@@ -588,7 +588,7 @@ mod tests {
     use hex_assets::{ArtPalette, PaletteSwatch, SrgbColor, Substance, SubstanceFile, SwatchId};
     use hex_core::{Level, MAX_HEADROOM};
 
-    const STONE: SubstanceId = SubstanceId(1);
+    const STONE: SubstanceId = SubstanceId(10);
 
     fn table() -> SubstanceTable {
         let stone_id =

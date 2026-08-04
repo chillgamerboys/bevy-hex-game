@@ -559,8 +559,8 @@ generating are map-side:
 #[derive(Message, Debug, Clone, Copy)]
 pub struct TerrainSnapshotRequest;
 
-/// A generator-independent dump. Substances BY NAME — ids are session-local
-/// (the table assigns them from sorted names), so a saved id is meaningless.
+/// A generator-independent dump. Substances BY NAME — runtime ids come from an
+/// internal compatibility registry, while names are the durable snapshot contract.
 #[derive(Resource, Debug, Clone)]
 pub struct TerrainSnapshot {
     pub names: Vec<String>,                 // index -> substance name

@@ -3306,6 +3306,10 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
         V3RecipeSettings::Volcano(_) => "Volcano",
         V3RecipeSettings::DeepForest(_) => "DeepForest",
         V3RecipeSettings::Prairie(_) => "Prairie",
+        V3RecipeSettings::ShallowSea(_) => "ShallowSea",
+        V3RecipeSettings::Beach(_) => "Beach",
+        V3RecipeSettings::Shore(_) => "Shore",
+        V3RecipeSettings::DeepMountain(_) => "DeepMountain",
     }
 }
 
@@ -3325,9 +3329,9 @@ mod tests {
     use hex_assets::{ArtPalette, ObjectBlueprint, ObjectCatalogFile, VoxelStyleCatalog};
     use hex_core::SubstanceId;
 
-    // `SubstanceTable` assigns stable ids from sorted authored names. Keep this
-    // materialization fixture aligned with that public runtime contract so its
-    // map fingerprint is directly comparable with gameplay publication.
+    // `SubstanceTable` preserves frozen ids for the original shipped vocabulary.
+    // Keep this materialization fixture aligned with that public runtime contract
+    // so its map fingerprint is directly comparable with gameplay publication.
     const BASALT: SubstanceId = SubstanceId(1);
     const BEDROCK: SubstanceId = SubstanceId(2);
     const DIRT: SubstanceId = SubstanceId(3);
@@ -3465,6 +3469,7 @@ mod tests {
             dirt: DIRT,
             grass: GRASS,
             gravel: GRAVEL,
+            sand: SubstanceId::AIR,
             water: WATER,
             metal: METAL,
             worked_stone: SubstanceId(12),

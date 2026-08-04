@@ -28,6 +28,10 @@ const RING19_PATCH_NAMESPACE_BITS: u32 = 5;
 const RING19_LOCAL_ID_BITS: u32 = u32::BITS - RING19_PATCH_NAMESPACE_BITS;
 const RING19_MAX_PATCH_ID: u32 = (1 << RING19_PATCH_NAMESPACE_BITS) - 1;
 const RING19_MAX_LOCAL_ID: u32 = (1 << RING19_LOCAL_ID_BITS) - 1;
+const MACRO_PATCH_NAMESPACE_BITS: u32 = 6;
+const MACRO_LOCAL_ID_BITS: u32 = u32::BITS - MACRO_PATCH_NAMESPACE_BITS;
+const MACRO_MAX_PATCH_ID: u32 = (1 << MACRO_PATCH_NAMESPACE_BITS) - 1;
+const MACRO_MAX_LOCAL_ID: u32 = (1 << MACRO_LOCAL_ID_BITS) - 1;
 
 /// Complete semantic output owned by exactly one resolved V3 patch.
 #[derive(Debug, Clone)]
@@ -95,18 +99,21 @@ impl GeneratedPatchPlan {
         }
 
         let isolated = self.isolated_world_unchecked(layout, resolved_patch);
-        issues.extend(
-            isolated
-                .validate_semantic_layers()
-                .into_iter()
-                .map(|issue| {
-                    PatchValidationIssue::new(
-                        self.patch_id,
-                        PatchIssueCode::Semantic(issue.code),
-                        issue.detail,
-                    )
-                }),
-        );
+        // Macro alone contains aquatic and scenic instances that are not actor
+        // destinations. Fixed-ring recipes retain the historical nonempty-anchor
+        // contract for every generated fragment.
+        let semantic_issues = if layout.kind == LayoutKind::Macro {
+            isolated.validate_fragment_semantic_layers()
+        } else {
+            isolated.validate_semantic_layers()
+        };
+        issues.extend(semantic_issues.into_iter().map(|issue| {
+            PatchValidationIssue::new(
+                self.patch_id,
+                PatchIssueCode::Semantic(issue.code),
+                issue.detail,
+            )
+        }));
         self.validate_boundary_liquid_outlets(layout, &mut issues);
         issues
     }
@@ -379,6 +386,7 @@ fn patch_slug(layout_kind: LayoutKind, patch: PatchId) -> String {
             6 => "sky_islands".to_owned(),
             id => format!("patch_{id}"),
         },
+        LayoutKind::Macro => format!("macro_{:02}", patch.0),
     }
 }
 
@@ -399,6 +407,7 @@ fn namespace_numeric(
             RING19_MAX_PATCH_ID,
             RING19_MAX_LOCAL_ID,
         ),
+        LayoutKind::Macro => (MACRO_LOCAL_ID_BITS, MACRO_MAX_PATCH_ID, MACRO_MAX_LOCAL_ID),
     };
     if patch.0 > maximum_patch || local > maximum_local {
         return Err(WorldCompositionError::NamespaceOverflow { patch, kind, local });
@@ -640,7 +649,7 @@ pub(crate) fn compose_world(
         )?;
         merge_map(&mut anchors, fragment.anchors, CollisionKind::Anchor)?;
     }
-    stitch_directed_liquid_seams(&layout, &mut liquids)?;
+    stitch_liquid_seams(&layout, &mut liquids)?;
 
     for (alias, target) in settings.canonical_anchors {
         if !super::world::valid_stable_name(&alias) {
@@ -691,58 +700,89 @@ struct LiquidSeamLink {
     edge: ResolvedEdgeId,
     source: LiquidEndpoint,
     sink: LiquidEndpoint,
+    directed: bool,
 }
 
-fn stitch_directed_liquid_seams(
+fn stitch_liquid_seams(
     layout: &ResolvedLayoutPlan,
     liquids: &mut LiquidPlan,
 ) -> Result<(), WorldCompositionError> {
     let mut links = Vec::new();
     for (edge_id, edge) in &layout.shared_edges {
-        let ResolvedLiquidPort::Directed {
-            source,
-            sink,
-            port,
-            elevation,
-        } = &edge.liquid
-        else {
-            continue;
-        };
-        let source_is_first = *source == edge.first.0 && *sink == edge.second.0;
-        let source_is_second = *source == edge.second.0 && *sink == edge.first.0;
-        if !source_is_first && !source_is_second {
-            continue;
-        }
+        match &edge.liquid {
+            ResolvedLiquidPort::Dry => {}
+            ResolvedLiquidPort::Standing { port, elevation } => {
+                let (minimum_level, maximum_level) = liquid_level_bounds(edge, *elevation);
+                for (first_coord, second_coord) in &port.lanes {
+                    let first_endpoint = unique_liquid_endpoint(
+                        *edge_id,
+                        edge.first.0,
+                        *first_coord,
+                        minimum_level,
+                        maximum_level,
+                        liquids,
+                    )?;
+                    let second_endpoint = unique_liquid_endpoint(
+                        *edge_id,
+                        edge.second.0,
+                        *second_coord,
+                        minimum_level,
+                        maximum_level,
+                        liquids,
+                    )?;
+                    validate_standing_liquid_link(*edge_id, first_endpoint, second_endpoint)?;
+                    links.push(LiquidSeamLink {
+                        edge: *edge_id,
+                        source: first_endpoint,
+                        sink: second_endpoint,
+                        directed: false,
+                    });
+                }
+            }
+            ResolvedLiquidPort::Directed {
+                source,
+                sink,
+                port,
+                elevation,
+            } => {
+                let source_is_first = *source == edge.first.0 && *sink == edge.second.0;
+                let source_is_second = *source == edge.second.0 && *sink == edge.first.0;
+                if !source_is_first && !source_is_second {
+                    continue;
+                }
 
-        let (minimum_level, maximum_level) = liquid_level_bounds(edge, *elevation);
-        for (first_coord, second_coord) in &port.lanes {
-            let (source_coord, sink_coord) = if source_is_first {
-                (*first_coord, *second_coord)
-            } else {
-                (*second_coord, *first_coord)
-            };
-            let source_endpoint = unique_liquid_endpoint(
-                *edge_id,
-                *source,
-                source_coord,
-                minimum_level,
-                maximum_level,
-                liquids,
-            )?;
-            let sink_endpoint = unique_liquid_endpoint(
-                *edge_id,
-                *sink,
-                sink_coord,
-                minimum_level,
-                maximum_level,
-                liquids,
-            )?;
-            validate_liquid_link(*edge_id, source_endpoint, sink_endpoint)?;
-            links.push(LiquidSeamLink {
-                edge: *edge_id,
-                source: source_endpoint,
-                sink: sink_endpoint,
-            });
+                let (minimum_level, maximum_level) = liquid_level_bounds(edge, *elevation);
+                for (first_coord, second_coord) in &port.lanes {
+                    let (source_coord, sink_coord) = if source_is_first {
+                        (*first_coord, *second_coord)
+                    } else {
+                        (*second_coord, *first_coord)
+                    };
+                    let source_endpoint = unique_liquid_endpoint(
+                        *edge_id,
+                        *source,
+                        source_coord,
+                        minimum_level,
+                        maximum_level,
+                        liquids,
+                    )?;
+                    let sink_endpoint = unique_liquid_endpoint(
+                        *edge_id,
+                        *sink,
+                        sink_coord,
+                        minimum_level,
+                        maximum_level,
+                        liquids,
+                    )?;
+                    validate_liquid_link(*edge_id, source_endpoint, sink_endpoint)?;
+                    links.push(LiquidSeamLink {
+                        edge: *edge_id,
+                        source: source_endpoint,
+                        sink: sink_endpoint,
+                        directed: true,
+                    });
+                }
+            }
         }
     }
     let Some(first_link) = links.first() else {
@@ -791,7 +831,7 @@ fn stitch_directed_liquid_seams(
     }
     liquids.bodies = merged;
 
-    for link in links {
+    for link in links.into_iter().filter(|link| link.directed) {
         let Some(body_id) = roots.get(&link.source.body).copied() else {
             return Err(WorldCompositionError::LiquidSeam {
                 edge: link.edge,
@@ -812,6 +852,41 @@ fn stitch_directed_liquid_seams(
         };
         source.state = LiquidFlowState::Current;
         source.downstream = Some(link.sink.position);
+    }
+    Ok(())
+}
+
+fn validate_standing_liquid_link(
+    edge: ResolvedEdgeId,
+    first: LiquidEndpoint,
+    second: LiquidEndpoint,
+) -> Result<(), WorldCompositionError> {
+    let fail = |issue| WorldCompositionError::LiquidSeam { edge, issue };
+    if first.material != second.material {
+        return Err(fail(LiquidSeamIssue::MaterialMismatch {
+            source: first.material,
+            sink: second.material,
+        }));
+    }
+    for endpoint in [first, second] {
+        if let Some(downstream) = endpoint.node.downstream {
+            return Err(fail(LiquidSeamIssue::SourceAlreadyFlows {
+                position: endpoint.position,
+                downstream,
+            }));
+        }
+        if endpoint.node.state != LiquidFlowState::Still {
+            return Err(fail(LiquidSeamIssue::SourceIsNotStill {
+                position: endpoint.position,
+                state: endpoint.node.state,
+            }));
+        }
+    }
+    if first.position.level != second.position.level {
+        return Err(fail(LiquidSeamIssue::Uphill {
+            source: first.position,
+            sink: second.position,
+        }));
     }
     Ok(())
 }
@@ -1047,7 +1122,7 @@ mod tests {
     use hex_core::{BiomeRegionId, HexCoord, IlluminationLevel};
 
     use super::*;
-    use crate::procedural_v3::layout::resolve_layout;
+    use crate::procedural_v3::layout::{resolve_layout, ResolvedElevationBand};
     use crate::procedural_v3::liquid::{LiquidBodyPlan, LiquidFlowState, LiquidNode};
     use crate::procedural_v3::patch::PatchRecipeContext;
     use crate::procedural_v3::seam::shape_walker_seams;
@@ -1060,15 +1135,19 @@ mod tests {
         ProtectedFeatureRoute, StructureKind,
     };
     use crate::settings::{
-        EdgeElevationSettings, EdgeLiquidPortSettings, EdgeLiquidSettings,
+        EdgeElevationSettings, EdgeLiquidPortSettings, EdgeLiquidSettings, MapSettings,
         PatchEdgeContractSettings, PatchEdgesSettings, PatchMaskSettings, PatchSpec,
-        ProceduralV3Settings, SharedEdgeSettings, V3CavesSettings, V3EnvironmentSettings,
-        V3ForestSettings, V3FortSettings, V3HillsSettings, V3LayoutSettings, V3MountainsSettings,
-        V3RecipeSettings, V3Ring7Settings, V3SkyIslandsSettings, V3WaterfallSettings,
-        WalkerPortSettings,
+        ProceduralSettings, ProceduralV3Settings, SharedEdgeSettings, TerrainSettings,
+        V3CavesSettings, V3EnvironmentSettings, V3ForestSettings, V3FortSettings, V3HillsSettings,
+        V3LayoutSettings, V3MountainsSettings, V3RecipeSettings, V3Ring7Settings,
+        V3SkyIslandsSettings, V3WaterfallSettings, WalkerPortSettings,
     };
 
     const TEST_VIEW: MapViewHint = MapViewHint::new((0.0, 40.0, 40.0), (0.0, 5.0, 0.0));
+    const RING19_WORLD_RON: &str =
+        include_str!("../../../../assets/config/worlds/procedural-two-rings.ron");
+    const MACRO_WORLD_RON: &str =
+        include_str!("../../../../assets/config/worlds/procedural-mountain-range.ron");
 
     #[test]
     fn patch_validation_requires_exact_resolved_mask_and_biome_membership() {
@@ -1099,6 +1178,36 @@ mod tests {
         assert!(issues
             .iter()
             .any(|issue| { issue.code == PatchIssueCode::Semantic(WorldIssueCode::Biome) }));
+    }
+
+    #[test]
+    fn only_macro_patch_fragments_may_omit_actor_anchors() {
+        for (name, layout) in [("Ring7", ring7_layout()), ("Ring19", ring19_layout())] {
+            let mut fragment = complete_patch(&layout, PatchId(0));
+            assert_eq!(
+                fragment.validate_against(&layout),
+                Vec::new(),
+                "the complete {name} fixture should establish a valid baseline"
+            );
+            fragment.anchors.clear();
+            let issues = fragment.validate_against(&layout);
+            assert!(
+                issues.iter().any(|issue| {
+                    issue.code == PatchIssueCode::Semantic(WorldIssueCode::Anchor)
+                        && issue.detail == "generated world publishes no actor anchors"
+                }),
+                "anchorless {name} fragments must retain the strict actor-anchor invariant: {issues:?}"
+            );
+        }
+
+        let layout = macro_layout();
+        let mut fragment = complete_patch(&layout, PatchId(0));
+        fragment.anchors.clear();
+        assert_eq!(
+            fragment.validate_against(&layout),
+            Vec::new(),
+            "Macro aquatic and scenic fragments may legitimately omit actor anchors"
+        );
     }
 
     #[test]
@@ -1573,6 +1682,50 @@ mod tests {
     }
 
     #[test]
+    fn macro_numeric_namespace_is_six_bits_and_collision_free_for_shipped_instances() {
+        assert_eq!(MACRO_PATCH_NAMESPACE_BITS, 6);
+        assert_eq!(MACRO_MAX_PATCH_ID, 63);
+        let ids = (0..31)
+            .flat_map(|patch| {
+                [0, 1, 42, MACRO_MAX_LOCAL_ID]
+                    .into_iter()
+                    .map(move |local| {
+                        namespace_numeric(
+                            LayoutKind::Macro,
+                            PatchId(patch),
+                            local,
+                            NamespaceKind::Feature,
+                        )
+                        .expect("the shipped Macro patch and bounded local ID must encode")
+                    })
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(ids.len(), 31 * 4);
+        assert_eq!(
+            namespace_numeric(
+                LayoutKind::Macro,
+                PatchId(30),
+                MACRO_MAX_LOCAL_ID,
+                NamespaceKind::Interior,
+            ),
+            Ok(0x7bff_ffff)
+        );
+        assert_eq!(
+            namespace_numeric(
+                LayoutKind::Macro,
+                PatchId(MACRO_MAX_PATCH_ID + 1),
+                0,
+                NamespaceKind::Feature,
+            ),
+            Err(WorldCompositionError::NamespaceOverflow {
+                patch: PatchId(MACRO_MAX_PATCH_ID + 1),
+                kind: NamespaceKind::Feature,
+                local: 0,
+            })
+        );
+    }
+
+    #[test]
     fn final_whole_world_validation_remains_authoritative() {
         let layout = ring7_layout();
         let settings = WorldCompositionSettings {
@@ -1925,6 +2078,35 @@ mod tests {
             layout: V3LayoutSettings::Ring7(valid_ring7_settings()),
         };
         resolve_layout(33, &settings).expect("the fixed dry Ring7 settings should resolve")
+    }
+
+    fn ring19_layout() -> ResolvedLayoutPlan {
+        tracked_layout(RING19_WORLD_RON, LayoutKind::Ring19)
+    }
+
+    fn macro_layout() -> ResolvedLayoutPlan {
+        tracked_layout(MACRO_WORLD_RON, LayoutKind::Macro)
+    }
+
+    fn tracked_layout(source: &str, expected_kind: LayoutKind) -> ResolvedLayoutPlan {
+        let map: MapSettings = ron::from_str(source).expect("tracked world settings should parse");
+        let TerrainSettings::Procedural(ProceduralSettings::V3(settings)) = map.terrain else {
+            panic!("tracked world should use procedural V3");
+        };
+        let mut layout = resolve_layout(map.grid_radius, &settings)
+            .expect("tracked world layout should resolve for the fragment contract fixture");
+        assert_eq!(layout.kind, expected_kind);
+        for edge in layout.shared_edges.values_mut() {
+            edge.elevation = ResolvedElevationBand {
+                preferred: 15,
+                min: 14,
+                max: 16,
+            };
+        }
+        layout
+            .validate()
+            .expect("normalized fixture seam elevations should remain valid");
+        layout
     }
 
     fn directed_ring7_layout() -> ResolvedLayoutPlan {
