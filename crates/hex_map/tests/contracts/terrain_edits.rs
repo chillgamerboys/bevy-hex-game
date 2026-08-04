@@ -350,6 +350,170 @@ fn v3_waterfall_rejects_liquid_and_support_edits_but_rebuilds_dry_terrain() {
     );
 }
 
+#[test]
+fn mountain_range_protects_the_shared_sea_and_republishes_it_after_a_dry_edit() {
+    let mut app = v3_mountain_range_app();
+    enter_gameplay(&mut app);
+
+    let (water_position, support_position, cap_position, dry_position, water, sand, stone) = {
+        let world = app.world();
+        let map = world.resource::<VoxelMap>();
+        let table = world.resource::<SubstanceTable>();
+        let water = table.id("water").expect("water should exist");
+        let sand = table.id("sand").expect("sand should exist");
+        let stone = table.id("stone").expect("stone should exist");
+        let blockers = world.resource::<TraversalBlockers>();
+        let anchors = world.resource::<MapAnchors>();
+        let water_position = map
+            .columns()
+            .filter_map(|(coord, column)| {
+                (column.get(4) == sand && (5..=8).all(|level| column.get(level) == water))
+                    .then_some(TilePos::new(coord, 8))
+            })
+            .min()
+            .expect("Mountain Range should contain exact Shallow Sea strata");
+        let dry_position = world
+            .resource::<BiomeRegions>()
+            .iter()
+            .map(|(position, _region)| position)
+            .filter(|position| position.level >= 60)
+            .filter(|position| {
+                table.is_solid(map.get(*position))
+                    && table.is_diggable(map.get(*position))
+                    && table.is_solid(map.get(position.below()))
+                    && map.get(position.above()).is_air()
+                    && map
+                        .column(position.coord)
+                        .is_some_and(|column| column.iter().all(|substance| substance != water))
+                    && !blockers.contains(*position)
+                    && anchors
+                        .iter()
+                        .all(|(_anchor, anchor_position)| anchor_position != *position)
+            })
+            .max()
+            .expect("Mountain Range should expose editable high-massif terrain");
+        (
+            water_position,
+            TilePos::new(water_position.coord, 4),
+            water_position.above(),
+            dry_position,
+            water,
+            sand,
+            stone,
+        )
+    };
+    let original_dry_region = app
+        .world()
+        .resource::<BiomeRegions>()
+        .get(dry_position)
+        .expect("the selected massif surface should publish a biome identity");
+    let original_grid = app
+        .world_mut()
+        .query_filtered::<Entity, With<HexGrid>>()
+        .single(app.world())
+        .expect("Mountain Range grid should exist");
+    let original_presentations = liquid_presentations(&mut app);
+    assert!(
+        !original_presentations.is_empty(),
+        "the shared watershed should publish liquid presentation"
+    );
+
+    for (edit, position, expected) in [
+        (
+            TerrainEdit::Clear {
+                pos: water_position,
+            },
+            water_position,
+            water,
+        ),
+        (
+            TerrainEdit::Clear {
+                pos: support_position,
+            },
+            support_position,
+            sand,
+        ),
+        (
+            TerrainEdit::Set {
+                pos: cap_position,
+                substance: stone,
+            },
+            cap_position,
+            SubstanceId::AIR,
+        ),
+    ] {
+        app.world_mut().write_message(edit);
+        app.update();
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<VoxelMap>().get(position),
+            expected,
+            "the conservative shared-sea guard admitted an edit at {position:?}"
+        );
+        let unchanged_grid = app
+            .world_mut()
+            .query_filtered::<Entity, With<HexGrid>>()
+            .single(app.world())
+            .expect("a rejected sea edit should retain the grid");
+        assert_eq!(
+            unchanged_grid, original_grid,
+            "a rejected sea edit rebuilt the grid"
+        );
+    }
+    assert_eq!(
+        liquid_presentations(&mut app),
+        original_presentations,
+        "rejected sea edits should not disturb runtime liquid publication"
+    );
+
+    app.world_mut()
+        .write_message(TerrainEdit::Clear { pos: dry_position });
+    app.update();
+    app.update();
+
+    let rebuilt_grid = app
+        .world_mut()
+        .query_filtered::<Entity, With<HexGrid>>()
+        .single(app.world())
+        .expect("the edited Mountain Range grid should be rebuilt");
+    assert_ne!(rebuilt_grid, original_grid);
+    assert!(app.world().get_entity(original_grid).is_err());
+    assert!(
+        app.world()
+            .resource::<VoxelMap>()
+            .get(dry_position)
+            .is_air(),
+        "the unrelated massif edit should be accepted"
+    );
+    assert_eq!(
+        app.world().resource::<BiomeRegions>().get(dry_position),
+        None,
+        "the cleared exact surface retained stale biome membership"
+    );
+    assert_eq!(
+        app.world()
+            .resource::<BiomeRegions>()
+            .get(dry_position.below()),
+        Some(original_dry_region),
+        "the newly exposed massif surface did not inherit its biome identity"
+    );
+    assert_column_run_publication(&mut app, dry_position.coord);
+
+    assert!(original_presentations
+        .iter()
+        .all(|(entity, _parent, _pickable)| app.world().get_entity(*entity).is_err()));
+    let rebuilt_presentations = liquid_presentations(&mut app);
+    assert_eq!(rebuilt_presentations.len(), original_presentations.len());
+    assert!(rebuilt_presentations
+        .iter()
+        .all(
+            |(_entity, parent, pickable)| *parent == rebuilt_grid && *pickable == Pickable::IGNORE
+        ));
+    assert!(app.world().contains_resource::<TerrainReady>());
+    assert!(!app.world().contains_resource::<GameplaySetupFailure>());
+}
+
 /// Headroom under a platform is the size of the gap, not open sky.
 ///
 /// This is what makes a body's size mean anything: build a roof two levels up and the

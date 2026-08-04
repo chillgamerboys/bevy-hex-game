@@ -189,7 +189,13 @@ mod tests {
         assert_eq!(two_rings.scenario, "Two Rings");
         assert_eq!(two_rings.fixed_seed, Some(1_592_598_566));
         assert_eq!(two_rings.preview, "ui/sandbox/two-rings.png");
-        assert_eq!(catalog.maps.len(), 16);
+        let mountain_range = catalog
+            .get("mountain-range")
+            .expect("Mountain Range should be selectable in Sandbox");
+        assert_eq!(mountain_range.scenario, "Mountain Range");
+        assert_eq!(mountain_range.fixed_seed, Some(129_704_046));
+        assert_eq!(mountain_range.preview, "ui/sandbox/mountain-range.png");
+        assert_eq!(catalog.maps.len(), 17);
 
         let scenarios: crate::ScenarioLibrary =
             ron::from_str(include_str!("../../../assets/config/scenarios.ron"))

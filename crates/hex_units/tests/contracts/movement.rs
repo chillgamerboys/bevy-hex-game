@@ -45,14 +45,14 @@ const GROUND: f32 = 2.0;
 /// The level of that ground's surface.
 const GROUND_LEVEL: hex_core::Level = 1;
 
-/// Non-solid lava sorts first after air in the fixture's substance table.
-const LAVA: SubstanceId = SubstanceId(1);
+/// Non-solid lava keeps its frozen shipped compatibility id.
+const LAVA: SubstanceId = SubstanceId(7);
 
 /// The one solid substance the fake terrain is made of.
-const STONE: SubstanceId = SubstanceId(2);
+const STONE: SubstanceId = SubstanceId(10);
 
-/// Non-solid water sorts after stone.
-const WATER: SubstanceId = SubstanceId(3);
+/// Non-solid water keeps its frozen shipped compatibility id.
+const WATER: SubstanceId = SubstanceId(11);
 
 /// A coordinate whose surface run is water rather than stone.
 ///

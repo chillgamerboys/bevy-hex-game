@@ -32,9 +32,10 @@ use std::time::{Duration, Instant};
 
 use hex_assets::GameAssets;
 use hex_assets::{
-    ArtPalette, ElementCatalog, ElementFile, ObjectBlueprint, ObjectCatalogFile, ObjectInstance,
-    PaletteSwatch, RuntimeArtCatalog, SrgbColor, Substance, SubstanceFile, SubstanceTable,
-    SwatchId, TerrainDamageFile, TerrainDamagePair, TerrainDamageTable, VoxelStyleCatalog,
+    ArtPalette, CameraSettings, ElementCatalog, ElementFile, ObjectBlueprint, ObjectCatalogFile,
+    ObjectInstance, PaletteSwatch, RuntimeArtCatalog, SrgbColor, Substance, SubstanceFile,
+    SubstanceTable, SwatchId, TerrainDamageFile, TerrainDamagePair, TerrainDamageTable,
+    VoxelStyleCatalog,
 };
 use hex_core::{
     BiomeRegionId, BiomeRegions, CanopyOccluder, CutawayOccluder, DamagedVoxels, ElementId,
@@ -48,7 +49,8 @@ use hex_core::{
 };
 use hex_map::{
     CavesReportMetrics, CrossingSettings, EnvironmentSettings, GenerationReport, HillsSettings,
-    LandformSettings, LayeredSkyIslandsSettings, LinkedIslandsSettings, MapSettings,
+    LandformSettings, LayeredSkyIslandsSettings, LinkedIslandsSettings, MacroHeadwaterSettings,
+    MacroLiquidConnectionSettings, MacroMetrics, MapSettings, MountainRangeMetrics,
     MountainsSettings, PatchEdgeContractSettings, PatchEdgesSettings, PatchMaskSettings, PatchSpec,
     PerlinSettings, PerlinStepSettings, ProceduralRecipeMetrics, ProceduralSettings,
     ProceduralV1Settings, ProceduralV2Settings, ProceduralV3Settings, Ring19Metrics, Ring7Metrics,
@@ -153,6 +155,7 @@ fn substance_table_fixture(omitted_substance: Option<&str>) -> SubstanceTable {
         ("grass", true, true),
         ("stone", true, true),
         ("gravel", true, true),
+        ("sand", true, true),
         ("water", false, true),
         ("metal", true, true),
         ("worked_stone", true, true),
@@ -559,6 +562,22 @@ fn v3_ring19_app() -> App {
     .expect("tracked Two Rings settings should parse");
     app.insert_resource(settings);
     app.insert_resource(ResolvedMapSeed(1_592_598_566));
+    app.insert_resource(runtime_art_catalog());
+    app
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "the tracked Mountain Range review world is a compile-time integration fixture"
+)]
+fn v3_mountain_range_app() -> App {
+    let mut app = test_app();
+    let settings: MapSettings = ron::from_str(include_str!(
+        "../../../assets/config/worlds/procedural-mountain-range.ron"
+    ))
+    .expect("tracked Mountain Range settings should parse");
+    app.insert_resource(settings);
+    app.insert_resource(ResolvedMapSeed(129_704_046));
     app.insert_resource(runtime_art_catalog());
     app
 }

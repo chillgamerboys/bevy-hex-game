@@ -57,7 +57,7 @@ const GROUND_LEVEL: Level = 1;
 /// The bridge deck, high enough above the ground that no step rule connects them.
 const DECK_LEVEL: Level = 9;
 
-const STONE: SubstanceId = SubstanceId(1);
+const STONE: SubstanceId = SubstanceId(10);
 
 /// Where the deck runs: a line of coordinates carrying a high surface as well as ground.
 ///

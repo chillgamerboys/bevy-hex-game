@@ -332,6 +332,9 @@ impl WaterfallHydrology {
                 }
                 Ok(resolved)
             }
+            LayoutKind::Macro => Err(vec![recipe_issue(
+                "Macro Waterfall hydrology is resolved by the authored Macro runner",
+            )]),
         }
     }
 
@@ -710,6 +713,10 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
         V3RecipeSettings::Volcano(_) => "Volcano",
         V3RecipeSettings::DeepForest(_) => "DeepForest",
         V3RecipeSettings::Prairie(_) => "Prairie",
+        V3RecipeSettings::ShallowSea(_) => "ShallowSea",
+        V3RecipeSettings::Beach(_) => "Beach",
+        V3RecipeSettings::Shore(_) => "Shore",
+        V3RecipeSettings::DeepMountain(_) => "DeepMountain",
     }
 }
 
@@ -4602,6 +4609,7 @@ mod tests {
             dirt: DIRT,
             grass: GRASS,
             gravel: GRAVEL,
+            sand: SubstanceId::AIR,
             water: WATER,
             metal: METAL,
             worked_stone: SubstanceId(12),

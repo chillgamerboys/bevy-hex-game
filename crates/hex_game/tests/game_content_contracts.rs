@@ -605,8 +605,8 @@ fn shipped_content_cross_references_resolve() {
     );
     assert_eq!(
         terrain_damage.len(),
-        162,
-        "all 18 canonical elements must be admitted against all 9 tough substances"
+        180,
+        "all 18 canonical elements must be admitted against all 10 tough substances"
     );
 
     // Every spell's requirements resolved to real element ids.

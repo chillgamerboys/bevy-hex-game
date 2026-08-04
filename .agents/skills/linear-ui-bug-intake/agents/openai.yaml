@@ -1,0 +1,4 @@
+interface:
+  display_name: "Linear UI Bug Intake"
+  short_description: "Log UI bugs and consolidate duplicate evidence"
+  default_prompt: "Use $linear-ui-bug-intake to capture this UI bug in Linear with exact reproduction evidence and deduplicate it."

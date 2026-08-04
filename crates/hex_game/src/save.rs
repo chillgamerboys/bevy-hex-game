@@ -44,43 +44,43 @@ const CAMPAIGNS_VERSION: u32 = 1;
 /// still equals the corresponding cutover digest, so any later semantic asset change
 /// keeps invalidating the legacy resume as intended.
 const LEGACY_RESUME_DIGESTS: &[(&str, u64, u64)] = &[
-    ("The Crossing", 0x5FFB_DCD6_C8CF_30CC, 0x7FA0_6763_5993_03EA),
+    ("The Crossing", 0x5FFB_DCD6_C8CF_30CC, 0xAC2F_13D5_7865_2646),
     (
         "Procedural Hills",
         0x8F25_010C_85CF_CAF3,
-        0x2D95_565A_603B_7FF5,
+        0x6308_39FC_0537_3D71,
     ),
     (
         "Rolling Hills",
         0x2DE9_1507_D357_ABF4,
-        0xE1AC_F8A1_299C_8B12,
+        0xED15_7C75_33CA_75BE,
     ),
-    ("Frozen Hills", 0xE6DD_2CCD_12D1_45E5, 0x93CA_427B_A21F_FD4F),
+    ("Frozen Hills", 0xE6DD_2CCD_12D1_45E5, 0x3582_3F3E_7518_D437),
     (
         "Volcanic Hills",
         0xEB7E_01A8_AAA2_286F,
-        0xD6E3_81EF_4AA2_0D31,
+        0x3A92_0DAE_E458_945D,
     ),
-    ("Sky Islands", 0x8071_6B2B_0888_E4FA, 0x92E4_71E4_CE92_9540),
-    ("Mountains", 0x3DDE_18E7_4C6A_569D, 0x45D5_4558_5A95_FE87),
-    ("Caves", 0x9BCD_C2F9_D17D_D72A, 0xE983_E982_3779_D770),
-    ("Waterfall", 0x5FD0_1EF4_38CE_8941, 0xA4CD_2C7F_6D9A_588B),
-    ("Forest", 0xB4F3_CBD7_781A_03E7, 0x1AAE_3FFC_0F15_22A9),
-    ("Deep Forest", 0xE738_EC86_5931_590B, 0x116B_366C_5C0D_B02D),
-    ("Prairie", 0x61EF_B225_B791_AC6E, 0x9E82_5F15_1AD4_B284),
-    ("Fort", 0x1C14_BC36_4158_CE43, 0xAD18_6CF9_EE68_5985),
+    ("Sky Islands", 0x8071_6B2B_0888_E4FA, 0x57C9_6540_6E72_6F20),
+    ("Mountains", 0x3DDE_18E7_4C6A_569D, 0x86BA_BFE3_09B0_FA7F),
+    ("Caves", 0x9BCD_C2F9_D17D_D72A, 0x3D97_6234_8A97_BAD0),
+    ("Waterfall", 0x5FD0_1EF4_38CE_8941, 0xE3A8_F74E_C1F3_BB33),
+    ("Forest", 0xB4F3_CBD7_781A_03E7, 0x4339_0018_80EB_5865),
+    ("Deep Forest", 0xE738_EC86_5931_590B, 0x01B6_E318_48E4_C3F9),
+    ("Prairie", 0x61EF_B225_B791_AC6E, 0xA321_BC25_8F8D_A414),
+    ("Fort", 0x1C14_BC36_4158_CE43, 0x3DF1_6E83_BDDF_44C1),
     (
         "Seven Regions",
         0xA5E5_86ED_155D_1FCF,
-        0x3559_C10F_80C6_5C11,
+        0x80BB_85FD_657F_507D,
     ),
-    ("Two Rings", 0xE4C0_B13F_0B78_00BD, 0x0EEA_DE9C_4831_2AA7),
-    ("Party Trial", 0xC8EA_6229_346D_CF96, 0xE64E_D979_1736_586C),
-    ("Ability Lab", 0x26E9_C8E6_07F1_C52E, 0x26A9_E26E_99EB_03C4),
+    ("Two Rings", 0xE4C0_B13F_0B78_00BD, 0x7EDA_10A6_7B46_E45F),
+    ("Party Trial", 0xC8EA_6229_346D_CF96, 0xAA13_0315_396C_E50C),
+    ("Ability Lab", 0x26E9_C8E6_07F1_C52E, 0x3829_4F64_D4E7_D6D4),
     (
         "Raider Mirror",
         0x4D4B_EBCF_B5C8_AB54,
-        0x3E7E_2058_28FC_0E72,
+        0x71B4_8117_1E3B_905E,
     ),
 ];
 
@@ -232,6 +232,10 @@ const SHIPPED_CAMPAIGN_INPUTS: &[(&str, &str)] = &[
     (
         "config/worlds/procedural-mountains.ron",
         include_str!("../../../assets/config/worlds/procedural-mountains.ron"),
+    ),
+    (
+        "config/worlds/procedural-mountain-range.ron",
+        include_str!("../../../assets/config/worlds/procedural-mountain-range.ron"),
     ),
     (
         "config/worlds/procedural-prairie.ron",
@@ -2731,15 +2735,22 @@ mod tests {
     }
 
     #[test]
-    fn pr175_digest_translation_is_retired_by_elemental_cutover() {
+    fn pr175_digest_translation_is_retired_after_elemental_and_world_cutovers() {
+        let legacy_text = include_str!("../testdata/legacy_resume_pr175.ron");
+        let legacy: LegacyResumeFile =
+            ron::from_str(legacy_text).expect("the historical PR #175 resume should parse");
+        assert_eq!(legacy.build_version, build_identity());
+        assert_eq!(legacy.scenario_digest, 0xC8EA_6229_346D_CF96);
+        validate_legacy_resume(&legacy).expect("the PR #175 record itself remains well formed");
+
         let library: ScenarioLibrary =
             ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
-                .expect("the cutover scenario library should parse");
-        assert_eq!(LEGACY_RESUME_DIGESTS.len(), library.scenarios.len());
-        for current in &library.scenarios {
-            let (_, legacy_digest, cutover_digest) = LEGACY_RESUME_DIGESTS
+                .expect("the current scenario library should parse");
+        for (name, legacy_digest, cutover_digest) in LEGACY_RESUME_DIGESTS {
+            let current = library
+                .scenarios
                 .iter()
-                .find(|(name, _, _)| *name == current.name)
+                .find(|current| current.name == *name)
                 .expect("every PR #175 scenario has an explicit digest translation");
             assert!(legacy_resume_digest_is_compatible(
                 &current.name,
@@ -2749,7 +2760,7 @@ mod tests {
             let live_digest = scenario_digest(current);
             assert_ne!(
                 live_digest, *cutover_digest,
-                "{} must reflect the elemental content cutover",
+                "{} must reflect the later elemental and world cutovers",
                 current.name
             );
             assert!(!legacy_resume_digest_is_compatible(
@@ -2758,17 +2769,23 @@ mod tests {
                 live_digest,
             ));
         }
+        assert!(
+            library
+                .scenarios
+                .iter()
+                .any(|scenario| scenario.name == "Mountain Range")
+                && !LEGACY_RESUME_DIGESTS
+                    .iter()
+                    .any(|(name, _, _)| *name == "Mountain Range"),
+            "post-cutover scenarios must not fabricate a PR #175 legacy digest"
+        );
 
-        let legacy_text = include_str!("../testdata/legacy_resume_pr175.ron");
-        let legacy: LegacyResumeFile =
-            ron::from_str(legacy_text).expect("the historical PR #175 resume should parse");
-        assert_eq!(legacy.scenario_digest, 0xC8EA_6229_346D_CF96);
-        validate_legacy_resume(&legacy).expect("the PR #175 record itself remains well formed");
         let current = library
             .scenarios
             .iter()
             .find(|candidate| candidate.name == legacy.scenario_name)
             .expect("Party Trial remains the canonical Campaign");
+        assert_ne!(scenario_digest(current), 0xAA13_0315_396C_E50C);
         assert!(!legacy_resume_digest_is_compatible(
             &current.name,
             legacy.scenario_digest,
@@ -2783,7 +2800,7 @@ mod tests {
             .available(CampaignSlotId::One)
             .expect("the well-formed PR #175 record should remain preserved");
         let refusal = campaign_content_refusal(&migrated, &library, 0xC0DE_CAFE)
-            .expect("the elemental cutover must refuse incompatible PR #175 content");
+            .expect("the current cutovers must refuse incompatible PR #175 content");
         assert_eq!(
             refusal,
             "The saved scenario \"Party Trial\" changed and cannot be resumed."
@@ -2801,7 +2818,7 @@ mod tests {
         let example: LegacyResumeFile =
             ron::from_str(example_text).expect("the elemental example resume should parse");
         assert_eq!(example.build_version, build_identity());
-        assert_eq!(example.scenario_digest, 0xB95E_588C_D920_0534);
+        assert_eq!(example.scenario_digest, 0xBF8D_7C8B_FF7F_C842);
         assert_eq!(example.units.len(), 6, "Party Trial is a complete 3v3");
         validate_legacy_resume(&example).expect("the elemental example record itself is valid");
 

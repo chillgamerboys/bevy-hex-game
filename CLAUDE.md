@@ -65,7 +65,7 @@ HEX_REVIEW_VIEW=default \
 cargo run --release -p hex_game --features map-review
 ```
 
-`HEX_REVIEW_VIEW` accepts `default`, `rotated`, or `top-down` and requires
+`HEX_REVIEW_VIEW` accepts `default`, `rotated`, `rear`, or `top-down` and requires
 `HEX_REVIEW_CAPTURE`; omitting the view uses `default`. `HEX_REVIEW_CAMERA` accepts
 `map` or `character` and also requires a capture. `HEX_REVIEW_TIME` accepts an hour in
 `[0, 24)` and can be used with or without a capture, but the selected scenario must use
@@ -372,8 +372,10 @@ played the build; `/release` to bump `[workspace.package] version` and tag
 Conventional Commits — `/release` computes the version bump from them.
 `/audit-pr` writes `/tmp/audit-pr-receipt-<PR>.json`; `/merge-pr` refuses to
 merge without a green receipt for the current HEAD.
-Test tiers: `/test-quick` (fmt+clippy+tests) → `/test-local` (+deny, doc,
-links) → `/test-full` (+ship build; applicable visual/human review stays manual).
+Validation has two tiers: `/test-quick` runs the selector-chosen focused iteration
+gate; `/test-full` runs the complete selector-chosen merge-candidate gate, including
+dependency, docs, links, and shipping checks. Applicable static visual review and
+exact-head human experience evidence remain separate explicit gates.
 Gameplay and map tests are partitioned by concern in
 [`docs/development/gameplay-testing.md`](docs/development/gameplay-testing.md) and
 [`docs/development/map-testing.md`](docs/development/map-testing.md); logical combat
@@ -383,17 +385,21 @@ gameplay visual run contains exactly ten reviewed presentation frames.
 Ordinary PRs run only the selector-chosen producer/consumer closure; trajectory-only
 changes use their dedicated pure/direct-consumer concern without application/UI tests.
 The combined terrain-impact source, unknown/unclassified paths, command-manifest or CI
-changes, pushes to `dev`/`main`, and final wave/release candidates ordinarily promote
-to the complete gate. An explicit exact-path waiver may replace only the concerns it
-names with an authoritative narrow closure; omitted concerns are reported as WAIVED,
-not passed.
-Standalone audits: `/audit-diff`, `/audit-silent-failures`, `/update-docs`,
-`/visual-walk` (the scripted capture walk — audit-pr's Step 2.5; the agent
+changes, and pushes to `dev`/`main` promote to the complete gate. Final wave and
+release candidates run the complete selector-chosen candidate gate on their exact
+combined diff.
+Standalone review helpers are `/audit-diff` and `/visual-walk` (the scripted capture
+walk used by `/audit-pr`; the agent
 reads static camera/UI/rendered-map frames, and video/human checks own motion, input
 response, control feel, and taste).
-Tickets live in Linear (team HEX): `/plan-ticket` to start from one,
-`/update-linear` to bind a PR, `/seed-tickets` to turn a roadmap into
-tickets. Binding is encouraged, never required.
+Tickets live in Linear (team HEX): `/plan-ticket` reconciles and starts an existing
+issue, while `/update-linear` binds an existing issue to a PR or applies an explicit
+state transition. Initial UI defects use the tool-neutral
+`.agents/skills/linear-ui-bug-intake` workflow; Claude's
+`/linear-ui-bug-intake` is a thin adapter over that same contract. All Linear skills
+resolve teams, workflow states, labels, members, and parents from live connector data
+instead of embedding workspace UUIDs. Linear linkage is encouraged, never a merge
+gate.
 
 ## Current state
 

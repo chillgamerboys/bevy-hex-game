@@ -261,7 +261,7 @@ initial scale `1`, `2`, `4`, and `8`:
 | Maximum health | Initial substances |
 |---:|---|
 | 1 | grass, snow |
-| 2 | dirt, gravel, ice |
+| 2 | dirt, gravel, ice, sand |
 | 4 | stone, basalt |
 | 8 | worked stone, metal |
 | none | air, water, lava, bedrock |
@@ -269,7 +269,7 @@ initial scale `1`, `2`, `4`, and `8`:
 `assets/config/terrain_damage.ron` is a world-owned allow-list of stable
 `(element_name, substance_name)` pairs. A listed pair permits damage; a missing pair
 resists. The neutral elemental-grid migration lists all 18 canonical elements against
-all nine substances with numeric toughness, exactly **162 unique pairs**, so the
+all ten substances with numeric toughness, exactly **180 unique pairs**, so the
 content continues to exercise the Boolean contract without pretending to settle
 elemental balance. Expanding that table changes no resolver behavior and does not
 claim any of HEX-19's remaining terrain mechanics. Validation rejects unknown names,
@@ -562,8 +562,8 @@ generating are map-side:
 #[derive(Message, Debug, Clone, Copy)]
 pub struct TerrainSnapshotRequest;
 
-/// A generator-independent dump. Substances BY NAME — ids are session-local
-/// (the table assigns them from sorted names), so a saved id is meaningless.
+/// A generator-independent dump. Substances BY NAME — runtime ids come from an
+/// internal compatibility registry, while names are the durable snapshot contract.
 #[derive(Resource, Debug, Clone)]
 pub struct TerrainSnapshot {
     pub names: Vec<String>,                 // index -> substance name

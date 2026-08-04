@@ -26,7 +26,14 @@ pub(crate) const MAX_WALKER_PORT_COUNT: u8 = 4;
 pub(crate) const MAX_SEAM_PORT_WIDTH: u32 = 4;
 /// Exact region count of the V3 two-rings composite.
 pub const V3_RING19_REGION_COUNT: usize = 19;
+/// Exact atomic-cell count of the first radius-three Macro layout.
+pub const V3_MACRO_CELL_COUNT: usize = 37;
+/// Exact logical-biome count of the shipped Mountain Range layout.
+pub const V3_MOUNTAIN_RANGE_REGION_COUNT: usize = 30;
 const RING19_RADIUS: u32 = 55;
+const MACRO_RADIUS: u32 = 77;
+const MACRO_CELL_RADIUS: u32 = 3;
+const MACRO_RECIPE_VALIDATION_RADIUS: u32 = 12;
 const RING19_RECIPE_VALIDATION_RADIUS: u32 = 40;
 const TWO_RINGS_REGIONS: [(V3EnvironmentSettings, &str, u8); V3_RING19_REGION_COUNT] = [
     (V3EnvironmentSettings::TemperateGrassland, "Hills", 0),
@@ -473,6 +480,144 @@ pub enum V3LayoutSettings {
     Ring7(V3Ring7Settings),
     /// A central region followed by the clockwise first and second rings.
     Ring19(V3Ring19Settings),
+    /// Authored logical biomes over a radius-three graph of atomic macro cells.
+    Macro(MacroLayoutSettings),
+}
+
+/// One authored radius-three macro world.
+///
+/// Atomic cells determine ownership and adjacency. Each logical instance owns one
+/// connected set of those cells and is generated as one union-mask biome.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MacroLayoutSettings {
+    /// Macro-cell radius. The first implementation requires exactly three.
+    pub macro_radius: u32,
+    /// Logical biome instances in stable ID and seed-stream order.
+    pub instances: Vec<MacroBiomeInstanceSettings>,
+    /// Default depth protected behind every resolved internal seam.
+    pub approach_depth: u32,
+    /// Explicit standing or directed liquid connections between adjacent instances.
+    #[serde(default)]
+    pub liquid_connections: Vec<MacroLiquidConnectionSettings>,
+    /// Authored inland origins for directed rivers that would otherwise begin at a seam.
+    #[serde(default)]
+    pub headwaters: Vec<MacroHeadwaterSettings>,
+    /// Ordered logical instances crossed by the canonical ordinary-walker route.
+    pub critical_route: Vec<String>,
+}
+
+/// One logical biome occupying one or more connected atomic macro cells.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MacroBiomeInstanceSettings {
+    /// Stable lowercase name used by anchors, diagnostics, and fingerprints.
+    pub name: String,
+    /// Connected macro coordinates inside the radius-three cell graph.
+    pub cells: Vec<CubeCoord>,
+    /// Material and climate family.
+    pub environment: V3EnvironmentSettings,
+    /// Geometry recipe run once over the complete union mask.
+    pub recipe: V3RecipeSettings,
+    /// Clockwise local-frame turns in `0..=5`.
+    pub rotation_turns: u8,
+    /// Whether ordinary actors may be required to enter this biome.
+    pub access: MacroAccessSettings,
+    /// Lower/upper datums and the direction in which the instance rises.
+    pub elevation: MacroElevationSettings,
+}
+
+/// Layout-level ordinary-access policy for a logical biome instance.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum MacroAccessSettings {
+    /// Fully submerged terrain; no ordinary seam or local actor anchor is required.
+    Aquatic,
+    /// Ordinary land which may participate in the canonical route.
+    Land,
+    /// Scenic terrain with no required ordinary seam or local actor anchor.
+    Scenic,
+}
+
+/// One authored elevation grade across a logical biome instance.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MacroElevationSettings {
+    /// Datum on the low side of the instance.
+    pub low: Level,
+    /// Datum on the high side of the instance.
+    pub high: Level,
+    /// Horizontal direction from `low` toward `high`.
+    pub grade_axis: MacroAxisSettings,
+}
+
+/// Six stable horizontal directions available to authored Macro grades.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+pub enum MacroAxisSettings {
+    /// East.
+    East,
+    /// South-east.
+    SouthEast,
+    /// South-west.
+    SouthWest,
+    /// West.
+    West,
+    /// North-west.
+    NorthWest,
+    /// North-east.
+    NorthEast,
+}
+
+/// One exact liquid relationship between adjacent logical biome instances.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+pub enum MacroLiquidConnectionSettings {
+    /// Broad, level still water shared without inventing a current.
+    Standing {
+        /// First instance name.
+        first_instance: String,
+        /// Second instance name.
+        second_instance: String,
+        /// Exact narrow width, or zero to continue water across the full segment.
+        width: u32,
+        /// Exact shared water surface level.
+        level: Level,
+    },
+    /// Directed flow from one instance into its adjacent sink.
+    Directed {
+        /// Upstream instance name.
+        source_instance: String,
+        /// Downstream instance name.
+        sink_instance: String,
+        /// Exact resolved seam width.
+        width: u32,
+        /// Exact shared liquid level.
+        level: Level,
+    },
+}
+
+/// One authored inland origin for an outgoing Macro river.
+///
+/// Headwaters describe source shape rather than a new liquid substance. The
+/// downstream seam remains the authoritative width and exact handoff level.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+pub enum MacroHeadwaterSettings {
+    /// A broad spring under a short stone overhang followed by a visible fall.
+    CaveFall {
+        /// Mountain instance containing the spring and its outgoing liquid seam.
+        instance: String,
+        /// Water level inside the filled, non-traversable spring mouth.
+        source_level: Level,
+        /// Number of inland columns covered by the stone overhang.
+        overhang_depth: u8,
+    },
+    /// Several narrow upland threads which draw together into the outgoing river.
+    RivuletConfluence {
+        /// Mountain instance containing the rivulets and its outgoing liquid seam.
+        instance: String,
+        /// Maximum water level at the separated source tips.
+        source_level: Level,
+        /// Exact number of narrow source threads.
+        branch_count: u8,
+    },
 }
 
 /// The fixed V3 seven-region roster.
@@ -614,6 +759,10 @@ pub enum V3EnvironmentSettings {
     Volcanic,
     /// Stone, gravel, and dirt suited to underground spaces.
     Rocky,
+    /// Sand, soil, vegetation, and still seawater.
+    Coastal,
+    /// Rocky lower slopes transitioning to snow and ice above the snowline.
+    Alpine,
 }
 
 /// V3 geometry recipes.
@@ -639,6 +788,14 @@ pub enum V3RecipeSettings {
     DeepForest(V3DeepForestSettings),
     /// Open rolling grassland without trees or an authored road.
     Prairie(V3PrairieSettings),
+    /// A thin sand seabed fully covered by shallow still water.
+    ShallowSea(V3ShallowSeaSettings),
+    /// Mostly submerged coastal terrain with a narrow sandy land edge.
+    Beach(V3BeachSettings),
+    /// Low coastal cliffs, a broader dry top, and denser trees.
+    Shore(V3ShoreSettings),
+    /// One dominant massif generated over a connected multi-cell union mask.
+    DeepMountain(V3DeepMountainSettings),
 }
 
 /// V3 Hills parameters, intentionally independent from the frozen V2 payload.
@@ -727,6 +884,50 @@ pub struct V3PrairieSettings {
     pub max_relief: Level,
     /// Target percentage of eligible surfaces carrying nonblocking grass.
     pub grass_coverage_percent: u8,
+}
+
+/// V3 Shallow Sea parameters.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V3ShallowSeaSettings {
+    /// Exact still-water surface level.
+    pub sea_level: Level,
+}
+
+/// V3 Beach parameters.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V3BeachSettings {
+    /// Target percentage of horizontal columns covered by water.
+    pub water_coverage_percent: u8,
+    /// Target percentage of eligible dry columns carrying trees.
+    pub tree_coverage_percent: u8,
+}
+
+/// V3 Shore parameters.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V3ShoreSettings {
+    /// Target percentage of horizontal columns covered by water.
+    pub water_coverage_percent: u8,
+    /// Target percentage of eligible dry columns carrying trees.
+    pub tree_coverage_percent: u8,
+    /// Highest authored cliff rise above sea level.
+    pub cliff_height: Level,
+}
+
+/// V3 Deep Mountain parameters.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V3DeepMountainSettings {
+    /// Broad target summit level.
+    pub summit_level: Level,
+    /// Absolute cap retained below the V3 allocation ceiling.
+    pub hard_cap: Level,
+    /// Level at which trees cease to appear.
+    pub treeline: Level,
+    /// Level at which exposed surfaces become snow covered.
+    pub snowline: Level,
 }
 
 /// Reserved Waterfall recipe payload.
@@ -847,6 +1048,8 @@ pub enum EdgeLiquidSettings {
     Inlet(EdgeLiquidPortSettings),
     /// Liquid exits this patch into its neighbor.
     Outlet(EdgeLiquidPortSettings),
+    /// Level still water continues across both sides without a downstream edge.
+    Standing(EdgeLiquidPortSettings),
 }
 
 /// Width shared by a reciprocal liquid inlet/outlet pair.
@@ -1214,6 +1417,20 @@ impl ProceduralV3Settings {
                     );
                 }
                 patch.validate(grid_radius, "V3 Single patch")?;
+                if matches!(
+                    &patch.recipe,
+                    V3RecipeSettings::ShallowSea(_)
+                        | V3RecipeSettings::Beach(_)
+                        | V3RecipeSettings::Shore(_)
+                        | V3RecipeSettings::DeepMountain(_)
+                ) || (matches!(&patch.recipe, V3RecipeSettings::Mountains(_))
+                    && patch.environment == V3EnvironmentSettings::Alpine)
+                {
+                    return Err(format!(
+                        "V3 Single does not support Macro-only {:?} geometry",
+                        patch.recipe
+                    ));
+                }
                 match &patch.mask {
                     PatchMaskSettings::WholeWorld | PatchMaskSettings::Explicit(_) => {}
                     PatchMaskSettings::GeneratedRegion => {
@@ -1242,8 +1459,646 @@ impl ProceduralV3Settings {
                 }
                 ring.validate()
             }
+            V3LayoutSettings::Macro(macro_layout) => {
+                if grid_radius != MACRO_RADIUS {
+                    return Err(format!(
+                        "procedural V3 Macro requires grid_radius exactly {MACRO_RADIUS}"
+                    ));
+                }
+                macro_layout.validate()
+            }
         }
     }
+}
+
+impl MacroLayoutSettings {
+    fn validate(&self) -> Result<(), String> {
+        if self.macro_radius != MACRO_CELL_RADIUS {
+            return Err(format!(
+                "V3 Macro macro_radius must be exactly {MACRO_CELL_RADIUS}"
+            ));
+        }
+        if self.instances.is_empty() || self.instances.len() > V3_MACRO_CELL_COUNT {
+            return Err(format!(
+                "V3 Macro requires between 1 and {V3_MACRO_CELL_COUNT} logical instances"
+            ));
+        }
+        if self.approach_depth == 0 || self.approach_depth > MACRO_RECIPE_VALIDATION_RADIUS {
+            return Err(format!(
+                "V3 Macro approach_depth must be between 1 and {MACRO_RECIPE_VALIDATION_RADIUS}"
+            ));
+        }
+
+        let mut names = BTreeMap::new();
+        let mut owners = BTreeMap::new();
+        for (index, instance) in self.instances.iter().enumerate() {
+            if !is_stable_identifier(&instance.name) {
+                return Err(format!(
+                    "V3 Macro instance name {:?} must be a lowercase stable identifier",
+                    instance.name
+                ));
+            }
+            if names.insert(instance.name.as_str(), index).is_some() {
+                return Err(format!(
+                    "V3 Macro contains duplicate instance name {:?}",
+                    instance.name
+                ));
+            }
+            if instance.rotation_turns > 5 {
+                return Err(format!(
+                    "V3 Macro instance {:?} rotation_turns must be in 0..=5",
+                    instance.name
+                ));
+            }
+            if instance.elevation.low < 0
+                || instance.elevation.low > instance.elevation.high
+                || instance.elevation.high > MAX_PROCEDURAL_LEVEL
+            {
+                return Err(format!(
+                    "V3 Macro instance {:?} elevation must satisfy 0 <= low <= high <= {MAX_PROCEDURAL_LEVEL}",
+                    instance.name
+                ));
+            }
+            validate_v3_recipe(
+                &instance.recipe,
+                instance.environment,
+                MACRO_RECIPE_VALIDATION_RADIUS,
+            )
+            .map_err(|error| format!("V3 Macro instance {:?}: {error}", instance.name))?;
+            if !matches!(
+                &instance.recipe,
+                V3RecipeSettings::Hills(_)
+                    | V3RecipeSettings::Mountains(_)
+                    | V3RecipeSettings::Waterfall(_)
+                    | V3RecipeSettings::Forest(_)
+                    | V3RecipeSettings::Prairie(_)
+                    | V3RecipeSettings::ShallowSea(_)
+                    | V3RecipeSettings::Beach(_)
+                    | V3RecipeSettings::Shore(_)
+                    | V3RecipeSettings::DeepMountain(_)
+            ) {
+                return Err(format!(
+                    "V3 Macro instance {:?} uses a recipe whose union-mask implementation is unavailable",
+                    instance.name
+                ));
+            }
+            if matches!(instance.recipe, V3RecipeSettings::ShallowSea(_))
+                != matches!(instance.access, MacroAccessSettings::Aquatic)
+            {
+                return Err(format!(
+                    "V3 Macro ShallowSea instance {:?} must be Aquatic and no other recipe may be Aquatic",
+                    instance.name
+                ));
+            }
+            if instance.cells.is_empty() {
+                return Err(format!(
+                    "V3 Macro instance {:?} must own at least one macro cell",
+                    instance.name
+                ));
+            }
+
+            let mut local_cells = BTreeSet::new();
+            for cell in &instance.cells {
+                let coord = macro_cell_tuple(*cell)
+                    .map_err(|error| format!("V3 Macro instance {:?}: {error}", instance.name))?;
+                if !local_cells.insert(coord) {
+                    return Err(format!(
+                        "V3 Macro instance {:?} repeats macro cell {coord:?}",
+                        instance.name
+                    ));
+                }
+                if let Some(previous) = owners.insert(coord, index) {
+                    let previous = self.instances.get(previous).ok_or_else(|| {
+                        format!(
+                            "V3 Macro macro cell {coord:?} resolved an invalid previous owner index"
+                        )
+                    })?;
+                    return Err(format!(
+                        "V3 Macro macro cell {coord:?} is owned by both {:?} and {:?}",
+                        previous.name, instance.name
+                    ));
+                }
+            }
+            if !macro_cells_are_connected(&local_cells) {
+                return Err(format!(
+                    "V3 Macro instance {:?} cells must be connected",
+                    instance.name
+                ));
+            }
+        }
+
+        let expected = all_macro_cells()?;
+        if owners.len() != V3_MACRO_CELL_COUNT
+            || owners.keys().copied().collect::<BTreeSet<_>>() != expected
+        {
+            let missing = expected
+                .difference(&owners.keys().copied().collect())
+                .copied()
+                .collect::<Vec<_>>();
+            return Err(format!(
+                "V3 Macro instances must cover all {V3_MACRO_CELL_COUNT} radius-three cells exactly; missing {missing:?}"
+            ));
+        }
+
+        let adjacency = macro_instance_adjacency(self.instances.len(), &owners)?;
+        validate_macro_adjacency(&self.instances, &adjacency)?;
+        self.validate_liquid_connections(&names, &adjacency)?;
+        self.validate_headwaters(&names)?;
+        self.validate_critical_route(&names, &adjacency)
+    }
+
+    fn validate_liquid_connections(
+        &self,
+        names: &BTreeMap<&str, usize>,
+        adjacency: &[BTreeSet<usize>],
+    ) -> Result<(), String> {
+        let mut occupied_seams = BTreeSet::new();
+        let mut directed_edges = Vec::new();
+        for connection in &self.liquid_connections {
+            let (first_name, second_name, width, level, directed) = match connection {
+                MacroLiquidConnectionSettings::Standing {
+                    first_instance,
+                    second_instance,
+                    width,
+                    level,
+                } => (first_instance, second_instance, *width, *level, false),
+                MacroLiquidConnectionSettings::Directed {
+                    source_instance,
+                    sink_instance,
+                    width,
+                    level,
+                } => (source_instance, sink_instance, *width, *level, true),
+            };
+            let first = *names.get(first_name.as_str()).ok_or_else(|| {
+                format!("V3 Macro liquid connection references unknown instance {first_name:?}")
+            })?;
+            let second = *names.get(second_name.as_str()).ok_or_else(|| {
+                format!("V3 Macro liquid connection references unknown instance {second_name:?}")
+            })?;
+            let instances_are_adjacent = adjacency
+                .get(first)
+                .is_some_and(|neighbors| neighbors.contains(&second));
+            if first == second || !instances_are_adjacent {
+                return Err(format!(
+                    "V3 Macro liquid connection {first_name:?} -> {second_name:?} must use one external instance seam"
+                ));
+            }
+            if directed || width != 0 {
+                validate_macro_liquid_width(width)?;
+            }
+            validate_macro_liquid_level(level)?;
+            let seam = if first < second {
+                (first, second)
+            } else {
+                (second, first)
+            };
+            if !occupied_seams.insert(seam) {
+                return Err(format!(
+                    "V3 Macro instances {first_name:?} and {second_name:?} have more than one liquid connection"
+                ));
+            }
+            if directed {
+                directed_edges.push((first, second));
+            }
+        }
+        if !directed_graph_is_acyclic(self.instances.len(), directed_edges) {
+            return Err("V3 Macro directed liquid connections must be acyclic".to_owned());
+        }
+        Ok(())
+    }
+
+    fn validate_headwaters(&self, names: &BTreeMap<&str, usize>) -> Result<(), String> {
+        let directed = self
+            .liquid_connections
+            .iter()
+            .filter_map(|connection| match connection {
+                MacroLiquidConnectionSettings::Directed {
+                    source_instance,
+                    sink_instance,
+                    width,
+                    level,
+                } => Some((
+                    source_instance.as_str(),
+                    sink_instance.as_str(),
+                    *width,
+                    *level,
+                )),
+                MacroLiquidConnectionSettings::Standing { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        let mut authored = BTreeSet::new();
+        for headwater in &self.headwaters {
+            let (name, source_level) = match headwater {
+                MacroHeadwaterSettings::CaveFall {
+                    instance,
+                    source_level,
+                    overhang_depth,
+                } => {
+                    if !(2..=4).contains(overhang_depth) {
+                        return Err(format!(
+                            "V3 Macro CaveFall headwater {instance:?} overhang_depth must be between 2 and 4"
+                        ));
+                    }
+                    (instance, *source_level)
+                }
+                MacroHeadwaterSettings::RivuletConfluence {
+                    instance,
+                    source_level,
+                    branch_count,
+                } => {
+                    if !(3..=5).contains(branch_count) {
+                        return Err(format!(
+                            "V3 Macro RivuletConfluence headwater {instance:?} branch_count must be between 3 and 5"
+                        ));
+                    }
+                    (instance, *source_level)
+                }
+            };
+            if !authored.insert(name.as_str()) {
+                return Err(format!(
+                    "V3 Macro instance {name:?} has more than one authored headwater"
+                ));
+            }
+            let index = *names.get(name.as_str()).ok_or_else(|| {
+                format!("V3 Macro headwater references unknown instance {name:?}")
+            })?;
+            let instance = self.instances.get(index).ok_or_else(|| {
+                format!("V3 Macro headwater {name:?} resolved invalid instance index {index}")
+            })?;
+            if !matches!(instance.recipe, V3RecipeSettings::Mountains(_)) {
+                return Err(format!(
+                    "V3 Macro headwater instance {name:?} must use the Mountains recipe"
+                ));
+            }
+            if source_level < instance.elevation.low || source_level > instance.elevation.high {
+                return Err(format!(
+                    "V3 Macro headwater {name:?} source_level {source_level} must lie within its authored elevation {}..={}",
+                    instance.elevation.low, instance.elevation.high
+                ));
+            }
+            let outgoing = directed
+                .iter()
+                .filter(|(source, _, _, _)| *source == name)
+                .copied()
+                .collect::<Vec<_>>();
+            if outgoing.len() != 1 {
+                return Err(format!(
+                    "V3 Macro headwater {name:?} must own exactly one outgoing directed liquid connection, got {}",
+                    outgoing.len()
+                ));
+            }
+            if directed.iter().any(|(_, sink, _, _)| *sink == name) {
+                return Err(format!(
+                    "V3 Macro headwater {name:?} may not also receive a directed liquid connection"
+                ));
+            }
+            let outlet_level = outgoing
+                .first()
+                .map(|(_, _, _, level)| *level)
+                .unwrap_or(source_level);
+            let minimum_drop = if matches!(headwater, MacroHeadwaterSettings::CaveFall { .. }) {
+                3
+            } else {
+                2
+            };
+            if source_level.saturating_sub(outlet_level) < minimum_drop {
+                return Err(format!(
+                    "V3 Macro headwater {name:?} needs at least a {minimum_drop}-level drop above its level-{outlet_level} outlet"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_critical_route(
+        &self,
+        names: &BTreeMap<&str, usize>,
+        adjacency: &[BTreeSet<usize>],
+    ) -> Result<(), String> {
+        if self.critical_route.len() < 2 {
+            return Err("V3 Macro critical_route must contain at least two instances".to_owned());
+        }
+        let mut previous: Option<usize> = None;
+        let mut visited = BTreeSet::new();
+        for name in &self.critical_route {
+            let index = *names.get(name.as_str()).ok_or_else(|| {
+                format!("V3 Macro critical_route references unknown instance {name:?}")
+            })?;
+            let instance = self.instances.get(index).ok_or_else(|| {
+                format!(
+                    "V3 Macro critical_route instance {name:?} resolved invalid instance index {index}"
+                )
+            })?;
+            if !matches!(instance.access, MacroAccessSettings::Land) {
+                return Err(format!(
+                    "V3 Macro critical_route instance {name:?} must use Land access"
+                ));
+            }
+            if !visited.insert(index) {
+                return Err(format!("V3 Macro critical_route repeats instance {name:?}"));
+            }
+            if let Some(previous) = previous {
+                let instances_are_adjacent = adjacency
+                    .get(previous)
+                    .is_some_and(|neighbors| neighbors.contains(&index));
+                if !instances_are_adjacent {
+                    return Err(format!(
+                        "V3 Macro critical_route consecutive instances are not adjacent at {name:?}"
+                    ));
+                }
+            }
+            previous = Some(index);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum MacroBiomeKind {
+    Hills,
+    SkyIslands,
+    Mountains,
+    Caves,
+    Waterfall,
+    Forest,
+    Fort,
+    Volcano,
+    DeepForest,
+    Prairie,
+    ShallowSea,
+    Beach,
+    Shore,
+    DeepMountain,
+}
+
+impl MacroBiomeKind {
+    const fn of(recipe: &V3RecipeSettings) -> Self {
+        match recipe {
+            V3RecipeSettings::Hills(_) => Self::Hills,
+            V3RecipeSettings::SkyIslands(_) => Self::SkyIslands,
+            V3RecipeSettings::Mountains(_) => Self::Mountains,
+            V3RecipeSettings::Caves(_) => Self::Caves,
+            V3RecipeSettings::Waterfall(_) => Self::Waterfall,
+            V3RecipeSettings::Forest(_) => Self::Forest,
+            V3RecipeSettings::Fort(_) => Self::Fort,
+            V3RecipeSettings::Volcano(_) => Self::Volcano,
+            V3RecipeSettings::DeepForest(_) => Self::DeepForest,
+            V3RecipeSettings::Prairie(_) => Self::Prairie,
+            V3RecipeSettings::ShallowSea(_) => Self::ShallowSea,
+            V3RecipeSettings::Beach(_) => Self::Beach,
+            V3RecipeSettings::Shore(_) => Self::Shore,
+            V3RecipeSettings::DeepMountain(_) => Self::DeepMountain,
+        }
+    }
+}
+
+/// Declarative neighbor policy for one Macro biome kind.
+///
+/// Missing fields are permissive. This lets authored layouts add only the
+/// obvious ecological constraints without turning placement into a solver.
+#[derive(Clone, Copy)]
+struct MacroNeighborRule {
+    subject: MacroBiomeKind,
+    allowed_only: &'static [MacroBiomeKind],
+    requires_any: &'static [MacroBiomeKind],
+    requires_all: &'static [MacroBiomeKind],
+    minimum_neighbors: usize,
+}
+
+struct MacroAdjacencyRegistry {
+    forbidden_kind_pairs: &'static [(MacroBiomeKind, MacroBiomeKind)],
+    forbidden_environment_pairs: &'static [(V3EnvironmentSettings, V3EnvironmentSettings)],
+    neighbor_rules: &'static [MacroNeighborRule],
+}
+
+const COASTAL_NEIGHBORS: &[MacroBiomeKind] = &[MacroBiomeKind::Beach, MacroBiomeKind::Shore];
+const MOUNTAIN_NEIGHBORS: &[MacroBiomeKind] = &[MacroBiomeKind::Mountains];
+const INLAND_GREEN_NEIGHBORS: &[MacroBiomeKind] =
+    &[MacroBiomeKind::Forest, MacroBiomeKind::Prairie];
+const SHALLOW_SEA_NEIGHBOR: &[MacroBiomeKind] = &[MacroBiomeKind::ShallowSea];
+const MACRO_NEIGHBOR_RULES: &[MacroNeighborRule] = &[
+    MacroNeighborRule {
+        subject: MacroBiomeKind::ShallowSea,
+        allowed_only: COASTAL_NEIGHBORS,
+        requires_any: &[],
+        requires_all: &[],
+        minimum_neighbors: 0,
+    },
+    MacroNeighborRule {
+        subject: MacroBiomeKind::Beach,
+        allowed_only: &[],
+        requires_any: INLAND_GREEN_NEIGHBORS,
+        requires_all: SHALLOW_SEA_NEIGHBOR,
+        minimum_neighbors: 2,
+    },
+    MacroNeighborRule {
+        subject: MacroBiomeKind::Shore,
+        allowed_only: &[],
+        requires_any: INLAND_GREEN_NEIGHBORS,
+        requires_all: SHALLOW_SEA_NEIGHBOR,
+        minimum_neighbors: 2,
+    },
+    MacroNeighborRule {
+        subject: MacroBiomeKind::DeepMountain,
+        allowed_only: MOUNTAIN_NEIGHBORS,
+        requires_any: &[],
+        requires_all: &[],
+        minimum_neighbors: 0,
+    },
+];
+const MACRO_ADJACENCY_REGISTRY: MacroAdjacencyRegistry = MacroAdjacencyRegistry {
+    // Kind-pair denials are empty initially; allowed-only rules express the two
+    // asymmetric ecological edges while remaining symmetric at validation time.
+    forbidden_kind_pairs: &[],
+    forbidden_environment_pairs: &[(
+        V3EnvironmentSettings::Frozen,
+        V3EnvironmentSettings::Volcanic,
+    )],
+    neighbor_rules: MACRO_NEIGHBOR_RULES,
+};
+
+fn validate_macro_adjacency(
+    instances: &[MacroBiomeInstanceSettings],
+    adjacency: &[BTreeSet<usize>],
+) -> Result<(), String> {
+    if adjacency.len() != instances.len() {
+        return Err(format!(
+            "V3 Macro adjacency requires one neighbor set per instance; got {} for {} instances",
+            adjacency.len(),
+            instances.len()
+        ));
+    }
+    for (first_index, neighbors) in adjacency.iter().enumerate() {
+        let first = instances.get(first_index).ok_or_else(|| {
+            format!("V3 Macro adjacency references invalid instance index {first_index}")
+        })?;
+        let first_kind = MacroBiomeKind::of(&first.recipe);
+        let mut neighbor_kinds = BTreeSet::new();
+        for &index in neighbors {
+            let neighbor = instances.get(index).ok_or_else(|| {
+                format!("V3 Macro adjacency references invalid neighbor index {index}")
+            })?;
+            neighbor_kinds.insert(MacroBiomeKind::of(&neighbor.recipe));
+        }
+        for second_index in neighbors
+            .iter()
+            .copied()
+            .filter(|index| *index > first_index)
+        {
+            let second = instances.get(second_index).ok_or_else(|| {
+                format!("V3 Macro adjacency references invalid neighbor index {second_index}")
+            })?;
+            let second_kind = MacroBiomeKind::of(&second.recipe);
+            let forbidden_kind =
+                MACRO_ADJACENCY_REGISTRY
+                    .forbidden_kind_pairs
+                    .iter()
+                    .any(|(left, right)| {
+                        (*left == first_kind && *right == second_kind)
+                            || (*left == second_kind && *right == first_kind)
+                    });
+            let forbidden_environment = MACRO_ADJACENCY_REGISTRY
+                .forbidden_environment_pairs
+                .iter()
+                .any(|(left, right)| {
+                    (*left == first.environment && *right == second.environment)
+                        || (*left == second.environment && *right == first.environment)
+                });
+            let violates_allowed_only = [(first_kind, second_kind), (second_kind, first_kind)]
+                .into_iter()
+                .any(|(subject, neighbor)| {
+                    MACRO_ADJACENCY_REGISTRY
+                        .neighbor_rules
+                        .iter()
+                        .filter(|rule| rule.subject == subject && !rule.allowed_only.is_empty())
+                        .any(|rule| !rule.allowed_only.contains(&neighbor))
+                });
+            if forbidden_kind || forbidden_environment || violates_allowed_only {
+                return Err(format!(
+                    "V3 Macro forbidden adjacency between {:?} cells {:?} and {:?} cells {:?}",
+                    first.name, first.cells, second.name, second.cells
+                ));
+            }
+        }
+        for rule in MACRO_ADJACENCY_REGISTRY
+            .neighbor_rules
+            .iter()
+            .filter(|rule| rule.subject == first_kind)
+        {
+            let has_any = rule.requires_any.is_empty()
+                || rule
+                    .requires_any
+                    .iter()
+                    .any(|required| neighbor_kinds.contains(required));
+            let has_all = rule
+                .requires_all
+                .iter()
+                .all(|required| neighbor_kinds.contains(required));
+            if neighbors.len() < rule.minimum_neighbors || !has_any || !has_all {
+                return Err(format!(
+                    "V3 Macro contextual adjacency failed for {:?} cells {:?}: requires_any={:?}, requires_all={:?}, minimum_neighbors={}",
+                    first.name,
+                    first.cells,
+                    rule.requires_any,
+                    rule.requires_all,
+                    rule.minimum_neighbors,
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn macro_cell_tuple(cell: CubeCoord) -> Result<(i32, i32, i32), String> {
+    if cell.x + cell.y + cell.z != 0 {
+        return Err(format!(
+            "macro cell ({}, {}, {}) axes must sum to zero",
+            cell.x, cell.y, cell.z
+        ));
+    }
+    let coord = (cell.x, cell.y, cell.z);
+    if cube_tuple_radius(coord) > MACRO_CELL_RADIUS {
+        return Err(format!(
+            "macro cell {coord:?} lies outside radius {MACRO_CELL_RADIUS}"
+        ));
+    }
+    Ok(coord)
+}
+
+fn all_macro_cells() -> Result<BTreeSet<(i32, i32, i32)>, String> {
+    let radius = i32::try_from(MACRO_CELL_RADIUS).map_err(|error| {
+        format!("V3 Macro macro_radius does not fit signed cube coordinates: {error}")
+    })?;
+    Ok((-radius..=radius)
+        .flat_map(|x| {
+            (-radius..=radius).filter_map(move |y| {
+                let z = -x - y;
+                (z.abs() <= radius).then_some((x, y, z))
+            })
+        })
+        .collect())
+}
+
+fn macro_cells_are_connected(cells: &BTreeSet<(i32, i32, i32)>) -> bool {
+    let Some(start) = cells.first().copied() else {
+        return false;
+    };
+    let mut visited = BTreeSet::from([start]);
+    let mut pending = VecDeque::from([start]);
+    while let Some(cell) = pending.pop_front() {
+        for delta in CUBE_NEIGHBORS {
+            let neighbor = (cell.0 + delta.0, cell.1 + delta.1, cell.2 + delta.2);
+            if cells.contains(&neighbor) && visited.insert(neighbor) {
+                pending.push_back(neighbor);
+            }
+        }
+    }
+    visited.len() == cells.len()
+}
+
+fn macro_instance_adjacency(
+    instance_count: usize,
+    owners: &BTreeMap<(i32, i32, i32), usize>,
+) -> Result<Vec<BTreeSet<usize>>, String> {
+    let mut adjacency = vec![BTreeSet::new(); instance_count];
+    for (cell, owner) in owners {
+        for delta in CUBE_NEIGHBORS {
+            let neighbor = (cell.0 + delta.0, cell.1 + delta.1, cell.2 + delta.2);
+            let Some(neighbor_owner) = owners.get(&neighbor).copied() else {
+                continue;
+            };
+            if *owner != neighbor_owner {
+                if adjacency.get(neighbor_owner).is_none() {
+                    return Err(format!(
+                        "V3 Macro cell {neighbor:?} resolved invalid owner index {neighbor_owner}"
+                    ));
+                }
+                let neighbors = adjacency.get_mut(*owner).ok_or_else(|| {
+                    format!("V3 Macro cell {cell:?} resolved invalid owner index {owner}")
+                })?;
+                neighbors.insert(neighbor_owner);
+            }
+        }
+    }
+    Ok(adjacency)
+}
+
+fn validate_macro_liquid_width(width: u32) -> Result<(), String> {
+    if !(2..=MAX_SEAM_PORT_WIDTH).contains(&width) {
+        return Err(format!(
+            "V3 Macro liquid width must be between 2 and {MAX_SEAM_PORT_WIDTH}"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_macro_liquid_level(level: Level) -> Result<(), String> {
+    if !(3..=MAX_PROCEDURAL_LEVEL).contains(&level) {
+        return Err(format!(
+            "V3 Macro liquid level must be between 3 and {MAX_PROCEDURAL_LEVEL}"
+        ));
+    }
+    Ok(())
 }
 
 impl V3Ring7Settings {
@@ -1886,6 +2741,10 @@ const fn ring19_recipe_name(recipe: &V3RecipeSettings) -> &'static str {
         V3RecipeSettings::Volcano(_) => "Volcano",
         V3RecipeSettings::DeepForest(_) => "DeepForest",
         V3RecipeSettings::Prairie(_) => "Prairie",
+        V3RecipeSettings::ShallowSea(_) => "ShallowSea",
+        V3RecipeSettings::Beach(_) => "Beach",
+        V3RecipeSettings::Shore(_) => "Shore",
+        V3RecipeSettings::DeepMountain(_) => "DeepMountain",
     }
 }
 
@@ -1921,6 +2780,9 @@ fn validate_v3_recipe(
         (V3RecipeSettings::Hills(_), V3EnvironmentSettings::Rocky) => {
             Err("V3 Hills does not support the Rocky environment".to_owned())
         }
+        (V3RecipeSettings::Hills(_), _) => {
+            Err("V3 Hills requires TemperateGrassland, Frozen, or Volcanic".to_owned())
+        }
         (
             V3RecipeSettings::SkyIslands(islands),
             V3EnvironmentSettings::TemperateGrassland | V3EnvironmentSettings::Frozen,
@@ -1928,11 +2790,12 @@ fn validate_v3_recipe(
         (V3RecipeSettings::SkyIslands(_), _) => {
             Err("V3 SkyIslands requires TemperateGrassland or Frozen".to_owned())
         }
-        (V3RecipeSettings::Mountains(mountains), V3EnvironmentSettings::Frozen) => {
-            mountains.validate(grid_radius)
-        }
+        (
+            V3RecipeSettings::Mountains(mountains),
+            V3EnvironmentSettings::Frozen | V3EnvironmentSettings::Alpine,
+        ) => mountains.validate(grid_radius),
         (V3RecipeSettings::Mountains(_), _) => {
-            Err("V3 Mountains requires the Frozen environment".to_owned())
+            Err("V3 Mountains requires the Frozen or Alpine environment".to_owned())
         }
         (V3RecipeSettings::Caves(caves), V3EnvironmentSettings::Rocky) => {
             caves.validate(grid_radius)
@@ -1969,6 +2832,58 @@ fn validate_v3_recipe(
         }
         (V3RecipeSettings::Prairie(_), _) => {
             Err("V3 Prairie requires the TemperateGrassland environment".to_owned())
+        }
+        (V3RecipeSettings::ShallowSea(settings), V3EnvironmentSettings::Coastal) => {
+            if settings.sea_level != 8 {
+                return Err("V3 ShallowSea sea_level must be exactly 8".to_owned());
+            }
+            Ok(())
+        }
+        (V3RecipeSettings::ShallowSea(_), _) => {
+            Err("V3 ShallowSea requires the Coastal environment".to_owned())
+        }
+        (V3RecipeSettings::Beach(settings), V3EnvironmentSettings::Coastal) => {
+            if !(60..=75).contains(&settings.water_coverage_percent) {
+                return Err("V3 Beach water coverage must be between 60 and 75 percent".to_owned());
+            }
+            if !(2..=5).contains(&settings.tree_coverage_percent) {
+                return Err("V3 Beach tree coverage must be between 2 and 5 percent".to_owned());
+            }
+            Ok(())
+        }
+        (V3RecipeSettings::Beach(_), _) => {
+            Err("V3 Beach requires the Coastal environment".to_owned())
+        }
+        (V3RecipeSettings::Shore(settings), V3EnvironmentSettings::Coastal) => {
+            if !(20..=40).contains(&settings.water_coverage_percent) {
+                return Err("V3 Shore water coverage must be between 20 and 40 percent".to_owned());
+            }
+            if !(8..=12).contains(&settings.tree_coverage_percent) {
+                return Err("V3 Shore tree coverage must be between 8 and 12 percent".to_owned());
+            }
+            if !(3..=6).contains(&settings.cliff_height) {
+                return Err("V3 Shore cliff_height must be between 3 and 6".to_owned());
+            }
+            Ok(())
+        }
+        (V3RecipeSettings::Shore(_), _) => {
+            Err("V3 Shore requires the Coastal environment".to_owned())
+        }
+        (V3RecipeSettings::DeepMountain(settings), V3EnvironmentSettings::Alpine) => {
+            if settings.treeline < 5
+                || settings.treeline >= settings.snowline
+                || settings.snowline >= settings.summit_level
+                || settings.summit_level > settings.hard_cap
+                || settings.hard_cap > MAX_PROCEDURAL_LEVEL
+            {
+                return Err(format!(
+                    "V3 DeepMountain must satisfy 5 <= treeline < snowline < summit_level <= hard_cap <= {MAX_PROCEDURAL_LEVEL}"
+                ));
+            }
+            Ok(())
+        }
+        (V3RecipeSettings::DeepMountain(_), _) => {
+            Err("V3 DeepMountain requires the Alpine environment".to_owned())
         }
     }
 }
@@ -2284,7 +3199,7 @@ impl WalkerPortSettings {
 
 impl EdgeLiquidSettings {
     fn validate(self, label: &str) -> Result<(), String> {
-        let (Self::Inlet(port) | Self::Outlet(port)) = self else {
+        let (Self::Inlet(port) | Self::Outlet(port) | Self::Standing(port)) = self else {
             return Ok(());
         };
         if port.width < 2 {
@@ -2329,12 +3244,15 @@ fn validate_reciprocal_edge(
         | (EdgeLiquidSettings::Outlet(first), EdgeLiquidSettings::Inlet(second)) => {
             first.width == second.width
         }
+        (EdgeLiquidSettings::Standing(first), EdgeLiquidSettings::Standing(second)) => {
+            first.width == second.width
+        }
         _ => false,
     };
     if !liquid_matches {
         return Err(format!(
-            "V3 Ring7 internal seam {label} requires Dry/Dry or reciprocal equal-width \
-             Inlet/Outlet liquid settings"
+            "V3 Ring7 internal seam {label} requires Dry/Dry, equal-width Standing/Standing, or \
+             reciprocal equal-width Inlet/Outlet liquid settings"
         ));
     }
     Ok(())
@@ -3147,6 +4065,8 @@ mod tests {
     const V3_RING7_RON: &str = include_str!("../../../assets/config/worlds/procedural-ring7.ron");
     const V3_RING19_RON: &str =
         include_str!("../../../assets/config/worlds/procedural-two-rings.ron");
+    const V3_MACRO_RON: &str =
+        include_str!("../../../assets/config/worlds/procedural-mountain-range.ron");
     const V1_HILLS_RON: &str = r#"
 (
     grid_radius: 12,
@@ -3354,6 +4274,54 @@ mod tests {
         ron::from_str(V3_RING19_RON).expect("the shipped Two Rings settings should parse")
     }
 
+    fn shipped_macro_settings() -> MapSettings {
+        ron::from_str(V3_MACRO_RON).expect("the shipped Mountain Range settings should parse")
+    }
+
+    fn macro_layout(settings: &MapSettings) -> &MacroLayoutSettings {
+        let TerrainSettings::Procedural(ProceduralSettings::V3(ProceduralV3Settings {
+            layout: V3LayoutSettings::Macro(layout),
+        })) = &settings.terrain
+        else {
+            panic!("the shipped Mountain Range settings should use V3 Macro");
+        };
+        layout
+    }
+
+    fn named_macro_instances(
+        layout: &MacroLayoutSettings,
+        names: &[&str],
+    ) -> Vec<MacroBiomeInstanceSettings> {
+        names
+            .iter()
+            .map(|name| {
+                layout
+                    .instances
+                    .iter()
+                    .find(|instance| instance.name == *name)
+                    .unwrap_or_else(|| panic!("the shipped Macro layout should contain {name:?}"))
+                    .clone()
+            })
+            .collect()
+    }
+
+    fn adjacency_for_pairs(
+        instance_count: usize,
+        pairs: &[(usize, usize)],
+    ) -> Vec<BTreeSet<usize>> {
+        let mut adjacency = vec![BTreeSet::new(); instance_count];
+        for &(first, second) in pairs {
+            assert!(first < instance_count && second < instance_count && first != second);
+            if let Some(neighbors) = adjacency.get_mut(first) {
+                neighbors.insert(second);
+            }
+            if let Some(neighbors) = adjacency.get_mut(second) {
+                neighbors.insert(first);
+            }
+        }
+        adjacency
+    }
+
     fn ring19_mut(settings: &mut MapSettings) -> &mut V3Ring19Settings {
         let TerrainSettings::Procedural(ProceduralSettings::V3(ProceduralV3Settings {
             layout: V3LayoutSettings::Ring19(ring),
@@ -3528,6 +4496,225 @@ mod tests {
             assert_eq!(
                 matches!(&procedural, ProceduralSettings::V3(_)),
                 expected_version == 3
+            );
+        }
+    }
+
+    #[test]
+    fn shipped_mountain_range_macro_contract_is_exact() {
+        let settings = shipped_macro_settings();
+        settings
+            .validate()
+            .expect("the shipped Mountain Range settings should validate");
+        assert_eq!(settings.grid_radius, 77);
+
+        let layout = macro_layout(&settings);
+        assert_eq!(layout.macro_radius, 3);
+        assert_eq!(layout.instances.len(), 30);
+
+        let authored_cells = layout
+            .instances
+            .iter()
+            .flat_map(|instance| instance.cells.iter().copied())
+            .map(|cell| {
+                macro_cell_tuple(cell)
+                    .expect("every shipped Mountain Range macro cell should be valid")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(authored_cells.len(), 37);
+        let unique_cells = authored_cells.into_iter().collect::<BTreeSet<_>>();
+        let expected_cells = all_macro_cells().unwrap_or_else(|error| {
+            panic!("the fixed Macro radius must be representable: {error}")
+        });
+        assert_eq!(unique_cells, expected_cells);
+
+        let raw_adjacencies = unique_cells
+            .iter()
+            .flat_map(|cell| {
+                CUBE_NEIGHBORS
+                    .into_iter()
+                    .map(move |delta| (cell.0 + delta.0, cell.1 + delta.1, cell.2 + delta.2))
+            })
+            .filter(|neighbor| unique_cells.contains(neighbor))
+            .count()
+            / 2;
+        let outer_sides = unique_cells
+            .iter()
+            .flat_map(|cell| {
+                CUBE_NEIGHBORS
+                    .into_iter()
+                    .map(move |delta| (cell.0 + delta.0, cell.1 + delta.1, cell.2 + delta.2))
+            })
+            .filter(|neighbor| !unique_cells.contains(neighbor))
+            .count();
+        assert_eq!(raw_adjacencies, 90);
+        assert_eq!(outer_sides, 42);
+
+        let owners = layout
+            .instances
+            .iter()
+            .enumerate()
+            .flat_map(|(owner, instance)| {
+                instance.cells.iter().copied().map(move |cell| {
+                    (
+                        macro_cell_tuple(cell).expect("the shipped macro cell is valid"),
+                        owner,
+                    )
+                })
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut internal_adjacencies = 0;
+        let mut external_adjacencies = 0;
+        let mut logical_pairs = BTreeSet::new();
+        for (cell, owner) in &owners {
+            for delta in CUBE_NEIGHBORS {
+                let neighbor = (cell.0 + delta.0, cell.1 + delta.1, cell.2 + delta.2);
+                let Some(neighbor_owner) = owners.get(&neighbor) else {
+                    continue;
+                };
+                if cell >= &neighbor {
+                    continue;
+                }
+                if owner == neighbor_owner {
+                    internal_adjacencies += 1;
+                } else {
+                    external_adjacencies += 1;
+                    logical_pairs.insert(if owner < neighbor_owner {
+                        (*owner, *neighbor_owner)
+                    } else {
+                        (*neighbor_owner, *owner)
+                    });
+                }
+            }
+        }
+        assert_eq!(internal_adjacencies, 9);
+        assert_eq!(external_adjacencies, 81);
+        assert_eq!(logical_pairs.len(), 74);
+
+        let multi_cell_instances = layout
+            .instances
+            .iter()
+            .filter(|instance| instance.cells.len() > 1)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            multi_cell_instances
+                .iter()
+                .map(|instance| instance.name.as_str())
+                .collect::<Vec<_>>(),
+            ["shallow-sea", "deep-mountain"]
+        );
+        for instance in multi_cell_instances {
+            let expected_cells = if instance.name == "shallow-sea" { 4 } else { 5 };
+            assert_eq!(instance.cells.len(), expected_cells);
+            let cells = instance
+                .cells
+                .iter()
+                .copied()
+                .map(|cell| macro_cell_tuple(cell).expect("the shipped macro cell is valid"))
+                .collect::<BTreeSet<_>>();
+            assert!(
+                macro_cells_are_connected(&cells),
+                "multi-cell instance {:?} must remain connected",
+                instance.name
+            );
+        }
+    }
+
+    #[test]
+    fn macro_coasts_require_both_sea_and_inland_contexts() {
+        let settings = shipped_macro_settings();
+        let layout = macro_layout(&settings);
+
+        let beach_without_inland = named_macro_instances(layout, &["shallow-sea", "beach-lower"]);
+        let error = validate_macro_adjacency(
+            &beach_without_inland,
+            &adjacency_for_pairs(beach_without_inland.len(), &[(0, 1)]),
+        )
+        .expect_err("a Beach without a Forest or Prairie neighbor must fail");
+        assert!(error.contains("beach-lower") && error.contains("requires_any"));
+
+        let shore_without_sea = named_macro_instances(layout, &["shore-center", "prairie-route"]);
+        let error = validate_macro_adjacency(
+            &shore_without_sea,
+            &adjacency_for_pairs(shore_without_sea.len(), &[(0, 1)]),
+        )
+        .expect_err("a Shore without a Shallow Sea neighbor must fail");
+        assert!(error.contains("shore-center") && error.contains("requires_all"));
+    }
+
+    #[test]
+    fn macro_forbidden_adjacencies_are_symmetric_and_diagnostic() {
+        let settings = shipped_macro_settings();
+        let layout = macro_layout(&settings);
+
+        let shallow_mountain =
+            named_macro_instances(layout, &["shallow-sea", "mountains-tier1-center"]);
+        let deep_non_mountain = named_macro_instances(layout, &["deep-mountain", "hills-center"]);
+        let mut frozen_volcanic =
+            named_macro_instances(layout, &["mountains-tier1-lower", "hills-lower"]);
+        let [frozen, volcanic] = frozen_volcanic.as_mut_slice() else {
+            panic!("the forbidden-environment fixture needs exactly two instances");
+        };
+        frozen.environment = V3EnvironmentSettings::Frozen;
+        volcanic.environment = V3EnvironmentSettings::Volcanic;
+
+        for (instances, first_name, second_name) in [
+            (shallow_mountain, "shallow-sea", "mountains-tier1-center"),
+            (deep_non_mountain, "deep-mountain", "hills-center"),
+            (frozen_volcanic, "mountains-tier1-lower", "hills-lower"),
+        ] {
+            let reversed = instances.iter().rev().cloned().collect::<Vec<_>>();
+            for ordered in [instances.clone(), reversed] {
+                let error = validate_macro_adjacency(
+                    &ordered,
+                    &adjacency_for_pairs(ordered.len(), &[(0, 1)]),
+                )
+                .expect_err("the forbidden pair must fail in either authored order");
+                assert!(
+                    error.contains("forbidden adjacency"),
+                    "unexpected error: {error}"
+                );
+                assert!(
+                    error.contains(first_name) && error.contains(second_name),
+                    "diagnostic should name both instances: {error}"
+                );
+                assert!(
+                    error.contains("cells"),
+                    "diagnostic should name their macro cells: {error}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn macro_adjacency_is_permissive_for_unlisted_pairs() {
+        let settings = shipped_macro_settings();
+        let instances = named_macro_instances(
+            macro_layout(&settings),
+            &["forest-center", "mountains-tier1-center"],
+        );
+        validate_macro_adjacency(&instances, &adjacency_for_pairs(instances.len(), &[(0, 1)]))
+            .expect("an unlisted Forest-Mountains pairing should remain allowed");
+    }
+
+    #[test]
+    fn macro_adjacency_rules_do_not_gate_legacy_v3_layouts() {
+        for (name, source) in [
+            ("Single", V3_SINGLE_RON),
+            ("Ring7", V3_RING7_RON),
+            ("Ring19", V3_RING19_RON),
+        ] {
+            let settings: MapSettings = ron::from_str(source)
+                .unwrap_or_else(|error| panic!("shipped V3 {name} should parse: {error}"));
+            settings
+                .validate()
+                .unwrap_or_else(|error| panic!("shipped V3 {name} should validate: {error}"));
+            let TerrainSettings::Procedural(ProceduralSettings::V3(v3)) = &settings.terrain else {
+                panic!("shipped V3 {name} should retain generator version 3");
+            };
+            assert!(
+                !matches!(&v3.layout, V3LayoutSettings::Macro(_)),
+                "legacy V3 {name} must not enter Macro adjacency validation"
             );
         }
     }

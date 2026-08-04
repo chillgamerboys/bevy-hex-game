@@ -150,7 +150,7 @@ mod tests {
     }
 
     fn test_palette(stone_red: f32) -> ArtPalette {
-        let swatches = [("stone", stone_red), ("clay", 0.6)]
+        let swatches = [("stone", stone_red), ("dirt", 0.6)]
             .into_iter()
             .map(|(name, red)| {
                 let swatch = PaletteSwatch::new(
@@ -176,7 +176,7 @@ mod tests {
     }
 
     fn queue_replacement(mut commands: Commands) {
-        commands.insert_resource(substance_file("clay"));
+        commands.insert_resource(substance_file("dirt"));
     }
 
     fn queue_palette_replacement(mut commands: Commands) {
@@ -357,11 +357,11 @@ mod tests {
             world
                 .resource::<SubstanceFile>()
                 .substances
-                .contains_key("clay"),
+                .contains_key("dirt"),
             "the replacement file should have been applied"
         );
         assert!(
-            world.resource::<SubstanceTable>().id("clay").is_none(),
+            world.resource::<SubstanceTable>().id("dirt").is_none(),
             "the table should still represent the previous file in this frame"
         );
         assert!(

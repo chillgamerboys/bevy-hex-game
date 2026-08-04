@@ -38,6 +38,17 @@ and put the exact recommended ticket updates in the handoff. The canonical workf
 and optional Codex setup are in
 `docs/development/delivery-state.md`.
 
+## Capture UI bugs before fixing them
+
+Use `$linear-ui-bug-intake` for a reproduced UI, interaction, accessibility, focus,
+clipping, overlap, or presentation defect. Search Linear before writing, keep one
+ticket per independently fixable root cause, attach durable evidence, and verify the
+saved issue. During the current HUD review, new Bugs are children of `HEX-67`.
+
+Bug intake records evidence and acceptance criteria; it does not implement the fix.
+Use `$plan-parallel-work` after the ticket set is concrete, grouping lanes by component
+and hot-file overlap rather than opening one PR per ticket.
+
 ## Ownership and shared concerns
 
 - The world owner controls `hex_map`, `hex_world`, `hex_perception`, and their

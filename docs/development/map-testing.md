@@ -54,9 +54,8 @@ PR records a narrower exact validator/schedule/producer wedge as review evidence
 than weakening that fail-closed route. Unclassified shared core/assets, other world
 crates, selector-command or CI-topology changes, unknown paths, invalid configuration,
 and empty diffs fail closed.
-Pushes to `dev` or `main` and final wave candidates ordinarily force the complete
-gate. A checked-in exact-path waiver may replace only its named concerns with a narrow
-authoritative closure; every omission remains visibly WAIVED rather than passed.
+Pushes to `dev` or `main` and selector changes force the complete gate. Final wave
+candidates run the selector-chosen gate over their exact combined diff.
 
 The executable completeness guard is:
 

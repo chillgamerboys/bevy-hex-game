@@ -16,7 +16,7 @@ tuning remain private to `hex_map`.
 description of a V3 world and contains:
 
 - occupied solid volumes and non-solid fills;
-- directed liquid topology and rendered flow classifications;
+- standing and directed liquid topology plus rendered flow classifications;
 - surface features such as trees and tall grass;
 - structures such as walls, stairs, towers, and bridges;
 - exact traversal blockers;
@@ -64,13 +64,16 @@ leave stale current or fall descriptors behind.
 
 ## Layouts and patches
 
-`generator_version: 3` selects one of three layouts:
+`generator_version: 3` selects one of four layouts:
 
 - `Single(PatchSpec)` fills one connected world footprint with one recipe.
 - `Ring7` fills one radius-33 footprint with a central patch and six surrounding
   connected patches.
 - `Ring19` fills one radius-55 footprint with a central patch, six first-ring
   patches, and twelve second-ring patches.
+- `Macro(MacroLayoutSettings)` fills the radius-77 Mountain Range footprint from
+  37 radius-12-scale atomic cells, then collapses those cells into authored logical
+  biome instances.
 
 A `PatchSpec` contains an environment, a typed recipe, named overlays, one connected
 mask, and six directional edge contracts. A mask is a set of horizontal columns
@@ -85,8 +88,8 @@ An edge contract describes what neighboring patches must agree on:
 
 - the boundary elevation profile and permitted transition band;
 - ordinary-walker route ports and their required width;
-- liquid ports, including direction and whether the edge is an inlet, outlet, or
-  dry;
+- liquid ports, including dry edges, directed inlet/outlet flow, and exact-level
+  standing-water joins;
 - protected approach cells that either recipe must preserve.
 
 The world planner resolves shared edges once. Both patches consume the same resolved
@@ -142,16 +145,76 @@ Volcano owns a separate lava body which exits the western boundary at level 14; 
 never joins the water graph. Every liquid crossing is explicit, directed, acyclic,
 level or descending, and checked against the exact seam lanes.
 
+`Macro` separates atomic ownership from logical biome identity. Atomic cells provide
+exact coverage, adjacency, and masks. Each named biome instance claims one connected
+set of cells, takes its logical id and seed namespace from stable authored order, and
+runs its recipe once over their union, publishing one opaque `BiomeRegionId`. Edges
+between cells owned by the same instance disappear. External seams are resolved from
+the complete region-pair boundary, which may contain more than one segment on the
+same compass side. Aquatic and scenic
+fragments may omit actor anchors; the composed world must still publish its canonical
+actor anchors and validate every declared critical land route.
+
+Macro adjacency validation is allowed by default and is not applied retroactively to
+Single, Ring7, or Ring19. The initial rules are deliberately narrow:
+
+- Shallow Sea may touch only Beach or Shore.
+- Beach and Shore must each touch at least one Shallow Sea instance and at least one
+  Forest or Prairie instance.
+- Every actual Deep Mountain neighbor must be Mountains; a world boundary is not a
+  neighbor.
+- Frozen and Volcanic environments may not touch directly.
+
+Diagnostics name the offending logical instance or pair and its atomic cells so an
+authored layout can be repaired without reconstructing the resolved masks from a
+fingerprint.
+
+The first Macro layout is the selectable **Mountain Range** scenario. Its seven
+sea-to-massif diagonal bands contain `4/5/6/7/6/5/4` atomic cells:
+
+1. one four-cell Shallow Sea instance;
+2. two Beach and three Shore instances, with Beach at the transverse ends;
+3. three Forest and three Prairie instances;
+4. five Hills and two Waterfall instances;
+5. six first-tier Alpine Mountains instances;
+6. three elevated Alpine Mountains instances around two forward Deep Mountain cells;
+   and
+7. one elevated Alpine Mountains instance beside three rear Deep Mountain cells.
+
+The result is 18,019 columns and 30 logical biome regions. The Shallow Sea recipe runs
+once over a four-cell union, while Deep Mountain runs once over a five-cell
+three-back/two-front wedge; neither publishes internal seams.
+The elevation progression is sea level 8, coast levels 9–13, green terrain 12–18,
+Hills approximately 16–24, first-tier mountain seam datums 24–34 with peaks near 44,
+second-tier datums 34–48 with peaks near 62, and a Deep Mountain base near 48 rising
+toward a broad level-96 summit under a hard cap of 104. The Deep Mountain climate
+payload supplies Macro's alpine thresholds: its shipped treeline is level 36 and its
+shipped snowline makes Mountain and Deep Mountain surfaces snowy from level 52.
+
+Two directed Waterfall tributaries descend through the green and coastal bands and
+join one shared water body at its still sea footprint. Their generated channels
+publish current, rapid, and fall stages, while standing-water seams join submerged
+coastal lanes to that footprint without creating a current. Prairie instances place
+their configured nonblocking authored grass over eligible dry terrain. The required
+ordinary-walker route is central Shore → Prairie → central Hills → one instance in
+each mountain tier → the landward Deep Mountain base. The summit, massif interior, a
+through-route, and global connectivity among all other land instances are
+intentionally not required. The party starts on central Shore, the hostile starts in
+central Hills, and review anchors cover coast, inland, foothill, massif front, and the
+Deep Mountain base.
+
 Single and Ring7 retain their shipped 4-bit patch / 28-bit local numeric namespace.
 Ring19 uses a layout-specific 5-bit patch / 27-bit local namespace, so patch ids
 16–18 cannot alias local feature, structure, liquid, light, interior, or
-special-movement identities.
+special-movement identities. Macro uses a 6-bit instance / 26-bit local namespace,
+leaving room for all 30 Mountain Range instances without changing legacy ids or
+fingerprints.
 
 ## Determinism and selection
 
-One top-level candidate represents the complete output. In `Ring7` and `Ring19`,
-patches are not selected independently: a locally strong patch cannot win if its
-seams make the world invalid.
+One top-level candidate represents the complete output. In `Ring7`, `Ring19`, and
+`Macro`, patches or instances are not selected independently: a locally strong
+fragment cannot win if its seams make the world invalid.
 
 - Every build evaluates eight deterministic candidates.
 - A V3 `SeedStreams` API derives independent named streams from generator version,
@@ -183,6 +246,12 @@ structures, gameplay lights, and interiors. Ring19 additionally records its exac
 world columns, biome-region count, reciprocal seams, outer boundary sides, and
 boundary liquid outlets. These fields are deterministic semantic measurements;
 timing and presentation-only entity counts remain outside them.
+
+Mountain Range metrics additionally record its 37 atomic cells, 42 outer macro sides,
+30 logical regions, resolved reciprocal, standing, and directed seams, critical-route
+steps, liquid coverage, elevation extrema and relief, summit level, and broad
+high-massif coverage. Layout validation separately fixes the raw atomic adjacency
+count at 90.
 
 After an admitted map is edited, `hex_map` keeps its published exact consequences
 honest. Edited columns discard buried `BiomeRegions` entries and classify every
@@ -283,6 +352,31 @@ the crater to the boundary with distinct static, current, fall, and deterministi
 landing presentation. There is no ford. The only ordinary crossing is an elevated
 bridge at least four levels above lava, reached by one-level stair approaches.
 
+### Coastal and alpine Macro recipes
+
+Shallow Sea uses an exact deliberately simple column profile: Bedrock at level 0,
+Stone at levels 1–2, Dirt at level 3, Sand at level 4, and Still water at levels 5–8.
+Sand is a first-class palette-backed solid used by materialization and semantic
+fingerprints; soil continues to use Dirt.
+
+Beach keeps 60–75% of its footprint submerged, exposes a narrow sand edge, and places
+sparse broadleaf trees on 2–5% of eligible dry columns. Shore keeps 20–40% submerged,
+raises 3–6-level voxel cliffs above the water, retains a broader dry top, and places
+trees on 8–12% of eligible dry columns. Both reuse the existing tree assets and exact
+blocker projection. Their still-water portions connect through Standing seams rather
+than receiving synthetic downstream directions.
+
+Alpine Mountains apply the instance's authored low-to-high grade before adding rocky
+interior peaks. Adjacent same-tier instances share seam datums, while the protected
+route apertures retain the ordinary one-level movement constraint. The existing
+Frozen Mountains recipe remains compatible and unchanged in presentation.
+
+Deep Mountain consumes one connected multi-cell union mask. A low-frequency height
+field, boundary falloff, broad shoulders, and one dominant summit create one massif
+instead of four stitched peaks. Validation requires a reachable landward base, a
+summit near the authored target, and substantial high-elevation coverage; it does not
+require ordinary access to the summit or interior.
+
 ### Caves
 
 Plan one varied rocky exterior and one rooted underground network in the same stacked
@@ -344,11 +438,11 @@ fort remains generated static geometry, not a player construction system.
 
 ### Composite
 
-Ring7 and Ring19 first resolve global routes, elevation profiles, liquid ports, and
-protected seam approaches. They then run each recipe against its resolved mask and
-contracts, validate patch-local invariants, and finally validate the exact combined
-`TilePos` graph. Materials and decorative boundaries are classified only after the
-geometry and semantics are accepted.
+Ring7, Ring19, and Macro first resolve global routes, elevation profiles, liquid
+ports, and protected seam approaches. They then run each recipe against its resolved
+mask and contracts, validate fragment-local invariants, and finally validate the
+exact combined `TilePos` graph. Materials and decorative boundaries are classified
+only after the geometry and semantics are accepted.
 
 Directed liquid ports are realized during checked composition, not by a later blend
 pass. Every declared lane must resolve to exactly one terminal source node and one
@@ -357,6 +451,12 @@ source may not already flow, and the crossing may be level or descend by one lev
 Composition deterministically unifies the two liquid bodies and installs the exact
 cross-patch downstream edge. Missing, ambiguous, uphill, mismatched, duplicate, or
 undeclared crossings reject the complete world candidate.
+
+A Standing crossing instead resolves broad lanes at one exact surface level and
+unifies still-water bodies without installing a downstream edge. It is distinct from
+a level directed current and from a Waterfall handoff. Missing contacts, mismatched
+levels or materials, non-still endpoints, and undeclared standing joins reject the
+complete world candidate.
 
 No post-generation blend pass may erase anchors, water direction, traversal blockers,
 interior/domain metadata, or protected approaches.
@@ -387,7 +487,9 @@ The normative delivery order is:
 11. complete scenario and review-tool migration;
 12. additive Volcano, Deep Forest, and Prairie recipes;
 13. `Ring19` and the selectable Two Rings map;
-14. V1/V2 removal.
+14. Macro layout, adjacency, coastal/alpine recipes, and the selectable Mountain
+    Range map;
+15. V1/V2 removal.
 
 See [planning/status.md](../planning/status.md) for progress through this sequence.
 
@@ -422,6 +524,13 @@ V3 foundation tests cover connected masks, exact coverage, six-way edge agreemen
 volume overlap rejection, named-stream independence, ordered fingerprints, bounded
 repair, forced fallback, setup failure, teardown, and re-entry.
 
+Macro coverage additionally fixes the radius-77 / 18,019-column geometry, 37-cell
+ownership, 90 raw adjacencies, 42 outer sides, 30 logical ids, connected multi-cell
+instances, erased internal seams, six-bit namespace, permissive and contextual
+adjacency behavior, exact sea strata, one shared water body with a continuous still
+coastal/sea footprint, acyclic descending tributaries, coastal coverage, massif
+shape, and the Shore-to-massif-base route.
+
 Recipe tests must enforce each runnable recipe's topology and protected routes.
 Fast fixed corpora run in CI; ignored 10,000-seed recipe corpora must produce 100%
 valid final maps including fallback and target less than 1% fallback use.
@@ -430,12 +539,23 @@ Recipe-level benchmarks cover runnable patches at radii 12, 20, and 40. Composit
 coverage measures Ring7 at radius 33 and Ring19 at radius 55 on the same machine,
 including generation time, entity count, terrain-edit projection, and physical seam
 traversal; Ring19 generation p95 may not exceed 3.5× Ring7. Perception benchmarks
-separately cover fog recomputation. Review packs must include deterministic reports
-and default, rotated, top-down, and character-camera captures. Manual review must
-traverse every critical recipe route and every open composite seam before that
-surface ships. The landed Two Rings surface received its final visual and play
-approval at the reviewed wave head; later presentation changes retain their own
-human review gates.
+separately cover fog recomputation. Mountain Range's release benchmark compares it to
+Ring19 on the same runner and budgets generation p95 at no more than 2.5× Ring19;
+character-camera collision remains below 2 ms p95. Review packs must include
+deterministic reports and default, rotated, top-down, and character-camera captures.
+Mountain Range additionally requires coast, watershed, both mountain tiers,
+front-massif, and rear-silhouette views. Manual review must traverse every critical
+recipe route and every open composite seam before that surface ships. The landed Two
+Rings surface received its final visual and play approval at the reviewed wave head;
+Mountain Range's 2026-08-03 delivery record contains its four-view deterministic pack
+and a 45-step, eight-frame feature-only walk with exact arrival and focus assertions.
+`@shrav-k` approved the overview and rear-silhouette static presentation. Hostile
+suppression in that walk is presentation-only and cannot establish spawning or
+gameplay. To unblock unrelated work, the same maintainer explicitly waived and
+cancelled the release-only 128-seed and 10,000-seed corpora, generation and camera
+performance diagnostics, and native human motion/control-feel replay. Those gates are
+WAIVED, not passed, and this one-delivery exception does not weaken the evidence
+requirements for later world or camera behavior changes.
 
 ## Primary precedents
 

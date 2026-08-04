@@ -194,7 +194,9 @@ impl V3Recipe for DeepForestRecipe {
                 }
                 _ => 0,
             },
-            V3LayoutSettings::Ring7(_) | V3LayoutSettings::Ring19(_) => 0,
+            V3LayoutSettings::Ring7(_)
+            | V3LayoutSettings::Ring19(_)
+            | V3LayoutSettings::Macro(_) => 0,
         };
         (
             metrics.blocker_coverage_percent.abs_diff(target),
@@ -235,7 +237,7 @@ fn target_relief(settings: &ProceduralV3Settings) -> i32 {
             V3RecipeSettings::DeepForest(settings) => settings.max_relief,
             _ => 0,
         },
-        V3LayoutSettings::Ring7(_) | V3LayoutSettings::Ring19(_) => 0,
+        V3LayoutSettings::Ring7(_) | V3LayoutSettings::Ring19(_) | V3LayoutSettings::Macro(_) => 0,
     }
 }
 
@@ -1493,6 +1495,10 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
         V3RecipeSettings::Volcano(_) => "Volcano",
         V3RecipeSettings::DeepForest(_) => "DeepForest",
         V3RecipeSettings::Prairie(_) => "Prairie",
+        V3RecipeSettings::ShallowSea(_) => "ShallowSea",
+        V3RecipeSettings::Beach(_) => "Beach",
+        V3RecipeSettings::Shore(_) => "Shore",
+        V3RecipeSettings::DeepMountain(_) => "DeepMountain",
     }
 }
 

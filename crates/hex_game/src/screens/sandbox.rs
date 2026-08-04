@@ -2687,8 +2687,8 @@ mod tests {
         let mut character = presets
             .characters
             .iter()
-            .find(|record| record.key == "template-hedge-mage")
-            .expect("the Hedge Mage template should exist")
+            .find(|record| record.key == "template-raider")
+            .expect("the Raider template should exist")
             .character
             .clone();
         for capacity in character.attunement.values_mut() {

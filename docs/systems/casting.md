@@ -99,7 +99,7 @@ thresholds, healing, replacement materials, or elemental transformations. Gamepl
 does not duplicate either file and cannot predict the outcome before the world answers.
 
 The neutral elemental-grid content lists each of the 18 canonical elements against
-each of the nine toughness-bearing substances: **162 unique allowed pairs**. That
+each of the ten toughness-bearing substances: **180 unique allowed pairs**. That
 broad table proves coherent admission without pretending to be final balance. Its
 expansion is content migration, not a new terrain-damage mechanic and not completion
 of the residual HEX-19 work. Water, lava, air, and bedrock have no toughness; authored
@@ -482,7 +482,7 @@ without touching the framework, which is the point of having one.
   stable-`UnitId` decision only after the previous answer is adopted, and the separate
   authority hold prevents the cleared public slot from advancing the turn early.
 - **Single-target `Reveal` is live; `Illuminate` still rejects with a reason.** The
-  E0 content candidate assigns Scrying Eye to Divination while retaining the current
+  E0 content assigns Scrying Eye to Divination while retaining the current
   observed-subject, complete tier-bounded view through the knowledge seam. A
   continuous off-sight live feed is separate later Divination work. Spell-created
   illumination belongs to Illusion, still waits on the perception lane, and must not
@@ -515,18 +515,14 @@ correspondence remains map/content-owned. The gameplay consumer wedge covers
 occupied candidates, lateral higher-ground fallback, insertion-order independence,
 and typed no-landing freeze.
 
-The approved automated evidence for that gameplay-only wave is exactly
-`trajectory_contracts` plus `spell_resolution_contracts`, together with ordinary
-format, dependency, Clippy, docs, and shipping-build checks. The explicit one-wave
-waiver omits `hex_ui`, `gameplay_app`, UI snapshots, automated visual walks,
-deterministic simulation, procedural map corpora, and the residual workspace corpus.
-Every omission is recorded as **WAIVED**, never passed. The dedicated headless game
-composition target installs no renderer or UI and proves only the real
-map/units/perception/combat protocol. See the exact authority and invalidation rules in
-[gameplay testing](../development/gameplay-testing.md#spell-resolution-wave-waiver).
-The thin Creator and preview consumers are covered by content/trajectory contracts,
-that composition target, and instrumented gameplay hooks; their presence does not turn
-any waived automated UI/app suite green.
+The lasting automated evidence for the delivered wave uses the ordinary fail-closed
+concern graph: trajectory and volume rules run in `trajectory_contracts`; rules, ECS,
+map seams, and application consumers run in their owning concerns; and the dedicated
+renderer-free `hex_game/tests/spell_resolution.rs` composition target runs as the
+`contracts` postflight. That target installs no renderer or UI and proves only the real
+map/units/perception/combat protocol. The temporary delivery-only routing used while
+PR #180 was in review is retired; see [gameplay
+testing](../development/gameplay-testing.md#spell-resolution-evidence-after-pr-180).
 
 Gameplay hooks, typed events, canonical snapshots, and renderer-free contracts are the
 authoritative evidence for casting logic. Screenshots may judge static camera/UI/map
