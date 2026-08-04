@@ -90,8 +90,17 @@ Gems hold mana of a single element. Spells draw power from **adjacent** gems.
 Adjacency is the entire power mechanism — there is no action at a distance within a
 lattice.
 
-A spell's tier is how many adjacent gems it requires. Ember needs one adjacent fire
-gem. Fireball needs six: a full ring, the spell hex completely surrounded.
+A spell's tier is how many adjacent source cells it requires: a matching gem for a
+basic spell or a matching fusion for a complex-school spell. Ember needs one adjacent
+Fire gem. Fireball needs six: a full ring, the spell hex completely surrounded.
+
+Every starter spell and first pair/triple showcase the design owner names for this
+program is **tier 1**. A basic-school spell requires exactly one adjacent gem of that
+school. A pair- or triple-school spell requires exactly one adjacent fusion cell of
+that school; the fusion's two or three basic feeders build that source and are not
+additional spell requirements. Higher-level spells use more adjacent source cells.
+A lattice may still include independent one-gem funding groups so a sustained
+enchantment does not lock the source needed by another tier-1 spell.
 
 This makes layout a packing puzzle with hard geometric consequences:
 
@@ -127,10 +136,13 @@ Complex-element spells require **very few** fusions of that element, or their fe
 geometry becomes unbuildable. A six-source complex spell would need six fusions with
 their own feeders, far beyond an ordinary lattice.
 
-High-tier spells therefore scale by **recipe complexity, not volume**. A spell hex's
-six neighbours are ingredients, not merely a quantity. The initial catalog stops at
-direct two- and three-basic recipes; a later chained recipe would be a deliberate
-extension rather than an alternate way to build one of these twelve elements.
+The first complex-school showcases therefore scale by **recipe complexity, not
+volume**: each consumes one fusion source whose feeder geometry already carries the
+school's complexity. Later higher-tier spells scale by volume through several
+adjacent source cells and may add further recipe complexity deliberately. The
+initial catalog stops at direct two- and three-basic recipes; a later chained recipe
+would be a deliberate extension rather than an alternate way to build one of these
+twelve elements.
 
 ### Evocation and enchantment
 
@@ -277,7 +289,8 @@ engagement, ordinary-attack, and one-round lost-contact adapters are not wired y
 the prototype currently starts and ends combat from distance and
 `disengage_margin` alone.
 
-- **Scrying Eye belongs to Divination.** Its current playable form targets one
+- **Scrying Eye belongs to Divination** and requires one adjacent Divination fusion
+  source. Its current playable form targets one
   already-observed unit and writes a complete, bounded lattice projection. Keeping
   that feed readable and live after the subject leaves ordinary sight is later
   Divination work, not part of the elemental-grid foundation.
@@ -285,8 +298,9 @@ the prototype currently starts and ends combat from distance and
   enemy or several, and expiring versus sustained knowledge.
 - Every faction has the same base spatial sight profile, pooled across its active
   characters; divination changes lattice knowledge, not that base sight rule.
-- Illusion is a separate Water + Air school. Its first planned showcase spell is
-  Invisibility. Spell-created illumination also belongs to Illusion, but no such
+- Illusion is a separate Water + Air school. Its first planned showcase spell,
+  Invisibility, requires one adjacent Illusion fusion source. Spell-created
+  illumination also belongs to Illusion, but no such
   spell ships in the foundation wave; the former Daylight spell is withdrawn rather
   than migrated into the new catalog.
 - Consumables can eventually patch structural weaknesses such as missing Divination
