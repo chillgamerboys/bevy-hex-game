@@ -49,7 +49,7 @@
                     (q: 1, r: 0, kind: Gem("Fire")),
                     (q: 0, r: 1, kind: Spell(Shipped("Scrying Eye"))),
                     (q: -1, r: 1, kind: Gem("Light")),
-                    (q: -1, r: 0, kind: Spell(Custom((2)))),
+                    (q: -1, r: 0, kind: Spell(Shipped("Renewal"))),
                     (q: 0, r: -1, kind: Gem("Water")),
                     (q: 1, r: -1, kind: Gem("Water")),
                 ],
