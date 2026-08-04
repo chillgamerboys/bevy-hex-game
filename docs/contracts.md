@@ -81,7 +81,7 @@ than agreed, the fallback the gameplay side ships without it is in
 | `voxel_styles.ron` + `VoxelStyleCatalog` — palette-bound reusable surface treatments | shared visual contract | `hex_editor`, `hex_objects` | live | [systems/asset-workshop.md](systems/asset-workshop.md) |
 | `object_catalog.ron` + `ObjectBlueprint` — deterministic catalog of validated local hex-voxel plants, effects, and props | shared visual contract | `hex_editor`, `hex_objects` | live | [systems/asset-workshop.md](systems/asset-workshop.md) |
 | `ObjectInstance` — exact object id, origin voxel, level height, and six-way rotation | shared visual contract | world publishers, `hex_objects`; future effects | **partial** — world publishers live for Forest vegetation and cave crystals; effect publishers pending | [systems/asset-workshop.md](systems/asset-workshop.md) |
-| `substances.ron` — substance names, exact palette references, solidity, diggability, and toughness | world | both | live | [development/config.md](development/config.md) |
+| `substances.ron` — stable name/id registry, exact palette references, solidity, diggability, and toughness | world | both | live | [development/config.md](development/config.md) |
 | `Substance::toughness` — optional voxel HP on the fixed 1/2/4/8 scale | world | world | live | [planning/boundary.md](planning/boundary.md) G |
 | World files, lighting profiles | world | world | live | [development/config.md](development/config.md) |
 | `spells.ron`, `elements.ron` — requirements, axes, targeting, effects | gameplay | gameplay | live | [development/config.md](development/config.md) |

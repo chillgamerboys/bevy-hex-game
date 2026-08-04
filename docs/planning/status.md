@@ -23,16 +23,37 @@ high-pass/low-bypass route pair, snow caps, and a peak-fed river and fall. Caves
 places a varied rocky surface above a two-wide entrance and a dense,
 height-validated underground chamber network with exact opaque cutaway roofs.
 
-V3 now has ten complete recipe variants: Hills, Sky Islands, Mountains, Caves,
-Waterfall, Forest, Fort, Volcano, Deep Forest, and Prairie. Ring7 places its fixed
-seven-recipe roster in one connected radius-33 world. Ring19 powers the selectable
-**Two Rings** map: a radius-55, 9,241-column world with 19 fixed regions, 42
-reciprocal seams, 30 outer boundary sides, and a physical ordinary-walker graph that
-keeps all regions reachable after any one seam is removed. Its three mountain-fed
-water branches meet in central Hills before flowing through downstream Hills and an
-outlet Waterfall; the western Volcano owns a separate lava outlet. Single and Ring7
-retain their 4-bit patch namespace, while Ring19 uses 5 patch bits so slots 16–18
-remain collision-free.
+V3 now has fourteen recipe variants: Hills, Sky Islands, Mountains, Caves, Waterfall,
+Forest, Fort, Volcano, Deep Forest, Prairie, Shallow Sea, Beach, Shore, and Deep
+Mountain. Ring7 places its fixed seven-recipe roster in one connected radius-33
+world. Ring19 powers the selectable **Two Rings** map: a radius-55, 9,241-column
+world with 19 fixed regions, 42 reciprocal seams, 30 outer boundary sides, and a
+physical ordinary-walker graph that keeps all regions reachable after any one seam is
+removed. Its three mountain-fed water branches meet in central Hills before flowing
+through downstream Hills and an outlet Waterfall; the western Volcano owns a separate
+lava outlet. Single and Ring7 retain their 4-bit patch namespace, while Ring19 uses 5
+patch bits so slots 16–18 remain collision-free.
+
+The new authored Macro path powers the selectable **Mountain Range** map. It covers a
+radius-77, 18,019-column world with 37 atomic radius-12-scale cells collapsed into 30
+logical biome regions; the four-cell Shallow Sea and five-cell Deep Mountain are each
+generated once over a union mask and publish one region id. Macro uses a six-bit
+instance namespace without changing legacy fingerprints. Its allowed-by-default
+adjacency check rejects direct Frozen–Volcanic contact, non-coastal Shallow Sea
+neighbors, Deep Mountain neighbors other than Mountains, and Beach or Shore without
+both sea and inland context. These rules gate Macro only.
+
+Mountain Range progresses through Shallow Sea, Beach/Shore, alternating Forest and
+Prairie, Hills and two Waterfalls, two graded Alpine mountain tiers, and one broad
+Deep Mountain massif. Sand backs the exact sea bed and coastal surfaces, Prairie
+instances place nonblocking authored grass, and the two Waterfall instances retain
+rapid, fall, and current stages. Standing seams join the submerged coast to the
+shared water body's still sea footprint, while the two directed tributaries descend
+and merge without an uphill edge or cycle. The required ordinary route runs from
+central Shore through Prairie, central Hills, both mountain tiers, and the landward
+Deep Mountain base; summit and through-massif access are deliberately optional. The
+party and hostile anchors live on central Shore and central Hills, with additional
+coast-to-massif review anchors.
 
 Waterfall authors deterministic directed liquid topology from calm inlet through
 rapids, a contiguous thirteen-level fall, plunge basin, outlet, redundant land
@@ -58,7 +79,30 @@ the required network while leaving optional branches dark.
 
 Two Rings is mechanically selectable and covered by deterministic generation,
 spawning, regeneration, and re-entry checks. Alberto approved its visual, motion,
-and play feel at the exact reviewed head before the development wave landed.
+and play feel at the exact reviewed head before the development wave landed. Mountain
+Range is mechanically selectable and its generator validates the authored geometry,
+coast, watershed, elevations, massif, anchors, and critical route. The complete
+selector-chosen functional closure passes, including map generation, real-plugin
+publication, regeneration, and re-entry. Its four-view deterministic capture pack and
+45-step, eight-frame automated walk cover the overview, rear silhouette, coast,
+watershed, foothills, both massif azimuths, and the Deep Mountain base.
+
+The Mountain Range walk removes Hostile rosters once, before actor setup and only
+behind the default-off `visual-walk` feature, so combat cannot interrupt terrain and
+camera evidence. Normal launches retain the authored encounter; typed map and scenario
+contracts, not the rendered frames, remain authoritative for connectivity, spawning,
+and gameplay. On 2026-08-03, `@shrav-k` approved the overview and rear-silhouette
+static presentation. The reviewed frames have SHA-256 hashes
+`3b36aaff163828b762b23d65fc3c8bcfea00b47e06bc551c44d4c60c558ab8ab` and
+`a8e36f44370f4b3ccfd5fbd49d7d6739310f9e33899a649ee2636626a5afddb9`.
+That approval does not claim human motion or control-feel evidence.
+
+To unblock unrelated pull requests, `@shrav-k` explicitly waived and cancelled the
+remaining release-only 128-seed corpus, 10,000-seed stress corpus, generation
+benchmark, large-map camera performance diagnostic, and native human motion/control-
+feel replay on 2026-08-03. Those gates are **WAIVED**, not passed; no fallback-rate,
+timing, or human-motion result is inferred from the functional tests, screenshots, or
+automated walk.
 
 Authoritative spatial perception now runs headlessly every gameplay frame.
 `hex_world` publishes a renderer-independent Bright or Dim exterior tier;
@@ -119,8 +163,10 @@ library from being paired with newer raw catalogs: Loading requires one
 `AcceptedContentRevision` spanning elements, substances, the terrain-damage matrix,
 spells, and lattices. A test opens everything shipped so a broken reference cannot
 ship.
-`ElementId` and `SpellId` are opaque `hex_core` ids assigned from sorted names, like
-`SubstanceId`. A dev-feature content dump remains available for inspecting the resolved
+`ElementId` and `SpellId` are opaque `hex_core` ids assigned from sorted names.
+`SubstanceId` instead preserves the frozen original vocabulary and an additive reserved
+compatibility tail, so independently landing terrain catalogs cannot renumber existing
+materials. A dev-feature content dump remains available for inspecting the resolved
 spell list, while gameplay now consumes the same catalogs through its lattices and cast
 panel. Every externally authored archetype must also form one contiguous lattice;
 disconnected islands fail with the archetype named in the error.
@@ -203,9 +249,13 @@ records as Empty, Available, or Invalid. A new canonical Party Trial is bound to
 chosen empty slot and occupies it only on its first safe manual save. Available cards
 show their party and accumulated active-play time; invalid records remain preserved
 and visibly refused. `campaigns.ron` is replaced atomically. When it is absent, one
-valid legacy `resume.ron` is copied to slot 1 without modifying the legacy file. Only
-active, unpaused, non-terminal Campaign gameplay accrues time. Manual saving instead
-requires paused, safe, quiescent Campaign exploration.
+structurally valid legacy `resume.ron` is copied to slot 1 without modifying the
+legacy file, then checked against the current semantic content. Mountain Range changes
+those digest-bound shipped world inputs, so the narrow PR #175 legacy translation is
+intentionally no longer compatible: the imported record remains preserved as Invalid
+with a visible scenario-changed refusal. Only active, unpaused, non-terminal Campaign
+gameplay accrues time. Manual saving instead requires paused, safe, quiescent Campaign
+exploration.
 
 Sandbox is the sole player-facing authority for a temporary map, two ordered fixed
 six-slot rosters, character picks, deployment, and launch. Its in-memory default is
@@ -370,7 +420,10 @@ idle-churn, and release-performance gates are live. Seed-exact multi-azimuth wal
 exercise ordinary pointer movement to a proved destination on every standalone
 selectable map and every Two Rings region. Alberto approved the corrected camera's
 motion and readability in a native Two Rings release walk at runtime head `2397d8e`
-on 2026-08-01. Map mode remains available without a scenario restriction.
+on 2026-08-01. Map mode remains available without a scenario restriction. A
+generated `MapViewHint` may now extend Map mode's zoom ceiling with ten percent
+headroom, so a large initial frame such as Mountain Range does not snap inward on the
+first scroll; Character mode retains its authored ceiling.
 
 ## What is provisional
 
@@ -557,9 +610,9 @@ The live implementation retains these explicit limitations:
 Most of what makes this a product does not exist yet: no long-term-compatible save
 contract, audio content, controller support, signing, or store packaging. The current
 shell provides three atomic build-bound Campaign slots with one-time legacy-resume
-migration, a persistent Settings menu, categorized configurable keyboard actions,
-HUD visibility preferences, empty audio buses, normalized release artifacts, and
-retained symbol material. The first hygiene
+import and invalid-record preservation, a persistent Settings menu, categorized
+configurable keyboard actions, HUD visibility preferences, empty audio buses,
+normalized release artifacts, and retained symbol material. The first hygiene
 slice has landed — a per-session log file beside the executable, a panic hook that
 writes into it, and the version on the Main Menu — but full crash *reporting*
 (symbolication, upload, a dialog) has not. These replaceable seams do not close the

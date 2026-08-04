@@ -245,6 +245,10 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
         V3RecipeSettings::Volcano(_) => "Volcano",
         V3RecipeSettings::DeepForest(_) => "DeepForest",
         V3RecipeSettings::Prairie(_) => "Prairie",
+        V3RecipeSettings::ShallowSea(_) => "ShallowSea",
+        V3RecipeSettings::Beach(_) => "Beach",
+        V3RecipeSettings::Shore(_) => "Shore",
+        V3RecipeSettings::DeepMountain(_) => "DeepMountain",
     }
 }
 
@@ -1013,6 +1017,8 @@ const fn surface_material(environment: V3EnvironmentSettings) -> SolidMaterialRo
         V3EnvironmentSettings::TemperateGrassland => SolidMaterialRole::Grass,
         V3EnvironmentSettings::Volcanic => SolidMaterialRole::Basalt,
         V3EnvironmentSettings::Rocky => SolidMaterialRole::Stone,
+        V3EnvironmentSettings::Coastal => SolidMaterialRole::Grass,
+        V3EnvironmentSettings::Alpine => SolidMaterialRole::Stone,
     }
 }
 

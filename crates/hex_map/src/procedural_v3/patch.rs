@@ -58,6 +58,13 @@ pub(crate) struct PatchLiquidPort {
     pub(crate) elevation: ResolvedLiquidElevation,
 }
 
+/// One still-water seam projected into a patch's local orientation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PatchStandingWaterPort {
+    pub(crate) port: ResolvedPort,
+    pub(crate) elevation: ResolvedLiquidElevation,
+}
+
 impl<'a> PatchSharedEdge<'a> {
     /// Preferred surface level agreed by both neighboring patches.
     #[must_use]
@@ -157,6 +164,18 @@ impl<'a> PatchSharedEdge<'a> {
             elevation: *elevation,
         })
     }
+
+    /// Standing-water aperture when this seam joins two level still bodies.
+    #[must_use]
+    pub(crate) fn standing_water_port(&self) -> Option<PatchStandingWaterPort> {
+        let ResolvedLiquidPort::Standing { port, elevation } = &self.contract.liquid else {
+            return None;
+        };
+        Some(PatchStandingWaterPort {
+            port: orient_port(port, self.patch_is_first),
+            elevation: *elevation,
+        })
+    }
 }
 
 /// Stable recipe inputs for one patch of a Single, Ring7, or Ring19 layout.
@@ -240,24 +259,53 @@ impl<'a> PatchRecipeContext<'a> {
 
     /// All shared edges in clockwise side order.
     pub(crate) fn shared_edges(&self) -> impl Iterator<Item = PatchSharedEdge<'a>> + '_ {
-        HexSide::ALL.into_iter().filter_map(|side| {
-            let ResolvedEdgeReference::Shared(edge_id) = self.patch.edges.get(&side)? else {
-                return None;
-            };
-            let contract = self.layout.shared_edges.get(edge_id)?;
-            let patch_is_first = contract.first == (self.id, side);
-            Some(PatchSharedEdge {
-                id: *edge_id,
-                side,
-                contract,
-                patch_is_first,
-            })
-        })
+        let mut projected = Vec::new();
+        if self.layout.kind == LayoutKind::Macro {
+            for (edge_id, contract) in &self.layout.shared_edges {
+                let (side, patch_is_first) = if contract.first.0 == self.id {
+                    (contract.first.1, true)
+                } else if contract.second.0 == self.id {
+                    (contract.second.1, false)
+                } else {
+                    continue;
+                };
+                projected.push(PatchSharedEdge {
+                    id: *edge_id,
+                    side,
+                    contract,
+                    patch_is_first,
+                });
+            }
+        } else {
+            for side in HexSide::ALL {
+                let Some(ResolvedEdgeReference::Shared(edge_id)) = self.patch.edges.get(&side)
+                else {
+                    continue;
+                };
+                let Some(contract) = self.layout.shared_edges.get(edge_id) else {
+                    continue;
+                };
+                projected.push(PatchSharedEdge {
+                    id: *edge_id,
+                    side,
+                    contract,
+                    patch_is_first: contract.first == (self.id, side),
+                });
+            }
+        }
+        projected.into_iter()
     }
 
     /// Whether this exact patch side exits the complete resolved world.
     #[must_use]
     pub(crate) fn is_world_boundary(&self, side: HexSide) -> bool {
+        if self.layout.kind == LayoutKind::Macro {
+            return self
+                .patch
+                .mask
+                .iter()
+                .any(|coord| !self.layout.footprint.contains(&side.neighbor(*coord)));
+        }
         matches!(
             self.patch.edges.get(&side),
             Some(ResolvedEdgeReference::WorldBoundary)

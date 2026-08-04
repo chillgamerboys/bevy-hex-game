@@ -338,7 +338,7 @@ fn shipped_content_cross_references_resolve() {
     );
     assert_eq!(
         terrain_damage.len(),
-        63,
+        70,
         "every current element must damage every toughness-bearing substance"
     );
 

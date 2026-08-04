@@ -160,6 +160,14 @@
             encounter: "config/encounters/anchored-skirmish.ron",
         ),
         (
+            name: "Mountain Range",
+            category: Map,
+            blurb: "A three-ring coast-to-massif world with shallow sea, joined watersheds, graded alpine tiers, and one broad Deep Mountain.",
+            world: "config/worlds/procedural-mountain-range.ron",
+            generation_seed: Some(129704046),
+            encounter: "config/encounters/anchored-skirmish.ron",
+        ),
+        (
             name: "Party Trial",
             category: Demo,
             blurb: "A full 3v3 party approaches the Crossing, compresses through its bridge, and fights archetype-for-archetype.",

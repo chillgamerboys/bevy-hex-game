@@ -9,6 +9,12 @@
 // here makes the authored contract visible. The terrain presets select the other
 // entries by name; changing their properties is safe, but renaming them requires
 // updating the generation code.
+//
+// Runtime ids are a compatibility contract rather than file order. The original
+// vocabulary keeps its shipped ids, followed by reserved Outpost slots for
+// limestone, slate, timber, and terracotta, then sand. Missing reserved entries are
+// inert and cannot be resolved by name; see docs/development/config.md before adding
+// another registry slot. A name added only to this file is rejected.
 (
     substances: {
         "air": (
@@ -51,6 +57,16 @@
 
         "gravel": (
             swatch: Some("terrain/gravel"),
+            solid: true,
+            diggable: true,
+            conjurable: false,
+            toughness: Some(2),
+        ),
+
+        // Loose coastal terrain. Swimming and erosion rules remain deferred, so
+        // sand currently follows the ordinary diggable-solid contract.
+        "sand": (
+            swatch: Some("terrain/sand"),
             solid: true,
             diggable: true,
             conjurable: false,

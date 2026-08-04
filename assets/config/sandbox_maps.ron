@@ -276,5 +276,22 @@
                 radius: 4,
             ),
         ),
+        (
+            id: "mountain-range",
+            display_name: "Mountain Range",
+            description: "A three-ring coast-to-massif world joins shallow seas, river watersheds, alpine tiers, and one broad Deep Mountain.",
+            tags: ["Macro", "Coast", "Massif"],
+            preview: "ui/sandbox/mountain-range.png",
+            scenario: "Mountain Range",
+            fixed_seed: Some(129704046),
+            player_region: (
+                center: Anchor("party_start"),
+                radius: 4,
+            ),
+            hostile_region: (
+                center: Anchor("hostile_start"),
+                radius: 4,
+            ),
+        ),
     ],
 )

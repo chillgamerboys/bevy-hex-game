@@ -234,6 +234,10 @@ const SHIPPED_CAMPAIGN_INPUTS: &[(&str, &str)] = &[
         include_str!("../../../assets/config/worlds/procedural-mountains.ron"),
     ),
     (
+        "config/worlds/procedural-mountain-range.ron",
+        include_str!("../../../assets/config/worlds/procedural-mountain-range.ron"),
+    ),
+    (
         "config/worlds/procedural-prairie.ron",
         include_str!("../../../assets/config/worlds/procedural-prairie.ron"),
     ),
@@ -2655,7 +2659,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_pr175_dev_resume_digest_survives_comment_only_cutover_changes() {
+    fn exact_pr175_dev_resume_is_refused_after_a_semantic_world_addition() {
         let legacy_text = include_str!("../testdata/legacy_resume_origin_dev.ron");
         let legacy: LegacyResumeFile =
             ron::from_str(legacy_text).expect("the PR #175 resume fixture should parse");
@@ -2666,36 +2670,35 @@ mod tests {
         let library: ScenarioLibrary =
             ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
                 .expect("the cutover scenario library should parse");
-        assert_eq!(LEGACY_RESUME_DIGESTS.len(), library.scenarios.len());
-        let digest_mismatches = library
-            .scenarios
-            .iter()
-            .filter_map(|current| {
-                let (_, _, cutover_digest) = LEGACY_RESUME_DIGESTS
-                    .iter()
-                    .find(|(name, _, _)| *name == current.name)
-                    .expect("every PR #175 scenario has an explicit digest translation");
-                let current_digest = scenario_digest(current);
-                (current_digest != *cutover_digest).then(|| {
-                    format!(
-                        "{}: current=0x{current_digest:016X}, cutover=0x{cutover_digest:016X}",
-                        current.name
-                    )
-                })
-            })
-            .collect::<Vec<_>>();
+        for (name, _, cutover_digest) in LEGACY_RESUME_DIGESTS {
+            let current = library
+                .scenarios
+                .iter()
+                .find(|current| current.name == *name)
+                .expect("every PR #175 scenario has an explicit digest translation");
+            assert_ne!(
+                scenario_digest(current),
+                *cutover_digest,
+                "the coarse digest must invalidate every legacy scenario after adding a shipped world"
+            );
+        }
         assert!(
-            digest_mismatches.is_empty(),
-            "legacy digest translations drifted:\n{}",
-            digest_mismatches.join("\n")
+            library
+                .scenarios
+                .iter()
+                .any(|scenario| scenario.name == "Mountain Range")
+                && !LEGACY_RESUME_DIGESTS
+                    .iter()
+                    .any(|(name, _, _)| *name == "Mountain Range"),
+            "post-cutover scenarios must not fabricate a PR #175 legacy digest"
         );
         let current = library
             .scenarios
             .iter()
             .find(|candidate| candidate.name == legacy.scenario_name)
             .expect("Party Trial remains the canonical Campaign");
-        assert_eq!(scenario_digest(current), 0xAA13_0315_396C_E50C);
-        assert!(legacy_resume_digest_is_compatible(
+        assert_ne!(scenario_digest(current), 0xAA13_0315_396C_E50C);
+        assert!(!legacy_resume_digest_is_compatible(
             &current.name,
             legacy.scenario_digest,
             scenario_digest(current),
@@ -2713,7 +2716,7 @@ mod tests {
         assert_eq!(migrated.content_revision, None);
         assert_eq!(
             campaign_content_refusal(&migrated, &library, 0xC0DE_CAFE),
-            None
+            Some("The saved scenario \"Party Trial\" changed and cannot be resumed.".to_owned())
         );
         let mut non_legacy = migrated.clone();
         non_legacy.content_revision = Some(0xC0DE_CAFE);
