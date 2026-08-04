@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 256 256"
+     width="256"
+     height="256"
+     role="img"
+     aria-labelledby="title desc">
+  <title id="title">Lightning elemental glyph</title>
+  <desc id="desc">A sharp rising bolt with two peaks.</desc>
+  <path d="M56 184L111 73L144 137L200 75"
+        fill="none" stroke="#fff" stroke-width="16" stroke-linecap="round" stroke-linejoin="round" />
+</svg>

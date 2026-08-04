@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 256 256"
+     width="256"
+     height="256"
+     role="img"
+     aria-labelledby="title desc">
+  <title id="title">Fire elemental glyph</title>
+  <desc id="desc">A rising flame curling around an open center.</desc>
+  <path d="M116 48C119 86 94 107 91 142C88 174 109 197 140 197C173 197 195 175 195 144C195 119 177 104 157 108C138 112 129 132 136 147C142 160 157 162 168 151"
+        fill="none" stroke="#fff" stroke-width="16" stroke-linecap="round" stroke-linejoin="round" />
+</svg>

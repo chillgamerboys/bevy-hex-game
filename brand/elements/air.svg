@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 256 256"
+     width="256"
+     height="256"
+     role="img"
+     aria-labelledby="title desc">
+  <title id="title">Air elemental glyph</title>
+  <desc id="desc">A single curling spiral.</desc>
+  <path d="M124 195C82 195 55 166 55 128C55 84 89 56 132 58C171 60 196 87 190 120C185 150 157 168 130 158C107 149 97 128 105 109C112 92 131 84 147 92C160 99 166 112 161 124C157 134 146 139 137 135"
+        fill="none" stroke="#fff" stroke-width="16" stroke-linecap="round" stroke-linejoin="round" />
+</svg>

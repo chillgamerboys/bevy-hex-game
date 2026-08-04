@@ -673,10 +673,9 @@ pub const UNDELIVERABLE: &str = "nothing this spell does is built yet";
 /// Whether the applier delivers **any** of a spell's effects today.
 ///
 /// The gate the interface and the applier share, and the reason it exists is a specific
-/// failure: several shipped spells — Earthen Wall, Stone Shaper, Daylight — are legal
-/// casts whose every effect is still waiting on a lane that has not landed. Offering
-/// one is worse than hiding it. The cast is legal, so it is charged: the mana goes, the
-/// turn goes, and the only trace is a log line the player cannot see.
+/// failure: authored content can name an effect whose delivery lane has not landed.
+/// Offering such a spell is worse than hiding it. The cast is legal, so it is charged:
+/// the mana goes, the turn goes, and the only trace is a log line the player cannot see.
 ///
 /// **Any, not all.** A partially built spell still does something, and refusing it would
 /// take away a real effect because a second one is pending; the applier already reports

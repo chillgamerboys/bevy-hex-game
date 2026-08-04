@@ -12,7 +12,7 @@ you do not need to recompile the game.
 | `art/palette.ron` | Canonical authored colours for terrain, liquids, structures, units, and authored objects |
 | `art/voxel_styles.ron` | Palette-backed opaque, cutout, translucent, additive, and emissive object surfaces |
 | `art/object_catalog.ron` + `art/objects/*.ron` | The validated authored plant, effect, and prop catalog; normally edited through `cargo editor` |
-| `elements.ron` | The six-element wheel, opposition, higher-order elements and fusion recipes |
+| `elements.ron` | The six-basic wheel, opposition, and the six direct pair plus six direct triple fusion recipes |
 | `spells.ron` | Spells: what each requires, how it is cast, and what it does |
 | `camera.ron` | Initial map and close-character frames, pan speed, zoom and tilt |
 | `combat.ron` | Engagement thresholds, movement budget, height bonus, what a strike costs, and the open design questions as policy knobs that reject unbuilt variants with a reason |
@@ -762,8 +762,8 @@ Sandbox draft remains available when its route is opened again.
 `lattices.ron` is where enemies are designed. **An enemy's lattice is its entire stat
 block** — there is no separate stats system, no hit points, and no difficulty slider. A
 wolf is four hexes and a bite. A raider is eight around a metal shield. A hedge-mage is
-thirteen with a fusion chain and Scrying Eye. Difficulty is the size and complexity of
-the drawing.
+thirteen with direct Lightning and Divination fusions plus Scrying Eye. Difficulty is
+the size and complexity of the drawing.
 
 An archetype named here is what `archetype: "raider"` in an encounter roster looks up.
 
@@ -831,32 +831,66 @@ load, validate, and cross-check together, so a dangling name cannot ship silentl
 
 ### `elements.ron`
 
-The six-element **wheel** and the **fusion recipes** that build higher-order elements
-from it.
+The six-basic **wheel** and the twelve direct **fusion recipes** form the canonical
+18-element catalog.
 
 ```ron
 (
-    wheel: ["Light", "Air", "Fire", "Metal", "Earth", "Water"],
+    wheel: ["Air", "Fire", "Metal", "Earth", "Life", "Water"],
     fusions: {
-        "Lightning": [(element: "Light", mana: 1), (element: "Fire", mana: 1)],
+        "Lightning": [
+            (element: "Air", mana: 1),
+            (element: "Fire", mana: 1),
+        ],
+        "Destruction": [
+            (element: "Air", mana: 1),
+            (element: "Fire", mana: 1),
+            (element: "Metal", mana: 1),
+        ],
+        // The shipped file contains the other ten recipes listed below.
     },
 )
 ```
 
+| Kind | Result | Direct basic inputs |
+|---|---|---|
+| Pair | Lightning | Air + Fire |
+| Pair | Volcano | Fire + Metal |
+| Pair | Crystal | Metal + Earth |
+| Pair | Transmutation | Earth + Life |
+| Pair | Divination | Life + Water |
+| Pair | Illusion | Water + Air |
+| Triple | Destruction | Air + Fire + Metal |
+| Triple | Artifice | Fire + Metal + Earth |
+| Triple | Necromancy | Metal + Earth + Life |
+| Triple | Wild | Earth + Life + Water |
+| Triple | Storm | Life + Water + Air |
+| Triple | Space | Water + Air + Fire |
+
 - **`wheel`** lists the basic elements. Opposition is their position on the wheel:
   each element opposes the one halfway round — with six, that is three apart, giving
-  Light/Metal, Air/Earth, Fire/Water. Reorder the wheel and you change *which elements
-  oppose which*; that is the wheel's whole job.
+  Air/Earth, Fire/Life, and Metal/Water. Reorder the wheel and you change *which
+  elements oppose which*. The catalog exposes this relationship, but no current
+  combat rule grants an opposition-triggered bonus.
 - **`fusions`** are higher-order elements. Each names its output and the inputs it
-  draws (an element and how much mana). Lightning is Light + Fire. A fusion output is
-  never itself a basic wheel element, every input must be a basic element or another
-  fusion's output, and the recipes may not form a loop — all checked when the file
-  loads.
+  draws (an element and how much mana). Every canonical recipe above consumes two or
+  three **distinct basic elements directly**; none of the triples consumes a pair
+  output. The generic loader still rejects unknown inputs, basic/output name
+  collisions, and cyclic recipe graphs.
 
-One rule worth knowing: an element's internal **id is assigned from its name in
-alphabetical order**, *not* from where it sits in the file or on the wheel. So you can
-reorder entries freely without silently rewriting anything — and it is why wheel order
-(which sets opposition) is written out separately.
+An element's internal **id is assigned from its name in alphabetical order**, *not*
+from where it sits in the file or on the wheel. Reordering entries therefore does not
+rewrite an unchanged catalog, while adding or removing a stable name deliberately
+changes the accepted content revision.
+
+**Life is not a rename or migration target for Light.** They are different stable
+names with different meanings. The elemental-grid migration removes Light references
+from packaged content and authors Life references where intended; it does not rewrite
+local Creator drafts or campaign data. Campaign records bound to the old content
+revision remain preserved and incompatible, including legacy digest-bound resumes
+that predate explicit content revisions. Creator drafts remain preserved with an
+unresolved-Light diagnostic until the user edits them. Neither path silently changes
+a build.
 
 ### `spells.ron`
 
@@ -943,6 +977,19 @@ Each spell by name:
   `Illuminate`, `SetTerrain`, `SpawnWall`, `Displace`.
 
   `SetTerrain` and `SpawnWall` name a substance from `substances.ron`.
+
+  This is the schema vocabulary, not a promise that every primitive has a delivered
+  runtime consumer. `ModifyIncomingDisables` remains reserved for a future one-shot
+  ward lifecycle and is absent from shipped spell content. `Renewal` currently ships
+  only `RestoreHexes(count: 2)`.
+
+  The E0 content gives `Scrying Eye` one Divination requirement and retains
+  the supported single-target `Reveal` behavior. Its later off-sight live-feed
+  lifecycle is not implied by this content migration. `Illuminate` remains in the
+  schema but still fails closed at runtime; future illumination spells belong to
+  Illusion. The former `Daylight` entry is removed rather than shipped under the new
+  element catalog, and the separate initial Illusion showcase, Invisibility, is later
+  work.
 
 ### When a reference is wrong
 

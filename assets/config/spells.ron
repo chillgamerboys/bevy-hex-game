@@ -46,10 +46,9 @@
             ],
         ),
 
-        // The roster's only higher-order spell, and the only thing that consumes a
-        // fusion. Tier 1 by requirement count, but Lightning is not a gem anyone holds:
-        // it has to be fused from an adjacent Light and Fire, so the real cost is the
-        // three cells that arrangement takes up. Cheap to cast, expensive to be able to.
+        // Tier 1 by requirement count, but Lightning is not a gem anyone holds: it has
+        // to be fused from adjacent Air and Fire feeders, so the real cost is the four
+        // cells occupied by the feeders, fusion, and spell.
         "Lightning Bolt": (
             requirements: [(element: "Lightning", mana: 1)],
             casting: Evocation,
@@ -110,9 +109,10 @@
             effects: [SetTerrain(substance: "stone")],
         ),
 
-        // Divination: reveals the complete live lattice for a round-scaled duration.
+        // Divination: the current single-target reveal behavior. A later school release
+        // owns the complete off-sight live-feed lifecycle.
         "Scrying Eye": (
-            requirements: [(element: "Light", mana: 1)],
+            requirements: [(element: "Divination", mana: 1)],
             casting: Evocation,
             mana: Fixed,
             co_castable: false,
@@ -120,20 +120,7 @@
             effects: [Reveal(tier: 1)],
         ),
 
-        // Light: lifts fog in an area.
-        "Daylight": (
-            requirements: [
-                (element: "Light", mana: 1),
-                (element: "Light", mana: 1),
-            ],
-            casting: Evocation,
-            mana: Fixed,
-            co_castable: false,
-            targeting: (range: 3, shape: Sphere(radius: 3), trajectory: None),
-            effects: [Illuminate(radius: 3)],
-        ),
-
-        // Restorative evocation: re-enables disabled hexes and blunts the next hit.
+        // Restorative evocation: re-enables disabled hexes.
         "Renewal": (
             requirements: [
                 (element: "Water", mana: 1),
@@ -143,10 +130,7 @@
             mana: Fixed,
             co_castable: false,
             targeting: (range: 3, shape: Single, trajectory: Direct),
-            effects: [
-                RestoreHexes(count: 2),
-                ModifyIncomingDisables(amount: 1),
-            ],
+            effects: [RestoreHexes(count: 2)],
         ),
     },
 )

@@ -67,8 +67,7 @@ options instead of merely smaller numbers.
 
 Combat resolution is deterministic: no to-hit rolls and no damage variance.
 Uncertainty comes from incomplete information instead. Enemy lattices and intentions
-begin hidden, while sight and Light-based divination reveal what is worth attacking
-or defending.
+begin hidden, while sight and Divination reveal what is worth attacking or defending.
 
 The design does not protect a player from the consequences of positioning. Future
 area effects may touch allies, enemies, and their caster. Planned terrain magic lets a

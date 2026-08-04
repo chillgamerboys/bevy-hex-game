@@ -14,10 +14,11 @@
 //! # Effects are a closed enum, never a script
 //!
 //! [`Effect`] is a fixed vocabulary of primitives (audit §8). A closed enum can be
-//! bounds-checked at parse and makes runtime failure unrepresentable — the whole
-//! reason there is no scripting engine. Extension is one variant plus one match arm.
-//! These effects are *applied* downstream (hex_combat, when casting lands); this crate
-//! only parses and validates them.
+//! bounds-checked at parse and gives downstream admission an exhaustive checklist —
+//! the whole reason there is no scripting engine. Extension is one variant plus one
+//! match arm. Delivered effects are applied downstream (hex_combat, when casting
+//! lands); this crate also retains schema variants whose runtime lifecycle is deferred,
+//! and shipped content must not advertise those variants meanwhile.
 //!
 //! Element and substance references are by **name**; resolving them against the
 //! element and substance tables is [`ContentIndex`](crate::ContentIndex)'s job.
@@ -996,8 +997,9 @@ mod tests {
         assert!(book.id("Fireball").is_some());
     }
 
-    /// Every effect currently advertised by shipped content must stay represented.
-    /// Decode-only `ClearTerrain` and deferred `Displace` deliberately remain absent.
+    /// Every effect intentionally exercised by the shipped roster stays represented.
+    /// Decode-only `ClearTerrain` plus deferred ward, illumination, and displacement
+    /// effects deliberately remain absent until spells with delivered mechanics own them.
     #[test]
     fn shipped_spells_cover_every_advertised_effect_variant() {
         let file = shipped_file();
@@ -1007,8 +1009,8 @@ mod tests {
                 seen.insert(std::mem::discriminant(effect));
             }
         }
-        // Every spell-authored effect variant. Destruction is `TerrainImpact`, not a
-        // spell-side clear instruction.
+        // Every spell-authored effect variant intentionally present in current content.
+        // Destruction is `TerrainImpact`, not a spell-side clear instruction.
         let all = [
             Effect::DisableHexes {
                 count: 1,
@@ -1016,9 +1018,7 @@ mod tests {
             },
             Effect::Burn { turns: 1 },
             Effect::RestoreHexes { count: 1 },
-            Effect::ModifyIncomingDisables { amount: 1 },
             Effect::Reveal { tier: 1 },
-            Effect::Illuminate { radius: 1 },
             Effect::SetTerrain {
                 substance: "stone".to_owned(),
             },
@@ -1036,6 +1036,32 @@ mod tests {
                 "shipped spells never use {effect:?}"
             );
         }
+        for deferred in [
+            Effect::ModifyIncomingDisables { amount: 1 },
+            Effect::Illuminate { radius: 1 },
+            Effect::Displace { distance: 1 },
+            Effect::ClearTerrain,
+        ] {
+            assert!(
+                !seen.contains(&std::mem::discriminant(&deferred)),
+                "deferred effect leaked into shipped content: {deferred:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn shipped_renewal_only_restores_hexes() {
+        let file = shipped_file();
+        let renewal = file
+            .spells
+            .get("Renewal")
+            .expect("the shipped spell roster defines Renewal");
+
+        assert_eq!(
+            renewal.effects,
+            vec![Effect::RestoreHexes { count: 2 }],
+            "Renewal must not advertise the deferred one-shot ward effect",
+        );
     }
 
     #[test]

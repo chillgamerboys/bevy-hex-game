@@ -13,6 +13,9 @@ that outlive their turn are expressed.
 > Enchantment-bound terrain, spell-created illumination, area Restore/Reveal, and
 > area-lingering zones remain later work.
 
+One-shot wards also remain deferred: the schema can decode
+`ModifyIncomingDisables`, but no runtime state owns that effect yet.
+
 Read [the design](../design/game.md) for the magic system this serves, and
 [combat.md](combat.md) for the turn loop a cast happens inside.
 
@@ -95,10 +98,12 @@ element × material allow-list. A missing pair resists; there are no multipliers
 thresholds, healing, replacement materials, or elemental transformations. Gameplay
 does not duplicate either file and cannot predict the outcome before the world answers.
 
-Every current element is initially allowed against every toughness-bearing material.
-That broad table proves the contract without pretending to be final balance. Water,
-lava, air, and bedrock have no toughness; authored liquid topology and the other
-map-owned protections continue to resist.
+The neutral elemental-grid content lists each of the 18 canonical elements against
+each of the ten toughness-bearing substances: **180 unique allowed pairs**. That
+broad table proves coherent admission without pretending to be final balance. Its
+expansion is content migration, not a new terrain-damage mechanic and not completion
+of the residual HEX-19 work. Water, lava, air, and bedrock have no toughness; authored
+liquid topology and the other map-owned protections continue to resist.
 
 The first consumer is Fireball with `Impact(element: "Fire", power: 2)`. Its
 previous `Displace` is removed rather than advertising forced movement the runtime
@@ -468,15 +473,21 @@ without touching the framework, which is the point of having one.
   `PendingDecision::ChooseRestores`; a player caster selects disabled cells on the
   target lattice, while a non-player caster uses its registered deterministic
   algorithm. The answer remains a replayable `ChooseRestores` command rather than an
-  internal healing policy.
+  internal healing policy. Shipped Renewal carries only `RestoreHexes(count: 2)`;
+  its former `ModifyIncomingDisables` entry was removed because one-shot wards have
+  no delivered runtime lifecycle.
 - **Only one exact-cell choice is public at a time.** Content validation still prevents
   incompatible choice-producing effects, while the implementation may queue several
   area Disable recipients behind the existing `PendingDecision`. It publishes the next
   stable-`UnitId` decision only after the previous answer is adopted, and the separate
   authority hold prevents the cleared public slot from advancing the turn early.
-- **`Reveal` is live; `Illuminate` still rejects with a reason.** Reveal writes a
-  complete tier-bounded view through the knowledge seam. Spell-created lights still
-  wait on the perception lane and must not silently do nothing.
+- **Single-target `Reveal` is live; `Illuminate` still rejects with a reason.** The
+  E0 content assigns Scrying Eye to Divination while retaining the current
+  observed-subject, complete tier-bounded view through the knowledge seam. A
+  continuous off-sight live feed is separate later Divination work. Spell-created
+  illumination belongs to Illusion, still waits on the perception lane, and must not
+  silently do nothing; the former Daylight spell is not part of the canonical
+  migrated content.
 - **Generated features are unaffected initially.** Destructible trees, tall grass,
   and other feature effects wait on an explicit world response and outcome contract.
 

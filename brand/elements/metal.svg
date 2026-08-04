@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 256 256"
+     width="256"
+     height="256"
+     role="img"
+     aria-labelledby="title desc">
+  <title id="title">Metal elemental glyph</title>
+  <desc id="desc">A broad ingot with a narrower top.</desc>
+  <path d="M72 95H178L197 164H57Z"
+        fill="none" stroke="#fff" stroke-width="16" stroke-linecap="round" stroke-linejoin="round" />
+</svg>

@@ -21,6 +21,18 @@ belong to the map's owner; `units` and `combat` rows belong to the gameplay
 owner. `perception` is the new headless visibility boundary, but its adapters
 still belong to the crate they change. `docs` is whoever picks it up.
 
+### Active elemental program
+
+The **Elemental Grid & Showcase Spell Program** is tracked directly in Linear rather
+than seeded from an unclaimed table row below. PR #184 delivers its E0 foundation
+(HEX-37/HEX-56/HEX-57): the canonical 18-element catalog and revision-bound packaged
+content, the neutral 18 × 10 terrain-damage matrix, and the accessible radius-two
+Creator chart with retained SVG masters and runtime glyphs. E0 rehomes the current
+Scrying Eye content under Divination and removes Daylight; it does not add Scrying
+Eye's off-sight live feed, Invisibility, spell-created illumination, or any other
+school mechanic. Those follow-on releases remain separately sequenced after the
+foundation.
+
 ## Upcoming
 
 | Epic | Scope | Owner |
@@ -42,6 +54,7 @@ still belong to the crate they change. `docs` is whoever picks it up.
 
 | Epic | Delivered |
 |---|---|
+| Canonical elemental-grid foundation | PR #184 / HEX-37, HEX-56, and HEX-57: 18 canonical schools, revision-bound packaged-content migration, a neutral 180-pair element × tough-substance matrix, retained SVG/runtime glyphs, and the accessible radius-two Creator chart |
 | Run bottoms on tiles | Every material-run entity publishes exact inclusive integer bounds through `RunBottom` and `TilePos`, including stacked platform/cave runs and terrain-edit rebuilds |
 | Casting UX | HEX-21 landed in Wave 3: cursor shape previews, blocked reasons, target cycling, and per-element cast presentation |
 | Combat readability | HEX-23 landed in Wave 3: initiative order, detailed lattice panels, and the structured combat log |

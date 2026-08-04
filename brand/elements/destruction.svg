@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 256 256"
+     width="256"
+     height="256"
+     role="img"
+     aria-labelledby="title desc">
+  <title id="title">Destruction elemental glyph</title>
+  <desc id="desc">Five hooked blades turning around one center.</desc>
+  <defs>
+    <path id="blade" d="M128 128C133 105 145 91 168 82L198 78L180 62" />
+  </defs>
+  <g fill="none" stroke="#fff" stroke-width="16" stroke-linecap="round" stroke-linejoin="round">
+    <use href="#blade" />
+    <use href="#blade" transform="rotate(72 128 128)" />
+    <use href="#blade" transform="rotate(144 128 128)" />
+    <use href="#blade" transform="rotate(216 128 128)" />
+    <use href="#blade" transform="rotate(288 128 128)" />
+  </g>
+</svg>

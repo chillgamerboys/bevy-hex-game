@@ -457,7 +457,7 @@ fn sim_seeds_for(name: &str, resolved: Option<ResolvedMapSeed>) -> SimSeeds {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
@@ -1780,7 +1780,11 @@ mod tests {
         (elements, spells, index, lattices, profiles, formations)
     }
 
-    fn procedural_gameplay_app_with_combat(scenario_name: &str, with_combat: bool) -> App {
+    /// Builds one shipped scenario through the production map and unit plugins.
+    pub(crate) fn procedural_gameplay_app_with_combat(
+        scenario_name: &str,
+        with_combat: bool,
+    ) -> App {
         let entry = library()
             .scenarios
             .into_iter()
@@ -1841,6 +1845,7 @@ mod tests {
                 GameplaySetup::Resources,
                 GameplaySetup::Terrain,
                 GameplaySetup::Actors,
+                GameplaySetup::Restore,
                 GameplaySetup::Perception,
                 GameplaySetup::View,
                 GameplaySetup::Finalize,
@@ -1912,7 +1917,8 @@ mod tests {
         app
     }
 
-    fn enter_screen(app: &mut App, screen: Screen) {
+    /// Applies a real state transition and lets its entry schedule settle.
+    pub(crate) fn enter_screen(app: &mut App, screen: Screen) {
         app.world_mut()
             .resource_mut::<NextState<Screen>>()
             .set(screen);

@@ -1670,8 +1670,8 @@ mod tests {
     use bevy::time::TimeUpdateStrategy;
     use bevy::MinimalPlugins;
     use hex_assets::{
-        ArtPalette, ContentIndex, ElementFile, LatticeFile, ScenarioCategory, SpellBook, SpellFile,
-        SubstanceFile, SubstanceTable, TerrainDamageFile, TerrainDamageTable,
+        ArtPalette, ContentIndex, ElementFile, Encounter, LatticeFile, ScenarioCategory, SpellBook,
+        SpellFile, SubstanceFile, SubstanceTable, TerrainDamageFile, TerrainDamageTable,
     };
     use hex_units::Standing;
 
@@ -1810,6 +1810,82 @@ mod tests {
             "hex-game-campaign-{label}-{}-{unique}",
             std::process::id()
         ))
+    }
+
+    fn assert_elemental_fixture_matches_fresh_party_trial(
+        pending: Res<PendingCampaign>,
+        encounter: Res<Encounter>,
+        formation: Res<PartyFormation>,
+        party: Res<hex_units::Party>,
+        units: Query<(
+            &UnitId,
+            &Faction,
+            &UnitArchetype,
+            &StandsOn,
+            &LatticeState,
+            Has<Downed>,
+        )>,
+    ) {
+        let save = &pending.0;
+        assert_eq!(encounter.name, save.scenario_name);
+
+        let declarations = encounter
+            .entries()
+            .enumerate()
+            .map(|(index, entry)| {
+                (
+                    UnitId(u64::try_from(index).expect("the shipped roster is tiny")),
+                    (entry.faction, entry.archetype.to_owned()),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let runtime_count = units.iter().count();
+        let runtime = units
+            .iter()
+            .map(|(id, faction, archetype, standing, lattice, downed)| {
+                (
+                    *id,
+                    (
+                        *faction,
+                        archetype.0.clone(),
+                        standing.0.pos,
+                        lattice.clone(),
+                        downed,
+                    ),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        assert_eq!(
+            runtime.len(),
+            runtime_count,
+            "the production Party Trial spawn must deal unique unit ids"
+        );
+        assert_eq!(declarations.len(), save.units.len());
+        assert_eq!(runtime.len(), save.units.len());
+        assert_eq!(
+            save.selected,
+            party.members.first().copied(),
+            "the fixture selection must match the fresh Party Trial selection target"
+        );
+        for snapshot in &save.units {
+            let (declared_faction, declared_archetype) = declarations
+                .get(&snapshot.id)
+                .expect("every saved id comes from the shipped encounter declaration");
+            let (runtime_faction, runtime_archetype, position, lattice, downed) = runtime
+                .get(&snapshot.id)
+                .expect("every saved id was spawned by the production unit plugin");
+            assert_eq!(runtime_faction, declared_faction);
+            assert_eq!(runtime_archetype, declared_archetype);
+            assert_eq!(*runtime_faction, snapshot.faction);
+            assert_eq!(*position, snapshot.position);
+            assert_eq!(Some(lattice), snapshot.lattice.as_ref());
+            assert_eq!(*downed, snapshot.downed);
+        }
+        assert_eq!(
+            *formation, save.formation,
+            "the fixture formation must be the production Party Trial formation"
+        );
     }
 
     #[test]
@@ -2659,28 +2735,39 @@ mod tests {
     }
 
     #[test]
-    fn exact_pr175_dev_resume_is_refused_after_a_semantic_world_addition() {
-        let legacy_text = include_str!("../testdata/legacy_resume_origin_dev.ron");
+    fn pr175_digest_translation_is_retired_after_elemental_and_world_cutovers() {
+        let legacy_text = include_str!("../testdata/legacy_resume_pr175.ron");
         let legacy: LegacyResumeFile =
-            ron::from_str(legacy_text).expect("the PR #175 resume fixture should parse");
+            ron::from_str(legacy_text).expect("the historical PR #175 resume should parse");
         assert_eq!(legacy.build_version, build_identity());
         assert_eq!(legacy.scenario_digest, 0xC8EA_6229_346D_CF96);
-        validate_legacy_resume(&legacy).expect("the PR #175 record itself is valid");
+        validate_legacy_resume(&legacy).expect("the PR #175 record itself remains well formed");
 
         let library: ScenarioLibrary =
             ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
-                .expect("the cutover scenario library should parse");
-        for (name, _, cutover_digest) in LEGACY_RESUME_DIGESTS {
+                .expect("the current scenario library should parse");
+        for (name, legacy_digest, cutover_digest) in LEGACY_RESUME_DIGESTS {
             let current = library
                 .scenarios
                 .iter()
                 .find(|current| current.name == *name)
                 .expect("every PR #175 scenario has an explicit digest translation");
-            assert_ne!(
-                scenario_digest(current),
+            assert!(legacy_resume_digest_is_compatible(
+                &current.name,
+                *legacy_digest,
                 *cutover_digest,
-                "the coarse digest must invalidate every legacy scenario after adding a shipped world"
+            ));
+            let live_digest = scenario_digest(current);
+            assert_ne!(
+                live_digest, *cutover_digest,
+                "{} must reflect the later elemental and world cutovers",
+                current.name
             );
+            assert!(!legacy_resume_digest_is_compatible(
+                &current.name,
+                *legacy_digest,
+                live_digest,
+            ));
         }
         assert!(
             library
@@ -2692,6 +2779,7 @@ mod tests {
                     .any(|(name, _, _)| *name == "Mountain Range"),
             "post-cutover scenarios must not fabricate a PR #175 legacy digest"
         );
+
         let current = library
             .scenarios
             .iter()
@@ -2704,24 +2792,107 @@ mod tests {
             scenario_digest(current),
         ));
 
-        let root = scratch_root("pr175-dev-legacy");
+        let root = scratch_root("pr175-historical");
         let paths = StoragePaths::under(&root);
-        write_atomic(&paths.resume, legacy_text).expect("legacy fixture should write");
+        write_atomic(&paths.resume, legacy_text).expect("historical fixture should write");
         let store = migrate_legacy(&paths);
         let migrated = store
             .available(CampaignSlotId::One)
-            .expect("the PR #175 record should migrate to slot one");
-        assert_eq!(migrated.scenario_digest, legacy.scenario_digest);
+            .expect("the well-formed PR #175 record should remain preserved");
+        let refusal = campaign_content_refusal(&migrated, &library, 0xC0DE_CAFE)
+            .expect("the current cutovers must refuse incompatible PR #175 content");
+        assert_eq!(
+            refusal,
+            "The saved scenario \"Party Trial\" changed and cannot be resumed."
+        );
+        assert_eq!(
+            read(&paths.resume).expect("historical resume remains"),
+            legacy_text
+        );
+        std::fs::remove_dir_all(root).expect("scratch directory should clean up");
+    }
+
+    #[test]
+    fn elemental_example_resume_migrates_and_restores_as_compatible() {
+        let example_text = include_str!("../testdata/example_resume_elemental_grid.ron");
+        let example: LegacyResumeFile =
+            ron::from_str(example_text).expect("the elemental example resume should parse");
+        assert_eq!(example.build_version, build_identity());
+        assert_eq!(example.scenario_digest, 0xBF8D_7C8B_FF7F_C842);
+        assert_eq!(example.units.len(), 6, "Party Trial is a complete 3v3");
+        validate_legacy_resume(&example).expect("the elemental example record itself is valid");
+
+        let library: ScenarioLibrary =
+            ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
+                .expect("the elemental scenario library should parse");
+        let current = library
+            .scenarios
+            .iter()
+            .find(|candidate| candidate.name == example.scenario_name)
+            .expect("Party Trial remains the canonical Campaign");
+        assert_eq!(scenario_digest(current), example.scenario_digest);
+
+        let root = scratch_root("elemental-grid-example");
+        let paths = StoragePaths::under(&root);
+        write_atomic(&paths.resume, example_text).expect("example fixture should write");
+        let store = migrate_legacy(&paths);
+        let migrated = store
+            .available(CampaignSlotId::One)
+            .expect("the elemental example should migrate to slot one")
+            .clone();
+        assert_eq!(migrated.scenario_digest, example.scenario_digest);
         assert_eq!(migrated.active_play_millis, 0);
         assert_eq!(migrated.content_revision, None);
         assert_eq!(
             campaign_content_refusal(&migrated, &library, 0xC0DE_CAFE),
-            Some("The saved scenario \"Party Trial\" changed and cannot be resumed.".to_owned())
+            None
         );
-        let mut non_legacy = migrated.clone();
-        non_legacy.content_revision = Some(0xC0DE_CAFE);
-        assert!(campaign_content_refusal(&non_legacy, &library, 0xC0DE_CAFE).is_some());
-        assert_eq!(read(&paths.resume).expect("legacy remains"), legacy_text);
+        assert_eq!(read(&paths.resume).expect("example remains"), example_text);
+
+        let expected_formation = migrated.formation.clone();
+        let mut app =
+            crate::scenarios::tests::procedural_gameplay_app_with_combat("Party Trial", true);
+        app.insert_resource(CampaignStore::default())
+            .insert_resource(PendingCampaign(migrated.clone()))
+            .insert_resource(ActiveCampaign::new(CampaignSlotId::One, 0xC0DE_CAFE, 0))
+            .add_systems(
+                OnEnter(Screen::Gameplay),
+                (
+                    assert_elemental_fixture_matches_fresh_party_trial,
+                    restore_pending_campaign,
+                )
+                    .chain()
+                    .in_set(GameplaySetup::Restore),
+            );
+
+        crate::scenarios::tests::enter_screen(&mut app, Screen::Gameplay);
+
+        assert!(!app.world().contains_resource::<PendingCampaign>());
+        assert!(app.world().contains_resource::<ActiveCampaign>());
+        assert!(!app.world().contains_resource::<GameplaySetupFailure>());
+        assert_eq!(
+            *app.world().resource::<PartyFormation>(),
+            expected_formation
+        );
+        let restored = {
+            let world = app.world_mut();
+            let mut units = world.query::<(&UnitId, &StandsOn, &LatticeState, Option<&Selected>)>();
+            units
+                .iter(world)
+                .map(|(id, standing, lattice, selected)| {
+                    (*id, (standing.0.pos, lattice.clone(), selected.is_some()))
+                })
+                .collect::<BTreeMap<_, _>>()
+        };
+        assert_eq!(restored.len(), migrated.units.len());
+        for snapshot in &migrated.units {
+            let (position, lattice, selected) = restored
+                .get(&snapshot.id)
+                .expect("every saved Party Trial unit was restored");
+            assert_eq!(*position, snapshot.position);
+            assert_eq!(Some(lattice), snapshot.lattice.as_ref());
+            assert_eq!(*selected, migrated.selected == Some(snapshot.id));
+        }
         std::fs::remove_dir_all(root).expect("scratch directory should clean up");
     }
 

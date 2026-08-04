@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 256 256"
+     width="256"
+     height="256"
+     role="img"
+     aria-labelledby="title desc">
+  <title id="title">Wild elemental glyph</title>
+  <desc id="desc">Two curling horns forming a deep double valley.</desc>
+  <path d="M56 62C53 114 71 161 106 190L128 139L150 190C185 161 203 114 200 62"
+        fill="none" stroke="#fff" stroke-width="16" stroke-linecap="round" stroke-linejoin="round" />
+</svg>

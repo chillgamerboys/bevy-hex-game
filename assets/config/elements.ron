@@ -1,21 +1,70 @@
-// The six-element wheel and the fusion recipes. Loaded by `hex_assets::elements`.
+// The canonical six-element wheel and twelve direct fusion recipes. Loaded by
+// `hex_assets::elements`.
 //
 // Element ids are assigned from SORTED names, never file order (so reordering this
 // file can never silently rewrite a stored lattice). The `wheel` order below is
 // SEPARATE and defines only opposition: each element opposes the one len/2 (== 3)
-// steps along — Light/Metal, Air/Earth, Fire/Water (docs/design/game.md).
+// steps along — Air/Earth, Fire/Life, Metal/Water (docs/design/game.md).
 //
 // Higher-order elements are fusion outputs and are never on the wheel. Every recipe
-// must be acyclic and every input must be a basic element or another fusion's output
-// (validated at load). Content here is provisional — the roster is the design owner's
-// to expand.
+// must be acyclic and every input must name a known element (validated at load). The
+// canonical pair and triple recipes below deliberately draw directly from distinct
+// basic feeders; triples are not pair-plus-basic chains.
 (
-    wheel: ["Light", "Air", "Fire", "Metal", "Earth", "Water"],
+    wheel: ["Air", "Fire", "Metal", "Earth", "Life", "Water"],
     fusions: {
-        // Lightning is the design's canonical fusion: an adjacent Light gem and an
-        // adjacent Fire gem (docs/design/game.md, "Fusions").
         "Lightning": [
-            (element: "Light", mana: 1),
+            (element: "Air", mana: 1),
+            (element: "Fire", mana: 1),
+        ],
+        "Volcano": [
+            (element: "Fire", mana: 1),
+            (element: "Metal", mana: 1),
+        ],
+        "Crystal": [
+            (element: "Metal", mana: 1),
+            (element: "Earth", mana: 1),
+        ],
+        "Transmutation": [
+            (element: "Earth", mana: 1),
+            (element: "Life", mana: 1),
+        ],
+        "Divination": [
+            (element: "Life", mana: 1),
+            (element: "Water", mana: 1),
+        ],
+        "Illusion": [
+            (element: "Water", mana: 1),
+            (element: "Air", mana: 1),
+        ],
+        "Destruction": [
+            (element: "Air", mana: 1),
+            (element: "Fire", mana: 1),
+            (element: "Metal", mana: 1),
+        ],
+        "Artifice": [
+            (element: "Fire", mana: 1),
+            (element: "Metal", mana: 1),
+            (element: "Earth", mana: 1),
+        ],
+        "Necromancy": [
+            (element: "Metal", mana: 1),
+            (element: "Earth", mana: 1),
+            (element: "Life", mana: 1),
+        ],
+        "Wild": [
+            (element: "Earth", mana: 1),
+            (element: "Life", mana: 1),
+            (element: "Water", mana: 1),
+        ],
+        "Storm": [
+            (element: "Life", mana: 1),
+            (element: "Water", mana: 1),
+            (element: "Air", mana: 1),
+        ],
+        "Space": [
+            (element: "Water", mana: 1),
+            (element: "Air", mana: 1),
             (element: "Fire", mana: 1),
         ],
     },

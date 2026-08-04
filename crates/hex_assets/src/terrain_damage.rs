@@ -571,7 +571,7 @@ mod tests {
             }
         }
         assert_eq!(table.len(), expected);
-        assert_eq!(expected, 70);
+        assert_eq!(expected, 180, "18 elements x 10 tough substances");
     }
 
     #[test]

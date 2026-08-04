@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 256 256"
+     width="256"
+     height="256"
+     role="img"
+     aria-labelledby="title desc">
+  <title id="title">Transmutation elemental glyph</title>
+  <desc id="desc">A faceted triangular gem in transformation.</desc>
+  <g fill="none" stroke="#fff" stroke-width="16" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M75 84L116 60L176 80L192 118L129 202L65 118Z" />
+    <path d="M75 84L128 120L176 80M65 118L128 120L192 118M128 120L129 202" />
+  </g>
+</svg>

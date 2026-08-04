@@ -16,6 +16,7 @@ mod creator;
 mod deployment;
 #[cfg(feature = "dev-tools")]
 mod dev_time;
+mod element_visual;
 mod focus;
 mod gameplay_frame;
 mod gameplay_lattices;
@@ -35,6 +36,9 @@ mod shell;
 mod theme;
 
 pub use creation_presentation::{effect_summary, CharacterBuildSummary, SpellBuildSummary};
+pub use element_visual::{
+    ElementClassification, ElementVisual, ElementVisualCatalog, ResolvedElementVisual,
+};
 pub use gameplay_lattices::spawn_decision_controls;
 pub use lattice::{
     paint_interactions as paint_lattice_interactions, short_name, spawn_lattice_cells,
@@ -121,6 +125,58 @@ mod structural_tests {
         (UVec2::new(1920, 1080), UiScaleMode::Percent200),
         (UVec2::new(3840, 2160), UiScaleMode::Percent200),
     ];
+
+    #[derive(Resource, Default)]
+    struct CreatorIntentLog(Vec<CreatorIntent>);
+
+    #[derive(Resource, Default)]
+    struct PointerActivation(Option<Entity>);
+
+    #[derive(Resource, Default)]
+    struct KeyboardActivation(Option<Entity>);
+
+    fn apply_pointer_activation(
+        mut request: ResMut<PointerActivation>,
+        mut interactions: Query<&mut Interaction, With<Button>>,
+    ) {
+        let Some(entity) = request.0.take() else {
+            return;
+        };
+        *interactions
+            .get_mut(entity)
+            .expect("the requested pointer target must remain interactive") = Interaction::Pressed;
+    }
+
+    fn apply_keyboard_activation(
+        mut request: ResMut<KeyboardActivation>,
+        mut focus: ResMut<bevy::input_focus::InputFocus>,
+        mut keys: ResMut<ButtonInput<KeyCode>>,
+    ) {
+        let Some(entity) = request.0.take() else {
+            return;
+        };
+        *focus = bevy::input_focus::InputFocus::from_entity(entity);
+        keys.press(KeyCode::Enter);
+    }
+
+    fn record_creator_intents(
+        mut intents: MessageReader<UiIntent>,
+        mut log: ResMut<CreatorIntentLog>,
+    ) {
+        for intent in intents.read() {
+            if let UiIntent::Creator(action @ CreatorIntent::ChooseTool(_)) = intent {
+                log.0.push(action.clone());
+            }
+        }
+    }
+
+    fn named_entity(world: &mut World, expected: &str) -> Entity {
+        let mut named = world.query::<(Entity, &Name)>();
+        named
+            .iter(world)
+            .find_map(|(entity, name)| (name.as_str() == expected).then_some(entity))
+            .unwrap_or_else(|| panic!("expected UI entity {expected:?}"))
+    }
 
     fn settled_snapshot(
         screen: hex_core::Screen,
@@ -440,7 +496,7 @@ mod structural_tests {
         })
     }
 
-    fn creator_snapshot(case: UiTaskCase, size: UVec2, mode: UiScaleMode) -> UiTreeSnapshot {
+    fn creator_view(case: UiTaskCase) -> (hex_core::Screen, CreatorScreenView) {
         let screen = case.contract().screen;
         assert!(matches!(
             screen,
@@ -517,6 +573,7 @@ mod structural_tests {
                     .iter()
                     .find(|record| record.audience == hex_assets::PresetAudience::HumanTemplate)
                     .map(|record| record.character.clone());
+                view.active_tool = Some(hex_assets::CreationCellKind::Gem("Air".to_owned()));
                 if case == UiTaskCase::CharacterConfirmDelete {
                     view.confirm_delete = true;
                     view.notice = "Press Confirm Delete to remove this saved character.".to_owned();
@@ -550,6 +607,11 @@ mod structural_tests {
             }
             other => panic!("{other:?} is not a Creator task"),
         }
+        (screen, view)
+    }
+
+    fn creator_snapshot(case: UiTaskCase, size: UVec2, mode: UiScaleMode) -> UiTreeSnapshot {
+        let (screen, view) = creator_view(case);
         settled_snapshot(screen, size, 1.0, mode, |world| {
             world.insert_resource(view);
         })
@@ -1368,8 +1430,352 @@ mod structural_tests {
                     "{} failed at {size:?} {mode:?}: {issues:#?}",
                     case.contract().id
                 );
+                if case == UiTaskCase::CharacterReady {
+                    assert_element_grid_contract(&snapshot, size, mode);
+                }
             }
         }
+    }
+
+    fn assert_element_grid_contract(snapshot: &UiTreeSnapshot, size: UVec2, mode: UiScaleMode) {
+        let expected = [
+            "Element Tool Air",
+            "Element Tool Fire",
+            "Element Tool Metal",
+            "Element Tool Earth",
+            "Element Tool Life",
+            "Element Tool Water",
+            "Element Tool Space",
+            "Element Tool Lightning",
+            "Element Tool Destruction",
+            "Element Tool Volcano",
+            "Element Tool Artifice",
+            "Element Tool Crystal",
+            "Element Tool Necromancy",
+            "Element Tool Transmutation",
+            "Element Tool Wild",
+            "Element Tool Divination",
+            "Element Tool Storm",
+            "Element Tool Illusion",
+        ];
+        let grid = snapshot
+            .nodes
+            .iter()
+            .find(|node| node.name == "Elemental Grid")
+            .expect("the elemental chart container must be rendered");
+        let grid_bounds = Rect::from_center_size(grid.center, grid.size);
+        let focus_order = snapshot
+            .focus_order
+            .iter()
+            .filter(|name| name.starts_with("Element Tool "))
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            focus_order, expected,
+            "element keyboard order drifted at {size:?} {mode:?}"
+        );
+
+        for name in expected {
+            let node = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.name == name)
+                .expect("every canonical element tool must be rendered");
+            assert!(
+                node.size.x >= 43.5 && node.size.y >= 43.5,
+                "{name} fell below the 44×44 target at {size:?} {mode:?}: {node:?}"
+            );
+            assert!(
+                !node.tessellated,
+                "{name} is an ordinary rectangular click target and must participate in overlap checks"
+            );
+            let bounds = Rect::from_center_size(node.center, node.size);
+            assert!(
+                bounds.min.x >= grid_bounds.min.x - 0.5
+                    && bounds.min.y >= grid_bounds.min.y - 0.5
+                    && bounds.max.x <= grid_bounds.max.x + 0.5
+                    && bounds.max.y <= grid_bounds.max.y + 0.5,
+                "{name} escaped the elemental chart at {size:?} {mode:?}: {bounds:?} outside {grid_bounds:?}"
+            );
+            assert!(
+                node.scroll_reachable,
+                "{name} lost its single-owner scroll route at {size:?} {mode:?}: {node:?}"
+            );
+            assert!(
+                node.accessible_label
+                    .as_deref()
+                    .is_some_and(|label| label.contains("formula")),
+                "{name} must expose classification and formula copy: {node:?}"
+            );
+        }
+        let tools = snapshot
+            .nodes
+            .iter()
+            .filter(|node| node.name.starts_with("Element Tool "))
+            .collect::<Vec<_>>();
+        for (index, left) in tools.iter().enumerate() {
+            for right in tools.iter().skip(index + 1) {
+                let overlap = Rect::from_center_size(left.center, left.size)
+                    .intersect(Rect::from_center_size(right.center, right.size));
+                assert!(
+                    overlap.width() <= 0.5 || overlap.height() <= 0.5,
+                    "{} and {} have ambiguous click bounds at {size:?} {mode:?}: {overlap:?}",
+                    left.name,
+                    right.name
+                );
+            }
+        }
+        assert_eq!(
+            snapshot
+                .nodes
+                .iter()
+                .filter(|node| node.name.starts_with("Element Formula "))
+                .count(),
+            18,
+            "the visible formula fallback must cover every element"
+        );
+        assert!(
+            snapshot
+                .nodes
+                .iter()
+                .any(|node| node.name == "Selected Element Air"),
+            "active selection needs a visible shape marker in addition to tint"
+        );
+        let air = snapshot
+            .nodes
+            .iter()
+            .find(|node| node.name == "Element Tool Air")
+            .expect("Air tool must exist");
+        assert!(
+            air.accessible_label
+                .as_deref()
+                .is_some_and(|label| label.contains("; selected;")),
+            "active selection must also be spoken: {air:?}"
+        );
+    }
+
+    #[test]
+    fn element_grid_maps_and_emits_exact_typed_tools_for_pointer_and_keyboard() {
+        let (screen, view) = creator_view(UiTaskCase::CharacterReady);
+        let mut app = App::new();
+        app.add_plugins(HeadlessUiPlugin::new(1920, 1080))
+            .init_resource::<CreatorIntentLog>()
+            .init_resource::<PointerActivation>()
+            .init_resource::<KeyboardActivation>()
+            .add_systems(
+                PreUpdate,
+                apply_keyboard_activation
+                    .after(bevy::input::InputSystems)
+                    .before(UiSystems::CaptureInput),
+            )
+            .add_systems(
+                Update,
+                (
+                    apply_pointer_activation.before(UiSystems::EmitIntents),
+                    record_creator_intents.after(UiSystems::EmitIntents),
+                ),
+            );
+        app.world_mut().insert_resource(view);
+        app.world_mut()
+            .resource_mut::<NextState<hex_core::Screen>>()
+            .set(screen);
+        for _ in 0..8 {
+            app.update();
+        }
+
+        for name in ["Air", "Fire", "Metal", "Earth", "Life", "Water"] {
+            let entity = named_entity(app.world_mut(), &format!("Element Tool {name}"));
+            let expected =
+                CreatorIntent::ChooseTool(hex_assets::CreationCellKind::Gem(name.to_owned()));
+            assert_eq!(
+                app.world().get::<CreatorIntent>(entity),
+                Some(&expected),
+                "basic element {name} must paint the exact gem tool"
+            );
+        }
+        for name in [
+            "Space",
+            "Lightning",
+            "Destruction",
+            "Volcano",
+            "Artifice",
+            "Crystal",
+            "Necromancy",
+            "Transmutation",
+            "Wild",
+            "Divination",
+            "Storm",
+            "Illusion",
+        ] {
+            let entity = named_entity(app.world_mut(), &format!("Element Tool {name}"));
+            let expected =
+                CreatorIntent::ChooseTool(hex_assets::CreationCellKind::Fusion(name.to_owned()));
+            assert_eq!(
+                app.world().get::<CreatorIntent>(entity),
+                Some(&expected),
+                "derived element {name} must paint the exact fusion tool"
+            );
+        }
+
+        app.world_mut().resource_mut::<CreatorIntentLog>().0.clear();
+        let air = named_entity(app.world_mut(), "Element Tool Air");
+        app.world_mut().resource_mut::<PointerActivation>().0 = Some(air);
+        app.update();
+        assert_eq!(
+            app.world().resource::<CreatorIntentLog>().0.as_slice(),
+            &[CreatorIntent::ChooseTool(
+                hex_assets::CreationCellKind::Gem("Air".to_owned())
+            )],
+            "pointer activation must emit the exact basic tool"
+        );
+
+        *app.world_mut()
+            .get_mut::<Interaction>(air)
+            .expect("the Air tool remains interactive") = Interaction::None;
+        app.update();
+        app.world_mut().resource_mut::<CreatorIntentLog>().0.clear();
+
+        let space = named_entity(app.world_mut(), "Element Tool Space");
+        app.world_mut().resource_mut::<KeyboardActivation>().0 = Some(space);
+        app.update();
+        assert_eq!(
+            app.world().resource::<CreatorIntentLog>().0.as_slice(),
+            &[CreatorIntent::ChooseTool(
+                hex_assets::CreationCellKind::Fusion("Space".to_owned())
+            )],
+            "keyboard activation must emit the exact derived tool"
+        );
+    }
+
+    #[test]
+    fn accepted_noncanonical_elements_remain_complete_creator_tools() {
+        let mut custom_file: hex_assets::ElementFile =
+            ron::from_str(include_str!("../../../assets/config/elements.ron"))
+                .expect("the production element catalog must parse");
+        custom_file.wheel.push("Aether".to_owned());
+        custom_file.wheel.push("Void".to_owned());
+        custom_file.fusions.insert(
+            "Tempest".to_owned(),
+            vec![
+                hex_assets::FusionInput {
+                    element: "Aether".to_owned(),
+                    mana: 1,
+                },
+                hex_assets::FusionInput {
+                    element: "Air".to_owned(),
+                    mana: 1,
+                },
+            ],
+        );
+        custom_file
+            .validate()
+            .expect("the extended element catalog must remain valid");
+        let custom = hex_assets::ElementCatalog::from_file(&custom_file);
+        let (screen, mut view) = creator_view(UiTaskCase::CharacterReady);
+        view.elements = Some(custom);
+        view.active_tool = Some(hex_assets::CreationCellKind::Gem("Aether".to_owned()));
+
+        let mut app = App::new();
+        app.add_plugins(HeadlessUiPlugin::new(1920, 1080))
+            .init_resource::<CreatorIntentLog>()
+            .init_resource::<PointerActivation>()
+            .init_resource::<KeyboardActivation>()
+            .add_systems(
+                PreUpdate,
+                apply_keyboard_activation
+                    .after(bevy::input::InputSystems)
+                    .before(UiSystems::CaptureInput),
+            )
+            .add_systems(
+                Update,
+                (
+                    apply_pointer_activation.before(UiSystems::EmitIntents),
+                    record_creator_intents.after(UiSystems::EmitIntents),
+                ),
+            );
+        app.world_mut().insert_resource(view);
+        app.world_mut()
+            .resource_mut::<NextState<hex_core::Screen>>()
+            .set(screen);
+        for _ in 0..8 {
+            app.update();
+        }
+
+        named_entity(app.world_mut(), "Element Tool Air");
+        for name in ["Aether", "Void"] {
+            let entity = named_entity(app.world_mut(), &format!("Element Tool {name}"));
+            assert_eq!(
+                app.world().get::<CreatorIntent>(entity),
+                Some(&CreatorIntent::ChooseTool(
+                    hex_assets::CreationCellKind::Gem(name.to_owned())
+                )),
+                "custom basic {name} must remain authorable"
+            );
+        }
+        let aether = named_entity(app.world_mut(), "Element Tool Aether");
+        let aether_label = app
+            .world()
+            .get::<AccessibleLabel>(aether)
+            .expect("Aether has an accessible label");
+        assert!(aether_label.0.contains("basic element"));
+        assert!(aether_label.0.contains("formula basic element"));
+        assert!(aether_label.0.contains("; selected;"));
+        named_entity(app.world_mut(), "Selected Element Aether");
+
+        let tempest = named_entity(app.world_mut(), "Element Tool Tempest");
+        assert_eq!(
+            app.world().get::<CreatorIntent>(tempest),
+            Some(&CreatorIntent::ChooseTool(
+                hex_assets::CreationCellKind::Fusion("Tempest".to_owned())
+            )),
+            "custom fusion must remain authorable"
+        );
+        let tempest_label = app
+            .world()
+            .get::<AccessibleLabel>(tempest)
+            .expect("Tempest has an accessible label");
+        assert!(tempest_label.0.contains("pair fusion"));
+        assert!(tempest_label.0.contains("formula Aether + Air"));
+        assert!(tempest_label.0.contains("; not selected;"));
+        for name in ["Aether", "Void", "Tempest"] {
+            named_entity(app.world_mut(), &format!("Element Formula {name}"));
+        }
+        {
+            let world = app.world_mut();
+            let mut text = world.query::<&Text>();
+            assert!(
+                text.iter(world).all(|text| !text
+                    .as_str()
+                    .contains("does not contain every canonical chart school")),
+                "a valid catalog superset must not be described as incomplete"
+            );
+        }
+
+        app.world_mut().resource_mut::<CreatorIntentLog>().0.clear();
+        app.world_mut().resource_mut::<PointerActivation>().0 = Some(aether);
+        app.update();
+        assert_eq!(
+            app.world().resource::<CreatorIntentLog>().0.as_slice(),
+            &[CreatorIntent::ChooseTool(
+                hex_assets::CreationCellKind::Gem("Aether".to_owned())
+            )],
+            "pointer activation must emit the exact custom basic tool"
+        );
+
+        *app.world_mut()
+            .get_mut::<Interaction>(aether)
+            .expect("the Aether tool remains interactive") = Interaction::None;
+        app.update();
+        app.world_mut().resource_mut::<CreatorIntentLog>().0.clear();
+        app.world_mut().resource_mut::<KeyboardActivation>().0 = Some(tempest);
+        app.update();
+        assert_eq!(
+            app.world().resource::<CreatorIntentLog>().0.as_slice(),
+            &[CreatorIntent::ChooseTool(
+                hex_assets::CreationCellKind::Fusion("Tempest".to_owned())
+            )],
+            "keyboard activation must emit the exact custom fusion tool"
+        );
     }
 
     #[test]
@@ -1599,6 +2005,7 @@ impl Plugin for UiPlugin {
         .init_resource::<InitiativeView>()
         .init_resource::<MainMenuView>()
         .init_resource::<TargetPulseView>()
+        .add_plugins(element_visual::plugin)
         .add_plugins((
             theme::plugin,
             casting_panel::plugin,

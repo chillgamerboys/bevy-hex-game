@@ -62,6 +62,16 @@ add slots, a cell inspector, gem/fusion/spell/blank choices, stats and validatio
 manual attunement and channelling, and session undo/redo. The schema requires an
 origin, connectivity, valid content names and coordinates, and no more than 64 cells.
 
+The element tool picker presents the canonical catalog as a radius-two hex chart with
+an empty centre: six basic gems on the inner ring and six pair plus six triple fusions
+on the outer ring. Every control has a textual element name, classification, formula,
+tool kind, and selected state; the icon and tint are never the only label. The chart's
+coordinates, tints, editable SVG masters, and runtime PNG glyphs are
+**presentation-only**. Whether a tool is a gem or fusion and what its recipe means are
+resolved from the accepted `ElementCatalog`; missing catalog entries are not offered
+as authoring tools. The canonical wheel, recipes, and chart order are recorded in
+[the config contract](../development/config.md#elementsron).
+
 New inscriptions may select shipped spells or saved Ready custom spells. Existing
 references are retained if a spell later becomes Draft, with an actionable diagnostic.
 A Map-ready character is saved, clean, schema-valid, contains an inscribed spell, and

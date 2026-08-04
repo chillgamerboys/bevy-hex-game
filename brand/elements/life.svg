@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 256 256"
+     width="256"
+     height="256"
+     role="img"
+     aria-labelledby="title desc">
+  <title id="title">Life elemental glyph</title>
+  <desc id="desc">A central stem opening into two curved leaves.</desc>
+  <g fill="none" stroke="#fff" stroke-width="16" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M128 201V111" />
+    <path d="M128 111C116 78 88 60 62 65C71 92 94 110 128 111Z" />
+    <path d="M128 111C140 78 168 60 194 65C185 92 162 110 128 111Z" />
+  </g>
+</svg>
