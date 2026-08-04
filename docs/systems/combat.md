@@ -346,8 +346,8 @@ a `LatticeSpec`, `LatticeState` and `LatticeStats` keyed by the unit's
 
 The target panel reads no hostile `LatticeSpec` or `LatticeState`; it projects only
 `FactionLatticeKnowledge::view`. A complete Reveal learns capacity and every cell for
-one already-observed target; Scrying Eye is the current spell, and the E0 content
-candidate moves its requirement to Divination. While that target remains observable
+one already-observed target; Scrying Eye is the current spell, and E0 moved its
+requirement to Divination. While that target remains observable
 and the reveal lasts, already-divined cells refresh mana and disabled state from live
 truth without resetting their expiry. Tier one lasts through the current partial
 round and the next complete round, expiring at the following rollover. Retaining a
