@@ -6,6 +6,20 @@ directory with its own `CLAUDE.md`, read that file too. Treat
 `docs/architecture.md`, `docs/contracts.md`, and the relevant system or design doc
 as contracts rather than background reading.
 
+## Launch source builds through Cargo
+
+When asked to open or launch the game from this checkout, never execute
+`target/debug/hex_game` or `target/release/hex_game` directly. Use `cargo dev` for a
+development launch or `cargo run --release -p hex_game` for the shipping-shaped
+build. Cargo applies the repository's `BEVY_ASSET_ROOT` from `.cargo/config.toml`; a
+bare source-tree binary instead searches beside itself under `target/*/assets` and
+can render empty UI shells with no text, icons, configuration, meshes, or shaders.
+
+After launching, poll the initial process output before reporting success. Treat any
+Bevy `Path not found` asset error as a failed launch, stop that process, and relaunch
+through Cargo. Packaged standalone builds are the exception because their release
+workflow deliberately stages `assets/` beside the executable.
+
 ## Plan the integration shape first
 
 Before splitting one outcome across branches, agents, or PRs, use
