@@ -59,9 +59,9 @@ pub use input::{
 pub use lattice_ids::{EnchantId, LatticeCoord};
 pub use occupancy::{OccupancyBlock, UnitOccupancy};
 pub use perception::{
-    ExteriorIllumination, GameplayLight, IlluminationLevel, KnowledgeExpiry, KnowledgeSource,
-    KnowledgeState, KnownTraversal, LightDomain, LocalMapKnowledge, PerceptionSystems, SightBand,
-    SightProfile,
+    upper_dome_contains, ExactGridPoint, ExteriorIllumination, GameplayLight, IlluminationLevel,
+    KnowledgeExpiry, KnowledgeSource, KnowledgeState, KnownTraversal, LightDomain,
+    LocalMapKnowledge, PerceptionSystems, SightBand, SightProfile,
 };
 pub use presentation::{
     CanopyOccluder, PresentationOcclusion, PresentationOcclusionReason, PresentationSystems,

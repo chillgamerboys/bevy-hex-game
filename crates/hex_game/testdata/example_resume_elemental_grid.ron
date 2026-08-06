@@ -2,8 +2,8 @@
     format_version: 1,
     build_version: "0.4.0",
     scenario_name: "Party Trial",
-    // Digest for the canonical 18-element E0 catalog on the Mountain Range baseline.
-    scenario_digest: 13802825373689301058,
+    // Digest for the canonical 18-element E0 catalog and upper-dome perception rules.
+    scenario_digest: 12559736720897313477,
     resolved_seed: None,
     generator_version: None,
     formation: (

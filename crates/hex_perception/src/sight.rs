@@ -5,8 +5,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use bevy_ecs::prelude::Resource;
 use bevy_ecs::reflect::ReflectResource;
 use bevy_reflect::Reflect;
-use hex_core::{ExteriorIllumination, LightDomain, SightProfile, TilePos, UnitId};
-use hex_units::Faction;
+use hex_core::{
+    upper_dome_contains, ExactGridPoint, ExteriorIllumination, SightProfile, TilePos, UnitId,
+};
+use hex_units::{terrain_sight_is_clear, Faction, TerrainOccupancy};
 
 use crate::{
     resolve_illumination_at, FactionMapKnowledge, LightSourceSnapshot, ObservedUnit,
@@ -140,29 +142,25 @@ impl FactionObservations {
 
 /// Whether one exact current surface observes another.
 ///
-/// The target's illumination tier selects the sight band. Both surfaces must share a
-/// light domain, horizontal cube distance must fit the band plus any downhill bonus,
-/// and absolute level distance must fit the independent vertical band.
+/// The target's illumination tier selects the inclusive upper-dome radius. Sight
+/// starts at the observer's standing eye and reaches the target's top face only when
+/// exact terrain occupancy leaves its center, or at least three corners, unobstructed.
+/// Light domains constrain illumination, not physical sight through an opening.
 #[must_use]
 pub fn can_observe(
     observer: TilePos,
     target: TilePos,
     illumination: &ResolvedIllumination,
     profile: SightProfile,
+    terrain: &TerrainOccupancy,
 ) -> bool {
-    let Some(observer_light) = illumination.get(observer) else {
+    if illumination.get(observer).is_none() {
         return false;
-    };
+    }
     let Some(target_light) = illumination.get(target) else {
         return false;
     };
-    can_observe_resolved(
-        observer,
-        observer_light.domain,
-        target,
-        target_light,
-        profile,
-    )
+    can_observe_resolved(observer, target, target_light, profile, terrain)
 }
 
 /// Resolves pooled observations for both factions.
@@ -181,6 +179,7 @@ pub fn resolve_observations(
     exterior: ExteriorIllumination,
     lights: &[LightSourceSnapshot],
     profile: SightProfile,
+    terrain: &TerrainOccupancy,
 ) -> Result<FactionObservations, PerceptionError> {
     let units = index_units(units)?;
     for unit in units.values() {
@@ -199,6 +198,7 @@ pub fn resolve_observations(
         exterior,
         lights,
         profile,
+        terrain,
     )?;
     let hostile = resolve_faction(
         Faction::Hostile,
@@ -208,6 +208,7 @@ pub fn resolve_observations(
         exterior,
         lights,
         profile,
+        terrain,
     )?;
     Ok(FactionObservations { player, hostile })
 }
@@ -234,19 +235,20 @@ fn resolve_faction(
     exterior: ExteriorIllumination,
     lights: &[LightSourceSnapshot],
     profile: SightProfile,
+    terrain: &TerrainOccupancy,
 ) -> Result<FactionObservation, PerceptionError> {
     let mut observers = Vec::new();
     for unit in units
         .values()
         .filter(|unit| unit.faction == faction && unit.provides_sight)
     {
-        let Some(resolved) = illumination.get(unit.pos) else {
+        if illumination.get(unit.pos).is_none() {
             return Err(PerceptionError::UnitMissingSurface {
                 id: unit.id,
                 pos: unit.pos,
             });
-        };
-        observers.push((unit.pos, resolved.domain));
+        }
+        observers.push(unit.pos);
     }
 
     let mut targets = illumination.iter().collect::<BTreeMap<_, _>>();
@@ -262,9 +264,10 @@ fn resolve_faction(
 
     let mut observation = FactionObservation::new();
     for (target, target_light) in targets {
-        if observers.iter().any(|(observer, domain)| {
-            can_observe_resolved(*observer, *domain, target, target_light, profile)
-        }) {
+        if observers
+            .iter()
+            .any(|&observer| can_observe_resolved(observer, target, target_light, profile, terrain))
+        {
             observation.insert_surface(target);
         }
     }
@@ -279,31 +282,28 @@ fn resolve_faction(
 
 fn can_observe_resolved(
     observer: TilePos,
-    observer_domain: LightDomain,
     target: TilePos,
     target_light: ResolvedLight,
     profile: SightProfile,
+    terrain: &TerrainOccupancy,
 ) -> bool {
-    if observer_domain != target_light.domain {
-        return false;
-    }
-
     let band = profile.band(target_light.level);
-    if observer.level.abs_diff(target.level) > band.vertical {
+    if !upper_dome_contains(
+        ExactGridPoint::standing_eye(observer),
+        ExactGridPoint::voxel_top_center(target),
+        band.radius,
+    ) {
         return false;
     }
-
-    let downhill_levels = observer.level.saturating_sub(target.level).max(0);
-    let horizontal_limit = band
-        .horizontal
-        .saturating_add(profile.downhill_bonus(target_light.level, downhill_levels));
-    observer.coord.distance(target.coord) <= horizontal_limit
+    terrain_sight_is_clear(observer, target, terrain)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hex_core::{GameplayLight, HexCoord, IlluminationLevel, InteriorRegionId, SightBand};
+    use hex_core::{
+        GameplayLight, HexCoord, IlluminationLevel, InteriorRegionId, LightDomain, SightBand,
+    };
 
     use crate::{
         apply_observations, FactionObservation, FactionObservations, SurfaceSnapshot,
@@ -314,13 +314,11 @@ mod tests {
         TilePos::new(HexCoord::from_axial(q, r), level)
     }
 
-    fn profile(bright: u32, dim: u32, dark: u32, vertical: u32) -> SightProfile {
+    fn profile(bright: u32, dim: u32, dark: u32) -> SightProfile {
         SightProfile {
-            bright: SightBand::new(bright, vertical),
-            dim: SightBand::new(dim, vertical),
-            dark: SightBand::new(dark, vertical),
-            downhill_levels_per_bonus: 4,
-            max_downhill_bonus: 6,
+            bright: SightBand::new(bright),
+            dim: SightBand::new(dim),
+            dark: SightBand::new(dark),
         }
     }
 
@@ -386,7 +384,14 @@ mod tests {
             &[bright_observer, dim_target],
         )
         .expect("illumination");
-        assert!(!can_observe(observer, target, &dim, profile(4, 2, 1, 10)));
+        let terrain = TerrainOccupancy::default();
+        assert!(!can_observe(
+            observer,
+            target,
+            &dim,
+            profile(4, 2, 1),
+            &terrain
+        ));
 
         let bright_target = light(target, LightDomain::Exterior, IlluminationLevel::Bright, 0);
         let bright = ResolvedIllumination::try_resolve(
@@ -398,64 +403,128 @@ mod tests {
             &[bright_observer, bright_target],
         )
         .expect("illumination");
-        assert!(can_observe(observer, target, &bright, profile(4, 2, 1, 10)));
+        assert!(can_observe(
+            observer,
+            target,
+            &bright,
+            profile(4, 2, 1),
+            &terrain
+        ));
     }
 
     #[test]
-    fn domains_and_vertical_band_are_independent_limits() {
+    fn default_target_tiers_use_exact_36_12_1_radii() {
+        let observer = pos(0, 0, 0);
+        let terrain = TerrainOccupancy::default();
+        for (tier, radius) in [
+            (IlluminationLevel::Bright, 36),
+            (IlluminationLevel::Dim, 12),
+            (IlluminationLevel::Dark, 1),
+        ] {
+            let boundary = pos(radius, 0, 0);
+            let outside = pos(radius + 1, 0, 0);
+            let illumination = ResolvedIllumination::try_resolve(
+                [
+                    (observer, LightDomain::Exterior),
+                    (boundary, LightDomain::Exterior),
+                    (outside, LightDomain::Exterior),
+                ],
+                ExteriorIllumination::new(tier),
+                &[],
+            )
+            .expect("tier fixture illumination");
+
+            assert!(
+                can_observe(
+                    observer,
+                    boundary,
+                    &illumination,
+                    SightProfile::DEFAULT,
+                    &terrain,
+                ),
+                "{tier:?} must include its radius-{radius} boundary"
+            );
+            assert!(
+                !can_observe(
+                    observer,
+                    outside,
+                    &illumination,
+                    SightProfile::DEFAULT,
+                    &terrain,
+                ),
+                "{tier:?} must exclude radius {}",
+                radius + 1
+            );
+        }
+    }
+
+    #[test]
+    fn physical_sight_crosses_domains_and_uses_the_upper_dome() {
         let observer = pos(0, 0, 5);
-        let vertical_target = pos(1, 0, 8);
+        let upward_target = pos(3, 0, 9);
+        let too_high = pos(3, 0, 11);
         let other_domain = pos(1, 0, 5);
         let cave = LightDomain::Interior(InteriorRegionId(1));
         let illumination = ResolvedIllumination::try_resolve(
             [
                 (observer, LightDomain::Exterior),
-                (vertical_target, LightDomain::Exterior),
+                (upward_target, LightDomain::Exterior),
+                (too_high, LightDomain::Exterior),
                 (other_domain, cave),
             ],
             ExteriorIllumination::new(IlluminationLevel::Bright),
             &[light(other_domain, cave, IlluminationLevel::Bright, 0)],
         )
         .expect("illumination");
+        let terrain = TerrainOccupancy::default();
 
-        assert!(!can_observe(
+        assert!(can_observe(
             observer,
-            vertical_target,
+            upward_target,
             &illumination,
-            profile(5, 5, 1, 2)
+            profile(5, 5, 1),
+            &terrain,
         ));
         assert!(!can_observe(
             observer,
+            too_high,
+            &illumination,
+            profile(5, 5, 1),
+            &terrain,
+        ));
+        assert!(can_observe(
+            observer,
             other_domain,
             &illumination,
-            profile(5, 5, 1, 10)
+            profile(5, 5, 1),
+            &terrain,
         ));
     }
 
     #[test]
-    fn downhill_bonus_uses_complete_levels_caps_and_skips_darkness() {
+    fn downward_sight_is_cylindrical_without_a_bonus_cap() {
         let observer = pos(0, 0, 24);
-        let bright_at_cap = pos(8, 0, 0);
-        let bright_past_cap = pos(9, 0, 0);
+        let bright_at_radius = pos(2, 0, -100);
+        let bright_past_radius = pos(3, 0, -100);
         let dark_downhill = pos(2, 0, 20);
         let exterior = ExteriorIllumination::new(IlluminationLevel::Dark);
         let illumination = ResolvedIllumination::try_resolve(
             [
                 (observer, LightDomain::Exterior),
-                (bright_at_cap, LightDomain::Exterior),
-                (bright_past_cap, LightDomain::Exterior),
+                (bright_at_radius, LightDomain::Exterior),
+                (bright_past_radius, LightDomain::Exterior),
                 (dark_downhill, LightDomain::Exterior),
             ],
             exterior,
             &[
                 light(
-                    bright_at_cap,
+                    bright_at_radius,
                     LightDomain::Exterior,
                     IlluminationLevel::Bright,
                     0,
                 ),
                 light(
-                    bright_past_cap,
+                    bright_past_radius,
                     LightDomain::Exterior,
                     IlluminationLevel::Bright,
                     0,
@@ -463,16 +532,30 @@ mod tests {
             ],
         )
         .expect("illumination");
-        let sight = profile(2, 2, 1, 30);
+        let sight = profile(2, 2, 1);
+        let terrain = TerrainOccupancy::default();
 
-        assert!(can_observe(observer, bright_at_cap, &illumination, sight));
+        assert!(can_observe(
+            observer,
+            bright_at_radius,
+            &illumination,
+            sight,
+            &terrain
+        ));
         assert!(!can_observe(
             observer,
-            bright_past_cap,
+            bright_past_radius,
             &illumination,
-            sight
+            sight,
+            &terrain,
         ));
-        assert!(!can_observe(observer, dark_downhill, &illumination, sight));
+        assert!(!can_observe(
+            observer,
+            dark_downhill,
+            &illumination,
+            sight,
+            &terrain,
+        ));
     }
 
     #[test]
@@ -490,10 +573,53 @@ mod tests {
             &[],
         )
         .expect("illumination");
-        let sight = profile(1, 1, 1, 2);
+        let sight = profile(1, 1, 1);
+        let terrain = TerrainOccupancy::default();
 
-        assert!(can_observe(observer, near_stack, &illumination, sight));
-        assert!(!can_observe(observer, far_stack, &illumination, sight));
+        assert!(can_observe(
+            observer,
+            near_stack,
+            &illumination,
+            sight,
+            &terrain
+        ));
+        assert!(!can_observe(
+            observer,
+            far_stack,
+            &illumination,
+            sight,
+            &terrain
+        ));
+    }
+
+    #[test]
+    fn authoritative_material_blocks_every_sight_sample() {
+        let observer = pos(0, 0, 0);
+        let target = pos(4, 0, 0);
+        let cave = LightDomain::Interior(InteriorRegionId(9));
+        let illumination = ResolvedIllumination::try_resolve(
+            [(observer, LightDomain::Exterior), (target, cave)],
+            ExteriorIllumination::new(IlluminationLevel::Bright),
+            &[light(target, cave, IlluminationLevel::Bright, 0)],
+        )
+        .expect("illumination");
+        let wall = TerrainOccupancy::from_runs([(pos(2, 0, 2), hex_core::RunBottom(0))])
+            .expect("wall run");
+
+        assert!(!can_observe(
+            observer,
+            target,
+            &illumination,
+            profile(6, 6, 1),
+            &wall,
+        ));
+        assert!(can_observe(
+            observer,
+            target,
+            &illumination,
+            profile(6, 6, 1),
+            &TerrainOccupancy::default(),
+        ));
     }
 
     #[test]
@@ -522,13 +648,53 @@ mod tests {
             &FactionMapKnowledge::new(),
             ExteriorIllumination::new(IlluminationLevel::Dim),
             &[],
-            profile(4, 2, 1, 10),
+            profile(4, 2, 1),
+            &TerrainOccupancy::default(),
         )
         .expect("observations");
 
         let player = observations.faction(Faction::Player);
         assert!(player.observes(target));
         assert_eq!(player.unit(hostile.id), Some(hostile));
+    }
+
+    #[test]
+    fn party_sight_never_pools_corner_samples_between_observers() {
+        let observer_a = pos(-5, 2, 0);
+        let observer_b = pos(-5, 3, 0);
+        let target = pos(0, 0, 0);
+        let illumination = ResolvedIllumination::try_resolve(
+            [
+                (observer_a, LightDomain::Exterior),
+                (observer_b, LightDomain::Exterior),
+                (target, LightDomain::Exterior),
+            ],
+            ExteriorIllumination::new(IlluminationLevel::Bright),
+            &[],
+        )
+        .expect("illumination");
+        let terrain = TerrainOccupancy::from_runs([(pos(-4, 2, 2), hex_core::RunBottom(2))])
+            .expect("single blocker");
+        let hostile = unit(9, Faction::Hostile, target);
+
+        let observations = resolve_observations(
+            [
+                unit(1, Faction::Player, observer_a),
+                unit(2, Faction::Player, observer_b),
+                hostile,
+            ],
+            &illumination,
+            &FactionMapKnowledge::new(),
+            ExteriorIllumination::new(IlluminationLevel::Bright),
+            &[],
+            profile(6, 6, 1),
+            &terrain,
+        )
+        .expect("observations");
+
+        let player = observations.faction(Faction::Player);
+        assert!(!player.observes(target));
+        assert_eq!(player.unit(hostile.id), None);
     }
 
     #[test]
@@ -559,7 +725,8 @@ mod tests {
             &FactionMapKnowledge::new(),
             ExteriorIllumination::new(IlluminationLevel::Bright),
             &[],
-            profile(1, 1, 1, 10),
+            profile(1, 1, 1),
+            &TerrainOccupancy::default(),
         )
         .expect("observations");
 
@@ -586,12 +753,18 @@ mod tests {
         let observer = TilePos::new(HexCoord::ORIGIN, level);
         let at = |distance| TilePos::new(HexCoord::from_axial(distance, 0), level);
         let samples = [at(0), at(1), at(2), at(20), at(21), at(40)];
-        let sight = profile(40, 20, 1, 10);
+        let sight = profile(40, 20, 1);
         let bright = ExteriorIllumination::new(IlluminationLevel::Bright);
         let dark = ExteriorIllumination::new(IlluminationLevel::Dark);
         let active = unit(1, Faction::Player, observer);
         let inactive = inactive_unit(1, Faction::Player, observer);
         let mut knowledge = FactionMapKnowledge::new();
+        let terrain = TerrainOccupancy::from_runs(
+            snapshots
+                .iter()
+                .map(|(position, _)| (position, hex_core::RunBottom(position.level))),
+        )
+        .expect("flat radius-40 terrain");
 
         let bright_illumination = ResolvedIllumination::from_surfaces(&snapshots, bright, &[])
             .expect("bright radius-40 illumination");
@@ -602,6 +775,7 @@ mod tests {
             bright,
             &[],
             sight,
+            &terrain,
         )
         .expect("initial radius-40 observation");
         assert_eq!(
@@ -630,6 +804,7 @@ mod tests {
             dark,
             &mixed_lights,
             sight,
+            &terrain,
         )
         .expect("mixed-light radius-40 observation");
         apply_observations(&mut knowledge, &snapshots, &mixed);
@@ -655,6 +830,7 @@ mod tests {
             dark,
             &mixed_lights,
             sight,
+            &terrain,
         )
         .expect("inactive observer projection");
         assert!(no_active_observer.faction(Faction::Player).is_empty());
@@ -673,6 +849,7 @@ mod tests {
             bright,
             &[],
             sight,
+            &terrain,
         )
         .expect("restored radius-40 observation");
         apply_observations(&mut knowledge, &snapshots, &restored);
@@ -712,7 +889,8 @@ mod tests {
             &FactionMapKnowledge::new(),
             exterior,
             &[],
-            profile(4, 2, 1, 10),
+            profile(4, 2, 1),
+            &TerrainOccupancy::default(),
         )
         .expect("observations");
 
@@ -740,6 +918,7 @@ mod tests {
             ExteriorIllumination::new(IlluminationLevel::Bright),
             &[],
             SightProfile::default(),
+            &TerrainOccupancy::default(),
         )
         .expect_err("duplicate stable identity must fail");
         assert_eq!(error, PerceptionError::DuplicateUnit(duplicate));
@@ -770,6 +949,7 @@ mod tests {
                 ExteriorIllumination::new(IlluminationLevel::Bright),
                 &[],
                 SightProfile::default(),
+                &TerrainOccupancy::default(),
             )
             .expect_err("duplicates must fail")
         };
@@ -799,6 +979,7 @@ mod tests {
             ExteriorIllumination::new(IlluminationLevel::Bright),
             &[],
             SightProfile::default(),
+            &TerrainOccupancy::default(),
         )
         .expect_err("an invalid unit projection must not silently blind its faction");
 
@@ -842,7 +1023,8 @@ mod tests {
             &knowledge,
             ExteriorIllumination::new(IlluminationLevel::Bright),
             &[],
-            profile(2, 2, 1, 10),
+            profile(2, 2, 1),
+            &TerrainOccupancy::default(),
         )
         .expect("observations");
 
