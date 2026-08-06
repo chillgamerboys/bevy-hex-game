@@ -178,19 +178,20 @@ encounter-owned exact `TilePos` overlay. No current system depends on it.
 
 ## C — Run bottoms (exact occupancy: casting legality, line-of-sight, cover)
 
-**Delivered**: material-sensitive trajectories, future sight, and cover want column
+**Delivered**: material-sensitive trajectories and obstruction-aware sight use column
 occupancy. Every material-run
 entity now publishes its inclusive top (`TilePos`) and bottom (`RunBottom`) alongside
 its world extent (`HexSpan`). Gameplay does not divide by `level_height` or infer from
 the saturated `Headroom` clearance fact. The published bounds feed one gameplay-owned
 exact occupancy projection and deterministic trajectory supercover; faction-facing
 trajectory choices filter that geometry through authorized knowledge, while full truth
-stays at command authority. Obstruction-aware sight remains later work and must reuse
-the primitive rather than introduce a second ray.
+stays at command authority. Sight reuses the same exact rational intersection kernel
+with a strict-interior contact policy while casting retains its closed-contact
+supercover.
 
-Initial spatial perception is deliberately obstruction-agnostic and does not need
-this component. Gameplay lights are radial within one light domain; sight uses exact
-horizontal and vertical bands.
+Spatial perception consumes this component after the target-illumination range gate.
+Gameplay lights remain obstruction-agnostic within one light domain; sight may cross
+domains through a material-clear opening.
 
 That reasoning holds for *sight*, but casting still needs the same datum, and for a
 different reason. [casting.md](../systems/casting.md) validates a cast against the
@@ -198,8 +199,7 @@ voxels it would affect — is this voxel solid, is it empty enough to conjure in
 somebody's supporting surface — and none of those are answerable without exact
 occupancy. Wave 3 deliberately shipped terrain effects fail-closed rather than
 reconstructing it; `RunBottom` now underpins permanent construction and live
-obstruction-aware trajectories, and remains the foundation for future
-obstruction-aware sight.
+obstruction-aware trajectories and sight.
 
 One component answers casting legality, conjuration placement, trajectory, cover, and
 pathing alike, using the existing published-data pattern rather than a new API surface.
@@ -218,14 +218,11 @@ You already hold both bounds when merging runs in the spawn pass. Every run enti
 including stacked runs under bridges, overhangs, and caves, carries it. Spawn-bundle
 tests assert the exact inclusive bottom and top for each such run.
 
-**Publication and the first casting consumers are live:** permanent construction and
+**Publication and the casting/sight consumers are live:** permanent construction and
 material-sensitive trajectory checks use the shared type and map adapter without
-reconstructing occupancy from presentation facts. Cover and obstruction-aware sight
-remain downstream.
-Obstruction-aware sight may still use its independent approximation while its consumer
-waits: a sight line is
-blocked iff some intervening column's highest run top reaches it. Wrong only
-for shooting *under* bridges and overhangs.
+reconstructing occupancy from presentation facts. Perception publishes occupancy
+before its first setup observation and traces compact complete runs, including real
+air gaps beneath bridges and overhangs. Cover remains downstream.
 
 ## G — Declarative terrain damage (accepted contract)
 
@@ -453,7 +450,7 @@ for direct edits and resolved impacts. Dynamic cave-aperture daylight remains de
 
 ## J — Sight tunables as settings
 
-**Need**: `SightProfile::DEFAULT` hardcodes the 36/12/1 bands and the downhill rule in
+**Need**: `SightProfile::DEFAULT` hardcodes the 36/12/1 radii in
 `hex_core`. Every other tunable in the game lives in `assets/config/*.ron`, validated
 at load and hot-reloadable, which is what makes playtesting a file edit.
 
@@ -462,9 +459,10 @@ the same loader pattern as `combat.ron`. The world owner owns the values and the
 gameplay owner reviews any shared loader-infrastructure change. **The numbers stay
 yours** — this is about where they live, not what they are.
 
-Note also that sight and spell range deliberately use *different* elevation rules:
-sight gains one hex per four levels capped at six, spell range gains one per five,
-uncapped. Sight is not reach, and they should be tuned apart.
+Sight now uses the canonical upper-dome range predicate selected for later targeting:
+horizontal and upward distance combine by the inclusive squared rule, while downward
+vertical distance is ignored. Combat targeting retains its older stepped high-ground
+bonus until its own gameplay-owned migration; movement receives no range bonus.
 
 `SightProfile::DEFAULT` remains the headless-test compatibility fallback; gameplay
 uses the validated active profile.

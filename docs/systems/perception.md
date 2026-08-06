@@ -5,14 +5,14 @@ renderer may disclose. The shared vocabulary and setup ordering were established
 before the runtime system on purpose: map, unit, combat, and presentation work can
 compile against one boundary without reaching into one another's crates.
 
-> **Status:** authoritative headless illumination, pooled faction sight, and
-> Unknown/Remembered/Observed map knowledge are live in `hex_perception`.
+> **Status:** authoritative illumination, obstruction-aware pooled faction sight,
+> Unknown/Remembered/Observed map knowledge, and the live-map tactical shroud are
+> live.
 > V3 Caves publishes fixed local gameplay lights into that live pipeline.
 > Casting anchors, hostile lattice disclosure, and AI observation/traversal now
 > consume that authority. Authored cave crystals and restrained physical lights
-> present those sources without becoming gameplay authority. Fog/picking presentation,
-> unknown-frontier movement, engagement, and lost-contact search remain later isolated
-> work.
+> present those sources without becoming gameplay authority. Unknown-frontier
+> movement, engagement, and lost-contact search remain later isolated work.
 
 ## Four facts, not one
 
@@ -63,10 +63,14 @@ gameplay illumination.
 Every place and local light belongs to a `LightDomain`: the exterior or one exact
 interior region. A light's domain is derived from its exact current position rather
 than cached, so a future carried light can cross an entrance. A light affects only
-positions in its current domain and inside both its inclusive horizontal and vertical
-radius. This prevents a cave lamp from shining through its roof and daylight from
-filling a tunnel, without requiring line-of-sight. Inside one domain, local light is
-deliberately radial: walls, corners, units, props, and shadows do not obstruct it.
+positions in its current domain and inside its inclusive upper-dome radius. Let `h`
+be horizontal hex distance and `u = max(target_level - source_level, 0)`; a source
+reaches the target when `h² + u² <= radius²`. Vertical distance below a source is
+ignored, so the volume is a downward cylinder with a grid-space spherical half-dome
+above it. This prevents a cave lamp from shining into another authored domain without
+requiring line-of-sight. Inside one domain, local light is deliberately
+obstruction-agnostic: walls, corners, units, props, and shadows do not block its
+illumination projection.
 
 Gameplay lights are public world facts. The same lamp, crystal, or future carried
 light illuminates a place for every faction; there are no faction-private light
@@ -80,32 +84,40 @@ illumination.
 
 ## Sight
 
-A `SightProfile` maps each illumination level to a horizontal and vertical
-`SightBand`. The initial ordinary profile is:
+A `SightProfile` maps each illumination level to one grid-space radius. The initial
+ordinary profile is:
 
-| Target illumination | Horizontal band | Vertical band |
-|---|---:|---:|
-| `Bright` | 36 | 36 |
-| `Dim` | 12 | 12 |
-| `Dark` | 1 | 1 |
+| Target illumination | Radius |
+|---|---:|
+| `Bright` | 36 |
+| `Dim` | 12 |
+| `Dark` | 1 |
 
-The target's effective illumination selects the band. An observer sees a target
-surface only when its exact `TilePos` falls within both limits. Horizontal distance
-is cube-coordinate distance; vertical distance is the absolute level difference.
-Observer and target must belong to the same light domain. This milestone does not
-trace intervening terrain or sight through entrances between domains.
+The target's effective illumination selects the radius. Range is measured from the
+center of the observer's second body voxel above its support surface—the head—to the
+target surface's top-face center. The same exact upper-dome predicate as local light
+applies, using fixed-sixth coordinates so the half-level target face is exact. A target
+at or below the eye pays only horizontal distance; upward distance combines with
+horizontal distance by the squared rule. Radius-one Dark sight is immediate awareness
+in absolute darkness, not emitted light.
 
-Using the same generated spatial partition for initial sight is deliberately coarse:
-it prevents an exterior observer from seeing a lamp-lit chamber through an opaque
-roof, but also prevents looking across an open cave threshold until the observer
-crosses it. Portal-aware cross-domain sight is a later, separately reviewed
-extension. `LightDomain` still does not turn illumination into sight; it is only an
-eligibility boundary applied before the independent sight-band test.
+Range is only the cheap first gate. Sight then traces exact rational segments from the
+head to the target top-face center and six corners. The target is observable when the
+center ray is clear or at least three corner rays are clear. One observer must satisfy
+that whole threshold; a party cannot pool corner successes from opposite sides of a
+wall.
 
-Bright and Dim sight gain one extra horizontal hex for every four complete levels
-the target is below the observer, capped at six extra hexes. Looking uphill grants
-nothing. Dark sight never gains an elevation bonus. Radius-one Dark sight is the
-character's immediate awareness in absolute darkness, not emitted light.
+Only exact material runs in `TerrainOccupancy` block; liquids follow the same rule as
+every other terrain material. A ray is blocked when its open segment crosses a
+material voxel's open interior for nonzero length. Exact face, edge, corner, and
+endpoint-only tangencies are clear. Units, trees, props, renderer meshes, shadows, and
+opacity do not establish obstruction. This strict-interior policy shares the exact
+rational kernel with casting while leaving casting's conservative closed-contact
+`supercover` unchanged.
+
+`LightDomain` remains an illumination-containment fact, not a sight boundary. Sight
+may cross an exterior/interior boundary through a physically open cave mouth; a wall
+or roof stops it through material occupancy instead.
 
 Each faction pools the union of all its active characters' sight. Selection has no
 effect: a six-character party knows everything any one member currently observes.
@@ -149,13 +161,13 @@ The movement adapter will use Observed and Remembered exact surfaces and the sha
 traversal predicate. It may append at most one horizontally adjacent Unknown
 coordinate to the end of an otherwise known route.
 
-Once fog and picking land, Unknown terrain will remain unpickable. Presentation will
-supply a generic frontier affordance rather than exposing a hidden tile entity, level,
-material, headroom, or passability. Execution resolves the attempted final step
-against the authoritative map. A rejected step leaves the unit at the known frontier
-and must not disclose which hidden condition rejected it. A planner never searches
-through several Unknown coordinates or uses failed probes to reveal an alternate
-route.
+The shipped tactical-map presentation deliberately treats current terrain as public:
+Unknown and Remembered surfaces remain visible, shaded, and pickable, including later
+terrain edits. This is a presentation exception, not a knowledge promotion. Unit
+identity, target legality, casting anchors, AI inputs, and other observation-only facts
+continue to use faction knowledge. The pending movement adapter must reconcile its
+older unknown-frontier design with this public-map rule rather than making the fog
+adapter manufacture stale geometry.
 
 The movement owner decides the action cost of a rejected exploration step when that
 turn rule is implemented. Perception's contract is only that the preview and result
@@ -207,19 +219,23 @@ Losing contact again later starts a new search on the same rule.
 
 ## Presentation without state collisions
 
-The fog adapter will consume faction knowledge:
+The live fog adapter consumes player faction knowledge:
 
-- Unknown places are featureless, unpickable, and disclose no underlying geometry.
-- Remembered terrain is visually distinct from current observation and cannot show
-  units or unseen changes.
-- Observed places render current world state.
+- current Unknown and Remembered terrain remains visible and pickable under one dark
+  translucent exact-surface cap;
+- Observed surfaces have no cap and render normally;
+- a hostile root receives `PresentationOcclusionReason::Fog` unless the player
+  currently observes that exact unit;
+- hidden hostiles retain only the anonymous `Unobserved hostile` initiative slot
+  during active combat, never their model, identity, location, inspection, targeting,
+  health bar, or world marker.
 
 Authoritative effects may change hidden terrain or units, but player-facing impact
 presentation and combat logs filter every outcome through the receiving faction's
 current knowledge. An acknowledgment may exist for simulation, replay, or saving
 without disclosing its hidden position, material, resistance, occupancy, or damage.
 
-Fog will join the explicit review-roof cutaway by contributing its own independent
+Fog joins the explicit review-roof cutaway by contributing its own independent
 occlusion reason to one composed result. Character-camera tree handling is a separate
 renderer-neutral opacity request: it fades every chunk sharing one exact tree root and
 never makes fogged content visible. No system may set `Visibility::Visible` to undo
@@ -247,11 +263,14 @@ position, observer, or `Downed` change is visible to AI before it selects a comm
 and the applier validates against the publication for that frame.
 
 The live ECS adapter caches each ordered stage. Terrain, substance, interior, or
-blocker changes rebuild the exact `SurfaceSnapshots`; ambient or local-light changes
-reuse that surface cache and restart at illumination; unit positions and
-`perception.ron` changes restart at observation. Unchanged gameplay frames run only
-the change detector. Every update-stage system belongs to `PausableSystems`, while
-the setup pass still resolves one complete initial frame before view framing.
+blocker changes rebuild the exact `SurfaceSnapshots`; a `RunBottom`-only occupancy
+change restarts at observation; ambient or local-light changes reuse the surface cache
+and restart at illumination; unit positions and `perception.ron` changes restart at
+observation. Exact occupancy is published after restore and before the first setup
+observation, so missing or malformed material never produces a one-frame clear map.
+Unchanged gameplay frames run only the change detector. Every update-stage system
+belongs to `PausableSystems`, while the setup pass still resolves one complete initial
+frame before view framing.
 `PerceptionRuntimeStats` exposes the four recomputation counts in the development
 inspector and headless benchmarks.
 
@@ -264,9 +283,10 @@ transitive build graph is renderer-free yet.
 ## Verification gate
 
 Headless tests must cover static, sun-key, moon-key, and dark ambient resolution;
-light-domain containment; inclusive local-light radii; maximum-tier overlap; pooled
-party sight; downhill caps; exact stacked surfaces; and the alternative `24/8/1` and
-`18/6/1` review profiles.
+light-domain containment; inclusive upper-dome local-light boundaries; maximum-tier
+overlap; pooled party sight; head-to-top range; center-or-three-corners LOS; exact
+tangencies; walls, roofs, air gaps, stacked surfaces, open domain thresholds; and the
+alternative `24/8/1` and `18/6/1` review profiles.
 
 Knowledge tests prove Unknown contains no snapshot, Remembered retains the exact
 last-seen terrain and blockers, unseen terrain edits and feature changes do not leak,
@@ -286,29 +306,27 @@ rules. Gameplay teardown and re-entry tests run 100 cycles and require the exact
 expected entity and resource counts after each exit.
 
 Benchmarks record faction-knowledge recomputation after unit movement and terrain
-edits. Fog recomputation benchmarks and the visual review captures are deferred
-until the fog/picking presentation adapter exists: the headless milestone has no
-renderer output capable of showing Unknown, Remembered, or Observed state. That
-presentation PR must capture one seed and azimuth at noon, moonlight, Remembered fog,
-cave darkness, and local-light states in both map and character cameras. Those
-captures must show no hidden-change leakage, black-but-playable terrain, or
-disagreement between gameplay knowledge and picking.
+edits, retain the radius-40 release p95 below 50 ms, and prove 10,000 unchanged frames
+perform no downstream recomputation. Fog checks bound overlays to one per shaded
+surface and one shared mesh/material. Visual review captures one seed and azimuth at
+noon, moonlight, darkness, wall occlusion, and an open cave threshold in both map and
+character cameras. The chosen cap renderer shades top surfaces; complete cliff-side
+and tall-prop darkening remains a future full-scene renderer concern.
 
 ## Deferred deliberately
 
-- obstruction-aware line-of-sight, cover, and physical-shadow gameplay
+- cover and physical-shadow gameplay
 - automatically advancing time and gameplay effects beyond exterior illumination
 - carried, destructible, extinguishable, faction-private, and spell-created lights
 - stealth, concealment, hearing, and hidden-unit detection
 - spatial divination that reveals unknown terrain; Divination's current
   observed-subject, bounded lattice Reveal is live in `hex_combat`, while Scrying
   Eye's proposed readable off-sight live feed remains later work
-- cross-domain sight through entrances and other portals
+- semantic prop, vegetation, and unit sight obstruction
+- full-scene fog shading, soft edges, and fades
 - saved-game persistence for remembered terrain
 
-These are extensions of the boundary, not reasons to bypass it. In particular,
-future obstruction-aware sight replaces the radial acceptance test; it does not
-change the meanings of illumination, knowledge, or presentation.
+These are extensions of the boundary, not reasons to bypass it.
 
 ## Primary precedents
 
@@ -322,5 +340,6 @@ them:
 - [Freeciv's server-side map knowledge](https://github.com/freeciv/freeciv/blob/main/server/maphand.c)
   updates each player's remembered map without exposing current world truth.
 
-Those sources justify the boundary. The numeric bands, public light domains,
-elevation rule, and one-round search above are Hex's own authored rules.
+Those sources justify the boundary. The numeric radii, upper-dome rule, exact
+strict-interior samples, public light domains, and one-round search above are Hex's own
+authored rules.

@@ -107,20 +107,34 @@ automated walk.
 Authoritative spatial perception now runs headlessly every gameplay frame.
 `hex_world` publishes a renderer-independent Bright or Dim exterior tier;
 `hex_perception` derives exact exterior/interior domains, maximum-tier public local
-lights, pooled faction sight, and independent faction memory over stacked `TilePos`
-surfaces. Unknown, Remembered, and Observed terrain snapshots do not leak hidden
-edits, unseen units disappear immediately, and the faction-generic traversal
-projection is rebuilt from the same knowledge. Downed units can remain visible but
-cannot provide sight, and changing `Downed` republishes observation in the same frame.
-Three validated hot-reloadable sight profiles live in `perception.ron`. V3 cave
-sources publish fixed local gameplay lights directly into this headless pipeline.
+lights, exact obstruction-aware pooled faction sight, and independent faction memory
+over stacked `TilePos` surfaces. The target's illumination chooses a 36/12/1
+Bright/Dim/Dark upper-dome radius; each observer then traces from its exact head point
+to the surface centre and six corners through compact `RunBottom` terrain occupancy.
+Material interior crossings block, exact tangencies remain clear, and a physically
+open cave mouth permits cross-domain sight. Downed units can remain visible but cannot
+provide sight, and changing `Downed`, a unit position, a light, a sight profile, or
+terrain occupancy republishes observation in the same frame. Three validated
+hot-reloadable sight profiles live in `perception.ron`. V3 cave sources publish fixed
+local gameplay lights directly into this headless pipeline.
+
+The tactical shroud keeps current terrain visible and pickable, but places one dark
+navy cap over every current surface the player does not observe. Unknown and
+Remembered terrain intentionally look alike because live map geometry is public in
+this design. Unobserved hostile roots receive only the composable Fog occlusion
+reason, suppressing their models, picking, shadows, markers, targeting, inspection,
+health bars, and identifying HUD details while combat retains an anonymous initiative
+entry. Unknown, Remembered, and Observed knowledge still gates gameplay facts:
+remembered snapshots do not leak hidden edits, and unseen units disappear immediately.
+The faction-generic traversal projection is rebuilt from that same knowledge.
 World observation gates the gameplay-owned hostile lattice view, every cast anchor,
 and AI identities, effects, turn order, traversal, and legal commands. AI can traverse
-only Observed or Remembered terrain and cannot use Unknown truth. Fog/picking
-presentation, unknown-frontier routing, engagement, ordinary-attack targeting, and
-lost-contact search are not wired yet. Authored emissive cave crystals and restrained
-physical point lights now present every fixed cave gameplay-light source without
-becoming gameplay authority.
+only Observed or Remembered terrain and cannot use Unknown truth. Unknown-frontier
+routing, engagement, ordinary-attack targeting, and lost-contact search are not wired
+yet. Authored emissive cave crystals and restrained physical point lights now present
+every fixed cave gameplay-light source without becoming gameplay authority. The cap
+renderer deliberately shades top faces rather than every cliff side or tall prop;
+full-scene shading and fades remain presentation refinements.
 
 Fort adds the first complete V3 structure recipe and the canonical worked-stone
 substance. A five-level, two-wide curtain surrounds a gravel courtyard and offset
@@ -570,8 +584,9 @@ The live implementation retains these explicit limitations:
   unchanged, and preview/AI use only faction-known occupancy. Authoritative casting
   uses complete `RunBottom` occupancy, so Unknown terrain cannot change
   faction-facing choices while full truth can still clip the applied volume. Authored
-  range and arc rise are technically capped at 16. Obstruction-aware sight remains
-  later work.
+  range and arc rise are technically capped at 16. The same rational intersection
+  foundation now serves sight through a separate strict-interior wrapper; casting's
+  closed-contact supercover and endpoint policy are unchanged.
 - **A breached cave roof will not admit daylight.** Terrain edits already keep the
   interior *roof* projection current, but interior **membership** is never re-derived,
   so a chamber you blow open still counts as inside. Live perception therefore

@@ -391,16 +391,21 @@ its acknowledgments, presentation, and logs cannot reveal those hidden outcomes.
 
 The full contract is [casting.md](../systems/casting.md).
 
-Elevation helps sight downhill without revealing stacked surfaces by accident:
-Bright and Dim sight gain one horizontal hex for every four complete levels above
-the target, capped at six. Dark sight gains nothing.
+Sight uses an asymmetric grid-space range volume. Horizontal distance and only the
+upward part of vertical distance combine by the inclusive squared rule; downward
+vertical distance is ignored. The result is a downward cylinder with a spherical
+half-dome above it. Target illumination selects radius 36 in Bright conditions, 12 in
+Dim conditions, and 1 in Dark conditions.
 
 Characters travel in a formation. Once combat starts, controls switch to moving each
 character independently.
 
-What a faction can observe uses separate horizontal and vertical sight bands, which
-is what lets the rule address multiple floors without collapsing them. What the
-camera happens to frame is presentation, not knowledge.
+Range alone does not establish observation. Exact terrain material must leave a clear
+line from the character's head to the target top-face center or at least three of its
+six corners; exact tangencies are clear. What the camera happens to frame is
+presentation, not knowledge. The tactical map intentionally keeps current terrain
+visible and pickable under a dark shroud while withholding unobserved hostile units
+and observation-only cues.
 
 Each tile type should be distinguishable by colour and design. A tile is a **3D prism
 with a hex base**, so it has five coordinates: cube coordinates horizontally (see
