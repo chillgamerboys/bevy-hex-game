@@ -80,5 +80,7 @@ pub use terrain_impact::{
 };
 pub use traversal::{TraversalEndpoint, TraversalProfile};
 pub use unit_ids::{ControlOwner, PlayerSeat, SimSeeds, UnitId};
-pub use view::{CameraFocusTarget, CenterInspectionCamera, InspectionCameraSubject};
+pub use view::{
+    CameraFocusTarget, CenterInspectionCamera, InspectionCameraSubject, ZoomSensitivityOverride,
+};
 pub use voxel::{Headroom, Level, RunBottom, SubstanceId, TerrainEdit, TilePos, MAX_HEADROOM};
