@@ -194,9 +194,15 @@ rays when the center is blocked; corners never cross-pair or pool between observ
 
 Spatial perception consumes this component after the unchanged target-illumination
 range gate. The paired bundle applies globally to every in-range target, with no
-near-field cutoff: one-voxel rises act as low cover, while two-voxel walls and roofs
-still obstruct the exact paired rays. Gameplay lights remain obstruction-agnostic
-within one light domain; sight may cross domains through a material-clear opening.
+near-field cutoff. Character LOS omits only the exposed top voxel of a compact run
+whose top lies within one level of the observer's support and has material directly
+beneath it; any deeper core remains blocking. A disconnected one-voxel run and every
+run topped farther away retain their full volume, so floating platforms, two-level
+walls, and vertically remote roofs or decks still obstruct the exact paired rays. The
+raw strict-interior segment kernel continues to test complete runs symmetrically,
+while this observer-relative low-cover classification means the resulting character
+visibility need not be symmetric. Gameplay lights remain obstruction-agnostic within
+one light domain; sight may cross domains through a material-clear opening.
 
 That reasoning holds for *sight*, but casting still needs the same datum, and for a
 different reason. [casting.md](../systems/casting.md) validates a cast against the

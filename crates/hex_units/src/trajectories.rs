@@ -134,7 +134,7 @@ pub fn sight_segment_is_clear(
     terrain: &TerrainOccupancy,
 ) -> bool {
     let corridor = sight_candidate_columns(source.anchor(), destination.anchor());
-    sight_segment_is_clear_in_corridor(source, destination, terrain, &corridor)
+    sight_segment_is_clear_in_corridor(source, destination, terrain, &corridor, None)
 }
 
 /// Whether a standing observer has terrain-clear sight to an exposed surface.
@@ -143,8 +143,13 @@ pub fn sight_segment_is_clear(
 /// `observer_support`; six perimeter rays start at the character body volume's upper
 /// corners. The target is accepted when the center ray is clear or when at least three
 /// paired perimeter rays reach the correspondingly oriented target top-face corners.
-/// Each call evaluates one observer in full, so callers pooling faction sight cannot
-/// accidentally combine corner samples from different characters.
+/// The exposed top voxel of a run within one level of the observer's support is low
+/// cover for this bundle when it is attached to material below: only the run's deeper
+/// core participates in the intersection. This clears ordinary nearby steps without
+/// turning disconnected bridge decks or overhead roofs transparent. Taller and
+/// vertically remote runs retain their complete blocking volume. Each call evaluates
+/// one observer in full, so callers pooling faction sight cannot accidentally combine
+/// corner samples from different characters.
 #[must_use]
 pub fn terrain_sight_is_clear(
     observer_support: TilePos,
@@ -153,11 +158,16 @@ pub fn terrain_sight_is_clear(
 ) -> bool {
     let eye = ExactGridPoint::standing_eye(observer_support);
     let corridor = sight_candidate_columns(observer_support.coord, target_surface.coord);
+    let low_cover_band = (
+        observer_support.level.saturating_sub(1),
+        observer_support.level.saturating_add(1),
+    );
     if sight_segment_is_clear_in_corridor(
         eye,
         ExactGridPoint::voxel_top_center(target_surface),
         terrain,
         &corridor,
+        Some(low_cover_band),
     ) {
         return true;
     }
@@ -169,7 +179,13 @@ pub fn terrain_sight_is_clear(
             .zip(ExactGridPoint::voxel_top_corners(target_surface))
             .enumerate()
     {
-        if sight_segment_is_clear_in_corridor(source, destination, terrain, &corridor) {
+        if sight_segment_is_clear_in_corridor(
+            source,
+            destination,
+            terrain,
+            &corridor,
+            Some(low_cover_band),
+        ) {
             clear_corners += 1;
             if clear_corners >= 3 {
                 return true;
@@ -284,6 +300,7 @@ fn sight_segment_is_clear_in_corridor(
     destination: ExactGridPoint,
     terrain: &TerrainOccupancy,
     corridor: &[HexCoord],
+    low_cover_band: Option<(Level, Level)>,
 ) -> bool {
     if source.cube_sixths() == destination.cube_sixths()
         && source.level_sixths() == destination.level_sixths()
@@ -291,9 +308,17 @@ fn sight_segment_is_clear_in_corridor(
         return true;
     }
     corridor.iter().copied().all(|coord| {
-        terrain
-            .runs_in_column(coord)
-            .all(|(bottom, top)| !segment_crosses_open_run(source, destination, coord, bottom, top))
+        terrain.runs_in_column(coord).all(|(bottom, top)| {
+            let blocking_top = if bottom < top
+                && low_cover_band
+                    .is_some_and(|(minimum, maximum)| (minimum..=maximum).contains(&top))
+            {
+                top - 1
+            } else {
+                top
+            };
+            !segment_crosses_open_run(source, destination, coord, bottom, blocking_top)
+        })
     })
 }
 
@@ -840,7 +865,7 @@ mod tests {
     }
 
     #[test]
-    fn body_top_bundle_sees_ground_from_a_ten_level_pillar_in_every_direction() {
+    fn body_top_bundle_sees_all_surrounding_ground_from_a_ten_level_pillar() {
         let observer = at(0, 0, 10);
         let terrain = TerrainOccupancy::from_runs(
             std::iter::once((observer, RunBottom(0))).chain(
@@ -853,16 +878,16 @@ mod tests {
         )
         .expect("the pillar and surrounding ground are valid runs");
 
-        for direction in Sextant::ALL {
-            let mut target_coord = HexCoord::ORIGIN;
-            for distance in 1..=8 {
-                target_coord = target_coord.neighbor(direction);
-                let target = TilePos::new(target_coord, 0);
-                assert!(
-                    terrain_sight_is_clear(observer, target, &terrain),
-                    "ten-level downward sight failed toward {direction:?} at range {distance}"
-                );
-            }
+        for target_coord in HexCoord::ORIGIN
+            .within_radius(8)
+            .into_iter()
+            .filter(|coord| *coord != HexCoord::ORIGIN)
+        {
+            let target = TilePos::new(target_coord, 0);
+            assert!(
+                terrain_sight_is_clear(observer, target, &terrain),
+                "ten-level downward sight failed at {target_coord:?}"
+            );
         }
     }
 
@@ -870,7 +895,11 @@ mod tests {
     fn one_level_lips_clear_in_every_rotation_and_for_off_axis_targets() {
         let observer = at(0, 0, 0);
         for direction in Sextant::ALL {
-            let lip = occupied([TilePos::new(advance(HexCoord::ORIGIN, direction, 2), 1)]);
+            let lip = TerrainOccupancy::from_runs([(
+                TilePos::new(advance(HexCoord::ORIGIN, direction, 2), 1),
+                RunBottom(0),
+            )])
+            .expect("a one-voxel lip attached to ground is a valid run");
             let aligned = TilePos::new(advance(HexCoord::ORIGIN, direction, 4), 0);
             let off_axis = TilePos::new(aligned.coord.neighbor(direction.turned(1)), 0);
 
@@ -883,6 +912,110 @@ mod tests {
                 "off-axis low cover blocked toward {direction:?}"
             );
         }
+    }
+
+    #[test]
+    fn one_level_ridges_on_full_ground_runs_are_low_cover_in_every_rotation() {
+        let observer = at(0, 0, 0);
+        for direction in Sextant::ALL {
+            let first = advance(HexCoord::ORIGIN, direction, 1);
+            let ridge = advance(HexCoord::ORIGIN, direction, 2);
+            let target_coord = advance(HexCoord::ORIGIN, direction, 3);
+            let target = TilePos::new(target_coord, 0);
+            let off_axis_target = TilePos::new(target_coord.neighbor(direction.turned(1)), 0);
+            let terrain = TerrainOccupancy::from_runs([
+                (observer, RunBottom(-4)),
+                (TilePos::new(first, 0), RunBottom(-4)),
+                (TilePos::new(ridge, 1), RunBottom(-4)),
+                (target, RunBottom(-4)),
+                (off_axis_target, RunBottom(-4)),
+            ])
+            .expect("the runtime-shaped ground and ridge runs are valid");
+
+            assert!(
+                terrain_sight_is_clear(observer, target, &terrain),
+                "one-level full-run ridge blocked toward {direction:?}"
+            );
+            assert!(
+                terrain_sight_is_clear(observer, off_axis_target, &terrain),
+                "off-axis ground behind a full-run ridge blocked toward {direction:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn one_level_stepped_relief_cannot_occlude_its_near_field() {
+        let observer = at(0, 0, 0);
+        let surfaces = HexCoord::ORIGIN
+            .within_radius(5)
+            .into_iter()
+            .map(|coord| {
+                let level = i32::from((coord.x() + coord.y()).rem_euclid(2) != 0);
+                TilePos::new(coord, level)
+            })
+            .collect::<Vec<_>>();
+        let terrain = TerrainOccupancy::from_runs(
+            surfaces
+                .iter()
+                .copied()
+                .map(|position| (position, RunBottom(-4))),
+        )
+        .expect("the stepped near-field runs are valid");
+
+        for target in surfaces
+            .into_iter()
+            .filter(|position| *position != observer)
+        {
+            assert!(
+                terrain_sight_is_clear(observer, target, &terrain),
+                "one-level stepped relief hid nearby surface {target:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn two_level_ridges_on_full_ground_runs_remain_blocking() {
+        let observer = at(0, 0, 0);
+        for direction in Sextant::ALL {
+            let first = advance(HexCoord::ORIGIN, direction, 1);
+            let ridge = advance(HexCoord::ORIGIN, direction, 2);
+            let target = TilePos::new(advance(HexCoord::ORIGIN, direction, 3), 0);
+            let terrain = TerrainOccupancy::from_runs([
+                (observer, RunBottom(-4)),
+                (TilePos::new(first, 0), RunBottom(-4)),
+                (TilePos::new(ridge, 2), RunBottom(-4)),
+                (target, RunBottom(-4)),
+            ])
+            .expect("the runtime-shaped ground and wall runs are valid");
+
+            assert!(
+                !terrain_sight_is_clear(observer, target, &terrain),
+                "two-level full-run ridge failed to block toward {direction:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn observer_relative_low_cover_can_make_character_sight_directional() {
+        let upper_observer = at(0, 0, 0);
+        let lower_observer = at(2, 0, -5);
+        let ridge = TerrainOccupancy::from_runs([(at(1, 0, -1), RunBottom(-2))])
+            .expect("the grounded ridge is valid");
+        let (raw_centre, raw_corners) =
+            sight_sample_results(upper_observer, lower_observer, &ridge);
+
+        assert!(!raw_centre);
+        assert!(raw_corners.into_iter().filter(|clear| *clear).count() < 3);
+        assert!(terrain_sight_is_clear(
+            upper_observer,
+            lower_observer,
+            &ridge
+        ));
+        assert!(!terrain_sight_is_clear(
+            lower_observer,
+            upper_observer,
+            &ridge
+        ));
     }
 
     #[test]
@@ -955,6 +1088,39 @@ mod tests {
         );
 
         assert!(!terrain_sight_is_clear(observer, elevated_target, &roof,));
+    }
+
+    #[test]
+    fn a_one_voxel_deck_below_a_high_observer_blocks_downward_sight() {
+        let observer = at(0, 0, 10);
+        for direction in Sextant::ALL {
+            let deck_coord = advance(HexCoord::ORIGIN, direction, 3);
+            let target = TilePos::new(advance(HexCoord::ORIGIN, direction, 7), 0);
+            let deck = occupied([TilePos::new(deck_coord, 7)]);
+
+            assert!(
+                !terrain_sight_is_clear(observer, target, &deck),
+                "one-voxel deck failed to block downward sight toward {direction:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_disconnected_deck_inside_the_low_cover_band_remains_blocking() {
+        let observer = at(0, 0, 10);
+        for direction in Sextant::ALL {
+            let deck_centre = advance(HexCoord::ORIGIN, direction, 2);
+            let target = TilePos::new(advance(HexCoord::ORIGIN, direction, 7), 0);
+            let deck = occupied(
+                std::iter::once(TilePos::new(deck_centre, 9))
+                    .chain(deck_centre.neighbors().map(|coord| TilePos::new(coord, 9))),
+            );
+
+            assert!(
+                !terrain_sight_is_clear(observer, target, &deck),
+                "disconnected deck inside the low-cover band failed to block toward {direction:?}"
+            );
+        }
     }
 
     #[test]

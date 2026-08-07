@@ -403,9 +403,15 @@ character independently.
 Range alone does not establish observation. For every in-range target, exact terrain
 material must leave clear either the character-head-center to target-top-center ray or
 at least three of six rays from the matching corners of the standing body's top face
-to the target top face. The one-to-one bundle makes a one-voxel rise low cover while a
-two-voxel wall still blocks; there is no separate near-distance exception, and exact
-tangencies are clear. What the camera happens to frame is presentation, not knowledge.
+to the target top face. For character LOS only, the exposed top voxel of a material run
+is low cover when that run tops out within one level of the observer's support and has
+material directly beneath its top. Its deeper core remains solid. A disconnected
+one-voxel platform, or a run topped farther away—including character-height walls and
+vertically remote roofs or decks—keeps its full blocking volume. There is no separate
+near-distance exception, and exact tangencies are clear. Because low cover is
+classified relative to the observer, observation may differ in the reverse direction
+even though the underlying exact segment test is symmetric. What the camera happens to
+frame is presentation, not knowledge.
 The tactical map intentionally keeps current terrain visible and pickable under a dark
 shroud while withholding unobserved hostile units and observation-only cues.
 

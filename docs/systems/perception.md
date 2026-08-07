@@ -111,10 +111,19 @@ must satisfy that whole threshold; a party cannot pool corner successes from opp
 sides of a wall.
 
 Corners pair one-to-one rather than forming every source-to-target combination. The
-aligned bundle models the hexagonal pillar occupied by a standing character: an
-ordinary one-voxel rise behaves as low cover, while a two-voxel wall still cuts the
-bundle. It also prevents a diagonal fan from inventing views around a pillar and keeps
-the worst case at seven segment tests per observer-target pair.
+aligned bundle models the hexagonal volume occupied by a standing character and
+prevents a diagonal fan from inventing views around a pillar. The worst case remains
+seven segment tests per observer-target pair.
+
+Character LOS applies one observer-relative low-cover rule before tracing those
+segments. For each compact material run whose exposed top is within one level above or
+below the observer's support **and has material directly beneath it in that run**, only
+that top voxel is omitted from sight obstruction. The rest of the run remains material,
+so the rule clears ordinary grounded steps and nearby one-level ridges without making
+their solid cores transparent. A disconnected one-voxel run keeps its complete volume
+even inside that level band. Runs topped two or more levels away also retain their
+complete volume; character-height walls and vertically remote roofs or decks therefore
+remain blockers.
 
 Only exact material runs in `TerrainOccupancy` block; liquids follow the same rule as
 every other terrain material. A ray is blocked when its open segment crosses a
@@ -122,7 +131,11 @@ material voxel's open interior for nonzero length. Exact face, edge, corner, and
 endpoint-only tangencies are clear. Units, trees, props, renderer meshes, shadows, and
 opacity do not establish obstruction. This strict-interior policy shares the exact
 rational kernel with casting while leaving casting's conservative closed-contact
-`supercover` unchanged.
+`supercover` unchanged. The raw strict-interior segment query always intersects the
+complete supplied runs and is source/destination symmetric. The low-cover projection
+belongs only to standing-character LOS and is chosen from the observer's support
+level, so observation from one surface to another is allowed to differ in the reverse
+direction.
 
 `LightDomain` remains an illumination-containment fact, not a sight boundary. Sight
 may cross an exterior/interior boundary through a physically open cave mouth; a wall
@@ -295,9 +308,19 @@ Headless tests must cover static, sun-key, moon-key, and dark ambient resolution
 light-domain containment; inclusive upper-dome local-light boundaries; maximum-tier
 overlap; pooled party sight; unchanged head-to-top range; the paired center plus six
 matching-corner LOS bundle; its observer-local three-of-six threshold without
-cross-pairs or cross-observer pooling; one-voxel low cover; two-voxel walls; exact
-tangencies; roofs, air gaps, stacked surfaces, open domain thresholds; and the
-alternative `24/8/1` and `18/6/1` review profiles.
+cross-pairs or cross-observer pooling; every radius-eight ground target around an
+isolated ten-level pillar; full-run one-level ridges immediately before aligned and
+off-axis targets in every rotation; stepped near-field relief; the corresponding
+two-level walls; disconnected one-voxel runs both inside and outside the observer's
+level band; direction-symmetric raw segment intersection and intentionally
+observer-relative character visibility; exact tangencies; roofs, air gaps, stacked
+surfaces, open domain thresholds; and the alternative `24/8/1` and `18/6/1` review
+profiles.
+
+Visual review is presentation evidence, not a substitute for those typed contracts.
+Every behavior-named capture must record its scenario, seed, time/light setting,
+camera mode, and exact anchor. Byte-identical captures cannot be cited as evidence for
+different cases unless that equality is the expected result and is stated explicitly.
 
 Knowledge tests prove Unknown contains no snapshot, Remembered retains the exact
 last-seen terrain and blockers, unseen terrain edits and feature changes do not leak,

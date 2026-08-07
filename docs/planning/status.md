@@ -113,14 +113,19 @@ Bright/Dim/Dark upper-dome radius; every in-range observer-target pair then trac
 head-center to target-top-center ray plus six standing-body-top corners to their
 matching target corners through compact `RunBottom` terrain occupancy. A blocked
 center requires three clear paired perimeter rays from one observer, never cross-pairs
-or cross-observer pooling. The bundle applies globally, makes one-voxel rises low
-cover, keeps two-voxel walls blocking, and never exceeds seven rays. Material interior
-crossings block, exact tangencies remain clear, and a physically open cave mouth
-permits cross-domain sight. Downed units can remain visible but cannot provide sight,
-and changing `Downed`, a unit position, a light, a sight profile, or terrain occupancy
-republishes observation in the same frame. Three validated hot-reloadable sight
-profiles live in `perception.ron`. V3 cave sources publish fixed local gameplay lights
-directly into this headless pipeline.
+or cross-observer pooling. The bundle applies globally and never exceeds seven rays.
+For character LOS, only the exposed top voxel of a run topped within one level of the
+observer's support is low cover, and only when that run continues into material
+directly below the top. Deeper run cores, disconnected one-voxel platforms, two-level
+walls, and vertically remote roofs or decks remain blockers. The raw strict-interior
+segment kernel still tests complete runs symmetrically, but observer-relative
+low-cover classification can make the resulting visibility directional. Material
+interior crossings block, exact tangencies remain clear, and a physically open cave
+mouth permits cross-domain sight. Downed units can remain visible but cannot provide
+sight, and changing `Downed`, a unit position, a light, a sight profile, or terrain
+occupancy republishes observation in the same frame. Three validated hot-reloadable
+sight profiles live in `perception.ron`. V3 cave sources publish fixed local gameplay
+lights directly into this headless pipeline.
 
 The tactical shroud keeps current terrain visible and pickable, but places one dark
 navy cap over every current surface the player does not observe. Unknown and

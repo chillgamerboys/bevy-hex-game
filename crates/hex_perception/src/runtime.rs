@@ -809,13 +809,28 @@ mod tests {
         substance: SubstanceId,
         headroom: i32,
     ) -> Entity {
+        spawn_tile_run(app, position, position.level, substance, headroom)
+    }
+
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "test terrain levels stay far inside f32's exact integer range"
+    )]
+    fn spawn_tile_run(
+        app: &mut App,
+        position: TilePos,
+        bottom: i32,
+        substance: SubstanceId,
+        headroom: i32,
+    ) -> Entity {
+        let run_span = HexSpan::new(bottom as f32, (position.level + 1) as f32);
         let entity = app
             .world_mut()
             .spawn((
                 HexTile,
                 position,
-                RunBottom(position.level),
-                span(position.level),
+                RunBottom(bottom),
+                run_span,
                 substance,
                 Headroom(headroom),
             ))
@@ -903,6 +918,47 @@ mod tests {
             illumination.get(interior).expect("interior light").level,
             IlluminationLevel::Bright
         );
+    }
+
+    #[test]
+    fn full_run_one_level_ridge_is_observed_through_the_runtime_pipeline() {
+        let (mut app, substances) = runtime_app(IlluminationLevel::Bright);
+        let observer = pos(0, 0, 0);
+        let before_ridge = pos(1, 0, 0);
+        let ridge = pos(2, 0, 1);
+        let target = pos(3, 0, 0);
+        for position in [observer, before_ridge, ridge, target] {
+            spawn_tile_run(&mut app, position, -4, substances.stone, 3);
+        }
+        spawn_unit(&mut app, 0, Faction::Player, observer);
+        spawn_unit(&mut app, 1, Faction::Hostile, target);
+
+        enter(&mut app, Screen::Gameplay);
+
+        let observations = app.world().resource::<FactionObservations>();
+        assert!(observations.faction(Faction::Player).observes(target));
+        assert_eq!(
+            observations.faction(Faction::Player).unit(UnitId(1)),
+            Some(ObservedUnit {
+                id: UnitId(1),
+                faction: Faction::Hostile,
+                pos: target,
+                provides_sight: true,
+            })
+        );
+        assert_eq!(
+            app.world()
+                .resource::<FactionMapKnowledge>()
+                .faction(Faction::Player)
+                .state(target),
+            KnowledgeState::Observed
+        );
+        assert!(app
+            .world()
+            .resource::<FactionMapKnowledge>()
+            .faction(Faction::Player)
+            .unit(UnitId(1))
+            .is_some());
     }
 
     #[test]

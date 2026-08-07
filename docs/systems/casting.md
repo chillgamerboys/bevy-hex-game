@@ -398,8 +398,12 @@ Authority clips against complete `TerrainOccupancy`; preview and AI clip against
 choices even though full physical truth may remove a candidate at application.
 Sight reuses the same exact rational intersection kernel through a separate
 strict-interior wrapper. That wrapper accepts exact head, top-face-center, and corner
-points and treats boundary-only tangencies as clear; it does not change this casting
-section's closed-contact `supercover`, Direct, Arc, or radial-clipping results.
+points, tests complete supplied runs symmetrically, and treats boundary-only
+tangencies as clear. Standing-character visibility adds its observer-relative
+grounded-exposed-top low-cover projection outside that raw query; disconnected
+one-voxel runs retain their complete volume. The final visibility answer may therefore
+be directional. Neither layer changes this casting section's closed-contact
+`supercover`, Direct, Arc, or radial-clipping results.
 
 ## The command
 
