@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use bevy::camera::CameraUpdateSystems;
 use bevy::input::mouse::MouseWheel;
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
@@ -27,6 +28,9 @@ const HEX_FACE_DISTANCE: f32 = HEX_CIRCUMRADIUS * 0.866_025_4;
 /// Lets ordinary upward free-look keep the character near the lower third of the
 /// view before unusual-angle assistance starts lowering and retracting the boom.
 const CHARACTER_UPWARD_COMPOSITION_ALLOWANCE: f32 = std::f32::consts::PI / 12.0;
+/// Keeps [`PanOrbitCamera`] geometrically meaningful while First Person rotates
+/// in place. The point is presentation-only; no gameplay query consumes it.
+const FIRST_PERSON_LOOK_DISTANCE: f32 = 1.0;
 /// Extra room beyond a generated map's initial frame for deliberate zooming out.
 const MAP_VIEW_ZOOM_HEADROOM: f32 = 1.1;
 /// Marks the sky-dome entity so `follow_camera` can pin it to the camera.
@@ -37,13 +41,14 @@ pub(crate) struct SkyDome;
 /// Same-frame ordering for the public terrain projection and camera transforms.
 ///
 /// Review tooling uses [`Self::FollowCharacter`] to establish an initial pose
-/// before Character-mode collision resolves it. The set carries presentation
-/// ordering only; it does not expose terrain ownership or gameplay visibility.
+/// before either character view resolves its target-relative pose. The set carries
+/// presentation ordering only; it does not expose terrain ownership or gameplay
+/// visibility.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CameraSystems {
     /// Refresh the cached public `HexTile`/`TilePos`/`HexSpan` projection.
     RefreshObstructions,
-    /// Follow the selected character and keep the camera outside terrain.
+    /// Follow the selected character; keep only the third-person camera outside terrain.
     FollowCharacter,
     /// Pin camera-owned presentation, such as the sky dome, to the final pose.
     FollowPresentation,
@@ -62,6 +67,7 @@ pub fn plugin(app: &mut App) {
         .init_resource::<SavedMapCamera>()
         .init_resource::<CameraObstructionIndex>()
         .init_resource::<CharacterCameraCollision>()
+        .init_resource::<ResolvedCameraSubject>()
         .init_resource::<InputBindings>()
         // Spawned once at startup rather than per screen: it is the render target
         // the UI screens draw through, and the sky behind them.
@@ -82,7 +88,7 @@ pub fn plugin(app: &mut App) {
         .add_systems(OnEnter(Screen::Gameplay), show_sky)
         .add_systems(
             OnExit(Screen::Gameplay),
-            (hide_sky, clear_camera_obstruction_index),
+            (hide_sky, clear_camera_obstruction_index, reset_camera_mode),
         )
         // Only the material push depends on the settings; the dome has to follow the
         // camera every frame regardless.
@@ -128,6 +134,9 @@ pub fn plugin(app: &mut App) {
             )
                 .chain()
                 .before(TransformSystems::Propagate)
+                // Projection changes must reach Bevy's derived clip matrix in the
+                // frame that First Person starts, follows, or hot-reloads its lens.
+                .before(CameraUpdateSystems)
                 .run_if(in_state(Screen::Gameplay)),
         );
 }
@@ -141,6 +150,8 @@ pub enum CameraMode {
     Map,
     /// Close orbit whose focus follows the selected character.
     Character,
+    /// Eye-level view whose pose follows the selected character.
+    FirstPerson,
 }
 
 /// Tags an entity as capable of panning and orbiting.
@@ -149,7 +160,8 @@ pub enum CameraMode {
 pub struct PanOrbitCamera {
     /// The point the camera orbits around. Updated automatically when panning.
     pub focus: Vec3,
-    /// Distance from the focus point, in world units. Clamped by camera settings.
+    /// Distance from the focus point, in world units. Map and Character clamp this
+    /// as zoom; First Person uses a fixed one-unit synthetic look point.
     pub radius: f32,
 }
 
@@ -167,21 +179,35 @@ struct CameraPose {
     transform: Transform,
     focus: Vec3,
     radius: f32,
+    projection: Option<Projection>,
 }
 
 impl CameraPose {
-    fn capture(transform: &Transform, camera: &PanOrbitCamera) -> Self {
+    fn capture(
+        transform: &Transform,
+        camera: &PanOrbitCamera,
+        projection: Option<&Projection>,
+    ) -> Self {
         Self {
             transform: *transform,
             focus: camera.focus,
             radius: camera.radius,
+            projection: projection.cloned(),
         }
     }
 
-    fn restore(self, transform: &mut Transform, camera: &mut PanOrbitCamera) {
+    fn restore(
+        self,
+        transform: &mut Transform,
+        camera: &mut PanOrbitCamera,
+        projection: Option<&mut Projection>,
+    ) {
         *transform = self.transform;
         camera.focus = self.focus;
         camera.radius = self.radius;
+        if let (Some(saved), Some(projection)) = (self.projection, projection) {
+            *projection = saved;
+        }
     }
 }
 
@@ -253,6 +279,37 @@ struct ResolvedCameraTarget {
     entity: Entity,
     translation: Vec3,
     surface: TilePos,
+}
+
+/// Exact presentation subject shared by character-camera follow and occlusion.
+///
+/// Publishing one resolved entity avoids letting the camera, self-hide, and tree
+/// fade adapters independently choose between inspection and selection targets.
+#[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ResolvedCameraSubject(Option<ResolvedCameraSubjectValue>);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ResolvedCameraSubjectValue {
+    entity: Entity,
+    surface: TilePos,
+}
+
+impl ResolvedCameraSubject {
+    pub(crate) fn entity(&self) -> Option<Entity> {
+        self.0.map(|subject| subject.entity)
+    }
+
+    pub(crate) fn surface(&self) -> Option<TilePos> {
+        self.0.map(|subject| subject.surface)
+    }
+
+    pub(crate) fn set(&mut self, entity: Entity, surface: TilePos) {
+        self.0 = Some(ResolvedCameraSubjectValue { entity, surface });
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.0 = None;
+    }
 }
 
 /// Prefers one disclosure-authorized inspection subject, then falls back to the
@@ -414,10 +471,25 @@ fn reset_camera_mode(
     mut mode: ResMut<CameraMode>,
     mut saved: ResMut<SavedMapCamera>,
     mut collision: ResMut<CharacterCameraCollision>,
+    mut subject: ResMut<ResolvedCameraSubject>,
+    mut cameras: Query<
+        (&mut Transform, &mut PanOrbitCamera, Option<&mut Projection>),
+        With<PanOrbitCamera>,
+    >,
 ) {
+    // Retain the exact Map pose until there is one unambiguous camera to receive it.
+    // This lets a transient cardinality fault recover on the next gameplay entry
+    // without leaking the First Person lens into Map.
+    if saved.0.is_some() {
+        if let Ok((mut transform, mut camera, mut projection)) = cameras.single_mut() {
+            if let Some(pose) = saved.0.take() {
+                pose.restore(&mut transform, &mut camera, projection.as_deref_mut());
+            }
+        }
+    }
     *mode = CameraMode::Map;
-    saved.0 = None;
     collision.clear();
+    subject.clear();
 }
 
 fn map_camera_active(mode: Res<CameraMode>) -> bool {
@@ -427,15 +499,15 @@ fn map_camera_active(mode: Res<CameraMode>) -> bool {
 fn pitch_limits(mode: CameraMode, settings: &CameraSettings) -> (f32, f32) {
     match mode {
         CameraMode::Map => (settings.min_pitch, settings.max_pitch),
-        CameraMode::Character => (-1.0, 1.0),
+        CameraMode::Character | CameraMode::FirstPerson => (-1.0, 1.0),
     }
 }
 
 /// Applies explicit HUD inspection requests to the free Map camera exactly once.
 ///
 /// The request is accepted only when exactly one entity carries a matching,
-/// identity-consistent [`InspectionCameraSubject`]. Character mode drains and ignores
-/// center messages because its normal follow pass already tracks that subject.
+/// identity-consistent [`InspectionCameraSubject`]. Both character views drain and
+/// ignore center messages because their normal follow pass already tracks that subject.
 fn center_inspection_camera(
     mut requests: MessageReader<CenterInspectionCamera>,
     mode: Res<CameraMode>,
@@ -479,7 +551,7 @@ fn effective_max_zoom(
     settings: &CameraSettings,
     hint: Option<&MapViewHint>,
 ) -> f32 {
-    if mode == CameraMode::Character {
+    if mode != CameraMode::Map {
         return settings.max_zoom;
     }
 
@@ -495,7 +567,60 @@ fn effective_max_zoom(
     hinted_max.map_or(settings.max_zoom, |maximum| settings.max_zoom.max(maximum))
 }
 
-/// Snaps between the current free-map pose and a close orbit around the selected unit.
+fn set_resolved_camera_subject(
+    subject: &mut ResMut<ResolvedCameraSubject>,
+    target: ResolvedCameraTarget,
+) {
+    if subject.entity() != Some(target.entity) || subject.surface() != Some(target.surface) {
+        subject.set(target.entity, target.surface);
+    }
+}
+
+fn clear_resolved_camera_subject(subject: &mut ResMut<ResolvedCameraSubject>) {
+    if subject.entity().is_some() {
+        subject.clear();
+    }
+}
+
+fn clear_character_collision(collision: &mut ResMut<CharacterCameraCollision>) {
+    if collision.target.is_some()
+        || collision.effective_radius.is_some()
+        || collision.last_desired_radius.is_some()
+        || collision.outward_clear_for_seconds != 0.0
+    {
+        collision.clear();
+    }
+}
+
+fn apply_first_person_projection(
+    projection: &mut Option<Mut<'_, Projection>>,
+    settings: &CameraSettings,
+) {
+    let wanted = settings.first_person_fov_degrees.to_radians();
+    let needs_update = matches!(
+        projection.as_deref(),
+        Some(Projection::Perspective(perspective))
+            if (perspective.fov - wanted).abs() > f32::EPSILON
+    );
+    if !needs_update {
+        return;
+    }
+    if let Some(Projection::Perspective(perspective)) = projection.as_deref_mut() {
+        perspective.fov = wanted;
+    }
+}
+
+fn first_person_pose(
+    target: ResolvedCameraTarget,
+    settings: &CameraSettings,
+    rotation: Quat,
+) -> (Vec3, Vec3) {
+    let eye = target.translation + Vec3::Y * settings.first_person_eye_height;
+    let focus = eye + rotation * Vec3::NEG_Z * FIRST_PERSON_LOOK_DISTANCE;
+    (eye, focus)
+}
+
+/// Cycles Map, third-person Character, and First Person around one resolved unit.
 fn toggle_camera_mode(
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<InputBindings>,
@@ -503,18 +628,22 @@ fn toggle_camera_mode(
     mut mode: ResMut<CameraMode>,
     mut saved: ResMut<SavedMapCamera>,
     mut collision: ResMut<CharacterCameraCollision>,
+    mut subject: ResMut<ResolvedCameraSubject>,
     inspected: Query<
         (Entity, &UnitId, &Transform, &InspectionCameraSubject),
         Without<PanOrbitCamera>,
     >,
     selected: Query<(Entity, &Transform, &CameraFocusTarget), Without<PanOrbitCamera>>,
-    mut cameras: Query<(&mut Transform, &mut PanOrbitCamera), With<PanOrbitCamera>>,
+    mut cameras: Query<
+        (&mut Transform, &mut PanOrbitCamera, Option<&mut Projection>),
+        With<PanOrbitCamera>,
+    >,
 ) {
     if !bindings.just_pressed(&keys, InputAction::ToggleCamera) {
         return;
     }
 
-    let Ok((mut transform, mut camera)) = cameras.single_mut() else {
+    let Ok((mut transform, mut camera, mut projection)) = cameras.single_mut() else {
         return;
     };
     match *mode {
@@ -525,7 +654,11 @@ fn toggle_camera_mode(
                 );
                 return;
             };
-            saved.0 = Some(CameraPose::capture(&transform, &camera));
+            saved.0 = Some(CameraPose::capture(
+                &transform,
+                &camera,
+                projection.as_deref(),
+            ));
 
             let wanted_pitch = settings.character_pitch * std::f32::consts::FRAC_PI_2;
             let pitch_delta = wanted_pitch - downward_pitch(transform.rotation);
@@ -534,21 +667,45 @@ fn toggle_camera_mode(
             camera.focus = target.translation + Vec3::Y * settings.character_focus_height;
             camera.radius = settings.character_radius;
             collision.begin_target(target.entity, camera.radius);
+            set_resolved_camera_subject(&mut subject, target);
             transform.translation = camera.focus
                 + Mat3::from_quat(transform.rotation).mul_vec3(Vec3::new(0.0, 0.0, camera.radius));
             *mode = CameraMode::Character;
         }
         CameraMode::Character => {
+            let Some(target) = resolve_camera_target(inspected.iter(), selected.iter()) else {
+                if let Some(pose) = saved.0.take() {
+                    pose.restore(&mut transform, &mut camera, projection.as_deref_mut());
+                }
+                clear_character_collision(&mut collision);
+                clear_resolved_camera_subject(&mut subject);
+                *mode = CameraMode::Map;
+                return;
+            };
+            let wanted_pitch = settings.first_person_pitch * std::f32::consts::FRAC_PI_2;
+            let pitch_delta = wanted_pitch - downward_pitch(transform.rotation);
+            transform.rotation = apply_pitch_delta(transform.rotation, pitch_delta, -1.0, 1.0);
+            clear_character_collision(&mut collision);
+            set_resolved_camera_subject(&mut subject, target);
+            let (eye, focus) = first_person_pose(target, &settings, transform.rotation);
+            transform.translation = eye;
+            camera.focus = focus;
+            camera.radius = FIRST_PERSON_LOOK_DISTANCE;
+            apply_first_person_projection(&mut projection, &settings);
+            *mode = CameraMode::FirstPerson;
+        }
+        CameraMode::FirstPerson => {
             if let Some(pose) = saved.0.take() {
-                pose.restore(&mut transform, &mut camera);
+                pose.restore(&mut transform, &mut camera, projection.as_deref_mut());
             }
-            collision.clear();
+            clear_character_collision(&mut collision);
+            clear_resolved_camera_subject(&mut subject);
             *mode = CameraMode::Map;
         }
     }
 }
 
-/// Keeps a close orbit centred on the inspected or selected unit's rendered position.
+/// Follows the inspected or selected unit in either character perspective.
 fn follow_character_camera(
     mut mode: ResMut<CameraMode>,
     mut saved: ResMut<SavedMapCamera>,
@@ -556,27 +713,55 @@ fn follow_character_camera(
     time: Res<Time>,
     obstruction_index: Res<CameraObstructionIndex>,
     mut collision: ResMut<CharacterCameraCollision>,
+    mut subject: ResMut<ResolvedCameraSubject>,
     inspected: Query<
         (Entity, &UnitId, &Transform, &InspectionCameraSubject),
         Without<PanOrbitCamera>,
     >,
     selected: Query<(Entity, &Transform, &CameraFocusTarget), Without<PanOrbitCamera>>,
-    mut cameras: Query<(&mut Transform, &mut PanOrbitCamera), With<PanOrbitCamera>>,
+    mut cameras: Query<
+        (&mut Transform, &mut PanOrbitCamera, Option<&mut Projection>),
+        With<PanOrbitCamera>,
+    >,
 ) {
-    if *mode != CameraMode::Character {
+    if *mode == CameraMode::Map {
+        clear_resolved_camera_subject(&mut subject);
         return;
     }
-    let Ok((mut transform, mut camera)) = cameras.single_mut() else {
+    let Ok((mut transform, mut camera, mut projection)) = cameras.single_mut() else {
+        // Presentation ownership must fail safe. A transient duplicate/missing
+        // camera cannot leave the last followed model hidden indefinitely; once
+        // cardinality recovers this system republishes the subject normally.
+        clear_character_collision(&mut collision);
+        clear_resolved_camera_subject(&mut subject);
         return;
     };
     let Some(target) = resolve_camera_target(inspected.iter(), selected.iter()) else {
         if let Some(pose) = saved.0.take() {
-            pose.restore(&mut transform, &mut camera);
+            pose.restore(&mut transform, &mut camera, projection.as_deref_mut());
         }
-        collision.clear();
+        clear_character_collision(&mut collision);
+        clear_resolved_camera_subject(&mut subject);
         *mode = CameraMode::Map;
         return;
     };
+    set_resolved_camera_subject(&mut subject, target);
+
+    if *mode == CameraMode::FirstPerson {
+        clear_character_collision(&mut collision);
+        let (wanted_eye, wanted_focus) = first_person_pose(target, &settings, transform.rotation);
+        if transform.translation.distance_squared(wanted_eye) > f32::EPSILON {
+            transform.translation = wanted_eye;
+        }
+        if camera.focus.distance_squared(wanted_focus) > f32::EPSILON {
+            camera.focus = wanted_focus;
+        }
+        if (camera.radius - FIRST_PERSON_LOOK_DISTANCE).abs() > f32::EPSILON {
+            camera.radius = FIRST_PERSON_LOOK_DISTANCE;
+        }
+        apply_first_person_projection(&mut projection, &settings);
+        return;
+    }
 
     // Collision history belongs to one selected unit. A new target must resolve its
     // own corridor immediately instead of inheriting the prior target's close boom or
@@ -1168,7 +1353,7 @@ fn rotation_with_pitch(rotation: Quat, pitch: f32) -> Quat {
     apply_pitch_delta(rotation, wanted - downward_pitch(rotation), -1.0, 1.0)
 }
 
-/// Pan the camera with WASD, zoom with scroll wheel, orbit with right mouse drag.
+/// Pan Map with WASD, zoom orbit views with the wheel, and look with right drag.
 ///
 /// Uses `CursorMoved` rather than raw `MouseMotion` because Wayland (and therefore
 /// WSL2's default WSLg session) does not deliver `MouseMotion` events while a button
@@ -1213,9 +1398,9 @@ fn orbit_camera(
     }
 
     for (mut pan_orbit, mut transform) in query.iter_mut() {
-        let mut any = false;
+        let mut rotated = false;
         if rotation_move.length_squared() > 0.0 {
-            any = true;
+            rotated = true;
             let window = get_primary_window_size(&windows);
             let delta_x = rotation_move.x / window.x * std::f32::consts::PI * 2.0;
             let delta_y = rotation_move.y / window.y * std::f32::consts::PI;
@@ -1226,8 +1411,7 @@ fn orbit_camera(
             transform.rotation =
                 apply_pitch_delta(transform.rotation, delta_y, min_pitch, max_pitch);
         }
-        if scroll.abs() > 0.0 {
-            any = true;
+        if *mode != CameraMode::FirstPerson && scroll.abs() > 0.0 {
             pan_orbit.radius -= scroll * pan_orbit.radius * settings.zoom_sensitivity;
             // dont allow zoom to reach zero or you get stuck
             pan_orbit.radius = f32::max(pan_orbit.radius, settings.min_zoom);
@@ -1237,7 +1421,15 @@ fn orbit_camera(
             );
         }
 
-        if any {
+        if *mode == CameraMode::FirstPerson {
+            if rotated {
+                let wanted_focus = transform.translation
+                    + transform.forward().as_vec3() * FIRST_PERSON_LOOK_DISTANCE;
+                if pan_orbit.focus.distance_squared(wanted_focus) > f32::EPSILON {
+                    pan_orbit.focus = wanted_focus;
+                }
+            }
+        } else if rotated || scroll.abs() > 0.0 {
             let rot_matrix = Mat3::from_quat(transform.rotation);
             transform.translation =
                 pan_orbit.focus + rot_matrix.mul_vec3(Vec3::new(0.0, 0.0, pan_orbit.radius));
@@ -1427,12 +1619,18 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::*;
+    use bevy::input::{
+        keyboard::{Key, KeyboardInput},
+        ButtonState,
+    };
+    use bevy::render::texture::ManualTextureViews;
     use hex_test_app::HeadlessAppBuilder;
 
     #[derive(Resource, Default)]
     struct CameraChangeCounts {
         transforms: usize,
         controls: usize,
+        projections: usize,
     }
 
     #[derive(Resource)]
@@ -1454,12 +1652,15 @@ mod tests {
     }
 
     fn count_camera_changes(
-        cameras: Query<(Ref<Transform>, Ref<PanOrbitCamera>)>,
+        cameras: Query<(Ref<Transform>, Ref<PanOrbitCamera>, Option<Ref<Projection>>)>,
         mut counts: ResMut<CameraChangeCounts>,
     ) {
-        for (transform, controls) in &cameras {
+        for (transform, controls, projection) in &cameras {
             counts.transforms += usize::from(transform.is_changed());
             counts.controls += usize::from(controls.is_changed());
+            counts.projections += projection
+                .as_ref()
+                .map_or(0, |projection| usize::from(projection.is_changed()));
         }
     }
 
@@ -1475,6 +1676,9 @@ mod tests {
             character_collision_release_delay: 0.2,
             character_self_hide_radius: 1.0,
             character_pitch: 0.3,
+            first_person_eye_height: 0.6,
+            first_person_pitch: 0.0,
+            first_person_fov_degrees: 60.0,
             pan_speed: 0.4,
             pan_speed_offset: 10.0,
             min_pitch: 0.25,
@@ -1667,6 +1871,11 @@ mod tests {
             (-1.0, 1.0),
             "Character mode must expose the full vertical look arc"
         );
+        assert_eq!(
+            pitch_limits(CameraMode::FirstPerson, &camera_settings()),
+            (-1.0, 1.0),
+            "First Person must expose the same full vertical look arc"
+        );
     }
 
     #[test]
@@ -1782,6 +1991,7 @@ mod tests {
         let counts = app.world().resource::<CameraChangeCounts>();
         assert_eq!(counts.transforms, 0);
         assert_eq!(counts.controls, 0);
+        assert_eq!(counts.projections, 0);
     }
 
     #[test]
@@ -2355,6 +2565,7 @@ mod tests {
             .insert_resource(CameraMode::Character)
             .init_resource::<SavedMapCamera>()
             .init_resource::<CameraObstructionIndex>()
+            .init_resource::<ResolvedCameraSubject>()
             .insert_resource(CharacterCameraCollision {
                 effective_radius: Some(settings.character_radius),
                 ..default()
@@ -2402,6 +2613,7 @@ mod tests {
         let counts = app.world().resource::<CameraChangeCounts>();
         assert_eq!(counts.transforms, 0);
         assert_eq!(counts.controls, 0);
+        assert_eq!(counts.projections, 0);
 
         app.world_mut()
             .entity_mut(tile)
@@ -2413,6 +2625,63 @@ mod tests {
         let index = app.world().resource::<CameraObstructionIndex>();
         assert_eq!(index.rebuilds, 3);
         assert!(index.spans_by_coord.is_empty());
+    }
+
+    #[test]
+    fn ten_thousand_stable_first_person_frames_do_not_republish_camera_state() {
+        let settings = camera_settings();
+        let rotation = rotation_with_pitch(Quat::from_rotation_y(0.4), settings.first_person_pitch);
+        let eye = Vec3::Y * settings.first_person_eye_height;
+        let focus = eye + rotation * Vec3::NEG_Z * FIRST_PERSON_LOOK_DISTANCE;
+        let perspective = bevy::camera::PerspectiveProjection {
+            fov: settings.first_person_fov_degrees.to_radians(),
+            ..Default::default()
+        };
+        let mut builder = HeadlessAppBuilder::new().with_minimal_plugins();
+        builder
+            .app_mut()
+            .insert_resource(settings)
+            .insert_resource(CameraMode::FirstPerson)
+            .init_resource::<SavedMapCamera>()
+            .init_resource::<CameraObstructionIndex>()
+            .init_resource::<CharacterCameraCollision>()
+            .init_resource::<ResolvedCameraSubject>()
+            .init_resource::<CameraChangeCounts>()
+            .add_systems(
+                PostUpdate,
+                (
+                    refresh_camera_obstruction_index,
+                    follow_character_camera,
+                    count_camera_changes,
+                )
+                    .chain(),
+            );
+        let mut app = builder.build();
+        app.world_mut().spawn((
+            Transform::from_translation(eye).with_rotation(rotation),
+            PanOrbitCamera {
+                focus,
+                radius: FIRST_PERSON_LOOK_DISTANCE,
+            },
+            Projection::Perspective(perspective),
+        ));
+        app.world_mut().spawn((
+            Transform::from_translation(Vec3::ZERO),
+            CameraFocusTarget::new(TilePos::ORIGIN),
+        ));
+
+        app.update();
+        assert_eq!(app.world().resource::<CameraObstructionIndex>().rebuilds, 1);
+        *app.world_mut().resource_mut::<CameraChangeCounts>() = CameraChangeCounts::default();
+        for _ in 0..10_000 {
+            app.update();
+        }
+
+        assert_eq!(app.world().resource::<CameraObstructionIndex>().rebuilds, 1);
+        let counts = app.world().resource::<CameraChangeCounts>();
+        assert_eq!(counts.transforms, 0);
+        assert_eq!(counts.controls, 0);
+        assert_eq!(counts.projections, 0);
     }
 
     #[test]
@@ -2465,6 +2734,7 @@ mod tests {
             .insert_resource(CameraMode::Character)
             .init_resource::<SavedMapCamera>()
             .init_resource::<CameraObstructionIndex>()
+            .init_resource::<ResolvedCameraSubject>()
             .insert_resource(CharacterCameraCollision {
                 effective_radius: Some(settings.character_radius),
                 ..default()
@@ -2525,6 +2795,7 @@ mod tests {
         let counts = app.world().resource::<CameraChangeCounts>();
         assert_eq!(counts.transforms, 0);
         assert_eq!(counts.controls, 0);
+        assert_eq!(counts.projections, 0);
         let final_rotation = app
             .world()
             .entity(camera)
@@ -2766,6 +3037,106 @@ mod tests {
     }
 
     #[test]
+    fn first_person_right_drag_rotates_in_place_and_consumes_scroll_without_zoom() {
+        let mut builder = HeadlessAppBuilder::new()
+            .with_minimal_plugins()
+            .with_input();
+        builder
+            .app_mut()
+            .add_message::<CursorMoved>()
+            .add_message::<MouseWheel>()
+            .insert_resource(camera_settings())
+            .insert_resource(CameraMode::FirstPerson)
+            .add_systems(Update, orbit_camera);
+        let window = builder
+            .app_mut()
+            .world_mut()
+            .spawn((
+                Window {
+                    resolution: bevy::window::WindowResolution::new(1_200, 800),
+                    ..default()
+                },
+                PrimaryWindow,
+            ))
+            .id();
+        let eye = Vec3::new(2.0, 1.6, -3.0);
+        let rotation = Quat::from_rotation_y(0.4);
+        let camera = builder
+            .app_mut()
+            .world_mut()
+            .spawn((
+                PanOrbitCamera {
+                    focus: eye + rotation * Vec3::NEG_Z * FIRST_PERSON_LOOK_DISTANCE,
+                    radius: FIRST_PERSON_LOOK_DISTANCE,
+                },
+                Transform::from_translation(eye).with_rotation(rotation),
+            ))
+            .id();
+        let mut app = builder.build();
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Right);
+        app.world_mut().write_message(CursorMoved {
+            window,
+            position: Vec2::new(600.0, 400.0),
+            delta: None,
+        });
+        app.update();
+
+        app.world_mut().write_message(CursorMoved {
+            window,
+            position: Vec2::new(480.0, 480.0),
+            delta: Some(Vec2::new(-120.0, 80.0)),
+        });
+        app.world_mut().write_message(MouseWheel {
+            unit: bevy::input::mouse::MouseScrollUnit::Line,
+            x: 0.0,
+            y: 1.0,
+            window,
+            phase: bevy::input::touch::TouchPhase::Moved,
+        });
+        app.update();
+
+        let entity = app.world().entity(camera);
+        let transform = entity
+            .get::<Transform>()
+            .expect("the first-person camera should retain its transform");
+        let orbit = entity
+            .get::<PanOrbitCamera>()
+            .expect("the first-person camera should retain its controls");
+        assert!(transform.rotation.dot(rotation).abs() < 0.9999);
+        assert_eq!(transform.translation, eye);
+        assert!((orbit.radius - FIRST_PERSON_LOOK_DISTANCE).abs() < f32::EPSILON);
+        assert!(
+            orbit
+                .focus
+                .distance(eye + transform.forward().as_vec3() * FIRST_PERSON_LOOK_DISTANCE)
+                < 1e-5
+        );
+
+        let held_transform = *transform;
+        let held_focus = orbit.focus;
+        app.world_mut().write_message(MouseWheel {
+            unit: bevy::input::mouse::MouseScrollUnit::Line,
+            x: 0.0,
+            y: -3.0,
+            window,
+            phase: bevy::input::touch::TouchPhase::Moved,
+        });
+        app.update();
+        let held = app.world().entity(camera);
+        assert_eq!(held.get::<Transform>(), Some(&held_transform));
+        assert_eq!(
+            held.get::<PanOrbitCamera>().map(|camera| camera.focus),
+            Some(held_focus)
+        );
+        assert_eq!(
+            held.get::<PanOrbitCamera>().map(|camera| camera.radius),
+            Some(FIRST_PERSON_LOOK_DISTANCE)
+        );
+    }
+
+    #[test]
     fn orbit_input_survives_the_same_frame_collision_pass() {
         let (mut app, camera, _) = prototype_camera_app(Some(Vec3::ZERO));
         app.insert_resource(ButtonInput::<MouseButton>::default())
@@ -2862,6 +3233,7 @@ mod tests {
         builder
             .app_mut()
             .init_resource::<CharacterCameraCollision>();
+        builder.app_mut().init_resource::<ResolvedCameraSubject>();
         builder.app_mut().add_systems(
             OnEnter(Screen::Gameplay),
             (reset_camera_mode, frame_gameplay_camera).chain(),
@@ -2889,6 +3261,7 @@ mod tests {
                 .entity(entity)
                 .get::<PanOrbitCamera>()
                 .expect("the camera should have pan/orbit state"),
+            app.world().entity(entity).get::<Projection>(),
         );
         app.world_mut().resource_mut::<SavedMapCamera>().0 = Some(saved_pose);
         {
@@ -2995,6 +3368,7 @@ mod tests {
         builder
             .app_mut()
             .init_resource::<CharacterCameraCollision>();
+        builder.app_mut().init_resource::<ResolvedCameraSubject>();
         builder.app_mut().init_resource::<InputBindings>();
         builder.app_mut().add_systems(Update, toggle_camera_mode);
         builder
@@ -3012,6 +3386,7 @@ mod tests {
                     focus,
                     radius: eye.distance(focus),
                 },
+                Projection::default(),
             ))
             .id();
         let target = target.map(|translation| {
@@ -3037,6 +3412,25 @@ mod tests {
             .reset(KeyCode::KeyC);
     }
 
+    fn press_camera_cycle_through_input_plugin(app: &mut App) {
+        let window = app
+            .world_mut()
+            .query_filtered::<Entity, With<PrimaryWindow>>()
+            .single(app.world())
+            .expect("the production camera fixture should own one primary window");
+        for state in [ButtonState::Pressed, ButtonState::Released] {
+            app.world_mut().write_message(KeyboardInput {
+                key_code: KeyCode::KeyC,
+                logical_key: Key::Character("c".into()),
+                state,
+                text: None,
+                repeat: false,
+                window,
+            });
+            app.update();
+        }
+    }
+
     fn camera_pose(app: &App, entity: Entity) -> (Transform, Vec3, f32) {
         let entity = app.world().entity(entity);
         let transform = *entity
@@ -3046,6 +3440,18 @@ mod tests {
             .get::<PanOrbitCamera>()
             .expect("the camera should have pan/orbit state");
         (transform, camera.focus, camera.radius)
+    }
+
+    fn perspective_projection(app: &App, entity: Entity) -> (f32, f32, f32) {
+        let projection = app
+            .world()
+            .entity(entity)
+            .get::<Projection>()
+            .expect("the game camera should retain its projection");
+        let Projection::Perspective(projection) = projection else {
+            panic!("the game camera should remain perspective");
+        };
+        (projection.fov, projection.near, projection.far)
     }
 
     #[test]
@@ -3290,6 +3696,71 @@ mod tests {
         );
     }
 
+    #[test]
+    fn first_person_follows_authorized_inspection_then_falls_back_to_selection() {
+        let selected_position = Vec3::new(-4.0, 1.0, 2.0);
+        let (mut app, camera, selected) = prototype_camera_app(Some(selected_position));
+        let selected = selected.expect("the fixture should retain its selected target");
+        let inspected_id = UnitId(28);
+        let inspected_surface = TilePos::new(hex_core::HexCoord::from_axial(2, -3), 5);
+        let inspected_position = Vec3::new(8.0, 2.0, -6.0);
+        let inspected = app
+            .world_mut()
+            .spawn((
+                inspected_id,
+                Transform::from_translation(inspected_position),
+                InspectionCameraSubject::new(inspected_id, inspected_surface),
+            ))
+            .id();
+
+        toggle_camera(&mut app);
+        toggle_camera(&mut app);
+
+        assert_eq!(
+            *app.world().resource::<CameraMode>(),
+            CameraMode::FirstPerson
+        );
+        let inspected_eye =
+            inspected_position + Vec3::Y * camera_settings().first_person_eye_height;
+        assert!(
+            camera_pose(&app, camera)
+                .0
+                .translation
+                .distance(inspected_eye)
+                < 1e-5
+        );
+        assert_eq!(
+            app.world().resource::<ResolvedCameraSubject>().entity(),
+            Some(inspected)
+        );
+        assert_eq!(
+            app.world().resource::<ResolvedCameraSubject>().surface(),
+            Some(inspected_surface)
+        );
+
+        app.world_mut()
+            .entity_mut(inspected)
+            .remove::<InspectionCameraSubject>();
+        app.update();
+
+        let selected_eye = selected_position + Vec3::Y * camera_settings().first_person_eye_height;
+        assert!(
+            camera_pose(&app, camera)
+                .0
+                .translation
+                .distance(selected_eye)
+                < 1e-5
+        );
+        assert_eq!(
+            app.world().resource::<ResolvedCameraSubject>().entity(),
+            Some(selected)
+        );
+        assert_eq!(
+            *app.world().resource::<CameraMode>(),
+            CameraMode::FirstPerson
+        );
+    }
+
     fn install_tall_camera_wall(app: &mut App, focus: Vec3, direction: Vec3, distance: f32) {
         let coord = hex_core::HexCoord::from_world(focus + direction * distance);
         *app.world_mut().resource_mut::<CameraObstructionIndex>() = CameraObstructionIndex {
@@ -3303,10 +3774,11 @@ mod tests {
     }
 
     #[test]
-    fn character_camera_snaps_close_and_restores_the_exact_map_pose() {
+    fn camera_cycle_enters_both_character_views_and_restores_the_exact_map_pose() {
         let target = Vec3::new(3.0, 2.0, -1.0);
         let (mut app, camera, _) = prototype_camera_app(Some(target));
         let original = camera_pose(&app, camera);
+        let original_projection = perspective_projection(&app, camera);
         let original_heading = (original.0.rotation * Vec3::NEG_Z).xz().normalize();
 
         toggle_camera(&mut app);
@@ -3331,6 +3803,35 @@ mod tests {
                 > 0.9999
         );
 
+        toggle_camera(&mut app);
+
+        assert_eq!(
+            *app.world().resource::<CameraMode>(),
+            CameraMode::FirstPerson
+        );
+        let first_person = camera_pose(&app, camera);
+        let expected_eye = target + Vec3::Y * camera_settings().first_person_eye_height;
+        assert!(first_person.0.translation.distance(expected_eye) < 1e-5);
+        assert!((first_person.2 - FIRST_PERSON_LOOK_DISTANCE).abs() < f32::EPSILON);
+        assert_pitch(
+            first_person.0.rotation,
+            camera_settings().first_person_pitch * std::f32::consts::FRAC_PI_2,
+        );
+        let first_person_heading = (first_person.0.rotation * Vec3::NEG_Z).xz().normalize();
+        assert!(close_heading.dot(first_person_heading) > 0.9999);
+        assert!(
+            first_person
+                .1
+                .distance(expected_eye + first_person.0.forward().as_vec3())
+                < 1e-5
+        );
+        assert!(
+            (perspective_projection(&app, camera).0
+                - camera_settings().first_person_fov_degrees.to_radians())
+            .abs()
+                < f32::EPSILON
+        );
+
         {
             let mut entity = app.world_mut().entity_mut(camera);
             entity
@@ -3350,6 +3851,189 @@ mod tests {
         assert_eq!(restored.0, original.0);
         assert_eq!(restored.1, original.1);
         assert!((restored.2 - original.2).abs() < f32::EPSILON);
+        assert_eq!(perspective_projection(&app, camera), original_projection);
+    }
+
+    #[test]
+    fn first_person_follows_motion_and_applies_live_eye_and_lens_settings() {
+        let target_position = Vec3::new(3.0, 2.0, -1.0);
+        let (mut app, camera, target) = prototype_camera_app(Some(target_position));
+        let target = target.expect("the fixture should spawn a target");
+        toggle_camera(&mut app);
+        toggle_camera(&mut app);
+        let authored_rotation = camera_pose(&app, camera).0.rotation;
+
+        let movement = Vec3::new(-1.25, 0.5, 2.0);
+        app.world_mut()
+            .entity_mut(target)
+            .get_mut::<Transform>()
+            .expect("the first-person subject should retain its transform")
+            .translation += movement;
+        {
+            let mut settings = app.world_mut().resource_mut::<CameraSettings>();
+            settings.first_person_eye_height = 1.15;
+            settings.first_person_fov_degrees = 72.0;
+        }
+        app.update();
+
+        let pose = camera_pose(&app, camera);
+        let expected_eye = target_position + movement + Vec3::Y * 1.15;
+        assert!(pose.0.translation.distance(expected_eye) < 1e-5);
+        assert_eq!(pose.0.rotation, authored_rotation);
+        assert!(
+            pose.1
+                .distance(expected_eye + authored_rotation * Vec3::NEG_Z)
+                < 1e-5
+        );
+        assert!((pose.2 - FIRST_PERSON_LOOK_DISTANCE).abs() < f32::EPSILON);
+        assert!(
+            (perspective_projection(&app, camera).0 - 72.0_f32.to_radians()).abs() < f32::EPSILON
+        );
+    }
+
+    #[test]
+    fn first_person_lens_reaches_bevy_camera_update_in_the_same_frame() {
+        let mut app = sky_app();
+        app.init_asset::<Image>();
+        app.init_resource::<ManualTextureViews>();
+        app.add_systems(
+            PostUpdate,
+            bevy::render::camera::camera_system.in_set(CameraUpdateSystems),
+        );
+        let target = app
+            .world_mut()
+            .spawn((
+                Transform::from_translation(Vec3::new(2.0, 1.0, -3.0)),
+                CameraFocusTarget::new(TilePos::ORIGIN),
+            ))
+            .id();
+
+        enter(&mut app, Screen::Gameplay);
+        press_camera_cycle_through_input_plugin(&mut app);
+        press_camera_cycle_through_input_plugin(&mut app);
+        assert_eq!(
+            app.world().resource::<ResolvedCameraSubject>().entity(),
+            Some(target)
+        );
+
+        app.world_mut()
+            .resource_mut::<CameraSettings>()
+            .first_person_fov_degrees = 73.0;
+        app.update();
+
+        let mut query = app
+            .world_mut()
+            .query_filtered::<(&Camera, &Projection), With<PanOrbitCamera>>();
+        let (camera, projection) = query
+            .single(app.world())
+            .expect("the production camera should remain unique");
+        let expected = projection.get_clip_from_view();
+        let Projection::Perspective(perspective) = projection else {
+            panic!("the production camera should remain perspective");
+        };
+        assert!(
+            camera.clip_from_view().abs_diff_eq(expected, 1e-6),
+            "Bevy's derived clip matrix must consume the hot-reloaded First Person lens in the same frame"
+        );
+        assert!(
+            (perspective.fov - 73.0_f32.to_radians()).abs() < f32::EPSILON,
+            "the authoritative projection should use the hot-reloaded lens"
+        );
+    }
+
+    #[test]
+    fn malformed_camera_cardinality_clears_then_recovers_first_person_ownership() {
+        let target_position = Vec3::new(2.0, 1.0, -3.0);
+        let (mut app, camera, target) = prototype_camera_app(Some(target_position));
+        let target = target.expect("the fixture should spawn a target");
+        toggle_camera(&mut app);
+        toggle_camera(&mut app);
+        assert_eq!(
+            app.world().resource::<ResolvedCameraSubject>().entity(),
+            Some(target)
+        );
+
+        let duplicate = app
+            .world_mut()
+            .spawn((
+                Transform::default(),
+                PanOrbitCamera::default(),
+                Projection::default(),
+            ))
+            .id();
+        app.update();
+
+        assert_eq!(
+            *app.world().resource::<CameraMode>(),
+            CameraMode::FirstPerson,
+            "a transient presentation fault must not discard the saved Map pose"
+        );
+        assert!(app
+            .world()
+            .resource::<ResolvedCameraSubject>()
+            .entity()
+            .is_none());
+        let collision = app.world().resource::<CharacterCameraCollision>();
+        assert!(collision.target.is_none());
+        assert!(collision.effective_radius.is_none());
+
+        app.world_mut().entity_mut(duplicate).despawn();
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<ResolvedCameraSubject>().entity(),
+            Some(target)
+        );
+        let eye = target_position + Vec3::Y * camera_settings().first_person_eye_height;
+        assert!(camera_pose(&app, camera).0.translation.distance(eye) < 1e-5);
+    }
+
+    #[test]
+    fn gameplay_reentry_recovers_saved_map_projection_after_malformed_camera_exit() {
+        let mut app = sky_app();
+        app.world_mut().spawn((
+            Transform::from_translation(Vec3::new(2.0, 1.0, -3.0)),
+            CameraFocusTarget::new(TilePos::ORIGIN),
+        ));
+        enter(&mut app, Screen::Gameplay);
+        let camera = app
+            .world_mut()
+            .query_filtered::<Entity, With<PanOrbitCamera>>()
+            .single(app.world())
+            .expect("the production camera should be unique");
+        let map_pose = camera_pose(&app, camera);
+        let map_projection = perspective_projection(&app, camera);
+
+        press_camera_cycle_through_input_plugin(&mut app);
+        press_camera_cycle_through_input_plugin(&mut app);
+        assert_eq!(
+            *app.world().resource::<CameraMode>(),
+            CameraMode::FirstPerson
+        );
+        assert_ne!(perspective_projection(&app, camera), map_projection);
+
+        let duplicate = app
+            .world_mut()
+            .spawn((
+                Transform::default(),
+                PanOrbitCamera::default(),
+                Projection::default(),
+            ))
+            .id();
+        enter(&mut app, Screen::Title);
+        assert_eq!(*app.world().resource::<CameraMode>(), CameraMode::Map);
+        assert!(
+            app.world().resource::<SavedMapCamera>().0.is_some(),
+            "malformed exit must retain the exact Map restoration pose"
+        );
+        assert_ne!(perspective_projection(&app, camera), map_projection);
+
+        app.world_mut().entity_mut(duplicate).despawn();
+        enter(&mut app, Screen::Gameplay);
+
+        assert!(app.world().resource::<SavedMapCamera>().0.is_none());
+        assert_eq!(camera_pose(&app, camera), map_pose);
+        assert_eq!(perspective_projection(&app, camera), map_projection);
     }
 
     #[test]
@@ -3360,6 +4044,7 @@ mod tests {
         toggle_camera(&mut app);
         let unobstructed = camera_pose(&app, camera);
         let direction = (unobstructed.0.translation - unobstructed.1).normalize();
+        toggle_camera(&mut app);
         toggle_camera(&mut app);
 
         let obstacle_center = unobstructed.1 + direction * 4.0;
@@ -3813,6 +4498,13 @@ mod tests {
         assert_eq!(character.0, before.0);
         assert_eq!(character.1, before.1);
 
+        *app.world_mut().resource_mut::<CameraMode>() = CameraMode::FirstPerson;
+        app.update();
+
+        let first_person = camera_pose(&app, camera);
+        assert_eq!(first_person.0, before.0);
+        assert_eq!(first_person.1, before.1);
+
         *app.world_mut().resource_mut::<CameraMode>() = CameraMode::Map;
         app.update();
 
@@ -3860,18 +4552,60 @@ mod tests {
     }
 
     #[test]
-    fn one_hundred_gameplay_lifecycles_leave_one_camera_and_no_collision_state() {
+    fn losing_the_first_person_target_restores_map_pose_projection_and_owners() {
+        let (mut app, camera, target) = prototype_camera_app(Some(Vec3::new(2.0, 1.0, -3.0)));
+        let target = target.expect("the fixture should spawn a target");
+        let map_pose = camera_pose(&app, camera);
+        let map_projection = perspective_projection(&app, camera);
+        toggle_camera(&mut app);
+        toggle_camera(&mut app);
+        assert_eq!(
+            *app.world().resource::<CameraMode>(),
+            CameraMode::FirstPerson
+        );
+
+        app.world_mut().entity_mut(target).despawn();
+        app.update();
+
+        assert_eq!(*app.world().resource::<CameraMode>(), CameraMode::Map);
+        let restored = camera_pose(&app, camera);
+        assert_eq!(restored.0, map_pose.0);
+        assert_eq!(restored.1, map_pose.1);
+        assert!((restored.2 - map_pose.2).abs() < f32::EPSILON);
+        assert_eq!(perspective_projection(&app, camera), map_projection);
+        assert!(app.world().resource::<SavedMapCamera>().0.is_none());
+        assert!(app
+            .world()
+            .resource::<ResolvedCameraSubject>()
+            .entity()
+            .is_none());
+        let collision = app.world().resource::<CharacterCameraCollision>();
+        assert!(collision.target.is_none());
+        assert!(collision.effective_radius.is_none());
+    }
+
+    #[test]
+    fn one_hundred_first_person_gameplay_lifecycles_restore_map_and_all_owners() {
         let mut app = sky_app();
+        let target = app
+            .world_mut()
+            .spawn((
+                Transform::from_translation(Vec3::new(2.0, 1.0, -3.0)),
+                CameraFocusTarget::new(TilePos::ORIGIN),
+            ))
+            .id();
 
         for cycle in 0..100 {
             enter(&mut app, Screen::Gameplay);
             assert_eq!(*app.world().resource::<CameraMode>(), CameraMode::Map);
             assert!(app.world().resource::<SavedMapCamera>().0.is_none());
-            let camera_count = {
+            let (camera, camera_count) = {
                 let mut cameras = app
                     .world_mut()
                     .query_filtered::<Entity, With<PanOrbitCamera>>();
-                cameras.iter(app.world()).count()
+                let cameras = cameras.iter(app.world()).collect::<Vec<_>>();
+                let camera = cameras.first().copied().unwrap_or(Entity::PLACEHOLDER);
+                (camera, cameras.len())
             };
             assert_eq!(
                 camera_count, 1,
@@ -3882,6 +4616,27 @@ mod tests {
                 domes.iter(app.world()).count()
             };
             assert_eq!(dome_count, 1, "cycle {cycle} duplicated the sky dome");
+
+            let map_pose = camera_pose(&app, camera);
+            let map_projection = perspective_projection(&app, camera);
+            press_camera_cycle_through_input_plugin(&mut app);
+            press_camera_cycle_through_input_plugin(&mut app);
+            assert_eq!(
+                *app.world().resource::<CameraMode>(),
+                CameraMode::FirstPerson,
+                "cycle {cycle} did not reach First Person"
+            );
+            assert_eq!(
+                app.world().resource::<ResolvedCameraSubject>().entity(),
+                Some(target)
+            );
+            assert!(app.world().resource::<SavedMapCamera>().0.is_some());
+            assert!(
+                (perspective_projection(&app, camera).0
+                    - camera_settings().first_person_fov_degrees.to_radians())
+                .abs()
+                    < f32::EPSILON
+            );
 
             {
                 let mut index = app.world_mut().resource_mut::<CameraObstructionIndex>();
@@ -3903,6 +4658,18 @@ mod tests {
                 };
 
             enter(&mut app, Screen::Title);
+            assert_eq!(*app.world().resource::<CameraMode>(), CameraMode::Map);
+            assert!(app.world().resource::<SavedMapCamera>().0.is_none());
+            assert!(app
+                .world()
+                .resource::<ResolvedCameraSubject>()
+                .entity()
+                .is_none());
+            let restored = camera_pose(&app, camera);
+            assert_eq!(restored.0, map_pose.0);
+            assert_eq!(restored.1, map_pose.1);
+            assert!((restored.2 - map_pose.2).abs() < f32::EPSILON);
+            assert_eq!(perspective_projection(&app, camera), map_projection);
             let index = app.world().resource::<CameraObstructionIndex>();
             assert!(!index.initialized);
             assert!(index.spans_by_coord.is_empty());

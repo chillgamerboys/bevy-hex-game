@@ -55,11 +55,11 @@ than agreed, the fallback the gameplay side ships without it is in
 | `LocalMapKnowledge` — faction-generic Observed/Remembered traversal projection; AI consumer live, player movement adapter pending | perception | `hex_combat` / `hex_units` | **partial** | [systems/perception.md](systems/perception.md) |
 | `FactionMapKnowledge` — current observations gate hostile lattice views, cast anchors, and AI identities | perception | `hex_combat` | live | [systems/perception.md](systems/perception.md) |
 | `KnowledgeSource` / `KnowledgeExpiry` — how a lattice fact was learned and when it stops being true | core | combat | live | [systems/combat.md](systems/combat.md) |
-| `InspectionCameraSubject` / `CenterInspectionCamera` — disclosure-authorized presentation target plus one-shot Map-camera centering; never gameplay selection or command authority | gameplay adapter | world presentation | live | [systems/camera.md](systems/camera.md) |
+| `InspectionCameraSubject` / `CenterInspectionCamera` — disclosure-authorized Third Person / First Person follow target plus one-shot Map-camera centering; never gameplay selection or command authority | gameplay adapter | world presentation | live | [systems/camera.md](systems/camera.md) |
 | `TargetReticleRequest` / `WorldMarkerSuppression` — one disclosed target marker and phase-level suppression over unit-owned, non-pickable world markers | gameplay adapter | unit presentation | live | [systems/combat.md](systems/combat.md) |
 | `CanopyOccluder` — exact authored canopy membership, separate from whole-tree behavior; runtime consumer pending | shared art / `hex_objects` | pending | **partial** | [systems/asset-workshop.md](systems/asset-workshop.md) |
 | `TreeOccluder` / `TreeFadeAmount` — stack-safe whole-tree identity and renderer-neutral camera opacity | world | presentation | live | [systems/camera.md](systems/camera.md) |
-| `PresentationOcclusion` — faction fog, review-roof, Character-camera proximity, and Sandbox-deployment reasons compose through one visibility owner | shared | presentation | **live** | [systems/camera.md](systems/camera.md), [systems/perception.md](systems/perception.md) |
+| `PresentationOcclusion` — faction fog, review-roof, character-camera proximity/full First Person model hiding, and Sandbox-deployment reasons compose through one visibility owner | shared | presentation | **live** | [systems/camera.md](systems/camera.md), [systems/perception.md](systems/perception.md) |
 | `perception.ron` — sight tunables as designer-facing settings | world | perception | live | [planning/boundary.md](planning/boundary.md) J |
 
 ## Ordering

@@ -49,6 +49,7 @@ use hex_core::{
     HexTile, MapAnchorId, MapAnchors, ResolvedMapSeed, Screen, TilePos,
 };
 use hex_units::{MovingTo, Party, Selected, StandsOn, UnitRegistry};
+use hex_world::CameraMode;
 use serde::Deserialize;
 
 use crate::capture::write_png;
@@ -270,6 +271,8 @@ enum WalkStep {
     /// click also leaves the party idle, so idleness alone cannot prove a route
     /// was accepted or completed.
     AssertSelectedAt { expected: CameraRouteTile },
+    /// Prove that ordinary input selected the expected camera perspective.
+    AssertCameraMode(WalkCameraMode),
     /// Wait until a named button exists without activating it.
     AwaitButton(String),
     /// Install an authored immutable UI presentation state without solving combat.
@@ -308,6 +311,25 @@ enum WalkStep {
         #[serde(default)]
         suppress_hostiles: bool,
     },
+}
+
+/// Stable review vocabulary kept separate from the runtime resource's Rust names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+enum WalkCameraMode {
+    Map,
+    Character,
+    FirstPerson,
+}
+
+impl WalkCameraMode {
+    fn matches(self, actual: CameraMode) -> bool {
+        matches!(
+            (self, actual),
+            (Self::Map, CameraMode::Map)
+                | (Self::Character, CameraMode::Character)
+                | (Self::FirstPerson, CameraMode::FirstPerson)
+        )
+    }
 }
 
 /// Stack-safe position serialized by camera-route evidence.
@@ -664,6 +686,7 @@ struct WalkUiCamera;
 #[derive(SystemParam)]
 struct WalkContent<'w, 's> {
     failure: Option<Res<'w, GameplaySetupFailure>>,
+    camera_mode: Option<Res<'w, CameraMode>>,
     library: Option<Res<'w, ScenarioLibrary>>,
     anchors: Option<Res<'w, MapAnchors>>,
     party: Option<Res<'w, Party>>,
@@ -1137,6 +1160,25 @@ fn run_walk(
                 }
             }
         }
+        WalkStep::AssertCameraMode(expected) => {
+            let Some(actual) = content.camera_mode.as_deref() else {
+                error!("visual walk cannot assert camera mode before CameraMode exists");
+                state.failed = true;
+                exit.write(AppExit::error());
+                return;
+            };
+            if expected.matches(*actual) {
+                info!("visual walk proved camera mode {expected:?}");
+                state.advance();
+            } else {
+                error!(
+                    "visual walk expected camera mode {expected:?}, found {:?}",
+                    *actual
+                );
+                state.failed = true;
+                exit.write(AppExit::error());
+            }
+        }
         WalkStep::Settle(frames) => {
             state.settled += 1;
             if state.settled >= frames {
@@ -1488,6 +1530,8 @@ fn run_walk(
 mod tests {
     use super::*;
 
+    const FIRST_PERSON_CAMERA_SCRIPT: &str = "../../walks/camera_first_person.ron";
+
     const CAMERA_ROUTE_SCRIPTS: &[(&str, &str)] = &[
         ("../../walks/camera_crossing.ron", "The Crossing"),
         (
@@ -1820,6 +1864,68 @@ mod tests {
             },
         })
         .is_err());
+        validate_step(&WalkStep::AssertCameraMode(WalkCameraMode::FirstPerson))
+            .expect("every typed camera mode should be a valid assertion");
+    }
+
+    #[test]
+    fn first_person_walk_proves_the_three_state_cycle_and_tactical_controls() {
+        let steps: Vec<WalkStep> =
+            ron::from_str(include_str!("../../../walks/camera_first_person.ron"))
+                .expect("the focused first-person walk should parse");
+        for step in &steps {
+            validate_step(step).expect("the focused first-person walk should validate");
+        }
+
+        let asserted_modes = steps
+            .iter()
+            .filter_map(|step| match step {
+                WalkStep::AssertCameraMode(mode) => Some(*mode),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            asserted_modes,
+            vec![
+                WalkCameraMode::Map,
+                WalkCameraMode::Character,
+                WalkCameraMode::FirstPerson,
+                WalkCameraMode::Map,
+            ],
+            "the walk must prove Map -> Character -> First Person -> Map in order"
+        );
+        let cycles_to = |expected| {
+            steps.windows(2).any(|pair| {
+                matches!(
+                    pair,
+                    [WalkStep::Key(key), WalkStep::AssertCameraMode(actual)]
+                        if key == "C" && *actual == expected
+                )
+            })
+        };
+        assert!(cycles_to(WalkCameraMode::Character));
+        assert!(cycles_to(WalkCameraMode::FirstPerson));
+        assert!(cycles_to(WalkCameraMode::Map));
+        assert_eq!(
+            steps
+                .iter()
+                .filter(|step| matches!(step, WalkStep::Capture(_)))
+                .count(),
+            4,
+            "the walk should retain before-move, after-move, look, and restored-Map evidence"
+        );
+        assert!(
+            steps
+                .iter()
+                .any(|step| matches!(step, WalkStep::OrbitCamera { .. })),
+            "right-drag look must be exercised through the ordinary input adapter"
+        );
+        assert!(
+            steps
+                .iter()
+                .any(|step| matches!(step, WalkStep::AssertSelectedAt { .. })),
+            "click-to-move must be proved at an exact stack-safe destination"
+        );
     }
 
     #[test]
@@ -2951,6 +3057,7 @@ mod tests {
         ]
         .into_iter()
         .chain(CAMERA_ROUTE_SCRIPTS.iter().map(|(path, _)| *path))
+        .chain(std::iter::once(FIRST_PERSON_CAMERA_SCRIPT))
         {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(script);
             let text = std::fs::read_to_string(&path)
@@ -3064,6 +3171,7 @@ mod tests {
         ]
         .into_iter()
         .chain(CAMERA_ROUTE_SCRIPTS.iter().map(|(path, _)| *path))
+        .chain(std::iter::once(FIRST_PERSON_CAMERA_SCRIPT))
         {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(script);
             let text = std::fs::read_to_string(&path)

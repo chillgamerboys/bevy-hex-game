@@ -345,7 +345,7 @@ below 150 ms, keep the LOS maximum at seven segment tests per observer-target pa
 and prove 10,000 unchanged frames perform no downstream recomputation. Fog checks
 bound overlays to one per shaded surface and one shared mesh/material. Visual review
 captures one seed and azimuth at noon, moonlight, darkness, wall occlusion, and an open
-cave threshold in both map and character cameras. The chosen cap renderer shades top
+cave threshold in Map, Third Person, and First Person. The chosen cap renderer shades top
 surfaces; complete cliff-side and tall-prop darkening remains a future full-scene
 renderer concern.
 
