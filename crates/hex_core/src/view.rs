@@ -74,7 +74,8 @@ impl CenterInspectionCamera {
 }
 
 /// Player-chosen zoom sensitivity that takes precedence over the authored
-/// [`CameraSettings`](hex_assets::CameraSettings) value.
+/// `CameraSettings::zoom_sensitivity` value (`hex_assets`, not linkable here
+/// since `hex_core` does not depend on it).
 ///
 /// Inserted by the preferences system. When present, the camera uses this
 /// instead of the RON-authored `zoom_sensitivity` so that hot-reload cannot
