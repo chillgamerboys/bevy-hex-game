@@ -1,0 +1,27 @@
+// Visual acceptance for HEX-87's movement hover distinction.
+//
+// Raider Mirror starts a flat, deterministic four-step player turn. The setup spends
+// three steps, then the two captures keep the same unit, one-step budget, camera, and
+// terrain: only the hover changes from an adjacent tile to one two steps away.
+[
+    AwaitScreen("Title"),
+    StartScenario(name: "Raider Mirror"),
+    AwaitScreen("Gameplay"),
+    AwaitTerrain,
+    SetViewport(width: 1920, height: 1080, device_scale: 1.0),
+    AwaitButton("Cast"),
+    Settle(20),
+    ClickTile(q: -4, r: 1),
+    AwaitPartyIdle(max_frames: 300),
+    AssertSelectedAt(expected: (q: -4, r: 1, level: 1)),
+    Key("C"),
+    Settle(20),
+
+    HoverTile(q: -5, r: 1),
+    Settle(8),
+    Capture("movement-01-affordable-path"),
+
+    HoverTile(q: -6, r: 1),
+    Settle(8),
+    Capture("movement-02-out-of-range"),
+]
