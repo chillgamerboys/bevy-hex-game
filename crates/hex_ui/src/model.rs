@@ -1028,6 +1028,8 @@ pub enum UiSetting {
     EffectsVolume,
     /// UI volume.
     UiVolume,
+    /// Camera zoom speed.
+    ZoomSpeed,
 }
 
 /// Direct Settings route selected by one persistent tab.
