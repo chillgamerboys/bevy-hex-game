@@ -35,7 +35,7 @@ than agreed, the fallback the gameplay side ships without it is in
 | `TerrainEdit::Set` / `::Clear` — the write path | gameplay | world | live | [systems/map.md](systems/map.md) |
 | `BiomeRegions` — published by V3; gameplay consumer pending | world | gameplay | **partial** | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
 | `TraversalBlockers` — exact feature-occupied surfaces consumed by validation, perception, and movement | world | perception / `hex_units` | live | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
-| `RunBottom(Level)` — each run's lowest voxel; exact occupancy for terrain casting, trajectories, and sight | world | gameplay / perception | **live** | [planning/boundary.md](planning/boundary.md) C |
+| `RunBottom(Level)` — each run's lowest voxel; exact occupancy for terrain casting, trajectories, and paired seven-ray sight | world | gameplay / perception | **live** | [planning/boundary.md](planning/boundary.md) C |
 | `TerrainImpact { batch, volume, ElementId, power }` — declarative canonical-volume voxel damage | gameplay | world | **live** — #175 owns map admission/resolution; #180 adds the paid gameplay spell publisher and monotonic batch ledger | [planning/boundary.md](planning/boundary.md) G |
 | `TerrainImpactOutcome` — one applied or rejected answer with exact per-voxel health transitions | world | gameplay | **live** — #175 publishes the answer, #178 validates it exhaustively, and #180 correlates it under the authority hold before settlement and release | [planning/boundary.md](planning/boundary.md) H |
 | `DamagedVoxels` — exact partial-health projection, never a visibility grant | world | shared presentation | live | [planning/boundary.md](planning/boundary.md) H |
@@ -51,6 +51,7 @@ than agreed, the fallback the gameplay side ships without it is in
 | `IlluminationLevel` / `ExteriorIllumination` — gameplay illumination, never sampled from the renderer | world | perception | live | [systems/perception.md](systems/perception.md) |
 | `GameplayLight` + derived `LightDomain` — fixed V3 cave sources published and consumed | world | perception | live | [systems/perception.md](systems/perception.md) |
 | `SightProfile` / `SightBand` — sight limits per illumination tier | perception | perception | live | [systems/perception.md](systems/perception.md) |
+| Exact paired sight bundle — head center to target top center plus six matching standing-body-top-corner to target-corner strict-interior rays; one observer owns the three-of-six threshold | core / gameplay | perception | live | [systems/perception.md](systems/perception.md) |
 | `LocalMapKnowledge` — faction-generic Observed/Remembered traversal projection; AI consumer live, player movement adapter pending | perception | `hex_combat` / `hex_units` | **partial** | [systems/perception.md](systems/perception.md) |
 | `FactionMapKnowledge` — current observations gate hostile lattice views, cast anchors, and AI identities | perception | `hex_combat` | live | [systems/perception.md](systems/perception.md) |
 | `KnowledgeSource` / `KnowledgeExpiry` — how a lattice fact was learned and when it stops being true | core | combat | live | [systems/combat.md](systems/combat.md) |

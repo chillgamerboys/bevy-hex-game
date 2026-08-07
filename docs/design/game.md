@@ -400,12 +400,14 @@ Dim conditions, and 1 in Dark conditions.
 Characters travel in a formation. Once combat starts, controls switch to moving each
 character independently.
 
-Range alone does not establish observation. Exact terrain material must leave a clear
-line from the character's head to the target top-face center or at least three of its
-six corners; exact tangencies are clear. What the camera happens to frame is
-presentation, not knowledge. The tactical map intentionally keeps current terrain
-visible and pickable under a dark shroud while withholding unobserved hostile units
-and observation-only cues.
+Range alone does not establish observation. For every in-range target, exact terrain
+material must leave clear either the character-head-center to target-top-center ray or
+at least three of six rays from the matching corners of the standing body's top face
+to the target top face. The one-to-one bundle makes a one-voxel rise low cover while a
+two-voxel wall still blocks; there is no separate near-distance exception, and exact
+tangencies are clear. What the camera happens to frame is presentation, not knowledge.
+The tactical map intentionally keeps current terrain visible and pickable under a dark
+shroud while withholding unobserved hostile units and observation-only cues.
 
 Each tile type should be distinguishable by colour and design. A tile is a **3D prism
 with a hex base**, so it has five coordinates: cube coordinates horizontally (see

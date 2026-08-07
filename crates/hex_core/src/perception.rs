@@ -118,6 +118,15 @@ impl ExactGridPoint {
     const SIXTHS_PER_VOXEL: i64 = 6;
     const TOP_FACE_OFFSET: i64 = 3;
     const STANDING_EYE_OFFSET: i64 = 12;
+    const STANDING_BODY_TOP_OFFSET: i64 = 15;
+    const TOP_FACE_CORNER_OFFSETS: [[i64; 3]; 6] = [
+        [4, -2, -2],
+        [2, 2, -4],
+        [-2, 4, -2],
+        [-4, 2, 2],
+        [-2, -2, 4],
+        [2, -4, 2],
+    ];
 
     /// Returns the centre of one exact voxel.
     #[must_use]
@@ -146,15 +155,21 @@ impl ExactGridPoint {
     /// Expressing them in sixths keeps all later intersection tests integral.
     #[must_use]
     pub fn voxel_top_corners(pos: TilePos) -> [Self; 6] {
-        [
-            [4, -2, -2],
-            [2, 2, -4],
-            [-2, 4, -2],
-            [-4, 2, 2],
-            [-2, -2, 4],
-            [2, -4, 2],
-        ]
-        .map(|offsets| Self::at_offsets(pos, offsets, Self::TOP_FACE_OFFSET))
+        Self::TOP_FACE_CORNER_OFFSETS
+            .map(|offsets| Self::at_offsets(pos, offsets, Self::TOP_FACE_OFFSET))
+    }
+
+    /// Returns the six exact upper corners of a standing character's body volume.
+    ///
+    /// `support` is the material voxel beneath a two-voxel-tall character. The
+    /// corners lie at `support.level + 2.5`, on the upper boundary of those two air
+    /// voxels. Their stable ordering matches [`Self::voxel_top_corners`], allowing
+    /// sight to pair corresponding source and target corners without cross-corner
+    /// keyholes.
+    #[must_use]
+    pub fn standing_body_top_corners(support: TilePos) -> [Self; 6] {
+        Self::TOP_FACE_CORNER_OFFSETS
+            .map(|offsets| Self::at_offsets(support, offsets, Self::STANDING_BODY_TOP_OFFSET))
     }
 
     fn at_offsets(pos: TilePos, offsets: [i64; 3], level_offset: i64) -> Self {
@@ -472,24 +487,30 @@ mod tests {
     }
 
     #[test]
-    fn exact_points_represent_eye_top_centre_and_all_regular_hex_corners() {
+    fn exact_points_represent_eye_body_top_and_all_regular_hex_corners() {
         let surface = TilePos::new(HexCoord::from_axial(2, -3), 7);
         let centre = ExactGridPoint::voxel_center(surface);
         let top = ExactGridPoint::voxel_top_center(surface);
         let eye = ExactGridPoint::standing_eye(surface);
+        let body_top_corners = ExactGridPoint::standing_body_top_corners(surface);
 
         assert_eq!(centre.cube_sixths(), [12, -18, 6]);
         assert_eq!(centre.level_sixths(), 42);
         assert_eq!(top.level_sixths(), 45);
         assert_eq!(eye.level_sixths(), 54);
+        assert!(body_top_corners
+            .iter()
+            .all(|corner| corner.level_sixths() == 57));
         assert_eq!(top.anchor(), surface.coord);
 
         let corners = ExactGridPoint::voxel_top_corners(surface);
         assert_eq!(corners.len(), 6);
-        for corner in corners {
+        for (corner, body_top_corner) in corners.into_iter().zip(body_top_corners) {
             assert_eq!(corner.cube_sixths().into_iter().sum::<i64>(), 0);
             assert_eq!(corner.level_sixths(), top.level_sixths());
             assert_eq!(corner.anchor(), surface.coord);
+            assert_eq!(body_top_corner.cube_sixths(), corner.cube_sixths());
+            assert_eq!(body_top_corner.anchor(), surface.coord);
             let offsets = corner
                 .cube_sixths()
                 .into_iter()
@@ -561,6 +582,22 @@ mod tests {
             [i64::from(i32::MIN) * 6, 6, i64::from(i32::MAX) * 6]
         );
         assert!(upper_dome_contains(point, point, 0));
+    }
+
+    #[test]
+    fn standing_body_top_corners_remain_exact_at_coordinate_and_level_boundaries() {
+        let support = TilePos::new(HexCoord::from_axial(i32::MIN, 1), i32::MAX);
+        let corners = ExactGridPoint::standing_body_top_corners(support);
+
+        assert!(corners
+            .iter()
+            .all(|corner| corner.anchor() == support.coord));
+        assert!(corners
+            .iter()
+            .all(|corner| corner.cube_sixths().into_iter().sum::<i64>() == 0));
+        assert!(corners
+            .iter()
+            .all(|corner| { corner.level_sixths() == i64::from(i32::MAX) * 6 + 15 }));
     }
 
     #[test]

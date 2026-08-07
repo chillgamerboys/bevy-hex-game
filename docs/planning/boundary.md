@@ -187,11 +187,16 @@ exact occupancy projection and deterministic trajectory supercover; faction-faci
 trajectory choices filter that geometry through authorized knowledge, while full truth
 stays at command authority. Sight reuses the same exact rational intersection kernel
 with a strict-interior contact policy while casting retains its closed-contact
-supercover.
+supercover. Each in-range observer-target pair uses at most seven sight segments: one
+head-center to target-top-center ray and six one-to-one rays from the standing-body-top
+corners to the matching target corners. A single observer needs three clear perimeter
+rays when the center is blocked; corners never cross-pair or pool between observers.
 
-Spatial perception consumes this component after the target-illumination range gate.
-Gameplay lights remain obstruction-agnostic within one light domain; sight may cross
-domains through a material-clear opening.
+Spatial perception consumes this component after the unchanged target-illumination
+range gate. The paired bundle applies globally to every in-range target, with no
+near-field cutoff: one-voxel rises act as low cover, while two-voxel walls and roofs
+still obstruct the exact paired rays. Gameplay lights remain obstruction-agnostic
+within one light domain; sight may cross domains through a material-clear opening.
 
 That reasoning holds for *sight*, but casting still needs the same datum, and for a
 different reason. [casting.md](../systems/casting.md) validates a cast against the

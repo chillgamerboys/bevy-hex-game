@@ -81,7 +81,7 @@ foundation.
 | Nineteen-region composition | Ring19 composes the selectable radius-55 Two Rings map from 19 fixed logical regions, 42 physically redundant seams, one mountain-fed confluence/outlet water graph, and a separate volcano lava outlet |
 | Macro Mountain Range | The selectable radius-77 / 18,019-column world composes 37 atomic cells into 30 logical biome instances with Macro-only adjacency validation, coastal and alpine recipes, one joined watershed, graded mountain tiers, a five-cell massif, generated framing, and a validated Shore-to-massif-base route |
 | Cave lighting and presentation | V3 Caves publishes deterministic gameplay lights over required routes plus authored emissive crystals and restrained presentation-only physical lights |
-| Obstruction-aware visibility and tactical shroud | Target-lit 36/12/1 upper-dome range, exact head-to-surface strict-interior terrain LOS, physical cross-domain sight, current-map dark caps, and composable concealment of unobserved hostiles |
+| Obstruction-aware visibility and tactical shroud | Target-lit 36/12/1 upper-dome range, a global exact paired seven-ray character-volume LOS bundle that treats one-voxel rises as low cover and two-voxel walls as blockers, physical cross-domain sight, current-map dark caps, and composable concealment of unobserved hostiles |
 | Character-first camera | Player-authoritative full-range look, radius-only terrain collision with stable recovery, near-character occlusion, whole-tree fading, ordinary opaque cave roofs, seed-exact multi-azimuth traversal over every selectable map and Two Rings region, and Alberto's 2026-08-01 native motion/readability approval |
 
 ## Sequencing — independent lanes behind one contract

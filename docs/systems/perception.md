@@ -101,11 +101,20 @@ at or below the eye pays only horizontal distance; upward distance combines with
 horizontal distance by the squared rule. Radius-one Dark sight is immediate awareness
 in absolute darkness, not emitted light.
 
-Range is only the cheap first gate. Sight then traces exact rational segments from the
-head to the target top-face center and six corners. The target is observable when the
-center ray is clear or at least three corner rays are clear. One observer must satisfy
-that whole threshold; a party cannot pool corner successes from opposite sides of a
-wall.
+Range is only the cheap first gate. Every in-range target then receives one paired
+seven-ray character-volume bundle; there is no separate near-field cutoff. Its center
+ray runs from the observer's head center to the target top-face center. Its six
+perimeter rays run from the six corners of the standing body's top face to the matching
+canonical corners of the target top face. The target is observable when the center ray
+is clear or at least three of the six paired perimeter rays are clear. One observer
+must satisfy that whole threshold; a party cannot pool corner successes from opposite
+sides of a wall.
+
+Corners pair one-to-one rather than forming every source-to-target combination. The
+aligned bundle models the hexagonal pillar occupied by a standing character: an
+ordinary one-voxel rise behaves as low cover, while a two-voxel wall still cuts the
+bundle. It also prevents a diagonal fan from inventing views around a pillar and keeps
+the worst case at seven segment tests per observer-target pair.
 
 Only exact material runs in `TerrainOccupancy` block; liquids follow the same rule as
 every other terrain material. A ray is blocked when its open segment crosses a
@@ -284,8 +293,10 @@ transitive build graph is renderer-free yet.
 
 Headless tests must cover static, sun-key, moon-key, and dark ambient resolution;
 light-domain containment; inclusive upper-dome local-light boundaries; maximum-tier
-overlap; pooled party sight; head-to-top range; center-or-three-corners LOS; exact
-tangencies; walls, roofs, air gaps, stacked surfaces, open domain thresholds; and the
+overlap; pooled party sight; unchanged head-to-top range; the paired center plus six
+matching-corner LOS bundle; its observer-local three-of-six threshold without
+cross-pairs or cross-observer pooling; one-voxel low cover; two-voxel walls; exact
+tangencies; roofs, air gaps, stacked surfaces, open domain thresholds; and the
 alternative `24/8/1` and `18/6/1` review profiles.
 
 Knowledge tests prove Unknown contains no snapshot, Remembered retains the exact
@@ -306,12 +317,14 @@ rules. Gameplay teardown and re-entry tests run 100 cycles and require the exact
 expected entity and resource counts after each exit.
 
 Benchmarks record faction-knowledge recomputation after unit movement and terrain
-edits, retain the radius-40 release p95 below 50 ms, and prove 10,000 unchanged frames
-perform no downstream recomputation. Fog checks bound overlays to one per shaded
-surface and one shared mesh/material. Visual review captures one seed and azimuth at
-noon, moonlight, darkness, wall occlusion, and an open cave threshold in both map and
-character cameras. The chosen cap renderer shades top surfaces; complete cliff-side
-and tall-prop darkening remains a future full-scene renderer concern.
+edits, retain the radius-40 release p95 below 50 ms and dense-wall six-observer p95
+below 150 ms, keep the LOS maximum at seven segment tests per observer-target pair,
+and prove 10,000 unchanged frames perform no downstream recomputation. Fog checks
+bound overlays to one per shaded surface and one shared mesh/material. Visual review
+captures one seed and azimuth at noon, moonlight, darkness, wall occlusion, and an open
+cave threshold in both map and character cameras. The chosen cap renderer shades top
+surfaces; complete cliff-side and tall-prop darkening remains a future full-scene
+renderer concern.
 
 ## Deferred deliberately
 

@@ -143,8 +143,9 @@ impl FactionObservations {
 /// Whether one exact current surface observes another.
 ///
 /// The target's illumination tier selects the inclusive upper-dome radius. Sight
-/// starts at the observer's standing eye and reaches the target's top face only when
-/// exact terrain occupancy leaves its center, or at least three corners, unobstructed.
+/// starts with the observer's standing head-to-centre ray, then the six paired rays
+/// from the character body's upper corners to matching target corners. Exact terrain
+/// occupancy must leave the centre, or at least three paired corners, unobstructed.
 /// Light domains constrain illumination, not physical sight through an opening.
 #[must_use]
 pub fn can_observe(
@@ -620,6 +621,63 @@ mod tests {
             profile(6, 6, 1),
             &TerrainOccupancy::default(),
         ));
+    }
+
+    #[test]
+    fn character_volume_observes_a_hostile_over_low_cover_but_not_a_full_wall() {
+        let observer = pos(0, 0, 5);
+        let target = pos(4, 0, 5);
+        let illumination = ResolvedIllumination::try_resolve(
+            [
+                (observer, LightDomain::Exterior),
+                (target, LightDomain::Exterior),
+            ],
+            ExteriorIllumination::new(IlluminationLevel::Bright),
+            &[],
+        )
+        .expect("illumination");
+        let player = unit(1, Faction::Player, observer);
+        let hostile = unit(2, Faction::Hostile, target);
+        let low_cover = TerrainOccupancy::from_runs([
+            (observer, hex_core::RunBottom(observer.level)),
+            (pos(2, 0, 6), hex_core::RunBottom(6)),
+            (target, hex_core::RunBottom(target.level)),
+        ])
+        .expect("one-voxel low-cover run");
+        let full_wall = TerrainOccupancy::from_runs([
+            (observer, hex_core::RunBottom(observer.level)),
+            (pos(2, 0, 7), hex_core::RunBottom(6)),
+            (target, hex_core::RunBottom(target.level)),
+        ])
+        .expect("two-voxel wall run");
+
+        let over_low_cover = resolve_observations(
+            [player, hostile],
+            &illumination,
+            &FactionMapKnowledge::new(),
+            ExteriorIllumination::new(IlluminationLevel::Bright),
+            &[],
+            profile(6, 6, 1),
+            &low_cover,
+        )
+        .expect("low-cover observations");
+        let player_over_low_cover = over_low_cover.faction(Faction::Player);
+        assert!(player_over_low_cover.observes(target));
+        assert_eq!(player_over_low_cover.unit(hostile.id), Some(hostile));
+
+        let behind_full_wall = resolve_observations(
+            [player, hostile],
+            &illumination,
+            &FactionMapKnowledge::new(),
+            ExteriorIllumination::new(IlluminationLevel::Bright),
+            &[],
+            profile(6, 6, 1),
+            &full_wall,
+        )
+        .expect("full-wall observations");
+        let player_behind_full_wall = behind_full_wall.faction(Faction::Player);
+        assert!(!player_behind_full_wall.observes(target));
+        assert_eq!(player_behind_full_wall.unit(hostile.id), None);
     }
 
     #[test]

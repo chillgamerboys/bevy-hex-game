@@ -139,21 +139,22 @@ pub fn sight_segment_is_clear(
 
 /// Whether a standing observer has terrain-clear sight to an exposed surface.
 ///
-/// Sight starts at the centre of the second air voxel above `observer_support`. The
-/// target is accepted when its top-face centre is clear or when at least three of its
-/// six exact top-face corners are clear. Each call evaluates one observer in full, so
-/// callers pooling faction sight cannot accidentally combine corner samples from
-/// different characters.
+/// The center ray starts at the centre of the second air voxel above
+/// `observer_support`; six perimeter rays start at the character body volume's upper
+/// corners. The target is accepted when the center ray is clear or when at least three
+/// paired perimeter rays reach the correspondingly oriented target top-face corners.
+/// Each call evaluates one observer in full, so callers pooling faction sight cannot
+/// accidentally combine corner samples from different characters.
 #[must_use]
 pub fn terrain_sight_is_clear(
     observer_support: TilePos,
     target_surface: TilePos,
     terrain: &TerrainOccupancy,
 ) -> bool {
-    let source = ExactGridPoint::standing_eye(observer_support);
+    let eye = ExactGridPoint::standing_eye(observer_support);
     let corridor = sight_candidate_columns(observer_support.coord, target_surface.coord);
     if sight_segment_is_clear_in_corridor(
-        source,
+        eye,
         ExactGridPoint::voxel_top_center(target_surface),
         terrain,
         &corridor,
@@ -162,11 +163,13 @@ pub fn terrain_sight_is_clear(
     }
 
     let mut clear_corners = 0_u8;
-    for (index, corner) in ExactGridPoint::voxel_top_corners(target_surface)
-        .into_iter()
-        .enumerate()
+    for (index, (source, destination)) in
+        ExactGridPoint::standing_body_top_corners(observer_support)
+            .into_iter()
+            .zip(ExactGridPoint::voxel_top_corners(target_surface))
+            .enumerate()
     {
-        if sight_segment_is_clear_in_corridor(source, corner, terrain, &corridor) {
+        if sight_segment_is_clear_in_corridor(source, destination, terrain, &corridor) {
             clear_corners += 1;
             if clear_corners >= 3 {
                 return true;
@@ -584,7 +587,7 @@ impl PartialOrd for Rational {
 
 #[cfg(test)]
 mod tests {
-    use hex_core::RunBottom;
+    use hex_core::{RunBottom, Sextant};
 
     use super::*;
 
@@ -597,6 +600,13 @@ mod tests {
             .expect("single-voxel runs are valid")
     }
 
+    fn advance(mut coord: HexCoord, direction: Sextant, distance: u32) -> HexCoord {
+        for _ in 0..distance {
+            coord = coord.neighbor(direction);
+        }
+        coord
+    }
+
     fn sight_sample_results(
         observer: TilePos,
         target: TilePos,
@@ -604,8 +614,13 @@ mod tests {
     ) -> (bool, [bool; 6]) {
         let eye = ExactGridPoint::standing_eye(observer);
         let centre = sight_segment_is_clear(eye, ExactGridPoint::voxel_top_center(target), terrain);
-        let corners = ExactGridPoint::voxel_top_corners(target)
-            .map(|corner| sight_segment_is_clear(eye, corner, terrain));
+        let mut source_corners = ExactGridPoint::standing_body_top_corners(observer).into_iter();
+        let corners = ExactGridPoint::voxel_top_corners(target).map(|destination| {
+            source_corners
+                .next()
+                .is_some_and(|source| sight_segment_is_clear(source, destination, terrain))
+        });
+        assert!(source_corners.next().is_none());
         (centre, corners)
     }
 
@@ -815,6 +830,75 @@ mod tests {
         );
         assert!(terrain_sight_is_clear(observer, target, &terrain));
         assert!(terrain_sight_is_clear(target, observer, &terrain));
+        for (source, destination) in ExactGridPoint::standing_body_top_corners(observer)
+            .into_iter()
+            .zip(ExactGridPoint::voxel_top_corners(target))
+        {
+            assert!(sight_segment_is_clear(source, destination, &terrain));
+            assert!(sight_segment_is_clear(destination, source, &terrain));
+        }
+    }
+
+    #[test]
+    fn body_top_bundle_sees_ground_from_a_ten_level_pillar_in_every_direction() {
+        let observer = at(0, 0, 10);
+        let terrain = TerrainOccupancy::from_runs(
+            std::iter::once((observer, RunBottom(0))).chain(
+                HexCoord::ORIGIN
+                    .within_radius(8)
+                    .into_iter()
+                    .filter(|coord| *coord != HexCoord::ORIGIN)
+                    .map(|coord| (TilePos::new(coord, 0), RunBottom(0))),
+            ),
+        )
+        .expect("the pillar and surrounding ground are valid runs");
+
+        for direction in Sextant::ALL {
+            let mut target_coord = HexCoord::ORIGIN;
+            for distance in 1..=8 {
+                target_coord = target_coord.neighbor(direction);
+                let target = TilePos::new(target_coord, 0);
+                assert!(
+                    terrain_sight_is_clear(observer, target, &terrain),
+                    "ten-level downward sight failed toward {direction:?} at range {distance}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn one_level_lips_clear_in_every_rotation_and_for_off_axis_targets() {
+        let observer = at(0, 0, 0);
+        for direction in Sextant::ALL {
+            let lip = occupied([TilePos::new(advance(HexCoord::ORIGIN, direction, 2), 1)]);
+            let aligned = TilePos::new(advance(HexCoord::ORIGIN, direction, 4), 0);
+            let off_axis = TilePos::new(aligned.coord.neighbor(direction.turned(1)), 0);
+
+            assert!(
+                terrain_sight_is_clear(observer, aligned, &lip),
+                "aligned low cover blocked toward {direction:?}"
+            );
+            assert!(
+                terrain_sight_is_clear(observer, off_axis, &lip),
+                "off-axis low cover blocked toward {direction:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_two_level_character_height_wall_blocks_the_body_top_bundle() {
+        let observer = at(0, 0, 0);
+        for direction in Sextant::ALL {
+            let wall_coord = advance(HexCoord::ORIGIN, direction, 2);
+            let wall = TerrainOccupancy::from_runs([(TilePos::new(wall_coord, 2), RunBottom(1))])
+                .expect("a two-level wall is a valid run");
+            let target = TilePos::new(advance(HexCoord::ORIGIN, direction, 4), 0);
+
+            assert!(
+                !terrain_sight_is_clear(observer, target, &wall),
+                "character-height wall failed to block toward {direction:?}"
+            );
+        }
     }
 
     #[test]
@@ -864,31 +948,39 @@ mod tests {
     fn an_overhead_roof_blocks_sight_to_an_elevated_surface() {
         let observer = at(0, 0, 0);
         let elevated_target = at(4, 0, 4);
-        let roof = occupied([at(2, 0, 3)]);
+        let roof_centre = HexCoord::from_axial(2, 0);
+        let roof = occupied(
+            std::iter::once(TilePos::new(roof_centre, 3))
+                .chain(roof_centre.neighbors().map(|coord| TilePos::new(coord, 3))),
+        );
 
         assert!(!terrain_sight_is_clear(observer, elevated_target, &roof,));
     }
 
     #[test]
     fn one_cell_candidate_corridor_contains_every_small_exact_intersection() {
-        let source = ExactGridPoint::standing_eye(at(0, 0, 0));
+        let observer = at(0, 0, 0);
         for target_coord in HexCoord::ORIGIN.within_radius(5) {
             let target = TilePos::new(target_coord, 0);
-            let corridor = sight_candidate_columns(source.anchor(), target_coord);
-            let reverse_corridor = sight_candidate_columns(target_coord, source.anchor());
-            let samples = std::iter::once(ExactGridPoint::voxel_top_center(target))
-                .chain(ExactGridPoint::voxel_top_corners(target));
-            for destination in samples {
-                for blocker_coord in HexCoord::ORIGIN.within_radius(7) {
-                    if segment_crosses_open_run(source, destination, blocker_coord, -2, 3) {
-                        assert!(
-                            corridor.contains(&blocker_coord),
-                            "corridor missed {blocker_coord:?} on {source:?} -> {destination:?}"
-                        );
-                        assert!(
-                            reverse_corridor.contains(&blocker_coord),
-                            "reverse corridor missed {blocker_coord:?} on {destination:?} -> {source:?}"
-                        );
+            let corridor = sight_candidate_columns(observer.coord, target_coord);
+            let reverse_corridor = sight_candidate_columns(target_coord, observer.coord);
+            let sources = std::iter::once(ExactGridPoint::standing_eye(observer))
+                .chain(ExactGridPoint::standing_body_top_corners(observer));
+            for source in sources {
+                let destinations = std::iter::once(ExactGridPoint::voxel_top_center(target))
+                    .chain(ExactGridPoint::voxel_top_corners(target));
+                for destination in destinations {
+                    for blocker_coord in HexCoord::ORIGIN.within_radius(7) {
+                        if segment_crosses_open_run(source, destination, blocker_coord, -2, 3) {
+                            assert!(
+                                corridor.contains(&blocker_coord),
+                                "corridor missed {blocker_coord:?} on {source:?} -> {destination:?}"
+                            );
+                            assert!(
+                                reverse_corridor.contains(&blocker_coord),
+                                "reverse corridor missed {blocker_coord:?} on {destination:?} -> {source:?}"
+                            );
+                        }
                     }
                 }
             }
@@ -915,10 +1007,39 @@ mod tests {
     }
 
     #[test]
+    fn unpaired_cross_corner_keyholes_do_not_contribute_to_the_threshold() {
+        let observer = at(-5, 2, 0);
+        let target = at(0, 0, 0);
+        let terrain = occupied([at(-4, 2, 2)]);
+        let (centre, paired) = sight_sample_results(observer, target, &terrain);
+        let reachable_destinations = ExactGridPoint::voxel_top_corners(target)
+            .into_iter()
+            .enumerate()
+            .filter(|(destination_index, destination)| {
+                ExactGridPoint::standing_body_top_corners(observer)
+                    .into_iter()
+                    .enumerate()
+                    .any(|(source_index, source)| {
+                        source_index != *destination_index
+                            && sight_segment_is_clear(source, *destination, &terrain)
+                    })
+            })
+            .count();
+
+        assert!(!centre);
+        assert_eq!(paired.into_iter().filter(|clear| *clear).count(), 2);
+        assert!(
+            reachable_destinations >= 3,
+            "the fixture must expose an area-to-area keyhole that pairing rejects"
+        );
+        assert!(!terrain_sight_is_clear(observer, target, &terrain));
+    }
+
+    #[test]
     fn exactly_three_clear_corners_make_the_surface_visible() {
         let target = at(0, 0, 0);
         let blocker = at(-3, 0, 1);
-        let observer = at(-6, 1, 0);
+        let observer = at(-7, 1, 0);
         let terrain = occupied([blocker]);
 
         let (centre, corners) = sight_sample_results(observer, target, &terrain);
