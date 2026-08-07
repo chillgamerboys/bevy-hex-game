@@ -12,7 +12,7 @@ use hex_assets::{
     creator_spell_issues, normalized_name, ContentIndex, CreationCell, CreationCellKind,
     CreationPresetCatalog, CustomCharacterId, CustomSpellId, Effect, ElementCatalog, LatticeFile,
     LatticeLibrary, SavedCharacter, SavedSpell, SpellBook, SpellFile, SpellReference,
-    SubstanceTable, TargetShape, MAX_CREATION_NAME_CHARS,
+    SubstanceTable, TargetShape, TargetingReach, Trajectory, MAX_CREATION_NAME_CHARS,
 };
 use hex_core::{LatticeCoord, Screen};
 use hex_gameplay_model::{
@@ -803,7 +803,14 @@ fn handle_actions(
                     } else {
                         TargetShape::SelfCast
                     };
-                    if *single && saved.spell.targeting.range == 0 {
+                    if !*single {
+                        saved.spell.targeting.reach = TargetingReach::Ranged;
+                        saved.spell.targeting.trajectory = Trajectory::None;
+                    }
+                    if *single
+                        && matches!(saved.spell.targeting.reach, TargetingReach::Ranged)
+                        && saved.spell.targeting.range == 0
+                    {
                         saved.spell.targeting.range = 1;
                     } else if !*single {
                         saved.spell.targeting.range = 0;
@@ -811,10 +818,19 @@ fn handle_actions(
                     session.spell_dirty = true;
                 }
             }
+            CreatorAction::SetTouch(touch) => {
+                session.remember_spell();
+                if let Some(saved) = &mut session.spell {
+                    set_touch_targeting(saved, *touch);
+                    session.spell_dirty = true;
+                }
+            }
             CreatorAction::AdjustRange(delta) => {
                 session.remember_spell();
                 if let Some(saved) = &mut session.spell {
-                    if !matches!(saved.spell.targeting.shape, TargetShape::SelfCast) {
+                    if !matches!(saved.spell.targeting.shape, TargetShape::SelfCast)
+                        && matches!(saved.spell.targeting.reach, TargetingReach::Ranged)
+                    {
                         saved.spell.targeting.range =
                             adjust_u8(saved.spell.targeting.range, *delta, 16);
                     }
@@ -1270,6 +1286,19 @@ fn adjust_u8(value: u8, delta: i8, max: u8) -> u8 {
     }
 }
 
+fn set_touch_targeting(saved: &mut SavedSpell, touch: bool) {
+    saved.spell.targeting.shape = TargetShape::Single;
+    if touch {
+        saved.spell.targeting.reach = TargetingReach::Touch;
+        saved.spell.targeting.range = 0;
+        saved.spell.targeting.trajectory = Trajectory::None;
+    } else {
+        saved.spell.targeting.reach = TargetingReach::Ranged;
+        saved.spell.targeting.range = saved.spell.targeting.range.max(1);
+        saved.spell.targeting.trajectory = Trajectory::Direct;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1305,6 +1334,55 @@ mod tests {
         }
         spell.spell.effects.swap(0, 99);
         assert_eq!(spell.spell.effects.len(), 100);
+    }
+
+    #[test]
+    fn touch_toggle_normalizes_targeting_and_round_trips_through_undo() {
+        let mut session = CreatorSession {
+            spell: Some(SavedSpell::blank(CustomSpellId(1), "Reach Draft")),
+            ..default()
+        };
+        let spell = session.spell.as_mut().expect("the fixture owns a spell");
+        spell.spell.targeting.range = 4;
+        spell.spell.targeting.trajectory = Trajectory::Direct;
+
+        session.remember_spell();
+        set_touch_targeting(
+            session.spell.as_mut().expect("the draft remains editable"),
+            true,
+        );
+        let touch = &session
+            .spell
+            .as_ref()
+            .expect("the draft remains")
+            .spell
+            .targeting;
+        assert_eq!(touch.shape, TargetShape::Single);
+        assert_eq!(touch.reach, TargetingReach::Touch);
+        assert_eq!(touch.range, 0);
+        assert_eq!(touch.trajectory, Trajectory::None);
+
+        undo(&mut session);
+        let ranged = &session
+            .spell
+            .as_ref()
+            .expect("undo restores the draft")
+            .spell
+            .targeting;
+        assert_eq!(ranged.reach, TargetingReach::Ranged);
+        assert_eq!(ranged.range, 4);
+        assert_eq!(ranged.trajectory, Trajectory::Direct);
+
+        redo(&mut session);
+        let touch = &session
+            .spell
+            .as_ref()
+            .expect("redo restores touch")
+            .spell
+            .targeting;
+        assert_eq!(touch.reach, TargetingReach::Touch);
+        assert_eq!(touch.range, 0);
+        assert_eq!(touch.trajectory, Trajectory::None);
     }
 
     #[test]

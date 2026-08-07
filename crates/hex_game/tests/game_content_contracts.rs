@@ -430,6 +430,31 @@ fn the_shipped_archetypes_match_the_design() {
 }
 
 #[test]
+fn shipped_heal_is_the_tier_one_life_touch_restoration() {
+    let spells = SpellBook::from_file(&parse_spells().expect("spells.ron parses and validates"));
+    let heal = spells
+        .id("Heal")
+        .and_then(|id| spells.spell(id))
+        .expect("Heal is shipped");
+
+    assert_eq!(
+        heal.requirements,
+        vec![GemRequirement {
+            element: "Life".to_owned(),
+            mana: 1,
+        }]
+    );
+    assert_eq!(heal.casting, CastingAxis::Evocation);
+    assert_eq!(heal.mana, ManaAxis::Fixed);
+    assert!(!heal.co_castable);
+    assert_eq!(heal.targeting.range, 0);
+    assert_eq!(heal.targeting.reach, hex_assets::TargetingReach::Touch);
+    assert_eq!(heal.targeting.shape, TargetShape::Single);
+    assert_eq!(heal.targeting.trajectory, Trajectory::None);
+    assert_eq!(heal.effects, vec![Effect::RestoreHexes { count: 1 }]);
+}
+
+#[test]
 fn shipped_element_catalog_is_the_exact_canonical_grid() {
     let elements =
         ElementCatalog::from_file(&parse_elements().expect("elements.ron parses and validates"));
@@ -507,6 +532,7 @@ fn every_canonical_fusion_is_castable_only_with_all_distinct_direct_feeders() {
                 co_castable: false,
                 targeting: TargetingSpec {
                     range: 0,
+                    reach: hex_assets::TargetingReach::Ranged,
                     shape: TargetShape::SelfCast,
                     trajectory: Trajectory::None,
                 },

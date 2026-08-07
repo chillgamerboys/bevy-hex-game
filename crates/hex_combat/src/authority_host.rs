@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use bevy::prelude::*;
 use hex_assets::{
     CastingAxis, CombatSettings, ContentIndex, Effect, ElementCatalog, SpellBook, SubstanceTable,
-    TargetShape,
+    TargetShape, TargetingReach,
 };
 use hex_combat_core::{
     ArenaSnapshot, CombatLattice, CombatState, CombatUnit, CombatUnitProjection, ElementNames,
@@ -601,9 +601,10 @@ fn freeze_content(
     let frozen_spells = spells
         .iter()
         .filter_map(|(id, name, spell)| {
-            let targeting = match spell.targeting.shape {
-                TargetShape::SelfCast => FrozenTargeting::SelfOnly,
-                TargetShape::Single => FrozenTargeting::ExactSurface {
+            let targeting = match (&spell.targeting.shape, spell.targeting.reach) {
+                (TargetShape::SelfCast, _) => FrozenTargeting::SelfOnly,
+                (TargetShape::Single, TargetingReach::Touch) => FrozenTargeting::Touch,
+                (TargetShape::Single, TargetingReach::Ranged) => FrozenTargeting::ExactSurface {
                     range: u32::from(spell.targeting.range),
                 },
                 _ => return None,

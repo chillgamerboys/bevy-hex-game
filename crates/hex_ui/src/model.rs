@@ -678,6 +678,8 @@ pub enum CreatorIntent {
     SetEnchantment(bool),
     /// Select single-target or self-cast targeting.
     SetSingleTarget(bool),
+    /// Select exact occupied-unit touch or ordinary ranged targeting.
+    SetTouch(bool),
     /// Adjust spell range.
     AdjustRange(i8),
     /// Adjust enchantment defense.

@@ -904,7 +904,7 @@ Each spell by name:
             casting: Evocation,
             mana: Fixed,
             co_castable: false,
-            targeting: (range: 3, shape: Single, trajectory: Direct),
+            targeting: (range: 3, reach: Ranged, shape: Single, trajectory: Direct),
             effects: [
                 DisableHexes(count: 1, targeted: false),
                 Burn(turns: 2),
@@ -924,13 +924,20 @@ Each spell by name:
 - **`co_castable`** allows casting alongside another spell. A spell that is both
   `Variable` and `co_castable` is what the design calls a **ritual** — you do not write
   "ritual"; it follows from the two flags.
-- **`targeting`** is `range` (how far away the target may be, in hexes), `shape` (what
-  the spell covers once it gets there), and `trajectory`: `Direct`, `Arc(rise: N)`,
-  or `None`. `Direct` tests a straight exact-voxel segment, `Arc` rises `N` integer
-  levels above the higher endpoint, and `None` deliberately ignores material
-  obstruction. Direct and arc authority fails closed if exact terrain occupancy is
-  absent; preview, target cycling, and AI use only currently Observed material facts.
-  Both authored `range` and `Arc.rise` have a technical maximum of 16.
+- **`targeting`** is `range` (how far away an ordinary target may be, in hexes),
+  `reach` (`Ranged` or `Touch`), `shape` (what the spell covers once it gets there),
+  and `trajectory`: `Direct`, `Arc(rise: N)`, or `None`. `Direct` tests a straight
+  exact-voxel segment, `Arc` rises `N` integer levels above the higher endpoint, and
+  `None` deliberately ignores material obstruction. Direct and arc authority fails
+  closed if exact terrain occupancy is absent; preview, target cycling, and AI use
+  only currently Observed material facts. Both authored `range` and `Arc.rise` have a
+  technical maximum of 16.
+
+  `Touch` is not range one. It targets the caster or an Observed occupied unit across
+  one exact bidirectional `Footing` edge, receives no high-ground bonus, and must use
+  `range: 0`, `shape: Single`, and `trajectory: None`. Omitting `reach` in older authored
+  content or Creator saves decodes as `Ranged`; new serialization writes it explicitly,
+  and changing it changes the accepted spell-content revision.
   Old creator saves using `needs_los: true/false` migrate on read to `Direct`/`None`;
   newly written content always uses `trajectory`, and defining both is rejected.
 
@@ -980,8 +987,11 @@ Each spell by name:
 
   This is the schema vocabulary, not a promise that every primitive has a delivered
   runtime consumer. `ModifyIncomingDisables` remains reserved for a future one-shot
-  ward lifecycle and is absent from shipped spell content. `Renewal` currently ships
-  only `RestoreHexes(count: 2)`.
+  ward lifecycle and is absent from shipped spell content. Canonical `Heal` is a
+  tier-one Life Evocation with fixed mana, `co_castable: false`,
+  `targeting: (range: 0, reach: Touch, shape: Single, trajectory: None)` and only
+  `RestoreHexes(count: 1)`. `Renewal` remains ranged and carries only
+  `RestoreHexes(count: 2)`.
 
   The E0 content gives `Scrying Eye` one Divination requirement and retains
   the supported single-target `Reveal` behavior. Its later off-sight live-feed

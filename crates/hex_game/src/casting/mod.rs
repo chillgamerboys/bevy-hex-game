@@ -36,25 +36,27 @@
 //! earns its keep is range: stepping away can carry an anchor out of reach exactly as
 //! stepping toward it brings one in.
 
+use std::collections::BTreeSet;
+
 use bevy::{
     input_focus::{tab_navigation::TabIndex, InputFocus},
     prelude::*,
 };
 use hex_assets::{
     CastingAxis, CombatSettings, ContentIndex, ElementCatalog, ManaAxis, Spell, SpellBook,
-    TargetShape, Trajectory,
+    SubstanceTable, TargetShape, TargetingReach, Trajectory,
 };
-use hex_combat::TurnOrder;
+use hex_combat::{FactionLatticeKnowledge, TurnOrder};
 use hex_core::{
     AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, GameplaySystems, HexCoord,
     InputAction, InputBindings, IssuedCommand, KnowledgeState, LatticeCoord, Mode, PausableSystems,
     PendingDecision, PlayerSeat, Screen, Sextant, SpellId, TilePos, Turn, UnitId,
 };
 use hex_lattice::{castable, CastBlocked, CellKind, LatticeSpec, LatticeState};
-use hex_perception::{FactionKnowledge, FactionMapKnowledge};
+use hex_perception::{FactionKnowledge, FactionMapKnowledge, SurfaceSnapshot};
 use hex_units::{
-    known_trajectory_is_clear, targeting, trajectory_destination, volumes, Downed, Faction,
-    KnownTerrainOccupancy, Player, Selected, StandsOn, UnitRegistry,
+    in_touch_reach, known_trajectory_is_clear, targeting, trajectory_destination, volumes, Body,
+    Downed, Faction, Footing, KnownTerrainOccupancy, Player, Selected, StandsOn, UnitRegistry,
 };
 
 use hex_ui::element_color;
@@ -154,6 +156,8 @@ pub struct Caster {
     pub seat: PlayerSeat,
     /// Which surface it stands on — the origin of every range and shape question.
     pub standing: TilePos,
+    /// Body-specific traversal policy used by exact touch reach.
+    pub body: Body,
 }
 
 /// One spell, as the panel shows it and the preview reads it.
@@ -171,12 +175,16 @@ pub struct SpellRow {
     pub color: Color,
     /// Base range in hexes, before any high-ground bonus.
     pub range: u32,
+    /// Whether the anchor uses ordinary ranged geometry or exact mutual-step touch.
+    pub reach: TargetingReach,
     /// The shape whose volume the preview resolves.
     pub shape: TargetShape,
     /// How exact material occupancy between caster and anchor affects this spell.
     pub trajectory: Trajectory,
     /// Whether the shape begins in the air above the selected surface.
     pub creates_terrain: bool,
+    /// Whether this spell may validly target a retained Downed lattice.
+    pub restores: bool,
 }
 
 /// The spell currently being aimed, if any.
@@ -250,8 +258,11 @@ fn refresh_readout(
     index: Option<Res<ContentIndex>>,
     elements: Option<Res<ElementCatalog>>,
     combat: Option<Res<CombatSettings>>,
+    substances: Option<Res<SubstanceTable>>,
     knowledge: Option<Res<FactionMapKnowledge>>,
+    lattice_knowledge: Option<Res<FactionLatticeKnowledge>>,
     casters: Query<CasterData, (With<Player>, Without<Downed>)>,
+    restoration_targets: RestorationTargetQuery,
     selected: Query<Entity, (With<Player>, With<Selected>, Without<Downed>)>,
 ) {
     let next = build_readout(
@@ -294,16 +305,36 @@ fn refresh_readout(
         let observed = knowledge.as_deref().is_some_and(|knowledge| {
             knowledge.faction(Faction::Player).state(aim.anchor) == KnowledgeState::Observed
         });
-        let reachable = matches!(row.shape, TargetShape::SelfCast)
-            || readout.caster.is_some_and(|caster| {
-                in_range(
-                    caster.standing,
-                    aim.anchor,
-                    row.range,
-                    readout.levels_per_bonus,
-                )
+        let reachable = readout.caster.is_some_and(|caster| {
+            aim_target_reachable(
+                row,
+                &caster,
+                aim.anchor,
+                knowledge
+                    .as_deref()
+                    .map(|knowledge| knowledge.faction(Faction::Player)),
+                substances.as_deref(),
+                readout.levels_per_bonus,
+            )
+        });
+        let restoration_eligible = !row.restores
+            || knowledge.as_deref().is_some_and(|spatial| {
+                let allowed = lattice_knowledge
+                    .as_deref()
+                    .map_or_else(BTreeSet::new, |known| {
+                        restorable_target_ids(
+                            spatial.faction(Faction::Player),
+                            Faction::Player,
+                            known,
+                            &restoration_targets,
+                        )
+                    });
+                spatial
+                    .faction(Faction::Player)
+                    .units()
+                    .any(|(id, unit)| unit.pos == aim.anchor && allowed.contains(&id))
             });
-        survives && row.blocked.is_none() && reachable && observed
+        survives && row.blocked.is_none() && reachable && observed && restoration_eligible
     });
     if aiming.0.is_some() && !valid {
         aiming.0 = None;
@@ -315,11 +346,23 @@ type CasterData = (
     &'static UnitId,
     Option<&'static ControlOwner>,
     &'static StandsOn,
+    &'static Body,
     &'static LatticeSpec,
     &'static LatticeState,
     Option<&'static Turn>,
     Has<Busy>,
 );
+
+type RestorationTargetQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static UnitId,
+        &'static Faction,
+        Option<&'static LatticeSpec>,
+        Option<&'static LatticeState>,
+    ),
+>;
 
 /// Everything outside the ECS queries that the readout is built from.
 ///
@@ -367,7 +410,7 @@ fn build_readout(
     let Some(entity) = acting.or_else(|| selected.iter().next()) else {
         return empty;
     };
-    let Ok((unit, owner, standing, spec, state, turn, busy)) = casters.get(entity) else {
+    let Ok((unit, owner, standing, body, spec, state, turn, busy)) = casters.get(entity) else {
         return empty;
     };
 
@@ -402,6 +445,7 @@ fn build_readout(
             unit: *unit,
             seat: owner.copied().unwrap_or_default().0,
             standing: standing.0.pos,
+            body: *body,
         }),
         unavailable: unavailable_reason(
             sources.mode.is_some_and(|mode| *mode.get() == Mode::Combat),
@@ -566,13 +610,14 @@ fn spell_row(
             element.unwrap_or("no element")
         ),
         cost: format!(
-            "{mana} · range {} · {}",
-            definition.targeting.range,
+            "{mana} · {} · {}",
+            reach_label(definition.targeting.reach, definition.targeting.range),
             shape_label(&definition.targeting.shape)
         ),
         blocked,
         color: element_color(element.and_then(|name| elements.id(name)), elements),
         range: u32::from(definition.targeting.range),
+        reach: definition.targeting.reach,
         shape: definition.targeting.shape.clone(),
         trajectory: definition.targeting.trajectory,
         creates_terrain: definition.effects.iter().any(|effect| {
@@ -581,7 +626,109 @@ fn spell_row(
                 hex_assets::Effect::SetTerrain { .. } | hex_assets::Effect::SpawnWall { .. }
             )
         }),
+        restores: definition
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, hex_assets::Effect::RestoreHexes { .. })),
     }
+}
+
+fn reach_label(reach: TargetingReach, range: u8) -> String {
+    match reach {
+        TargetingReach::Ranged => format!("range {range}"),
+        TargetingReach::Touch => "touch".to_owned(),
+    }
+}
+
+fn known_footing(knowledge: &FactionKnowledge, substances: &SubstanceTable, body: Body) -> Footing {
+    let snapshots: Vec<SurfaceSnapshot> = knowledge
+        .surfaces()
+        .map(|(_, known)| known.snapshot())
+        .filter(|snapshot| !snapshot.blocked)
+        .collect();
+    Footing::from_tiles(
+        snapshots.iter().map(|snapshot| {
+            (
+                &snapshot.pos,
+                &snapshot.span,
+                &snapshot.substance,
+                &snapshot.headroom,
+            )
+        }),
+        substances,
+        body,
+        None,
+    )
+}
+
+fn aim_target_reachable(
+    row: &SpellRow,
+    caster: &Caster,
+    target: TilePos,
+    knowledge: Option<&FactionKnowledge>,
+    substances: Option<&SubstanceTable>,
+    levels_per_bonus: u32,
+) -> bool {
+    if matches!(row.shape, TargetShape::SelfCast) {
+        return target == caster.standing;
+    }
+    match row.reach {
+        TargetingReach::Ranged => in_range(caster.standing, target, row.range, levels_per_bonus),
+        TargetingReach::Touch => {
+            let Some(knowledge) = knowledge else {
+                return false;
+            };
+            let occupied = knowledge
+                .units()
+                .any(|(_, observed)| observed.pos == target);
+            if !occupied {
+                return false;
+            }
+            if target == caster.standing {
+                return knowledge.unit(caster.unit).is_some();
+            }
+            let Some(substances) = substances else {
+                return false;
+            };
+            in_touch_reach(
+                &known_footing(knowledge, substances, caster.body),
+                caster.standing,
+                target,
+            )
+        }
+    }
+}
+
+fn restorable_target_ids(
+    spatial: &FactionKnowledge,
+    caster_faction: Faction,
+    knowledge: &FactionLatticeKnowledge,
+    targets: &RestorationTargetQuery,
+) -> BTreeSet<UnitId> {
+    spatial
+        .units()
+        .filter_map(|(observed_id, _)| {
+            let (id, faction, spec, state) = targets
+                .iter()
+                .find(|(candidate, ..)| **candidate == observed_id)?;
+            let hostile = caster_faction.is_hostile_to(*faction);
+            let hostile_knowledge = hostile
+                .then(|| knowledge.view(caster_faction, *id))
+                .flatten();
+            if hostile && !hostile_knowledge.is_some_and(|known| known.is_complete()) {
+                return None;
+            }
+            let (Some(spec), Some(state)) = (spec, state) else {
+                return None;
+            };
+            if hostile && !hostile_knowledge.is_some_and(|known| known.is_complete_for(spec)) {
+                return None;
+            }
+            spec.cells()
+                .any(|(coord, _)| state.is_disabled(coord))
+                .then_some(*id)
+        })
+        .collect()
 }
 
 /// A shape written the way a player would say it.
@@ -614,7 +761,10 @@ fn resolve_aim_input(
     focusable_controls: Query<(), With<TabIndex>>,
     mut intents: MessageReader<hex_ui::UiIntent>,
     knowledge: Option<Res<FactionMapKnowledge>>,
-    active_units: Query<&UnitId, Without<Downed>>,
+    lattice_knowledge: Option<Res<FactionLatticeKnowledge>>,
+    substances: Option<Res<SubstanceTable>>,
+    unit_states: Query<(&UnitId, Has<Downed>)>,
+    restoration_targets: RestorationTargetQuery,
 ) {
     if pending.is_open() {
         return;
@@ -648,15 +798,35 @@ fn resolve_aim_input(
             };
             let player = knowledge.faction(Faction::Player);
             let known_terrain = known_terrain(player);
+            let restorable = row.restores.then(|| {
+                lattice_knowledge
+                    .as_deref()
+                    .map_or_else(BTreeSet::new, |known| {
+                        restorable_target_ids(player, Faction::Player, known, &restoration_targets)
+                    })
+            });
             let targets = targets_in_range(
                 &readout,
                 &caster,
                 row,
                 player,
                 &known_terrain,
-                &active_units,
+                substances.as_deref(),
+                &unit_states,
+                restorable.as_ref(),
             );
             let fallback = (player.state(caster.standing) == KnowledgeState::Observed
+                && restorable
+                    .as_ref()
+                    .is_none_or(|allowed| allowed.contains(&caster.unit))
+                && aim_target_reachable(
+                    row,
+                    &caster,
+                    caster.standing,
+                    Some(player),
+                    substances.as_deref(),
+                    readout.levels_per_bonus,
+                )
                 && trajectory_available(
                     row.trajectory,
                     caster.standing,
@@ -681,13 +851,22 @@ fn resolve_aim_input(
             };
             let player = knowledge.faction(Faction::Player);
             let known_terrain = known_terrain(player);
+            let restorable = row.restores.then(|| {
+                lattice_knowledge
+                    .as_deref()
+                    .map_or_else(BTreeSet::new, |known| {
+                        restorable_target_ids(player, Faction::Player, known, &restoration_targets)
+                    })
+            });
             let targets = targets_in_range(
                 &readout,
                 &caster,
                 row,
                 player,
                 &known_terrain,
-                &active_units,
+                substances.as_deref(),
+                &unit_states,
+                restorable.as_ref(),
             );
             Some(Aim {
                 anchor: step_target(&targets, aim.anchor).unwrap_or(aim.anchor),
@@ -823,16 +1002,19 @@ fn emit_cast(queue: &mut CommandQueue, readout: &CastReadout, caster: &Caster, a
 /// ally-or-enemy targeting filter and there will not be one: you may heal an enemy and
 /// immolate a friend.
 ///
-/// Downed units remain spatially visible, but the target-cycle shortcut omits them just
-/// as it did before perception became the source of positions. The live-unit query is
-/// only intersected with authorized observations; it can never add a hidden identity.
+/// Downed units remain spatially visible. The target-cycle shortcut omits them for
+/// ordinary spells and includes them for restoration, whose purpose includes revival.
+/// The live-unit query is only intersected with authorized observations; it can never
+/// add a hidden identity.
 fn targets_in_range(
     readout: &CastReadout,
     caster: &Caster,
     row: &SpellRow,
     knowledge: &FactionKnowledge,
     terrain: &KnownTerrainOccupancy,
-    active_units: &Query<&UnitId, Without<Downed>>,
+    substances: Option<&SubstanceTable>,
+    unit_states: &Query<(&UnitId, Has<Downed>)>,
+    restorable: Option<&BTreeSet<UnitId>>,
 ) -> Vec<TilePos> {
     if matches!(row.shape, TargetShape::SelfCast) {
         return (knowledge.state(caster.standing) == KnowledgeState::Observed
@@ -849,11 +1031,23 @@ fn targets_in_range(
     }
     let mut ranked: Vec<(bool, u32, TilePos)> = knowledge
         .units()
-        .filter(|(_, unit)| active_units.iter().any(|id| *id == unit.id))
+        .filter(|(_, unit)| {
+            unit_states
+                .iter()
+                .any(|(id, downed)| *id == unit.id && (row.restores || !downed))
+        })
+        .filter(|(_, unit)| restorable.is_none_or(|allowed| allowed.contains(&unit.id)))
         .map(|(_, unit)| (unit.faction, unit.pos))
         .filter(|(_, pos)| {
             knowledge.state(*pos) == KnowledgeState::Observed
-                && in_range(caster.standing, *pos, row.range, readout.levels_per_bonus)
+                && aim_target_reachable(
+                    row,
+                    caster,
+                    *pos,
+                    Some(knowledge),
+                    substances,
+                    readout.levels_per_bonus,
+                )
                 && trajectory_available(
                     row.trajectory,
                     caster.standing,
@@ -945,8 +1139,14 @@ fn forget_aim(mut aiming: ResMut<Aiming>) {
 
 #[cfg(test)]
 mod tests {
+    use bevy::ecs::system::SystemState;
     use hex_assets::{ArtPalette, ElementFile, SpellFile, SubstanceFile, SubstanceTable};
-    use hex_core::{ElementId, Level};
+    use hex_combat::BaseVisibility;
+    use hex_core::{ElementId, Headroom, HexSpan, Level, LightDomain, SubstanceId};
+    use hex_lattice::{apply_disables, LatticeStats};
+    use hex_perception::{
+        apply_observations, FactionObservation, FactionObservations, ObservedUnit, SurfaceSnapshots,
+    };
 
     use super::*;
 
@@ -998,6 +1198,104 @@ mod tests {
         ContentIndex::build(&elements, &spells, &substances)
             .expect("shipped content cross-references resolve");
         (elements, spells)
+    }
+
+    #[test]
+    fn heal_readout_says_touch_instead_of_range_zero() {
+        let (elements, spells) = shipped_content();
+        let heal = spells
+            .id("Heal")
+            .and_then(|id| spells.spell(id))
+            .expect("Heal is shipped");
+        let row = spell_row("Heal", heal, None, &elements);
+
+        assert_eq!(row.reach, TargetingReach::Touch);
+        assert!(row.restores);
+        assert!(row.cost.contains("touch"));
+        assert!(!row.cost.contains("range 0"));
+    }
+
+    fn observed_spatial(units: &[(UnitId, Faction, TilePos)]) -> FactionMapKnowledge {
+        let snapshots =
+            SurfaceSnapshots::try_from_iter(units.iter().map(|(_, _, pos)| SurfaceSnapshot {
+                pos: *pos,
+                span: HexSpan::new(0.0, 1.0),
+                substance: SubstanceId(10),
+                headroom: Headroom(3),
+                is_solid: true,
+                blocked: false,
+                domain: LightDomain::Exterior,
+            }))
+            .expect("restoration fixtures occupy distinct surfaces");
+        let mut observation = FactionObservation::new();
+        for (id, faction, pos) in units {
+            observation.insert_surface(*pos);
+            observation
+                .try_insert_unit(ObservedUnit {
+                    id: *id,
+                    faction: *faction,
+                    pos: *pos,
+                    provides_sight: true,
+                })
+                .expect("restoration fixtures use distinct unit ids");
+        }
+        let observations = FactionObservations::with_faction(Faction::Player, observation);
+        let mut spatial = FactionMapKnowledge::new();
+        apply_observations(&mut spatial, &snapshots, &observations);
+        spatial
+    }
+
+    #[test]
+    fn restoration_presentation_excludes_healthy_and_opaque_hostile_targets() {
+        let damaged_ally = UnitId(1);
+        let healthy_ally = UnitId(2);
+        let opaque_hostile = UnitId(3);
+        let units = [
+            (damaged_ally, Faction::Player, at(0, 0, 4)),
+            (healthy_ally, Faction::Player, at(1, 0, 4)),
+            (opaque_hostile, Faction::Hostile, at(0, 1, 4)),
+        ];
+        let spatial = observed_spatial(&units);
+        let spec = LatticeSpec::default().with(LatticeCoord::ORIGIN, CellKind::Blank);
+        let healthy = LatticeState::new(&spec, &LatticeStats::default());
+        let mut damaged = healthy.clone();
+        apply_disables(&mut damaged, &[LatticeCoord::ORIGIN]);
+
+        let mut world = World::new();
+        world.spawn((damaged_ally, Faction::Player, spec.clone(), damaged.clone()));
+        world.spawn((healthy_ally, Faction::Player, spec.clone(), healthy));
+        world.spawn((opaque_hostile, Faction::Hostile, spec, damaged));
+
+        let mut lattice_knowledge = FactionLatticeKnowledge::default();
+        lattice_knowledge.observe_base(
+            Faction::Player,
+            opaque_hostile,
+            BaseVisibility {
+                faction: Faction::Hostile,
+            },
+        );
+
+        let mut query_state =
+            SystemState::<RestorationTargetQuery<'static, 'static>>::new(&mut world);
+        let targets = query_state
+            .get(&world)
+            .expect("the restoration query has no fallible parameters");
+        let allowed = restorable_target_ids(
+            spatial.faction(Faction::Player),
+            Faction::Player,
+            &lattice_knowledge,
+            &targets,
+        );
+
+        assert_eq!(allowed, BTreeSet::from([damaged_ally]));
+        assert!(
+            !allowed.contains(&healthy_ally),
+            "restoration has no no-op marker"
+        );
+        assert!(
+            !allowed.contains(&opaque_hostile),
+            "live hostile lattice damage must not leak through an opaque view"
+        );
     }
 
     fn at(x: i32, y: i32, level: Level) -> TilePos {
@@ -1112,7 +1410,7 @@ mod tests {
         );
     }
 
-    /// Every shipped spell becomes a row that says what it costs and how far it reaches.
+    /// Every shipped spell becomes a row that says what it costs and how it reaches.
     ///
     /// Content-driven end to end: if a spell is renamed or its targeting changes, this
     /// is what notices before a player does.
@@ -1123,7 +1421,14 @@ mod tests {
             let row = spell_row(name, definition, None, &elements);
             assert_eq!(row.name, name);
             assert!(!row.detail.is_empty(), "{name} has no identity line");
-            assert!(row.cost.contains("range"), "{name} does not say its range");
+            let expected_reach = match definition.targeting.reach {
+                TargetingReach::Ranged => "range",
+                TargetingReach::Touch => "touch",
+            };
+            assert!(
+                row.cost.contains(expected_reach),
+                "{name} does not say its {expected_reach} reach"
+            );
             assert_eq!(row.range, u32::from(definition.targeting.range));
             assert_eq!(row.shape, definition.targeting.shape);
         }
@@ -1238,6 +1543,7 @@ mod tests {
             unit: UnitId(1),
             seat: PlayerSeat::default(),
             standing: at(0, 0, 4),
+            body: Body::new(hex_core::TraversalProfile::WALKER),
         };
         let rows = names
             .iter()
