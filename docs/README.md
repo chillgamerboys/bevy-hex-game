@@ -36,7 +36,7 @@ doc or the code, not drift.
 | Working on saved characters, Sandbox, deployment, or deterministic test support | [systems/creator-and-sandbox.md](systems/creator-and-sandbox.md) |
 | Wondering who owns a fact that crosses the boundary | [contracts.md](contracts.md) |
 | Writing code that reveals terrain or units | [systems/perception.md](systems/perception.md) |
-| Changing Map/Character camera behavior or obstruction presentation | [systems/camera.md](systems/camera.md) |
+| Changing Map/Third Person/First Person camera behavior or obstruction presentation | [systems/camera.md](systems/camera.md) |
 | Looking at a wrong window | [development/troubleshooting.md](development/troubleshooting.md) |
 | Producing or extending release artifacts | [development/release.md](development/release.md) |
 | Picking up the next piece of work | [planning/roadmap.md](planning/roadmap.md) |
@@ -58,7 +58,7 @@ doc or the code, not drift.
 | [systems/casting.md](systems/casting.md) | Anyone touching spells or terrain magic | What makes a cast legal, the volume it affects, who decides what the material does, and persistent effects | Gameplay owner |
 | [systems/creator-and-sandbox.md](systems/creator-and-sandbox.md) | Anyone touching creators or temporary encounters | Saved blueprints, readiness, Sandbox setup/deployment, frozen snapshots, test-support boundary, and typed return routing | Gameplay owner |
 | [systems/perception.md](systems/perception.md) | Anyone touching sight, fog, AI, or hidden information | Illumination, faction sight, remembered terrain, presentation, and the boundary between them | World owner (gameplay adapters: gameplay owner) |
-| [systems/camera.md](systems/camera.md) | Anyone touching gameplay cameras or obstruction presentation | Map/Character handoff, player-owned full-range look, radius-only prism collision, composable proximity hiding, separate whole-tree fading, and review-only cave cutaways | World owner (`hex_objects` material adapter: shared presentation) |
+| [systems/camera.md](systems/camera.md) | Anyone touching gameplay cameras or obstruction presentation | Three-view cycle and exact Map restoration, tactical First Person, player-owned full-range look, third-person radius-only prism collision, composable model hiding, separate whole-tree fading, and review-only cave cutaways | World owner (`hex_objects` material adapter: shared presentation) |
 | [systems/sky.md](systems/sky.md) | Anyone touching presentation | How the sky is drawn, and the four choices in the shader that are not obvious | World owner |
 | [design/game.md](design/game.md) | Everyone | The game this is heading toward: lattices, elements, spells, damage, and the questions deliberately left open | The designer; open questions close only on purpose |
 | [design/visual-language.md](design/visual-language.md) | Artists, designers, rendering contributors | The canonical art palette, how it grows, and the boundary between colour, material, lighting, and UI | The designer; tooling is shared |

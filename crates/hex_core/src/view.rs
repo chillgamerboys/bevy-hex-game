@@ -57,8 +57,8 @@ impl InspectionCameraSubject {
 /// Requests one Map-camera centering operation for an authorized inspection subject.
 ///
 /// This is deliberately a message rather than retained camera state: moving the
-/// subject afterward does not drag the free Map camera. Character mode independently
-/// follows the current [`InspectionCameraSubject`].
+/// subject afterward does not drag the free Map camera. Both character camera modes
+/// independently follow the current [`InspectionCameraSubject`].
 #[derive(Message, Reflect, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CenterInspectionCamera {
     /// Stable identity of the subject to center.

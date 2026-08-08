@@ -440,27 +440,36 @@ variants, a nonblocking grass tuft and snowy variant, cave moss and lichen, and 
 nonblocking emissive crystal silhouettes. Terrain substances, liquids, construction
 metal, and unit presentation resolve exact palette swatches. Forest and Deep Forest
 publish generated vegetation as shared `ObjectInstance`s while retaining exact
-rotated blockers and stack-safe tree roots. Character mode fades an entire obstructing
+rotated blockers and stack-safe tree roots. Third Person fades an entire obstructing
 tree through isolated per-tree material clones; authored canopy masks remain art
 metadata. Prairie publishes nonblocking grass.
 Caves publishes authored crystal `ObjectInstance`s with presentation-only
 point-light children at its gameplay-light sites.
 
-Character camera mode gives the player exclusive ownership of yaw, full-range pitch,
-and desired zoom. A conservative probe retracts only the effective boom radius against
-the public stacked-terrain projection, waits for continuous full clearance, then
-restores outward monotonically. Near-first-person retraction hides only the selected
-unit through a composable camera-owned visibility reason. Ordinary gameplay keeps cave
-roofs intact, while explicit map-review capture may still request a complete interior
-cutaway. Automated geometry, control-authority, motion-continuity, lifecycle,
-idle-churn, and release-performance gates are live. Seed-exact multi-azimuth walks now
-exercise ordinary pointer movement to a proved destination on every standalone
-selectable map and every Two Rings region. Alberto approved the corrected camera's
-motion and readability in a native Two Rings release walk at runtime head `2397d8e`
-on 2026-08-01. Map mode remains available without a scenario restriction. A
-generated `MapViewHint` may now extend Map mode's zoom ceiling with ten percent
-headroom, so a large initial frame such as Mountain Range does not snap inward on the
-first scroll; Character mode retains its authored ceiling.
+The camera action now cycles Map → Third Person → First Person → Map. Third Person
+gives the player exclusive ownership of yaw, full-range pitch, and desired zoom. A
+conservative probe retracts only its effective boom radius against the public
+stacked-terrain projection, waits for continuous full clearance, then restores outward
+monotonically. First Person instead follows the same disclosed subject at the
+configured `0.6`-unit eye height with a `60°` vertical lens, a horizon entry pitch, and
+no boom sweep. It keeps the tactical cursor/right-drag/click-to-move controls; it does
+not capture the mouse, zoom the fixed eye, or introduce WASD character locomotion.
+
+Near third-person retraction and First Person hide the resolved followed model through
+the same composable camera-owned visibility reason. Retargeting and mode/lifecycle
+transitions restore the complete model without removing fog or other owners. Returning
+from either character view restores the exact saved Map pose and projection. Ordinary
+gameplay keeps cave roofs intact, while explicit map-review capture may still request a
+complete interior cutaway. Automated geometry, control-authority, motion-continuity,
+lifecycle, idle-churn, and release-performance gates are live. Seed-exact
+multi-azimuth walks exercise ordinary pointer movement to a proved destination on every
+standalone selectable map and every Two Rings region. Alberto approved the corrected
+third-person camera's motion and readability in a native Two Rings release walk at
+runtime head `2397d8e` on 2026-08-01; First Person still requires its own native
+motion/control-feel review for final acceptance. Map remains available without a
+scenario restriction. A generated `MapViewHint` may extend its zoom ceiling with ten
+percent headroom, so a large initial frame such as Mountain Range does not snap inward
+on the first scroll; Third Person retains its authored ceiling.
 
 ## What is provisional
 

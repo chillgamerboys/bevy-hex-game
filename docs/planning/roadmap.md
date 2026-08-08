@@ -43,7 +43,8 @@ foundation.
 | Co-casting and rituals | variable-mana group casting after Wave 7 supplies a real Channel action and evidence for initiative and action economy | combat | <!-- linear: HEX-26 owner: shravan-kumaran -->
 | Engine upkeep | the one budgeted Bevy 0.20 upgrade (~Q4 2026) plus the feature trim, landed together in a quiet window before any release | game | <!-- linear: HEX-18 owner: shravan-kumaran -->
 | Fog presentation refinements | full-scene shading for cliff sides and tall props, soft transitions, and fades beyond the live exact-surface tactical caps; current terrain intentionally remains public and pickable | perception |
-| Scenario camera policy | decide when Map mode is appropriate and limit its availability by scenario now that the human-approved Character view is live | world / presentation |
+| Tactical first-person camera | **In Progress / HEX-89:** one rebindable `C` action cycles Map → Third Person → First Person → Map; implementation and automated evidence are present, while native motion/control-feel acceptance and delivery to `dev` remain pending | world / presentation |
+| Scenario camera policy | decide when Map mode is appropriate and limit its availability by scenario after the three-view cycle lands; do not conflate that policy with first-person locomotion | world / presentation |
 | Remaining movement and combat perception adapters | unknown-route restriction; detection, engagement, ordinary-attack targeting, and one-round last-known-position behavior in isolated owner-reviewed PRs; AI and casting anchors are already live | units/combat |
 | V1/V2 legacy removal | remove the frozen V1/V2 parsers, generators, assets, and runtime tests now that every active shipped procedural scenario resolves through V3 | map |
 | Named rule regions | revisit a content-addressable exact-surface overlay when the first region-sensitive spell lands; do not combine biome identity, lighting, and anti-magic into generic tile tags | map/combat |
@@ -82,7 +83,7 @@ foundation.
 | Macro Mountain Range | The selectable radius-77 / 18,019-column world composes 37 atomic cells into 30 logical biome instances with Macro-only adjacency validation, coastal and alpine recipes, one joined watershed, graded mountain tiers, a five-cell massif, generated framing, and a validated Shore-to-massif-base route |
 | Cave lighting and presentation | V3 Caves publishes deterministic gameplay lights over required routes plus authored emissive crystals and restrained presentation-only physical lights |
 | Obstruction-aware visibility and tactical shroud | Target-lit 36/12/1 upper-dome range, a global paired seven-ray character-volume LOS bundle with observer-relative grounded exposed-top low cover, intact deeper cores and disconnected/remote roof-deck blockers, physical cross-domain sight, current-map dark caps, and composable concealment of unobserved hostiles |
-| Character-first camera | Player-authoritative full-range look, radius-only terrain collision with stable recovery, near-character occlusion, whole-tree fading, ordinary opaque cave roofs, seed-exact multi-azimuth traversal over every selectable map and Two Rings region, and Alberto's 2026-08-01 native motion/readability approval |
+| Third-person camera foundation | Player-authoritative full-range look, radius-only terrain collision with stable recovery, near-character occlusion, whole-tree fading, ordinary opaque cave roofs, seed-exact multi-azimuth traversal over every selectable map and Two Rings region, and Alberto's 2026-08-01 native motion/readability approval |
 
 ## Sequencing — independent lanes behind one contract
 

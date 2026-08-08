@@ -24,6 +24,15 @@
     // and 1.0 is straight down.
     character_pitch: 0.3,
 
+    // Tactical first-person keeps the cursor visible and uses the same right-drag
+    // look control as the other camera views. The camera sits at this height above
+    // the character's support surface, enters level with the horizon, and uses a
+    // dedicated vertical lens while the character's complete model is hidden.
+    first_person_eye_height: 0.6,
+    // Signed quarter-turn fraction with the same convention as character_pitch.
+    first_person_pitch: 0.0,
+    first_person_fov_degrees: 60.0,
+
     // WASD pan speed. Scaled by how far out you are zoomed, so panning feels the
     // same at every distance.
     pan_speed: 0.4,

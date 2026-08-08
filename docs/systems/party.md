@@ -29,9 +29,9 @@ character detail belongs to `MainViewDestination::Character`.
 
 The first activation of a card or its number key publishes a presentation-only
 inspection subject and one-shot Map-camera center request. Activating that same member
-again opens its Character Main View. Character camera mode may follow the inspected
-subject, but neither activation changes `Selected`, `Turn`, casting, command ownership,
-or formation assignment.
+again opens its Character Main View. Third Person and First Person may follow the
+inspected subject, but neither activation changes `Selected`, `Turn`, casting, command
+ownership, or formation assignment.
 
 Formation editing is a separate Main View destination opened by the Formation binding
 (`F` by default) during Exploration. It keeps Group/Solo, presets, and the assignment
