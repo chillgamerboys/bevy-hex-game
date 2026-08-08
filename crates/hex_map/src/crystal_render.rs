@@ -1,8 +1,9 @@
-//! Runtime publication for authored V3 cave crystals.
+//! Runtime publication for authored V3 cave and Crystal Ascent crystals.
 //!
 //! Gameplay illumination remains a separate exact [`GameplayLight`](hex_core::GameplayLight)
-//! rooted on the cave floor. This adapter publishes only the authored visual object
-//! and a deliberately restrained physical point light.
+//! rooted on the authored floor. This adapter publishes only the authored visual
+//! object, exact opt-in occupancy for the cathedral heart, and deliberately restrained
+//! physical point lights.
 
 use std::fmt;
 
@@ -68,7 +69,7 @@ pub(crate) struct PreparedCrystal {
     occupancy: Option<hex_core::AuthoredObjectVoxelRuns>,
 }
 
-/// Failure to publish one cave-crystal presentation.
+/// Failure to publish one authored crystal presentation.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum CrystalPresentationError {
     Asset(CaveCrystalAssetError),

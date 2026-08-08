@@ -84,7 +84,10 @@ fn test_app() -> App {
         speed: 5.0,
     });
     app.add_systems(OnEnter(Screen::Gameplay), spawn_terrain);
-    app.add_plugins(hex_combat::plugin);
+    app.add_plugins((
+        hex_units::authored_object_occupancy::plugin,
+        hex_combat::plugin,
+    ));
 
     builder.build()
 }

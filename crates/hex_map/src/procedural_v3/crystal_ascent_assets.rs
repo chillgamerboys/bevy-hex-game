@@ -188,7 +188,7 @@ fn validate_heart(blueprint: &ObjectBlueprint) -> Result<(), CrystalAscentAssetE
         || blueprint.origin.level != 0
     {
         return Err(CrystalAscentAssetError::new(format!(
-            "Crystal Ascent heart '{}' must be a free radius-4 Prop with origin (0, 0, 0) and levels 0..24",
+            "Crystal Ascent heart '{}' must be a free radius-4 Prop with origin (0, 0, 0) and levels 0..=23",
             blueprint.id
         )));
     }
@@ -239,7 +239,7 @@ fn validate_heart(blueprint: &ObjectBlueprint) -> Result<(), CrystalAscentAssetE
     }
     if !has_body || !has_glow || levels != (0..24).collect::<BTreeSet<_>>() {
         return Err(CrystalAscentAssetError::new(format!(
-            "Crystal Ascent heart '{}' must use body and glow voxels across every level 0..24",
+            "Crystal Ascent heart '{}' must use body and glow voxels across every level 0..=23",
             blueprint.id
         )));
     }

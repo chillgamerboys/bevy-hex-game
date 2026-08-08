@@ -130,7 +130,7 @@ fails immediately when ordinary input did not produce the authored transition. T
 focused `walks/camera_first_person.ron` Mountains route uses those assertions to prove
 the three-state cycle, then exercises normal click movement and right-drag look before
 capturing the returned Map frame; typed tests prove exact pose and projection
-restoration. It is presentation evidence, not another entry in the 16-map third-person
+restoration. It is presentation evidence, not another entry in the 17-map third-person
 route manifest.
 
 ## Scope selection

@@ -323,13 +323,24 @@ mod tests {
 
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
-    use hex_core::{HexCoord, SubstanceId};
+    use hex_assets::ObjectInstance;
+    use hex_core::{
+        AuthoredObjectVoxelRuns, ExactGridPoint, HexCoord, SubstanceId, TraversalProfile,
+    };
     use hex_perception::{
         apply_observations, FactionObservation, FactionObservations, ObservedUnit, SurfaceSnapshot,
         SurfaceSnapshots,
     };
     use hex_test_support::TestAppBuilder;
-    use hex_units::Player;
+    use hex_units::{
+        authored_object_sight_segment_is_clear, AuthoredObjectOccupancy, Body, Downed, Player,
+        Standing, StandsOn,
+    };
+
+    use crate::scenarios::tests::{
+        crystal_heart_blocked_sight_pair, crystal_heart_occupancy_snapshot, enter_screen,
+        procedural_gameplay_app_with_combat,
+    };
 
     fn pos(q: i32) -> TilePos {
         TilePos::new(HexCoord::from_axial(q, 0), 4)
@@ -833,5 +844,209 @@ mod tests {
             .expect("former hostile occlusion");
         assert!(!occlusion.contains(PresentationOcclusionReason::Fog));
         assert!(occlusion.contains(PresentationOcclusionReason::InteriorCutaway));
+    }
+
+    #[test]
+    fn shipped_cathedral_heart_drives_seven_ray_knowledge_and_hostile_fog() {
+        let mut app = procedural_gameplay_app_with_combat("Crystal Ascent", false);
+        plugin(&mut app);
+        enter_screen(&mut app, Screen::Gameplay);
+
+        let (heart, heart_runs, expected_occupancy) = crystal_heart_occupancy_snapshot(&mut app);
+        let (observer, target) = crystal_heart_blocked_sight_pair(&app, heart.origin());
+        let (observer_span, target_span) = {
+            let surfaces = app.world().resource::<SurfaceSnapshots>();
+            (
+                surfaces
+                    .get(observer)
+                    .expect("heart fixture observer should be an exposed surface")
+                    .span,
+                surfaces
+                    .get(target)
+                    .expect("heart fixture target should be an exposed surface")
+                    .span,
+            )
+        };
+
+        let player_entities = {
+            let world = app.world_mut();
+            let mut players = world.query_filtered::<Entity, (With<Player>, With<Body>)>();
+            players.iter(world).collect::<Vec<_>>()
+        };
+        let (&observer_entity, remaining_players) = player_entities
+            .split_first()
+            .expect("Crystal Ascent should roster the standard party");
+        for player in remaining_players {
+            app.world_mut().entity_mut(*player).insert(Downed);
+        }
+        app.world_mut()
+            .entity_mut(observer_entity)
+            .remove::<Downed>()
+            .insert(StandsOn(Standing {
+                pos: observer,
+                span: observer_span,
+            }));
+
+        let hostile_id = UnitId(9_999);
+        let hostile = app
+            .world_mut()
+            .spawn((
+                Enemy,
+                hostile_id,
+                Faction::Hostile,
+                Body::new(TraversalProfile::WALKER),
+                StandsOn(Standing {
+                    pos: target,
+                    span: target_span,
+                }),
+                Transform::default(),
+                Visibility::default(),
+                PresentationOcclusion::default(),
+            ))
+            .id();
+        app.update();
+
+        assert!(
+            app.world()
+                .resource::<FactionMapKnowledge>()
+                .faction(Faction::Player)
+                .unit(hostile_id)
+                .is_none(),
+            "the exact heart volume should withhold hostile identity"
+        );
+        assert_ne!(
+            app.world()
+                .resource::<FactionMapKnowledge>()
+                .faction(Faction::Player)
+                .state(target),
+            KnowledgeState::Observed,
+        );
+        assert!(app
+            .world()
+            .get::<PresentationOcclusion>(hostile)
+            .expect("hostile should carry composable presentation authority")
+            .contains(PresentationOcclusionReason::Fog));
+        assert!(
+            app.world_mut()
+                .query::<&FogOverlay>()
+                .iter(app.world())
+                .any(|overlay| overlay.0 == target),
+            "the heart-obscured hostile surface should retain its shroud cap"
+        );
+
+        let heart_root = {
+            let world = app.world_mut();
+            let mut sources = world.query::<(Entity, &ObjectInstance, &AuthoredObjectVoxelRuns)>();
+            sources
+                .iter(world)
+                .find_map(|(entity, instance, _)| {
+                    (instance.object_id().as_str() == "prop/crystal-cathedral-heart")
+                        .then_some(entity)
+                })
+                .expect("the shipped heart source should still be live")
+        };
+        app.world_mut()
+            .entity_mut(heart_root)
+            .remove::<AuthoredObjectVoxelRuns>();
+        app.update();
+
+        assert!(app.world().resource::<AuthoredObjectOccupancy>().is_empty());
+        assert!(
+            app.world()
+                .resource::<FactionMapKnowledge>()
+                .faction(Faction::Player)
+                .unit(hostile_id)
+                .is_some(),
+            "withdrawing the heart volume should reveal the hostile in the same update"
+        );
+        assert_eq!(
+            app.world()
+                .resource::<FactionMapKnowledge>()
+                .faction(Faction::Player)
+                .state(target),
+            KnowledgeState::Observed,
+        );
+        assert!(!app
+            .world()
+            .get::<PresentationOcclusion>(hostile)
+            .expect("hostile should retain its presentation reason set")
+            .contains(PresentationOcclusionReason::Fog));
+        assert!(
+            !app.world_mut()
+                .query::<&FogOverlay>()
+                .iter(app.world())
+                .any(|overlay| overlay.0 == target),
+            "revealing the target should remove its fog cap"
+        );
+
+        app.world_mut()
+            .entity_mut(heart_root)
+            .insert(heart_runs.clone());
+        app.update();
+        assert_eq!(
+            app.world().resource::<AuthoredObjectOccupancy>(),
+            &expected_occupancy,
+            "restoring the exact source should rebuild the blueprint-derived volume"
+        );
+        assert!(app
+            .world()
+            .resource::<FactionMapKnowledge>()
+            .faction(Faction::Player)
+            .unit(hostile_id)
+            .is_none());
+        assert!(app
+            .world()
+            .get::<PresentationOcclusion>(hostile)
+            .expect("hostile should retain its presentation reason set")
+            .contains(PresentationOcclusionReason::Fog));
+
+        let peak = heart_runs
+            .iter()
+            .max_by_key(|run| run.top.level)
+            .expect("the cathedral heart should occupy at least one voxel")
+            .top;
+        let tangent_source = ExactGridPoint::voxel_top_center(TilePos::new(
+            HexCoord::from_axial(peak.coord.x().saturating_sub(2), peak.coord.y()),
+            peak.level,
+        ));
+        let tangent_target = ExactGridPoint::voxel_top_center(TilePos::new(
+            HexCoord::from_axial(peak.coord.x().saturating_add(2), peak.coord.y()),
+            peak.level,
+        ));
+        assert!(
+            authored_object_sight_segment_is_clear(
+                tangent_source,
+                tangent_target,
+                &expected_occupancy,
+            ),
+            "an exact tangent across the shipped heart's upper face must remain clear"
+        );
+        assert_eq!(
+            authored_object_sight_segment_is_clear(
+                tangent_source,
+                tangent_target,
+                &expected_occupancy,
+            ),
+            authored_object_sight_segment_is_clear(
+                tangent_target,
+                tangent_source,
+                &expected_occupancy,
+            ),
+            "the shipped-heart tangency must remain direction symmetric"
+        );
+        assert!(
+            !authored_object_sight_segment_is_clear(
+                ExactGridPoint::voxel_center(TilePos::new(
+                    HexCoord::from_axial(peak.coord.x().saturating_sub(2), peak.coord.y(),),
+                    peak.level,
+                )),
+                ExactGridPoint::voxel_center(TilePos::new(
+                    HexCoord::from_axial(peak.coord.x().saturating_add(2), peak.coord.y(),),
+                    peak.level,
+                )),
+                &expected_occupancy,
+            ),
+            "lowering the same segment into the shipped heart interior must block"
+        );
     }
 }

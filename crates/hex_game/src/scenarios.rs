@@ -482,23 +482,26 @@ pub(crate) mod tests {
         MAX_COMBAT_SUMMARY_DETAILS,
     };
     use hex_core::{
-        AppSystems, AuthoredObjectVoxelRuns, Busy, CommandQueue, ControlOwner,
-        ExteriorIllumination, GameCommand, GameplayLight, GameplaySetup, GameplaySetupFailure,
-        Headroom, HexCoord, HexGrid, HexSpan, HexTile, IlluminationLevel, InteriorRegions,
-        IssuedCommand, KnowledgeState, LatticeCoord, LightDomain, LocalMapKnowledge, MapAnchorId,
-        MapAnchors, MapViewHint, Mode, PartyFormation, PausableSystems, Pause, PendingDecision,
-        PerceptionSystems, PlayerSeat, ResolvedMapSeed, Screen, SpecialMovementRegion,
-        SpecialMovementRegions, SubstanceId, TerrainReady, TilePos, TraversalBlockers, Turn,
-        UnitId,
+        AppSystems, AuthoredObjectVoxelRun, AuthoredObjectVoxelRuns, Busy, CommandQueue,
+        ControlOwner, ExteriorIllumination, GameCommand, GameplayLight, GameplaySetup,
+        GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile, IlluminationLevel,
+        InteriorRegions, IssuedCommand, KnowledgeState, LatticeCoord, LightDomain,
+        LocalMapKnowledge, MapAnchorId, MapAnchors, MapViewHint, Mode, PartyFormation,
+        PausableSystems, Pause, PendingDecision, PerceptionSystems, PlayerSeat, ResolvedMapSeed,
+        Screen, SpecialMovementRegion, SpecialMovementRegions, SubstanceId, TerrainReady, TilePos,
+        TraversalBlockers, TraversalProfile, Turn, UnitId,
     };
     use hex_lattice::{LatticeSpec, LatticeState};
     use hex_map::{
         GenerationReport, MapSettings, ProceduralRecipeMetrics, TerrainSettings, VoxelMap,
     };
-    use hex_perception::{FactionMapKnowledge, ResolvedIllumination};
+    use hex_perception::{
+        can_observe, can_observe_with_authored_objects, FactionMapKnowledge, ResolvedIllumination,
+    };
     use hex_units::{
         either_in_reach, plan_formation_move, AuthoredObjectOccupancy, Body, Downed, Enemy,
-        Faction, Footing, FormationMember, Player, Reach, StandsOn, UnitOccupancy,
+        Faction, Footing, FormationMember, Player, Reach, StandsOn, TerrainOccupancy,
+        UnitOccupancy,
     };
     use hex_world::TimeOfDay;
 
@@ -558,6 +561,155 @@ pub(crate) mod tests {
         }
         RuntimeArtCatalog::from_sources(palette, &styles, &manifest, objects)
             .expect("the shipped runtime art graph should resolve")
+    }
+
+    /// Independently projects every occupied cell in a shipped blueprint into the
+    /// exact world columns of its runtime instance. The production Crystal Ascent
+    /// adapter compacts the same source cells before publishing them; keeping this
+    /// derivation in the acceptance test prevents a self-fulfilling component check.
+    fn expected_object_occupancy(
+        blueprint: &ObjectBlueprint,
+        instance: &ObjectInstance,
+    ) -> AuthoredObjectOccupancy {
+        let runs = blueprint.placements.iter().map(|placement| {
+            let rotated = instance
+                .rotation()
+                .rotate_voxel(placement.position, blueprint.origin)
+                .expect("shipped object coordinates should rotate without overflow");
+            let q = instance
+                .origin()
+                .coord
+                .x()
+                .checked_add(
+                    rotated
+                        .q
+                        .checked_sub(blueprint.origin.q)
+                        .expect("shipped local q offset should be exact"),
+                )
+                .expect("shipped world q should be exact");
+            let r = instance
+                .origin()
+                .coord
+                .y()
+                .checked_add(
+                    rotated
+                        .r
+                        .checked_sub(blueprint.origin.r)
+                        .expect("shipped local r offset should be exact"),
+                )
+                .expect("shipped world r should be exact");
+            let level = instance
+                .origin()
+                .level
+                .checked_add(
+                    rotated
+                        .level
+                        .checked_sub(blueprint.origin.level)
+                        .expect("shipped local level offset should be exact"),
+                )
+                .expect("shipped world level should be exact");
+            let position = TilePos::new(HexCoord::from_axial(q, r), level);
+            AuthoredObjectVoxelRun::new(position, position.level)
+        });
+        AuthoredObjectOccupancy::from_runs(runs)
+            .expect("the shipped object's projected cells should form valid runs")
+    }
+
+    /// Proves and returns the live heart instance, source runs, and exact authority.
+    pub(crate) fn crystal_heart_occupancy_snapshot(
+        app: &mut App,
+    ) -> (
+        ObjectInstance,
+        AuthoredObjectVoxelRuns,
+        AuthoredObjectOccupancy,
+    ) {
+        let (instance, published_runs) = {
+            let world = app.world_mut();
+            let mut objects = world.query::<(&ObjectInstance, &AuthoredObjectVoxelRuns)>();
+            let mut hearts = objects.iter(world).filter(|(instance, _)| {
+                instance.object_id().as_str() == "prop/crystal-cathedral-heart"
+            });
+            let (instance, runs) = hearts
+                .next()
+                .expect("Crystal Ascent should publish one occupied cathedral heart");
+            assert!(
+                hearts.next().is_none(),
+                "Crystal Ascent published two hearts"
+            );
+            (instance.clone(), runs.clone())
+        };
+        let blueprint = app
+            .world()
+            .resource::<RuntimeArtCatalog>()
+            .object(instance.object_id())
+            .expect("the live heart should resolve through the shipped art catalog");
+        let expected = expected_object_occupancy(blueprint, &instance);
+        let published = AuthoredObjectOccupancy::from_runs(published_runs.iter())
+            .expect("the heart component should contain valid compact runs");
+        assert_eq!(
+            published, expected,
+            "heart runs diverged from its blueprint"
+        );
+        assert_eq!(
+            app.world().resource::<AuthoredObjectOccupancy>(),
+            &expected,
+            "authoritative occupancy diverged from the heart component"
+        );
+        let published_cells = published_runs
+            .iter()
+            .map(|run| {
+                usize::try_from(run.top.level.saturating_sub(run.bottom).saturating_add(1))
+                    .expect("shipped heart run length should fit usize")
+            })
+            .sum::<usize>();
+        assert_eq!(
+            published_cells,
+            blueprint.placements.len(),
+            "heart compaction lost or invented an authored structural cell"
+        );
+        (instance, published_runs, expected)
+    }
+
+    /// Finds one chamber pair blocked only by the shipped heart's seven-ray volume.
+    pub(crate) fn crystal_heart_blocked_sight_pair(
+        app: &App,
+        heart: TilePos,
+    ) -> (TilePos, TilePos) {
+        let illumination = app.world().resource::<ResolvedIllumination>();
+        let terrain = app.world().resource::<TerrainOccupancy>();
+        let authored = app.world().resource::<AuthoredObjectOccupancy>();
+        let profile = app
+            .world()
+            .resource::<PerceptionSettings>()
+            .active_profile();
+        let candidates = illumination
+            .iter()
+            .map(|(position, _)| position)
+            .filter(|position| {
+                position.level == heart.level.saturating_sub(1)
+                    && (5..=7).contains(&position.coord.distance(heart.coord))
+            })
+            .collect::<Vec<_>>();
+        for observer in candidates.iter().copied() {
+            for target in candidates.iter().copied() {
+                if observer == target {
+                    continue;
+                }
+                if can_observe(observer, target, illumination, profile, terrain)
+                    && !can_observe_with_authored_objects(
+                        observer,
+                        target,
+                        illumination,
+                        profile,
+                        terrain,
+                        authored,
+                    )
+                {
+                    return (observer, target);
+                }
+            }
+        }
+        panic!("the shipped heart should block at least one otherwise-clear chamber sight bundle");
     }
 
     /// The encounter a scenario names, read off disk.
@@ -1675,7 +1827,19 @@ pub(crate) mod tests {
             1,
             "only the cathedral heart should opt into authored occupancy"
         );
-        assert!(!app.world().resource::<AuthoredObjectOccupancy>().is_empty());
+        let (first_heart, first_runs, first_occupancy) = crystal_heart_occupancy_snapshot(&mut app);
+        let first_occupancy_fingerprint = first_occupancy.fingerprint();
+        assert_ne!(first_occupancy_fingerprint, 0);
+        let heart_support = TilePos::new(
+            first_heart.origin().coord,
+            first_heart.origin().level.saturating_sub(1),
+        );
+        assert!(first_occupancy.blocks_standing_body(heart_support, TraversalProfile::WALKER));
+        assert!(app
+            .world()
+            .resource::<TraversalBlockers>()
+            .contains(heart_support));
+        let first_blocked_pair = crystal_heart_blocked_sight_pair(&app, first_heart.origin());
         assert_eq!(
             app.world_mut()
                 .query_filtered::<Entity, With<Player>>()
@@ -1684,6 +1848,34 @@ pub(crate) mod tests {
             3
         );
         assert!(standing_pos::<Enemy>(&mut app).is_none());
+
+        enter_screen(&mut app, Screen::Title);
+        assert!(
+            !app.world().contains_resource::<AuthoredObjectOccupancy>(),
+            "Title must not retain gameplay occupancy authority"
+        );
+        assert_eq!(
+            app.world_mut()
+                .query::<&AuthoredObjectVoxelRuns>()
+                .iter(app.world())
+                .count(),
+            0,
+            "Title must not retain the generated heart source"
+        );
+
+        enter_screen(&mut app, Screen::Gameplay);
+        assert!(app.world().contains_resource::<TerrainReady>());
+        let (second_heart, second_runs, second_occupancy) =
+            crystal_heart_occupancy_snapshot(&mut app);
+        assert_eq!(second_heart, first_heart);
+        assert_eq!(second_runs, first_runs);
+        assert_eq!(second_occupancy, first_occupancy);
+        assert_eq!(second_occupancy.fingerprint(), first_occupancy_fingerprint);
+        assert_eq!(
+            crystal_heart_blocked_sight_pair(&app, second_heart.origin()),
+            first_blocked_pair,
+            "re-entry must rebuild identical seven-ray obstruction"
+        );
     }
 
     #[test]
