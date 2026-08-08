@@ -403,4 +403,4 @@ Ported from the jxp-skills seed's `/plan-epic`, adapted to this repository: crat
 is the first decomposition seam, selector economics are a planning input, Linear is soft and
 its identities are resolved live, the artifact is committed under `docs/planning/waves/`,
 and the lane field table lives in `wave-protocol.md` rather than being mirrored here. It
-supersedes the wave-manifest template that `$plan-parallel-work` used to carry.
+supersedes the manifest template `$plan-parallel-work` used to carry.
