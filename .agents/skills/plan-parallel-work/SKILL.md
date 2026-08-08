@@ -95,8 +95,8 @@ concerns, the owners, the foundation, and the review budget. Hand that to `$plan
 which owns the wave artifact: the committed manifest under
 `docs/planning/waves/<slug>/`, the lane field table, and the ordering into
 `dispatch_blockers` and `merge_blockers`. Do not invent a second manifest shape here, and do
-not store a wave plan under `.context/` — it is excluded from the repository and invisible
-to every lane builder.
+not store a wave plan under `.context/` — it is untracked scratch, invisible to every lane
+builder and to anyone else's clone.
 
 Do not open PRs or create remote state unless the user also asked to execute.
 

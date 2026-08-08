@@ -42,10 +42,11 @@ docs/planning/waves/<slug>/
   maps/<name>.md         banked exploration — spent, deleted at close-out
 ```
 
-**The artifact is committed, never `.context/`.** `.context/` is excluded from the
-repository, so anything stored there is invisible inside a fresh worktree or to anyone who
-checks the branch out — including every dispatched worker, which is exactly the audience
-the orders exist for. `docs/planning/spell-resolution-wave.md` is the existing precedent
+**The artifact is committed, never `.context/`.** `.context/` holds per-workspace scratch
+and is not tracked, so anything stored there is invisible inside a fresh worktree, in a
+fresh clone, and on the other owner's machine — including to every dispatched worker, which
+is exactly the audience the orders exist for. That is a property of being untracked, not of
+any one ignore rule, so it holds even where `.gitignore` says nothing about the path. `docs/planning/spell-resolution-wave.md` is the existing precedent
 for a committed wave record.
 
 There is **exactly one wave artifact format**. A lane plan that lives anywhere else, in any
@@ -58,16 +59,30 @@ other shape, is not a wave — it is a note.
    outcome, and explicit exclusions.
 2. **Why this wave exists.**
 3. **Locked decisions** — numbered, quoted verbatim into every order they bind.
-4. **Dispatch queue** — §3. One block, one truth.
-5. **Ownership map** — per lane: verbatim paths, regions, composed end-states, hotspot
+4. **Shared foundation** — the live contracts the wave builds on, each with its authority;
+   and every contract change the wave *requires*, with its owner and a behavior-neutral
+   landing plan. A cross-owner contract change with no named owner and no landing plan is a
+   stop condition, not a lane detail.
+5. **Dispatch queue** — §3. One block, one truth.
+6. **Ownership map** — per lane: verbatim paths, regions, composed end-states, hotspot
    rules, and a row for every file a teammate's in-flight branch also touches.
-6. **Territory** — the teammate and other-owner PR and branch sweep, with measured
+7. **Territory** — the teammate and other-owner PR and branch sweep, with measured
    footprints.
-7. **Integration order** — the readiness graph: what runs in parallel, what lands last.
-8. **Combined acceptance** — the `wave/* → dev` gate.
-9. **Stop conditions.**
-10. **Injection log** — one line per `/inject`.
-11. **Close-out.**
+8. **Integration order** — the readiness graph: what runs in parallel, what lands last.
+9. **Combined acceptance** — the `wave/* → dev` gate, enumerated rather than named: the
+   runtime path the wave delivers; the composition and failure paths no single lane owns;
+   regeneration and return-to-title or re-entry where relevant; the affected static
+   camera/UI/rendered-map frames to inspect, or a verified-maintainer N/A; the affected
+   video or human motion, input, and feel route, or a verified-maintainer N/A; and the typed
+   hooks that prove every logical claim.
+10. **Stop conditions.**
+11. **Injection log** — one line per `/inject`.
+12. **Close-out.**
+
+**The manifest is updated as the wave runs, not only when it is written.** Each combined
+checkpoint records its findings and the fixes made on the wave, and each lane's `state` and
+`pr` move as its builder lands it. A manifest that still describes the plan rather than the
+territory is the input to every later collision check, and it will be wrong.
 
 **Decisions are amendable, never edited.** When one is retired mid-wave, keep the original
 text and append an AMENDMENT naming what changed, who ratified it, and when. Orders quote
@@ -115,19 +130,32 @@ files stop being shared, not into equal parts.
 
 ### 4.1 Crate authority is the first seam
 
-Every lane declares one authority, and the crate map decides it:
+Every lane declares one authority: `world`, `gameplay`, or `shared`.
 
-- **world** — `hex_map`, `hex_world`, `hex_perception`, their schema and settings modules,
-  and map/perception content.
-- **gameplay** — `hex_core`, `hex_units`, `hex_combat`, `hex_combat_core`, `hex_lattice`,
-  `hex_anim`, `hex_ai`, `hex_gameplay_model`, and gameplay schema, settings, and content.
-- **shared** — `hex_game`, `hex_ui`, `hex_assets` loader infrastructure, `hex_objects`,
-  `hex_editor`. Integration adapters and tooling, with no gameplay authority of their own.
+**The authoritative owner map is `CLAUDE.md` §"Two owners, two roles" and
+`docs/architecture.md` §Ownership. Read it there and do not copy it into a manifest** — a
+second copy of the crate list is exactly the drift this document exists to avoid, and the
+map has moved before.
+
+Two properties of that map matter more than the crate list when you are cutting lanes:
+
+- **`hex_assets` is split by concern, not by directory.** Generic loader traits, load
+  tracking, registration patterns, and cross-domain reference infrastructure are
+  gameplay-owned; a domain's own schema, validation, settings, and content belong to that
+  domain's owner. So a lane in `hex_assets` declares the authority of *the concern it
+  touches*, and "it is all one crate" is not an argument for calling it `shared`.
+- **`shared` means no domain authority, not joint authority.** `hex_game`, `hex_ui`,
+  `hex_objects`, and `hex_editor` are wiring, presentation, and tooling. A change there
+  that encodes a domain decision is that domain's lane, not a shared one.
 
 **A lane whose `owns` crosses the world/gameplay line is a stop condition.** Re-cut the
 seam, or plan a small behavior-neutral foundation lane that lands on `dev` first. A wave
 does not make ownership collective; it is an integration boundary, not a new owner. When
 two lanes would implement the same authority, that is one concern with one owner.
+
+If a lane's crate is not in the owner map — a new crate, or one the map has not caught up
+with — that is a decision for the owners, not a default. Tag it and route it through review
+mode rather than guessing.
 
 ### 4.2 File and region ownership
 
@@ -205,8 +233,8 @@ already-published wave with an additive commit.
 **Every lane PR targets `wave/<slug>` and merges through the repository's ordinary gate**
 — `/audit-pr` then `/merge-pr`, with a merge commit. Nothing in a wave loop targets `dev` or
 `main`. The single `wave/* → dev` merge is a separate deliberate act by the coordinator,
-gated on a named human having played the exact combined head, and `dev → main` is `/promote`
-only.
+carrying the combined head's own exact-head runtime classification (§7), and `dev → main`
+is `/promote` only.
 
 Integrate in semantic order:
 
@@ -222,7 +250,7 @@ when that branch remains an independently useful review unit.
 ### The composed-tree check
 
 **After every lane merges into the wave, re-plan the selector against the composed head and
-run every selected concern:**
+run the concerns it selects:**
 
 ```sh
 python3 tools/test_scope.py plan --base origin/dev --head origin/wave/<slug>
@@ -233,6 +261,21 @@ jobs only on `main` and `dev`, so nothing validates the wave branch between lane
 lanes green in isolation can compose red — most sharply when a new file imports a symbol
 another lane deleted, which every path-level ownership map is blind to. Discovering that at
 the wave gate, after the builders are gone, costs the wave.
+
+**This is the selector-chosen composed run, not the complete candidate gate**, and the
+distinction is the whole point. The
+[review budget](parallel-development.md) still applies unchanged: detailed review and
+expensive validation escalate when a semantic group becomes coherent, and the full
+platform, shipping, and coverage gate runs **once**, on the final wave PR. Repeating that
+tier per leaf is the V3/Ring7 failure — it consumed time across more than ten provisional
+PRs without increasing confidence in the combined runtime state.
+
+What changed, and why it is worth saying plainly: the earlier guidance was "do not demand a
+separate full workspace run after every mechanically integrated leaf," written when the
+integration branch had CI watching it. It does not. So the *cheap* composed check became
+mandatory per lane while the *expensive* candidate gate stayed once-per-wave. If a single
+lane's paths promote the composed plan to the complete gate, that is a signal about the
+decomposition (§4.3), not a licence to skip the run.
 
 `MERGEABLE` is a claim about text, not about composed behavior. A clean auto-merge is not
 evidence that two changes compose.
@@ -267,8 +310,12 @@ Each lane declares its `evidence` class, and that class drives its gate:
 `.github/workflows/manual-runtime-signoff.yaml` already exempts a PR whose base matches
 `wave/*`, on the grounds that exact-head sign-off belongs to the combined wave PR into
 `dev`. `/audit-pr` records that deferral rather than a hook closure for such a lane. The
-combined `wave/* → dev` PR carries the real named-human `PASS` at its own exact head, and no
-lane's evidence may be copied onto it. Any subsequent commit invalidates that sign-off.
+combined `wave/* → dev` PR carries the real classification at its own exact head, under the
+repository's ordinary two-way rule: a wave whose changed surface includes rendered
+presentation, native input, motion, seams, control feel, or taste needs a **named human's
+`PASS`**; a logic-only wave records a **verified-maintainer `N/A`** naming its authoritative
+hook closure. Wave topology alone does not manufacture a visual gate. No lane's evidence may
+be copied onto the wave PR, and any subsequent commit invalidates either classification.
 
 The display is a **machine-global resource**, along with the human playtest and the disk for
 each worktree's own build directory. The coordinator serializes every visual walk and every
@@ -280,6 +327,12 @@ interactive run on the composed head; parallel builders never invoke them.
 or PRs that already exists and now needs to become one candidate — stale stacked branches,
 duplicate shared logic, or a feature set whose release confidence only comes from combined
 runtime behavior.
+
+**Start by classifying and recording the batch.** If there is no manifest, use
+`$plan-parallel-work` to confirm the batch really is a wave, then write the manifest before
+changing any branch — with the existing branches as its lanes, their real owners as their
+builders, and their measured footprints as the ownership map. Every step below records into
+that artifact, and the inventory is worth nothing if it lives only in a session.
 
 ### Inventory before mutation
 
@@ -379,6 +432,8 @@ Never merge a wave directly to `main`. Promotion is separate and deliberate.
 - A lane PR whose base is not `wave/<slug>`.
 - **Any attempt to merge a wave loop into `dev` or `main` without the coordinator's separate
   human-gated landing.**
-- A `wave/* → dev` PR without a named human's `PASS` at that exact combined head.
+- A `wave/* → dev` PR without an exact-head runtime classification of its own — a named
+  human's `PASS` for a changed presentation or experience surface, or a
+  verified-maintainer `N/A` naming the hook closure for a logic-only wave.
 - The composed selector run red after a lane merge, with both lanes green in isolation.
 - A source diff that cannot be separated from obsolete parent state.

@@ -14,9 +14,12 @@ implementation begins. Do not open one PR per subtask by default.
 
 Once the answer is a wave, use `$plan-epic` to decompose it into lanes with disjoint
 ownership, sequence them with separate `dispatch_blockers` and `merge_blockers`, and commit
-the manifest under `docs/planning/waves/<slug>/`. That covers three or more related lanes,
-several branches touching the same contracts or files, and a feature set whose review only
-means something combined.
+the manifest under `docs/planning/waves/<slug>/`. That covers three or more related lanes
+and a feature set whose review only means something combined.
+
+Reconciling branches or PRs that **already exist** — stale stacked branches, duplicate
+shared logic, a batch that grew without a plan — is `docs/development/wave-protocol.md` §8:
+classify and record the batch first, then inventory before mutating anything.
 
 The canonical rules and decision table are in
 `docs/development/parallel-development.md`; the wave artifact, lane field table, ownership

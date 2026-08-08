@@ -181,22 +181,15 @@ lane at all; it defers to the combined candidate.
 
 ## Step 4 — Sequence: `dispatch_blockers` vs `merge_blockers`
 
-Fill in two fields per lane, separately — never one ordered list:
+Fill in two fields per lane, separately — never one ordered list. What belongs in each is
+[wave-protocol.md §5](../../../docs/development/wave-protocol.md), including the verifiable
+handoff-contract rule; do not copy that table into the manifest.
 
-| Field | Contains | Typical value |
-|---|---|---|
-| `dispatch_blockers` | file or region overlap with a RUNNING lane; an unmade decision; a missing artifact, such as a map not yet banked | **empty** |
-| `merge_blockers` | the lanes that must LAND first: a deletion whose last importer another lane removes, a handoff contract, a fence another lane writes | one or two |
-
-Then audit your own output: **a lane whose only blocker is "merges after X" has an EMPTY
-`dispatch_blockers`.** If more than a couple of lanes carry dispatch blockers, you have
-almost certainly written a merge chain and mislabeled it — the exact failure this
-representation exists to prevent. If the lanes genuinely form a chain, say so and stop.
-
-Every handoff gets a **verifiable contract**, not a promise: "lane L2 leaves
-`crates/hex_units/src/lib.rs` importing nothing from your module — grep-zero that on the
-rebased tree before you delete the file." Late rebase is the worker default, so the order
-says *verify*, never *assume*.
+The part that is *this step's job* is the self-audit: **a lane whose only blocker is "merges
+after X" has an EMPTY `dispatch_blockers`.** If more than a couple of lanes carry dispatch
+blockers, you have almost certainly written a merge chain and mislabeled it — the exact
+failure this representation exists to prevent. If the lanes genuinely form a chain, say so
+and stop; that is stacked work, not a wave.
 
 ## Step 5 — Resolve ambiguity → locked decisions
 

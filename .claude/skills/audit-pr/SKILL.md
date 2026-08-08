@@ -55,8 +55,13 @@ Run in order and stop after the first failure:
    `manual_runtime: "N/A"` with `validation.summary` naming the deferral and the wave
    branch — for a source lane the `N/A` justification is that deferral, not a hook
    closure, and a presentation-touching lane is expected to use it. The combined
-   `wave/* → dev` PR carries the real named-human `PASS` at its own exact head; no lane's
-   evidence may be copied onto it. See
+   `wave/* → dev` PR is classified at its own exact head under the ordinary two-way rule
+   above — a named-human `PASS` for changed presentation or experience, a
+   verified-maintainer `N/A` naming the hook closure for a logic-only wave. Wave topology
+   alone does not manufacture a visual gate, and no lane's evidence may be copied onto the
+   wave PR. For a `wave/*` base the body's sign-off fields are **not read**, so unfilled
+   template placeholders there are expected and do not fail the gate; every other body
+   requirement still applies. See
    [wave-protocol.md](../../../docs/development/wave-protocol.md).
 
 Do not rerun visual review, run a second validation tier, mutate documentation, append

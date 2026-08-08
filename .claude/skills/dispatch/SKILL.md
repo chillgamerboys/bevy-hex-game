@@ -10,8 +10,8 @@ coordinator that dispatches, reviews and merges. **The coordinator writes no imp
 code.** Its scarce resource is not tokens — it is **wall-clock with an idle slot in it**.
 
 **`/dispatch` never merges to `dev` or `main`.** Every lane PR targets `wave/<slug>`. The
-single `wave/* → dev` merge is the coordinator's separate act, gated on a named human
-playing the exact combined head; `dev → main` is `/promote` only. This is the hardest stop
+single `wave/* → dev` merge is the coordinator's separate act, carrying the combined head's
+own exact-head runtime classification; `dev → main` is `/promote` only. This is the hardest stop
 in the skill.
 
 Four hard rules govern every step:
@@ -257,10 +257,12 @@ its reader of record, and a third copy triples an existing drift hazard.
 python3 tools/test_scope.py plan --base origin/dev --head origin/wave/<slug>
 ```
 
-then run every selected concern. This is **mandatory and has no CI backstop**:
+then run the concerns it selects. This is **mandatory and has no CI backstop**:
 `.github/workflows/ci.yaml` runs its `push` jobs only on `main` and `dev`, so nothing
 validates the wave branch between lane merges. It stays mandatory even for a single-lane
-merge — worker-green is not coordinator-green for any environment-dependent test.
+merge — worker-green is not coordinator-green for any environment-dependent test. This is
+the cheap selector-chosen run, not the complete candidate gate; that tier runs once, on the
+final wave PR.
 
 **Ping before you land on the other owner's hotspot.** Shared registration lists, config
 manifests and append-only ledgers serialize everyone. Before merging anything that shares
@@ -275,8 +277,10 @@ nothing is dispatchable, the slot audit says *why*.
 
 Close the wave with the Report below. Then run the serialized legs workers were forbidden
 from running: `/visual-walk` on the composed head for affected presentation, and the
-combined selector gate. **Then stop.** Taking the wave to `dev` needs a named human's
-playtest of that exact combined head, and it is not this skill's step.
+combined selector gate. **Then stop.** Taking the wave to `dev` needs the combined head's own
+exact-head runtime classification — a named human's playtest for a changed presentation or
+experience surface, a verified-maintainer `N/A` naming the hook closure for a logic-only
+wave — and it is not this skill's step.
 
 ## Coordinator safety rules
 
@@ -321,7 +325,7 @@ Escalations resolved: <each, with the ruling>
 Deferred: <legit-defer lanes + reason>
 Debt filed: <issues opened from worker reports>
 Serialized legs run by the coordinator: <list>
-NOT DONE: wave/<slug> → dev needs a named human's playtest of <sha>.
+NOT DONE: wave/<slug> -> dev needs its own exact-head runtime classification at <sha>.
 ```
 
 ## When NOT to invoke

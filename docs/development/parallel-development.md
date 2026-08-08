@@ -81,9 +81,9 @@ checks, unresolved decisions, and the cleanup plan.
 
 [wave-protocol.md](wave-protocol.md) owns that artifact: its layout under
 `docs/planning/waves/<slug>/`, the lane field table, and its lifecycle. `/plan-epic` and
-`$plan-epic` produce it. **The manifest is committed** — anything under `.context/` is
-excluded from the repository and is invisible in a fresh worktree, so lane builders cannot
-read it.
+`$plan-epic` produce it. **The manifest is committed** — `.context/` is untracked scratch,
+invisible in a fresh worktree and in anyone else's clone, so lane builders cannot read a
+plan stored there.
 
 Only the integration owner writes directly to the wave. Lane owners push additive
 commits to their own branches. Published and shared branches are never rebased or

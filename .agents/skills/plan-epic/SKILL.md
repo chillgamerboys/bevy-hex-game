@@ -57,9 +57,9 @@ choice; this skill starts once the answer is a wave. Read `docs/architecture.md`
    its owner and routed through a review draft, not guessed.
 
 7. **Commit the manifest and orders** under `docs/planning/waves/<slug>/`, on a branch off
-   `origin/dev`, through the ordinary PR path. `.context/` is excluded from the repository
-   and is invisible to anyone who checks the branch out, so a wave plan stored there cannot
-   be read by the people who have to build it.
+   `origin/dev`, through the ordinary PR path. `.context/` is untracked scratch and is
+   invisible to anyone who checks the branch out, so a wave plan stored there cannot be read
+   by the people who have to build it.
 
 ## Linear
 
@@ -79,9 +79,9 @@ Executing the wave with parallel agents is Claude-side: `/dispatch` runs isolate
 and `/inject` mutates a running wave. Both depend on harness worktree isolation and agent
 messaging that Codex does not have, which is why there is no `$dispatch`.
 
-A Codex coordinator lands lanes by hand, following `wave-protocol.md` §6 and §8 — the same
-semantic integration order, the same composed-tree check after every lane merge, and the
-same single human-gated merge to `dev`. Do not half-execute a wave: without the slot audit
+A Codex coordinator lands lanes by hand, following `wave-protocol.md` §6 for the merge
+order and the composed-tree check, §8 when the wave is being assembled from branches that
+already exist, and §9 for landing and close-out. Do not half-execute a wave: without the slot audit
 and the territory sweep, parallel lanes stop being tracked and the ownership union stops
 being true.
 

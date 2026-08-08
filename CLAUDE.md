@@ -372,7 +372,7 @@ decomposes and commits the artifact, `/dispatch` runs up to three isolated worke
 against it and merges each lane PR into `wave/<slug>` through the same
 `/audit-pr` → `/merge-pr` gate, and `/inject` adds discovered work to a running wave.
 **`/dispatch` never merges to `dev` or `main`.** The single `wave/* → dev` merge stays a
-deliberate act gated on a named human playing the exact combined head. `/dispatch` and
+deliberate act carrying the combined head's own exact-head evidence. `/dispatch` and
 `/inject` are Claude-only because they need harness worktree isolation and agent
 messaging; a Codex coordinator plans with `$plan-epic` and lands lanes by hand.
 

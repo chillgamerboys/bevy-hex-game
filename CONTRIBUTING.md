@@ -230,7 +230,8 @@ classification.
 A lane PR into `wave/*` runs the ordinary audit and merge gate, but defers its exact-head
 manual runtime sign-off to the combined wave PR — the CI sign-off job already exempts a
 `wave/*` base for exactly that reason. The single `wave/* → dev` merge carries the real
-named-human playtest of the combined head.
+combined head's own exact-head classification — a named-human playtest for changed
+presentation or experience, or the verified-maintainer N/A a logic-only wave already uses.
 
 The complete decision table, review budget, and stale-parent reconciliation are in
 [parallel development and integration waves](docs/development/parallel-development.md); the
