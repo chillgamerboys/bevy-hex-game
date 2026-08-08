@@ -13,7 +13,7 @@ something reserved for later, or something still being asked for?*
 | **live** | Published and consumed in the shipped build |
 | **partial** | One side is live, while the row names the required producer or consumer still pending |
 | **agreed** | Both owners accept the contract and sequencing, but it is not live yet |
-| **reserved** | Type and ordering exist; nothing produces or consumes it yet |
+| **reserved** | Shared vocabulary and/or ordering is defined for later use; no runtime producer or consumer is live |
 | **asked** | Proposed in [planning/boundary.md](planning/boundary.md), not yet agreed |
 
 Detail lives in the doc named in the last column. Where a contract is *asked* rather
@@ -35,6 +35,8 @@ than agreed, the fallback the gameplay side ships without it is in
 | `TerrainEdit::Set` / `::Clear` — the write path | gameplay | world | live | [systems/map.md](systems/map.md) |
 | `BiomeRegions` — published by V3; gameplay consumer pending | world | gameplay | **partial** | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
 | `TraversalBlockers` — exact feature-occupied surfaces consumed by validation, perception, and movement | world | perception / `hex_units` | live | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
+| `SurfaceFeatureBatchId` / `PlaceSurfaceFeature` — exact semantic placement request | future gameplay requester | future world authority | **reserved** — shared types and structural validation only; no runtime publisher or consumer | [planning/boundary.md](planning/boundary.md) M |
+| `SurfaceFeatureId` / `SurfaceFeatureKind` / `SurfaceFeature` / `SurfaceFeaturePlacementOutcome` / `SurfaceFeatures` — correlated answer and complete stack-safe semantic projection | future world authority | future gameplay consumer | **reserved** — shared types and structural validation only; no live registry, placement, or schedule | [planning/boundary.md](planning/boundary.md) M |
 | `RunBottom(Level)` — each run's lowest voxel; exact occupancy for terrain casting and obstruction-aware trajectories | world | gameplay | **live** | [planning/boundary.md](planning/boundary.md) C |
 | `TerrainImpact { batch, volume, ElementId, power }` — declarative canonical-volume voxel damage | gameplay | world | **live** — #175 owns map admission/resolution; #180 adds the paid gameplay spell publisher and monotonic batch ledger | [planning/boundary.md](planning/boundary.md) G |
 | `TerrainImpactOutcome` — one applied or rejected answer with exact per-voxel health transitions | world | gameplay | **live** — #175 publishes the answer, #178 validates it exhaustively, and #180 correlates it under the authority hold before settlement and release | [planning/boundary.md](planning/boundary.md) H |

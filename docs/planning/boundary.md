@@ -522,6 +522,52 @@ creates the hanging-water problem ask K has not solved. The palette stays the wo
 owner's to widen, and gating a material purely because it is powerful remains a balance
 decision that belongs in cost and tier.
 
+## M — Authoritative surface-feature placement (accepted vocabulary; runtime reserved)
+
+**Status — reserved, not live.** `hex_core` defines and structurally validates the
+renderer-independent placement vocabulary. No runtime system publishes or consumes
+these values, no `SurfaceFeatures` resource is inserted by default, no schedule is
+configured, and no placement, rendering, perception, or gameplay behavior changes.
+The first producer and consumer belong to the separate Life mechanics delivery.
+
+`SurfaceFeatureBatchId` is a monotonically allocated, session-local requester
+correlation, never an authored or durable identity. `SurfaceFeatureId` is allocated by
+the authoritative world producer and is stable only within one active map instance; it
+is not a Bevy `Entity`, private V3 `FeatureId`, or Campaign wire identity.
+`SurfaceFeatureKind` is a closed semantic enum, initially `TallGrass`, and carries no
+asset, mesh, palette, generator, blocker, or presentation data.
+
+`SurfaceFeature` contains only its stable id, semantic kind, and exact support
+`TilePos`. `PlaceSurfaceFeature` requests one kind at one exact support.
+`SurfaceFeaturePlacementOutcome` supplies exactly one correlated answer: an applied
+answer carries the complete feature record that must appear in the producer's next
+valid complete projection, while a rejected answer carries no feature. Rejections use
+the fixed precedence `ReusedBatch`, `TerrainUnavailable`, `UnsupportedKind`,
+`InvalidSupport`, then `FeatureConflict`; the first processed use consumes the batch
+whether applied or rejected.
+
+`SurfaceFeatures` is a deterministic complete projection ordered by feature id, with
+exact-support lookup that never collapses levels. Shared validation proves structural
+identity and request/outcome consistency only; material validity, occupancy, stacking,
+blocking, sight, rendering, duration, and removal remain producer or later-mechanics
+policy. Once a consumer exists, a present empty projection means "ready with no
+semantic features," while a missing projection means unavailable and fails closed.
+That future readiness rule does not make the resource live in this foundation.
+
+Shared/core owns the ids, records, request/outcome vocabulary, projection container,
+and structural validation. A later `hex_map` adapter is the sole authority for
+admission, id allocation, mutation, support reconciliation, complete replacement,
+presentation mapping, and outcome publication. Later gameplay owns batch allocation,
+payment, pending authority, adoption, AI, and feedback. `hex_objects` remains an
+`ObjectInstance` renderer, and `hex_perception` gains no behavior here. Private V3
+plans and identities remain private and are not migrated by this contract.
+
+The intended first runtime use processes requests in the existing ordered
+world-consequence flow and publishes the complete projection plus one outcome before
+gameplay consumes it. The later implementation must select and test the exact existing
+shared phase. This reservation creates no parallel terrain, zone, perception, or
+render schedule.
+
 ## D1 — Pre-spawn terrain edit replay
 
 **Need**: save restoration (and encounter-authored terrain — a pre-broken
@@ -612,11 +658,10 @@ without pinning the damage table's version.
   `MapAnchorId`, scenarios and encounters can reference every anchor the
   generator already publishes.
 - **Destructible features (trees, structures)**: deliberately not folded into contract G.
-  `TerrainImpact` covers material voxels; V3 features are semantic instances with
-  separate blocker/canopy projections, and authored object parts explicitly carry no
-  gameplay meaning. The first feature-damaging spell therefore needs its own exact
-  occupancy, response, and acknowledgment contract. Until that need is scheduled,
-  fireballs leave forests and structures standing, as [status.md](status.md) records.
+  Section M reserves placement vocabulary only; it supplies no feature-damage,
+  destruction, or removal contract. `TerrainImpact` still affects material voxels
+  only, and fireballs leave forests and structures standing until a separate
+  feature-response contract is scheduled.
 - **A callable query API for terrain**: deliberately not asked for. `hex_map` is a leaf
   and should stay one; gameplay computing `Footing`, occupancy, and trajectories from
   published components is the same pattern that already works for movement. Ask C is
