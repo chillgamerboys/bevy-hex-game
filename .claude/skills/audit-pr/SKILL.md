@@ -29,7 +29,12 @@ acceptance scope and state with the PR and
 
 Linear is never a merge gate. Do not create a ticket here. New UI observations belong
 through the repository's canonical `linear-ui-bug-intake` workflow; existing issue
-linkage or state correction belongs to `/update-linear`.
+linkage or state correction belongs to `/update-linear`; wave lane children belong to
+`/plan-epic`.
+
+A wave lane routinely carries no ticket — `/plan-epic` keys lanes on their lane id when
+the connector is unavailable. Record `linear.status: "unlinked"` and continue; it never
+changes `overall_status`.
 
 ## Required phases
 
@@ -43,6 +48,16 @@ Run in order and stop after the first failure:
    work requires a verified-maintainer `N/A` naming the typed hook closure. The full
    recorded SHA must equal the PR head. `BLOCKED`, placeholders, stale SHAs, or agent
    self-signoff fail the gate.
+
+   **A PR whose base is `wave/*` is a source lane and defers this evidence.**
+   `.github/workflows/manual-runtime-signoff.yaml` already exempts a `wave/*` base on the
+   grounds that exact-head sign-off belongs to the combined wave PR into `dev`. Record
+   `manual_runtime: "N/A"` with `validation.summary` naming the deferral and the wave
+   branch — for a source lane the `N/A` justification is that deferral, not a hook
+   closure, and a presentation-touching lane is expected to use it. The combined
+   `wave/* → dev` PR carries the real named-human `PASS` at its own exact head; no lane's
+   evidence may be copied onto it. See
+   [wave-protocol.md](../../../docs/development/wave-protocol.md).
 
 Do not rerun visual review, run a second validation tier, mutate documentation, append
 audit records, or silently downgrade a failed check. The template and the gameplay/map

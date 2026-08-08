@@ -43,7 +43,10 @@ exact recommended operations; Linear remains a soft coordination dependency.
 
 Do not replace a valid different link without explicit user direction. Do not create a
 ticket as a fallback. Initial UI observations use the repository's canonical
-`linear-ui-bug-intake` workflow.
+`linear-ui-bug-intake` workflow, and the lane children of an approved wave manifest belong
+to `/plan-epic`. Those two own a parent and their own deduplication, which is why
+[delivery-state.md](../../../docs/development/delivery-state.md) grants them creation
+authority and nothing else.
 
 ## Transition mode
 

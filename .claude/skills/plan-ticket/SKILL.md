@@ -25,6 +25,9 @@ the repository's canonical `linear-ui-bug-intake` workflow, not this skill.
    obsolete, duplicate, conflicting, and genuinely residual acceptance scope.
 5. Choose independent, stacked, or wave topology before proposing lanes, using
    [parallel-development.md](../../../docs/development/parallel-development.md).
+6. If the issue already belongs to a wave that is dispatching, stop and use `/inject`
+   instead. Re-planning over a live wave rewrites the manifest and orders that running
+   builders are reading, and it can hand two of them the same files.
 
 ## Plan
 
