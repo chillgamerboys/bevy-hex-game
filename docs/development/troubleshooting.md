@@ -19,6 +19,7 @@ causes them.
 | Symptom | Cause |
 |---|---|
 | Plain blue window | Assets not found: Bevy fell back to `ClearColor` with no meshes. Run through `cargo`, never the binary directly, and check `BEVY_ASSET_ROOT` in `.cargo/config.toml` |
+| UI panels and button outlines render, but text and icons are absent | The source-tree binary was launched directly and is searching under `target/*/assets`; the log will report missing fonts followed by other assets. Stop it and launch from the repository root with `cargo dev` or `cargo run --release -p hex_game` |
 | Black sky | The sky shader failed to load, or the dome was culled — check `shaders/sky.wgsl` and that `SkyMaterial::specialize` sets `cull_mode = None` |
 | Clouds smeared into streaks | A sky-projection singularity. Check the mirroring in `sky.wgsl`, and verify from the *gameplay* camera — it looks down, so it sees the half of the sky a level screenshot never shows |
 | Terrain looks flat and washed out | Fill light competing with the sun. The terrain has no texture, so shadows are the only thing giving it shape; see `lighting.ron` |

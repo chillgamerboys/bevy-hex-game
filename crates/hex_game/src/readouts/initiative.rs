@@ -16,6 +16,7 @@ pub(super) fn plugin(app: &mut App) {
             .in_set(AppSystems::Update)
             .after(CombatSystems::Advance)
             .after(GameplaySystems::UiContext)
+            .before(hex_ui::UiSystems::Render)
             .run_if(in_state(Screen::Gameplay)),
     );
 }
@@ -73,9 +74,69 @@ fn publish_view(
 
 #[cfg(test)]
 mod tests {
-    use hex_core::UnitId;
+    use std::time::Duration;
+
+    use hex_combat::Initiative;
+    use hex_core::{Headroom, HexCoord, HexSpan, LightDomain, Mode, SubstanceId, TilePos, UnitId};
+    use hex_perception::{
+        apply_observations, FactionObservation, FactionObservations, ObservedUnit, SurfaceSnapshot,
+        SurfaceSnapshots,
+    };
+    use hex_test_support::TestAppBuilder;
 
     use super::*;
+
+    #[derive(Resource, Debug, Default)]
+    struct RenderedInitiative(InitiativeView);
+
+    fn capture_rendered_view(view: Res<InitiativeView>, mut rendered: ResMut<RenderedInitiative>) {
+        rendered.0.clone_from(&view);
+    }
+
+    fn test_app() -> App {
+        let mut builder = TestAppBuilder::new().with_fixed_step(Duration::ZERO);
+        let app = builder.app_mut();
+        app.insert_resource(hex_assets::CombatSettings::default())
+            .init_resource::<InitiativeView>()
+            .init_resource::<RenderedInitiative>()
+            .add_plugins(hex_combat::plugin)
+            .add_plugins(plugin)
+            .add_systems(
+                Update,
+                capture_rendered_view
+                    .in_set(hex_ui::UiSystems::Render)
+                    .run_if(in_state(Screen::Gameplay)),
+            );
+        builder.build()
+    }
+
+    fn observed_hostile_knowledge(hostile: UnitId) -> FactionMapKnowledge {
+        let pos = TilePos::new(HexCoord::ORIGIN, 1);
+        let surfaces = SurfaceSnapshots::try_from_iter([SurfaceSnapshot {
+            pos,
+            span: HexSpan::new(0.0, 1.0),
+            substance: SubstanceId(1),
+            headroom: Headroom(2),
+            is_solid: true,
+            blocked: false,
+            domain: LightDomain::Exterior,
+        }])
+        .expect("the disclosure fixture has one unique surface");
+        let mut player = FactionObservation::new();
+        player.insert_surface(pos);
+        player
+            .try_insert_unit(ObservedUnit {
+                id: hostile,
+                faction: Faction::Hostile,
+                pos,
+                provides_sight: true,
+            })
+            .expect("the disclosure fixture has one unique hostile");
+        let observations = FactionObservations::with_faction(Faction::Player, player);
+        let mut knowledge = FactionMapKnowledge::new();
+        apply_observations(&mut knowledge, &surfaces, &observations);
+        knowledge
+    }
 
     #[test]
     fn projected_order_keeps_canonical_identity_and_side_labels() {
@@ -106,5 +167,55 @@ mod tests {
             view.entries.last().map(|entry| entry.side),
             Some(InitiativeSide::Hostile)
         );
+    }
+
+    #[test]
+    fn rendered_initiative_anonymizes_and_reveals_hostiles_in_the_same_update() {
+        let mut app = test_app();
+        let ally = UnitId(4);
+        let hostile = UnitId(9);
+        app.world_mut()
+            .spawn((ally, Name::new("mage #4"), Faction::Player, Initiative(20)));
+        app.world_mut().spawn((
+            hostile,
+            Name::new("wolf #9"),
+            Faction::Hostile,
+            Initiative(10),
+        ));
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Gameplay);
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<Mode>>()
+            .set(Mode::Combat);
+        app.update();
+
+        let rendered = &app.world().resource::<RenderedInitiative>().0;
+        assert_eq!(rendered.entries.len(), 2);
+        assert!(matches!(
+            rendered.entries.as_slice(),
+            [ally_entry, hostile_entry]
+                if ally_entry.unit == ally
+                    && ally_entry.name == "mage #4"
+                    && hostile_entry.unit == hostile
+                    && hostile_entry.name == "Unobserved hostile"
+                    && !hostile_entry.inspectable
+        ));
+
+        app.world_mut()
+            .insert_resource(observed_hostile_knowledge(hostile));
+        app.update();
+        let rendered = &app.world().resource::<RenderedInitiative>().0;
+        assert!(rendered.entries.iter().any(|entry| {
+            entry.unit == hostile && entry.name == "wolf #9" && entry.inspectable
+        }));
+
+        app.world_mut().remove_resource::<FactionMapKnowledge>();
+        app.update();
+        let rendered = &app.world().resource::<RenderedInitiative>().0;
+        assert!(rendered.entries.iter().any(|entry| {
+            entry.unit == hostile && entry.name == "Unobserved hostile" && !entry.inspectable
+        }));
     }
 }

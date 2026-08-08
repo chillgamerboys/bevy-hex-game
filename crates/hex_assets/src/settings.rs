@@ -54,6 +54,14 @@ pub struct CameraSettings {
     /// Initial close-view pitch as a signed quarter-turn fraction: -1.0 is straight
     /// up, 0.0 is the horizon, and 1.0 is straight down.
     pub character_pitch: f32,
+    /// First-person eye height above the followed character's support surface, in
+    /// world units.
+    pub first_person_eye_height: f32,
+    /// Initial first-person pitch as a signed quarter-turn fraction: -1.0 is
+    /// straight up, 0.0 is the horizon, and 1.0 is straight down.
+    pub first_person_pitch: f32,
+    /// First-person vertical field of view, in degrees.
+    pub first_person_fov_degrees: f32,
     /// WASD pan speed, scaled by zoom distance so panning feels the same when
     /// zoomed out as when zoomed in.
     pub pan_speed: f32,
@@ -142,6 +150,22 @@ impl CameraSettings {
             );
         }
         validate_range("character_pitch", self.character_pitch, -1.0, 1.0, true)?;
+        if !self.first_person_eye_height.is_finite() || self.first_person_eye_height <= 0.0 {
+            return Err("first_person_eye_height must be positive and finite".to_owned());
+        }
+        validate_range(
+            "first_person_pitch",
+            self.first_person_pitch,
+            -1.0,
+            1.0,
+            true,
+        )?;
+        validate_open_range(
+            "first_person_fov_degrees",
+            self.first_person_fov_degrees,
+            0.0,
+            180.0,
+        )?;
         validate_nonnegative("pan_speed", self.pan_speed)?;
         validate_nonnegative("pan_speed_offset", self.pan_speed_offset)?;
         validate_unit_interval("min_pitch", self.min_pitch)?;
@@ -180,6 +204,9 @@ struct UnvalidatedCameraSettings {
     character_collision_release_delay: f32,
     character_self_hide_radius: f32,
     character_pitch: f32,
+    first_person_eye_height: f32,
+    first_person_pitch: f32,
+    first_person_fov_degrees: f32,
     pan_speed: f32,
     pan_speed_offset: f32,
     min_pitch: f32,
@@ -206,6 +233,9 @@ impl<'de> Deserialize<'de> for CameraSettings {
             character_collision_release_delay: raw.character_collision_release_delay,
             character_self_hide_radius: raw.character_self_hide_radius,
             character_pitch: raw.character_pitch,
+            first_person_eye_height: raw.first_person_eye_height,
+            first_person_pitch: raw.first_person_pitch,
+            first_person_fov_degrees: raw.first_person_fov_degrees,
             pan_speed: raw.pan_speed,
             pan_speed_offset: raw.pan_speed_offset,
             min_pitch: raw.min_pitch,
@@ -1060,6 +1090,15 @@ fn validate_range(
     Ok(())
 }
 
+fn validate_open_range(name: &str, value: f32, minimum: f32, maximum: f32) -> Result<(), String> {
+    if !value.is_finite() || value <= minimum || value >= maximum {
+        return Err(format!(
+            "{name} must be finite and strictly within {minimum}..{maximum}"
+        ));
+    }
+    Ok(())
+}
+
 fn validate_unit_interval(name: &str, value: f32) -> Result<(), String> {
     if !value.is_finite() || !(0.0..=1.0).contains(&value) {
         return Err(format!("{name} must be finite and in 0.0..=1.0"));
@@ -1480,6 +1519,9 @@ mod tests {
         assert!((camera.character_collision_release_delay - 0.2).abs() < f32::EPSILON);
         assert!((camera.character_self_hide_radius - 1.0).abs() < f32::EPSILON);
         assert!((camera.character_pitch - 0.3).abs() < f32::EPSILON);
+        assert!((camera.first_person_eye_height - 0.6).abs() < f32::EPSILON);
+        assert!(camera.first_person_pitch.abs() < f32::EPSILON);
+        assert!((camera.first_person_fov_degrees - 60.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -1504,6 +1546,31 @@ mod tests {
             ron::from_str(&alternate).expect("a bounded wide probe should remain configurable");
         assert!((camera.character_probe_radius - 1.8).abs() < f32::EPSILON);
         assert!((camera.character_self_hide_radius - 2.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn first_person_camera_accepts_positive_eye_height_and_lens_boundaries() {
+        for (pitch, fov) in [("-1.0", "0.001"), ("1.0", "179.999")] {
+            let alternate = CAMERA_RON
+                .replacen(
+                    "first_person_eye_height: 0.6",
+                    "first_person_eye_height: 0.000001",
+                    1,
+                )
+                .replacen(
+                    "first_person_pitch: 0.0",
+                    &format!("first_person_pitch: {pitch}"),
+                    1,
+                )
+                .replacen(
+                    "first_person_fov_degrees: 60.0",
+                    &format!("first_person_fov_degrees: {fov}"),
+                    1,
+                );
+            let camera: CameraSettings = ron::from_str(&alternate)
+                .expect("positive eye height, inclusive pitch, and an interior lens must be valid");
+            assert!((camera.first_person_eye_height - 0.000_001).abs() < f32::EPSILON);
+        }
     }
 
     #[test]
@@ -1608,6 +1675,46 @@ mod tests {
                 "character_pitch: 0.3",
                 "character_pitch: 1.1",
                 "character_pitch",
+            ),
+            (
+                "first_person_eye_height: 0.6",
+                "first_person_eye_height: -0.1",
+                "first_person_eye_height",
+            ),
+            (
+                "first_person_eye_height: 0.6",
+                "first_person_eye_height: 0.0",
+                "first_person_eye_height",
+            ),
+            (
+                "first_person_eye_height: 0.6",
+                "first_person_eye_height: NaN",
+                "first_person_eye_height",
+            ),
+            (
+                "first_person_pitch: 0.0",
+                "first_person_pitch: -1.1",
+                "first_person_pitch",
+            ),
+            (
+                "first_person_pitch: 0.0",
+                "first_person_pitch: 1.1",
+                "first_person_pitch",
+            ),
+            (
+                "first_person_fov_degrees: 60.0",
+                "first_person_fov_degrees: 0.0",
+                "first_person_fov_degrees",
+            ),
+            (
+                "first_person_fov_degrees: 60.0",
+                "first_person_fov_degrees: 180.0",
+                "first_person_fov_degrees",
+            ),
+            (
+                "first_person_fov_degrees: 60.0",
+                "first_person_fov_degrees: NaN",
+                "first_person_fov_degrees",
             ),
             ("pan_speed: 0.4", "pan_speed: -0.1", "pan_speed"),
             (

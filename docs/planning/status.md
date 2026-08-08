@@ -107,20 +107,43 @@ automated walk.
 Authoritative spatial perception now runs headlessly every gameplay frame.
 `hex_world` publishes a renderer-independent Bright or Dim exterior tier;
 `hex_perception` derives exact exterior/interior domains, maximum-tier public local
-lights, pooled faction sight, and independent faction memory over stacked `TilePos`
-surfaces. Unknown, Remembered, and Observed terrain snapshots do not leak hidden
-edits, unseen units disappear immediately, and the faction-generic traversal
-projection is rebuilt from the same knowledge. Downed units can remain visible but
-cannot provide sight, and changing `Downed` republishes observation in the same frame.
-Three validated hot-reloadable sight profiles live in `perception.ron`. V3 cave
-sources publish fixed local gameplay lights directly into this headless pipeline.
+lights, exact obstruction-aware pooled faction sight, and independent faction memory
+over stacked `TilePos` surfaces. The target's illumination chooses a 36/12/1
+Bright/Dim/Dark upper-dome radius; every in-range observer-target pair then traces one
+head-center to target-top-center ray plus six standing-body-top corners to their
+matching target corners through compact `RunBottom` terrain occupancy. A blocked
+center requires three clear paired perimeter rays from one observer, never cross-pairs
+or cross-observer pooling. The bundle applies globally and never exceeds seven rays.
+For character LOS, only the exposed top voxel of a run topped within one level of the
+observer's support is low cover, and only when that run continues into material
+directly below the top. Deeper run cores, disconnected one-voxel platforms, two-level
+walls, and vertically remote roofs or decks remain blockers. The raw strict-interior
+segment kernel still tests complete runs symmetrically, but observer-relative
+low-cover classification can make the resulting visibility directional. Material
+interior crossings block, exact tangencies remain clear, and a physically open cave
+mouth permits cross-domain sight. Downed units can remain visible but cannot provide
+sight, and changing `Downed`, a unit position, a light, a sight profile, or terrain
+occupancy republishes observation in the same frame. Three validated hot-reloadable
+sight profiles live in `perception.ron`. V3 cave sources publish fixed local gameplay
+lights directly into this headless pipeline.
+
+The tactical shroud keeps current terrain visible and pickable, but places one dark
+navy cap over every current surface the player does not observe. Unknown and
+Remembered terrain intentionally look alike because live map geometry is public in
+this design. Unobserved hostile roots receive only the composable Fog occlusion
+reason, suppressing their models, picking, shadows, markers, targeting, inspection,
+health bars, and identifying HUD details while combat retains an anonymous initiative
+entry. Unknown, Remembered, and Observed knowledge still gates gameplay facts:
+remembered snapshots do not leak hidden edits, and unseen units disappear immediately.
+The faction-generic traversal projection is rebuilt from that same knowledge.
 World observation gates the gameplay-owned hostile lattice view, every cast anchor,
 and AI identities, effects, turn order, traversal, and legal commands. AI can traverse
-only Observed or Remembered terrain and cannot use Unknown truth. Fog/picking
-presentation, unknown-frontier routing, engagement, ordinary-attack targeting, and
-lost-contact search are not wired yet. Authored emissive cave crystals and restrained
-physical point lights now present every fixed cave gameplay-light source without
-becoming gameplay authority.
+only Observed or Remembered terrain and cannot use Unknown truth. Unknown-frontier
+routing, engagement, ordinary-attack targeting, and lost-contact search are not wired
+yet. Authored emissive cave crystals and restrained physical point lights now present
+every fixed cave gameplay-light source without becoming gameplay authority. The cap
+renderer deliberately shades top faces rather than every cliff side or tall prop;
+full-scene shading and fades remain presentation refinements.
 
 Fort adds the first complete V3 structure recipe and the canonical worked-stone
 substance. A five-level, two-wide curtain surrounds a gravel courtyard and offset
@@ -417,27 +440,36 @@ variants, a nonblocking grass tuft and snowy variant, cave moss and lichen, and 
 nonblocking emissive crystal silhouettes. Terrain substances, liquids, construction
 metal, and unit presentation resolve exact palette swatches. Forest and Deep Forest
 publish generated vegetation as shared `ObjectInstance`s while retaining exact
-rotated blockers and stack-safe tree roots. Character mode fades an entire obstructing
+rotated blockers and stack-safe tree roots. Third Person fades an entire obstructing
 tree through isolated per-tree material clones; authored canopy masks remain art
 metadata. Prairie publishes nonblocking grass.
 Caves publishes authored crystal `ObjectInstance`s with presentation-only
 point-light children at its gameplay-light sites.
 
-Character camera mode gives the player exclusive ownership of yaw, full-range pitch,
-and desired zoom. A conservative probe retracts only the effective boom radius against
-the public stacked-terrain projection, waits for continuous full clearance, then
-restores outward monotonically. Near-first-person retraction hides only the selected
-unit through a composable camera-owned visibility reason. Ordinary gameplay keeps cave
-roofs intact, while explicit map-review capture may still request a complete interior
-cutaway. Automated geometry, control-authority, motion-continuity, lifecycle,
-idle-churn, and release-performance gates are live. Seed-exact multi-azimuth walks now
-exercise ordinary pointer movement to a proved destination on every standalone
-selectable map and every Two Rings region. Alberto approved the corrected camera's
-motion and readability in a native Two Rings release walk at runtime head `2397d8e`
-on 2026-08-01. Map mode remains available without a scenario restriction. A
-generated `MapViewHint` may now extend Map mode's zoom ceiling with ten percent
-headroom, so a large initial frame such as Mountain Range does not snap inward on the
-first scroll; Character mode retains its authored ceiling.
+The camera action now cycles Map → Third Person → First Person → Map. Third Person
+gives the player exclusive ownership of yaw, full-range pitch, and desired zoom. A
+conservative probe retracts only its effective boom radius against the public
+stacked-terrain projection, waits for continuous full clearance, then restores outward
+monotonically. First Person instead follows the same disclosed subject at the
+configured `0.6`-unit eye height with a `60°` vertical lens, a horizon entry pitch, and
+no boom sweep. It keeps the tactical cursor/right-drag/click-to-move controls; it does
+not capture the mouse, zoom the fixed eye, or introduce WASD character locomotion.
+
+Near third-person retraction and First Person hide the resolved followed model through
+the same composable camera-owned visibility reason. Retargeting and mode/lifecycle
+transitions restore the complete model without removing fog or other owners. Returning
+from either character view restores the exact saved Map pose and projection. Ordinary
+gameplay keeps cave roofs intact, while explicit map-review capture may still request a
+complete interior cutaway. Automated geometry, control-authority, motion-continuity,
+lifecycle, idle-churn, and release-performance gates are live. Seed-exact
+multi-azimuth walks exercise ordinary pointer movement to a proved destination on every
+standalone selectable map and every Two Rings region. Alberto approved the corrected
+third-person camera's motion and readability in a native Two Rings release walk at
+runtime head `2397d8e` on 2026-08-01; First Person still requires its own native
+motion/control-feel review for final acceptance. Map remains available without a
+scenario restriction. A generated `MapViewHint` may extend its zoom ceiling with ten
+percent headroom, so a large initial frame such as Mountain Range does not snap inward
+on the first scroll; Third Person retains its authored ceiling.
 
 ## What is provisional
 
@@ -570,8 +602,9 @@ The live implementation retains these explicit limitations:
   unchanged, and preview/AI use only faction-known occupancy. Authoritative casting
   uses complete `RunBottom` occupancy, so Unknown terrain cannot change
   faction-facing choices while full truth can still clip the applied volume. Authored
-  range and arc rise are technically capped at 16. Obstruction-aware sight remains
-  later work.
+  range and arc rise are technically capped at 16. The same rational intersection
+  foundation now serves sight through a separate strict-interior wrapper; casting's
+  closed-contact supercover and endpoint policy are unchanged.
 - **A breached cave roof will not admit daylight.** Terrain edits already keep the
   interior *roof* projection current, but interior **membership** is never re-derived,
   so a chamber you blow open still counts as inside. Live perception therefore

@@ -14,9 +14,9 @@ you do not need to recompile the game.
 | `art/object_catalog.ron` + `art/objects/*.ron` | The validated authored plant, effect, and prop catalog; normally edited through `cargo editor` |
 | `elements.ron` | The six-basic wheel, opposition, and the six direct pair plus six direct triple fusion recipes |
 | `spells.ron` | Spells: what each requires, how it is cast, and what it does |
-| `camera.ron` | Initial map and close-character frames, pan speed, zoom and tilt |
+| `camera.ron` | Initial Map, third-person, and first-person frames, lens, pan speed, zoom, and tilt |
 | `combat.ron` | Engagement thresholds, movement budget, height bonus, what a strike costs, and the open design questions as policy knobs that reject unbuilt variants with a reason |
-| `perception.ron` | Active sight profile, Bright/Dim/Dark ranges, and the downhill sight bonus |
+| `perception.ron` | Active Bright/Dim/Dark sight radii |
 | `lighting.ron` | Sun brightness, colour and angle, ambient light, the sky gradient and its hex clouds |
 | `player.ron` | Player piece size and movement speed |
 | `scenarios.ron` | Internal world + lighting + encounter launch definitions used by Campaign, Sandbox, saves, retry, review, and tests |
@@ -41,7 +41,7 @@ How quickly you *see* the change depends on which file:
 
 | File | When it takes effect |
 |---|---|
-| `camera.ron` | Movement/follow values straight away; close preset on the next `C`; initial map frame on the next rebuild |
+| `camera.ron` | Follow, eye-height, and lens values straight away; entry pitch/radius on the next mode entry; initial Map frame on the next rebuild |
 | `display.ron` | Straight away until the player saves a local presentation choice in Settings |
 | `world.ron` | On the next world rebuild |
 | `substances.ron` | On the next world rebuild |
@@ -94,8 +94,8 @@ The optional review overrides are:
 | Variable | Effect |
 |---|---|
 | `HEX_REVIEW_SEED` | Replaces the configured seed of a seeded scenario |
-| `HEX_REVIEW_VIEW` | Uses `default`, `rotated`, `rear` (180° orbit), or `top-down` map view |
-| `HEX_REVIEW_CAMERA` | Uses the `map` or close `character` camera |
+| `HEX_REVIEW_VIEW` | Authors the deterministic Map pose as `default`, `rotated`, `rear` (180° orbit), or `top-down`; character cameras retain its horizontal azimuth while applying their own pitch, except that `top-down` has no horizontal component and falls back to the original Map heading |
+| `HEX_REVIEW_CAMERA` | Uses the `map`, close `character`, or `first-person` camera |
 | `HEX_REVIEW_TIME` | Sets a cyclic-lighting hour from `0.0` up to, but not including, `24.0` |
 | `HEX_REVIEW_LIQUID_PHASE` | Freezes liquid animation at a finite phase in seconds, wrapped over its visual cycle; captures default to `0.0` |
 | `HEX_REVIEW_FOCUS_ANCHOR` | Moves the selected actor to one exact generated map anchor before framing |
@@ -368,12 +368,12 @@ profiles without coupling them to renderer brightness:
 active: Expansive,
 ```
 
-`Expansive` uses Bright/Dim/Dark horizontal and vertical limits of `36/12/1`,
-`Focused` uses `24/8/1`, and `Tight` uses `18/6/1`. Each axis remains independently
-authored, so vertical visibility can be tuned for caves and sky layers without
-widening the ground footprint. Every profile must keep Bright at least Dim, Dim at
-least Dark, and Dark exactly one in both axes. Invalid edits and unknown fields are
-reported while the last valid settings remain active.
+`Expansive` uses Bright/Dim/Dark radii of `36/12/1`, `Focused` uses `24/8/1`, and
+`Tight` uses `18/6/1`. Every profile must keep Bright at least Dim, Dim at least Dark,
+and Dark exactly one. Each radius feeds the exact upper-dome predicate: horizontal
+distance and upward voxel distance combine by `h² + u² <= radius²`, while downward
+vertical distance is ignored. Invalid edits and unknown fields are reported while the
+last valid settings remain active.
 
 **Use the retained Perlin preset.** Perlin remains a separate, optional terrain
 preset; it is not one of the versioned procedural recipes:

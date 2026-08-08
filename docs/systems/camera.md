@@ -1,30 +1,44 @@
 # Camera presentation
 
-The gameplay camera has two modes with separate authority:
+The gameplay camera has three modes with separate placement rules and one shared
+presentation authority. The configurable Camera action (`C` by default) cycles
+`Map → Third Person → First Person → Map`:
 
 - **Map** is a free pan/orbit view framed by the generated `MapViewHint`. A typed
   `CenterInspectionCamera` request may translate that pose once to a disclosed
   `InspectionCameraSubject` without changing its look or zoom.
-- **Character** follows exactly one disclosure-authorized
+- **Third Person** follows exactly one disclosure-authorized
   `InspectionCameraSubject`, falling back to the gameplay-selected
   `CameraFocusTarget` when no inspection subject exists. The player exclusively owns
   look direction and desired zoom. A deterministic upward-look composition keeps
   ordinary free-look above the supporting floor, while terrain may shorten only the
   rendered boom along that placement ray.
+- **First Person** follows that same resolved subject from the configured eye height,
+  with no orbit boom. It preserves the third-person yaw on entry, starts at the
+  configured horizon pitch, and uses a dedicated `60°` vertical field of view. The
+  complete followed model is hidden through the existing composable camera reason.
+
+The cycle saves the complete Map pose only when leaving Map. Returning from either
+character view restores that exact focus, transform, desired radius, and projection;
+cycling between Third Person and First Person never overwrites it. If the followed
+subject becomes unavailable, either character view fails safely back to that saved
+Map pose.
 
 This is presentation only. Camera geometry never grants sight, changes gameplay
 targeting legality, brightens darkness, or becomes an occupancy fact. A unit hidden
-by the near-camera presentation envelope is also ignored by Bevy picking until it is
-shown again; that suppression does not alter gameplay command authority.
+by the near-camera presentation envelope, or the complete model hidden in First
+Person, is also ignored by Bevy picking until it is shown again; that suppression does
+not alter gameplay command authority.
 
 Party and disclosed Initiative activation publish inspection state through the
-gameplay adapter. The first activation centers Map mode; Character mode follows that
-subject until it changes or becomes unavailable. Publishing inspection never mutates
-`Selected`, `Turn`, caster, command ownership, or formation state. An unobserved
-hostile publishes no inspection subject or center request. Multiple simultaneous
-inspection subjects are malformed and fail closed to the unique gameplay selection.
+gameplay adapter. The first activation centers Map mode; both character modes follow
+that subject until it changes or becomes unavailable. Publishing inspection never
+mutates `Selected`, `Turn`, caster, command ownership, or formation state. An
+unobserved hostile publishes no inspection subject or center request. Multiple
+simultaneous inspection subjects are malformed and fail closed to the unique gameplay
+selection.
 
-## Character motion regression contract
+## Character-view motion regression contract
 
 Human motion review of the first adaptive candidate (`9bbaddf`) found defects that
 the endpoint screenshot suite could not expose:
@@ -38,7 +52,7 @@ the endpoint screenshot suite could not expose:
 | Automated review reported green despite the motion defects. | Scripted captures were taken after movement settled and proved route coverage, not temporal continuity or control feel. | Headless regressions cover frame sequences and exact authority; final acceptance also requires a native motion review, not still images alone. |
 
 These are behavior contracts, not tuning preferences. Rotation always matches player
-input exactly. For ordinary upward free-look, the placement ray may lag that authored
+input exactly. In Third Person, the placement ray may lag that authored
 pitch by at most `15°`; this keeps the long third-person boom above the supporting floor
 and the character near the lower portion of the frame. Beyond the first `15°` of upward
 look, the placement ray tracks the authored pitch with that fixed composition offset,
@@ -47,11 +61,17 @@ view. This placement is a pure function of player look, so walking cannot change
 Terrain then changes position only along that placement ray: it retracts immediately,
 remains stable through changing partial clearance, waits for the configured release
 delay after complete clearance, and restores at the configured maximum rate.
-`PanOrbitCamera.radius` remains the player's requested zoom throughout.
+`PanOrbitCamera.radius` remains the player's requested third-person zoom throughout.
+
+First Person keeps the ordinary tactical input model: the cursor stays visible,
+right-mouse drag authors full-range yaw and pitch, and left-click movement remains the
+only ordinary locomotion. It does not capture the mouse or add WASD character movement.
+WASD remains Map-only, and wheel input is consumed without changing the fixed
+first-person eye. This mode is a viewpoint, not a second movement system.
 
 ## Boundary
 
-`hex_world` cannot depend on `hex_map` or `hex_units`. Character collision therefore
+`hex_world` cannot depend on `hex_map` or `hex_units`. Third-person collision therefore
 builds a cached index exclusively from public `HexTile`, `TilePos`, and `HexSpan`
 components. The index preserves every stacked run at one `HexCoord`, sorts spans
 canonically, rebuilds only when a published tile is added, changed, or removed, and is
@@ -62,13 +82,17 @@ are bounded to `0.0 < radius <= 2.0` world units; an invalid runtime value fails
 instead of shrinking the candidate set and tunnelling through terrain.
 
 No physics engine or private voxel storage participates. Terrain edits refresh the
-same public projection before the next Character-camera resolution.
+same public projection before the next third-person-camera resolution. First Person
+does not sweep a boom: valid standing placement already supplies the canonical clear
+two-voxel character volume around its configured eye point.
 
 ## Desired and effective pose
 
-`PanOrbitCamera.radius` is always the player's desired zoom, and the camera
-`Transform.rotation` is always the player's authored look direction. Character
-collision keeps only an independent effective radius:
+In Map and Third Person, `PanOrbitCamera.radius` is the player's desired zoom. First
+Person instead fixes it to a one-unit synthetic look point so the shared orbit
+component retains a well-defined focus without moving the eye. In every mode,
+`Transform.rotation` is the player's authored look direction. Third-person collision
+keeps only an independent effective radius:
 
 1. Derive the placement ray from player-authored rotation. Level and downward views use
    the exact orbit ray. Shallow upward free-look retains a horizontal boom; beyond the
@@ -108,20 +132,25 @@ The shipped defaults in `camera.ron` are:
 | release delay | `0.2` seconds |
 | radius restoration | `8.0` world units/second |
 | self-hide radius | `1.0` world units |
-| initial pitch | `0.3` quarter-turn fractions |
-| Character pitch arc | `-1.0..=1.0` (straight up through straight down) |
+| third-person initial pitch | `0.3` quarter-turn fractions |
+| First Person eye height | `0.6` world units |
+| First Person initial pitch | `0.0` (horizon) |
+| First Person vertical field of view | `60°` |
+| character-view pitch arc | `-1.0..=1.0` (straight up through straight down) |
 
 Manual orbit input changes rotation directly, including at both vertical poles. The
-full Character arc is a code-level contract rather than a configurable narrower range.
-Simultaneous wheel input still changes desired zoom. Switching back to Map restores the
-exact saved map pose.
+full character-view arc is a code-level contract rather than a configurable narrower
+range. Simultaneous wheel input still changes desired zoom in Third Person; First
+Person drains it without moving the eye. Switching back to Map restores the exact
+saved pose and non-first-person projection.
 
 ## Trees and interiors
 
-Generated trees publish one exact stack-safe root. `hex_objects` copies
-`TreeOccluder(root)` and an opaque `TreeFadeAmount` to every trunk, branch, foliage,
-and canopy render chunk. `hex_world` intersects the final camera-focus corridor with
-transformed chunk bounds; one blocking chunk fades every chunk at that exact root to
+Generated trees publish one exact stack-safe root. Independently of camera mode,
+`hex_objects` copies `TreeOccluder(root)` and an opaque `TreeFadeAmount` to every trunk,
+branch, foliage, and canopy render chunk. In Third Person only, `hex_world` intersects
+the final camera-focus corridor with transformed chunk bounds; one blocking chunk
+fades every chunk at that exact root to
 20%, holds for 0.2 seconds after clearance, then restores over 0.3 seconds. A lone
 tree retains that exact opacity regardless of how its renderer chunks are split. When
 several exact trees intersect the corridor at once, their intersecting chunks share
@@ -138,30 +167,36 @@ the same catalog style is never mutated. Authored `CanopyOccluder` metadata rema
 separate art boundary and does not create camera behavior by itself.
 
 Ordinary gameplay never removes cave roofs. Those roof runs remain visible collision
-geometry, allowing the collision-limited camera to stay inside a tight interior. Only explicit
+geometry, allowing the collision-limited camera to stay inside a tight interior.
+First Person does not fade trees or remove roofs: ordinary world geometry remains
+visible from the eye. Only explicit
 `map-review` tooling may install the full-cutaway override, which hides the complete
 roof of the selected exact `InteriorRegionId` for one deterministic capture.
 
 ## Ordering and lifecycle
 
-Character follow runs in `PostUpdate` after unit animation and before transform
+Character-view follow runs in `PostUpdate` after unit animation and before transform
 propagation. Camera-driven presentation then uses the shared order:
 
 `ResolveCameraOcclusion → ApplyMaterials → ApplyVisibility`
 
 Tree intersection observes final propagated camera/object transforms, renderer-owned
 material changes settle before composed visibility, and fog/review reasons remain
-independent. Near-character hiding adds and removes only its own composable reason.
+independent. Near-character and First Person hiding add and remove only their shared
+camera-owned composable reason.
 Gameplay exit clears collision indexes, effective-radius recovery state, proximity
 ownership, fade timelines, temporary material clones, and OIT ownership. Retargeting
 inspection or gameplay selection also discards the previous unit's collision history
 and resolves the new unit's own clear or obstructed corridor in the same frame.
 
-Focused tests cover prism faces/corners and stacked spans, exact player-rotation
-authority, both vertical poles, simultaneous orbit/zoom input, 120 open-motion frames,
-blocked-clearance chatter, delayed monotonic recovery, proximity occlusion composition,
-a clear and obstructed focus retarget, one-shot Map inspection centering, Character
-inspection follow and selected-target fallback, no gameplay-authority mutation, a
+Focused tests cover the exact three-state cycle and Map-pose/projection restoration;
+first-person eye height, horizon entry, `60°` lens, fixed-eye input, subject following,
+retargeting, and composable full-model hiding; prism faces/corners and stacked spans;
+exact player-rotation authority; both vertical poles; simultaneous third-person
+orbit/zoom input; 120 open-motion frames; blocked-clearance chatter; delayed monotonic
+recovery; proximity occlusion composition; a clear and obstructed focus retarget;
+one-shot Map inspection centering; character-view inspection follow and
+selected-target fallback; no gameplay-authority mutation; a
 synthetic flat radius-55 lower-level benchmark,
 a 2,048-render-chunk tree-fade
 performance gate, 10,000 unchanged frames, whole-tree/material isolation, review-only
@@ -179,6 +214,18 @@ ordinary pointer movement and bounded party-idle waiting, followed by an exact c
 that the selected unit's authoritative footing and the camera-focus surface both equal
 the requested destination. Sky Islands exercises only its reachable ordinary ground
 bridge.
+
+The separate `walks/camera_first_person.ron` route is a focused Mountains proof, not
+a seventeenth manifest entry. It uses typed `AssertCameraMode(Map|Character|FirstPerson)`
+steps around ordinary `C` input, performs click-to-move through the normal pointer
+adapter, applies a bounded right-drag look, and captures the restored Map frame. Run it
+with:
+
+```sh
+HEX_WALK_SCRIPT=walks/camera_first_person.ron \
+HEX_WALK_OUT=.context/visual-walks/first-person \
+cargo run -p hex_game --features visual-walk
+```
 
 Mountain Range's presentation walk explicitly removes hostile rosters before actor
 setup, behind the default-off `visual-walk` feature. This keeps combat outside a
@@ -207,6 +254,8 @@ evidence proves only their grounded bridges. The harness does not invent movemen
 capabilities or treat static frames as play-feel approval. Alberto completed the human
 motion/readability gate on 2026-08-01 in the shipped release path on Two Rings at
 runtime head `2397d8e` and approved the corrected player-controlled camera for merge.
-Future camera-behavior changes must repeat a native motion review, including blocked
-yaw cases that confirm immediate safe retraction and smooth recovery after the player
-rotates clear.
+The HEX-89 First Person candidate still requires a native motion review covering the
+three-state cycle, full look range, steps, walls and ceilings, retargeting, complete
+model restoration, and exact Map-pose restoration. Future camera-behavior changes must
+also repeat the applicable native route, including blocked third-person yaw cases that
+confirm immediate safe retraction and smooth recovery after the player rotates clear.
