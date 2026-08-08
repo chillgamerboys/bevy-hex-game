@@ -29,12 +29,10 @@ acceptance scope and state with the PR and
 
 Linear is never a merge gate. Do not create a ticket here. New UI observations belong
 through the repository's canonical `linear-ui-bug-intake` workflow; existing issue
-linkage or state correction belongs to `/update-linear`; wave lane children belong to
-`/plan-epic`.
+linkage, state correction, or policy-governed deletion belongs to `/update-linear`.
 
-A wave lane routinely carries no ticket — `/plan-epic` keys lanes on their lane id when
-the connector is unavailable. Record `linear.status: "unlinked"` and continue; it never
-changes `overall_status`.
+A wave lane routinely carries no ticket because the manifest is its queue and primary key.
+Record `linear.status: "unlinked"` and continue; it never changes `overall_status`.
 
 ## Required phases
 

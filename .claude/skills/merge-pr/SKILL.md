@@ -52,9 +52,10 @@ requires the combined head rather than any source-lane receipt.
 
 Follow [delivery-state.md](../../../docs/development/delivery-state.md). If one linked
 issue's complete promised outcome has now landed on `dev`, invoke `/update-linear` to
-verify and move it to the live `Done` equivalent. A source PR entering a wave, a
-partial epic, or a symptom-level fix remains non-terminal. Linear failure is reported
-but never changes a valid merge result.
+retire it: `Done` when it must be retained, or verified deletion after the required durable
+record exists under the free-workspace policy. A source PR entering a wave, a partial epic,
+or a symptom-level fix remains non-terminal. Linear failure is reported but never changes a
+valid merge result.
 
 Before deleting the remote head, verify it is neither `dev` nor `main`, is not a base
 for any open PR, and is not a still-needed source lane. Never delete a `wave/*` branch

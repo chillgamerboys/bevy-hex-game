@@ -63,15 +63,14 @@ choice; this skill starts once the answer is a wave. Read `docs/architecture.md`
 
 ## Linear
 
-Reconcile existing `HEX-N` through `$reconcile-delivery-state`. This skill may create the
-child issues of an approved manifest — it is one of two workflows authorized to create,
-because it owns both a parent and its own deduplication (see
-`docs/development/delivery-state.md`). Resolve the team, parent, and workflow state from
-live connector data on every run; never embed a workspace UUID, and never create the epic
-itself.
+Reconcile existing `HEX-N` through `$reconcile-delivery-state`. The manifest is the lane
+queue, so this skill never creates one Linear child per lane. Reuse an existing issue only
+when it already represents that lane's product or cross-owner coordination outcome;
+otherwise leave `ticket: null` and key the lane on its id. Never create the epic itself.
 
-If Linear is unavailable, warn visibly, key every lane on its lane id, put the recommended
-child set in the handoff, and continue. Linear never blocks planning or dispatch.
+Resolve live identities when Linear is available. If it is unavailable, warn visibly and
+continue. Linear never blocks planning or dispatch. After delivery, apply the free-workspace
+retention policy in `docs/development/delivery-state.md`.
 
 ## Capability boundary
 

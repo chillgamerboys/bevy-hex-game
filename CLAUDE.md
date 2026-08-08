@@ -405,15 +405,17 @@ walk used by `/audit-pr`; the agent
 reads static camera/UI/rendered-map frames, and video/human checks own motion, input
 response, control feel, and taste).
 Tickets live in Linear (team HEX): `/plan-ticket` reconciles and starts an existing
-issue, while `/update-linear` binds an existing issue to a PR or applies an explicit
-state transition. Initial UI defects use the tool-neutral
+issue, while `/update-linear` binds, transitions, or policy-retires an existing issue.
+Initial UI defects use the tool-neutral
 `.agents/skills/linear-ui-bug-intake` workflow; Claude's
 `/linear-ui-bug-intake` is a thin adapter over that same contract. All Linear skills
 resolve teams, workflow states, labels, members, and parents from live connector data
 instead of embedding workspace UUIDs. Linear linkage is encouraged, never a merge
-gate. A skill may create issues only where it also owns deduplication and a parent —
-`linear-ui-bug-intake` for bug children, and `/plan-epic` for the lane children of an
-approved wave manifest. Every other skill reconciles and links, never creates.
+gate. The committed wave manifest owns lane execution state, so `/plan-epic` and
+`/inject` reuse existing issues selectively and never mint one child per lane. New issue
+creation is limited to deduplicated `linear-ui-bug-intake` children. Fully delivered issues
+follow the free-workspace deletion policy in `docs/development/delivery-state.md` only after
+their outcome and exact `dev` delivery are recorded durably.
 
 ## Current state
 

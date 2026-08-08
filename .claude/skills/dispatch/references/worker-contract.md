@@ -34,11 +34,11 @@ dispatches, reviews and merges; you implement.
    clock, GPU, or window size. Speeds come from Res<Time>, never SystemTime.
    Green in your worktree and red in the coordinator's composed run costs
    more than it saved.
-6. LATE REBASE IS THE DEFAULT. Verify now; then, immediately before opening
-   your PR, re-fetch origin/wave/<slug>, rebase and re-run your gates. A
-   double rebase is cheap; a stale branch is not. If that rebase pulls ANY
-   merge — a teammate's or a sibling worker's — into a region you touched,
-   re-verify the region and REPORT the interaction. Never resolve it
+6. LATE ADDITIVE REFRESH IS THE DEFAULT. Verify now; then, immediately before
+   opening your PR, re-fetch origin/wave/<slug>, merge it into your lane, and
+   re-run your gates. Published lane history is never rebased or force-pushed.
+   If that merge pulls ANY change — a teammate's or a sibling worker's —
+   into a region you touched, re-verify the region and REPORT the interaction. Never resolve it
    silently: a clean auto-merge is not evidence that two changes compose.
 7. Before claiming a number or a slot in a shared append-only list (scenario
    ids, fixture indices, wave numbers), check the OTHER open branches.

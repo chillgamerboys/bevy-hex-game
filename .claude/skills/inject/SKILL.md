@@ -19,7 +19,8 @@ Three hard rules:
    re-reads it at every slot audit. What must not change is its *shape* — the
    [§3 field set](../../../docs/development/wave-protocol.md), the two blocker lists still
    separate.
-3. **The artifact absorbs the lane, in the same PR.** A manifest that omits an injected lane
+3. **The artifact absorbs the lane before dispatch.** Commit and push the order and manifest
+   update on the wave before cutting the lane branch. A manifest that omits an injected lane
    is a map lying about the territory, and every later collision check reads that map.
 
 Copy this checklist and track progress:
@@ -29,9 +30,9 @@ Inject Progress:
 - [ ] Step 0: Resolve the wave + locate the artifact
 - [ ] Step 1: The grounding probe
 - [ ] Step 2: Collision check — lanes, workers, territory, selector
-- [ ] Step 3: Author the order (and the ticket, when Linear is up)
-- [ ] Step 4: Append to the queue; dispatch or name the blocker
-- [ ] Step 5: Artifact truth
+- [ ] Step 3: Author the order and reconcile any existing ticket
+- [ ] Step 4: Persist artifact truth on the wave
+- [ ] Step 5: Dispatch or name the blocker
 ```
 
 ## Step 0 — Resolve the wave + locate the artifact
@@ -111,7 +112,7 @@ banked design is **LAW** for the order, quoted verbatim including the shape they
 and the fences they specified; an on-ticket heads-up with a stand-down offer goes out
 **before** dispatch, not after the PR opens.
 
-## Step 3 — Author the order (and the ticket, when Linear is up)
+## Step 3 — Author the order and reconcile any existing ticket
 
 **Order first.** The work order is the binding artifact; the ticket is coordination. Author
 it at `docs/planning/waves/<slug>/orders/<id>-<slug>.md`, in the same shape every other
@@ -137,18 +138,25 @@ Quote into it, verbatim, every locked decision from the manifest that binds it �
 any ruling the operator makes while scoping the injection. A ruling that stays in the
 conversation binds nobody.
 
-When Linear is connected, mint the child under the epic, carrying Step 1's probe verbatim
-and saying plainly that it was **injected mid-wave**, with the reason: an epic's child list
-is read later by people reconstructing why the scope moved. Resolve the team and the In
-Progress state from live connector data and pass the resolved state identifier, never a
-name or a stored UUID. When Linear is unavailable, leave `ticket: null`, key the lane on its
-id, warn visibly, and continue — the injection proceeds.
+When Linear is connected and the report came from an existing issue, re-fetch it, confirm it
+actually represents this lane, and link it. Do not mint a child merely because scope grew:
+the order and injection log are the durable reconstruction of why the wave moved. Otherwise
+leave `ticket: null` and key the lane on its id. Missing Linear access is a visible warning,
+never a dispatch blocker.
 
-## Step 4 — Append to the queue; dispatch or name the blocker
+## Step 4 — Persist artifact truth on the wave
 
 Append one row to the dispatch queue in the manifest, in exactly the
 [§3 field set](../../../docs/development/wave-protocol.md), so the lane survives this
 session.
+
+The manifest lives on the wave branch once `/dispatch` Step 0 has cut it. Commit and push
+the new order, queue row, ownership-map entry, updated territory row, and one-line injection
+log entry **before** cutting the lane branch or launching a worker. An injected worker must
+start from a wave head that contains its own binding order; dispatching first recreates the
+untracked-plan failure this protocol was designed to prevent.
+
+## Step 5 — Dispatch or name the blocker
 
 Then, immediately:
 
@@ -168,22 +176,6 @@ Then, immediately:
   heads-up on the ticket, and let them claim it. Until they do it is neither dispatched nor
   a slot. Re-tagging it `builder: worker` after a stand-down is a one-line edit; re-doing
   their work is not.
-
-## Step 5 — Artifact truth
-
-The manifest lives on the wave branch once `/dispatch` Step 0 has cut it, so an injected
-lane's artifact update is a commit on `wave/<slug>` by the coordinator — not a second PR to
-`dev`, which would leave the new order absent from every lane worktree already checked out.
-It gains:
-
-- the **queue row** from Step 4, with its `state` and `builder`;
-- its **ownership map** bullet, plus any hotspot rule Step 2 produced;
-- its **territory** row, if the collision check moved one; and
-- a one-line **injection note** in the injection log: the date, and what caused it.
-
-The injection note is the row that pays off later. A wave whose scope grew twice, with no
-record of why, cannot be reviewed at close-out and cannot be learned from — and the close-out
-lane is the one that reads this document hardest.
 
 ## Report
 

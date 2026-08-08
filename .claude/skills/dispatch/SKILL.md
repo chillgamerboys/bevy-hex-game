@@ -1,6 +1,6 @@
 ---
 name: dispatch
-description: "Coordinator loop for a wave: run up to three implementation agents in parallel isolated worktrees, keep every slot full, review each returned diff, and merge each lane into wave/<slug> serially through /audit-pr and /merge-pr. Consumes the dispatch queue /plan-epic commits. Never merges to dev or main."
+description: "Coordinate a wave by running up to three implementation agents in parallel isolated worktrees, keeping every slot full, reviewing each returned diff, and merging each lane into its wave branch serially through /audit-pr and /merge-pr. Consumes the dispatch queue /plan-epic commits. Never merges to dev or main."
 ---
 
 # Dispatch a wave
@@ -39,7 +39,7 @@ Dispatch Progress:
 - [ ] Step 4: SLOT AUDIT + territory sweep — every wake-up
 - [ ] Step 5: Review the report; reconcile against the world now
 - [ ] Step 6: Composed-tree check, then merge serially into wave/<slug>
-- [ ] Step 7: Backfill immediately; close the wave
+- [ ] Step 7: Backfill immediately; finish dispatch
 ```
 
 ## Step 0 — Load the queue + pre-flight
@@ -84,10 +84,13 @@ Pre-flight, once per wave:
    git push origin origin/dev:refs/heads/wave/<slug>
    ```
 
-   Then write the branch name and that exact base SHA into the manifest header, on the wave
-   branch, as the wave's first commit. If the branch already exists, verify instead that its
-   recorded base SHA matches, and that the artifact PR is an ancestor of it — a wave cut
-   before its own manifest landed is the failure this step exists to prevent.
+   Create a dedicated coordinator worktree for `wave/<slug>`; never switch the current
+   Conductor workspace. In that worktree, write the branch name and exact base SHA into the
+   manifest header, commit, and push before any lane branch is cut. If the branch already
+   exists, attach a dedicated worktree to it and verify instead that its recorded base SHA
+   matches and that the artifact PR is an ancestor — a wave cut before its own manifest
+   landed is the failure this step exists to prevent. Every later coordinator write to the
+   manifest and wave happens from this worktree.
 4. Name the **machine-global resources**: the GPU and display (`/visual-walk`, `cargo dev`,
    `cargo editor`), the human playtest, and disk for three cold build directories. They are
    the coordinator's alone.
@@ -134,7 +137,7 @@ follow-up cheaply. Every brief carries:
 3. **The WORLD-STATE block**: the repo as of *this* dispatch, not the plan's — the
    `origin/wave/<slug>` tip SHA, what has merged into the wave since the map was banked,
    the other owner's PRs in flight with their footprints, siblings' region splits in shared
-   files, and which handoff contract to verify rather than assume. Without it a late rebase
+   files, and which handoff contract to verify rather than assume. Without it a late refresh
    reads to the worker as a conflict, not a design interaction.
 4. **The bootstrap block**, run in the fresh worktree *before any work*:
 
@@ -184,10 +187,14 @@ follow-up cheaply. Every brief carries:
 
 ## Step 3 — Create the branch and worktree, launch up to 3 workers
 
-**The coordinator creates the lane branch off `wave/<slug>` and the isolated worktree
-before launching.** The worker then never runs checkout, switch, branch creation, or
-rename — which is what makes `/create-pr`'s Conductor rule satisfiable inside a dispatched
-lane. Record the branch in the lane's `branch` field.
+**The coordinator prepares the rows, then creates lane branches off `wave/<slug>` and their
+isolated worktrees before launching.** For an initial batch, choose all branch names, set
+every selected row's `branch` and `state: dispatched` in one coordinator commit, and push.
+For a one-lane backfill, do the same with that row. Only then cut the lane branches from the
+resulting wave head and create their worktrees. Every worker therefore starts from a tree
+that already records the whole batch and contains its binding order, and no worker runs
+checkout, switch, branch creation, or rename — which is what makes `/create-pr`'s Conductor
+rule satisfiable inside a dispatched lane.
 
 **Root the worktree deliberately**: an isolated dispatch resolves its repo from the
 coordinator's CWD, not from the order's prose, so verify the target repo in the same turn
@@ -195,7 +202,7 @@ as the launch. Size model and effort per lane from its `sizing` field, and send 
 launches in **one batch** so they actually run concurrently.
 
 Three is the cap. Past it, workers finish faster than the one serial reviewer-merger lands
-them and the queue converts into rebase debt — and three cold Bevy build directories is
+them and the queue converts into integration debt — and three cold Bevy build directories is
 already tens of gigabytes. Lower it when the machine says so; never raise it to hide a slow
 first build.
 
@@ -246,7 +253,10 @@ Per returned worker, before anything merges:
    re-verify that worker's other lanes before they merge, and do not take its later reports
    at face value.
 4. Triage **escalations** yourself — most are real findings a guessing worker would have
-   shipped as bugs — and file the **out-of-scope debt** now, while it still has a finder.
+   shipped as bugs — and record **out-of-scope debt** in the manifest and handoff while it
+   still has a finder. Do not create an incidental Linear issue; a reproduced UI defect goes
+   through `/linear-ui-bug-intake`, and other debt reuses an existing issue only when one
+   already represents it.
 5. **Broadcast hazards the same turn.** A report surfacing an environment or gate-validity
    hazard (a scope plan measuring the wrong tree, a fixture reading the clock) goes to every
    in-flight sibling immediately via `SendMessage`, not into the close-out.
@@ -255,8 +265,9 @@ Then **reconcile**: the order was written against an older world, and its green 
 statement about that one. Between the report and the merge —
 
 (a) **What landed since.** If the worker's HEAD lacks the newest merge touching ANY file it
-    shares — a sibling's or the other owner's — send it back for a rebase round and fresh
-    gates. `MERGEABLE` is a claim about text, not about composed behaviour.
+    shares — a sibling's or the other owner's — send it back to merge the updated wave into
+    its lane and run fresh gates. Published lane history is never rebased or force-pushed.
+    `MERGEABLE` is a claim about text, not about composed behaviour.
 
 (b) **Read every removed line** in the diff, not just the added ones:
 
@@ -274,13 +285,13 @@ inside it — additive-looking, green on every gate, and invisible in any summar
 ## Step 6 — Composed-tree check, then merge serially into `wave/<slug>`
 
 Merging is single-owner and serial. Before merging the **second** of two PRs on one
-surface: rebase it onto the merged first, then run that surface's own gate on the
+surface: merge the updated wave into that lane, then run that surface's own gate on the
 **combined** result.
 
 File-ownership maps cannot see a **new** file importing a **deleted** one: each PR is green
 in its own worktree and the pair is red on the wave. Opposite-direction edits to the *same
-lines* slip file-level ownership the same way; rebase deliberately, to the brief's composed
-end-state.
+lines* slip file-level ownership the same way; refresh additively and verify the brief's
+composed end-state.
 
 **Audit in the lane's worktree, not yours.** `/audit-pr` requires local `HEAD` to equal the
 PR head and a clean tree, which your own workspace cannot satisfy for someone else's lane.
@@ -292,7 +303,12 @@ Read only `overall_status`, `head_sha`, `pr_number`, and `base_branch` from the 
 **Do not restate the receipt schema here** — `/audit-pr` is its writer and `/merge-pr` is
 its reader of record, and a third copy triples an existing drift hazard.
 
-**After every lane merges, run the composed check on the wave head:**
+After the merge is verified, update that lane's manifest row to `merged-to-wave` in the
+coordinator worktree, record its PR, commit, and push. The worker can truthfully record only
+`in-review`; leaving the terminal transition to it produces a manifest that never reaches
+the state required for safe branch cleanup.
+
+**After every lane merges, run the composed check on that resulting wave head:**
 
 ```sh
 python3 tools/test_scope.py plan --base origin/dev --head origin/wave/<slug>
@@ -311,13 +327,13 @@ manifests and append-only ledgers serialize everyone. Before merging anything th
 one with their open PR, tell them and state the composed end-state you are creating. The
 ping buys the author's review of the composition, which no gate checks.
 
-## Step 7 — Backfill immediately; close the wave
+## Step 7 — Backfill immediately; finish dispatch
 
 The moment a slot frees and a dispatchable lane exists, dispatch it — never batch
 dispatches into check-ins, never wait to be asked. Return to Step 1 for that lane; when
 nothing is dispatchable, the slot audit says *why*.
 
-Close the wave with the Report below. Then run the serialized legs workers were forbidden
+Finish the dispatch loop with the Report below. Then run the serialized legs workers were forbidden
 from running: `/visual-walk` on the composed head for affected presentation, and the
 combined selector gate. **Then stop.** Taking the wave to `dev` needs the combined head's own
 exact-head runtime classification — a named human's playtest for a changed presentation or
@@ -356,7 +372,7 @@ here.
 ## Report
 
 ```
-=== /dispatch wave complete ===
+=== /dispatch complete ===
 Wave wave/<slug> · slots 3 · dispatched N · merged M · blocked B
 Wave head <sha> · composed gate <result>
 
@@ -365,7 +381,7 @@ Wave head <sha> · composed gate <result>
 
 Escalations resolved: <each, with the ruling>
 Deferred: <legit-defer lanes + reason>
-Debt filed: <issues opened from worker reports>
+Debt recorded: <manifest/handoff entries; reused issue ids where applicable>
 Serialized legs run by the coordinator: <list>
 NOT DONE: wave/<slug> -> dev needs its own exact-head runtime classification at <sha>.
 ```
@@ -388,11 +404,12 @@ NOT DONE: wave/<slug> -> dev needs its own exact-head runtime classification at 
 **Slots keep idling.** The queue encoded merge order as dispatch order. Re-read each
 `dispatch_blockers` in isolation; most are empty.
 
-**Two workers touched the same lines.** The ownership map named files, not regions. Rebase
-to the composed end-state; fix the queue.
+**Two workers touched the same lines.** The ownership map named files, not regions. Merge
+the updated wave into the later lane, verify the composed end-state, and fix the queue.
 
 **Composed tree red, both PRs green.** Almost always a new file referencing something the
-sibling deleted. Merge the first, rebase the second, re-run the gate.
+sibling deleted. Merge the first, merge the updated wave into the second, and re-run the
+gate.
 
 **A worker's first build takes twenty minutes.** Expected: a fresh worktree has a cold Bevy
 build directory. Do not raise the cap to hide it, and do not share `CARGO_TARGET_DIR` to

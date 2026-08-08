@@ -64,7 +64,8 @@ Walk every applicable lens. Report `file:line`, a short excerpt, impact, and
 9. **Lane ownership**, when the PR is a wave lane. Compare every changed path against the
    lane's declared `owns` list. A path outside it is a `SHIP-BLOCKER` even when the change
    itself is correct: it is invisible to the coordinator's disjointness union and to every
-   sibling's rebase, so the first sign of it is a conflict or a silent revert on the wave.
+   sibling's additive refresh, so the first sign of it is a conflict or a silent revert on
+   the wave.
    A change that crosses the world/gameplay authority boundary is a `SHIP-BLOCKER`
    unconditionally. Read what the lane *removed*, not only what it added — a builder on a
    stale base can rewrite a shared file wholesale and revert a deliberate default inside

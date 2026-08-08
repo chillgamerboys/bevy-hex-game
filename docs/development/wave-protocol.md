@@ -81,9 +81,10 @@ other shape, is not a wave — it is a note.
 12. **Close-out.**
 
 **The manifest is updated as the wave runs, not only when it is written.** Each combined
-checkpoint records its findings and the fixes made on the wave, and each lane's `state` and
-`pr` move as its builder lands it. A manifest that still describes the plan rather than the
-territory is the input to every later collision check, and it will be wrong.
+checkpoint records its findings and the fixes made on the wave. A builder records its PR and
+`in-review`; the coordinator alone records `merged-to-wave` after the merge is verified. A
+manifest that still describes the plan rather than the territory is the input to every later
+collision check, and it will be wrong.
 
 **Decisions are amendable, never edited.** When one is retired mid-wave, keep the original
 text and append an AMENDMENT naming what changed, who ratified it, and when. Orders quote
@@ -106,7 +107,7 @@ survive as a Markdown table, and YAML diffs per field.
 |---|---|---|---|
 | `id` | `L1`, `L2`… | Lane label. The primary key, stable for the wave's life. **Not** the ticket | plan-epic / inject |
 | `title` | string | One line | plan-epic / inject |
-| `order` | path | `orders/L1-<slug>.md`, repo-relative. Empty only for a `@human` lane with no order | plan-epic / inject |
+| `order` | path | `orders/L1-<slug>.md`, relative to `manifest.md`. Empty only for a `@human` lane with no order | plan-epic / inject |
 | `ticket` | `HEX-N` or `null` | **Soft.** `null` is legal and never blocks dispatch or merge | plan-epic / inject |
 | `authority` | `world \| gameplay \| shared` | Crate authority. A lane that crosses it is a stop condition | plan-epic |
 | `builder` | `worker \| @<login>` | `worker` when absent. A `@human` lane is territory: counted in the ownership union and every sweep, never dispatched, never against the slot cap | plan-epic / inject |
@@ -118,7 +119,7 @@ survive as a Markdown table, and YAML diffs per field.
 | `selector` | `{concerns: [...], full: bool}` | Which `.config/test-scopes.json` concerns this lane's paths select, and whether it promotes to the complete gate | plan-epic |
 | `evidence` | `logic-only \| static-presentation \| motion-or-feel` | Drives whether the lane needs a visual walk, and confirms it defers manual runtime to the wave PR | plan-epic |
 | `sizing` | `{model, effort}` | Per-lane agent sizing | plan-epic / inject |
-| `state` | `queued \| dispatched \| in-review \| merged-to-wave \| blocked \| deferred` | **The lane's own builder updates this in its own PR** — which is what makes it trustworthy rather than aspirational | worker |
+| `state` | `queued \| dispatched \| in-review \| merged-to-wave \| blocked \| deferred` | The builder records `in-review`; only the coordinator records `merged-to-wave` after verifying the merge | worker / coordinator |
 | `pr` | int or `null` | Lane PR number, base `wave/<slug>` | worker |
 
 Untagged `builder` means `worker`. **That tag is the only thing standing between a human's
@@ -168,7 +169,8 @@ Where a file genuinely must be shared, split it by **region** — a module, a bl
 `register_type` list — and name both each region's owner and the **composed end-state**:
 what the file looks like once both lanes land. Two lanes that each drop half of a block and
 keep the other half produce a clean-looking auto-merge and a broken file. Add a **hotspot
-rule** per shared file: who rebases over whom.
+rule** per shared file: who refreshes after whose changes and how the composed end-state is
+verified.
 
 The repo's append-only shared files — `crates/hex_assets/src/lib.rs`,
 `crates/hex_units/src/lib.rs` and their siblings — are the canonical regional case. A lane
@@ -178,8 +180,9 @@ touches nothing else. A one-line addition merges; a reflow does not.
 **`manifest.md` is shared by construction, and every wave must annotate it.** Each lane
 updates its own `state` and `pr` in its own PR (§3) — that is what makes the queue
 trustworthy rather than aspirational — so the manifest belongs in *every* lane's `owns`,
-scoped to **that lane's queue row only**, with the standing hotspot rule that a lane rebases
-onto the wave rather than resolving a sibling's row. Omitting it makes each lane's
+scoped to **that lane's queue row only**, with the standing hotspot rule that a lane merges
+the updated wave into its published branch rather than resolving a sibling's row in
+isolation. Omitting it makes each lane's
 definition-of-done edit an ownership violation; listing it without the region split trips
 the disjointness check. It is the one overlap that is expected on every wave, and expected
 is not the same as unannotated.
@@ -230,8 +233,8 @@ chain is stacked work, not a wave.
 
 Every handoff gets a **verifiable contract**, not a promise — "lane L2 leaves
 `crates/hex_units/src/lib.rs` importing nothing from your module; grep-zero that on the
-rebased tree before you delete the file." Late rebase is the builder default, so the order
-says *verify*, never *assume*.
+refreshed tree before you delete the file." A late additive refresh from the wave is the
+builder default, so the order says *verify*, never *assume*.
 
 ## 6. Merge order and the wave branch
 
@@ -426,15 +429,18 @@ The wave lands on `dev` with a merge commit. Then:
 3. retarget any still-open child PR before deleting its former base;
 4. delete the wave and merged source branches only after no open PR depends on them, and
    never while the manifest lists a lane that is not yet `merged-to-wave` or `deferred`;
-5. reconcile tickets from delivered outcomes rather than incidental leaf-PR state, leaving a
-   visible warning if Linear was unavailable; and
-6. leave a short reconciliation note for protected or ongoing branches that must now merge
+5. merge the close-out PR described below so the durable record precedes ticket deletion;
+6. reconcile or policy-delete tickets from delivered outcomes rather than incidental
+   leaf-PR state, leaving a visible warning if Linear was unavailable; and
+7. leave a short reconciliation note for protected or ongoing branches that must now merge
    updated `dev`.
 
-**Close-out deletes `orders/` and `maps/`; `manifest.md` survives** as the durable record of
-what was decided and why. Remove the links to those files **in the same commit that removes
-the files** — the documentation concern's relative-link check is a hard gate, so a manifest
-still linking a deleted order fails the close-out PR.
+**Close-out is a small post-landing PR to `dev`, not a source lane.** It updates the
+manifest to `closed`, records the wave PR and exact `dev` merge SHA, deletes `orders/` and
+`maps/`, removes their links in the same commit, and lists any Linear issues eligible for
+policy-governed deletion. Merge that durable record before deleting those issues. The
+documentation concern's relative-link check is a hard gate, so a manifest still linking a
+deleted order fails the close-out PR.
 
 Never merge a wave directly to `main`. Promotion is separate and deliberate.
 

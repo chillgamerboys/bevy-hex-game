@@ -58,10 +58,12 @@ Plan Epic Progress:
    independent/stacked/wave choice. A chain of strictly dependent lanes is stacked work,
    not a wave; do not decompose one into a wave to make it look parallel.
 
-4. **Linear is soft.** When a connector is available, use it. When it is not, emit a
-   visible warning, plan from repository and GitHub evidence, key every lane on its lane
-   id, put the recommended child set in the handoff, and continue. **Missing Linear access
-   never blocks planning or dispatch** — see
+4. **Linear is soft and sparse.** When a connector is available, use it to reconcile an
+   existing epic or issue, never to mirror the lane queue. Every lane is keyed by its lane
+   id; reuse a relevant existing `HEX-N` only when it adds product or cross-owner
+   coordination value, otherwise leave `ticket: null`. When Linear is unavailable, emit a
+   visible warning and continue from repository and GitHub evidence. **Missing Linear
+   access never blocks planning or dispatch** — see
    [delivery-state.md](../../../docs/development/delivery-state.md).
 
 5. **Clean-enough worktree on a branch cut from `origin/dev`.** Step 7 commits the manifest
@@ -99,7 +101,7 @@ A useful map is specific: `file:line` anchors, per-symbol dispositions (delete /
 keep, with the reason), importer counts, and the field-level answer to "what does this
 surface actually read". Anchors go stale as PRs land, so every order citing a map carries
 the rule: **if reality disagrees with the map, that is an escalation, not a judgment
-call** — and re-derive anchors after each rebase.
+call** — and re-derive anchors after each refresh from the wave.
 
 Maps are **spent** once the wave lands and are deleted with the orders at close-out: a map
 whose territory no longer exists is not reference material, it is a trap for its next
@@ -153,7 +155,8 @@ Within an authority:
   append-only shared files — `crates/hex_assets/src/lib.rs`, `crates/hex_units/src/lib.rs`
   and their siblings — are the canonical case: one line in its existing alphabetical
   position, nothing else.
-- Add a **hotspot rule** per shared file: who rebases over whom.
+- Add a **hotspot rule** per shared file: who refreshes after whose changes and how the
+  composed end-state is verified.
 - A **new file importing a symbol another lane deletes** is invisible to any path-level
   map. Wherever you can see that shape, make it an explicit merge blocker and flag the
   composed-tree check in both orders.
@@ -167,7 +170,8 @@ Within an authority:
 - **`manifest.md` is shared by construction and must be annotated, not omitted.** Every
   lane updates its own `state` and `pr` there in its own PR, so the file belongs in every
   lane's `owns` — scoped to *that lane's queue row only*, with the hotspot rule that a lane
-  rebases onto the wave rather than resolving a sibling's row. Omitting it makes the
+  merges the updated wave into its published branch rather than resolving a sibling's row
+  in isolation. Omitting it makes the
   definition-of-done edit an ownership violation; listing it without the region split trips
   the disjointness pre-flight.
 - Leave the *other* shared claims-about-now files — the test count in `CLAUDE.md`, type
@@ -269,18 +273,20 @@ The **durable** artifact; it outlives the orders. Its section list is in
 [wave-protocol.md §2](../../../docs/development/wave-protocol.md); keep the paths and
 section names as written there, because `/dispatch` and `/inject` read them.
 
-The dispatch queue goes in as one fenced YAML block using the §3 field set. Lane `state` and
-`pr` are updated by each lane's own builder in its own PR — what makes the table trustworthy
-rather than aspirational. Rows still reading `in-review` once the wave closes get reconciled
-against `gh pr list` at close-out.
+The dispatch queue goes in as one fenced YAML block using the §3 field set. A builder records
+its PR and `in-review` state in its own PR; only the coordinator records `merged-to-wave`,
+immediately after verifying the merge. That split prevents a worker from claiming a merge it
+cannot perform and keeps safe branch cleanup from depending on a later reconstruction.
 
 **The close-out convention.** Orders are transient by design — instructions for one worker
 on one branch at one moment, full of "if lane L2 has merged, do X instead" conditionals
-answered the moment it merges. So the wave ends with a **close-out PR** that absorbs and
-deletes the orders and their maps: class rules live in the fences the wave wrote, chosen
-debt in the relevant `CLAUDE.md`, descoped work on its own ticket, and the arc's shape in
-the manifest. Plan it as a lane from the start, and remove the links in the same commit that
-removes the files — the documentation link check is a hard gate.
+answered the moment it merges. After the wave lands, the coordinator opens one small
+**close-out PR to `dev`** that records the exact merge, absorbs and deletes the orders and
+their maps, and marks the manifest `closed`: class rules live in the fences the wave wrote,
+chosen debt in the relevant `CLAUDE.md`, descoped work in the durable handoff, and the arc's
+shape in the manifest. This is not a source lane. Remove the links in the same commit that
+removes the files — the documentation link check is a hard gate — and merge this durable
+record before policy-deleting completed Linear issues.
 
 ### A work order — `docs/planning/waves/<slug>/orders/<id>-<slug>.md`
 
@@ -311,28 +317,20 @@ that dies with it, and say in the order that the fence going RED first is it wor
 Orders name gates by skill and by contract, never as a literal cargo command — the
 fail-closed selector owns concern choice, and a hardcoded command silently drifts from it.
 
-## Step 7 — Tickets, comment, commit, emit the queue
+## Step 7 — Reconcile tickets, comment, commit, emit the queue
 
 In **review mode** this step runs after the draft PR merges — the ruled decision table is
 its input, and nothing here should precede it. Confirm once, then, in this order:
 
-1. **Child tickets, when Linear is connected.** Per lane, verify or mint the child under the
-   epic. `/plan-epic` is one of exactly two workflows authorized to create issues, because
-   it owns both a parent and its own deduplication — one lane, one child, over an ownership
-   union that is disjoint by construction. The **approved manifest is the authorization**;
-   do not ask a second time. Resolve the team and the In Progress state from live connector
-   data by returned name and type, and pass the resolved state identifier rather than a
-   name. Never embed a workspace UUID, and never create the epic itself — that is
-   `/plan-ticket` and the human.
+1. **Existing tickets, when Linear is connected.** Re-fetch and reconcile the epic and any
+   existing issue that genuinely represents a lane. Fill only verified identifiers into
+   orders; never guess a placeholder and never create a child merely because a lane exists.
+   The committed manifest already owns lane state, blockers, and PR mapping. Unlinked lanes
+   use `ticket: null` and their stable lane id. Never create the epic itself.
 
-   Then fill the **real numbers** into the orders: a worker handed a placeholder guesses,
-   and a green PR bound to someone else's ticket is expensive to unwind. If the connector is
-   unavailable, say so loudly, leave every `ticket` field `null`, key the orders on lane
-   ids, and list the recommended children in the report. The wave proceeds.
-
-2. **Post the plan to the epic** as a comment — context, locked decisions, the
-   lane-to-ticket mapping, and what is parked and why. The file-level detail is the orders'
-   job. Do not paste secrets or local absolute paths.
+2. **Post the plan to an existing epic**, when one is in use, as a comment — context, locked
+   decisions, the sparse lane-to-ticket mapping, and what is parked and why. The file-level
+   detail is the orders' job. Do not paste secrets or local absolute paths.
 
 3. **Commit the manifest and orders in-repo**, on a branch off `origin/dev`, through the
    ordinary `/create-pr` → `/audit-pr` → `/merge-pr` path. This is the one artifact PR that
@@ -340,7 +338,8 @@ its input, and nothing here should precede it. Confirm once, then, in this order
    `origin/dev` *after* this PR lands — that ordering is what guarantees each lane's
    worktree contains its own order, and reversing it leaves every worker reading a tree its
    brief is missing from. Leave the manifest header's wave base SHA blank; `/dispatch`
-   Step 0 cuts the branch and fills it in.
+   Step 0 cuts the branch, creates a dedicated coordinator worktree, fills it in, and pushes
+   that header commit before any lane is cut.
 
    In Conductor this PR uses the current workspace branch. If that branch is not cut from
    `origin/dev`, stop and ask the operator for the right workspace, exactly as `/create-pr`
@@ -358,9 +357,9 @@ its input, and nothing here should precede it. Confirm once, then, in this order
 5. **Report and hand off**:
 
    ```
-   ✓ /plan-epic complete — HEX-N "<title>"
+   ✓ /plan-epic complete — <HEX-N or repository-only> "<title>"
      lanes:    N (M dispatchable now)
-     tickets:  <minted/verified list, or "none — Linear unavailable">
+     tickets:  <reused existing list, or "none — manifest lane ids only">
      manifest: docs/planning/waves/<slug>/manifest.md
      orders:   docs/planning/waves/<slug>/orders/ (N files)
      wave:     wave/<slug> — not yet cut; /dispatch Step 0 cuts it from origin/dev

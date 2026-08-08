@@ -49,6 +49,11 @@ and put the exact recommended ticket updates in the handoff. The canonical workf
 and optional Codex setup are in
 `docs/development/delivery-state.md`.
 
+Keep the free workspace sparse: the committed wave manifest is the lane queue, so wave
+skills reuse existing tickets only when they add product or cross-owner value and otherwise
+leave lanes unlinked. After complete delivery reaches `dev`, delete eligible workflow-owned
+issues only under the durable-record and safety checks in the delivery-state contract.
+
 ## Capture UI bugs before fixing them
 
 Use `$linear-ui-bug-intake` for a reproduced UI, interaction, accessibility, focus,

@@ -73,22 +73,26 @@ docs disagree, inspect runtime/tests and fix the false projection.
 
 Mutate Linear only when access exists and the user authorized ticket reconciliation.
 
-- **Delivered:** recommend/set Done and replace stale claims that the baseline is
-  missing.
+- **Delivered:** recommend/set Done or delete under the repository's free-workspace
+  retention policy, and replace stale claims that the baseline is missing.
 - **Partial:** recommend/retain In Review or Backlog, rewrite the description around
   exact residual scope, and link the delivery PR/SHA.
 - **Planned:** retain Backlog/Todo and remove obsolete blockers or shipped subclaims.
 - **Obsolete:** recommend/set Canceled or Duplicate with the reason.
 
-Do not create tickets for incidental chores merely to satisfy traceability. Do not
-mark a ticket Done when any acceptance item in its current scope remains. If the owner
-does not use Linear, put the recommended changes in the PR/handoff instead.
+Do not create tickets for incidental chores merely to satisfy traceability. Do not retire a
+ticket when any acceptance item in its current scope remains. Before deleting, require the
+durable identifier/title/outcome/dev-SHA/PR record and every safety condition in
+`delivery-state.md`; re-fetch immediately before the mutation and verify it afterward. If
+the owner does not use Linear, put the recommended changes in the PR/handoff instead.
 
 ## 5. Verify available projections
 
 Validate repository edits with `git diff --check`, Markdown-link checks, and the
-repository's changed-path selector. When Linear was modified, re-fetch every issue and
-assert its returned state, title, and residual description.
+repository's changed-path selector. When Linear was modified, re-fetch every retained issue
+and assert its returned state, title, and residual description; verify deleted issues
+through the connector's returned deleted/recently-deleted state or an immediate explicit
+not-found response. A timeout or connector error is not deletion evidence.
 
 Perform a contradiction pass:
 
@@ -107,7 +111,7 @@ condition.
 Return:
 
 - PR and merge SHA or the exact blocker;
-- tickets corrected or recommended for correction;
+- tickets corrected, deleted, or recommended for correction/deletion;
 - documents corrected;
 - explicit residual work and owner; and
 - a soft warning naming any Linear state that could not be inspected.
