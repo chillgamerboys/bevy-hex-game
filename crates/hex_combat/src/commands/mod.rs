@@ -644,6 +644,7 @@ fn apply_commands(
                 &mut stores.terrain_edits,
                 &mut stores.terrain_impacts,
                 &mut commands,
+                &tiles,
                 &mut units.actors,
                 &mut units.lattices,
                 unit,

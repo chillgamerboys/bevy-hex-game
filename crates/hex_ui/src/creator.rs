@@ -1905,13 +1905,18 @@ fn spawn_spell_tab(
         left.spawn(label(
             assets,
             format!(
-                "{} · range {}",
+                "{} · {}",
                 if matches!(saved.spell.targeting.shape, TargetShape::SelfCast) {
                     "Self"
                 } else {
                     "Single target"
                 },
-                saved.spell.targeting.range
+                match saved.spell.targeting.reach {
+                    hex_assets::TargetingReach::Ranged => {
+                        format!("range {}", saved.spell.targeting.range)
+                    }
+                    hex_assets::TargetingReach::Touch => "touch".to_owned(),
+                }
             ),
         ));
         left.spawn(Node {
@@ -1960,20 +1965,42 @@ fn spawn_spell_tab(
                 82.0,
             );
             if single {
-                scrollable_action_button(
+                let touch = matches!(
+                    saved.spell.targeting.reach,
+                    hex_assets::TargetingReach::Touch
+                );
+                segmented_button(
                     controls,
                     assets,
-                    "Range −",
-                    CreatorIntent::AdjustRange(-1),
-                    84.0,
+                    "Ranged",
+                    CreatorIntent::SetTouch(false),
+                    !touch,
+                    88.0,
                 );
-                scrollable_action_button(
+                segmented_button(
                     controls,
                     assets,
-                    "Range +",
-                    CreatorIntent::AdjustRange(1),
-                    84.0,
+                    "Touch",
+                    CreatorIntent::SetTouch(true),
+                    touch,
+                    76.0,
                 );
+                if !touch {
+                    scrollable_action_button(
+                        controls,
+                        assets,
+                        "Range −",
+                        CreatorIntent::AdjustRange(-1),
+                        84.0,
+                    );
+                    scrollable_action_button(
+                        controls,
+                        assets,
+                        "Range +",
+                        CreatorIntent::AdjustRange(1),
+                        84.0,
+                    );
+                }
             }
             if enchantment {
                 scrollable_action_button(
