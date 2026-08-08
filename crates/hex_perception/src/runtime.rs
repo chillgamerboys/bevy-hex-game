@@ -12,9 +12,12 @@ use hex_assets::{PerceptionSettings, SubstanceTable};
 use hex_core::{
     ExteriorIllumination, GameplayLight, GameplaySetupFailure, Headroom, HexSpan, HexTile,
     IlluminationLevel, InteriorRegions, LightDomain, LocalMapKnowledge, PausableSystems,
-    PerceptionSystems, Screen, SubstanceId, TerrainReady, TilePos, TraversalBlockers, UnitId,
+    PerceptionSystems, RunBottom, Screen, SubstanceId, TerrainReady, TilePos, TraversalBlockers,
+    UnitId,
 };
-use hex_units::{Body, Downed, Faction, MovementSystems, StandsOn};
+use hex_units::{
+    Body, Downed, Faction, MovementSystems, StandsOn, TerrainOccupancy, TerrainOccupancySystems,
+};
 
 use crate::{
     apply_observations, resolve_observations, FactionMapKnowledge, FactionObservations,
@@ -163,6 +166,7 @@ pub fn plugin(app: &mut App) {
             detect_perception_input_changes
                 .in_set(PerceptionSystems::ResolveIllumination)
                 .after(MovementSystems::Reconcile)
+                .after(TerrainOccupancySystems::Publish)
                 .before(resolve_illumination)
                 .run_if(in_state(Screen::Gameplay))
                 .run_if(resource_exists::<TerrainReady>)
@@ -228,6 +232,7 @@ struct PerceptionInputChanges<'w, 's> {
             Or<(Changed<GameplayLight>, Changed<TilePos>)>,
         ),
     >,
+    changed_run_bottoms: Query<'w, 's, (), (With<HexTile>, Changed<RunBottom>)>,
     changed_units: Query<
         'w,
         's,
@@ -248,6 +253,7 @@ struct PerceptionInputChanges<'w, 's> {
     removed_spans: RemovedComponents<'w, 's, HexSpan>,
     removed_substances: RemovedComponents<'w, 's, SubstanceId>,
     removed_headroom: RemovedComponents<'w, 's, Headroom>,
+    removed_run_bottoms: RemovedComponents<'w, 's, RunBottom>,
     removed_lights: RemovedComponents<'w, 's, GameplayLight>,
     removed_bodies: RemovedComponents<'w, 's, Body>,
     removed_unit_ids: RemovedComponents<'w, 's, UnitId>,
@@ -260,6 +266,7 @@ struct PerceptionInputChanges<'w, 's> {
     blockers: Option<Res<'w, TraversalBlockers>>,
     settings: Option<Res<'w, PerceptionSettings>>,
     terrain_ready: Option<Res<'w, TerrainReady>>,
+    occupancy: Option<Res<'w, TerrainOccupancy>>,
 }
 
 fn detect_perception_input_changes(
@@ -270,6 +277,20 @@ fn detect_perception_input_changes(
     stats.frames_checked = stats.frames_checked.saturating_add(1);
 
     let removed_positions = inputs.removed_positions.read().collect::<Vec<_>>();
+    let tiles_removed = inputs.removed_tiles.read().count() != 0;
+    let spans_removed = inputs.removed_spans.read().count() != 0;
+    let substances_removed = inputs.removed_substances.read().count() != 0;
+    let headroom_removed = inputs.removed_headroom.read().count() != 0;
+    let lights_removed = inputs.removed_lights.read().count() != 0;
+    let bodies_removed = inputs.removed_bodies.read().count() != 0;
+    let unit_ids_removed = inputs.removed_unit_ids.read().count() != 0;
+    let factions_removed = inputs.removed_factions.read().count() != 0;
+    let standing_removed = inputs.removed_standing.read().count() != 0;
+    let downed_removed = inputs.removed_downed.read().count() != 0;
+    let mut run_bottom_removed = false;
+    for entity in inputs.removed_run_bottoms.read() {
+        run_bottom_removed |= inputs.tile_entities.contains(entity);
+    }
     let tile_position_removed = removed_positions
         .iter()
         .any(|entity| inputs.tile_entities.contains(*entity));
@@ -277,11 +298,11 @@ fn detect_perception_input_changes(
         .iter()
         .any(|entity| inputs.light_entities.contains(*entity));
     let surfaces_changed = !inputs.changed_tiles.is_empty()
-        || inputs.removed_tiles.read().next().is_some()
+        || tiles_removed
         || tile_position_removed
-        || inputs.removed_spans.read().next().is_some()
-        || inputs.removed_substances.read().next().is_some()
-        || inputs.removed_headroom.read().next().is_some()
+        || spans_removed
+        || substances_removed
+        || headroom_removed
         || inputs
             .table
             .as_ref()
@@ -303,7 +324,7 @@ fn detect_perception_input_changes(
     }
 
     let illumination_changed = !inputs.changed_lights.is_empty()
-        || inputs.removed_lights.read().next().is_some()
+        || lights_removed
         || light_position_removed
         || inputs
             .exterior
@@ -318,15 +339,21 @@ fn detect_perception_input_changes(
     }
 
     let observation_changed = !inputs.changed_units.is_empty()
-        || inputs.removed_bodies.read().next().is_some()
-        || inputs.removed_unit_ids.read().next().is_some()
-        || inputs.removed_factions.read().next().is_some()
-        || inputs.removed_standing.read().next().is_some()
-        || inputs.removed_downed.read().next().is_some()
+        || !inputs.changed_run_bottoms.is_empty()
+        || run_bottom_removed
+        || bodies_removed
+        || unit_ids_removed
+        || factions_removed
+        || standing_removed
+        || downed_removed
         || inputs
             .settings
             .as_ref()
-            .is_some_and(|resource| resource.is_changed());
+            .is_some_and(|resource| resource.is_changed())
+        || inputs
+            .occupancy
+            .as_ref()
+            .is_none_or(|resource| resource.is_changed());
     if observation_changed {
         invalidation.invalidate_observation();
     }
@@ -433,6 +460,7 @@ fn resolve_observation(
     frame: Option<Res<PerceptionFrame>>,
     exterior: Option<Res<ExteriorIllumination>>,
     settings: Option<Res<PerceptionSettings>>,
+    terrain: Option<Res<TerrainOccupancy>>,
     prior_knowledge: Option<Res<FactionMapKnowledge>>,
     mut invalidation: ResMut<PerceptionInvalidation>,
     mut stats: ResMut<PerceptionRuntimeStats>,
@@ -449,6 +477,14 @@ fn resolve_observation(
             &mut commands,
             &mut next_screen,
             "Perception observation started without a complete illumination frame.",
+        );
+        return;
+    };
+    let Some(terrain) = terrain.filter(|terrain| !terrain.is_empty()) else {
+        fail(
+            &mut commands,
+            &mut next_screen,
+            "Perception observation started without authoritative terrain occupancy.",
         );
         return;
     };
@@ -477,6 +513,7 @@ fn resolve_observation(
         *exterior,
         &frame.lights,
         settings.active_profile(),
+        &terrain,
     ) {
         Ok(observations) => observations,
         Err(error) => {
@@ -625,6 +662,12 @@ fn domain_at(pos: TilePos, interiors: Option<&InteriorRegions>) -> LightDomain {
 fn fail(commands: &mut Commands, next_screen: &mut NextState<Screen>, reason: impl Into<String>) {
     let reason = reason.into();
     error!("gameplay perception failed: {reason}");
+    // A failure must withdraw every player-facing spatial authorization before the
+    // final gameplay presentation pass. Otherwise a previously observed hostile can
+    // remain disclosed for one stale frame while the state transition is pending.
+    commands.remove_resource::<FactionObservations>();
+    commands.remove_resource::<FactionMapKnowledge>();
+    commands.remove_resource::<LocalMapKnowledge>();
     commands.insert_resource(GameplaySetupFailure::new(reason));
     next_screen.set(Screen::Title);
 }
@@ -766,15 +809,44 @@ mod tests {
         substance: SubstanceId,
         headroom: i32,
     ) -> Entity {
-        app.world_mut()
+        spawn_tile_run(app, position, position.level, substance, headroom)
+    }
+
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "test terrain levels stay far inside f32's exact integer range"
+    )]
+    fn spawn_tile_run(
+        app: &mut App,
+        position: TilePos,
+        bottom: i32,
+        substance: SubstanceId,
+        headroom: i32,
+    ) -> Entity {
+        let run_span = HexSpan::new(bottom as f32, (position.level + 1) as f32);
+        let entity = app
+            .world_mut()
             .spawn((
                 HexTile,
                 position,
-                span(position.level),
+                RunBottom(bottom),
+                run_span,
                 substance,
                 Headroom(headroom),
             ))
-            .id()
+            .id();
+        let runs = {
+            let world = app.world_mut();
+            let mut query = world.query_filtered::<(&TilePos, &RunBottom), With<HexTile>>();
+            query
+                .iter(world)
+                .map(|(&top, &bottom)| (top, bottom))
+                .collect::<Vec<_>>()
+        };
+        app.insert_resource(
+            TerrainOccupancy::from_runs(runs).expect("test fixture terrain runs must be valid"),
+        );
+        entity
     }
 
     fn spawn_unit(app: &mut App, id: u64, faction: Faction, position: TilePos) -> Entity {
@@ -849,6 +921,47 @@ mod tests {
     }
 
     #[test]
+    fn full_run_one_level_ridge_is_observed_through_the_runtime_pipeline() {
+        let (mut app, substances) = runtime_app(IlluminationLevel::Bright);
+        let observer = pos(0, 0, 0);
+        let before_ridge = pos(1, 0, 0);
+        let ridge = pos(2, 0, 1);
+        let target = pos(3, 0, 0);
+        for position in [observer, before_ridge, ridge, target] {
+            spawn_tile_run(&mut app, position, -4, substances.stone, 3);
+        }
+        spawn_unit(&mut app, 0, Faction::Player, observer);
+        spawn_unit(&mut app, 1, Faction::Hostile, target);
+
+        enter(&mut app, Screen::Gameplay);
+
+        let observations = app.world().resource::<FactionObservations>();
+        assert!(observations.faction(Faction::Player).observes(target));
+        assert_eq!(
+            observations.faction(Faction::Player).unit(UnitId(1)),
+            Some(ObservedUnit {
+                id: UnitId(1),
+                faction: Faction::Hostile,
+                pos: target,
+                provides_sight: true,
+            })
+        );
+        assert_eq!(
+            app.world()
+                .resource::<FactionMapKnowledge>()
+                .faction(Faction::Player)
+                .state(target),
+            KnowledgeState::Observed
+        );
+        assert!(app
+            .world()
+            .resource::<FactionMapKnowledge>()
+            .faction(Faction::Player)
+            .unit(UnitId(1))
+            .is_some());
+    }
+
+    #[test]
     fn malformed_tile_fails_persistently_instead_of_disappearing() {
         let (mut app, _substances) = runtime_app(IlluminationLevel::Bright);
         app.world_mut().spawn((HexTile, pos(0, 0, 5)));
@@ -864,6 +977,51 @@ mod tests {
             Screen::Title
         );
         assert!(app.world().contains_resource::<GameplaySetupFailure>());
+    }
+
+    #[test]
+    fn missing_authoritative_terrain_occupancy_fails_closed() {
+        let (mut app, substances) = runtime_app(IlluminationLevel::Bright);
+        spawn_tile(&mut app, pos(0, 0, 5), substances.stone, 2);
+        app.world_mut().remove_resource::<TerrainOccupancy>();
+
+        enter(&mut app, Screen::Gameplay);
+
+        let failure = app.world().resource::<GameplaySetupFailure>();
+        assert!(failure.reason.contains("authoritative terrain occupancy"));
+        assert!(!app.world().contains_resource::<FactionObservations>());
+        assert!(!app.world().contains_resource::<FactionMapKnowledge>());
+    }
+
+    #[test]
+    fn withdrawn_occupancy_clears_previously_published_knowledge_before_failure() {
+        let (mut app, substances) = runtime_app(IlluminationLevel::Bright);
+        let player = pos(0, 0, 5);
+        let hostile = pos(2, 0, 5);
+        spawn_tile(&mut app, player, substances.stone, 2);
+        spawn_tile(&mut app, hostile, substances.stone, 2);
+        spawn_unit(&mut app, 0, Faction::Player, player);
+        spawn_unit(&mut app, 1, Faction::Hostile, hostile);
+
+        enter(&mut app, Screen::Gameplay);
+        assert!(app
+            .world()
+            .resource::<FactionMapKnowledge>()
+            .faction(Faction::Player)
+            .unit(UnitId(1))
+            .is_some());
+
+        app.world_mut().remove_resource::<TerrainOccupancy>();
+        app.update();
+
+        assert!(app
+            .world()
+            .resource::<GameplaySetupFailure>()
+            .reason
+            .contains("authoritative terrain occupancy"));
+        assert!(!app.world().contains_resource::<FactionObservations>());
+        assert!(!app.world().contains_resource::<FactionMapKnowledge>());
+        assert!(!app.world().contains_resource::<LocalMapKnowledge>());
     }
 
     #[test]
@@ -1107,6 +1265,20 @@ mod tests {
             after.knowledge_publications,
             before.knowledge_publications + 1
         );
+
+        app.update();
+        let settled = *app.world().resource::<PerceptionRuntimeStats>();
+        assert_eq!(settled.frames_checked, after.frames_checked + 1);
+        assert_eq!(settled.surface_rebuilds, after.surface_rebuilds);
+        assert_eq!(
+            settled.illumination_resolutions,
+            after.illumination_resolutions
+        );
+        assert_eq!(
+            settled.observation_resolutions,
+            after.observation_resolutions
+        );
+        assert_eq!(settled.knowledge_publications, after.knowledge_publications);
     }
 
     #[test]
@@ -1175,6 +1347,67 @@ mod tests {
                 .get(player)
                 .expect("player surface")
                 .blocked
+        );
+    }
+
+    #[test]
+    fn published_run_bottom_change_recomputes_observation_in_the_same_frame() {
+        let (mut app, substances) = runtime_app(IlluminationLevel::Bright);
+        hex_units::terrain_occupancy::plugin(&mut app);
+        let player = pos(0, 0, 5);
+        let wall_top = pos(2, 0, 7);
+        let hostile_pos = pos(4, 0, 5);
+        spawn_tile(&mut app, player, substances.stone, 2);
+        let wall = spawn_tile(&mut app, wall_top, substances.stone, 2);
+        spawn_tile(&mut app, hostile_pos, substances.stone, 2);
+        spawn_unit(&mut app, 0, Faction::Player, player);
+        spawn_unit(&mut app, 1, Faction::Hostile, hostile_pos);
+
+        enter(&mut app, Screen::Gameplay);
+        assert!(
+            app.world()
+                .resource::<FactionMapKnowledge>()
+                .faction(Faction::Player)
+                .unit(UnitId(1))
+                .is_some(),
+            "the single high wall voxel starts above the sight line"
+        );
+        let before = *app.world().resource::<PerceptionRuntimeStats>();
+
+        *app.world_mut()
+            .entity_mut(wall)
+            .get_mut::<RunBottom>()
+            .expect("wall run bottom") = RunBottom(6);
+        app.update();
+
+        let after = *app.world().resource::<PerceptionRuntimeStats>();
+        assert_eq!(after.surface_rebuilds, before.surface_rebuilds);
+        assert_eq!(
+            after.illumination_resolutions,
+            before.illumination_resolutions
+        );
+        assert_eq!(
+            after.observation_resolutions,
+            before.observation_resolutions + 1
+        );
+        assert_eq!(
+            after.knowledge_publications,
+            before.knowledge_publications + 1
+        );
+        assert_eq!(
+            app.world()
+                .resource::<FactionMapKnowledge>()
+                .faction(Faction::Player)
+                .state(hostile_pos),
+            KnowledgeState::Remembered
+        );
+        assert!(
+            app.world()
+                .resource::<FactionMapKnowledge>()
+                .faction(Faction::Player)
+                .unit(UnitId(1))
+                .is_none(),
+            "the newly extended wall must hide the hostile in the same frame"
         );
     }
 
@@ -1491,14 +1724,27 @@ mod tests {
         rebuild_now: bool,
     }
 
-    fn rebuild_before_perception(mut commands: Commands, mut rebuild: ResMut<RebuildOnce>) {
+    fn rebuild_before_perception(
+        mut commands: Commands,
+        mut rebuild: ResMut<RebuildOnce>,
+        tiles: Query<(Entity, &TilePos, &RunBottom), With<HexTile>>,
+        mut terrain: ResMut<TerrainOccupancy>,
+    ) {
         if !rebuild.rebuild_now {
             return;
         }
+        let mut runs = tiles
+            .iter()
+            .filter(|(entity, _, _)| *entity != rebuild.old)
+            .map(|(_, &top, &bottom)| (top, bottom))
+            .collect::<Vec<_>>();
+        runs.push((rebuild.replacement, RunBottom(rebuild.replacement.level)));
+        *terrain = TerrainOccupancy::from_runs(runs).expect("replacement run must be valid");
         commands.entity(rebuild.old).despawn();
         commands.spawn((
             HexTile,
             rebuild.replacement,
+            RunBottom(rebuild.replacement.level),
             span(rebuild.replacement.level),
             rebuild.substance,
             Headroom(2),
@@ -1523,7 +1769,9 @@ mod tests {
         });
         app.add_systems(
             Update,
-            rebuild_before_perception.before(PerceptionSystems::ResolveIllumination),
+            rebuild_before_perception
+                .before(detect_perception_input_changes)
+                .before(PerceptionSystems::ResolveIllumination),
         );
 
         enter(&mut app, Screen::Gameplay);
@@ -1555,6 +1803,17 @@ mod tests {
             after.knowledge_publications,
             before.knowledge_publications + 1
         );
+
+        app.update();
+        let idle = *app.world().resource::<PerceptionRuntimeStats>();
+        assert_eq!(idle.frames_checked, after.frames_checked + 1);
+        assert_eq!(idle.surface_rebuilds, after.surface_rebuilds);
+        assert_eq!(
+            idle.illumination_resolutions,
+            after.illumination_resolutions
+        );
+        assert_eq!(idle.observation_resolutions, after.observation_resolutions);
+        assert_eq!(idle.knowledge_publications, after.knowledge_publications);
     }
 
     #[test]
@@ -1676,6 +1935,12 @@ mod tests {
                 provides_sight: true,
             },
         ];
+        let terrain = TerrainOccupancy::from_runs(
+            snapshots
+                .iter()
+                .map(|(position, _)| (position, RunBottom(position.level))),
+        )
+        .expect("flat radius-40 occupancy");
         let mut samples = Vec::new();
         for _ in 0..12 {
             let started = Instant::now();
@@ -1689,6 +1954,7 @@ mod tests {
                 ambient,
                 &[],
                 SightProfile::DEFAULT,
+                &terrain,
             )
             .expect("benchmark observations");
             apply_observations(&mut knowledge, &snapshots, &observations);
@@ -1706,6 +1972,94 @@ mod tests {
             Duration::from_millis(250)
         } else {
             Duration::from_millis(50)
+        };
+        assert!(median < budget && p95 < budget);
+    }
+
+    #[test]
+    #[ignore = "manual dense-wall, six-observer perception recomputation benchmark"]
+    fn radius_40_dense_walls_and_six_observers_benchmark() {
+        let floor_level = 15;
+        let wall_level = 18;
+        let surface_level = |coord: HexCoord| {
+            if coord.x().rem_euclid(4) == 0 {
+                wall_level
+            } else {
+                floor_level
+            }
+        };
+        let snapshots = SurfaceSnapshots::try_from_iter(
+            HexCoord::ORIGIN.within_radius(40).into_iter().map(|coord| {
+                let level = surface_level(coord);
+                let position = TilePos::new(coord, level);
+                SurfaceSnapshot {
+                    pos: position,
+                    span: span(position.level),
+                    substance: SubstanceId(1),
+                    headroom: Headroom(8),
+                    is_solid: true,
+                    blocked: false,
+                    domain: LightDomain::Exterior,
+                }
+            }),
+        )
+        .expect("radius-40 dense-wall surfaces");
+        let terrain = TerrainOccupancy::from_runs(
+            snapshots
+                .iter()
+                .map(|(position, _)| (position, RunBottom(floor_level))),
+        )
+        .expect("dense wall occupancy");
+        let observer_coords = [
+            HexCoord::from_axial(-1, 0),
+            HexCoord::from_axial(-1, 1),
+            HexCoord::from_axial(-1, 2),
+            HexCoord::from_axial(1, 0),
+            HexCoord::from_axial(1, -1),
+            HexCoord::from_axial(1, -2),
+        ];
+        let units = observer_coords
+            .into_iter()
+            .enumerate()
+            .map(|(index, coord)| ObservedUnit {
+                id: UnitId(u64::try_from(index).expect("six observer indices fit u64")),
+                faction: Faction::Player,
+                pos: TilePos::new(coord, surface_level(coord)),
+                provides_sight: true,
+            });
+        let units = units.collect::<Vec<_>>();
+        let ambient = ExteriorIllumination::new(IlluminationLevel::Bright);
+        let illumination = ResolvedIllumination::from_surfaces(&snapshots, ambient, &[])
+            .expect("dense-wall illumination");
+        let mut samples = Vec::new();
+        for _ in 0..12 {
+            let started = Instant::now();
+            let mut knowledge = FactionMapKnowledge::new();
+            let observations = resolve_observations(
+                units.iter().copied(),
+                &illumination,
+                &knowledge,
+                ambient,
+                &[],
+                SightProfile::DEFAULT,
+                &terrain,
+            )
+            .expect("dense-wall observations");
+            apply_observations(&mut knowledge, &snapshots, &observations);
+            std::hint::black_box((observations, knowledge));
+            samples.push(started.elapsed());
+        }
+        samples.sort_unstable();
+        let median = samples
+            .get(samples.len() / 2)
+            .copied()
+            .expect("twelve samples");
+        let p95 = samples.last().copied().expect("twelve samples");
+        eprintln!("radius-40 dense-wall six-observer recomputation: median={median:?} p95={p95:?}");
+        let budget = if cfg!(debug_assertions) {
+            Duration::from_millis(750)
+        } else {
+            Duration::from_millis(150)
         };
         assert!(median < budget && p95 < budget);
     }
