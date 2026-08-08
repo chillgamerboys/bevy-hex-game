@@ -1,0 +1,391 @@
+# Client-hosted Sandbox wave
+
+- **Status:** planning
+- **Wave branch:** `wave/client-hosted-sandbox` (not cut until the foundation lands on `dev`)
+- **Base:** `origin/dev@92662d456746506093e8de61f54f1d619085e1fe`
+- **Coordinator:** `@shrav-k`
+- **Epic:** user-approved Client-Hosted Multiplayer Epic, 2026-08-08 (`ticket: null`)
+- **Outcome:** up to six players can host or join one shipped Sandbox encounter over an
+  encrypted direct connection, control exclusive party subsets through the existing
+  authoritative command reducer, disconnect/restart/rejoin safely, and return through the
+  host-owned outcome flow.
+- **Exclusions:** Campaign persistence, Steam lobbies/relay, public matchmaking,
+  spectators, split-screen, dedicated servers, WASM, non-Steam relay services, UPnP,
+  STUN/TURN, host migration, prediction, rollback, simultaneous allied turns, custom
+  content transfer, and combat saving.
+
+## Why this wave exists
+
+The deliverable is meaningful only when session transport, gameplay authority, world
+restoration/disclosure, and session UI compose in one host-plus-client runtime. Those
+concerns have separate crate authorities and can be built in parallel after a shared
+foundation, but no leaf is independently shippable. The shared command, world, app, and
+UI seams plus one combined native runtime gate make this a wave rather than independent
+or stacked work.
+
+Campaign persistence and Steam are deliberately later release units. They depend on a
+proven transport-neutral direct protocol and do not belong in this wave.
+
+## Locked decisions
+
+1. **Human and system seats.** “Human seats are `0..=5`; reserve
+   `PlayerSeat(u8::MAX)` for host AI/system commands so the host’s player seat cannot
+   command hostile units.”
+2. **Assignment invariant.** “The host must control at least one party member. Every
+   connected non-spectator must own at least one; the host owns unassigned members by
+   default and may redistribute them in the lobby.”
+3. **Party movement.** “Group movement includes only characters assigned to the issuing
+   seat. `MoveParty` validates every included member, not only its anchor.”
+4. **Admission.** “New players enter only before launch. A previously admitted player may
+   restart the app and rejoin the active encounter using a private rotating reconnect
+   credential.”
+5. **Disconnect delegation.** “A disconnected seat remains reserved for 30 real-time
+   seconds. It then receives a temporary host delegation; canonical `ControlOwner`
+   assignments do not change. Reconnection revokes delegation at the next boundary with
+   no command, decision, or movement in flight.”
+6. **Host loss.** “A host disconnect ends the session. Clients return to the Multiplayer
+   screen with a typed reason.”
+7. **Host-only operations.** “Only the host may globally pause, save, launch, retry, kick,
+   or close. Client Escape menus are local and non-pausing. Any connected player may issue
+   `Rest` through one of their assigned party members.”
+8. **Content compatibility.** “Multiplayer supports only shipped content with an exact
+   accepted-content fingerprint. Custom Creator content and host content transfer are
+   rejected in this epic.”
+9. **Tempo.** “Existing combat rules remain unchanged: one global `Mode`, one active turn,
+   no split-tempo party, and no simultaneous allied turns.”
+10. **Saving.** “Campaign saves remain host-owned, manual, and limited to quiescent paused
+    exploration. Combat saving is excluded.”
+11. **Authority model.** The listen host owns simulation, AI, world mutation, admission,
+    global pause, and saves. Remote clients submit intents and apply disclosure-safe
+    authoritative projections; there is no lockstep, rollback, prediction, host migration,
+    or dedicated server in this epic.
+12. **Command identity.** A wire `GameCommandRequest` contains only `request_id` and
+    `command`. The host derives seat/delegation from the authenticated connection and
+    caches outcomes by seat/request id; a remote payload can never assert a seat.
+13. **World secrecy.** `CombatState` remains host-only. Clients receive exact authorized
+    unit/session projections and the existing shared player-faction knowledge view, never
+    undisclosed hostile lattice facts.
+14. **Initial world.** Every peer generates the static map locally from the frozen
+    `SessionManifestV1`, reports the complete public map fingerprint, and activates only
+    after exact agreement. Reconnect uses a bounded host snapshot plus deltas newer than
+    its baseline sequence.
+15. **Direct transport.** Direct hosting uses WebTransport on editable UDP port `7777`, a
+    per-session self-signed certificate pinned by SPKI SHA-256, and a redacted versioned
+    `HEX1.<base64url>` code carrying advertised endpoint, fingerprint, and a 128-bit invite
+    token. Production-unsafe certificate bypass is forbidden.
+16. **Reconnect secret.** A rotating 256-bit reconnect token is written atomically to
+    temporary application storage, is never included in `Debug` or ordinary logs, and is
+    deleted when the session ends.
+17. **Untrusted bounds.** Serialized commands are capped at 64 KiB; decoded strings,
+    vectors, paths, and domain values are validated; request bursts are rate limited; and
+    snapshot allocation is capped before deserialization.
+18. **Offline parity.** Single-player uses the same local request ingress and defaults to
+    `SimulationRole::Authority` without opening a socket.
+19. **Transport neutrality.** Replicon messages, manifests, snapshots, validation, seat
+    rules, and saves are transport-neutral. Steam later supplies identity, invite-only
+    lobby discovery, and relay traversal behind the same session interface; Direct Connect
+    remains available when Steam is absent.
+
+Decisions are amendable, never silently edited. An amendment records its ratifier and date.
+
+## Shared foundation
+
+Live contracts this wave builds on:
+
+- **Gameplay:** `GameCommand`, `IssuedCommand`, `CommandQueue`, stable `UnitId`,
+  `PlayerSeat`, `ControlOwner`, `SimSeeds`, and the one authority reducer at
+  `crates/hex_core/src/commands.rs:41` and `crates/hex_core/src/unit_ids.rs:26`.
+- **Gameplay:** the reducer already validates each included `MoveParty` member at
+  `crates/hex_combat/src/commands/move_party.rs:46`.
+- **World:** stack-safe terrain components/resources, `DamagedVoxels`,
+  `GenerationReport::map_fingerprint`, and `TerrainReady` publication at
+  `crates/hex_core/src/terrain.rs:57`,
+  `crates/hex_core/src/terrain_impact.rs:258`, and
+  `crates/hex_map/src/procedural.rs:36`.
+- **Shared loader:** `AcceptedContentRevision::fingerprint` at
+  `crates/hex_assets/src/content_index.rs:235`.
+- **Shared app:** `AppSystems`, `PausableSystems`, `GameplaySetup`, one global `Mode`,
+  and `GameplayPhase` at `crates/hex_core/src/app.rs:54`.
+
+Required behavior-neutral foundation, owned and landed on `dev` before the wave is cut:
+
+1. **Joint architecture decision:** declare new `hex_multiplayer` as shared protocol and
+   session infrastructure. It may depend on shared domain types but may not query map,
+   unit, combat, or perception implementations. Add it to `CLAUDE.md`,
+   `docs/architecture.md`, `docs/contracts.md`, and `.config/test-scopes.json`.
+2. **Gameplay-owned shared vocabulary:** add `SimulationRole::{Authority, Replica}` and
+   `AuthoritativeSystems`; reserve `PlayerSeat::AI == PlayerSeat(u8::MAX)` while keeping
+   human seats `0..=5`; add `CommandRequestId` and `LocalGameCommandRequest` without
+   changing offline behavior.
+3. **Shared wire vocabulary:** add the versioned protocol/session/replica types, redacted
+   secret wrappers, deterministic registration order, structural limits, and protocol
+   hash in `hex_multiplayer`. No socket opens merely because its plugin is installed.
+4. **World-owned review draft:** the world owner must explicitly ratify the fields and
+   round-trip fingerprint of `WorldSnapshotV1` before L3 dispatch, including whether
+   stable generator-neutral presentation consequences are snapshotted (recommended) or
+   regenerated. Regeneration alone does not meet the Campaign snapshot contract. The
+   shared type is a data contract; only `hex_map` exports/imports it.
+5. **Coordinator-only dependency/composition:** pin the Bevy-0.19-compatible Replicon and
+   Aeronet `0.21` stack, add fail-closed Cargo features/selectors, and keep `steam`
+   optional and absent from Milestone A. Root Cargo and plugin composition remain
+   coordinator territory.
+
+The current user approval ratifies the product behavior, but it is not recorded as the
+separate world-owner sign-off required by item 4. That sign-off remains a dispatch
+condition for L3.
+
+## Dispatch queue
+
+```yaml
+lanes:
+  - id: L1
+    title: Session runtime
+    order: orders/L1-session-runtime.md
+    ticket: null
+    authority: shared
+    builder: worker
+    branch: worker/client-hosted-session-runtime
+    owns:
+      - crates/hex_multiplayer/src/auth.rs
+      - crates/hex_multiplayer/src/direct.rs
+      - crates/hex_multiplayer/src/lobby.rs
+      - crates/hex_multiplayer/src/runtime.rs
+      - crates/hex_multiplayer/src/sequence.rs
+      - crates/hex_multiplayer/src/testing.rs
+      - crates/hex_multiplayer/tests/direct_session.rs
+      - docs/planning/waves/client-hosted-sandbox/manifest.md#L1-row
+    dispatch_blockers:
+      - behavior-neutral multiplayer foundation landed on dev and wave branch cut from that exact head
+    merge_blockers: []
+    fences: []
+    selector:
+      concerns: [app, residual, clippy, docs, shipping]
+      full: false
+    evidence: logic-only
+    sizing:
+      model: gpt-5.6-sol
+      effort: high
+    state: queued
+    pr: null
+
+  - id: L2
+    title: Gameplay authority
+    order: orders/L2-gameplay-authority.md
+    ticket: null
+    authority: gameplay
+    builder: worker
+    branch: worker/client-hosted-gameplay-authority
+    owns:
+      - crates/hex_ai/src/lib.rs#AI-command-seat-and-authority-gates
+      - crates/hex_combat/src/commands/mod.rs#request-result-and-delegation-adapter
+      - crates/hex_combat/src/commands/move_party.rs#per-seat-party-subset
+      - crates/hex_combat/src/commands/rest.rs#issuing-member-contract
+      - crates/hex_combat/src/lib.rs#authoritative-system-gates-and-replica-projection
+      - crates/hex_units/src/units.rs#local-request-ingress-and-unit-replica
+      - crates/hex_units/src/movement.rs#authoritative-domain-movement-gate
+      - crates/hex_units/src/selection.rs#seat-scoped-command-emission
+      - crates/hex_game/src/screens/gameplay.rs#local-ingress-and-client-menu-adapter
+      - crates/hex_combat/tests/contracts/multiplayer_authority.rs
+      - crates/hex_units/tests/contracts/multiplayer_authority.rs
+      - docs/planning/waves/client-hosted-sandbox/manifest.md#L2-row
+    dispatch_blockers:
+      - behavior-neutral multiplayer foundation landed on dev and wave branch cut from that exact head
+      - PRs 186, 188, 189, and stacked PR 190 have landed or every overlapping symbol is remapped in an amended manifest
+    merge_blockers: [L1]
+    fences: []
+    selector:
+      concerns: [rules, contracts, simulation, app, clippy, docs, shipping]
+      full: false
+    evidence: motion-or-feel
+    sizing:
+      model: gpt-5.6-sol
+      effort: high
+    state: queued
+    pr: null
+
+  - id: L3
+    title: World replication and disclosure
+    order: orders/L3-world-replication.md
+    ticket: null
+    authority: world
+    builder: worker
+    branch: worker/client-hosted-world-replication
+    owns:
+      - crates/hex_map/src/world_snapshot.rs
+      - crates/hex_map/src/grid.rs#snapshot-import-export-and-terrain-deltas
+      - crates/hex_map/src/lib.rs#world-snapshot-publication
+      - crates/hex_map/tests/contracts/world_snapshot.rs
+      - crates/hex_perception/src/runtime.rs#multiplayer-player-faction-disclosure
+      - crates/hex_perception/tests/multiplayer_disclosure.rs
+      - docs/planning/waves/client-hosted-sandbox/manifest.md#L3-row
+    dispatch_blockers:
+      - behavior-neutral multiplayer foundation landed on dev and wave branch cut from that exact head
+      - explicit world-owner ratification of WorldSnapshotV1 fields and complete public fingerprint
+      - PRs 186, 187, and stacked PR 190 have landed or every overlapping symbol is remapped in an amended manifest
+    merge_blockers: [L1]
+    fences: []
+    selector:
+      concerns: [map_unit, map_contracts, app, clippy, docs, shipping]
+      full: true
+    evidence: static-presentation
+    sizing:
+      model: gpt-5.6-sol
+      effort: high
+    state: queued
+    pr: null
+
+  - id: L4
+    title: Session UI and application adapters
+    order: orders/L4-session-ui.md
+    ticket: null
+    authority: shared
+    builder: worker
+    branch: worker/client-hosted-session-ui
+    owns:
+      - crates/hex_gameplay_model/src/multiplayer.rs
+      - crates/hex_gameplay_model/src/main_menu.rs#multiplayer-route-only
+      - crates/hex_gameplay_model/src/lib.rs#multiplayer-module-export
+      - crates/hex_ui/src/multiplayer.rs
+      - crates/hex_ui/src/main_menu.rs#fifth-product-route
+      - crates/hex_ui/src/model.rs#multiplayer-view-and-intents
+      - crates/hex_ui/src/lib.rs#multiplayer-registration-only
+      - crates/hex_game/src/screens/multiplayer.rs
+      - crates/hex_game/src/screens/main_menu.rs#multiplayer-intent-adapter
+      - crates/hex_game/src/screens/mod.rs#multiplayer-plugin-and-screen-teardown
+      - crates/hex_game/tests/gameplay_app.rs#multiplayer-session-journey
+      - walks/multiplayer_session.ron
+      - docs/planning/waves/client-hosted-sandbox/manifest.md#L4-row
+    dispatch_blockers:
+      - behavior-neutral multiplayer foundation landed on dev and wave branch cut from that exact head
+      - PRs 186, 188, 189, and stacked PR 190 have landed or every overlapping symbol is remapped in an amended manifest
+    merge_blockers: [L1, L2, L3]
+    fences: []
+    selector:
+      concerns: [app, clippy, docs, shipping]
+      full: false
+    evidence: motion-or-feel
+    sizing:
+      model: gpt-5.6-sol
+      effort: high
+    state: queued
+    pr: null
+```
+
+## Ownership map
+
+The queue paths are verbatim ownership. The only intentional overlap is this manifest:
+each builder owns only its own YAML row and merges the latest wave branch into its branch
+before updating that row. No builder resolves or rewrites a sibling row.
+
+Coordinator-only hotspots:
+
+- `Cargo.toml`, `Cargo.lock`, `.config/test-scopes.json`, `CLAUDE.md`,
+  `docs/architecture.md`, and `docs/contracts.md` during the behavior-neutral foundation.
+- `crates/hex_game/Cargo.toml` and `crates/hex_game/src/lib.rs` plugin composition.
+- Protocol registration order in `crates/hex_multiplayer/src/protocol.rs` after the
+  foundation. Lanes consume it; additions require coordinator injection.
+
+Shared-file composed end states and hotspot rules:
+
+| File | Regions | Composed end state | Hotspot rule |
+|---|---|---|---|
+| `crates/hex_gameplay_model/src/main_menu.rs` | L4 owns only `MainMenuRoute::Multiplayer` and matching route test arms | Existing Campaign/Sandbox/Tools/Settings behavior is unchanged and Multiplayer is the fifth root route | Refresh after any UI branch; no reflow outside the enum/test arms |
+| `crates/hex_game/src/screens/main_menu.rs` | L4 owns Multiplayer intent handling only | Existing four adapters remain byte-for-byte equivalent; new intent selects `Screen::Multiplayer` | Refresh after #186/#190; coordinator checks complete match block |
+| `crates/hex_map/src/grid.rs` | L3 owns snapshot import/export and delta hooks only | Ordinary generation/edit/impact lifecycle remains the default; import reaches the same `TerrainReady` projection | Refresh after every world branch; run complete map lifecycle contracts |
+| `crates/hex_perception/src/runtime.rs` | L3 owns authorized shared-player disclosure projection only | Existing authoritative publication remains; network visibility consumes its public projection and cannot reconstruct private facts | #186/#190 land or map is amended before dispatch |
+| `crates/hex_combat/src/commands/mod.rs` | L2 owns authenticated request correlation/result emission and delegation lookup only | Existing reducer remains the sole legality authority and emits one typed result per request | #186/#189 land or map is amended before dispatch |
+| `crates/hex_units/src/selection.rs` | L2 owns seat-filtered local emission only | Presentation selection may inspect replicas; only owned units generate requests | #188 lands or map is amended before dispatch |
+
+Any disagreement between these banked regions and refreshed source is an escalation, not
+a builder judgment call.
+
+## Territory
+
+Sweep performed 2026-08-08 after fetching all remotes. The measurement command was
+`git diff --numstat origin/dev...origin/<branch>`; PR 190 is stacked on PR 186 but is also
+measured against `origin/dev` to expose its complete inherited footprint.
+
+| PR | Branch / base | Measured footprint | Multiplayer relationship | Disposition |
+|---|---|---:|---|---|
+| #186 visibility | `wave/visibility` / `dev` | 34 files, +3597/−518 | perception, core exports, save, gameplay UI | blocks L2/L3/L4 regions until landed or remapped |
+| #187 surface contract | `wave/hex-81-surface-feature-contract` / `dev` | 4 files, +852/−6 | `hex_core` public world contract and boundary docs | blocks WorldSnapshotV1 ratification/remap |
+| #188 movement feedback | `wave/hex-87-movement-feedback` / `dev` | 8 files, +881/−85 | unit movement/selection and gameplay walk | blocks L2/L4 movement regions |
+| #189 Heal | `wave/hex-79-heal` / `dev` | 37 files, +3018/−244 | combat authority, save, UI, content identity | blocks L2/L4 authority/UI regions |
+| #190 first person | `wave/hex-89-first-person` / `wave/visibility` | 52 files, +5366/−775 | inherited visibility plus world camera and gameplay walk | blocks L2/L3/L4 until stack lands or exact regions are remapped |
+
+No open PR touches the new `crates/hex_multiplayer/**` namespace. Re-sweep immediately
+before foundation landing, wave creation, every lane dispatch, and integration.
+
+## Integration order
+
+1. Land the behavior-neutral foundation on `dev`, including the explicit world-owner
+   `WorldSnapshotV1` agreement; refresh territory; then cut `wave/client-hosted-sandbox`
+   from that exact `origin/dev` head.
+2. Dispatch L1 immediately. Dispatch L2–L4 only when their territory blockers are true;
+   merge blockers do not serialize their construction.
+3. Merge L1 first. Run the selector-chosen composed-tree checks.
+4. Merge L2 and L3 in either order. After each merge, refresh the other branch, inspect
+   removed lines, re-plan the selector, and run its composed concerns.
+5. Merge L4 last, then let the coordinator apply only root Cargo/plugin composition and
+   combined fixes.
+6. Run the exact-head combined gate before the single wave PR targets `dev`.
+
+Milestone B (`client-hosted-campaign`) is a fresh wave after A lands. Milestone C is a
+two-level Steam stack after Campaign. Neither is injected into this wave.
+
+## Combined acceptance
+
+Automated contracts on the exact combined head must prove:
+
+- serde round trips and one host/client protocol hash for every wire/snapshot type;
+- rejection of wrong protocol/build/content/map, invalid/reused credentials, full/closed
+  lobbies, duplicate active seats, malformed/oversized payloads, and non-human claims;
+- a wire request cannot carry a seat and a remote connection cannot command another seat
+  or `PlayerSeat::AI`;
+- `MoveParty` contains only issuing-seat members and `Rest` accepts any owned issuing
+  party member;
+- `WorldSnapshotV1` export → teardown → import reproduces the complete public fingerprint,
+  partial damage, anchors/regions, knowledge inputs, and actor footing;
+- offline single-player and listen-host commands traverse the same request ingress and
+  preserve existing command transcripts/fingerprints;
+- untrusted auth, command, and snapshot decoding is bounded and does not panic.
+
+The headless `aeronet_channel` composition drives one host plus six clients through join,
+assignment, ready, local map verification, exploration, combat turns and defender choices,
+terrain mutation, outcome, retry, and return to title. It compares each client projection
+to its authorized host view after every authority sequence. It also covers disconnect at
+each authority boundary, 30-second delegation, safe reclamation, client process destruction
+and recreation, snapshot/delta catch-up, duplicate retry idempotence, and typed host loss.
+
+The selector-chosen CI-equivalent suite, strict Clippy, docs, dependency/license audit,
+shipping build, and macOS/Windows/Linux direct-transport compilation run on the combined
+head. Static frames cover Multiplayer home, Host Direct, Join Direct, six-seat lobby,
+mismatch refusal, reconnect/delegation, host pause, and client local menu. A named human
+records an exact-head PASS using two native processes or machines for movement feel, local
+cameras, combat decisions, disconnect/restart/rejoin, outcome, retry, and return to title.
+Typed hooks—not pixels—prove all logical claims.
+
+## Stop conditions
+
+- Authority cannot be gated without moving presentation-only systems behind authority.
+- `WorldSnapshotV1` cannot reproduce the complete public world contract or lacks explicit
+  world-owner agreement.
+- Client exploration requires simulation prediction for acceptable feel.
+- Disclosure filtering leaks private combat/lattice facts.
+- A refreshed open-PR footprint disagrees with a banked map or creates unowned overlap.
+- The protocol requires map, unit, combat, or perception implementation queries from
+  `hex_multiplayer`.
+- Direct certificate pinning would require Aeronet’s dangerous validation bypass.
+
+On any stop condition, do not improvise in a lane: mark it blocked, bank the evidence, and
+amend this manifest after owner review.
+
+## Injection log
+
+- None.
+
+## Close-out
+
+Not started. At landing, retain the manifest as the durable outcome record, delete spent
+orders/maps, record the exact `dev` SHA and named runtime sign-off, close/retarget lane PRs,
+and remove the wave/source branches only after no open PR uses them as a base.
