@@ -15,6 +15,7 @@ hex_core → hex_ai → {hex_assets, hex_units, hex_combat}   (contracts, contro
 hex_core → {hex_assets, hex_units} → hex_perception → {hex_combat, hex_game}
 hex_core → hex_lattice → {hex_assets, hex_units, hex_combat}   (the pure rules engine)
 hex_core → hex_anim ─────────────────────→ hex_units
+{hex_core, hex_lattice, Replicon, Aeronet} → hex_multiplayer ───────→ hex_game
 {Bevy, bevy-inspector-egui} → hex_dev ──────────────────────────────→ hex_game
 {Bevy, bevy_egui, hex_core, hex_assets} → hex_editor  (standalone tool)
 {Bevy, hex_core} → hex_test_app → hex_test_support  (test-only app mechanics)
@@ -45,6 +46,7 @@ will, and no amount of documentation prevents it. A compiler error does.
 | `hex_units` | Units and their lattices, AI-controller attachment, picking, pathfinding, body size, and the movement preview | `hex_core`, `hex_ai`, `hex_assets`, `hex_anim`, `hex_lattice` | gameplay |
 | `hex_perception` | Authoritative illumination, faction sight, and remembered map knowledge | `hex_core`, `hex_assets`, `hex_units` | world |
 | `hex_combat` | The loop: modes, turn order, algorithm-neutral AI host and legal-action enumeration, persistent effects, and faction lattice knowledge | `hex_core`, `hex_ai`, `hex_assets`, `hex_anim`, `hex_units`, `hex_lattice`, `hex_perception` | gameplay |
+| `hex_multiplayer` | Transport-neutral protocol, bounded wire containers, custom-admission vocabulary, lobby/manifest contracts, disclosure-safe replicas, and default-off Replicon/Aeronet composition | `hex_core`, `hex_lattice`, Bevy app/ECS sub-crates, Replicon, Aeronet; never map/unit/combat/perception implementations | shared infrastructure |
 | `hex_dev` | World inspector. Behind the `dev` feature | Bevy, `bevy-inspector-egui` | gameplay |
 | `hex_game` | Thin executable library and composition root: observes authority, builds immutable UI view models, applies typed intents, and wires plugins | all runtime crates | shared |
 | `hex_editor` | Standalone palette, voxel-style, and object authoring; validated explicit writes, untracked recovery, and deterministic review packs | Bevy, `bevy_egui`, `hex_core`, `hex_assets` | shared tooling |
@@ -59,6 +61,32 @@ explicit saves are the only operations that change `assets/art/`. The canonical
 palette and object contracts are described in
 [design/visual-language.md](design/visual-language.md), and the operational workflow
 is in [systems/asset-workshop.md](systems/asset-workshop.md).
+
+### `hex_multiplayer` is a shared protocol boundary
+
+Multiplayer is a server-authoritative listen-host projection, not a second simulator.
+`GameCommandRequest` contains only a request id and `GameCommand`; an authenticated
+connection lookup supplies its seat and temporary delegation before the existing
+authority reducer sees an `IssuedCommand`. The host retains AI, combat truth, world
+mutation, admission, global pause, and persistence. In particular, `CombatState` never
+crosses the network boundary.
+
+The shared crate owns stable data and transport registration, while each domain owns its
+adapter. Gameplay publishes authorized `UnitReplica`/`SessionReplica` values. The world
+owner alone exports/imports the pending `WorldSnapshotV1` contract. Perception decides
+which hostile projections exist; networking applies that authorized view and must not
+reconstruct hidden facts from private implementations.
+
+`MultiplayerPlugin` installs custom-auth Replicon, Aeronet adapters, and WebTransport
+capability in one deterministic registration order. It does not spawn an endpoint or
+open a socket. Offline play defaults to `SimulationRole::Authority`; a remote client
+must explicitly select `Replica`. Direct Connect and a later Steam transport share the
+same messages, manifests, snapshots, seat checks, and saves.
+
+The exact direct certificate digest is still a recorded implementation blocker:
+`wtransport 0.6.1`'s safe convenience verifier hashes complete leaf-certificate DER,
+while the approved product contract names SPKI SHA-256. The wave manifest requires an
+explicit audited verifier choice and forbids disable-validation shortcuts.
 
 ### `hex_map` is a leaf, on purpose
 
@@ -144,8 +172,10 @@ Two roles, named so the arrangement survives a change of people:
 | **Gameplay owner** | `hex_core`, `hex_units`, `hex_combat`, `hex_lattice`, `hex_anim`, `hex_dev`, generic `hex_assets` loader infrastructure, and gameplay schema/settings modules and content: `combat.ron`, `spells.ron`, `elements.ron` |
 
 `hex_game` is **shared** — it is wiring, screens, scenarios and review tooling, and
-whoever needs a change makes it. `scenario.rs` and `scenarios.ron` sit in the same
-shared middle, flagged to the other side when a change touches their domain.
+whoever needs a change makes it. `hex_multiplayer` is also shared, with a stricter
+dependency ceiling: it owns protocol/session contracts but no gameplay or world truth.
+`scenario.rs` and `scenarios.ron` sit in the same shared middle, flagged to the other
+side when a change touches their domain.
 
 `hex_ui` is also shared presentation, but its dependency ceiling is strict. Domain
 facts flow into it as immutable view models and player actions flow out as typed

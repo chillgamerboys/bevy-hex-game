@@ -1274,8 +1274,10 @@ fn spawn_unit(
         spawn.body,
         spawn.faction,
         id,
-        // Seat 0 everywhere today; the command funnel gives this teeth.
-        ControlOwner::default(),
+        match spawn.faction {
+            Faction::Player => ControlOwner::default(),
+            Faction::Hostile => ControlOwner(hex_core::PlayerSeat::AI),
+        },
         Archetype(spawn.archetype.to_owned()),
         // Archetype plus the stable id, so two wolves are distinguishable in the
         // inspector and each one's name matches what the log calls it.

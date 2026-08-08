@@ -382,6 +382,12 @@
       "reason": "The current shared file also owns the damaged-voxel projection consumed by map and application code; keep it fail-closed until those authorities are split by file."
     },
     {
+      "name": "multiplayer-protocol",
+      "patterns": ["crates/hex_multiplayer/**"],
+      "concerns": ["app", "residual", "clippy", "docs", "shipping"],
+      "reason": "Shared wire, authorization, lobby, replica, and transport registration contracts require headless composition, residual protocol tests, strict docs/lints, and shipping compatibility without selecting map corpora."
+    },
+    {
       "name": "shared-core",
       "patterns": ["crates/hex_core/**"],
       "full": true,

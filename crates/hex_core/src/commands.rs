@@ -177,6 +177,40 @@ pub struct IssuedCommand {
     pub command: GameCommand,
 }
 
+/// Stable identity of one human command request within a session.
+///
+/// Callers allocate monotonically increasing ids and retain an unacknowledged request
+/// across reconnect. The authority combines this id with the authenticated seat, making a
+/// retry idempotent without trusting a seat supplied by a client.
+#[derive(
+    Reflect,
+    Serialize,
+    Deserialize,
+    Debug,
+    Default,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+)]
+pub struct CommandRequestId(pub u64);
+
+/// One local human intent entering the same request path used by network clients.
+///
+/// Deliberately carries no seat. Offline and listen-host adapters derive their configured
+/// local seat exactly as the network authority derives a seat from an authenticated
+/// connection.
+#[derive(Message, Reflect, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct LocalGameCommandRequest {
+    /// Idempotence and response correlation key.
+    pub request_id: CommandRequestId,
+    /// Requested domain action.
+    pub command: GameCommand,
+}
+
 /// The funnel itself: commands in issue order, awaiting the one applier.
 ///
 /// Push from anywhere; drained only by `hex_combat`'s applier. First in,

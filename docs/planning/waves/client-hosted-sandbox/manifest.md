@@ -130,6 +130,24 @@ Required behavior-neutral foundation, owned and landed on `dev` before the wave 
    optional and absent from Milestone A. Root Cargo and plugin composition remain
    coordinator territory.
 
+### Certificate-pin implementation blocker
+
+The dependency audit found a concrete mismatch between the locked connection-code
+contract and the available safe convenience API. `aeronet_webtransport 0.21.0` exposes
+`digest_from_spki_fingerprint`, but its pinned `wtransport 0.6.1` verifier compares the
+configured digest with SHA-256 of the complete leaf-certificate DER, not the SPKI bytes.
+Passing the documented SPKI digest to that verifier would therefore reject a valid host;
+using its disable-verification path remains forbidden.
+
+The transport-neutral foundation retains a typed 32-byte `CertificateFingerprint` and
+does not guess at verifier behavior. Before L1 dispatch, the coordinator must ratify one
+audited implementation: preserve SPKI pinning with a custom rustls verifier that also
+enforces expiry, the maximum 14-day certificate lifetime, and P-256 constraints; or amend
+decision 15 to pin the complete per-session leaf certificate DER with the built-in
+verifier. The latter is the smaller implementation and preserves exact per-session
+certificate identity, but it changes the named digest contract and cannot be done
+silently.
+
 The current user approval ratifies the product behavior, but it is not recorded as the
 separate world-owner sign-off required by item 4. That sign-off remains a dispatch
 condition for L3.
@@ -156,6 +174,7 @@ lanes:
       - docs/planning/waves/client-hosted-sandbox/manifest.md#L1-row
     dispatch_blockers:
       - behavior-neutral multiplayer foundation landed on dev and wave branch cut from that exact head
+      - certificate fingerprint verifier choice ratified and recorded as an amendment
     merge_blockers: []
     fences: []
     selector:

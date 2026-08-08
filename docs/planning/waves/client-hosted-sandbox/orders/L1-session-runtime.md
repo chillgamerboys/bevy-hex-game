@@ -77,6 +77,11 @@ map/unit/combat/perception dependency to `hex_multiplayer`.
 8. Generate a per-session self-signed certificate, derive/publish its SPKI SHA-256 pin, and
    configure WebTransport validation to require that pin. Do not enable any dangerous
    certificate-verification bypass.
+   **Dispatch blocker:** `aeronet_webtransport 0.21.0`'s pinned `wtransport 0.6.1`
+   convenience verifier hashes the complete leaf-certificate DER, despite Aeronet's
+   SPKI-named digest helper. Do not implement this item until the manifest records an
+   explicit choice between an audited custom SPKI verifier and an amendment to leaf-DER
+   pinning.
 9. Persist reconnect credentials through an injected atomic temporary-storage adapter;
    tests use memory/temp storage. Rotate after successful reconnect and delete at session
    end.

@@ -2141,12 +2141,17 @@ fn unit_ids_follow_spawn_order_and_reset_between_sessions() {
             .single(app.world())
             .map(|(entity, id)| (entity, *id))
             .expect("one player with an id");
-        let mut enemies = app.world_mut().query_filtered::<&UnitId, With<Enemy>>();
-        let enemy_id = *enemies.single(app.world()).expect("one enemy with an id");
-        (player_entity, player_id, enemy_id)
+        let mut enemies = app
+            .world_mut()
+            .query_filtered::<(Entity, &UnitId), With<Enemy>>();
+        let (enemy_entity, enemy_id) = enemies
+            .single(app.world())
+            .map(|(entity, id)| (entity, *id))
+            .expect("one enemy with an id");
+        (player_entity, player_id, enemy_entity, enemy_id)
     };
 
-    let (player_entity, player_id, enemy_id) = ids(&mut app);
+    let (player_entity, player_id, enemy_entity, enemy_id) = ids(&mut app);
     assert_eq!(player_id, UnitId(0), "the player spawns first");
     assert_eq!(enemy_id, UnitId(1), "the enemy spawns second");
 
@@ -2159,6 +2164,13 @@ fn unit_ids_follow_spawn_order_and_reset_between_sessions() {
             .get::<hex_core::ControlOwner>(),
         Some(&hex_core::ControlOwner::default()),
         "spawned units carry the seat-0 ownership marker"
+    );
+    assert_eq!(
+        app.world()
+            .entity(enemy_entity)
+            .get::<hex_core::ControlOwner>(),
+        Some(&hex_core::ControlOwner(hex_core::PlayerSeat::AI)),
+        "hostile authority is isolated from the host's human seat"
     );
     assert_eq!(
         app.world().resource::<Party>().members,
@@ -2180,7 +2192,7 @@ fn unit_ids_follow_spawn_order_and_reset_between_sessions() {
     );
 
     enter_gameplay(&mut app);
-    let (_, player_again, enemy_again) = ids(&mut app);
+    let (_, player_again, _, enemy_again) = ids(&mut app);
     assert_eq!(
         player_again,
         UnitId(0),

@@ -40,7 +40,7 @@ than agreed, the fallback the gameplay side ships without it is in
 | `TerrainImpactOutcome` — one applied or rejected answer with exact per-voxel health transitions | world | gameplay | **live** — #175 publishes the answer, #178 validates it exhaustively, and #180 correlates it under the authority hold before settlement and release | [planning/boundary.md](planning/boundary.md) H |
 | `DamagedVoxels` — exact partial-health projection, never a visibility grant | world | shared presentation | live | [planning/boundary.md](planning/boundary.md) H |
 | `PendingTerrainEdits` — replay before first spawn | gameplay | world | **asked** | [planning/boundary.md](planning/boundary.md) ask D1 |
-| `TerrainSnapshot` — generator-independent dump | world | gameplay | **asked** | [planning/boundary.md](planning/boundary.md) ask D2 |
+| `WorldSnapshotV1` / former `TerrainSnapshot` ask — generator-independent voxel substances by stable name, partial damage, and every semantic projection required to reproduce the complete public world fingerprint | world | multiplayer/session restore | **asked** — field set and round-trip fingerprint still require explicit world-owner agreement | [planning/boundary.md](planning/boundary.md) ask D2 |
 
 ## Perception and presentation
 
@@ -72,6 +72,17 @@ than agreed, the fallback the gameplay side ships without it is in
 | `TerrainSystems` — `ApplyWorld → RefreshProjections → ReconcileActors → ConsumeOutcomes` before perception and later combat authority | core | world / gameplay | **live** — #175 supplies map `ApplyWorld`, #178 supplies the shared ordering, and #180 wires occupancy/movement refresh, deterministic actor settlement and authority adoption, then matching-outcome consumption | [planning/boundary.md](planning/boundary.md) H |
 | `AppSystems`, `PausableSystems` | core | all | live | [`CLAUDE.md`](../CLAUDE.md) |
 | Same-frame combat knowledge — `PublishKnowledge → spatial lattice sync → Act → Apply → Resolve → Advance` | perception / gameplay | combat / AI | live | [systems/ai.md](systems/ai.md) |
+
+## Multiplayer foundation
+
+| Contract | Publisher | Consumer | Status | Specified in |
+|---|---|---|---|---|
+| `SimulationRole::{Authority, Replica}` / `AuthoritativeSystems` | core | authority-owning runtime systems | **reserved** — vocabulary is live; system gates land only after overlapping gameplay/world PR territory clears | [client-hosted sandbox manifest](planning/waves/client-hosted-sandbox/manifest.md) |
+| `PlayerSeat(0..=5)` plus `PlayerSeat::AI == u8::MAX` | core / unit spawn | command ownership and host AI | **live** — player units default to host seat; hostile spawns use the disjoint AI seat | [client-hosted sandbox manifest](planning/waves/client-hosted-sandbox/manifest.md) |
+| `CommandRequestId`, seatless `LocalGameCommandRequest`, and seatless wire `GameCommandRequest` | local/network ingress | authenticated authority adapter | **reserved** — bounded codec and protocol registration are live; producer migration waits on gameplay territory | [authority map](planning/waves/client-hosted-sandbox/maps/authority-and-command.md) |
+| `SessionManifestV1`, `LobbySnapshot`, redacted invite/reconnect credentials, `CommandResult` | shared session authority | host/client adapters and UI | **reserved** — stable types, validation, and ordered registration are live; L1 mechanics/UI are pending | [L1 order](planning/waves/client-hosted-sandbox/orders/L1-session-runtime.md) |
+| `UnitReplica` / `SessionReplica` | gameplay authority | remote ECS/UI adapters | **reserved** — disclosure-safe types are live; authoritative publishers and visibility application wait on L2/L3 | [world/disclosure map](planning/waves/client-hosted-sandbox/maps/world-and-disclosure.md) |
+| Default-off `MultiplayerPlugin` with Replicon/Aeronet/WebTransport | shared composition | explicit Host Direct / Join Direct runtime | **partial** — deterministic protocol plugin is live and proven socket-free; connection/auth runtime waits on L1 and the certificate-pin amendment | [L1 order](planning/waves/client-hosted-sandbox/orders/L1-session-runtime.md) |
 
 ## Content
 

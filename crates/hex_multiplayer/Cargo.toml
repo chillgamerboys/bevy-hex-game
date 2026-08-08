@@ -1,0 +1,33 @@
+[package]
+name = "hex_multiplayer"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "Shared, transport-neutral multiplayer protocol and session contracts."
+
+[features]
+default = ["direct"]
+# Direct native Internet/LAN transport. Installing the plugin never opens a socket;
+# a session runtime must explicitly request Host Direct or Join Direct.
+direct = ["dep:aeronet_webtransport"]
+
+[dependencies]
+aeronet = { workspace = true }
+aeronet_replicon = { workspace = true }
+aeronet_webtransport = { workspace = true, optional = true }
+base64 = { workspace = true }
+bevy_app = { workspace = true }
+bevy_ecs = { workspace = true }
+bevy_replicon = { workspace = true }
+bevy_state = { workspace = true }
+hex_core = { workspace = true }
+hex_lattice = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+aeronet_channel = { workspace = true }
+serde_json = "1"
+
+[lints]
+workspace = true

@@ -34,10 +34,13 @@ pub mod view;
 pub mod voxel;
 
 pub use app::{
-    AppSystems, GameplayPhase, GameplaySetup, GameplaySystems, Mode, PausableSystems, Pause,
-    RoundElapsed, Screen, Turn,
+    AppSystems, AuthoritativeSystems, GameplayPhase, GameplaySetup, GameplaySystems, Mode,
+    PausableSystems, Pause, RoundElapsed, Screen, SimulationRole, Turn,
 };
-pub use commands::{Busy, CommandQueue, GameCommand, IssuedCommand, PendingDecision};
+pub use commands::{
+    Busy, CommandQueue, CommandRequestId, GameCommand, IssuedCommand, LocalGameCommandRequest,
+    PendingDecision,
+};
 #[cfg(feature = "test-support")]
 pub use deterministic_fixture::{
     deterministic_fixture, DeterministicFixtureDefinition, DeterministicFixtureInitialState,

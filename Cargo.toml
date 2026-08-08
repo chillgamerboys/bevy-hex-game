@@ -23,6 +23,7 @@ hex_perception = { path = "crates/hex_perception" }
 hex_dev = { path = "crates/hex_dev" }
 hex_test_app = { path = "crates/hex_test_app" }
 hex_test_support = { path = "crates/hex_test_support" }
+hex_multiplayer = { path = "crates/hex_multiplayer" }
 
 bevy = "0.19"
 bevy_app = "0.19"
@@ -46,6 +47,12 @@ rand = "0.8.5"
 ron = "0.12.2"
 xxhash-rust = { version = "0.8.6", features = ["xxh3"] }
 serde = { version = "1.0.229", features = ["derive"] }
+base64 = "0.22.1"
+bevy_replicon = { version = "=0.41.1", default-features = false, features = ["client", "server"] }
+aeronet = { version = "=0.21.0", default-features = false, features = ["std"] }
+aeronet_replicon = { version = "=0.21.0", default-features = false, features = ["std", "client", "server"] }
+aeronet_webtransport = { version = "=0.21.0", default-features = false, features = ["client", "server", "self-signed"] }
+aeronet_channel = "=0.21.0"
 
 [workspace.package]
 version = "0.4.0"

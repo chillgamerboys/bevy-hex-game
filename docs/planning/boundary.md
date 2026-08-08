@@ -597,6 +597,27 @@ scaffold.
 When they land, contract H's outcome log is what makes a replayed impact reproducible
 without pinning the damage table's version.
 
+### Multiplayer refinement (asked; not yet world-owner agreed)
+
+Client-hosted reconnect and durable Campaign saves strengthen D2 from voxel columns to
+`WorldSnapshotV1`: versioned substances by stable name, exact partial damage, anchors,
+regions, traversal blockers, presentation-semantic consequences, knowledge inputs, and
+every other public fact required to restore the same `TerrainReady` world. Acceptance is
+an export → teardown → import round trip compared against a new complete public world
+fingerprint, not `GenerationReport::map_fingerprint` (which describes initial generation
+and is not updated by mutations).
+
+The open owner decision is whether stable generator-neutral consequences currently held
+inside V3's private presentation projection become explicit snapshot fields
+(recommended), or are regenerated. Regeneration alone is adequate for initial direct
+map verification but does not meet the generator-independent Campaign promise. Import
+must also hydrate both the public damaged-voxel projection and the map's private remaining
+health state, and it must occur only at a boundary with no terrain edit/impact batch in
+flight. Player remembered knowledge is a separate authorized reconnect snapshot; hostile
+knowledge remains host-only. Until the world owner ratifies this field list and
+fingerprint, `WorldSnapshotV1`, `LiveSessionSnapshotV1`, L3, and Campaign C1 remain
+blocked rather than approximated.
+
 ## F — Deliberate non-asks
 
 - **Streaming / chunks**: Ring7 and Ring19 are finite maps, not a streaming

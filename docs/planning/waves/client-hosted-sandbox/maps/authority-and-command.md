@@ -118,3 +118,10 @@ hostile AI ownership, new `hex_multiplayer` DTOs, redacted secrets/limits/protoc
 and additive Cargo/docs/selector wiring. L2 does not start until the conflicting command,
 AI, casting, selection, and movement regions land or a manifest amendment remaps every
 symbol.
+
+The direct-transport audit also found that the pinned `wtransport 0.6.1` convenience
+verifier hashes the complete leaf-certificate DER while Aeronet names its helper as an
+SPKI fingerprint conversion. The foundation may model the fixed-size fingerprint but may
+not bind it to that verifier until the explicit SPKI-versus-leaf-DER amendment in the
+manifest is ratified. This is an L1 dispatch blocker, not permission to enable dangerous
+certificate validation.
