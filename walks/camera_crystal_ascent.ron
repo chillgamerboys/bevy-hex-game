@@ -1,0 +1,63 @@
+// Real 144-level ascent from the lower apron through the crystal chamber and all
+// three contracting stair circuits to the woodland summit. Every authored move is
+// followed by bounded completion and an exact selected-surface proof.
+[
+    AwaitScreen("Title"),
+    StartScenario(name: "Crystal Ascent", seed: Some(1592598566)),
+    AwaitScreen("Gameplay"),
+    AwaitTerrain,
+    Key("H"),
+    AssertCameraMode(Map),
+    Key("C"),
+    AssertCameraMode(Character),
+    Settle(60),
+    Capture("01-crystal-ascent-lower-exterior-entrance-character"),
+
+    ClickAnchor(name: "crystal_ascent.bottom_chamber", expected: (q: 5, r: 0, level: 6)),
+    AwaitPartyIdle(max_frames: 2400),
+    AssertSelectedAt(expected: (q: 5, r: 0, level: 6)),
+    Settle(60),
+    Capture("02-crystal-ascent-bottom-chamber-heart-character"),
+    Key("C"),
+    AssertCameraMode(FirstPerson),
+    Settle(45),
+    Capture("03-crystal-ascent-bottom-chamber-heart-first-person"),
+
+    ClickAnchor(name: "crystal_ascent.mid_flight", expected: (q: 22, r: 0, level: 74)),
+    AwaitPartyIdle(max_frames: 7200),
+    AssertSelectedAt(expected: (q: 22, r: 0, level: 74)),
+    Settle(60),
+    Capture("04-crystal-ascent-mid-flight-first-person"),
+    // First Person keeps both review azimuths at the exact proved footing, avoiding
+    // a camera-boom sweep through the enclosing wall.
+    OrbitCamera(yaw_turns: 0.16666667, pitch_fraction: -0.1),
+    Settle(45),
+    Capture("05-crystal-ascent-mid-flight-clockwise-first-person"),
+    OrbitCamera(yaw_turns: -0.33333334, pitch_fraction: 0.1),
+    Settle(45),
+    Capture("06-crystal-ascent-mid-flight-counterclockwise-first-person"),
+
+    ClickAnchor(name: "crystal_ascent.upper_contraction", expected: (q: -19, r: 19, level: 138)),
+    AwaitPartyIdle(max_frames: 7200),
+    AssertSelectedAt(expected: (q: -19, r: 19, level: 138)),
+    Settle(60),
+    Capture("07-crystal-ascent-upper-contraction-first-person"),
+    Key("C"),
+    AssertCameraMode(Map),
+    Key("C"),
+    AssertCameraMode(Character),
+
+    ClickAnchor(name: "crystal_ascent.upper_exit", expected: (q: 16, r: 15, level: 150)),
+    AwaitPartyIdle(max_frames: 4800),
+    AssertSelectedAt(expected: (q: 16, r: 15, level: 150)),
+    Settle(60),
+    Capture("08-crystal-ascent-summit-oculus-clearing-character"),
+    Key("C"),
+    AssertCameraMode(FirstPerson),
+    Settle(45),
+    Capture("09-crystal-ascent-summit-clearing-first-person"),
+    Key("C"),
+    AssertCameraMode(Map),
+    Key("Backspace"),
+    AwaitScreen("Title"),
+]

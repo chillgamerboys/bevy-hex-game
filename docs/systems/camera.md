@@ -166,12 +166,13 @@ and restores the exact handles before deleting the clones. A neighboring tree us
 the same catalog style is never mutated. Authored `CanopyOccluder` metadata remains a
 separate art boundary and does not create camera behavior by itself.
 
-Ordinary gameplay never removes cave roofs. Those roof runs remain visible collision
-geometry, allowing the collision-limited camera to stay inside a tight interior.
-First Person does not fade trees or remove roofs: ordinary world geometry remains
-visible from the eye. Only explicit
-`map-review` tooling may install the full-cutaway override, which hides the complete
-roof of the selected exact `InteriorRegionId` for one deterministic capture.
+Ordinary gameplay never removes authored interior occluders. Cave roofs and Crystal
+Ascent's enclosing worked-stone shell remain visible collision geometry, allowing the
+collision-limited camera to stay inside a tight interior. First Person does not fade
+trees or remove those runs: ordinary world geometry remains visible from the eye.
+Only explicit `map-review` tooling may install the full-cutaway override, which hides
+the complete tagged occluder set of the selected exact `InteriorRegionId` for one
+deterministic capture.
 
 ## Ordering and lifecycle
 
@@ -207,16 +208,18 @@ repeatedly rebuilds the camera index from each public
 1 ms p95 for Two Rings and defines a 2 ms p95 budget for Mountain Range across their
 exact published anchors and six yaws.
 
-The tracked route manifest pins 16 camera-walk Sandbox catalog maps—every entry except
+The tracked route manifest pins 17 camera-walk Sandbox catalog maps—every entry except
 the deployment-only Flat Arena—to their exact scenario seed and representative
 stack-safe destinations. Each has an executable multi-azimuth Character walk using
 ordinary pointer movement and bounded party-idle waiting, followed by an exact check
 that the selected unit's authoritative footing and the camera-focus surface both equal
 the requested destination. Sky Islands exercises only its reachable ordinary ground
-bridge.
+bridge. Crystal Ascent proves real movement from its lower entrance through the heart
+chamber, mid-flight, upper contraction, and woodland summit, with Character and First
+Person evidence at the vertical landmarks.
 
 The separate `walks/camera_first_person.ron` route is a focused Mountains proof, not
-a seventeenth manifest entry. It uses typed `AssertCameraMode(Map|Character|FirstPerson)`
+an eighteenth manifest entry. It uses typed `AssertCameraMode(Map|Character|FirstPerson)`
 steps around ordinary `C` input, performs click-to-move through the normal pointer
 adapter, applies a bounded right-drag look, and captures the restored Map frame. Run it
 with:

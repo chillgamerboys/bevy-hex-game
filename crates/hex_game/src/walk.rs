@@ -1531,6 +1531,7 @@ mod tests {
     use super::*;
 
     const FIRST_PERSON_CAMERA_SCRIPT: &str = "../../walks/camera_first_person.ron";
+    const CRYSTAL_ASCENT_CAMERA_SCRIPT: &str = "../../walks/camera_crystal_ascent.ron";
 
     const CAMERA_ROUTE_SCRIPTS: &[(&str, &str)] = &[
         ("../../walks/camera_crossing.ron", "The Crossing"),
@@ -1549,6 +1550,7 @@ mod tests {
         ("../../walks/camera_deep_forest.ron", "Deep Forest"),
         ("../../walks/camera_prairie.ron", "Prairie"),
         ("../../walks/camera_fort.ron", "Fort"),
+        ("../../walks/camera_crystal_ascent.ron", "Crystal Ascent"),
         ("../../walks/camera_seven_regions.ron", "Seven Regions"),
         ("../../walks/camera_two_rings.ron", "Two Rings"),
         ("../../walks/camera_mountain_range.ron", "Mountain Range"),
@@ -2068,7 +2070,7 @@ mod tests {
                 "deployment-only Sandbox map {id:?} must remain in the shipping catalog"
             );
         }
-        assert_eq!(routes.len(), 16);
+        assert_eq!(routes.len(), 17);
 
         for route in &manifest.routes {
             assert!(
@@ -2117,6 +2119,109 @@ mod tests {
                 CameraRouteDestination::Anchor { name, .. } if name == "bridge"
             )
         }));
+    }
+
+    #[test]
+    fn crystal_ascent_walk_proves_the_vertical_route_and_both_close_cameras() {
+        let steps: Vec<WalkStep> =
+            ron::from_str(include_str!("../../../walks/camera_crystal_ascent.ron"))
+                .expect("the Crystal Ascent camera walk should parse");
+        for step in &steps {
+            validate_step(step).expect("the Crystal Ascent camera walk should validate");
+        }
+
+        assert!(steps.contains(&WalkStep::StartScenario {
+            name: "Crystal Ascent".to_owned(),
+            seed: Some(1_592_598_566),
+            suppress_hostiles: false,
+        }));
+        let clicks = steps
+            .iter()
+            .filter_map(|step| match step {
+                WalkStep::ClickAnchor { name, expected } => Some((name.as_str(), *expected)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            clicks,
+            vec![
+                (
+                    "crystal_ascent.bottom_chamber",
+                    CameraRouteTile {
+                        q: 5,
+                        r: 0,
+                        level: 6,
+                    },
+                ),
+                (
+                    "crystal_ascent.mid_flight",
+                    CameraRouteTile {
+                        q: 22,
+                        r: 0,
+                        level: 74,
+                    },
+                ),
+                (
+                    "crystal_ascent.upper_contraction",
+                    CameraRouteTile {
+                        q: -19,
+                        r: 19,
+                        level: 138,
+                    },
+                ),
+                (
+                    "crystal_ascent.upper_exit",
+                    CameraRouteTile {
+                        q: 16,
+                        r: 15,
+                        level: 150,
+                    },
+                ),
+            ]
+        );
+        let captures = steps
+            .iter()
+            .filter_map(|step| match step {
+                WalkStep::Capture(name) => Some(name.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            captures,
+            vec![
+                "01-crystal-ascent-lower-exterior-entrance-character",
+                "02-crystal-ascent-bottom-chamber-heart-character",
+                "03-crystal-ascent-bottom-chamber-heart-first-person",
+                "04-crystal-ascent-mid-flight-first-person",
+                "05-crystal-ascent-mid-flight-clockwise-first-person",
+                "06-crystal-ascent-mid-flight-counterclockwise-first-person",
+                "07-crystal-ascent-upper-contraction-first-person",
+                "08-crystal-ascent-summit-oculus-clearing-character",
+                "09-crystal-ascent-summit-clearing-first-person",
+            ]
+        );
+        assert_eq!(
+            steps
+                .iter()
+                .filter(|step| matches!(step, WalkStep::OrbitCamera { .. }))
+                .count(),
+            2
+        );
+        assert!(steps.windows(2).any(|pair| matches!(
+            pair,
+            [WalkStep::Key(key), WalkStep::AssertCameraMode(WalkCameraMode::Character)]
+                if key == "C"
+        )));
+        assert!(steps.windows(2).any(|pair| matches!(
+            pair,
+            [WalkStep::Key(key), WalkStep::AssertCameraMode(WalkCameraMode::FirstPerson)]
+                if key == "C"
+        )));
+        assert!(steps.ends_with(&[
+            WalkStep::Key("Backspace".to_owned()),
+            WalkStep::AwaitScreen("Title".to_owned()),
+        ]));
+        assert!(CAMERA_ROUTE_SCRIPTS.contains(&(CRYSTAL_ASCENT_CAMERA_SCRIPT, "Crystal Ascent")));
     }
 
     #[test]

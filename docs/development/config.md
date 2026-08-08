@@ -100,7 +100,7 @@ The optional review overrides are:
 | `HEX_REVIEW_LIQUID_PHASE` | Freezes liquid animation at a finite phase in seconds, wrapped over its visual cycle; captures default to `0.0` |
 | `HEX_REVIEW_FOCUS_ANCHOR` | Moves the selected actor to one exact generated map anchor before framing |
 | `HEX_REVIEW_CUTAWAY` | `full` hides the complete roof of the selected interior; ordinary gameplay never removes it |
-| `HEX_REVIEW_ILLUMINATION` | `overlay` draws exact cave-interior gameplay illumination tiers: charcoal Dark, blue Dim, and cyan-green Bright |
+| `HEX_REVIEW_ILLUMINATION` | `overlay` draws exact authored-interior gameplay illumination tiers: charcoal Dark, blue Dim, and cyan-green Bright |
 
 `HEX_REVIEW_VIEW`, `HEX_REVIEW_CAMERA`, `HEX_REVIEW_FOCUS_ANCHOR`, and
 `HEX_REVIEW_CUTAWAY` and `HEX_REVIEW_ILLUMINATION` require `HEX_REVIEW_CAPTURE`.
@@ -330,6 +330,39 @@ checks that placement against the loaded combat policy so combat through rock ca
 interrupt entry. Recipe and environment combinations are validated together:
 Mountains requires `Frozen`, Caves requires `Rocky`, and invalid combinations leave
 the previous valid hot-reloaded settings active.
+
+`CrystalAscent` authors one complete vertical landmark in a radius-40 `Single` patch:
+
+```ron
+terrain: Procedural((
+    generator_version: 3,
+    layout: Single((
+        environment: TemperateGrassland,
+        recipe: CrystalAscent((
+            base_level: 6,
+            rise_levels: 144,
+        )),
+        overlays: [],
+        mask: WholeWorld,
+        edges: (
+            east: WorldBoundary,
+            south_east: WorldBoundary,
+            south_west: WorldBoundary,
+            west: WorldBoundary,
+            north_west: WorldBoundary,
+            north_east: WorldBoundary,
+        ),
+    )),
+)),
+```
+
+`rise_levels` accepts 100 through 200. `base_level`, the rise, the crown, and its
+reserved headroom must all fit at or below V3's level-256 ceiling. That ceiling does
+not change the retained V1/V2 validation limits. The landmark's three stair circuits,
+four-wide routes, entrance, chamber, shaft, oculus, lights, and summit clearing are
+recipe invariants rather than additional tuning fields. Crystal Ascent currently
+requires `TemperateGrassland`, rejects overlays and Macro placement, and varies only
+crystal presentation and summit trees with the scenario seed.
 
 **Use V3 Waterfall terrain.** The first shipped V3 recipe uses an explicit
 single-patch layout. Its edge-to-edge three-wide liquid topology, eleven-level fall,

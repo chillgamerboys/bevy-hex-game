@@ -365,6 +365,25 @@ properties and elevations:
   evocations unless they have special properties like an anti-magic field; fewer
   allow enchantments, since a fixed stone wall cannot be cast on water
 
+### Crystal Ascent landmark
+
+Crystal Ascent is a vertical transition biome intended to become one landmark inside
+a larger authored world. A monumental aperture enters at the bottom into an open,
+dark chamber dominated by one large cyan crystal. The playable route does not cross
+the central void: it coils upward in three broad circuits along the enclosing walls,
+contracts inward like a Gothic cathedral, and emerges through an oculus into a wooded
+summit clearing. Smaller landing crystals make the route readable without turning the
+whole interior into daylight.
+
+The standalone scenario fixes the climb at 144 voxel levels while the authored recipe
+accepts 100 through 200 for later composition. Four-wide stairs and landings support a
+full party, ordinary transitions remain flat or one level, and the lower and upper
+terminals remain opposite one another. The cathedral heart is physical world volume:
+characters cannot enter it and sight cannot pass through its interior. Small crystals
+are presentation and illumination fixtures rather than blockers. Map, Third Person,
+and First Person remain ordinary camera choices; no automatic gameplay cutaway is
+introduced for the tower.
+
 ### Magic shapes the world; the world decides how
 
 **Evocations make persistent terrain changes.** They last at least across multiple

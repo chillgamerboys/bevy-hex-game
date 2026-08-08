@@ -996,7 +996,7 @@ mod tests {
     use super::*;
     use crate::{
         ConnectivityPolicy, EffectPart, ObjectBounds, ObjectPart, ObjectPlacement, PaletteSwatch,
-        VoxelSurfaceMode, OBJECT_BLUEPRINT_SCHEMA_VERSION,
+        PropPart, VoxelSurfaceMode, OBJECT_BLUEPRINT_SCHEMA_VERSION,
     };
     use bevy::asset::{AssetLoadError, AssetLoadFailedEvent, AssetPath};
     use bevy::reflect::ReflectRef;
@@ -1489,6 +1489,7 @@ mod tests {
             include_str!("../../../assets/art/objects/prop/cave-lichen.ron"),
             include_str!("../../../assets/art/objects/prop/cave-moss.ron"),
             include_str!("../../../assets/art/objects/prop/crystal-branched.ron"),
+            include_str!("../../../assets/art/objects/prop/crystal-cathedral-heart.ron"),
             include_str!("../../../assets/art/objects/prop/crystal-low-cluster.ron"),
             include_str!("../../../assets/art/objects/prop/crystal-spire.ron"),
             include_str!("../../../assets/art/objects/prop/grass-tuft.ron"),
@@ -1511,6 +1512,7 @@ mod tests {
             "prop/cave-lichen",
             "prop/cave-moss",
             "prop/crystal-branched",
+            "prop/crystal-cathedral-heart",
             "prop/crystal-low-cluster",
             "prop/crystal-spire",
             "prop/grass-tuft",
@@ -1521,7 +1523,7 @@ mod tests {
 
         let resolved = RuntimeArtCatalog::from_sources(&palette, &styles, &manifest, objects)
             .expect("shipped authored object graph should resolve");
-        assert_eq!(resolved.objects().len(), 13);
+        assert_eq!(resolved.objects().len(), 14);
         assert_eq!(resolved.styles().styles().len(), 8);
 
         let small = resolved
@@ -1720,6 +1722,55 @@ mod tests {
             assert!(crystal.blocker_footprint.is_empty());
             assert!(crystal.canopy_occluders.is_empty());
         }
+        let heart = resolved
+            .object(&id("prop/crystal-cathedral-heart"))
+            .expect("cathedral heart should resolve");
+        assert_eq!(heart.category, ObjectCategory::Prop);
+        assert_eq!(heart.connectivity, ConnectivityPolicy::Free);
+        assert_eq!(heart.bounds.radius, 4);
+        assert_eq!(heart.bounds.min_level, 0);
+        assert_eq!(heart.bounds.height, 24);
+        assert_eq!(heart.origin, LocalVoxelCoord::new(0, 0, 0));
+        assert!(heart.canopy_occluders.is_empty());
+        assert!(heart
+            .placements
+            .iter()
+            .all(|placement| placement.part == ObjectPart::Prop(PropPart::Structure)));
+        assert_eq!(
+            heart
+                .placements
+                .iter()
+                .map(|placement| placement.style.clone())
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([style_id("crystal/cyan-body"), style_id("crystal/cyan-glow"),])
+        );
+        assert_eq!(
+            heart
+                .placements
+                .iter()
+                .map(|placement| placement.position.level)
+                .collect::<BTreeSet<_>>(),
+            (0..24).collect::<BTreeSet<_>>()
+        );
+        let expected_heart_footprint = (-4_i32..=4)
+            .flat_map(|q| (-4_i32..=4).map(move |r| LocalAxialCoord::new(q, r)))
+            .filter(|coord| {
+                coord
+                    .q
+                    .abs()
+                    .max(coord.r.abs())
+                    .max((-coord.q - coord.r).abs())
+                    <= 4
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            heart
+                .blocker_footprint
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>(),
+            expected_heart_footprint
+        );
         let body_style = resolved
             .styles()
             .get(&style_id("crystal/cyan-body"))
@@ -1740,9 +1791,9 @@ mod tests {
                 resolved.combined_fingerprint(),
             ),
             (
-                8_717_522_685_805_731_658,
-                3_796_578_994_341_658_295,
-                12_062_549_279_886_409_984,
+                5_183_140_313_222_150_403,
+                9_652_748_088_792_271_647,
+                2_286_574_576_222_903_349,
             )
         );
         let expected_object_fingerprints = BTreeMap::from([
@@ -1755,6 +1806,10 @@ mod tests {
             (id("prop/cave-lichen"), 14_754_322_871_995_823_724),
             (id("prop/cave-moss"), 11_746_802_235_239_197_086),
             (id("prop/crystal-branched"), 632_179_240_403_471_067),
+            (
+                id("prop/crystal-cathedral-heart"),
+                7_289_663_172_659_263_250,
+            ),
             (id("prop/crystal-low-cluster"), 1_307_286_824_627_267_907),
             (id("prop/crystal-spire"), 1_248_030_652_803_885_799),
             (id("prop/grass-tuft"), 8_128_471_665_006_116_358),

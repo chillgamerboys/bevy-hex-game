@@ -482,13 +482,14 @@ pub(crate) mod tests {
         MAX_COMBAT_SUMMARY_DETAILS,
     };
     use hex_core::{
-        AppSystems, Busy, CommandQueue, ControlOwner, ExteriorIllumination, GameCommand,
-        GameplayLight, GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan,
-        HexTile, IlluminationLevel, InteriorRegions, IssuedCommand, KnowledgeState, LatticeCoord,
-        LocalMapKnowledge, MapAnchorId, MapAnchors, MapViewHint, Mode, PartyFormation,
-        PausableSystems, Pause, PendingDecision, PerceptionSystems, PlayerSeat, ResolvedMapSeed,
-        Screen, SpecialMovementRegion, SpecialMovementRegions, SubstanceId, TerrainReady, TilePos,
-        TraversalBlockers, Turn, UnitId,
+        AppSystems, AuthoredObjectVoxelRuns, Busy, CommandQueue, ControlOwner,
+        ExteriorIllumination, GameCommand, GameplayLight, GameplaySetup, GameplaySetupFailure,
+        Headroom, HexCoord, HexGrid, HexSpan, HexTile, IlluminationLevel, InteriorRegions,
+        IssuedCommand, KnowledgeState, LatticeCoord, LightDomain, LocalMapKnowledge, MapAnchorId,
+        MapAnchors, MapViewHint, Mode, PartyFormation, PausableSystems, Pause, PendingDecision,
+        PerceptionSystems, PlayerSeat, ResolvedMapSeed, Screen, SpecialMovementRegion,
+        SpecialMovementRegions, SubstanceId, TerrainReady, TilePos, TraversalBlockers, Turn,
+        UnitId,
     };
     use hex_lattice::{LatticeSpec, LatticeState};
     use hex_map::{
@@ -496,8 +497,8 @@ pub(crate) mod tests {
     };
     use hex_perception::{FactionMapKnowledge, ResolvedIllumination};
     use hex_units::{
-        either_in_reach, plan_formation_move, Body, Downed, Enemy, Faction, Footing,
-        FormationMember, Player, Reach, StandsOn, UnitOccupancy,
+        either_in_reach, plan_formation_move, AuthoredObjectOccupancy, Body, Downed, Enemy,
+        Faction, Footing, FormationMember, Player, Reach, StandsOn, UnitOccupancy,
     };
     use hex_world::TimeOfDay;
 
@@ -1494,6 +1495,290 @@ pub(crate) mod tests {
         );
     }
 
+    #[test]
+    fn crystal_ascent_showcase_builds_the_complete_runtime_contract() {
+        let mut app = procedural_gameplay_app("Crystal Ascent");
+        enter_screen(&mut app, Screen::Gameplay);
+
+        assert!(
+            app.world().contains_resource::<TerrainReady>(),
+            "Crystal Ascent did not finish terrain generation: {:?}",
+            app.world()
+                .get_resource::<GameplaySetupFailure>()
+                .map(|failure| failure.reason.as_str())
+        );
+        let report = app.world().resource::<GenerationReport>();
+        let Some(ProceduralRecipeMetrics::CrystalAscent(metrics)) = &report.recipe_metrics else {
+            panic!(
+                "Crystal Ascent published unexpected metrics: {:?}",
+                report.recipe_metrics
+            );
+        };
+        assert_eq!(metrics.circuits, 3);
+        assert_eq!(metrics.flights, 18);
+        assert_eq!(metrics.landings, 18);
+        assert_eq!(metrics.crystal_fixtures, 19);
+        assert_eq!(metrics.gameplay_lights, 38);
+        assert_eq!(metrics.rise_levels, 144);
+        assert!(metrics.minimum_stair_headroom >= 4);
+        assert!(metrics.critical_route_steps > 144);
+
+        let anchors = app.world().resource::<MapAnchors>();
+        for name in [
+            "crystal_ascent.lower_entry",
+            "crystal_ascent.bottom_chamber",
+            "crystal_ascent.upper_exit",
+        ] {
+            assert!(
+                anchors.get(&MapAnchorId::from(name)).is_some(),
+                "Crystal Ascent omitted {name}"
+            );
+        }
+        let lower_entry = anchors
+            .get(&MapAnchorId::from("crystal_ascent.lower_entry"))
+            .expect("Crystal Ascent should publish its lower entry");
+        let bottom_chamber = anchors
+            .get(&MapAnchorId::from("crystal_ascent.bottom_chamber"))
+            .expect("Crystal Ascent should publish its bottom chamber");
+        let mid_flight = anchors
+            .get(&MapAnchorId::from("crystal_ascent.mid_flight"))
+            .expect("Crystal Ascent should publish its deterministic mid-flight review point");
+        let upper_contraction = anchors
+            .get(&MapAnchorId::from("crystal_ascent.upper_contraction"))
+            .expect("Crystal Ascent should publish its upper-contraction review point");
+        let upper_exit = anchors
+            .get(&MapAnchorId::from("crystal_ascent.upper_exit"))
+            .expect("Crystal Ascent should publish its upper exit");
+        let illumination = app.world().resource::<ResolvedIllumination>();
+        for exterior in [lower_entry, upper_exit] {
+            let resolved = illumination
+                .get(exterior)
+                .unwrap_or_else(|| panic!("missing resolved illumination at {exterior:?}"));
+            assert_eq!(resolved.domain, LightDomain::Exterior);
+            assert_eq!(resolved.level, IlluminationLevel::Bright);
+        }
+        for interior in [bottom_chamber, mid_flight, upper_contraction] {
+            let resolved = illumination
+                .get(interior)
+                .unwrap_or_else(|| panic!("missing resolved illumination at {interior:?}"));
+            assert!(matches!(resolved.domain, LightDomain::Interior(_)));
+            assert!(
+                resolved.level >= IlluminationLevel::Dim,
+                "required interior review point {interior:?} resolved {:?}",
+                resolved.level
+            );
+        }
+        assert!(
+            app.world()
+                .resource::<InteriorRegions>()
+                .surfaces()
+                .next()
+                .is_some(),
+            "Crystal Ascent did not publish its dark interior domain"
+        );
+        let gameplay_lights = {
+            let world = app.world_mut();
+            let mut lights = world.query::<&GameplayLight>();
+            lights
+                .iter(world)
+                .map(|light| (light.level, light.radius))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(gameplay_lights.len(), 38);
+        assert_eq!(
+            gameplay_lights
+                .iter()
+                .filter(|light| **light == (IlluminationLevel::Bright, 4))
+                .count(),
+            18
+        );
+        assert_eq!(
+            gameplay_lights
+                .iter()
+                .filter(|light| **light == (IlluminationLevel::Dim, 18))
+                .count(),
+            18
+        );
+        assert_eq!(
+            gameplay_lights
+                .iter()
+                .filter(|light| **light == (IlluminationLevel::Bright, 8))
+                .count(),
+            1
+        );
+        assert_eq!(
+            gameplay_lights
+                .iter()
+                .filter(|light| **light == (IlluminationLevel::Dim, 24))
+                .count(),
+            1
+        );
+        let physical_lights = app
+            .world_mut()
+            .query::<&PointLight>()
+            .iter(app.world())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            physical_lights.len(),
+            22,
+            "the 18 landing crystals and four heart emitters should each publish once"
+        );
+        assert!(physical_lights.iter().all(|light| {
+            (light.intensity - 4_500.0).abs() <= f32::EPSILON
+                && (light.range - 4.5).abs() <= f32::EPSILON
+                && !light.shadow_maps_enabled
+                && !light.contact_shadows_enabled
+        }));
+        let crystal_objects = {
+            let world = app.world_mut();
+            let mut objects = world.query::<&ObjectInstance>();
+            objects
+                .iter(world)
+                .filter(|instance| instance.object_id().as_str().starts_with("prop/crystal-"))
+                .map(|instance| {
+                    (
+                        instance.object_id().as_str().to_owned(),
+                        TilePos::new(
+                            instance.origin().coord,
+                            instance.origin().level.saturating_sub(1),
+                        ),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            crystal_objects
+                .iter()
+                .filter(|(id, _)| id == "prop/crystal-cathedral-heart")
+                .count(),
+            1,
+            "the visual heart and its authoritative occupancy must share one root"
+        );
+        assert_eq!(
+            crystal_objects.len(),
+            19,
+            "the heart and all 18 landing crystals should be visible fixtures"
+        );
+        let illumination = app.world().resource::<ResolvedIllumination>();
+        for (_, floor) in &crystal_objects {
+            let resolved = illumination
+                .get(*floor)
+                .unwrap_or_else(|| panic!("missing fixture illumination at {floor:?}"));
+            assert_eq!(resolved.level, IlluminationLevel::Bright);
+            assert!(matches!(resolved.domain, LightDomain::Interior(_)));
+        }
+        assert_eq!(
+            app.world_mut()
+                .query::<&AuthoredObjectVoxelRuns>()
+                .iter(app.world())
+                .count(),
+            1,
+            "only the cathedral heart should opt into authored occupancy"
+        );
+        assert!(!app.world().resource::<AuthoredObjectOccupancy>().is_empty());
+        assert_eq!(
+            app.world_mut()
+                .query_filtered::<Entity, With<Player>>()
+                .iter(app.world())
+                .count(),
+            3
+        );
+        assert!(standing_pos::<Enemy>(&mut app).is_none());
+    }
+
+    #[test]
+    #[ignore = "manual release/debug Crystal Ascent end-to-end boundary-rise benchmark"]
+    fn crystal_ascent_boundary_rises_track_materialization_perception_and_entity_counts() {
+        for rise_levels in [100, 144, 200] {
+            let mut app = procedural_gameplay_app("Crystal Ascent");
+            {
+                let mut map = app.world_mut().resource_mut::<MapSettings>();
+                let TerrainSettings::Procedural(hex_map::ProceduralSettings::V3(v3)) =
+                    &mut map.terrain
+                else {
+                    panic!("Crystal Ascent benchmark should retain V3 settings");
+                };
+                let hex_map::V3LayoutSettings::Single(patch) = &mut v3.layout else {
+                    panic!("Crystal Ascent benchmark should retain its Single patch");
+                };
+                let hex_map::V3RecipeSettings::CrystalAscent(settings) = &mut patch.recipe else {
+                    panic!("Crystal Ascent benchmark should retain its recipe");
+                };
+                settings.rise_levels = rise_levels;
+                map.validate()
+                    .unwrap_or_else(|error| panic!("rise {rise_levels} must validate: {error}"));
+            }
+
+            let started = Instant::now();
+            enter_screen(&mut app, Screen::Gameplay);
+            let setup_elapsed = started.elapsed();
+            assert!(
+                app.world().contains_resource::<TerrainReady>(),
+                "rise {rise_levels} setup failed: {:?}",
+                app.world()
+                    .get_resource::<GameplaySetupFailure>()
+                    .map(|failure| failure.reason.as_str())
+            );
+
+            let (columns, material_runs) = {
+                let map = app.world().resource::<VoxelMap>();
+                (
+                    map.columns().count(),
+                    map.columns()
+                        .map(|(_, column)| hex_map::runs(column).len())
+                        .sum::<usize>(),
+                )
+            };
+            let (tile_entities, total_entities, object_instances, point_lights) = {
+                let world = app.world_mut();
+                let tile_entities = world
+                    .query_filtered::<Entity, With<HexTile>>()
+                    .iter(world)
+                    .count();
+                let object_instances = world.query::<&ObjectInstance>().iter(world).count();
+                let point_lights = world.query::<&PointLight>().iter(world).count();
+                (
+                    tile_entities,
+                    world.iter_entities().count(),
+                    object_instances,
+                    point_lights,
+                )
+            };
+            let illumination_surfaces = app.world().resource::<ResolvedIllumination>().len();
+            let perception = *app
+                .world()
+                .resource::<hex_perception::PerceptionRuntimeStats>();
+            let report = app.world().resource::<GenerationReport>();
+            let Some(ProceduralRecipeMetrics::CrystalAscent(metrics)) = &report.recipe_metrics
+            else {
+                panic!("rise {rise_levels} omitted Crystal Ascent metrics");
+            };
+            assert_eq!(metrics.rise_levels, rise_levels);
+            assert_eq!(columns, 4_921);
+            assert_eq!(object_instances, 61);
+            assert_eq!(point_lights, 22);
+            assert!(
+                illumination_surfaces >= metrics.ordinary_surfaces as usize,
+                "resolved illumination must include every ordinary route surface"
+            );
+            assert!((1..=2).contains(&perception.illumination_resolutions));
+            assert!((1..=2).contains(&perception.observation_resolutions));
+            eprintln!(
+                "CRYSTAL_ASCENT_RUNTIME rise={rise_levels} setup={setup_elapsed:?} \
+                 generation_us={} columns={columns} material_runs={material_runs} \
+                 tile_entities={tile_entities} total_entities={total_entities} \
+                 ordinary_surfaces={} illumination_surfaces={illumination_surfaces} \
+                 object_instances={object_instances} point_lights={point_lights}",
+                report.elapsed_micros, metrics.ordinary_surfaces,
+            );
+
+            enter_screen(&mut app, Screen::Title);
+            assert!(!app.world().contains_resource::<VoxelMap>());
+            assert!(!app.world().contains_resource::<ResolvedIllumination>());
+            assert!(!app.world().contains_resource::<AuthoredObjectOccupancy>());
+        }
+    }
+
     /// Automated combat UI walks use minimal flat fixtures instead of making ability
     /// assertions depend on the Crossing's routing and six-unit initiative.
     #[test]
@@ -1959,6 +2244,7 @@ pub(crate) mod tests {
         app.add_plugins((
             hex_map::plugin,
             hex_units::terrain_occupancy::plugin,
+            hex_units::authored_object_occupancy::plugin,
             hex_units::movement::plugin,
             hex_perception::plugin,
         ));

@@ -716,13 +716,14 @@ mod tests {
     use hex_assets::{
         ArtPalette, PaletteSwatch, SightPreset, SrgbColor, Substance, SubstanceFile, SwatchId,
     };
-    use hex_core::{HexCoord, InteriorRegionId, KnowledgeState, SightProfile, TraversalProfile};
+    use hex_core::{
+        AuthoredObjectVoxelRun, AuthoredObjectVoxelRuns, GameplaySetup, HexCoord, InteriorRegionId,
+        KnowledgeState, SightProfile, TraversalProfile,
+    };
     use hex_test_app::HeadlessAppBuilder;
     use hex_units::Standing;
 
     use super::*;
-    use crate::resolve_observations;
-
     #[derive(Clone, Copy)]
     struct TestSubstances {
         stone: SubstanceId,
@@ -763,7 +764,9 @@ mod tests {
     }
 
     fn runtime_app(exterior: IlluminationLevel) -> (App, TestSubstances) {
-        let mut builder = HeadlessAppBuilder::new().with_state_plugin();
+        let mut builder = HeadlessAppBuilder::new()
+            .with_state_plugin()
+            .with_gameplay_sets();
         builder.app_mut().init_state::<Screen>();
         builder.app_mut().configure_sets(
             Update,
@@ -792,7 +795,8 @@ mod tests {
                 PerceptionSystems::PublishKnowledge,
                 PerceptionSystems::ApplyPresentation,
             )
-                .chain(),
+                .chain()
+                .in_set(GameplaySetup::Perception),
         );
         let (table, substances) = test_table();
         builder.app_mut().insert_resource(table);
@@ -804,10 +808,8 @@ mod tests {
             .insert_resource(ExteriorIllumination::new(exterior));
         builder.app_mut().insert_resource(InteriorRegions::new());
         builder.app_mut().insert_resource(TraversalBlockers::new());
-        builder
-            .app_mut()
-            .insert_resource(AuthoredObjectOccupancy::default());
         builder.app_mut().insert_resource(TerrainReady);
+        hex_units::authored_object_occupancy::plugin(builder.app_mut());
         builder.app_mut().add_plugins(plugin);
         (builder.build(), substances)
     }
@@ -1019,9 +1021,11 @@ mod tests {
     fn missing_authoritative_object_occupancy_fails_closed_even_when_empty_is_valid() {
         let (mut app, substances) = runtime_app(IlluminationLevel::Bright);
         spawn_tile(&mut app, pos(0, 0, 5), substances.stone, 2);
-        app.world_mut().remove_resource::<AuthoredObjectOccupancy>();
-
         enter(&mut app, Screen::Gameplay);
+        assert!(app.world().contains_resource::<AuthoredObjectOccupancy>());
+
+        app.world_mut().remove_resource::<AuthoredObjectOccupancy>();
+        app.update();
 
         let failure = app.world().resource::<GameplaySetupFailure>();
         assert!(failure
@@ -1040,18 +1044,23 @@ mod tests {
         spawn_tile(&mut app, hostile, substances.stone, 3);
         spawn_unit(&mut app, 0, Faction::Player, player);
         spawn_unit(&mut app, 1, Faction::Hostile, hostile);
+        let source = app
+            .world_mut()
+            .spawn(AuthoredObjectVoxelRuns::default())
+            .id();
         enter(&mut app, Screen::Gameplay);
         assert!(app
             .world()
             .resource::<FactionObservations>()
             .faction(Faction::Player)
             .observes(hostile));
+        let before_blocking = *app.world().resource::<PerceptionRuntimeStats>();
 
-        let blocking = AuthoredObjectOccupancy::from_runs((1..=3).flat_map(|q| {
-            (-2..=2).map(move |r| hex_core::AuthoredObjectVoxelRun::new(pos(q, r, 1), 0))
-        }))
-        .expect("blocking object runs");
-        app.world_mut().insert_resource(blocking);
+        app.world_mut()
+            .entity_mut(source)
+            .insert(AuthoredObjectVoxelRuns::new((1..=3).flat_map(|q| {
+                (-2..=2).map(move |r| AuthoredObjectVoxelRun::new(pos(q, r, 1), 0))
+            })));
         app.update();
         assert!(!app
             .world()
@@ -1064,15 +1073,115 @@ mod tests {
             .faction(Faction::Player)
             .unit(UnitId(1))
             .is_none());
+        let after_blocking = *app.world().resource::<PerceptionRuntimeStats>();
+        assert_eq!(
+            after_blocking.surface_rebuilds,
+            before_blocking.surface_rebuilds
+        );
+        assert_eq!(
+            after_blocking.illumination_resolutions,
+            before_blocking.illumination_resolutions
+        );
+        assert_eq!(
+            after_blocking.observation_resolutions,
+            before_blocking.observation_resolutions + 1
+        );
+        assert_eq!(
+            after_blocking.knowledge_publications,
+            before_blocking.knowledge_publications + 1
+        );
 
         app.world_mut()
-            .insert_resource(AuthoredObjectOccupancy::default());
+            .entity_mut(source)
+            .remove::<AuthoredObjectVoxelRuns>();
         app.update();
         assert!(app
             .world()
             .resource::<FactionObservations>()
             .faction(Faction::Player)
             .observes(hostile));
+        let after_removal = *app.world().resource::<PerceptionRuntimeStats>();
+        assert_eq!(
+            after_removal.surface_rebuilds,
+            after_blocking.surface_rebuilds
+        );
+        assert_eq!(
+            after_removal.illumination_resolutions,
+            after_blocking.illumination_resolutions
+        );
+        assert_eq!(
+            after_removal.observation_resolutions,
+            after_blocking.observation_resolutions + 1
+        );
+        assert_eq!(
+            after_removal.knowledge_publications,
+            after_blocking.knowledge_publications + 1
+        );
+    }
+
+    #[test]
+    fn malformed_authored_source_withdraws_authority_and_spatial_knowledge_same_frame() {
+        let (mut app, substances) = runtime_app(IlluminationLevel::Bright);
+        let player = pos(0, 0, 0);
+        let hostile = pos(2, 0, 0);
+        spawn_tile(&mut app, player, substances.stone, 3);
+        spawn_tile(&mut app, hostile, substances.stone, 3);
+        spawn_unit(&mut app, 0, Faction::Player, player);
+        spawn_unit(&mut app, 1, Faction::Hostile, hostile);
+        let source = app
+            .world_mut()
+            .spawn(AuthoredObjectVoxelRuns::default())
+            .id();
+        enter(&mut app, Screen::Gameplay);
+        assert!(app
+            .world()
+            .resource::<FactionMapKnowledge>()
+            .faction(Faction::Player)
+            .unit(UnitId(1))
+            .is_some());
+
+        app.world_mut()
+            .entity_mut(source)
+            .insert(AuthoredObjectVoxelRuns::new([AuthoredObjectVoxelRun::new(
+                pos(1, 0, 3),
+                4,
+            )]));
+        app.update();
+
+        assert!(!app.world().contains_resource::<AuthoredObjectOccupancy>());
+        assert!(app
+            .world()
+            .resource::<GameplaySetupFailure>()
+            .reason
+            .contains("authoritative authored-object occupancy"));
+        assert!(!app.world().contains_resource::<FactionObservations>());
+        assert!(!app.world().contains_resource::<FactionMapKnowledge>());
+        assert!(!app.world().contains_resource::<LocalMapKnowledge>());
+    }
+
+    #[test]
+    fn malformed_authored_source_fails_initial_perception_setup_closed() {
+        let (mut app, substances) = runtime_app(IlluminationLevel::Bright);
+        let player = pos(0, 0, 0);
+        spawn_tile(&mut app, player, substances.stone, 3);
+        spawn_unit(&mut app, 0, Faction::Player, player);
+        app.world_mut()
+            .spawn(AuthoredObjectVoxelRuns::new([AuthoredObjectVoxelRun::new(
+                pos(1, 0, 3),
+                4,
+            )]));
+
+        enter(&mut app, Screen::Gameplay);
+
+        assert!(!app.world().contains_resource::<AuthoredObjectOccupancy>());
+        assert!(app
+            .world()
+            .resource::<GameplaySetupFailure>()
+            .reason
+            .contains("authoritative authored-object occupancy"));
+        assert!(!app.world().contains_resource::<FactionObservations>());
+        assert!(!app.world().contains_resource::<FactionMapKnowledge>());
+        assert!(!app.world().contains_resource::<LocalMapKnowledge>());
     }
 
     #[test]
@@ -1942,6 +2051,12 @@ mod tests {
         spawn_tile(&mut app, player, substances.stone, 2);
         spawn_tile(&mut app, adjacent, substances.stone, 2);
         spawn_unit(&mut app, 0, Faction::Player, player);
+        let object_voxel = pos(4, -2, 9);
+        app.world_mut()
+            .spawn(AuthoredObjectVoxelRuns::new([AuthoredObjectVoxelRun::new(
+                object_voxel,
+                7,
+            )]));
         let expected_entities = app.world().entities().len();
 
         for cycle in 0..100 {
@@ -1960,6 +2075,10 @@ mod tests {
             assert!(app.world().contains_resource::<FactionObservations>());
             assert!(app.world().contains_resource::<FactionMapKnowledge>());
             assert!(app.world().contains_resource::<LocalMapKnowledge>());
+            assert!(app
+                .world()
+                .resource::<AuthoredObjectOccupancy>()
+                .contains(object_voxel));
 
             enter(&mut app, Screen::Title);
             assert_eq!(
@@ -1973,6 +2092,7 @@ mod tests {
             assert!(!app.world().contains_resource::<FactionObservations>());
             assert!(!app.world().contains_resource::<FactionMapKnowledge>());
             assert!(!app.world().contains_resource::<LocalMapKnowledge>());
+            assert!(!app.world().contains_resource::<AuthoredObjectOccupancy>());
             assert_eq!(
                 *app.world().resource::<PerceptionRuntimeStats>(),
                 PerceptionRuntimeStats::default()
@@ -2023,13 +2143,14 @@ mod tests {
                 .map(|(position, _)| (position, RunBottom(position.level))),
         )
         .expect("flat radius-40 occupancy");
+        let authored_objects = AuthoredObjectOccupancy::default();
         let mut samples = Vec::new();
         for _ in 0..12 {
             let started = Instant::now();
             let illumination = ResolvedIllumination::from_surfaces(&snapshots, ambient, &[])
                 .expect("benchmark illumination");
             let mut knowledge = FactionMapKnowledge::new();
-            let observations = resolve_observations(
+            let observations = resolve_observations_with_authored_objects(
                 units,
                 &illumination,
                 &knowledge,
@@ -2037,6 +2158,7 @@ mod tests {
                 &[],
                 SightProfile::DEFAULT,
                 &terrain,
+                &authored_objects,
             )
             .expect("benchmark observations");
             apply_observations(&mut knowledge, &snapshots, &observations);
@@ -2113,11 +2235,12 @@ mod tests {
         let ambient = ExteriorIllumination::new(IlluminationLevel::Bright);
         let illumination = ResolvedIllumination::from_surfaces(&snapshots, ambient, &[])
             .expect("dense-wall illumination");
+        let authored_objects = AuthoredObjectOccupancy::default();
         let mut samples = Vec::new();
         for _ in 0..12 {
             let started = Instant::now();
             let mut knowledge = FactionMapKnowledge::new();
-            let observations = resolve_observations(
+            let observations = resolve_observations_with_authored_objects(
                 units.iter().copied(),
                 &illumination,
                 &knowledge,
@@ -2125,6 +2248,7 @@ mod tests {
                 &[],
                 SightProfile::DEFAULT,
                 &terrain,
+                &authored_objects,
             )
             .expect("dense-wall observations");
             apply_observations(&mut knowledge, &snapshots, &observations);

@@ -710,6 +710,13 @@ mod tests {
         .expect("single-voxel authored runs are valid")
     }
 
+    fn rotate_clockwise(mut coord: HexCoord, rotations: u8) -> HexCoord {
+        for _ in 0..rotations % 6 {
+            coord = HexCoord::from_axial(-coord.y(), coord.x() + coord.y());
+        }
+        coord
+    }
+
     fn advance(mut coord: HexCoord, direction: Sextant, distance: u32) -> HexCoord {
         for _ in 0..distance {
             coord = coord.neighbor(direction);
@@ -868,6 +875,45 @@ mod tests {
             interior_destination,
             &blocker,
         ));
+
+        let endpoint = ExactGridPoint::voxel_top_center(at(0, 0, 0));
+        let above = ExactGridPoint::voxel_center(at(0, 0, 3));
+        assert!(authored_object_sight_segment_is_clear(
+            endpoint, above, &blocker,
+        ));
+        assert!(authored_object_sight_segment_is_clear(
+            above, endpoint, &blocker,
+        ));
+    }
+
+    #[test]
+    fn tapered_authored_wall_blocks_the_complete_bundle_in_all_six_rotations() {
+        let empty_terrain = TerrainOccupancy::default();
+        let observer = at(0, 0, 0);
+
+        for rotations in 0..6 {
+            let runs = (2..=4).flat_map(|q| {
+                (-3_i32..=3).map(move |r| {
+                    let top = match r.abs() {
+                        0 => 5,
+                        1 => 3,
+                        _ => 1,
+                    };
+                    let coord = rotate_clockwise(HexCoord::from_axial(q, r), rotations);
+                    hex_core::AuthoredObjectVoxelRun::new(TilePos::new(coord, top), -1)
+                })
+            });
+            let object =
+                AuthoredObjectOccupancy::from_runs(runs).expect("rotated tapered authored wall");
+            let target = TilePos::new(rotate_clockwise(HexCoord::from_axial(6, 0), rotations), 0);
+
+            assert!(!terrain_and_authored_object_sight_is_clear(
+                observer,
+                target,
+                &empty_terrain,
+                &object,
+            ));
+        }
     }
 
     #[test]

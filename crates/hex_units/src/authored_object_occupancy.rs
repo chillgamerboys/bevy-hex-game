@@ -246,6 +246,13 @@ mod tests {
         AuthoredObjectVoxelRun::new(at(q, r, top), bottom)
     }
 
+    fn rotate_clockwise(mut q: i32, mut r: i32, rotations: u8) -> (i32, i32) {
+        for _ in 0..rotations % 6 {
+            (q, r) = (-r, q + r);
+        }
+        (q, r)
+    }
+
     #[test]
     fn runs_union_without_filling_stacked_air_gaps() {
         let occupancy = AuthoredObjectOccupancy::from_runs([
@@ -291,6 +298,45 @@ mod tests {
         assert!(
             AuthoredObjectOccupancy::default().blocks_standing_body(at(0, 0, Level::MAX), walker,)
         );
+    }
+
+    #[test]
+    fn rotated_tapered_runs_keep_exact_columns_and_body_overlap() {
+        const BASE: Level = 20;
+        const ANCHOR_Q: i32 = 11;
+        const ANCHOR_R: i32 = -7;
+        let local_runs = [(0, 0, 0, 9), (1, 0, 0, 5), (0, 1, 0, 2), (-1, 1, 0, 0)];
+
+        for rotations in 0..6 {
+            let projected = local_runs.into_iter().map(|(q, r, bottom, top)| {
+                let (rotated_q, rotated_r) = rotate_clockwise(q, r, rotations);
+                run(
+                    ANCHOR_Q + rotated_q,
+                    ANCHOR_R + rotated_r,
+                    BASE + bottom,
+                    BASE + top,
+                )
+            });
+            let occupancy =
+                AuthoredObjectOccupancy::from_runs(projected).expect("rotated tapered runs");
+
+            for (q, r, bottom, top) in local_runs {
+                let (rotated_q, rotated_r) = rotate_clockwise(q, r, rotations);
+                let world_q = ANCHOR_Q + rotated_q;
+                let world_r = ANCHOR_R + rotated_r;
+                assert!(occupancy.contains(at(world_q, world_r, BASE + bottom)));
+                assert!(occupancy.contains(at(world_q, world_r, BASE + top)));
+                assert!(!occupancy.contains(at(world_q, world_r, BASE + top + 1)));
+            }
+
+            let (arm_q, arm_r) = rotate_clockwise(1, 0, rotations);
+            let arm_support = at(ANCHOR_Q + arm_q, ANCHOR_R + arm_r, BASE - 1);
+            assert!(occupancy.blocks_standing_body(arm_support, TraversalProfile::WALKER));
+            assert!(!occupancy.blocks_standing_body(
+                at(ANCHOR_Q + arm_q, ANCHOR_R + arm_r, BASE + 5),
+                TraversalProfile::WALKER,
+            ));
+        }
     }
 
     #[derive(Resource, Default)]
@@ -366,5 +412,32 @@ mod tests {
             .set(Screen::Title);
         app.update();
         assert!(!app.world().contains_resource::<AuthoredObjectOccupancy>());
+    }
+
+    #[test]
+    fn gameplay_reentry_rebuilds_persisted_authored_sources() {
+        let mut builder = HeadlessAppBuilder::new().with_states().with_gameplay_sets();
+        plugin(builder.app_mut());
+        let mut app = builder.build();
+        app.world_mut()
+            .spawn(AuthoredObjectVoxelRuns::new([run(3, -2, 8, 14)]));
+
+        enter_gameplay(&mut app);
+        assert!(app
+            .world()
+            .resource::<AuthoredObjectOccupancy>()
+            .contains(at(3, -2, 11)));
+
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Title);
+        app.update();
+        assert!(!app.world().contains_resource::<AuthoredObjectOccupancy>());
+
+        enter_gameplay(&mut app);
+        assert!(app
+            .world()
+            .resource::<AuthoredObjectOccupancy>()
+            .contains(at(3, -2, 11)));
     }
 }

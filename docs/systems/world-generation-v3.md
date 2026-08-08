@@ -417,6 +417,53 @@ the planned six-way rotation, and owns a restrained non-shadow-casting point lig
 The authored emission and physical light are presentation only; neither carries
 `GameplayLight` nor determines gameplay illumination.
 
+### Crystal Ascent
+
+Crystal Ascent is a deterministic standalone landmark recipe over a radius-40 world.
+Its authored site occupies radius 32, begins at `base_level`, and accepts an exact rise
+from 100 through 200 levels. The shipped showcase uses base level 6 and a 144-level
+rise. Its monumental geometry is seed-independent; seed streams vary only the landing
+crystal silhouettes and rotations and the summit tree placement.
+
+A twelve-hex-wide, eighteen-level-high pointed lower aperture opens into a radius-23
+worked-stone chamber. The radius-four cathedral-heart reservation blocks the chamber
+centre while the shaft above it remains open and contracts to a radius-12 summit
+oculus. Exactly three clockwise stair circuits climb around that void. Their four-wide
+radial bands are `24..=27`, `21..=24`, and `18..=21`; each circuit contains six
+flights and six corner landings. Flight boundary `i` is
+`base_level + floor(i * rise_levels / 18)`, and rises are distributed along each
+flight so every ordinary transition is flat or one level. Flights retain at least
+four clear levels, corner landings retain at least eight, and transfer landings are
+the only connections between consecutive circuits. Validation rejects narrower
+coverage, cross-loop shortcuts, void crossings, wall clipping, insufficient
+headroom, or a lower-to-upper route whose elevation differs from the requested rise.
+
+The summit is a soil-and-grass crown around the oculus. Radius 18 remains an open
+clearing; existing broadleaf trees become denser outside it while an exact four-wide
+trail stays clear. Stable `crystal_ascent.lower_entry`,
+`crystal_ascent.bottom_chamber`, and `crystal_ascent.upper_exit` anchors identify the
+landmark, and exact four-wide lower and upper terminal pads remain protected. The
+upper terminal is opposite the lower aperture. The patch constructor is translation-
+and-rotation safe, but Macro placement is deliberately deferred until the larger
+authored world defines its composition contract.
+
+Each of the eighteen outward landing alcoves reuses one accepted cave-crystal asset.
+It publishes paired Bright radius-4 and Dim radius-18 gameplay lights, with only the
+Bright source owning the visual object and its non-shadow-casting 4,500-lumen point
+light. The cathedral heart publishes paired Bright radius-8 and Dim radius-24 sources,
+one visual object, and four vertically distributed point lights. The complete chamber
+and stairs share one Dark interior domain; the lower apron and summit crown remain
+exterior. Physical light and emissive materials communicate these rules but never
+establish gameplay illumination.
+
+The heart is the first authored prop to opt into exact gameplay occupancy. Its
+preflighted structural voxels are rotated and compacted into
+`AuthoredObjectVoxelRuns`; the runtime publishes their union before movement and
+perception. Standing-body intersections derive the landmark's exact traversal
+blockers, and the same complete volume blocks strict-interior sight without terrain's
+low-cover exception. Small crystals and summit vegetation retain their existing
+contracts, and authored-object casting obstruction remains later work.
+
 ### Fort
 
 Fort resolves an unobstructed radius-nine site inside its arbitrary patch mask and

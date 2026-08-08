@@ -8,7 +8,8 @@ compile against one boundary without reaching into one another's crates.
 > **Status:** authoritative illumination, obstruction-aware pooled faction sight,
 > Unknown/Remembered/Observed map knowledge, and the live-map tactical shroud are
 > live.
-> V3 Caves publishes fixed local gameplay lights into that live pipeline.
+> V3 Caves and Crystal Ascent publish fixed local gameplay lights into that live
+> pipeline.
 > Casting anchors, hostile lattice disclosure, and AI observation/traversal now
 > consume that authority. Authored cave crystals and restrained physical lights
 > present those sources without becoming gameplay authority. Unknown-frontier
@@ -78,9 +79,14 @@ volumes. Overlapping sources take the maximum level rather than adding brightnes
 
 V3 Caves places fixed Bright sources with radii from four through seven. They cover
 the entrance, required route, and critical chambers while preserving dark optional
-branches. Authored emissive crystal meshes and restrained physical point lights
-communicate the rule at those exact sites, but they never implement gameplay
-illumination.
+branches. Crystal Ascent treats its chamber and complete stair as one Dark interior:
+each of its eighteen landing crystals publishes a Bright-radius-4/Dim-radius-18 pair,
+and its cathedral heart publishes a Bright-radius-8/Dim-radius-24 pair. Only the
+Bright member owns the shared visual fixture. The apron and woodland crown remain
+exterior, so exterior daylight does not leak through the entrance or summit aperture
+under the domain contract. Authored emissive crystal meshes and restrained physical
+point lights communicate these rules at their exact sites, but they never implement
+gameplay illumination.
 
 ## Sight
 

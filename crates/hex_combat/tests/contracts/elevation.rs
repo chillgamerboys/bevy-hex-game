@@ -130,7 +130,11 @@ fn perception_combat_test_app() -> App {
         OnEnter(Screen::Gameplay),
         spawn_terrain.before(PerceptionSystems::ResolveIllumination),
     );
-    app.add_plugins((hex_perception::plugin, hex_combat::plugin));
+    app.add_plugins((
+        hex_units::authored_object_occupancy::plugin,
+        hex_perception::plugin,
+        hex_combat::plugin,
+    ));
 
     builder.build()
 }

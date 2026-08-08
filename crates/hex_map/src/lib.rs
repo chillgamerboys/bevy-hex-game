@@ -59,11 +59,12 @@ pub mod voxel;
 pub use generator::{FlatGenerator, HeightGenerator, HeightMap, PerlinGenerator, PerlinStep};
 pub use liquid_render::LiquidVisualTime;
 pub use procedural::{
-    CavesMetrics as CavesReportMetrics, DeepForestMetrics as DeepForestReportMetrics,
-    ForestMetrics as ForestReportMetrics, FortMetrics as FortReportMetrics, GenerationReport,
-    MacroMetrics, MountainRangeMetrics, PrairieMetrics as PrairieReportMetrics,
-    ProceduralRecipeMetrics, Ring19Metrics, Ring7Metrics, TacticalMetrics,
-    VolcanoMetrics as VolcanoReportMetrics, WaterfallMetrics as WaterfallReportMetrics,
+    CavesMetrics as CavesReportMetrics, CrystalAscentMetrics as CrystalAscentReportMetrics,
+    DeepForestMetrics as DeepForestReportMetrics, ForestMetrics as ForestReportMetrics,
+    FortMetrics as FortReportMetrics, GenerationReport, MacroMetrics, MountainRangeMetrics,
+    PrairieMetrics as PrairieReportMetrics, ProceduralRecipeMetrics, Ring19Metrics, Ring7Metrics,
+    TacticalMetrics, VolcanoMetrics as VolcanoReportMetrics,
+    WaterfallMetrics as WaterfallReportMetrics,
 };
 pub use settings::{
     BridgeSettings, CavesSettings, CrossingSettings, CubeCoord, DerivedHillsCrossing,

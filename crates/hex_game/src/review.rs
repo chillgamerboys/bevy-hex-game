@@ -13,10 +13,10 @@
 //! `HEX_REVIEW_FOCUS_ANCHOR` optionally relocates the selected actor to one exact
 //! generated anchor before framing. This keeps iteration tooling on the same loading
 //! and validation path as manual play while avoiding compositor-dependent screenshots.
-//! `HEX_REVIEW_CUTAWAY=full` exposes the complete active interior for cave overview
-//! captures; ordinary gameplay keeps every cave roof intact.
+//! `HEX_REVIEW_CUTAWAY=full` exposes the complete active interior for overview
+//! captures; ordinary gameplay keeps every authored roof or enclosing shell intact.
 //! `HEX_REVIEW_ILLUMINATION=overlay` draws the authoritative Dark, Dim, and Bright
-//! gameplay tiers over exact interior surfaces for diagnostic cave captures.
+//! gameplay tiers over exact interior surfaces for diagnostic captures.
 
 use std::collections::BTreeMap;
 use std::env;

@@ -1175,6 +1175,54 @@ mod tests {
         assert!(footing.at(clear_above.0).is_some());
     }
 
+    #[test]
+    fn authored_object_overlap_uses_the_movers_exact_body_height() {
+        let surface_level = 10;
+        let first = tile(HexCoord::from_axial(0, 0), surface_level);
+        let second = tile(HexCoord::from_axial(1, 0), surface_level);
+        let third = tile(HexCoord::from_axial(2, 0), surface_level);
+        let support_only = tile(HexCoord::from_axial(3, 0), surface_level);
+        let surfaces = [first, second, third, support_only];
+        let authored = AuthoredObjectOccupancy::from_runs([
+            hex_core::AuthoredObjectVoxelRun::new(first.0.above(), surface_level + 1),
+            hex_core::AuthoredObjectVoxelRun::new(second.0.above().above(), surface_level + 2),
+            hex_core::AuthoredObjectVoxelRun::new(
+                third.0.above().above().above(),
+                surface_level + 3,
+            ),
+            hex_core::AuthoredObjectVoxelRun::new(support_only.0, surface_level),
+        ])
+        .expect("height-specific authored-object fixture");
+
+        let footing_for_height = |levels_tall| {
+            Footing::from_tiles_with_object_occupancy(
+                surfaces
+                    .iter()
+                    .map(|(pos, span, substance, headroom)| (pos, span, substance, headroom)),
+                &table(),
+                Body::new(TraversalProfile {
+                    levels_tall,
+                    max_climb: 1,
+                    max_drop: 1,
+                }),
+                None,
+                &authored,
+            )
+        };
+
+        let walker = footing_for_height(2);
+        assert!(walker.at(first.0).is_none());
+        assert!(walker.at(second.0).is_none());
+        assert!(walker.at(third.0).is_some());
+        assert!(walker.at(support_only.0).is_some());
+
+        let tall = footing_for_height(3);
+        assert!(tall.at(first.0).is_none());
+        assert!(tall.at(second.0).is_none());
+        assert!(tall.at(third.0).is_none());
+        assert!(tall.at(support_only.0).is_some());
+    }
+
     /// A run buried inside a column is not a surface, however solid it is.
     ///
     /// This is the shipped bug, in one assertion. Run-merging splits a column into

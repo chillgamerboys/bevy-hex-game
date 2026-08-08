@@ -23,9 +23,18 @@ high-pass/low-bypass route pair, snow caps, and a peak-fed river and fall. Caves
 places a varied rocky surface above a two-wide entrance and a dense,
 height-validated underground chamber network with exact opaque cutaway roofs.
 
-V3 now has fourteen recipe variants: Hills, Sky Islands, Mountains, Caves, Waterfall,
-Forest, Fort, Volcano, Deep Forest, Prairie, Shallow Sea, Beach, Shore, and Deep
-Mountain. Ring7 places its fixed seven-recipe roster in one connected radius-33
+The selectable **Crystal Ascent** landmark occupies one radius-40 world. Its
+monumental lower aperture opens into a crystal chamber and central shaft; three exact
+four-wide clockwise stair circuits climb 144 levels through eighteen crystal-lit
+landings before emerging around a radius-12 oculus into a protected woodland
+clearing. The recipe accepts rises from 100 through 200, keeps its architecture
+seed-independent, publishes stable lower/chamber/upper anchors and terminal pads, and
+validates ordinary traversal, one-level transitions, headroom, lighting coverage,
+and the absence of cross-loop shortcuts. Macro composition remains deferred.
+
+V3 now has fifteen recipe variants: Hills, Sky Islands, Mountains, Caves, Waterfall,
+Forest, Fort, Volcano, Deep Forest, Prairie, Shallow Sea, Beach, Shore, Deep Mountain,
+and Crystal Ascent. Ring7 places its fixed seven-recipe roster in one connected radius-33
 world. Ring19 powers the selectable **Two Rings** map: a radius-55, 9,241-column
 world with 19 fixed regions, 42 reciprocal seams, 30 outer boundary sides, and a
 physical ordinary-walker graph that keeps all regions reachable after any one seam is
@@ -144,6 +153,15 @@ yet. Authored emissive cave crystals and restrained physical point lights now pr
 every fixed cave gameplay-light source without becoming gameplay authority. The cap
 renderer deliberately shades top faces rather than every cliff side or tall prop;
 full-scene shading and fades remain presentation refinements.
+
+Authored-object occupancy is live as an opt-in exact-volume contract. The cathedral
+heart projects its rotated structural voxel runs before movement and perception,
+blocks the standing two-voxel body and strict-interior sight, and rebuilds or
+withdraws the authoritative resource in the same update when its source changes.
+Terrain low-cover handling never applies to that volume. The eighteen smaller
+landing crystals remain nonblocking presentation objects. Their paired Bright/Dim
+gameplay lights and the heart's four physical point lights remain independent of
+rendered emission.
 
 Fort adds the first complete V3 structure recipe and the canonical worked-stone
 substance. A five-level, two-wide curtain surrounds a gravel courtyard and offset
