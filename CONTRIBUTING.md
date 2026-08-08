@@ -41,37 +41,66 @@ if [ -s "$broken" ]; then cat "$broken"; exit 1; fi
 echo "all relative links resolve"
 ```
 
-Run the same Rust checks CI runs:
+Ask the selector what this diff owns, then run only those concerns:
 
-```sh
-cargo fmt --all --check
-cargo deny check
-cargo clippy --workspace --all-targets --all-features --profile ci -- -D warnings
-cargo test --workspace --all-features --profile ci
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
-cargo build --workspace --profile ci
+```bash
+BASE_REF=$(gh pr view --json baseRefName --jq .baseRefName 2>/dev/null || printf dev)
+SCOPE_ARGS=(--base "origin/$BASE_REF" --head HEAD)
+python3 tools/test_scope.py plan "${SCOPE_ARGS[@]}"
+SELECTED_TESTS=$(python3 tools/test_scope.py selected-tests \
+  "${SCOPE_ARGS[@]}") || exit $?
+REMAINING=$SELECTED_TESTS
+while [ -n "$REMAINING" ]; do
+  concern=${REMAINING%% *}
+  case "$REMAINING" in
+    *" "*) REMAINING=${REMAINING#* } ;;
+    *) REMAINING= ;;
+  esac
+  python3 tools/test_scope.py run "$concern" || exit $?
+done
+case " $SELECTED_TESTS " in
+  *" residual "*) cargo test --workspace --all-features --profile ci --doc ;;
+esac
 ```
 
-CI runs the final build command on Linux, Windows, and macOS. Run it on your local
-platform; the CI matrix covers the other two. Markdown-only changes skip the Rust
-commands, but still need valid relative links.
+For a Rust-affecting diff, also run `cargo fmt --all --check` and `cargo deny check`.
+Run `python3 tools/test_scope.py run clippy`, `python3 tools/test_scope.py run docs`,
+and `cargo build --package hex_game --release` only when the printed plan selects
+`clippy`, `docs`, or `shipping`, respectively. Run graph/partition completeness checks
+only when the selector or configuration files that define them changed. Never edit the
+selector result by hand or report an omitted concern as passed.
 
-**Then run the affected application.** This is not optional, and it is not covered by
-the above. Several failure modes here produce a clean log and a wrong window: missing
-assets render as a plain blue screen, a sky shader that fails to load renders a black
-sky, and a speed-unit mistake just looks slightly off. Every one of those passes CI.
+CI runs the final shipping-package build command on Linux, Windows, and macOS. Run it
+on your local platform; the CI matrix covers the other two. Markdown-only changes
+skip the Rust commands, but still need valid relative links.
 
-If your change touches rendering, movement, persistence, or state transitions, walk
-it: splash → title → New Game → Party Trial, orbit, move the party, **ESC** to pause,
-save with **F5**, return to the title, and Continue. Open Settings, persist one change,
-restart, and confirm it survived. Launch an affected Map or focused Demo separately
-when the change touches one.
+The concern commands are separated because their evidence has different authority.
+Their exact Cargo package, target, and feature selections live in
+`.config/test-scopes.json`; do not duplicate or broaden them in a new workflow. See
+the [gameplay](docs/development/gameplay-testing.md) and
+[map](docs/development/map-testing.md) testing contracts before adding a helper,
+integration binary, screenshot, soak, or balance claim.
 
-If it touches the Asset Workshop, run `cargo editor` and complete the relevant
-[authoring workflow](docs/systems/asset-workshop.md#authoring-workflow). Persistence
-changes require a save/reload round trip, recovery changes require an interrupted
-dirty draft, and review changes require inspection of every source frame, the contact
-sheet, and `report.ron`.
+**Then inspect the affected application when presentation or experience changed.**
+This is required for camera/UI/rendered-map presentation, native input, motion,
+control feel, and taste, because several failures produce a clean log and a wrong
+window: missing assets render as a plain blue screen, a sky shader that fails to load
+renders a black sky, and a speed-unit mistake just looks slightly off. Every one of
+those passes CI. A logic-only change instead records the exact-head hook-backed
+classification; launching the application cannot strengthen its state evidence.
+
+Walk only the affected experiential route. For a broad presentation change that may
+be splash → title → New Game → Party Trial, orbit, move the party, **ESC** to pause,
+return to the title, Continue, and the affected Settings/Map/Demo surface. Screenshots
+judge its static presentation; video/human checks judge motion and feel. Typed hooks
+and canonical snapshots separately prove persistence and every state transition.
+
+If it touches Asset Workshop presentation or experience, run `cargo editor` and
+complete the affected visual portion of the
+[authoring workflow](docs/systems/asset-workshop.md#authoring-workflow). Inspect every
+affected source frame, contact sheet, and report presentation. Typed persistence and
+recovery contracts—not observation of the editor—prove save/reload identity and
+interrupted-draft recovery.
 
 ## Where code goes
 
@@ -168,25 +197,50 @@ tidied up afterwards — never delete it. Feature branches are deleted once merg
 Related work is delivered in **waves** when its branches share contracts or hot files,
 form a deep dependency stack, or only make sense as one runtime candidate. A
 short-lived `wave/<name>` branch off `dev` collects source lanes in semantic order,
-the integrated result gets a combined audit and manual walk, and **one** merge takes
-the whole wave to `dev`. This keeps provisional composition off `dev` without forcing
-every work lane to become a release unit.
+the integrated result gets a combined audit and, when presentation or experience is
+affected, the applicable visual/human route. A logic-only wave uses exact-head
+hook-backed evidence. **One** merge takes the whole wave to `dev`, keeping provisional
+composition off `dev` without forcing every work lane to become a release unit.
 
 ```
-feat/ticket-a ─PR─► wave/2-command-flow ─one walked PR─► dev ─promotion─► main
+feat/ticket-a ─PR─► wave/2-command-flow ─one reviewed PR─► dev ─promotion─► main
 feat/ticket-b ─PR─►        │
 ```
 
 Choose independent, stacked, or wave topology **before** opening PRs. Source branches
 inside a wave are work lanes, not automatically separate PRs. Open a leaf PR only
 when focused review or ownership approval is useful; otherwise integrate its
-identifiable commits directly. Full CI, the automated visual walk, and the human walk
-gate the combined wave. Retarget any stacked child PR *before* deleting its parent
-branch; wave branches die after their one merge — `dev` never does.
+identifiable commits directly. The selector-chosen CI gate runs on the combined wave;
+automated visual review and a human route additionally apply when camera, UI,
+rendered-map presentation, motion, input, or feel changed. Logic-only waves record the
+exact-head hook-backed classification instead. Retarget any stacked child PR *before*
+deleting its parent branch; wave branches die after their one merge — `dev` never
+does.
 
-The complete decision table, manifest, review budget, stale-parent reconciliation,
-and cleanup rules are in
-[parallel development and integration waves](docs/development/parallel-development.md).
+Screenshots prove static presentation: camera framing/occlusion, UI
+hierarchy/layout/legibility/focus/contrast/reflow, and rendered-map geometry,
+materials, lighting, cutaways, seams, and composition. Video and human checks prove
+camera motion, native-input response, animation, control feel, and taste. They may
+judge the presentation of a state independently established by hooks, but must never
+prove or corroborate gameplay or exact world logic available through typed state,
+messages, logs, snapshots, or deterministic contracts. Add a missing hook rather than
+infer logic from pixels; a logic-only wave uses the verified-maintainer N/A
+classification.
+
+A lane PR into `wave/*` runs the ordinary audit and merge gate, but defers its exact-head
+manual runtime sign-off to the combined wave PR — the CI sign-off job already exempts a
+`wave/*` base for exactly that reason. The single `wave/* → dev` merge carries the real
+combined head's own exact-head classification — a named-human playtest for changed
+presentation or experience, or the verified-maintainer N/A a logic-only wave already uses.
+
+The complete decision table, review budget, and stale-parent reconciliation are in
+[parallel development and integration waves](docs/development/parallel-development.md); the
+wave manifest, lane field table, ownership algebra, merge order, and cleanup rules are in
+[the wave protocol](docs/development/wave-protocol.md).
+Before declaring a PR or wave complete, also reconcile implementation,
+status/design/roadmap docs, GitHub, and—when available—Linear using
+[the delivery-state contract](docs/development/delivery-state.md). Linear is strongly
+recommended for cross-owner visibility but never blocks a valid contribution.
 
 `main` moves only by merging `dev` into it, as a deliberate promotion after someone
 has actually played the game. That gap exists for a specific reason: **CI cannot see

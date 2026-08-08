@@ -16,8 +16,14 @@ use crate::state::{LatticeState, LatticeStats};
 /// there is no trickle here. Disabled gems are skipped, and so are **locked** gems:
 /// an enchantment's cost is capacity — that part of the lattice is spoken for and
 /// cannot be channelled — so refilling a locked gem would quietly refund the mana
-/// the enchantment tied up and collapse the throughput/capacity distinction.
-pub fn channel(state: &mut LatticeState, spec: &LatticeSpec, stats: &LatticeStats) {
+/// the enchantment tied up and collapse the throughput/capacity distinction. Returns
+/// the mana actually restored by element; full, disabled, and locked gems contribute
+/// nothing to that structured result.
+pub fn channel(
+    state: &mut LatticeState,
+    spec: &LatticeSpec,
+    stats: &LatticeStats,
+) -> BTreeMap<ElementId, u16> {
     // Group live gems by element. `spec.cells()` yields coordinate order, so each
     // element's gem list is already sorted by `LatticeCoord`.
     let mut by_element: BTreeMap<ElementId, Vec<LatticeCoord>> = BTreeMap::new();
@@ -30,9 +36,11 @@ pub fn channel(state: &mut LatticeState, spec: &LatticeSpec, stats: &LatticeStat
     }
 
     // `by_element` iterates in element order; each gem list is in coordinate order.
+    let mut restored = BTreeMap::new();
     for (element, gems) in by_element {
         let capacity = stats.capacity(element);
         let mut budget = stats.channelling(element);
+        let available = budget;
         for coord in gems {
             if budget == 0 {
                 break;
@@ -45,5 +53,10 @@ pub fn channel(state: &mut LatticeState, spec: &LatticeSpec, stats: &LatticeStat
                 budget -= added;
             }
         }
+        let amount = available.saturating_sub(budget);
+        if amount > 0 {
+            restored.insert(element, amount);
+        }
     }
+    restored
 }

@@ -265,6 +265,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use hex_test_app::HeadlessAppBuilder;
 
     /// A leg from the origin to `x` at one unit per second, so elapsed seconds and
     /// distance travelled are the same number and the assertions read directly.
@@ -353,17 +354,16 @@ mod tests {
     /// five paused seconds jumps forward by five seconds.
     #[test]
     fn a_paused_transformation_resumes_without_a_time_jump() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
-            Duration::from_millis(100),
-        ));
-        app.insert_resource(DriverEnabled(true));
-        app.configure_sets(
+        let mut builder = HeadlessAppBuilder::new()
+            .with_minimal_plugins()
+            .with_fixed_step(Duration::from_millis(100));
+        builder.app_mut().insert_resource(DriverEnabled(true));
+        builder.app_mut().configure_sets(
             Update,
             PausableSystems.run_if(|enabled: Res<DriverEnabled>| enabled.0),
         );
-        app.add_plugins(plugin);
+        builder.app_mut().add_plugins(plugin);
+        let mut app = builder.build();
 
         let entity = app
             .world_mut()

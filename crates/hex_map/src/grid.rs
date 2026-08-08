@@ -3,9 +3,10 @@
 //! Storage and generation are private to `hex_map`; rendered terrain reaches other
 //! crates as entities carrying [`HexTile`](hex_core::HexTile),
 //! [`HexCoord`](hex_core::HexCoord), a surface [`TilePos`](hex_core::TilePos),
-//! [`HexSpan`](hex_core::HexSpan), [`SubstanceId`](hex_core::SubstanceId), and
-//! [`Headroom`](hex_core::Headroom). The substance table itself is shared through
-//! `hex_assets` because gameplay also reads its behavior flags.
+//! [`RunBottom`](hex_core::RunBottom), [`HexSpan`](hex_core::HexSpan),
+//! [`SubstanceId`](hex_core::SubstanceId), and [`Headroom`](hex_core::Headroom).
+//! The substance table itself is shared through `hex_assets` because gameplay also
+//! reads its behavior flags.
 //!
 //! Keeping that boundary narrow is what lets the map be rebuilt without touching
 //! gameplay. A richer map means producing different voxels in the terrain builder;
@@ -16,13 +17,17 @@ use std::fmt;
 
 use bevy::{ecs::system::SystemParam, prelude::*};
 
-use hex_assets::{to_color, GameAssets, RuntimeArtCatalog, SubstanceTable};
+use hex_assets::{
+    to_color, ElementCatalog, GameAssets, HexObjectRotation, ObjectBlueprint, RuntimeArtCatalog,
+    SubstanceTable, TerrainDamageFile, TerrainDamageTable,
+};
 use hex_core::{
-    BiomeRegions, CanopyOccluder, CutawayOccluder, GameplayLight, GameplaySetup,
+    BiomeRegions, CutawayOccluder, DamagedVoxels, GameplayLight, GameplaySetup,
     GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile, InteriorRegionId,
     InteriorRegions, MapAnchorId, MapAnchors, MapViewHint, PerceptionSystems,
-    PresentationOcclusion, ResolvedMapSeed, Screen, SpecialMovementRegions, SubstanceId,
-    TerrainEdit, TerrainReady, TilePos, TraversalBlockers, TraversalProfile,
+    PresentationOcclusion, ResolvedMapSeed, RunBottom, Screen, SpecialMovementRegions, SubstanceId,
+    TerrainEdit, TerrainImpact, TerrainImpactOutcome, TerrainImpactRejection, TerrainImpactResult,
+    TerrainReady, TerrainSystems, TilePos, TraversalBlockers, TraversalProfile, TreeOccluder,
 };
 
 use crate::crystal_render::{self, CrystalPresentationError};
@@ -34,11 +39,36 @@ use crate::procedural_v3;
 use crate::procedural_v3::MapPresentationProjection;
 use crate::settings::{MapSettings, TerrainSettings};
 use crate::terrain::{build_non_procedural_map, TerrainPalette};
+use crate::terrain_damage::TerrainDamageState;
 use crate::voxel::{runs, Column, SubstanceRun, VoxelMap};
 use crate::{
-    CavesReportMetrics, ForestReportMetrics, FortReportMetrics, GenerationReport,
-    ProceduralRecipeMetrics, Ring7Metrics, WaterfallReportMetrics,
+    CavesReportMetrics, DeepForestReportMetrics, ForestReportMetrics, FortReportMetrics,
+    GenerationReport, MacroMetrics, MountainRangeMetrics, PrairieReportMetrics,
+    ProceduralRecipeMetrics, Ring19Metrics, Ring7Metrics, VolcanoReportMetrics,
+    WaterfallReportMetrics,
 };
+
+/// One claimed impact decision retained in exact incoming message order.
+#[derive(Debug)]
+enum PendingTerrainImpact {
+    Apply(TerrainImpact),
+    Reject {
+        batch: hex_core::TerrainBatchId,
+        reason: TerrainImpactRejection,
+    },
+}
+
+/// Claimed impact decisions collected before direct edits are resolved.
+#[derive(Resource, Debug, Default)]
+struct PendingTerrainImpacts(Vec<PendingTerrainImpact>);
+
+/// Direct edits claimed before the pausable mutation phase.
+///
+/// Messages live for only a bounded number of updates. Keeping an owned queue lets
+/// a cast announced immediately before pausing survive until gameplay resumes
+/// without changing the world against a stale perception frame.
+#[derive(Resource, Debug, Default)]
+struct PendingTerrainEdits(Vec<TerrainEdit>);
 
 /// Registers world construction and tile spawning.
 pub fn plugin(app: &mut App) {
@@ -49,13 +79,17 @@ pub fn plugin(app: &mut App) {
         .register_type::<HexTile>()
         .register_type::<SubstanceId>()
         .register_type::<TilePos>()
+        .register_type::<RunBottom>()
         .register_type::<Headroom>()
         .register_type::<InteriorRegionId>()
         .register_type::<CutawayOccluder>()
-        .register_type::<CanopyOccluder>()
+        .register_type::<TreeOccluder>()
         .register_type::<PresentationOcclusion>()
         .register_type::<GameplayLight>()
         .register_type::<TerrainReady>()
+        .register_type::<DamagedVoxels>()
+        .register_type::<TerrainImpact>()
+        .register_type::<TerrainImpactOutcome>()
         .register_type::<GenerationReport>()
         .register_type::<ProceduralRecipeMetrics>()
         .register_type::<WaterfallReportMetrics>()
@@ -63,7 +97,32 @@ pub fn plugin(app: &mut App) {
         .register_type::<FortReportMetrics>()
         .register_type::<CavesReportMetrics>()
         .register_type::<Ring7Metrics>()
+        .register_type::<VolcanoReportMetrics>()
+        .register_type::<DeepForestReportMetrics>()
+        .register_type::<PrairieReportMetrics>()
+        .register_type::<Ring19Metrics>()
+        .register_type::<MacroMetrics>()
+        .register_type::<MountainRangeMetrics>()
+        .init_resource::<DamagedVoxels>()
+        .init_resource::<TerrainDamageState>()
+        .init_resource::<PendingTerrainEdits>()
+        .init_resource::<PendingTerrainImpacts>()
         .add_message::<TerrainEdit>()
+        .add_message::<TerrainImpact>()
+        .add_message::<TerrainImpactOutcome>()
+        // Only ApplyWorld has participants today. The empty downstream sets reserve
+        // the cross-crate protocol without moving gameplay behavior in this change.
+        .configure_sets(
+            Update,
+            (
+                TerrainSystems::ApplyWorld,
+                TerrainSystems::RefreshProjections,
+                TerrainSystems::ReconcileActors,
+                TerrainSystems::ConsumeOutcomes,
+            )
+                .chain()
+                .before(PerceptionSystems::ResolveIllumination),
+        )
         // Split across two sets rather than chained locally: `hex_units` spawns
         // the player into `Actors`, which must come after the tiles here, and a
         // local `.chain()` cannot order systems in another crate.
@@ -79,12 +138,31 @@ pub fn plugin(app: &mut App) {
         )
         .add_systems(
             Update,
-            apply_terrain_edits
-                .run_if(in_state(Screen::Gameplay))
-                .run_if(resource_exists::<TerrainReady>)
-                .before(PerceptionSystems::ResolveIllumination),
+            (collect_terrain_edits, collect_terrain_impacts)
+                .in_set(TerrainSystems::ApplyWorld)
+                .run_if(in_state(Screen::Gameplay)),
+        )
+        .add_systems(
+            Update,
+            (
+                apply_terrain_changes.run_if(terrain_world_available),
+                reject_pending_impacts_without_world.run_if(not(terrain_world_available)),
+            )
+                .chain()
+                .in_set(TerrainSystems::ApplyWorld)
+                .in_set(hex_core::PausableSystems)
+                .after(collect_terrain_edits)
+                .after(collect_terrain_impacts)
+                .run_if(in_state(Screen::Gameplay)),
         )
         .add_systems(OnExit(Screen::Gameplay), teardown_map);
+}
+
+fn terrain_world_available(
+    terrain_ready: Option<Res<TerrainReady>>,
+    map: Option<Res<VoxelMap>>,
+) -> bool {
+    terrain_ready.is_some() && map.is_some()
 }
 
 fn generate_world(
@@ -93,7 +171,20 @@ fn generate_world(
     table: Res<SubstanceTable>,
     art_catalog: Option<Res<RuntimeArtCatalog>>,
     resolved_seed: Option<Res<ResolvedMapSeed>>,
+    mut damage_state: ResMut<TerrainDamageState>,
+    mut damaged_voxels: ResMut<DamagedVoxels>,
+    mut pending_edits: ResMut<PendingTerrainEdits>,
+    mut pending_impacts: ResMut<PendingTerrainImpacts>,
+    mut edits: ResMut<Messages<TerrainEdit>>,
+    mut impacts: ResMut<Messages<TerrainImpact>>,
+    mut outcomes: ResMut<Messages<TerrainImpactOutcome>>,
 ) {
+    damage_state.reset(&mut damaged_voxels);
+    pending_edits.0.clear();
+    pending_impacts.0.clear();
+    edits.clear();
+    impacts.clear();
+    outcomes.clear();
     commands.remove_resource::<GameplaySetupFailure>();
     commands.remove_resource::<TerrainReady>();
     commands.remove_resource::<VoxelMap>();
@@ -252,10 +343,26 @@ fn generate_world(
     }
 }
 
-fn teardown_map(mut commands: Commands, grids: Query<Entity, With<HexGrid>>) {
+fn teardown_map(
+    mut commands: Commands,
+    grids: Query<Entity, With<HexGrid>>,
+    mut damage_state: ResMut<TerrainDamageState>,
+    mut damaged_voxels: ResMut<DamagedVoxels>,
+    mut pending_edits: ResMut<PendingTerrainEdits>,
+    mut pending_impacts: ResMut<PendingTerrainImpacts>,
+    mut edits: ResMut<Messages<TerrainEdit>>,
+    mut impacts: ResMut<Messages<TerrainImpact>>,
+    mut outcomes: ResMut<Messages<TerrainImpactOutcome>>,
+) {
     for entity in &grids {
         commands.entity(entity).despawn();
     }
+    damage_state.reset(&mut damaged_voxels);
+    pending_edits.0.clear();
+    pending_impacts.0.clear();
+    edits.clear();
+    impacts.clear();
+    outcomes.clear();
     commands.remove_resource::<VoxelMap>();
     commands.remove_resource::<MapAnchors>();
     commands.remove_resource::<SpecialMovementRegions>();
@@ -376,6 +483,7 @@ fn build_grid(
                 span,
                 run.substance,
                 position,
+                RunBottom(run.bottom),
                 headroom,
             ));
             if let Some(region) = projected.cutaway {
@@ -561,19 +669,148 @@ struct EditableSpatialConsequences<'w> {
     blockers: Option<ResMut<'w, TraversalBlockers>>,
 }
 
-/// Applies terrain edits requested by gameplay, then rebuilds what changed.
-///
-/// Naive on purpose: any edit respawns the whole grid. Correct, obviously so, and
-/// fast enough at this scale. Re-meshing only the affected columns is the first
-/// optimisation worth making, and it is a change entirely inside this crate.
-fn apply_terrain_edits(
-    mut commands: Commands,
+/// Mutable terrain-impact resources grouped to stay within Bevy's function-system
+/// parameter arity while keeping every authority explicit.
+#[derive(SystemParam)]
+struct TerrainMutation<'w> {
+    edits: ResMut<'w, PendingTerrainEdits>,
+    outcomes: MessageWriter<'w, TerrainImpactOutcome>,
+    pending: ResMut<'w, PendingTerrainImpacts>,
+    damage_state: ResMut<'w, TerrainDamageState>,
+    damaged_voxels: ResMut<'w, DamagedVoxels>,
+}
+
+/// Claims direct edits outside the pausable mutation phase so they cannot age out.
+fn collect_terrain_edits(
     mut edits: MessageReader<TerrainEdit>,
+    mut pending: ResMut<PendingTerrainEdits>,
+) {
+    pending.0.extend(edits.read().cloned());
+}
+
+/// Reprojects an accepted cave prop using the feature renderer's exact origin convention.
+fn project_cave_vegetation_cells(
+    root: TilePos,
+    rotation: HexObjectRotation,
+    blueprint: &ObjectBlueprint,
+) -> Option<BTreeSet<TilePos>> {
+    let visual_origin_level = root.level.checked_add(1)?;
+    let mut cells = BTreeSet::new();
+    for placement in &blueprint.placements {
+        let rotated = rotation.rotate_voxel(placement.position, blueprint.origin)?;
+        let delta_q = rotated.q.checked_sub(blueprint.origin.q)?;
+        let delta_r = rotated.r.checked_sub(blueprint.origin.r)?;
+        let coord = HexCoord::from_axial(
+            root.coord.x().checked_add(delta_q)?,
+            root.coord.y().checked_add(delta_r)?,
+        );
+        let relative_level = rotated.level.checked_sub(blueprint.origin.level)?;
+        let level = visual_origin_level.checked_add(relative_level)?;
+        if !cells.insert(TilePos::new(coord, level)) {
+            return None;
+        }
+    }
+    (cells.len() == blueprint.placements.len()).then_some(cells)
+}
+
+/// Validates and claims every announced batch exactly once before map mutation.
+///
+/// This reader runs even while terrain is unavailable so malformed or early casts
+/// receive an explicit rejection instead of aging out of Bevy's message buffers. The
+/// accepted queue is drained after direct edits in the same ordered terrain phase.
+fn collect_terrain_impacts(
+    mut impacts: MessageReader<TerrainImpact>,
+    mut pending: ResMut<PendingTerrainImpacts>,
+    mut damage_state: ResMut<TerrainDamageState>,
+    terrain_ready: Option<Res<TerrainReady>>,
+    map: Option<Res<VoxelMap>>,
+    substances: Option<Res<SubstanceTable>>,
+    elements: Option<Res<ElementCatalog>>,
+    damage_file: Option<Res<TerrainDamageFile>>,
+    damage_table: Option<Res<TerrainDamageTable>>,
+) {
+    let coherent_damage_content = match (
+        damage_file.as_deref(),
+        damage_table.as_deref(),
+        elements.as_deref(),
+        substances.as_deref(),
+    ) {
+        (Some(file), Some(table), Some(elements), Some(substances)) => {
+            table.matches_sources(file, elements, substances)
+        }
+        _ => false,
+    };
+    let terrain_available = terrain_ready.is_some() && map.is_some() && coherent_damage_content;
+
+    for impact in impacts.read() {
+        let rejection = if !damage_state.consume_batch(impact.batch) {
+            Some(TerrainImpactRejection::ReusedBatch)
+        } else if let Some(reason) = impact.structural_rejection() {
+            Some(reason)
+        } else if elements
+            .as_deref()
+            .is_some_and(|catalog| catalog.name(impact.element).is_none())
+        {
+            Some(TerrainImpactRejection::UnknownElement)
+        } else if !terrain_available {
+            Some(TerrainImpactRejection::TerrainUnavailable)
+        } else {
+            None
+        };
+
+        if let Some(reason) = rejection {
+            pending.0.push(PendingTerrainImpact::Reject {
+                batch: impact.batch,
+                reason,
+            });
+        } else {
+            pending.0.push(PendingTerrainImpact::Apply(impact.clone()));
+        }
+    }
+}
+
+fn rejected_terrain_outcome(
+    batch: hex_core::TerrainBatchId,
+    reason: TerrainImpactRejection,
+) -> TerrainImpactOutcome {
+    TerrainImpactOutcome {
+        batch,
+        result: TerrainImpactResult::Rejected(reason),
+    }
+}
+
+/// Completes queued rejections when no mutable terrain world can run this frame.
+fn reject_pending_impacts_without_world(
+    mut pending: ResMut<PendingTerrainImpacts>,
+    mut outcomes: MessageWriter<TerrainImpactOutcome>,
+) {
+    for decision in pending.0.drain(..) {
+        let outcome = match decision {
+            PendingTerrainImpact::Reject { batch, reason } => {
+                rejected_terrain_outcome(batch, reason)
+            }
+            PendingTerrainImpact::Apply(impact) => {
+                rejected_terrain_outcome(impact.batch, TerrainImpactRejection::TerrainUnavailable)
+            }
+        };
+        outcomes.write(outcome);
+    }
+}
+
+/// Applies direct terrain edits first, then admitted impacts, and rebuilds once.
+///
+/// Naive on purpose: any material change respawns the whole grid. Correct, obviously
+/// so, and fast enough at this scale. Partial health never enters this consequence
+/// path. Re-meshing only affected columns remains a private future optimisation.
+fn apply_terrain_changes(
+    mut commands: Commands,
+    mutation: TerrainMutation,
     mut map: ResMut<VoxelMap>,
     grids: Query<Entity, With<HexGrid>>,
     assets: Res<GameAssets>,
     mut presentation_assets: MapPresentationAssets,
     table: Res<SubstanceTable>,
+    damage_table: Option<Res<TerrainDamageTable>>,
     settings: Res<MapSettings>,
     liquid_visual_time: Res<LiquidVisualTime>,
     art_catalog: Option<Res<RuntimeArtCatalog>>,
@@ -583,15 +820,23 @@ fn apply_terrain_edits(
     mut presentation: Option<ResMut<MapPresentationProjection>>,
     mut next_screen: ResMut<NextState<Screen>>,
 ) {
+    let TerrainMutation {
+        mut edits,
+        mut outcomes,
+        mut pending,
+        mut damage_state,
+        mut damaged_voxels,
+    } = mutation;
     let mut changed = false;
     let mut changed_coords = BTreeSet::new();
-    for edit in edits.read() {
+    for edit in edits.0.drain(..) {
         let semantic_projection_protected = presentation.as_deref().is_some_and(|projection| {
             projection.protects_liquid_edit(edit.pos())
                 || projection.protects_feature_edit(edit.pos())
                 || projection.protects_light_edit(edit.pos())
         });
-        if apply_terrain_edit(&mut map, &table, edit, semantic_projection_protected) {
+        if apply_terrain_edit(&mut map, &table, &edit, semantic_projection_protected) {
+            damage_state.forget_voxel(edit.pos(), &mut damaged_voxels);
             changed = true;
             changed_coords.insert(edit.pos().coord);
             if let Some(interiors) = interiors.as_deref_mut() {
@@ -602,24 +847,94 @@ fn apply_terrain_edits(
             }
         }
     }
+
+    for decision in pending.0.drain(..) {
+        let impact = match decision {
+            PendingTerrainImpact::Apply(impact) => impact,
+            PendingTerrainImpact::Reject { batch, reason } => {
+                outcomes.write(rejected_terrain_outcome(batch, reason));
+                continue;
+            }
+        };
+        let Some(damage_table) = damage_table.as_deref() else {
+            outcomes.write(rejected_terrain_outcome(
+                impact.batch,
+                TerrainImpactRejection::TerrainUnavailable,
+            ));
+            continue;
+        };
+        let resolved = damage_state.apply(
+            impact,
+            &mut map,
+            &table,
+            damage_table,
+            &mut damaged_voxels,
+            |position| {
+                presentation.as_deref().is_some_and(|projection| {
+                    projection.protects_liquid_edit(position)
+                        || projection.protects_feature_edit(position)
+                        || projection.protects_light_edit(position)
+                })
+            },
+        );
+        for position in &resolved.destroyed {
+            changed = true;
+            changed_coords.insert(position.coord);
+            if let Some(interiors) = interiors.as_deref_mut() {
+                interiors.remove_roof_voxel(*position);
+            }
+        }
+        outcomes.write(resolved.outcome);
+    }
+
     if !changed {
         return;
     }
 
     if let Some(presentation) = presentation.as_deref_mut() {
-        presentation.retain_features(|feature| {
-            if feature.kind != procedural_v3::FeatureKind::TallGrass
-                || !changed_coords.contains(&feature.root.coord)
-            {
-                return true;
+        presentation.retain_features(|feature| match feature.kind {
+            procedural_v3::FeatureKind::Tree => true,
+            procedural_v3::FeatureKind::TallGrass => {
+                if !changed_coords.contains(&feature.root.coord) {
+                    return true;
+                }
+                let Some(column) = map.column(feature.root.coord) else {
+                    return false;
+                };
+                TraversalProfile::WALKER.admits_surface(
+                    table.is_solid(column.get(feature.root.level)),
+                    column.headroom_above(feature.root.level.saturating_add(1)),
+                )
             }
-            let Some(column) = map.column(feature.root.coord) else {
-                return false;
-            };
-            TraversalProfile::WALKER.admits_surface(
-                table.is_solid(column.get(feature.root.level)),
-                column.headroom_above(feature.root.level.saturating_add(1)),
-            )
+            procedural_v3::FeatureKind::CaveVegetation => {
+                let Some(blueprint) = art_catalog
+                    .as_deref()
+                    .and_then(|catalog| catalog.object(&feature.object_id))
+                else {
+                    return false;
+                };
+                let Some(visual_cells) =
+                    project_cave_vegetation_cells(feature.root, feature.rotation, blueprint)
+                else {
+                    return false;
+                };
+                if !changed_coords.contains(&feature.root.coord)
+                    && visual_cells
+                        .iter()
+                        .all(|position| !changed_coords.contains(&position.coord))
+                {
+                    return true;
+                }
+                visual_cells.iter().all(|visual| {
+                    let Some(column) = map.column(visual.coord) else {
+                        return false;
+                    };
+                    TraversalProfile::WALKER.admits_surface(
+                        table.is_solid(column.get(feature.root.level)),
+                        column.headroom_above(feature.root.level.saturating_add(1)),
+                    ) && map.get(*visual).is_air()
+                })
+            }
         });
     }
 

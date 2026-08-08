@@ -1,11 +1,12 @@
 //! Opaque identities for the element/spell content system.
 //!
-//! [`ElementId`] and [`SpellId`] are session-local integer handles in the
-//! [`SubstanceId`](crate::SubstanceId) style: `hex_assets` assigns them from the
-//! **sorted names** in `elements.ron` and `spells.ron`, so the mapping depends only
-//! on the set of names and reordering a file never silently rewrites what an id
-//! means. Names are what appear in hand-authored content and in saves; these ids are
-//! the resolved runtime form.
+//! [`ElementId`] and [`SpellId`] are session-local integer handles: `hex_assets`
+//! assigns them from the **sorted names** in `elements.ron` and `spells.ron`, so the
+//! mapping depends only on the set of names and reordering a file never silently
+//! rewrites what an id means. They share [`SubstanceId`](crate::SubstanceId)'s
+//! opaque-table-handle shape, but not its assignment contract: substance ids follow
+//! a frozen material-compatibility registry. Names are what appear in hand-authored
+//! content and in saves; these ids are the resolved runtime form.
 //!
 //! # Why these carry `serde`
 //!
@@ -29,8 +30,9 @@ use serde::{Deserialize, Serialize};
 
 /// Opaque identity of an element.
 ///
-/// Assigned from sorted element names in `elements.ron` by `hex_assets`, exactly like
-/// [`SubstanceId`](crate::SubstanceId). Covers both the six basic elements and the
+/// Assigned from sorted element names in `elements.ron` by `hex_assets`. This differs
+/// from [`SubstanceId`](crate::SubstanceId), whose numeric values follow a frozen
+/// material-compatibility registry. Covers both the six basic elements and the
 /// higher-order elements produced by fusions — every element the content defines has
 /// one. It is a [`Component`] so a future gem or fusion entity can carry it directly,
 /// and derives `serde` because `hex_lattice::CellKind` serializes it into a
@@ -56,10 +58,10 @@ pub struct ElementId(pub u16);
 /// Opaque identity of a spell.
 ///
 /// Assigned from sorted spell names in `spells.ron` by `hex_assets`, exactly like
-/// [`ElementId`] and [`SubstanceId`](crate::SubstanceId). The hand-authored
-/// `lattices.ron` refers to spells by name; this id is the resolved form a
-/// `hex_lattice::LatticeSpec` serializes (`CellKind::Spell { spell }`), which is why
-/// it derives `serde`.
+/// [`ElementId`]. [`SubstanceId`](crate::SubstanceId) is similarly opaque but follows
+/// a separate frozen compatibility registry. The hand-authored `lattices.ron` refers
+/// to spells by name; this id is the resolved form a `hex_lattice::LatticeSpec`
+/// serializes (`CellKind::Spell { spell }`), which is why it derives `serde`.
 ///
 /// Not a [`Component`]: a spell is a cell in an abstract lattice
 /// (`hex_lattice::CellKind`), not an ECS entity of its own.

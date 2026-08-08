@@ -6,23 +6,21 @@
 //! resource that did not exist yet was the gap between those two schedules —
 //! undocumented, unenforced, and one refactor away from a panic.
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use hex_assets::{
     AcceptedContentRevision, ArtPalette, ContentIndex, ContentReadinessSystems, ElementCatalog,
     ElementFile, GameAssets, LatticeFile, LatticeLibrary, SettingsRegistry, SpellBook, SpellFile,
-    SubstanceFile, SubstanceTable,
+    SubstanceFile, SubstanceTable, TerrainDamageFile, TerrainDamageTable,
 };
 use hex_core::Screen;
 
-use super::{despawn_screen, screen_root};
-use crate::menus::widgets::UiAssets;
 use crate::scenarios::ScenarioContractStatus;
 
 pub(super) fn plugin(app: &mut App) {
-    app.add_systems(OnEnter(Screen::Loading), spawn_loading);
     app.add_systems(
         PostUpdate,
-        super::combat_lab::apply_creator_content_overlay
+        super::sandbox::apply_creator_content_overlay
             .before(ContentReadinessSystems::PublishAcceptedRevision)
             .run_if(in_state(Screen::Loading)),
     );
@@ -36,22 +34,6 @@ pub(super) fn plugin(app: &mut App) {
             .after(ContentReadinessSystems::PublishAcceptedRevision)
             .run_if(in_state(Screen::Loading)),
     );
-    app.add_systems(OnExit(Screen::Loading), despawn_screen(Screen::Loading));
-}
-
-fn spawn_loading(mut commands: Commands, assets: Res<UiAssets>) {
-    commands
-        .spawn(screen_root(Screen::Loading, "Loading Screen"))
-        .with_children(|parent| {
-            parent.spawn((
-                Text::new("loading..."),
-                TextFont {
-                    font: assets.body.clone().into(),
-                    ..TextFont::from_font_size(24.0)
-                },
-                TextColor(Color::srgb(0.8, 0.8, 0.8)),
-            ));
-        });
 }
 
 /// Gameplay may only start once asset handles are terminal and every settings file
@@ -75,14 +57,7 @@ fn enter_gameplay_when_ready(
     substance_file: Option<Res<SubstanceFile>>,
     substances: Option<Res<SubstanceTable>>,
     scenario_contract: Option<Res<ScenarioContractStatus>>,
-    accepted_content: Option<Res<AcceptedContentRevision>>,
-    content: Option<Res<ContentIndex>>,
-    lattices: Option<Res<LatticeLibrary>>,
-    element_file: Option<Res<ElementFile>>,
-    elements: Option<Res<ElementCatalog>>,
-    spell_file: Option<Res<SpellFile>>,
-    spells: Option<Res<SpellBook>>,
-    lattice_file: Option<Res<LatticeFile>>,
+    graph: AcceptedContentGraph,
     mut next: ResMut<NextState<Screen>>,
 ) {
     let substances_are_current = substance_file
@@ -100,14 +75,16 @@ fn enter_gameplay_when_ready(
     // change ticks cannot establish coherence: the changed flag settles after one frame
     // while the retained ids remain stale indefinitely.
     let content_is_current = match (
-        accepted_content.as_deref(),
-        content.as_deref(),
-        lattices.as_deref(),
-        element_file.as_deref(),
-        elements.as_deref(),
-        spell_file.as_deref(),
-        spells.as_deref(),
-        lattice_file.as_deref(),
+        graph.accepted.as_deref(),
+        graph.content.as_deref(),
+        graph.lattices.as_deref(),
+        graph.element_file.as_deref(),
+        graph.elements.as_deref(),
+        graph.spell_file.as_deref(),
+        graph.spells.as_deref(),
+        graph.lattice_file.as_deref(),
+        graph.terrain_damage_file.as_deref(),
+        graph.terrain_damage.as_deref(),
         substances.as_deref(),
     ) {
         (
@@ -119,17 +96,20 @@ fn enter_gameplay_when_ready(
             Some(spell_file),
             Some(spells),
             Some(lattice_file),
+            Some(terrain_damage_file),
+            Some(terrain_damage),
             Some(substances),
         ) => {
             accepted.matches_resolved(content, lattices)
+                && accepted.matches_terrain_damage(terrain_damage)
                 && elements.matches_source(element_file)
                 && spells.matches_source(spell_file)
                 && content.matches_sources(elements, spells, substances)
                 && lattices.matches_sources(lattice_file, elements, spells)
+                && terrain_damage.matches_sources(terrain_damage_file, elements, substances)
         }
         _ => false,
     };
-
     if assets.is_ready(&asset_server)
         && settings.all_loaded()
         && substances_are_current
@@ -138,6 +118,20 @@ fn enter_gameplay_when_ready(
     {
         next.set(Screen::Gameplay);
     }
+}
+
+#[derive(SystemParam)]
+struct AcceptedContentGraph<'w> {
+    accepted: Option<Res<'w, AcceptedContentRevision>>,
+    content: Option<Res<'w, ContentIndex>>,
+    lattices: Option<Res<'w, LatticeLibrary>>,
+    element_file: Option<Res<'w, ElementFile>>,
+    elements: Option<Res<'w, ElementCatalog>>,
+    spell_file: Option<Res<'w, SpellFile>>,
+    spells: Option<Res<'w, SpellBook>>,
+    lattice_file: Option<Res<'w, LatticeFile>>,
+    terrain_damage_file: Option<Res<'w, TerrainDamageFile>>,
+    terrain_damage: Option<Res<'w, TerrainDamageTable>>,
 }
 
 #[cfg(test)]
@@ -156,7 +150,7 @@ mod tests {
     }
 
     fn test_palette(stone_red: f32) -> ArtPalette {
-        let swatches = [("stone", stone_red), ("clay", 0.6)]
+        let swatches = [("stone", stone_red), ("dirt", 0.6)]
             .into_iter()
             .map(|(name, red)| {
                 let swatch = PaletteSwatch::new(
@@ -176,13 +170,13 @@ mod tests {
         substances.insert("air".to_owned(), Substance::invisible(false, false));
         substances.insert(
             name.to_owned(),
-            Substance::from_swatch(swatch_id(name), true, true),
+            Substance::from_swatch(swatch_id(name), true, true).with_conjurable(name == "stone"),
         );
         SubstanceFile { substances }
     }
 
     fn queue_replacement(mut commands: Commands) {
-        commands.insert_resource(substance_file("clay"));
+        commands.insert_resource(substance_file("dirt"));
     }
 
     fn queue_palette_replacement(mut commands: Commands) {
@@ -213,6 +207,11 @@ mod tests {
             .expect("the stable fixtures should form a valid content index");
         let lattices = LatticeLibrary::build(&lattice_file, &elements, &spell_book)
             .expect("the stable fixtures should form a valid lattice library");
+        let terrain_damage_file = TerrainDamageFile {
+            damaging_pairs: Vec::new(),
+        };
+        let terrain_damage = TerrainDamageTable::from_file(&terrain_damage_file, &elements, &table)
+            .expect("the empty test damage matrix should resolve");
         let mut app = App::new();
         app.add_plugins((
             MinimalPlugins,
@@ -226,11 +225,6 @@ mod tests {
             StatesPlugin,
         ));
         app.insert_state(Screen::Loading);
-        app.insert_resource(UiAssets {
-            display: Handle::default(),
-            body: Handle::default(),
-            hex_cell: Handle::default(),
-        });
         app.insert_resource(GameAssets {
             hex_tile: Handle::default(),
             player_pieces: [Handle::default(), Handle::default()],
@@ -255,6 +249,8 @@ mod tests {
         app.insert_resource(lattice_file);
         app.insert_resource(content);
         app.insert_resource(lattices);
+        app.insert_resource(terrain_damage_file);
+        app.insert_resource(terrain_damage);
         plugin(&mut app);
         app
     }
@@ -334,11 +330,6 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default(), StatesPlugin));
         app.insert_state(Screen::Loading);
-        app.insert_resource(UiAssets {
-            display: Handle::default(),
-            body: Handle::default(),
-            hex_cell: Handle::default(),
-        });
         app.init_resource::<SettingsRegistry>();
         app.insert_resource(GameAssets {
             hex_tile: Handle::default(),
@@ -366,11 +357,11 @@ mod tests {
             world
                 .resource::<SubstanceFile>()
                 .substances
-                .contains_key("clay"),
+                .contains_key("dirt"),
             "the replacement file should have been applied"
         );
         assert!(
-            world.resource::<SubstanceTable>().id("clay").is_none(),
+            world.resource::<SubstanceTable>().id("dirt").is_none(),
             "the table should still represent the previous file in this frame"
         );
         assert!(
@@ -390,11 +381,6 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default(), StatesPlugin));
         app.insert_state(Screen::Loading);
-        app.insert_resource(UiAssets {
-            display: Handle::default(),
-            body: Handle::default(),
-            hex_cell: Handle::default(),
-        });
         app.init_resource::<SettingsRegistry>();
         app.insert_resource(GameAssets {
             hex_tile: Handle::default(),

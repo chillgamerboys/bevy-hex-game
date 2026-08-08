@@ -26,29 +26,56 @@ use bevy::prelude::*;
 pub mod formation;
 /// Which surfaces a piece may step between.
 pub mod movement;
+/// Compatibility path for shared exact-surface occupancy vocabulary.
+pub mod occupancy {
+    pub use hex_core::{OccupancyBlock, UnitOccupancy};
+}
 /// Hex-specific movement along a route of surfaces.
 pub mod pathing;
 /// Showing a piece where it can go before it goes there.
 pub mod selection;
 /// Who can be reached from where, and what height is worth.
 pub mod targeting;
+/// Spell-created terrain placement and legality.
+pub mod terrain_creation;
+/// Exact material occupancy derived from published integer run bounds.
+pub mod terrain_occupancy;
+/// Deterministic landing choices after terrain withdraws a unit's support.
+pub mod terrain_reconciliation;
+/// Exact material obstruction along spell trajectories.
+pub mod trajectories;
 /// The units themselves: the player, enemies, and click-to-move.
 pub mod units;
 /// Turning a spell's shape into the exact voxels it reaches.
 pub mod volumes;
 
 pub use formation::{
-    plan_formation_move, rotated, FormationMember, FormationPlan, FormationPlanError,
+    plan_formation_move, plan_formation_move_with_occupancy, rotated, FormationMember,
+    FormationPlan, FormationPlanError,
 };
-pub use movement::{route, Body, Footing, MovementCrossings, MovementSystems, Reach, Standing};
+pub use hex_core::{Faction, OccupancyBlock, UnitOccupancy};
+pub use movement::{
+    route, route_with_occupancy, Body, Footing, MovementCrossings, MovementSystems, Reach, Standing,
+};
 pub use pathing::HexPathingLine;
 pub use selection::{
-    HoveredSurface, PathOverlay, RangeOverlay, Selected, TerrainRevision, UnitRing,
+    HoveredSurface, PathOverlay, RangeOverlay, Selected, TargetReticle, TerrainRevision, UnitRing,
 };
 pub use targeting::{either_in_reach, high_ground_bonus, in_reach};
+pub use terrain_creation::{
+    resolve_creation_volume, validate_creation_volume, CreationBody, TerrainCreationBlock,
+};
+pub use terrain_occupancy::{
+    InvalidTerrainRun, KnownTerrainOccupancy, TerrainOccupancy, TerrainOccupancySystems,
+};
+pub use terrain_reconciliation::{plan_unsupported_actor_landing, NoLanding};
+pub use trajectories::{
+    known_trajectory_is_clear, supercover, trajectory_destination, trajectory_is_clear,
+    trajectory_voxels,
+};
 pub use units::{
-    Archetype, Downed, Enemy, Faction, MovingTo, Party, Player, StandsOn, StopMovingAt,
-    UnitAllocator, UnitRegistry,
+    Archetype, Downed, Enemy, MovingTo, Party, Player, StandsOn, StopMovingAt, UnitAllocator,
+    UnitRegistry,
 };
 // `volumes` is deliberately not re-exported here. Its names are bare verbs —
 // `line`, `column`, `path`, `resolve` — that only read correctly qualified, and
@@ -62,6 +89,7 @@ pub use units::{
 pub fn plugin(app: &mut App) {
     app.add_plugins((
         hex_anim::plugin,
+        terrain_occupancy::plugin,
         movement::plugin,
         units::plugin,
         selection::plugin,

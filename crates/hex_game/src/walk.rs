@@ -4,20 +4,24 @@
 //! Compiled only with the default-off `visual-walk` feature. Setting
 //! `HEX_WALK_SCRIPT` to a RON step list and `HEX_WALK_OUT` to an output
 //! directory runs the walk on launch: the runner advances one step at a time
-//! (waiting for screens, settling frames, injecting clicks and keys, capturing
-//! PNGs) and exits with success only if every step completed. A per-step
+//! (waiting for screens, settling frames, injecting UI or exact terrain clicks and
+//! keys, waiting for bounded party movement, capturing PNGs) and exits with success
+//! only if every step completed. A per-step
 //! watchdog turns a stall into a diagnostic and a failing exit instead of a
-//! hang. `HEX_WALK_SIZE=1280x720` optionally selects an exact review viewport;
-//! the default is 1920×1080.
+//! hang. `HEX_WALK_VIEWPORT=1280x720@2` optionally selects an exact logical
+//! canvas and device scale; the default is 1920×1080@1.
 //!
-//! # Why clicks are injected as `Interaction::Pressed`
+//! # How clicks are injected
 //!
-//! `bevy_ui`'s focus system only resets a node's `Interaction` when it is not
+//! Named UI clicks use `Interaction::Pressed`. `bevy_ui`'s focus system only resets
+//! a node's `Interaction` when it is not
 //! `Pressed` — an injected press on a button the real cursor is nowhere near
 //! is deliberately left alone ("press sticks until release"). Every handler in
 //! this game reads `Changed<Interaction>` + `== Pressed`, so one injected
 //! insert is exactly one activation, exercised through the real button wiring
-//! rather than a state-bypass. The runner clears the press to
+//! rather than a state-bypass. Exact terrain clicks emit the ordinary primary
+//! `Pointer<Click>` after stack-safe surface resolution. The runner clears each
+//! named-button press to
 //! `Interaction::None` on the following step for buttons that outlive their
 //! click. Keys go through `ButtonInput::press` from `PreUpdate`, after the
 //! input plugin's frame clear, so `just_pressed` is visible to every `Update`
@@ -25,37 +29,73 @@
 
 use std::env;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use bevy::camera::{NormalizedRenderTarget, RenderTarget};
+use bevy::camera::{ClearColorConfig, ImageRenderTarget, NormalizedRenderTarget, RenderTarget};
 use bevy::ecs::system::SystemParam;
 use bevy::input::InputSystems;
 use bevy::picking::backend::HitData;
-use bevy::picking::pointer::{Location, PointerId};
+use bevy::picking::events::{Click, Pointer};
+use bevy::picking::pointer::{Location, PointerButton, PointerId};
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
-use hex_assets::{ScenarioLibrary, SubstanceTable};
-use hex_combat::AiDecisionTraces;
+use bevy::window::CursorMoved;
+#[cfg(test)]
+use hex_assets::SandboxMapCatalog;
+use hex_assets::{Encounter, EncounterFaction, ScenarioLibrary};
 use hex_core::{
-    Busy, CommandQueue, ControlOwner, GameCommand, GameplaySetupFailure, Headroom, HexCoord,
-    HexSpan, HexTile, IssuedCommand, LatticeCoord, PendingDecision, ResolvedMapSeed, Screen,
-    SubstanceId, TilePos, TraversalBlockers, Turn, UnitId,
+    Busy, CameraFocusTarget, CommandQueue, GameplaySetup, GameplaySetupFailure, Headroom, HexCoord,
+    HexTile, MapAnchorId, MapAnchors, ResolvedMapSeed, Screen, TilePos,
 };
-use hex_lattice::{CellKind, LatticeSpec, LatticeState};
-use hex_units::{Body, Downed, Enemy, Footing, Player, Reach, StandsOn};
+use hex_units::{MovingTo, Party, Selected, StandsOn, UnitRegistry};
 use serde::Deserialize;
 
 use crate::capture::write_png;
-use crate::casting::{Aiming, AnchorMarker};
 use crate::scenarios::ScenarioToLoad;
 
 const SCRIPT_ENV: &str = "HEX_WALK_SCRIPT";
 const OUT_ENV: &str = "HEX_WALK_OUT";
-const SIZE_ENV: &str = "HEX_WALK_SIZE";
+const VIEWPORT_ENV: &str = "HEX_WALK_VIEWPORT";
+const UI_DEBUG_ENV: &str = "HEX_WALK_UI_DEBUG";
+const DATA_ENV: &str = "HEX_GAME_DATA_DIR";
 const STEP_TIMEOUT: Duration = Duration::from_secs(60);
-const DEFAULT_WALK_WIDTH: u32 = 1920;
-const DEFAULT_WALK_HEIGHT: u32 = 1080;
+const WALK_TIME_SCALE: f32 = 12.0;
+const MAX_ORBIT_YAW_TURNS: f32 = 0.5;
+const MAX_ORBIT_PITCH_FRACTION: f32 = 1.0;
+/// Full render frames allowed after both cameras move to a fresh image target.
+///
+/// Four frames let the asynchronous UI glyph atlas settle on Metal. Two frames
+/// occasionally captured a complete 3D pass with only part of the UI text uploaded.
+const CAPTURE_TARGET_SETTLE_FRAMES: u8 = 4;
+
+/// Gives every configured walk a fresh storage root unless the caller explicitly
+/// supplied one. This runs before persistence plugins initialize `StoragePaths`.
+pub(super) fn isolate_storage(app: &mut App) {
+    if env::var_os(DATA_ENV).is_some() {
+        return;
+    }
+    let script = env::var_os(SCRIPT_ENV);
+    let out = env::var_os(OUT_ENV);
+    if script.is_none() && out.is_none() {
+        return;
+    }
+
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    let parent = out.map_or_else(env::temp_dir, PathBuf::from);
+    let root = isolated_storage_root(parent, std::process::id(), nonce);
+    info!(
+        "visual walk: isolating disposable application data at {}",
+        root.display()
+    );
+    app.insert_resource(crate::storage::StoragePaths::under(root));
+}
+
+fn isolated_storage_root(out: PathBuf, process_id: u32, nonce: u128) -> PathBuf {
+    out.join(format!(".game-data-{process_id}-{nonce}"))
+}
 
 /// Installs the walk runner only when its environment is present.
 pub(super) fn plugin(app: &mut App) {
@@ -81,29 +121,58 @@ pub(super) fn plugin(app: &mut App) {
             return;
         }
     };
-    let size = match env::var(SIZE_ENV) {
-        Ok(size) => match parse_size(&size) {
-            Ok(size) => size,
+    let viewport = match env::var(VIEWPORT_ENV) {
+        Ok(viewport) => match parse_viewport(&viewport) {
+            Ok(viewport) => viewport,
             Err(error) => {
                 install_config_error(app, error);
                 return;
             }
         },
-        Err(env::VarError::NotPresent) => (DEFAULT_WALK_WIDTH, DEFAULT_WALK_HEIGHT),
+        Err(env::VarError::NotPresent) => hex_ui::ReviewViewport::DEFAULT,
         Err(error) => {
-            install_config_error(app, format!("cannot read {SIZE_ENV}: {error}"));
+            install_config_error(app, format!("cannot read {VIEWPORT_ENV}: {error}"));
             return;
         }
     };
 
     info!(
-        "visual walk: {} steps from {script}, output to {out} at {}x{}",
+        "visual walk: {} steps from {script}, output to {out} at {}x{}@{}",
         steps.len(),
-        size.0,
-        size.1
+        viewport.logical_size.x,
+        viewport.logical_size.y,
+        viewport.device_scale,
     );
-    app.insert_resource(WalkState::new(steps, PathBuf::from(out), size))
-        .add_systems(PreUpdate, run_walk.after(InputSystems));
+    let diagnostic_overlays = env::var_os(UI_DEBUG_ENV).is_some();
+    if diagnostic_overlays {
+        let mut options = app
+            .world_mut()
+            .resource_mut::<bevy::ui_render::prelude::GlobalUiDebugOptions>();
+        options.enabled = true;
+        options.show_hidden = true;
+        options.show_clipped = true;
+        options.outline_padding_box = true;
+        options.outline_content_box = true;
+        options.outline_scrollbars = true;
+    }
+    app.insert_resource(WalkState::new(
+        steps,
+        PathBuf::from(out),
+        viewport,
+        diagnostic_overlays,
+    ))
+    .add_systems(Startup, accelerate_walk_time)
+    .add_systems(
+        OnEnter(Screen::Gameplay),
+        suppress_hostiles_for_map_review.in_set(GameplaySetup::Resources),
+    )
+    .add_systems(PreUpdate, run_walk.after(InputSystems));
+}
+
+fn accelerate_walk_time(mut time: ResMut<Time<Virtual>>) {
+    // Walks exercise the ordinary animation/timer systems, but should not spend
+    // wall-clock minutes waiting through every combatant in a 6v6 matrix.
+    time.set_relative_speed(WALK_TIME_SCALE);
 }
 
 fn install_config_error(app: &mut App, error: String) {
@@ -113,6 +182,27 @@ fn install_config_error(app: &mut App, error: String) {
 
 #[derive(Resource, Debug)]
 struct WalkConfigurationError(String);
+
+/// Feature-only launch policy for terrain and camera evidence.
+#[derive(Resource)]
+struct SuppressHostilesForMapReview;
+
+fn suppress_hostiles_for_map_review(
+    policy: Option<Res<SuppressHostilesForMapReview>>,
+    mut encounter: ResMut<Encounter>,
+    mut commands: Commands,
+) {
+    if policy.is_some() {
+        retain_non_hostile_rosters(&mut encounter);
+        commands.remove_resource::<SuppressHostilesForMapReview>();
+    }
+}
+
+fn retain_non_hostile_rosters(encounter: &mut Encounter) {
+    encounter
+        .rosters
+        .retain(|roster| roster.faction != EncounterFaction::Hostile);
+}
 
 fn reject_invalid_configuration(
     error: Res<WalkConfigurationError>,
@@ -131,64 +221,122 @@ enum WalkStep {
     AwaitTerrain,
     /// Let this many frames pass before the next step.
     Settle(u32),
-    /// Photograph the primary window into `<out>/<name>.png`.
+    /// Photograph the current Bevy image target into `<out>/<name>.png`.
     Capture(String),
+    /// Capture one gameplay-owned review task through its named structural contract.
+    ///
+    /// Map-owner walks retain the generic `Capture` variant unchanged. Gameplay
+    /// UI acceptance uses this fail-closed variant so a correct screen root with
+    /// the wrong task contents cannot produce evidence.
+    ReviewCapture {
+        name: String,
+        task: hex_ui::test_support::UiTaskCase,
+    },
     /// Press the `index`-th button whose `Name` starts with `name`.
     Click {
         name: String,
         #[serde(default)]
         index: usize,
     },
-    /// Wait until a named button exists without activating it.
-    AwaitButton(String),
-    /// End player turns and answer player decisions until a named button exists.
-    AutoUntilButton(String),
-    /// End player turns and answer player decisions until baseline AI casts.
-    AutoUntilAiCast,
-    /// End turns until the named stable player unit owns the turn.
-    AutoUntilPlayerTurn(u64),
-    /// Drive combat until a player damage choice is open.
-    AutoUntilDamageDecision,
-    /// Answer the currently open player lattice decision through the command funnel.
-    AnswerDecision,
-    /// Point an in-flight recovery spell at the first damaged player unit.
+    /// Click one exact exposed terrain entity through the ordinary picking observer path.
     ///
-    /// This is the walk equivalent of cycling the target control. Confirming the
-    /// resulting aim still emits the ordinary cast command through the UI.
-    AimAtDamagedPlayer,
-    /// Point an in-flight spell at one stable player unit, including a downed unit.
-    ///
-    /// Ability fixtures use this for intentional friendly damage and for restoring the
-    /// exact ally they downed through ordinary commands.
-    AimAtPlayer(u64),
-    /// Point an in-flight spell at the first hostile by stable id.
-    AimAtHostile,
-    /// Move an in-flight aim to a legal unoccupied anchor, retaining its prior target.
-    AimAtEmpty,
-    /// Press and release a supported gameplay or menu key.
-    Key(String),
-    /// Click the topmost surface at one authored axial coordinate.
+    /// Omitting `level` is accepted only when the coordinate has one exposed
+    /// surface. Stacked terrain must name its exact surface instead of letting
+    /// the runner guess which entity a real pointer would have hit.
     ClickTile {
         q: i32,
         r: i32,
         #[serde(default)]
-        level: Option<i32>,
+        level: Option<hex_core::Level>,
     },
-    /// Deliberately send a movement command through the simulation funnel.
+    /// Click one generated anchor through the same stack-safe picking path.
     ///
-    /// Walk-only probes bypass the quiet input prefilter so a modal refusal becomes a
-    /// visible combat-log line, proving the authoritative choke point held.
-    AttemptMove,
-    /// Deliberately send an end-turn command through the simulation funnel.
-    AttemptEndTurn,
-    /// Launch a scenario by exact name, bypassing the menu UI.
+    /// `expected` deliberately duplicates the current hero-seed projection. The
+    /// anchor remains the authority, while a moved anchor makes old visual evidence
+    /// fail stale instead of silently reviewing a different place.
+    ClickAnchor {
+        name: String,
+        expected: CameraRouteTile,
+    },
+    /// Wait for every registered party member's domain movement to finish.
+    ///
+    /// The script owns the frame limit so a stalled route fails deterministically
+    /// instead of relying only on the runner's wall-clock watchdog.
+    AwaitPartyIdle { max_frames: u32 },
+    /// Prove that the authoritative selection and its camera projection reached
+    /// one exact stack-safe surface before accepting visual evidence.
+    ///
+    /// This is deliberately separate from [`Self::AwaitPartyIdle`]: an ignored
+    /// click also leaves the party idle, so idleness alone cannot prove a route
+    /// was accepted or completed.
+    AssertSelectedAt { expected: CameraRouteTile },
+    /// Wait until a named button exists without activating it.
+    AwaitButton(String),
+    /// Install an authored immutable UI presentation state without solving combat.
+    PresentUi(String),
+    /// Select one semantic UI scale for responsive presentation review.
+    SetUiScale(hex_ui::UiScaleMode),
+    /// Change the logical canvas and device scale for later presentation frames.
+    SetViewport {
+        width: u32,
+        height: u32,
+        device_scale: f32,
+    },
+    /// Perform one bounded right-mouse drag through ordinary camera input.
+    ///
+    /// Positive yaw is a counter-clockwise fraction of one turn. Positive pitch is
+    /// a downward fraction of a quarter turn. Each relative gesture is bounded so
+    /// both synthetic cursor positions describe one plausible drag rather than a
+    /// direct camera-state mutation.
+    OrbitCamera {
+        yaw_turns: f32,
+        #[serde(default)]
+        pitch_fraction: f32,
+    },
+    /// Press and release a supported gameplay or menu key.
+    Key(String),
+    /// Install an exact internal scenario as a review-only launch input.
     StartScenario {
         name: String,
         #[serde(default)]
         seed: Option<u64>,
+        /// Remove hostile rosters before actor setup for this feature-only launch.
+        ///
+        /// Map-owner presentation walks use this when combat is unrelated to the
+        /// terrain and camera evidence under review. Shipped scenario tests still
+        /// exercise the authored encounter independently.
+        #[serde(default)]
+        suppress_hostiles: bool,
     },
-    /// Launch an immutable Combat Lab fixture by stable machine id.
-    StartFixture { id: String },
+}
+
+/// Stack-safe position serialized by camera-route evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CameraRouteTile {
+    q: i32,
+    r: i32,
+    level: hex_core::Level,
+}
+
+impl CameraRouteTile {
+    fn position(self) -> TilePos {
+        TilePos::new(HexCoord::from_axial(self.q, self.r), self.level)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OrbitGesturePhase {
+    Delta,
+    Release,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct OrbitGesture {
+    window: Entity,
+    baseline: Vec2,
+    destination: Vec2,
+    phase: OrbitGesturePhase,
 }
 
 fn load_script(path: &str) -> Result<Vec<WalkStep>, String> {
@@ -209,41 +357,142 @@ fn validate_step(step: &WalkStep) -> Result<(), String> {
     match step {
         WalkStep::AwaitScreen(name) => parse_screen(name).map(|_| ()),
         WalkStep::Key(name) => parse_key(name).map(|_| ()),
-        WalkStep::Capture(name) if name.trim().is_empty() => {
+        WalkStep::Capture(name) | WalkStep::ReviewCapture { name, .. }
+            if name.trim().is_empty() =>
+        {
             Err("capture name must not be empty".to_owned())
         }
         WalkStep::Click { name, .. } if name.trim().is_empty() => {
             Err("click name must not be empty".to_owned())
         }
+        WalkStep::ClickAnchor { name, .. } if name.trim().is_empty() => {
+            Err("anchor name must not be empty".to_owned())
+        }
+        WalkStep::AwaitPartyIdle { max_frames: 0 } => {
+            Err("AwaitPartyIdle max_frames must be positive".to_owned())
+        }
         WalkStep::AwaitButton(name) if name.trim().is_empty() => {
             Err("awaited button name must not be empty".to_owned())
         }
-        WalkStep::AutoUntilButton(name) if name.trim().is_empty() => {
-            Err("automated button name must not be empty".to_owned())
+        WalkStep::PresentUi(name)
+            if !matches!(
+                name.as_str(),
+                "clear"
+                    | "normal-gameplay"
+                    | "player-turn-max"
+                    | "hostile-turn"
+                    | "casting-list"
+                    | "required-decision"
+                    | "restore-decision"
+                    | "aiming-disabled"
+                    | "sandbox-outcome"
+            ) =>
+        {
+            Err(format!("unknown presentation-only UI fixture {name:?}"))
         }
+        WalkStep::SetViewport {
+            width,
+            height,
+            device_scale,
+        } => hex_ui::ReviewViewport::new(*width, *height, *device_scale).map(|_| ()),
+        WalkStep::OrbitCamera {
+            yaw_turns,
+            pitch_fraction,
+        } => validate_orbit_drag(*yaw_turns, *pitch_fraction),
         WalkStep::StartScenario { name, .. } if name.trim().is_empty() => {
             Err("scenario name must not be empty".to_owned())
         }
-        WalkStep::StartFixture { id } if id.trim().is_empty() => {
-            Err("fixture id must not be empty".to_owned())
-        }
         _ => Ok(()),
     }
+}
+
+fn validate_orbit_drag(yaw_turns: f32, pitch_fraction: f32) -> Result<(), String> {
+    if !yaw_turns.is_finite() || !pitch_fraction.is_finite() {
+        return Err("camera orbit values must be finite".to_owned());
+    }
+    if yaw_turns.abs() > MAX_ORBIT_YAW_TURNS {
+        return Err(format!(
+            "camera yaw must be within ±{MAX_ORBIT_YAW_TURNS} turns per gesture"
+        ));
+    }
+    if pitch_fraction.abs() > MAX_ORBIT_PITCH_FRACTION {
+        return Err(format!(
+            "camera pitch must be within ±{MAX_ORBIT_PITCH_FRACTION} quarter turns per gesture"
+        ));
+    }
+    if yaw_turns == 0.0 && pitch_fraction == 0.0 {
+        return Err("camera orbit gesture must move yaw or pitch".to_owned());
+    }
+    Ok(())
+}
+
+fn orbit_cursor_positions(
+    window_size: Vec2,
+    cursor_position: Option<Vec2>,
+    yaw_turns: f32,
+    pitch_fraction: f32,
+) -> Result<(Vec2, Vec2), String> {
+    validate_orbit_drag(yaw_turns, pitch_fraction)?;
+    if !window_size.is_finite() || window_size.min_element() <= 0.0 {
+        return Err("camera orbit requires a finite positive window".to_owned());
+    }
+    let baseline = cursor_position.unwrap_or(window_size * 0.5);
+    let delta = Vec2::new(
+        -yaw_turns * window_size.x,
+        pitch_fraction * window_size.y * 0.5,
+    );
+    Ok((baseline, baseline + delta))
+}
+
+#[cfg(test)]
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CameraRouteManifest {
+    schema_version: u16,
+    routes: Vec<CameraRouteCase>,
+}
+
+#[cfg(test)]
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CameraRouteCase {
+    scenario: String,
+    seed: Option<u64>,
+    points: Vec<CameraRoutePoint>,
+}
+
+#[cfg(test)]
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CameraRoutePoint {
+    label: String,
+    destination: CameraRouteDestination,
+    azimuth_turns: Vec<f32>,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+enum CameraRouteDestination {
+    Anchor {
+        name: String,
+        expected: CameraRouteTile,
+    },
+    Exact(CameraRouteTile),
 }
 
 fn parse_screen(name: &str) -> Result<Screen, String> {
     match name {
         "Splash" => Ok(Screen::Splash),
         "Title" => Ok(Screen::Title),
+        "Sandbox" => Ok(Screen::Sandbox),
         "Settings" => Ok(Screen::Settings),
         "LatticeDemo" => Ok(Screen::LatticeDemo),
         "CharacterCreator" => Ok(Screen::CharacterCreator),
         "SpellCreator" => Ok(Screen::SpellCreator),
-        "CombatLab" => Ok(Screen::CombatLab),
         "Loading" => Ok(Screen::Loading),
         "Gameplay" => Ok(Screen::Gameplay),
         _ => Err(format!(
-            "unknown screen {name:?}; expected Splash, Title, Settings, CharacterCreator, SpellCreator, CombatLab, LatticeDemo, Loading, or Gameplay"
+            "unknown screen {name:?}; expected Splash, Title, Sandbox, Settings, CharacterCreator, SpellCreator, LatticeDemo, Loading, or Gameplay"
         )),
     }
 }
@@ -252,44 +501,109 @@ fn parse_key(name: &str) -> Result<KeyCode, String> {
     match name {
         "Backspace" => Ok(KeyCode::Backspace),
         "Escape" => Ok(KeyCode::Escape),
-        "Space" => Ok(KeyCode::Space),
-        "Enter" => Ok(KeyCode::Enter),
+        "B" => Ok(KeyCode::KeyB),
         "C" => Ok(KeyCode::KeyC),
-        // `Tab` and `Q` are casting's — step to the next target, and put the aim down.
-        // `Enter` confirms an aim, and the casting walk drives that through the panel's
-        // Confirm button instead: a `Click` that never finds its button stalls the walk
-        // and fails it, which is a stronger assertion than a key that can be pressed
-        // into a screen with no aiming UI on it at all.
-        "Tab" => Ok(KeyCode::Tab),
-        "KeyQ" => Ok(KeyCode::KeyQ),
-        "KeyH" => Ok(KeyCode::KeyH),
-        "KeyL" => Ok(KeyCode::KeyL),
-        "KeyR" => Ok(KeyCode::KeyR),
-        "F5" => Ok(KeyCode::F5),
+        "F" => Ok(KeyCode::KeyF),
+        "H" => Ok(KeyCode::KeyH),
+        "I" => Ok(KeyCode::KeyI),
+        "L" => Ok(KeyCode::KeyL),
+        "P" => Ok(KeyCode::KeyP),
+        "V" => Ok(KeyCode::KeyV),
         _ => Err(format!(
-            "unknown key {name:?}; expected Backspace, Escape, Space, Enter, C, Tab, KeyQ, KeyH, KeyL, KeyR, or F5"
+            "unknown key {name:?}; expected Backspace, Escape, or a configured HUD/camera review key"
         )),
     }
 }
 
-fn parse_size(size: &str) -> Result<(u32, u32), String> {
-    let invalid = || format!("{SIZE_ENV} must be WIDTHxHEIGHT with two positive integers");
+fn parse_viewport(viewport: &str) -> Result<hex_ui::ReviewViewport, String> {
+    let invalid = || format!("{VIEWPORT_ENV} must be WIDTHxHEIGHT@SCALE");
+    let Some((size, device_scale)) = viewport.split_once('@') else {
+        return Err(invalid());
+    };
     let Some((width, height)) = size.split_once('x') else {
         return Err(invalid());
     };
-    if height.contains('x') {
+    if height.contains('x') || device_scale.contains('@') {
         return Err(invalid());
     }
     let width = width
         .parse::<u32>()
-        .map_err(|error| format!("{SIZE_ENV} width is invalid: {error}"))?;
+        .map_err(|error| format!("{VIEWPORT_ENV} width is invalid: {error}"))?;
     let height = height
         .parse::<u32>()
-        .map_err(|error| format!("{SIZE_ENV} height is invalid: {error}"))?;
-    if width == 0 || height == 0 {
-        return Err(invalid());
+        .map_err(|error| format!("{VIEWPORT_ENV} height is invalid: {error}"))?;
+    let device_scale = device_scale
+        .parse::<f32>()
+        .map_err(|error| format!("{VIEWPORT_ENV} device scale is invalid: {error}"))?;
+    hex_ui::ReviewViewport::new(width, height, device_scale)
+}
+
+/// Resolves a script coordinate to the same exact entity the picking backend would
+/// have reported. `None` means terrain has not published any tile yet, so the step
+/// may continue waiting.
+fn resolve_tile_click_target<'a>(
+    tiles: impl Iterator<Item = (Entity, &'a TilePos, &'a Headroom)>,
+    coord: HexCoord,
+    level: Option<hex_core::Level>,
+) -> Result<Option<(Entity, TilePos)>, String> {
+    let mut saw_tile = false;
+    let mut at_coord = Vec::new();
+    for (entity, pos, headroom) in tiles {
+        saw_tile = true;
+        if pos.coord == coord && headroom.0 > 0 {
+            at_coord.push((entity, *pos));
+        }
     }
-    Ok((width, height))
+    if !saw_tile {
+        return Ok(None);
+    }
+
+    at_coord.sort_by_key(|&(entity, pos)| (pos, entity));
+    let available_levels: Vec<hex_core::Level> =
+        at_coord.iter().map(|(_, pos)| pos.level).collect();
+    let matches: Vec<(Entity, TilePos)> = at_coord
+        .into_iter()
+        .filter(|(_, pos)| level.is_none_or(|level| pos.level == level))
+        .collect();
+
+    match matches.as_slice() {
+        [(entity, pos)] => Ok(Some((*entity, *pos))),
+        [] if available_levels.is_empty() => Err(format!(
+            "ClickTile(q: {}, r: {}) names no published terrain coordinate",
+            coord.x(),
+            coord.y()
+        )),
+        [] => Err(format!(
+            "ClickTile(q: {}, r: {}, level: {level:?}) names no published run; available levels are {available_levels:?}",
+            coord.x(),
+            coord.y()
+        )),
+        _ if level.is_none() => Err(format!(
+            "ClickTile(q: {}, r: {}) is ambiguous across stacked levels {available_levels:?}; specify an exact level",
+            coord.x(),
+            coord.y()
+        )),
+        _ => Err(format!(
+            "ClickTile(q: {}, r: {}, level: {level:?}) matched duplicate published runs",
+            coord.x(),
+            coord.y()
+        )),
+    }
+}
+
+fn primary_tile_click(target: Entity, window: Entity) -> Option<Pointer<Click>> {
+    let target_window = bevy::window::WindowRef::Entity(window).normalize(Some(window))?;
+    let location = Location {
+        target: NormalizedRenderTarget::Window(target_window),
+        position: Vec2::ZERO,
+    };
+    let click = Click {
+        button: PointerButton::Primary,
+        hit: HitData::new(target, 0.0, None, None),
+        duration: Duration::from_millis(1),
+        count: 1,
+    };
+    Some(Pointer::new(PointerId::Mouse, location, click, target))
 }
 
 /// What the capture observer reports back to the runner.
@@ -297,6 +611,17 @@ fn parse_size(size: &str) -> Result<(u32, u32), String> {
 enum CaptureOutcome {
     Written { brightest: u8, coverage: bool },
     Failed(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CaptureTargetPreparation {
+    /// The next capture must first detach and replace the shared target.
+    Refresh,
+    /// Both cameras must render into this exact new generation before screenshotting.
+    Settling {
+        expected_generation: u64,
+        rendered_frames: u8,
+    },
 }
 
 #[derive(Resource)]
@@ -312,84 +637,119 @@ struct WalkState {
     pressed: Option<Entity>,
     /// A key pressed by the previous step, to be released.
     held_key: Option<KeyCode>,
-    /// Consecutive automation frames that observed the same player turn.
-    ///
-    /// The grace frame lets turn-start effects and the casting panel settle before
-    /// automation decides there is no recovery action to preserve.
-    auto_turn_seen: Option<(UnitId, u8)>,
-    /// The offscreen image the camera renders into for capture.
-    ///
-    /// The window surface is not readable on every backend — on macOS/Metal a
-    /// `Screenshot::primary_window()` comes back black — so the walk redirects
-    /// the game's single camera into a target image exactly as the map-review
-    /// harness does. `bevy_ui` only follows a *window*-targeting camera by
-    /// default, so the runner also tags every UI root with `UiTargetCamera`
-    /// pointing at the redirected camera; frames then show everything a
-    /// player would see.
+    /// Multi-frame ordinary right-drag currently being injected.
+    orbit_gesture: Option<OrbitGesture>,
+    /// The Bevy image target the game and UI render into for capture.
     target: Option<Handle<Image>>,
+    /// Previous target retained until its replacement receives a distinct asset ID.
+    retired_target: Option<Handle<Image>>,
+    /// Monotonic identity for the shared game/UI image target.
+    target_generation: u64,
+    /// Per-capture refresh and render-settling state.
+    capture_target: CaptureTargetPreparation,
     /// The camera entity the UI roots must be pointed at.
     camera: Option<Entity>,
-    /// Exact offscreen viewport under review.
-    size: (u32, u32),
+    /// Exact logical canvas and raster density under review.
+    viewport: hex_ui::ReviewViewport,
+    /// Authored presentation fixture whose named composition contract is active.
+    presentation: Option<String>,
+    /// Debug outlines are useful diagnostics but invalidate acceptance evidence.
+    diagnostic_overlays: bool,
     failed: bool,
 }
 
-#[derive(SystemParam)]
-struct WalkCombat<'w, 's> {
-    pending: Option<Res<'w, PendingDecision>>,
-    traces: Option<Res<'w, AiDecisionTraces>>,
-    aiming: Option<ResMut<'w, Aiming>>,
-    enemies: Query<'w, 's, (&'static UnitId, &'static StandsOn), (With<Enemy>, Without<Downed>)>,
-    anchors: Query<'w, 's, &'static TilePos, With<AnchorMarker>>,
-    terrain: WalkTerrain<'w, 's>,
-}
+#[derive(Component)]
+struct WalkUiCamera;
 
 #[derive(SystemParam)]
-struct WalkContent<'w> {
+struct WalkContent<'w, 's> {
     failure: Option<Res<'w, GameplaySetupFailure>>,
     library: Option<Res<'w, ScenarioLibrary>>,
-    presets: Option<Res<'w, hex_assets::CreationPresetCatalog>>,
-    shipped_spells: Option<Res<'w, hex_assets::SpellFile>>,
-    base_lattices: Option<Res<'w, hex_assets::LatticeFile>>,
-    elements: Option<Res<'w, hex_assets::ElementCatalog>>,
-    substances: Option<Res<'w, hex_assets::SubstanceTable>>,
-}
-
-#[derive(SystemParam)]
-struct WalkTerrain<'w, 's> {
-    substances: Option<Res<'w, SubstanceTable>>,
-    blockers: Option<Res<'w, TraversalBlockers>>,
-    tiles: Query<
+    anchors: Option<Res<'w, MapAnchors>>,
+    party: Option<Res<'w, Party>>,
+    registry: Option<Res<'w, UnitRegistry>>,
+    queue: Option<Res<'w, CommandQueue>>,
+    movement: Query<'w, 's, (Has<Busy>, Has<MovingTo>)>,
+    selected: Query<
         'w,
         's,
         (
-            &'static TilePos,
-            &'static HexSpan,
-            &'static SubstanceId,
-            &'static Headroom,
+            Entity,
+            &'static StandsOn,
+            Option<&'static CameraFocusTarget>,
         ),
-        With<HexTile>,
+        With<Selected>,
     >,
 }
 
-type WalkPlayerQuery<'w, 's> = Query<
-    'w,
-    's,
-    (
-        &'static UnitId,
-        &'static ControlOwner,
-        &'static StandsOn,
-        &'static Body,
-        Option<&'static Turn>,
-        Option<&'static LatticeSpec>,
-        Option<&'static LatticeState>,
-        Has<Busy>,
-    ),
-    With<Player>,
->;
+#[derive(SystemParam)]
+struct WalkInput<'w> {
+    keys: ResMut<'w, ButtonInput<KeyCode>>,
+    mouse: ResMut<'w, ButtonInput<MouseButton>>,
+    cursor_moved: MessageWriter<'w, CursorMoved>,
+}
+
+impl WalkContent<'_, '_> {
+    /// `None` means party facts are not ready yet. `Some(false)` means at least one
+    /// stable party member still has a queued command or live domain route.
+    fn party_is_idle(&self) -> Option<bool> {
+        let (Some(party), Some(registry), Some(queue)) = (
+            self.party.as_deref(),
+            self.registry.as_deref(),
+            self.queue.as_deref(),
+        ) else {
+            return None;
+        };
+        if party.members.is_empty() {
+            return None;
+        }
+        for member in &party.members {
+            if queue.holds_command_for(*member) {
+                return Some(false);
+            }
+            let entity = registry.entity_of(*member)?;
+            let Ok((busy, moving)) = self.movement.get(entity) else {
+                return None;
+            };
+            if busy || moving {
+                return Some(false);
+            }
+        }
+        Some(true)
+    }
+
+    fn assert_selected_at(&self, expected: TilePos) -> Result<(), String> {
+        let (entity, standing, focus) = self.selected.single().map_err(|error| {
+            format!("visual walk needs exactly one selected unit before position proof: {error}")
+        })?;
+        if standing.0.pos != expected {
+            return Err(format!(
+                "selected unit {entity:?} stands at {:?}, not expected {expected:?}",
+                standing.0.pos
+            ));
+        }
+        let Some(focus) = focus else {
+            return Err(format!(
+                "selected unit {entity:?} reached {expected:?} without a camera focus projection"
+            ));
+        };
+        if focus.surface != expected {
+            return Err(format!(
+                "selected unit {entity:?} reached {expected:?}, but camera focus remains at {:?}",
+                focus.surface
+            ));
+        }
+        Ok(())
+    }
+}
 
 impl WalkState {
-    fn new(steps: Vec<WalkStep>, out_dir: PathBuf, size: (u32, u32)) -> Self {
+    fn new(
+        steps: Vec<WalkStep>,
+        out_dir: PathBuf,
+        viewport: hex_ui::ReviewViewport,
+        diagnostic_overlays: bool,
+    ) -> Self {
         Self {
             steps,
             cursor: 0,
@@ -400,10 +760,15 @@ impl WalkState {
             capture_outcome: None,
             pressed: None,
             held_key: None,
-            auto_turn_seen: None,
+            orbit_gesture: None,
             target: None,
+            retired_target: None,
+            target_generation: 0,
+            capture_target: CaptureTargetPreparation::Refresh,
             camera: None,
-            size,
+            viewport,
+            presentation: None,
+            diagnostic_overlays,
             failed: false,
         }
     }
@@ -413,9 +778,159 @@ impl WalkState {
         self.settled = 0;
         self.capture_requested = false;
         self.capture_outcome = None;
+        self.capture_target = CaptureTargetPreparation::Refresh;
         self.step_started = Instant::now();
-        self.auto_turn_seen = None;
     }
+}
+
+fn install_walk_target(
+    state: &mut WalkState,
+    images: &mut Assets<Image>,
+    target: Handle<Image>,
+) -> Result<(), String> {
+    if state
+        .retired_target
+        .as_ref()
+        .is_some_and(|retired| retired.id() == target.id())
+    {
+        return Err("visual-walk replacement reused the retired render-target ID".to_owned());
+    }
+    state.target_generation = state
+        .target_generation
+        .checked_add(1)
+        .ok_or_else(|| "visual-walk render-target generation overflowed".to_owned())?;
+    state.target = Some(target);
+    if let Some(retired) = state.retired_target.take() {
+        images.remove(retired.id());
+    }
+    Ok(())
+}
+
+/// Makes each screenshot generation-owning instead of reusing an image whose 3D
+/// render pass may have gone stale while UI composition continued to update.
+fn prepare_capture_target(state: &mut WalkState) -> Result<bool, String> {
+    match state.capture_target {
+        CaptureTargetPreparation::Refresh => {
+            let expected_generation = state
+                .target_generation
+                .checked_add(1)
+                .ok_or_else(|| "visual-walk render-target generation overflowed".to_owned())?;
+            if state.retired_target.is_some() {
+                return Err("visual-walk still holds an unretired render target".to_owned());
+            }
+            state.retired_target = state.target.take();
+            state.capture_target = CaptureTargetPreparation::Settling {
+                expected_generation,
+                rendered_frames: 0,
+            };
+            Ok(false)
+        }
+        CaptureTargetPreparation::Settling {
+            expected_generation,
+            rendered_frames,
+        } => {
+            if state.target_generation > expected_generation {
+                return Err(format!(
+                    "visual-walk render target advanced past capture generation \
+                     {expected_generation} to {}",
+                    state.target_generation
+                ));
+            }
+            if state.target_generation < expected_generation || state.target.is_none() {
+                return Ok(false);
+            }
+            if rendered_frames < CAPTURE_TARGET_SETTLE_FRAMES {
+                state.capture_target = CaptureTargetPreparation::Settling {
+                    expected_generation,
+                    rendered_frames: rendered_frames + 1,
+                };
+                return Ok(false);
+            }
+            Ok(true)
+        }
+    }
+}
+
+fn shared_target_msaa_update(source: Msaa, target: Msaa) -> Option<Msaa> {
+    (target != source).then_some(source)
+}
+
+fn capture_structural_issues(
+    snapshot: &hex_ui::test_support::UiTreeSnapshot,
+    presentation: Option<&str>,
+    task: Option<hex_ui::test_support::UiTaskCase>,
+    screen: Option<Screen>,
+) -> Vec<String> {
+    let mut issues = task.map_or_else(
+        || {
+            presentation.map_or_else(
+                || snapshot.layout_issues(),
+                |fixture| snapshot.review_fixture_issues(fixture),
+            )
+        },
+        |task| snapshot.task_issues(task),
+    );
+    if let (Some(fixture), Some(task)) = (presentation, task) {
+        let compatible = match fixture {
+            "normal-gameplay" => matches!(
+                task,
+                hex_ui::test_support::UiTaskCase::Exploration
+                    | hex_ui::test_support::UiTaskCase::CharacterMainView
+                    | hex_ui::test_support::UiTaskCase::ActivityTabs
+                    | hex_ui::test_support::UiTaskCase::CustomHudVisibility
+                    | hex_ui::test_support::UiTaskCase::CompactTemporarySurface
+            ),
+            "player-turn-max" => task == hex_ui::test_support::UiTaskCase::PlayerTurnMaxActions,
+            "hostile-turn" => task == hex_ui::test_support::UiTaskCase::HostileTurn,
+            "casting-list" => task == hex_ui::test_support::UiTaskCase::Casting,
+            "aiming-disabled" => task == hex_ui::test_support::UiTaskCase::AimingBlocked,
+            "required-decision" => matches!(
+                task,
+                hex_ui::test_support::UiTaskCase::DisableDecision
+                    | hex_ui::test_support::UiTaskCase::HudHiddenRequired
+            ),
+            "restore-decision" => task == hex_ui::test_support::UiTaskCase::RestoreDecision,
+            "sandbox-outcome" => task == hex_ui::test_support::UiTaskCase::SandboxOutcome,
+            _ => false,
+        };
+        if !compatible {
+            issues.push(format!(
+                "presentation fixture {fixture:?} cannot satisfy task {:?}",
+                task.contract().id
+            ));
+        }
+    }
+    if let Some(screen) = screen {
+        if let Some(task) = task {
+            let expected = task.contract().screen;
+            if expected != screen {
+                issues.push(format!(
+                    "capture task {:?} belongs to {expected:?}, not active screen {screen:?}",
+                    task.contract().id
+                ));
+            }
+        }
+        let expected_roots: &[&str] = match screen {
+            Screen::Splash => &["Splash Screen"],
+            Screen::Title => &["Main Menu"],
+            Screen::Settings => &["Settings Screen"],
+            Screen::LatticeDemo => &["Lattice Demo Screen"],
+            Screen::CharacterCreator | Screen::SpellCreator => &["Creator Screen"],
+            Screen::Sandbox => &["Sandbox"],
+            Screen::Loading => &["Loading Screen"],
+            Screen::Gameplay => &["Gameplay HUD Safe Frame"],
+        };
+        if !snapshot
+            .nodes
+            .iter()
+            .any(|node| expected_roots.iter().any(|expected| node.name == *expected))
+        {
+            issues.push(format!(
+                "capture snapshot for {screen:?} is stale or incomplete; expected one of {expected_roots:?}"
+            ));
+        }
+    }
+    issues
 }
 
 #[expect(
@@ -428,45 +943,115 @@ fn run_walk(
     mut state: ResMut<WalkState>,
     screen: Res<State<Screen>>,
     mut next: ResMut<NextState<Screen>>,
-    mut combat: WalkCombat,
     content: WalkContent,
-    mut keys: ResMut<ButtonInput<KeyCode>>,
+    mut ui_scale: ResMut<hex_ui::UiScalePreference>,
+    mut primary_window: Query<(Entity, &mut Window), With<bevy::window::PrimaryWindow>>,
+    mut input: WalkInput,
     buttons: Query<(Entity, &Name), With<Button>>,
-    tiles: Query<(Entity, &TilePos), With<HexTile>>,
-    players: WalkPlayerQuery,
-    mut queue: ResMut<CommandQueue>,
+    tiles: Query<(Entity, &TilePos, &Headroom), With<HexTile>>,
     mut images: ResMut<Assets<Image>>,
-    mut camera_targets: Query<(Entity, &mut RenderTarget), With<Camera>>,
-    ui_roots: Query<Entity, (With<Node>, Without<ChildOf>, Without<UiTargetCamera>)>,
+    mut game_camera: Query<(&mut RenderTarget, &Msaa), (With<Camera3d>, Without<WalkUiCamera>)>,
+    mut review_camera: Query<
+        (Entity, &mut RenderTarget, &mut Msaa),
+        (With<WalkUiCamera>, Without<Camera3d>),
+    >,
+    ui_roots: Query<(Entity, Option<&UiTargetCamera>), (With<Node>, Without<ChildOf>)>,
+    latest_ui_tree: Res<hex_ui::test_support::LatestUiTreeSnapshot>,
     mut exit: MessageWriter<AppExit>,
 ) {
     if state.failed {
         return;
     }
 
-    // Redirect the game's single camera into a readable offscreen image before
-    // anything is photographed; see `WalkState::target`.
+    // The Bevy image target owns capture pixels. Keep the ordinary window's
+    // requested logical size aligned so the runtime semantic-metrics system sees
+    // the same canvas without overriding the operating system's scale factor.
+    if let Ok((_, mut window)) = primary_window.single_mut() {
+        let logical = state.viewport.logical_size.as_vec2();
+        if (window.width() - logical.x).abs() > 0.5 || (window.height() - logical.y).abs() > 0.5 {
+            window.resolution.set(logical.x, logical.y);
+        }
+    }
+
+    // Redirect the game's single camera into an explicitly scaled Bevy image.
     if state.target.is_none() {
-        let Ok((camera, mut render_target)) = camera_targets.single_mut() else {
+        let Ok((mut game_target, game_msaa)) = game_camera.single_mut() else {
+            return;
+        };
+        let Ok(physical_size) = state.viewport.physical_size() else {
+            error!("visual walk viewport became invalid");
+            state.failed = true;
+            exit.write(AppExit::error());
             return;
         };
         let image = Image::new_target_texture(
-            state.size.0,
-            state.size.1,
-            TextureFormat::Rgba8UnormSrgb,
+            physical_size.x,
+            physical_size.y,
+            TextureFormat::Bgra8UnormSrgb,
             None,
         );
         let handle = images.add(image);
-        *render_target = RenderTarget::Image(handle.clone().into());
-        state.target = Some(handle);
-        state.camera = Some(camera);
+        let render_target = RenderTarget::Image(ImageRenderTarget {
+            handle: handle.clone(),
+            scale_factor: state.viewport.device_scale,
+        });
+        *game_target = render_target.clone();
+        let ui_camera = if let Ok((camera, mut target, mut ui_msaa)) = review_camera.single_mut() {
+            *target = render_target.clone();
+            if let Some(wanted) = shared_target_msaa_update(*game_msaa, *ui_msaa) {
+                *ui_msaa = wanted;
+            }
+            camera
+        } else {
+            commands
+                .spawn((
+                    Name::new("Visual Walk UI Camera"),
+                    WalkUiCamera,
+                    Camera2d,
+                    Camera {
+                        order: 1,
+                        clear_color: ClearColorConfig::None,
+                        ..default()
+                    },
+                    *game_msaa,
+                    render_target,
+                ))
+                .id()
+        };
+        if let Err(reason) = install_walk_target(&mut state, &mut images, handle) {
+            error!("{reason}");
+            state.failed = true;
+            exit.write(AppExit::error());
+            return;
+        }
+        state.camera = Some(ui_camera);
+    }
+
+    // A shared render target requires compatible sampling across every camera.
+    // Character tree fading enables OIT and therefore turns the 3D camera's MSAA
+    // off; mirror that exact setting onto the tooling-only UI camera and restore it
+    // change-driven when OIT leaves. Otherwise Bevy may keep presenting the last
+    // compatible 3D pass while the UI pass alone continues to update.
+    if let (Ok((_, game_msaa)), Ok((_, _, mut ui_msaa))) =
+        (game_camera.single(), review_camera.single_mut())
+    {
+        if let Some(wanted) = shared_target_msaa_update(*game_msaa, *ui_msaa) {
+            *ui_msaa = wanted;
+        }
     }
 
     // UI roots spawn and despawn with every screen; keep pointing new ones at
     // the redirected camera or their screens render into nothing.
     if let Some(camera) = state.camera {
-        for root in &ui_roots {
-            commands.entity(root).insert(UiTargetCamera(camera));
+        let mut retargeted = false;
+        for (root, target) in &ui_roots {
+            if target.is_none_or(|target| target.entity() != camera) {
+                commands.entity(root).insert(UiTargetCamera(camera));
+                retargeted = true;
+            }
+        }
+        if retargeted {
+            return;
         }
     }
     if let Some(failure) = content.failure.as_deref() {
@@ -486,14 +1071,19 @@ fn run_walk(
         }
     }
     if let Some(key) = state.held_key.take() {
-        keys.release(key);
+        input.keys.release(key);
     }
 
     let Some(step) = state.steps.get(state.cursor).cloned() else {
         info!("visual walk complete: {} steps", state.steps.len());
+        input.mouse.release(MouseButton::Right);
         exit.write(AppExit::Success);
         state.failed = true;
         return;
+    };
+    let review_task = match &step {
+        WalkStep::ReviewCapture { task, .. } => Some(*task),
+        _ => None,
     };
 
     if state.step_started.elapsed() > STEP_TIMEOUT {
@@ -520,27 +1110,120 @@ fn run_walk(
                 state.advance();
             }
         }
+        WalkStep::AwaitPartyIdle { max_frames } => {
+            state.settled = state.settled.saturating_add(1);
+            if content.party_is_idle() == Some(true) {
+                state.advance();
+            } else if state.settled >= max_frames {
+                error!(
+                    "visual walk exhausted AwaitPartyIdle after {max_frames} frames; party facts: {:?}",
+                    content.party_is_idle()
+                );
+                state.failed = true;
+                exit.write(AppExit::error());
+            }
+        }
+        WalkStep::AssertSelectedAt { expected } => {
+            let expected = expected.position();
+            match content.assert_selected_at(expected) {
+                Ok(()) => {
+                    info!("visual walk proved selected unit and camera focus at {expected:?}");
+                    state.advance();
+                }
+                Err(reason) => {
+                    error!("visual walk rejected position evidence: {reason}");
+                    state.failed = true;
+                    exit.write(AppExit::error());
+                }
+            }
+        }
         WalkStep::Settle(frames) => {
             state.settled += 1;
             if state.settled >= frames {
                 state.advance();
             }
         }
-        WalkStep::Capture(ref name) => {
+        WalkStep::Capture(ref name) | WalkStep::ReviewCapture { ref name, .. } => {
+            if review_task.is_some() && state.diagnostic_overlays {
+                error!(
+                    "visual walk rejected acceptance capture {name:?}: {UI_DEBUG_ENV} enables diagnostic overlays"
+                );
+                state.failed = true;
+                exit.write(AppExit::error());
+                return;
+            }
+            match prepare_capture_target(&mut state) {
+                Ok(true) => {}
+                Ok(false) => return,
+                Err(reason) => {
+                    error!("visual walk capture {name} failed: {reason}");
+                    state.failed = true;
+                    exit.write(AppExit::error());
+                    return;
+                }
+            }
             if !state.capture_requested {
+                let Some(snapshot) = latest_ui_tree.0.as_ref() else {
+                    return;
+                };
+                let issues = capture_structural_issues(
+                    snapshot,
+                    state.presentation.as_deref(),
+                    review_task,
+                    Some(*screen.get()),
+                );
+                if !issues.is_empty() {
+                    error!(
+                        "visual walk structural oracle rejected {name}:\n{}",
+                        issues.join("\n")
+                    );
+                    state.failed = true;
+                    exit.write(AppExit::error());
+                    return;
+                }
+                let expected_logical = state.viewport.logical_size.as_vec2();
+                if (snapshot.metrics.logical_size - expected_logical)
+                    .abs()
+                    .max_element()
+                    > 0.5
+                {
+                    return;
+                }
                 let Some(target) = state.target.clone() else {
+                    return;
+                };
+                let Ok(expected_physical) = state.viewport.physical_size() else {
+                    state.capture_outcome = Some(CaptureOutcome::Failed(
+                        "review viewport physical size is invalid".to_owned(),
+                    ));
+                    state.capture_requested = true;
                     return;
                 };
                 let path = state.out_dir.join(format!("{name}.png"));
                 info!("visual walk capturing {}", path.display());
-                commands.spawn(Screenshot::image(target)).observe(
+                let mut screenshot = Screenshot::image(target.clone());
+                // Bevy's convenience constructor defaults image targets to 1×.
+                // Preserve the reviewed target's device scale so the screenshot
+                // render-graph key matches the cameras' ImageRenderTarget.
+                screenshot.0 = RenderTarget::Image(ImageRenderTarget {
+                    handle: target,
+                    scale_factor: state.viewport.device_scale,
+                });
+                commands.spawn(screenshot).observe(
                     move |captured: On<ScreenshotCaptured>, mut state: ResMut<WalkState>| {
-                        let outcome = match write_png(&captured.image, &path) {
-                            Ok(stats) => CaptureOutcome::Written {
-                                brightest: stats.brightest,
-                                coverage: stats.has_coverage,
-                            },
-                            Err(error) => CaptureOutcome::Failed(error),
+                        let outcome = if captured.image.size() != expected_physical {
+                            CaptureOutcome::Failed(format!(
+                                "capture size {:?} did not match review target {expected_physical:?}",
+                                captured.image.size()
+                            ))
+                        } else {
+                            match write_png(&captured.image, &path) {
+                                Ok(stats) => CaptureOutcome::Written {
+                                    brightest: stats.brightest,
+                                    coverage: stats.has_coverage,
+                                },
+                                Err(error) => CaptureOutcome::Failed(error),
+                            }
                         };
                         state.capture_outcome = Some(outcome);
                     },
@@ -590,6 +1273,77 @@ fn run_walk(
             state.pressed = Some(entity);
             state.advance();
         }
+        WalkStep::ClickTile { q, r, level } => {
+            let coord = HexCoord::from_axial(q, r);
+            match resolve_tile_click_target(tiles.iter(), coord, level) {
+                Ok(None) => {}
+                Ok(Some((target, pos))) => {
+                    let Ok((window, _)) = primary_window.single() else {
+                        return;
+                    };
+                    let Some(click) = primary_tile_click(target, window) else {
+                        error!("visual walk could not normalize the primary window for {step:?}");
+                        state.failed = true;
+                        exit.write(AppExit::error());
+                        return;
+                    };
+                    info!("visual walk clicking terrain {pos:?} through pointer picking");
+                    commands.trigger(click);
+                    state.advance();
+                }
+                Err(reason) => {
+                    error!("visual walk refused {step:?}: {reason}");
+                    state.failed = true;
+                    exit.write(AppExit::error());
+                }
+            }
+        }
+        WalkStep::ClickAnchor { ref name, expected } => {
+            let Some(anchors) = content.anchors.as_deref() else {
+                return;
+            };
+            let id = MapAnchorId::from(name.as_str());
+            let Some(actual) = anchors.get(&id) else {
+                error!("visual walk anchor {name:?} is not published by this map");
+                state.failed = true;
+                exit.write(AppExit::error());
+                return;
+            };
+            let expected = expected.position();
+            if actual != expected {
+                error!(
+                    "visual walk anchor {name:?} moved from expected {expected:?} to {actual:?}; \
+                     recapture and review the route before updating its stale detector"
+                );
+                state.failed = true;
+                exit.write(AppExit::error());
+                return;
+            }
+            match resolve_tile_click_target(tiles.iter(), actual.coord, Some(actual.level)) {
+                Ok(None) => {}
+                Ok(Some((target, pos))) => {
+                    let Ok((window, _)) = primary_window.single() else {
+                        return;
+                    };
+                    let Some(click) = primary_tile_click(target, window) else {
+                        error!("visual walk could not normalize the primary window for {step:?}");
+                        state.failed = true;
+                        exit.write(AppExit::error());
+                        return;
+                    };
+                    info!(
+                        "visual walk clicking anchor {name:?} at {pos:?} through pointer picking"
+                    );
+                    commands.trigger(click);
+                    state.advance();
+                }
+                Err(reason) => {
+                    error!("visual walk refused {step:?}: {reason}");
+                    state.failed = true;
+                    exit.write(AppExit::error());
+                }
+            }
+        }
         WalkStep::AwaitButton(ref name) => {
             if buttons
                 .iter()
@@ -598,265 +1352,106 @@ fn run_walk(
                 state.advance();
             }
         }
-        WalkStep::AutoUntilButton(ref name) => {
-            let recovery_needed = name != "Cast Renewal"
-                || players.iter().any(|(_, _, _, _, _, spec, lattice, _)| {
-                    spec.zip(lattice).is_some_and(|(spec, lattice)| {
-                        spec.cells().any(|(cell, _)| lattice.is_disabled(cell))
-                    })
-                });
-            if recovery_needed
-                && buttons
-                    .iter()
-                    .any(|(_, button_name)| button_name.as_str().starts_with(name.as_str()))
-            {
-                // Panels rebuild through deferred commands. A matching button can
-                // therefore be the one-frame remnant of the actor whose turn just
-                // ended. Require the semantic control to survive a complete frame
-                // before the next step tries to press it.
-                state.settled = state.settled.saturating_add(1);
-                if state.settled >= 2 {
-                    state.advance();
-                }
-            } else {
-                state.settled = 0;
-                auto_player_input(
-                    combat.pending.as_deref(),
-                    &players,
-                    &combat.enemies,
-                    &combat.terrain,
-                    &mut queue,
-                    &mut state.auto_turn_seen,
-                );
+        WalkStep::PresentUi(ref name) => {
+            if let Err(reason) = hex_ui::apply_ui_review_fixture(&mut commands, name) {
+                error!("visual walk: {reason}");
+                state.failed = true;
+                exit.write(AppExit::error());
+                return;
             }
+            state.presentation = (name != "clear").then(|| name.clone());
+            state.advance();
         }
-        WalkStep::AutoUntilAiCast => {
-            let cast_seen = combat.traces.as_deref().is_some_and(|traces| {
-                traces
-                    .entries
-                    .iter()
-                    .any(|trace| matches!(trace.command, Some(GameCommand::Cast { .. })))
-            });
-            if cast_seen {
-                state.advance();
-            } else {
-                auto_player_input(
-                    combat.pending.as_deref(),
-                    &players,
-                    &combat.enemies,
-                    &combat.terrain,
-                    &mut queue,
-                    &mut state.auto_turn_seen,
-                );
-            }
+        WalkStep::SetUiScale(mode) => {
+            ui_scale.0 = mode;
+            state.advance();
         }
-        WalkStep::AutoUntilPlayerTurn(wanted) => {
-            if players
-                .iter()
-                .any(|(unit, _, _, _, turn, ..)| unit.0 == wanted && turn.is_some())
-            {
-                state.advance();
-            } else {
-                auto_player_input(
-                    combat.pending.as_deref(),
-                    &players,
-                    &combat.enemies,
-                    &combat.terrain,
-                    &mut queue,
-                    &mut state.auto_turn_seen,
-                );
-            }
-        }
-        WalkStep::AutoUntilDamageDecision => {
-            let open = combat.pending.as_deref().is_some_and(|pending| {
-                matches!(
-                    pending,
-                    PendingDecision::ChooseDisables { decider, .. }
-                        if players.iter().any(|(unit, ..)| unit == decider)
-                )
-            });
-            if open {
-                state.advance();
-            } else {
-                auto_player_input(
-                    combat.pending.as_deref(),
-                    &players,
-                    &combat.enemies,
-                    &combat.terrain,
-                    &mut queue,
-                    &mut state.auto_turn_seen,
-                );
-            }
-        }
-        WalkStep::AnswerDecision => {
-            if answer_player_decision(combat.pending.as_deref(), &players, &mut queue) {
+        WalkStep::SetViewport {
+            width,
+            height,
+            device_scale,
+        } => match hex_ui::ReviewViewport::new(width, height, device_scale) {
+            Ok(viewport) => {
+                state.viewport = viewport;
+                state.retired_target = state.target.take();
                 state.advance();
             }
-        }
-        WalkStep::AimAtDamagedPlayer => {
-            let target = players
-                .iter()
-                .filter(|(_, _, _, _, _, spec, lattice, _)| {
-                    spec.zip(*lattice).is_some_and(|(spec, lattice)| {
-                        spec.cells().any(|(cell, _)| lattice.is_disabled(cell))
-                    })
-                })
-                .min_by_key(|(unit, ..)| **unit)
-                .map(|(unit, _, standing, ..)| (*unit, standing.0.pos));
-            let aim = combat
-                .aiming
-                .as_deref_mut()
-                .and_then(|aiming| aiming.0.as_mut());
-            if let (Some((unit, position)), Some(aim)) = (target, aim) {
-                info!("visual walk aiming recovery at damaged player {unit:?}");
-                aim.anchor = position;
-                state.advance();
+            Err(error) => {
+                error!("visual walk viewport is invalid: {error}");
+                state.failed = true;
+                exit.write(AppExit::error());
             }
-        }
-        WalkStep::AimAtPlayer(target) => {
-            let target = players
-                .iter()
-                .find(|(unit, ..)| unit.0 == target)
-                .map(|(unit, _, standing, ..)| (*unit, standing.0.pos));
-            let aim = combat
-                .aiming
-                .as_deref_mut()
-                .and_then(|aiming| aiming.0.as_mut());
-            if let (Some((unit, position)), Some(aim)) = (target, aim) {
-                info!("visual walk aiming at player {unit:?}");
-                aim.anchor = position;
-                state.advance();
+        },
+        WalkStep::OrbitCamera {
+            yaw_turns,
+            pitch_fraction,
+        } => {
+            if *screen.get() != Screen::Gameplay {
+                error!("visual walk camera orbit is only valid during Gameplay");
+                state.failed = true;
+                exit.write(AppExit::error());
+                return;
             }
-        }
-        WalkStep::AimAtHostile => {
-            let target = combat
-                .enemies
-                .iter()
-                .min_by_key(|(unit, _)| **unit)
-                .map(|(unit, standing)| (*unit, standing.0.pos));
-            let aim = combat
-                .aiming
-                .as_deref_mut()
-                .and_then(|aiming| aiming.0.as_mut());
-            if let (Some((unit, position)), Some(aim)) = (target, aim) {
-                info!("visual walk aiming at hostile {unit:?}");
-                aim.anchor = position;
-                state.advance();
-            }
-        }
-        WalkStep::AimAtEmpty => {
-            let occupied = players
-                .iter()
-                .map(|(_, _, standing, ..)| standing.0.pos)
-                .chain(combat.enemies.iter().map(|(_, standing)| standing.0.pos))
-                .collect::<Vec<_>>();
-            let Some(current_anchor) = combat
-                .aiming
-                .as_deref()
-                .and_then(|aiming| aiming.0.as_ref())
-                .map(|aim| aim.anchor)
-            else {
+            let Ok((window_entity, window)) = primary_window.single_mut() else {
                 return;
             };
-            let mut surfaces = combat
-                .anchors
-                .iter()
-                .copied()
-                .filter(|anchor| !occupied.contains(anchor))
-                .collect::<Vec<_>>();
-            surfaces.sort_by_key(|position| {
-                (
-                    current_anchor.coord.distance(position.coord),
-                    (current_anchor.level - position.level).abs(),
-                    *position,
-                )
-            });
-            let aim = combat
-                .aiming
-                .as_deref_mut()
-                .and_then(|aiming| aiming.0.as_mut());
-            if let (Some(position), Some(aim)) = (surfaces.first().copied(), aim) {
-                info!("visual walk moving aim over empty surface {position:?}");
-                aim.anchor = position;
-                state.advance();
+            match state.orbit_gesture.as_mut() {
+                None => {
+                    let size = Vec2::new(window.width(), window.height());
+                    let (baseline, destination) = match orbit_cursor_positions(
+                        size,
+                        window.cursor_position(),
+                        yaw_turns,
+                        pitch_fraction,
+                    ) {
+                        Ok(positions) => positions,
+                        Err(error) => {
+                            error!("visual walk camera orbit is invalid: {error}");
+                            state.failed = true;
+                            exit.write(AppExit::error());
+                            return;
+                        }
+                    };
+                    input.mouse.press(MouseButton::Right);
+                    input.cursor_moved.write(CursorMoved {
+                        window: window_entity,
+                        position: baseline,
+                        delta: None,
+                    });
+                    state.orbit_gesture = Some(OrbitGesture {
+                        window: window_entity,
+                        baseline,
+                        destination,
+                        phase: OrbitGesturePhase::Delta,
+                    });
+                }
+                Some(gesture) if gesture.phase == OrbitGesturePhase::Delta => {
+                    input.cursor_moved.write(CursorMoved {
+                        window: gesture.window,
+                        position: gesture.destination,
+                        delta: Some(gesture.destination - gesture.baseline),
+                    });
+                    gesture.phase = OrbitGesturePhase::Release;
+                }
+                Some(_) => {
+                    input.mouse.release(MouseButton::Right);
+                    state.orbit_gesture = None;
+                    state.advance();
+                }
             }
         }
         WalkStep::Key(ref name) => {
             let key = parse_key(name).unwrap_or(KeyCode::Escape);
             info!("visual walk pressing {name}");
-            keys.press(key);
+            input.keys.press(key);
             state.held_key = Some(key);
             state.advance();
         }
-        WalkStep::ClickTile { q, r, level } => {
-            let coord = HexCoord::from_axial(q, r);
-            let mut matches: Vec<_> = tiles
-                .iter()
-                .filter(|(_, position)| {
-                    position.coord == coord && level.is_none_or(|level| position.level == level)
-                })
-                .collect();
-            matches.sort_by_key(|(entity, position)| (position.level, *entity));
-            let Some(&(entity, position)) = matches.last() else {
-                return;
-            };
-            let (Some(target), Some(camera)) = (state.target.clone(), state.camera) else {
-                return;
-            };
-            info!("visual walk clicking tile {position:?}");
-            let hit = HitData::new(camera, 0.0, None, None);
-            let location = Location {
-                target: NormalizedRenderTarget::Image(target.into()),
-                position: Vec2::ZERO,
-            };
-            commands.trigger(Pointer::new(
-                PointerId::Mouse,
-                location,
-                Click {
-                    button: PointerButton::Primary,
-                    hit,
-                    duration: Duration::ZERO,
-                    count: 1,
-                },
-                entity,
-            ));
-            state.advance();
-        }
-        WalkStep::AttemptMove => {
-            let Some((unit, owner, standing, ..)) = players
-                .iter()
-                .find(|(_, _, _, _, turn, _, _, _)| turn.is_some())
-                .or_else(|| players.iter().next())
-            else {
-                return;
-            };
-            queue.push(IssuedCommand {
-                seat: owner.0,
-                command: GameCommand::MoveAlong {
-                    unit: *unit,
-                    // The modal gate runs before path validation. Naming the current
-                    // surface keeps the probe deterministic without pretending the
-                    // walk knows this scenario's terrain graph.
-                    path: vec![standing.0.pos],
-                },
-            });
-            state.advance();
-        }
-        WalkStep::AttemptEndTurn => {
-            let Some((unit, owner, ..)) = players
-                .iter()
-                .find(|(_, _, _, _, turn, _, _, _)| turn.is_some())
-                .or_else(|| players.iter().next())
-            else {
-                return;
-            };
-            queue.push(IssuedCommand {
-                seat: owner.0,
-                command: GameCommand::EndTurn { unit: *unit },
-            });
-            state.advance();
-        }
-        WalkStep::StartScenario { ref name, seed } => {
+        WalkStep::StartScenario {
+            ref name,
+            seed,
+            suppress_hostiles,
+        } => {
             let Some(library) = content.library.as_deref() else {
                 return;
             };
@@ -873,6 +1468,11 @@ fn run_walk(
             };
             let resolved_seed = seed.or(scenario.generation_seed).map(ResolvedMapSeed);
             info!("visual walk launching scenario {name:?}");
+            if suppress_hostiles {
+                commands.insert_resource(SuppressHostilesForMapReview);
+            } else {
+                commands.remove_resource::<SuppressHostilesForMapReview>();
+            }
             commands.insert_resource(ScenarioToLoad {
                 scenario,
                 resolved_seed,
@@ -881,282 +1481,128 @@ fn run_walk(
             next.set(Screen::Loading);
             state.advance();
         }
-        WalkStep::StartFixture { ref id } => {
-            let Some(library) = content.library.as_deref() else {
-                return;
-            };
-            let Some(name) = crate::screens::combat_lab::fixture_scenario_name(id) else {
-                error!("visual walk: fixture {id:?} is not registered");
-                state.failed = true;
-                exit.write(AppExit::error());
-                return;
-            };
-            let Some(scenario) = library
-                .scenarios
-                .iter()
-                .find(|scenario| scenario.name == name)
-                .cloned()
-            else {
-                error!("visual walk: fixture {id:?} scenario {name:?} is missing");
-                state.failed = true;
-                exit.write(AppExit::error());
-                return;
-            };
-            let resolved_seed = scenario.generation_seed.map(ResolvedMapSeed);
-            commands.insert_resource(crate::screens::combat_lab::CombatLabSession {
-                kind: crate::screens::combat_lab::CombatLabSessionKind::FixedFixture(id.clone()),
-                return_to: Screen::CombatLab,
-            });
-            let payload = match crate::screens::combat_lab::creator_fixture_payload(
-                id,
-                content.presets.as_deref(),
-                content.shipped_spells.as_deref(),
-                content.base_lattices.as_deref(),
-                content.elements.as_deref(),
-                content.substances.as_deref(),
-            ) {
-                Ok(payload) => payload,
-                Err(reason) => {
-                    error!("visual walk: fixture {id:?} is invalid: {reason}");
-                    state.failed = true;
-                    exit.write(AppExit::error());
-                    return;
-                }
-            };
-            let encounter_override = payload.map(|(overlay, encounter)| {
-                commands.insert_resource(overlay);
-                encounter
-            });
-            commands.insert_resource(ScenarioToLoad {
-                scenario,
-                resolved_seed,
-                encounter_override,
-            });
-            next.set(Screen::Loading);
-            state.advance();
-        }
     }
-}
-
-fn auto_player_input(
-    pending: Option<&PendingDecision>,
-    players: &WalkPlayerQuery,
-    enemies: &Query<(&UnitId, &StandsOn), (With<Enemy>, Without<Downed>)>,
-    terrain: &WalkTerrain,
-    queue: &mut CommandQueue,
-    turn_seen: &mut Option<(UnitId, u8)>,
-) {
-    if answer_player_decision(pending, players, queue) {
-        *turn_seen = None;
-        return;
-    }
-    let Some((unit, owner, standing, body, Some(turn), _, _, _)) = players
-        .iter()
-        .find(|(_, _, _, _, turn, _, _, busy)| turn.is_some() && !busy)
-    else {
-        *turn_seen = None;
-        return;
-    };
-    let frames = match *turn_seen {
-        Some((seen, frames)) if seen == *unit => frames.saturating_add(1),
-        _ => 1,
-    };
-    *turn_seen = Some((*unit, frames));
-    if frames < 2 {
-        return;
-    }
-    if !queue.holds_command_for(*unit) {
-        let Some(substances) = terrain.substances.as_deref() else {
-            return;
-        };
-        let footing = Footing::from_tiles(
-            terrain.tiles.iter(),
-            substances,
-            *body,
-            terrain.blockers.as_deref(),
-        );
-        let mut targets = enemies.iter().collect::<Vec<_>>();
-        targets.sort_by_key(|(target, _)| **target);
-        if !turn.acted {
-            if let Some((target, _)) = targets.iter().find(|(_, target)| {
-                standing.0.pos.coord.distance(target.0.pos.coord) == 1
-                    && (footing.admits_step(standing.0.pos, target.0.pos)
-                        || footing.admits_step(target.0.pos, standing.0.pos))
-            }) {
-                queue.push(IssuedCommand {
-                    seat: owner.0,
-                    command: GameCommand::Strike {
-                        unit: *unit,
-                        target: **target,
-                    },
-                });
-                return;
-            }
-        }
-
-        let occupied = players
-            .iter()
-            .map(|(_, _, occupied, ..)| occupied.0.pos)
-            .chain(targets.iter().map(|(_, occupied)| occupied.0.pos))
-            .collect::<Vec<_>>();
-        let reach = Reach::from(standing.0, &footing, None);
-        let route = targets
-            .iter()
-            .flat_map(|(target, target_standing)| {
-                footing
-                    .standings()
-                    .into_iter()
-                    .filter(|candidate| {
-                        candidate.pos.coord.distance(target_standing.0.pos.coord) == 1
-                            && (footing.admits_step(candidate.pos, target_standing.0.pos)
-                                || footing.admits_step(target_standing.0.pos, candidate.pos))
-                            && (candidate.pos == standing.0.pos
-                                || !occupied.contains(&candidate.pos))
-                    })
-                    .filter_map(|candidate| {
-                        reach
-                            .path_to(candidate.pos)
-                            .map(|path| (**target, candidate.pos, path))
-                    })
-            })
-            .min_by_key(|(target, destination, path)| (path.len(), *target, *destination))
-            .map(|(_, _, mut path)| {
-                path.truncate(
-                    usize::try_from(turn.movement_left)
-                        .unwrap_or(usize::MAX)
-                        .saturating_add(1),
-                );
-                path
-            });
-        if let Some(path) = route.filter(|path| path.len() > 1) {
-            queue.push(IssuedCommand {
-                seat: owner.0,
-                command: GameCommand::MoveAlong {
-                    unit: *unit,
-                    path: path.into_iter().map(|step| step.pos).collect(),
-                },
-            });
-            return;
-        }
-        queue.push(IssuedCommand {
-            seat: owner.0,
-            command: GameCommand::EndTurn { unit: *unit },
-        });
-    }
-}
-
-fn answer_player_decision(
-    pending: Option<&PendingDecision>,
-    players: &WalkPlayerQuery,
-    queue: &mut CommandQueue,
-) -> bool {
-    let Some(pending) = pending else {
-        return false;
-    };
-    let (decider, target, count, restoring) = match *pending {
-        PendingDecision::ChooseDisables { decider, count, .. } => (decider, decider, count, false),
-        PendingDecision::ChooseRestores {
-            decider,
-            target,
-            count,
-        } => (decider, target, count, true),
-        PendingDecision::None => return false,
-    };
-    if queue.holds_answer_for(decider) {
-        return true;
-    }
-    let Some((_, owner, ..)) = players.iter().find(|(unit, ..)| **unit == decider) else {
-        return false;
-    };
-    let Some((_, _, _, _, _, Some(spec), Some(state), _)) =
-        players.iter().find(|(unit, ..)| **unit == target)
-    else {
-        return false;
-    };
-    let mut candidates: Vec<_> = spec
-        .cells()
-        .filter(|(cell, _)| state.is_disabled(*cell) == restoring)
-        .map(|(cell, kind)| {
-            let rank = if restoring {
-                0
-            } else {
-                match kind {
-                    CellKind::Blank => 0,
-                    // Preserve funding gems long enough for the recovery walk to
-                    // exercise Renewal on the following hedge-mage turn.
-                    CellKind::Fusion { .. } => 1,
-                    CellKind::Spell { .. } if cell != LatticeCoord::new(-1, 3) => 2,
-                    CellKind::Gem { .. } => 3,
-                    CellKind::Spell { .. } => 4,
-                }
-            };
-            (rank, state.mana(cell), cell)
-        })
-        .collect();
-    candidates.sort_unstable();
-    let cells = candidates
-        .into_iter()
-        .take(usize::from(count))
-        .map(|(_, _, cell)| cell)
-        .collect();
-    queue.push(IssuedCommand {
-        seat: owner.0,
-        command: if restoring {
-            GameCommand::ChooseRestores {
-                unit: decider,
-                target,
-                cells,
-            }
-        } else {
-            GameCommand::ChooseDisables {
-                unit: decider,
-                cells,
-            }
-        },
-    });
-    true
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    const CAMERA_ROUTE_SCRIPTS: &[(&str, &str)] = &[
+        ("../../walks/camera_crossing.ron", "The Crossing"),
+        (
+            "../../walks/camera_procedural_hills.ron",
+            "Procedural Hills",
+        ),
+        ("../../walks/camera_rolling_hills.ron", "Rolling Hills"),
+        ("../../walks/camera_frozen_hills.ron", "Frozen Hills"),
+        ("../../walks/camera_volcanic_hills.ron", "Volcanic Hills"),
+        ("../../walks/camera_sky_islands.ron", "Sky Islands"),
+        ("../../walks/camera_mountains.ron", "Mountains"),
+        ("../../walks/camera_caves.ron", "Caves"),
+        ("../../walks/camera_waterfall.ron", "Waterfall"),
+        ("../../walks/camera_forest.ron", "Forest"),
+        ("../../walks/camera_deep_forest.ron", "Deep Forest"),
+        ("../../walks/camera_prairie.ron", "Prairie"),
+        ("../../walks/camera_fort.ron", "Fort"),
+        ("../../walks/camera_seven_regions.ron", "Seven Regions"),
+        ("../../walks/camera_two_rings.ron", "Two Rings"),
+        ("../../walks/camera_mountain_range.ron", "Mountain Range"),
+    ];
+
+    const TWO_RINGS_ROUTE_SCRIPTS: &[&str] = &[
+        "../../walks/camera_two_rings.ron",
+        "../../walks/camera_two_rings_mountains.ron",
+        "../../walks/camera_two_rings_woodlands.ron",
+        "../../walks/camera_two_rings_prairies.ron",
+        "../../walks/camera_two_rings_west.ron",
+    ];
+
+    /// Sandbox maps reviewed through deployment rather than terrain traversal.
+    ///
+    /// Flat Arena has no meaningful camera route; the README Sandbox deployment
+    /// walk and scoped map-selection frames exercise it through its shipping path.
+    const DEPLOYMENT_ONLY_SANDBOX_MAP_IDS: &[&str] = &["flat-arena"];
+
+    #[derive(Resource, Default)]
+    struct PointerRecord {
+        target: Option<Entity>,
+        primary: bool,
+    }
+
+    #[derive(Resource, Clone, Copy)]
+    struct PointerRequest {
+        target: Entity,
+        window: Entity,
+    }
+
+    fn issue_requested_pointer_click(mut commands: Commands, request: Res<PointerRequest>) {
+        if let Some(click) = primary_tile_click(request.target, request.window) {
+            commands.trigger(click);
+        }
+    }
+
+    fn record_pointer_click(click: On<Pointer<Click>>, mut record: ResMut<PointerRecord>) {
+        record.target = Some(click.event_target());
+        record.primary = click.button == PointerButton::Primary;
+    }
+
+    #[derive(Resource, Default, Debug, PartialEq, Eq)]
+    struct PartyIdleRecord(Option<bool>);
+
+    fn record_party_idle(content: WalkContent, mut record: ResMut<PartyIdleRecord>) {
+        record.0 = content.party_is_idle();
+    }
+
+    #[derive(Resource, Default, Debug)]
+    struct SelectedAtRecord(Option<Result<(), String>>);
+
+    fn record_selected_at(content: WalkContent, mut record: ResMut<SelectedAtRecord>) {
+        record.0 = Some(content.assert_selected_at(TilePos::ORIGIN));
+    }
+
     const FULL_SCRIPT: &str = r#"[
         AwaitScreen("Title"),
         Settle(30),
         Capture("01-title"),
-        Click(name: "Combat Lab"),
-        AwaitScreen("CombatLab"),
+        Click(name: "Sandbox"),
+        AwaitScreen("Sandbox"),
         Key("Backspace"),
         StartScenario(name: "The Crossing"),
-        StartFixture(id: "ability-lab"),
         AwaitTerrain,
-        ClickTile(q: 0, r: -2),
-        Key("KeyR"),
+        ClickTile(q: 2, r: -2),
+        ClickTile(q: 2, r: -2, level: Some(7)),
+        ClickAnchor(name: "bridge", expected: (q: 0, r: 0, level: 16)),
+        AwaitPartyIdle(max_frames: 600),
+        AssertSelectedAt(expected: (q: 0, r: 0, level: 16)),
+        OrbitCamera(yaw_turns: 0.33333334, pitch_fraction: -0.1),
         AwaitButton("Cast Ember"),
-        AutoUntilButton("Cast Renewal"),
-        AutoUntilAiCast,
-        AutoUntilPlayerTurn(1),
-        AutoUntilDamageDecision,
-        AimAtDamagedPlayer,
-        AimAtPlayer(1),
-        AimAtHostile,
-        AimAtEmpty,
-        AnswerDecision,
-        AttemptMove,
-        AttemptEndTurn,
+        SetViewport(width: 3840, height: 2160, device_scale: 1.0),
+        SetUiScale(Percent200),
+        PresentUi("required-decision"),
         Capture("02-crossing"),
     ]"#;
 
     #[test]
+    fn disposable_storage_root_is_unique_to_one_walk_process() {
+        let out = PathBuf::from("captures");
+        let first = isolated_storage_root(out.clone(), 42, 100);
+        let second = isolated_storage_root(out.clone(), 42, 101);
+
+        assert_eq!(first.parent(), Some(out.as_path()));
+        assert_ne!(first, second);
+        assert_eq!(first, out.join(".game-data-42-100"));
+    }
+
+    #[test]
     fn a_full_script_parses_with_every_step_kind() {
         let steps: Vec<WalkStep> = ron::from_str(FULL_SCRIPT).expect("script parses");
-        assert_eq!(steps.len(), 24);
+        assert_eq!(steps.len(), 19);
         assert_eq!(steps.first(), Some(&WalkStep::AwaitScreen("Title".into())));
         assert_eq!(
             steps.get(3),
             Some(&WalkStep::Click {
-                name: "Combat Lab".into(),
+                name: "Sandbox".into(),
                 index: 0
             })
         );
@@ -1164,13 +1610,56 @@ mod tests {
             steps.get(6),
             Some(&WalkStep::StartScenario {
                 name: "The Crossing".into(),
-                seed: None
+                seed: None,
+                suppress_hostiles: false,
             })
         );
         assert_eq!(
-            steps.get(7),
-            Some(&WalkStep::StartFixture {
-                id: "ability-lab".into(),
+            steps.get(8),
+            Some(&WalkStep::ClickTile {
+                q: 2,
+                r: -2,
+                level: None,
+            })
+        );
+        assert_eq!(
+            steps.get(9),
+            Some(&WalkStep::ClickTile {
+                q: 2,
+                r: -2,
+                level: Some(7),
+            })
+        );
+        assert_eq!(
+            steps.get(10),
+            Some(&WalkStep::ClickAnchor {
+                name: "bridge".to_owned(),
+                expected: CameraRouteTile {
+                    q: 0,
+                    r: 0,
+                    level: 16,
+                },
+            })
+        );
+        assert_eq!(
+            steps.get(11),
+            Some(&WalkStep::AwaitPartyIdle { max_frames: 600 })
+        );
+        assert_eq!(
+            steps.get(12),
+            Some(&WalkStep::AssertSelectedAt {
+                expected: CameraRouteTile {
+                    q: 0,
+                    r: 0,
+                    level: 16,
+                },
+            })
+        );
+        assert_eq!(
+            steps.get(13),
+            Some(&WalkStep::OrbitCamera {
+                yaw_turns: 0.33333334,
+                pitch_fraction: -0.1,
             })
         );
         for step in &steps {
@@ -1179,29 +1668,1258 @@ mod tests {
     }
 
     #[test]
+    fn map_review_hostile_suppression_preserves_the_authored_player_roster() {
+        let authored = || {
+            ron::from_str::<Encounter>(include_str!(
+                "../../../assets/config/encounters/anchored-skirmish.ron"
+            ))
+            .expect("the shipped anchored skirmish parses")
+        };
+        let mut encounter = authored();
+        let players = encounter
+            .rosters
+            .iter()
+            .filter(|roster| roster.faction == EncounterFaction::Player)
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(!players.is_empty());
+        assert!(encounter.unit_count(EncounterFaction::Hostile) > 0);
+
+        retain_non_hostile_rosters(&mut encounter);
+
+        assert_eq!(encounter.rosters, players);
+        assert_eq!(encounter.unit_count(EncounterFaction::Hostile), 0);
+        encounter
+            .validate()
+            .expect("removing hostiles must leave a valid player-owned review encounter");
+
+        let mut app = App::new();
+        app.insert_resource(authored())
+            .insert_resource(SuppressHostilesForMapReview)
+            .add_systems(Update, suppress_hostiles_for_map_review);
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<Encounter>()
+                .unit_count(EncounterFaction::Hostile),
+            0
+        );
+        assert!(
+            !app.world()
+                .contains_resource::<SuppressHostilesForMapReview>(),
+            "the presentation-only policy must be consumed by exactly one launch"
+        );
+
+        app.insert_resource(authored());
+        app.update();
+        assert!(
+            app.world()
+                .resource::<Encounter>()
+                .unit_count(EncounterFaction::Hostile)
+                > 0,
+            "a later launch must retain its authored hostile roster"
+        );
+    }
+
+    #[test]
+    fn capture_uses_the_active_fixture_composition_contract() {
+        let snapshot = hex_ui::test_support::UiTreeSnapshot {
+            metrics: hex_ui::ResolvedUiMetrics {
+                viewport: hex_ui::UiViewportClass::Standard,
+                logical_size: Vec2::new(1920.0, 1080.0),
+                ..default()
+            },
+            nodes: Vec::new(),
+            focus_order: Vec::new(),
+            action_priority: None,
+        };
+        assert!(capture_structural_issues(&snapshot, None, None, None).is_empty());
+        let issues = capture_structural_issues(
+            &snapshot,
+            Some("sandbox-outcome"),
+            Some(hex_ui::test_support::UiTaskCase::SandboxOutcome),
+            Some(Screen::Gameplay),
+        );
+        assert!(
+            issues.iter().any(|issue| issue.contains("Retry Exact")),
+            "the capture path must reject an incomplete Sandbox outcome: {issues:?}"
+        );
+        let issues = capture_structural_issues(&snapshot, None, None, Some(Screen::Sandbox));
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.contains("stale or incomplete")),
+            "a stale screen snapshot must not authorize a capture: {issues:?}"
+        );
+        let issues = capture_structural_issues(
+            &snapshot,
+            Some("aiming-disabled"),
+            Some(hex_ui::test_support::UiTaskCase::AimingBlocked),
+            Some(Screen::Gameplay),
+        );
+        assert!(
+            issues.iter().any(|issue| issue.contains("Cancel Aim")),
+            "a named review capture must reject the right screen with the wrong task contents: {issues:?}"
+        );
+        for task in [
+            hex_ui::test_support::UiTaskCase::CharacterMainView,
+            hex_ui::test_support::UiTaskCase::ActivityTabs,
+            hex_ui::test_support::UiTaskCase::CustomHudVisibility,
+            hex_ui::test_support::UiTaskCase::CompactTemporarySurface,
+        ] {
+            let issues = capture_structural_issues(
+                &snapshot,
+                Some("normal-gameplay"),
+                Some(task),
+                Some(Screen::Gameplay),
+            );
+            assert!(
+                issues
+                    .iter()
+                    .all(|issue| !issue.contains("cannot satisfy task")),
+                "normal gameplay fixture must be compatible with {}: {issues:?}",
+                task.contract().id
+            );
+        }
+    }
+
+    #[test]
     fn unknown_screens_and_keys_are_rejected_at_load() {
-        assert_eq!(parse_key("KeyH"), Ok(KeyCode::KeyH));
-        assert_eq!(parse_key("KeyL"), Ok(KeyCode::KeyL));
-        assert_eq!(parse_key("KeyR"), Ok(KeyCode::KeyR));
+        assert_eq!(parse_key("C"), Ok(KeyCode::KeyC));
+        assert_eq!(parse_key("H"), Ok(KeyCode::KeyH));
+        assert_eq!(parse_key("P"), Ok(KeyCode::KeyP));
+        assert_eq!(parse_key("I"), Ok(KeyCode::KeyI));
+        assert_eq!(parse_key("L"), Ok(KeyCode::KeyL));
+        assert_eq!(parse_key("B"), Ok(KeyCode::KeyB));
+        assert_eq!(parse_key("V"), Ok(KeyCode::KeyV));
+        assert_eq!(parse_key("F"), Ok(KeyCode::KeyF));
+        assert_eq!(parse_key("Escape"), Ok(KeyCode::Escape));
         assert!(validate_step(&WalkStep::AwaitScreen("Menu".into())).is_err());
         assert!(validate_step(&WalkStep::Key("F13".into())).is_err());
         assert!(validate_step(&WalkStep::Capture(" ".into())).is_err());
+        assert!(validate_step(&WalkStep::ReviewCapture {
+            name: " ".into(),
+            task: hex_ui::test_support::UiTaskCase::MainMenu,
+        })
+        .is_err());
         assert!(validate_step(&WalkStep::Click {
             name: String::new(),
             index: 0
         })
         .is_err());
         assert!(validate_step(&WalkStep::AwaitButton(" ".into())).is_err());
-        assert!(validate_step(&WalkStep::AutoUntilButton(" ".into())).is_err());
+        assert!(validate_step(&WalkStep::AwaitPartyIdle { max_frames: 0 }).is_err());
+        validate_step(&WalkStep::AwaitPartyIdle { max_frames: 1 })
+            .expect("a positive frame bound is valid");
+        assert!(validate_step(&WalkStep::ClickAnchor {
+            name: " ".to_owned(),
+            expected: CameraRouteTile {
+                q: 0,
+                r: 0,
+                level: 1,
+            },
+        })
+        .is_err());
     }
 
     #[test]
-    fn capture_size_is_explicit_and_positive() {
-        assert_eq!(parse_size("1280x720"), Ok((1280, 720)));
-        assert_eq!(parse_size("1920x1080"), Ok((1920, 1080)));
-        for invalid in ["", "1280", "1280X720", "x720", "1280x", "0x720", "1280x0"] {
-            assert!(parse_size(invalid).is_err(), "{invalid:?} should fail");
+    fn orbit_gesture_is_finite_bounded_and_converts_to_an_ordinary_drag() {
+        let size = Vec2::new(1_200.0, 800.0);
+        let (baseline, destination) = orbit_cursor_positions(size, None, 1.0 / 3.0, 0.5)
+            .expect("a bounded multi-azimuth gesture should resolve");
+        assert_eq!(baseline, Vec2::new(600.0, 400.0));
+        assert!((destination.x - 200.0).abs() < 1e-4);
+        assert!((destination.y - 600.0).abs() < 1e-4);
+
+        let authored_cursor = Vec2::new(175.0, 90.0);
+        let (baseline, destination) =
+            orbit_cursor_positions(size, Some(authored_cursor), -0.25, -1.0)
+                .expect("the real cursor should become the ordinary drag baseline");
+        assert_eq!(baseline, authored_cursor);
+        assert_eq!(destination, Vec2::new(475.0, -310.0));
+
+        for (yaw, pitch) in [
+            (0.0, 0.0),
+            (0.500_1, 0.0),
+            (0.0, 1.001),
+            (f32::NAN, 0.0),
+            (0.0, f32::INFINITY),
+        ] {
+            assert!(
+                orbit_cursor_positions(size, None, yaw, pitch).is_err(),
+                "{yaw:?}/{pitch:?} should be rejected"
+            );
         }
+        assert!(orbit_cursor_positions(Vec2::ZERO, None, 0.25, 0.0).is_err());
+    }
+
+    #[test]
+    fn every_capture_owns_a_fresh_settled_render_target_generation() {
+        let steps = vec![
+            WalkStep::Capture("first".to_owned()),
+            WalkStep::Capture("second".to_owned()),
+        ];
+        let mut state = WalkState::new(
+            steps,
+            PathBuf::from("captures"),
+            hex_ui::ReviewViewport::DEFAULT,
+            false,
+        );
+        let mut images = Assets::<Image>::default();
+
+        let initial = images.add(Image::default());
+        let initial_id = initial.id();
+        install_walk_target(&mut state, &mut images, initial).expect("the initial target installs");
+        assert_eq!(state.target_generation, 1);
+        assert!(!prepare_capture_target(&mut state).expect("refresh starts"));
+        assert!(state.target.is_none());
+        assert!(
+            images.get(initial_id).is_some(),
+            "the old asset must stay allocated until the replacement gets a distinct ID"
+        );
+
+        let first = images.add(Image::default());
+        assert_ne!(first.id(), initial_id);
+        install_walk_target(&mut state, &mut images, first)
+            .expect("the first capture target installs");
+        assert!(
+            images.get(initial_id).is_none(),
+            "the retired image must be removed after replacement"
+        );
+        for _ in 0..CAPTURE_TARGET_SETTLE_FRAMES {
+            assert!(
+                !prepare_capture_target(&mut state).expect("settling succeeds"),
+                "a fresh target must render before capture"
+            );
+        }
+        assert!(prepare_capture_target(&mut state).expect("first target is ready"));
+        let first_generation = state.target_generation;
+
+        state.advance();
+        assert!(!prepare_capture_target(&mut state).expect("next refresh starts"));
+        let second = images.add(Image::default());
+        install_walk_target(&mut state, &mut images, second)
+            .expect("the second capture target installs");
+        assert_eq!(state.target_generation, first_generation + 1);
+        for _ in 0..CAPTURE_TARGET_SETTLE_FRAMES {
+            assert!(!prepare_capture_target(&mut state).expect("settling succeeds"));
+        }
+        assert!(prepare_capture_target(&mut state).expect("second target is ready"));
+    }
+
+    #[test]
+    fn shared_target_ui_sampling_tracks_oit_and_restores_change_driven() {
+        assert_eq!(
+            shared_target_msaa_update(Msaa::Off, Msaa::Sample4),
+            Some(Msaa::Off)
+        );
+        assert_eq!(
+            shared_target_msaa_update(Msaa::Off, Msaa::Off),
+            None,
+            "a stable OIT frame must not republish the sampling component"
+        );
+        assert_eq!(
+            shared_target_msaa_update(Msaa::Sample4, Msaa::Off),
+            Some(Msaa::Sample4)
+        );
+    }
+
+    #[test]
+    fn camera_route_manifest_is_seed_exact_for_traversed_sandbox_maps() {
+        let catalog: SandboxMapCatalog =
+            ron::from_str(include_str!("../../../assets/config/sandbox_maps.ron"))
+                .expect("the shipped Sandbox map catalog parses");
+        let manifest: CameraRouteManifest =
+            ron::from_str(include_str!("../../../walks/camera_routes.ron"))
+                .expect("the camera route manifest parses");
+        assert_eq!(manifest.schema_version, 1);
+
+        let maps = catalog
+            .maps
+            .iter()
+            .filter(|map| !DEPLOYMENT_ONLY_SANDBOX_MAP_IDS.contains(&map.id.as_str()))
+            .map(|map| (map.scenario.as_str(), map.fixed_seed))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let routes = manifest
+            .routes
+            .iter()
+            .map(|route| (route.scenario.as_str(), route.seed))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(manifest.routes.len(), maps.len());
+        assert_eq!(routes.len(), manifest.routes.len(), "route names repeat");
+        assert_eq!(
+            routes, maps,
+            "traversed Sandbox maps and camera routes must be a seed-exact bijection"
+        );
+        assert_eq!(
+            catalog.maps.len(),
+            routes.len() + DEPLOYMENT_ONLY_SANDBOX_MAP_IDS.len(),
+            "every Sandbox map needs either camera traversal or explicit deployment-only review"
+        );
+        for id in DEPLOYMENT_ONLY_SANDBOX_MAP_IDS {
+            assert!(
+                catalog.get(id).is_some(),
+                "deployment-only Sandbox map {id:?} must remain in the shipping catalog"
+            );
+        }
+        assert_eq!(routes.len(), 16);
+
+        for route in &manifest.routes {
+            assert!(
+                !route.points.is_empty(),
+                "{} has no review point",
+                route.scenario
+            );
+            let labels = route
+                .points
+                .iter()
+                .map(|point| point.label.as_str())
+                .collect::<std::collections::BTreeSet<_>>();
+            assert_eq!(
+                labels.len(),
+                route.points.len(),
+                "{} repeats a point label",
+                route.scenario
+            );
+            for point in &route.points {
+                assert!(!point.label.trim().is_empty());
+                assert!(!point.azimuth_turns.is_empty());
+                for &azimuth in &point.azimuth_turns {
+                    assert!(azimuth.is_finite());
+                    assert!(azimuth.abs() <= MAX_ORBIT_YAW_TURNS);
+                }
+                match &point.destination {
+                    CameraRouteDestination::Anchor { name, expected } => {
+                        assert!(!name.trim().is_empty());
+                        let _ = expected.position();
+                    }
+                    CameraRouteDestination::Exact(position) => {
+                        let _ = position.position();
+                    }
+                }
+            }
+        }
+
+        let sky = manifest
+            .routes
+            .iter()
+            .find(|route| route.scenario == "Sky Islands")
+            .expect("Sky Islands has a route");
+        assert!(sky.points.iter().all(|point| {
+            matches!(
+                &point.destination,
+                CameraRouteDestination::Anchor { name, .. } if name == "bridge"
+            )
+        }));
+    }
+
+    #[test]
+    fn mountain_range_walk_pins_review_route_and_rear_silhouette() {
+        let steps: Vec<WalkStep> =
+            ron::from_str(include_str!("../../../walks/camera_mountain_range.ron"))
+                .expect("the Mountain Range camera walk parses");
+        let manifest: CameraRouteManifest =
+            ron::from_str(include_str!("../../../walks/camera_routes.ron"))
+                .expect("the camera route manifest parses");
+
+        assert!(steps.contains(&WalkStep::StartScenario {
+            name: "Mountain Range".to_owned(),
+            seed: Some(129_704_046),
+            suppress_hostiles: true,
+        }));
+
+        let captures = steps
+            .iter()
+            .filter_map(|step| match step {
+                WalkStep::Capture(name) => Some(name.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            captures,
+            vec![
+                "01-mountain-range-front-massif",
+                "02-mountain-range-rear-silhouette",
+                "03-mountain-range-coast",
+                "04-mountain-range-watershed",
+                "05-mountain-range-foothills",
+                "06-mountain-range-mountain-tiers-front",
+                "07-mountain-range-mountain-tiers-rear",
+                "08-mountain-range-deep-mountain-base",
+            ]
+        );
+
+        let orbits = steps
+            .iter()
+            .filter_map(|step| match step {
+                WalkStep::OrbitCamera { yaw_turns, .. } => Some(yaw_turns.to_bits()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            orbits,
+            vec![
+                0.5_f32.to_bits(),
+                (-0.5_f32).to_bits(),
+                0.5_f32.to_bits(),
+                (-0.5_f32).to_bits(),
+            ]
+        );
+
+        let clicks = steps
+            .iter()
+            .filter_map(|step| match step {
+                WalkStep::ClickAnchor { name, expected } => Some((name.as_str(), *expected)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            clicks,
+            vec![
+                (
+                    "coast_review",
+                    CameraRouteTile {
+                        q: -52,
+                        r: 25,
+                        level: 12,
+                    },
+                ),
+                (
+                    "inland_review",
+                    CameraRouteTile {
+                        q: -9,
+                        r: 14,
+                        level: 20,
+                    },
+                ),
+                (
+                    "foothill_review",
+                    CameraRouteTile {
+                        q: -7,
+                        r: 13,
+                        level: 20,
+                    },
+                ),
+                (
+                    "massif_front_review",
+                    CameraRouteTile {
+                        q: 31,
+                        r: 5,
+                        level: 34,
+                    },
+                ),
+                (
+                    "deep_mountain_base",
+                    CameraRouteTile {
+                        q: 53,
+                        r: 6,
+                        level: 48,
+                    },
+                ),
+            ]
+        );
+
+        let route = manifest
+            .routes
+            .iter()
+            .find(|route| route.scenario == "Mountain Range")
+            .expect("Mountain Range is present in the route manifest");
+        assert_eq!(route.seed, Some(129704046));
+        let manifested_clicks = route
+            .points
+            .iter()
+            .filter_map(|point| match &point.destination {
+                CameraRouteDestination::Anchor { name, expected } => {
+                    Some((name.as_str(), *expected))
+                }
+                CameraRouteDestination::Exact(_) => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(manifested_clicks.len(), route.points.len());
+        assert_eq!(manifested_clicks, clicks);
+        assert!(route.points.iter().any(|point| {
+            point.label == "massif front and rear silhouette"
+                && point
+                    .azimuth_turns
+                    .iter()
+                    .map(|azimuth| azimuth.to_bits())
+                    .eq([0.0_f32.to_bits(), 0.5_f32.to_bits()])
+        }));
+
+        let map_front = steps
+            .iter()
+            .position(|step| step == &WalkStep::Capture("01-mountain-range-front-massif".into()))
+            .expect("the front massif capture exists");
+        let map_turn_rear = steps
+            .iter()
+            .position(|step| {
+                matches!(
+                    step,
+                    WalkStep::OrbitCamera { yaw_turns, .. }
+                        if yaw_turns.to_bits() == 0.5_f32.to_bits()
+                )
+            })
+            .expect("the Map-mode rear orbit exists");
+        let map_rear = steps
+            .iter()
+            .position(|step| step == &WalkStep::Capture("02-mountain-range-rear-silhouette".into()))
+            .expect("the rear silhouette capture exists");
+        let map_restore_front = steps
+            .iter()
+            .position(|step| {
+                matches!(
+                    step,
+                    WalkStep::OrbitCamera { yaw_turns, .. }
+                        if yaw_turns.to_bits() == (-0.5_f32).to_bits()
+                )
+            })
+            .expect("the Map-mode front orbit restoration exists");
+        let character_mode = steps
+            .iter()
+            .position(|step| step == &WalkStep::Key("C".into()))
+            .expect("the walk enters Character camera mode");
+        let massif_click = steps
+            .iter()
+            .position(|step| {
+                matches!(
+                    step,
+                    WalkStep::ClickAnchor { name, .. } if name == "massif_front_review"
+                )
+            })
+            .expect("the walk clicks the massif-front destination");
+        let massif_proof = steps
+            .iter()
+            .position(|step| {
+                matches!(
+                    step,
+                    WalkStep::AssertSelectedAt { expected }
+                        if *expected
+                            == CameraRouteTile {
+                                q: 31,
+                                r: 5,
+                                level: 34,
+                            }
+                )
+            })
+            .expect("the walk proves exact arrival at the massif front");
+        let character_front = steps
+            .iter()
+            .position(|step| {
+                step == &WalkStep::Capture("06-mountain-range-mountain-tiers-front".into())
+            })
+            .expect("the Character front-massif capture exists");
+        let character_turn_rear = steps
+            .iter()
+            .enumerate()
+            .filter_map(|(index, step)| {
+                matches!(
+                    step,
+                    WalkStep::OrbitCamera { yaw_turns, .. }
+                        if yaw_turns.to_bits() == 0.5_f32.to_bits()
+                )
+                .then_some(index)
+            })
+            .nth(1)
+            .expect("the Character rear orbit exists");
+        let character_rear = steps
+            .iter()
+            .position(|step| {
+                step == &WalkStep::Capture("07-mountain-range-mountain-tiers-rear".into())
+            })
+            .expect("the Character rear-massif capture exists");
+        let character_restore_front = steps
+            .iter()
+            .enumerate()
+            .filter_map(|(index, step)| {
+                matches!(
+                    step,
+                    WalkStep::OrbitCamera { yaw_turns, .. }
+                        if yaw_turns.to_bits() == (-0.5_f32).to_bits()
+                )
+                .then_some(index)
+            })
+            .nth(1)
+            .expect("the Character front orbit restoration exists");
+        let deep_mountain_click = steps
+            .iter()
+            .position(|step| {
+                matches!(
+                    step,
+                    WalkStep::ClickAnchor { name, .. } if name == "deep_mountain_base"
+                )
+            })
+            .expect("the walk continues to the Deep Mountain base");
+
+        assert!(map_front < map_turn_rear);
+        assert!(map_turn_rear < map_rear);
+        assert!(map_rear < map_restore_front);
+        assert!(map_restore_front < character_mode);
+        assert!(character_mode < massif_click);
+        assert!(massif_click < massif_proof);
+        assert!(massif_proof < character_front);
+        assert!(character_front < character_turn_rear);
+        assert!(character_turn_rear < character_rear);
+        assert!(character_rear < character_restore_front);
+        assert!(character_restore_front < deep_mountain_click);
+    }
+
+    #[test]
+    fn obstructed_route_cards_use_explicit_open_side_azimuths() {
+        let manifest: CameraRouteManifest =
+            ron::from_str(include_str!("../../../walks/camera_routes.ron"))
+                .expect("the camera route manifest parses");
+        let expected_manifest = [
+            ("Mountains", "stream overlook", vec![0.0, -1.0 / 6.0]),
+            ("Mountains", "low bypass", vec![-1.0 / 3.0]),
+            (
+                "Waterfall",
+                "fall overlook",
+                vec![0.0, -1.0 / 6.0, -1.0 / 3.0],
+            ),
+            (
+                "Fort",
+                "east gate approach",
+                vec![0.0, 1.0 / 6.0, -1.0 / 6.0],
+            ),
+            ("Two Rings", "central confluence", vec![0.0, 1.0 / 6.0]),
+            ("Two Rings", "waterfall B", vec![1.0 / 6.0, -1.0 / 6.0]),
+            (
+                "Two Rings",
+                "mountains A water",
+                vec![-1.0 / 6.0, -1.0 / 12.0],
+            ),
+            ("Two Rings", "mountains B pass", vec![1.0 / 3.0, -1.0 / 3.0]),
+            ("Two Rings", "mountains C stream", vec![0.0, -1.0 / 6.0]),
+            ("Two Rings", "frozen bridge", vec![0.0, 1.0 / 3.0]),
+            ("Two Rings", "outlet fall", vec![0.0, -1.0 / 6.0]),
+        ];
+        for (scenario, label, expected) in expected_manifest {
+            let actual = manifest
+                .routes
+                .iter()
+                .find(|route| route.scenario == scenario)
+                .and_then(|route| route.points.iter().find(|point| point.label == label))
+                .unwrap_or_else(|| panic!("missing {scenario:?} route point {label:?}"));
+            assert_eq!(actual.azimuth_turns, expected, "{scenario} {label}");
+        }
+
+        let expected_gestures = [
+            (
+                "../../walks/camera_mountains.ron",
+                vec![-1.0 / 6.0, 1.0 / 6.0, -1.0 / 3.0],
+            ),
+            (
+                "../../walks/camera_waterfall.ron",
+                vec![-1.0 / 6.0, -1.0 / 6.0],
+            ),
+            ("../../walks/camera_fort.ron", vec![1.0 / 6.0, -1.0 / 3.0]),
+            (
+                "../../walks/camera_two_rings.ron",
+                vec![1.0 / 6.0, -1.0 / 3.0, 1.0 / 12.0],
+            ),
+            (
+                "../../walks/camera_two_rings_mountains.ron",
+                vec![
+                    1.0 / 3.0,
+                    1.0 / 3.0,
+                    1.0 / 3.0,
+                    -1.0 / 6.0,
+                    1.0 / 6.0,
+                    1.0 / 3.0,
+                ],
+            ),
+            (
+                "../../walks/camera_two_rings_west.ron",
+                vec![-1.0 / 6.0, 1.0 / 6.0, -1.0 / 3.0, 1.0 / 3.0, -1.0 / 3.0],
+            ),
+        ];
+        for (script_path, expected) in expected_gestures {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(script_path);
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
+            let steps: Vec<WalkStep> = ron::from_str(&text)
+                .unwrap_or_else(|error| panic!("cannot parse {}: {error}", path.display()));
+            let actual = steps
+                .iter()
+                .filter_map(|step| match step {
+                    WalkStep::OrbitCamera { yaw_turns, .. } => Some(*yaw_turns),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected, "{}", path.display());
+        }
+    }
+
+    #[test]
+    fn critical_camera_scripts_use_only_manifested_real_movement_destinations() {
+        let manifest: CameraRouteManifest =
+            ron::from_str(include_str!("../../../walks/camera_routes.ron"))
+                .expect("the camera route manifest parses");
+        let scripted_scenarios = CAMERA_ROUTE_SCRIPTS
+            .iter()
+            .map(|(_, scenario)| *scenario)
+            .collect::<std::collections::BTreeSet<_>>();
+        let manifested_scenarios = manifest
+            .routes
+            .iter()
+            .map(|route| route.scenario.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            CAMERA_ROUTE_SCRIPTS.len(),
+            scripted_scenarios.len(),
+            "camera script scenarios repeat"
+        );
+        assert_eq!(
+            scripted_scenarios, manifested_scenarios,
+            "every manifested Map needs exactly one executable camera script"
+        );
+        for &(script_path, scenario_name) in CAMERA_ROUTE_SCRIPTS {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(script_path);
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
+            let steps: Vec<WalkStep> = ron::from_str(&text)
+                .unwrap_or_else(|error| panic!("cannot parse {}: {error}", path.display()));
+            for step in &steps {
+                validate_step(step)
+                    .unwrap_or_else(|error| panic!("{} invalid: {error}", path.display()));
+            }
+
+            let route = manifest
+                .routes
+                .iter()
+                .find(|route| route.scenario == scenario_name)
+                .unwrap_or_else(|| panic!("{scenario_name} is absent from the manifest"));
+            let require_exact_arrival_proof = scenario_name != "Two Rings";
+            let launches = steps
+                .iter()
+                .filter_map(|step| match step {
+                    WalkStep::StartScenario {
+                        name,
+                        seed,
+                        suppress_hostiles,
+                    } => Some((name.as_str(), *seed, *suppress_hostiles)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                launches,
+                vec![(scenario_name, route.seed, scenario_name == "Mountain Range")],
+                "only Mountain Range may remove hostiles from map-presentation evidence"
+            );
+            assert!(steps.contains(&WalkStep::Key("C".to_owned())));
+            assert!(
+                steps
+                    .iter()
+                    .filter(|step| matches!(step, WalkStep::OrbitCamera { .. }))
+                    .count()
+                    >= 2,
+                "{scenario_name} needs multiple player-authored azimuths"
+            );
+            assert!(
+                steps
+                    .iter()
+                    .filter(|step| matches!(step, WalkStep::Capture(_)))
+                    .count()
+                    >= 3,
+                "{scenario_name} needs before/after multi-azimuth evidence"
+            );
+
+            let mut movement_steps = 0_usize;
+            let mut pending_proof = None;
+            let mut saw_idle_after_click = false;
+            for step in &steps {
+                let destination = match step {
+                    WalkStep::ClickAnchor { name, expected } => {
+                        Some(CameraRouteDestination::Anchor {
+                            name: name.clone(),
+                            expected: *expected,
+                        })
+                    }
+                    WalkStep::ClickTile {
+                        q,
+                        r,
+                        level: Some(level),
+                    } => Some(CameraRouteDestination::Exact(CameraRouteTile {
+                        q: *q,
+                        r: *r,
+                        level: *level,
+                    })),
+                    WalkStep::ClickTile { level: None, .. } => {
+                        panic!(
+                            "{} contains an ambiguous camera-route click",
+                            path.display()
+                        )
+                    }
+                    _ => None,
+                };
+                if let Some(destination) = destination {
+                    movement_steps += 1;
+                    assert!(
+                        route
+                            .points
+                            .iter()
+                            .any(|point| point.destination == destination),
+                        "{} uses {destination:?}, absent from its stale-checked manifest",
+                        path.display()
+                    );
+                    if require_exact_arrival_proof {
+                        assert!(
+                            pending_proof.is_none(),
+                            "{} clicks another destination before proving the previous movement",
+                            path.display()
+                        );
+                        pending_proof = Some(match destination {
+                            CameraRouteDestination::Anchor { expected, .. }
+                            | CameraRouteDestination::Exact(expected) => expected,
+                        });
+                        saw_idle_after_click = false;
+                    }
+                    continue;
+                }
+
+                match step {
+                    WalkStep::AwaitPartyIdle { .. } if pending_proof.is_some() => {
+                        saw_idle_after_click = true;
+                    }
+                    WalkStep::AssertSelectedAt { expected } if require_exact_arrival_proof => {
+                        let clicked = pending_proof.take().unwrap_or_else(|| {
+                            panic!(
+                                "{} proves a position without a pending movement",
+                                path.display()
+                            )
+                        });
+                        assert!(
+                            saw_idle_after_click,
+                            "{} proves {clicked:?} before awaiting party idle",
+                            path.display()
+                        );
+                        assert_eq!(
+                            *expected,
+                            clicked,
+                            "{} proves a different surface than it clicked",
+                            path.display()
+                        );
+                    }
+                    WalkStep::Capture(name) => assert!(
+                        pending_proof.is_none(),
+                        "{} captures {name:?} before proving its movement destination",
+                        path.display()
+                    ),
+                    _ => {}
+                }
+            }
+            assert!(
+                pending_proof.is_none(),
+                "{} ends with an unproved movement destination",
+                path.display()
+            );
+            assert!(
+                movement_steps > 0,
+                "{scenario_name} has no real movement leg"
+            );
+            assert!(steps.iter().any(|step| matches!(
+                step,
+                WalkStep::AwaitPartyIdle { max_frames } if *max_frames > 0
+            )));
+        }
+    }
+
+    #[test]
+    fn grouped_two_rings_walks_review_every_region_from_a_proved_destination() {
+        let manifest: CameraRouteManifest =
+            ron::from_str(include_str!("../../../walks/camera_routes.ron"))
+                .expect("the camera route manifest parses");
+        let route = manifest
+            .routes
+            .iter()
+            .find(|route| route.scenario == "Two Rings")
+            .expect("Two Rings is present in the route manifest");
+        let expected = route
+            .points
+            .iter()
+            .map(|point| point.destination.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(expected.len(), 19, "Ring19 needs one point per region");
+
+        let mut reviewed_counts = std::collections::BTreeMap::new();
+        for script_path in TWO_RINGS_ROUTE_SCRIPTS {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(script_path);
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
+            let steps: Vec<WalkStep> = ron::from_str(&text)
+                .unwrap_or_else(|error| panic!("cannot parse {}: {error}", path.display()));
+            for step in &steps {
+                validate_step(step)
+                    .unwrap_or_else(|error| panic!("{} invalid: {error}", path.display()));
+            }
+            let launches = steps
+                .iter()
+                .filter_map(|step| match step {
+                    WalkStep::StartScenario {
+                        name,
+                        seed,
+                        suppress_hostiles,
+                    } => Some((name.as_str(), *seed, *suppress_hostiles)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                !launches.is_empty(),
+                "{} has no exact Two Rings launch",
+                path.display()
+            );
+            assert!(
+                launches.iter().all(|(name, seed, suppress)| {
+                    *name == "Two Rings" && *seed == route.seed && !suppress
+                }),
+                "{} must restart only the exact seed-pinned Two Rings scenario",
+                path.display()
+            );
+            let captures = steps
+                .iter()
+                .filter(|step| matches!(step, WalkStep::Capture(_)))
+                .count();
+            assert!(
+                captures <= 10,
+                "{} exceeds the ten-frame review budget",
+                path.display()
+            );
+            let mut pending_destination = None;
+            let mut saw_idle_after_click = false;
+            let mut last_proved_destination = None;
+            for step in &steps {
+                let destination = match step {
+                    WalkStep::ClickAnchor { name, expected } => {
+                        Some(CameraRouteDestination::Anchor {
+                            name: name.clone(),
+                            expected: *expected,
+                        })
+                    }
+                    WalkStep::ClickTile {
+                        q,
+                        r,
+                        level: Some(level),
+                    } => Some(CameraRouteDestination::Exact(CameraRouteTile {
+                        q: *q,
+                        r: *r,
+                        level: *level,
+                    })),
+                    _ => None,
+                };
+                if let Some(destination) = destination {
+                    assert!(
+                        pending_destination.is_none(),
+                        "{} starts a second movement before proving the first destination",
+                        path.display()
+                    );
+                    assert!(
+                        route
+                            .points
+                            .iter()
+                            .any(|point| point.destination == destination),
+                        "{} uses {destination:?}, absent from the stale-checked Two Rings manifest",
+                        path.display()
+                    );
+                    pending_destination = Some(destination);
+                    saw_idle_after_click = false;
+                    last_proved_destination = None;
+                    continue;
+                }
+
+                match step {
+                    WalkStep::AwaitPartyIdle { .. } if pending_destination.is_some() => {
+                        saw_idle_after_click = true;
+                    }
+                    WalkStep::AssertSelectedAt { expected } => {
+                        let destination = pending_destination.take().unwrap_or_else(|| {
+                            panic!(
+                                "{} proves a position without a pending movement",
+                                path.display()
+                            )
+                        });
+                        assert!(
+                            saw_idle_after_click,
+                            "{} proves {destination:?} before awaiting party idle",
+                            path.display()
+                        );
+                        let clicked = match destination {
+                            CameraRouteDestination::Anchor { expected, .. }
+                            | CameraRouteDestination::Exact(expected) => expected,
+                        };
+                        assert_eq!(
+                            *expected,
+                            clicked,
+                            "{} proves a different surface than it clicked",
+                            path.display()
+                        );
+                        last_proved_destination = Some(destination);
+                    }
+                    WalkStep::Capture(name) => {
+                        assert!(
+                            pending_destination.is_none(),
+                            "{} captures {name:?} before proving its movement destination",
+                            path.display()
+                        );
+                        if let Some(destination) = &last_proved_destination {
+                            *reviewed_counts.entry(destination.clone()).or_insert(0usize) += 1;
+                        }
+                    }
+                    WalkStep::StartScenario { .. } => {
+                        assert!(
+                            pending_destination.is_none(),
+                            "{} changes scenarios before proving its movement destination",
+                            path.display()
+                        );
+                        last_proved_destination = None;
+                    }
+                    WalkStep::Key(key) if key == "Backspace" => {
+                        assert!(
+                            pending_destination.is_none(),
+                            "{} changes scenarios before proving its movement destination",
+                            path.display()
+                        );
+                        last_proved_destination = None;
+                    }
+                    _ => {}
+                }
+            }
+            assert!(
+                pending_destination.is_none(),
+                "{} ends with an unproved movement destination",
+                path.display()
+            );
+        }
+
+        let actual = reviewed_counts
+            .keys()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            actual, expected,
+            "grouped Two Rings walks must capture every stale-checked region destination"
+        );
+        for (destination, captures) in reviewed_counts {
+            assert!(
+                captures >= 2,
+                "Two Rings destination {destination:?} needs two reviewed azimuths, found {captures}"
+            );
+        }
+    }
+
+    #[test]
+    fn review_viewport_is_explicit_and_positive() {
+        assert_eq!(
+            parse_viewport("1280x720@2"),
+            hex_ui::ReviewViewport::new(1280, 720, 2.0)
+        );
+        assert_eq!(
+            parse_viewport("1920x1080@1"),
+            hex_ui::ReviewViewport::new(1920, 1080, 1.0)
+        );
+        for invalid in [
+            "",
+            "1280x720",
+            "1280X720@1",
+            "x720@1",
+            "1280x@1",
+            "0x720@1",
+            "1280x0@1",
+            "1280x720@0",
+        ] {
+            assert!(parse_viewport(invalid).is_err(), "{invalid:?} should fail");
+        }
+    }
+
+    #[test]
+    fn tile_click_resolution_requires_an_exact_stacked_surface() {
+        let mut world = World::new();
+        let low = world.spawn_empty().id();
+        let high = world.spawn_empty().id();
+        let elsewhere = world.spawn_empty().id();
+        let coord = HexCoord::from_axial(4, -3);
+        let low_pos = TilePos::new(coord, 2);
+        let high_pos = TilePos::new(coord, 8);
+        let elsewhere_pos = TilePos::new(HexCoord::from_axial(5, -3), 2);
+        let open = Headroom(8);
+        let tiles = [
+            (low, low_pos, open),
+            (high, high_pos, open),
+            (elsewhere, elsewhere_pos, open),
+        ];
+
+        let ambiguous = resolve_tile_click_target(
+            tiles
+                .iter()
+                .map(|(entity, pos, headroom)| (*entity, pos, headroom)),
+            coord,
+            None,
+        )
+        .expect_err("a stacked coordinate without a level must be refused");
+        assert!(ambiguous.contains("stacked levels [2, 8]"));
+
+        assert_eq!(
+            resolve_tile_click_target(
+                tiles
+                    .iter()
+                    .map(|(entity, pos, headroom)| (*entity, pos, headroom)),
+                coord,
+                Some(8),
+            ),
+            Ok(Some((high, high_pos)))
+        );
+        let missing_level = resolve_tile_click_target(
+            tiles
+                .iter()
+                .map(|(entity, pos, headroom)| (*entity, pos, headroom)),
+            coord,
+            Some(7),
+        )
+        .expect_err("a missing exact level must not fall back to another run");
+        assert!(missing_level.contains("available levels are [2, 8]"));
+
+        let buried = Headroom(0);
+        assert_eq!(
+            resolve_tile_click_target(
+                [(low, &low_pos, &buried), (high, &high_pos, &open)].into_iter(),
+                coord,
+                None,
+            ),
+            Ok(Some((high, high_pos))),
+            "buried material runs are not pointer-clickable surfaces"
+        );
+    }
+
+    #[test]
+    fn tile_click_resolution_waits_only_before_any_terrain_exists() {
+        let coord = HexCoord::from_axial(1, 2);
+        assert_eq!(
+            resolve_tile_click_target(std::iter::empty(), coord, None),
+            Ok(None)
+        );
+
+        let mut world = World::new();
+        let entity = world.spawn_empty().id();
+        let pos = TilePos::new(HexCoord::ORIGIN, 1);
+        let open = Headroom(8);
+        let missing =
+            resolve_tile_click_target(std::iter::once((entity, &pos, &open)), coord, None)
+                .expect_err("a missing coordinate cannot appear after terrain publication");
+        assert!(missing.contains("names no published terrain coordinate"));
+    }
+
+    #[test]
+    fn tile_click_uses_the_real_primary_pointer_observer_path() {
+        let mut app = App::new();
+        let window = app.world_mut().spawn(Window::default()).id();
+        let target = app.world_mut().spawn_empty().id();
+        app.init_resource::<PointerRecord>()
+            .insert_resource(PointerRequest { target, window })
+            .add_observer(record_pointer_click)
+            .add_systems(Update, issue_requested_pointer_click);
+
+        app.update();
+
+        let record = app.world().resource::<PointerRecord>();
+        assert_eq!(record.target, Some(target));
+        assert!(record.primary);
+    }
+
+    #[test]
+    fn party_idle_uses_stable_party_domain_facts_and_the_command_queue() {
+        let mut app = App::new();
+        app.init_resource::<Party>()
+            .init_resource::<UnitRegistry>()
+            .init_resource::<CommandQueue>()
+            .init_resource::<PartyIdleRecord>()
+            .add_systems(Update, record_party_idle);
+
+        app.update();
+        assert_eq!(
+            app.world().resource::<PartyIdleRecord>().0,
+            None,
+            "an empty party is not ready rather than vacuously idle"
+        );
+
+        let member = hex_core::UnitId(17);
+        let entity = app.world_mut().spawn_empty().id();
+        app.world_mut().resource_mut::<Party>().members.push(member);
+        app.world_mut()
+            .resource_mut::<UnitRegistry>()
+            .register(member, entity);
+        app.update();
+        assert_eq!(app.world().resource::<PartyIdleRecord>().0, Some(true));
+
+        app.world_mut()
+            .resource_mut::<CommandQueue>()
+            .push(hex_core::IssuedCommand {
+                seat: hex_core::PlayerSeat::default(),
+                command: hex_core::GameCommand::EndTurn { unit: member },
+            });
+        app.update();
+        assert_eq!(app.world().resource::<PartyIdleRecord>().0, Some(false));
+
+        let _ = app.world_mut().resource_mut::<CommandQueue>().pop();
+        app.world_mut().entity_mut(entity).insert(Busy);
+        app.update();
+        assert_eq!(app.world().resource::<PartyIdleRecord>().0, Some(false));
+
+        app.world_mut().entity_mut(entity).remove::<Busy>();
+        app.update();
+        assert_eq!(app.world().resource::<PartyIdleRecord>().0, Some(true));
+    }
+
+    #[test]
+    fn selected_position_proof_requires_authority_and_camera_projection_to_agree() {
+        let mut app = App::new();
+        app.init_resource::<SelectedAtRecord>()
+            .add_systems(Update, record_selected_at);
+        let entity = app
+            .world_mut()
+            .spawn((
+                Selected,
+                StandsOn(hex_units::Standing {
+                    pos: TilePos::ORIGIN,
+                    span: hex_core::HexSpan::new(0.0, 1.0),
+                }),
+                CameraFocusTarget::new(TilePos::ORIGIN),
+            ))
+            .id();
+
+        app.update();
+        assert!(app
+            .world()
+            .resource::<SelectedAtRecord>()
+            .0
+            .as_ref()
+            .expect("position proof ran")
+            .is_ok());
+
+        let wrong = TilePos::new(HexCoord::from_axial(1, 0), 0);
+        app.world_mut()
+            .entity_mut(entity)
+            .insert(CameraFocusTarget::new(wrong));
+        app.update();
+        let reason = app
+            .world()
+            .resource::<SelectedAtRecord>()
+            .0
+            .as_ref()
+            .expect("position proof reran")
+            .as_ref()
+            .expect_err("stale camera focus must fail");
+        assert!(reason.contains("camera focus remains"), "{reason}");
+
+        app.world_mut().entity_mut(entity).remove::<Selected>();
+        app.update();
+        let reason = app
+            .world()
+            .resource::<SelectedAtRecord>()
+            .0
+            .as_ref()
+            .expect("missing-selection proof ran")
+            .as_ref()
+            .expect_err("missing selection must fail");
+        assert!(reason.contains("exactly one selected unit"), "{reason}");
     }
 
     #[test]
@@ -1209,8 +2927,10 @@ mod tests {
         for name in [
             "Splash",
             "Title",
+            "Sandbox",
+            "Settings",
             "CharacterCreator",
-            "CombatLab",
+            "SpellCreator",
             "LatticeDemo",
             "Loading",
             "Gameplay",
@@ -1223,13 +2943,15 @@ mod tests {
     #[test]
     fn the_shipped_walk_scripts_parse_and_validate() {
         for script in [
-            "../../walks/menus.ron",
-            "../../walks/gameplay.ron",
-            "../../walks/ability_lab.ron",
-            "../../walks/raider_mirror.ron",
+            "../../walks/gameplay_ui.ron",
             "../../walks/waterfall.ron",
             "../../walks/forest.ron",
-        ] {
+            "../../walks/readme_party_trial.ron",
+            "../../walks/readme_creator_sandbox.ron",
+        ]
+        .into_iter()
+        .chain(CAMERA_ROUTE_SCRIPTS.iter().map(|(path, _)| *path))
+        {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(script);
             let text = std::fs::read_to_string(&path)
                 .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
@@ -1241,6 +2963,52 @@ mod tests {
                     .unwrap_or_else(|error| panic!("{} invalid: {error}", path.display()));
             }
         }
+    }
+
+    #[test]
+    fn scoped_gameplay_acceptance_stays_within_the_frame_budget() {
+        let steps: Vec<WalkStep> = ron::from_str(include_str!("../../../walks/gameplay_ui.ron"))
+            .expect("the gameplay UI walk parses");
+        let captures = steps
+            .iter()
+            .filter(|step| matches!(step, WalkStep::Capture(_) | WalkStep::ReviewCapture { .. }))
+            .count();
+        let tasks = steps
+            .iter()
+            .filter_map(|step| match step {
+                WalkStep::ReviewCapture { task, .. } => Some(*task),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            captures, 10,
+            "scoped gameplay acceptance must capture exactly 10 frames"
+        );
+        assert_eq!(
+            tasks.len(),
+            captures,
+            "every scoped frame must use a fail-closed task contract"
+        );
+        let task_ids = tasks
+            .iter()
+            .map(|task| task.contract().id)
+            .collect::<Vec<_>>();
+        let expected = [
+            "gameplay-exploration",
+            "gameplay-player-turn-max",
+            "gameplay-hostile-turn",
+            "decision-disable",
+            "aiming-blocked",
+            "gameplay-activity-tabs",
+            "gameplay-custom-hud-visibility",
+            "gameplay-character-main-view",
+            "hud-hidden-required",
+            "gameplay-compact-temporary-surface",
+        ];
+        assert_eq!(
+            task_ids, expected,
+            "the scoped HUD route must preserve its authored presentation sequence"
+        );
     }
 
     #[test]
@@ -1260,6 +3028,7 @@ mod tests {
         assert!(steps.contains(&WalkStep::StartScenario {
             name: "Forest".to_owned(),
             seed: Some(hero_seed),
+            suppress_hostiles: false,
         }));
     }
 
@@ -1285,7 +3054,17 @@ mod tests {
         let mut checked = 0;
         let mut launches_default = false;
         let mut continues_save = false;
-        for script in ["../../walks/menus.ron", "../../walks/gameplay.ron"] {
+        let mut launches_sandbox = false;
+        for script in [
+            "../../walks/gameplay_ui.ron",
+            "../../walks/waterfall.ron",
+            "../../walks/forest.ron",
+            "../../walks/readme_party_trial.ron",
+            "../../walks/readme_creator_sandbox.ron",
+        ]
+        .into_iter()
+        .chain(CAMERA_ROUTE_SCRIPTS.iter().map(|(path, _)| *path))
+        {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(script);
             let text = std::fs::read_to_string(&path)
                 .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
@@ -1306,11 +3085,14 @@ mod tests {
                 if matches!(step, WalkStep::Click { name, .. } if name == "Continue") {
                     continues_save = true;
                 }
+                if matches!(step, WalkStep::Click { name, .. } if name == "Start Sandbox") {
+                    launches_sandbox = true;
+                }
             }
         }
         assert!(
-            checked > 0 || (launches_default && continues_save),
-            "walks must launch configured scenarios directly or exercise New Game and Continue"
+            checked > 0 || launches_default || continues_save || launches_sandbox,
+            "the UI walk must exercise at least one real application launch path"
         );
     }
 }

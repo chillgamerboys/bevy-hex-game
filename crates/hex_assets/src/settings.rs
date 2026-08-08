@@ -38,12 +38,22 @@ pub struct CameraSettings {
     pub character_focus_height: f32,
     /// Initial orbit radius when entering the close character view.
     pub character_radius: f32,
-    /// Initial close-view pitch as a fraction from the horizon toward straight down.
+    /// Radius of the conservative camera probe used to protect the near plane.
+    pub character_probe_radius: f32,
+    /// Clearance kept between the close camera and the first obstructing terrain run.
+    pub character_collision_margin: f32,
+    /// World units per second used when restoring the close camera after an
+    /// obstruction clears.
+    pub character_restoration_speed: f32,
+    /// Seconds of continuous outward clearance required before an automatically
+    /// retracted close camera begins restoring its desired radius.
+    pub character_collision_release_delay: f32,
+    /// Effective Character-camera radius at or below which the selected unit is
+    /// hidden so a near-first-person view cannot be occluded by its own mesh.
+    pub character_self_hide_radius: f32,
+    /// Initial close-view pitch as a signed quarter-turn fraction: -1.0 is straight
+    /// up, 0.0 is the horizon, and 1.0 is straight down.
     pub character_pitch: f32,
-    /// Closest the close view may tilt toward the horizon, 0.0–1.0.
-    pub character_min_pitch: f32,
-    /// Furthest the close view may tilt toward straight down, 0.0–1.0.
-    pub character_max_pitch: f32,
     /// WASD pan speed, scaled by zoom distance so panning feels the same when
     /// zoomed out as when zoomed in.
     pub pan_speed: f32,
@@ -63,6 +73,13 @@ pub struct CameraSettings {
 }
 
 impl CameraSettings {
+    /// Largest supported conservative Character-camera probe, in world units.
+    ///
+    /// This bounds the spatial-neighbour expansion used by the public-terrain
+    /// camera index while still permitting a probe as wide as one voxel's full
+    /// corner-to-corner diameter.
+    pub const MAX_CHARACTER_PROBE_RADIUS: f32 = 2.0;
+
     /// Checks camera geometry and controls before settings replace the active asset.
     pub fn validate(&self) -> Result<(), String> {
         validate_finite_vec3("gameplay_eye", self.gameplay_eye)?;
@@ -85,19 +102,46 @@ impl CameraSettings {
         if !self.character_radius.is_finite() || self.character_radius <= 0.0 {
             return Err("character_radius must be positive and finite".to_owned());
         }
-        validate_unit_interval("character_pitch", self.character_pitch)?;
-        validate_unit_interval("character_min_pitch", self.character_min_pitch)?;
-        validate_unit_interval("character_max_pitch", self.character_max_pitch)?;
-        if self.character_min_pitch > self.character_max_pitch {
-            return Err("character_min_pitch must not exceed character_max_pitch".to_owned());
+        if !self.character_probe_radius.is_finite()
+            || self.character_probe_radius <= 0.0
+            || self.character_probe_radius > Self::MAX_CHARACTER_PROBE_RADIUS
+        {
+            return Err(format!(
+                "character_probe_radius must be finite and within 0.0..={}",
+                Self::MAX_CHARACTER_PROBE_RADIUS
+            ));
         }
-        if !(self.character_min_pitch..=self.character_max_pitch).contains(&self.character_pitch) {
+        if self.character_probe_radius > self.character_focus_height {
+            return Err("character_probe_radius must not exceed character_focus_height".to_owned());
+        }
+        validate_nonnegative(
+            "character_collision_margin",
+            self.character_collision_margin,
+        )?;
+        if self.character_collision_margin >= self.character_radius {
+            return Err("character_collision_margin must be less than character_radius".to_owned());
+        }
+        if !self.character_restoration_speed.is_finite() || self.character_restoration_speed <= 0.0
+        {
+            return Err("character_restoration_speed must be positive and finite".to_owned());
+        }
+        validate_nonnegative(
+            "character_collision_release_delay",
+            self.character_collision_release_delay,
+        )?;
+        let character_self_show_radius =
+            self.character_self_hide_radius + self.character_collision_margin * 0.25;
+        if !self.character_self_hide_radius.is_finite()
+            || self.character_self_hide_radius < self.character_probe_radius
+            || self.character_self_hide_radius >= self.character_radius
+            || character_self_show_radius >= self.character_radius
+        {
             return Err(
-                "character_pitch must be within character_min_pitch..=character_max_pitch"
+                "character_self_hide_radius must be finite, at least character_probe_radius, and leave its collision-margin exit hysteresis below character_radius"
                     .to_owned(),
             );
         }
-
+        validate_range("character_pitch", self.character_pitch, -1.0, 1.0, true)?;
         validate_nonnegative("pan_speed", self.pan_speed)?;
         validate_nonnegative("pan_speed_offset", self.pan_speed_offset)?;
         validate_unit_interval("min_pitch", self.min_pitch)?;
@@ -130,9 +174,12 @@ struct UnvalidatedCameraSettings {
     gameplay_focus: (f32, f32, f32),
     character_focus_height: f32,
     character_radius: f32,
+    character_probe_radius: f32,
+    character_collision_margin: f32,
+    character_restoration_speed: f32,
+    character_collision_release_delay: f32,
+    character_self_hide_radius: f32,
     character_pitch: f32,
-    character_min_pitch: f32,
-    character_max_pitch: f32,
     pan_speed: f32,
     pan_speed_offset: f32,
     min_pitch: f32,
@@ -153,9 +200,12 @@ impl<'de> Deserialize<'de> for CameraSettings {
             gameplay_focus: raw.gameplay_focus,
             character_focus_height: raw.character_focus_height,
             character_radius: raw.character_radius,
+            character_probe_radius: raw.character_probe_radius,
+            character_collision_margin: raw.character_collision_margin,
+            character_restoration_speed: raw.character_restoration_speed,
+            character_collision_release_delay: raw.character_collision_release_delay,
+            character_self_hide_radius: raw.character_self_hide_radius,
             character_pitch: raw.character_pitch,
-            character_min_pitch: raw.character_min_pitch,
-            character_max_pitch: raw.character_max_pitch,
             pan_speed: raw.pan_speed,
             pan_speed_offset: raw.pan_speed_offset,
             min_pitch: raw.min_pitch,
@@ -1167,7 +1217,7 @@ pub struct CombatSettings {
 }
 
 /// The initiative options from `docs/design/game.md` § Open questions.
-#[derive(Reflect, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Reflect, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InitiativePolicy {
     /// Today's placeholder: a flat number on the unit, ties by stable id.
     FlatComponent,
@@ -1182,7 +1232,7 @@ pub enum InitiativePolicy {
 }
 
 /// The action-economy options from the design's open questions.
-#[derive(Reflect, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Reflect, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActionEconomy {
     /// Today's shape: a movement budget plus one action per turn.
     MoveAndAction,
@@ -1195,7 +1245,7 @@ pub enum ActionEconomy {
 }
 
 /// Whether channelling trickles passively or only bursts on the action.
-#[derive(Reflect, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Reflect, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannellingTrickle {
     /// Today's rule: mana returns only when the channel action is taken.
     BurstOnly,
@@ -1204,7 +1254,7 @@ pub enum ChannellingTrickle {
 }
 
 /// How a fight can end before one side is annihilated.
-#[derive(Reflect, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Reflect, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoutPolicy {
     /// Today's rule: fights end only by distance or destruction.
     FightToTheEnd,
@@ -1362,6 +1412,7 @@ mod tests {
 
     use bevy::asset::{AssetLoadFailedEvent, AssetPlugin};
     use bevy::ecs::system::RunSystemOnce;
+    use hex_test_app::HeadlessAppBuilder;
 
     use crate::loader::{choose_settings, LoadSettings, SelectSettings, SettingsRegistry};
 
@@ -1423,9 +1474,36 @@ mod tests {
         );
         assert!((camera.character_focus_height - 0.4).abs() < f32::EPSILON);
         assert!((camera.character_radius - 7.0).abs() < f32::EPSILON);
+        assert!((camera.character_probe_radius - 0.1).abs() < f32::EPSILON);
+        assert!((camera.character_collision_margin - 0.35).abs() < f32::EPSILON);
+        assert!((camera.character_restoration_speed - 8.0).abs() < f32::EPSILON);
+        assert!((camera.character_collision_release_delay - 0.2).abs() < f32::EPSILON);
+        assert!((camera.character_self_hide_radius - 1.0).abs() < f32::EPSILON);
         assert!((camera.character_pitch - 0.3).abs() < f32::EPSILON);
-        assert!((camera.character_min_pitch - 0.05).abs() < f32::EPSILON);
-        assert!((camera.character_max_pitch - 0.95).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn a_non_default_bounded_camera_probe_is_valid() {
+        let alternate = CAMERA_RON
+            .replacen(
+                "character_focus_height: 0.4",
+                "character_focus_height: 2.0",
+                1,
+            )
+            .replacen(
+                "character_probe_radius: 0.1",
+                "character_probe_radius: 1.8",
+                1,
+            )
+            .replacen(
+                "character_self_hide_radius: 1.0",
+                "character_self_hide_radius: 2.0",
+                1,
+            );
+        let camera: CameraSettings =
+            ron::from_str(&alternate).expect("a bounded wide probe should remain configurable");
+        assert!((camera.character_probe_radius - 1.8).abs() < f32::EPSILON);
+        assert!((camera.character_self_hide_radius - 2.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -1462,24 +1540,74 @@ mod tests {
                 "character_radius",
             ),
             (
+                "character_probe_radius: 0.1",
+                "character_probe_radius: 0.0",
+                "character_probe_radius",
+            ),
+            (
+                "character_probe_radius: 0.1",
+                "character_probe_radius: 2.1",
+                "character_probe_radius",
+            ),
+            (
+                "character_probe_radius: 0.1",
+                "character_probe_radius: 0.5",
+                "character_focus_height",
+            ),
+            (
+                "character_collision_margin: 0.35",
+                "character_collision_margin: -0.1",
+                "character_collision_margin",
+            ),
+            (
+                "character_collision_margin: 0.35",
+                "character_collision_margin: 7.0",
+                "character_collision_margin",
+            ),
+            (
+                "character_restoration_speed: 8.0",
+                "character_restoration_speed: 0.0",
+                "character_restoration_speed",
+            ),
+            (
+                "character_collision_release_delay: 0.2",
+                "character_collision_release_delay: -0.1",
+                "character_collision_release_delay",
+            ),
+            (
+                "character_collision_release_delay: 0.2",
+                "character_collision_release_delay: NaN",
+                "character_collision_release_delay",
+            ),
+            (
+                "character_self_hide_radius: 1.0",
+                "character_self_hide_radius: 0.0",
+                "character_self_hide_radius",
+            ),
+            (
+                "character_self_hide_radius: 1.0",
+                "character_self_hide_radius: 0.05",
+                "character_self_hide_radius",
+            ),
+            (
+                "character_self_hide_radius: 1.0",
+                "character_self_hide_radius: 7.0",
+                "character_self_hide_radius",
+            ),
+            (
+                "character_self_hide_radius: 1.0",
+                "character_self_hide_radius: 6.95",
+                "character_self_hide_radius",
+            ),
+            (
                 "character_pitch: 0.3",
-                "character_pitch: 1.0",
+                "character_pitch: -1.1",
                 "character_pitch",
             ),
             (
-                "character_min_pitch: 0.05",
-                "character_min_pitch: -0.1",
-                "character_min_pitch",
-            ),
-            (
-                "character_max_pitch: 0.95",
-                "character_max_pitch: 1.1",
-                "character_max_pitch",
-            ),
-            (
-                "character_min_pitch: 0.05",
-                "character_min_pitch: 0.96",
-                "character_min_pitch",
+                "character_pitch: 0.3",
+                "character_pitch: 1.1",
+                "character_pitch",
             ),
             ("pan_speed: 0.4", "pan_speed: -0.1", "pan_speed"),
             (
@@ -1510,6 +1638,30 @@ mod tests {
             assert!(
                 error.to_string().contains(expected),
                 "{replacement:?} returned an unrelated error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn removed_adaptive_pitch_settings_are_not_silently_accepted() {
+        for field in [
+            "character_min_effective_radius",
+            "character_min_pitch",
+            "character_max_pitch",
+            "character_adaptive_max_pitch",
+            "character_pitch_search_step",
+            "character_pitch_restoration_speed",
+        ] {
+            let stale = CAMERA_RON.replacen(
+                "character_collision_release_delay: 0.2,",
+                &format!("character_collision_release_delay: 0.2,\n    {field}: 0.5,"),
+                1,
+            );
+            let error = ron::from_str::<CameraSettings>(&stale)
+                .expect_err("removed adaptive-pitch settings must be rejected");
+            assert!(
+                error.to_string().contains(field),
+                "stale {field} returned an unrelated error: {error}"
             );
         }
     }
@@ -2055,19 +2207,20 @@ mod tests {
         fs::write(&lighting_path, LIGHTING_RON)
             .expect("the valid lighting fixture should be written");
 
-        let mut app = App::new();
-        app.add_plugins((
-            MinimalPlugins,
-            AssetPlugin {
+        let mut builder = HeadlessAppBuilder::new()
+            .with_minimal_plugins()
+            .with_asset_plugin_config(AssetPlugin {
                 file_path: root.path().to_string_lossy().into_owned(),
                 ..default()
-            },
-        ));
-        app.load_settings::<LightingSettings>("lighting.ron", &["ron"]);
-        app.init_resource::<SawLightingLoadFailure>();
-        app.add_systems(Update, record_lighting_load_failure);
-        app.finish();
-        app.cleanup();
+            });
+        builder
+            .app_mut()
+            .load_settings::<LightingSettings>("lighting.ron", &["ron"]);
+        builder.app_mut().init_resource::<SawLightingLoadFailure>();
+        builder
+            .app_mut()
+            .add_systems(Update, record_lighting_load_failure);
+        let mut app = builder.build();
 
         assert!(
             update_until(&mut app, |world| world
@@ -2114,19 +2267,20 @@ mod tests {
         fs::write(&lighting_path, LIGHTING_RON)
             .expect("the valid lighting fixture should be written");
 
-        let mut app = App::new();
-        app.add_plugins((
-            MinimalPlugins,
-            AssetPlugin {
+        let mut builder = HeadlessAppBuilder::new()
+            .with_minimal_plugins()
+            .with_asset_plugin_config(AssetPlugin {
                 file_path: root.path().to_string_lossy().into_owned(),
                 ..default()
-            },
-        ));
-        app.select_settings::<LightingSettings>(&["ron"]);
-        app.init_resource::<SawLightingLoadFailure>();
-        app.add_systems(Update, record_lighting_load_failure);
-        app.finish();
-        app.cleanup();
+            });
+        builder
+            .app_mut()
+            .select_settings::<LightingSettings>(&["ron"]);
+        builder.app_mut().init_resource::<SawLightingLoadFailure>();
+        builder
+            .app_mut()
+            .add_systems(Update, record_lighting_load_failure);
+        let mut app = builder.build();
 
         app.world_mut()
             .run_system_once(

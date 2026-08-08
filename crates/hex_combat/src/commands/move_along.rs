@@ -8,7 +8,7 @@ use hex_units::{Footing, HexPathingLine, MovingTo, Standing};
 
 use crate::{CombatData, CommandRefusal, UnitData};
 
-use super::{ActorQuery, TileQuery, Verb};
+use super::{current_occupancy, ActorQuery, TileQuery, Verb};
 
 /// Applies a move, or returns the reason it was refused.
 pub(super) fn apply(
@@ -30,6 +30,7 @@ pub(super) fn apply(
             current: ctx.turn_order.current(),
         });
     }
+    let occupancy = current_occupancy(ctx.occupancy, ctx.reserved);
     let Ok((standing, body, turn, busy, _, _, _)) = actors.get_mut(entity) else {
         return Err(CommandRefusal::MissingUnitData {
             unit,
@@ -60,6 +61,9 @@ pub(super) fn apply(
     let Some(steps) = ground_path(path, standing.0, &footing) else {
         return Err(CommandRefusal::InvalidPath);
     };
+    occupancy
+        .validate_route(path, unit)
+        .map_err(|block| CommandRefusal::Occupied { block })?;
 
     // A route of N surfaces costs N-1 steps.
     let cost = u32::try_from(steps.len().saturating_sub(1)).unwrap_or(u32::MAX);
@@ -76,6 +80,7 @@ pub(super) fn apply(
         turn.movement_left -= cost;
     }
 
+    let destination = steps.last().map(|standing| standing.pos);
     let mut unit_commands = commands.entity(entity);
     if let Some(settings) = ctx.settings {
         let animation: Transformation = HexPathingLine::new(&steps, settings.speed).into();
@@ -86,6 +91,49 @@ pub(super) fn apply(
         unit_commands.insert((MovingTo::new(steps, 0.0), Busy));
     }
     ctx.committed.push(entity);
+    if let Some(destination) = destination {
+        ctx.reserved.insert(unit, destination);
+    }
+    Ok(())
+}
+
+/// Projects an authority-approved route into domain movement and animation.
+pub(super) fn project(
+    ctx: &mut Verb,
+    commands: &mut Commands,
+    tiles: &TileQuery,
+    actors: &mut ActorQuery,
+    unit: UnitId,
+    entity: Entity,
+    path: &[TilePos],
+) -> Result<(), CommandRefusal> {
+    let Ok((standing, body, _, _, _, _, _)) = actors.get_mut(entity) else {
+        return Err(CommandRefusal::MissingUnitData {
+            unit,
+            data: UnitData::EntityRecord,
+        });
+    };
+    let (Some(standing), Some(body), Some(table)) = (standing, body, ctx.table) else {
+        return Err(CommandRefusal::MissingCombatData {
+            data: CombatData::SubstanceTable,
+        });
+    };
+    let footing = Footing::from_tiles(tiles.iter(), table, *body, ctx.blockers);
+    let Some(steps) = ground_path(path, standing.0, &footing) else {
+        return Err(CommandRefusal::InvalidPath);
+    };
+    let destination = steps.last().map(|standing| standing.pos);
+    let mut unit_commands = commands.entity(entity);
+    if let Some(settings) = ctx.settings {
+        let animation: Transformation = HexPathingLine::new(&steps, settings.speed).into();
+        unit_commands.insert((animation, MovingTo::new(steps, settings.speed), Busy));
+    } else {
+        unit_commands.insert((MovingTo::new(steps, 0.0), Busy));
+    }
+    ctx.committed.push(entity);
+    if let Some(destination) = destination {
+        ctx.reserved.insert(unit, destination);
+    }
     Ok(())
 }
 

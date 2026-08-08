@@ -1,0 +1,55 @@
+// Ordinary-network Character traversal across the north-west river source chain.
+// The script uses only stale-checked generated anchors and real pointer movement.
+[
+    AwaitScreen("Title"),
+    StartScenario(name: "Two Rings", seed: Some(1592598566)),
+    AwaitScreen("Gameplay"),
+    AwaitTerrain,
+    Key("H"),
+    Key("C"),
+    Settle(60),
+    ClickAnchor(name: "waterfall_a_fall_overlook", expected: (q: -4, r: -20, level: 26)),
+    AwaitPartyIdle(max_frames: 3600),
+    AssertSelectedAt(expected: (q: -4, r: -20, level: 26)),
+    Settle(45),
+    Capture("01-two-rings-waterfall-a-front"),
+    OrbitCamera(yaw_turns: 0.33333334),
+    Settle(45),
+    Capture("02-two-rings-waterfall-a-side"),
+    ClickAnchor(name: "mountains_b_high_pass", expected: (q: 10, r: -55, level: 21)),
+    AwaitPartyIdle(max_frames: 4800),
+    AssertSelectedAt(expected: (q: 10, r: -55, level: 21)),
+    Settle(45),
+    Capture("03-two-rings-mountains-b-front"),
+    // Continue from absolute +120° to -120° around the open side. Subtracting
+    // 120° would return to the outward-looking launch yaw and show only sky.
+    OrbitCamera(yaw_turns: 0.33333334),
+    Settle(45),
+    Capture("04-two-rings-mountains-b-side"),
+    // Restore launch yaw so the reviewed Mountains C/Frozen Hills inputs do not
+    // change merely because this earlier checkpoint gained a useful second view.
+    OrbitCamera(yaw_turns: 0.33333334),
+    Settle(15),
+    ClickAnchor(name: "mountains_c_stream_fall_overlook", expected: (q: 19, r: -51, level: 20)),
+    AwaitPartyIdle(max_frames: 3600),
+    AssertSelectedAt(expected: (q: 19, r: -51, level: 20)),
+    Settle(45),
+    Capture("05-two-rings-mountains-c-front"),
+    // Keep the second stream view on the open side of the mountain wall.
+    OrbitCamera(yaw_turns: -0.16666667),
+    Settle(45),
+    Capture("06-two-rings-mountains-c-side"),
+    // Reset to launch yaw so Frozen Hills reuses its two already-reviewed views.
+    OrbitCamera(yaw_turns: 0.16666667),
+    Settle(15),
+    ClickAnchor(name: "frozen_hills_bridge", expected: (q: 22, r: -22, level: 18)),
+    AwaitPartyIdle(max_frames: 4800),
+    AssertSelectedAt(expected: (q: 22, r: -22, level: 18)),
+    Settle(45),
+    Capture("07-two-rings-frozen-hills-front"),
+    OrbitCamera(yaw_turns: 0.33333334),
+    Settle(45),
+    Capture("08-two-rings-frozen-hills-side"),
+    Key("Backspace"),
+    AwaitScreen("Title"),
+]

@@ -48,7 +48,7 @@ use bevy::prelude::*;
 
 use hex_core::{
     AppSystems, EffectEnd, EffectId, EffectPayload, Mode, PausableSystems, PendingDecision,
-    PersistentEffect, RoundElapsed, Screen, Turn, UnitId,
+    PersistentEffect, RoundElapsed, Screen, TerrainSystems, Turn, UnitId,
 };
 use hex_lattice::LatticeState;
 use hex_units::UnitRegistry;
@@ -368,8 +368,10 @@ fn open_due_decision(
     mut effects: ResMut<PersistentEffects>,
     mut pending: ResMut<PendingDecision>,
     mut events: MessageWriter<CombatEvent>,
+    mut authority: Option<ResMut<crate::authority_host::CombatAuthority>>,
+    resolution: Res<crate::SpellResolutionState>,
 ) {
-    if pending.is_open() {
+    if pending.is_open() || resolution.is_blocking() {
         return;
     }
     let Some(hit) = effects.due.pop_front() else {
@@ -390,6 +392,9 @@ fn open_due_decision(
         count: hit.count,
         source: hit.source,
     };
+    if let Some(authority) = authority.as_deref_mut() {
+        authority.mark_adapter_pending();
+    }
     events.write(CombatEvent::DecisionOpened {
         decider: hit.target,
         source: hit.source,
@@ -446,7 +451,7 @@ fn clear_session_effects(mut effects: ResMut<PersistentEffects>) {
 /// measured in rounds.
 ///
 /// A due hit that never reached the seam has nobody left to answer it, exactly like the
-/// open decision `commands::clear_pending_decision` drops beside it. It is a real loss —
+/// open decision would otherwise outlive combat beside it. It is a real loss —
 /// the tick that produced it was already spent against its effect's countdown — but the
 /// alternative is holding damage for a fight that is over.
 ///
@@ -480,6 +485,7 @@ pub(crate) fn plugin(app: &mut App) {
             // A shared set, not `.before(a_system)`: the tick has to be complete
             // before anything decides what to do with the turn, and `Act` is what
             // "deciding" means. The set boundary also supplies the sync point.
+            .after(TerrainSystems::ConsumeOutcomes)
             .before(crate::CombatSystems::Act)
             .run_if(in_state(Mode::Combat)),
     );

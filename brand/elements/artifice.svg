@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 256 256"
+     width="256"
+     height="256"
+     role="img"
+     aria-labelledby="title desc">
+  <title id="title">Artifice elemental glyph</title>
+  <desc id="desc">A vertical spindle with a centered aperture.</desc>
+  <g fill="none" stroke="#fff" stroke-width="16" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M128 48L178 128L128 208L78 128Z" />
+    <path d="M91 128H165" />
+  </g>
+  <circle cx="128" cy="128" r="15" fill="#fff" />
+</svg>

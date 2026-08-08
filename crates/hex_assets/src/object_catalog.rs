@@ -998,9 +998,9 @@ mod tests {
         ConnectivityPolicy, EffectPart, ObjectBounds, ObjectPart, ObjectPlacement, PaletteSwatch,
         VoxelSurfaceMode, OBJECT_BLUEPRINT_SCHEMA_VERSION,
     };
-    use bevy::asset::{AssetLoadError, AssetLoadFailedEvent, AssetPath, AssetPlugin};
+    use bevy::asset::{AssetLoadError, AssetLoadFailedEvent, AssetPath};
     use bevy::reflect::ReflectRef;
-    use bevy::MinimalPlugins;
+    use hex_test_app::HeadlessAppBuilder;
 
     fn id(value: &str) -> ObjectAssetId {
         ObjectAssetId::new(value).expect("fixture id should use stable-id syntax")
@@ -1229,28 +1229,34 @@ mod tests {
     }
 
     fn resolver_app() -> (App, Handle<ObjectBlueprint>) {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+        let mut builder = HeadlessAppBuilder::new()
+            .with_minimal_plugins()
+            .with_asset_plugin();
+        builder
+            .app_mut()
             .init_asset::<ObjectBlueprint>()
             .init_resource::<SettingsRegistry>()
             .init_resource::<RuntimeArtCatalogStatus>()
             .add_systems(Update, resolve_runtime_art_catalog);
-        app.world_mut()
+        builder
+            .app_mut()
+            .world_mut()
             .resource_mut::<SettingsRegistry>()
             .mark_pending::<RuntimeArtCatalog>();
-        app.insert_resource(palette([0.2, 0.4, 0.6]));
-        app.insert_resource(styles("effect/core"));
+        builder.app_mut().insert_resource(palette([0.2, 0.4, 0.6]));
+        builder.app_mut().insert_resource(styles("effect/core"));
         let manifest = manifest();
-        app.insert_resource(manifest.clone());
-        let handle = app
+        builder.app_mut().insert_resource(manifest.clone());
+        let handle = builder
+            .app_mut()
             .world_mut()
             .resource_mut::<Assets<ObjectBlueprint>>()
             .add(blueprint());
-        app.insert_resource(ObjectBlueprintHandles {
+        builder.app_mut().insert_resource(ObjectBlueprintHandles {
             manifest,
             handles: BTreeMap::from([(id("effect/glow"), handle.clone())]),
         });
-        (app, handle)
+        (builder.build(), handle)
     }
 
     fn report_object_load_failure(app: &mut App, handle: &Handle<ObjectBlueprint>) {
@@ -1476,11 +1482,17 @@ mod tests {
         let objects = [
             include_str!("../../../assets/art/objects/plant/old-growth.ron"),
             include_str!("../../../assets/art/objects/plant/small-broadleaf.ron"),
+            include_str!("../../../assets/art/objects/plant/snowy-old-growth.ron"),
+            include_str!("../../../assets/art/objects/plant/snowy-small-broadleaf.ron"),
+            include_str!("../../../assets/art/objects/plant/snowy-tall-narrow.ron"),
             include_str!("../../../assets/art/objects/plant/tall-narrow.ron"),
+            include_str!("../../../assets/art/objects/prop/cave-lichen.ron"),
+            include_str!("../../../assets/art/objects/prop/cave-moss.ron"),
             include_str!("../../../assets/art/objects/prop/crystal-branched.ron"),
             include_str!("../../../assets/art/objects/prop/crystal-low-cluster.ron"),
             include_str!("../../../assets/art/objects/prop/crystal-spire.ron"),
             include_str!("../../../assets/art/objects/prop/grass-tuft.ron"),
+            include_str!("../../../assets/art/objects/prop/snowy-grass-tuft.ron"),
         ]
         .into_iter()
         .map(|source| {
@@ -1492,37 +1504,57 @@ mod tests {
         let expected_ids = [
             "plant/old-growth",
             "plant/small-broadleaf",
+            "plant/snowy-old-growth",
+            "plant/snowy-small-broadleaf",
+            "plant/snowy-tall-narrow",
             "plant/tall-narrow",
+            "prop/cave-lichen",
+            "prop/cave-moss",
             "prop/crystal-branched",
             "prop/crystal-low-cluster",
             "prop/crystal-spire",
             "prop/grass-tuft",
+            "prop/snowy-grass-tuft",
         ]
         .map(id);
         assert_eq!(manifest.ids(), expected_ids.as_slice());
 
         let resolved = RuntimeArtCatalog::from_sources(&palette, &styles, &manifest, objects)
             .expect("shipped authored object graph should resolve");
-        assert_eq!(resolved.objects().len(), 7);
-        assert_eq!(resolved.styles().styles().len(), 7);
+        assert_eq!(resolved.objects().len(), 13);
+        assert_eq!(resolved.styles().styles().len(), 8);
+
+        let small = resolved
+            .object(&id("plant/small-broadleaf"))
+            .expect("small tree should resolve");
+        assert_eq!(small.bounds.height, 9);
+        assert_eq!(small.blocker_footprint, [LocalAxialCoord::new(0, 0)]);
+        assert_eq!(
+            small
+                .placements
+                .iter()
+                .map(|placement| placement.position.level)
+                .max(),
+            Some(8)
+        );
 
         let tall = resolved
             .object(&id("plant/tall-narrow"))
             .expect("tall tree should resolve");
-        assert_eq!(tall.bounds.height, 12);
+        assert_eq!(tall.bounds.height, 16);
         assert_eq!(tall.blocker_footprint, [LocalAxialCoord::new(0, 0)]);
         assert_eq!(
             tall.placements
                 .iter()
                 .map(|placement| placement.position.level)
                 .max(),
-            Some(11)
+            Some(15)
         );
 
         let old_growth = resolved
             .object(&id("plant/old-growth"))
             .expect("old-growth tree should resolve");
-        assert_eq!(old_growth.bounds.height, 18);
+        assert_eq!(old_growth.bounds.height, 21);
         assert_eq!(old_growth.blocker_footprint.len(), 7);
         assert_eq!(
             old_growth
@@ -1546,7 +1578,7 @@ mod tests {
                 .iter()
                 .map(|placement| placement.position.level)
                 .max(),
-            Some(17)
+            Some(20)
         );
 
         let grass = resolved
@@ -1555,6 +1587,126 @@ mod tests {
         assert_eq!(grass.category, ObjectCategory::Prop);
         assert!(grass.blocker_footprint.is_empty());
         assert_eq!(grass.bounds.height, 1);
+
+        for (snowy_id, expected_height, expected_blockers) in [
+            ("plant/snowy-small-broadleaf", 9, 1),
+            ("plant/snowy-tall-narrow", 16, 1),
+            ("plant/snowy-old-growth", 21, 7),
+        ] {
+            let snowy = resolved
+                .object(&id(snowy_id))
+                .expect("snowy tree should resolve");
+            assert_eq!(snowy.category, ObjectCategory::Plant);
+            assert_eq!(snowy.bounds.height, expected_height);
+            assert_eq!(snowy.blocker_footprint.len(), expected_blockers);
+            assert!(!snowy.canopy_occluders.is_empty());
+        }
+
+        for nonblocking_id in [
+            "prop/cave-lichen",
+            "prop/cave-moss",
+            "prop/snowy-grass-tuft",
+        ] {
+            let vegetation = resolved
+                .object(&id(nonblocking_id))
+                .expect("nonblocking vegetation should resolve");
+            assert_eq!(vegetation.category, ObjectCategory::Prop);
+            assert!(vegetation.blocker_footprint.is_empty());
+            assert!(vegetation.canopy_occluders.is_empty());
+        }
+
+        for vegetation_id in [
+            "plant/old-growth",
+            "plant/small-broadleaf",
+            "plant/snowy-old-growth",
+            "plant/snowy-small-broadleaf",
+            "plant/snowy-tall-narrow",
+            "plant/tall-narrow",
+            "prop/cave-lichen",
+            "prop/cave-moss",
+            "prop/grass-tuft",
+            "prop/snowy-grass-tuft",
+        ] {
+            let vegetation = resolved
+                .object(&id(vegetation_id))
+                .expect("vegetation asset should resolve");
+            let authored_positions = vegetation
+                .placements
+                .iter()
+                .map(|placement| placement.position)
+                .collect::<BTreeSet<_>>();
+            for steps in 0..6 {
+                let rotation =
+                    HexObjectRotation::new(steps).expect("all six authored rotations are valid");
+                let rotated_positions = vegetation
+                    .placements
+                    .iter()
+                    .map(|placement| {
+                        rotation
+                            .rotate_voxel(placement.position, vegetation.origin)
+                            .expect("shipped vegetation coordinates should rotate without overflow")
+                    })
+                    .collect::<BTreeSet<_>>();
+                assert_eq!(
+                    rotated_positions.len(),
+                    authored_positions.len(),
+                    "rotation {steps} overlaps '{vegetation_id}' placements"
+                );
+                assert!(
+                    rotated_positions
+                        .iter()
+                        .all(|position| vegetation.bounds.contains(*position)),
+                    "rotation {steps} moves '{vegetation_id}' outside its authored bounds"
+                );
+
+                let rotated_blockers = vegetation
+                    .blocker_footprint
+                    .iter()
+                    .map(|blocker| {
+                        rotation
+                            .rotate_axial(*blocker, vegetation.origin.axial())
+                            .expect("shipped blocker coordinates should rotate without overflow")
+                    })
+                    .collect::<BTreeSet<_>>();
+                assert_eq!(
+                    rotated_blockers.len(),
+                    vegetation.blocker_footprint.len(),
+                    "rotation {steps} overlaps '{vegetation_id}' blockers"
+                );
+
+                let rotated_canopy = vegetation
+                    .canopy_occluders
+                    .iter()
+                    .map(|position| {
+                        rotation
+                            .rotate_voxel(*position, vegetation.origin)
+                            .expect("shipped canopy coordinates should rotate without overflow")
+                    })
+                    .collect::<BTreeSet<_>>();
+                assert_eq!(
+                    rotated_canopy.len(),
+                    vegetation.canopy_occluders.len(),
+                    "rotation {steps} overlaps '{vegetation_id}' canopy cells"
+                );
+            }
+
+            let full_turn = authored_positions
+                .iter()
+                .copied()
+                .map(|mut position| {
+                    for _ in 0..6 {
+                        position = position.rotated_clockwise_60(vegetation.origin).expect(
+                            "shipped vegetation coordinates should rotate without overflow",
+                        );
+                    }
+                    position
+                })
+                .collect::<BTreeSet<_>>();
+            assert_eq!(
+                full_turn, authored_positions,
+                "six turns should restore '{vegetation_id}' exactly"
+            );
+        }
 
         for crystal_id in [
             "prop/crystal-low-cluster",
@@ -1588,29 +1740,38 @@ mod tests {
                 resolved.combined_fingerprint(),
             ),
             (
-                11_296_322_867_963_087_424,
-                11_614_891_655_779_057_070,
-                10_698_065_650_290_374_298,
+                8_717_522_685_805_731_658,
+                3_796_578_994_341_658_295,
+                12_062_549_279_886_409_984,
             )
         );
-        let object_fingerprints = BTreeMap::from([
-            (id("plant/old-growth"), 8_472_572_437_239_582_479),
-            (id("plant/small-broadleaf"), 8_757_163_157_510_762_779),
-            (id("plant/tall-narrow"), 14_950_083_940_216_167_308),
+        let expected_object_fingerprints = BTreeMap::from([
+            (id("plant/old-growth"), 18_215_252_645_504_955_369),
+            (id("plant/small-broadleaf"), 692_655_780_260_542_668),
+            (id("plant/snowy-old-growth"), 16_803_730_044_443_536_229),
+            (id("plant/snowy-small-broadleaf"), 7_195_704_118_276_503_348),
+            (id("plant/snowy-tall-narrow"), 10_256_897_596_986_011_740),
+            (id("plant/tall-narrow"), 6_591_765_473_067_103_716),
+            (id("prop/cave-lichen"), 14_754_322_871_995_823_724),
+            (id("prop/cave-moss"), 11_746_802_235_239_197_086),
             (id("prop/crystal-branched"), 632_179_240_403_471_067),
             (id("prop/crystal-low-cluster"), 1_307_286_824_627_267_907),
             (id("prop/crystal-spire"), 1_248_030_652_803_885_799),
             (id("prop/grass-tuft"), 8_128_471_665_006_116_358),
+            (id("prop/snowy-grass-tuft"), 10_601_105_736_077_673_696),
         ]);
-        for (id, expected) in object_fingerprints {
-            assert_eq!(
-                resolved
-                    .object(&id)
-                    .expect("fingerprinted object should resolve")
-                    .semantic_fingerprint(),
-                Ok(expected),
-                "semantic fingerprint changed for '{id}'"
-            );
-        }
+        let actual_object_fingerprints = resolved
+            .objects()
+            .iter()
+            .map(|(id, object)| {
+                (
+                    id.clone(),
+                    object
+                        .semantic_fingerprint()
+                        .expect("resolved object should have a semantic fingerprint"),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(actual_object_fingerprints, expected_object_fingerprints);
     }
 }

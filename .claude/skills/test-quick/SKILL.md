@@ -1,74 +1,27 @@
 ---
 name: test-quick
-description: Fastest validation loop — fmt + clippy + the workspace test suite. Fast when warm (incremental after the first build); run during iteration and before commits. Skips deny, doc build, link check, and the ship-shape build. Use during iteration; `/test-local` is the next tier up.
+description: "Run the focused iteration gate: format plus the fail-closed selector's affected Clippy and test concerns for the current diff. Use while implementing; /test-full owns merge-candidate validation."
 ---
 
-When invoked, run this sequence. STOP on first failure — the
-downstream tiers are meaningless if quick is red.
+# Focused validation
 
-## Step 1 — Format
+Use the exact PR base when one exists; otherwise use `origin/dev`. For a source lane
+targeting a wave, never substitute `dev` for its actual base.
 
-```bash
-cargo fmt --all --check
-```
+1. Fetch the base and run the scope planner using the exact argument construction in
+   [`CONTRIBUTING.md`](../../../CONTRIBUTING.md#before-opening-a-pr).
+2. Record the complete plan. Unknown paths, invalid configuration, and empty diffs
+   fail closed; do not hand-narrow or broaden the result.
+3. For a Rust-affecting diff, run `cargo fmt --all --check`.
+4. Run `python3 tools/test_scope.py run clippy` only when selected by the plan.
+5. Run every value returned by `selected-tests` in order. If `residual` is selected,
+   also run the workspace doctest command from `CONTRIBUTING.md`.
+6. Stop on the first failure and preserve its output.
 
-Expected: clean. Any error → STOP, surface verbatim.
+This tier deliberately omits dependency policy, documentation, link, shipping, and
+visual/human gates. Markdown-only work reports that no Rust concerns were selected;
+it does not claim the candidate gate is green.
 
-## Step 2 — Clippy
-
-```bash
-cargo clippy --workspace --all-targets --all-features --profile ci -- -D warnings
-```
-
-Expected: clean. Any error → STOP, surface verbatim. (Rust has no
-separate typecheck step — clippy subsumes `cargo check` and runs the
-repo's strict lint set: `#[allow]` banned, unwrap/panic/indexing
-denied outside tests.)
-
-## Step 3 — Tests
-
-```bash
-cargo test --workspace --all-features --profile ci
-```
-
-Expected: all pass across all twelve crates plus doctests. Sum the
-`test result:` lines and report:
-
-```
-✓ /test-quick — fmt clean, clippy clean, <N> tests passed (<elapsed>s)
-```
-
-## When to invoke
-
-- **During iteration**, while writing code. Incremental compilation
-  makes this cheap once the workspace is warm; the first cold run
-  compiles Bevy and takes far longer — that is expected, not a hang.
-- **Before commits**, as a pre-push sanity gate.
-- **In `/audit-diff`** as the verification step when running
-  standalone (not from `/audit-pr` — that uses `/test-full`).
-
-## When NOT to invoke
-
-- **As the merge gate.** `/audit-pr` calls `/test-full`, which adds
-  deny, the doc build, the link check, and the ship-shape build.
-- **For PRs touching `.github/workflows/`, `Cargo.toml`, `deny.toml`,
-  or `rust-toolchain.toml`.** Use `/test-full` — those files change
-  what CI itself runs, and quick's subset can be green while CI is not.
-
-## Doc-only short-circuit
-
-If the diff is doc-only (changes restricted to `**/*.md`, `docs/`,
-`README*`, `CHANGELOG*`, `.claude/`), report:
-
-```
-✓ /test-quick — doc-only diff; skipping fmt/clippy/tests.
-```
-
-and exit success. This keeps `/audit-pr` Step 2 fast on doc PRs
-that short-circuit to test-quick.
-
-## Self-updating
-
-If a new fast-tier check earns its place, add it as Step 0 ahead of
-format. Keep the tier meaningfully faster than `/test-local` — that's
-the contract.
+Report the base, changed-file classification, selected concerns, commands actually
+run, elapsed time, and the first failure or all-green result. Do not describe an
+unselected concern as executed or passed.

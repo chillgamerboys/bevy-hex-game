@@ -13,16 +13,22 @@ validation at the level where the behavior is actually meaningful.
 
 ## Keep agent workflows thin
 
-This document is the tool-neutral source of truth. Agent-specific instruction layers
-should route to it instead of copying the whole process:
+This document is the tool-neutral source of truth for *choosing* the shape.
+[wave-protocol.md](wave-protocol.md) is the tool-neutral source of truth for *executing* a
+wave — its artifact, lane field table, ownership algebra, and merge order. Agent-specific
+instruction layers should route to both instead of copying the process:
 
 - Codex loads root `AGENTS.md` automatically and discovers
-  `.agents/skills/plan-parallel-work` and
-  `.agents/skills/land-development-wave`;
+  `.agents/skills/plan-parallel-work` for the topology choice and
+  `.agents/skills/plan-epic` for the wave decomposition;
 - Claude continues to use the detailed audit, test, PR, promotion, and release skills
-  under `.claude/skills/`; and
+  under `.claude/skills/`, plus `/plan-epic`, `/dispatch`, and `/inject` for waves; and
 - both use the same commands, contracts, ownership rules, and wave gate documented
-  here and in `CONTRIBUTING.md`.
+  here, in `wave-protocol.md`, and in `CONTRIBUTING.md`.
+
+`/dispatch` and `/inject` are deliberately Claude-only: they depend on harness worktree
+isolation and agent messaging that Codex does not have. A Codex coordinator plans with
+`$plan-epic` and lands lanes by hand following `wave-protocol.md`.
 
 Do not port every Claude skill merely to achieve symmetry. Add a Codex skill when
 Codex lacks a repeatable user-goal workflow; keep stable repository policy in shared
@@ -32,9 +38,9 @@ docs so the two tool-specific layers cannot silently diverge.
 
 | Shape | Use it when | Branch and PR shape | Validation |
 |---|---|---|---|
-| Independent | Each change is shippable alone, shares no unsettled contract, and has little risky file overlap | Each branch starts from `dev` and gets its own PR to `dev` | Full review and CI per PR |
-| Stacked | One small change strictly depends on one other change and reviewing the child alone is still useful | Parent targets `dev`; child targets parent until the parent lands, then is retargeted | Focused checks per level; full CI on each mergeable PR |
-| Wave | Three or more related lanes, shared contracts or hot files, a common runtime checkpoint, or a branch stack deeper than two | One `wave/<name>` branch starts from `dev`; source lanes feed it; one wave PR targets `dev` | Focused lane checks; combined audit, full CI, visual walk, and human walk once on the wave |
+| Independent | Each change is shippable alone, shares no unsettled contract, and has little risky file overlap | Each branch starts from `dev` and gets its own PR to `dev` | Full review and selector-chosen CI per PR |
+| Stacked | One small change strictly depends on one other change and reviewing the child alone is still useful | Parent targets `dev`; child targets parent until the parent lands, then is retargeted | Focused checks per level; selector-chosen CI on each mergeable PR |
+| Wave | Three or more related lanes, shared contracts or hot files, a common runtime checkpoint, or a branch stack deeper than two | One `wave/<name>` branch starts from `dev`; source lanes feed it; one wave PR targets `dev` | Focused lane checks; combined audit and selector-chosen CI, plus visual/human review only for affected presentation or experiential surfaces |
 
 These are defaults, not arithmetic. Two branches that both change world composition
 belong in a wave even though there are only two. Ten genuinely unrelated fixes should
@@ -68,20 +74,16 @@ implementations forward.
 
 ## Start a wave with a manifest
 
-One integration owner creates `wave/<name>` from current `origin/dev` and records:
+One integration owner creates `wave/<name>` from current `origin/dev` and commits a
+manifest recording the outcome and exclusions, every lane's ownership and dependencies, the
+contracts and hot files each lane touches, the integration order, focused and combined
+checks, unresolved decisions, and the cleanup plan.
 
-- the user-visible outcome and explicit exclusions;
-- the source branch, owner, base, and dependency of every lane;
-- contracts and hot files each lane expects to touch;
-- the order in which lanes will enter the wave;
-- focused checks for each lane and combined acceptance scenarios;
-- unresolved cross-owner decisions; and
-- the cleanup plan for source PRs and branches.
-
-The `$plan-parallel-work` skill provides the manifest template. Store a live working
-copy under `.context/waves/` or in the wave PR body. `.context/` is appropriate while
-the plan is operational; the PR body becomes the durable record once the wave is
-published.
+[wave-protocol.md](wave-protocol.md) owns that artifact: its layout under
+`docs/planning/waves/<slug>/`, the lane field table, and its lifecycle. `/plan-epic` and
+`$plan-epic` produce it. **The manifest is committed** — `.context/` is untracked scratch,
+invisible in a fresh worktree and in anyone else's clone, so lane builders cannot read a
+plan stored there.
 
 Only the integration owner writes directly to the wave. Lane owners push additive
 commits to their own branches. Published and shared branches are never rebased or
@@ -99,13 +101,9 @@ transplant its intended unique commits from the correct fork point, then audit t
 resulting diff. Preserve authorship and record the source PR or commit range in the
 wave manifest.
 
-Integrate in semantic order:
-
-1. shared foundations and contract corrections;
-2. owner-local foundations;
-3. feature lanes;
-4. composition and adapters;
-5. combined fixes discovered by the wave.
+Integrate in the semantic order set out in [wave-protocol.md](wave-protocol.md), which also
+carries the inspection recipes for stacked ancestry and the rule for choosing between a
+merge, a transplant, a reimplementation, and a stop.
 
 Resolve a shared concern once on the wave. Push a correction back to a source branch
 only when that branch remains an independently useful review unit; otherwise record
@@ -129,27 +127,37 @@ After each semantic group enters the wave:
 
 - inspect the aggregate diff and changed contracts;
 - run affected workspace tests;
-- run the relevant deterministic scenario captures or visual walk; and
+- run relevant deterministic scenario captures or a visual walk only for affected
+  presentation claims; and
 - test composition, regeneration, state exit/re-entry, and failure paths that no
   source lane owns alone.
 
 ### Final wave candidate
 
-The wave PR is the merge gate. Run the complete repository checks:
+The wave PR is the merge gate. Run the exact PR-diff selector loop from
+`CONTRIBUTING.md`, including only the selected test concerns and selected non-test
+format/dependency/Clippy/docs/shipping gates. Unknown paths, selector changes, pushes
+to protected branches, invalid configuration, and empty diffs fail closed to the
+complete gate. Do not hand-edit the plan or call an omitted concern passed.
 
-```sh
-cargo fmt --all --check
-cargo deny check
-cargo clippy --workspace --all-targets --all-features --profile ci -- -D warnings
-cargo test --workspace --all-features --profile ci
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
-cargo build --workspace --profile ci
-```
+GitHub CI additionally runs that shipping-package build on the other supported
+platforms and runs domain coverage. Screenshots/frames may judge static camera, UI,
+and rendered-map presentation; video/human checks may judge motion, input response,
+control feel, and taste. They may show how hook-established state is rendered, but
+never prove gameplay or exact world logic that hooks, state, messages, logs,
+snapshots, or deterministic contracts can express; add a missing hook rather than
+infer logic from pixels.
 
-GitHub CI additionally runs the three-platform shipping build and domain coverage.
-Run the automated visual walk and inspect every frame, then have a human play the
-combined build. Human review belongs here because motion, seams, composition, and
-taste do not become cheaper or more reliable when repeated on incomplete leaves.
+A source lane PR into `wave/*` defers exact-head manual runtime sign-off to the combined
+wave PR into `dev`, exactly as `.github/workflows/manual-runtime-signoff.yaml` already
+exempts it. A lane never buys the combined evidence alone, and no lane's evidence may be
+copied onto the wave PR.
+
+For affected presentation, native-input, motion, feel, seams, composition, or taste,
+run the automated visual walk, inspect every frame, and have a human play the combined
+build. Record that playtest against the full final wave head SHA. A wave with no such
+changed claim uses the verified-maintainer N/A classification and names its
+authoritative hook closure. Any subsequent commit invalidates either classification.
 
 Retry an apparent infrastructure failure once after confirming that no compiler,
 test, lint, or application error preceded it. If the same job reaches the same hard
@@ -161,13 +169,19 @@ an explicit maintainer waiver. A timeout is never silently called a pass.
 The wave lands on `dev` with a merge commit. Promotion from `dev` to `main` remains a
 separate deliberate action.
 
+Before the final gate, reconcile implementation, status/design/roadmap documents,
+contracts, and—when available—ticket descriptions using
+[delivery-state reconciliation](delivery-state.md). Documentation corrections belong
+in the candidate. Linear is strongly advised for visibility but is not a merge gate.
+
 After the wave merge:
 
 1. confirm the merge commit and post-merge `dev` checks;
 2. close source PRs as superseded, linking the wave PR;
 3. retarget any still-open child PR before deleting its former base;
 4. delete the wave and merged source branches only after no open PR depends on them;
-5. update tickets based on delivered outcomes, not on incidental leaf-PR state; and
+5. recommend or apply ticket updates based on delivered outcomes, not on incidental
+   leaf-PR state, and leave a visible warning if Linear was unavailable; and
 6. leave a short reconciliation note for protected or ongoing branches that must now
    merge updated `dev`.
 

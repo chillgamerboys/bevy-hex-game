@@ -5,9 +5,10 @@
 //! single file cannot see the others. [`ContentIndex`] is where the references
 //! *between* files are resolved: every element a spell requires must exist in the
 //! [`ElementCatalog`], and every substance a spell's effect names must exist in the
-//! [`SubstanceTable`]. A dangling reference is reported loudly and the last valid
-//! index is kept — the same last-valid-on-bad-reload behaviour the settings loader
-//! has.
+//! [`SubstanceTable`]. Construction effects additionally require the world-owned
+//! substance policy to admit spell conjuration. A dangling or non-conjurable reference
+//! is reported loudly and the last valid index is kept — the same
+//! last-valid-on-bad-reload behaviour the settings loader has.
 //!
 //! It is rebuilt only outside [`Screen::Gameplay`], like the tables it draws on, so
 //! resolved ids never shift under a live world. It also holds the spell requirements
@@ -26,6 +27,7 @@ use crate::fingerprint::FingerprintEncoder;
 use crate::lattices::{LatticeFile, LatticeLibrary};
 use crate::spells::{CastingAxis, SpellBook, SpellFile};
 use crate::substances::{SubstanceFile, SubstanceTable};
+use crate::terrain_damage::{TerrainDamageFile, TerrainDamageTable};
 use crate::ArtPalette;
 
 /// A cross-file reference that did not resolve.
@@ -39,6 +41,16 @@ pub enum ContentError {
         /// The element name that did not resolve.
         element: String,
     },
+    /// A spell impact names an element no `elements.ron` entry defines.
+    #[error(
+        "spell '{spell}' Impact names element '{element}', which is not defined in elements.ron"
+    )]
+    UnknownEffectElement {
+        /// The spell with the dangling impact element.
+        spell: String,
+        /// The element name that did not resolve.
+        element: String,
+    },
     /// A spell effect names a substance no `substances.ron` entry defines.
     #[error(
         "spell '{spell}' effect names substance '{substance}', which is not defined in substances.ron"
@@ -47,6 +59,14 @@ pub enum ContentError {
         /// The spell with the dangling effect.
         spell: String,
         /// The substance name that did not resolve.
+        substance: String,
+    },
+    /// A construction effect names a defined substance the world does not admit.
+    #[error("spell '{spell}' effect names substance '{substance}', which is not conjurable")]
+    NonConjurableSubstance {
+        /// The spell with the refused construction effect.
+        spell: String,
+        /// The defined but non-conjurable substance.
         substance: String,
     },
 }
@@ -81,9 +101,10 @@ impl ContentIndex {
     /// Resolves every cross-file reference, or returns every failure found.
     ///
     /// Pure and table-only, so the shipped-content test can call it without an
-    /// [`App`]. Substance references are checked for existence but not stored: effects
-    /// are applied downstream against the live [`SubstanceTable`], keeping names —
-    /// not session-local ids — as the durable form.
+    /// [`App`]. Substance references are checked for existence and world-owned
+    /// conjuration admission but are not stored: effects are applied downstream
+    /// against the live [`SubstanceTable`], keeping names — not session-local ids —
+    /// as the durable form.
     pub fn build(
         elements: &ElementCatalog,
         spells: &SpellBook,
@@ -104,12 +125,27 @@ impl ContentIndex {
                 }
             }
             for effect in &spell.effects {
+                if let Some(element) = effect.element() {
+                    if elements.id(element).is_none() {
+                        errors.push(ContentError::UnknownEffectElement {
+                            spell: name.to_owned(),
+                            element: element.to_owned(),
+                        });
+                    }
+                }
                 if let Some(substance) = effect.substance() {
-                    if substances.id(substance).is_none() {
-                        errors.push(ContentError::UnknownSubstance {
+                    match substances.id(substance) {
+                        None => errors.push(ContentError::UnknownSubstance {
                             spell: name.to_owned(),
                             substance: substance.to_owned(),
-                        });
+                        }),
+                        Some(id) if !substances.is_conjurable(id) => {
+                            errors.push(ContentError::NonConjurableSubstance {
+                                spell: name.to_owned(),
+                                substance: substance.to_owned(),
+                            });
+                        }
+                        Some(_) => {}
                     }
                 }
             }
@@ -207,15 +243,17 @@ impl ContentIndex {
 pub struct AcceptedContentRevision {
     content_sources: u64,
     lattice_sources: u64,
+    terrain_damage_sources: u64,
 }
 
 impl AcceptedContentRevision {
     /// Stable identity of the complete accepted semantic revision.
     #[must_use]
     pub fn fingerprint(&self) -> u64 {
-        let mut encoder = FingerprintEncoder::new(b"hex-accepted-content-revision-v1");
+        let mut encoder = FingerprintEncoder::new(b"hex-accepted-content-revision-v2");
         encoder.u64(self.content_sources);
         encoder.u64(self.lattice_sources);
+        encoder.u64(self.terrain_damage_sources);
         encoder.finish()
     }
 
@@ -224,6 +262,13 @@ impl AcceptedContentRevision {
     pub fn matches_resolved(&self, content: &ContentIndex, lattices: &LatticeLibrary) -> bool {
         self.content_sources == content.source_revision()
             && self.lattice_sources == lattices.source_revision()
+    }
+
+    /// Whether this is still the resolved terrain-damage table accepted by the same
+    /// coherent content revision.
+    #[must_use]
+    pub fn matches_terrain_damage(&self, terrain_damage: &TerrainDamageTable) -> bool {
+        self.terrain_damage_sources == terrain_damage.source_revision()
     }
 }
 
@@ -341,6 +386,8 @@ fn publish_accepted_content_revision(
     substance_file: Option<Res<SubstanceFile>>,
     palette: Option<Res<ArtPalette>>,
     substances: Option<Res<SubstanceTable>>,
+    terrain_damage_file: Option<Res<TerrainDamageFile>>,
+    terrain_damage: Option<Res<TerrainDamageTable>>,
     lattice_file: Option<Res<LatticeFile>>,
     content: Option<Res<ContentIndex>>,
     lattices: Option<Res<LatticeLibrary>>,
@@ -354,6 +401,8 @@ fn publish_accepted_content_revision(
         substance_file.as_deref(),
         palette.as_deref(),
         substances.as_deref(),
+        terrain_damage_file.as_deref(),
+        terrain_damage.as_deref(),
         lattice_file.as_deref(),
         content.as_deref(),
         lattices.as_deref(),
@@ -366,18 +415,22 @@ fn publish_accepted_content_revision(
             Some(substance_file),
             Some(palette),
             Some(substances),
+            Some(terrain_damage_file),
+            Some(terrain_damage),
             Some(lattice_file),
             Some(content),
             Some(lattices),
         ) if elements.matches_source(element_file)
             && spells.matches_source(spell_file)
             && substances.matches_sources(substance_file, palette)
+            && terrain_damage.matches_sources(terrain_damage_file, elements, substances)
             && content.matches_sources(elements, spells, substances)
             && lattices.matches_sources(lattice_file, elements, spells) =>
         {
             Some(AcceptedContentRevision {
                 content_sources: content.source_revision(),
                 lattice_sources: lattices.source_revision(),
+                terrain_damage_sources: terrain_damage.source_revision(),
             })
         }
         _ => None,
@@ -395,15 +448,17 @@ fn publish_accepted_content_revision(
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use bevy::state::app::StatesPlugin;
+    use hex_test_app::HeadlessAppBuilder;
 
     use super::*;
     use crate::art_palette::{ArtPalette, PaletteSwatch, SrgbColor, SwatchId};
     use crate::elements::{ElementFile, FusionInput};
     use crate::spells::{
-        CastingAxis, Effect, GemRequirement, ManaAxis, Spell, SpellFile, TargetShape, TargetingSpec,
+        CastingAxis, Effect, GemRequirement, ManaAxis, Spell, SpellFile, TargetShape,
+        TargetingSpec, Trajectory,
     };
     use crate::substances::{Substance, SubstanceFile};
+    use crate::terrain_damage::{TerrainDamageFile, TerrainDamagePair, TerrainDamageTable};
 
     fn elements() -> ElementCatalog {
         let mut fusions = HashMap::default();
@@ -431,6 +486,10 @@ mod tests {
     }
 
     fn substances() -> SubstanceTable {
+        substances_with_stone_admission(true)
+    }
+
+    fn substances_with_stone_admission(conjurable: bool) -> SubstanceTable {
         let stone_swatch = SwatchId::new("test/stone").expect("the test swatch id should be valid");
         let palette = ArtPalette::new(BTreeMap::from([(
             stone_swatch.clone(),
@@ -446,7 +505,9 @@ mod tests {
         map.insert("air".to_owned(), Substance::invisible(false, false));
         map.insert(
             "stone".to_owned(),
-            Substance::from_swatch(stone_swatch, true, true),
+            Substance::from_swatch(stone_swatch, true, true)
+                .with_conjurable(conjurable)
+                .with_toughness(Some(4)),
         );
         SubstanceTable::from_file(&SubstanceFile { substances: map }, &palette)
             .expect("the test substances should resolve through the palette")
@@ -461,7 +522,7 @@ mod tests {
             targeting: TargetingSpec {
                 range: 1,
                 shape: TargetShape::Single,
-                needs_los: false,
+                trajectory: Trajectory::None,
             },
             effects,
         }
@@ -487,6 +548,7 @@ mod tests {
         SpellFile,
         SubstanceFile,
         ArtPalette,
+        TerrainDamageFile,
         LatticeFile,
     ) {
         (
@@ -498,6 +560,8 @@ mod tests {
                 .expect("shipped substances should parse"),
             ron::from_str(include_str!("../../../assets/art/palette.ron"))
                 .expect("shipped palette should parse"),
+            ron::from_str(include_str!("../../../assets/config/terrain_damage.ron"))
+                .expect("shipped terrain damage should parse"),
             ron::from_str(include_str!("../../../assets/config/lattices.ron"))
                 .expect("shipped lattices should parse"),
         )
@@ -539,6 +603,26 @@ mod tests {
     }
 
     #[test]
+    fn a_dangling_impact_element_fails_cross_file_admission() {
+        let book = book(vec![(
+            "Void Strike",
+            spell(
+                vec![gem("Fire")],
+                vec![Effect::Impact {
+                    element: "Aether".to_owned(),
+                    power: 2,
+                }],
+            ),
+        )]);
+        let errors = ContentIndex::build(&elements(), &book, &substances())
+            .expect_err("an Impact element must resolve through elements.ron");
+        assert!(errors.iter().any(|error| matches!(
+            error,
+            ContentError::UnknownEffectElement { element, .. } if element == "Aether"
+        )));
+    }
+
+    #[test]
     fn a_dangling_substance_reference_fails() {
         let book = book(vec![(
             "Conjure",
@@ -557,21 +641,46 @@ mod tests {
         )));
     }
 
+    #[test]
+    fn a_defined_but_non_conjurable_substance_fails() {
+        let book = book(vec![(
+            "Protected Wall",
+            spell(
+                vec![gem("Earth")],
+                vec![Effect::SpawnWall {
+                    substance: "stone".to_owned(),
+                }],
+            ),
+        )]);
+        let errors =
+            ContentIndex::build(&elements(), &book, &substances_with_stone_admission(false))
+                .expect_err("existence alone must not admit a construction material");
+
+        assert_eq!(
+            errors,
+            vec![ContentError::NonConjurableSubstance {
+                spell: "Protected Wall".to_owned(),
+                substance: "stone".to_owned(),
+            }]
+        );
+    }
+
     /// A failed rebuild must keep the previous valid index, not clear it.
     #[test]
     fn a_bad_rebuild_keeps_the_last_valid_index() {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin));
-        app.insert_state(Screen::Title);
-        app.add_systems(
+        let mut builder = HeadlessAppBuilder::new()
+            .with_minimal_plugins()
+            .with_state_plugin();
+        builder.app_mut().insert_state(Screen::Title);
+        builder.app_mut().add_systems(
             Update,
             build_content_index.run_if(not(in_state(Screen::Gameplay))),
         );
 
         // A good index is built from valid tables.
-        app.insert_resource(elements());
-        app.insert_resource(substances());
-        app.insert_resource(book(vec![(
+        builder.app_mut().insert_resource(elements());
+        builder.app_mut().insert_resource(substances());
+        builder.app_mut().insert_resource(book(vec![(
             "Ember",
             spell(
                 vec![gem("Fire")],
@@ -581,6 +690,7 @@ mod tests {
                 }],
             ),
         )]));
+        let mut app = builder.build();
         app.update();
         assert_eq!(
             app.world().resource::<ContentIndex>().len(),
@@ -609,30 +719,38 @@ mod tests {
 
     #[test]
     fn rejected_cross_file_revision_stays_unaccepted_until_repaired() {
-        let (element_file, spell_file, substance_file, palette, lattice_file) = shipped_sources();
+        let (element_file, spell_file, substance_file, palette, terrain_damage_file, lattice_file) =
+            shipped_sources();
         let elements = ElementCatalog::from_file(&element_file);
         let spells = SpellBook::from_file(&spell_file);
         let substances = SubstanceTable::from_file(&substance_file, &palette)
             .expect("shipped substances should resolve");
+        let terrain_damage =
+            TerrainDamageTable::from_file(&terrain_damage_file, &elements, &substances)
+                .expect("shipped terrain damage should resolve");
         let content =
             ContentIndex::build(&elements, &spells, &substances).expect("content should resolve");
         let lattices = LatticeLibrary::build(&lattice_file, &elements, &spells)
             .expect("lattices should resolve");
 
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.insert_resource(element_file);
-        app.insert_resource(elements);
-        app.insert_resource(spell_file.clone());
-        app.insert_resource(spells);
-        app.insert_resource(substance_file);
-        app.insert_resource(palette);
-        app.insert_resource(substances);
-        app.insert_resource(lattice_file);
-        app.insert_resource(content);
-        app.insert_resource(lattices);
-        app.add_systems(Update, build_content_index);
-        app.add_systems(PostUpdate, publish_accepted_content_revision);
+        let mut builder = HeadlessAppBuilder::new().with_minimal_plugins();
+        builder.app_mut().insert_resource(element_file);
+        builder.app_mut().insert_resource(elements);
+        builder.app_mut().insert_resource(spell_file.clone());
+        builder.app_mut().insert_resource(spells);
+        builder.app_mut().insert_resource(substance_file);
+        builder.app_mut().insert_resource(palette);
+        builder.app_mut().insert_resource(substances);
+        builder.app_mut().insert_resource(terrain_damage_file);
+        builder.app_mut().insert_resource(terrain_damage);
+        builder.app_mut().insert_resource(lattice_file);
+        builder.app_mut().insert_resource(content);
+        builder.app_mut().insert_resource(lattices);
+        builder.app_mut().add_systems(Update, build_content_index);
+        builder
+            .app_mut()
+            .add_systems(PostUpdate, publish_accepted_content_revision);
+        let mut app = builder.build();
 
         app.update();
         assert!(
@@ -670,9 +788,47 @@ mod tests {
     }
 
     #[test]
+    fn terrain_damage_only_changes_the_accepted_revision_fingerprint() {
+        let elements = elements();
+        let substances = substances();
+        let empty_file = TerrainDamageFile {
+            damaging_pairs: Vec::new(),
+        };
+        let empty = TerrainDamageTable::from_file(&empty_file, &elements, &substances)
+            .expect("the empty matrix should resolve");
+        let changed_file = TerrainDamageFile {
+            damaging_pairs: vec![TerrainDamagePair {
+                element: "Fire".to_owned(),
+                substance: "stone".to_owned(),
+            }],
+        };
+        let changed = TerrainDamageTable::from_file(&changed_file, &elements, &substances)
+            .expect("the changed matrix should resolve");
+
+        let accepted = |terrain_damage: &TerrainDamageTable| AcceptedContentRevision {
+            content_sources: 11,
+            lattice_sources: 22,
+            terrain_damage_sources: terrain_damage.source_revision(),
+        };
+        let before = accepted(&empty);
+        let after = accepted(&changed);
+
+        assert_ne!(before.fingerprint(), after.fingerprint());
+        assert!(before.matches_terrain_damage(&empty));
+        assert!(!before.matches_terrain_damage(&changed));
+        assert!(after.matches_terrain_damage(&changed));
+    }
+
+    #[test]
     fn inserted_names_cannot_pair_shifted_ids_with_stale_derived_tables() {
-        let (element_file, mut spell_file, substance_file, palette, lattice_file) =
-            shipped_sources();
+        let (
+            element_file,
+            mut spell_file,
+            substance_file,
+            palette,
+            _terrain_damage_file,
+            lattice_file,
+        ) = shipped_sources();
         let elements = ElementCatalog::from_file(&element_file);
         let original_spells = SpellBook::from_file(&spell_file);
         let substances = SubstanceTable::from_file(&substance_file, &palette)

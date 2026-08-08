@@ -1,11 +1,162 @@
 # Audit log
 
-Wave entries appended by `/audit-diff` — one per audited PR, the
-durable trail of which lenses fired and what was fixed or deferred.
-The receipt at `/tmp/audit-pr-receipt-<N>.json` is ephemeral; this
-file is the record that travels with the repo.
+Historical wave entries from the former audit-log workflow. Current `/audit-diff` is
+read-only, and `/audit-pr` records exact-head evidence in an ephemeral receipt instead
+of changing the candidate after review. Preserve the entries below as provenance.
 
-<!-- /audit-diff appends below this line. Don't insert content between this comment and Wave entries; the skill anchors on this marker. -->
+## Wave 29 — feat(map): ship procedural Mountain Range (2026-08-03)
+
+- **PR**: #182 — `progress-status-check`
+- **Outcome**: green after takeover reconciliation and audit fixes; no remaining
+  ship blockers, with release-only corpus/performance and native-motion gates explicitly
+  waived
+- **Lenses triggered**: 1, 2, 4, 6, 7, 8, D3, D4, plus the fresh-eyes pass
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 1, 7 | `crates/hex_map/src/procedural_v3/macro_world.rs` | SHIP-BLOCKER | fixed — candidate-local construction errors become typed rejections so all eight candidates and the canonical fallback remain reachable; setup failures stay fatal |
+| 4, 7 | `crates/hex_map/src/procedural_v3/macro_world.rs` | SHIP-BLOCKER | fixed — Deep Mountain treeline and snowline settings now drive Macro vegetation and surface material, with mutation coverage and unchanged canonical output |
+| 2, 8, D3, D4 | `crates/hex_assets/src/substances.rs`, `docs/{contracts.md,development/config.md,planning/boundary.md}` | SHIP-BLOCKER | fixed — one frozen registry preserves original ids 0–12, reserves inert 13–16, pins Sand to 17, rejects unregistered names, and corrects stale sorted-id claims |
+| 6, 7, 8 | `crates/hex_game/src/walk.rs`, `walks/camera_mountain_range.ron` | NON-BLOCKER | fixed — feature-only one-shot hostile suppression runs before actor setup for Mountain Range only, preserves Player rosters, and leaves later and production launches unchanged |
+| 7, D3 | `crates/hex_game/src/save.rs`, `docs/planning/status.md` | NON-BLOCKER | fixed — PR #175's legacy resume is preserved but visibly refused after the semantic shipped-world digest changes |
+
+**Notes**: the complete functional selector closure is green: contracts 345,
+simulation 24, app 138 plus 11 postflight checks, map unit 99, map generation 413,
+map contracts 80, and residual 786. Canonical generation, materialization, spawning,
+regeneration, and re-entry remain typed evidence; neither screenshots nor the walk are
+used for those claims. The automated Mountain Range route completed all 45 steps and
+eight frames, and the four-view capture pack was inspected. `@shrav-k` approved the
+overview (`3b36aaff163828b762b23d65fc3c8bcfea00b47e06bc551c44d4c60c558ab8ab`)
+and rear silhouette
+(`a8e36f44370f4b3ccfd5fbd49d7d6739310f9e33899a649ee2636626a5afddb9`)
+as static presentation only. The Mountain Range walk's Hostile-roster suppression is
+default-off, consumed once before actors, and absent from the production encounter.
+
+On 2026-08-03, `@shrav-k` explicitly waived and cancelled the remaining 128-seed and
+10,000-seed release corpora, generation benchmark, large-map camera performance
+diagnostic, and native human motion/control-feel replay to unblock unrelated pull
+requests. They are WAIVED, not passed; no fallback, timing, or human-motion result is
+claimed. Linear was unavailable, so no ticket state was inspected; if a Mountain
+Range ticket exists, mark it Done after #182 reaches `dev` and attach the merge SHA.
+
+## Wave 28 — feat(ui): add SVG-backed hex-grid logo (2026-08-02)
+
+- **PR**: #181 — `shrav-k/logo-elemental-grid-assets`
+- **Outcome**: green
+- **Lenses triggered**: none; all eight code lenses, the documentation lenses, and
+  the fresh-eyes pass were reviewed
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| — | — | — | no findings |
+
+**Notes**: the editable SVG masters parse cleanly and regenerate the checked-in
+transparent PNGs byte-for-byte at their authored dimensions. Runtime use remains
+presentation-only, preserves the logo's aspect ratio and spoken label, and stages the
+dedicated compact mark without claiming native icon embedding. Responsive native
+captures were crisp and unobstructed; the automated full walk and named-human
+visual/taste review remain separate merge gates.
+
+## Wave 27 — feat: establish spell resolution contract foundation (2026-08-02)
+
+- **PR**: #178 — `feat/spell-resolution-foundation`
+- **Outcome**: green after final automation-contract corrections
+- **Lenses triggered**: 6, 7, 8, D1, plus the fresh-eyes pass
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 6 | `.claude/skills/test-{quick,local}/SKILL.md` | SHIP-BLOCKER | fixed — selector failure now stops the gate and the concern loop uses portable scalar parsing under both bash and the repository-default zsh |
+| 7 | `.config/{test-scopes.json,nextest.toml}`, `.github/workflows/ci.yaml` | SHIP-BLOCKER | fixed — trajectory/volume-only changes run one JUnit-producing 61-test closure across pure geometry and the direct creation, AI, command, and casting consumers; no `hex_ui` or `gameplay_app` tests are selected |
+| 8 | `.config/test-scopes.json` | SHIP-BLOCKER | fixed — the combined routing/command manifest and combined terrain-impact source remain fail-closed instead of exempting their untested consumers |
+| D1 | `.github/workflows/manual-runtime-signoff.yaml`, `.claude/skills/{create-pr,merge-pr,test-full}/SKILL.md` | SHIP-BLOCKER | fixed — only the two pure geometry paths bypass the runtime gate automatically; conservative runtime classifications require exact-head PASS or an explicit named maintainer N/A waiver, while wave landings still require PASS |
+
+**Notes**: the Rust contract and schedule diff was clean across all eight code lenses.
+Exact-head evidence includes 59 selector regressions; ten exhaustive terrain-impact
+tests; the reverse-registered phase-order contract; the mixed material/air producer;
+140 rules, 94 map-unit, and 75 map-contract tests; warnings-denied workspace Clippy and
+docs; dependency policy; and the release build. The new trajectory wedge separately
+passes 12 trajectory units, 5 volume units, 2 creation-resolution units, 32 volume
+contracts, 1 AI consumer, 6 authoritative command contracts, and 3 game-library
+casting consumers (61 total). No application/UI test target or visual walk was run. Because this PR
+changes the canonical command manifest and CI topology, the selector correctly marks
+the bootstrap diff full; the maintainer explicitly chose the listed non-UI evidence
+for this landing while retaining the full fail-closed policy for future infrastructure
+changes. Linear was unavailable and remains a soft coordination signal; HEX-19 and
+HEX-24 stay partial.
+
+## Wave 26 — feat(game): cut over to Campaign and Sandbox (2026-08-02)
+
+- **PR**: #176 — `shrav-k/campaign-sandbox-cutover`
+- **Outcome**: combined audit and automated candidate gate green after PR #175
+  reconciliation; exact-head named-human runtime sign-off remains pending
+- **Lenses triggered**: 4, 6, 7, 8, D2, plus the fresh-eyes pass
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 6 | `crates/hex_game/src/screens/sandbox.rs` (`on_deployment_tile_clicked`), `crates/hex_ui/src/gameplay_frame.rs` | SHIP-BLOCKER | fixed — guided placement targets canonical terrain directly, validates exact walker footing and occupancy without catalog-region caps, and removes ordinary HUD regions from layout and picking during Deployment |
+| 7 | `crates/hex_gameplay_model/src/sandbox.rs`, `crates/hex_ui/src/deployment.rs` | SHIP-BLOCKER | fixed — the typed queue admits only the next unplaced slot or a prior placed slot, and Undo derives Review again whenever it restores a complete exact deployment |
+| 6 | `crates/hex_core/src/presentation.rs`, `crates/hex_game/src/screens/sandbox.rs`, `crates/hex_game/src/terrain_health_bars.rs` | SHIP-BLOCKER | fixed — staged actors use a composable Sandbox-deployment occlusion reason, while world-space terrain health bars obey effective gameplay chrome; camera cutaways, Start, HUD hiding, Deployment, and outcomes can no longer restore or retain the wrong visibility |
+| 4 | `crates/hex_game/src/screens/gameplay.rs` (`handle_outcome_actions`, `handle_input`) | SHIP-BLOCKER | fixed — Campaign Return and Backspace now reset the persistent menu model to its root before entering `Screen::Title`; typed outcome and keyboard regressions cover both paths without changing Sandbox ownership |
+| 8 | `.github/workflows/manual-runtime-signoff.yaml` | SHIP-BLOCKER | fixed — the exact-head runtime gate now treats every shipped `assets/**` path as runtime-visible instead of omitting menu, scenario, Creator, and Sandbox preview inputs |
+| 7, 8 | `.config/test-scopes.json`, `tools/test_test_scope.py` | NON-BLOCKER | fixed — the deprecated-vocabulary validator is explicit validation infrastructure, with a selector regression proving full coverage and no unknown path |
+| D2 | `docs/design/game.md` | NON-BLOCKER | fixed — removed a link to a nonexistent `magic-outside-combat` fragment while preserving the open design question |
+
+**Notes**: PR #175 landed at `70a212bb` and was merged additively into the cutover at
+`fdd6012`. The reconciled candidate passes formatting, dependency policy, strict
+all-feature Clippy, the full all-feature workspace suite, warning-denied docs, the
+release build, and the focused rules (136), contracts (323), simulation (22), app
+(100 plus 11 postflight), residual (742), and unchanged map-contract (74) scopes.
+The bounded route walk completed all 59 steps and ten captures. A separate 37-step
+release Fort walk selected the canonical map, placed Party then Enemy through exact
+terrain pointer clicks, and captured the HUD-suppressed Review state. Linear was
+unavailable and remains a soft coordination signal. The PR must not merge until its
+body records a named-human runtime PASS for the final head SHA.
+
+## Wave 25 — feat: add terrain durability and destruction (2026-08-02)
+
+- **PR**: #175 — `wave/terrain-durability`
+- **Outcome**: green — one duplicated contract literal and the live-documentation
+  contradictions fixed; one behavior-neutral pure-test expansion deferred to the
+  named post-merge foundation
+- **Lenses triggered**: 2, 7, D3, D4
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 2 | `crates/hex_assets/src/substances.rs`:349 | NON-BLOCKER | fixed — authored substance validation now consumes shared `is_terrain_toughness` instead of repeating the `1/2/4/8` scale |
+| D3, D4 | `docs/systems/casting.md`:170, `docs/planning/roadmap.md`:32 | SHIP-BLOCKER | fixed — PR #162 already landed `Direct`/`Arc`/`None` caster-to-anchor obstruction; only per-voxel effect-volume clipping remains deferred under HEX-24 |
+| D3, D4 | `docs/systems/casting.md`:219, `docs/planning/boundary.md`:200, `docs/contracts.md`:38 | NON-BLOCKER | fixed — every live contract source now describes `RunBottom` as consumed by permanent construction and trajectory checks while cover and obstruction-aware sight remain downstream |
+| D3, D4 | `docs/planning/roadmap.md`:31, `docs/planning/roadmap.md`:116 | NON-BLOCKER | fixed — the living plan now distinguishes permanent construction from deferred save/restore and separates live construction, trajectories, and world durability from the gameplay impact/outcome/settlement and perception residuals |
+| D3, D4 | `docs/planning/status.md`:469, `docs/systems/map.md`:412, `docs/README.md`:79 | NON-BLOCKER | fixed — boundary I is accepted, the pending cast is explicitly future gameplay behavior, and the documentation index describes the boundary ledger's accepted/live decisions as well as open asks |
+| 7 | `crates/hex_core/src/terrain_impact.rs`:386 | NON-BLOCKER | deferred — the post-#175 behavior-neutral spell-resolution foundation already owns the exhaustive malformed-outcome matrix against the now-settled live dispositions |
+
+**Notes**: all eight code lenses and the fresh-eyes pass found no remaining checkpoint
+blocker in content readiness, deterministic map resolution, pause/re-entry lifecycle,
+presentation privacy, or ownership. The shipped 63-pair test deliberately pins the
+initial complete element/material allow-list; later balance work must update that
+fixture when it removes pairs. Exact-head CI, automated visual review, and named human
+runtime sign-off remain separate landing gates rather than claims made by this entry.
+
+## Wave 24 — feat(map): biome expansion and Two Rings (2026-07-30)
+
+- **PR**: #144 — `wave/alberto-biome-expansion`
+- **Outcome**: draft — documentation and the dev-integrated local combined gate are
+  green; platform checks, final-SHA captures, and mandatory human visual/play approval
+  remain pending
+- **Lenses triggered**: D1, D3, D4
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| D1, D3 | `docs/systems/world-generation-v3.md` | SHIP-BLOCKER | fixed — the V3 contract now includes the additive Volcano, Deep Forest, Prairie, and Ring19 paths instead of claiming only two layouts and seven recipe variants |
+| D1, D3 | `docs/systems/creator-and-combat-lab.md`, `docs/planning/status.md`, `docs/planning/roadmap.md`, `README.md` | SHIP-BLOCKER | fixed — the published catalog is sixteen distinct maps and includes Deep Forest, Prairie, and Two Rings |
+| D3, D4 | `docs/systems/world-generation-v3.md`, `docs/planning/boundary.md` | SHIP-BLOCKER | fixed — Ring19 records its fixed 19-region roster, radius-55/9,241-column footprint, 42 seams, 30 boundary sides, exact water graph, separate lava outlet, physical seam redundancy, and layout-specific namespace without turning the composite into a streaming contract |
+
+**Notes**: Ring19 keeps Single/Ring7 numeric identities unchanged and uses a
+5-bit patch / 27-bit local namespace for slots 16–18. Two Rings is selectable beside
+Seven Regions. The complete local gate passes 1,583 ordinary tests with 32 deliberate
+stress/benchmark skips. The release comparison measures Ring19 at 3.250 seconds p95
+against Ring7 at 1.234 seconds p95 (2.63×, within the 3.5× budget). The draft wave is
+not release-ready until platform checks, final-SHA captures, scripted walks, and human
+visual/play review pass; this entry does not record those pending checks as green.
 
 ## Wave 23 — chore(release): v0.4.0 (2026-07-30)
 

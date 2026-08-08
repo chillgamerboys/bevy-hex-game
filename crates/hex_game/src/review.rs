@@ -14,7 +14,7 @@
 //! generated anchor before framing. This keeps iteration tooling on the same loading
 //! and validation path as manual play while avoiding compositor-dependent screenshots.
 //! `HEX_REVIEW_CUTAWAY=full` exposes the complete active interior for cave overview
-//! captures while leaving the normal local cutaway unchanged.
+//! captures; ordinary gameplay keeps every cave roof intact.
 //! `HEX_REVIEW_ILLUMINATION=overlay` draws the authoritative Dark, Dim, and Bright
 //! gameplay tiers over exact interior surfaces for diagnostic cave captures.
 
@@ -40,7 +40,7 @@ use hex_core::{
 use hex_map::LiquidVisualTime;
 use hex_perception::ResolvedIllumination;
 use hex_units::{Body, Footing, Selected, Standing, StandsOn};
-use hex_world::{CameraMode, PanOrbitCamera};
+use hex_world::{CameraMode, CameraSystems, PanOrbitCamera};
 
 use crate::capture::{prepare_capture_path, write_png};
 use crate::scenarios::ScenarioToLoad;
@@ -110,6 +110,7 @@ fn install_capture_systems(app: &mut App, capture: ReviewCapture) {
                 capture_settled_frame,
             )
                 .chain()
+                .before(CameraSystems::FollowCharacter)
                 .before(TransformSystems::Propagate)
                 .run_if(in_state(Screen::Gameplay)),
         );
@@ -455,6 +456,7 @@ impl ReviewIlluminationMaterials {
 enum ReviewView {
     Default,
     Rotated,
+    Rear,
     TopDown,
 }
 
@@ -481,9 +483,10 @@ impl ReviewView {
         match value {
             "default" => Ok(Self::Default),
             "rotated" => Ok(Self::Rotated),
+            "rear" => Ok(Self::Rear),
             "top-down" | "top_down" => Ok(Self::TopDown),
             _ => Err(format!(
-                "{VIEW_ENV} must be default, rotated, or top-down; got {value:?}"
+                "{VIEW_ENV} must be default, rotated, rear, or top-down; got {value:?}"
             )),
         }
     }
@@ -606,7 +609,7 @@ fn capture_timeout_diagnostic(
             | Screen::LatticeDemo
             | Screen::CharacterCreator
             | Screen::SpellCreator
-            | Screen::CombatLab => CapturePhase::AwaitingScenario,
+            | Screen::Sandbox => CapturePhase::AwaitingScenario,
             Screen::Loading => CapturePhase::Loading,
             Screen::Gameplay if !state.view_applied => CapturePhase::AwaitingCamera,
             Screen::Gameplay if !terrain_ready => CapturePhase::AwaitingTerrain,
@@ -737,7 +740,7 @@ fn apply_review_view(
     mut mode: ResMut<CameraMode>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    if state.failed || !state.focus_relocated {
+    if state.failed || state.view_applied || !state.focus_relocated {
         return;
     }
     let Ok((mut transform, mut orbit, mut target)) = camera.single_mut() else {
@@ -822,9 +825,15 @@ fn apply_character_camera_view(
     let focus = target + Vec3::Y * settings.character_focus_height;
     let offset = horizontal * (settings.character_radius * pitch.cos())
         + Vec3::Y * (settings.character_radius * pitch.sin());
+    let direction = offset.normalize_or_zero();
+    let up = if direction.cross(Vec3::Y).length_squared() <= f32::EPSILON {
+        Vec3::Z
+    } else {
+        Vec3::Y
+    };
 
     transform.translation = focus + offset;
-    transform.look_at(focus, Vec3::Y);
+    transform.look_at(focus, up);
     orbit.focus = focus;
     orbit.radius = settings.character_radius;
 }
@@ -995,6 +1004,10 @@ fn apply_camera_view(
                 focus,
             ),
         ),
+        ReviewView::Rear => {
+            let eye = focus + Quat::from_rotation_y(std::f32::consts::PI) * offset;
+            (eye, camera_up(eye, focus))
+        }
         ReviewView::TopDown => (focus + Vec3::Y * offset.length(), Vec3::NEG_Z),
     };
     transform.translation = eye;
@@ -1102,6 +1115,9 @@ fn persist_screenshot(image: &Image, path: &Path) -> Result<(), String> {
         ));
     }
     let stats = write_png(image, path)?;
+    if stats.brightest <= 8 {
+        return Err("renderer output is effectively black; rejected PNG was preserved".to_owned());
+    }
     if !stats.has_coverage {
         return Err(
             "renderer output lacks meaningful visual coverage; rejected PNG was preserved"
@@ -1125,6 +1141,27 @@ mod tests {
     use crate::capture::{has_visual_coverage, temporary_capture_path};
 
     use super::*;
+
+    #[derive(Resource, Default)]
+    struct CharacterFollowObservation {
+        saw_review_pose: bool,
+    }
+
+    fn observe_review_pose_before_character_follow(
+        mode: Res<CameraMode>,
+        settings: Res<CameraSettings>,
+        cameras: Query<&PanOrbitCamera>,
+        mut observation: ResMut<CharacterFollowObservation>,
+    ) {
+        let Ok(camera) = cameras.single() else {
+            return;
+        };
+        if *mode == CameraMode::Character
+            && (camera.radius - settings.character_radius).abs() < f32::EPSILON
+        {
+            observation.saw_review_pose = true;
+        }
+    }
 
     fn scenario(seed: Option<u64>) -> Scenario {
         Scenario {
@@ -1683,10 +1720,12 @@ mod tests {
 
     #[test]
     fn review_views_have_exact_deterministic_poses() {
+        assert_eq!(ReviewView::parse("rear"), Ok(ReviewView::Rear));
         let focus = Vec3::new(1.0, 2.0, 3.0);
         let eye = focus + Vec3::new(0.0, 4.0, 3.0);
         let offset = eye - focus;
         let rotated_eye = focus + Quat::from_rotation_y(2.0 * std::f32::consts::PI / 3.0) * offset;
+        let rear_eye = focus + Quat::from_rotation_y(std::f32::consts::PI) * offset;
         let top_down_eye = focus + Vec3::Y * offset.length();
         for (view, expected_eye, expected_up) in [
             (ReviewView::Default, eye, camera_up(eye, focus)),
@@ -1695,6 +1734,7 @@ mod tests {
                 rotated_eye,
                 camera_up(rotated_eye, focus),
             ),
+            (ReviewView::Rear, rear_eye, camera_up(rear_eye, focus)),
             (ReviewView::TopDown, top_down_eye, Vec3::NEG_Z),
         ] {
             let mut transform = Transform::from_translation(eye);
@@ -1728,6 +1768,7 @@ mod tests {
         for view in [
             ReviewView::Default,
             ReviewView::Rotated,
+            ReviewView::Rear,
             ReviewView::TopDown,
         ] {
             let mut transform = Transform::default();
@@ -1760,6 +1801,33 @@ mod tests {
             assert!((close_offset.length() - settings.character_radius).abs() < 0.0001);
             assert!(close_horizontal.dot(map_horizontal) > 0.9999);
             assert!((orbit.radius - settings.character_radius).abs() < 0.0001);
+        }
+    }
+
+    #[test]
+    fn character_capture_supports_both_vertical_poles() {
+        let map_focus = Vec3::ZERO;
+        let map_eye = Vec3::new(8.0, 10.0, 6.0);
+        let target = Vec3::new(-2.0, 4.0, 5.0);
+
+        for (pitch, wanted_forward) in [(-1.0, Vec3::Y), (1.0, Vec3::NEG_Y)] {
+            let mut settings = test_camera_settings();
+            settings.character_pitch = pitch;
+            let mut transform = Transform::default();
+            let mut orbit = PanOrbitCamera::default();
+            apply_character_camera_view(
+                map_eye,
+                map_focus,
+                target,
+                &settings,
+                &mut transform,
+                &mut orbit,
+            );
+
+            assert!(transform.translation.is_finite());
+            assert!(transform.rotation.is_finite());
+            assert!((transform.rotation * Vec3::NEG_Z).dot(wanted_forward) > 0.99999);
+            assert!((orbit.radius - settings.character_radius).abs() < f32::EPSILON);
         }
     }
 
@@ -1952,6 +2020,11 @@ mod tests {
         app.insert_resource(test_camera_settings());
         app.insert_resource(CameraMode::Map);
         app.insert_resource(Assets::<Image>::default());
+        app.init_resource::<CharacterFollowObservation>()
+            .add_systems(
+                PostUpdate,
+                observe_review_pose_before_character_follow.in_set(CameraSystems::FollowCharacter),
+            );
         install_capture_systems(
             &mut app,
             ReviewCapture {
@@ -1963,11 +2036,14 @@ mod tests {
                 illumination_overlay: false,
             },
         );
-        app.world_mut().spawn((
-            Transform::default(),
-            PanOrbitCamera::default(),
-            RenderTarget::default(),
-        ));
+        let camera = app
+            .world_mut()
+            .spawn((
+                Transform::default(),
+                PanOrbitCamera::default(),
+                RenderTarget::default(),
+            ))
+            .id();
         app.world_mut()
             .resource_mut::<NextState<Screen>>()
             .set(Screen::Gameplay);
@@ -1994,6 +2070,43 @@ mod tests {
             .expect("the test should have exactly one camera");
         let expected_focus = target + Vec3::Y * test_camera_settings().character_focus_height;
         assert!(orbit.focus.distance(expected_focus) < 0.0001);
+        assert!(
+            app.world()
+                .resource::<CharacterFollowObservation>()
+                .saw_review_pose,
+            "the one-shot review pose must publish before Character collision follows it"
+        );
+
+        let retained_translation = Vec3::new(31.0, 41.0, 59.0);
+        let retained_focus = Vec3::new(26.0, 35.0, 53.0);
+        {
+            let mut camera = app.world_mut().entity_mut(camera);
+            camera
+                .get_mut::<Transform>()
+                .expect("the test camera should keep its transform")
+                .translation = retained_translation;
+            let mut orbit = camera
+                .get_mut::<PanOrbitCamera>()
+                .expect("the test camera should keep its controls");
+            orbit.focus = retained_focus;
+            orbit.radius = 3.0;
+        }
+        app.update();
+        let camera = app.world().entity(camera);
+        assert!(
+            camera
+                .get::<Transform>()
+                .expect("the test camera should keep its transform")
+                .translation
+                .distance(retained_translation)
+                < f32::EPSILON,
+            "review automation must not reapply its initial pose after success"
+        );
+        let orbit = camera
+            .get::<PanOrbitCamera>()
+            .expect("the test camera should keep its controls");
+        assert!(orbit.focus.distance(retained_focus) < f32::EPSILON);
+        assert!((orbit.radius - 3.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -2013,7 +2126,7 @@ mod tests {
         let error = persist_screenshot(&uniform, &path)
             .expect_err("a uniform renderer output should fail visual validation");
         assert!(
-            error.contains("rejected PNG was preserved"),
+            error.contains("effectively black") && error.contains("rejected PNG was preserved"),
             "unexpected validation error: {error}"
         );
         let png = fs::read(&path).expect("the rejected capture should remain readable");
@@ -2080,9 +2193,12 @@ mod tests {
             gameplay_focus: (0.0, 6.0, 0.0),
             character_focus_height: 0.4,
             character_radius: 7.0,
+            character_probe_radius: 0.1,
+            character_collision_margin: 0.35,
+            character_restoration_speed: 8.0,
+            character_collision_release_delay: 0.2,
+            character_self_hide_radius: 1.0,
             character_pitch: 0.3,
-            character_min_pitch: 0.05,
-            character_max_pitch: 0.95,
             pan_speed: 0.4,
             pan_speed_offset: 10.0,
             min_pitch: 0.25,

@@ -307,7 +307,7 @@ pub struct ObjectBlueprint {
     pub placements: Vec<ObjectPlacement>,
     /// Exact horizontal gameplay blocker footprint.
     pub blocker_footprint: Vec<LocalAxialCoord>,
-    /// Exact occupied foliage cells eligible for canopy cutaway.
+    /// Exact occupied foliage cells carrying authored canopy membership metadata.
     pub canopy_occluders: Vec<LocalVoxelCoord>,
 }
 

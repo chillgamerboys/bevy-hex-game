@@ -2,13 +2,13 @@
 
 Releases produce unsigned pre-alpha archives. Every platform uses the
 `hex-game-<platform>` artifact name and contains a `hex-game` executable (or
-`hex-game.exe`), assets, the current placeholder `app-icon.png`, README, and any
-platform symbol companions emitted by Rust. Release builds retain line-table debug
+`hex-game.exe`), assets, the compact Hex brand mark as `app-icon.png`, README, and
+any platform symbol companions emitted by Rust. Release builds retain line-table debug
 information. Symbols stay in the artifact; nothing uploads crash data.
 
 The application identity is `com.chillgamerboys.hex-game`, with the player-facing name
-**Hex Game**. The icon is deliberately the existing hex UI mark until product art
-replaces it.
+**Hex Game**. The PNG is currently staged beside the executable as a release companion;
+it is not yet embedded as a native platform icon.
 
 ## Procedure
 
@@ -36,6 +36,13 @@ records the invariants an operator should verify. An apparent infrastructure tim
 is retried once after confirming no compiler, test, packaging, or application error
 preceded it. A second identical hard timeout requires an explicit maintainer waiver in
 the release notes; it is never silently called a pass.
+
+The release gate uses screenshots/frames for static camera, UI, and rendered-map
+presentation, and video/human checks for camera motion, native-input response,
+animation, control feel, and taste. These may judge the rendering of hook-established
+state, but never prove gameplay or exact world logic that typed hooks, state,
+messages, logs, snapshots, or deterministic contracts can express; those logical
+gates must already be green before presentation review begins.
 
 ## Reserved integrations
 

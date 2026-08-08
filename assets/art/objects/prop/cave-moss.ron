@@ -1,0 +1,21 @@
+(
+    schema_version: 1,
+    id: "prop/cave-moss",
+    display_name: "Cave Moss",
+    category: Prop,
+    bounds: (
+        radius: 1,
+        min_level: 0,
+        height: 1,
+    ),
+    connectivity: Grounded,
+    origin: (q: 0, r: 0, level: 0),
+    placements: [
+        (position: (q: 0, r: -1, level: 0), style: "plant/foliage-dark", part: Prop(Detail)),
+        (position: (q: 0, r: 0, level: 0), style: "plant/foliage-dark", part: Prop(Structure)),
+        (position: (q: 1, r: -1, level: 0), style: "plant/foliage-mid", part: Prop(Detail)),
+        (position: (q: 1, r: 0, level: 0), style: "plant/foliage-dark", part: Prop(Detail)),
+    ],
+    blocker_footprint: [],
+    canopy_occluders: [],
+)

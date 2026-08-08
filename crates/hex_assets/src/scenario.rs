@@ -1,7 +1,8 @@
-//! The scenarios offered on the title screen.
+//! Internal world, lighting, and encounter launch definitions.
 //!
-//! A scenario is a **world plus the units standing on it**: pick one and you get that
-//! terrain with those pieces, without editing a file or restarting.
+//! A scenario is a **world plus the units standing on it**. Campaign, Sandbox, saves,
+//! retries, review, and tests share this contract without exposing a player-facing
+//! browser.
 //!
 //! # Why the world is a string
 //!
@@ -20,18 +21,17 @@
 use bevy::prelude::*;
 use serde::{de::Error as _, Deserialize, Deserializer};
 
-/// `assets/config/scenarios.ron` — the default game and development scenarios.
+/// `assets/config/scenarios.ron` — canonical internal launch definitions.
 ///
 /// Order is the order they appear, so it is a designer's decision rather than an
 /// accident of hashing.
 #[derive(Asset, Resource, Reflect, Debug, Clone, Deserialize)]
 #[reflect(Resource)]
 pub struct ScenarioLibrary {
-    /// Stable name of the scenario launched by New Game.
+    /// Stable name of the scenario bound by a new Campaign.
     ///
     /// The entry remains in `scenarios` so it uses the same validated world,
-    /// lighting, encounter, and seed vocabulary as every development fixture. The
-    /// title screen resolves it independently and does not also list it in a lane.
+    /// lighting, encounter, and seed vocabulary as every other launch owner.
     pub default_game: String,
     /// The scenarios, in the order they are listed.
     pub scenarios: Vec<Scenario>,
@@ -45,21 +45,14 @@ impl ScenarioLibrary {
             .iter()
             .find(|scenario| scenario.name == self.default_game)
     }
-
-    /// Development scenarios visible in the Maps and Demos lanes.
-    pub fn visible_scenarios(&self) -> impl Iterator<Item = &Scenario> {
-        self.scenarios
-            .iter()
-            .filter(|scenario| scenario.name != self.default_game)
-    }
 }
 
 /// One playable setup: a world, and where the units start on it.
-#[derive(Reflect, Debug, Clone)]
+#[derive(Reflect, Debug, Clone, PartialEq)]
 pub struct Scenario {
-    /// What the title screen calls it.
+    /// Stable launch name used by Campaign, Sandbox, saves, review, and tests.
     pub name: String,
-    /// Which framed title-screen column owns this scenario.
+    /// Temporarily retained compatibility metadata; runtime routing must ignore it.
     pub category: ScenarioCategory,
     /// One line under the name, saying what is interesting about it.
     pub blurb: String,
@@ -77,8 +70,8 @@ pub struct Scenario {
     pub lighting: String,
     /// Reproducible terrain seed for a generated world.
     ///
-    /// Authored scenarios omit this. The title screen can replace a configured seed
-    /// for the current process, but never writes that replacement back to this asset.
+    /// Authored scenarios omit this. Sandbox may carry a resolved replacement for one
+    /// launch, but never writes that seed back to this asset.
     pub generation_seed: Option<u64>,
     /// Optional time of day at which this scenario starts, in `[0, 24)`.
     ///
@@ -95,12 +88,12 @@ pub struct Scenario {
     pub encounter: String,
 }
 
-/// The development title-screen lane a non-default scenario can inhabit.
+/// Inert compatibility metadata retained until legacy Campaign data can migrate.
 #[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
 pub enum ScenarioCategory {
-    /// Worlds whose terrain or traversal is the main attraction.
+    /// Historically map-oriented content; runtime routing ignores this value.
     Map,
-    /// Focused mechanics showcases and rules probes.
+    /// Historically mechanics-oriented content; runtime routing ignores this value.
     Demo,
 }
 
@@ -181,11 +174,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use super::*;
 
-    /// The shipped file parses, and says enough to build a menu from.
+    /// The shipped file parses and carries a complete internal launch definition.
     ///
     /// Mirrors the camera settings test: content that ships is content that can be
     /// wrong, and a `scenarios.ron` that will not parse is a game stuck on "loading…"
@@ -214,7 +207,7 @@ mod tests {
         }
     }
 
-    /// Two scenarios with the same name are indistinguishable on the title screen.
+    /// Two scenarios with the same name are indistinguishable in the catalog.
     #[test]
     fn scenario_names_are_unique() {
         let library: ScenarioLibrary =
@@ -229,7 +222,7 @@ mod tests {
     }
 
     #[test]
-    fn the_default_is_resolved_independently_from_visible_scenarios() {
+    fn the_default_campaign_scenario_resolves_by_stable_name() {
         let library: ScenarioLibrary =
             ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
                 .expect("the shipped scenarios should parse");
@@ -238,11 +231,14 @@ mod tests {
             .expect("the shipped default should resolve");
 
         assert_eq!(default.name, "Party Trial");
-        assert!(
+        assert_eq!(
             library
-                .visible_scenarios()
-                .all(|scenario| scenario.name != default.name),
-            "the default must not also appear in a development lane"
+                .scenarios
+                .iter()
+                .filter(|scenario| scenario.name == library.default_game)
+                .count(),
+            1,
+            "the Campaign default must resolve to exactly one launch input"
         );
     }
 
@@ -313,13 +309,17 @@ mod tests {
         assert!(error.contains("generaton_seed"), "{error}");
     }
 
-    /// Generated scenarios own distinct reproducible seeds and name an encounter file.
+    /// Generated scenarios own intentional reproducible seeds and name an encounter file.
     ///
     /// Whether that encounter places its units through generated *anchors* is a
     /// cross-file fact — the encounter is a separate asset — so it is checked in
     /// `hex_game`, which is allowed to open both. This crate can only see the path.
+    /// Procedural Hills, the additive vegetation biomes, and the composite wave map
+    /// deliberately share one canonical review seed so their visual differences are
+    /// directly comparable. Mountain Range likewise shares the Mountains review seed
+    /// so the single-patch and macro-world massifs can be compared directly.
     #[test]
-    fn procedural_scenarios_use_distinct_seeds_and_name_an_encounter() {
+    fn procedural_scenarios_use_only_the_intended_shared_seed_and_name_an_encounter() {
         let library: ScenarioLibrary =
             ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
                 .expect("the shipped scenarios should parse");
@@ -331,17 +331,33 @@ mod tests {
 
         assert_eq!(
             generated.len(),
-            10,
-            "the scenario library should include all ten generated maps"
+            14,
+            "the scenario library should include all fourteen generated maps"
         );
-        let seeds: HashSet<u64> = generated
-            .iter()
-            .filter_map(|scenario| scenario.generation_seed)
+        let mut by_seed = BTreeMap::<u64, BTreeSet<&str>>::new();
+        for scenario in &generated {
+            let seed = scenario
+                .generation_seed
+                .expect("the generated scenario should retain its seed");
+            by_seed
+                .entry(seed)
+                .or_default()
+                .insert(scenario.name.as_str());
+        }
+        let duplicate_seeds: BTreeMap<_, _> = by_seed
+            .into_iter()
+            .filter(|(_seed, names)| names.len() > 1)
             .collect();
         assert_eq!(
-            seeds.len(),
-            generated.len(),
-            "generated scenarios should not start on the same configured seed"
+            duplicate_seeds,
+            BTreeMap::from([
+                (129_704_046, BTreeSet::from(["Mountain Range", "Mountains"]),),
+                (
+                    1_592_598_566,
+                    BTreeSet::from(["Deep Forest", "Prairie", "Procedural Hills", "Two Rings"]),
+                ),
+            ]),
+            "only the approved directly comparable maps may share a configured seed"
         );
 
         for scenario in generated {

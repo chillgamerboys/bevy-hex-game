@@ -1,110 +1,32 @@
-//! Stable combat order with names, factions, and the current actor.
+//! Initiative application adapter. Rendering belongs to `hex_ui`.
 
-use bevy::picking::Pickable;
 use bevy::prelude::*;
 use hex_combat::{CombatSystems, TurnOrder};
-use hex_core::{AppSystems, GameplaySystems, Screen, UnitId};
+use hex_core::{AppSystems, GameplaySystems, Screen};
+use hex_perception::FactionMapKnowledge;
+use hex_ui::{InitiativeEntryView, InitiativeSide, InitiativeView};
 use hex_units::{Faction, UnitRegistry};
 
-use crate::menus::widgets::{heading, panel, UiAssets, ACCENT, LABEL};
-use crate::readouts::{region, GameplayUiContext, HudElement, HudRegion, HudSetup, READ_ONLY_HUD};
-
-#[derive(Resource, Default, Debug, PartialEq, Eq)]
-struct InitiativeReadout(Vec<InitiativeEntry>);
-
-#[derive(Debug, PartialEq, Eq)]
-struct InitiativeEntry {
-    unit: UnitId,
-    name: String,
-    faction: Faction,
-    current: bool,
-}
-
-#[derive(Component)]
-struct InitiativePanel;
-
-#[derive(Component)]
-struct InitiativeBody;
-
-#[derive(Component)]
-struct InitiativeHeading;
+use crate::readouts::GameplayUiContext;
 
 pub(super) fn plugin(app: &mut App) {
-    app.init_resource::<InitiativeReadout>()
-        .add_systems(
-            OnEnter(Screen::Gameplay),
-            spawn_panel.in_set(HudSetup::Panels),
-        )
-        .add_systems(
-            Update,
-            refresh
-                .in_set(AppSystems::Update)
-                .after(CombatSystems::Advance)
-                .run_if(in_state(Screen::Gameplay)),
-        )
-        .add_systems(
-            Update,
-            rebuild
-                .after(refresh)
-                .after(GameplaySystems::UiContext)
-                .run_if(in_state(Screen::Gameplay)),
-        );
+    app.add_systems(
+        Update,
+        publish_view
+            .in_set(AppSystems::Update)
+            .after(CombatSystems::Advance)
+            .after(GameplaySystems::UiContext)
+            .run_if(in_state(Screen::Gameplay)),
+    );
 }
 
-fn spawn_panel(
-    mut commands: Commands,
-    mut readout: ResMut<InitiativeReadout>,
-    assets: Res<UiAssets>,
-    regions: Query<(Entity, &HudRegion)>,
-) {
-    *readout = InitiativeReadout::default();
-    let turn_region = region(HudRegion::Turn, &regions);
-    let panel = commands
-        .spawn((
-            Name::new("Initiative Panel"),
-            InitiativePanel,
-            HudElement,
-            panel(),
-            READ_ONLY_HUD,
-        ))
-        .insert(Node {
-            display: Display::None,
-            width: Val::Percent(100.0),
-            height: Val::Percent(100.0),
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            padding: UiRect::axes(Val::Px(12.0), Val::Px(8.0)),
-            border: UiRect::all(Val::Px(1.0)),
-            border_radius: BorderRadius::all(Val::Px(10.0)),
-            column_gap: Val::Px(12.0),
-            ..default()
-        })
-        .with_children(|panel| {
-            panel.spawn((InitiativeHeading, heading(&assets, "turn order")));
-            panel.spawn((
-                Name::new("Initiative Body"),
-                InitiativeBody,
-                Node {
-                    flex_grow: 1.0,
-                    flex_direction: FlexDirection::Row,
-                    column_gap: Val::Px(8.0),
-                    align_items: AlignItems::Center,
-                    ..default()
-                },
-                Pickable::IGNORE,
-            ));
-        })
-        .id();
-    if let Some(turn_region) = turn_region {
-        commands.entity(turn_region).add_child(panel);
-    }
-}
-
-fn refresh(
-    mut readout: ResMut<InitiativeReadout>,
+fn publish_view(
     order: Res<TurnOrder>,
     registry: Res<UnitRegistry>,
     identities: Query<(&Name, &Faction)>,
+    knowledge: Option<Res<FactionMapKnowledge>>,
+    context: Option<Res<GameplayUiContext>>,
+    mut view: ResMut<InitiativeView>,
 ) {
     let current = order.current();
     let entries = order
@@ -113,123 +35,76 @@ fn refresh(
         .filter_map(|unit| {
             let entity = registry.entity_of(*unit)?;
             let (name, faction) = identities.get(entity).ok()?;
-            Some(InitiativeEntry {
+            let inspectable = *faction == Faction::Player
+                || knowledge.as_deref().is_some_and(|knowledge| {
+                    knowledge.faction(Faction::Player).unit(*unit).is_some()
+                });
+            Some(InitiativeEntryView {
                 unit: *unit,
-                name: name.as_str().to_owned(),
-                faction: *faction,
+                name: if inspectable {
+                    name.as_str().to_owned()
+                } else {
+                    "Unobserved hostile".to_owned()
+                },
+                side: match faction {
+                    Faction::Player => InitiativeSide::Ally,
+                    Faction::Hostile => InitiativeSide::Hostile,
+                },
                 current: current == Some(*unit),
+                inspectable,
             })
         })
         .collect();
-    let next = InitiativeReadout(entries);
-    if *readout != next {
-        *readout = next;
+    let heading = context
+        .as_deref()
+        .and_then(|context| context.acting.as_ref())
+        .map_or_else(
+            || "turn order".to_owned(),
+            |actor| match actor.faction {
+                Faction::Player => "your turn".to_owned(),
+                Faction::Hostile => "enemy turn".to_owned(),
+            },
+        );
+    let next = InitiativeView { heading, entries };
+    if *view != next {
+        *view = next;
     }
-}
-
-fn rebuild(
-    mut commands: Commands,
-    readout: Res<InitiativeReadout>,
-    bodies: Query<Entity, With<InitiativeBody>>,
-    mut panels: Query<&mut Node, With<InitiativePanel>>,
-    mut headings: Query<&mut Text, With<InitiativeHeading>>,
-    context: Option<Res<GameplayUiContext>>,
-    assets: Res<UiAssets>,
-) {
-    if !readout.is_changed() && !context.as_ref().is_some_and(|context| context.is_changed()) {
-        return;
-    }
-    if let Ok(mut heading) = headings.single_mut() {
-        heading.0 = context
-            .as_deref()
-            .and_then(|context| context.acting.as_ref())
-            .map_or_else(
-                || "turn order".to_owned(),
-                |actor| match actor.faction {
-                    Faction::Player => "your turn".to_owned(),
-                    Faction::Hostile => "enemy turn".to_owned(),
-                },
-            );
-    }
-    if let Ok(mut node) = panels.single_mut() {
-        node.display = if readout.0.is_empty() {
-            Display::None
-        } else {
-            Display::Flex
-        };
-    }
-    let Ok(body) = bodies.single() else { return };
-    commands.entity(body).despawn_related::<Children>();
-    commands.entity(body).with_children(|rows| {
-        for entry in &readout.0 {
-            let side = match entry.faction {
-                Faction::Player => "ALLY",
-                Faction::Hostile => "HOSTILE",
-            };
-            let marker = if entry.current { "▶" } else { "·" };
-            rows.spawn((
-                Name::new(format!("Initiative Unit {}", entry.unit.0)),
-                Text::new(format!("{marker} {side} · {}", entry.name)),
-                TextFont {
-                    font: assets.body.clone().into(),
-                    ..TextFont::from_font_size(13.0)
-                },
-                TextColor(if entry.current { ACCENT } else { LABEL }),
-                Pickable::IGNORE,
-            ));
-        }
-    });
 }
 
 #[cfg(test)]
 mod tests {
-    use bevy::MinimalPlugins;
+    use hex_core::UnitId;
 
     use super::*;
 
     #[test]
-    fn initiative_renders_in_stable_order_and_marks_the_current_unit() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.insert_resource(UiAssets {
-            display: Handle::default(),
-            body: Handle::default(),
-            hex_cell: Handle::default(),
-        });
-        app.init_resource::<InitiativeReadout>()
-            .add_systems(Startup, spawn_panel)
-            .add_systems(Update, rebuild);
-        app.update();
-        app.insert_resource(InitiativeReadout(vec![
-            InitiativeEntry {
-                unit: UnitId(4),
-                name: "mage #4".to_owned(),
-                faction: Faction::Player,
-                current: true,
-            },
-            InitiativeEntry {
-                unit: UnitId(9),
-                name: "wolf #9".to_owned(),
-                faction: Faction::Hostile,
-                current: false,
-            },
-        ]));
-        app.update();
-
-        let mut rows = app
-            .world_mut()
-            .query_filtered::<(&Name, &Text, &TextColor), Without<InitiativeBody>>();
-        let rendered: Vec<_> = rows
-            .iter(app.world())
-            .filter(|(name, _, _)| name.as_str().starts_with("Initiative Unit"))
-            .map(|(_, text, color)| (text.0.clone(), color.0))
-            .collect();
+    fn projected_order_keeps_canonical_identity_and_side_labels() {
+        let view = InitiativeView {
+            heading: "your turn".to_owned(),
+            entries: vec![
+                InitiativeEntryView {
+                    unit: UnitId(4),
+                    name: "mage #4".to_owned(),
+                    side: InitiativeSide::Ally,
+                    current: true,
+                    inspectable: true,
+                },
+                InitiativeEntryView {
+                    unit: UnitId(9),
+                    name: "wolf #9".to_owned(),
+                    side: InitiativeSide::Hostile,
+                    current: false,
+                    inspectable: false,
+                },
+            ],
+        };
         assert_eq!(
-            rendered,
-            vec![
-                ("▶ ALLY · mage #4".to_owned(), ACCENT),
-                ("· HOSTILE · wolf #9".to_owned(), LABEL),
-            ]
+            view.entries.first().map(|entry| entry.unit),
+            Some(UnitId(4))
+        );
+        assert_eq!(
+            view.entries.last().map(|entry| entry.side),
+            Some(InitiativeSide::Hostile)
         );
     }
 }

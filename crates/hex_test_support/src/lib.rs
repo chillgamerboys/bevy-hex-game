@@ -1,0 +1,254 @@
+//! Dependency-limited infrastructure for deterministic headless tests.
+//!
+//! The app shell is shared across owners; each owning test adds its system under test
+//! and retains its domain fixtures and acceptance criteria. Synthetic arenas publish
+//! the same shared surface components that gameplay consumes, without importing the
+//! world systems that normally produce them, and therefore belong only in consumer
+//! tests. A map-publication test must exercise `hex_map` instead of substituting one.
+//!
+//! Cargo dependencies are the enforcement boundary: adding `hex_units`, `hex_combat`,
+//! `hex_game`, `hex_map`, `hex_world`, or `hex_perception` here is an architecture
+//! violation.
+
+use std::time::Duration;
+
+use bevy::prelude::*;
+use hex_assets::{
+    ArtPalette, PaletteSwatch, SrgbColor, Substance, SubstanceFile, SubstanceTable, SwatchId,
+};
+use hex_core::{
+    GameplaySetup, Headroom, HexCoord, HexSpan, HexTile, RunBottom, Screen, SubstanceId, TilePos,
+    MAX_HEADROOM,
+};
+use hex_test_app::HeadlessAppBuilder;
+pub use hex_test_app::{enter_gameplay, run_until, RunLimitExceeded};
+
+/// Stable synthetic stone id produced by [`fixture_assets`].
+pub const STONE: SubstanceId = SubstanceId(10);
+
+/// One exact surface published by a synthetic arena.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SurfaceSpec {
+    /// Exact standable surface.
+    pub position: TilePos,
+    /// Inclusive bottom of this exact material run.
+    pub bottom: i32,
+    /// Vertical material span below the surface.
+    pub span: HexSpan,
+    /// Clear levels above the surface.
+    pub headroom: i32,
+    /// Authored material id.
+    pub substance: SubstanceId,
+}
+
+impl SurfaceSpec {
+    /// Builds one ordinary stone surface at `position`.
+    #[must_use]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "test arenas use small exact voxel levels that round-trip through f32"
+    )]
+    pub fn stone(position: TilePos) -> Self {
+        Self {
+            position,
+            bottom: position.level,
+            span: HexSpan::new(position.level as f32, position.level as f32 + 1.0),
+            headroom: MAX_HEADROOM,
+            substance: STONE,
+        }
+    }
+}
+
+/// Synthetic exact-surface facts used in gameplay tests.
+#[derive(Resource, Debug, Clone, PartialEq, Default)]
+pub struct SyntheticArena {
+    surfaces: Vec<SurfaceSpec>,
+}
+
+impl SyntheticArena {
+    /// Creates an arena from explicit shared surface facts.
+    #[must_use]
+    pub fn new(surfaces: impl IntoIterator<Item = SurfaceSpec>) -> Self {
+        let mut surfaces = surfaces.into_iter().collect::<Vec<_>>();
+        surfaces.sort_by_key(|surface| surface.position);
+        surfaces.dedup_by_key(|surface| surface.position);
+        Self { surfaces }
+    }
+
+    /// Creates one flat hexagonal patch.
+    #[must_use]
+    pub fn flat_radius(radius: u32, level: i32) -> Self {
+        Self::new(
+            HexCoord::ORIGIN
+                .within_radius(radius)
+                .into_iter()
+                .map(|coord| SurfaceSpec::stone(TilePos::new(coord, level))),
+        )
+    }
+
+    /// Creates a one-surface-wide axial corridor including both endpoints.
+    #[must_use]
+    pub fn corridor(start_q: i32, end_q: i32, r: i32, level: i32) -> Self {
+        let low = start_q.min(end_q);
+        let high = start_q.max(end_q);
+        Self::new(
+            (low..=high)
+                .map(|q| SurfaceSpec::stone(TilePos::new(HexCoord::from_axial(q, r), level))),
+        )
+    }
+
+    /// Creates two rooms connected by one exact-surface-wide chokepoint.
+    #[must_use]
+    pub fn chokepoint(level: i32) -> Self {
+        let left = HexCoord::from_axial(-3, 0);
+        let right = HexCoord::from_axial(3, 0);
+        Self::new(
+            left.within_radius(2)
+                .into_iter()
+                .chain(right.within_radius(2))
+                .chain((-2..=2).map(|q| HexCoord::from_axial(q, 0)))
+                .map(|coord| SurfaceSpec::stone(TilePos::new(coord, level))),
+        )
+    }
+
+    /// Creates a flat patch with a second surface at the origin.
+    #[must_use]
+    pub fn stacked(radius: u32, lower_level: i32, upper_level: i32) -> Self {
+        let lower = Self::flat_radius(radius, lower_level);
+        Self::new(
+            lower
+                .surfaces
+                .into_iter()
+                .chain([SurfaceSpec::stone(TilePos::new(
+                    HexCoord::ORIGIN,
+                    upper_level,
+                ))]),
+        )
+    }
+
+    /// Returns the exact surfaces in stable order.
+    #[must_use]
+    pub fn surfaces(&self) -> &[SurfaceSpec] {
+        &self.surfaces
+    }
+}
+
+/// Builds the small palette and substance table used by synthetic gameplay arenas.
+pub fn fixture_assets() -> Result<(ArtPalette, SubstanceTable), String> {
+    let stone_id = SwatchId::new("terrain/test-stone").map_err(|error| error.to_string())?;
+    let stone = PaletteSwatch::new(
+        "Test Stone",
+        SrgbColor::new(0.5, 0.5, 0.5).map_err(|error| error.to_string())?,
+        ["test".to_owned()].into_iter().collect(),
+    )
+    .map_err(|error| error.to_string())?;
+    let palette = ArtPalette::new([(stone_id.clone(), stone)].into_iter().collect())
+        .map_err(|error| error.to_string())?;
+    let substances = SubstanceFile {
+        substances: [
+            ("air".to_owned(), Substance::invisible(false, false)),
+            (
+                "stone".to_owned(),
+                Substance::from_swatch(stone_id, true, true).with_conjurable(true),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    };
+    let table =
+        SubstanceTable::from_file(&substances, &palette).map_err(|error| error.to_string())?;
+    Ok((palette, table))
+}
+
+/// Builder for deterministic minimal Bevy apps used by owning headless tests.
+pub struct TestAppBuilder {
+    inner: HeadlessAppBuilder,
+}
+
+impl Default for TestAppBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TestAppBuilder {
+    /// Installs common states, schedules, input, assets, and a fixed 100 ms clock.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            inner: HeadlessAppBuilder::new().with_gameplay_shell(),
+        }
+    }
+
+    /// Gives the test access to the app before plugins are finalized.
+    pub fn app_mut(&mut self) -> &mut App {
+        self.inner.app_mut()
+    }
+
+    /// Selects the deterministic duration advanced by every app update.
+    #[must_use]
+    pub fn with_fixed_step(mut self, duration: Duration) -> Self {
+        self.inner = self.inner.with_fixed_step(duration);
+        self
+    }
+
+    /// Publishes the standard synthetic palette, substances, and arena.
+    pub fn with_arena(mut self, arena: SyntheticArena) -> Result<Self, String> {
+        let (palette, substances) = fixture_assets()?;
+        self.inner.app_mut().insert_resource(palette);
+        self.inner.app_mut().insert_resource(substances);
+        self.inner.app_mut().insert_resource(arena);
+        self.inner.app_mut().add_systems(
+            OnEnter(Screen::Gameplay),
+            spawn_synthetic_arena.in_set(GameplaySetup::Terrain),
+        );
+        Ok(self)
+    }
+
+    /// Finalizes plugins and returns the runnable app.
+    pub fn build(self) -> App {
+        self.inner.build()
+    }
+}
+
+fn spawn_synthetic_arena(mut commands: Commands, arena: Res<SyntheticArena>) {
+    for surface in arena.surfaces() {
+        commands.spawn((
+            HexTile,
+            surface.position.coord,
+            surface.position,
+            RunBottom(surface.bottom),
+            surface.span,
+            surface.substance,
+            Headroom(surface.headroom),
+        ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arenas_publish_unique_exact_surfaces() {
+        let arena = SyntheticArena::stacked(2, 1, 5);
+        assert_eq!(arena.surfaces().len(), 20);
+        assert!(arena
+            .surfaces()
+            .windows(2)
+            .all(|pair| matches!(pair, [left, right] if left.position < right.position)));
+        assert!(arena
+            .surfaces()
+            .iter()
+            .any(|surface| surface.position == TilePos::new(HexCoord::ORIGIN, 5)));
+    }
+
+    #[test]
+    fn bounded_runner_reports_non_completion_as_data() {
+        let mut app = TestAppBuilder::new().build();
+        assert_eq!(
+            run_until(&mut app, 3, |_| false),
+            Err(RunLimitExceeded { frames: 3 })
+        );
+    }
+}

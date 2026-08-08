@@ -9,6 +9,12 @@
 // here makes the authored contract visible. The terrain presets select the other
 // entries by name; changing their properties is safe, but renaming them requires
 // updating the generation code.
+//
+// Runtime ids are a compatibility contract rather than file order. The original
+// vocabulary keeps its shipped ids, followed by reserved Outpost slots for
+// limestone, slate, timber, and terracotta, then sand. Missing reserved entries are
+// inert and cannot be resolved by name; see docs/development/config.md before adding
+// another registry slot. A name added only to this file is rejected.
 (
     substances: {
         "air": (
@@ -18,30 +24,53 @@
             solid: false,
             // There is nothing to dig out of it.
             diggable: false,
+            // Empty space is never a substance a spell can create.
+            conjurable: false,
+            // Empty space has no damageable voxel body.
+            toughness: None,
         ),
 
         "grass": (
             swatch: Some("terrain/grass"),
             solid: true,
             diggable: true,
+            conjurable: false,
+            toughness: Some(1),
         ),
 
         "dirt": (
             swatch: Some("terrain/dirt"),
             solid: true,
             diggable: true,
+            conjurable: false,
+            toughness: Some(2),
         ),
 
         "stone": (
             swatch: Some("terrain/stone"),
             solid: true,
             diggable: true,
+            // The current construction spells name stone explicitly.
+            conjurable: true,
+            toughness: Some(4),
         ),
 
         "gravel": (
             swatch: Some("terrain/gravel"),
             solid: true,
             diggable: true,
+            conjurable: false,
+            toughness: Some(2),
+        ),
+
+        // Loose coastal terrain. Swimming and erosion rules remain deferred, so
+        // sand currently follows the ordinary diggable-solid contract.
+        "sand": (
+            swatch: Some("terrain/sand"),
+            solid: true,
+            diggable: true,
+            conjurable: false,
+            toughness: Some(2),
         ),
 
         // Rendered as a voxel but excluded from movement footing. It remains
@@ -50,23 +79,27 @@
             swatch: Some("liquid/water"),
             solid: false,
             diggable: true,
+            conjurable: false,
+            toughness: None,
         ),
 
-        // Durability is not modelled yet, so metal is currently just a solid,
-        // diggable bridge material.
+        // Metal is on the toughest initial durability tier.
         "metal": (
             swatch: Some("structure/metal"),
             solid: true,
             diggable: true,
+            conjurable: false,
+            toughness: Some(8),
         ),
 
         // Cut and fitted masonry used by generated walls, towers, stairs, and keeps.
-        // Structural durability remains deferred, so it follows ordinary stone's
-        // current solid and diggable behavior.
+        // Fitted masonry shares the toughest initial durability tier with metal.
         "worked_stone": (
             swatch: Some("structure/worked-stone"),
             solid: true,
             diggable: true,
+            conjurable: false,
+            toughness: Some(8),
         ),
 
         // Procedural-environment materials. Their behaviour is intentionally simple
@@ -75,26 +108,34 @@
             swatch: Some("terrain/snow"),
             solid: true,
             diggable: true,
+            conjurable: false,
+            toughness: Some(1),
         ),
 
         "ice": (
             swatch: Some("terrain/ice"),
             solid: true,
             diggable: true,
+            conjurable: false,
+            toughness: Some(2),
         ),
 
         "basalt": (
             swatch: Some("terrain/basalt"),
             solid: true,
             diggable: true,
+            conjurable: false,
+            toughness: Some(4),
         ),
 
-        // Lava is an opaque, non-solid voxel for now. Damage and emissive rendering
-        // need gameplay and material contracts that do not exist yet.
+        // Lava is an opaque, non-solid voxel and deliberately opts out of toughness.
+        // Fluid redistribution and emissive rendering remain separate concerns.
         "lava": (
             swatch: Some("liquid/lava"),
             solid: false,
             diggable: true,
+            conjurable: false,
+            toughness: None,
         ),
 
         // The floor of the world. Not diggable, so nothing can tunnel out the
@@ -103,6 +144,8 @@
             swatch: Some("terrain/bedrock"),
             solid: true,
             diggable: false,
+            conjurable: false,
+            toughness: None,
         ),
     },
 )

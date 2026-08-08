@@ -6,12 +6,13 @@
 //!
 //! # Two orderings, deliberately separate
 //!
-//! [`ElementId`] is assigned from **sorted names** (the same reason
-//! [`SubstanceTable`](crate::SubstanceTable) sorts: reordering the file must never
-//! silently rewrite what an id means). The **wheel** is a *different* ordering — the
-//! six basic elements in the order that makes opposition `wheel[(i + len/2) % len]`,
-//! index arithmetic over the array. An element's id says nothing about where it sits
-//! on the wheel, and it must not: the two orderings answer different questions.
+//! [`ElementId`] is assigned from **sorted names**, so reordering the file never
+//! silently rewrites what an id means. This is distinct from
+//! [`SubstanceTable`](crate::SubstanceTable), whose ids follow a frozen material-
+//! compatibility registry. The **wheel** is a *different* ordering — the six basic
+//! elements in the order that makes opposition `wheel[(i + len/2) % len]`, index
+//! arithmetic over the array. An element's id says nothing about where it sits on the
+//! wheel, and it must not: the two orderings answer different questions.
 //!
 //! # Higher-order elements
 //!
@@ -403,9 +404,8 @@ fn build_element_catalog(
 
 #[cfg(test)]
 mod tests {
-    use bevy::state::app::StatesPlugin;
-
     use super::*;
+    use hex_test_app::HeadlessAppBuilder;
 
     fn wheel() -> Vec<String> {
         ["Light", "Air", "Fire", "Metal", "Earth", "Water"]
@@ -584,12 +584,16 @@ mod tests {
             vec![fusion("Fire", 1), fusion("Water", 1)],
         );
 
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin));
-        app.insert_state(Screen::Gameplay);
-        app.insert_resource(ElementCatalog::from_file(&original));
-        app.insert_resource(replacement);
-        register_catalog_builder(&mut app);
+        let mut builder = HeadlessAppBuilder::new()
+            .with_minimal_plugins()
+            .with_state_plugin();
+        builder.app_mut().insert_state(Screen::Gameplay);
+        builder
+            .app_mut()
+            .insert_resource(ElementCatalog::from_file(&original));
+        builder.app_mut().insert_resource(replacement);
+        register_catalog_builder(builder.app_mut());
+        let mut app = builder.build();
 
         app.update();
         assert!(

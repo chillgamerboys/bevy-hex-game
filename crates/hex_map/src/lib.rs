@@ -16,8 +16,9 @@
 //!
 //! Tile entities are spawned carrying [`HexTile`](hex_core::HexTile),
 //! [`HexCoord`](hex_core::HexCoord), a surface [`TilePos`](hex_core::TilePos),
-//! [`HexSpan`](hex_core::HexSpan), [`SubstanceId`](hex_core::SubstanceId), and
-//! [`Headroom`](hex_core::Headroom). Exact optional-region memberships are published
+//! its inclusive [`RunBottom`](hex_core::RunBottom), [`HexSpan`](hex_core::HexSpan),
+//! [`SubstanceId`](hex_core::SubstanceId), and [`Headroom`](hex_core::Headroom).
+//! Exact optional-region memberships are published
 //! separately through [`SpecialMovementRegions`](hex_core::SpecialMovementRegions).
 //! `hex_units` queries the tile components off the entities. It never reads
 //! [`HeightMap`] or any other type defined here.
@@ -51,28 +52,37 @@ mod procedural_v3;
 pub mod settings;
 /// Pure construction of complete voxel maps from terrain presets.
 mod terrain;
+mod terrain_damage;
 /// Voxel storage and the run-merging that turns it into prisms.
 pub mod voxel;
 
 pub use generator::{FlatGenerator, HeightGenerator, HeightMap, PerlinGenerator, PerlinStep};
 pub use liquid_render::LiquidVisualTime;
 pub use procedural::{
-    CavesMetrics as CavesReportMetrics, ForestMetrics as ForestReportMetrics,
-    FortMetrics as FortReportMetrics, GenerationReport, ProceduralRecipeMetrics, Ring7Metrics,
-    TacticalMetrics, WaterfallMetrics as WaterfallReportMetrics,
+    CavesMetrics as CavesReportMetrics, DeepForestMetrics as DeepForestReportMetrics,
+    ForestMetrics as ForestReportMetrics, FortMetrics as FortReportMetrics, GenerationReport,
+    MacroMetrics, MountainRangeMetrics, PrairieMetrics as PrairieReportMetrics,
+    ProceduralRecipeMetrics, Ring19Metrics, Ring7Metrics, TacticalMetrics,
+    VolcanoMetrics as VolcanoReportMetrics, WaterfallMetrics as WaterfallReportMetrics,
 };
 pub use settings::{
     BridgeSettings, CavesSettings, CrossingSettings, CubeCoord, DerivedHillsCrossing,
     EdgeElevationSettings, EdgeLiquidPortSettings, EdgeLiquidSettings, EnvironmentSettings,
-    HillsSettings, LandformSettings, LayeredSkyIslandsSettings, LinkedIslandsSettings, MapSettings,
+    HillsSettings, LandformSettings, LayeredSkyIslandsSettings, LinkedIslandsSettings,
+    MacroAccessSettings, MacroAxisSettings, MacroBiomeInstanceSettings, MacroElevationSettings,
+    MacroHeadwaterSettings, MacroLayoutSettings, MacroLiquidConnectionSettings, MapSettings,
     MountainSettings, MountainsSettings, NamedOverlaySettings, PatchEdgeContractSettings,
     PatchEdgesSettings, PatchMaskSettings, PatchSpec, PerlinSettings, PerlinStepSettings,
     ProceduralSettings, ProceduralV1Settings, ProceduralV2Settings, ProceduralV3Settings,
-    RiverSettings, SharedEdgeSettings, ShowcaseSettings, SkyIslandsSettings, TacticalSettings,
-    TerrainSettings, V2EnvironmentSettings, V2HillsSettings, V2RecipeSettings, V3CavesSettings,
+    Ring19BoundaryOutletSettings, Ring19BoundarySide, Ring19LiquidConnectionSettings,
+    Ring19RegionSettings, RiverSettings, SharedEdgeSettings, ShowcaseSettings, SkyIslandsSettings,
+    TacticalSettings, TerrainSettings, V2EnvironmentSettings, V2HillsSettings, V2RecipeSettings,
+    V3BeachSettings, V3CavesSettings, V3DeepForestSettings, V3DeepMountainSettings,
     V3EnvironmentSettings, V3ForestSettings, V3FortSettings, V3HillsSettings, V3LayoutSettings,
-    V3MountainsSettings, V3OverlaySettings, V3RecipeSettings, V3Ring7Settings,
-    V3SkyIslandsSettings, V3WaterfallSettings, WalkerPortSettings,
+    V3MountainsSettings, V3OverlaySettings, V3PrairieSettings, V3RecipeSettings, V3Ring19Settings,
+    V3Ring7Settings, V3ShallowSeaSettings, V3ShoreSettings, V3SkyIslandsSettings,
+    V3VolcanoSettings, V3WaterfallSettings, WalkerPortSettings, V3_MACRO_CELL_COUNT,
+    V3_MOUNTAIN_RANGE_REGION_COUNT, V3_RING19_REGION_COUNT,
 };
 pub use voxel::{runs, Column, SubstanceRun, VoxelMap};
 

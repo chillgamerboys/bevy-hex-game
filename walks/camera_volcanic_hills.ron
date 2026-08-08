@@ -1,0 +1,25 @@
+// Real Character movement to the elevated lava bridge, followed by multiple azimuths.
+// The crater overlook remains manifested separately; this route does not cross lava.
+[
+    AwaitScreen("Title"),
+    StartScenario(name: "Volcanic Hills", seed: Some(444211238)),
+    AwaitScreen("Gameplay"),
+    AwaitTerrain,
+    Key("H"),
+    Key("C"),
+    Settle(45),
+    Capture("01-volcanic-hills-character-start"),
+    ClickAnchor(name: "bridge", expected: (q: 0, r: 0, level: 18)),
+    AwaitPartyIdle(max_frames: 2400),
+    AssertSelectedAt(expected: (q: 0, r: 0, level: 18)),
+    Settle(60),
+    Capture("02-volcanic-hills-bridge-front"),
+    OrbitCamera(yaw_turns: 0.33333334, pitch_fraction: -0.1),
+    Settle(45),
+    Capture("03-volcanic-hills-bridge-side"),
+    OrbitCamera(yaw_turns: 0.33333334, pitch_fraction: 0.1),
+    Settle(45),
+    Capture("04-volcanic-hills-bridge-rear"),
+    Key("Backspace"),
+    AwaitScreen("Title"),
+]

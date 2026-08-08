@@ -16,8 +16,8 @@
 
 use bevy::prelude::*;
 use hex_assets::{
-    choose_settings, Encounter, LightingSettings, Scenario, SelectSettings, SettingsRegistry,
-    CONFIG_EXTENSIONS,
+    choose_settings, Encounter, EncounterPlacement, LightingSettings, Scenario, SelectSettings,
+    SettingsRegistry, CONFIG_EXTENSIONS,
 };
 use hex_core::{
     GameplaySetup, GameplaySetupFailure, InteriorRegions, MapAnchors, MapViewHint, ResolvedMapSeed,
@@ -26,6 +26,8 @@ use hex_core::{
 use hex_map::{MapSettings, TerrainSettings};
 use hex_units::Faction;
 use hex_world::TimeOfDay;
+
+use crate::screens::CreatorSandboxReturn;
 
 pub(super) fn plugin(app: &mut App) {
     // `select_settings` rather than `load_settings`: there is no world file to load
@@ -58,13 +60,13 @@ pub(super) fn plugin(app: &mut App) {
         .add_systems(OnExit(Screen::Gameplay), clear_session_resources);
 }
 
-/// The exact scenario and resolved seed whose button was clicked.
+/// The exact scenario and resolved seed frozen by its typed launch owner.
 ///
-/// The library can hot-reload between the title-screen click and the next frame's
-/// `OnEnter(Loading)`. Carrying the entry itself keeps a reorder or removal from
-/// changing what that click means; carrying the seed prevents a later reroll from
-/// changing an already-started load.
-#[derive(Resource, Debug, Clone)]
+/// The library can hot-reload between a Campaign, Sandbox, save, retry, review, or
+/// test request and the next frame's `OnEnter(Loading)`. Carrying the entry itself
+/// keeps a reorder or removal from changing that request; carrying the seed prevents
+/// a later regeneration from changing an already-started load.
+#[derive(Resource, Debug, Clone, PartialEq)]
 pub(super) struct ScenarioToLoad {
     pub(super) scenario: Scenario,
     pub(super) resolved_seed: Option<ResolvedMapSeed>,
@@ -102,6 +104,7 @@ fn apply_selected_scenario(
     asset_server: Res<AssetServer>,
     mut registry: ResMut<SettingsRegistry>,
     pending: Option<Res<ScenarioToLoad>>,
+    creator_return: Option<Res<CreatorSandboxReturn>>,
     mut next: ResMut<NextState<Screen>>,
 ) {
     // These resources describe the previous generated world. Clearing them before the
@@ -129,8 +132,8 @@ fn apply_selected_scenario(
         commands.insert_resource(GameplaySetupFailure::new(
             "Loading started without a selected scenario.",
         ));
-        next.set(Screen::Title);
-        error!("loading entered without a clicked scenario; returning to the title screen");
+        next.set(setup_failure_destination(creator_return.is_some()));
+        error!("loading entered without a typed launch request; returning to Main Menu");
         return;
     };
     let scenario = pending.scenario.clone();
@@ -183,7 +186,9 @@ pub(crate) fn validate_loaded_scenario(
     lighting: Option<Res<LightingSettings>>,
     time_override: Option<Res<ScenarioTimeOverride>>,
     seed: Option<Res<ResolvedMapSeed>>,
+    active: Option<Res<ActiveScenario>>,
     status: Option<Res<ScenarioContractStatus>>,
+    creator_return: Option<Res<CreatorSandboxReturn>>,
     mut next: ResMut<NextState<Screen>>,
 ) {
     if !registry.all_loaded()
@@ -207,15 +212,23 @@ pub(crate) fn validate_loaded_scenario(
         return;
     }
 
-    let contract_error = scenario_contract_error(&map, &encounter, seed.as_deref())
-        .or_else(|| lighting.resolve(time_override.0).err());
+    let allow_resolved_surfaces = active
+        .as_deref()
+        .is_some_and(|active| active.0.encounter_override.is_some());
+    let contract_error = scenario_contract_error_for_launch(
+        &map,
+        &encounter,
+        seed.as_deref(),
+        allow_resolved_surfaces,
+    )
+    .or_else(|| lighting.resolve(time_override.0).err());
     if let Some(reason) = contract_error {
         error!("selected scenario is incompatible with its world: {reason}");
         commands.insert_resource(ScenarioContractStatus::Invalid);
         commands.insert_resource(GameplaySetupFailure::new(format!(
             "The selected scenario is incompatible with its world: {reason}."
         )));
-        next.set(Screen::Title);
+        next.set(setup_failure_destination(creator_return.is_some()));
     } else {
         commands.insert_resource(ScenarioContractStatus::Ready);
     }
@@ -226,6 +239,7 @@ fn initialize_time_of_day(
     mut commands: Commands,
     lighting: Res<LightingSettings>,
     time_override: Res<ScenarioTimeOverride>,
+    creator_return: Option<Res<CreatorSandboxReturn>>,
     mut next: ResMut<NextState<Screen>>,
 ) {
     match lighting.resolve(time_override.0) {
@@ -242,7 +256,7 @@ fn initialize_time_of_day(
             commands.insert_resource(GameplaySetupFailure::new(format!(
                 "The selected scenario cannot initialize its lighting: {reason}."
             )));
-            next.set(Screen::Title);
+            next.set(setup_failure_destination(creator_return.is_some()));
         }
     }
 }
@@ -256,6 +270,7 @@ fn validate_gameplay_lighting_contract(
     mut commands: Commands,
     lighting: Res<LightingSettings>,
     time_override: Res<ScenarioTimeOverride>,
+    creator_return: Option<Res<CreatorSandboxReturn>>,
     mut next: ResMut<NextState<Screen>>,
 ) {
     if !lighting.is_changed() {
@@ -269,7 +284,7 @@ fn validate_gameplay_lighting_contract(
     commands.insert_resource(GameplaySetupFailure::new(format!(
         "The active scenario is incompatible with reloaded lighting: {reason}."
     )));
-    next.set(Screen::Title);
+    next.set(setup_failure_destination(creator_return.is_some()));
 }
 
 /// Whether the chosen encounter can be placed on the world the scenario named.
@@ -278,10 +293,20 @@ fn validate_gameplay_lighting_contract(
 /// and a world cannot see who is standing on it. Every entry is checked rather than a
 /// side at a time — one authored coordinate in an otherwise anchored roster is the same
 /// bug, and it would otherwise only surface as one unit missing from the fight.
+#[cfg(test)]
 fn scenario_contract_error(
     map: &MapSettings,
     encounter: &Encounter,
     seed: Option<&ResolvedMapSeed>,
+) -> Option<String> {
+    scenario_contract_error_for_launch(map, encounter, seed, false)
+}
+
+fn scenario_contract_error_for_launch(
+    map: &MapSettings,
+    encounter: &Encounter,
+    seed: Option<&ResolvedMapSeed>,
+    allow_resolved_surfaces: bool,
 ) -> Option<String> {
     match &map.terrain {
         TerrainSettings::Procedural(_) => {
@@ -289,7 +314,9 @@ fn scenario_contract_error(
                 return Some("procedural terrain has no resolved generation seed".to_owned());
             }
             for unit in encounter.entries() {
-                if !unit.placement.is_generated() {
+                let resolved_override = allow_resolved_surfaces
+                    && matches!(unit.placement, EncounterPlacement::Surface(_));
+                if !unit.placement.is_generated() && !resolved_override {
                     return Some(format!(
                         "the {} {:?} is placed on an authored coordinate, but procedural terrain \
                          must use a map anchor",
@@ -330,6 +357,7 @@ fn finalize_gameplay_setup(
     terrain_ready: Option<Res<TerrainReady>>,
     encounter: Option<Res<Encounter>>,
     units: Query<&Faction>,
+    creator_return: Option<Res<CreatorSandboxReturn>>,
     mut next: ResMut<NextState<Screen>>,
 ) {
     let reason = failure
@@ -347,7 +375,15 @@ fn finalize_gameplay_setup(
         commands.insert_resource(GameplaySetupFailure::new(reason.clone()));
     }
     error!("gameplay setup failed: {reason}");
-    next.set(Screen::Title);
+    next.set(setup_failure_destination(creator_return.is_some()));
+}
+
+fn setup_failure_destination(has_creator_return: bool) -> Screen {
+    if has_creator_return {
+        Screen::Sandbox
+    } else {
+        Screen::Title
+    }
 }
 
 /// Whether every side the encounter rosters actually stands on the map.
@@ -368,10 +404,7 @@ fn roster_shortfall(encounter: Option<&Encounter>, units: &Query<&Faction>) -> O
 
     for faction in encounter.factions() {
         let rostered = encounter.unit_count(faction);
-        let standing = units
-            .iter()
-            .filter(|spawned| **spawned == Faction::from(faction))
-            .count();
+        let standing = units.iter().filter(|spawned| **spawned == faction).count();
         if standing != rostered {
             let plural = if rostered == 1 { "unit" } else { "units" };
             return Some(format!(
@@ -424,7 +457,7 @@ fn sim_seeds_for(name: &str, resolved: Option<ResolvedMapSeed>) -> SimSeeds {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
@@ -445,8 +478,8 @@ mod tests {
         SpellFile, SubstanceFile, SubstanceTable, VoxelStyleCatalog,
     };
     use hex_combat::{
-        AiDecisionTraces, CombatSummary, EncounterOutcome, EncounterResolution, TurnOrder,
-        MAX_AI_DECISION_TRACES, MAX_COMBAT_SUMMARY_DETAILS,
+        AiDecisionTraces, CombatSummary, EncounterResolution, TurnOrder, MAX_AI_DECISION_TRACES,
+        MAX_COMBAT_SUMMARY_DETAILS,
     };
     use hex_core::{
         AppSystems, Busy, CommandQueue, ControlOwner, ExteriorIllumination, GameCommand,
@@ -458,23 +491,32 @@ mod tests {
         TraversalBlockers, Turn, UnitId,
     };
     use hex_lattice::{LatticeSpec, LatticeState};
-    use hex_map::{GenerationReport, MapSettings, TerrainSettings, VoxelMap};
+    use hex_map::{
+        GenerationReport, MapSettings, ProceduralRecipeMetrics, TerrainSettings, VoxelMap,
+    };
     use hex_perception::{FactionMapKnowledge, ResolvedIllumination};
     use hex_units::{
         either_in_reach, plan_formation_move, Body, Downed, Enemy, Faction, Footing,
-        FormationMember, Player, Reach, StandsOn,
+        FormationMember, Player, Reach, StandsOn, UnitOccupancy,
     };
     use hex_world::TimeOfDay;
 
     use super::{
         clear_session_resources, finalize_gameplay_setup, initialize_time_of_day,
-        scenario_contract_error, validate_gameplay_lighting_contract, validate_loaded_scenario,
-        ActiveScenario, ScenarioTimeOverride, ScenarioToLoad,
+        scenario_contract_error, scenario_contract_error_for_launch, setup_failure_destination,
+        validate_gameplay_lighting_contract, validate_loaded_scenario, ActiveScenario,
+        ScenarioContractStatus, ScenarioTimeOverride, ScenarioToLoad,
     };
 
     fn library() -> ScenarioLibrary {
         ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
             .expect("the shipped scenarios should parse")
+    }
+
+    #[test]
+    fn setup_failures_preserve_a_creator_origin_via_sandbox() {
+        assert_eq!(setup_failure_destination(false), Screen::Title);
+        assert_eq!(setup_failure_destination(true), Screen::Sandbox);
     }
 
     fn assets_dir() -> PathBuf {
@@ -807,6 +849,60 @@ mod tests {
             scenario_contract_error(&world, &authored, Some(&ResolvedMapSeed(1)))
                 .is_some_and(|error| error.contains("map anchor"))
         );
+    }
+
+    #[test]
+    fn procedural_retry_accepts_typed_resolved_surface_overrides_only() {
+        let entry = library()
+            .scenarios
+            .into_iter()
+            .find(|scenario| scenario.generation_seed.is_some())
+            .expect("the shipped library should include procedural terrain");
+        let world_text = fs::read_to_string(assets_dir().join(&entry.world))
+            .expect("the procedural world should be readable");
+        let world: MapSettings =
+            ron::from_str(&world_text).expect("the procedural world should deserialize");
+        let exact = duel(
+            EncounterPlacement::Surface(TilePos::new(HexCoord::ORIGIN, 2)),
+            EncounterPlacement::Surface(TilePos::new(HexCoord::from_axial(1, -1), 3)),
+        );
+        let seed = ResolvedMapSeed(1);
+
+        assert!(scenario_contract_error(&world, &exact, Some(&seed))
+            .is_some_and(|error| error.contains("map anchor")));
+        assert_eq!(
+            scenario_contract_error_for_launch(&world, &exact, Some(&seed), true),
+            None
+        );
+
+        let lighting_text = fs::read_to_string(assets_dir().join(&entry.lighting))
+            .expect("the procedural lighting should be readable");
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.init_state::<Screen>();
+        app.insert_resource(SettingsRegistry::default());
+        app.insert_resource(world);
+        app.insert_resource(exact.clone());
+        app.insert_resource(
+            ron::from_str::<LightingSettings>(&lighting_text)
+                .expect("the procedural lighting should deserialize"),
+        );
+        app.insert_resource(ScenarioTimeOverride(entry.starting_time_hours));
+        app.insert_resource(seed);
+        app.insert_resource(ActiveScenario(ScenarioToLoad {
+            scenario: entry,
+            resolved_seed: Some(seed),
+            encounter_override: Some(exact),
+        }));
+        app.add_systems(Update, validate_loaded_scenario);
+
+        app.update();
+
+        assert_eq!(
+            *app.world().resource::<ScenarioContractStatus>(),
+            ScenarioContractStatus::Ready
+        );
+        assert!(!app.world().contains_resource::<GameplaySetupFailure>());
     }
 
     #[test]
@@ -1184,7 +1280,7 @@ mod tests {
     /// And every rostered unit starts inside the world it is placed on.
     ///
     /// Not a formality. An authored coordinate outside the grid radius has no surface
-    /// under it, which now fails setup and sends the player back to the title screen —
+    /// under it, which now fails setup and sends the player back to Main Menu —
     /// so a scenario nobody has clicked yet would be broken with nothing to say so.
     ///
     /// Every entry, not one per side: a roster can be wrong about its fourth unit.
@@ -1412,7 +1508,7 @@ mod tests {
         }
     }
 
-    /// Loading is only valid after a scenario button has supplied a snapshot.
+    /// Loading is only valid after a typed launch owner has supplied a snapshot.
     ///
     /// The loading gate runs in PostUpdate, after the return requested from OnEnter
     /// has already taken effect.
@@ -1557,7 +1653,7 @@ mod tests {
             .expect("the scenario's placements should be installed")
             .clone();
 
-        // Back to the title screen, exactly as BACKSPACE does, then pick the other one.
+        // Back to Main Menu, exactly as BACKSPACE does, then issue the other launch.
         app.world_mut()
             .resource_mut::<NextState<Screen>>()
             .set(Screen::Title);
@@ -1585,7 +1681,7 @@ mod tests {
         );
     }
 
-    /// The seed captured by the title-screen click is installed for map generation.
+    /// The seed frozen by the typed launch request is installed for map generation.
     #[test]
     fn selected_generation_seed_is_installed_while_loading() {
         let procedural_index = library()
@@ -1684,7 +1780,11 @@ mod tests {
         (elements, spells, index, lattices, profiles, formations)
     }
 
-    fn procedural_gameplay_app_with_combat(scenario_name: &str, with_combat: bool) -> App {
+    /// Builds one shipped scenario through the production map and unit plugins.
+    pub(crate) fn procedural_gameplay_app_with_combat(
+        scenario_name: &str,
+        with_combat: bool,
+    ) -> App {
         let entry = library()
             .scenarios
             .into_iter()
@@ -1745,6 +1845,7 @@ mod tests {
                 GameplaySetup::Resources,
                 GameplaySetup::Terrain,
                 GameplaySetup::Actors,
+                GameplaySetup::Restore,
                 GameplaySetup::Perception,
                 GameplaySetup::View,
                 GameplaySetup::Finalize,
@@ -1816,7 +1917,8 @@ mod tests {
         app
     }
 
-    fn enter_screen(app: &mut App, screen: Screen) {
+    /// Applies a real state transition and lets its entry schedule settle.
+    pub(crate) fn enter_screen(app: &mut App, screen: Screen) {
         app.world_mut()
             .resource_mut::<NextState<Screen>>()
             .set(screen);
@@ -1834,6 +1936,7 @@ mod tests {
     struct PartyTrialReplay {
         player_stream: Vec<IssuedCommand>,
         summary: CombatSummary,
+        stalled: bool,
         turn_order: Vec<UnitId>,
         current: Option<UnitId>,
         round: u32,
@@ -1981,19 +2084,6 @@ mod tests {
         })
     }
 
-    fn finish_presentations(app: &mut App) {
-        let moving = {
-            let world = app.world_mut();
-            let mut moving = world.query_filtered::<Entity, With<hex_anim::Transformation>>();
-            moving.iter(world).collect::<Vec<_>>()
-        };
-        for entity in moving {
-            app.world_mut()
-                .entity_mut(entity)
-                .remove::<hex_anim::Transformation>();
-        }
-    }
-
     fn player_turn_command(app: &mut App, actor: UnitId) -> Option<GameCommand> {
         let (standing, body, turn) = {
             let world = app.world_mut();
@@ -2032,15 +2122,16 @@ mod tests {
             return Some(GameCommand::EndTurn { unit: actor });
         }
 
-        let occupied = {
+        let occupancy = {
             let world = app.world_mut();
-            let mut units = world.query::<&StandsOn>();
-            units
-                .iter(world)
-                .map(|standing| standing.0.pos)
-                .collect::<Vec<_>>()
+            let mut units = world.query::<(&UnitId, &StandsOn)>();
+            UnitOccupancy::from_positions(
+                units
+                    .iter(world)
+                    .map(|(unit, standing)| (*unit, standing.0.pos)),
+            )
         };
-        let reach = Reach::from(standing, &footing, None);
+        let reach = Reach::with_occupancy(standing, &footing, None, &occupancy, actor);
         let route = hostiles
             .iter()
             .flat_map(|(target, target_standing)| {
@@ -2051,7 +2142,7 @@ mod tests {
                         candidate.pos.coord.distance(target_standing.pos.coord) == 1
                             && (footing.admits_step(candidate.pos, target_standing.pos)
                                 || footing.admits_step(target_standing.pos, candidate.pos))
-                            && (candidate.pos == standing.pos || !occupied.contains(&candidate.pos))
+                            && !occupancy.is_occupied(candidate.pos, Some(actor))
                     })
                     .filter_map(|candidate| {
                         reach
@@ -2090,8 +2181,12 @@ mod tests {
         let crossing = party_trial_move(&mut app);
         queue_player_command(&mut app, &mut player_stream, crossing);
 
+        let mut last_progress = (0, 0, 0, 0, 0, 0);
+        let mut last_progress_round = 0;
+        let mut stalled = false;
+        let mut frames_executed = 0;
         for _ in 0..4_000 {
-            finish_presentations(&mut app);
+            frames_executed += 1;
             if app
                 .world()
                 .resource::<EncounterResolution>()
@@ -2099,6 +2194,27 @@ mod tests {
                 .is_some()
             {
                 app.update();
+                break;
+            }
+            let (round, progress) = {
+                let summary = app.world().resource::<CombatSummary>();
+                (
+                    app.world().resource::<TurnOrder>().round,
+                    (
+                        summary.moves,
+                        summary.strikes,
+                        summary.applied_disables,
+                        summary.restored_cells,
+                        summary.downings,
+                        summary.revivals,
+                    ),
+                )
+            };
+            if progress != last_progress {
+                last_progress = progress;
+                last_progress_round = round;
+            } else if round.saturating_sub(last_progress_round) >= 25 {
+                stalled = true;
                 break;
             }
             if app.world().resource::<CommandQueue>().is_empty() {
@@ -2116,18 +2232,89 @@ mod tests {
             app.update();
         }
         let outcome = app.world().resource::<EncounterResolution>().outcome();
-        assert_eq!(
-            outcome,
-            Some(EncounterOutcome::Defeat),
-            "the deterministic player policy should reach defeat; mode={:?}, pending={:?}, \
-             round={}, moves={}, casts={}, strikes={}, downings={}",
-            app.world().resource::<State<Mode>>().get(),
-            app.world().resource::<PendingDecision>(),
-            app.world().resource::<TurnOrder>().round,
-            app.world().resource::<CombatSummary>().moves,
-            app.world().resource::<CombatSummary>().casts,
-            app.world().resource::<CombatSummary>().strikes,
-            app.world().resource::<CombatSummary>().downings,
+        let bound_diagnostic = {
+            let moving = {
+                let world = app.world_mut();
+                let mut moving = world.query_filtered::<&UnitId, With<hex_units::MovingTo>>();
+                moving.iter(world).copied().collect::<Vec<_>>()
+            };
+            let busy = {
+                let world = app.world_mut();
+                let mut busy = world.query_filtered::<&UnitId, With<hex_core::Busy>>();
+                busy.iter(world).copied().collect::<Vec<_>>()
+            };
+            let authority = hex_combat::authority_snapshot(app.world()).map(|state| {
+                (
+                    state.current(),
+                    state
+                        .units
+                        .values()
+                        .map(|actor| {
+                            (
+                                actor.id,
+                                actor.faction,
+                                actor.turn,
+                                actor.busy,
+                                actor.motion.is_some(),
+                                actor.downed,
+                                actor.position,
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                    state
+                        .events
+                        .iter()
+                        .rev()
+                        .take(5)
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                )
+            });
+            let player_turns = {
+                let world = app.world_mut();
+                let mut players = world.query_filtered::<
+                    (&UnitId, Option<&Turn>, Has<hex_core::Busy>, Has<Downed>),
+                    With<Player>,
+                >();
+                players
+                    .iter(world)
+                    .map(|(id, turn, busy, downed)| (*id, turn.copied(), busy, downed))
+                    .collect::<Vec<_>>()
+            };
+            let order = app.world().resource::<TurnOrder>();
+            let summary = app.world().resource::<CombatSummary>();
+            format!(
+                "frames={frames_executed} round={} current={:?} progress={:?} \
+                 last_progress_round={last_progress_round} pending={:?} queue_empty={} mode={:?} \
+                 pause={:?} moving={moving:?} busy={busy:?} authority={authority:?} \
+                 player_turns={player_turns:?} \
+                 virtual_delta={:?} virtual_elapsed={:?}",
+                order.round,
+                order.current(),
+                (
+                    summary.moves,
+                    summary.strikes,
+                    summary.applied_disables,
+                    summary.restored_cells,
+                    summary.downings,
+                    summary.revivals,
+                ),
+                app.world().resource::<PendingDecision>(),
+                app.world().resource::<CommandQueue>().is_empty(),
+                app.world().resource::<State<Mode>>().get(),
+                app.world().get_resource::<State<Pause>>().map(State::get),
+                app.world()
+                    .resource::<bevy::time::Time<bevy::time::Virtual>>()
+                    .delta(),
+                app.world()
+                    .resource::<bevy::time::Time<bevy::time::Virtual>>()
+                    .elapsed(),
+            )
+        };
+        assert!(
+            outcome.is_some() || stalled,
+            "the deterministic player policy neither resolved nor reached the bounded \
+             no-progress gate: {bound_diagnostic}"
         );
         assert!(
             app.world().resource::<CommandQueue>().is_empty(),
@@ -2163,6 +2350,7 @@ mod tests {
         PartyTrialReplay {
             player_stream,
             summary,
+            stalled,
             turn_order,
             current,
             round,
@@ -2175,8 +2363,10 @@ mod tests {
     /// `CombatSummary::ai_selections` carries each exact observation, canonical legal
     /// set/fingerprint, selected route/command, and profile/algorithm dispatch. The
     /// remaining fields cover the player command stream, structured events, final
-    /// positions, turn order, and outcome. Equality here is therefore the integrated
-    /// replay contract rather than a second, weaker simulation snapshot.
+    /// positions, turn order, outcome, and the bounded no-progress gate required now
+    /// that downed bodies can hold the Crossing's chokepoints. Equality here is
+    /// therefore the integrated replay contract rather than a second, weaker
+    /// simulation snapshot.
     #[test]
     fn party_trial_replays_identically_end_to_end() {
         let first = run_party_trial_replay();
@@ -2197,8 +2387,15 @@ mod tests {
             "the baseline hostile party should select a cast"
         );
         assert!(first.summary.rounds > 0);
-        assert!(first.summary.downings >= 3);
-        assert_eq!(first.summary.outcome, Some(EncounterOutcome::Defeat));
+        assert!(
+            first.summary.downings >= 1,
+            "the replay should make damage progress before resolving or reaching its \
+             bounded terrain-obstructed stalemate"
+        );
+        assert!(
+            first.summary.outcome.is_some() || first.stalled,
+            "the run should resolve or reproduce the bounded chokepoint stalemate"
+        );
         assert_eq!(
             first,
             run_party_trial_replay(),
@@ -2322,9 +2519,26 @@ mod tests {
         );
     }
 
-    #[test]
-    fn forest_reenters_with_the_same_authored_features_and_art_graph() {
-        let mut app = procedural_gameplay_app("Forest");
+    fn assert_vegetation_scenario_reenters_with_the_same_art(scenario_name: &str) {
+        fn object_snapshot(app: &mut App) -> Vec<(String, TilePos, u32, u8)> {
+            let world = app.world_mut();
+            let mut objects = world.query::<&ObjectInstance>();
+            let mut snapshot = objects
+                .iter(world)
+                .map(|instance| {
+                    (
+                        instance.object_id().as_str().to_owned(),
+                        instance.origin(),
+                        instance.level_height().to_bits(),
+                        instance.rotation().steps(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            snapshot.sort_unstable();
+            snapshot
+        }
+
+        let mut app = procedural_gameplay_app(scenario_name);
         let art_fingerprint = app
             .world()
             .resource::<RuntimeArtCatalog>()
@@ -2337,20 +2551,16 @@ mod tests {
             .world()
             .resource::<MapAnchors>()
             .get(&MapAnchorId::from("party_start"))
-            .expect("Forest should publish party_start");
+            .unwrap_or_else(|| panic!("{scenario_name} should publish party_start"));
         let first_hostile = app
             .world()
             .resource::<MapAnchors>()
             .get(&MapAnchorId::from("hostile_start"))
-            .expect("Forest should publish hostile_start");
-        let first_features = app
-            .world_mut()
-            .query_filtered::<Entity, With<ObjectInstance>>()
-            .iter(app.world())
-            .count();
+            .unwrap_or_else(|| panic!("{scenario_name} should publish hostile_start"));
+        let first_features = object_snapshot(&mut app);
         assert!(
-            first_features > 0,
-            "Forest should publish authored object instances"
+            !first_features.is_empty(),
+            "{scenario_name} should publish authored object instances"
         );
 
         enter_screen(&mut app, Screen::Title);
@@ -2363,12 +2573,9 @@ mod tests {
             "gameplay teardown should retain the accepted global art graph"
         );
         assert_eq!(
-            app.world_mut()
-                .query_filtered::<Entity, With<ObjectInstance>>()
-                .iter(app.world())
-                .count(),
-            0,
-            "Forest teardown left authored feature instances alive"
+            object_snapshot(&mut app),
+            Vec::new(),
+            "{scenario_name} teardown left authored feature instances alive"
         );
 
         enter_screen(&mut app, Screen::Gameplay);
@@ -2380,13 +2587,25 @@ mod tests {
         assert_eq!(standing_pos::<Player>(&mut app), Some(first_party));
         assert_eq!(standing_pos::<Enemy>(&mut app), Some(first_hostile));
         assert_eq!(
-            app.world_mut()
-                .query_filtered::<Entity, With<ObjectInstance>>()
-                .iter(app.world())
-                .count(),
+            object_snapshot(&mut app),
             first_features,
-            "Forest re-entry changed its authored feature instance count"
+            "{scenario_name} re-entry changed its exact authored feature placement"
         );
+    }
+
+    #[test]
+    fn forest_reenters_with_the_same_authored_features_and_art_graph() {
+        assert_vegetation_scenario_reenters_with_the_same_art("Forest");
+    }
+
+    #[test]
+    fn deep_forest_reenters_with_the_same_authored_features_and_art_graph() {
+        assert_vegetation_scenario_reenters_with_the_same_art("Deep Forest");
+    }
+
+    #[test]
+    fn prairie_reenters_with_the_same_authored_features_and_art_graph() {
+        assert_vegetation_scenario_reenters_with_the_same_art("Prairie");
     }
 
     #[test]
@@ -2417,7 +2636,7 @@ mod tests {
             .contains("missing map anchor"));
         assert!(
             !app.world().contains_resource::<VoxelMap>(),
-            "failed setup left generated terrain alive on the title screen"
+            "failed setup left generated terrain alive on Main Menu"
         );
         assert!(standing_pos::<Player>(&mut app).is_none());
         assert!(standing_pos::<Enemy>(&mut app).is_none());
@@ -2433,6 +2652,10 @@ mod tests {
             "Caves",
             "Waterfall",
             "Forest",
+            "Deep Forest",
+            "Prairie",
+            "Two Rings",
+            "Mountain Range",
         ] {
             let scenario = library()
                 .scenarios
@@ -2447,7 +2670,10 @@ mod tests {
 
             assert!(
                 app.world().contains_resource::<TerrainReady>(),
-                "{scenario_name} did not finish terrain generation"
+                "{scenario_name} did not finish terrain generation: {:?}",
+                app.world()
+                    .get_resource::<GameplaySetupFailure>()
+                    .map(|failure| failure.reason.as_str())
             );
             let report = app.world().resource::<GenerationReport>();
             assert_eq!(report.seed, configured_seed);
@@ -2464,6 +2690,46 @@ mod tests {
                 !report.used_fallback,
                 "{scenario_name} unexpectedly used its canonical fallback"
             );
+            match (scenario_name, report.recipe_metrics.as_ref()) {
+                ("Deep Forest", Some(ProceduralRecipeMetrics::DeepForest(metrics))) => {
+                    assert!(metrics.tree_roots > 0, "Deep Forest did not publish trees");
+                    assert_eq!(metrics.clearing_count, 3);
+                    assert!(
+                        (28..=32).contains(&metrics.blocker_coverage_percent),
+                        "Deep Forest blocker coverage left its approved band: {}%",
+                        metrics.blocker_coverage_percent
+                    );
+                }
+                ("Prairie", Some(ProceduralRecipeMetrics::Prairie(metrics))) => {
+                    assert!(metrics.grass_roots > 0, "Prairie did not publish grass");
+                    assert!(
+                        (65..=75).contains(&metrics.grass_coverage_percent),
+                        "Prairie grass coverage left its approved band: {}%",
+                        metrics.grass_coverage_percent
+                    );
+                }
+                ("Two Rings", Some(ProceduralRecipeMetrics::Ring19(metrics))) => {
+                    assert_eq!(metrics.world_columns, 9_241);
+                    assert_eq!(metrics.biome_regions, 19);
+                    assert_eq!(metrics.reciprocal_seams, 42);
+                    assert_eq!(metrics.redundant_regions, 19);
+                }
+                ("Mountain Range", Some(ProceduralRecipeMetrics::MountainRange(metrics))) => {
+                    assert_eq!(metrics.world_columns, 18_019);
+                    assert_eq!(metrics.macro_cells, 37);
+                    assert_eq!(metrics.biome_regions, 30);
+                    assert_eq!(metrics.outer_macro_sides, 42);
+                    assert!(metrics.critical_route_steps > 0);
+                    assert!(metrics.standing_water_seams > 0);
+                    assert!(metrics.directed_liquid_seams > 0);
+                    assert!((92..=104).contains(&metrics.summit_level));
+                    assert!(metrics.high_massif_surfaces >= 100);
+                }
+                ("Deep Forest" | "Prairie" | "Two Rings" | "Mountain Range", metrics) => {
+                    panic!("{scenario_name} published unexpected metrics: {metrics:?}");
+                }
+                _ => {}
+            }
             let encounter = encounter_of(&scenario);
             let anchors = app.world().resource::<MapAnchors>();
             for required in encounter
@@ -2476,10 +2742,31 @@ mod tests {
                 );
             }
             let recipe_anchors: &[&str] = match scenario_name {
+                "Volcanic Hills" => &["conflict_center", "bridge", "crater_overlook"],
                 "Mountains" => &["conflict_center", "high_pass", "low_bypass"],
                 "Caves" => &["conflict_center", "cave_entrance", "deep_chamber"],
                 "Waterfall" => &["fall_overlook", "basin_overlook"],
                 "Forest" => &["forest_clearing", "prairie_overlook"],
+                "Deep Forest" => &["deep_forest_clearing"],
+                "Prairie" => &["prairie_overlook"],
+                "Two Rings" => &[
+                    "center_conflict_center",
+                    "mountains_a_stream_source_overlook",
+                    "caves_deep_chamber",
+                    "mountain_waterfall_overlook",
+                    "confluence_overlook",
+                    "vegetation_gradient_overlook",
+                    "fort_outlet_overlook",
+                ],
+                "Mountain Range" => &[
+                    "beach_review",
+                    "coast_review",
+                    "inland_review",
+                    "foothill_review",
+                    "massif_front_review",
+                    "deep_mountain_base",
+                    "deep_mountain_review",
+                ],
                 _ => &["conflict_center", "bridge", "alternate_crossing"],
             };
             for required in recipe_anchors {
@@ -2490,9 +2777,13 @@ mod tests {
             }
             let special_regions = app.world().resource::<SpecialMovementRegions>();
             match scenario_name {
-                "Sky Islands" => assert!(
+                "Sky Islands" | "Two Rings" => assert!(
                     !special_regions.is_empty(),
-                    "Sky Islands dropped its flight-gated upper layer"
+                    "{scenario_name} dropped its flight-gated upper layer"
+                ),
+                "Mountain Range" => assert!(
+                    !special_regions.is_empty(),
+                    "Mountain Range dropped its closed non-route macro seams"
                 ),
                 "Mountains" => {}
                 "Waterfall" => {
@@ -2514,14 +2805,14 @@ mod tests {
                 ),
             }
             let interiors = app.world().resource::<InteriorRegions>();
-            if scenario_name == "Caves" {
+            if matches!(scenario_name, "Caves" | "Two Rings") {
                 assert!(
                     interiors.surfaces().next().is_some(),
-                    "Caves dropped its exact interior floors"
+                    "{scenario_name} dropped its exact interior floors"
                 );
                 assert!(
                     interiors.roof_voxels().next().is_some(),
-                    "Caves dropped its exact cutaway roofs"
+                    "{scenario_name} dropped its exact cutaway roofs"
                 );
             } else {
                 assert!(
@@ -2540,6 +2831,137 @@ mod tests {
                 "{scenario_name} did not spawn exactly one rendered grid"
             );
         }
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    #[ignore = "manual release-mode shipped large-map Character-camera timing diagnostic"]
+    fn shipped_large_maps_character_collision_release_timing() {
+        for (scenario_name, expected_columns, budget) in [
+            ("Two Rings", 9_241, std::time::Duration::from_millis(1)),
+            (
+                "Mountain Range",
+                18_019,
+                std::time::Duration::from_millis(2),
+            ),
+        ] {
+            let mut app = procedural_gameplay_app(scenario_name);
+            enter_screen(&mut app, Screen::Gameplay);
+            assert!(
+                app.world().contains_resource::<TerrainReady>(),
+                "{scenario_name} did not finish terrain generation: {:?}",
+                app.world()
+                    .get_resource::<GameplaySetupFailure>()
+                    .map(|failure| failure.reason.as_str())
+            );
+
+            let settings: hex_assets::CameraSettings =
+                ron::from_str(include_str!("../../../assets/config/camera.ron"))
+                    .expect("the shipped camera settings should deserialize");
+            let mut supports = app
+                .world()
+                .resource::<MapAnchors>()
+                .iter()
+                .map(|(_id, position)| position)
+                .collect::<Vec<_>>();
+            supports.sort_unstable();
+            supports.dedup();
+            let projection = {
+                let world = app.world_mut();
+                let mut tiles = world.query_filtered::<(&TilePos, &HexSpan), With<HexTile>>();
+                tiles
+                    .iter(world)
+                    .map(|(position, span)| (*position, *span))
+                    .collect::<Vec<_>>()
+            };
+
+            let profile = hex_world::camera::test_support::profile_character_collision(
+                &projection,
+                &supports,
+                &settings,
+                10_000,
+            )
+            .expect("the shipped public terrain projection should support camera diagnostics");
+
+            assert_eq!(
+                profile.columns, expected_columns,
+                "the camera diagnostic must use every shipped {scenario_name} column"
+            );
+            assert!(
+                profile.spans >= profile.columns,
+                "each public column should publish at least one exact material run"
+            );
+            assert_eq!(profile.supports, supports.len());
+            assert_ne!(
+                profile.result_checksum, 0,
+                "the timed collision results must remain observable"
+            );
+            eprintln!(
+                "shipped {scenario_name} Character collision diagnostic (release): \
+             columns={}, spans={}, supports={}, queries={}, index_build={:?}, \
+             index_rebuild_p95={:?}, index_rebuild_worst={:?}, query_p95={:?}, \
+             query_worst={:?}",
+                profile.columns,
+                profile.spans,
+                profile.supports,
+                profile.queries,
+                profile.index_build,
+                profile.index_rebuild_p95,
+                profile.index_rebuild_worst,
+                profile.query_p95,
+                profile.query_worst,
+            );
+            assert!(
+                profile.query_p95 < budget,
+                "shipped {scenario_name} Character collision p95 {:?} breached the {budget:?} release budget",
+                profile.query_p95
+            );
+        }
+    }
+
+    #[test]
+    fn volcanic_hills_scenario_uses_the_native_volcano_contract() {
+        let mut app = procedural_gameplay_app("Volcanic Hills");
+        enter_screen(&mut app, Screen::Gameplay);
+
+        assert!(app.world().contains_resource::<TerrainReady>());
+        let report = app.world().resource::<GenerationReport>();
+        assert_eq!(
+            report.semantic_plan_fingerprint,
+            Some(6_901_546_631_227_104_688)
+        );
+        assert_eq!(report.map_fingerprint, 7_940_527_797_927_330_083);
+        assert_eq!(report.valid_candidates, 8);
+        let Some(ProceduralRecipeMetrics::Volcano(metrics)) = &report.recipe_metrics else {
+            panic!(
+                "Volcanic Hills published the wrong recipe metrics: {:?}",
+                report.recipe_metrics
+            );
+        };
+        assert_eq!(metrics.summit_relief, 20);
+        assert_eq!(metrics.bridge_clearance, 4);
+
+        let anchors = app.world().resource::<MapAnchors>();
+        for required in [
+            "party_start",
+            "hostile_start",
+            "conflict_center",
+            "bridge",
+            "crater_overlook",
+        ] {
+            assert!(
+                anchors.get(&MapAnchorId::from(required)).is_some(),
+                "Volcanic Hills omitted {required}"
+            );
+        }
+        assert!(
+            anchors
+                .get(&MapAnchorId::from("alternate_crossing"))
+                .is_none(),
+            "the native Volcano resurrected the removed cooled crossing"
+        );
+        assert!(standing_pos::<Player>(&mut app).is_some());
+        assert!(standing_pos::<Enemy>(&mut app).is_some());
     }
 
     #[test]

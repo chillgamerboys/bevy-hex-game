@@ -28,11 +28,13 @@
 //! the same order.
 
 use bevy::prelude::*;
-use hex_assets::{Effect, ManaAxis, Spell, TargetShape};
+use hex_assets::{Effect, ManaAxis, Spell};
 use hex_core::{AppSystems, PerceptionSystems};
 
 /// What an enemy does with its turn. A placeholder, and says so.
 mod ai;
+/// Freezes published Bevy facts and projects the pure combat authority.
+mod authority_host;
 /// The applier: the one place a command becomes a change to the sim.
 mod commands;
 /// Effects that outlast the action that caused them.
@@ -40,16 +42,20 @@ pub mod effects;
 /// What a faction knows about a hostile lattice.
 pub mod knowledge;
 /// Structured outcomes produced by combat resolution.
-pub mod outcomes;
+pub mod outcomes {
+    pub use hex_combat_core::outcomes::*;
+}
 /// Terminal encounter detection and its simulation gate.
 pub mod resolution;
+/// Pending host-resolved area and terrain spell transactions.
+pub mod spell_resolution;
 /// Deterministic session combat reporting.
 pub mod summary;
 /// Whose turn it is, and what they have left.
 pub mod turns;
 
 pub use ai::{AiAlgorithmRegistry, AiDecisionTraces, MAX_AI_DECISION_TRACES};
-pub use commands::{delivers_anything, UNDELIVERABLE};
+pub use commands::{channel_refusal, delivers_anything, ChannelReadiness, UNDELIVERABLE};
 pub use effects::PersistentEffects;
 pub use hex_core::Turn;
 pub use knowledge::{
@@ -60,10 +66,29 @@ pub use outcomes::{
     RestorationRefusal, UnitData,
 };
 pub use resolution::{encounter_unresolved, EncounterResolution};
+pub use spell_resolution::{SpellResolutionFailure, SpellResolutionState, SpellResolutionStatus};
 pub use summary::{
-    CombatSummary, CombatTranscriptRecorder, CommandKind, MAX_COMBAT_SUMMARY_DETAILS,
+    CombatSummary, CombatTranscriptRecorder, CommandKind, DeliveredEffectKind, UnitCombatSummary,
+    COMBAT_SUMMARY_FINGERPRINT_VERSION, MAX_COMBAT_SUMMARY_DETAILS,
 };
 pub use turns::{Initiative, TurnOrder};
+
+/// Clones the canonical renderer-free combat state for read-only diagnostics.
+///
+/// This deliberately exposes no mutable authority handle. Behavioral tests may use
+/// it to prove that an in-combat assertion was not satisfied by a legacy fallback.
+pub fn authority_snapshot(world: &World) -> Result<hex_combat_core::CombatState, String> {
+    authority_host::snapshot(world)
+}
+
+/// Publishes a complete content-adapter projection to the combat authority.
+///
+/// This is an explicit synchronization token, not a mutable authority handle. The
+/// projection is adopted only after deferred ECS writes settle and passes the same
+/// exact-roster validation used by runtime content effects.
+pub fn publish_combat_adapter_facts(world: &mut World) -> Result<(), String> {
+    authority_host::publish_adapter_facts(world)
+}
 
 /// Combat-owned compatibility verdict for spells authored by the Wave 6 creator.
 ///
@@ -73,35 +98,35 @@ pub use turns::{Initiative, TurnOrder};
 /// creator restriction one reviewable change.
 pub fn creator_spell_deployability(spell: &Spell) -> Result<(), Vec<String>> {
     let mut issues = Vec::new();
+    let area = spell.targeting.shape.can_cover_multiple_voxels();
+    let mut delivers = matches!(
+        spell.casting,
+        hex_assets::CastingAxis::Enchantment { defense } if defense > 0
+    );
     if spell.mana != ManaAxis::Fixed {
         issues.push("variable mana is not implemented".to_owned());
     }
     if spell.co_castable {
         issues.push("co-casting is not implemented".to_owned());
     }
-    if spell.targeting.needs_los {
-        issues.push("line-of-sight enforcement is not implemented".to_owned());
-    }
-    if !matches!(
-        spell.targeting.shape,
-        TargetShape::SelfCast | TargetShape::Single
-    ) {
-        issues.push("unit effects are delivered only to Self or Single targets".to_owned());
-    }
     for effect in &spell.effects {
-        if !matches!(
-            effect,
+        match effect {
             Effect::DisableHexes {
-                targeted: false,
-                ..
-            } | Effect::Burn { .. }
-                | Effect::RestoreHexes { .. }
-                | Effect::Reveal { .. }
-        ) {
-            issues.push(format!("effect {effect:?} is not completely delivered"));
+                targeted: false, ..
+            }
+            | Effect::Burn { .. }
+            | Effect::Impact { .. } => delivers = true,
+            Effect::RestoreHexes { .. } | Effect::Reveal { .. } if !area => delivers = true,
+            Effect::RestoreHexes { .. } => {
+                issues.push("area Restore is not safely delivered".to_owned());
+            }
+            Effect::Reveal { .. } => {
+                issues.push("area Reveal is not safely delivered".to_owned());
+            }
+            _ => issues.push(format!("effect {effect:?} is not completely delivered")),
         }
     }
-    if !delivers_anything(spell) {
+    if !delivers {
         issues.push(UNDELIVERABLE.to_owned());
     }
     if issues.is_empty() {
@@ -151,8 +176,10 @@ pub fn plugin(app: &mut App) {
     app.configure_sets(
         Update,
         (
-            CombatSystems::Act.after(PerceptionSystems::PublishKnowledge),
-            CombatSystems::Apply,
+            CombatSystems::Act
+                .after(PerceptionSystems::PublishKnowledge)
+                .after(hex_units::TerrainOccupancySystems::Publish),
+            CombatSystems::Apply.after(hex_units::TerrainOccupancySystems::Publish),
             CombatSystems::Resolve,
             CombatSystems::Advance,
         )
@@ -165,6 +192,7 @@ pub fn plugin(app: &mut App) {
     );
     app.add_plugins((
         turns::plugin,
+        authority_host::plugin,
         ai::plugin,
         commands::plugin,
         effects::plugin,
@@ -177,7 +205,7 @@ pub fn plugin(app: &mut App) {
 #[cfg(test)]
 mod creator_tests {
     use super::*;
-    use hex_assets::{CastingAxis, GemRequirement, TargetingSpec};
+    use hex_assets::{CastingAxis, GemRequirement, TargetShape, TargetingSpec, Trajectory};
 
     fn ready_spell(effect: Effect) -> Spell {
         Spell {
@@ -191,14 +219,14 @@ mod creator_tests {
             targeting: TargetingSpec {
                 range: 3,
                 shape: TargetShape::Single,
-                needs_los: false,
+                trajectory: Trajectory::None,
             },
             effects: vec![effect],
         }
     }
 
     #[test]
-    fn creator_delivery_accepts_only_the_closed_wave_six_behavior_set() {
+    fn creator_delivery_accepts_the_supported_single_target_behavior_set() {
         for effect in [
             Effect::DisableHexes {
                 count: 1,
@@ -219,14 +247,65 @@ mod creator_tests {
     }
 
     #[test]
-    fn creator_delivery_fails_closed_on_unimplemented_axes() {
+    fn creator_delivery_admits_area_disable_burn_and_impact() {
+        let mut spell = ready_spell(Effect::Impact {
+            element: "Fire".to_owned(),
+            power: 2,
+        });
+        spell.targeting.shape = TargetShape::Sphere { radius: 2 };
+        spell.effects = vec![
+            Effect::DisableHexes {
+                count: 3,
+                targeted: false,
+            },
+            Effect::Burn { turns: 2 },
+            Effect::Impact {
+                element: "Fire".to_owned(),
+                power: 2,
+            },
+        ];
+
+        assert!(
+            creator_spell_deployability(&spell).is_ok(),
+            "the supported area transaction should be Creator-deployable"
+        );
+
+        spell.effects = vec![Effect::Impact {
+            element: "Fire".to_owned(),
+            power: 2,
+        }];
+        assert!(
+            creator_spell_deployability(&spell).is_ok(),
+            "an impact-only area spell still delivers terrain behavior"
+        );
+    }
+
+    #[test]
+    fn creator_delivery_keeps_area_restore_and_reveal_fail_closed() {
+        for effect in [
+            Effect::RestoreHexes { count: 1 },
+            Effect::Reveal { tier: 1 },
+        ] {
+            let mut spell = ready_spell(effect);
+            spell.targeting.shape = TargetShape::Sphere { radius: 2 };
+            let issues = creator_spell_deployability(&spell)
+                .expect_err("unsettled area information policy must fail closed");
+            assert!(
+                issues.iter().any(|issue| issue.contains("area")),
+                "{issues:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn creator_delivery_accepts_trajectories_but_rejects_unimplemented_axes() {
         let mut spell = ready_spell(Effect::Burn { turns: 1 });
-        spell.targeting.needs_los = true;
+        spell.targeting.trajectory = Trajectory::Direct;
         spell.co_castable = true;
         spell.mana = ManaAxis::Variable;
         let issues = creator_spell_deployability(&spell).expect_err("unsupported axes must fail");
-        assert!(issues.iter().any(|issue| issue.contains("line-of-sight")));
         assert!(issues.iter().any(|issue| issue.contains("co-casting")));
         assert!(issues.iter().any(|issue| issue.contains("variable mana")));
+        assert!(!issues.iter().any(|issue| issue.contains("trajectory")));
     }
 }

@@ -12,10 +12,16 @@ the combined release gate.
 ## Read the repository contracts
 
 Read `AGENTS.md`, `CLAUDE.md`, and
-`docs/development/parallel-development.md`. Read `docs/architecture.md`,
+`docs/development/parallel-development.md`. Read
+`docs/development/wave-protocol.md` before classifying anything as a wave. Read
+`docs/architecture.md`,
 `docs/contracts.md`, and `docs/planning/boundary.md` when more than one owner or a
 shared crate is involved. Read the relevant system and design docs for the requested
 behavior.
+
+Strongly prefer `$reconcile-delivery-state` first when the plan begins from existing
+tickets, roadmap state, or claimed delivered work. Linear is a soft coordination
+signal: if unavailable, warn and continue from repository/GitHub evidence.
 
 ## 1. Map the outcome and concerns
 
@@ -27,6 +33,11 @@ reach it, then identify for each concern:
 - strict dependencies;
 - whether it is meaningful to review or ship alone; and
 - the runtime paths that prove it works.
+
+Record relevant ticket references and their verified current/residual scope when
+Linear is available. For broad roadmap or architecture work, inspect every
+non-completed Hex Game ticket rather than only the current branch's references. If
+that inventory cannot run, put the skipped reconciliation in the handoff.
 
 Group work by authority and shared concern, not merely by file or ticket. If two lanes
 would implement the same authority, make that one concern with one owner.
@@ -62,9 +73,12 @@ or a mechanical integration detail is not.
 ## 4. Set the review budget
 
 Define focused lane checks and combined acceptance separately. Put composition,
-regeneration, failure paths, return-to-title/re-entry, automated visual review, and
-human play on the combined candidate. Full platform CI belongs on every independent
-release unit or once on the wave; do not manufacture leaf PRs solely to repeat it.
+regeneration, failure paths, and return-to-title/re-entry on the combined candidate.
+Add automated visual review and human play only for affected presentation, native
+input, motion, or feel. Screenshots/frames judge static camera, UI, or rendered-map
+presentation; video/human checks judge motion and feel. None proves logic available
+through hooks or contracts. Full platform CI belongs on every independent release
+unit or once on the wave; do not manufacture leaf PRs solely to repeat it.
 
 ## 5. Produce the plan
 
@@ -76,10 +90,15 @@ For independent or stacked work, return:
 - review and validation per release unit; and
 - retargeting or cleanup order.
 
-For a wave, read `references/wave-manifest.md` and fill it in. Store it under
-`.context/waves/<name>.md` when the task calls for implementation, or return it in the
-response when the user asked only for a plan. Do not open PRs or create remote state
-unless the user also asked to execute.
+For a wave, this skill's output is the classification and its evidence — the outcome, the
+concerns, the owners, the foundation, and the review budget. Hand that to `$plan-epic`,
+which owns the wave artifact: the committed manifest under
+`docs/planning/waves/<slug>/`, the lane field table, and the ordering into
+`dispatch_blockers` and `merge_blockers`. Do not invent a second manifest shape here, and do
+not store a wave plan under `.context/` — it is untracked scratch, invisible to every lane
+builder and to anyone else's clone.
+
+Do not open PRs or create remote state unless the user also asked to execute.
 
 If execution is authorized and no semantic ambiguity remains, continue from the
 approved or user-supplied plan without pausing merely to reconfirm its topology.

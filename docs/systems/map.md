@@ -4,6 +4,12 @@ The world is made of **voxels**: hex prisms stacked in columns, each one made of
 substance. This describes the model, the vocabulary that goes with it, and the rules
 that everything else depends on.
 
+> **Status:** voxel storage, publication, `TerrainEdit`, toughness content,
+> `TerrainImpact` admission/resolution, ordered outcomes, partial-health publication,
+> visibility-gated health bars, gameplay spell emission/outcome consumption, and
+> deterministic unsupported-actor settlement are live. The map still does not infer
+> gameplay payment, landing, correlation, or authority policy.
+
 If you only want to change how the terrain looks, [development/config.md](../development/config.md) is shorter.
 
 ## The pieces
@@ -15,6 +21,9 @@ If you only want to change how the terrain looks, [development/config.md](../dev
 **A position** — `TilePos { coord, level }` — is one voxel. This is how anything in the
 world is addressed.
 
+**A run bottom** — `RunBottom(Level)` — is the lowest material voxel represented by a
+tile entity. That entity's `TilePos` is the same run's topmost material voxel.
+
 **Headroom** — `Headroom(Level)` — is how many clear voxels sit above a tile's surface.
 Zero means it is buried inside a column.
 
@@ -22,6 +31,11 @@ Zero means it is buried inside a column.
 The list and gameplay properties live in `assets/config/substances.ron`; every
 rendered substance names one exact colour in `assets/art/palette.ron`. Air is the
 only substance without a swatch because it is never drawn.
+
+The damage slice adds optional material toughness. It is maximum voxel health,
+restricted to `1`, `2`, `4`, or `8`; absence means the material does not participate in
+damage. Remaining health is runtime state keyed by exact `TilePos`, never a property of
+the rendered run entity.
 
 > **The vertical axis is always called `level`.** Never `z`. Cube coordinates already
 > use `x`, `y` and `z`, and all three are horizontal — `HexCoord::z()` returns
@@ -175,8 +189,9 @@ looks across the range so both routes remain legible.
 Caves keeps a playable rocky surface above one rooted underground network. A two-wide
 open entrance descends one level per row to six through twelve chambers joined by
 two-wide critical corridors. The selected scenario has twelve chambers, selected
-loop connections, two walkable floor bands, varied ceiling levels, larger chambers,
-and five levels of surface relief. The original six-through-eight-room path remains
+loop connections, three walkable floor terraces at relative levels `+0/+2/+4`, varied
+ceiling levels, larger chambers, and five levels of surface relief. The original
+six-through-eight-room path remains
 frozen for side-by-side V3 review. Every corridor retains at least three clear levels,
 every chamber at least four, and cutaway roofs remain at least three solid levels
 thick.
@@ -198,8 +213,9 @@ its disposable material runs wherever cutaway membership changes and projects
 `CutawayOccluder(region)` onto the resulting roof segments. Digging through a roof
 therefore preserves both surviving fragments without transferring the tag to replacement
 material. A cutaway tag does not remove or make terrain transparent, change voxel
-storage, or change traversal. Cave presentation may hide tagged opaque roof segments
-locally while leaving adjacent untagged columns visible as walls.
+storage, or change traversal. Ordinary gameplay keeps tagged roof segments opaque and
+collision-active. Explicit map-review capture tooling may hide every tagged segment in
+the selected exact interior while leaving other regions and adjacent walls intact.
 
 The plan also publishes a `MapViewHint` so camera setup can frame the generated
 geometry after terrain and actors exist. V1 keeps its frozen single-height plan and
@@ -249,14 +265,19 @@ footing; a water run is rendered but is not standable. Tagging the base instead 
 force gameplay to know the level height to work the surface out, which would put a
 dependency on the map back into movement.
 
+The same entity carries `RunBottom` for its **lowest material voxel**. The two integer
+levels are inclusive and exact, including for stacked runs under bridges, platforms,
+overhangs, and caves. Gameplay never reconstructs the bottom from `HexSpan`, the
+entity transform, `level_height`, or saturated `Headroom`.
+
 ## What each crate sees
 
 ```
-hex_core     HexTile, HexCoord, TilePos, HexSpan, SubstanceId, Headroom,
+hex_core     HexTile, HexCoord, TilePos, RunBottom, HexSpan, SubstanceId, Headroom,
              TraversalEndpoint, TraversalProfile, SpecialMovementRegion,
              SpecialMovementRegions, InteriorRegionId, InteriorRegions,
              CutawayOccluder, MapViewHint, BiomeRegions, TraversalBlockers,
-             TerrainEdit, and the agreed TerrainImpact vocabulary
+             TerrainEdit, TerrainImpact, TerrainImpactOutcome, and DamagedVoxels
              — the shared vocabulary
 hex_assets   the substance table
 hex_map      voxel storage, generation, rendering — nothing else can see this
@@ -266,7 +287,7 @@ hex_units reads tiles; cannot see hex_map
 The map exposes rendered footing through components on tile entities:
 
 ```rust
-(HexTile, HexCoord, TilePos, HexSpan, SubstanceId, Headroom, Mesh3d, ...)
+(HexTile, HexCoord, TilePos, RunBottom, HexSpan, SubstanceId, Headroom, Mesh3d, ...)
 ```
 
 Exact optional-region memberships live in the `SpecialMovementRegions` resource keyed
@@ -284,10 +305,84 @@ TerrainEdit::Set { pos, substance }
 TerrainEdit::Clear { pos }
 ```
 
-Gameplay cannot call into `hex_map`, so a spell that digs or builds writes one of these
-and the map applies it. That is the only live write path. Elemental destruction will
-use the separate agreed `TerrainImpact` announcement so the world, rather than the
-spell, decides how each material responds.
+Gameplay cannot call into `hex_map`, so a spell that builds writes one of these and the
+map applies it. Elemental damage uses the separate live `TerrainImpact` announcement,
+so gameplay publishes exact affected voxels and authored power while the world decides
+how each material responds.
+
+### Toughness and destruction — map side live
+
+The gameplay contract announces `TerrainImpact { batch, volume, element, power }`; it
+never sends a material outcome. Its runtime publisher is live. The exact volume is
+nonempty, sorted, and deduplicated. The map resolves each voxel against the world-owned
+Boolean allow-list in
+`terrain_damage.ron`, subtracts `power` directly from remaining health, and returns an
+applied or rejected `TerrainImpactOutcome` as specified by
+[boundary G/H](../planning/boundary.md).
+
+Initial maximum health is deliberately coarse:
+
+| HP | Materials |
+|---:|---|
+| 1 | grass, snow |
+| 2 | dirt, gravel, ice |
+| 4 | stone, basalt |
+| 8 | worked stone, metal |
+| none | air, water, lava, bedrock |
+
+The map stores only partial health in a private sparse ledger keyed by `TilePos`;
+absence means full health for the voxel's current material. A hit that leaves positive
+health changes no material and does not remesh. A hit that reaches zero clears the
+voxel through the ordinary material-change consequence path. Health never transforms
+one material into another.
+
+Direct edits are resolved before impacts, then impacts in message order. A
+material-changing `Set` discards old damage and creates its new voxel at full health;
+`Clear` discards it. A same-material `Set` remains a no-op and does not heal. Ordinary
+spell construction remains the existing atomic, empty-volume placement of `stone`
+through `TerrainEdit::Set`; it does not use `TerrainImpact`.
+
+Both message streams are claimed before the pausable mutation phase so an edit or
+impact emitted late in the last running frame cannot expire while paused. Terrain,
+health, and outcomes remain unchanged until gameplay resumes; the next running
+`ApplyWorld` phase drains the retained direct edits before the retained impacts.
+
+All current topology protections still win over the damage table. Bedrock,
+non-diggable voxels, authored V3 liquids and their protected lower supports, feature
+roots, and generated-light protection resist without acquiring damage. Liquids do not
+flow, refill, or redistribute after a neighboring voxel changes, and non-voxel
+features are outside this contract.
+
+The map validates each batch before mutation and always publishes one ordered applied
+or rejected answer for every batch it processes. Reused ids, malformed volumes,
+zero power, unknown elements, and unavailable terrain fail atomically. Gameplay's
+live publisher and pending-batch consumer correlate that answer before releasing the
+held cast authority.
+
+### Publication, presentation, and consequences — map side live
+
+`DamagedVoxels` publishes only partial health as exact
+`TilePos → TerrainVoxelHealth` facts. It is authoritative state, not a visibility
+grant. Shared presentation draws a depth-tested camera-facing bar only when that exact
+voxel is a current exposed top surface, currently Observed by the Player faction, and
+still visible after ordinary cutaway/tile and camera culling. Buried/internal,
+Remembered, Unknown, full-health, and destroyed voxels never expose a bar.
+
+A material change rebuilds the same terrain runs, headroom, special/biome/interior
+projections, blockers, illumination, observation, and knowledge that the edited map
+normally publishes. The authored cave membership itself is not regenerated: removing
+a roof voxel updates roof metadata, but the chamber stays in its authored Interior
+domain and does not gain daylight in this slice.
+
+The configured live terrain protocol is `TerrainSystems::ApplyWorld →
+RefreshProjections → ReconcileActors → ConsumeOutcomes` before perception. Map-owned
+`ApplyWorld` performs world mutation and publication. Gameplay-owned
+`RefreshProjections` republishes exact terrain occupancy and reconciles ordinary
+movement, `ReconcileActors` deterministically settles or adopts unsupported units,
+and `ConsumeOutcomes` validates/correlates the matching answer before later combat
+authority resumes. The map never reads a character, chooses a landing, or releases a
+pending cast; those deterministic policies belong to gameplay and are pinned in
+[boundary H](../planning/boundary.md#cross-owner-ordering-and-unsupported-actors).
 
 ## Things that are true and easy to forget
 
@@ -295,6 +390,7 @@ spell, decides how each material responds.
 |---|---|
 | A tile entity covers a **run**, not a voxel | its `HexSpan` may be many levels tall |
 | A tile's `TilePos` is its **run surface** | the topmost material voxel, not the base |
+| A tile's `RunBottom` is its **run floor** | the lowest material voxel, in integer levels |
 | Headroom of 0 means **buried** | solid, but inside a column and not standable |
 | A one-voxel gap under a bridge is **not** a corridor | a 2-level body does not fit; a 1-level one does |
 | Two standable endpoints do not guarantee a step | the shared lateral aperture can still be too short |
@@ -313,9 +409,10 @@ spell, decides how each material responds.
   charges one per step, so the map's substances do not yet affect how far a piece
   gets. **`hexx::a_star` cannot supply that model**, despite being compiled in: it
   keys on `Hex` alone, so it cannot tell a bridge from the ground beneath it.
-- **Whether terrain takes a turn to change.** A turn order exists now — see
-  [systems/combat.md](combat.md) — but `TerrainEdit` is applied the moment it
-  arrives and costs nobody anything. Whether digging is an action is a design question.
+- **What terrain changes cost.** `TerrainEdit` remains applied when it arrives and
+  costs nobody anything. The live gameplay adapter keeps an elemental cast pending
+  until the ordered map answer, but mana/action payment remains gameplay policy rather
+  than a property of the map.
 - **Whether stacked surfaces ever connect.** Teleport and tunnel are named in the design
   but not implemented. When they are, they belong in `hex_units` as explicit
   exceptions to the step rule, not as changes to it.

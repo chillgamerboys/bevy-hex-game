@@ -32,7 +32,10 @@
 //! press being silently lost to the animation.
 
 use bevy::platform::collections::HashMap;
-use bevy::prelude::*;
+use bevy::{
+    input_focus::{tab_navigation::TabIndex, InputFocus},
+    prelude::*,
+};
 use std::collections::BTreeMap;
 
 use hex_assets::CombatSettings;
@@ -89,6 +92,14 @@ impl PendingRevivals {
     pub(crate) fn schedule(&mut self, unit: UnitId, round: u32) {
         self.0.insert(unit, round);
     }
+
+    pub(crate) fn snapshot(&self) -> BTreeMap<UnitId, u32> {
+        self.0.clone()
+    }
+
+    pub(crate) fn project(&mut self, pending: &BTreeMap<UnitId, u32>) {
+        self.0.clone_from(pending);
+    }
 }
 
 impl TurnOrder {
@@ -114,6 +125,16 @@ impl TurnOrder {
     #[must_use]
     pub fn position_of(&self, unit: UnitId) -> Option<usize> {
         self.order.iter().position(|u| *u == unit)
+    }
+
+    /// Projects the pure authority's current order without deriving any rule.
+    pub(crate) fn project(&mut self, order: &[UnitId], current: Option<UnitId>, round: u32) {
+        self.order.clear();
+        self.order.extend_from_slice(order);
+        self.current = current
+            .and_then(|unit| self.position_of(unit))
+            .unwrap_or_default();
+        self.round = round;
     }
 
     /// Moves to the next unit, wrapping and counting a round.
@@ -258,7 +279,12 @@ fn engagement(
     units: Query<(Entity, &Faction, &StandsOn), Without<Downed>>,
     crossings: Option<Res<MovementCrossings>>,
     settings: Res<CombatSettings>,
+    pending: Res<PendingDecision>,
+    resolution: Res<crate::SpellResolutionState>,
 ) {
+    if pending.is_open() || resolution.is_blocking() {
+        return;
+    }
     let engage = settings.engage_range;
     let disengage = engage + settings.disengage_margin;
     let levels_per_bonus = settings.levels_per_bonus_range;
@@ -347,10 +373,19 @@ fn first_hostile_crossing(
 }
 
 /// Builds the order and hands the first unit its turn.
-fn begin_combat(
+pub(crate) fn begin_combat(
     mut commands: Commands,
     mut turn_order: ResMut<TurnOrder>,
-    units: Query<(Entity, Option<&UnitId>, Option<&Initiative>), (With<Faction>, Without<Downed>)>,
+    units: Query<
+        (
+            Entity,
+            Option<&UnitId>,
+            Option<&Initiative>,
+            Option<&LatticeSpec>,
+            Option<&LatticeState>,
+        ),
+        (With<Faction>, Without<Downed>),
+    >,
     mut allocator: ResMut<UnitAllocator>,
     mut registry: ResMut<UnitRegistry>,
     settings: Res<CombatSettings>,
@@ -360,26 +395,35 @@ fn begin_combat(
     // filtered out, combat starting with nobody in it and no error anywhere.
     // A unit without a `UnitId` (hand-spawned in a test, or a future spawn path
     // that forgot) is registered here rather than dropped.
-    let mut combatants: Vec<(UnitId, Entity, Initiative)> = units
-        .iter()
-        .map(|(entity, unit, initiative)| {
-            let unit = unit.copied().unwrap_or_else(|| {
-                // Dealing here re-admits query iteration order into id order —
-                // the exact nondeterminism this system exists to remove — so
-                // the breach must be observable, never silent.
-                warn!("dealing a combat-time id to {entity:?}; a spawn path missed it");
-                let id = allocator.allocate();
-                commands.entity(entity).insert(id);
-                id
-            });
-            // Upsert unconditionally: a unit carrying an id the registry has
-            // not seen (a test's explicit id, a future load path) must still
-            // resolve, or its turn silently never advances.
-            registry.register(unit, entity);
-            let fallback = Initiative(settings.default_initiative);
-            (unit, entity, initiative.copied().unwrap_or(fallback))
-        })
-        .collect();
+    let mut combatants: Vec<(UnitId, Entity, Initiative)> = Vec::new();
+    for (entity, unit, initiative, spec, state) in &units {
+        let unit = unit.copied().unwrap_or_else(|| {
+            // Dealing here re-admits query iteration order into id order —
+            // the exact nondeterminism this system exists to remove — so
+            // the breach must be observable, never silent.
+            warn!("dealing a combat-time id to {entity:?}; a spawn path missed it");
+            let id = allocator.allocate();
+            commands.entity(entity).insert(id);
+            id
+        });
+        // Upsert unconditionally: a unit carrying an id the registry has
+        // not seen (a test's explicit id, a future load path) must still
+        // resolve, or its turn silently never advances.
+        registry.register(unit, entity);
+        if spec
+            .zip(state)
+            .is_some_and(|(spec, state)| lattice_is_fully_disabled(spec, state))
+        {
+            // Normalize authored/fixture opening state before the authority freezes
+            // the roster. Waiting for the first Update would let ECS remove the unit
+            // after the authority had already published a different initiative order.
+            commands.entity(entity).insert(Downed).remove::<Turn>();
+            info!("{unit:?} enters combat down — every hex is already disabled");
+            continue;
+        }
+        let fallback = Initiative(settings.default_initiative);
+        combatants.push((unit, entity, initiative.copied().unwrap_or(fallback)));
+    }
 
     // Highest initiative first. Ties break on the stable `UnitId` rather than
     // being left to query order or entity index — the design rules out
@@ -426,13 +470,23 @@ fn end_combat(
 fn end_turn_on_space(
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<InputBindings>,
+    focus: Option<Res<InputFocus>>,
+    focusable_controls: Query<(), With<TabIndex>>,
     turn_order: Res<TurnOrder>,
     registry: Res<UnitRegistry>,
     pending: Res<PendingDecision>,
+    resolution: Res<crate::SpellResolutionState>,
     owners: Query<(Option<&ControlOwner>, &Faction)>,
     mut queue: ResMut<CommandQueue>,
 ) {
-    if !bindings.just_pressed(&keys, InputAction::EndTurn) || pending.is_open() {
+    let focus_owns_shortcuts = focus
+        .as_deref()
+        .and_then(InputFocus::get)
+        .is_some_and(|entity| focusable_controls.contains(entity));
+    if !raw_end_turn_requested(&keys, &bindings, focus_owns_shortcuts)
+        || pending.is_open()
+        || resolution.is_blocking()
+    {
         return;
     }
     let Some(current) = turn_order.current() else {
@@ -454,6 +508,14 @@ fn end_turn_on_space(
     });
 }
 
+fn raw_end_turn_requested(
+    keys: &ButtonInput<KeyCode>,
+    bindings: &InputBindings,
+    focus_owns_shortcuts: bool,
+) -> bool {
+    !focus_owns_shortcuts && bindings.just_pressed(keys, InputAction::EndTurn)
+}
+
 /// Passes the turn on when the acting unit is done.
 ///
 /// A unit is done when it has taken its action and spent its movement — which
@@ -463,14 +525,20 @@ fn end_turn_on_space(
 fn advance_turn(
     mut commands: Commands,
     mut turn_order: ResMut<TurnOrder>,
+    mut authority: Option<ResMut<crate::authority_host::CombatAuthority>>,
     registry: Res<UnitRegistry>,
     settings: Res<CombatSettings>,
     mut rounds: MessageWriter<RoundElapsed>,
+    mut combat_events: MessageWriter<crate::CombatEvent>,
     acting: Query<(Entity, &Turn, Has<Busy>)>,
     initiatives: Query<&Initiative>,
     downed: Query<(), With<Downed>>,
     mut revivals: ResMut<PendingRevivals>,
+    resolution: Res<crate::SpellResolutionState>,
 ) {
+    if resolution.is_blocking() {
+        return;
+    }
     let Some(current) = turn_order.current() else {
         return;
     };
@@ -531,6 +599,18 @@ fn advance_turn(
             acted: false,
         });
     }
+    combat_events.write(crate::CombatEvent::TurnAdvanced {
+        unit: current,
+        next: turn_order.current(),
+        round: turn_order.round,
+    });
+    // Content-dependent commands (casts today) spend the ECS turn through their
+    // adapter before this system advances it. That transition is deliberately
+    // outside the pure command reducer, so publish the complete settled handoff
+    // back to the authority after the deferred Turn swap lands.
+    if let Some(authority) = authority.as_deref_mut() {
+        authority.mark_adapter_pending();
+    }
 }
 
 /// Movement budget when `combat.ron` has not loaded, for headless harnesses only.
@@ -558,7 +638,7 @@ fn check_for_downed(
     for (entity, &unit, spec, state) in &units {
         // A lattice with no cells at all is not a downed unit — it is a unit with no
         // lattice, which `all()` would call downed on the vacuous truth.
-        if spec.capacity() == 0 || !spec.cells().all(|(coord, _)| state.is_disabled(coord)) {
+        if !lattice_is_fully_disabled(spec, state) {
             continue;
         }
         let held_the_turn = turn_order.current() == Some(unit);
@@ -591,9 +671,22 @@ fn check_for_downed(
     }
 }
 
+fn lattice_is_fully_disabled(spec: &LatticeSpec, state: &LatticeState) -> bool {
+    spec.capacity() != 0 && spec.cells().all(|(coord, _)| state.is_disabled(coord))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn focused_ui_owns_space_instead_of_double_ending_the_turn() {
+        let mut keys = ButtonInput::default();
+        keys.press(KeyCode::Space);
+        let bindings = InputBindings::default();
+        assert!(raw_end_turn_requested(&keys, &bindings, false));
+        assert!(!raw_end_turn_requested(&keys, &bindings, true));
+    }
 
     fn order_of(units: &[UnitId]) -> TurnOrder {
         TurnOrder {

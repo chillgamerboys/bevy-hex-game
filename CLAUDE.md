@@ -1,6 +1,6 @@
 # Context for Claude Code
 
-A hex-grid game on **Bevy 0.19**, organised as a fourteen-crate cargo workspace.
+A hex-grid game on **Bevy 0.19**, organised as a multi-crate cargo workspace.
 
 Read **[docs/architecture.md](docs/architecture.md)** first — it explains the crate
 graph and, more usefully, the reasoning behind it. This file is the operational
@@ -48,7 +48,7 @@ HEX_REVIEW_SEED=1592598566 \
 cargo run --release -p hex_game --features map-review
 ```
 
-This bypasses only the title-screen click. Loading, validation, terrain spawning, and
+This bypasses only the Main Menu click. Loading, validation, terrain spawning, and
 actor spawning still use the production path. Omit `HEX_REVIEW_SEED` to use the
 scenario's configured seed; an override is valid only when that scenario declares
 `generation_seed`.
@@ -65,7 +65,7 @@ HEX_REVIEW_VIEW=default \
 cargo run --release -p hex_game --features map-review
 ```
 
-`HEX_REVIEW_VIEW` accepts `default`, `rotated`, or `top-down` and requires
+`HEX_REVIEW_VIEW` accepts `default`, `rotated`, `rear`, or `top-down` and requires
 `HEX_REVIEW_CAPTURE`; omitting the view uses `default`. `HEX_REVIEW_CAMERA` accepts
 `map` or `character` and also requires a capture. `HEX_REVIEW_TIME` accepts an hour in
 `[0, 24)` and can be used with or without a capture, but the selected scenario must use
@@ -74,7 +74,8 @@ freezes liquid presentation there; captures default to `0.0`, while launches wit
 capture keep live animation. `HEX_REVIEW_FOCUS_ANCHOR` relocates the selected actor to
 an exact generated anchor before framing and requires a capture.
 `HEX_REVIEW_CUTAWAY=full` exposes the selected cave interior for a review overview
-while ordinary gameplay keeps its local six-hex opening; it also requires a capture.
+while ordinary gameplay keeps every cave roof opaque and collision-active; it also
+requires a capture.
 `HEX_REVIEW_ILLUMINATION=overlay` adds exact Dark, Dim, and Bright cave-interior
 gameplay-tier caps to a capture without changing physical lighting, perception, fog,
 or picking.
@@ -87,23 +88,44 @@ the tool.
 ### Scripted visual walks
 
 The sibling default-off `visual-walk` feature drives the whole game through a RON
-step list — screens, button clicks by `Name`, keys, scenario launches — and
-photographs each step, so an agent can *look* at the frames (`/visual-walk` in the
-skill pipeline reads them; audit-pr runs it as Step 2.5):
+step list — screens, named UI buttons, exact stack-safe tile or generated-anchor
+clicks, bounded party movement waits, bounded right-drag camera orbits, keys, and
+scenario launches — and photographs each step, so an agent can *look* at the frames
+(`/visual-walk` in the skill pipeline reads them; audit-pr runs it as Step 2.5):
 
 ```sh
-HEX_WALK_SCRIPT=walks/menus.ron \
+HEX_WALK_SCRIPT=walks/gameplay_ui.ron \
 HEX_WALK_OUT=.context/visual-walks/local \
 cargo run -p hex_game --features visual-walk
 ```
 
-Exit code is the mechanical verdict: any stalled step or black frame fails the
-run. `walks/menus.ron` covers the title, Settings, both Creators, Combat Lab, and
-return routing;
-`walks/gameplay.ron` covers New Game, save/Continue restore, and the pause overlay.
-Ability Lab and Raider Mirror provide the focused combat walks. The capture goes
-through an offscreen render target (the window surface is not readable on
-macOS/Metal), with every UI root pointed at the redirected camera.
+Exit code is the mechanical verdict: any stalled step, structural UI failure, or
+black frame fails the run. The scoped gameplay route contains at most ten
+deterministic Bevy image-target frames. It reviews hierarchy, layout, focus,
+legibility, and responsive composition only; gameplay correctness is proved by
+canonical state snapshots in the rules/contracts/simulation/app partitions. Each
+capture has an explicit logical canvas and device scale, and uses Bevy's
+`ImageRenderTarget` plus `Screenshot::image` without an operating-system capture API.
+Every capture replaces that shared 3D/UI image, gives both cameras four complete render
+frames, and mirrors the 3D camera's MSAA onto the dedicated UI camera. The last rule
+keeps OIT tree-fade captures compatible while restoring ordinary sampling when OIT
+leaves.
+`walks/camera_routes.ron` is the seed-exact route authority for every selectable Map
+scenario. Named anchor clicks carry an expected `TilePos` stale detector, and camera
+orbits pass through the ordinary held-right-button plus cursor-motion input path;
+neither action mutates unit or camera state directly.
+
+Screenshots and rendered frames are evidence for static presentation: camera framing
+and occlusion, UI hierarchy/layout/legibility/focus/contrast/reflow, and rendered-map
+geometry, materials, lighting, cutaways, seams, and composition. Video and human
+checks are the evidence for camera motion, native-input response, animation, control
+feel, and taste; a still frame cannot establish motion. A visual artifact may prove
+how a hook-established state is rendered, but it never proves the underlying state.
+
+**Never use screenshots, rendered frames, video, or human observation as gameplay or
+exact world-logic evidence when typed hooks, state, events, logs, snapshots, or
+deterministic contracts can prove the claim.** If the hook is missing, add it; do not
+infer state transitions from pixels.
 
 ## Workspace
 
@@ -112,6 +134,9 @@ hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → h
 hex_core → hex_assets → hex_objects ───────────────────────────────→ hex_game
 {Bevy, bevy_egui, hex_core, hex_assets} → hex_editor  (standalone tool)
 hex_core → hex_ai → {hex_assets, hex_units, hex_combat}   (contracts, controllers, host)
+{hex_core, hex_lattice} → hex_combat_core → hex_combat   (pure combat authority)
+{bevy_ecs, hex_core} → hex_gameplay_model → hex_game  (pure screen behavior)
+{Bevy, hex_core, hex_assets, hex_gameplay_model} → hex_ui → hex_game  (runtime presentation)
 hex_core → {hex_assets, hex_units} → hex_perception → {hex_combat, hex_game}
 hex_core → hex_lattice → {hex_assets, hex_units, hex_combat}   (pure rules engine)
 hex_core → hex_anim ─────────────────────→ hex_units
@@ -124,6 +149,13 @@ spells, mana, disables, enchantments. Built like `hex_core` (Bevy sub-crates onl
 design's open questions. `hex_assets` resolves authored content into it, `hex_units`
 carries per-unit lattice state, and `hex_combat` drives casts, disables, and decisions.
 See `crates/hex_lattice`.
+
+**`hex_gameplay_model` is pure screen behavior** — Main Menu, Campaign, and Sandbox
+routing, pending/committed map and fixed-slot roster edits, typed launch blockers,
+plus Creator navigation and edit history. It does not depend on assets, combat,
+units, the game binary, or renderer. `hex_game` adapts typed model transitions to
+Bevy resources, persistence, and navigation instead of owning a second copy of those
+decisions.
 
 **`hex_map`, `hex_world` and `hex_units` must not depend on each other.** Shared
 types go in `hex_core`. Cargo enforces this; a violating `use` fails to compile.
@@ -142,7 +174,7 @@ and AI. Neither gameplay crate may import map-generator internals.
 **Two owners, two roles.** The **world owner** has `hex_map`, `hex_world`,
 `hex_perception`, their schema/settings modules in `hex_assets`, and map/perception
 content (world files, `substances.ron`, lighting profiles, `perception.ron`).
-The **gameplay owner** has `hex_core`, `hex_units`, `hex_combat`, `hex_lattice`,
+The **gameplay owner** has `hex_core`, `hex_units`, `hex_combat_core`, `hex_combat`, `hex_lattice`,
 `hex_anim`, generic `hex_assets` loader infrastructure, and gameplay schema/settings
 modules and content (`combat.ron`, `spells.ron`, `elements.ron`). `hex_game` is shared;
 `hex_objects` and `hex_editor` are shared presentation/tooling with no gameplay
@@ -159,7 +191,7 @@ owner's review; crate boundaries do not change.
 
 **`hex_map` is a leaf** — nothing depends on it but the binary. It is owned by one
 person, and the map reaches the rest of the game only through `HexTile`, `HexCoord`,
-surface `TilePos`, `HexSpan`, `SubstanceId` and `Headroom` components on tile
+surface `TilePos`, `RunBottom`, `HexSpan`, `SubstanceId` and `Headroom` components on tile
 entities. See `crates/hex_map/CLAUDE.md`. Cargo isolates the implementation, but
 malformed components can still break gameplay at runtime.
 
@@ -168,6 +200,13 @@ and a review comment on a *design* question inside someone else's crate is an ar
 rather than a veto — the owner decides, writes down why, and moves. Contract bugs and
 broken boundaries are the exception and should block. See
 `docs/architecture.md#ownership-cuts-both-ways`.
+
+**Delivery state has several projections.** Before planning from old tickets or
+calling work complete, compare the implementation with status/design/roadmap docs,
+GitHub, and Linear when it is connected. Linear is strongly recommended for
+cross-owner visibility but never blocks a contribution from an owner who does not use
+it. The tool-neutral contract is `docs/development/delivery-state.md`; Codex uses
+`$reconcile-delivery-state`.
 
 `hex_core` depends on Bevy sub-crates rather than the `bevy` facade, so it builds
 and tests without a renderer. It holds the largest share of the test suite.
@@ -193,6 +232,12 @@ and tests without a renderer. It holds the largest share of the test suite.
   ResolveObservation → PublishKnowledge → ApplyPresentation`) orders both initial
   perception and later updates. Authored lighting publishes
   `ExteriorIllumination`; gameplay never samples renderer lights or pixels.
+- **`TerrainSystems`** (`ApplyWorld → RefreshProjections → ReconcileActors →
+  ConsumeOutcomes`) runs the complete terrain-durability protocol before perception.
+  Map-owned `ApplyWorld` applies impacts and publishes rebuilt facts/outcomes;
+  `RefreshProjections` republishes occupancy and reconciles movement;
+  `ReconcileActors` deterministically settles or adopts unsupported actors; and
+  `ConsumeOutcomes` validates the matching batch before releasing gameplay authority.
 - **Same-frame combat knowledge** is ordered `PublishKnowledge → combat spatial
   knowledge synchronization → CombatSystems::Act → Apply → Resolve → Advance`.
   Casting and AI must use that publication; neither preview nor a legal-action request
@@ -203,9 +248,9 @@ and tests without a renderer. It holds the largest share of the test suite.
 - **The vertical axis is `level`, never `z`** — cube coordinates already use `x`, `y`
   and `z`, and all three are horizontal.
 - **A tile entity is a run of voxels, not one voxel**, and its `TilePos` is the run's
-  topmost material voxel. Its substance determines whether that position is solid
-  footing. Interior voxels have no entity, which is why targeting is positional. See
-  `docs/systems/map.md`.
+  topmost material voxel while `RunBottom` is its lowest. Its substance determines
+  whether that position is solid footing. Interior voxels have no entity, which is why
+  targeting is positional. See `docs/systems/map.md`.
 - **A surface needs room above it.** Every tile carries `Headroom` — clear voxels above
   it, 0 when buried inside a column — and a `Body` may stand only where headroom admits
   its traversal profile. The canonical walker is exactly 2 levels tall and may climb
@@ -217,9 +262,9 @@ and tests without a renderer. It holds the largest share of the test suite.
 - **Settings come from `assets/config/*.ron`.** On initial load, resources are
   absent until parsed rather than defaulted, so a bad file stalls loading. After
   that, a failed hot reload retains the last valid value and reports the error.
-  Elements, substances, spells, and lattices additionally require one matching
-  `AcceptedContentRevision`; resource presence or a settled Bevy change tick cannot
-  admit mixed source revisions.
+  Elements, substances, the terrain-damage matrix, spells, and lattices additionally
+  require one matching `AcceptedContentRevision`; resource presence or a settled Bevy
+  change tick cannot admit mixed source revisions.
 
 ## Bevy 0.19 specifics
 
@@ -254,8 +299,10 @@ and `Component`, and every query names concrete components.
 
 ## Traps
 
-Several failure modes produce **no log output**. A clean log is not evidence a
-change worked — look at the window. The sharpest three:
+Several presentation failures produce **no log output**. A clean log is not evidence
+that the window is correct, so inspect it for visual symptoms. That inspection is not
+a gameplay oracle; logical claims still require typed hooks or deterministic state.
+The sharpest three:
 
 - **Plain blue window** — assets not found (see "Always run through cargo").
 - **Black sky** — the sky shader failed to load, or the dome was culled.
@@ -267,8 +314,8 @@ Full list, including the map-specific ones:
 
 **Observers are global.** They fire in every state. One touching a gameplay-only
 resource must take `Option<Res<T>>` — Bevy validates parameters *before* the body
-runs, so an internal guard won't save it. This caused a real crash on the title
-screen.
+runs, so an internal guard won't save it. This caused a real crash on the Main
+Menu.
 
 ## Branch & PR workflow
 
@@ -276,15 +323,17 @@ screen.
 
 ```
 feat/whatever  ──PR──►  dev  ──PR──►  main
-feat/ticket    ──PR──►  wave/N-name  ──one walked PR──►  dev
+feat/ticket    ──PR──►  wave/N-name  ──one reviewed PR──►  dev
 ```
 
 `dev` is permanent — it is the integration branch, not a release branch that gets
 cleaned up. Standalone work PRs straight onto it; **related work with shared contracts,
 hot files, or one meaningful runtime checkpoint goes through a short-lived
 `wave/*` branch**. Source branches are work lanes and need leaf PRs only when focused
-review is useful. The combined wave gets the full audit and human walk, then lands on
-`dev` in one merge and is deleted (never `dev`). See
+review is useful. The combined wave gets the selector-chosen audit; affected
+presentation or experiential surfaces also get the applicable visual/human route,
+while logic-only waves record exact-head hook-backed evidence. It then lands on `dev`
+in one merge and is deleted (never `dev`). See
 [parallel development](docs/development/parallel-development.md) for the topology
 decision table and reconciliation rules.
 
@@ -312,8 +361,20 @@ allowed to be wrong.
 
 Codex reads root [`AGENTS.md`](AGENTS.md) automatically and discovers repository
 skills under `.agents/skills/`. Use `$plan-parallel-work` before dividing a related
-outcome across lanes, and `$land-development-wave` to reconcile and land an existing
-batch without multiplying release gates.
+outcome across lanes, and `$plan-epic` once that choice is a wave.
+
+Waves have their own pipeline, and
+[`docs/development/wave-protocol.md`](docs/development/wave-protocol.md) is the
+tool-neutral contract behind all of it — the committed manifest under
+`docs/planning/waves/<slug>/`, the lane field table, the ownership algebra, the merge
+order, and the recipes for folding pre-existing branches into a wave. `/plan-epic`
+decomposes and commits the artifact, `/dispatch` runs up to three isolated worker agents
+against it and merges each lane PR into `wave/<slug>` through the same
+`/audit-pr` → `/merge-pr` gate, and `/inject` adds discovered work to a running wave.
+**`/dispatch` never merges to `dev` or `main`.** The single `wave/* → dev` merge stays a
+deliberate act carrying the combined head's own exact-head evidence. `/dispatch` and
+`/inject` are Claude-only because they need harness worktree isolation and agent
+messaging; a Codex coordinator plans with `$plan-epic` and lands lanes by hand.
 
 The PR lifecycle is driven by skills in `.claude/skills/`:
 `/create-pr` → `/audit-pr` → `/merge-pr` for feature work into `dev`;
@@ -323,20 +384,44 @@ played the build; `/release` to bump `[workspace.package] version` and tag
 Conventional Commits — `/release` computes the version bump from them.
 `/audit-pr` writes `/tmp/audit-pr-receipt-<PR>.json`; `/merge-pr` refuses to
 merge without a green receipt for the current HEAD.
-Test tiers: `/test-quick` (fmt+clippy+tests) → `/test-local` (+deny, doc,
-links) → `/test-full` (+ship build; the visual walk stays manual).
-Standalone audits: `/audit-diff`, `/audit-silent-failures`, `/update-docs`,
-`/visual-walk` (the scripted capture walk — audit-pr's Step 2.5; the agent
-reads the frames, and the human walk still owns motion and taste).
-Tickets live in Linear (team HEX): `/plan-ticket` to start from one,
-`/update-linear` to bind a PR, `/seed-tickets` to turn a roadmap into
-tickets. Binding is encouraged, never required.
+Validation has two tiers: `/test-quick` runs the selector-chosen focused iteration
+gate; `/test-full` runs the complete selector-chosen merge-candidate gate, including
+dependency, docs, links, and shipping checks. Applicable static visual review and
+exact-head human experience evidence remain separate explicit gates.
+Gameplay and map tests are partitioned by concern in
+[`docs/development/gameplay-testing.md`](docs/development/gameplay-testing.md) and
+[`docs/development/map-testing.md`](docs/development/map-testing.md); logical combat
+evidence comes from rules/contracts/simulation/app data, while map logic uses
+unit/generation/publication data and retains its existing visual criteria. The scoped
+gameplay visual run contains exactly ten reviewed presentation frames.
+Ordinary PRs run only the selector-chosen producer/consumer closure; trajectory-only
+changes use their dedicated pure/direct-consumer concern without application/UI tests.
+The combined terrain-impact source, unknown/unclassified paths, command-manifest or CI
+changes, and pushes to `dev`/`main` promote to the complete gate. Final wave and
+release candidates run the complete selector-chosen candidate gate on their exact
+combined diff.
+Standalone review helpers are `/audit-diff` and `/visual-walk` (the scripted capture
+walk used by `/audit-pr`; the agent
+reads static camera/UI/rendered-map frames, and video/human checks own motion, input
+response, control feel, and taste).
+Tickets live in Linear (team HEX): `/plan-ticket` reconciles and starts an existing
+issue, while `/update-linear` binds, transitions, or policy-retires an existing issue.
+Initial UI defects use the tool-neutral
+`.agents/skills/linear-ui-bug-intake` workflow; Claude's
+`/linear-ui-bug-intake` is a thin adapter over that same contract. All Linear skills
+resolve teams, workflow states, labels, members, and parents from live connector data
+instead of embedding workspace UUIDs. Linear linkage is encouraged, never a merge
+gate. The committed wave manifest owns lane execution state, so `/plan-epic` and
+`/inject` reuse existing issues selectively and never mint one child per lane. New issue
+creation is limited to deduplicated `linear-ui-bug-intake` children. Fully delivered issues
+follow the free-workspace deletion policy in `docs/development/delivery-state.md` only after
+their outcome and exact `dev` delivery are recorded durably.
 
 ## Current state
 
 Runs on macOS/Metal at 60 FPS, 3,400–4,100 entities in gameplay depending on the
 terrain seed. Bevy 0.19 and Rust 1.97.1 are pinned. The test count is intentionally
-not frozen here; the current foundation gate and its exact count are recorded in
+not frozen here; dated foundation checkpoints and their exact counts are recorded in
 [foundation-hardening.md](docs/planning/foundation-hardening.md). macOS is the primary
 dev machine; the WSL2 setup in the README belongs to another contributor and still
 works.
@@ -352,10 +437,19 @@ to be out of date. Everything else under `docs/` describes contracts.
   `println!`, float `==` and undocumented public items are all denied. Tests may
   unwrap, expect, panic, debug and print; slice indexing and the other restrictions
   remain denied.
-- **Headless integration tests** live in `crates/hex_map/tests/`,
-  `crates/hex_units/tests/` and `crates/hex_combat/tests/`. They cannot see anything
-  visual — a black sky or a mistransformed tile still needs a human looking at the
-  window.
+- **Headless integration tests** use capability-based app mechanics from
+  `hex_test_app` and dependency-limited fixtures from `hex_test_support`, then live
+  in their owning crate. Units and combat each
+  expose one explicit `contracts` target; concern modules live beneath that target
+  rather than creating another Bevy link. The single
+  `hex_combat_core/tests/simulation.rs` target owns multi-turn composition, and the
+  single `hex_game/tests/gameplay_app.rs` target owns gameplay UI behavior behind
+  `test-support`. `game_content_contracts` and the library's private
+  scenario/loading tests stay separately selectable in the residual shared seam.
+  Map tests may reuse the neutral app shell while retaining their world-owned fixture
+  data and acceptance criteria; they must not replace the map producer with a synthetic
+  consumer arena. None can see anything visual — a black sky or a mistransformed tile
+  still needs a human looking at the window.
 
 **Gaps in the engine and the toolchain** — `bevy_lint` unusable at 0.19, Bevy
 features untrimmed, animation still `Box<dyn Transformer>` — are recorded in

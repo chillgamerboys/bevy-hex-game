@@ -243,17 +243,18 @@ impl CommandQueue {
     }
 }
 
-/// A unit whose presentation is still in flight.
+/// A unit whose domain movement is still in flight.
 ///
-/// Maintained by the applier and its sync system in `hex_combat`: inserted
-/// when a command commits an animation, removed once the walk or swing has
-/// landed. The applier refuses to start new presentation for a busy unit —
-/// which is the one rule that used to live as three separate ad-hoc
-/// `Transformation` checks.
+/// Inserted when a route is committed and removed by the movement reconciler
+/// when its bounded domain clock reaches the final exact surface. Combat
+/// legality and turn advancement may query this marker; animation components
+/// may mirror the same route, but their presence or removal is never gameplay
+/// truth.
 ///
 /// A marker in `hex_core` rather than a query on the animation component,
-/// because the *rule* ("one thing at a time") is sim vocabulary while the
-/// animation is presentation — and because `hex_core` cannot see `hex_anim`.
+/// because the *rule* ("one domain transition at a time") is sim vocabulary
+/// while animation is presentation — and because `hex_core` cannot see
+/// `hex_anim`.
 #[derive(Component, Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[reflect(Component)]
 pub struct Busy;

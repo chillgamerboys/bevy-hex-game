@@ -69,9 +69,11 @@ The contracts-first PR introduced the exact projections V3 may publish:
   generated features such as tree roots;
 - a generated light is an entity with an exact `TilePos` and `GameplayLight`;
   its exterior or interior `LightDomain` is derived at use time;
-- `PresentationOcclusion` composes independent fog, interior-cutaway, and
-  canopy-cutaway reasons without making any one system the owner of Bevy
-  `Visibility`.
+- `PresentationOcclusion` composes independent fog, explicit review-cutaway,
+  Character-camera proximity, and Sandbox-deployment reasons; reason-producing
+  systems never write Bevy `Visibility` independently, and one shared presentation
+  pass applies their combined result. `TreeOccluder` and `TreeFadeAmount` carry
+  whole-tree camera opacity without exposing feature plans.
 
 These contracts carry consequences, not instructions. Gameplay can ask whether a
 known surface is blocked or which biome region it belongs to, but it cannot ask the
@@ -91,9 +93,10 @@ objects are validated, edited, and drawn, but they own no world or gameplay sema
 The split for a Forest tree is therefore explicit:
 
 - Forest publishes its authored `ObjectInstance`, exact rotated roots in
-  `TraversalBlockers`, and a root-keyed `CanopyOccluder` through separate projections;
-- `hex_objects` renders the object and never derives either projection from object
-  parts;
+  `TraversalBlockers`, and one stack-safe whole-tree identity;
+- `hex_objects` renders the object, propagates the supplied root to every chunk, and
+  preserves authored canopy membership as separate, currently unconsumed art
+  metadata; it never derives traversal from object parts;
 - gameplay consumes the blocker and knowledge projections, never the renderer.
 
 This permits authored Forest visuals without moving generation into presentation or
@@ -175,11 +178,15 @@ encounter-owned exact `TilePos` overlay. No current system depends on it.
 
 ## C — Run bottoms (exact occupancy: casting legality, line-of-sight, cover)
 
-**Need**: `needs_los` spells and cover want column occupancy. Tiles publish
-their run's top (`TilePos`) and world extent (`HexSpan`) but not the run's
-bottom **level**, and gameplay must not divide by `level_height` to recover
-it (that reintroduces the dependency the split exists to prevent);
-`Headroom` saturates, so occupancy can't be reconstructed exactly.
+**Delivered**: material-sensitive trajectories, future sight, and cover want column
+occupancy. Every material-run
+entity now publishes its inclusive top (`TilePos`) and bottom (`RunBottom`) alongside
+its world extent (`HexSpan`). Gameplay does not divide by `level_height` or infer from
+the saturated `Headroom` clearance fact. The published bounds feed one gameplay-owned
+exact occupancy projection and deterministic trajectory supercover; faction-facing
+trajectory choices filter that geometry through authorized knowledge, while full truth
+stays at command authority. Obstruction-aware sight remains later work and must reuse
+the primitive rather than introduce a second ray.
 
 Initial spatial perception is deliberately obstruction-agnostic and does not need
 this component. Gameplay lights are radial within one light domain; sight uses exact
@@ -190,13 +197,14 @@ different reason. [casting.md](../systems/casting.md) validates a cast against t
 voxels it would affect — is this voxel solid, is it empty enough to conjure into, is it
 somebody's supporting surface — and none of those are answerable without exact
 occupancy. Wave 3 deliberately shipped terrain effects fail-closed rather than
-reconstructing it; `RunBottom` now gates the terrain-casting follow-up and later
+reconstructing it; `RunBottom` now underpins permanent construction and live
+obstruction-aware trajectories, and remains the foundation for future
 obstruction-aware sight.
 
 One component answers casting legality, conjuration placement, trajectory, cover, and
 pathing alike, using the existing published-data pattern rather than a new API surface.
 
-**Accepted contract and sequencing**: add one component to the existing spawn bundle.
+**Accepted and live contract**: one component extends the existing spawn bundle.
 The type lives in gameplay-owned `hex_core`:
 
 ```rust
@@ -210,169 +218,238 @@ You already hold both bounds when merging runs in the spawn pass. Every run enti
 including stacked runs under bridges, overhangs, and caves, carries it. Spawn-bundle
 tests assert the exact inclusive bottom and top for each such run.
 
-This lands before terrain casting. If it slips, terrain casting waits; gameplay does
-not reconstruct occupancy or ship terrain effects that cannot distinguish rock from
-air. Obstruction-aware sight may still use its independent approximation while it
+**Publication and the first casting consumers are live:** permanent construction and
+material-sensitive trajectory checks use the shared type and map adapter without
+reconstructing occupancy from presentation facts. Cover and obstruction-aware sight
+remain downstream.
+Obstruction-aware sight may still use its independent approximation while its consumer
 waits: a sight line is
 blocked iff some intervening column's highest run top reaches it. Wrong only
 for shooting *under* bridges and overhangs.
 
-## G — Declarative terrain impact (accepted contract)
+## G — Declarative terrain damage (accepted contract)
 
-**Need**: a fireball should not have to know whether stone yields to fire. Today a
-spell would have to say `TerrainEdit::Clear`, which is gameplay deciding an outcome for
-a material it does not own — and it means every new material you add (worked stone,
-ice, and other voxel substances) needs a corresponding gameplay change to interact
-sensibly.
+**Need**: a spell must not decide whether a material can be damaged or how much health
+it has. Gameplay owns the exact volume and authored power; the world owns material
+toughness, protection, accumulated damage, and destruction.
 
-**Accepted contract**: a second message beside `TerrainEdit`, type in `hex_core`
-(gameplay-side):
+The shared announcement remains a second message beside `TerrainEdit`:
 
 ```rust
-/// Identifies one announcement so its outcome can be matched to it (contract H).
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TerrainBatchId(pub u64);
 
-/// An energetic effect announced over an exact voxel volume. The map decides
-/// what each material does about it — including nothing.
-#[derive(Message, Debug, Clone, PartialEq, Eq)]
 pub struct TerrainImpact {
-    /// Dealt by gameplay; echoed back by the outcome message.
     pub batch: TerrainBatchId,
-    /// Exact voxels the effect reaches, in canonical TilePos order.
     pub volume: Vec<TilePos>,
-    /// Session-local element handle resolved before the message is emitted.
     pub element: ElementId,
-    /// Authored strength, from the spell's own content.
     pub power: u8,
 }
 ```
 
-`volume` is a set represented in deterministic form: the publisher must sort it by
-`TilePos` and remove duplicates before emission, and the consumer rejects a
-non-canonical message rather than making event order depend on input accidents. It
-contains every exact voxel the effect reaches, including empty voxels whose disposition
-is reported by contract H.
+The publisher allocates a session-unique batch id and emits a nonempty `volume` sorted
+by `TilePos` with duplicates removed. `power` is authored and strictly positive.
+`TerrainBatchId` and `ElementId` are transient handles, never authored or durable save
+identities. Empty, noncanonical, zero-power, unknown-element, and reused-batch
+announcements receive the explicit rejection in contract H rather than disappearing.
 
-`TerrainBatchId` and `ElementId` are transient runtime handles. They may cross this
-in-process boundary, but neither is a durable save or authored-content identity.
-Authored response tables and persistent logs use stable element names; the loader
-resolves those names to `ElementId` for runtime lookup.
+### Initial toughness and damage rule
 
-**The map side is a response table** — `(ElementId, power, SubstanceId) → outcome` at
-runtime, authored by stable element and substance names — as map-domain content you own
-and tune. `hex_map` already depends on `hex_assets`, so reading resolved element content
-needs no new crate edge.
+`Substance::toughness: Option<u8>` is the voxel's maximum health. `None` means the
+substance does not participate in damage; authored values are restricted to the fixed
+initial scale `1`, `2`, `4`, and `8`:
 
-This is what lets you decide, entirely on your side and at your own pace, whether fire
-melts ice, whether worked stone resists Earth magic, and what happens when a spell hits
-water. Gameplay never encodes material physics; it only ever says *which voxels* and
-*what kind of energy*.
+| Maximum health | Initial substances |
+|---:|---|
+| 1 | grass, snow |
+| 2 | dirt, gravel, ice, sand |
+| 4 | stone, basalt |
+| 8 | worked stone, metal |
+| none | air, water, lava, bedrock |
 
-Feature destruction is explicitly outside this contract. V3 trees are `FeaturePlan`
-entries with exact root blockers, not substance voxels, so a substance-response table
-cannot honestly burn them. Trees and other non-voxel features remain unchanged until a
-separate feature-impact contract defines occupancy, response, and acknowledgment.
+`assets/config/terrain_damage.ron` is a world-owned allow-list of stable
+`(element_name, substance_name)` pairs. A listed pair permits damage; a missing pair
+resists. The neutral elemental-grid migration lists all 18 canonical elements against
+all ten substances with numeric toughness, exactly **180 unique pairs**, so the
+content continues to exercise the Boolean contract without pretending to settle
+elemental balance. Expanding that table changes no resolver behavior and does not
+claim any of HEX-19's remaining terrain mechanics. Validation rejects unknown names,
+duplicate pairs, and pairs naming a substance without toughness. The resolved matrix
+participates in the same coherent content revision and deterministic fingerprint as
+elements, substances, spells, and lattices; a failed reload retains the last complete
+accepted revision.
 
-The full model, including the invariant that **gameplay owns geometry and the world
-owns materiality**, is [casting.md](../systems/casting.md).
+For an allowed, unprotected voxel, effective damage is exactly `power`,
+capped at its remaining health. A voxel with no sparse damage entry starts at its
+material maximum. A positive remainder produces `Damaged`; zero destroys the voxel
+and produces `Destroyed`. There are no thresholds, multipliers, healing, material
+replacement, or elemental transformations in this slice.
 
-**Fallback while implementation is deferred**: spells keep using
-`TerrainEdit::Set`/`::Clear` with outcomes
-chosen gameplay-side, and terrain magic ships ignorant of materials — fireballs that
-delete granite, and no interaction at all with trees or structures.
+The map processes direct `TerrainEdit`s before impacts, then impacts in message order;
+later work observes all earlier changes. An accepted material-changing `Set` drops old
+damage and gives the new material full health, while `Clear` drops it. A same-material
+`Set` remains a no-op and does not heal. Partial damage changes no material and does
+not require a terrain rebuild; any actual creation or destruction uses the existing
+single consequence/rebuild path, at most once per update.
 
-## H — Terrain impact acknowledgment (accepted contract)
+The existing protections remain authoritative. Non-diggable material, authored V3
+liquid voxels and their protected lower supports, blocking feature roots, and generated
+light protection resist without accumulating damage. Damage never redistributes a
+liquid or affects a non-voxel feature.
 
-**Need**: under contract G the world decides outcomes, so gameplay does not know what
-happened. Without an answer it cannot show the difference between shattered and
-scorched, cannot log it, cannot record it in a save, and can never express a
-conditional effect ("if the wall falls…"). This is the *only* channel back.
+Feature destruction is outside this contract. V3 trees and structures are semantic
+instances rather than substance voxels and need their own occupancy, response, and
+acknowledgment contract.
 
-**Accepted contract**: one message written after a batch is applied, type in
-`hex_core`:
+**Status — live**: the shared message, toughness schema/content, validated Boolean
+matrix, coherent content readiness, sparse health ledger, protection checks, ordered
+map resolver, ordinary terrain consequences, paid gameplay spell emission, monotonic
+batch allocation, and correlated outcome consumption are wired in the shipped build.
+
+## H — Damage acknowledgment, health projection, and settlement (accepted contract)
+
+The map produces exactly one answer for every impact it processes:
 
 ```rust
-/// The map's explicit decision for one voxel reached by an impact.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct TerrainVoxelHealth {
+    pub remaining: u8,
+    pub maximum: u8,
+}
+
 pub enum TerrainImpactDisposition {
     NoMaterial,
     Resisted,
-    Unchanged,
-    Cleared,
-    Replaced,
+    Damaged,
+    Destroyed,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct TerrainVoxelOutcome {
     pub pos: TilePos,
     pub disposition: TerrainImpactDisposition,
     pub before: Option<SubstanceId>,
     pub after: Option<SubstanceId>,
+    pub health_before: Option<TerrainVoxelHealth>,
+    pub health_after: Option<TerrainVoxelHealth>,
 }
 
-/// What every voxel in one announced impact became.
-#[derive(Message, Debug, Clone, PartialEq, Eq)]
+pub enum TerrainImpactRejection {
+    EmptyVolume,
+    NonCanonicalVolume,
+    ZeroPower,
+    UnknownElement,
+    ReusedBatch,
+    TerrainUnavailable,
+}
+
+pub enum TerrainImpactResult {
+    Applied(Vec<TerrainVoxelOutcome>),
+    Rejected(TerrainImpactRejection),
+}
+
 pub struct TerrainImpactOutcome {
-    /// Correlates with the announcement that caused it.
     pub batch: TerrainBatchId,
-    /// Exactly one entry per impact voxel, in the same canonical TilePos order.
-    pub voxels: Vec<TerrainVoxelOutcome>,
+    pub result: TerrainImpactResult,
 }
 ```
 
-The explicit disposition distinguishes empty space, resistance, and an unchanged
-material response; `before`/`after` alone cannot. Unchanged voxels matter as much as
-changed ones — "the bedrock resisted" is the outcome a player needs to see. The
-consumer verifies that positions are sorted, unique, and exactly equal to the
-announced volume. `NoMaterial` requires `None → None`; `Resisted` and `Unchanged`
-require the same `Some` value before and after; `Cleared` requires `Some → None`; and
-`Replaced` requires two different `Some` values. Any other combination is invalid.
+An applied result contains exactly one entry for every announced voxel, in the same
+canonical order. `SubstanceId::AIR` is absence and is never valid inside `Some`; `None`
+is the only no-material representation. `NoMaterial` is `None → None` with no health.
+`Resisted` preserves
+one material; toughness-bearing material reports equal valid health before and after,
+while material without toughness reports neither. `Damaged` preserves one material
+and reports the same maximum with `0 < after.remaining < before.remaining`.
+`Destroyed` is `Some → None`, reports valid `health_before`, and has no
+`health_after`; zero is therefore never represented as live voxel health. Every
+`TerrainVoxelHealth` satisfies `1 <= remaining <= maximum`.
 
-This is an authoritative simulation message, not permission to reveal its payload.
-Presentation, logs, and faction-facing knowledge filter every entry through current
-observation, so an area extending into hidden terrain does not disclose its material
-or response.
+A rejected result contains no per-voxel payload and mutates nothing. Validation uses
+this fixed precedence: `ReusedBatch`, `EmptyVolume`, `NonCanonicalVolume`, `ZeroPower`,
+`UnknownElement`, then `TerrainUnavailable`. The first processed use of a batch id
+consumes it whether applied or rejected; a later use is therefore `ReusedBatch`.
+`TerrainUnavailable` covers a missing/not-ready map or a missing coherent damage
+catalog. Gameplay keeps a cast pending until it receives either answer, so rejection
+cannot deadlock turn advancement.
 
-**Correlation**: `TerrainImpact` carries the `TerrainBatchId` gameplay dealt it
-(contract G)
-and the outcome echoes it. The batch id, `ElementId`, and both `SubstanceId` values are
-session-local only. A durable log or save projection stores its own durable event key
-and converts elements and substances back to stable names before serialization.
+### Partial-health projection and privacy
 
-`TerrainEdit` predates this and has no batch field. Acknowledging or correlating
-conjuration is not smuggled into this ask; if it becomes necessary, it receives an
-explicit contract rather than relying on voxel position as an implicit correlation id.
+`DamagedVoxels` is a stack-safe `TilePos → TerrainVoxelHealth` projection containing
+only voxels with partial health. `hex_map` is its sole publisher. Absence means full
+health or no toughness; destruction and a material-changing direct edit remove the
+entry. The projection is authoritative world truth, **not permission to reveal it**.
 
-**Fallback if deferred**: presentation plays only the spell's own animation and never
-reflects the world's answer; the save log records intent rather than result (see D2's
-interaction — a replayed impact then depends on the response table not changing).
+The shared presentation adapter may draw a health bar only for an entry that is also a
+current exposed top surface, currently `Observed` by the Player faction, and visible
+after ordinary cutaway/tile and camera culling. Remembered, Unknown, buried, internal,
+side-only, full-health, and destroyed voxels expose no bar. Bars are small depth-tested,
+camera-facing world billboards so terrain can occlude them normally. Logs and spell
+presentation independently filter outcomes through faction knowledge.
 
-## I — Interior and domain metadata after edits
+### Cross-owner ordering and unsupported actors
 
-**Need**: breach a cave roof with a spell and the chamber below is open to the sky, but
-nothing says so. To be precise about what already happens: `apply_terrain_edits`
-(`crates/hex_map/src/grid.rs`) does maintain `InteriorRegions` across an edit by
-calling `remove_roof_voxel` for each applied edit — so the *roof* projection stays
-current. What is never re-derived is interior **membership**: the chamber's surfaces
-keep the region they were generated with. `hex_perception` derives each surface and
-source `LightDomain` from that exact current membership every frame. A breached
-chamber therefore continues to resolve as Interior even after its roof changes.
+`TerrainSystems::{ApplyWorld, RefreshProjections, ReconcileActors, ConsumeOutcomes}`
+defines the live configured cross-crate phase order. The map-owned `ApplyWorld`
+applies edits/impacts, rebuilds material consequences, publishes outcomes, and flushes
+rebuilt tile facts. Gameplay-owned `RefreshProjections` republishes exact terrain
+occupancy and reconciles ordinary movement; `ReconcileActors` deterministically
+settles unsupported actors and adopts the resulting authority; and `ConsumeOutcomes`
+validates/correlates the matching answer before releasing pending gameplay authority:
 
-The correct gameplay meaning of a breach remains unresolved. Removing one roof voxel
-must not automatically convert an entire connected chamber to exterior illumination,
-but keeping every generated interior permanently dark is also not a long-term answer.
-The decision needs an explicit rule for aperture size, connectivity, local versus
-region-wide daylight, and whether a repaired roof can restore the domain.
+```text
+ApplyWorld
+  → RefreshProjections
+      → TerrainOccupancySystems::Publish
+      → MovementSystems::Reconcile
+  → ReconcileActors (cancel stale routes, then settle)
+  → ConsumeOutcomes (validate/correlate, then release pending work)
+  → perception
+  → combat authority/action
+```
 
-**Open question, not an accepted rebuild contract**: V3 keeps interior membership and
-ambient-domain derivation private, but does not promise to reclassify a whole chamber
-after an edit. Resolve the breach rule before `TerrainImpact` begins mutating worlds
-observed by live perception; until then, edits update the existing roof projection
-only.
+An impact emitted during combat apply on frame N therefore settles at the next
+`ApplyWorld`. The gameplay adapter keeps combat behind its pending batch until the
+refreshed projections, actor reconciliation, authority adoption, and matching
+`ConsumeOutcomes` phase complete.
 
-**Fallback until then**: documented in [status.md](status.md) — a breached roof does
-not admit daylight, and gameplay will not pretend otherwise.
+Gameplay owns settlement because the map never reads units. After destruction, every
+unit whose exact support is no longer legal is handled in stable `UnitId` order:
+
+1. Select the highest legal, unoccupied surface strictly below the old support in the
+   same column.
+2. If none exists, consider lateral legal surfaces in the deterministic tuple
+   `(hex_distance, absolute_level_difference, is_higher, TilePos)`, where lower or
+   same-level candidates sort before higher candidates at equal distance/difference.
+   Higher surfaces are allowed.
+3. Apply the body's headroom/traversal rules, exact blockers, current unit occupancy,
+   and destinations reserved for earlier units in this same pass.
+4. Cancel stale movement/animation and update `StandsOn`, transform, occupancy, and
+   combat authority together. Falling deals no damage, spends no movement/action, and
+   does not change turn ownership.
+5. If no landing exists anywhere, stop combat with a fatal settlement diagnostic;
+   never leave the unit on air or silently despawn it.
+
+`TerrainEdit` still has no batch acknowledgment. Conjuration correlation is not
+inferred from voxel position; it receives a separate contract if one is needed.
+
+**Status — live**: the four-phase shared vocabulary/configuration, map outcome and
+`DamagedVoxels` publishers, visibility-gated shared presentation adapter, gameplay
+impact emission, occupancy/movement refresh, deterministic actor settlement and
+authority adoption, matching-outcome consumption, and combat pending gate are wired
+in the shipped build.
+
+## I — Interior domains after edits (initial ruling)
+
+Material changes rebuild the same terrain, headroom, blocker, illumination,
+observation, and knowledge projections used for an originally generated map. Existing
+`InteriorRegions` roof voxels stay current as pieces are removed.
+
+Interior **membership**, however, remains authored V3 metadata and is not re-derived.
+A breached cave therefore stays in its authored Interior light domain and does not gain
+new daylight in this initial implementation. No aperture-size, connectivity,
+local-daylight, or repaired-roof rule is implied. That more dynamic model is separate
+future work rather than a condition on terrain damage.
+
+**Status**: the material-change rebuild and retained authored-domain ruling are live
+for direct edits and resolved impacts. Dynamic cave-aperture daylight remains deferred.
 
 ## J — Sight tunables as settings
 
@@ -406,6 +483,11 @@ retained authored liquid run remains above. Its private classifier is keyed by e
 `TilePos` and returns all affected stacked runs. Rejection is atomic: neither
 occupancy nor current/fall metadata changes, and liquid never redistributes.
 
+The same classifier applies to `TerrainImpact`: authored liquid voxels and their
+protected lower supports report `Resisted` and never acquire partial health. Water and
+lava have no toughness in the initial damage model. Breaking a nearby ordinary voxel
+does not trigger flow, refill, current propagation, or any other fluid simulation.
+
 This does not make water or lava globally non-diggable. Legacy and non-topological
 liquids remain governed by their existing `diggable` material behavior. The exact
 classifier and conservative runtime admission are live for authored V3 liquid
@@ -419,29 +501,26 @@ Treating every defined substance as conjurable would let an otherwise valid spel
 create protected bedrock, static water, or lava merely because the world needs those
 materials for generation.
 
-**Ask**: add an explicit world-owned `conjurable` policy to substance content. The
-gameplay-owned content loader validates every `SetTerrain` and `SpawnWall` spell
-reference against both existence and this policy before publishing the spell catalog.
-The initial substance file marks allowed construction materials explicitly; bedrock,
-air, water, and lava are not conjurable.
+**Live contract**: the world-owned `conjurable` policy in substance content is checked
+by the gameplay-owned content loader for every construction spell reference. The
+initial file marks only `stone` conjurable; every other current substance, including
+bedrock, air, water, and lava, is not. Ordinary construction also requires its complete
+creation volume to be empty before it emits `TerrainEdit::Set`, so this slice creates
+stone in air and never replaces an existing material.
 
 This is a spell-content admission rule, not a new meaning for the low-level
 `TerrainEdit::Set` message. Save restoration and authored terrain may still need to set
 any valid substance. Runtime cast legality consumes only spell content that already
 passed the cross-domain check.
 
-**Fallback if deferred**: terrain-conjuring spell effects remain rejected as unbuilt.
-They do not ship with an implicit allow-all policy.
-
 **Accepted by the gameplay owner**, including the initial exclusions. This supersedes
 an earlier gameplay-side ruling that any defined substance was conjurable and balance
 would live in a spell's cost and tier. That ruling was aimed at *balance* whitelists —
 gating an interesting material because it is strong — and this is a different concern:
-world integrity. Conjured bedrock would be an indestructible wall, which breaks the
-symmetry that anything magic creates can also be destroyed; conjured liquid creates
-the hanging-water problem ask K has not solved. The palette stays the world owner's to
-widen, and gating a material purely because it is powerful remains a balance decision
-that belongs in cost and tier.
+world integrity. Conjured bedrock would be an indestructible wall; conjured liquid
+creates the hanging-water problem ask K has not solved. The palette stays the world
+owner's to widen, and gating a material purely because it is powerful remains a balance
+decision that belongs in cost and tier.
 
 ## D1 — Pre-spawn terrain edit replay
 
@@ -483,8 +562,8 @@ generating are map-side:
 #[derive(Message, Debug, Clone, Copy)]
 pub struct TerrainSnapshotRequest;
 
-/// A generator-independent dump. Substances BY NAME — ids are session-local
-/// (the table assigns them from sorted names), so a saved id is meaningless.
+/// A generator-independent dump. Substances BY NAME — runtime ids come from an
+/// internal compatibility registry, while names are the durable snapshot contract.
 #[derive(Resource, Debug, Clone)]
 pub struct TerrainSnapshot {
     pub names: Vec<String>,                 // index -> substance name
@@ -508,20 +587,24 @@ legacy generator lifetime.
 **Scheduling note (gameplay side agrees, and has moved to suit).** Your rule that no
 production save may depend on regenerating a V1/V2 seed still makes D2 a
 *prerequisite* for durable saves rather than an optimization — and D1 a prerequisite
-for restoring an edited world. Wave 5's pre-alpha resume slot is a deliberately
-disposable exception: it records an explicit seed, generator version, and content
-digests, then refuses drift instead of migrating or silently rebuilding a different
-world ([roadmap.md](roadmap.md)). It never claims production compatibility and does
-not save combat. D1 and D2 therefore remain asked without blocking that scaffold.
+for restoring an edited world. The former Wave 5 single resume was superseded by
+exactly three Campaign slots plus one-time legacy migration. Those slots remain a
+deliberately disposable pre-alpha exception: each records an explicit seed, generator
+version, and content identities, then refuses drift instead of silently rebuilding a
+different world ([roadmap.md](roadmap.md)). They never claim production compatibility
+and do not save combat. D1 and D2 therefore remain asked without blocking that
+scaffold.
 When they land, contract H's outcome log is what makes a replayed impact reproducible
-without pinning the response table's version.
+without pinning the damage table's version.
 
 ## F — Deliberate non-asks
 
-- **Streaming / chunks**: `Ring7` is one radius-33 map, not a streaming
-  decision. Keep `VoxelMap` private so a later chunked rewrite changes no
-  consumer. Record generation time, entity count, and perception recomputation
-  for the composite before choosing a streaming model.
+- **Streaming / chunks**: Ring7 and Ring19 are finite maps, not a streaming
+  decision. Ring7 remains one radius-33 world; Ring19 is one radius-55,
+  9,241-column world with 19 regions, 42 internal seams, and 30 outer boundary
+  sides. Keep `VoxelMap` private so a later chunked rewrite changes no consumer.
+  Record generation time, entity count, and perception recomputation for both
+  composites before choosing a streaming model.
 - **Unit obstruction / occupancy**: gameplay-side (hex_combat), not a map
   concern.
 - **Anchor constants**: raised in the PR #52 review rather than here — if

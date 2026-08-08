@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use hex_core::{FormationPreset, HexCoord, PartyFormation, PartyPath, Sextant, TilePos, UnitId};
 
-use crate::{Footing, Reach, Standing};
+use crate::{Footing, OccupancyBlock, Reach, Standing, UnitOccupancy};
 
 /// One party member's live movement facts for a formation plan.
 #[derive(Debug, Clone)]
@@ -42,6 +42,8 @@ pub enum FormationPlanError {
     InvalidFormation,
     /// A member could not reach an admissible unique compressed position.
     NoSafeSlot(UnitId),
+    /// Member routes would share an endpoint or swap through each other.
+    Occupied(OccupancyBlock),
 }
 
 /// Builds an atomic formation plan, returning the first member that cannot be placed.
@@ -50,6 +52,23 @@ pub fn plan_formation_move(
     formation: &PartyFormation,
     anchor_path: &[Standing],
     members: Vec<FormationMember>,
+) -> Result<FormationPlan, FormationPlanError> {
+    plan_formation_move_with_occupancy(
+        preset,
+        formation,
+        anchor_path,
+        members,
+        &UnitOccupancy::default(),
+    )
+}
+
+/// Builds a formation plan while excluding bodies outside the moving party.
+pub fn plan_formation_move_with_occupancy(
+    preset: &FormationPreset,
+    formation: &PartyFormation,
+    anchor_path: &[Standing],
+    members: Vec<FormationMember>,
+    occupancy: &UnitOccupancy,
 ) -> Result<FormationPlan, FormationPlanError> {
     let Some(anchor_slot) = preset.anchor() else {
         return Err(FormationPlanError::InvalidFormation);
@@ -125,7 +144,13 @@ pub fn plan_formation_move(
 
             let chosen = if unit == anchor {
                 member.footing.at(anchor_step.pos).and_then(|destination| {
-                    let reach = Reach::until(from, &member.footing, destination.pos);
+                    let reach = Reach::until_with_occupancy(
+                        from,
+                        &member.footing,
+                        destination.pos,
+                        occupancy,
+                        unit,
+                    );
                     reach
                         .path_to(destination.pos)
                         .map(|path| (destination, path))
@@ -140,6 +165,8 @@ pub fn plan_formation_move(
                     &recent,
                     &used,
                     &member.footing,
+                    occupancy,
+                    unit,
                 )
             };
             let Some((destination, route)) = chosen else {
@@ -161,6 +188,7 @@ pub fn plan_formation_move(
         };
         planned_paths.push(PartyPath { member, path });
     }
+    UnitOccupancy::validate_group_routes(&planned_paths).map_err(FormationPlanError::Occupied)?;
     Ok(FormationPlan {
         paths: planned_paths,
         facing,
@@ -176,6 +204,8 @@ fn choose_destination(
     recent: &[TilePos],
     used: &BTreeSet<TilePos>,
     footing: &Footing,
+    occupancy: &UnitOccupancy,
+    unit: UnitId,
 ) -> Option<(Standing, Vec<Standing>)> {
     let mut ideals = footing.at_coord(ideal).to_vec();
     ideals.sort_by_key(|standing| (standing.pos.level.abs_diff(ideal_level), standing.pos));
@@ -209,7 +239,7 @@ fn choose_destination(
         .iter()
         .find(|candidate| !used.contains(&candidate.pos))
     {
-        let reach = Reach::until(from, footing, first.pos);
+        let reach = Reach::until_with_occupancy(from, footing, first.pos, occupancy, unit);
         if let Some(chosen) = candidates
             .into_iter()
             .find_map(|candidate| usable_route(candidate, used, &reach))
@@ -225,7 +255,7 @@ fn choose_destination(
     let first = candidates
         .iter()
         .find(|candidate| !used.contains(&candidate.pos))?;
-    let reach = Reach::until(from, footing, first.pos);
+    let reach = Reach::until_with_occupancy(from, footing, first.pos, occupancy, unit);
     candidates
         .into_iter()
         .find_map(|candidate| usable_route(candidate, used, &reach))
@@ -280,7 +310,7 @@ mod tests {
     use super::*;
     use crate::route;
 
-    const STONE: SubstanceId = SubstanceId(1);
+    const STONE: SubstanceId = SubstanceId(10);
     const BODY: crate::Body = crate::Body::new(TraversalProfile::WALKER);
 
     fn table() -> SubstanceTable {

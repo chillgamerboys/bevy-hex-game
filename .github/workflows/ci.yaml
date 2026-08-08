@@ -37,6 +37,20 @@ jobs:
     timeout-minutes: 10
     outputs:
       code: ${{ steps.filter.outputs.code }}
+      full: ${{ steps.filter.outputs.full }}
+      rules: ${{ steps.filter.outputs.rules }}
+      trajectory_contracts: ${{ steps.filter.outputs.trajectory_contracts }}
+      contracts: ${{ steps.filter.outputs.contracts }}
+      simulation: ${{ steps.filter.outputs.simulation }}
+      app: ${{ steps.filter.outputs.app }}
+      map_unit: ${{ steps.filter.outputs.map_unit }}
+      map_generation: ${{ steps.filter.outputs.map_generation }}
+      map_contracts: ${{ steps.filter.outputs.map_contracts }}
+      residual: ${{ steps.filter.outputs.residual }}
+      clippy: ${{ steps.filter.outputs.clippy }}
+      docs: ${{ steps.filter.outputs.docs }}
+      shipping: ${{ steps.filter.outputs.shipping }}
+      reason: ${{ steps.filter.outputs.reason }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -47,27 +61,40 @@ jobs:
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             git fetch --no-tags origin "${{ github.base_ref }}" || true
             changed=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD" 2>/dev/null) || changed=""
+            force_full=()
           else
             before="${{ github.event.before }}"
             case "$before" in
               ''|0000000000000000000000000000000000000000) changed="" ;;
               *) changed=$(git diff --name-only "$before" "${{ github.sha }}" 2>/dev/null) || changed="" ;;
             esac
+            force_full=(--force-full)
           fi
 
-          if [ -z "$changed" ]; then
-            echo "could not determine the diff; running everything"
-            echo "code=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "changed files:"; echo "$changed"
-          if echo "$changed" | grep -qv '\.md$'; then
-            echo "code=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "markdown only; skipping the Rust build"
-            echo "code=false" >> "$GITHUB_OUTPUT"
-          fi
+          echo "changed files:"
+          printf '%s\n' "$changed"
+          printf '%s\n' "$changed" > changed-files.txt
+          python3 tools/test_scope.py plan \
+            --paths-file changed-files.txt \
+            "${force_full[@]}" \
+            --json-out test-scope.json \
+            --github-output "$GITHUB_OUTPUT"
+          {
+            echo '### Test scope decision'
+            echo
+            echo '```json'
+            cat test-scope.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Test the fail-closed selector
+        run: python3 -m unittest tools/test_test_scope.py
+      - name: Upload scope decision
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-scope-decision
+          path: test-scope.json
+          if-no-files-found: error
 
   # Formatting and licensing need no Bevy build, so they report in seconds
   # instead of waiting behind a ~10 minute compile.
@@ -107,6 +134,9 @@ jobs:
           if [ -s "$broken" ]; then cat "$broken"; exit 1; fi
           echo "all relative links resolve"
 
+      - name: Check deprecated UI terminology
+        run: python3 tools/check_deprecated_ui_terms.py
+
       - uses: dtolnay/rust-toolchain@stable
         if: needs.changes.outputs.code == 'true'
         with:
@@ -125,18 +155,18 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.clippy == 'true' || needs.changes.outputs.residual == 'true'
       - uses: dtolnay/rust-toolchain@stable
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.clippy == 'true' || needs.changes.outputs.residual == 'true'
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.clippy == 'true' || needs.changes.outputs.residual == 'true'
       - uses: taiki-e/install-action@nextest
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.residual == 'true'
       # Bevy needs these to build on Linux even for a check-only run.
       - name: Install Linux dependencies
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.clippy == 'true' || needs.changes.outputs.residual == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
@@ -144,45 +174,206 @@ jobs:
       # Package isolation catches missing direct-dependency features that workspace
       # feature unification can otherwise hide.
       - run: cargo check --package hex_core --profile ci
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.clippy == 'true'
       # --all-features so hex_dev is linted too; it is excluded from a default build.
       - run: cargo clippy --workspace --all-targets --all-features --profile ci -- -D warnings
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.clippy == 'true'
       - name: Run ordinary tests with per-test timing
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.residual == 'true'
         shell: bash
         run: |
           set -o pipefail
           {
-            time cargo nextest run \
-              --workspace \
-              --all-features \
-              --cargo-profile ci \
-              --profile ci
+            time python3 tools/test_scope.py run residual \
+              --timing-out residual-timing.json
             # Nextest deliberately does not execute doctests.
             time cargo test --workspace --all-features --profile ci --doc
           } 2>&1 | tee test-timing.log
       - name: Upload test timing artifacts
-        if: always() && needs.changes.outputs.code == 'true'
+        if: always() && needs.changes.outputs.residual == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: workspace-test-timings
           path: |
             test-timing.log
+            residual-timing.json
             target/nextest/ci/junit.xml
           if-no-files-found: error
+
+  # Map concerns share one job so the three logical partitions reuse the same
+  # optimized hex_map build. Package and target selection happens before nextest
+  # filters; every PR seed remains ordinary evidence.
+  map_tests:
+    name: Map partitions
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        if: needs.changes.outputs.map_unit == 'true' || needs.changes.outputs.map_generation == 'true' || needs.changes.outputs.map_contracts == 'true'
+      - uses: dtolnay/rust-toolchain@stable
+        if: needs.changes.outputs.map_unit == 'true' || needs.changes.outputs.map_generation == 'true' || needs.changes.outputs.map_contracts == 'true'
+      - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.map_unit == 'true' || needs.changes.outputs.map_generation == 'true' || needs.changes.outputs.map_contracts == 'true'
+      - uses: taiki-e/install-action@nextest
+        if: needs.changes.outputs.map_unit == 'true' || needs.changes.outputs.map_generation == 'true' || needs.changes.outputs.map_contracts == 'true'
+      - name: Install Linux dependencies
+        if: needs.changes.outputs.map_unit == 'true' || needs.changes.outputs.map_generation == 'true' || needs.changes.outputs.map_contracts == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+      - name: Map unit contracts
+        if: needs.changes.outputs.map_unit == 'true'
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 tools/test_scope.py run map_unit \
+            --timing-out map-unit-timing.json \
+            2>&1 | tee map-unit-timing.log
+      - name: Map generation contracts
+        if: needs.changes.outputs.map_generation == 'true'
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 tools/test_scope.py run map_generation \
+            --timing-out map-generation-timing.json \
+            2>&1 | tee map-generation-timing.log
+      - name: Map publication contracts
+        if: needs.changes.outputs.map_contracts == 'true'
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 tools/test_scope.py run map_contracts \
+            --timing-out map-contracts-timing.json \
+            2>&1 | tee map-contracts-timing.log
+      - name: Verify exhaustive map partitions
+        if: needs.changes.outputs.full == 'true'
+        run: python3 tools/test_scope.py check-partitions map
+      - name: Upload map timing artifacts
+        if: always() && (needs.changes.outputs.map_unit == 'true' || needs.changes.outputs.map_generation == 'true' || needs.changes.outputs.map_contracts == 'true')
+        uses: actions/upload-artifact@v4
+        with:
+          name: map-test-timings
+          path: |
+            map-*-timing.log
+            map-*-timing.json
+            target/nextest/map-unit/junit.xml
+            target/nextest/map-generation/junit.xml
+            target/nextest/map-contracts/junit.xml
+          if-no-files-found: error
+
+  # Rustdoc is a separate bounded deliverable. Keeping it in the test job caused
+  # two consecutive otherwise-green runs to hit the exact 30-minute ceiling only
+  # after Clippy and all ordinary tests had passed.
+  docs:
+    name: Documentation
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        if: needs.changes.outputs.docs == 'true' && needs.changes.outputs.code == 'true'
+      - uses: dtolnay/rust-toolchain@stable
+        if: needs.changes.outputs.docs == 'true' && needs.changes.outputs.code == 'true'
+      - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.docs == 'true' && needs.changes.outputs.code == 'true'
+      - name: Install Linux dependencies
+        if: needs.changes.outputs.docs == 'true' && needs.changes.outputs.code == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
       # Docs are a deliverable here, not a nicety: the map is owned by someone who
       # does not write Rust. A broken intra-doc link is a broken handoff.
       #
       # This does *not* cover doc comments in `tests/` — rustdoc skips integration
       # tests — which is how a link to a deleted type survived a green pipeline.
       - run: cargo doc --workspace --no-deps --all-features
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.docs == 'true' && needs.changes.outputs.code == 'true'
         env:
           RUSTDOCFLAGS: -D warnings
 
-  # The three platforms we intend to ship. Catches target-specific breakage —
-  # notably the Windows console subsystem attribute — before it reaches a release.
+  gameplay:
+    name: Gameplay partitions
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        if: needs.changes.outputs.rules == 'true' || needs.changes.outputs.trajectory_contracts == 'true' || needs.changes.outputs.contracts == 'true' || needs.changes.outputs.simulation == 'true' || needs.changes.outputs.app == 'true'
+      - uses: dtolnay/rust-toolchain@stable
+        if: needs.changes.outputs.rules == 'true' || needs.changes.outputs.trajectory_contracts == 'true' || needs.changes.outputs.contracts == 'true' || needs.changes.outputs.simulation == 'true' || needs.changes.outputs.app == 'true'
+      - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.rules == 'true' || needs.changes.outputs.trajectory_contracts == 'true' || needs.changes.outputs.contracts == 'true' || needs.changes.outputs.simulation == 'true' || needs.changes.outputs.app == 'true'
+      - uses: taiki-e/install-action@nextest
+        if: needs.changes.outputs.rules == 'true' || needs.changes.outputs.trajectory_contracts == 'true' || needs.changes.outputs.contracts == 'true' || needs.changes.outputs.simulation == 'true' || needs.changes.outputs.app == 'true'
+      - name: Install Linux dependencies
+        if: needs.changes.outputs.rules == 'true' || needs.changes.outputs.trajectory_contracts == 'true' || needs.changes.outputs.contracts == 'true' || needs.changes.outputs.simulation == 'true' || needs.changes.outputs.app == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+      - name: Gameplay rules
+        if: needs.changes.outputs.rules == 'true'
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 tools/test_scope.py check-graph rules
+          python3 tools/test_scope.py run rules \
+            --timing-out gameplay-rules-timing.json \
+            2>&1 | tee gameplay-rules-timing.log
+      - name: Gameplay contracts
+        if: needs.changes.outputs.contracts == 'true'
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 tools/test_scope.py run contracts \
+            --timing-out gameplay-contracts-timing.json \
+            2>&1 | tee gameplay-contracts-timing.log
+      - name: Trajectory and volume contracts
+        if: needs.changes.outputs.trajectory_contracts == 'true'
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 tools/test_scope.py run trajectory_contracts \
+            --timing-out gameplay-trajectory-timing.json \
+            2>&1 | tee gameplay-trajectory-timing.log
+      - name: Gameplay simulation
+        if: needs.changes.outputs.simulation == 'true'
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 tools/test_scope.py check-graph simulation
+          python3 tools/test_scope.py run simulation \
+            --timing-out gameplay-simulation-timing.json \
+            2>&1 | tee gameplay-simulation-timing.log
+      - name: Gameplay app
+        if: needs.changes.outputs.app == 'true'
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 tools/test_scope.py run app \
+            --timing-out gameplay-app-timing.json \
+            2>&1 | tee gameplay-app-timing.log
+      - name: Upload gameplay timing artifacts
+        if: always() && (needs.changes.outputs.rules == 'true' || needs.changes.outputs.trajectory_contracts == 'true' || needs.changes.outputs.contracts == 'true' || needs.changes.outputs.simulation == 'true' || needs.changes.outputs.app == 'true')
+        uses: actions/upload-artifact@v4
+        with:
+          name: gameplay-test-timings
+          path: |
+            gameplay-*-timing.log
+            gameplay-*-timing.json
+            target/nextest/gameplay-rules/junit.xml
+            target/nextest/gameplay-trajectory/junit.xml
+            target/nextest/gameplay-contracts/junit.xml
+            target/nextest/gameplay-simulation/junit.xml
+            target/nextest/gameplay-app/junit.xml
+          if-no-files-found: error
+
+  # The two Unix platforms we intend to ship. Windows retains the same exact
+  # shipping build below, split only so a cold dependency cache can be published
+  # without crossing either job's 30-minute ceiling.
   build:
     name: Build (${{ matrix.os }})
     needs: changes
@@ -191,40 +382,87 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v5
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.shipping == 'true'
       - uses: dtolnay/rust-toolchain@stable
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.shipping == 'true'
       - uses: Swatinem/rust-cache@v2
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.shipping == 'true'
       - name: Install Linux dependencies
-        if: runner.os == 'Linux' && needs.changes.outputs.code == 'true'
+        if: runner.os == 'Linux' && needs.changes.outputs.shipping == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
             libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
       # No --all-features and only the shipping package: this must not accidentally
       # validate a workspace-only development binary in place of the game.
-      #
-      # The Windows runner's MSVC linker spent more than ten minutes in the final
-      # ThinLTO link and crossed this job's 30-minute ceiling. The runner ships
-      # LLVM's MSVC-compatible linker; selecting it changes no Cargo profile or
-      # package input and keeps the exact shipping build inside the same budget.
+      - name: Build the shipping package
+        if: needs.changes.outputs.shipping == 'true'
+        run: cargo build --package hex_game --release
+
+  # A cold Windows cache consistently reached `hex_game` after about 15 minutes,
+  # then the release ThinLTO compile/link crossed the 30-minute job ceiling before
+  # rust-cache could publish its work. Prime the shipping dependency graph in one
+  # bounded job, then restore it into the unchanged exact package build below.
+  windows_dependencies:
+    name: Prime Windows shipping dependencies
+    needs: changes
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: lld-link.exe
+    steps:
+      - uses: actions/checkout@v5
+        if: needs.changes.outputs.shipping == 'true'
+      - uses: dtolnay/rust-toolchain@stable
+        if: needs.changes.outputs.shipping == 'true'
+      - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.shipping == 'true'
+        with:
+          shared-key: windows-shipping
       - name: Record the Windows shipping linker
-        if: runner.os == 'Windows' && needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.shipping == 'true'
         shell: pwsh
         run: |
           $linker = Get-Command lld-link.exe -ErrorAction Stop
           & $linker.Source --version
+      - name: Build the Windows shipping dependency graph
+        if: needs.changes.outputs.shipping == 'true'
+        run: >-
+          cargo build --release
+          --package hex_assets
+          --package hex_objects
+          --package hex_combat
+          --package hex_core
+          --package hex_lattice
+          --package hex_units
+          --package hex_map
+          --package hex_perception
+          --package hex_world
+
+  windows:
+    name: Build (windows-latest)
+    needs: [changes, windows_dependencies]
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: lld-link.exe
+    steps:
+      - uses: actions/checkout@v5
+        if: needs.changes.outputs.shipping == 'true'
+      - uses: dtolnay/rust-toolchain@stable
+        if: needs.changes.outputs.shipping == 'true'
+      - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.shipping == 'true'
+        with:
+          shared-key: windows-shipping
+          save-if: false
+      # Keep the exact shipping validation command unchanged. The preceding job
+      # alters only cache availability, never the release profile or package input.
       - name: Build the Windows shipping package
-        if: runner.os == 'Windows' && needs.changes.outputs.code == 'true'
-        env:
-          CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: lld-link.exe
-        run: cargo build --package hex_game --release
-      - name: Build the shipping package
-        if: runner.os != 'Windows' && needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.shipping == 'true'
         run: cargo build --package hex_game --release
 
   coverage:
@@ -234,34 +472,35 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.full == 'true'
       - uses: dtolnay/rust-toolchain@stable
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.full == 'true'
         with:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.full == 'true'
       - uses: taiki-e/install-action@cargo-llvm-cov
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.full == 'true'
       - name: Install Linux dependencies
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.full == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
             libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
       - name: Measure headless domain coverage
-        if: needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.full == 'true'
         run: >-
           cargo llvm-cov
           --package hex_core
           --package hex_lattice
           --package hex_ai
+          --package hex_combat_core
           --package hex_perception
           --all-features
           --lcov
           --output-path coverage.lcov
       - name: Upload coverage
-        if: always() && needs.changes.outputs.code == 'true'
+        if: always() && needs.changes.outputs.full == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: domain-coverage

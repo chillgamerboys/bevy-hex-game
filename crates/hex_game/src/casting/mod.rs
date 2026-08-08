@@ -36,10 +36,13 @@
 //! earns its keep is range: stepping away can carry an anchor out of reach exactly as
 //! stepping toward it brings one in.
 
-use bevy::prelude::*;
+use bevy::{
+    input_focus::{tab_navigation::TabIndex, InputFocus},
+    prelude::*,
+};
 use hex_assets::{
     CastingAxis, CombatSettings, ContentIndex, ElementCatalog, ManaAxis, Spell, SpellBook,
-    TargetShape,
+    TargetShape, Trajectory,
 };
 use hex_combat::TurnOrder;
 use hex_core::{
@@ -49,16 +52,15 @@ use hex_core::{
 };
 use hex_lattice::{castable, CastBlocked, CellKind, LatticeSpec, LatticeState};
 use hex_perception::{FactionKnowledge, FactionMapKnowledge};
-use hex_units::{targeting, volumes};
-use hex_units::{Downed, Faction, Player, Selected, StandsOn, UnitRegistry};
+use hex_units::{
+    known_trajectory_is_clear, targeting, trajectory_destination, volumes, Downed, Faction,
+    KnownTerrainOccupancy, Player, Selected, StandsOn, UnitRegistry,
+};
 
-use crate::menus::widgets::element_color;
+use hex_ui::element_color;
 
-mod panel;
+pub(crate) mod panel;
 mod preview;
-
-#[cfg(feature = "visual-walk")]
-pub(crate) use preview::AnchorMarker;
 
 /// Height-per-range-bonus when `combat.ron` has not loaded.
 ///
@@ -82,10 +84,6 @@ pub fn plugin(app: &mut App) {
     app.add_observer(preview::on_anchor_clicked);
 
     app.add_systems(
-        OnEnter(Screen::Gameplay),
-        panel::spawn_panel.in_set(crate::readouts::HudSetup::Panels),
-    );
-    app.add_systems(
         OnExit(Screen::Gameplay),
         (forget_aim, preview::clear_preview),
     );
@@ -93,8 +91,7 @@ pub fn plugin(app: &mut App) {
         Update,
         (
             refresh_readout,
-            resolve_aim_input,
-            panel::end_turn_from_button,
+            resolve_aim_input.after(hex_ui::UiSystems::EmitIntents),
         )
             .chain()
             .in_set(AppSystems::RecordInput)
@@ -106,10 +103,11 @@ pub fn plugin(app: &mut App) {
     // there is anything to paint.
     app.add_systems(
         Update,
-        (preview::redraw_preview, panel::rebuild_panel)
+        (preview::redraw_preview, panel::publish_view)
             .chain()
             .after(resolve_aim_input)
             .after(GameplaySystems::UiContext)
+            .after(hex_units::TerrainOccupancySystems::Publish)
             .in_set(PausableSystems)
             .run_if(in_state(Screen::Gameplay)),
     );
@@ -175,6 +173,10 @@ pub struct SpellRow {
     pub range: u32,
     /// The shape whose volume the preview resolves.
     pub shape: TargetShape,
+    /// How exact material occupancy between caster and anchor affects this spell.
+    pub trajectory: Trajectory,
+    /// Whether the shape begins in the air above the selected surface.
+    pub creates_terrain: bool,
 }
 
 /// The spell currently being aimed, if any.
@@ -204,25 +206,6 @@ pub struct Aim {
     pub spell: String,
     /// The one positional anchor the cast will name.
     pub anchor: TilePos,
-}
-
-/// Marks the button that starts aiming a named spell.
-///
-/// Carries the name rather than a row index, because entity order is not stable across
-/// UI rebuilds and this panel is rebuilt wholesale — the same reason the lattice demo's
-/// cast buttons carry their spell's coordinate.
-#[derive(Component, Debug, Clone)]
-struct AimsSpell(String);
-
-/// Marks one of the three buttons that act on the aim in flight.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-enum AimControl {
-    /// Emit the cast.
-    Confirm,
-    /// Point at the next unit in range.
-    Next,
-    /// Put the spell down.
-    Cancel,
 }
 
 /// The words the interface uses for a blocked cast.
@@ -591,6 +574,13 @@ fn spell_row(
         color: element_color(element.and_then(|name| elements.id(name)), elements),
         range: u32::from(definition.targeting.range),
         shape: definition.targeting.shape.clone(),
+        trajectory: definition.targeting.trajectory,
+        creates_terrain: definition.effects.iter().any(|effect| {
+            matches!(
+                effect,
+                hex_assets::Effect::SetTerrain { .. } | hex_assets::Effect::SpawnWall { .. }
+            )
+        }),
     }
 }
 
@@ -620,15 +610,20 @@ fn resolve_aim_input(
     pending: Res<PendingDecision>,
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<InputBindings>,
-    chooses: Query<(&Interaction, &AimsSpell), Changed<Interaction>>,
-    controls: Query<(&Interaction, &AimControl), Changed<Interaction>>,
+    focus: Option<Res<InputFocus>>,
+    focusable_controls: Query<(), With<TabIndex>>,
+    mut intents: MessageReader<hex_ui::UiIntent>,
     knowledge: Option<Res<FactionMapKnowledge>>,
     active_units: Query<&UnitId, Without<Downed>>,
 ) {
     if pending.is_open() {
         return;
     }
-    let Some(request) = requested(&keys, &bindings, &chooses, &controls) else {
+    let focus_owns_shortcuts = focus
+        .as_deref()
+        .and_then(InputFocus::get)
+        .is_some_and(|entity| focusable_controls.contains(entity));
+    let Some(request) = requested(&keys, &bindings, focus_owns_shortcuts, &mut intents) else {
         return;
     };
     let Some(caster) = readout.caster else {
@@ -652,9 +647,24 @@ fn resolve_aim_input(
                 return;
             };
             let player = knowledge.faction(Faction::Player);
-            let targets = targets_in_range(&readout, &caster, row, player, &active_units);
-            let fallback = (player.state(caster.standing) == KnowledgeState::Observed)
-                .then_some(caster.standing);
+            let known_terrain = known_terrain(player);
+            let targets = targets_in_range(
+                &readout,
+                &caster,
+                row,
+                player,
+                &known_terrain,
+                &active_units,
+            );
+            let fallback = (player.state(caster.standing) == KnowledgeState::Observed
+                && trajectory_available(
+                    row.trajectory,
+                    caster.standing,
+                    caster.standing,
+                    row.creates_terrain,
+                    &known_terrain,
+                ))
+            .then_some(caster.standing);
             let Some(anchor) = targets.first().copied().or(fallback) else {
                 return;
             };
@@ -669,11 +679,14 @@ fn resolve_aim_input(
             let Some(knowledge) = knowledge.as_deref() else {
                 return;
             };
+            let player = knowledge.faction(Faction::Player);
+            let known_terrain = known_terrain(player);
             let targets = targets_in_range(
                 &readout,
                 &caster,
                 row,
-                knowledge.faction(Faction::Player),
+                player,
+                &known_terrain,
                 &active_units,
             );
             Some(Aim {
@@ -723,27 +736,31 @@ enum AimRequest {
 fn requested(
     keys: &ButtonInput<KeyCode>,
     bindings: &InputBindings,
-    chooses: &Query<(&Interaction, &AimsSpell), Changed<Interaction>>,
-    controls: &Query<(&Interaction, &AimControl), Changed<Interaction>>,
+    focus_owns_shortcuts: bool,
+    intents: &mut MessageReader<hex_ui::UiIntent>,
 ) -> Option<AimRequest> {
-    for (interaction, spell) in chooses {
-        if *interaction == Interaction::Pressed {
-            return Some(AimRequest::Choose(spell.0.clone()));
-        }
-    }
-    for (interaction, control) in controls {
-        if *interaction == Interaction::Pressed {
-            return Some(match control {
-                AimControl::Confirm => AimRequest::Confirm,
-                AimControl::Next => AimRequest::Next,
-                AimControl::Cancel => AimRequest::Cancel,
+    for intent in intents.read() {
+        if let hex_ui::UiIntent::Casting(intent) = intent {
+            return Some(match intent {
+                hex_ui::CastingIntent::Begin(spell) => AimRequest::Choose(spell.clone()),
+                hex_ui::CastingIntent::Confirm => AimRequest::Confirm,
+                hex_ui::CastingIntent::NextTarget => AimRequest::Next,
+                hex_ui::CastingIntent::Cancel => AimRequest::Cancel,
             });
         }
     }
-    if bindings.just_pressed(keys, InputAction::Confirm) {
+    raw_aim_request(keys, bindings, focus_owns_shortcuts)
+}
+
+fn raw_aim_request(
+    keys: &ButtonInput<KeyCode>,
+    bindings: &InputBindings,
+    focus_owns_shortcuts: bool,
+) -> Option<AimRequest> {
+    if !focus_owns_shortcuts && bindings.just_pressed(keys, InputAction::Confirm) {
         return Some(AimRequest::Confirm);
     }
-    if bindings.just_pressed(keys, InputAction::NextTarget) {
+    if !focus_owns_shortcuts && bindings.just_pressed(keys, InputAction::NextTarget) {
         return Some(AimRequest::Next);
     }
     if bindings.just_pressed(keys, InputAction::CancelCast) {
@@ -814,13 +831,21 @@ fn targets_in_range(
     caster: &Caster,
     row: &SpellRow,
     knowledge: &FactionKnowledge,
+    terrain: &KnownTerrainOccupancy,
     active_units: &Query<&UnitId, Without<Downed>>,
 ) -> Vec<TilePos> {
     if matches!(row.shape, TargetShape::SelfCast) {
-        return (knowledge.state(caster.standing) == KnowledgeState::Observed)
-            .then_some(caster.standing)
-            .into_iter()
-            .collect();
+        return (knowledge.state(caster.standing) == KnowledgeState::Observed
+            && trajectory_available(
+                row.trajectory,
+                caster.standing,
+                caster.standing,
+                row.creates_terrain,
+                terrain,
+            ))
+        .then_some(caster.standing)
+        .into_iter()
+        .collect();
     }
     let mut ranked: Vec<(bool, u32, TilePos)> = knowledge
         .units()
@@ -829,6 +854,13 @@ fn targets_in_range(
         .filter(|(_, pos)| {
             knowledge.state(*pos) == KnowledgeState::Observed
                 && in_range(caster.standing, *pos, row.range, readout.levels_per_bonus)
+                && trajectory_available(
+                    row.trajectory,
+                    caster.standing,
+                    *pos,
+                    row.creates_terrain,
+                    terrain,
+                )
         })
         .map(|(faction, pos)| {
             (
@@ -840,6 +872,31 @@ fn targets_in_range(
         .collect();
     ranked.sort_unstable();
     ranked.into_iter().map(|(_, _, pos)| pos).collect()
+}
+
+fn trajectory_available(
+    trajectory: Trajectory,
+    standing: TilePos,
+    target: TilePos,
+    creates_terrain: bool,
+    terrain: &KnownTerrainOccupancy,
+) -> bool {
+    matches!(trajectory, Trajectory::None)
+        || known_trajectory_is_clear(
+            trajectory,
+            standing.above(),
+            trajectory_destination(target, creates_terrain),
+            terrain,
+        )
+}
+
+fn known_terrain(knowledge: &FactionKnowledge) -> KnownTerrainOccupancy {
+    KnownTerrainOccupancy::from_observed_surfaces(
+        knowledge
+            .surfaces()
+            .filter(|(_, known)| known.state() == KnowledgeState::Observed)
+            .map(|(position, _)| position),
+    )
 }
 
 /// The entry after `current` in a cycle, wrapping.
@@ -889,10 +946,28 @@ fn forget_aim(mut aiming: ResMut<Aiming>) {
 #[cfg(test)]
 mod tests {
     use hex_assets::{ArtPalette, ElementFile, SpellFile, SubstanceFile, SubstanceTable};
-    use hex_core::Level;
+    use hex_core::{ElementId, Level};
 
     use super::*;
-    use crate::menus::widgets::{FUSION_COLOR, GEM_COLOR};
+
+    #[test]
+    fn focused_ui_owns_enter_and_tab_without_hiding_the_explicit_cancel_key() {
+        let bindings = InputBindings::default();
+
+        for key in [KeyCode::Enter, KeyCode::Tab] {
+            let mut keys = ButtonInput::default();
+            keys.press(key);
+            assert!(raw_aim_request(&keys, &bindings, true).is_none());
+        }
+
+        let mut keys = ButtonInput::default();
+        keys.press(KeyCode::KeyQ);
+        assert!(matches!(
+            raw_aim_request(&keys, &bindings, true),
+            Some(AimRequest::Cancel)
+        ));
+    }
+    use hex_ui::{FUSION_COLOR, GEM_COLOR};
 
     fn shipped_content() -> (ElementCatalog, SpellBook) {
         let element_file: ElementFile = ron::from_str(include_str!(concat!(
@@ -971,24 +1046,25 @@ mod tests {
         assert_eq!(step_target(&[], at(1, 0, 4)), None);
     }
 
-    /// Every element on the wheel gets its own colour, and a fusion gets the demo's.
+    /// Every canonical element gets its own authored colour, including fusions.
     #[test]
-    fn the_wheel_gives_every_element_a_distinct_colour() {
+    fn canonical_elements_have_distinct_authored_colours() {
         let (elements, _) = shipped_content();
         let mut seen: Vec<Color> = Vec::new();
-        for id in elements.wheel() {
-            let name = elements.name(*id).expect("a wheel element has a name");
+        for raw_id in 0..elements.len() {
+            let id = ElementId(u16::try_from(raw_id).expect("element catalog fits in an id"));
+            let name = elements.name(id).expect("a catalog element has a name");
             let color = element_color(elements.id(name), &elements);
             assert!(
                 !seen.contains(&color),
-                "{name} shares a colour with an element already on the wheel"
+                "{name} shares a colour with another canonical element"
             );
             seen.push(color);
         }
-        assert_eq!(
+        assert_ne!(
             element_color(elements.id("Lightning"), &elements),
             FUSION_COLOR,
-            "a fusion output is not on the wheel and should read as a fusion"
+            "canonical fusions use their authored school tint"
         );
         assert_eq!(
             element_color(elements.id("not an element"), &elements),
@@ -997,11 +1073,22 @@ mod tests {
         );
     }
 
-    /// Opposed elements sit half a turn apart on the hue circle, because they sit half
-    /// a turn apart on the wheel. The property the rotation was chosen for.
+    /// A custom catalog remains legible even though it has no authored icon catalog.
     #[test]
-    fn opposed_elements_get_opposed_hues() {
-        let (elements, _) = shipped_content();
+    fn custom_elements_keep_deterministic_fallback_colours() {
+        let custom: ElementFile = ron::from_str(
+            r#"(
+                wheel: ["Aether", "Flame", "Stone", "Void", "Frost", "Bloom"],
+                fusions: {
+                    "Tempest": [
+                        (element: "Aether", mana: 1),
+                        (element: "Flame", mana: 1),
+                    ],
+                },
+            )"#,
+        )
+        .expect("custom elements parse");
+        let elements = ElementCatalog::from_file(&custom);
         let wheel = elements.wheel();
         let half = wheel.len() / 2;
         for (step, id) in wheel.iter().enumerate() {
@@ -1018,6 +1105,11 @@ mod tests {
                 "{name} and {against} are {apart} degrees apart, not 180"
             );
         }
+        assert_eq!(
+            element_color(elements.id("Tempest"), &elements),
+            FUSION_COLOR,
+            "a custom fusion retains the generic fusion fallback"
+        );
     }
 
     /// Every shipped spell becomes a row that says what it costs and how far it reaches.
@@ -1066,6 +1158,30 @@ mod tests {
         );
         assert!(in_range(high, low, 3, 5), "five levels up buys the hex");
         assert!(!in_range(low, high, 3, 5), "the low ground gains nothing");
+    }
+
+    #[test]
+    fn target_cycle_trajectory_filter_ignores_unknown_material() {
+        let standing = at(0, 0, 1);
+        let target = at(3, 0, 1);
+        let blocker = at(1, 0, 2);
+        let hidden = KnownTerrainOccupancy::default();
+        let observed = KnownTerrainOccupancy::from_observed_surfaces([blocker]);
+
+        assert!(trajectory_available(
+            Trajectory::Direct,
+            standing,
+            target,
+            false,
+            &hidden,
+        ));
+        assert!(!trajectory_available(
+            Trajectory::Direct,
+            standing,
+            target,
+            false,
+            &observed,
+        ));
     }
 
     /// Every rung the applier refuses a cast on is a rung the panel refuses to offer
@@ -1308,29 +1424,20 @@ mod tests {
     ///
     /// The failure without this is invisible and expensive: the cast is *legal*, so the
     /// applier charges for it — the mana goes, the turn goes — and the only trace is a
-    /// `warn!` a release build does not show a console for. Several shipped spells are in
-    /// that state, so this is the live case rather than a hypothetical one.
+    /// `warn!` a release build does not show a console for. The canonical roster keeps
+    /// no such placeholder spell, so every shipped definition is the live regression.
     #[test]
-    fn a_spell_with_nothing_built_is_blocked_rather_than_offered() {
+    fn every_shipped_spell_has_a_delivered_effect_path() {
         let (_, spells) = shipped_content();
-        let undeliverable = ["Earthen Wall", "Stone Shaper", "Daylight"];
-        for name in undeliverable {
-            let id = spells.id(name).expect("the test names a shipped spell");
-            let definition = spells.spell(id).expect("a shipped spell has a definition");
-            assert!(
-                !hex_combat::delivers_anything(definition),
-                "{name} has nothing built, so the panel must not offer it"
-            );
-        }
-        // The control, and the reason this is not just a ban on everything: the spells
-        // the wave actually delivers stay castable.
-        for name in ["Ember", "Kindle", "Metal Shield", "Renewal", "Scrying Eye"] {
-            let Some(id) = spells.id(name) else { continue };
-            let definition = spells.spell(id).expect("a shipped spell has a definition");
+        for (id, name, definition) in spells.iter() {
             assert!(
                 hex_combat::delivers_anything(definition),
-                "{name} has a delivered combat result and must stay offered"
+                "{name} ({id:?}) has no delivered combat result and must not ship"
             );
         }
+        assert!(
+            spells.id("Daylight").is_none(),
+            "Illuminate remains deferred"
+        );
     }
 }

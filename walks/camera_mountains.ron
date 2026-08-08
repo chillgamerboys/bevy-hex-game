@@ -1,0 +1,32 @@
+// Real ascent from the southern landing to the stream overlook and low bypass.
+[
+    AwaitScreen("Title"),
+    StartScenario(name: "Mountains", seed: Some(129704046)),
+    AwaitScreen("Gameplay"),
+    AwaitTerrain,
+    Key("H"),
+    Key("C"),
+    Settle(45),
+    Capture("01-mountains-character-start"),
+    ClickAnchor(name: "stream_fall_overlook", expected: (q: -11, r: 9, level: 19)),
+    AwaitPartyIdle(max_frames: 2400),
+    AssertSelectedAt(expected: (q: -11, r: 9, level: 19)),
+    Settle(60),
+    Capture("02-mountains-stream-front"),
+    // Keep the review eye on the open side of the narrow ledge. A full +120°
+    // orbit puts the requested boom through the adjacent mountain face.
+    OrbitCamera(yaw_turns: -0.16666667),
+    Settle(45),
+    Capture("03-mountains-stream-side"),
+    // Make the next landmark's absolute azimuth independent of this capture.
+    OrbitCamera(yaw_turns: 0.16666667),
+    ClickAnchor(name: "low_bypass", expected: (q: -12, r: 6, level: 19)),
+    AwaitPartyIdle(max_frames: 1200),
+    AssertSelectedAt(expected: (q: -12, r: 6, level: 19)),
+    Settle(45),
+    OrbitCamera(yaw_turns: -0.33333334),
+    Settle(45),
+    Capture("04-mountains-low-bypass-rear"),
+    Key("Backspace"),
+    AwaitScreen("Title"),
+]

@@ -1,0 +1,75 @@
+// Ten deterministic Bevy image-target frames for the minimalist gameplay HUD.
+// Every ReviewCapture first runs the named UiTaskCase structural oracle; pixels
+// remain presentation evidence only. Authored fixtures populate readable gameplay
+// facts without solving combat, while real configured shortcuts exercise HUD state.
+[
+    AwaitScreen("Title"),
+    StartScenario(name: "Party Trial"),
+    AwaitScreen("Gameplay"),
+    AwaitTerrain,
+    SetViewport(width: 1920, height: 1080, device_scale: 1.0),
+    SetUiScale(Auto),
+    Settle(8),
+
+    PresentUi("normal-gameplay"),
+    Settle(4),
+    ReviewCapture(name: "hud-01-minimal-exploration", task: Exploration),
+
+    PresentUi("player-turn-max"),
+    Settle(4),
+    ReviewCapture(
+        name: "hud-02-player-turn-max-actions",
+        task: PlayerTurnMaxActions,
+    ),
+
+    PresentUi("hostile-turn"),
+    Settle(4),
+    ReviewCapture(name: "hud-03-hostile-turn", task: HostileTurn),
+
+    PresentUi("required-decision"),
+    Settle(4),
+    ReviewCapture(name: "hud-04-required-decision", task: DisableDecision),
+
+    PresentUi("aiming-disabled"),
+    Settle(4),
+    ReviewCapture(name: "hud-05-aiming-action-bar", task: AimingBlocked),
+
+    PresentUi("normal-gameplay"),
+    Key("L"),
+    Settle(4),
+    ReviewCapture(name: "hud-06-activity", task: ActivityTabs),
+
+    Key("B"),
+    Settle(4),
+    ReviewCapture(
+        name: "hud-07-custom-party-activity",
+        task: CustomHudVisibility,
+    ),
+
+    Key("V"),
+    Settle(4),
+    ReviewCapture(
+        name: "hud-08-character-main-view",
+        task: CharacterMainView,
+    ),
+
+    PresentUi("required-decision"),
+    Key("H"),
+    Settle(4),
+    ReviewCapture(
+        name: "hud-09-master-hidden-required",
+        task: HudHiddenRequired,
+    ),
+
+    PresentUi("normal-gameplay"),
+    Key("H"),
+    SetViewport(width: 1280, height: 720, device_scale: 1.0),
+    SetUiScale(Auto),
+    Settle(4),
+    Key("P"),
+    Settle(4),
+    ReviewCapture(
+        name: "hud-10-compact-party-task",
+        task: CompactTemporarySurface,
+    ),
+]

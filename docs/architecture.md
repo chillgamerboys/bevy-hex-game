@@ -9,11 +9,16 @@ contact with the next change.
 hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → hex_game
 hex_core → hex_assets → hex_objects ───────────────────────────────→ hex_game
 hex_core → hex_ai → {hex_assets, hex_units, hex_combat}   (contracts, controllers, host)
+{hex_core, hex_lattice} → hex_combat_core → hex_combat   (pure combat authority)
+{bevy_ecs, hex_core} → hex_gameplay_model → hex_game  (pure screen behavior)
+{Bevy, hex_core, hex_assets, hex_gameplay_model} → hex_ui → hex_game  (runtime presentation)
 hex_core → {hex_assets, hex_units} → hex_perception → {hex_combat, hex_game}
 hex_core → hex_lattice → {hex_assets, hex_units, hex_combat}   (the pure rules engine)
 hex_core → hex_anim ─────────────────────→ hex_units
 {Bevy, bevy-inspector-egui} → hex_dev ──────────────────────────────→ hex_game
 {Bevy, bevy_egui, hex_core, hex_assets} → hex_editor  (standalone tool)
+{Bevy, hex_core} → hex_test_app → hex_test_support  (test-only app mechanics)
+{Bevy, hex_core, hex_assets} ───→ hex_test_support  (test-only shared fixtures)
 ```
 
 An arrow means "may depend on". **Cargo enforces this.** A `use` that crosses the
@@ -26,20 +31,25 @@ will, and no amount of documentation prevents it. A compiler error does.
 
 | Crate | Holds | Depends on | Owner |
 |---|---|---|---|
-| `hex_core` | Hex coordinates, voxel positions, substances, headroom, terrain edits, app states, ordering sets, lattice ids | Bevy sub-crates only — no renderer | gameplay |
+| `hex_core` | Hex coordinates, voxel positions, factions, exact occupancy, substances, headroom, terrain edits/impacts/outcomes, app states, ordering sets, lattice ids | Bevy sub-crates only — no renderer | gameplay |
 | `hex_lattice` | **The lattice**: gems, fusions, spells, mana, disables, enchantments — the game's core rules, as a pure engine | `hex_core` | gameplay |
 | `hex_ai` | Authorized observations, canonical legal-action requests, profile/controller identities, and replaceable algorithm traits; no legality or simulation mutation | `hex_core`, Bevy sub-crates | gameplay |
+| `hex_combat_core` | Frozen combat inputs, serializable state, the command reducer, typed outcomes, canonical snapshots and bounded simulation | `hex_core`, `hex_lattice`, `bevy_ecs` derive support only | gameplay |
+| `hex_gameplay_model` | Pure Main Menu, Campaign, Sandbox, and Creator routes; bounded slot identities; draft edits; launch blockers; and edit history | `hex_core`, `bevy_ecs` derive support only | gameplay |
+| `hex_ui` | Runtime UI rendering, immutable presentation models, typed UI intentions, responsive scale, semantic styling, focus/accessibility, and presentation-only observations | Bevy, `hex_core`, `hex_assets`, `hex_gameplay_model`; never gameplay/world implementations | shared presentation |
 | `hex_assets` | Generic asset loading plus domain-owned RON schema and settings modules | `hex_core`, `hex_lattice` | loader infrastructure: gameplay; each schema/settings module and its content: that domain's owner |
-| `hex_objects` | Palette-backed rendering of static authored voxel objects | `hex_core`, `hex_assets` | shared presentation |
+| `hex_objects` | Palette-backed rendering of static authored voxel objects and isolated per-tree fade materials | `hex_core`, `hex_assets` | shared presentation |
 | `hex_map` | **The map**: voxel storage, terrain generation, tile spawning, map settings | `hex_core`, `hex_assets` | world |
-| `hex_world` | Sky, camera, and presentation cutaways | `hex_core`, `hex_assets` | world |
+| `hex_world` | Sky, collision-aware camera presentation, tree obstruction, and review-only cutaways | `hex_core`, `hex_assets` | world |
 | `hex_anim` | Moving a transform over time. Knows nothing about hexes | `hex_core` | gameplay |
 | `hex_units` | Units and their lattices, AI-controller attachment, picking, pathfinding, body size, and the movement preview | `hex_core`, `hex_ai`, `hex_assets`, `hex_anim`, `hex_lattice` | gameplay |
 | `hex_perception` | Authoritative illumination, faction sight, and remembered map knowledge | `hex_core`, `hex_assets`, `hex_units` | world |
 | `hex_combat` | The loop: modes, turn order, algorithm-neutral AI host and legal-action enumeration, persistent effects, and faction lattice knowledge | `hex_core`, `hex_ai`, `hex_assets`, `hex_anim`, `hex_units`, `hex_lattice`, `hex_perception` | gameplay |
 | `hex_dev` | World inspector. Behind the `dev` feature | Bevy, `bevy-inspector-egui` | gameplay |
-| `hex_game` | The binary: app setup, screens, menus, wiring | all of the above | shared |
+| `hex_game` | Thin executable library and composition root: observes authority, builds immutable UI view models, applies typed intents, and wires plugins | all runtime crates | shared |
 | `hex_editor` | Standalone palette, voxel-style, and object authoring; validated explicit writes, untracked recovery, and deterministic review packs | Bevy, `bevy_egui`, `hex_core`, `hex_assets` | shared tooling |
+| `hex_test_app` | Capability-based deterministic Bevy app construction, plugin finalization, bounded settling, and shared state entry; no fixtures or owner implementation | Bevy, `hex_core` | shared testing |
+| `hex_test_support` | Test-only deterministic app setup plus consumer-side synthetic exact-surface facts and fixture assets; no gameplay or world implementation | Bevy, `hex_core`, `hex_assets`, `hex_test_app` | gameplay testing; neutral app shell is shared across owners |
 
 `hex_editor` is not a game screen and does not depend on runtime world or gameplay
 crates. Reusable art schemas and validation live in `hex_assets`; the editor owns only
@@ -57,9 +67,9 @@ compile-time blast radius is what makes that ownership manageable: gameplay, cam
 sky, screens and menus cannot import map internals.
 
 The boundary does not make malformed output harmless. Those crates consume the
-components the map publishes, so a wrong `TilePos`, `HexSpan` or `Headroom` can still
-break movement or presentation. Cargo protects the dependency graph; tests and visual
-review protect the component contract.
+components the map publishes, so a wrong `TilePos`, `RunBottom`, `HexSpan` or
+`Headroom` can still break movement or presentation. Cargo protects the dependency
+graph; tests and visual review protect the component contract.
 
 ### `hex_lattice` is the rules engine, built like `hex_core`
 
@@ -84,6 +94,33 @@ result: a unit's spec, state, and stats are attached at spawn, keyed by its arch
 `apply_disables`, defender-owned disable choices, persistent effects, and the
 knowledge seam the engine deliberately refuses to own.
 
+### `hex_combat_core` is the authority, not a second simulator
+
+Combat truth has a renderer-free home above the lattice engine. `CombatState` accepts
+only frozen rules, stable roster records, exact arena links, explicit faction
+observation, and ordered `IssuedCommand`s. It contains integer-valued/domain state,
+ordered collections, and stable IDs—never an `Entity`, transform, viewport, clock,
+asset server, or map-generator type. A refusal is transactional and produces the same
+typed `CombatEvent` vocabulary as a successful transition.
+
+`hex_combat` is the Bevy host: it resolves live published contracts into frozen input,
+feeds human and AI commands to the authority, and projects state/events to ECS,
+animation, summaries, and UI. Reducer-covered verbs mutate only `CombatState`.
+The pure workbench freezes supported active-combat Cast and restoration facts and
+reduces them, persistent effects, downing, revival, and outcomes without Bevy. The
+live ECS path still resolves Cast and restoration through explicit content adapters:
+each publishes a complete projection back through transactional exact-roster
+validation before any later command may reduce. Exploration Rest, party movement, and
+unsupported terrain/area spell effects remain outside the pure reducer. Missing
+authority refuses every combat command; there is no legacy fallback or retained
+shadow simulator.
+
+Movement completion is an explicit domain projection, not an animation query.
+`MovingTo` advances from the pausable virtual clock, publishes exact `TilePos`
+crossings, and clears the shared `Busy` gate when it reaches its bound. Generic
+`Transformation` components may start, finish, or be torn down independently; no
+legality, logical position, AI decision, or turn-order system queries their presence.
+
 Drawing an edge costs something worth naming: the compiler stops being the review
 signal for that boundary, since anything in those crates can now reach the engine. The
 trade is deliberate — the compiler cannot distinguish an intended consumer from an
@@ -103,12 +140,17 @@ Two roles, named so the arrangement survives a change of people:
 
 | Role | Owns |
 |---|---|
-| **World owner** | `hex_map`, `hex_world` (sky, camera, cutaway), `hex_perception`, world/perception schema and settings modules in `hex_assets`, and their content: world files, `substances.ron`, lighting profiles, `perception.ron`, and the future terrain-response table |
+| **World owner** | `hex_map`, `hex_world` (sky, camera, cutaway), `hex_perception`, world/perception schema and settings modules in `hex_assets`, and their content: world files, `substances.ron`, lighting profiles, `perception.ron`, and the `terrain_damage.ron` allow-list |
 | **Gameplay owner** | `hex_core`, `hex_units`, `hex_combat`, `hex_lattice`, `hex_anim`, `hex_dev`, generic `hex_assets` loader infrastructure, and gameplay schema/settings modules and content: `combat.ron`, `spells.ron`, `elements.ron` |
 
 `hex_game` is **shared** — it is wiring, screens, scenarios and review tooling, and
 whoever needs a change makes it. `scenario.rs` and `scenarios.ron` sit in the same
 shared middle, flagged to the other side when a change touches their domain.
+
+`hex_ui` is also shared presentation, but its dependency ceiling is strict. Domain
+facts flow into it as immutable view models and player actions flow out as typed
+intent. The complete contract, responsive model, and testing oracle are in
+[systems/ui.md](systems/ui.md).
 
 `hex_assets` is split by concern rather than guarded as one person's directory.
 Generic mechanisms — loader traits, load tracking, common registration patterns, and
@@ -153,20 +195,23 @@ commented last.
 boundary, a crash — those are not taste and either owner should block on them.
 
 The map reaches the rest of the game only through shared `hex_core` components and
-resources. Tiles carry `HexTile`, `HexCoord`, `TilePos`, `HexSpan`, `SubstanceId`, and
-`Headroom`; exact resources publish anchors, interiors, blockers, biome membership,
-and view hints. Nothing outside `hex_map` references `VoxelMap` or generator internals,
-so terrain storage and generation can be replaced wholesale without anyone noticing.
+resources. Tiles carry `HexTile`, `HexCoord`, `TilePos`, `RunBottom`, `HexSpan`,
+`SubstanceId`, and `Headroom`; exact resources publish anchors, interiors, blockers,
+biome membership, and view hints. Nothing outside `hex_map` references `VoxelMap` or
+generator internals, so terrain storage and generation can be replaced wholesale
+without anyone noticing.
 
 `Headroom` is on that list because only the map can measure it: a run carries its own
 extent but knows nothing about what is stacked on it, so gameplay cannot tell a surface
 from the inside of a column — let alone whether a body fits in the space above one.
 
-Writing goes the other way, through the `TerrainEdit` message — gameplay cannot call
-into the map, so a spell that digs or builds requests it and the map applies it. The
-planned second write path, `TerrainImpact`, keeps the same direction and hands the map
-even more authority: gameplay announces which voxels an elemental effect reaches, and
-the map decides what each material does about it ([systems/casting.md](systems/casting.md)).
+Writing goes the other way, through shared messages — gameplay cannot call into the
+map. Live stone construction uses `TerrainEdit::Set`. The map-side receiver for the
+second path, `TerrainImpact`, is also live and keeps toughness and damage policy in the
+world: gameplay announces which voxels an elemental effect reaches and its power; the
+map accumulates material health, destroys voxels at zero, and answers through
+`TerrainImpactOutcome`; gameplay correlates that answer before releasing its pending
+authority ([systems/casting.md](systems/casting.md)).
 
 See [systems/map.md](systems/map.md) for the voxel model itself. V3's private
 semantic plan and its exact published projections are specified in
@@ -269,13 +314,23 @@ sets make the ordering that crosses crate boundaries explicit:
   `Pause(false)`.
 - **`GameplaySetup`** — `Resources → Terrain → Actors → Restore → Perception →
   View → Finalize`, for `OnEnter(Screen::Gameplay)`. `Restore` applies a validated
-  pre-alpha resume after the scenario terrain and roster exist; `Perception` then
+  bound Campaign slot after the scenario terrain and roster exist; `Perception` then
   derives initial knowledge from the restored actors, and `View` applies generated
   framing and presentation only after that projection exists.
 - **`PerceptionSystems`** — `PublishAmbient → ResolveIllumination →
   ResolveObservation → PublishKnowledge → ApplyPresentation`, nested inside
   `GameplaySetup::Perception` on entry and `AppSystems::Update` thereafter. The first
   phase is the cross-owner hand-off from authored lighting, not a renderer query.
+- **`TerrainSystems`** — `ApplyWorld → RefreshProjections → ReconcileActors →
+  ConsumeOutcomes`, configured before illumination and later perception. Map-owned
+  `ApplyWorld` applies impacts and publishes rebuilt facts/outcomes;
+  `RefreshProjections` republishes occupancy and reconciles movement;
+  `ReconcileActors` deterministically settles or adopts unsupported actors; and
+  `ConsumeOutcomes` validates the matching batch before releasing gameplay authority.
+- **`PresentationSystems`** — `ResolveCameraOcclusion → ApplyMaterials →
+  ApplyVisibility`, in `PostUpdate` after final transforms. World presentation
+  publishes whole-tree opacity, the object renderer owns isolated material clones,
+  and fog/review visibility remains composable.
 
 `GameplaySetup` exists because of two bugs worth not repeating.
 
@@ -312,21 +367,21 @@ forgets to update.
 ## States
 
 ```
-Splash ──► Title ◄──────────────► Settings
-              │  ├──► Character Creator ──► local lattice test
-              │  ├──► Spell Creator
-              │  └──► Combat Lab setup ──► deployment
-              │
-              │ New Game / valid Continue / Sandbox / fixed fixture
-              ▼
-           Loading ──► Gameplay
-                          │
-                          ├── BACKSPACE ──► owning screen or Title
-                          └── Pause (sub-state of Gameplay)
+Splash ──► Title (Main Menu host) ◄──────────────► Settings
+              │  ├──► Campaign (three slots) ───────────┐
+              │  ├──► Sandbox ──► deployment ───────────┤
+              │  └──► Tools ──► Character/Spell Creator │
+              │                    └──► local test       │
+              │                                          ▼
+              └──────────────────────────────────────► Loading ──► Gameplay
+                                                                   │
+                                                                   ├── BACKSPACE ──► typed owner
+                                                                   └── Pause
 ```
 
-`Pause` is a **sub-state** of `Gameplay`, so "paused on the title screen" is
-unrepresentable rather than merely unlikely.
+`Screen::Title` remains the internal coarse state that hosts the player-facing Main
+Menu, Campaign cards, and Tools page. `Pause` is a **sub-state** of `Gameplay`, so
+"paused on the Main Menu" is unrepresentable rather than merely unlikely.
 
 `Loading` is load-bearing, not decorative. It is what makes
 `OnEnter(Screen::Gameplay)` a safe place to build the world: it blocks until every
@@ -334,17 +389,26 @@ settings file has parsed, the derived `SubstanceTable` exists, and every asset h
 has reached a terminal state. Gameplay systems can therefore take resources such as
 `Res<MapSettings>` rather than `Option<Res<…>>`.
 
-New Game and Continue deliberately share that path. New Game resolves the hidden
-Party Trial default and neither reads nor overwrites the resume slot. Continue first
-validates the one pre-alpha resume file, stages it as `PendingResume`, and then lets
-`GameplaySetup::Restore` consume it. An absent, corrupt, or incompatible file stays
-on the title screen with a visible reason instead of constructing a partial session.
+Campaign New Game and Continue deliberately share that path. New Game binds the
+canonical Party Trial to one selected empty `CampaignSlotId`; it does not occupy the
+slot until the first safe manual save. Continue validates that explicit slot and
+stages its scenario, party, selection, formation, and play time for Restore. Empty,
+corrupt, or incompatible records stay on Campaign with a visible reason instead of
+constructing a partial session. `campaigns.ron` always projects exactly three indexed
+records. A valid legacy `resume.ron` is migrated once into slot 1 without changing the
+legacy file.
 
-Creator and Combat Lab launches also share Loading. They install one frozen
+The session provenance carries `Campaign(slot)`, `Sandbox`, or `TestFixture`. Only an
+exact Campaign slot is save-eligible. Its accumulated milliseconds advance only while
+Gameplay is active, unpaused, and non-terminal; Loading, Main Menu and child pages,
+deployment, pause, outcomes, Sandbox, and tests contribute no time.
+
+Creator and Sandbox launches also share Loading. They install one frozen
 shipped-plus-custom spell/content/lattice namespace before terrain and actors enter
-Gameplay. Dynamic Sandbox encounters and their resolved seed live in
-`ActiveScenario`, so Retry cannot observe later local-library edits. These sessions
-refuse resume writes and restore the shipped namespace when they return.
+Gameplay. `SandboxLaunchSnapshot` carries the exact map, resolved seed, ordered
+rosters, accepted content revision, shipped combat rules, and eventual deployment,
+so Retry Exact cannot observe later map, draft, or local-library edits. These sessions
+refuse Campaign writes and restore the shipped namespace when they return.
 
 An asset failure is terminal too. The asset server already reports it, and treating
 failure as "still loading" would turn a visible missing-asset problem into a permanent
@@ -355,7 +419,7 @@ documented plain-blue fallback.
 
 An observer registered with `app.add_observer` fires on **every** matching event,
 in every state. `on_tile_clicked` took `Res<HeightMap>`, which only exists during
-gameplay, so clicking the title screen panicked. Bevy validates system parameters
+gameplay, so clicking the Main Menu panicked. Bevy validates system parameters
 *before* running the body, so the observer's own "is this a tile?" guard never got
 the chance to reject it.
 
@@ -377,9 +441,22 @@ file leaves the authored value in force, and corrupt preferences are rejected vi
 before falling back. Local preferences are user state, not hot-reloaded project
 content.
 
-`InputBindings` centralizes the current fixed action-to-key map without promising
-rebinding UI. `AudioBusVolumes` and the audio facade similarly reserve music, SFX, and
-UI seams without requiring Wave 5 to ship audio content.
+`InputBindings` centralizes stable input actions, canonical defaults, categories, and
+context-aware keyboard overrides. A compile-selected `InputActionInventory` excludes
+development-only actions from shipping presentation and conflict validation while
+retaining their serialized overrides for a later development build. If shipping edits
+later occupy that tooling chord, development startup rehomes only the tooling action to
+a deterministic free modified chord and atomically persists the repaired preferences.
+Settings captures
+one non-modifier key, resolves overlapping-context conflicts through explicit Swap or
+Cancel, and persists only overrides in preferences schema v3. Row restore is an atomic
+binding edit: if another row owns the canonical chord it opens the same explicit
+conflict flow instead of creating a duplicate. Fixed Tab and Escape UI navigation stay
+outside that remapping surface. Enter and Space may bind only to the gameplay actions
+whose handlers explicitly yield to a focused control, preventing one press from also
+dispatching an unrelated gameplay action. `AudioBusVolumes` and the audio facade
+similarly reserve music, SFX, and UI seams without requiring Wave 5 to ship audio
+content.
 
 **Hex geometry constants deliberately stayed in Rust.** `HEX_INNER_RADIUS` and its
 derivations in `hex_core::config` describe the dimensions of `hex.glb`. Editing
@@ -403,11 +480,11 @@ re-inserted on change. Whether that is *visible* depends on when the value is re
 `lighting.ron` used to be split across the first and last rows: the sky shader read its
 values every frame, but the sun and ambient were only applied on
 `OnEnter(Screen::Gameplay)`, so tuning a light angle meant a round trip through the
-title screen. `reload_lighting` now re-applies them on change, which is what makes the
+Main Menu. `reload_lighting` now re-applies them on change, which is what makes the
 lighting worth exposing at all — the values below are only useful if you can see them
 move.
 
-Returning to the title and re-entering rebuilds the world in under a second, so
+Returning to the Main Menu and re-entering rebuilds the world in under a second, so
 this is a mild inconvenience rather than a gap. Regenerating terrain in place on
 change would be a real improvement for anyone tuning it, and is a fair follow-up.
 
@@ -424,29 +501,54 @@ setting is real on Windows and Linux.
 
 ## When it fails silently
 
-Several failure modes here produce no log output at all, and a clean log is not
-evidence that a change worked. The list of symptoms and their causes is
-[development/troubleshooting.md](development/troubleshooting.md); the habit it
-asks for is looking at the window.
+Several presentation failures here produce no log output at all, and a clean log is
+not evidence that the window is correct. The list of visual symptoms and their causes
+is [development/troubleshooting.md](development/troubleshooting.md). Inspecting those
+symptoms never substitutes for typed gameplay or world evidence.
 
 ## Testing
 
-Two complementary layers across the workspace.
+Testing is partitioned by the authority needed for the claim. The complete matrices,
+commands, dependency ceilings, budgets, and anti-patterns are the
+[gameplay](development/gameplay-testing.md) and
+[map](development/map-testing.md) testing contracts.
 
-**Unit tests** live beside behavior throughout the workspace and do not need a GPU:
+Screenshots and rendered frames prove static presentation: camera framing/occlusion,
+UI hierarchy/layout/legibility/focus/contrast/reflow, and rendered-map geometry,
+materials, lighting, cutaways, seams, and composition. Video and human checks prove
+camera motion, native-input response, animation, control feel, and taste. A visual
+artifact may show how hook-established state is rendered, but whenever hooks,
+components, resources, messages, logs, canonical snapshots, or deterministic
+contracts can express gameplay or exact world state, those typed oracles are
+mandatory; if one is missing, add it instead of inferring logic from pixels.
+
+**Pure unit tests** live beside behavior throughout the workspace and do not need a GPU:
 coordinate round-tripping, the cube invariant, lattice properties, content validation,
 object meshing, perception, voxel columns and run-merging, substance id assignment,
 and movement rules — including that a two-level body is refused a one-voxel crawlspace
 a one-level body walks into.
 
-**ECS integration tests** run a headless `App` with `MinimalPlugins` and inspect the
-world afterwards — `crates/hex_map/tests/`, `crates/hex_units/tests/` and
-`crates/hex_combat/tests/`. Separate asset integration tests parse the GLB directly to
-verify mesh geometry. They exist because every bug found in this codebase was found by
-a person clicking, and the worst of them were green across compiler, clippy, unit
-tests and CI.
+**Focused ECS contracts** run a deterministic headless `App` and inspect components,
+resources, messages and exact positions. Owning tests may reuse the neutral app shell
+from dependency-limited `hex_test_support`. Gameplay consumer tests may also build
+synthetic shared facts there; map tests retain their own world-owned fixtures and
+acceptance criteria and must exercise the real map publisher. Separate asset
+integration tests parse the GLB directly to verify mesh geometry.
 
-They cover tile counts, that a tile's transform agrees with its `HexSpan`, headroom
+**Composition** has one `hex_combat_core` simulation target and one `hex_game` headless
+app/UI target. A simulation compares complete canonical snapshots from two fresh runs.
+Rendered frames review presentation only; they are not a combat oracle.
+
+Gameplay screen behavior that does not need a widget tree lives in
+`hex_gameplay_model`. `hex_game` translates clicks and Bevy state changes into typed
+model actions, then performs the resulting filesystem, resource, and navigation
+effects. Sandbox pending/committed maps, resolved seeds, six-slot roster order and
+duplicates, blocker priority, exact Retry identity, Campaign slot identities, typed
+Creator returns, and bounded undo/redo therefore run without `App`, assets, renderer,
+viewport, or screen internals. The headless app target retains only wiring and
+lifecycle claims that require Bevy.
+
+Together the focused contracts cover tile counts, that a tile's transform agrees with its `HexSpan`, headroom
 under open sky and beneath platforms, clean teardown and re-entry, and three specific
 regressions: the player must spawn *on* the surface, clicking before settings load
 must not panic, and a buried run must never be standable.

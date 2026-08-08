@@ -36,11 +36,15 @@ use bevy::picking::events::{Click, Pointer};
 use bevy::picking::Pickable;
 use bevy::prelude::*;
 
-use hex_assets::{GameAssets, TargetShape};
+use hex_assets::{GameAssets, TargetShape, Trajectory};
 use hex_core::{Headroom, HexSpan, HexTile, KnowledgeState, Pause, TilePos};
 use hex_perception::FactionMapKnowledge;
+use hex_units::trajectories::clip_known_effect_volume;
 use hex_units::Faction;
-use hex_units::{volumes, TerrainRevision};
+use hex_units::{
+    known_trajectory_is_clear, resolve_creation_volume, trajectory_destination, volumes,
+    KnownTerrainOccupancy, TerrainRevision,
+};
 
 use super::{facing_toward, in_range, Aim, Aiming, CastReadout};
 
@@ -145,6 +149,8 @@ pub(super) struct DrawKey {
     range: u32,
     levels_per_bonus: u32,
     shape: TargetShape,
+    trajectory: Trajectory,
+    creates_terrain: bool,
     knowledge_available: bool,
 }
 
@@ -184,6 +190,12 @@ pub(super) fn redraw_preview(
             shape: readout
                 .row(&aim.spell)
                 .map_or(TargetShape::Single, |row| row.shape.clone()),
+            trajectory: readout
+                .row(&aim.spell)
+                .map_or(Trajectory::None, |row| row.trajectory),
+            creates_terrain: readout
+                .row(&aim.spell)
+                .is_some_and(|row| row.creates_terrain),
             knowledge_available: knowledge.is_some(),
         });
     if drawn_key.0 == wanted && !knowledge_changed {
@@ -217,6 +229,13 @@ pub(super) fn redraw_preview(
     let player_knowledge = knowledge
         .as_deref()
         .map(|knowledge| knowledge.faction(Faction::Player));
+    let known_terrain = KnownTerrainOccupancy::from_observed_surfaces(
+        player_knowledge
+            .into_iter()
+            .flat_map(|knowledge| knowledge.surfaces())
+            .filter(|(_, known)| known.state() == KnowledgeState::Observed)
+            .map(|(position, _)| position),
+    );
     let surfaces: Vec<(TilePos, f32)> = tiles
         .iter()
         .filter(|(pos, _, headroom)| {
@@ -233,6 +252,9 @@ pub(super) fn redraw_preview(
         row.range,
         readout.levels_per_bonus,
         &row.shape,
+        row.trajectory,
+        row.creates_terrain,
+        &known_terrain,
     );
     for (pos, top) in &anchors {
         commands.spawn((
@@ -254,7 +276,18 @@ pub(super) fn redraw_preview(
 
     let facing = volumes::needs_facing(&row.shape)
         .then(|| facing_toward(key.from.coord, key.aim.anchor.coord));
-    let voxels = volumes::resolve(&row.shape, key.from, key.aim.anchor, facing).unwrap_or_default();
+    let voxels = if row.creates_terrain {
+        resolve_creation_volume(&row.shape, key.from, key.aim.anchor, facing)
+    } else {
+        volumes::resolve(&row.shape, key.from, key.aim.anchor, facing)
+    }
+    .unwrap_or_default();
+    let voxels = if row.creates_terrain {
+        voxels
+    } else {
+        clip_known_effect_volume(row.trajectory, key.aim.anchor, voxels, &known_terrain)
+            .unwrap_or_default()
+    };
     let mut painted = 0;
     for (pos, top) in &surfaces {
         // A resolver hands back its volume sorted and deduplicated — the canonical form
@@ -321,12 +354,24 @@ fn legal_anchors(
     range: u32,
     levels_per_bonus: u32,
     shape: &TargetShape,
+    trajectory: Trajectory,
+    creates_terrain: bool,
+    terrain: &KnownTerrainOccupancy,
 ) -> Vec<(TilePos, f32)> {
     surfaces
         .iter()
         .filter(|(pos, _)| match shape {
             TargetShape::SelfCast => *pos == from,
             _ => in_range(from, *pos, range, levels_per_bonus),
+        })
+        .filter(|(pos, _)| {
+            matches!(trajectory, Trajectory::None)
+                || known_trajectory_is_clear(
+                    trajectory,
+                    from.above(),
+                    trajectory_destination(*pos, creates_terrain),
+                    terrain,
+                )
         })
         .copied()
         .collect()
@@ -435,4 +480,77 @@ pub(super) fn clear_preview(
     }
     drawn_key.0 = None;
     *volume = AimVolume::default();
+}
+
+#[cfg(test)]
+mod tests {
+    use hex_core::HexCoord;
+
+    use super::*;
+
+    fn at(q: i32, r: i32, level: i32) -> TilePos {
+        TilePos::new(HexCoord::from_axial(q, r), level)
+    }
+
+    #[test]
+    fn legal_anchor_paint_uses_only_faction_authorized_trajectory_material() {
+        let from = at(0, 0, 1);
+        let target = at(3, 0, 1);
+        let surfaces = [(target, 1.0)];
+        let blocker = at(1, 0, 2);
+        let observed = KnownTerrainOccupancy::from_observed_surfaces([blocker]);
+        let hidden = KnownTerrainOccupancy::default();
+
+        assert!(legal_anchors(
+            &surfaces,
+            from,
+            3,
+            5,
+            &TargetShape::Single,
+            Trajectory::Direct,
+            false,
+            &observed,
+        )
+        .is_empty());
+        assert_eq!(
+            legal_anchors(
+                &surfaces,
+                from,
+                3,
+                5,
+                &TargetShape::Single,
+                Trajectory::Arc { rise: 3 },
+                false,
+                &observed,
+            ),
+            surfaces
+        );
+        assert_eq!(
+            legal_anchors(
+                &surfaces,
+                from,
+                3,
+                5,
+                &TargetShape::Single,
+                Trajectory::None,
+                false,
+                &hidden,
+            ),
+            surfaces
+        );
+        assert_eq!(
+            legal_anchors(
+                &surfaces,
+                from,
+                3,
+                5,
+                &TargetShape::Single,
+                Trajectory::Direct,
+                false,
+                &hidden,
+            ),
+            surfaces,
+            "an unknown world blocker must not remove a preview marker"
+        );
+    }
 }

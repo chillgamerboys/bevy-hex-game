@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 1290 480"
+     width="1290"
+     height="480"
+     preserveAspectRatio="xMidYMid meet"
+     role="img"
+     aria-labelledby="title desc">
+  <title id="title">Hex</title>
+  <desc id="desc">The word Hex constructed from a connected grid of pointy-top hexagonal cells.</desc>
+  <defs>
+    <g id="cell">
+      <path d="M 0,-52 L 45,-26 L 45,26 L 0,52 L -45,26 L -45,-26 Z" />
+    </g>
+  </defs>
+
+  <g fill="#edc975"
+     stroke="#1a1c24"
+     stroke-width="7"
+     stroke-linejoin="round"
+     shape-rendering="geometricPrecision">
+    <g aria-label="H" transform="translate(245 240)">
+      <use href="#cell" transform="translate(-90 -156)" />
+      <use href="#cell" transform="translate(90 -156)" />
+      <use href="#cell" transform="translate(-135 -78)" />
+      <use href="#cell" transform="translate(135 -78)" />
+      <use href="#cell" transform="translate(-180 0)" />
+      <use href="#cell" transform="translate(-90 0)" />
+      <use href="#cell" transform="translate(0 0)" />
+      <use href="#cell" transform="translate(90 0)" />
+      <use href="#cell" transform="translate(180 0)" />
+      <use href="#cell" transform="translate(-135 78)" />
+      <use href="#cell" transform="translate(135 78)" />
+      <use href="#cell" transform="translate(-90 156)" />
+      <use href="#cell" transform="translate(90 156)" />
+    </g>
+
+    <g aria-label="E" transform="translate(725 240)">
+      <use href="#cell" transform="translate(-90 -156)" />
+      <use href="#cell" transform="translate(0 -156)" />
+      <use href="#cell" transform="translate(90 -156)" />
+      <use href="#cell" transform="translate(-135 -78)" />
+      <use href="#cell" transform="translate(-180 0)" />
+      <use href="#cell" transform="translate(-90 0)" />
+      <use href="#cell" transform="translate(0 0)" />
+      <use href="#cell" transform="translate(90 0)" />
+      <use href="#cell" transform="translate(-135 78)" />
+      <use href="#cell" transform="translate(-90 156)" />
+      <use href="#cell" transform="translate(0 156)" />
+      <use href="#cell" transform="translate(90 156)" />
+    </g>
+
+    <g aria-label="X" transform="translate(1130 240)">
+      <use href="#cell" transform="translate(-90 -156)" />
+      <use href="#cell" transform="translate(90 -156)" />
+      <use href="#cell" transform="translate(-45 -78)" />
+      <use href="#cell" transform="translate(45 -78)" />
+      <use href="#cell" transform="translate(0 0)" />
+      <use href="#cell" transform="translate(-45 78)" />
+      <use href="#cell" transform="translate(45 78)" />
+      <use href="#cell" transform="translate(-90 156)" />
+      <use href="#cell" transform="translate(90 156)" />
+    </g>
+  </g>
+</svg>

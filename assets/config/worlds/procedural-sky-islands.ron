@@ -10,10 +10,10 @@
             recipe: SkyIslands((
                 ground: (
                     valley_level: 15,
-                    max_relief: 8,
+                    max_relief: 12,
                     hills_per_bank: 3,
                 ),
-                min_clearance: 22,
+                min_clearance: 26,
                 upper_coverage_percent: 24,
             )),
             overlays: [],

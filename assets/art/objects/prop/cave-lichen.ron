@@ -1,0 +1,20 @@
+(
+    schema_version: 1,
+    id: "prop/cave-lichen",
+    display_name: "Cave Lichen",
+    category: Prop,
+    bounds: (
+        radius: 1,
+        min_level: 0,
+        height: 1,
+    ),
+    connectivity: Grounded,
+    origin: (q: 0, r: 0, level: 0),
+    placements: [
+        (position: (q: -1, r: 1, level: 0), style: "plant/grass-tuft", part: Prop(Detail)),
+        (position: (q: 0, r: 0, level: 0), style: "plant/grass-tuft", part: Prop(Structure)),
+        (position: (q: 0, r: 1, level: 0), style: "plant/foliage-light", part: Prop(Detail)),
+    ],
+    blocker_footprint: [],
+    canopy_occluders: [],
+)

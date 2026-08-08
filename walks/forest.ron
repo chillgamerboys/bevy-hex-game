@@ -7,12 +7,15 @@
     StartScenario(name: "Forest", seed: Some(381654729)),
     AwaitScreen("Gameplay"),
     AwaitTerrain,
+    // This route judges world/camera presentation, not the gameplay HUD.
+    Key("H"),
     Settle(120),
     Capture("01-forest-map"),
     Key("C"),
     Settle(45),
     Capture("02-forest-character-canopy"),
     Key("C"),
+    Key("H"),
     Key("Backspace"),
     AwaitScreen("Title"),
 ]

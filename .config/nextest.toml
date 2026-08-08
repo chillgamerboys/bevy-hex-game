@@ -11,4 +11,83 @@ slow-timeout = "60s"
 path = "junit.xml"
 store-success-output = false
 store-failure-output = true
-report-skipped = "ignored"
+
+[profile.gameplay-rules]
+fail-fast = false
+slow-timeout = "60s"
+default-filter = "package(hex_core) | package(hex_lattice) | package(hex_ai)"
+
+[profile.gameplay-rules.junit]
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true
+
+[profile.gameplay-contracts]
+fail-fast = false
+slow-timeout = "60s"
+default-filter = "package(hex_test_support) | package(hex_units) | (package(hex_combat) & not binary(simulation))"
+
+[profile.gameplay-contracts.junit]
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true
+
+[profile.gameplay-trajectory]
+fail-fast = false
+slow-timeout = "60s"
+default-filter = "(package(hex_units) & ((binary(hex_units) & (test(/^trajectories::tests::/) | test(/^volumes::tests::/) | test(/^terrain_creation::tests::(a_two_level_column_starts_wholly_above_the_selected_floor|a_selected_lower_stack_never_jumps_to_the_highest_run)$/))) | (binary(contracts) & test(/^volumes::/)))) | (package(hex_combat) & ((binary(hex_combat) & test(/^ai::tests::ai_legality_uses_only_faction_authorized_material$/)) | (binary(contracts) & test(/^effects::(an_observed_anchor_allows_area_spillover_into_unknown_space|a_blocked_direct_trajectory_refuses_before_payment_without_disclosing_the_voxel|an_authored_arc_clears_the_same_wall_that_blocks_a_direct_cast|terrain_creation_emits_exact_air_voxels_only_after_legality_and_payment|an_earthen_wall_publishes_two_complete_voxels_above_the_selected_surface|hidden_air_material_and_unit_truth_have_the_same_acceptance_and_payment)$/)))) | (package(hex_game) & binary(hex_game) & test(/^casting::(preview::tests::legal_anchor_paint_uses_only_faction_authorized_trajectory_material|tests::(target_cycle_trajectory_filter_ignores_unknown_material|a_confirmed_cast_names_its_anchor_and_only_the_facing_it_needs))$/))"
+
+[profile.gameplay-trajectory.junit]
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true
+
+[profile.gameplay-simulation]
+fail-fast = false
+slow-timeout = "60s"
+default-filter = "package(hex_combat_core)"
+
+[profile.gameplay-simulation.junit]
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true
+
+[profile.gameplay-app]
+fail-fast = false
+slow-timeout = "60s"
+default-filter = "package(hex_gameplay_model) | package(hex_ui) | (package(hex_game) & binary(gameplay_app))"
+
+[profile.gameplay-app.junit]
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true
+
+[profile.map-unit]
+fail-fast = false
+slow-timeout = "60s"
+default-filter = "package(hex_map) & binary(hex_map) & not test(/^procedural/)"
+
+[profile.map-unit.junit]
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true
+
+[profile.map-generation]
+fail-fast = false
+slow-timeout = "60s"
+default-filter = "package(hex_map) & binary(hex_map) & test(/^procedural/)"
+
+[profile.map-generation.junit]
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true
+
+[profile.map-contracts]
+fail-fast = false
+slow-timeout = "60s"
+default-filter = "package(hex_map) & binary(contracts)"
+
+[profile.map-contracts.junit]
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true

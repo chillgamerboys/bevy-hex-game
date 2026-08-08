@@ -55,6 +55,7 @@ pub(crate) enum SolidMaterialRole {
     Snow,
     Ice,
     Basalt,
+    Sand,
 }
 
 /// A visible material which occupies volume but cannot support footing.
@@ -141,7 +142,8 @@ pub(crate) enum SurfaceAccess {
     Ordinary,
     /// Geometrically standable, but outside the ordinary walker network.
     SpecialMovement(SpecialMovementRegion),
-    /// Not valid footing, for example a submerged bed or a low opening.
+    /// Not valid footing, for example a submerged bed, low opening, or authored
+    /// slippery Ice hazard.
     NonStandable,
 }
 
@@ -400,6 +402,16 @@ impl VolumePlan {
                 continue;
             };
             let walker_admitted = TraversalProfile::WALKER.admits_surface(true, headroom);
+            let authored_ice_hazard = self.columns.get(&surface.coord).is_some_and(|column| {
+                column.elements.iter().any(|element| {
+                    matches!(
+                        element,
+                        VolumeElement::Solid(mass)
+                            if mass.material == SolidMaterialRole::Ice
+                                && mass.levels.contains(surface.level)
+                    )
+                })
+            });
             match metadata.access {
                 SurfaceAccess::Ordinary | SurfaceAccess::SpecialMovement(_) if !walker_admitted => {
                     issues.push(VolumeIssue::InsufficientHeadroom {
@@ -407,7 +419,7 @@ impl VolumePlan {
                         clear_levels: headroom.0,
                     });
                 }
-                SurfaceAccess::NonStandable if walker_admitted => {
+                SurfaceAccess::NonStandable if walker_admitted && !authored_ice_hazard => {
                     issues.push(VolumeIssue::NonStandableWithHeadroom {
                         surface: *surface,
                         clear_levels: headroom.0,
@@ -586,6 +598,7 @@ const fn solid_substance(role: SolidMaterialRole, palette: &TerrainPalette) -> S
         SolidMaterialRole::Snow => palette.snow,
         SolidMaterialRole::Ice => palette.ice,
         SolidMaterialRole::Basalt => palette.basalt,
+        SolidMaterialRole::Sand => palette.sand,
     }
 }
 
@@ -685,6 +698,7 @@ mod tests {
             dirt: SubstanceId(3),
             grass: SubstanceId(4),
             gravel: SubstanceId(5),
+            sand: SubstanceId(13),
             water: SubstanceId(6),
             metal: SubstanceId(7),
             worked_stone: SubstanceId(12),
@@ -696,7 +710,7 @@ mod tests {
     }
 
     fn test_is_solid(substance: SubstanceId) -> bool {
-        matches!(substance.0, 1 | 2 | 3 | 4 | 5 | 7 | 8 | 9 | 10)
+        matches!(substance.0, 1 | 2 | 3 | 4 | 5 | 7 | 8 | 9 | 10 | 13)
     }
 
     fn issues_text(issues: &[VolumeIssue]) -> String {
@@ -934,6 +948,31 @@ mod tests {
     }
 
     #[test]
+    fn exposed_ice_may_be_an_authored_nonstandable_hazard() {
+        let coord = HexCoord::ORIGIN;
+        let mut plan = VolumePlan::new(BTreeSet::from([coord]));
+        plan.columns
+            .get_mut(&coord)
+            .expect("the origin is in the test mask")
+            .elements = vec![mass(0, 2, SolidMaterialRole::Ice, None)];
+        let ice = TilePos::new(coord, 1);
+        plan.surfaces
+            .insert(ice, surface(SurfaceAccess::NonStandable, None));
+
+        assert_eq!(plan.surface_headroom(ice), Some(Headroom(MAX_HEADROOM)));
+        assert!(plan.validate().is_ok());
+
+        plan.columns
+            .get_mut(&coord)
+            .expect("the origin is in the test mask")
+            .elements = vec![mass(0, 2, SolidMaterialRole::Stone, None)];
+        let issues = plan
+            .validate()
+            .expect_err("ordinary stone with full headroom cannot hide from traversal");
+        assert!(issues_text(&issues).contains("marked non-standable"));
+    }
+
+    #[test]
     fn materialization_maps_every_v3_material_role_and_preserves_air_gaps() {
         let coord = HexCoord::ORIGIN;
         let mut plan = VolumePlan::new(BTreeSet::from([coord]));
@@ -950,11 +989,12 @@ mod tests {
             mass(6, 7, SolidMaterialRole::Snow, None),
             mass(7, 8, SolidMaterialRole::Ice, None),
             mass(8, 9, SolidMaterialRole::Basalt, None),
-            fill(10, 11, FillMaterialRole::Water),
-            fill(12, 13, FillMaterialRole::Lava),
+            mass(9, 10, SolidMaterialRole::Sand, None),
+            fill(11, 12, FillMaterialRole::Water),
+            fill(13, 14, FillMaterialRole::Lava),
         ];
         plan.surfaces.insert(
-            TilePos::new(coord, 8),
+            TilePos::new(coord, 9),
             surface(SurfaceAccess::NonStandable, None),
         );
 
@@ -972,6 +1012,7 @@ mod tests {
             palette.snow,
             palette.ice,
             palette.basalt,
+            palette.sand,
         ];
         for (level, substance) in expected.into_iter().enumerate() {
             assert_eq!(
@@ -982,10 +1023,10 @@ mod tests {
                 substance
             );
         }
-        assert!(materialized.map.get(TilePos::new(coord, 9)).is_air());
-        assert_eq!(materialized.map.get(TilePos::new(coord, 10)), palette.water);
-        assert!(materialized.map.get(TilePos::new(coord, 11)).is_air());
-        assert_eq!(materialized.map.get(TilePos::new(coord, 12)), palette.lava);
+        assert!(materialized.map.get(TilePos::new(coord, 10)).is_air());
+        assert_eq!(materialized.map.get(TilePos::new(coord, 11)), palette.water);
+        assert!(materialized.map.get(TilePos::new(coord, 12)).is_air());
+        assert_eq!(materialized.map.get(TilePos::new(coord, 13)), palette.lava);
     }
 
     #[test]

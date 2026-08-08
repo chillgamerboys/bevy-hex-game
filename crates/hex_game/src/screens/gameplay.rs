@@ -1,6 +1,6 @@
 //! The game itself.
 //!
-//! Owns the pause toggle, the route back to the title screen, and the HUD. Terrain,
+//! Owns the pause toggle, the route back to Main Menu, and the HUD. Terrain,
 //! environment, and the units are spawned by `hex_map`, `hex_world`, and `hex_units`
 //! on `OnEnter(Screen::Gameplay)`; this module deliberately does not reach into any
 //! of them. It reads `Mode` and `TurnOrder` to describe what is happening, and
@@ -12,26 +12,33 @@
 //! before an interface for it existed; nothing here emits a command any more.
 
 use bevy::prelude::*;
-use hex_assets::FormationCatalog;
-use hex_combat::{EncounterOutcome, EncounterResolution, Turn, TurnOrder};
-use hex_core::{
-    CommandQueue, ControlOwner, GameCommand, GameplayPhase, GameplaySystems, HexCoord, InputAction,
-    InputBindings, IssuedCommand, Mode, PartyFormation, PartyMovementMode, Pause, PendingDecision,
-    Screen, UnitId,
+use hex_assets::{CombatSettings, ElementCatalog, FixedSettingsFreeze, FormationCatalog};
+use hex_combat::{
+    ChannelReadiness, CommandRefusal, EncounterOutcome, EncounterResolution, Turn, TurnOrder,
 };
-use hex_lattice::{LatticeSpec, LatticeState};
+use hex_core::{
+    AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, GameplayPhase, GameplaySystems,
+    InputAction, InputBindings, IssuedCommand, Mode, PartyFormation, PartyMovementMode, Pause,
+    PendingDecision, Screen, UnitId,
+};
+use hex_gameplay_model::{HudActionResult, HudState, MainMenuModel, MainMenuRoute};
+use hex_lattice::{CellKind, LatticeSpec, LatticeState, LatticeStats};
 use hex_units::{Archetype, Downed, Party, Player, Selected, UnitRegistry};
 
-use super::combat_lab::{CombatLabSession, CreatorDisplayName};
-use super::{despawn_screen, DespawnOnExit};
-use crate::menus::widgets::{
-    blurb, heading, row_button, UiAssets, ACCENT, ACCENT_EDGE, EDGE, LABEL, PANEL_BG,
+use super::despawn_screen;
+use super::sandbox::{CreatorDisplayName, GameplaySessionOrigin, SandboxSession};
+use crate::readouts::{
+    ActivityNotice, DisableSelection, GameplayHudContext, GameplayUiContext, UiUnitIdentity,
 };
-use crate::readouts::{region, GameplayUiContext, HudElement, HudRegion, HudSetup, UiUnitIdentity};
 use crate::scenarios::ActiveScenario;
+use hex_ui::{
+    ActionAffordance, ActionAvailability, ActionPriority, GameplayAction, GameplayHudView,
+    OutcomeAction, OutcomeActionView, OutcomeView,
+};
 
-pub(super) fn plugin(app: &mut App) {
-    app.init_resource::<InputBindings>();
+pub(crate) fn plugin(app: &mut App) {
+    app.init_resource::<InputBindings>()
+        .init_resource::<MainMenuModel>();
     app.add_sub_state::<Pause>();
     app.register_type::<Pause>();
     // A second sub-state of `Screen::Gameplay`, independent of `Pause`. Both are
@@ -42,28 +49,43 @@ pub(super) fn plugin(app: &mut App) {
     app.add_systems(
         Update,
         handle_input
+            .after(AppSystems::Update)
             .run_if(in_state(Screen::Gameplay))
             .run_if(resource_equals(GameplayPhase::Active))
             .run_if(hex_combat::encounter_unresolved),
     );
     app.add_systems(
         Update,
-        update_hud
+        publish_hud_view
+            .in_set(AppSystems::Update)
             .after(GameplaySystems::UiContext)
+            .before(hex_ui::UiSystems::Render)
+            .run_if(in_state(Screen::Gameplay)),
+    );
+    app.add_systems(
+        Update,
+        handle_gameplay_ui_intents
+            .after(publish_hud_view)
+            .after(hex_ui::UiSystems::EmitIntents)
             .run_if(in_state(Screen::Gameplay))
             .run_if(resource_equals(GameplayPhase::Active)),
     );
     app.add_systems(
         Update,
-        (handle_party_strip, update_party_strip)
+        (
+            handle_party_strip.after(hex_ui::UiSystems::EmitIntents),
+            publish_party_view,
+        )
             .chain()
             .run_if(in_state(Screen::Gameplay))
             .run_if(resource_equals(GameplayPhase::Active)),
     );
     app.add_systems(
         Update,
-        (sync_outcome_modal, handle_outcome_actions)
+        (sync_outcome_view, handle_outcome_actions)
             .chain()
+            .after(hex_ui::UiSystems::EmitIntents)
+            .before(hex_ui::UiSystems::Render)
             .run_if(in_state(Screen::Gameplay))
             .run_if(resource_equals(GameplayPhase::Active)),
     );
@@ -81,326 +103,72 @@ pub(super) fn plugin(app: &mut App) {
     );
     app.add_systems(
         OnEnter(Screen::Gameplay),
-        (
-            reset_pause,
-            reset_mode,
-            spawn_hud.in_set(HudSetup::Panels),
-            spawn_party_strip.in_set(HudSetup::Panels),
-        ),
+        (reset_pause, reset_mode, reset_outcome_view),
     );
     app.add_systems(OnExit(Screen::Gameplay), despawn_screen(Screen::Gameplay));
 }
 
-/// Marks the HUD line so it can be rewritten as the mode changes.
-#[derive(Component)]
-struct HudText;
-
-#[derive(Component)]
-struct PartyStrip;
-
-#[derive(Component)]
-struct FormationPanel;
-
-#[derive(Component)]
-struct PartyMemberButton(usize);
-
-#[derive(Component)]
-struct PartyPresetButton(String);
-
-#[derive(Component)]
-struct PartySlotButton(HexCoord);
-
-#[derive(Component)]
-struct PartyModeButton;
-
-#[derive(Component)]
-struct PartyModeText;
-
-#[derive(Component)]
-struct PartyRestButton;
-
-#[derive(Component)]
-struct OutcomeModal;
-
-#[derive(Component, Clone, Copy)]
-enum OutcomeAction {
-    Continue,
-    Retry,
-    ReturnTitle,
+fn handle_gameplay_ui_intents(
+    mut intents: MessageReader<hex_ui::UiIntent>,
+    mode: Res<State<Mode>>,
+    order: Res<TurnOrder>,
+    pending: Res<PendingDecision>,
+    registry: Res<UnitRegistry>,
+    owners: Query<(Option<&ControlOwner>, &hex_units::Faction)>,
+    pause: Res<State<Pause>>,
+    mut queue: ResMut<CommandQueue>,
+    mut next_pause: ResMut<NextState<Pause>>,
+) {
+    for intent in intents.read() {
+        let hex_ui::UiIntent::Gameplay(action) = intent else {
+            continue;
+        };
+        match action {
+            GameplayAction::Channel => crate::casting::panel::queue_current_player_command(
+                true,
+                &order,
+                &pending,
+                &registry,
+                &owners,
+                &mut queue,
+                |unit| GameCommand::Channel { unit },
+            ),
+            GameplayAction::EndTurn => crate::casting::panel::queue_current_player_command(
+                true,
+                &order,
+                &pending,
+                &registry,
+                &owners,
+                &mut queue,
+                |unit| GameCommand::EndTurn { unit },
+            ),
+            GameplayAction::Pause => next_pause.set(toggled_pause(*pause.get())),
+            GameplayAction::Rest if *mode.get() == Mode::Exploring => {
+                let player = registry.iter().find_map(|(unit, entity)| {
+                    owners.get(entity).ok().and_then(|(owner, faction)| {
+                        (*faction == hex_units::Faction::Player)
+                            .then(|| (unit, owner.copied().unwrap_or_default().0))
+                    })
+                });
+                if let Some((unit, seat)) = player {
+                    queue.push(IssuedCommand {
+                        seat,
+                        command: GameCommand::Rest { unit },
+                    });
+                }
+            }
+            GameplayAction::ConfirmDecision => {
+                // The decision input system independently reads this same typed
+                // intent and reduces it through the exact ChooseDisables/
+                // ChooseRestores command funnel.
+            }
+            GameplayAction::Rest => {}
+        }
+    }
 }
 
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "formation offsets are content-limited to a six-cell miniature"
-)]
-fn spawn_party_strip(
-    mut commands: Commands,
-    assets: Res<UiAssets>,
-    formations: Res<FormationCatalog>,
-    regions: Query<(Entity, &HudRegion)>,
-) {
-    let mut offered_slots: Vec<HexCoord> = formations
-        .presets
-        .iter()
-        .flat_map(|preset| preset.slots.iter().map(|slot| slot.offset))
-        .collect();
-    offered_slots.sort_unstable();
-    offered_slots.dedup();
-    let slot_pixels: Vec<(HexCoord, f32, f32)> = offered_slots
-        .iter()
-        .map(|offset| {
-            (
-                *offset,
-                (offset.x() * 20 + offset.y() * 10) as f32,
-                (offset.y() * 18) as f32,
-            )
-        })
-        .collect();
-    let min_slot_x = slot_pixels
-        .iter()
-        .map(|(_, x, _)| *x)
-        .fold(f32::INFINITY, f32::min);
-    let max_slot_x = slot_pixels
-        .iter()
-        .map(|(_, x, _)| *x)
-        .fold(f32::NEG_INFINITY, f32::max);
-    let min_slot_y = slot_pixels
-        .iter()
-        .map(|(_, _, y)| *y)
-        .fold(f32::INFINITY, f32::min);
-    let max_slot_y = slot_pixels
-        .iter()
-        .map(|(_, _, y)| *y)
-        .fold(f32::NEG_INFINITY, f32::max);
-    let Some(party_region) = region(HudRegion::Party, &regions) else {
-        error!("party HUD region was not available during gameplay setup");
-        return;
-    };
-    let Some(inspector_region) = region(HudRegion::Inspector, &regions) else {
-        error!("inspector HUD region was not available during gameplay setup");
-        return;
-    };
-
-    commands.entity(party_region).with_children(|region| {
-        region
-            .spawn((
-                Name::new("Party Strip"),
-                PartyStrip,
-                HudElement,
-                Node {
-                    width: Val::Percent(100.0),
-                    padding: UiRect::all(Val::Px(10.0)),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(8.0),
-                    border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(10.0)),
-                    ..default()
-                },
-                BorderColor::all(EDGE),
-                BackgroundColor(PANEL_BG),
-            ))
-            .with_children(|root| {
-                root.spawn(heading(&assets, "party"));
-                root.spawn(blurb(&assets, "ALLIES · keys 1–6"));
-                root.spawn((
-                    Node {
-                        width: Val::Percent(100.0),
-                        flex_direction: FlexDirection::Column,
-                        row_gap: Val::Px(6.0),
-                        ..default()
-                    },
-                    BackgroundColor(Color::NONE),
-                ))
-                .with_children(|members| {
-                    for index in 0..6 {
-                        members
-                            .spawn((
-                                Name::new(format!("Party Member {}", index + 1)),
-                                Button,
-                                PartyMemberButton(index),
-                                Node {
-                                    width: Val::Percent(100.0),
-                                    min_height: Val::Px(48.0),
-                                    padding: UiRect::axes(Val::Px(8.0), Val::Px(7.0)),
-                                    border: UiRect::all(Val::Px(1.0)),
-                                    border_radius: BorderRadius::all(Val::Px(6.0)),
-                                    ..default()
-                                },
-                                BorderColor::all(EDGE),
-                                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.07)),
-                            ))
-                            .with_child((
-                                Text::new(format!("ALLY {} · —", index + 1)),
-                                TextFont {
-                                    font: assets.body.clone().into(),
-                                    ..TextFont::from_font_size(14.0)
-                                },
-                                TextColor(LABEL),
-                            ));
-                    }
-                });
-            });
-    });
-
-    commands.entity(inspector_region).with_children(|region| {
-        region
-            .spawn((
-                Name::new("Formation Panel"),
-                FormationPanel,
-                HudElement,
-                Node {
-                    width: Val::Percent(100.0),
-                    padding: UiRect::all(Val::Px(12.0)),
-                    border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(10.0)),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(10.0),
-                    ..default()
-                },
-                BorderColor::all(EDGE),
-                BackgroundColor(PANEL_BG),
-            ))
-            .with_children(|formation| {
-                formation.spawn(heading(&assets, "formation"));
-                formation.spawn(blurb(
-                    &assets,
-                    "Select an ally, then choose a slot. Occupied slots swap.",
-                ));
-                formation
-                    .spawn((
-                        Name::new("Party Movement Mode"),
-                        Button,
-                        PartyModeButton,
-                        Node {
-                            width: Val::Percent(100.0),
-                            padding: UiRect::axes(Val::Px(10.0), Val::Px(8.0)),
-                            border: UiRect::all(Val::Px(1.0)),
-                            border_radius: BorderRadius::all(Val::Px(6.0)),
-                            ..default()
-                        },
-                        BorderColor::all(ACCENT_EDGE),
-                        BackgroundColor(Color::srgba(0.93, 0.79, 0.46, 0.16)),
-                    ))
-                    .with_child((
-                        PartyModeText,
-                        Text::new("GROUP MOVEMENT"),
-                        TextFont {
-                            font: assets.body.clone().into(),
-                            ..TextFont::from_font_size(14.0)
-                        },
-                        TextColor(LABEL),
-                    ));
-                formation
-                    .spawn((
-                        Name::new("Party Rest"),
-                        Button,
-                        PartyRestButton,
-                        Node {
-                            width: Val::Percent(100.0),
-                            padding: UiRect::axes(Val::Px(10.0), Val::Px(8.0)),
-                            border: UiRect::all(Val::Px(1.0)),
-                            border_radius: BorderRadius::all(Val::Px(6.0)),
-                            ..default()
-                        },
-                        BorderColor::all(EDGE),
-                        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.07)),
-                    ))
-                    .with_child((
-                        Text::new("REST PARTY · R"),
-                        TextFont {
-                            font: assets.body.clone().into(),
-                            ..TextFont::from_font_size(14.0)
-                        },
-                        TextColor(LABEL),
-                    ));
-                formation
-                    .spawn((
-                        Node {
-                            width: Val::Percent(100.0),
-                            flex_direction: FlexDirection::Row,
-                            flex_wrap: FlexWrap::Wrap,
-                            column_gap: Val::Px(6.0),
-                            row_gap: Val::Px(6.0),
-                            ..default()
-                        },
-                        BackgroundColor(Color::NONE),
-                    ))
-                    .with_children(|presets| {
-                        for preset in &formations.presets {
-                            presets
-                                .spawn((
-                                    Name::new(format!("Formation Preset {}", preset.name)),
-                                    Button,
-                                    PartyPresetButton(preset.name.clone()),
-                                    Node {
-                                        padding: UiRect::axes(Val::Px(9.0), Val::Px(7.0)),
-                                        border: UiRect::all(Val::Px(1.0)),
-                                        border_radius: BorderRadius::all(Val::Px(6.0)),
-                                        ..default()
-                                    },
-                                    BorderColor::all(EDGE),
-                                    BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.07)),
-                                ))
-                                .with_child((
-                                    Text::new(preset.name.clone()),
-                                    TextFont {
-                                        font: assets.body.clone().into(),
-                                        ..TextFont::from_font_size(14.0)
-                                    },
-                                    TextColor(LABEL),
-                                ));
-                        }
-                    });
-                formation.spawn(blurb(&assets, "ASSIGNMENT GRID · ◆ anchor"));
-                formation
-                    .spawn((
-                        Name::new("Formation mini-grid"),
-                        Node {
-                            width: Val::Px(max_slot_x - min_slot_x + 24.0),
-                            height: Val::Px(max_slot_y - min_slot_y + 24.0),
-                            position_type: PositionType::Relative,
-                            align_self: AlignSelf::Center,
-                            ..default()
-                        },
-                        BackgroundColor(Color::NONE),
-                    ))
-                    .with_children(|grid| {
-                        for (offset, x, y) in &slot_pixels {
-                            grid.spawn((
-                                Name::new(format!(
-                                    "Formation Slot ({}, {})",
-                                    offset.x(),
-                                    offset.y()
-                                )),
-                                Button,
-                                PartySlotButton(*offset),
-                                Node {
-                                    position_type: PositionType::Absolute,
-                                    left: Val::Px(x - min_slot_x),
-                                    top: Val::Px(y - min_slot_y),
-                                    width: Val::Px(28.0),
-                                    height: Val::Px(26.0),
-                                    align_items: AlignItems::Center,
-                                    justify_content: JustifyContent::Center,
-                                    border: UiRect::all(Val::Px(1.0)),
-                                    border_radius: BorderRadius::all(Val::Px(4.0)),
-                                    ..default()
-                                },
-                                BorderColor::all(EDGE),
-                                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.1)),
-                            ))
-                            .with_child((
-                                Text::new("⬡"),
-                                TextFont {
-                                    font: assets.body.clone().into(),
-                                    ..TextFont::from_font_size(14.0)
-                                },
-                                TextColor(LABEL),
-                            ));
-                        }
-                    });
-            });
-    });
+fn reset_outcome_view(mut view: ResMut<OutcomeView>) {
+    *view = OutcomeView::default();
 }
 
 fn handle_party_strip(
@@ -410,74 +178,85 @@ fn handle_party_strip(
     registry: Res<UnitRegistry>,
     formations: Res<FormationCatalog>,
     mut formation: ResMut<PartyFormation>,
-    member_clicks: Query<(&Interaction, &PartyMemberButton), Changed<Interaction>>,
-    mode_clicks: Query<&Interaction, (Changed<Interaction>, With<PartyModeButton>)>,
-    preset_clicks: Query<(&Interaction, &PartyPresetButton), Changed<Interaction>>,
-    slot_clicks: Query<(&Interaction, &PartySlotButton), Changed<Interaction>>,
-    rest_clicks: Query<&Interaction, (Changed<Interaction>, With<PartyRestButton>)>,
+    mut intents: MessageReader<hex_ui::UiIntent>,
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<InputBindings>,
     mut queue: ResMut<CommandQueue>,
-    selected: Query<(Entity, &UnitId), (With<Player>, With<Selected>)>,
+    mut activity: MessageWriter<ActivityNotice>,
+    party_units: Query<(Entity, &UnitId, Has<Selected>), With<Player>>,
     owners: Query<&ControlOwner>,
 ) {
     if *mode.get() != Mode::Exploring {
         return;
     }
-    for (interaction, button) in &member_clicks {
-        if *interaction != Interaction::Pressed {
+    let mut selected = party_units
+        .iter()
+        .find_map(|(_, unit, selected)| selected.then_some(*unit));
+    let mut rest_requested = bindings.just_pressed(&keys, InputAction::Rest);
+    for intent in intents.read() {
+        let hex_ui::UiIntent::Party(intent) = intent else {
             continue;
-        }
-        if let Some(entity) = party
-            .members
-            .get(button.0)
-            .and_then(|unit| registry.entity_of(*unit))
-        {
-            for (old, _) in &selected {
-                if old != entity {
-                    commands.entity(old).remove::<Selected>();
+        };
+        match intent {
+            // Inspection is presentation-only and handled by `readouts`; it must
+            // never rewrite gameplay `Selected` or command authority.
+            hex_ui::PartyIntent::ActivateMember(_) => {}
+            hex_ui::PartyIntent::SelectFormationMember(slot) => {
+                let Some(member) = party.members.get(*slot).copied() else {
+                    continue;
+                };
+                let Some(target) = registry.entity_of(member) else {
+                    continue;
+                };
+                let Ok((_, registered, _)) = party_units.get(target) else {
+                    continue;
+                };
+                if *registered != member {
+                    continue;
+                }
+                for (entity, _, _) in &party_units {
+                    if entity == target {
+                        commands.entity(entity).insert(Selected);
+                    } else {
+                        commands.entity(entity).remove::<Selected>();
+                    }
+                }
+                selected = Some(member);
+                activity.write(ActivityNotice(format!(
+                    "Ally {} now owns formation assignment and Solo movement.",
+                    slot + 1
+                )));
+            }
+            hex_ui::PartyIntent::ToggleMovementMode => {
+                formation.mode = match formation.mode {
+                    PartyMovementMode::Group => PartyMovementMode::Solo,
+                    PartyMovementMode::Solo => PartyMovementMode::Group,
+                };
+                activity.write(ActivityNotice(format!(
+                    "Party movement changed to {:?}.",
+                    formation.mode
+                )));
+            }
+            hex_ui::PartyIntent::SelectPreset(name) => {
+                if let Some(preset) = formations.get(name) {
+                    formation.select_preset(preset, &party.members);
+                    activity.write(ActivityNotice(format!("Formation changed to {name}.")));
                 }
             }
-            commands.entity(entity).insert(Selected);
-        }
-    }
-    if mode_clicks
-        .iter()
-        .any(|interaction| *interaction == Interaction::Pressed)
-    {
-        formation.mode = match formation.mode {
-            PartyMovementMode::Group => PartyMovementMode::Solo,
-            PartyMovementMode::Solo => PartyMovementMode::Group,
-        };
-    }
-    for (interaction, button) in &preset_clicks {
-        if *interaction == Interaction::Pressed {
-            if let Some(preset) = formations.get(&button.0) {
-                formation.select_preset(preset, &party.members);
+            hex_ui::PartyIntent::AssignSlot(offset) => {
+                let Some(member) = selected else { continue };
+                let Some(preset) = formations.get(&formation.preset) else {
+                    continue;
+                };
+                if preset.slots.iter().any(|slot| slot.offset == *offset) {
+                    let _ = formation.assign(member, *offset);
+                    formation.fill_unassigned(preset, &party.members);
+                    activity.write(ActivityNotice("Formation assignment changed.".to_owned()));
+                }
             }
+            hex_ui::PartyIntent::Rest => rest_requested = true,
         }
     }
-    let selected_info = selected.iter().next().map(|(_, unit)| *unit);
-    let selected = selected_info;
-    for (interaction, button) in &slot_clicks {
-        if *interaction != Interaction::Pressed {
-            continue;
-        }
-        let Some(member) = selected else {
-            continue;
-        };
-        let Some(preset) = formations.get(&formation.preset) else {
-            continue;
-        };
-        if preset.slots.iter().any(|slot| slot.offset == button.0) {
-            let _ = formation.assign(member, button.0);
-            formation.fill_unassigned(preset, &party.members);
-        }
-    }
-    let rest_requested = bindings.just_pressed(&keys, InputAction::Rest)
-        || rest_clicks
-            .iter()
-            .any(|interaction| *interaction == Interaction::Pressed);
     if rest_requested {
         let issuer = selected
             .or_else(|| party.members.first().copied())
@@ -493,17 +272,19 @@ fn handle_party_strip(
                 seat,
                 command: GameCommand::Rest { unit },
             });
+            activity.write(ActivityNotice("Party rest requested.".to_owned()));
         }
     }
 }
 
-fn update_party_strip(
+fn publish_party_view(
     mode: Res<State<Mode>>,
     context: Res<GameplayUiContext>,
     party: Res<Party>,
     registry: Res<UnitRegistry>,
     formations: Res<FormationCatalog>,
     formation: Res<PartyFormation>,
+    elements: Option<Res<ElementCatalog>>,
     units: Query<(
         &UnitId,
         &Archetype,
@@ -513,285 +294,207 @@ fn update_party_strip(
         Has<Downed>,
         Has<Selected>,
     )>,
-    mut members: Query<
-        (
-            &PartyMemberButton,
-            &Children,
-            &mut Node,
-            &mut BorderColor,
-            &mut BackgroundColor,
-        ),
-        Without<FormationPanel>,
-    >,
-    mut slots: Query<
-        (
-            &PartySlotButton,
-            &Children,
-            &mut Visibility,
-            &mut BackgroundColor,
-        ),
-        Without<PartyMemberButton>,
-    >,
-    mut modes: Query<&mut Text, With<PartyModeText>>,
-    mut texts: Query<&mut Text, Without<PartyModeText>>,
-    mut formation_panels: Query<&mut Node, (With<FormationPanel>, Without<PartyMemberButton>)>,
+    mut view: ResMut<hex_ui::PartyView>,
 ) {
-    if let Ok(mut panel) = formation_panels.single_mut() {
-        panel.display = if *mode.get() == Mode::Exploring {
-            Display::Flex
-        } else {
-            Display::None
-        };
-    }
     let anchor = formations
         .get(&formation.preset)
         .and_then(|preset| formation.anchor_member(preset));
-    for (button, children, mut node, mut border, mut color) in &mut members {
-        let Some(&member) = party.members.get(button.0) else {
-            node.display = Display::None;
-            continue;
-        };
-        node.display = Display::Flex;
-        let Some(entity) = registry.entity_of(member) else {
-            continue;
-        };
-        let Ok((id, archetype, display_name, spec, state, downed, selected)) = units.get(entity)
-        else {
-            continue;
-        };
-        let condition = spec.zip(state).map_or_else(String::new, |(spec, state)| {
-            let total = spec.cells().count();
-            let live = spec
-                .cells()
-                .filter(|(coord, _)| !state.is_disabled(*coord))
-                .count();
-            format!("{live}/{total}")
-        });
-        let active = context
-            .acting
-            .as_ref()
-            .is_some_and(|unit| unit.unit == *id && unit.faction == hex_units::Faction::Player);
-        let status = format!(
-            "{}ALLY {} · {} #{} · {}{}{}",
-            if active { "▶ " } else { "" },
-            button.0 + 1,
-            display_name.map_or(archetype.0.as_str(), |name| name.0.as_str()),
-            id.0,
-            condition,
-            if downed { " · DOWN" } else { "" },
-            if anchor == Some(*id) {
-                " · ANCHOR ◆"
-            } else {
-                ""
-            }
-        );
-        if let Some(child) = children.first() {
-            if let Ok(mut text) = texts.get_mut(*child) {
-                text.0 = status;
-            }
-        }
-        *border = BorderColor::all(if active || selected { ACCENT } else { EDGE });
-        color.0 = if active {
-            Color::srgba(0.93, 0.79, 0.46, 0.28)
-        } else if selected {
-            Color::srgba(0.93, 0.79, 0.46, 0.16)
-        } else {
-            Color::srgba(1.0, 1.0, 1.0, 0.07)
-        };
-    }
-    for mut text in &mut modes {
-        text.0 = format!("{:?} MOVEMENT", formation.mode).to_uppercase();
-    }
-    let active_preset = formations.get(&formation.preset);
-    for (slot, children, mut visibility, mut color) in &mut slots {
-        let authored = active_preset.and_then(|preset| {
-            preset
-                .slots
-                .iter()
-                .find(|authored| authored.offset == slot.0)
-        });
-        *visibility = if authored.is_some() {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
-        };
-        color.0 = if authored.is_some_and(|authored| authored.anchor) {
-            Color::srgba(0.93, 0.79, 0.46, 0.45)
-        } else {
-            Color::srgba(1.0, 1.0, 1.0, 0.1)
-        };
-        if let Some(child) = children.first() {
-            if let Ok(mut text) = texts.get_mut(*child) {
-                text.0 = if authored.is_some_and(|authored| authored.anchor) {
-                    "◆".to_owned()
-                } else {
-                    "⬡".to_owned()
-                };
-            }
-        }
-    }
-}
-
-/// Controls are otherwise undiscoverable — there is no manual and no tutorial.
-fn spawn_hud(mut commands: Commands, assets: Res<UiAssets>, regions: Query<(Entity, &HudRegion)>) {
-    let actions = region(HudRegion::Actions, &regions);
-    let hud = commands
-        .spawn((
-            Name::new("Gameplay HUD"),
-            HudElement,
-            Node {
-                position_type: PositionType::Absolute,
-                bottom: Val::Px(0.0),
-                left: Val::Px(0.0),
-                right: Val::Px(0.0),
-                min_height: Val::Px(28.0),
-                padding: UiRect::axes(Val::Px(10.0), Val::Px(5.0)),
-                border_radius: BorderRadius::all(Val::Px(4.0)),
-                ..default()
-            },
-            BackgroundColor(PANEL_BG),
-            // Without this the HUD swallows clicks on any tile behind it, and
-            // click-to-move silently stops working along the bottom edge.
-            Pickable::IGNORE,
-        ))
-        .with_children(|parent| {
-            parent.spawn((
-                HudText,
-                Text::new(exploring_hint()),
-                TextFont {
-                    font: assets.body.clone().into(),
-                    ..TextFont::from_font_size(14.0)
-                },
-                TextColor(LABEL),
-                Pickable::IGNORE,
-            ));
+    let members = party
+        .members
+        .iter()
+        .enumerate()
+        .filter_map(|(slot, member)| {
+            let entity = registry.entity_of(*member)?;
+            let (id, archetype, display_name, spec, state, downed, selected) =
+                units.get(entity).ok()?;
+            let condition = spec.zip(state).map_or_else(String::new, |(spec, state)| {
+                let total = spec.cells().count();
+                let live = spec
+                    .cells()
+                    .filter(|(coord, _)| !state.is_disabled(*coord))
+                    .count();
+                format!("{live}/{total}")
+            });
+            let active = context
+                .acting
+                .as_ref()
+                .is_some_and(|unit| unit.unit == *id && unit.faction == hex_units::Faction::Player);
+            Some(hex_ui::PartyMemberView {
+                slot,
+                label: format!(
+                    "{}ALLY {} · {} #{} · {}{}{}",
+                    if active { "▶ " } else { "" },
+                    slot + 1,
+                    display_name.map_or(archetype.0.as_str(), |name| name.0.as_str()),
+                    id.0,
+                    condition,
+                    if downed { " · DOWN" } else { "" },
+                    if anchor == Some(*id) {
+                        " · ANCHOR ◆"
+                    } else {
+                        ""
+                    }
+                ),
+                cells: spec
+                    .map(|spec| party_lattice_cells(spec, elements.as_deref()))
+                    .unwrap_or_default(),
+                active,
+                selected,
+            })
         })
-        .id();
-    if let Some(actions) = actions {
-        commands.entity(actions).add_child(hud);
+        .collect();
+    let active_preset = formations.get(&formation.preset);
+    let next = hex_ui::PartyView {
+        members,
+        formation_visible: *mode.get() == Mode::Exploring,
+        movement_mode: format!("{:?} MOVEMENT", formation.mode).to_uppercase(),
+        presets: formations
+            .presets
+            .iter()
+            .map(|preset| preset.name.clone())
+            .collect(),
+        slots: active_preset
+            .into_iter()
+            .flat_map(|preset| preset.slots.iter())
+            .map(|slot| hex_ui::FormationSlotView {
+                offset: slot.offset,
+                anchor: slot.anchor,
+            })
+            .collect(),
+    };
+    if *view != next {
+        *view = next;
     }
 }
 
-fn sync_outcome_modal(
-    mut commands: Commands,
+fn party_lattice_cells(
+    spec: &LatticeSpec,
+    elements: Option<&ElementCatalog>,
+) -> Vec<hex_ui::SandboxLatticeCellView> {
+    spec.cells()
+        .map(|(coord, kind)| {
+            let (label, kind) = match kind {
+                CellKind::Gem { element } => (
+                    elements
+                        .and_then(|elements| elements.name(element))
+                        .map_or_else(|| "G".to_owned(), compact_lattice_label),
+                    hex_ui::SandboxLatticeCellKind::Gem,
+                ),
+                CellKind::Fusion { output } => (
+                    elements
+                        .and_then(|elements| elements.name(output))
+                        .map_or_else(|| "F".to_owned(), compact_lattice_label),
+                    hex_ui::SandboxLatticeCellKind::Fusion,
+                ),
+                CellKind::Spell { .. } => ("S".to_owned(), hex_ui::SandboxLatticeCellKind::Spell),
+                CellKind::Blank => ("·".to_owned(), hex_ui::SandboxLatticeCellKind::Blank),
+            };
+            hex_ui::SandboxLatticeCellView {
+                q: coord.q(),
+                r: coord.r(),
+                label,
+                kind,
+            }
+        })
+        .collect()
+}
+
+fn compact_lattice_label(name: &str) -> String {
+    name.chars()
+        .filter(|character| character.is_alphanumeric())
+        .take(2)
+        .collect::<String>()
+        .to_uppercase()
+}
+fn sync_outcome_view(
     resolution: Res<EncounterResolution>,
-    existing: Query<Entity, With<OutcomeModal>>,
-    assets: Res<UiAssets>,
-    lab: Option<Res<CombatLabSession>>,
+    sandbox: Option<Res<SandboxSession>>,
+    mut view: ResMut<OutcomeView>,
 ) {
     let Some(outcome) = resolution.outcome() else {
-        for entity in &existing {
-            commands.entity(entity).despawn();
+        if view.visible {
+            *view = OutcomeView::default();
         }
         return;
     };
-    if !existing.is_empty() {
-        return;
-    }
-    let return_label = lab
-        .as_deref()
-        .map(|session| match session.return_to {
-            Screen::CharacterCreator => "Return to Creator",
-            Screen::SpellCreator => "Return to Spell Creator",
-            Screen::CombatLab => "Return to Combat Lab",
-            _ => "Return to Title",
-        })
-        .unwrap_or("Return to Title");
-    commands
-        .spawn((
-            Name::new("Encounter Outcome Modal"),
-            OutcomeModal,
-            Node {
-                position_type: PositionType::Absolute,
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::Center,
-                ..default()
+    let actions = if sandbox.is_some() {
+        vec![
+            OutcomeActionView {
+                action: OutcomeAction::RetryExact,
+                label: "Retry Exact".to_owned(),
             },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.62)),
-            GlobalZIndex(20),
-            Pickable::default(),
-            DespawnOnExit(Screen::Gameplay),
-        ))
-        .with_children(|overlay| {
-            overlay
-                .spawn((
-                    Node {
-                        width: Val::Px(430.0),
-                        padding: UiRect::all(Val::Px(28.0)),
-                        flex_direction: FlexDirection::Column,
-                        align_items: AlignItems::Center,
-                        row_gap: Val::Px(16.0),
-                        border: UiRect::all(Val::Px(1.0)),
-                        border_radius: BorderRadius::all(Val::Px(10.0)),
-                        ..default()
-                    },
-                    BorderColor::all(Color::srgba(0.93, 0.79, 0.46, 0.5)),
-                    BackgroundColor(Color::srgba(0.02, 0.03, 0.045, 0.97)),
-                ))
-                .with_children(|panel| {
-                    let (title, detail) = match outcome {
-                        EncounterOutcome::Victory => {
-                            ("Victory", "The battlefield remains as the encounter ended.")
-                        }
-                        EncounterOutcome::Defeat => (
-                            "Defeat",
-                            "Retry replays this scenario with the same resolved seed.",
-                        ),
-                    };
-                    panel.spawn(heading(&assets, title));
-                    panel.spawn(blurb(&assets, detail));
-                    panel
-                        .spawn(Node {
-                            flex_direction: FlexDirection::Row,
-                            column_gap: Val::Px(10.0),
-                            ..default()
-                        })
-                        .with_children(|buttons| {
-                            let primary = match outcome {
-                                EncounterOutcome::Victory => (OutcomeAction::Continue, "Continue"),
-                                EncounterOutcome::Defeat => (OutcomeAction::Retry, "Retry"),
-                            };
-                            buttons
-                                .spawn((row_button(primary.1, 150.0), primary.0))
-                                .with_child(blurb(&assets, primary.1));
-                            buttons
-                                .spawn((
-                                    row_button(return_label, 170.0),
-                                    OutcomeAction::ReturnTitle,
-                                ))
-                                .with_child(blurb(&assets, return_label));
-                        });
-                });
-        });
+            OutcomeActionView {
+                action: OutcomeAction::Return,
+                label: "Return to Sandbox".to_owned(),
+            },
+        ]
+    } else {
+        vec![
+            OutcomeActionView {
+                action: match outcome {
+                    EncounterOutcome::Victory => OutcomeAction::Continue,
+                    EncounterOutcome::Defeat => OutcomeAction::Retry,
+                },
+                label: match outcome {
+                    EncounterOutcome::Victory => "Continue",
+                    EncounterOutcome::Defeat => "Retry",
+                }
+                .to_owned(),
+            },
+            OutcomeActionView {
+                action: OutcomeAction::Return,
+                label: "Return to Main Menu".to_owned(),
+            },
+        ]
+    };
+    let next = OutcomeView {
+        visible: true,
+        title: match outcome {
+            EncounterOutcome::Victory => "Victory",
+            EncounterOutcome::Defeat => "Defeat",
+        }
+        .to_owned(),
+        detail: match (sandbox.is_some(), outcome) {
+            (true, EncounterOutcome::Victory) => "The Enemy roster can no longer continue.",
+            (true, EncounterOutcome::Defeat) => "The Party roster can no longer continue.",
+            (false, EncounterOutcome::Victory) => {
+                "The encounter is complete. Continue the Campaign when ready."
+            }
+            (false, EncounterOutcome::Defeat) => {
+                "Retry replays this scenario with the same resolved seed."
+            }
+        }
+        .to_owned(),
+        actions,
+    };
+    if *view != next {
+        *view = next;
+    }
 }
 
 fn handle_outcome_actions(
-    clicked: Query<(&Interaction, &OutcomeAction), Changed<Interaction>>,
+    mut intents: MessageReader<hex_ui::UiIntent>,
     resolution: Res<EncounterResolution>,
     active: Option<Res<ActiveScenario>>,
-    lab: Option<Res<CombatLabSession>>,
+    sandbox: Option<Res<SandboxSession>>,
+    origin: Option<Res<GameplaySessionOrigin>>,
     mut commands: Commands,
     mut next_mode: ResMut<NextState<Mode>>,
     mut next_screen: ResMut<NextState<Screen>>,
+    mut main_menu: ResMut<MainMenuModel>,
 ) {
     let Some(outcome) = resolution.outcome() else {
         return;
     };
-    for (interaction, action) in &clicked {
-        if *interaction != Interaction::Pressed {
+    for intent in intents.read() {
+        let hex_ui::UiIntent::Outcome(hex_ui::OutcomeIntent::Activate(action)) = intent else {
             continue;
-        }
+        };
         match (*action, outcome) {
-            (OutcomeAction::Continue, EncounterOutcome::Victory) => {
-                if let Some(lab) = lab.as_deref() {
-                    next_screen.set(lab.return_to);
-                } else {
-                    next_mode.set(Mode::Exploring);
-                }
+            (OutcomeAction::Continue, EncounterOutcome::Victory) if sandbox.is_none() => {
+                next_mode.set(Mode::Exploring);
             }
-            (OutcomeAction::Retry, EncounterOutcome::Defeat) => {
+            (OutcomeAction::Retry, EncounterOutcome::Defeat) if sandbox.is_none() => {
                 let Some(active) = active.as_deref() else {
                     error!("cannot retry: active scenario launch input was not retained");
                     continue;
@@ -799,78 +502,273 @@ fn handle_outcome_actions(
                 commands.insert_resource(active.0.clone());
                 next_screen.set(Screen::Loading);
             }
-            (OutcomeAction::ReturnTitle, _) => {
-                next_screen.set(
-                    lab.as_deref()
-                        .map_or(Screen::Title, |session| session.return_to),
-                );
+            (OutcomeAction::RetryExact, _) if sandbox.is_some() => {
+                let Some(sandbox) = sandbox.as_deref() else {
+                    error!(
+                        "cannot retry exact Sandbox run: frozen launch snapshot was not retained"
+                    );
+                    continue;
+                };
+                // `SandboxSession` and `CreatorContentOverlay` deliberately remain
+                // installed. Loading consumes the same frozen scenario identity,
+                // deployment, roster, and content snapshot as the completed run.
+                commands.insert_resource(FixedSettingsFreeze::<CombatSettings>::default());
+                commands.insert_resource(FixedSettingsFreeze::<hex_assets::SpellFile>::default());
+                commands.insert_resource(FixedSettingsFreeze::<hex_assets::LatticeFile>::default());
+                commands.insert_resource(sandbox.launch.loading_input());
+                commands.insert_resource(sandbox.launch.rules.clone());
+                next_screen.set(Screen::Loading);
+            }
+            (OutcomeAction::Return, _) => {
+                let destination = gameplay_return_screen(origin.as_deref(), sandbox.is_some());
+                prepare_main_menu_for_gameplay_return(destination, &mut main_menu);
+                next_screen.set(destination);
             }
             _ => {}
         }
     }
 }
 
-fn exploring_hint() -> String {
-    "EXPLORING · click to move · formation at right · H hide HUD · ESC pause".to_owned()
+fn gameplay_return_screen(
+    origin: Option<&GameplaySessionOrigin>,
+    has_sandbox_session: bool,
+) -> Screen {
+    if has_sandbox_session || matches!(origin, Some(GameplaySessionOrigin::Sandbox)) {
+        Screen::Sandbox
+    } else {
+        Screen::Title
+    }
 }
 
-/// Rewrites the hint line to say what the game is doing and whose turn it is.
-///
-/// This compact summary complements the lattice panels, initiative list, and combat
-/// log by keeping the current mode, round, and action budget visible at a glance.
-fn update_hud(
+fn prepare_main_menu_for_gameplay_return(destination: Screen, main_menu: &mut MainMenuModel) {
+    if destination == Screen::Title {
+        main_menu.show(MainMenuRoute::Root);
+    }
+}
+
+/// Publishes authoritative game facts to the presentation-only Action Bar.
+fn publish_hud_view(
+    phase: Res<GameplayPhase>,
+    resolution: Res<EncounterResolution>,
     mode: Res<State<Mode>>,
     order: Res<TurnOrder>,
     pending: Res<PendingDecision>,
+    selection: Res<DisableSelection>,
+    bindings: Res<InputBindings>,
     context: Res<GameplayUiContext>,
-    acting: Query<(Has<Player>, &Turn)>,
-    party: Query<(&LatticeSpec, &LatticeState), With<Player>>,
-    mut hud: Query<&mut Text, With<HudText>>,
+    elements: Option<Res<ElementCatalog>>,
+    acting: Query<(
+        &UnitId,
+        Has<Player>,
+        &Turn,
+        Has<Busy>,
+        Has<Downed>,
+        Option<&LatticeSpec>,
+        Option<&LatticeStats>,
+    )>,
+    mut view: ResMut<GameplayHudView>,
 ) {
-    let Ok(mut text) = hud.single_mut() else {
+    if *phase == GameplayPhase::Deployment {
+        let next = GameplayHudView {
+            phase: GameplayPhase::Deployment,
+            actor: None,
+            actor_label: "Sandbox deployment".to_owned(),
+            round: "Setup".to_owned(),
+            movement_remaining: 0,
+            action_remaining: false,
+            required_prompt: Some(
+                "Place each character on any open legal surface, then review and start combat."
+                    .to_owned(),
+            ),
+            actions: Vec::new(),
+        };
+        if *view != next {
+            *view = next;
+        }
         return;
-    };
-
-    let wanted = match mode.get() {
-        Mode::Exploring => exploring_hint(),
+    }
+    if let Some(outcome) = resolution.outcome() {
+        let outcome = format!("{outcome:?}");
+        let next = GameplayHudView {
+            phase: GameplayPhase::Active,
+            actor: None,
+            actor_label: "Encounter complete".to_owned(),
+            round: outcome,
+            movement_remaining: 0,
+            action_remaining: false,
+            required_prompt: Some("Choose Retry Exact or return to the session setup.".to_owned()),
+            actions: Vec::new(),
+        };
+        if *view != next {
+            *view = next;
+        }
+        return;
+    }
+    let next = match mode.get() {
+        Mode::Exploring => GameplayHudView {
+            phase: GameplayPhase::Active,
+            actor: context.acting.as_ref().map(|actor| actor.unit),
+            actor_label: context
+                .acting
+                .as_ref()
+                .map_or_else(|| "Party".to_owned(), UiUnitIdentity::label),
+            round: "Exploring".to_owned(),
+            movement_remaining: 0,
+            action_remaining: true,
+            required_prompt: Some(
+                "Choose: click a reachable surface to move, or use a party action.".to_owned(),
+            ),
+            actions: vec![
+                ActionAffordance {
+                    action: GameplayAction::Rest,
+                    label: "Rest party".to_owned(),
+                    shortcut: Some(bindings.chord(InputAction::Rest).label()),
+                    availability: ActionAvailability::Enabled,
+                    priority: ActionPriority::Primary,
+                },
+                ActionAffordance {
+                    action: GameplayAction::Pause,
+                    label: "Pause".to_owned(),
+                    shortcut: Some(bindings.chord(InputAction::Pause).label()),
+                    availability: ActionAvailability::Enabled,
+                    priority: ActionPriority::Secondary,
+                },
+            ],
+        },
         Mode::Combat => {
             // How much movement is left, spelled out. Without it a click refused for
             // being out of range is indistinguishable from a click that did not
             // register — which is precisely the complaint the tinted range answers,
             // and the number is what confirms the tint rather than merely repeating it.
-            let (whose, player_turn, budget) = match acting.single() {
-                Ok((true, turn)) => (
-                    "YOUR TURN",
-                    true,
-                    format!(
-                        "MOVE {} · ACTION {}",
-                        turn.movement_left,
-                        if turn.acted { "SPENT" } else { "READY" }
-                    ),
-                ),
-                Ok((false, _)) => ("ENEMY TURN", false, "PLAYER ACTIONS LOCKED".to_owned()),
-                Err(_) => ("COMBAT UPDATING", false, String::new()),
+            let actor_facts = acting.single().ok();
+            let (player_turn, movement_remaining, action_remaining) = match actor_facts {
+                Some((_, true, turn, _, _, _, _)) => (true, turn.movement_left, !turn.acted),
+                Some((_, false, _, _, _, _, _)) | None => (false, 0, false),
             };
             let actor = context
                 .acting
                 .as_ref()
-                .map_or_else(|| "NO ACTIVE UNIT".to_owned(), UiUnitIdentity::label);
-            let action = decision_context_hint(&context, &pending)
-                .unwrap_or_else(|| combat_action_hint(player_turn, &pending).to_owned());
-            format!(
-                "ROUND {} · {} · {} · {}{} · {}",
-                order.round + 1,
-                whose,
-                actor,
-                budget,
-                lattice_readout(&party),
-                action
-            )
+                .map_or_else(|| "No active unit".to_owned(), UiUnitIdentity::label);
+            let required_prompt = Some(
+                decision_context_hint(&context, &pending)
+                    .unwrap_or_else(|| combat_action_hint(player_turn, &pending, &bindings)),
+            );
+            let availability = if player_turn && !pending.is_open() {
+                ActionAvailability::Enabled
+            } else {
+                ActionAvailability::Disabled {
+                    reason: if pending.is_open() {
+                        "Resolve the required lattice choice first".to_owned()
+                    } else {
+                        "Enemy turn".to_owned()
+                    },
+                }
+            };
+            let channel = match actor_facts {
+                Some((unit, true, turn, busy, downed, lattice, stats)) if !pending.is_open() => {
+                    channel_availability(hex_combat::channel_refusal(ChannelReadiness {
+                        in_combat: true,
+                        unit: *unit,
+                        current: order.current(),
+                        downed,
+                        busy,
+                        turn: Some(turn),
+                        lattice,
+                        stats,
+                        elements: elements.as_deref(),
+                    }))
+                }
+                Some((_, true, _, _, _, _, _)) => ActionAvailability::Disabled {
+                    reason: "Resolve the required lattice choice first".to_owned(),
+                },
+                Some((_, false, _, _, _, _, _)) | None => ActionAvailability::Disabled {
+                    reason: "Enemy turn".to_owned(),
+                },
+            };
+            let mut actions = vec![
+                ActionAffordance {
+                    action: GameplayAction::Channel,
+                    label: "Channel".to_owned(),
+                    shortcut: None,
+                    availability: channel,
+                    priority: ActionPriority::Primary,
+                },
+                ActionAffordance {
+                    action: GameplayAction::EndTurn,
+                    label: "End turn".to_owned(),
+                    shortcut: Some(bindings.chord(InputAction::EndTurn).label()),
+                    availability,
+                    priority: ActionPriority::Primary,
+                },
+            ];
+            if pending.is_open() && selection.remaining_choices().is_some() {
+                actions.insert(
+                    0,
+                    ActionAffordance {
+                        action: GameplayAction::ConfirmDecision,
+                        label: "Confirm choice".to_owned(),
+                        shortcut: Some(bindings.chord(InputAction::Confirm).label()),
+                        availability: decision_confirmation_availability(
+                            selection.remaining_choices(),
+                        ),
+                        priority: ActionPriority::Required,
+                    },
+                );
+            }
+            GameplayHudView {
+                phase: GameplayPhase::Active,
+                actor: context.acting.as_ref().map(|actor| actor.unit),
+                actor_label: actor,
+                round: format!("Round {}", order.round + 1),
+                movement_remaining,
+                action_remaining,
+                required_prompt,
+                actions,
+            }
         }
     };
+    if *view != next {
+        *view = next;
+    }
+}
 
-    if text.0 != wanted {
-        text.0 = wanted;
+fn decision_confirmation_availability(remaining: Option<usize>) -> ActionAvailability {
+    match remaining {
+        Some(0) => ActionAvailability::Enabled,
+        Some(1) => ActionAvailability::Disabled {
+            reason: "Choose 1 more lattice cell".to_owned(),
+        },
+        Some(remaining) => ActionAvailability::Disabled {
+            reason: format!("Choose {remaining} more lattice cells"),
+        },
+        None => ActionAvailability::Disabled {
+            reason: "Waiting for the decision owner".to_owned(),
+        },
+    }
+}
+
+fn channel_availability(refusal: Option<CommandRefusal>) -> ActionAvailability {
+    let Some(refusal) = refusal else {
+        return ActionAvailability::Enabled;
+    };
+    let reason = match refusal {
+        CommandRefusal::Busy => "Still finishing movement",
+        CommandRefusal::ActionAlreadySpent => "Action already spent",
+        CommandRefusal::ActingUnitDowned { .. } => "This unit is downed",
+        CommandRefusal::NoTurn => "No active turn",
+        CommandRefusal::MissingUnitData {
+            data: hex_combat::UnitData::Lattice,
+            ..
+        } => "This unit has no channel lattice",
+        CommandRefusal::MissingCombatData {
+            data: hex_combat::CombatData::ElementCatalog,
+        } => "Element content is unavailable",
+        CommandRefusal::NotCurrentTurn { .. } => "Another unit is acting",
+        CommandRefusal::CombatOnly => "Channel is combat-only",
+        _ => "Command unavailable",
+    };
+    ActionAvailability::Disabled {
+        reason: reason.to_owned(),
     }
 }
 
@@ -896,17 +794,26 @@ fn decision_context_hint(context: &GameplayUiContext, pending: &PendingDecision)
     }
 }
 
-/// The action hint must agree with the command emitters: Space and casting are
-/// player-turn controls, while an open defender choice replaces every ordinary
-/// simulation command.
-fn combat_action_hint(player_turn: bool, pending: &PendingDecision) -> &'static str {
+/// The action hint must agree with the configured command bindings. An open
+/// defender choice replaces every ordinary simulation command.
+fn combat_action_hint(
+    player_turn: bool,
+    pending: &PendingDecision,
+    bindings: &InputBindings,
+) -> String {
+    let confirm = bindings.chord(InputAction::Confirm).label();
     match pending {
-        PendingDecision::ChooseDisables { .. } => "choose a live cell above, then ENTER to confirm",
-        PendingDecision::ChooseRestores { .. } => {
-            "choose a disabled target cell above, then ENTER to confirm"
+        PendingDecision::ChooseDisables { .. } => {
+            format!("choose a live cell above, then {confirm} to confirm")
         }
-        PendingDecision::None if player_turn => "cast from the panel   ·   SPACE to end turn",
-        PendingDecision::None => "waiting for the enemy",
+        PendingDecision::ChooseRestores { .. } => {
+            format!("choose a disabled target cell above, then {confirm} to confirm")
+        }
+        PendingDecision::None if player_turn => format!(
+            "cast from the panel   ·   {} to end turn",
+            bindings.chord(InputAction::EndTurn).label()
+        ),
+        PendingDecision::None => "waiting for the enemy".to_owned(),
     }
 }
 
@@ -915,8 +822,8 @@ fn combat_action_hint(player_turn: bool, pending: &PendingDecision) -> &'static 
 ///
 /// Behind the `dev` feature deliberately: the shipped build has no key that
 /// exposes hidden information, and hidden information is the game's source of
-/// uncertainty rather than dice. `K` for knowledge — `Escape`, `Backspace`,
-/// `Space`, `Tab`, `Q`, `H`, `C`, `Enter` and `WASD` are all taken.
+/// uncertainty rather than dice. The default remains `K`; Settings owns any
+/// collision-safe customization.
 ///
 /// The resource is initialised by `hex_combat`'s plugin, which the binary always
 /// adds, so this cannot be the observer-on-the-title-screen crash: it is a
@@ -936,44 +843,6 @@ fn toggle_reveal_all(
     }
 }
 
-/// Your party's hexes still standing, out of the hexes it started with.
-///
-/// A **sum across the party**, not one unit's lattice, and the label says "party" for
-/// that reason: every shipped encounter fields one player unit today, so an unqualified
-/// count would read correctly by accident and then quietly become an aggregate the first
-/// time somebody adds a second line to a roster — which the encounter files openly invite.
-/// Per-unit readouts are the casting-UX ticket's, not this one's.
-///
-/// Read straight off the components rather than through
-/// [`FactionLatticeKnowledge`](hex_combat::FactionLatticeKnowledge): a faction's knowledge of *itself*
-/// is not the question that store answers. It exists to gate what you know about a
-/// **hostile** lattice, where seeing a unit reveals nothing about its contents — and
-/// routing your own hexes through it would either need a self-view nothing publishes, or
-/// teach the next reader that `view()` is how you look at anything, which is exactly the
-/// confusion the two-channel split exists to prevent.
-///
-/// Empty while nothing carries a lattice, so a party of one inert unit reads exactly as
-/// it did before this — no readout rather than a zero.
-fn lattice_readout(party: &Query<(&LatticeSpec, &LatticeState), With<Player>>) -> String {
-    let mut live = 0_usize;
-    let mut total = 0_usize;
-    for (spec, state) in party {
-        // The spec is what says which cells exist; the state only says which of them
-        // are down. Counting the state alone would miss every cell that has never been
-        // touched, which early in a fight is all of them.
-        for (coord, _) in spec.cells() {
-            total += 1;
-            if !state.is_disabled(coord) {
-                live += 1;
-            }
-        }
-    }
-    if total == 0 {
-        return String::new();
-    }
-    format!("   ·   party {live}/{total} hexes")
-}
-
 /// Entering gameplay always starts unpaused, so a pause left set from a previous
 /// session cannot leak into a new one.
 fn reset_pause(mut next: ResMut<NextState<Pause>>) {
@@ -991,71 +860,167 @@ fn handle_input(
     pause: Res<State<Pause>>,
     mut next_pause: ResMut<NextState<Pause>>,
     mut next_screen: ResMut<NextState<Screen>>,
-    lab: Option<Res<CombatLabSession>>,
+    sandbox: Option<Res<SandboxSession>>,
+    origin: Option<Res<GameplaySessionOrigin>>,
+    mut main_menu: ResMut<MainMenuModel>,
+    hud_context: Res<GameplayHudContext>,
+    mut hud: ResMut<HudState>,
 ) {
-    if bindings.just_pressed(&keys, InputAction::Pause) {
-        next_pause.set(Pause(!pause.get().0));
+    let escape_closed_surface = keys.just_pressed(KeyCode::Escape)
+        && hud.close_active_surface(hud_context.0) != HudActionResult::NoChange;
+    if bindings.just_pressed(&keys, InputAction::Pause) && !escape_closed_surface {
+        next_pause.set(toggled_pause(*pause.get()));
     }
-    // Backspace rather than Escape, which is taken by pause.
+    // The return action stays distinct from Escape, which always dismisses an
+    // ordinary HUD task before the configured pause action may run.
     if bindings.just_pressed(&keys, InputAction::ReturnTitle) {
-        next_screen.set(
-            lab.as_deref()
-                .map_or(Screen::Title, |session| session.return_to),
-        );
+        let destination = gameplay_return_screen(origin.as_deref(), sandbox.is_some());
+        prepare_main_menu_for_gameplay_return(destination, &mut main_menu);
+        next_screen.set(destination);
     }
+}
+
+fn toggled_pause(pause: Pause) -> Pause {
+    Pause(!pause.0)
 }
 
 #[cfg(test)]
 mod tests {
     use bevy::state::app::StatesPlugin;
     use bevy::MinimalPlugins;
-    use hex_assets::ScenarioLibrary;
-    use hex_core::ResolvedMapSeed;
+    use hex_assets::{
+        CombatSettings, Encounter, EncounterFaction, EncounterPlacement, Roster, RosterEntry,
+        ScenarioLibrary,
+    };
+    use hex_core::{HexCoord, ResolvedMapSeed, TilePos};
+    use hex_gameplay_model::{CampaignSlotId, SandboxCharacter, SandboxMapSelection};
 
-    use super::*;
+    use super::super::sandbox::{SandboxDeploymentSnapshot, SandboxLaunchSnapshot};
 
-    /// Every layer of the full-width HUD must let world picks pass through.
-    ///
-    /// Pickability is per entity, so ignoring only the backing node still leaves its
-    /// text able to swallow tile clicks.
     #[test]
-    fn gameplay_hud_does_not_block_tile_clicks() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.insert_resource(UiAssets {
-            display: Handle::default(),
-            body: Handle::default(),
-            hex_cell: Handle::default(),
-        });
-        app.add_systems(Startup, spawn_hud);
-        app.update();
+    fn typed_and_keyboard_pause_paths_share_the_same_toggle() {
+        assert_eq!(toggled_pause(Pause(false)), Pause(true));
+        assert_eq!(toggled_pause(Pause(true)), Pause(false));
+    }
 
-        let mut roots = app
-            .world_mut()
-            .query_filtered::<&Pickable, With<BackgroundColor>>();
-        assert!(
-            roots
-                .iter(app.world())
-                .any(|pickable| *pickable == Pickable::IGNORE),
-            "the HUD backing node blocks world picks"
-        );
-
-        let mut labels = app.world_mut().query_filtered::<&Pickable, With<HudText>>();
+    #[test]
+    fn required_confirmation_enables_exactly_when_the_choice_is_complete() {
         assert_eq!(
-            labels.iter(app.world()).next(),
-            Some(&Pickable::IGNORE),
-            "the HUD text blocks world picks"
+            decision_confirmation_availability(Some(0)),
+            ActionAvailability::Enabled
+        );
+        assert_eq!(
+            decision_confirmation_availability(Some(2)),
+            ActionAvailability::Disabled {
+                reason: "Choose 2 more lattice cells".to_owned(),
+            }
         );
     }
 
     #[test]
-    fn combat_hints_never_offer_player_commands_during_an_enemy_turn() {
+    fn channel_affordance_preserves_the_combat_owned_refusal() {
         assert_eq!(
-            combat_action_hint(true, &PendingDecision::None),
-            "cast from the panel   ·   SPACE to end turn"
+            channel_availability(Some(CommandRefusal::Busy)),
+            ActionAvailability::Disabled {
+                reason: "Still finishing movement".to_owned(),
+            }
+        );
+        assert_eq!(channel_availability(None), ActionAvailability::Enabled);
+    }
+
+    use super::*;
+
+    fn sample_sandbox_session(seed: u64) -> SandboxSession {
+        let library: ScenarioLibrary =
+            ron::from_str(include_str!("../../../../assets/config/scenarios.ron"))
+                .expect("shipped scenarios parse");
+        let scenario = library
+            .scenarios
+            .into_iter()
+            .find(|scenario| scenario.name == "Procedural Hills")
+            .expect("Sandbox scenario exists");
+        let party = vec![
+            SandboxCharacter::Template("hedge-mage".to_owned()),
+            SandboxCharacter::Template("hedge-mage".to_owned()),
+        ];
+        let enemies = vec![
+            SandboxCharacter::Template("raider".to_owned()),
+            SandboxCharacter::Template("raider".to_owned()),
+        ];
+        let party_surfaces = vec![
+            TilePos::new(HexCoord::from_axial(-2, 1), 1),
+            TilePos::new(HexCoord::from_axial(-1, 1), 1),
+        ];
+        let enemy_surfaces = vec![
+            TilePos::new(HexCoord::from_axial(2, -1), 1),
+            TilePos::new(HexCoord::from_axial(3, -1), 1),
+        ];
+        let initial = Encounter {
+            name: "Sandbox test".to_owned(),
+            rosters: Vec::new(),
+        };
+        let rules = CombatSettings {
+            movement_per_turn: 3,
+            ..Default::default()
+        };
+        let mut launch = SandboxLaunchSnapshot::new(
+            SandboxMapSelection::new("procedural-hills", Some(seed)),
+            "Procedural Hills".to_owned(),
+            party.clone(),
+            enemies.clone(),
+            Some(77),
+            rules,
+            scenario,
+            initial,
+        );
+        let exact = Encounter {
+            name: "Sandbox test · exact".to_owned(),
+            rosters: [
+                (EncounterFaction::Player, &party, &party_surfaces),
+                (EncounterFaction::Hostile, &enemies, &enemy_surfaces),
+            ]
+            .into_iter()
+            .map(|(faction, choices, surfaces)| Roster {
+                faction,
+                placement: EncounterPlacement::Surface(
+                    surfaces.first().copied().unwrap_or(TilePos::ORIGIN),
+                ),
+                units: choices
+                    .iter()
+                    .zip(surfaces)
+                    .map(|(choice, surface)| RosterEntry {
+                        archetype: match choice {
+                            SandboxCharacter::Template(key) => key.clone(),
+                            SandboxCharacter::Custom(id) => format!("custom-character-{}", id.0),
+                        },
+                        placement: Some(EncounterPlacement::Surface(*surface)),
+                        ai_profile: None,
+                        ai_group: None,
+                    })
+                    .collect(),
+            })
+            .collect(),
+        };
+        launch.freeze_deployment(
+            SandboxDeploymentSnapshot {
+                party: party_surfaces,
+                enemies: enemy_surfaces,
+            },
+            exact,
+            Some(77),
+        );
+        SandboxSession { launch }
+    }
+
+    #[test]
+    fn combat_hints_never_offer_player_commands_during_an_enemy_turn() {
+        let bindings = InputBindings::default();
+        assert_eq!(
+            combat_action_hint(true, &PendingDecision::None, &bindings),
+            "cast from the panel   ·   Space to end turn"
         );
         assert_eq!(
-            combat_action_hint(false, &PendingDecision::None),
+            combat_action_hint(false, &PendingDecision::None, &bindings),
             "waiting for the enemy"
         );
         assert_eq!(
@@ -1065,9 +1030,10 @@ mod tests {
                     decider: UnitId(1),
                     count: 1,
                     source: UnitId(2),
-                }
+                },
+                &bindings,
             ),
-            "choose a live cell above, then ENTER to confirm"
+            "choose a live cell above, then Enter to confirm"
         );
     }
 
@@ -1105,11 +1071,116 @@ mod tests {
     }
 
     #[test]
-    fn retry_requeues_the_exact_active_scenario_and_seed() {
+    fn only_the_explicit_formation_member_control_changes_gameplay_selection() {
+        let first_id = UnitId(41);
+        let second_id = UnitId(42);
+        let party = Party {
+            members: vec![first_id, second_id],
+        };
+        let formations: FormationCatalog =
+            ron::from_str(include_str!("../../../../assets/config/formations.ron"))
+                .expect("shipped formations parse");
+        let preset = formations.get("Compact").expect("Compact formation exists");
+        let anchor = preset.anchor().expect("Compact formation has an anchor");
+        let mut formation = PartyFormation::default();
+        formation.select_preset(preset, &party.members);
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .insert_state(Screen::Gameplay)
+            .add_sub_state::<Mode>()
+            .insert_resource(party)
+            .insert_resource(formations)
+            .insert_resource(formation)
+            .init_resource::<UnitRegistry>()
+            .init_resource::<CommandQueue>()
+            .init_resource::<InputBindings>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .add_message::<hex_ui::UiIntent>()
+            .add_message::<ActivityNotice>()
+            .add_systems(Update, handle_party_strip);
+        let first = app.world_mut().spawn((Player, first_id, Selected)).id();
+        let second = app.world_mut().spawn((Player, second_id)).id();
+        app.world_mut()
+            .resource_mut::<UnitRegistry>()
+            .register(first_id, first);
+        app.world_mut()
+            .resource_mut::<UnitRegistry>()
+            .register(second_id, second);
+        app.update();
+
+        app.world_mut().write_message(hex_ui::UiIntent::Party(
+            hex_ui::PartyIntent::ActivateMember(1),
+        ));
+        app.update();
+
+        assert!(app.world().entity(first).contains::<Selected>());
+        assert!(!app.world().entity(second).contains::<Selected>());
+
+        app.world_mut().write_message(hex_ui::UiIntent::Party(
+            hex_ui::PartyIntent::SelectFormationMember(1),
+        ));
+        app.world_mut()
+            .write_message(hex_ui::UiIntent::Party(hex_ui::PartyIntent::AssignSlot(
+                anchor,
+            )));
+        app.update();
+
+        assert!(!app.world().entity(first).contains::<Selected>());
+        assert!(app.world().entity(second).contains::<Selected>());
+        assert_eq!(
+            app.world()
+                .resource::<PartyFormation>()
+                .assignments
+                .get(&second_id),
+            Some(&anchor),
+            "the same explicit member must own a same-frame formation assignment"
+        );
+
+        app.world_mut().write_message(hex_ui::UiIntent::Party(
+            hex_ui::PartyIntent::SelectFormationMember(0),
+        ));
+        app.world_mut().write_message(hex_ui::UiIntent::Party(
+            hex_ui::PartyIntent::SelectFormationMember(1),
+        ));
+        app.update();
+
+        assert!(!app.world().entity(first).contains::<Selected>());
+        assert!(app.world().entity(second).contains::<Selected>());
+    }
+
+    #[test]
+    fn sandbox_outcome_projects_only_exact_retry_and_return() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(EncounterResolution(Some(EncounterOutcome::Victory)))
+            .insert_resource(sample_sandbox_session(9_001))
+            .init_resource::<OutcomeView>()
+            .add_systems(Update, sync_outcome_view);
+        app.update();
+
+        let view = app.world().resource::<OutcomeView>();
+        assert!(view.visible);
+        assert_eq!(
+            view.actions
+                .iter()
+                .map(|action| action.action)
+                .collect::<Vec<_>>(),
+            vec![OutcomeAction::RetryExact, OutcomeAction::Return]
+        );
+        assert_eq!(
+            view.actions.get(1).map(|action| action.label.as_str()),
+            Some("Return to Sandbox")
+        );
+    }
+
+    #[test]
+    fn sandbox_retry_requeues_exact_identity_and_preserves_session() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin))
             .init_state::<Screen>()
-            .add_sub_state::<Mode>();
+            .add_sub_state::<Mode>()
+            .init_resource::<MainMenuModel>();
         app.world_mut()
             .resource_mut::<NextState<Screen>>()
             .set(Screen::Gameplay);
@@ -1131,15 +1202,227 @@ mod tests {
             resolved_seed: Some(seed),
             encounter_override: None,
         }));
-        app.world_mut()
-            .spawn((Interaction::Pressed, OutcomeAction::Retry));
+        let session = sample_sandbox_session(seed.0);
+        let expected_retry = session.launch.loading_input();
+        let expected_rules = session.launch.rules.clone();
+        app.insert_resource(session.clone());
+        app.insert_resource(GameplaySessionOrigin::Sandbox);
+        app.add_message::<hex_ui::UiIntent>();
         app.add_systems(Update, handle_outcome_actions);
+        app.world_mut()
+            .write_message(hex_ui::UiIntent::Outcome(hex_ui::OutcomeIntent::Activate(
+                OutcomeAction::RetryExact,
+            )));
         app.update();
 
         let retry = app.world().resource::<crate::scenarios::ScenarioToLoad>();
-        assert_eq!(retry.scenario.name, scenario.name);
-        assert_eq!(retry.scenario.world, scenario.world);
-        assert_eq!(retry.scenario.encounter, scenario.encounter);
-        assert_eq!(retry.resolved_seed, Some(seed));
+        assert_eq!(retry, &expected_retry);
+        assert_ne!(retry.encounter_override, None);
+        let exact = retry
+            .encounter_override
+            .as_ref()
+            .expect("Retry Exact carries deployed encounter");
+        let retried_party = exact
+            .rosters
+            .first()
+            .map(|roster| {
+                roster
+                    .units
+                    .iter()
+                    .map(|unit| unit.archetype.as_str())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        assert_eq!(retried_party, vec!["hedge-mage", "hedge-mage"]);
+        assert_eq!(app.world().resource::<CombatSettings>(), &expected_rules);
+        assert!(app
+            .world()
+            .contains_resource::<FixedSettingsFreeze<CombatSettings>>());
+        assert!(app
+            .world()
+            .contains_resource::<FixedSettingsFreeze<hex_assets::SpellFile>>());
+        assert!(app
+            .world()
+            .contains_resource::<FixedSettingsFreeze<hex_assets::LatticeFile>>());
+        assert_eq!(
+            app.world().resource::<SandboxSession>().launch,
+            session.launch
+        );
+        assert_eq!(
+            app.world().resource::<GameplaySessionOrigin>(),
+            &GameplaySessionOrigin::Sandbox
+        );
+    }
+
+    #[test]
+    fn gameplay_returns_to_its_typed_owner() {
+        assert_eq!(
+            gameplay_return_screen(Some(&GameplaySessionOrigin::Sandbox), true),
+            Screen::Sandbox
+        );
+        assert_eq!(
+            gameplay_return_screen(
+                Some(&GameplaySessionOrigin::Campaign(CampaignSlotId::Two)),
+                false,
+            ),
+            Screen::Title
+        );
+    }
+
+    #[test]
+    fn terminal_sandbox_return_intent_transitions_the_real_app_back_to_sandbox() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .insert_state(Screen::Gameplay)
+            .add_sub_state::<Mode>()
+            .add_message::<hex_ui::UiIntent>()
+            .init_resource::<MainMenuModel>()
+            .insert_resource(EncounterResolution(Some(EncounterOutcome::Victory)))
+            .insert_resource(sample_sandbox_session(9_001))
+            .insert_resource(GameplaySessionOrigin::Sandbox)
+            .add_systems(Update, handle_outcome_actions);
+        app.world_mut()
+            .write_message(hex_ui::UiIntent::Outcome(hex_ui::OutcomeIntent::Activate(
+                OutcomeAction::Return,
+            )));
+        app.update();
+        app.update();
+        assert_eq!(
+            *app.world().resource::<State<Screen>>().get(),
+            Screen::Sandbox
+        );
+    }
+
+    #[test]
+    fn campaign_return_intent_opens_the_main_menu_root() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .insert_state(Screen::Gameplay)
+            .add_sub_state::<Mode>()
+            .add_message::<hex_ui::UiIntent>()
+            .init_resource::<MainMenuModel>()
+            .insert_resource(EncounterResolution(Some(EncounterOutcome::Victory)))
+            .insert_resource(GameplaySessionOrigin::Campaign(CampaignSlotId::Two))
+            .add_systems(Update, handle_outcome_actions);
+        app.world_mut()
+            .resource_mut::<MainMenuModel>()
+            .show(MainMenuRoute::Campaign);
+        app.world_mut()
+            .write_message(hex_ui::UiIntent::Outcome(hex_ui::OutcomeIntent::Activate(
+                OutcomeAction::Return,
+            )));
+
+        app.update();
+        app.update();
+
+        assert_eq!(
+            *app.world().resource::<State<Screen>>().get(),
+            Screen::Title
+        );
+        assert_eq!(
+            app.world().resource::<MainMenuModel>().route,
+            MainMenuRoute::Root
+        );
+    }
+
+    #[test]
+    fn campaign_keyboard_return_opens_the_main_menu_root() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .insert_state(Screen::Gameplay)
+            .insert_state(Pause(false))
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<InputBindings>()
+            .init_resource::<HudState>()
+            .init_resource::<GameplayHudContext>()
+            .init_resource::<MainMenuModel>()
+            .add_systems(Update, handle_input);
+        app.world_mut()
+            .resource_mut::<MainMenuModel>()
+            .show(MainMenuRoute::Campaign);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Backspace);
+
+        app.update();
+        app.update();
+
+        assert_eq!(
+            *app.world().resource::<State<Screen>>().get(),
+            Screen::Title
+        );
+        assert_eq!(
+            app.world().resource::<MainMenuModel>().route,
+            MainMenuRoute::Root
+        );
+    }
+
+    #[test]
+    fn escape_closes_an_ordinary_main_view_before_default_pause() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .insert_state(Screen::Gameplay)
+            .insert_state(Pause(false))
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<InputBindings>()
+            .init_resource::<HudState>()
+            .init_resource::<GameplayHudContext>()
+            .init_resource::<MainMenuModel>()
+            .add_systems(Update, handle_input);
+        let result = app
+            .world_mut()
+            .resource_mut::<HudState>()
+            .open_formation(hex_gameplay_model::HudContext::default());
+        assert_eq!(result, HudActionResult::RuntimeChanged);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Escape);
+
+        app.update();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<HudState>().stored_main_view(),
+            hex_gameplay_model::MainViewDestination::Closed
+        );
+        assert_eq!(*app.world().resource::<State<Pause>>().get(), Pause(false));
+    }
+
+    #[test]
+    fn escape_pauses_without_discarding_a_master_hidden_main_view() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .insert_state(Screen::Gameplay)
+            .insert_state(Pause(false))
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<InputBindings>()
+            .init_resource::<HudState>()
+            .init_resource::<GameplayHudContext>()
+            .init_resource::<MainMenuModel>()
+            .add_systems(Update, handle_input);
+        let mut hud = app.world_mut().resource_mut::<HudState>();
+        assert_eq!(
+            hud.open_formation(hex_gameplay_model::HudContext::default()),
+            HudActionResult::RuntimeChanged
+        );
+        hud.toggle_master();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Escape);
+
+        app.update();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<HudState>().stored_main_view(),
+            hex_gameplay_model::MainViewDestination::Formation
+        );
+        assert_eq!(*app.world().resource::<State<Pause>>().get(), Pause(true));
     }
 }

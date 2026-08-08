@@ -1,0 +1,145 @@
+name: Manual runtime sign-off
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, edited]
+
+concurrency:
+  group: manual-runtime-signoff-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  verify:
+    name: Current-head manual runtime sign-off
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Require structured gameplay sign-off
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          IS_DRAFT: ${{ github.event.pull_request.draft }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          REPOSITORY: ${{ github.repository }}
+          WAIVER_ACTOR: ${{ github.actor }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # GitHub normalises PR body line endings to CRLF, but grep -x below
+          # matches whole lines against LF-only patterns built from env vars.
+          # Strip the CR so exact-line matches work regardless of that source
+          # formatting.
+          PR_BODY="$(printf '%s' "$PR_BODY" | tr -d '\r')"
+
+          case "$BASE_REF" in
+            wave/*)
+              echo "Source lane targets $BASE_REF; exact-head sign-off is deferred to the combined wave PR into dev."
+              exit 0
+              ;;
+          esac
+
+          if ! changed="$(git diff --name-only "$BASE_SHA...$HEAD_SHA")"
+          then
+            echo "::error::Could not compute the exact base-to-head changed paths."
+            exit 1
+          fi
+          # Any shipped asset can change native runtime behavior or presentation.
+          # Keep this broad so new asset families fail closed without another path list.
+          # The two renderer-free geometry files below are explicit exceptions:
+          # their focused pure and direct-consumer contracts are the authority, and
+          # launching the UI cannot add evidence about them. Shared terrain-impact
+          # vocabulary stays fail-closed because its file also owns a rendered health
+          # projection.
+          runtime_changed="$(printf '%s\n' "$changed" \
+            | awk '/^(crates\/(hex_assets|hex_core|hex_lattice|hex_ai|hex_anim|hex_units|hex_combat_core|hex_combat|hex_gameplay_model|hex_ui|hex_game|hex_test_support)\/|assets\/|walks\/)/' \
+            | awk '!/^crates\/hex_units\/src\/(trajectories|volumes)\.rs$/')"
+          if [ -z "$runtime_changed" ]; then
+            echo "No gameplay runtime path changed; manual gameplay sign-off is not required."
+            exit 0
+          fi
+
+          if [ "$IS_DRAFT" = "true" ]
+          then
+            echo "Draft PR: sign-off becomes mandatory when the PR is marked ready."
+            exit 0
+          fi
+
+          require_exact() {
+            if ! printf '%s\n' "$PR_BODY" | grep -Fqx "$1"
+            then
+              echo "::error::Missing exact PR-body line: $1"
+              exit 1
+            fi
+          }
+          field_value() {
+            printf '%s\n' "$PR_BODY" | awk -v prefix="$1: " \
+              'index($0, prefix) == 1 { print substr($0, length(prefix) + 1); exit }'
+          }
+          require_named_field() {
+            value="$(field_value "$1")"
+            case "$value" in
+              ""|*"<"*|*"TODO"*|*"N/A"*|*"n/a"*)
+                echo "::error::$1 must name the completed evidence, not a placeholder."
+                exit 1
+                ;;
+            esac
+          }
+
+          require_exact "Manual runtime commit: $HEAD_SHA"
+          require_named_field "Manual runtime reviewer"
+          require_named_field "Manual runtime route"
+
+          date="$(field_value "Manual runtime date")"
+          if ! printf '%s\n' "$date" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+          then
+            echo "::error::Manual runtime date must use YYYY-MM-DD."
+            exit 1
+          fi
+
+          result="$(field_value "Manual runtime result")"
+          case "$result" in
+            PASS)
+              ;;
+            N/A)
+              require_named_field "Manual runtime findings/waiver"
+              reviewer="$(field_value "Manual runtime reviewer")"
+              reviewer="${reviewer#@}"
+              if ! printf '%s\n' "$reviewer" | grep -Eq '^[A-Za-z0-9-]+$'
+              then
+                echo "::error::An N/A waiver reviewer must be one GitHub login."
+                exit 1
+              fi
+              if [ "$reviewer" != "$WAIVER_ACTOR" ]
+              then
+                echo "::error::The named waiving maintainer must trigger this exact-head check."
+                exit 1
+              fi
+              if ! permission="$(gh api \
+                "repos/$REPOSITORY/collaborators/$reviewer/permission" \
+                --jq .permission)"
+              then
+                echo "::error::Could not verify repository permission for @$reviewer."
+                exit 1
+              fi
+              case "$permission" in
+                admin|maintain)
+                  ;;
+                *)
+                  echo "::error::@$reviewer has '$permission' permission, not maintain/admin."
+                  exit 1
+                  ;;
+              esac
+              echo "Exact-head N/A waiver recorded by @$reviewer ($permission)."
+              ;;
+            *)
+              echo "::error::Manual runtime result must be PASS, or N/A with an explicit exact-head maintainer waiver."
+              exit 1
+              ;;
+          esac

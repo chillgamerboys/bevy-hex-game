@@ -143,18 +143,33 @@ map-owned behavior with its palette entry rather than embedding another RGB lite
 
 ## Knowing you have not broken anything
 
-```sh
-cargo test --workspace     # full workspace suite, a couple of seconds
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-```
+Use the exact PR-diff selector loop in
+[`CONTRIBUTING.md`](../../CONTRIBUTING.md#before-opening-a-pr). It resolves the current
+PR base, compares it with the exact local head, then runs only the returned test
+concerns and the non-test gates whose plan booleans are true. Unknown paths, invalid
+configuration, and empty diffs deliberately fail closed to the complete gate.
 
-Both run automatically on every pull request that changes code or configuration,
-and both must pass. Markdown-only changes run the documentation link check instead.
+The selector chooses the affected gameplay and map concerns and fails closed to the
+complete gate for an unknown or unclassified shared path. Trajectory/volume-only
+changes use their dedicated pure/direct-consumer concern, so they do not select or
+execute the application/UI partition merely because both are gameplay-adjacent. The
+combined terrain-impact source stays full until its projection and protocol
+authorities are split by file. Broad owner corpora still run for their owning changes
+and on protected-branch pushes; final wave and release candidates run the
+selector-chosen gate over their exact combined diff. These checks run automatically
+on pull requests;
+Markdown-only changes run the documentation link check instead.
 
-**Then run the game and look at it.** This matters more than it sounds. Every bug
-found in this project so far was found by a person looking at the window — including
-a crash and a piece sunk into the ground, both of which passed every automated check
-at the time. The tests raise the floor; they do not replace looking.
+If the diff changes camera/UI/rendered-map presentation or a visual script, inspect
+the applicable static frames; if it changes camera motion, native-input response,
+animation, control feel, or taste, use video and a human check. This matters more than
+it sounds: a crash and a piece sunk into the ground both once passed every automated
+check. Visual evidence may judge how hook-established state is presented but never
+proves the underlying gameplay/world state. Pure contract or trajectory changes
+instead record the visual/runtime gate as not applicable; launching the UI cannot add
+authority evidence for them. Visual applicability is independent of a conservative
+`app` selection caused only by changing validation infrastructure. Final waves follow
+the same affected-surface rule; release promotions retain their broader human walk.
 
 ## When it will not build
 

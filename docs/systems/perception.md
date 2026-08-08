@@ -25,9 +25,9 @@ separate:
 4. **Presentation** turns that knowledge into meshes, overlays, picking, and UI.
 
 A physically bright pixel does not make a tile observed. A remembered tile may be
-drawn without being observed. Hiding a cave roof for the camera does not illuminate
-the cave below it. No gameplay rule may infer knowledge from Bevy's `Visibility` or
-the PBR light list.
+drawn without being observed. Hiding a cave roof for an explicit review capture does
+not illuminate the cave below it; ordinary gameplay keeps cave roofs intact. No
+gameplay rule may infer knowledge from Bevy's `Visibility` or the PBR light list.
 
 Enemy lattice knowledge is a fifth, independent information channel. Observing an
 enemy establishes its position; it does not reveal its lattice or intent. Divination
@@ -219,11 +219,13 @@ presentation and combat logs filter every outcome through the receiving faction'
 current knowledge. An acknowledgment may exist for simulation, replay, or saving
 without disclosing its hidden position, material, resistance, occupancy, or damage.
 
-Fog will join the live cave-roof and canopy cutaways by contributing its own
-independent occlusion reason to one composed result. No system may set
-`Visibility::Visible` to undo another system's hide, or treat a camera cutaway as a
-knowledge change. Picking, shadows, overlays, units, terrain, and props derive their
-final state from the same composition.
+Fog will join the explicit review-roof cutaway by contributing its own independent
+occlusion reason to one composed result. Character-camera tree handling is a separate
+renderer-neutral opacity request: it fades every chunk sharing one exact tree root and
+never makes fogged content visible. No system may set `Visibility::Visible` to undo
+another system's hide, or treat camera presentation as a knowledge change. Picking,
+shadows, overlays, units, terrain, and props derive their final state from the same
+composition.
 
 `GameplaySetup::Perception` runs after actors exist and before generated view framing.
 The `hex_perception` crate owns illumination, sight, faction knowledge, and
@@ -298,8 +300,9 @@ disagreement between gameplay knowledge and picking.
 - automatically advancing time and gameplay effects beyond exterior illumination
 - carried, destructible, extinguishable, faction-private, and spell-created lights
 - stealth, concealment, hearing, and hidden-unit detection
-- spatial divination that reveals unknown terrain; lattice divination and its
-  persistent knowledge are live in `hex_combat`
+- spatial divination that reveals unknown terrain; Divination's current
+  observed-subject, bounded lattice Reveal is live in `hex_combat`, while Scrying
+  Eye's proposed readable off-sight live feed remains later work
 - cross-domain sight through entrances and other portals
 - saved-game persistence for remembered terrain
 

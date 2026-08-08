@@ -1,8 +1,5 @@
-// Immutable creator-format records.
-//
-// HumanTemplate records are visible and duplicable. AutomationFixture records are
-// addressed only by fixed Combat Lab fixture ids, so local edits can never change a
-// deterministic walkthrough.
+// Immutable player-facing Creator templates. Deterministic fixture definitions live
+// exclusively behind test support and are not part of this shipping catalog.
 (
     version: 1,
     characters: [
@@ -48,71 +45,22 @@
                 id: (3),
                 name: "Hedge Mage Template",
                 cells: [
-                    (q: 0, r: 0, kind: Spell(Shipped("Ember"))),
-                    (q: 1, r: 0, kind: Gem("Fire")),
-                    (q: 0, r: 1, kind: Spell(Shipped("Scrying Eye"))),
-                    (q: -1, r: 1, kind: Gem("Light")),
-                    (q: -1, r: 0, kind: Spell(Shipped("Renewal"))),
-                    (q: 0, r: -1, kind: Gem("Water")),
-                    (q: 1, r: -1, kind: Gem("Water")),
-                ],
-                attunement: {"Fire": 3, "Light": 3, "Water": 2},
-                channelling: {"Fire": 2, "Light": 2, "Water": 1},
-            ),
-        ),
-        (
-            key: "fixture-caster",
-            audience: AutomationFixture,
-            character: (
-                id: (1001),
-                name: "Fixture Caster",
-                cells: [
-                    (q: 0, r: 0, kind: Spell(Custom((1001)))),
-                    (q: 1, r: 0, kind: Gem("Fire")),
-                    (q: 0, r: 1, kind: Spell(Custom((1002)))),
+                    (q: 0, r: 0, kind: Fusion("Lightning")),
+                    (q: 1, r: 0, kind: Gem("Air")),
+                    (q: 0, r: -1, kind: Gem("Fire")),
+                    (q: 1, r: -1, kind: Spell(Shipped("Lightning Bolt"))),
+                    (q: -1, r: -1, kind: Spell(Shipped("Ember"))),
+                    (q: -2, r: -1, kind: Gem("Fire")),
+                    (q: -1, r: 0, kind: Fusion("Divination")),
+                    (q: -2, r: 0, kind: Gem("Life")),
                     (q: -1, r: 1, kind: Gem("Water")),
-                    (q: -1, r: 0, kind: Spell(Custom((1003)))),
-                    (q: -1, r: -1, kind: Gem("Light")),
-                    (q: 0, r: -1, kind: Spell(Custom((1004)))),
-                    (q: 1, r: -1, kind: Gem("Metal")),
+                    (q: -2, r: 1, kind: Spell(Shipped("Scrying Eye"))),
+                    (q: 0, r: 1, kind: Spell(Shipped("Renewal"))),
+                    (q: 0, r: 2, kind: Gem("Water")),
+                    (q: -1, r: 2, kind: Gem("Water")),
                 ],
-                attunement: {"Fire": 3, "Water": 3, "Light": 3, "Metal": 3},
-                channelling: {"Fire": 2, "Water": 2, "Light": 2, "Metal": 2},
-            ),
-        ),
-        (
-            key: "fixture-target",
-            audience: AutomationFixture,
-            character: (
-                id: (1002),
-                name: "Fixture Target",
-                cells: [
-                    (q: 0, r: 0, kind: Spell(Custom((1004)))),
-                    (q: 1, r: 0, kind: Gem("Metal")),
-                    (q: 0, r: 1, kind: Gem("Earth")),
-                    (q: -1, r: 1, kind: Gem("Earth")),
-                    (q: -1, r: 0, kind: Gem("Earth")),
-                    (q: 0, r: -1, kind: Gem("Earth")),
-                ],
-                attunement: {"Metal": 2, "Earth": 2},
-                channelling: {"Metal": 1, "Earth": 1},
-            ),
-        ),
-        (
-            key: "fixture-support",
-            audience: AutomationFixture,
-            character: (
-                id: (1003),
-                name: "Fixture Support",
-                cells: [
-                    (q: 0, r: 0, kind: Spell(Custom((1002)))),
-                    (q: 1, r: 0, kind: Gem("Water")),
-                    (q: 0, r: 1, kind: Spell(Custom((1003)))),
-                    (q: -1, r: 1, kind: Gem("Light")),
-                    (q: -1, r: 0, kind: Gem("Earth")),
-                ],
-                attunement: {"Water": 3, "Light": 3, "Earth": 1},
-                channelling: {"Water": 2, "Light": 2, "Earth": 1},
+                attunement: {"Air": 3, "Fire": 3, "Life": 3, "Water": 2},
+                channelling: {"Air": 2, "Fire": 2, "Life": 2, "Water": 1},
             ),
         ),
     ],
@@ -128,7 +76,7 @@
                     casting: Evocation,
                     mana: Fixed,
                     co_castable: false,
-                    targeting: (range: 3, shape: Single, needs_los: false),
+                    targeting: (range: 3, shape: Single, trajectory: None),
                     effects: [DisableHexes(count: 1, targeted: false)],
                 ),
             ),
@@ -144,75 +92,8 @@
                     casting: Evocation,
                     mana: Fixed,
                     co_castable: false,
-                    targeting: (range: 3, shape: Single, needs_los: false),
+                    targeting: (range: 3, shape: Single, trajectory: None),
                     effects: [RestoreHexes(count: 1)],
-                ),
-            ),
-        ),
-        (
-            key: "fixture-scorch",
-            audience: AutomationFixture,
-            spell: (
-                id: (1001),
-                name: "Fixture Scorch",
-                spell: (
-                    requirements: [(element: "Fire", mana: 1)],
-                    casting: Evocation,
-                    mana: Fixed,
-                    co_castable: false,
-                    targeting: (range: 4, shape: Single, needs_los: false),
-                    effects: [
-                        DisableHexes(count: 1, targeted: false),
-                        Burn(turns: 2),
-                    ],
-                ),
-            ),
-        ),
-        (
-            key: "fixture-mend",
-            audience: AutomationFixture,
-            spell: (
-                id: (1002),
-                name: "Fixture Mend",
-                spell: (
-                    requirements: [(element: "Water", mana: 1)],
-                    casting: Evocation,
-                    mana: Fixed,
-                    co_castable: false,
-                    targeting: (range: 4, shape: Single, needs_los: false),
-                    effects: [RestoreHexes(count: 1)],
-                ),
-            ),
-        ),
-        (
-            key: "fixture-sight",
-            audience: AutomationFixture,
-            spell: (
-                id: (1003),
-                name: "Fixture Sight",
-                spell: (
-                    requirements: [(element: "Light", mana: 1)],
-                    casting: Evocation,
-                    mana: Fixed,
-                    co_castable: false,
-                    targeting: (range: 6, shape: Single, needs_los: false),
-                    effects: [Reveal(tier: 1)],
-                ),
-            ),
-        ),
-        (
-            key: "fixture-ward",
-            audience: AutomationFixture,
-            spell: (
-                id: (1004),
-                name: "Fixture Ward",
-                spell: (
-                    requirements: [(element: "Metal", mana: 1)],
-                    casting: Enchantment(defense: 1),
-                    mana: Fixed,
-                    co_castable: false,
-                    targeting: (range: 0, shape: SelfCast, needs_los: false),
-                    effects: [],
                 ),
             ),
         ),

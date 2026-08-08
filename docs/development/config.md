@@ -8,18 +8,19 @@ you do not need to recompile the game.
 |---|---|
 | `world.ron` | Map size, terrain preset and shape, how tall a voxel is |
 | `substances.ron` | What the world is made of — including water and metal — plus exact art-palette references and gameplay properties |
+| `terrain_damage.ron` | Boolean element × substance damage admission; every missing pair resists |
 | `art/palette.ron` | Canonical authored colours for terrain, liquids, structures, units, and authored objects |
 | `art/voxel_styles.ron` | Palette-backed opaque, cutout, translucent, additive, and emissive object surfaces |
 | `art/object_catalog.ron` + `art/objects/*.ron` | The validated authored plant, effect, and prop catalog; normally edited through `cargo editor` |
-| `elements.ron` | The six-element wheel, opposition, higher-order elements and fusion recipes |
+| `elements.ron` | The six-basic wheel, opposition, and the six direct pair plus six direct triple fusion recipes |
 | `spells.ron` | Spells: what each requires, how it is cast, and what it does |
 | `camera.ron` | Initial map and close-character frames, pan speed, zoom and tilt |
 | `combat.ron` | Engagement thresholds, movement budget, height bonus, what a strike costs, and the open design questions as policy knobs that reject unbuilt variants with a reason |
 | `perception.ron` | Active sight profile, Bright/Dim/Dark ranges, and the downhill sight bonus |
 | `lighting.ron` | Sun brightness, colour and angle, ambient light, the sky gradient and its hex clouds |
 | `player.ron` | Player piece size and movement speed |
-| `scenarios.ron` | The default New Game and visible development fixtures: a map, a sky and an encounter |
-| `combat_lab_maps.ron` | Stable Combat Lab map IDs, scenario and fixed seed, plus Player/Hostile deployment-region centers and radii |
+| `scenarios.ron` | Internal world + lighting + encounter launch definitions used by Campaign, Sandbox, saves, retry, review, and tests |
+| `sandbox_maps.ron` | Stable player-facing Sandbox map IDs and scenario/seed contract, plus Party/Enemy hidden actor-staging centers and radii retained for compatibility |
 | `encounters/*.ron` | Who is on the map: rosters by archetype, and where each unit starts |
 | `lattices.ron` | Who each of them *is*: the gems, fusions and spells an archetype is made of |
 | `menu.ron` | How the menu screens look |
@@ -44,6 +45,7 @@ How quickly you *see* the change depends on which file:
 | `display.ron` | Straight away until the player saves a local presentation choice in Settings |
 | `world.ron` | On the next world rebuild |
 | `substances.ron` | On the next world rebuild |
+| `terrain_damage.ron` | On the next world rebuild (re-parsed and cross-file validated on save) |
 | `art/palette.ron` | Authored objects after one coherent art-graph reload; substance and unit colours on the next world rebuild |
 | `art/voxel_styles.ron`, `art/object_catalog.ron`, `art/objects/*.ron` | Rendered object instances after the complete palette → style → object graph validates; a broken revision keeps the last valid graph |
 | `elements.ron` | On the next world rebuild (re-parsed and validated on save) |
@@ -56,22 +58,21 @@ How quickly you *see* the change depends on which file:
 | `lattices.ron` | On the next world rebuild (re-parsed and re-resolved on save) |
 | `menu.ron` | Straight away |
 
-**To rebuild the world**, press `BACKSPACE` to return to the title screen, then use
-New Game for Party Trial or relaunch the visible development fixture you are tuning.
-It takes under a second and picks up your edit.
+**To rebuild the world**, press `BACKSPACE` to return to the owning Campaign or
+Sandbox route, then launch again. It takes under a second and picks up your edit.
 
 The split exists because some values are read continuously while the game runs and
 others are read once, when the map and pieces are created. Nothing is lost either
 way — the rebuild is quick.
 
-Elements, substances, spells, and lattices form one semantic revision at the Loading
-boundary. A bad cross-file edit may leave the last valid resolved catalogs available
-for inspection, but Loading does not treat their presence as readiness. It waits
-until canonical source fingerprints prove that every raw file, direct catalog,
-`ContentIndex`, and `LatticeLibrary` describes the same accepted revision. Repairing
-or reverting the edit publishes a new `AcceptedContentRevision` and allows the
-rebuild; leaving an invalid edit settled for several frames never admits a mixed
-revision.
+Elements, substances, terrain-damage admission, spells, and lattices form one semantic
+revision at the Loading boundary. A bad cross-file edit may leave the last valid
+resolved catalogs available for inspection, but Loading does not treat their presence
+as readiness. It waits until canonical source fingerprints prove that every raw file,
+direct catalog, `TerrainDamageTable`, `ContentIndex`, and `LatticeLibrary` describes
+the same accepted revision. Repairing or reverting the edit publishes a new
+`AcceptedContentRevision` and allows the rebuild; leaving an invalid edit settled for
+several frames never admits a mixed revision.
 
 (`cargo run --release` runs faster but will not reload files at all. Use `cargo dev`
 while tuning, and `--release` when you just want to play.)
@@ -93,12 +94,12 @@ The optional review overrides are:
 | Variable | Effect |
 |---|---|
 | `HEX_REVIEW_SEED` | Replaces the configured seed of a seeded scenario |
-| `HEX_REVIEW_VIEW` | Uses `default`, `rotated`, or `top-down` map azimuth |
+| `HEX_REVIEW_VIEW` | Uses `default`, `rotated`, `rear` (180° orbit), or `top-down` map view |
 | `HEX_REVIEW_CAMERA` | Uses the `map` or close `character` camera |
 | `HEX_REVIEW_TIME` | Sets a cyclic-lighting hour from `0.0` up to, but not including, `24.0` |
 | `HEX_REVIEW_LIQUID_PHASE` | Freezes liquid animation at a finite phase in seconds, wrapped over its visual cycle; captures default to `0.0` |
 | `HEX_REVIEW_FOCUS_ANCHOR` | Moves the selected actor to one exact generated map anchor before framing |
-| `HEX_REVIEW_CUTAWAY` | `full` hides the complete roof of the selected interior instead of the local six-hex opening |
+| `HEX_REVIEW_CUTAWAY` | `full` hides the complete roof of the selected interior; ordinary gameplay never removes it |
 | `HEX_REVIEW_ILLUMINATION` | `overlay` draws exact cave-interior gameplay illumination tiers: charcoal Dark, blue Dim, and cyan-green Bright |
 
 `HEX_REVIEW_VIEW`, `HEX_REVIEW_CAMERA`, `HEX_REVIEW_FOCUS_ANCHOR`, and
@@ -108,8 +109,9 @@ coordinate, so it can target an underground floor beneath a surface. It also app
 the selected actor's normal solidity and headroom rules. An unknown anchor or one the
 actor cannot stand on fails the review process instead of silently capturing the
 wrong place. The full cutaway still requires the selected actor to occupy an exact
-interior surface and affects only that interior; ordinary gameplay retains the local
-cutaway. The illumination overlay reads `ResolvedIllumination` and never changes
+interior surface and affects only that interior; ordinary gameplay retains the opaque
+roof and resolves tight views through camera collision instead. The illumination
+overlay reads `ResolvedIllumination` and never changes
 gameplay light, physical lights, faction knowledge, fog, or picking.
 
 For example, this exposes the complete generated cave network for a top-down overview:
@@ -317,9 +319,9 @@ terrain: Procedural((
 It publishes a two-wide descending entrance, a rooted network of six to twelve
 chambers, at least three clear levels in critical corridors, at least four in
 chambers, and at least three solid roof levels. The selected scenario uses twelve
-chambers, two floor bands, loop corridors, varied chamber heights, and the most
-developed rocky surface. Six-through-eight-room settings retain their deterministic
-compatibility geometry.
+chambers, three `+0/+2/+4` floor terraces, loop corridors, varied chamber heights,
+and the most developed rocky surface. Six-through-eight-room settings retain their
+deterministic compatibility geometry.
 Exact floor, entrance, and cutaway-roof memberships remain keyed by `TilePos`, so the
 underground floor cannot be confused with the surface above it. The hostile remains
 inside the deepest chamber on the floor with the greatest minimum horizontal
@@ -397,15 +399,17 @@ steps: [
 ],
 ```
 
-**A new substance.** First create or deliberately reuse a swatch in the canonical
-palette. Then, in the map-owned `substances.ron`, copy an entry and change its name
-and exact reference:
+**A substance entry.** First create or deliberately reuse a swatch in the canonical
+palette. The shipped Sand material is a complete example of the corresponding entry
+in the map-owned `substances.ron`:
 
 ```ron
 "sand": (
     swatch: Some("terrain/sand"),
     solid: true,
     diggable: true,
+    conjurable: false,
+    toughness: Some(2),
 ),
 ```
 
@@ -415,6 +419,31 @@ cross-file update and retains the previous valid runtime table. The rejected sou
 pair is retained too, so repairing only the other file retries the complete on-disk
 candidate instead of accepting a stale fallback. `air` is never drawn and therefore
 uses `swatch: None`; every rendered substance requires `Some(...)`.
+
+Substance ids are a frozen compatibility contract, not RON entry order. `air` is 0;
+the original shipped vocabulary remains `basalt=1`, `bedrock=2`, `dirt=3`, `grass=4`,
+`gravel=5`, `ice=6`, `lava=7`, `metal=8`, `snow=9`, `stone=10`, `water=11`, and
+`worked_stone=12`. The additive tail reserves `limestone=13`, `slate=14`, `timber=15`,
+and `terracotta=16` for Outpost, followed by `sand=17`. A reserved but unauthored slot
+is inert and does not resolve through `id`, `name`, or `get`. This lets Mountain Range
+or Outpost land first without moving the other feature's ids or existing id-derived
+map fingerprints. Before adding another name, extend this stable registry and its
+exact-id regression; the loader rejects an arbitrary name added only to the RON file
+so it cannot shift accepted ids.
+
+`toughness` is maximum voxel health. The initial schema accepts only `Some(1)`,
+`Some(2)`, `Some(4)`, `Some(8)`, or `None`; `None` means the material does not
+participate in terrain damage. To make an added substance damageable, add explicit
+stable-name pairs to `terrain_damage.ron`:
+
+```ron
+(element: "Earth", substance: "sand"),
+```
+
+The matrix is an allow-list, not a multiplier table. A listed pair permits the
+spell's exact authored power, while an absent pair resists. Duplicate pairs, unknown
+elements or substances, and references to `toughness: None` are rejected without
+replacing the last valid resolved table.
 
 **A bigger procedural map.** `grid_radius: 12` gives 469 columns, `20` gives 1261,
 and `40` gives 4921. Procedural recipes accept radii from 12 through 40 and regenerate
@@ -542,7 +571,8 @@ the same as everywhere else.
 
 ## The menus
 
-`menu.ron` is the splash, title and loading screens. One value so far:
+`menu.ron` is the splash, Main Menu, Campaign, Sandbox, Tools, and loading surfaces.
+One value so far:
 
 ```ron
 background: (0.10, 0.11, 0.14),
@@ -559,24 +589,36 @@ has somewhere obvious to go.
 ## Configuring a scenario
 
 A scenario names a world, a sky, and an encounter. The library's `default_game`
-names the entry launched by New Game; that entry is hidden from the development lanes.
-Every other scenario chooses the independently scrollable `Map` or `Demo` lane through
-`category`. Wave 6 does not expose scenario-backed demos as title cards: the Demos
-lane contains only **Character Creator**, **Spell Creator**, and **Combat Lab**. Focused combat
-scenarios are selected by stable fixture ID inside Combat Lab.
+names the canonical Campaign started from an empty slot. Players do not browse these
+definitions directly: Campaign, Sandbox, saves, Retry Exact, deterministic review,
+and tests resolve them internally through the same `ScenarioToLoad` loading contract.
+`category` remains inert compatibility metadata while legacy
+`resume.ron` data can still refer to this `scenarios.ron`; do not use it to create a
+shipping route.
 
-Immutable creator-format templates and automation records live in
-`creation_presets.ron`. `HumanTemplate` records appear as duplicable Creator choices;
-`AutomationFixture` records are isolated behind fixed fixtures. Local saved creations
-belong to the per-user data directory's `creations.ron`, not the shipped asset tree.
+Immutable human creator-format templates live in `creation_presets.ron` and appear as
+duplicable Creator choices. Exact automation-only Creator records live instead in
+`crates/hex_game/testdata/deterministic_creator_library.ron`; that file and the stable
+deterministic fixture manifest are consumed only by the default-off `test-support`
+boundary and never enter the shipping asset loader. Local saved creations belong to
+the per-user data directory's `creations.ron`, not the shipped asset tree.
 
-`combat_lab_maps.ron` owns the deployable Sandbox map list independently from the
-title-screen scenario lanes. Its `schema_version` is checked on load. Every distinct
+`sandbox_maps.ron` owns the deployable Sandbox map list. Its `schema_version` is
+checked on load. Every distinct
 supported shipped environment appears once. Each entry has a stable ID, display name,
 tactical description and tags, renderer-generated preview asset, scenario, optional
-fixed generation seed, and one deployment region per side. A region center is either
-`Fixed((x, y, z))` for authored terrain or `Anchor("name")` for a generated exact
-surface, with a bounded path-cost `radius`.
+generation seed, and one hidden actor-staging region per side. A staging center is
+either `Fixed((x, y, z))` for authored terrain or `Anchor("name")` for a generated
+exact surface, with a bounded path-cost `radius`. These fields are retained as stable
+compatibility metadata so Loading can stage the frozen roster before guided
+deployment. They do not restrict the player's exact placement choices: each current
+Party or Enemy character may be placed on any canonical legal, unoccupied surface.
+
+Selecting a generated map in Sandbox creates a pending `resolved_seed`. Regenerate
+changes only that pending value and displays the exact replacement. **Use Map**
+commits it; Back discards it; restarting the process returns to the configured seed.
+Authored maps have no regeneration action. None of these operations edits either RON
+file.
 
 ```ron
 (
@@ -616,11 +658,6 @@ reproducible seed here:
     encounter: "config/encounters/anchored-skirmish.ron",
 ),
 ```
-
-The title screen shows the resolved seed beside every visible generated scenario. Its
-`reroll` button changes only the current session, and the exact replacement seed is
-shown and logged so a useful or broken map can be reproduced. It never edits
-`scenarios.ron`; restarting returns to the configured seed.
 
 It is called `lighting` rather than `sky` because it also sets **the sun's angle and
 colour**, so it decides which way the shadows fall. That is most of what makes a
@@ -708,24 +745,25 @@ bridge keeps his surface and the crowd flows around him.
 
 ### When a unit cannot be placed
 
-**Every rostered unit is placed, or the game returns to the title screen with the
-reason on it** — naming the side, the archetype, and what was wrong. An anchor that the
+**Every rostered unit is placed, or loading returns to the Main Menu with a visible
+reason** — naming the side, the archetype, and what was wrong. An anchor that the
 active map does not publish, an authored coordinate with nothing standable under it, and
 a formation with more units than room all fail that way. None of them is a unit that
 quietly does not appear, which is the class of bug this repo is worst at noticing.
 
 A scenario is also checked against the world it names: procedural terrain requires every
 placement to resolve through an anchor, and authored terrain requires every placement to
-be fixed. That pairing is checked once both files have loaded, and a mismatch returns to
-the title screen rather than starting a fight with a unit missing.
+be fixed. That pairing is checked once both files have loaded, and a mismatch returns
+to the Main Menu rather than starting a fight with a unit missing. The in-memory
+Sandbox draft remains available when its route is opened again.
 
 ## Writing a lattice
 
 `lattices.ron` is where enemies are designed. **An enemy's lattice is its entire stat
 block** — there is no separate stats system, no hit points, and no difficulty slider. A
 wolf is four hexes and a bite. A raider is eight around a metal shield. A hedge-mage is
-thirteen with a fusion chain and Scrying Eye. Difficulty is the size and complexity of
-the drawing.
+thirteen with direct Lightning and Divination fusions plus Scrying Eye. Difficulty is
+the size and complexity of the drawing.
 
 An archetype named here is what `archetype: "raider"` in an encounter roster looks up.
 
@@ -793,32 +831,66 @@ load, validate, and cross-check together, so a dangling name cannot ship silentl
 
 ### `elements.ron`
 
-The six-element **wheel** and the **fusion recipes** that build higher-order elements
-from it.
+The six-basic **wheel** and the twelve direct **fusion recipes** form the canonical
+18-element catalog.
 
 ```ron
 (
-    wheel: ["Light", "Air", "Fire", "Metal", "Earth", "Water"],
+    wheel: ["Air", "Fire", "Metal", "Earth", "Life", "Water"],
     fusions: {
-        "Lightning": [(element: "Light", mana: 1), (element: "Fire", mana: 1)],
+        "Lightning": [
+            (element: "Air", mana: 1),
+            (element: "Fire", mana: 1),
+        ],
+        "Destruction": [
+            (element: "Air", mana: 1),
+            (element: "Fire", mana: 1),
+            (element: "Metal", mana: 1),
+        ],
+        // The shipped file contains the other ten recipes listed below.
     },
 )
 ```
 
+| Kind | Result | Direct basic inputs |
+|---|---|---|
+| Pair | Lightning | Air + Fire |
+| Pair | Volcano | Fire + Metal |
+| Pair | Crystal | Metal + Earth |
+| Pair | Transmutation | Earth + Life |
+| Pair | Divination | Life + Water |
+| Pair | Illusion | Water + Air |
+| Triple | Destruction | Air + Fire + Metal |
+| Triple | Artifice | Fire + Metal + Earth |
+| Triple | Necromancy | Metal + Earth + Life |
+| Triple | Wild | Earth + Life + Water |
+| Triple | Storm | Life + Water + Air |
+| Triple | Space | Water + Air + Fire |
+
 - **`wheel`** lists the basic elements. Opposition is their position on the wheel:
   each element opposes the one halfway round — with six, that is three apart, giving
-  Light/Metal, Air/Earth, Fire/Water. Reorder the wheel and you change *which elements
-  oppose which*; that is the wheel's whole job.
+  Air/Earth, Fire/Life, and Metal/Water. Reorder the wheel and you change *which
+  elements oppose which*. The catalog exposes this relationship, but no current
+  combat rule grants an opposition-triggered bonus.
 - **`fusions`** are higher-order elements. Each names its output and the inputs it
-  draws (an element and how much mana). Lightning is Light + Fire. A fusion output is
-  never itself a basic wheel element, every input must be a basic element or another
-  fusion's output, and the recipes may not form a loop — all checked when the file
-  loads.
+  draws (an element and how much mana). Every canonical recipe above consumes two or
+  three **distinct basic elements directly**; none of the triples consumes a pair
+  output. The generic loader still rejects unknown inputs, basic/output name
+  collisions, and cyclic recipe graphs.
 
-One rule worth knowing: an element's internal **id is assigned from its name in
-alphabetical order**, *not* from where it sits in the file or on the wheel. So you can
-reorder entries freely without silently rewriting anything — and it is why wheel order
-(which sets opposition) is written out separately.
+An element's internal **id is assigned from its name in alphabetical order**, *not*
+from where it sits in the file or on the wheel. Reordering entries therefore does not
+rewrite an unchanged catalog, while adding or removing a stable name deliberately
+changes the accepted content revision.
+
+**Life is not a rename or migration target for Light.** They are different stable
+names with different meanings. The elemental-grid migration removes Light references
+from packaged content and authors Life references where intended; it does not rewrite
+local Creator drafts or campaign data. Campaign records bound to the old content
+revision remain preserved and incompatible, including legacy digest-bound resumes
+that predate explicit content revisions. Creator drafts remain preserved with an
+unresolved-Light diagnostic until the user edits them. Neither path silently changes
+a build.
 
 ### `spells.ron`
 
@@ -832,7 +904,7 @@ Each spell by name:
             casting: Evocation,
             mana: Fixed,
             co_castable: false,
-            targeting: (range: 3, shape: Single, needs_los: true),
+            targeting: (range: 3, shape: Single, trajectory: Direct),
             effects: [
                 DisableHexes(count: 1, targeted: false),
                 Burn(turns: 2),
@@ -853,8 +925,14 @@ Each spell by name:
   `Variable` and `co_castable` is what the design calls a **ritual** — you do not write
   "ritual"; it follows from the two flags.
 - **`targeting`** is `range` (how far away the target may be, in hexes), `shape` (what
-  the spell covers once it gets there) and `needs_los` (whether line of sight is
-  required — parsed, but not enforced until obstruction lands).
+  the spell covers once it gets there), and `trajectory`: `Direct`, `Arc(rise: N)`,
+  or `None`. `Direct` tests a straight exact-voxel segment, `Arc` rises `N` integer
+  levels above the higher endpoint, and `None` deliberately ignores material
+  obstruction. Direct and arc authority fails closed if exact terrain occupancy is
+  absent; preview, target cycling, and AI use only currently Observed material facts.
+  Both authored `range` and `Arc.rise` have a technical maximum of 16.
+  Old creator saves using `needs_los: true/false` migrate on read to `Direct`/`None`;
+  newly written content always uses `trajectory`, and defining both is rejected.
 
   `range` and a shape's own extents are different numbers. Fireball's `range: 4` is
   how far it is thrown; its `Sphere(radius: 2)` is how big the ball is.
@@ -896,9 +974,22 @@ Each spell by name:
   without a programmer, which is deliberate:
 
   `DisableHexes`, `Burn`, `RestoreHexes`, `ModifyIncomingDisables`, `Reveal`,
-  `Illuminate`, `SetTerrain`, `ClearTerrain`, `SpawnWall`, `Displace`.
+  `Illuminate`, `SetTerrain`, `SpawnWall`, `Displace`.
 
   `SetTerrain` and `SpawnWall` name a substance from `substances.ron`.
+
+  This is the schema vocabulary, not a promise that every primitive has a delivered
+  runtime consumer. `ModifyIncomingDisables` remains reserved for a future one-shot
+  ward lifecycle and is absent from shipped spell content. `Renewal` currently ships
+  only `RestoreHexes(count: 2)`.
+
+  The E0 content gives `Scrying Eye` one Divination requirement and retains
+  the supported single-target `Reveal` behavior. Its later off-sight live-feed
+  lifecycle is not implied by this content migration. `Illuminate` remains in the
+  schema but still fails closed at runtime; future illumination spells belong to
+  Illusion. The former `Daylight` entry is removed rather than shipped under the new
+  element catalog, and the separate initial Illusion showcase, Invisibility, is later
+  work.
 
 ### When a reference is wrong
 
@@ -910,18 +1001,36 @@ file and fails if any reference dangles, so the shipped game never carries a bro
 
 ## Local Settings are not authored config
 
-The in-game Settings screen writes `preferences.ron` beside the disposable
-`resume.ron`; it never edits `assets/config/display.ron`. Set `HEX_GAME_DATA_DIR` to
-an explicit directory when a test or review needs isolated local state. Otherwise the
-files live under:
+The in-game Settings screen atomically writes schema-v3 `preferences.ron` beside
+`campaigns.ron`, `creations.ron`, and any legacy local files; it never edits
+`assets/config/display.ron`. The file stores display/window presentation, semantic UI
+scale, volume values, the four ordinary HUD visibility preferences, and only keyboard
+bindings that differ from their canonical defaults. Transient master HUD suppression,
+Compact temporary surfaces, inspected-unit identity, and the current Main View are
+session state and are never persisted.
+
+Reading schema v1 preserves its display and audio values while supplying Auto UI
+scale, the minimalist default HUD combination, and no keyboard overrides. Reading
+schema v2 also preserves its UI-scale choice while supplying the same new HUD and
+binding defaults. A missing file uses the authored display default plus built-in UI,
+volume, HUD, and input defaults. A corrupt, invalid, or unknown-version file is
+reported on the Settings screen and rejected as a whole rather than partially
+applied.
+
+Campaign persistence contains exactly three indexed records and is replaced
+atomically. On first load without `campaigns.ron`, a valid legacy `resume.ron` is
+copied into slot 1 with zero prior active-play time. Invalid legacy data is preserved
+with its refusal, and `resume.ron` is never overwritten or deleted. An existing
+obsolete `combat-reports.ron` is likewise never read, modified, or deleted.
+
+Set `HEX_GAME_DATA_DIR` to an explicit directory when a test or review needs isolated
+local state. Otherwise the files live under:
 
 - macOS: `~/Library/Application Support/Hex Game/`
 - Windows: `%APPDATA%/Hex Game/`
 - Linux: `$XDG_DATA_HOME/hex-game/`, or `~/.local/share/hex-game/`
 
-A missing preferences file uses the authored display default and built-in volume
-defaults. A corrupt or incompatible file is reported on the Settings screen and those
-defaults are restored. The file is version-bound pre-alpha state, not a durable
+The preferences file remains version-bound pre-alpha state, not a durable
 configuration format.
 
 ## Frame presentation on macOS

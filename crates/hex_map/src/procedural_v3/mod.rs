@@ -14,10 +14,11 @@ use hex_core::{
 };
 
 use crate::procedural::{
-    CavesMetrics as CavesReportMetrics, ForestMetrics as ForestReportMetrics,
-    FortMetrics as FortReportMetrics, GenerationReport, HillsMetrics as HillsReportMetrics,
-    MountainsMetrics as MountainsReportMetrics, ProceduralRecipeMetrics, TacticalMetrics,
-    WaterfallMetrics as WaterfallReportMetrics,
+    CavesMetrics as CavesReportMetrics, DeepForestMetrics as DeepForestReportMetrics,
+    ForestMetrics as ForestReportMetrics, FortMetrics as FortReportMetrics, GenerationReport,
+    HillsMetrics as HillsReportMetrics, MountainsMetrics as MountainsReportMetrics,
+    PrairieMetrics as PrairieReportMetrics, ProceduralRecipeMetrics, TacticalMetrics,
+    VolcanoMetrics as VolcanoReportMetrics, WaterfallMetrics as WaterfallReportMetrics,
 };
 use crate::settings::{ProceduralV3Settings, V3LayoutSettings, V3RecipeSettings};
 use crate::terrain::TerrainPalette;
@@ -28,7 +29,9 @@ use world::WorldValidationIssue;
 
 mod caves;
 pub(crate) use caves::{CaveCrystalAssetError, CaveCrystalObjectSet};
+mod composite_patch;
 mod composition;
+mod deep_forest;
 #[cfg(test)]
 mod dry_patch_tests;
 mod fingerprint;
@@ -41,6 +44,9 @@ mod hills;
 )]
 mod layout;
 mod local_frame;
+mod macro_alpine;
+mod macro_landform;
+mod macro_world;
 pub(crate) use layout::HexSide;
 #[expect(
     dead_code,
@@ -52,7 +58,11 @@ mod materialize;
 pub(crate) use materialize::MapPresentationProjection;
 mod mountains;
 mod patch;
+mod prairie;
+mod ring19;
 mod ring7;
+mod river_terrain;
+mod routing;
 mod seam;
 mod seed;
 #[cfg_attr(
@@ -65,6 +75,9 @@ mod seed;
 mod selection;
 mod sky;
 mod traversal;
+mod vegetation;
+mod vegetation_landform;
+mod volcano;
 #[expect(
     dead_code,
     reason = "the volume foundation is consumed by sequential V3 recipe implementations"
@@ -185,6 +198,9 @@ pub(crate) fn ensure_recipe_available(
                     | V3RecipeSettings::Forest(_)
                     | V3RecipeSettings::Fort(_)
                     | V3RecipeSettings::Caves(_)
+                    | V3RecipeSettings::DeepForest(_)
+                    | V3RecipeSettings::Volcano(_)
+                    | V3RecipeSettings::Prairie(_)
             ) =>
         {
             Ok(())
@@ -193,6 +209,8 @@ pub(crate) fn ensure_recipe_available(
             &patch.recipe,
         ))),
         V3LayoutSettings::Ring7(_) => Ok(()),
+        V3LayoutSettings::Ring19(_) => Ok(()),
+        V3LayoutSettings::Macro(_) => Ok(()),
     }
 }
 
@@ -223,8 +241,13 @@ pub(crate) fn build(
     let started = Instant::now();
     match &settings.layout {
         V3LayoutSettings::Single(patch) if matches!(patch.recipe, V3RecipeSettings::Hills(_)) => {
+            let art_catalog = art_catalog.ok_or_else(|| {
+                V3GenerationError::RecipeContract(
+                    "Hills requires the accepted runtime art catalog".to_owned(),
+                )
+            })?;
             finish_build(
-                hills::generate(grid_radius, level_height, settings, seed)?,
+                hills::generate(grid_radius, level_height, settings, seed, art_catalog)?,
                 grid_radius,
                 level_height,
                 settings,
@@ -239,8 +262,13 @@ pub(crate) fn build(
         V3LayoutSettings::Single(patch)
             if matches!(patch.recipe, V3RecipeSettings::SkyIslands(_)) =>
         {
+            let art_catalog = art_catalog.ok_or_else(|| {
+                V3GenerationError::RecipeContract(
+                    "Sky Islands requires the accepted runtime art catalog".to_owned(),
+                )
+            })?;
             finish_build(
-                sky::generate(grid_radius, level_height, settings, seed)?,
+                sky::generate(grid_radius, level_height, settings, seed, art_catalog)?,
                 grid_radius,
                 level_height,
                 settings,
@@ -255,8 +283,13 @@ pub(crate) fn build(
         V3LayoutSettings::Single(patch)
             if matches!(patch.recipe, V3RecipeSettings::Mountains(_)) =>
         {
+            let art_catalog = art_catalog.ok_or_else(|| {
+                V3GenerationError::RecipeContract(
+                    "Mountains requires the accepted runtime art catalog".to_owned(),
+                )
+            })?;
             finish_build(
-                mountains::generate(grid_radius, level_height, settings, seed)?,
+                mountains::generate(grid_radius, level_height, settings, seed, art_catalog)?,
                 grid_radius,
                 level_height,
                 settings,
@@ -271,8 +304,19 @@ pub(crate) fn build(
         V3LayoutSettings::Single(patch)
             if matches!(patch.recipe, V3RecipeSettings::Waterfall(_)) =>
         {
+            let art_catalog = art_catalog.ok_or_else(|| {
+                V3GenerationError::RecipeContract(
+                    "Waterfall requires the accepted runtime art catalog".to_owned(),
+                )
+            })?;
             finish_build(
-                waterfall::generate(grid_radius, level_height, settings, seed)?,
+                waterfall::generate_with_catalog(
+                    grid_radius,
+                    level_height,
+                    settings,
+                    seed,
+                    art_catalog,
+                )?,
                 grid_radius,
                 level_height,
                 settings,
@@ -323,10 +367,8 @@ pub(crate) fn build(
                     "Caves requires the accepted runtime art catalog".to_owned(),
                 )
             })?;
-            CaveCrystalObjectSet::resolve(art_catalog)
-                .map_err(|error| V3GenerationError::RecipeContract(error.to_string()))?;
             finish_build(
-                caves::generate(grid_radius, level_height, settings, seed)?,
+                caves::generate(grid_radius, level_height, settings, seed, art_catalog)?,
                 grid_radius,
                 level_height,
                 settings,
@@ -336,6 +378,60 @@ pub(crate) fn build(
                 started,
                 caves_report_metrics,
                 |metrics| ProceduralRecipeMetrics::Caves(caves_recipe_metrics(metrics)),
+            )
+        }
+        V3LayoutSettings::Single(patch)
+            if matches!(patch.recipe, V3RecipeSettings::DeepForest(_)) =>
+        {
+            let art_catalog = art_catalog.ok_or_else(|| {
+                V3GenerationError::RecipeContract(
+                    "Deep Forest requires the accepted runtime art catalog".to_owned(),
+                )
+            })?;
+            finish_build(
+                deep_forest::generate(grid_radius, level_height, settings, seed, art_catalog)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                deep_forest_report_metrics,
+                |metrics| ProceduralRecipeMetrics::DeepForest(deep_forest_recipe_metrics(metrics)),
+            )
+        }
+        V3LayoutSettings::Single(patch) if matches!(patch.recipe, V3RecipeSettings::Prairie(_)) => {
+            let art_catalog = art_catalog.ok_or_else(|| {
+                V3GenerationError::RecipeContract(
+                    "Prairie requires the accepted runtime art catalog".to_owned(),
+                )
+            })?;
+            finish_build(
+                prairie::generate(grid_radius, level_height, settings, seed, art_catalog)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                prairie_report_metrics,
+                |metrics| ProceduralRecipeMetrics::Prairie(prairie_recipe_metrics(metrics)),
+            )
+        }
+        V3LayoutSettings::Single(patch) if matches!(patch.recipe, V3RecipeSettings::Volcano(_)) => {
+            finish_build(
+                volcano::generate(grid_radius, level_height, settings, seed)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                volcano_report_metrics,
+                |metrics| ProceduralRecipeMetrics::Volcano(volcano_recipe_metrics(metrics)),
             )
         }
         V3LayoutSettings::Single(patch) => Err(V3GenerationError::RecipeUnavailable(recipe_name(
@@ -360,7 +456,80 @@ pub(crate) fn build(
                 |metrics| ProceduralRecipeMetrics::Ring7(ring7_recipe_metrics(metrics)),
             )
         }
+        V3LayoutSettings::Ring19(_) => {
+            let art_catalog = art_catalog.ok_or_else(|| {
+                V3GenerationError::RecipeContract(
+                    "Ring19 requires the accepted runtime art catalog".to_owned(),
+                )
+            })?;
+            finish_build(
+                ring19::generate(grid_radius, level_height, settings, seed, art_catalog)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                ring19_report_metrics,
+                |metrics| ProceduralRecipeMetrics::Ring19(ring19_recipe_metrics(metrics)),
+            )
+        }
+        V3LayoutSettings::Macro(_) => {
+            let art_catalog = art_catalog.ok_or_else(|| {
+                V3GenerationError::RecipeContract(
+                    "Macro worlds require the accepted runtime art catalog".to_owned(),
+                )
+            })?;
+            finish_build(
+                macro_world::generate(grid_radius, level_height, settings, seed, art_catalog)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                macro_report_metrics,
+                |metrics| {
+                    metrics.mountain_range.map_or_else(
+                        || ProceduralRecipeMetrics::Macro(metrics.report),
+                        ProceduralRecipeMetrics::MountainRange,
+                    )
+                },
+            )
+        }
     }
+}
+
+fn macro_report_metrics(metrics: &macro_world::MacroWorldMetrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: metrics.report.relief,
+        barrier_cells: metrics.report.liquid_cells,
+        critical_route_steps: metrics.report.critical_route_steps,
+        reachable_surfaces: metrics.report.reachable_surfaces,
+        reachable_elevation_levels: metrics.report.reachable_elevation_levels,
+        environment_signature_percent: 0,
+        ..Default::default()
+    }
+}
+
+fn ring19_report_metrics(metrics: &ring19::Ring19Metrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: metrics.report.relief,
+        barrier_cells: metrics.report.liquid_cells,
+        critical_route_steps: metrics.report.critical_route_steps,
+        reachable_surfaces: metrics.report.reachable_surfaces,
+        reachable_elevation_levels: metrics.report.reachable_elevation_levels,
+        environment_signature_percent: 0,
+        ..Default::default()
+    }
+}
+
+const fn ring19_recipe_metrics(
+    metrics: &ring19::Ring19Metrics,
+) -> crate::procedural::Ring19Metrics {
+    metrics.report
 }
 
 fn ring7_report_metrics(metrics: &ring7::Ring7Metrics) -> TacticalMetrics {
@@ -621,6 +790,64 @@ fn forest_recipe_metrics(metrics: &forest::ForestMetrics) -> ForestReportMetrics
     }
 }
 
+fn deep_forest_report_metrics(metrics: &DeepForestReportMetrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: metrics.relief,
+        critical_route_steps: metrics.critical_route_steps,
+        reachable_surfaces: metrics.ordinary_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        environment_signature_percent: metrics.blocker_coverage_percent,
+        ..Default::default()
+    }
+}
+
+const fn deep_forest_recipe_metrics(metrics: &DeepForestReportMetrics) -> DeepForestReportMetrics {
+    *metrics
+}
+
+fn prairie_report_metrics(metrics: &PrairieReportMetrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: metrics.relief,
+        critical_route_steps: metrics.critical_route_steps,
+        reachable_surfaces: metrics.ordinary_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        environment_signature_percent: metrics.grass_coverage_percent,
+        ..Default::default()
+    }
+}
+
+const fn prairie_recipe_metrics(metrics: &PrairieReportMetrics) -> PrairieReportMetrics {
+    *metrics
+}
+
+fn volcano_report_metrics(metrics: &volcano::VolcanoMetrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: metrics.summit_relief,
+        barrier_cells: metrics.lava_nodes,
+        critical_route_steps: metrics.critical_route_steps,
+        reachable_surfaces: metrics.ordinary_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        environment_signature_percent: metrics.massif_coverage_percent,
+        ..Default::default()
+    }
+}
+
+fn volcano_recipe_metrics(metrics: &volcano::VolcanoMetrics) -> VolcanoReportMetrics {
+    VolcanoReportMetrics {
+        ordinary_surfaces: metrics.ordinary_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        summit_relief: metrics.summit_relief,
+        massif_surfaces: metrics.massif_surfaces,
+        massif_coverage_percent: metrics.massif_coverage_percent,
+        lava_nodes: metrics.lava_nodes,
+        fall_nodes: metrics.fall_nodes,
+        maximum_fall_height: metrics.maximum_fall_height,
+        bridge_surfaces: metrics.bridge_surfaces,
+        bridge_clearance: metrics.bridge_clearance,
+        critical_route_steps: metrics.critical_route_steps,
+    }
+}
+
 fn fort_report_metrics(metrics: &fort::FortMetrics) -> TacticalMetrics {
     TacticalMetrics {
         relief: i32::try_from(metrics.relief).unwrap_or(i32::MAX),
@@ -682,6 +909,9 @@ fn caves_recipe_metrics(metrics: &caves::CavesMetrics) -> CavesReportMetrics {
         critical_floors: metrics.critical_floors,
         optional_dark_floors: metrics.optional_dark_floors,
         gameplay_lights: metrics.gameplay_lights,
+        moss_roots: metrics.moss_roots,
+        lichen_roots: metrics.lichen_roots,
+        vegetation_visual_voxels: metrics.vegetation_visual_voxels,
         minimum_roof_thickness: metrics.minimum_roof_thickness,
         minimum_clearance: metrics.minimum_clearance,
         maximum_clearance: metrics.maximum_clearance,
@@ -745,6 +975,13 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
         V3RecipeSettings::Waterfall(_) => "Waterfall",
         V3RecipeSettings::Forest(_) => "Forest",
         V3RecipeSettings::Fort(_) => "Fort",
+        V3RecipeSettings::Volcano(_) => "Volcano",
+        V3RecipeSettings::DeepForest(_) => "DeepForest",
+        V3RecipeSettings::Prairie(_) => "Prairie",
+        V3RecipeSettings::ShallowSea(_) => "ShallowSea",
+        V3RecipeSettings::Beach(_) => "Beach",
+        V3RecipeSettings::Shore(_) => "Shore",
+        V3RecipeSettings::DeepMountain(_) => "DeepMountain",
     }
 }
 

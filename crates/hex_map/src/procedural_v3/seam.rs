@@ -8,14 +8,18 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use hex_core::{HexCoord, Level, SpecialMovementRegion, TilePos, TraversalProfile};
 
-use super::layout::{PatchId, ResolvedEdgeContract};
+use super::layout::{LayoutKind, PatchId, ResolvedEdgeContract, ResolvedEdgeId};
 use super::patch::PatchRecipeContext;
 use super::traversal::OrdinaryGraph;
 use super::volume::{SurfaceAccess, VolumePlan};
 use super::world::{GeneratedWorldPlan, WorldIssueCode, WorldValidationIssue};
 
-const SEAM_CLOSURE_REGION_BASE: u32 = 0x0ffe_0000;
-const SEAM_CLOSURE_REGION_LIMIT: u32 = SEAM_CLOSURE_REGION_BASE + 0x1_0000;
+const LEGACY_SEAM_CLOSURE_REGION_BASE: u32 = 0x0ffe_0000;
+const LEGACY_SEAM_CLOSURE_REGION_LIMIT: u32 = LEGACY_SEAM_CLOSURE_REGION_BASE + 0x1_0000;
+const RING19_SEAM_CLOSURE_REGION_BASE: u32 = 0x07fe_0000;
+const RING19_SEAM_CLOSURE_REGION_LIMIT: u32 = RING19_SEAM_CLOSURE_REGION_BASE + 0x1_0000;
+const MACRO_SEAM_CLOSURE_REGION_BASE: u32 = 0x03fe_0000;
+const MACRO_SEAM_CLOSURE_REGION_LIMIT: u32 = MACRO_SEAM_CLOSURE_REGION_BASE + 0x1_0000;
 
 /// Whether an access marker is an exact shared-seam closure rather than a
 /// recipe-owned special-movement region.
@@ -24,9 +28,22 @@ pub(crate) const fn is_seam_closure_access(access: SurfaceAccess) -> bool {
     matches!(
         access,
         SurfaceAccess::SpecialMovement(region)
-            if region.0 >= SEAM_CLOSURE_REGION_BASE
-                && region.0 < SEAM_CLOSURE_REGION_LIMIT
+            if (region.0 >= LEGACY_SEAM_CLOSURE_REGION_BASE
+                && region.0 < LEGACY_SEAM_CLOSURE_REGION_LIMIT)
+                || (region.0 >= RING19_SEAM_CLOSURE_REGION_BASE
+                    && region.0 < RING19_SEAM_CLOSURE_REGION_LIMIT)
+                || (region.0 >= MACRO_SEAM_CLOSURE_REGION_BASE
+                    && region.0 < MACRO_SEAM_CLOSURE_REGION_LIMIT)
     )
+}
+
+const fn seam_closure_region(kind: LayoutKind, edge: ResolvedEdgeId) -> SpecialMovementRegion {
+    let base = match kind {
+        LayoutKind::Single | LayoutKind::Ring7 => LEGACY_SEAM_CLOSURE_REGION_BASE,
+        LayoutKind::Ring19 => RING19_SEAM_CLOSURE_REGION_BASE,
+        LayoutKind::Macro => MACRO_SEAM_CLOSURE_REGION_BASE,
+    };
+    SpecialMovementRegion(base.saturating_add(edge.0))
 }
 
 /// Exact local consequences of shaping one patch's shared walker seams.
@@ -76,8 +93,14 @@ impl WalkerSeamShape {
                 volume.surfaces.get(surface).map(|metadata| metadata.access),
                 Some(SurfaceAccess::Ordinary)
             ) {
+                let actual = volume
+                    .surfaces
+                    .iter()
+                    .filter(|(candidate, _)| candidate.coord == surface.coord)
+                    .map(|(candidate, metadata)| (*candidate, metadata.access))
+                    .collect::<Vec<_>>();
                 issues.push(seam_issue(format!(
-                    "declared seam aperture has no exact ordinary surface at {surface:?}"
+                    "declared seam aperture has no exact ordinary surface at {surface:?}; actual surfaces at the coordinate: {actual:?}"
                 )));
             }
         }
@@ -121,6 +144,30 @@ pub(crate) fn shape_walker_seams(
         return Err(issues);
     }
 
+    let mut fixed_macro_approaches = BTreeMap::<HexCoord, Level>::new();
+    if patch.layout().kind == LayoutKind::Macro {
+        for (edge, ports) in &edges {
+            let preferred = edge.preferred_level();
+            for coord in ports
+                .iter()
+                .flat_map(|port| port.first_approach.iter().copied())
+            {
+                if fixed_macro_approaches
+                    .insert(coord, preferred)
+                    .is_some_and(|existing| existing != preferred)
+                {
+                    issues.push(seam_issue(format!(
+                        "patch {} Macro route approaches require conflicting levels at {coord:?}",
+                        patch.id.0
+                    )));
+                }
+            }
+        }
+    }
+    if !issues.is_empty() {
+        return Err(issues);
+    }
+
     for (edge, ports) in &edges {
         let preferred = edge.preferred_level();
         let approaches: BTreeSet<_> = ports
@@ -128,6 +175,9 @@ pub(crate) fn shape_walker_seams(
             .flat_map(|port| port.first_approach.iter().copied())
             .collect();
         for (coord, level) in levels.iter_mut() {
+            if fixed_macro_approaches.contains_key(coord) {
+                continue;
+            }
             let distance = approaches
                 .iter()
                 .map(|approach| approach.distance(*coord))
@@ -157,7 +207,7 @@ pub(crate) fn shape_walker_seams(
 
     let mut boundary_regions = BTreeMap::new();
     for (edge, _) in edges {
-        let region = SpecialMovementRegion(SEAM_CLOSURE_REGION_BASE.saturating_add(edge.id.0));
+        let region = seam_closure_region(patch.layout().kind, edge.id);
         for (local, _) in edge.boundary_pairs() {
             if !levels.contains_key(&local) {
                 issues.push(seam_issue(format!(
@@ -237,7 +287,7 @@ pub(crate) fn validate_patch_walker_seams(
 
     let mut expected_closures = BTreeMap::<HexCoord, SpecialMovementRegion>::new();
     for edge in patch.shared_edges() {
-        let region = SpecialMovementRegion(SEAM_CLOSURE_REGION_BASE.saturating_add(edge.id.0));
+        let region = seam_closure_region(patch.layout().kind, edge.id);
         for (local, _) in edge.boundary_pairs() {
             expected_closures
                 .entry(local)
@@ -477,4 +527,28 @@ fn valid_two_wide_contract(count: u8, width: u32, ports: &[super::layout::Resolv
     width == 2
         && usize::from(count) == ports.len()
         && ports.iter().all(|port| port.lanes.len() == 2)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn seam_closure_regions_preserve_legacy_ids_and_fit_ring19_local_bits() {
+        let edge = ResolvedEdgeId(3);
+        let single = seam_closure_region(LayoutKind::Single, edge);
+        let ring7 = seam_closure_region(LayoutKind::Ring7, edge);
+        let ring19 = seam_closure_region(LayoutKind::Ring19, edge);
+
+        assert_eq!(single, SpecialMovementRegion(0x0ffe_0003));
+        assert_eq!(ring7, single);
+        assert_eq!(ring19, SpecialMovementRegion(0x07fe_0003));
+        assert!(ring19.0 <= 0x07ff_ffff);
+        assert!(is_seam_closure_access(SurfaceAccess::SpecialMovement(
+            single
+        )));
+        assert!(is_seam_closure_access(SurfaceAccess::SpecialMovement(
+            ring19
+        )));
+    }
 }

@@ -12,5 +12,8 @@ description = "Generic transform animation, driven by the engine clock. Knows no
 bevy = { workspace = true }
 hex_core = { workspace = true }
 
+[dev-dependencies]
+hex_test_app = { workspace = true }
+
 [lints]
 workspace = true

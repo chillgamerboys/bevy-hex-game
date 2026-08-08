@@ -205,9 +205,9 @@ opposition, and fusion recipes are *data* — opposition is index arithmetic
 over the wheel array, and no code ever matches on a specific element),
 `UnitId(u64)` + allocator + registry, `PlayerSeat`/`ControlOwner` (seat 0
 today; the entire co-op ownership model later), the command types below, a
-`Busy` component (sim-side "still presenting" gate that replaces
-`Has<Transformation>` checks and shrinks hex_anim's blast radius ahead of
-its expected rewrite), `SimSystems::{Emit, Apply}`, and serde derives across
+`Busy` component (domain movement/action gate that replaces
+`Has<Transformation>` checks and keeps presentation lifetime out of legality),
+`SimSystems::{Emit, Apply}`, and serde derives across
 the domain vocabulary.
 
 ### 3. The command funnel
@@ -294,8 +294,9 @@ session-local): `elements.ron` (wheel + elements + fusion recipes, DAG
 validation), `spells.ron` (requirements multiset ≤ 6; casting axis
 evocation/enchantment-with-upkeep; mana axis fixed/variable; `co_castable` —
 "ritual" = variable + co-castable, separating the axes per the design's own
-naming note; `TargetingSpec { range, shape, needs_los }` reusing
-`hex_units::targeting`'s height-advantage geometry), `lattices.ron` (enemy
+naming note; `TargetingSpec { range, shape, trajectory }` reusing
+`hex_units::targeting`'s height-advantage geometry and the exact integer-voxel
+`Direct`/`Arc`/`None` obstruction vocabulary), `lattices.ron` (enemy
 archetypes as cube-coordinate entries — the file **is** `LatticeSpec`'s
 serde format, so the future in-game lattice editor round-trips for free; the
 editor never rewrites hand-commented shipped files), `combat.ron` (policy
@@ -303,7 +304,7 @@ knobs), `progression.ron`, `encounters/*.ron`.
 
 **Effects are a closed enum of primitives** — `DisableHexes{count,targeted}`,
 `Burn`, `RestoreHexes`, `ModifyIncomingDisables`, `Reveal`, `Illuminate`,
-`SetTerrain`/`ClearTerrain`/`SpawnWall` (substance by name), `Displace` — and
+`SetTerrain`/`SpawnWall` (substance by name), `Displace` — and
 deliberately not a scripting engine: the lint wall exists to make runtime
 failure unrepresentable and a script interpreter manufactures it; a closed
 vocabulary can be bounds-validated at parse; the no-randomness and no-HP
@@ -324,8 +325,10 @@ yet (experimental, editor-styled).
 
 ### 10. Crates *not* created
 
-No `hex_ui`, no `hex_save`: boundaries that isolate nothing for two people.
-Revisit when the lattice-builder screen or a server binary exists.
+No `hex_save`. The earlier recommendation against `hex_ui` was superseded by the
+runtime UI foundation after the gameplay surfaces accumulated enough shared scaling,
+focus, accessibility, action-hierarchy, and test-oracle policy to form a real
+dependency boundary. See [`docs/systems/ui.md`](../systems/ui.md).
 
 ---
 
@@ -367,7 +370,10 @@ fenced.
   presentation.
 - **The window stays load-bearing.** Headless tests cannot see a black sky
   or a sunken piece; every serious bug here was found by a person looking.
-  The visual walk remains part of every gameplay PR.
+  The visual walk remains part of gameplay PRs that change rendered presentation,
+  runtime navigation, movement behavior, persistence, or a visual script; pure
+  contract/trajectory PRs record it as not applicable. Combined waves and release
+  promotions retain the broader walk.
 
 ## Risks
 

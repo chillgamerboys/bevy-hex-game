@@ -26,6 +26,7 @@ pub(crate) struct TerrainPalette {
     pub(super) dirt: SubstanceId,
     pub(super) grass: SubstanceId,
     pub(super) gravel: SubstanceId,
+    pub(super) sand: SubstanceId,
     pub(super) water: SubstanceId,
     pub(super) metal: SubstanceId,
     pub(super) worked_stone: SubstanceId,
@@ -52,6 +53,7 @@ impl TerrainPalette {
             dirt: id("dirt")?,
             grass: id("grass")?,
             gravel: optional("gravel"),
+            sand: optional("sand"),
             water: optional("water"),
             metal: optional("metal"),
             worked_stone: optional("worked_stone"),
@@ -73,6 +75,7 @@ impl TerrainPalette {
                 // validator. Require the complete procedural vocabulary so a missing
                 // environment material cannot be mistaken for air during validation.
                 palette.gravel = id("gravel")?;
+                palette.sand = id("sand")?;
                 palette.water = id("water")?;
                 palette.metal = id("metal")?;
                 palette.worked_stone = id("worked_stone")?;
@@ -346,6 +349,7 @@ mod tests {
             dirt: DIRT,
             grass: GRASS,
             gravel: GRAVEL,
+            sand: SubstanceId(13),
             water: WATER,
             metal: METAL,
             worked_stone: SubstanceId(12),
@@ -385,7 +389,7 @@ mod tests {
         let mut substances: SubstanceFile =
             ron::from_str(include_str!("../../../assets/config/substances.ron"))
                 .expect("the shipped substances should parse");
-        for environment_material in ["snow", "ice", "basalt", "lava"] {
+        for environment_material in ["sand", "snow", "ice", "basalt", "lava"] {
             substances.substances.remove(environment_material);
         }
         let table = SubstanceTable::from_file(&substances, &art_palette())
@@ -412,7 +416,7 @@ mod tests {
         let mut substances: SubstanceFile =
             ron::from_str(include_str!("../../../assets/config/substances.ron"))
                 .expect("the shipped substances should parse");
-        substances.substances.remove("lava");
+        substances.substances.remove("sand");
         let table = SubstanceTable::from_file(&substances, &art_palette())
             .expect("the remaining substances should resolve through the shipped palette");
         let procedural: MapSettings = ron::from_str(include_str!(
@@ -422,7 +426,7 @@ mod tests {
 
         let error = TerrainPalette::for_terrain(&table, &procedural.terrain)
             .expect_err("procedural validation must not alias a missing material to air");
-        assert!(error.contains("lava"));
+        assert!(error.contains("sand"));
     }
 
     fn at(x: i32, y: i32, z: i32) -> HexCoord {

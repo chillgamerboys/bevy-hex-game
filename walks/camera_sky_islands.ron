@@ -1,0 +1,25 @@
+// Real Character movement only on the ordinary-network ground bridge. Upper islands
+// remain flight-gated and are deliberately not selected or teleported to by this walk.
+[
+    AwaitScreen("Title"),
+    StartScenario(name: "Sky Islands", seed: Some(94445606)),
+    AwaitScreen("Gameplay"),
+    AwaitTerrain,
+    Key("H"),
+    Key("C"),
+    Settle(45),
+    Capture("01-sky-islands-character-start"),
+    ClickAnchor(name: "bridge", expected: (q: 0, r: 0, level: 16)),
+    AwaitPartyIdle(max_frames: 1800),
+    AssertSelectedAt(expected: (q: 0, r: 0, level: 16)),
+    Settle(60),
+    Capture("02-sky-islands-ground-bridge-front"),
+    OrbitCamera(yaw_turns: 0.33333334, pitch_fraction: -0.1),
+    Settle(45),
+    Capture("03-sky-islands-ground-bridge-side"),
+    OrbitCamera(yaw_turns: 0.33333334, pitch_fraction: 0.1),
+    Settle(45),
+    Capture("04-sky-islands-ground-bridge-rear"),
+    Key("Backspace"),
+    AwaitScreen("Title"),
+]

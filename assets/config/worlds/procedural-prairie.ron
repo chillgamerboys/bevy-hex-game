@@ -1,0 +1,27 @@
+// Open rolling grassland using the accepted authored tuft over most eligible surfaces.
+// The seed lives on the scenario so review rerolls do not mutate this recipe.
+(
+    grid_radius: 12,
+    level_height: 0.4,
+    terrain: Procedural((
+        generator_version: 3,
+        layout: Single((
+            environment: TemperateGrassland,
+            recipe: Prairie((
+                base_level: 15,
+                max_relief: 4,
+                grass_coverage_percent: 70,
+            )),
+            overlays: [],
+            mask: WholeWorld,
+            edges: (
+                east: WorldBoundary,
+                south_east: WorldBoundary,
+                south_west: WorldBoundary,
+                west: WorldBoundary,
+                north_west: WorldBoundary,
+                north_east: WorldBoundary,
+            ),
+        )),
+    )),
+)

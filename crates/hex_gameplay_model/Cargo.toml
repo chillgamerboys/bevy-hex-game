@@ -1,0 +1,14 @@
+[package]
+name = "hex_gameplay_model"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "Pure state models for gameplay-owned application surfaces."
+
+[dependencies]
+bevy_ecs = { workspace = true }
+hex_core = { workspace = true }
+serde = { workspace = true }
+
+[lints]
+workspace = true

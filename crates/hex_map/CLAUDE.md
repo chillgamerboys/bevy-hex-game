@@ -44,6 +44,7 @@ commands.spawn((
     HexTile,       // marker
     hex_coord,     // HexCoord  — which hex
     tile_pos,      // TilePos   — the run's TOPMOST MATERIAL VOXEL, not its base
+    run_bottom,    // RunBottom — the run's LOWEST MATERIAL VOXEL
     span,          // HexSpan   — the run's world extent
     substance,     // SubstanceId
     headroom,      // Headroom  — clear voxels above the run, 0 if buried
@@ -51,12 +52,14 @@ commands.spawn((
 ));
 ```
 
-`hex_units` queries `(&TilePos, &HexSpan, &SubstanceId, &Headroom)` with
+Gameplay may query `(&TilePos, &RunBottom, &HexSpan, &SubstanceId, &Headroom)` with
 `With<HexTile>` and consumes exact projections such as `TraversalBlockers`.
 `MapAnchors`, `BiomeRegions`, `InteriorRegions`, and view hints use the same shared,
-stack-safe pattern. `TerrainEdit` is the only live write interface; the accepted
-`TerrainImpact`/`TerrainImpactOutcome` pair remains the separate future material-
-response path.
+stack-safe pattern. `TerrainEdit` and `TerrainImpact` are the two live write
+interfaces: direct edits replace or clear material, while impacts resolve numeric
+toughness and publish one ordered `TerrainImpactOutcome` per batch. `DamagedVoxels` is
+the exact partial-health projection, not a visibility grant. PR #180 adds the live
+paid spell emitter plus gameplay-owned correlation, settlement, and outcome consumer.
 
 ### `Headroom` is not optional, and it is yours to get right
 
@@ -94,6 +97,11 @@ run's topmost material voxel. Gameplay combines the position with the substance'
 know `level_height` to work the surface out, which puts a dependency on this crate
 straight back into movement — the exact thing the split prevents.
 
+`RunBottom` publishes the same run's lowest material voxel as an integer `Level`.
+Together those two components make the inclusive voxel bounds exact without gameplay
+reconstructing a level from `HexSpan`, world transforms, `level_height`, or saturated
+`Headroom`.
+
 ### Storage is not rendering
 
 One entity per voxel would be tens of thousands on a deep map. The spawn pass merges
@@ -111,7 +119,7 @@ A tile's `Transform` has to match the rendered run described by its span:
 
 Gameplay reads `span.top` to place a piece on a surface. If the transform disagrees,
 pieces float or sink and **nothing errors** — the tiles still render. There is a test
-for this (`tests/spawning.rs::every_tile_transform_matches_its_span`); keep it
+for this (`tests/contracts/presentation.rs::every_tile_transform_matches_its_span`); keep it
 passing.
 
 ## Voxels, columns, and the rule about them
@@ -192,9 +200,22 @@ real bug (the player spawned before the tiles existed and sank into the ground).
 
 Clean up on `OnExit(Screen::Gameplay)`. There is a test that nothing leaks.
 
+The terrain-durability contract configures the reserved update protocol
+`TerrainSystems::ApplyWorld → TerrainSystems::RefreshProjections →
+TerrainSystems::ReconcileActors → TerrainSystems::ConsumeOutcomes` before perception.
+`ApplyWorld` remains the map-owned phase that flushes rebuilt tile facts and
+outcomes. PR #180 fills the gameplay-owned refresh, deterministic actor settlement,
+authority adoption, and matching-outcome consumption phases under cross-crate ordering
+contracts.
+
 ## Things that fail silently here
 
-A clean log is not evidence a change worked. **Look at the window.**
+A clean log is not evidence that presentation is correct, so inspect static frames for
+camera framing/occlusion and rendered geometry, materials, lighting, cutaways, seams,
+and composition; use video/human checks for camera motion, input response, control
+feel, and taste. Those artifacts may show how hook-established state is rendered but
+never prove map or gameplay logic when typed hooks or contracts can assert it; add the
+missing hook instead.
 
 | Symptom | Cause |
 |---|---|
@@ -212,7 +233,9 @@ A clean log is not evidence a change worked. **Look at the window.**
 
 ```sh
 cargo dev                      # run with inspector and live asset reload
-cargo test -p hex_map          # fast; no GPU needed
+python3 tools/test_scope.py run map_unit
+python3 tools/test_scope.py run map_generation
+python3 tools/test_scope.py run map_contracts
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 ```
 
@@ -231,9 +254,10 @@ depending on what has been looked at.
 ## Before you finish
 
 1. `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-2. `cargo test --workspace`
-3. **Run the game and look at it.** Every bug found in this codebase so far was found
-   by a human looking at the window, not by CI.
+2. `python3 tools/test_scope.py check-partitions map`
+3. Run the selected map concerns from `python3 tools/test_scope.py plan`.
+4. Inspect the game only for affected geometry, materials, lighting, composition, or
+   motion. Logical map claims must already be proved through typed contracts.
 
 ## Where your work goes
 
@@ -246,10 +270,9 @@ gh pr create --base dev        # <- the --base matters
 ```
 
 `main` moves only when `dev` is promoted into it, after someone has played the game.
-This is not ceremony: **CI cannot see anything**. A black sky, a gap between every
-tile, a piece standing inside the terrain — all three have shipped here, green across
-clippy, the whole test suite and every CI check. `dev` is where work is allowed to be
-wrong until a person has looked at it.
+This is not ceremony: typed hooks cannot judge a black sky, a gap between every tile,
+or native presentation quality. Those visual claims need human eyes; map and gameplay
+logic still require typed evidence.
 
 `dev` is permanent. Delete your feature branch after it merges; never delete `dev`.
 

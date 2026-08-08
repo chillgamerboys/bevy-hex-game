@@ -2,10 +2,10 @@
 
 use std::{
     collections::{BTreeMap, VecDeque},
+    ops::Deref,
     time::Duration,
 };
 
-use bevy::picking::Pickable;
 use bevy::prelude::*;
 use hex_assets::{ElementCatalog, SpellBook};
 use hex_combat::{CombatEvent, CombatSystems, CommandRefusal, FactionLatticeKnowledge};
@@ -14,12 +14,12 @@ use hex_lattice::{CellKind, LatticeSpec};
 use hex_perception::FactionMapKnowledge;
 use hex_units::{Faction, Player, StandsOn, UnitRegistry};
 
-use super::lattice::{set_pulse_color, RetainedTarget, TargetPanel};
-use crate::menus::widgets::{blurb, panel, UiAssets, DANGER, LABEL};
-use crate::readouts::{region, HudElement, HudRegion, HudSetup, READ_ONLY_HUD};
+use super::lattice::RetainedTarget;
+use hex_ui::{
+    ActivityKind, ActivityLogLineView, ActivityLogView, ActivityTab, TargetPulseView, UiIntent,
+};
 
 const CAPACITY: usize = 64;
-const FEED_LINES: usize = 3;
 const DRAWER_LINES: usize = 12;
 const PULSE_SECONDS: f32 = 0.28;
 #[derive(Debug, Clone, PartialEq)]
@@ -28,9 +28,40 @@ struct LogLine {
     danger: bool,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct RecordedLine {
+    sequence: u64,
+    line: LogLine,
+}
+
+impl Deref for RecordedLine {
+    type Target = LogLine;
+
+    fn deref(&self) -> &Self::Target {
+        &self.line
+    }
+}
+
+/// Shared ordering across combat and high-level activity ingestion.
+#[derive(Resource, Default)]
+struct ActivityChronology {
+    next: u64,
+}
+
+impl ActivityChronology {
+    fn record(&mut self, line: LogLine) -> RecordedLine {
+        let recorded = RecordedLine {
+            sequence: self.next,
+            line,
+        };
+        self.next = self.next.saturating_add(1);
+        recorded
+    }
+}
+
 #[derive(Resource, Default)]
 struct CombatLog {
-    lines: VecDeque<LogLine>,
+    lines: VecDeque<RecordedLine>,
     /// Damage outcomes follow a typed cause event. This freezes that stable cause by
     /// source/target pair until the resulting defender answer resolves.
     causes: BTreeMap<(UnitId, UnitId), DamageCause>,
@@ -41,6 +72,25 @@ struct CombatLog {
     anonymous_causes: BTreeMap<UnitId, DamageCause>,
 }
 
+/// High-level non-combat history kept separate from combat disclosure machinery.
+#[derive(Resource, Default)]
+struct ActivityHistory {
+    lines: VecDeque<RecordedLine>,
+}
+
+impl ActivityHistory {
+    fn push(&mut self, line: LogLine, chronology: &mut ActivityChronology) {
+        self.lines.push_back(chronology.record(line));
+        while self.lines.len() > CAPACITY {
+            self.lines.pop_front();
+        }
+    }
+}
+
+/// Typed high-level activity emitted by gameplay adapters.
+#[derive(Message, Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ActivityNotice(pub(crate) String);
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DamageCause {
     Spell(String),
@@ -48,8 +98,8 @@ enum DamageCause {
 }
 
 impl CombatLog {
-    fn push(&mut self, line: LogLine) {
-        self.lines.push_back(line);
+    fn push(&mut self, line: LogLine, chronology: &mut ActivityChronology) {
+        self.lines.push_back(chronology.record(line));
         while self.lines.len() > CAPACITY {
             self.lines.pop_front();
         }
@@ -86,26 +136,17 @@ impl DamagePulse {
     }
 }
 
-#[derive(Component)]
-struct LogBody;
-
-#[derive(Component)]
-struct LogPanel;
-
-#[derive(Component)]
-struct LogHeading;
-
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
-struct LogExpanded(bool);
+struct SelectedActivityTab(ActivityTab);
 
 pub(super) fn plugin(app: &mut App) {
     app.init_resource::<CombatLog>()
+        .init_resource::<ActivityHistory>()
+        .init_resource::<ActivityChronology>()
         .init_resource::<DamagePulse>()
-        .init_resource::<LogExpanded>()
-        .add_systems(
-            OnEnter(Screen::Gameplay),
-            (spawn_panel, reset).in_set(HudSetup::Panels),
-        )
+        .init_resource::<SelectedActivityTab>()
+        .add_message::<ActivityNotice>()
+        .add_systems(OnEnter(Screen::Gameplay), reset)
         // Not pausable. Bevy messages age out after two frames, so pausing on
         // the resolution frame must not erase the outcome from history.
         .add_systems(
@@ -118,71 +159,61 @@ pub(super) fn plugin(app: &mut App) {
         )
         .add_systems(
             Update,
-            (toggle_history, rebuild, pulse_panel)
+            (
+                ingest_activity,
+                select_tab.after(hex_ui::UiSystems::EmitIntents),
+                publish_view,
+                pulse_panel,
+            )
                 .chain()
                 .after(ingest)
+                .before(hex_ui::UiSystems::Render)
                 .run_if(in_state(Screen::Gameplay)),
         );
 }
 
-fn spawn_panel(
-    mut commands: Commands,
-    assets: Res<UiAssets>,
-    regions: Query<(Entity, &HudRegion)>,
+fn reset(
+    mut log: ResMut<CombatLog>,
+    mut activity: ResMut<ActivityHistory>,
+    mut chronology: ResMut<ActivityChronology>,
+    mut pulse: ResMut<DamagePulse>,
+    mut tab: ResMut<SelectedActivityTab>,
 ) {
-    let panel = commands
-        .spawn((
-            Name::new("Combat Log Panel"),
-            LogPanel,
-            HudElement,
-            panel(),
-            READ_ONLY_HUD,
-        ))
-        .insert(Node {
-            width: Val::Percent(100.0),
-            flex_direction: FlexDirection::Column,
-            padding: UiRect::all(Val::Px(8.0)),
-            border: UiRect::all(Val::Px(1.0)),
-            border_radius: BorderRadius::all(Val::Px(8.0)),
-            row_gap: Val::Px(3.0),
-            ..default()
-        })
-        .with_children(|panel| {
-            panel.spawn((LogHeading, blurb(&assets, "RECENT EVENTS · L HISTORY")));
-            panel.spawn((
-                Name::new("Combat Log Body"),
-                LogBody,
-                Node {
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(3.0),
-                    ..default()
-                },
-                Pickable::IGNORE,
-            ));
-        })
-        .id();
-    if let Some(events) = region(HudRegion::Events, &regions) {
-        commands.entity(events).add_child(panel);
+    *log = CombatLog::default();
+    *activity = ActivityHistory::default();
+    *chronology = ActivityChronology::default();
+    activity.push(
+        LogLine {
+            text: "Entered the battlefield.".to_owned(),
+            danger: false,
+        },
+        &mut chronology,
+    );
+    *pulse = DamagePulse::default();
+    *tab = SelectedActivityTab::default();
+}
+
+fn ingest_activity(
+    mut notices: MessageReader<ActivityNotice>,
+    mut activity: ResMut<ActivityHistory>,
+    mut chronology: ResMut<ActivityChronology>,
+) {
+    for notice in notices.read() {
+        activity.push(
+            LogLine {
+                text: notice.0.clone(),
+                danger: false,
+            },
+            &mut chronology,
+        );
     }
 }
 
-fn reset(
-    mut log: ResMut<CombatLog>,
-    mut pulse: ResMut<DamagePulse>,
-    mut expanded: ResMut<LogExpanded>,
-) {
-    *log = CombatLog::default();
-    *pulse = DamagePulse::default();
-    *expanded = LogExpanded::default();
-}
-
-fn toggle_history(
-    keys: Res<ButtonInput<KeyCode>>,
-    bindings: Res<hex_core::InputBindings>,
-    mut expanded: ResMut<LogExpanded>,
-) {
-    if bindings.just_pressed(&keys, hex_core::InputAction::ToggleLog) {
-        expanded.0 = !expanded.0;
+fn select_tab(mut intents: MessageReader<UiIntent>, mut selected: ResMut<SelectedActivityTab>) {
+    for intent in intents.read() {
+        if let UiIntent::Activity(hex_ui::ActivityIntent::SelectTab(tab)) = intent {
+            selected.0 = *tab;
+        }
     }
 }
 
@@ -203,6 +234,7 @@ type IdentityQuery<'w, 's> = Query<
 fn ingest(
     mut events: MessageReader<CombatEvent>,
     mut log: ResMut<CombatLog>,
+    mut chronology: ResMut<ActivityChronology>,
     mut pulse: ResMut<DamagePulse>,
     registry: Res<UnitRegistry>,
     identities: IdentityQuery,
@@ -246,7 +278,7 @@ fn ingest(
             elements.as_deref(),
             spells.as_deref(),
         ) {
-            log.push(line);
+            log.push(line, &mut chronology);
         }
         clear_resolved_cause(event, &mut log);
     }
@@ -275,7 +307,11 @@ fn event_is_disclosed(
 ) -> bool {
     let unit = |id| unit_is_disclosed(viewer, id, registry, identities, spatial);
     match event {
+        CombatEvent::TurnAdvanced { unit: actor, .. } => unit(*actor),
         CombatEvent::Cast { caster, .. } => unit(*caster),
+        CombatEvent::Channelled {
+            unit: channeler, ..
+        } => unit(*channeler),
         CombatEvent::Strike { target, .. } => unit(*target),
         CombatEvent::DecisionOpened { decider, .. } => unit(*decider),
         CombatEvent::DamagePrevented { target, .. }
@@ -398,10 +434,32 @@ fn format_event(
     spells: Option<&SpellBook>,
 ) -> Option<LogLine> {
     let line = match event {
+        // Turn boundaries are canonical report facts, but the ordinary combat log
+        // already communicates initiative and should not grow one line per turn.
+        CombatEvent::TurnAdvanced { .. } => return None,
         CombatEvent::Cast { caster, spell, .. } => LogLine {
             text: format!("{} cast {spell}", unit_name(*caster, registry, identities)),
             danger: false,
         },
+        CombatEvent::Channelled { unit, restored } => {
+            let detail = restored
+                .iter()
+                .map(|(element, amount)| format!("{element} +{amount}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let suffix = if detail.is_empty() {
+                "no mana restored".to_owned()
+            } else {
+                detail
+            };
+            LogLine {
+                text: format!(
+                    "{} channelled ({suffix})",
+                    unit_name(*unit, registry, identities)
+                ),
+                danger: false,
+            }
+        }
         CombatEvent::Strike { attacker, target } => LogLine {
             text: format!(
                 "{} struck {}",
@@ -683,6 +741,10 @@ fn refusal_label(refusal: &CommandRefusal) -> &'static str {
         CommandRefusal::MissingUnitData { .. } => "unit data unavailable",
         CommandRefusal::Busy => "still busy",
         CommandRefusal::InvalidPath => "invalid path",
+        CommandRefusal::Occupied { block } => match block {
+            hex_units::OccupancyBlock::Destination { .. } => "destination occupied",
+            hex_units::OccupancyBlock::Route { .. } => "route occupied",
+        },
         CommandRefusal::MovementBudgetExceeded { .. } => "not enough movement",
         CommandRefusal::UnknownTarget { .. } => "unknown target",
         CommandRefusal::TargetDowned { .. } => "target is already down",
@@ -690,6 +752,7 @@ fn refusal_label(refusal: &CommandRefusal) -> &'static str {
         CommandRefusal::TargetOutOfMeleeReach { .. } => "target is out of reach",
         CommandRefusal::NoTurn => "no active turn",
         CommandRefusal::ActionAlreadySpent => "action already spent",
+        CommandRefusal::ActingUnitDowned { .. } => "acting unit is down",
         CommandRefusal::UnknownSpell { .. } => "unknown spell",
         CommandRefusal::MissingSpellDefinition { .. } => "spell definition unavailable",
         CommandRefusal::UndeliverableSpell { .. } => "spell is not implemented",
@@ -697,10 +760,11 @@ fn refusal_label(refusal: &CommandRefusal) -> &'static str {
         CommandRefusal::TargetOutOfRange { .. } => "target is out of range",
         CommandRefusal::ShapeUnresolved { .. } => "shape could not resolve",
         CommandRefusal::TargetUnobserved { .. } => "target is unobserved",
+        CommandRefusal::TrajectoryBlocked { .. } => "spell trajectory is blocked",
+        CommandRefusal::TerrainCreationBlocked { .. } => "terrain creation is blocked",
         CommandRefusal::SpellNotInscribed { .. } => "spell is not inscribed",
         CommandRefusal::CastBlocked { .. } => "lattice cannot pay",
         CommandRefusal::CastPlanStale { .. } => "lattice changed",
-        CommandRefusal::ChannelUnavailable => "channelling is unavailable",
         CommandRefusal::PartyMovementUnavailable => "party movement is unavailable",
         CommandRefusal::RestorationUnavailable => "restoration is unavailable",
         CommandRefusal::RestUnavailable => "rest is unavailable",
@@ -717,47 +781,68 @@ fn refusal_label(refusal: &CommandRefusal) -> &'static str {
     }
 }
 
-fn rebuild(
-    mut commands: Commands,
+fn publish_view(
     log: Res<CombatLog>,
-    expanded: Res<LogExpanded>,
-    bodies: Query<Entity, With<LogBody>>,
-    mut headings: Query<&mut Text, With<LogHeading>>,
-    assets: Res<UiAssets>,
+    activity: Res<ActivityHistory>,
+    selected: Res<SelectedActivityTab>,
+    mut view: ResMut<ActivityLogView>,
 ) {
-    if !log.is_changed() && !expanded.is_changed() {
+    if !log.is_changed() && !activity.is_changed() && !selected.is_changed() {
         return;
     }
-    if let Ok(mut heading) = headings.single_mut() {
-        heading.0 = if expanded.0 {
-            format!("COMBAT HISTORY · {} EVENTS · L CLOSE", log.lines.len())
-        } else {
-            "RECENT EVENTS · L HISTORY".to_owned()
-        };
-    }
-    let Ok(body) = bodies.single() else { return };
-    commands.entity(body).despawn_related::<Children>();
-    commands.entity(body).with_children(|rows| {
-        for line in visible_lines(&log, expanded.0) {
-            rows.spawn((
-                Text::new(line.text.clone()),
-                TextFont {
-                    font: assets.body.clone().into(),
-                    ..TextFont::from_font_size(13.0)
-                },
-                TextColor(if line.danger { DANGER } else { LABEL }),
-                Pickable::IGNORE,
-            ));
+    let mut lines = match selected.0 {
+        ActivityTab::All => {
+            let mut combined = activity
+                .lines
+                .iter()
+                .map(|line| (ActivityKind::Activity, line))
+                .chain(log.lines.iter().map(|line| (ActivityKind::Combat, line)))
+                .collect::<Vec<_>>();
+            combined.sort_by_key(|(_, line)| line.sequence);
+            combined
         }
-    });
+        ActivityTab::Combat => log
+            .lines
+            .iter()
+            .map(|line| (ActivityKind::Combat, line))
+            .collect(),
+        ActivityTab::Activity => activity
+            .lines
+            .iter()
+            .map(|line| (ActivityKind::Activity, line))
+            .collect(),
+    };
+    let keep_from = lines.len().saturating_sub(DRAWER_LINES);
+    lines.drain(0..keep_from);
+    let count = match selected.0 {
+        ActivityTab::All => log.lines.len() + activity.lines.len(),
+        ActivityTab::Combat => log.lines.len(),
+        ActivityTab::Activity => activity.lines.len(),
+    };
+    let next = ActivityLogView {
+        heading: format!("ACTIVITY · {count} EVENTS"),
+        tab: selected.0,
+        lines: lines
+            .into_iter()
+            .map(|(kind, line)| ActivityLogLineView {
+                kind,
+                text: line.text.clone(),
+                danger: line.danger,
+            })
+            .collect(),
+    };
+    if *view != next {
+        *view = next;
+    }
 }
 
-fn visible_lines(log: &CombatLog, expanded: bool) -> Vec<&LogLine> {
-    let visible = if expanded { DRAWER_LINES } else { FEED_LINES };
+#[cfg(test)]
+fn visible_lines(log: &CombatLog, visible: usize) -> Vec<&LogLine> {
     log.lines
         .iter()
         .rev()
         .take(visible)
+        .map(|recorded| &recorded.line)
         .collect::<Vec<_>>()
         .into_iter()
         .rev()
@@ -768,11 +853,13 @@ fn pulse_panel(
     time: Res<Time>,
     focus: Res<RetainedTarget>,
     mut pulse: ResMut<DamagePulse>,
-    mut panels: Query<&mut BackgroundColor, With<TargetPanel>>,
+    mut view: ResMut<TargetPulseView>,
 ) {
     let live = pulse.tick(time.delta());
-    let active = live && pulse.target == focus.unit;
-    set_pulse_color(active, &mut panels);
+    let next = TargetPulseView(live && pulse.target == focus.unit);
+    if *view != next {
+        *view = next;
+    }
 }
 
 #[cfg(test)]
@@ -821,11 +908,15 @@ mod tests {
     #[test]
     fn the_log_keeps_sixty_four_entries() {
         let mut log = CombatLog::default();
+        let mut chronology = ActivityChronology::default();
         for number in 0..80 {
-            log.push(LogLine {
-                text: number.to_string(),
-                danger: false,
-            });
+            log.push(
+                LogLine {
+                    text: number.to_string(),
+                    danger: false,
+                },
+                &mut chronology,
+            );
         }
         assert_eq!(log.lines.len(), CAPACITY);
         assert_eq!(log.lines.front().map(|line| line.text.as_str()), Some("16"));
@@ -835,18 +926,22 @@ mod tests {
     #[test]
     fn the_feed_is_three_lines_without_discarding_drawer_history() {
         let mut log = CombatLog::default();
+        let mut chronology = ActivityChronology::default();
         for number in 0..8 {
-            log.push(LogLine {
-                text: number.to_string(),
-                danger: number == 6,
-            });
+            log.push(
+                LogLine {
+                    text: number.to_string(),
+                    danger: number == 6,
+                },
+                &mut chronology,
+            );
         }
 
-        let feed: Vec<_> = visible_lines(&log, false)
+        let feed: Vec<_> = visible_lines(&log, 3)
             .iter()
             .map(|line| line.text.as_str())
             .collect();
-        let drawer: Vec<_> = visible_lines(&log, true)
+        let drawer: Vec<_> = visible_lines(&log, DRAWER_LINES)
             .iter()
             .map(|line| line.text.as_str())
             .collect();
@@ -854,6 +949,61 @@ mod tests {
         assert_eq!(drawer, ["0", "1", "2", "3", "4", "5", "6", "7"]);
         assert!(log.lines.get(6).is_some_and(|line| line.danger));
         assert_eq!(log.lines.len(), 8, "opening the drawer is non-destructive");
+    }
+
+    #[test]
+    fn all_tab_keeps_late_activity_after_dense_combat_history() {
+        let mut chronology = ActivityChronology::default();
+        let mut activity = ActivityHistory::default();
+        let mut log = CombatLog::default();
+        activity.push(
+            LogLine {
+                text: "entered".to_owned(),
+                danger: false,
+            },
+            &mut chronology,
+        );
+        for number in 0..12 {
+            log.push(
+                LogLine {
+                    text: format!("combat {number}"),
+                    danger: false,
+                },
+                &mut chronology,
+            );
+        }
+        activity.push(
+            LogLine {
+                text: "formation changed".to_owned(),
+                danger: false,
+            },
+            &mut chronology,
+        );
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(log)
+            .insert_resource(activity)
+            .init_resource::<SelectedActivityTab>()
+            .init_resource::<ActivityLogView>()
+            .add_systems(Update, publish_view);
+        app.update();
+
+        let view = app.world().resource::<ActivityLogView>();
+        assert_eq!(view.lines.len(), DRAWER_LINES);
+        assert_eq!(
+            view.lines
+                .last()
+                .map(|line| (line.kind, line.text.as_str())),
+            Some((ActivityKind::Activity, "formation changed"))
+        );
+        assert_eq!(
+            view.lines
+                .iter()
+                .filter(|line| line.text == "formation changed")
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -878,6 +1028,7 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .add_message::<CombatEvent>()
             .init_resource::<CombatLog>()
+            .init_resource::<ActivityChronology>()
             .init_resource::<DamagePulse>()
             .init_resource::<UnitRegistry>()
             .init_resource::<FactionLatticeKnowledge>()
@@ -976,6 +1127,7 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .add_message::<CombatEvent>()
             .init_resource::<CombatLog>()
+            .init_resource::<ActivityChronology>()
             .init_resource::<DamagePulse>()
             .init_resource::<UnitRegistry>()
             .init_resource::<FactionLatticeKnowledge>()
@@ -1044,6 +1196,7 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .add_message::<CombatEvent>()
             .init_resource::<CombatLog>()
+            .init_resource::<ActivityChronology>()
             .init_resource::<DamagePulse>()
             .init_resource::<UnitRegistry>()
             .init_resource::<FactionLatticeKnowledge>()
@@ -1145,6 +1298,7 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .add_message::<CombatEvent>()
             .init_resource::<CombatLog>()
+            .init_resource::<ActivityChronology>()
             .init_resource::<DamagePulse>()
             .init_resource::<UnitRegistry>()
             .init_resource::<FactionLatticeKnowledge>()

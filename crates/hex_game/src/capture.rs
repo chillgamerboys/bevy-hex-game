@@ -4,10 +4,10 @@
 //! (scripted multi-screen walk) screenshot the renderer and persist the frame
 //! atomically. The plumbing lives here once; *policy* stays with each caller:
 //! review demands its exact 1920x1080 target and rejects frames without full
-//! visual coverage, while the walk captures whatever the window is and treats
-//! coverage as evidence for the reviewer rather than a gate — a menu screen is
-//! mostly flat background and would fail review's terrain-shaped thresholds
-//! while being a perfectly good photograph of the menu.
+//! visual coverage, while the walk captures an explicit logical-size/device-scale
+//! image target. The walk's live UI-tree oracle is its structural gate; pixel
+//! coverage remains supporting evidence because a valid menu is mostly flat
+//! background and would fail review's terrain-shaped thresholds.
 
 use std::ffi::OsString;
 use std::fs;

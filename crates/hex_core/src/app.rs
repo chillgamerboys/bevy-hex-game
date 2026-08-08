@@ -26,18 +26,17 @@ pub enum Screen {
     Title,
     /// Persistent pre-alpha display and volume preferences.
     Settings,
-    /// Interactive sandbox for the lattice ruleset, reached from the title menu.
+    /// Local mechanics test reached only from Character Creator.
     ///
-    /// Exists as an isolated manual-verification surface for magic rules — casting,
-    /// fusions, mana, disables, and enchantments. Slated for gating or removal
-    /// before release.
+    /// Exists as an isolated manual-verification surface for casting, fusions, mana,
+    /// disables, and enchantments. It is not part of Main Menu navigation.
     LatticeDemo,
-    /// Saved character authoring, reached only from the Demos lane.
+    /// Saved character authoring, reached through the primary Creator workspace.
     CharacterCreator,
-    /// Saved spell authoring, reached only from the Demos lane.
+    /// Saved spell authoring, reached through the primary Creator workspace.
     SpellCreator,
-    /// Human sandbox setup and deterministic fixture selection.
-    CombatLab,
+    /// Temporary map, roster, character, and deployment setup.
+    Sandbox,
     /// Waits for settings and terminal asset states before gameplay may spawn.
     Loading,
     /// The game itself.
@@ -54,8 +53,8 @@ pub struct Pause(pub bool);
 
 /// Runtime boundary between terrain preparation, human deployment, and live combat.
 ///
-/// Ordinary scenarios move directly from `Preparing` to `Active`. Combat Lab
-/// sandboxes pause at `Deployment` while the already-loaded terrain remains visible.
+/// Ordinary scenarios move directly from `Preparing` to `Active`. Sandbox sessions
+/// pause at `Deployment` while the already-loaded terrain remains visible.
 #[derive(Resource, Reflect, Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
 pub enum GameplayPhase {
     /// Resources and terrain are being prepared.
@@ -157,7 +156,7 @@ pub enum GameplaySetup {
     /// Systems here can query tiles and read their
     /// [`HexSpan`](crate::HexSpan)s. Systems in [`Self::Terrain`] cannot.
     Actors,
-    /// Apply a validated exploration resume after default actors spawn.
+    /// Apply a validated Campaign save after default actors spawn.
     ///
     /// This phase is intentionally before perception: restored positions must be the
     /// positions observed on the first gameplay frame.
@@ -210,4 +209,8 @@ pub enum GameplaySystems {
     Casting,
     /// The explicit gameplay UI role context is ready for panels to consume.
     UiContext,
+    /// Disclosure-safe world-marker requests and suppression are published.
+    WorldFeedbackRequests,
+    /// World-space rings and reticles realize the published presentation request.
+    WorldFeedback,
 }

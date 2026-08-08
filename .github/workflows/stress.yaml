@@ -83,7 +83,7 @@ jobs:
           set -o pipefail
           {
             time cargo test --release --package hex_map benchmark -- --ignored --nocapture --test-threads=1
-            time cargo test --release --package hex_map --test spawning one_hundred_localized_terrain_edits_stay_within_the_interactive_budget -- --ignored --exact --nocapture --test-threads=1
+            time cargo test --release --package hex_map --test contracts terrain_edits::one_hundred_localized_terrain_edits_stay_within_the_interactive_budget -- --ignored --exact --nocapture --test-threads=1
             time cargo test --release --package hex_ai tests::baseline_ai_radius_team_matrix_release_benchmark -- --ignored --exact --nocapture --test-threads=1
             time cargo test --release --package hex_units formation::tests::six_member_formation_benchmark_matrix -- --ignored --exact --nocapture --test-threads=1
             time cargo test --release --package hex_perception runtime::tests::radius_40_recomputation_benchmark -- --ignored --exact --nocapture --test-threads=1

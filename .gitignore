@@ -1,6 +1,9 @@
 /target
+__pycache__/
+*.pyc
 *.DS_Store
 # Visual-walk output frames are per-run artifacts, not repo content.
 /.context/visual-walks/
 /.context/asset-workshop/
 /assets/.asset-workshop-cache/
+/.claude/settings.local.json

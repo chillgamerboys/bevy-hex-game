@@ -2209,7 +2209,7 @@ fn draw_object_inspector(
     }
     let canopy_changed = ui
         .checkbox(&mut state.show_canopy, "Canopy occluders")
-        .on_hover_text("Overlay exact cells eligible for canopy cutaway")
+        .on_hover_text("Overlay exact cells in the authored canopy mask")
         .changed();
     if canopy_changed {
         actions.push(WorkshopUiAction::ShowCanopyOverlay(state.show_canopy));
