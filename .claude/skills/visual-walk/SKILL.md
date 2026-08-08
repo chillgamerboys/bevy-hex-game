@@ -21,6 +21,11 @@ returns `not_applicable` with its typed hook closure.
 
 ## Run
 
+The display is a machine-global resource, like the human playtest. During a wave, only the
+coordinator invokes this skill, and only on the composed wave head; parallel lane builders
+never run it, `cargo dev`, or `cargo editor`, and record the tier as deferred to the merge
+gate instead.
+
 1. Ensure no operator-owned game process is running.
 2. Build the release-shaped local walk harness:
 

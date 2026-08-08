@@ -361,8 +361,20 @@ allowed to be wrong.
 
 Codex reads root [`AGENTS.md`](AGENTS.md) automatically and discovers repository
 skills under `.agents/skills/`. Use `$plan-parallel-work` before dividing a related
-outcome across lanes, and `$land-development-wave` to reconcile and land an existing
-batch without multiplying release gates.
+outcome across lanes, and `$plan-epic` once that choice is a wave.
+
+Waves have their own pipeline, and
+[`docs/development/wave-protocol.md`](docs/development/wave-protocol.md) is the
+tool-neutral contract behind all of it — the committed manifest under
+`docs/planning/waves/<slug>/`, the lane field table, the ownership algebra, the merge
+order, and the recipes for folding pre-existing branches into a wave. `/plan-epic`
+decomposes and commits the artifact, `/dispatch` runs up to three isolated worker agents
+against it and merges each lane PR into `wave/<slug>` through the same
+`/audit-pr` → `/merge-pr` gate, and `/inject` adds discovered work to a running wave.
+**`/dispatch` never merges to `dev` or `main`.** The single `wave/* → dev` merge stays a
+deliberate act carrying the combined head's own exact-head evidence. `/dispatch` and
+`/inject` are Claude-only because they need harness worktree isolation and agent
+messaging; a Codex coordinator plans with `$plan-epic` and lands lanes by hand.
 
 The PR lifecycle is driven by skills in `.claude/skills/`:
 `/create-pr` → `/audit-pr` → `/merge-pr` for feature work into `dev`;
@@ -393,13 +405,17 @@ walk used by `/audit-pr`; the agent
 reads static camera/UI/rendered-map frames, and video/human checks own motion, input
 response, control feel, and taste).
 Tickets live in Linear (team HEX): `/plan-ticket` reconciles and starts an existing
-issue, while `/update-linear` binds an existing issue to a PR or applies an explicit
-state transition. Initial UI defects use the tool-neutral
+issue, while `/update-linear` binds, transitions, or policy-retires an existing issue.
+Initial UI defects use the tool-neutral
 `.agents/skills/linear-ui-bug-intake` workflow; Claude's
 `/linear-ui-bug-intake` is a thin adapter over that same contract. All Linear skills
 resolve teams, workflow states, labels, members, and parents from live connector data
 instead of embedding workspace UUIDs. Linear linkage is encouraged, never a merge
-gate.
+gate. The committed wave manifest owns lane execution state, so `/plan-epic` and
+`/inject` reuse existing issues selectively and never mint one child per lane. New issue
+creation is limited to deduplicated `linear-ui-bug-intake` children. Fully delivered issues
+follow the free-workspace deletion policy in `docs/development/delivery-state.md` only after
+their outcome and exact `dev` delivery are recorded durably.
 
 ## Current state
 
