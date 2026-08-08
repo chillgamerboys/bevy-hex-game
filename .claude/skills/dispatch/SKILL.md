@@ -69,9 +69,25 @@ Pre-flight, once per wave:
    the plan.
 2. The union of all `owns` entries has no *unannotated* overlap. Where two lanes share a
    file, the queue must name the disjoint regions AND the composed end-state — else STOP
-   and fix the queue.
-3. Confirm `wave/<slug>` exists on the remote and was branched from a known `origin/dev`
-   SHA that the manifest records.
+   and fix the queue. `manifest.md` is the one standing exception and must be annotated as
+   such: every lane owns exactly its own queue row there and nothing else
+   ([wave-protocol.md §4.2](../../../docs/development/wave-protocol.md)). A manifest missing
+   from every `owns` list is as wrong as one listed without regions.
+3. **Cut the wave branch if it does not exist yet.** `/plan-epic` deliberately does not
+   create it: the manifest and orders land on `dev` first, so that cutting `wave/<slug>`
+   from the resulting `origin/dev` guarantees every lane worktree contains its own order.
+   Cutting it earlier produces workers whose orders are absent from the tree they check out.
+
+   ```sh
+   git fetch origin --prune
+   git rev-parse origin/dev                       # record this — it is the manifest's base
+   git push origin origin/dev:refs/heads/wave/<slug>
+   ```
+
+   Then write the branch name and that exact base SHA into the manifest header, on the wave
+   branch, as the wave's first commit. If the branch already exists, verify instead that its
+   recorded base SHA matches, and that the artifact PR is an ancestor of it — a wave cut
+   before its own manifest landed is the failure this step exists to prevent.
 4. Name the **machine-global resources**: the GPU and display (`/visual-walk`, `cargo dev`,
    `cargo editor`), the human playtest, and disk for three cold build directories. They are
    the coordinator's alone.
@@ -120,32 +136,51 @@ follow-up cheaply. Every brief carries:
    the other owner's PRs in flight with their footprints, siblings' region splits in shared
    files, and which handoff contract to verify rather than assume. Without it a late rebase
    reads to the worker as a conflict, not a design interaction.
-4. **The bootstrap block**, run in the fresh worktree:
+4. **The bootstrap block**, run in the fresh worktree *before any work*:
 
    ```sh
    git remote get-url origin          # must name bevy-hex-game — STOP on mismatch
-   cat rust-toolchain.toml            # 1.97.1, pinned; an older stable fails the tree
-   cat .cargo/config.toml             # BEVY_ASSET_ROOT must resolve to THIS worktree
+   git rev-parse --abbrev-ref HEAD    # must be this lane's branch
+   git merge-base --is-ancestor origin/wave/<slug> HEAD && echo "base ok"
+   grep channel rust-toolchain.toml   # 1.97.1; an older stable fails the dependency tree
+   test -f .cargo/config.toml && echo "asset root config present"
+   ```
+
+   Everything runs through cargo, and `.cargo/config.toml` must be present in *this*
+   worktree root: `BEVY_ASSET_ROOT` is `relative = true`, so it resolves against that file's
+   parent, and without it the game reads another checkout's assets or none at all.
+   **Do not set a shared `CARGO_TARGET_DIR`**: cargo takes an exclusive lock on a build
+   directory, so sharing one across worktrees serializes the whole wave. Each worker pays
+   its own cold Bevy build; that cost is why the cap is three.
+
+   **Do not run the scope plan here.** A fresh lane worktree has an empty diff against its
+   own base, and `tools/test_scope.py` fail-closes an empty diff to `fail-closed-empty-diff`
+   with the complete gate — so running it at t=0 produces that token every time, and a
+   worker taught to read it as "wrong base" either escalates a false alarm or learns to
+   ignore the one token that detects a genuinely wrong base.
+
+5. **The falsifiability check**, run *after the first commit*, once there is a diff:
+
+   ```sh
    python3 tools/test_scope.py plan --base origin/wave/<slug> --head HEAD
    ```
 
-   Everything runs through cargo. **Do not set a shared `CARGO_TARGET_DIR`**: cargo takes
-   an exclusive lock on a build directory, so sharing one across worktrees serializes the
-   whole wave. Each worker pays its own cold Bevy build; that cost is why the cap is three.
+   It must name *this lane's* paths and its selected concerns. `fail-closed-empty-diff`
+   after a commit means the base is wrong; someone else's paths mean the worktree is.
 
-   The last command is the self-check, and it replaces the seed's break-one-line test: it
-   must name *this lane's* paths and its selected concerns. If it reports
-   `fail-closed-empty-diff` or someone else's paths, the worktree or the base is wrong and
-   the gate the worker is about to trust is measuring the wrong tree.
-5. **File and region ownership** — which files, and where two lanes share one, which hunks
+   Then the seed's rule, which nothing else replaces: **break one changed line, confirm the
+   selected concern goes red, restore.** A gate that cannot go red is not a gate, and
+   concern routing being correct is not evidence that the concern actually exercises this
+   lane's code.
+6. **File and region ownership** — which files, and where two lanes share one, which hunks
    and what the composed end-state is.
-6. **Test and fence dispositions** — per load-bearing test the lane touches: retire,
+7. **Test and fence dispositions** — per load-bearing test the lane touches: retire,
    retarget or keep, with the reason. Without it a worker either breaks a fence or refuses
    to touch one it should. Never disposition a fence as retire without naming the claim
    that dies with it, and say in the order that the fence going red first is it working.
-7. **The evidence class** for this lane, and the deferral: a lane's manual runtime
+8. **The evidence class** for this lane, and the deferral: a lane's manual runtime
    sign-off belongs to the combined wave PR.
-8. **[The worker prompt contract](references/worker-contract.md)**, verbatim.
+9. **[The worker prompt contract](references/worker-contract.md)**, verbatim.
 
 ## Step 3 — Create the branch and worktree, launch up to 3 workers
 
@@ -204,7 +239,12 @@ Per returned worker, before anything merges:
    when the change is correct; `/audit-diff` lens 9 covers this, but you own the
    disjointness union.
 3. Check the **deviations**. A worker correcting a stale claim and reporting the delta is a
-   good worker; one that silently obeyed a wrong instruction is the expensive one.
+   good worker; one that silently obeyed a wrong instruction is the expensive one. A worker
+   blocked by something outside its order should have opened its PR as a draft and said
+   which steps remain — that is the model working. **A claimed-green gate that was not run,
+   or was run and failed, is the whole model failing:** treat it as a calibration incident,
+   re-verify that worker's other lanes before they merge, and do not take its later reports
+   at face value.
 4. Triage **escalations** yourself — most are real findings a guessing worker would have
    shipped as bugs — and file the **out-of-scope debt** now, while it still has a finder.
 5. **Broadcast hazards the same turn.** A report surfacing an environment or gate-validity
@@ -244,7 +284,8 @@ end-state.
 
 **Audit in the lane's worktree, not yours.** `/audit-pr` requires local `HEAD` to equal the
 PR head and a clean tree, which your own workspace cannot satisfy for someone else's lane.
-Run `/audit-pr` there, then `/merge-pr` with `--base wave/<slug>`. The coordinator merges;
+Run `/audit-pr` there, then `/merge-pr`, which reads the base off the PR and already allows
+the `source→wave/*` shape. Confirm that shape before merging. The coordinator merges;
 workers never do.
 
 Read only `overall_status`, `head_sha`, `pr_number`, and `base_branch` from the receipt.
@@ -257,9 +298,10 @@ its reader of record, and a third copy triples an existing drift hazard.
 python3 tools/test_scope.py plan --base origin/dev --head origin/wave/<slug>
 ```
 
-then run the concerns it selects. This is **mandatory and has no CI backstop**:
-`.github/workflows/ci.yaml` runs its `push` jobs only on `main` and `dev`, so nothing
-validates the wave branch between lane merges. It stays mandatory even for a single-lane
+then run the concerns it selects. This is **mandatory because CI's cover here is stale, not
+absent**: a lane PR into `wave/*` does get the full gate (`pull_request` has no branch
+filter), but only on push — never when its base moves underneath it — and `ci.yaml`'s `push`
+jobs are limited to `main` and `dev`, so nothing re-checks the wave after a merge. It stays mandatory even for a single-lane
 merge — worker-green is not coordinator-green for any environment-dependent test. This is
 the cheap selector-chosen run, not the complete candidate gate; that tier runs once, on the
 final wave PR.
@@ -318,8 +360,8 @@ here.
 Wave wave/<slug> · slots 3 · dispatched N · merged M · blocked B
 Wave head <sha> · composed gate <result>
 
-| Lane | Ticket | PR | Outcome |
-|---|---|---|---|
+| Lane | Ticket | PR | Receipt | Outcome |
+|---|---|---|---|---|
 
 Escalations resolved: <each, with the ruling>
 Deferred: <legit-defer lanes + reason>

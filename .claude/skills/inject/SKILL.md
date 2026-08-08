@@ -49,8 +49,8 @@ anything else:
 **If the wave is running artifact-light** — planned in a session, in a plan file outside the
 repo, or under `.context/` — say so explicitly and **create the manifest as part of this
 injection**. A wave planned into `.context/` is the likeliest case here, and it is
-artifact-light by definition: that directory is excluded from the repository, so nothing in
-it exists inside a worker's worktree. The artifact is not optional: Step 2's collision check
+artifact-light by definition: it is untracked scratch, so nothing in it exists inside a
+worker's worktree. The artifact is not optional: Step 2's collision check
 has nothing authoritative to read without it, and each injection makes the unbanked state
 more expensive. Seed it from what the wave already has — the live lanes, their builders,
 their PRs — rather than reconstructing the original plan.
@@ -152,7 +152,10 @@ session.
 
 Then, immediately:
 
-- **A free slot and empty `dispatch_blockers` → dispatch now**, using
+- **A free slot and empty `dispatch_blockers` → dispatch now**, through `/dispatch` Step 3:
+  the coordinator cuts the lane branch off `wave/<slug>` and creates the isolated worktree
+  *before* launching, which is what makes `/create-pr`'s Conductor rule satisfiable inside
+  the lane. Then send
   [the worker contract](../dispatch/references/worker-contract.md) unchanged. This is the
   backfill rule. An injection that waits for the next check-in is the under-utilization
   failure `/dispatch` exists to prevent, and it is *worse* here than in a planned wave: the
@@ -168,7 +171,10 @@ Then, immediately:
 
 ## Step 5 — Artifact truth
 
-In the same commit and PR discipline the wave already uses, the manifest gains:
+The manifest lives on the wave branch once `/dispatch` Step 0 has cut it, so an injected
+lane's artifact update is a commit on `wave/<slug>` by the coordinator — not a second PR to
+`dev`, which would leave the new order absent from every lane worktree already checked out.
+It gains:
 
 - the **queue row** from Step 4, with its `state` and `builder`;
 - its **ownership map** bullet, plus any hotspot rule Step 2 produced;

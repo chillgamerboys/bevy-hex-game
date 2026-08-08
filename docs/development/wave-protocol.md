@@ -46,8 +46,9 @@ docs/planning/waves/<slug>/
 and is not tracked, so anything stored there is invisible inside a fresh worktree, in a
 fresh clone, and on the other owner's machine — including to every dispatched worker, which
 is exactly the audience the orders exist for. That is a property of being untracked, not of
-any one ignore rule, so it holds even where `.gitignore` says nothing about the path. `docs/planning/spell-resolution-wave.md` is the existing precedent
-for a committed wave record.
+any one ignore rule, so it holds even where `.gitignore` says nothing about the path.
+`docs/planning/spell-resolution-wave.md` is the existing precedent for a committed wave
+record.
 
 There is **exactly one wave artifact format**. A lane plan that lives anywhere else, in any
 other shape, is not a wave — it is a note.
@@ -174,6 +175,15 @@ The repo's append-only shared files — `crates/hex_assets/src/lib.rs`,
 adds its `mod` / `pub use` / `register_type` line in the existing alphabetical position and
 touches nothing else. A one-line addition merges; a reflow does not.
 
+**`manifest.md` is shared by construction, and every wave must annotate it.** Each lane
+updates its own `state` and `pr` in its own PR (§3) — that is what makes the queue
+trustworthy rather than aspirational — so the manifest belongs in *every* lane's `owns`,
+scoped to **that lane's queue row only**, with the standing hotspot rule that a lane rebases
+onto the wave rather than resolving a sibling's row. Omitting it makes each lane's
+definition-of-done edit an ownership violation; listing it without the region split trips
+the disjointness check. It is the one overlap that is expected on every wave, and expected
+is not the same as unannotated.
+
 A **new file importing a symbol another lane deletes** is invisible to any path-level map.
 Wherever that shape is visible, make it an explicit merge blocker and flag the composed-tree
 check in both orders.
@@ -225,7 +235,11 @@ says *verify*, never *assume*.
 
 ## 6. Merge order and the wave branch
 
-One coordinator creates `wave/<slug>` from current `origin/dev`. Only the coordinator writes
+One coordinator creates `wave/<slug>` from current `origin/dev` — **after the manifest and
+orders have landed on `dev`**, so that every lane worktree cut from the wave contains its
+own order. Cutting the wave first produces workers whose briefs are absent from the tree
+they check out, which is the same failure as storing the plan in untracked scratch. The
+manifest header records the branch and that exact base SHA. Only the coordinator writes
 directly to the wave. Lane builders push additive commits to their own branches. Published
 and shared branches are never rebased or force-pushed; merge updated `dev` into an
 already-published wave with an additive commit.
@@ -256,9 +270,13 @@ run the concerns it selects:**
 python3 tools/test_scope.py plan --base origin/dev --head origin/wave/<slug>
 ```
 
-This is mandatory and has **no CI backstop**: `.github/workflows/ci.yaml` runs its `push`
-jobs only on `main` and `dev`, so nothing validates the wave branch between lane merges. Two
-lanes green in isolation can compose red — most sharply when a new file imports a symbol
+This is mandatory because **CI's cover of the wave branch is stale, not absent, and stale is
+the dangerous shape.** `.github/workflows/ci.yaml` has no branch filter on `pull_request`,
+so a lane PR into `wave/*` does run the full selector-driven gate against GitHub's merge
+commit — but it runs on *push*, not when the base moves underneath it. A lane that went
+green before its sibling landed has proven nothing about the tree that now exists, and
+`ci.yaml`'s `push` jobs are limited to `main` and `dev`, so nothing re-checks the wave
+branch after a merge. Two lanes green in isolation can compose red — most sharply when a new file imports a symbol
 another lane deleted, which every path-level ownership map is blind to. Discovering that at
 the wave gate, after the builders are gone, costs the wave.
 

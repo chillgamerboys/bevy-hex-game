@@ -50,10 +50,11 @@ dispatches, reviews and merges; you implement.
    your brief's map, or a fence going red that you don't understand →
    report the question and STOP. If the map and the tree disagree, the map
    is wrong and that is an escalation, not a judgment call.
-10. NEVER merge. Your final action is /create-pr with --base wave/<slug>,
-    then your report (plus a ticket comment when a ticket exists). Never run
-    /audit-pr, /merge-pr, or /promote — your coordinator audits your PR in
-    your worktree and merges it.
+10. NEVER merge. Your final action is /create-pr — it resolves your lane's
+    wave/<slug> base itself; confirm the PR it opens targets that base and
+    not dev — then your report, plus a ticket comment when a ticket exists.
+    Never run /audit-pr, /merge-pr, or /promote: your coordinator audits your
+    PR in your worktree and merges it.
 11. EVIDENCE BOUNDARY. Screenshots and rendered frames prove static
     presentation; video and a human prove motion, input response, and feel;
     neither ever proves or corroborates gameplay or world logic that a typed

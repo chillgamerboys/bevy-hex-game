@@ -64,9 +64,10 @@ Plan Epic Progress:
    never blocks planning or dispatch** — see
    [delivery-state.md](../../../docs/development/delivery-state.md).
 
-5. **Clean-enough worktree.** Step 7 commits the manifest and orders; warn the operator to
-   stash or commit work in progress. In Conductor, use the current branch exactly as
-   provided and never switch or create one.
+5. **Clean-enough worktree on a branch cut from `origin/dev`.** Step 7 commits the manifest
+   and orders from the current workspace branch; warn the operator to stash or commit work
+   in progress. In Conductor, use the current branch exactly as provided and never switch or
+   create one — if it is the wrong branch, stop and ask for the right workspace.
 
 ## Step 1 — Read the epic, its children, its comments
 
@@ -163,9 +164,15 @@ Within an authority:
   queue because it holds real territory: its files count in the disjointness union and its
   merges go through the hotspot rule. Untagged means `worker`, so the tag is the only thing
   standing between a human's in-progress lane and a worker dispatched onto it.
-- Leave shared claims-about-now files — the test count in `CLAUDE.md`, type names quoted in
-  `docs/planning/boundary.md` — to the coordinator at integration, not to three lanes at
-  once.
+- **`manifest.md` is shared by construction and must be annotated, not omitted.** Every
+  lane updates its own `state` and `pr` there in its own PR, so the file belongs in every
+  lane's `owns` — scoped to *that lane's queue row only*, with the hotspot rule that a lane
+  rebases onto the wave rather than resolving a sibling's row. Omitting it makes the
+  definition-of-done edit an ownership violation; listing it without the region split trips
+  the disjointness pre-flight.
+- Leave the *other* shared claims-about-now files — the test count in `CLAUDE.md`, type
+  names quoted in `docs/planning/boundary.md` — to the coordinator at integration, not to
+  three lanes at once.
 
 ### Selector consequence per lane
 
@@ -329,7 +336,15 @@ its input, and nothing here should precede it. Confirm once, then, in this order
 
 3. **Commit the manifest and orders in-repo**, on a branch off `origin/dev`, through the
    ordinary `/create-pr` → `/audit-pr` → `/merge-pr` path. This is the one artifact PR that
-   targets `dev` rather than the wave. In-repo is the point: the operator reviews the
+   targets `dev` rather than the wave. **Do not cut `wave/<slug>` here.** It is cut from
+   `origin/dev` *after* this PR lands — that ordering is what guarantees each lane's
+   worktree contains its own order, and reversing it leaves every worker reading a tree its
+   brief is missing from. Leave the manifest header's wave base SHA blank; `/dispatch`
+   Step 0 cuts the branch and fills it in.
+
+   In Conductor this PR uses the current workspace branch. If that branch is not cut from
+   `origin/dev`, stop and ask the operator for the right workspace, exactly as `/create-pr`
+   preflight 3 requires — never switch or create one here. In-repo is the point: the operator reviews the
    decomposition as a diff, and each worker reads its order out of the tree it checks out.
    A plan under `.context/` is invisible in a worker's worktree.
 
@@ -348,7 +363,8 @@ its input, and nothing here should precede it. Confirm once, then, in this order
      tickets:  <minted/verified list, or "none — Linear unavailable">
      manifest: docs/planning/waves/<slug>/manifest.md
      orders:   docs/planning/waves/<slug>/orders/ (N files)
-     wave:     wave/<slug> (branch from origin/dev @ <sha>)
+     wave:     wave/<slug> — not yet cut; /dispatch Step 0 cuts it from origin/dev
+               once this artifact PR has landed
    Next: /dispatch
    ```
 
