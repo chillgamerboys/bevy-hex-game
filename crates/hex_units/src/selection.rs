@@ -3,28 +3,34 @@
 //! Clicking a tile used to move the player instantly, and refuse silently when it
 //! could not: not your turn, no route, too far, nothing standable. Five different
 //! reasons all looked identical from the outside — nothing happened. This module
-//! makes the answer visible *before* the click, so a tile that cannot be reached is
-//! simply not lit.
+//! makes the answer visible *before* the click: affordable tiles show their route,
+//! connected terrain beyond the budget gets a refusal ×, and terrain with no route
+//! remains unlit.
 //!
-//! Three things are drawn:
+//! Four things are drawn:
 //!
 //! | | |
 //! |---|---|
 //! | a ring | at the feet of the acting unit, or of the selection out of combat |
 //! | a faint tint | over every surface within this turn's movement — combat only |
 //! | a stronger tint | along the way to whatever the cursor is over |
+//! | a rose × | on a connected destination this turn cannot afford |
 //!
 //! There is **no range tint while exploring**, because there is no budget there: every
 //! connected surface is reachable, and a tint over the whole map says nothing.
 //!
-//! # One search, not one per tile
+//! # Cached searches, not one per tile
 //!
-//! Both tints come out of a single [`Reach`](crate::movement::Reach). Its keys are the
-//! range and a walk backwards down its predecessors is the path, so hovering costs a
-//! lookup rather than a search. What is expensive is
+//! Combat caches one unbounded, disclosure-safe [`Reach`](crate::movement::Reach).
+//! Its exact costs are sliced by the current budget for range and affordable paths;
+//! a higher cost supplies the coarse "connected but too far" cue. The search includes
+//! allied and currently presentable hostile occupancy but excludes fogged hostiles,
+//! preventing hidden actors from becoming a presentation oracle. Command validation
+//! remains authoritative. Exploring uses the same search without a budget slice.
+//! Either way, a hover remains a lookup rather than a search. What is expensive is
 //! [`Footing::from_tiles`](crate::movement::Footing::from_tiles), which reads every
-//! tile entity on the map — so the search is rebuilt when the *selection* changes, not
-//! when the cursor does. Moving the mouse redraws; it does not re-solve.
+//! tile entity on the map — so the search is rebuilt when its preview key changes,
+//! not when the cursor does. Moving the mouse redraws; it does not re-solve.
 
 use bevy::light::NotShadowCaster;
 use bevy::picking::events::{Out, Over, Pointer};
@@ -33,7 +39,8 @@ use bevy::prelude::*;
 
 use hex_assets::{GameAssets, SubstanceTable};
 use hex_core::{
-    CameraFocusTarget, GameplaySetup, GameplaySystems, HexTile, Mode, PausableSystems, Screen,
+    Busy, CameraFocusTarget, GameplaySetup, GameplaySystems, HexTile, Mode, PausableSystems,
+    PerceptionSystems, PresentationOcclusion, PresentationOcclusionReason, Screen,
     TargetReticleRequest, TilePos, TraversalBlockers, Turn, UnitId, WorldMarkerSuppression,
 };
 
@@ -60,6 +67,23 @@ const RANGE_LIFT: f32 = 0.01;
 /// How far above a surface the path cap floats. Above [`RANGE_LIFT`] so the two never
 /// contend for the same pixels where a path crosses its own range.
 const PATH_LIFT: f32 = 0.05;
+
+/// Scale of each reused target tick in the out-of-range ×.
+///
+/// The underlying cuboid is 0.34 × 0.025 × 0.12 world units. These factors make two
+/// crossed strokes about 0.75 units long and 0.09 wide, plainly different from every
+/// hex cap even without colour.
+const OUT_OF_RANGE_STROKE_SCALE: Vec3 = Vec3::new(2.2, 1.0, 0.75);
+
+/// Clearance above the terrain for the refusal ×.
+///
+/// Tactical shroud caps occupy the layer through `surface top + 0.10`. Keeping the
+/// stroke's underside at `+0.12`, with a larger depth bias than the shroud, preserves
+/// movement feedback on shaded destinations as well as ordinary ground.
+const OUT_OF_RANGE_LIFT: f32 = 0.12;
+
+/// Half the shared target-tick mesh's unscaled thickness.
+const TARGET_TICK_HALF_THICKNESS: f32 = 0.0125;
 
 /// How far above a unit's feet the ring sits.
 const RING_LIFT: f32 = 0.03;
@@ -105,6 +129,16 @@ pub struct RangeOverlay;
 #[reflect(Component)]
 pub struct PathOverlay;
 
+/// Marks a hovered destination that is connected but beyond this turn's budget.
+///
+/// This is deliberately a two-stroke × on one target rather than a potentially
+/// map-spanning continuation. The cue answers why the click would refuse without
+/// creating hundreds of entities when the cursor crosses a distant tile, and its
+/// shape remains meaningful without colour.
+#[derive(Component, Reflect, Default)]
+#[reflect(Component)]
+pub struct OutOfRangeOverlay;
+
 /// Marks a ring, and remembers the unit it belongs to.
 ///
 /// Holding the owner rather than relying on the hierarchy keeps the reconcile a single
@@ -122,12 +156,13 @@ pub struct TargetReticle(Entity);
 
 /// Meshes and materials shared by every overlay.
 ///
-/// Four materials and one mesh for the whole game, following the `MaterialCache`
+/// Six materials and two meshes for the whole game, following the `MaterialCache`
 /// precedent in `hex_map`: a highlight over sixty tiles must not be sixty materials.
 #[derive(Resource)]
 struct OverlayAssets {
     range: Handle<StandardMaterial>,
     path: Handle<StandardMaterial>,
+    out_of_range: Handle<StandardMaterial>,
     ring: Handle<Mesh>,
     target_tick: Handle<Mesh>,
     player_ring: Handle<StandardMaterial>,
@@ -148,29 +183,29 @@ struct OverlayAssets {
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TerrainRevision(pub u64);
 
-/// What a [`Reach`] was computed for.
+/// What the disclosure-safe [`Reach`] was computed for.
 ///
-/// Two levels of absence, which are different things: no key at all means nothing is
-/// being previewed — in combat, on somebody else's turn. A key with `budget: None`
-/// means exploring, where movement is unlimited.
-///
-/// `terrain` is here because the other three can all be unchanged while the ground
+/// `terrain` is here because the other fields can all be unchanged while the ground
 /// underneath them is replaced.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct PreviewKey {
     unit: Entity,
     from: TilePos,
-    budget: Option<u32>,
     terrain: u64,
-    occupancy: u64,
+    disclosure: u64,
 }
 
 /// The current search, and what is drawn from it.
 #[derive(Resource, Default)]
 struct MovementPreview {
-    /// What `reach` was computed for, and the test for whether it is still valid.
+    /// What the cached search was computed for, and whether it is still valid.
     of: Option<PreviewKey>,
+    /// One unbounded reach over facts presentable to the selected faction.
     reach: Option<Reach>,
+    /// Affordable surfaces sliced from [`Self::reach`] for the current combat budget.
+    affordable: Vec<Standing>,
+    /// The budget [`Self::affordable`] reflects. `None` means exploring or no preview.
+    range_for: Option<u32>,
     /// The hovered surface the drawn overlays reflect.
     shown: Option<TilePos>,
 }
@@ -183,6 +218,7 @@ pub fn plugin(app: &mut App) {
         .register_type::<WorldMarkerSuppression>()
         .register_type::<RangeOverlay>()
         .register_type::<PathOverlay>()
+        .register_type::<OutOfRangeOverlay>()
         .init_resource::<HoveredSurface>()
         .init_resource::<MovementPreview>()
         .init_resource::<TerrainRevision>()
@@ -208,6 +244,7 @@ pub fn plugin(app: &mut App) {
                 .in_set(PausableSystems)
                 .in_set(GameplaySystems::Selection)
                 .after(track_terrain_changes)
+                .after(PerceptionSystems::ApplyPresentation)
                 .after(crate::movement::MovementSystems::Reconcile),
         )
         .add_systems(
@@ -285,12 +322,15 @@ fn create_overlay_assets(
     // ownership rather than as reachable ground.
     let range = materials.add(cap_material(Color::srgba(1.0, 0.94, 0.75, 0.22), 1.0));
     let path = materials.add(cap_material(Color::srgba(1.0, 0.9, 0.55, 0.6), 2.0));
+    // A rose-magenta refusal cue, rather than either faction's red/blue primary.
+    // The crossed-stroke geometry carries the same meaning without relying on hue.
+    let out_of_range = materials.add(cap_material(Color::srgba(0.95, 0.30, 0.62, 0.9), 9.0));
 
     // Sized inside a hex — the grid's circumradius is 1.0, so its inradius is about
     // 0.87 and a ring at 0.78 clears the edge on every side.
     let ring = meshes.add(Mesh::from(Torus::new(0.68, 0.78)));
-    // Four copies form the target reticle. A segmented square language cannot be
-    // confused with the continuous torus used for the acting/selected unit.
+    // Four copies form the target reticle, and two crossed copies form the
+    // out-of-range ×. Neither can be confused with the continuous acting ring.
     let target_tick = meshes.add(Mesh::from(Cuboid::new(0.34, 0.025, 0.12)));
 
     // Rings borrow their unit's colour, because a ring *is* about ownership — it says
@@ -302,6 +342,7 @@ fn create_overlay_assets(
     commands.insert_resource(OverlayAssets {
         range,
         path,
+        out_of_range,
         ring,
         target_tick,
         player_ring,
@@ -575,8 +616,18 @@ fn redraw_overlays(
     revision: Res<TerrainRevision>,
     blockers: Option<Res<TraversalBlockers>>,
     tiles: TileQuery,
-    selected: Query<(Entity, &UnitId, &StandsOn, &Body, Option<&Turn>), With<Selected>>,
-    positions: Query<(&UnitId, &StandsOn, Option<&MovingTo>)>,
+    selected: Query<
+        (Entity, &UnitId, &Faction, &StandsOn, &Body, Option<&Turn>),
+        (With<Selected>, Without<Busy>, Without<MovingTo>),
+    >,
+    selected_body_changes: Query<(), (With<Selected>, Changed<Body>)>,
+    positions: Query<(
+        &UnitId,
+        &Faction,
+        &StandsOn,
+        Option<&MovingTo>,
+        Option<&PresentationOcclusion>,
+    )>,
     drawn: Query<Entity, DrawnOverlays>,
 ) {
     let (Some(assets), Some(overlays), Some(table), Some(mode)) = (assets, overlays, table, mode)
@@ -584,17 +635,34 @@ fn redraw_overlays(
         return;
     };
 
-    let occupancy =
-        UnitOccupancy::from_positions(positions.iter().flat_map(|(unit, on, moving)| {
-            std::iter::once((*unit, on.0.pos)).chain(
-                moving
-                    .into_iter()
-                    .flat_map(|moving| moving.path.iter())
-                    .map(|step| (*unit, step.pos)),
-            )
-        }));
     let selection = selected.iter().next();
-    let key = selection.and_then(|(entity, _, standing, _, turn)| {
+    let viewer_faction = selection.map(|(_, _, faction, _, _, _)| *faction);
+    let footing_changed = table.is_changed()
+        || blockers
+            .as_ref()
+            .is_some_and(|blockers| blockers.is_changed())
+        || !selected_body_changes.is_empty();
+    let disclosed_occupancy = UnitOccupancy::from_positions(
+        positions
+            .iter()
+            .filter(|(_, faction, _, _, occlusion)| {
+                viewer_faction.is_some_and(|viewer| {
+                    **faction == viewer
+                        || !occlusion.is_some_and(|occlusion| {
+                            occlusion.contains(PresentationOcclusionReason::Fog)
+                        })
+                })
+            })
+            .flat_map(|(unit, _, on, moving, _)| {
+                std::iter::once((*unit, on.0.pos)).chain(
+                    moving
+                        .into_iter()
+                        .flat_map(|moving| moving.path.iter())
+                        .map(|step| (*unit, step.pos)),
+                )
+            }),
+    );
+    let request = selection.and_then(|(entity, _, _, standing, _, turn)| {
         let budget = match (mode.get(), turn) {
             // Somebody else's turn. Tinting a range the piece cannot use this turn
             // would promise a move that would then be refused.
@@ -603,32 +671,63 @@ fn redraw_overlays(
             // Exploring has no budget at all, which is why there is no range tint.
             (Mode::Exploring, _) => None,
         };
-        Some(PreviewKey {
-            unit: entity,
-            from: standing.0.pos,
+        Some((
+            PreviewKey {
+                unit: entity,
+                from: standing.0.pos,
+                terrain: revision.0,
+                disclosure: disclosed_occupancy.fingerprint(),
+            },
             budget,
-            terrain: revision.0,
-            occupancy: occupancy.fingerprint(),
-        })
+        ))
     });
+    let key = request.map(|(key, _)| key);
+    let budget = request.and_then(|(_, budget)| budget);
 
-    if key == preview.of && hovered.0 == preview.shown {
+    if key == preview.of
+        && budget == preview.range_for
+        && hovered.0 == preview.shown
+        && !footing_changed
+    {
         return;
     }
 
-    // The search depends on where the piece stands and what it has left, never on
-    // where the cursor is. `Footing::from_tiles` reads every tile entity on the map —
-    // around four thousand of them — so rebuilding it per mouse-move would cost
-    // hundreds of thousands of reads a second to arrive at the same answer.
-    if key != preview.of {
-        preview.reach = selection.and_then(|(_, unit, standing, body, _)| {
-            let key = key?;
+    // The search depends on where the piece stands, not where the cursor is.
+    // `Footing::from_tiles` reads every tile entity on the map — tens of thousands on
+    // the largest current worlds — so rebuild it only when the graph key is stale.
+    // Budget changes merely re-slice cached costs, and hidden occupancy is absent from
+    // the key entirely.
+    let reach_dirty = key != preview.of || footing_changed;
+    if reach_dirty {
+        preview.reach = if let (Some(_), Some((_, unit, _, standing, body, _))) = (key, selection) {
             let footing = Footing::from_tiles(tiles.iter(), &table, *body, blockers.as_deref());
             Some(Reach::with_occupancy(
-                standing.0, &footing, key.budget, &occupancy, *unit,
+                standing.0,
+                &footing,
+                None,
+                &disclosed_occupancy,
+                *unit,
             ))
-        });
+        } else {
+            None
+        };
         preview.of = key;
+    }
+
+    if reach_dirty || budget != preview.range_for {
+        let mut affordable = match (preview.reach.as_ref(), key, budget) {
+            (Some(reach), Some(key), Some(budget)) => reach
+                .surfaces()
+                .filter(|standing| {
+                    standing.pos != key.from
+                        && reach.cost(standing.pos).is_some_and(|cost| cost <= budget)
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        affordable.sort_by_key(|standing: &Standing| standing.pos);
+        preview.affordable = affordable;
+        preview.range_for = budget;
     }
     preview.shown = hovered.0;
 
@@ -639,15 +738,12 @@ fn redraw_overlays(
     let Some(reach) = preview.reach.as_ref() else {
         return;
     };
-    let Some(key) = key else {
+    if key.is_none() {
         return;
-    };
+    }
 
-    if key.budget.is_some() {
-        for standing in reach.surfaces() {
-            if standing.pos == key.from {
-                continue;
-            }
+    if budget.is_some() {
+        for standing in preview.affordable.iter().copied() {
             let tint = cap(&assets, &overlays.range, standing, RANGE_INSET, RANGE_LIFT);
             commands.spawn((tint, RangeOverlay, Name::new("RangeOverlay")));
         }
@@ -656,9 +752,20 @@ fn redraw_overlays(
     let Some(target) = hovered.0 else {
         return;
     };
+    let Some(cost) = reach.cost(target) else {
+        return;
+    };
+    if budget.is_some_and(|budget| cost > budget) {
+        let Some(destination) = reach.standing(target) else {
+            return;
+        };
+        spawn_out_of_range_glyph(&mut commands, &overlays, destination);
+        return;
+    }
     let Some(path) = reach.path_to(target) else {
         return;
     };
+
     // Skipping the first entry: it is the surface the piece already stands on, and
     // tinting it would make a legal move look like it started one hex early.
     for standing in path.iter().skip(1) {
@@ -668,7 +775,36 @@ fn redraw_overlays(
 }
 
 /// Everything drawn on the ground by this module, for clearing in one pass.
-type DrawnOverlays = Or<(With<RangeOverlay>, With<PathOverlay>)>;
+type DrawnOverlays = Or<(
+    With<RangeOverlay>,
+    With<PathOverlay>,
+    With<OutOfRangeOverlay>,
+)>;
+
+/// Draws one colour-independent × over a connected destination beyond the budget.
+fn spawn_out_of_range_glyph(commands: &mut Commands, overlays: &OverlayAssets, standing: Standing) {
+    let translation = standing
+        .pos
+        .coord
+        .to_world(standing.span.top + OUT_OF_RANGE_LIFT + TARGET_TICK_HALF_THICKNESS);
+    for yaw in [std::f32::consts::FRAC_PI_4, -std::f32::consts::FRAC_PI_4] {
+        commands.spawn((
+            Mesh3d(overlays.target_tick.clone()),
+            MeshMaterial3d(overlays.out_of_range.clone()),
+            Transform {
+                translation,
+                rotation: Quat::from_rotation_y(yaw),
+                scale: OUT_OF_RANGE_STROKE_SCALE,
+            },
+            Visibility::Inherited,
+            Pickable::IGNORE,
+            NotShadowCaster,
+            standing.pos,
+            OutOfRangeOverlay,
+            Name::new("OutOfRangeOverlay"),
+        ));
+    }
+}
 
 /// One tinted cap, sitting on a surface.
 ///
@@ -749,6 +885,7 @@ mod tests {
         let mut materials = Assets::<StandardMaterial>::default();
         let range = materials.add(StandardMaterial::default());
         let path = materials.add(StandardMaterial::default());
+        let out_of_range = materials.add(StandardMaterial::default());
         let player_ring = materials.add(StandardMaterial::default());
         let enemy_ring = materials.add(StandardMaterial::default());
         let target_reticle = materials.add(StandardMaterial::default());
@@ -757,6 +894,7 @@ mod tests {
             OverlayAssets {
                 range,
                 path,
+                out_of_range,
                 ring: ring.clone(),
                 target_tick: target_tick.clone(),
                 player_ring,

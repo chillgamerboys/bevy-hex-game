@@ -15,9 +15,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use bevy::camera::NormalizedRenderTarget;
+use bevy::light::NotShadowCaster;
 use bevy::picking::backend::HitData;
 use bevy::picking::events::{Click, Pointer};
 use bevy::picking::pointer::{Location, PointerButton, PointerId};
+use bevy::picking::Pickable;
 use bevy::prelude::*;
 
 use hex_anim::Transformation;
@@ -29,14 +31,15 @@ use hex_assets::{Substance, SubstanceFile, SubstanceTable};
 use hex_core::{
     Busy, CommandQueue, GameCommand, GameplayPhase, GameplaySetup, GameplaySetupFailure, Headroom,
     HexCoord, HexSpan, HexTile, MapAnchorId, MapAnchors, Mode, PartyFormation, PartyMovementMode,
-    Pause, PresentationOcclusion, Screen, SubstanceId, TerrainReady, TilePos, TraversalBlockers,
-    TraversalProfile, Turn, MAX_HEADROOM,
+    Pause, PresentationOcclusion, PresentationOcclusionReason, Screen, SubstanceId, TerrainReady,
+    TilePos, TraversalBlockers, TraversalProfile, Turn, MAX_HEADROOM,
 };
 use hex_test_app::HeadlessAppBuilder;
 use hex_test_support::TestAppBuilder;
 use hex_units::{
     Body, Enemy, Faction, Footing, HexPathingLine, HoveredSurface, MovementSystems, MovingTo,
-    Party, PathOverlay, Player, RangeOverlay, Selected, StandsOn, UnitRegistry, UnitRing,
+    OutOfRangeOverlay, Party, PathOverlay, Player, RangeOverlay, Selected, Standing, StandsOn,
+    UnitRegistry, UnitRing,
 };
 
 /// World height of the fake ground these tests stand things on.
@@ -470,8 +473,8 @@ fn a_missing_required_unit_swatch_fails_before_spawning_or_allocating_materials(
     let materials = app.world().resource::<Assets<StandardMaterial>>();
     assert_eq!(
         materials.len(),
-        5,
-        "only range, path, player-ring, hostile-ring, and target-reticle presentation materials should exist"
+        6,
+        "only range, path, out-of-range, player-ring, hostile-ring, and target-reticle presentation materials should exist"
     );
     assert!(
         materials.iter().all(|(_, material)| {
@@ -1508,6 +1511,407 @@ fn hovering_a_tile_draws_the_way_to_it() {
         2,
         "a tile two steps away should be two tinted steps"
     );
+    assert_eq!(
+        count::<With<OutOfRangeOverlay>>(&mut app),
+        0,
+        "unlimited exploration must not mark a connected destination as unaffordable"
+    );
+}
+
+/// Combat preserves the ordinary path inside budget and gives a connected destination
+/// beyond it a bounded, shape-distinct refusal cue.
+#[test]
+fn combat_hover_marks_a_connected_destination_beyond_budget() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+    take_a_turn(&mut app, 1).expect("a player should exist during gameplay");
+    let target = HexCoord::new_cubic(2, -2, 0);
+    hover(&mut app, target).expect("the fixture covers this coordinate");
+
+    assert_eq!(
+        count::<With<PathOverlay>>(&mut app),
+        0,
+        "an unaffordable route must not retain the ordinary affordable-path style"
+    );
+
+    let glyphs: Vec<_> = {
+        let mut query = app.world_mut().query_filtered::<(
+            &TilePos,
+            &Mesh3d,
+            &MeshMaterial3d<StandardMaterial>,
+            &Transform,
+            &Pickable,
+            Has<NotShadowCaster>,
+        ), With<OutOfRangeOverlay>>();
+        query
+            .iter(app.world())
+            .map(|(pos, mesh, material, transform, pickable, no_shadow)| {
+                (
+                    *pos,
+                    mesh.0.clone(),
+                    material.0.clone(),
+                    *transform,
+                    *pickable,
+                    no_shadow,
+                )
+            })
+            .collect()
+    };
+
+    assert_eq!(glyphs.len(), 2, "one refusal × should have two strokes");
+    let expected_target = TilePos::new(target, GROUND_LEVEL);
+    assert!(
+        glyphs
+            .iter()
+            .all(|(pos, _, _, _, _, _)| *pos == expected_target),
+        "the refusal × was not keyed to the exact hovered surface: {glyphs:?}"
+    );
+    let first = glyphs
+        .first()
+        .expect("the refusal × should have a first stroke");
+    let second = glyphs
+        .get(1)
+        .expect("the refusal × should have a second stroke");
+    assert_eq!(
+        first.1, second.1,
+        "both strokes should reuse one shared mesh"
+    );
+    assert_eq!(
+        first.2, second.2,
+        "both strokes should reuse one shared material"
+    );
+    assert_eq!(
+        first.3.translation, second.3.translation,
+        "the two strokes did not share one target centre"
+    );
+    assert!(
+        (first.3.translation.y - (GROUND + 0.1325)).abs() < 1.0e-6,
+        "the refusal × no longer clears the tactical-shroud presentation layer"
+    );
+    assert_eq!(
+        first.3.scale,
+        Vec3::new(2.2, 1.0, 0.75),
+        "the refusal stroke lost its shape-distinct scale"
+    );
+    assert_eq!(first.3.scale, second.3.scale);
+    assert!(
+        (first.3.rotation.angle_between(second.3.rotation) - std::f32::consts::FRAC_PI_2).abs()
+            < 1.0e-6,
+        "the two strokes were not perpendicular"
+    );
+    assert!(
+        glyphs
+            .iter()
+            .all(|(_, _, _, _, pickable, no_shadow)| *pickable == Pickable::IGNORE && *no_shadow),
+        "the refusal glyph intercepted picking or cast a shadow"
+    );
+}
+
+#[test]
+fn increasing_the_budget_replaces_the_refusal_glyph_with_the_normal_path() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+    take_a_turn(&mut app, 1).expect("a player should exist during gameplay");
+    hover(&mut app, HexCoord::new_cubic(2, -2, 0)).expect("the fixture covers this coordinate");
+    assert_eq!(
+        count::<With<OutOfRangeOverlay>>(&mut app),
+        2,
+        "setup failed"
+    );
+
+    let player = single::<With<Player>>(&mut app).expect("a player should exist");
+    app.world_mut()
+        .get_mut::<Turn>(player)
+        .expect("the player should hold the turn")
+        .movement_left = 2;
+    app.update();
+
+    assert_eq!(
+        count::<With<OutOfRangeOverlay>>(&mut app),
+        0,
+        "the stale refusal glyph survived a sufficient budget"
+    );
+    assert_eq!(
+        count::<With<PathOverlay>>(&mut app),
+        2,
+        "the exact-budget destination did not regain its ordinary route"
+    );
+}
+
+#[test]
+fn hover_out_and_a_new_affordable_hover_clear_the_refusal_glyph() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+    take_a_turn(&mut app, 1).expect("a player should exist during gameplay");
+    hover(&mut app, HexCoord::new_cubic(2, -2, 0))
+        .expect("the fixture covers the unaffordable coordinate");
+    assert_eq!(
+        count::<With<OutOfRangeOverlay>>(&mut app),
+        2,
+        "setup failed"
+    );
+
+    app.world_mut().resource_mut::<HoveredSurface>().0 = None;
+    app.update();
+    assert_eq!(
+        count::<With<OutOfRangeOverlay>>(&mut app),
+        0,
+        "the refusal glyph survived pointer-out"
+    );
+
+    hover(&mut app, HexCoord::new_cubic(1, -1, 0))
+        .expect("the fixture covers the affordable coordinate");
+    assert_eq!(count::<With<OutOfRangeOverlay>>(&mut app), 0);
+    assert_eq!(
+        count::<With<PathOverlay>>(&mut app),
+        1,
+        "the affordable hover did not regain its ordinary path"
+    );
+}
+
+#[test]
+fn zero_movement_marks_an_adjacent_connected_destination_as_out_of_range() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+    take_a_turn(&mut app, 0).expect("a player should exist during gameplay");
+    hover(&mut app, HexCoord::new_cubic(1, -1, 0))
+        .expect("the fixture covers this adjacent coordinate");
+
+    assert_eq!(count::<With<RangeOverlay>>(&mut app), 0);
+    assert_eq!(count::<With<PathOverlay>>(&mut app), 0);
+    assert_eq!(
+        count::<With<OutOfRangeOverlay>>(&mut app),
+        2,
+        "zero remaining movement made the adjacent refusal disappear"
+    );
+}
+
+#[test]
+fn terrain_route_cost_not_horizontal_distance_selects_the_refusal_glyph() {
+    let mut app = test_app();
+    let mut blockers = TraversalBlockers::new();
+    assert!(blockers.insert(TilePos::new(HexCoord::new_cubic(1, -1, 0), GROUND_LEVEL,)));
+    app.insert_resource(blockers);
+    enter_gameplay(&mut app);
+    take_a_turn(&mut app, 2).expect("a player should exist during gameplay");
+
+    let target = HexCoord::new_cubic(2, -2, 0);
+    hover(&mut app, target).expect("the target remains standable behind the blocker");
+
+    assert_eq!(target.distance(HexCoord::ORIGIN), 2);
+    assert_eq!(count::<With<PathOverlay>>(&mut app), 0);
+    assert_eq!(
+        count::<With<OutOfRangeOverlay>>(&mut app),
+        2,
+        "a terrain detour longer than the budget was classified by hex distance"
+    );
+}
+
+#[test]
+fn changing_feature_blockers_reconciles_feedback_without_moving_the_cursor() {
+    let mut app = test_app();
+    app.insert_resource(TraversalBlockers::new());
+    enter_gameplay(&mut app);
+    take_a_turn(&mut app, 2).expect("a player should exist during gameplay");
+
+    let midpoint = TilePos::new(HexCoord::new_cubic(1, -1, 0), GROUND_LEVEL);
+    let target = HexCoord::new_cubic(2, -2, 0);
+    hover(&mut app, target).expect("the fixture covers this coordinate");
+    assert_eq!(count::<With<PathOverlay>>(&mut app), 2, "setup failed");
+    assert_eq!(count::<With<OutOfRangeOverlay>>(&mut app), 0);
+
+    assert!(app
+        .world_mut()
+        .resource_mut::<TraversalBlockers>()
+        .insert(midpoint));
+    app.update();
+    assert_eq!(count::<With<PathOverlay>>(&mut app), 0);
+    assert_eq!(
+        count::<With<OutOfRangeOverlay>>(&mut app),
+        2,
+        "a live blocker change did not rebuild the cached route cost"
+    );
+
+    assert!(app
+        .world_mut()
+        .resource_mut::<TraversalBlockers>()
+        .remove(midpoint));
+    app.update();
+    assert_eq!(count::<With<OutOfRangeOverlay>>(&mut app), 0);
+    assert_eq!(
+        count::<With<PathOverlay>>(&mut app),
+        2,
+        "removing the live blocker did not restore the ordinary path"
+    );
+}
+
+#[test]
+fn disclosed_allied_occupancy_can_make_a_short_target_out_of_range() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+    take_a_turn(&mut app, 2).expect("a player should exist during gameplay");
+    app.world_mut().spawn((
+        hex_core::UnitId(99),
+        Faction::Player,
+        StandsOn(Standing {
+            pos: TilePos::new(HexCoord::new_cubic(1, -1, 0), GROUND_LEVEL),
+            span: HexSpan::new(GROUND - 1.0, GROUND),
+        }),
+    ));
+    app.update();
+
+    let target = HexCoord::new_cubic(2, -2, 0);
+    hover(&mut app, target).expect("the target remains standable beyond the allied detour");
+
+    assert_eq!(target.distance(HexCoord::ORIGIN), 2);
+    assert_eq!(count::<With<PathOverlay>>(&mut app), 0);
+    assert_eq!(
+        count::<With<OutOfRangeOverlay>>(&mut app),
+        2,
+        "a disclosed allied detour did not contribute to out-of-range feedback"
+    );
+}
+
+#[test]
+fn a_disconnected_standable_target_is_not_mislabeled_as_merely_too_far() {
+    let mut app = test_app();
+    let mut blockers = TraversalBlockers::new();
+    for neighbor in HexCoord::ORIGIN.neighbors() {
+        assert!(blockers.insert(TilePos::new(neighbor, GROUND_LEVEL)));
+    }
+    app.insert_resource(blockers);
+    enter_gameplay(&mut app);
+    take_a_turn(&mut app, 1).expect("a player should exist during gameplay");
+    hover(&mut app, HexCoord::new_cubic(2, -2, 0))
+        .expect("the disconnected target itself remains standable");
+
+    assert_eq!(count::<With<PathOverlay>>(&mut app), 0);
+    assert_eq!(
+        count::<With<OutOfRangeOverlay>>(&mut app),
+        0,
+        "terrain with no route was presented as connected but unaffordable"
+    );
+}
+
+#[test]
+fn clicking_the_refusal_glyph_neither_queues_a_move_nor_spends_movement() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+    take_a_turn(&mut app, 1).expect("a player should exist during gameplay");
+    let target_coord = HexCoord::new_cubic(2, -2, 0);
+    hover(&mut app, target_coord).expect("the fixture covers this coordinate");
+    assert_eq!(
+        count::<With<OutOfRangeOverlay>>(&mut app),
+        2,
+        "setup failed"
+    );
+
+    let target = surface_at(&mut app, target_coord).expect("the target should be standable");
+    let window = app.world_mut().spawn(Window::default()).id();
+    click(&mut app, target, window);
+
+    assert!(
+        app.world().resource::<CommandQueue>().is_empty(),
+        "presentation authorized an out-of-budget move"
+    );
+    assert_eq!(
+        movement_left(&mut app),
+        Some(1),
+        "presentation spent movement while refusing the click"
+    );
+}
+
+#[test]
+fn fog_only_disclosure_changes_reconcile_the_cached_out_of_range_cue() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+    take_a_turn(&mut app, 2).expect("a player should exist during gameplay");
+    let hidden_blocker = app
+        .world_mut()
+        .spawn((
+            hex_core::UnitId(99),
+            Faction::Hostile,
+            StandsOn(Standing {
+                pos: TilePos::new(HexCoord::new_cubic(1, -1, 0), GROUND_LEVEL),
+                span: HexSpan::new(GROUND - 1.0, GROUND),
+            }),
+        ))
+        .id();
+    app.update();
+
+    let target = HexCoord::new_cubic(2, -2, 0);
+    hover(&mut app, target).expect("the target remains standable beyond the hostile detour");
+    assert_eq!(count::<With<PathOverlay>>(&mut app), 0);
+    assert_eq!(
+        count::<With<OutOfRangeOverlay>>(&mut app),
+        2,
+        "a disclosed hostile detour should initially make the route too long"
+    );
+
+    // Only disclosure changes here. Authoritative occupancy continues to block the
+    // direct route, while every feedback search must stop using the private position.
+    app.world_mut()
+        .entity_mut(hidden_blocker)
+        .insert(PresentationOcclusion::from_reason(
+            PresentationOcclusionReason::Fog,
+        ));
+    app.update();
+    assert_eq!(
+        count::<With<PathOverlay>>(&mut app),
+        2,
+        "the ordinary path preview leaked the fogged hostile's position"
+    );
+    assert_eq!(
+        count::<With<OutOfRangeOverlay>>(&mut app),
+        0,
+        "the fog-only transition left private occupancy in the disclosure-safe cache"
+    );
+
+    let target_entity = surface_at(&mut app, target).expect("the target should be standable");
+    let window = app.world_mut().spawn(Window::default()).id();
+    click(&mut app, target_entity, window);
+    assert!(
+        app.world().resource::<CommandQueue>().is_empty(),
+        "a disclosure-safe preview weakened authoritative movement validation"
+    );
+    assert_eq!(movement_left(&mut app), Some(2));
+
+    app.world_mut()
+        .entity_mut(hidden_blocker)
+        .remove::<PresentationOcclusion>();
+    app.update();
+    assert_eq!(count::<With<PathOverlay>>(&mut app), 0);
+    assert_eq!(
+        count::<With<OutOfRangeOverlay>>(&mut app),
+        2,
+        "revealing the unchanged hostile did not invalidate disclosed connectivity"
+    );
+}
+
+#[test]
+fn idle_frames_retain_the_exact_out_of_range_glyph() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+    take_a_turn(&mut app, 1).expect("a player should exist during gameplay");
+    hover(&mut app, HexCoord::new_cubic(2, -2, 0)).expect("the fixture covers this coordinate");
+
+    let before: BTreeSet<Entity> = {
+        let mut glyphs = app
+            .world_mut()
+            .query_filtered::<Entity, With<OutOfRangeOverlay>>();
+        glyphs.iter(app.world()).collect()
+    };
+    assert_eq!(before.len(), 2, "setup failed");
+    for _ in 0..100 {
+        app.update();
+    }
+    let after: BTreeSet<Entity> = {
+        let mut glyphs = app
+            .world_mut()
+            .query_filtered::<Entity, With<OutOfRangeOverlay>>();
+        glyphs.iter(app.world()).collect()
+    };
+    assert_eq!(after, before, "idle reconciliation rebuilt the refusal ×");
 }
 
 #[test]
@@ -1545,6 +1949,60 @@ fn one_hundred_idle_frames_retain_the_exact_selection_overlays() {
     assert_eq!(
         after, before,
         "idle selection reconciliation despawned and rebuilt unchanged overlays"
+    );
+}
+
+#[test]
+fn movement_previews_suspend_while_the_selected_unit_is_busy() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+    let destination = HexCoord::new_cubic(2, -2, 0);
+    hover(&mut app, destination).expect("the fixture covers this coordinate");
+    assert_eq!(count::<With<PathOverlay>>(&mut app), 2, "setup failed");
+
+    let target = surface_at(&mut app, destination).expect("the target should be standable");
+    let window = app.world_mut().spawn(Window::default()).id();
+    click(&mut app, target, window);
+    commit_move(&mut app).expect("the emitted move should ground and start");
+    app.update();
+
+    let player = single::<With<Player>>(&mut app).expect("a player should exist");
+    assert!(app.world().get::<MovingTo>(player).is_some());
+    assert_eq!(count::<With<RangeOverlay>>(&mut app), 0);
+    assert_eq!(count::<With<PathOverlay>>(&mut app), 0);
+    assert_eq!(count::<With<OutOfRangeOverlay>>(&mut app), 0);
+}
+
+#[test]
+fn changing_the_selected_body_rebuilds_cached_footing() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+    let target = HexCoord::new_cubic(2, -2, 0);
+    hover(&mut app, target).expect("the fixture covers this coordinate");
+    assert_eq!(count::<With<PathOverlay>>(&mut app), 2, "setup failed");
+
+    let player = single::<With<Player>>(&mut app).expect("a player should exist");
+    *app.world_mut()
+        .get_mut::<Body>(player)
+        .expect("the player should have a body") = Body::new(TraversalProfile {
+        levels_tall: MAX_HEADROOM + 1,
+        ..TraversalProfile::WALKER
+    });
+    app.update();
+    assert_eq!(
+        count::<With<PathOverlay>>(&mut app),
+        0,
+        "a changed traversal profile reused stale standability"
+    );
+
+    *app.world_mut()
+        .get_mut::<Body>(player)
+        .expect("the player should have a body") = Body::new(TraversalProfile::WALKER);
+    app.update();
+    assert_eq!(
+        count::<With<PathOverlay>>(&mut app),
+        2,
+        "restoring the traversal profile did not rebuild footing"
     );
 }
 
@@ -1617,8 +2075,14 @@ fn combat_tints_exactly_what_this_turn_can_reach() {
 fn no_tint_while_it_is_not_your_turn() {
     let mut app = test_app();
     enter_gameplay(&mut app);
-    take_a_turn(&mut app, 2).expect("a player should exist during gameplay");
+    take_a_turn(&mut app, 1).expect("a player should exist during gameplay");
+    hover(&mut app, HexCoord::new_cubic(2, -2, 0)).expect("the fixture covers this coordinate");
     assert!(count::<With<RangeOverlay>>(&mut app) > 0, "setup failed");
+    assert_eq!(
+        count::<With<OutOfRangeOverlay>>(&mut app),
+        2,
+        "setup failed"
+    );
 
     let player = single::<With<Player>>(&mut app).expect("a player should exist");
     app.world_mut().entity_mut(player).remove::<Turn>();
@@ -1628,6 +2092,11 @@ fn no_tint_while_it_is_not_your_turn() {
         count::<With<RangeOverlay>>(&mut app),
         0,
         "the range outlived the turn it belonged to"
+    );
+    assert_eq!(
+        count::<With<OutOfRangeOverlay>>(&mut app),
+        0,
+        "the out-of-range cue appeared when the selected unit could not move"
     );
 }
 
@@ -1680,9 +2149,13 @@ fn the_ring_follows_whoever_is_acting() {
 fn no_overlay_leaks_across_screens() {
     let mut app = test_app();
     enter_gameplay(&mut app);
-    take_a_turn(&mut app, 2).expect("a player should exist during gameplay");
+    take_a_turn(&mut app, 1).expect("a player should exist during gameplay");
     hover(&mut app, HexCoord::new_cubic(2, -2, 0)).expect("the fixture covers this coordinate");
-    assert!(count::<With<RangeOverlay>>(&mut app) > 0, "setup failed");
+    assert_eq!(
+        count::<With<OutOfRangeOverlay>>(&mut app),
+        2,
+        "setup failed"
+    );
 
     app.world_mut()
         .resource_mut::<NextState<Screen>>()
@@ -1691,7 +2164,13 @@ fn no_overlay_leaks_across_screens() {
     app.update();
 
     assert_eq!(
-        count::<Or<(With<RangeOverlay>, With<PathOverlay>)>>(&mut app),
+        count::<
+            Or<(
+                With<RangeOverlay>,
+                With<PathOverlay>,
+                With<OutOfRangeOverlay>,
+            )>,
+        >(&mut app),
         0,
         "tints from a finished game are still on the title screen"
     );

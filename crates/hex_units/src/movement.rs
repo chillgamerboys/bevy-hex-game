@@ -386,8 +386,9 @@ impl Reach {
     /// Floods outward from `start`, stopping after `budget` steps if there is one.
     ///
     /// `None` means unlimited, which is what exploring uses — there is no turn and so
-    /// no movement budget. The whole standable graph is around 1,300 surfaces with at
-    /// most six edges each, so even the unbounded search is trivial.
+    /// no movement budget. The search is linear in the standable graph (at most six
+    /// outgoing edges per surface); callers that use a shipped large map cache the
+    /// unbounded result rather than recomputing it per interaction.
     #[must_use]
     pub fn from(start: Standing, footing: &Footing, budget: Option<u32>) -> Self {
         Self::flood(start, footing, budget, None, None)
@@ -514,6 +515,15 @@ impl Reach {
     #[must_use]
     pub fn cost(&self, pos: TilePos) -> Option<u32> {
         self.steps.get(&pos).map(|step| step.cost)
+    }
+
+    /// The exact standing surface reached at `pos`, if this search discovered it.
+    ///
+    /// Presentation uses this to mark a distant destination without allocating and
+    /// reversing the complete route merely to recover its last element.
+    #[must_use]
+    pub fn standing(&self, pos: TilePos) -> Option<Standing> {
+        self.steps.get(&pos).map(|step| step.standing)
     }
 
     /// The surfaces walked over to get there, starting with the surface stood on now.
@@ -867,6 +877,44 @@ mod tests {
         // On open ground, cost is exactly hex distance, so a budget of 2 reaches the
         // centre plus two full rings: 1 + 6 + 12.
         assert_eq!(reach.surfaces().count(), 19);
+    }
+
+    /// Manual release-mode guard for the largest current flat selection graph.
+    ///
+    /// Radius 77 contains 18,019 surfaces. The movement preview builds this search
+    /// once per stable selection, so its p95 must remain inside one 50 ms frame even
+    /// when every surface belongs to the connected component.
+    #[test]
+    #[ignore = "manual release-mode radius-77 movement-preview benchmark"]
+    fn radius_77_disclosed_preview_release_p95_stays_under_fifty_ms() {
+        let tiles: Vec<_> = HexCoord::ORIGIN
+            .within_radius(77)
+            .into_iter()
+            .map(|coord| tile(coord, 4))
+            .collect();
+        assert_eq!(tiles.len(), 18_019, "the benchmark radius drifted");
+
+        let occupancy = UnitOccupancy::default();
+        let mut samples = Vec::with_capacity(20);
+        for _ in 0..20 {
+            let started = std::time::Instant::now();
+            let footing = footing_from(&tiles);
+            let origin = footing
+                .ground(HexCoord::ORIGIN)
+                .expect("the benchmark origin should be standable");
+            let reach = Reach::with_occupancy(origin, &footing, None, &occupancy, UnitId(1));
+            assert_eq!(reach.surfaces().count(), tiles.len());
+            samples.push(started.elapsed());
+        }
+        samples.sort_unstable();
+        let p95 = samples
+            .get(18)
+            .copied()
+            .expect("twenty samples should have a p95");
+        assert!(
+            p95 < std::time::Duration::from_millis(50),
+            "radius-77 movement-preview p95 was {p95:?}"
+        );
     }
 
     /// The path is as long as the cost says, and starts where the piece stands.
