@@ -361,8 +361,20 @@ allowed to be wrong.
 
 Codex reads root [`AGENTS.md`](AGENTS.md) automatically and discovers repository
 skills under `.agents/skills/`. Use `$plan-parallel-work` before dividing a related
-outcome across lanes, and `$land-development-wave` to reconcile and land an existing
-batch without multiplying release gates.
+outcome across lanes, and `$plan-epic` once that choice is a wave.
+
+Waves have their own pipeline, and
+[`docs/development/wave-protocol.md`](docs/development/wave-protocol.md) is the
+tool-neutral contract behind all of it — the committed manifest under
+`docs/planning/waves/<slug>/`, the lane field table, the ownership algebra, the merge
+order, and the recipes for folding pre-existing branches into a wave. `/plan-epic`
+decomposes and commits the artifact, `/dispatch` runs up to three isolated worker agents
+against it and merges each lane PR into `wave/<slug>` through the same
+`/audit-pr` → `/merge-pr` gate, and `/inject` adds discovered work to a running wave.
+**`/dispatch` never merges to `dev` or `main`.** The single `wave/* → dev` merge stays a
+deliberate act gated on a named human playing the exact combined head. `/dispatch` and
+`/inject` are Claude-only because they need harness worktree isolation and agent
+messaging; a Codex coordinator plans with `$plan-epic` and lands lanes by hand.
 
 The PR lifecycle is driven by skills in `.claude/skills/`:
 `/create-pr` → `/audit-pr` → `/merge-pr` for feature work into `dev`;
@@ -399,7 +411,9 @@ state transition. Initial UI defects use the tool-neutral
 `/linear-ui-bug-intake` is a thin adapter over that same contract. All Linear skills
 resolve teams, workflow states, labels, members, and parents from live connector data
 instead of embedding workspace UUIDs. Linear linkage is encouraged, never a merge
-gate.
+gate. A skill may create issues only where it also owns deduplication and a parent —
+`linear-ui-bug-intake` for bug children, and `/plan-epic` for the lane children of an
+approved wave manifest. Every other skill reconciles and links, never creates.
 
 ## Current state
 

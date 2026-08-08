@@ -12,12 +12,20 @@ Before splitting one outcome across branches, agents, or PRs, use
 `$plan-parallel-work`. Classify the work as independent, stacked, or a wave before
 implementation begins. Do not open one PR per subtask by default.
 
-Use `$land-development-wave` when reconciling three or more related branches or PRs,
-when several branches touch the same contracts or files, or when only the combined
-runtime state is meaningful to review.
+Once the answer is a wave, use `$plan-epic` to decompose it into lanes with disjoint
+ownership, sequence them with separate `dispatch_blockers` and `merge_blockers`, and commit
+the manifest under `docs/planning/waves/<slug>/`. That covers three or more related lanes,
+several branches touching the same contracts or files, and a feature set whose review only
+means something combined.
 
 The canonical rules and decision table are in
-`docs/development/parallel-development.md`.
+`docs/development/parallel-development.md`; the wave artifact, lane field table, ownership
+algebra, merge order, and the recipes for reconciling pre-existing branches are in
+`docs/development/wave-protocol.md`.
+
+Executing a wave with parallel agents is Claude-side (`/dispatch`, `/inject`) because it
+needs harness worktree isolation. A Codex coordinator plans with `$plan-epic` and lands
+lanes by hand, following the same merge order.
 
 ## Keep delivery state reconciled
 
@@ -61,6 +69,9 @@ and hot-file overlap rather than opening one PR per ticket.
 - A wave may contain both owners' work, but it does not erase ownership. Keep
   owner-specific changes in identifiable commits and treat cross-owner behavior
   changes as explicit decisions.
+- A wave *lane* sits inside exactly one crate authority. A lane whose declared ownership
+  crosses the world/gameplay boundary is a stop condition, not a review comment: re-cut the
+  seam, or land a behavior-neutral foundation on `dev` first.
 - When two lanes solve the same concern, consolidate on one shared contract in the
   foundation or wave. Do not preserve parallel implementations merely to keep
   branches independent.
@@ -68,6 +79,8 @@ and hot-file overlap rather than opening one PR per ticket.
 ## Branch and review safety
 
 - Everything lands on `dev`; only a deliberate promotion moves `dev` to `main`.
+- Lane PRs target `wave/*`; the wave PR targets `dev`; nothing inside a wave loop ever
+  targets `main`.
 - One integration owner writes to a shared wave branch. Other contributors own
   their source branches.
 - Do not rebase or force-push a published or shared branch. Reconcile with additive

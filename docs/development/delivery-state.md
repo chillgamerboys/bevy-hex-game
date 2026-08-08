@@ -73,6 +73,25 @@ Use `$reconcile-delivery-state` for this workflow. If Linear is unavailable, rep
 visible warning and a concrete update list rather than silently treating repository
 state as a proxy.
 
+## Issue creation authority
+
+**A skill may create issues only where it also owns deduplication and a parent.** Two
+workflows qualify, and no others:
+
+| Workflow | Creates | Under | Dedup it owns |
+|---|---|---|---|
+| `$linear-ui-bug-intake` | Bug children | the current HUD/UI bug-bash parent | Searches active and recently terminal issues, follows `duplicateOf` |
+| `/plan-epic` | Lane children | an epic that already exists | The wave manifest — one lane, one child, and the ownership union is disjoint by construction |
+
+Every other skill reconciles and links existing issues and never creates. `/plan-epic`
+creates only for lanes in an **approved** manifest, so the plan approval is the
+authorization; it never creates the epic itself. When the connector is unavailable it warns
+visibly, keys every lane on its lane id, puts the recommended child set in the handoff, and
+the wave proceeds — Linear never blocks planning or dispatch.
+
+A lane that carries no ticket is a normal, mergeable lane. Its audit records an unlinked
+Linear status and continues.
+
 ## UI bug intake
 
 Initial UI defect capture is deliberately smaller than delivery reconciliation. Use

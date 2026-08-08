@@ -12,7 +12,9 @@ the combined release gate.
 ## Read the repository contracts
 
 Read `AGENTS.md`, `CLAUDE.md`, and
-`docs/development/parallel-development.md`. Read `docs/architecture.md`,
+`docs/development/parallel-development.md`. Read
+`docs/development/wave-protocol.md` before classifying anything as a wave. Read
+`docs/architecture.md`,
 `docs/contracts.md`, and `docs/planning/boundary.md` when more than one owner or a
 shared crate is involved. Read the relevant system and design docs for the requested
 behavior.
@@ -88,10 +90,15 @@ For independent or stacked work, return:
 - review and validation per release unit; and
 - retargeting or cleanup order.
 
-For a wave, read `references/wave-manifest.md` and fill it in. Store it under
-`.context/waves/<name>.md` when the task calls for implementation, or return it in the
-response when the user asked only for a plan. Do not open PRs or create remote state
-unless the user also asked to execute.
+For a wave, this skill's output is the classification and its evidence — the outcome, the
+concerns, the owners, the foundation, and the review budget. Hand that to `$plan-epic`,
+which owns the wave artifact: the committed manifest under
+`docs/planning/waves/<slug>/`, the lane field table, and the ordering into
+`dispatch_blockers` and `merge_blockers`. Do not invent a second manifest shape here, and do
+not store a wave plan under `.context/` — it is excluded from the repository and invisible
+to every lane builder.
+
+Do not open PRs or create remote state unless the user also asked to execute.
 
 If execution is authorized and no semantic ambiguity remains, continue from the
 approved or user-supplied plan without pausing merely to reconfirm its topology.

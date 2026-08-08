@@ -1,4 +1,0 @@
-interface:
-  display_name: "Land Development Wave"
-  short_description: "Reconcile related branches into one reviewed wave"
-  default_prompt: "Use $land-development-wave to reconcile this branch or PR batch, validate the combined candidate, and land it safely on dev."

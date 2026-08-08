@@ -13,16 +13,22 @@ validation at the level where the behavior is actually meaningful.
 
 ## Keep agent workflows thin
 
-This document is the tool-neutral source of truth. Agent-specific instruction layers
-should route to it instead of copying the whole process:
+This document is the tool-neutral source of truth for *choosing* the shape.
+[wave-protocol.md](wave-protocol.md) is the tool-neutral source of truth for *executing* a
+wave — its artifact, lane field table, ownership algebra, and merge order. Agent-specific
+instruction layers should route to both instead of copying the process:
 
 - Codex loads root `AGENTS.md` automatically and discovers
-  `.agents/skills/plan-parallel-work` and
-  `.agents/skills/land-development-wave`;
+  `.agents/skills/plan-parallel-work` for the topology choice and
+  `.agents/skills/plan-epic` for the wave decomposition;
 - Claude continues to use the detailed audit, test, PR, promotion, and release skills
-  under `.claude/skills/`; and
+  under `.claude/skills/`, plus `/plan-epic`, `/dispatch`, and `/inject` for waves; and
 - both use the same commands, contracts, ownership rules, and wave gate documented
-  here and in `CONTRIBUTING.md`.
+  here, in `wave-protocol.md`, and in `CONTRIBUTING.md`.
+
+`/dispatch` and `/inject` are deliberately Claude-only: they depend on harness worktree
+isolation and agent messaging that Codex does not have. A Codex coordinator plans with
+`$plan-epic` and lands lanes by hand following `wave-protocol.md`.
 
 Do not port every Claude skill merely to achieve symmetry. Add a Codex skill when
 Codex lacks a repeatable user-goal workflow; keep stable repository policy in shared
@@ -68,20 +74,16 @@ implementations forward.
 
 ## Start a wave with a manifest
 
-One integration owner creates `wave/<name>` from current `origin/dev` and records:
+One integration owner creates `wave/<name>` from current `origin/dev` and commits a
+manifest recording the outcome and exclusions, every lane's ownership and dependencies, the
+contracts and hot files each lane touches, the integration order, focused and combined
+checks, unresolved decisions, and the cleanup plan.
 
-- the user-visible outcome and explicit exclusions;
-- the source branch, owner, base, and dependency of every lane;
-- contracts and hot files each lane expects to touch;
-- the order in which lanes will enter the wave;
-- focused checks for each lane and combined acceptance scenarios;
-- unresolved cross-owner decisions; and
-- the cleanup plan for source PRs and branches.
-
-The `$plan-parallel-work` skill provides the manifest template. Store a live working
-copy under `.context/waves/` or in the wave PR body. `.context/` is appropriate while
-the plan is operational; the PR body becomes the durable record once the wave is
-published.
+[wave-protocol.md](wave-protocol.md) owns that artifact: its layout under
+`docs/planning/waves/<slug>/`, the lane field table, and its lifecycle. `/plan-epic` and
+`$plan-epic` produce it. **The manifest is committed** — anything under `.context/` is
+excluded from the repository and is invisible in a fresh worktree, so lane builders cannot
+read it.
 
 Only the integration owner writes directly to the wave. Lane owners push additive
 commits to their own branches. Published and shared branches are never rebased or
@@ -99,13 +101,9 @@ transplant its intended unique commits from the correct fork point, then audit t
 resulting diff. Preserve authorship and record the source PR or commit range in the
 wave manifest.
 
-Integrate in semantic order:
-
-1. shared foundations and contract corrections;
-2. owner-local foundations;
-3. feature lanes;
-4. composition and adapters;
-5. combined fixes discovered by the wave.
+Integrate in the semantic order set out in [wave-protocol.md](wave-protocol.md), which also
+carries the inspection recipes for stacked ancestry and the rule for choosing between a
+merge, a transplant, a reimplementation, and a stop.
 
 Resolve a shared concern once on the wave. Push a correction back to a source branch
 only when that branch remains an independently useful review unit; otherwise record
@@ -149,6 +147,11 @@ control feel, and taste. They may show how hook-established state is rendered, b
 never prove gameplay or exact world logic that hooks, state, messages, logs,
 snapshots, or deterministic contracts can express; add a missing hook rather than
 infer logic from pixels.
+
+A source lane PR into `wave/*` defers exact-head manual runtime sign-off to the combined
+wave PR into `dev`, exactly as `.github/workflows/manual-runtime-signoff.yaml` already
+exempts it. A lane never buys the combined evidence alone, and no lane's evidence may be
+copied onto the wave PR.
 
 For affected presentation, native-input, motion, feel, seams, composition, or taste,
 run the automated visual walk, inspect every frame, and have a human play the combined
