@@ -43,7 +43,8 @@ use crate::movement::{route_with_occupancy, Body, Footing, MovementCrossings, Re
 use crate::pathing::{leg_duration, reached_step_index};
 use crate::selection::Selected;
 use crate::{
-    plan_formation_move_with_occupancy, FormationMember, FormationPlanError, UnitOccupancy,
+    plan_formation_move_with_occupancy, AuthoredObjectOccupancy, FormationMember,
+    FormationPlanError, UnitOccupancy,
 };
 
 const PLAYER_SWATCH_ID: &str = "unit/player";
@@ -427,6 +428,7 @@ fn on_tile_clicked(
     formation: Option<Res<PartyFormation>>,
     formations: Option<Res<FormationCatalog>>,
     blockers: Option<Res<TraversalBlockers>>,
+    authored_objects: Option<Res<AuthoredObjectOccupancy>>,
     mode: Option<Res<State<Mode>>>,
     pause: Option<Res<State<Pause>>>,
     phase: Option<Res<GameplayPhase>>,
@@ -440,7 +442,8 @@ fn on_tile_clicked(
     // parameters *before* the body runs, so a plain `Res<T>` panics in those states
     // no matter what the body checks — which is a crash this codebase has already
     // shipped once.
-    let (Some(mut queue), Some(table)) = (queue, table) else {
+    let (Some(mut queue), Some(table), Some(authored_objects)) = (queue, table, authored_objects)
+    else {
         return;
     };
 
@@ -512,11 +515,12 @@ fn on_tile_clicked(
         else {
             return;
         };
-        let anchor_footing = Arc::new(Footing::from_tiles(
+        let anchor_footing = Arc::new(Footing::from_tiles_with_object_occupancy(
             tiles.iter(),
             &table,
             *anchor_body,
             blockers.as_deref(),
+            &authored_objects,
         ));
         let Some(destination) = anchor_footing.at(*pos) else {
             return;
@@ -553,11 +557,12 @@ fn on_tile_clicked(
             {
                 Arc::clone(footing)
             } else {
-                let footing = Arc::new(Footing::from_tiles(
+                let footing = Arc::new(Footing::from_tiles_with_object_occupancy(
                     tiles.iter(),
                     &table,
                     *body,
                     blockers.as_deref(),
+                    &authored_objects,
                 ));
                 footing_by_body.push((*body, Arc::clone(&footing)));
                 footing
@@ -615,7 +620,13 @@ fn on_tile_clicked(
         // small creature and a wall for a large one. With one player this is the same
         // work as hoisting it out of the loop; with a mixed party it is the difference
         // between right and wrong.
-        let footing = Footing::from_tiles(tiles.iter(), &table, *body, blockers.as_deref());
+        let footing = Footing::from_tiles_with_object_occupancy(
+            tiles.iter(),
+            &table,
+            *body,
+            blockers.as_deref(),
+            &authored_objects,
+        );
         let Some(destination) = footing.at(*pos) else {
             continue;
         };

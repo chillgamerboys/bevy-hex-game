@@ -13,15 +13,9 @@ use hex_core::{
     SpecialMovementRegions, SubstanceId, TilePos, TraversalProfile, MAX_HEADROOM,
 };
 
+use crate::settings::MAX_V3_LEVEL;
 use crate::terrain::TerrainPalette;
 use crate::voxel::{Column, VoxelMap};
-
-/// Highest voxel level admitted by a V3 semantic volume.
-///
-/// The bound keeps malformed settings from causing an unbounded allocation during
-/// materialization. Intervals use an exclusive top, so their greatest valid top is
-/// one greater than this value.
-pub(crate) const MAX_VOLUME_LEVEL: Level = 128;
 
 /// Inclusive-bottom, exclusive-top vertical interval.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -517,7 +511,7 @@ fn validate_column(coord: HexCoord, column: &VolumeColumn, issues: &mut Vec<Volu
         let levels = element.levels();
         if levels.bottom < 0
             || levels.bottom >= levels.top
-            || levels.top > MAX_VOLUME_LEVEL.saturating_add(1)
+            || levels.top > MAX_V3_LEVEL.saturating_add(1)
         {
             issues.push(VolumeIssue::InvalidInterval {
                 coord,
@@ -805,8 +799,8 @@ mod tests {
             mass(0, 4, SolidMaterialRole::Stone, None),
             mass(3, 5, SolidMaterialRole::Dirt, None),
             fill(
-                MAX_VOLUME_LEVEL,
-                MAX_VOLUME_LEVEL.saturating_add(2),
+                MAX_V3_LEVEL,
+                MAX_V3_LEVEL.saturating_add(2),
                 FillMaterialRole::Water,
             ),
         ];
@@ -836,6 +830,46 @@ mod tests {
             .validate()
             .expect_err("mergeable runs are noncanonical");
         assert!(issues_text(&issues).contains("adjacent mergeable"));
+    }
+
+    #[test]
+    fn inclusive_v3_level_ceiling_is_admitted_and_the_next_level_is_rejected() {
+        let coord = HexCoord::ORIGIN;
+        let mut plan = VolumePlan::new(BTreeSet::from([coord]));
+        plan.columns
+            .get_mut(&coord)
+            .expect("the origin is in the test mask")
+            .elements = vec![mass(
+            0,
+            MAX_V3_LEVEL.saturating_add(1),
+            SolidMaterialRole::Stone,
+            None,
+        )];
+        plan.surfaces.insert(
+            TilePos::new(coord, MAX_V3_LEVEL),
+            surface(SurfaceAccess::Ordinary, None),
+        );
+        plan.validate()
+            .expect("the inclusive V3 level ceiling should remain valid");
+
+        plan.columns
+            .get_mut(&coord)
+            .expect("the origin is in the test mask")
+            .elements = vec![mass(
+            0,
+            MAX_V3_LEVEL.saturating_add(2),
+            SolidMaterialRole::Stone,
+            None,
+        )];
+        plan.surfaces.clear();
+        plan.surfaces.insert(
+            TilePos::new(coord, MAX_V3_LEVEL.saturating_add(1)),
+            surface(SurfaceAccess::Ordinary, None),
+        );
+        let issues = plan
+            .validate()
+            .expect_err("the first voxel above the V3 level ceiling must fail");
+        assert!(issues_text(&issues).contains("out-of-range interval"));
     }
 
     #[test]

@@ -57,7 +57,16 @@ pub(super) fn apply(
             data: CombatData::SubstanceTable,
         });
     };
-    let footing = Footing::from_tiles(tiles.iter(), table, *body, ctx.blockers);
+    let Some(authored_objects) = ctx.authored_objects else {
+        return Err(CommandRefusal::InvalidPath);
+    };
+    let footing = Footing::from_tiles_with_object_occupancy(
+        tiles.iter(),
+        table,
+        *body,
+        ctx.blockers,
+        authored_objects,
+    );
     let Some(steps) = ground_path(path, standing.0, &footing) else {
         return Err(CommandRefusal::InvalidPath);
     };
@@ -118,7 +127,16 @@ pub(super) fn project(
             data: CombatData::SubstanceTable,
         });
     };
-    let footing = Footing::from_tiles(tiles.iter(), table, *body, ctx.blockers);
+    let Some(authored_objects) = ctx.authored_objects else {
+        return Err(CommandRefusal::InvalidPath);
+    };
+    let footing = Footing::from_tiles_with_object_occupancy(
+        tiles.iter(),
+        table,
+        *body,
+        ctx.blockers,
+        authored_objects,
+    );
     let Some(steps) = ground_path(path, standing.0, &footing) else {
         return Err(CommandRefusal::InvalidPath);
     };

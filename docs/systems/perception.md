@@ -125,15 +125,24 @@ even inside that level band. Runs topped two or more levels away also retain the
 complete volume; character-height walls and vertically remote roofs or decks therefore
 remain blockers.
 
-Only exact material runs in `TerrainOccupancy` block; liquids follow the same rule as
-every other terrain material. A ray is blocked when its open segment crosses a
-material voxel's open interior for nonzero length. Exact face, edge, corner, and
-endpoint-only tangencies are clear. Units, trees, props, renderer meshes, shadows, and
-opacity do not establish obstruction. This strict-interior policy shares the exact
-rational kernel with casting while leaving casting's conservative closed-contact
-`supercover` unchanged. The raw strict-interior segment query always intersects the
-complete supplied runs and is source/destination symmetric. The low-cover projection
-belongs only to standing-character LOS and is chosen from the observer's support
+Exact material runs in `TerrainOccupancy` block; liquids follow the same rule as every
+other terrain material. Objects opt in separately by publishing compact
+`AuthoredObjectVoxelRuns`, which `hex_units` validates and unions into the always-present
+`AuthoredObjectOccupancy` resource before perception. Missing or malformed publication
+fails setup closed; a valid empty projection means no authored object opted in. Object
+changes invalidate observation in the same update.
+
+A ray is blocked when its open segment crosses an occupied voxel's open interior for
+nonzero length. Exact face, edge, corner, and endpoint-only tangencies are clear.
+Authored-object runs always retain their full supplied volume: terrain's
+observer-relative low-cover omission never applies to them. Generic units, trees,
+props without the opt-in component, renderer meshes, shadows, and opacity do not
+establish obstruction. This strict-interior policy shares the exact rational kernel
+with casting while leaving casting's conservative closed-contact terrain `supercover`
+unchanged; authored objects do not obstruct casting in this contract. The raw
+strict-interior segment query always intersects the complete supplied runs and is
+source/destination symmetric. The low-cover projection belongs only to
+standing-character LOS against terrain and is chosen from the observer's support
 level, so observation from one surface to another is allowed to differ in the reverse
 direction.
 
@@ -358,7 +367,8 @@ renderer concern.
 - spatial divination that reveals unknown terrain; Divination's current
   observed-subject, bounded lattice Reveal is live in `hex_combat`, while Scrying
   Eye's proposed readable off-sight live feed remains later work
-- semantic prop, vegetation, and unit sight obstruction
+- semantic obstruction for props that have not opted into authored-object occupancy,
+  plus vegetation and units
 - full-scene fog shading, soft edges, and fades
 - saved-game persistence for remembered terrain
 

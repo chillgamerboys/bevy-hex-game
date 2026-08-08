@@ -29,6 +29,11 @@ use world::WorldValidationIssue;
 
 mod caves;
 pub(crate) use caves::{CaveCrystalAssetError, CaveCrystalObjectSet};
+mod crystal_ascent;
+mod crystal_ascent_assets;
+pub(crate) use crystal_ascent_assets::{
+    CrystalAscentAssetError, CrystalAscentObjectSet, CRYSTAL_CATHEDRAL_HEART_ID,
+};
 mod composite_patch;
 mod composition;
 mod deep_forest;
@@ -89,7 +94,8 @@ mod world;
 #[cfg(test)]
 pub(crate) use world::PlannedFeature;
 pub(crate) use world::{
-    CaveCrystalKind, FeatureId, FeatureKind, LightId, PlannedLightPresentation,
+    CaveCrystalKind, CrystalAscentCrystalKind, CrystalAscentCrystalPresentation, FeatureId,
+    FeatureKind, LightId, PlannedLightPresentation,
 };
 
 /// Failure to construct or validate one V3 world.
@@ -982,6 +988,7 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
         V3RecipeSettings::Beach(_) => "Beach",
         V3RecipeSettings::Shore(_) => "Shore",
         V3RecipeSettings::DeepMountain(_) => "DeepMountain",
+        V3RecipeSettings::CrystalAscent(_) => "CrystalAscent",
     }
 }
 

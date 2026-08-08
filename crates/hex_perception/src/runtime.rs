@@ -16,12 +16,14 @@ use hex_core::{
     UnitId,
 };
 use hex_units::{
-    Body, Downed, Faction, MovementSystems, StandsOn, TerrainOccupancy, TerrainOccupancySystems,
+    AuthoredObjectOccupancy, AuthoredObjectOccupancySystems, Body, Downed, Faction,
+    MovementSystems, StandsOn, TerrainOccupancy, TerrainOccupancySystems,
 };
 
 use crate::{
-    apply_observations, resolve_observations, FactionMapKnowledge, FactionObservations,
-    LightSourceSnapshot, ObservedUnit, ResolvedIllumination, SurfaceSnapshot, SurfaceSnapshots,
+    apply_observations, resolve_observations_with_authored_objects, FactionMapKnowledge,
+    FactionObservations, LightSourceSnapshot, ObservedUnit, ResolvedIllumination, SurfaceSnapshot,
+    SurfaceSnapshots,
 };
 
 type TileProjectionQuery<'w, 's> = Query<
@@ -167,6 +169,7 @@ pub fn plugin(app: &mut App) {
                 .in_set(PerceptionSystems::ResolveIllumination)
                 .after(MovementSystems::Reconcile)
                 .after(TerrainOccupancySystems::Publish)
+                .after(AuthoredObjectOccupancySystems::Publish)
                 .before(resolve_illumination)
                 .run_if(in_state(Screen::Gameplay))
                 .run_if(resource_exists::<TerrainReady>)
@@ -267,6 +270,7 @@ struct PerceptionInputChanges<'w, 's> {
     settings: Option<Res<'w, PerceptionSettings>>,
     terrain_ready: Option<Res<'w, TerrainReady>>,
     occupancy: Option<Res<'w, TerrainOccupancy>>,
+    authored_objects: Option<Res<'w, AuthoredObjectOccupancy>>,
 }
 
 fn detect_perception_input_changes(
@@ -352,6 +356,10 @@ fn detect_perception_input_changes(
             .is_some_and(|resource| resource.is_changed())
         || inputs
             .occupancy
+            .as_ref()
+            .is_none_or(|resource| resource.is_changed())
+        || inputs
+            .authored_objects
             .as_ref()
             .is_none_or(|resource| resource.is_changed());
     if observation_changed {
@@ -461,6 +469,7 @@ fn resolve_observation(
     exterior: Option<Res<ExteriorIllumination>>,
     settings: Option<Res<PerceptionSettings>>,
     terrain: Option<Res<TerrainOccupancy>>,
+    authored_objects: Option<Res<AuthoredObjectOccupancy>>,
     prior_knowledge: Option<Res<FactionMapKnowledge>>,
     mut invalidation: ResMut<PerceptionInvalidation>,
     mut stats: ResMut<PerceptionRuntimeStats>,
@@ -488,6 +497,14 @@ fn resolve_observation(
         );
         return;
     };
+    let Some(authored_objects) = authored_objects else {
+        fail(
+            &mut commands,
+            &mut next_screen,
+            "Perception observation started without authoritative authored-object occupancy.",
+        );
+        return;
+    };
     if surfaces.is_empty() {
         fail(
             &mut commands,
@@ -506,7 +523,7 @@ fn resolve_observation(
     };
     let empty_knowledge = FactionMapKnowledge::new();
     let prior = prior_knowledge.as_deref().unwrap_or(&empty_knowledge);
-    let observations = match resolve_observations(
+    let observations = match resolve_observations_with_authored_objects(
         units,
         &illumination,
         prior,
@@ -514,6 +531,7 @@ fn resolve_observation(
         &frame.lights,
         settings.active_profile(),
         &terrain,
+        &authored_objects,
     ) {
         Ok(observations) => observations,
         Err(error) => {
@@ -703,6 +721,7 @@ mod tests {
     use hex_units::Standing;
 
     use super::*;
+    use crate::resolve_observations;
 
     #[derive(Clone, Copy)]
     struct TestSubstances {
@@ -785,6 +804,9 @@ mod tests {
             .insert_resource(ExteriorIllumination::new(exterior));
         builder.app_mut().insert_resource(InteriorRegions::new());
         builder.app_mut().insert_resource(TraversalBlockers::new());
+        builder
+            .app_mut()
+            .insert_resource(AuthoredObjectOccupancy::default());
         builder.app_mut().insert_resource(TerrainReady);
         builder.app_mut().add_plugins(plugin);
         (builder.build(), substances)
@@ -991,6 +1013,66 @@ mod tests {
         assert!(failure.reason.contains("authoritative terrain occupancy"));
         assert!(!app.world().contains_resource::<FactionObservations>());
         assert!(!app.world().contains_resource::<FactionMapKnowledge>());
+    }
+
+    #[test]
+    fn missing_authoritative_object_occupancy_fails_closed_even_when_empty_is_valid() {
+        let (mut app, substances) = runtime_app(IlluminationLevel::Bright);
+        spawn_tile(&mut app, pos(0, 0, 5), substances.stone, 2);
+        app.world_mut().remove_resource::<AuthoredObjectOccupancy>();
+
+        enter(&mut app, Screen::Gameplay);
+
+        let failure = app.world().resource::<GameplaySetupFailure>();
+        assert!(failure
+            .reason
+            .contains("authoritative authored-object occupancy"));
+        assert!(!app.world().contains_resource::<FactionObservations>());
+        assert!(!app.world().contains_resource::<FactionMapKnowledge>());
+    }
+
+    #[test]
+    fn authored_object_change_hides_and_reveals_a_hostile_in_the_same_update() {
+        let (mut app, substances) = runtime_app(IlluminationLevel::Bright);
+        let player = pos(0, 0, 0);
+        let hostile = pos(4, 0, 0);
+        spawn_tile(&mut app, player, substances.stone, 3);
+        spawn_tile(&mut app, hostile, substances.stone, 3);
+        spawn_unit(&mut app, 0, Faction::Player, player);
+        spawn_unit(&mut app, 1, Faction::Hostile, hostile);
+        enter(&mut app, Screen::Gameplay);
+        assert!(app
+            .world()
+            .resource::<FactionObservations>()
+            .faction(Faction::Player)
+            .observes(hostile));
+
+        let blocking = AuthoredObjectOccupancy::from_runs((1..=3).flat_map(|q| {
+            (-2..=2).map(move |r| hex_core::AuthoredObjectVoxelRun::new(pos(q, r, 1), 0))
+        }))
+        .expect("blocking object runs");
+        app.world_mut().insert_resource(blocking);
+        app.update();
+        assert!(!app
+            .world()
+            .resource::<FactionObservations>()
+            .faction(Faction::Player)
+            .observes(hostile));
+        assert!(app
+            .world()
+            .resource::<FactionMapKnowledge>()
+            .faction(Faction::Player)
+            .unit(UnitId(1))
+            .is_none());
+
+        app.world_mut()
+            .insert_resource(AuthoredObjectOccupancy::default());
+        app.update();
+        assert!(app
+            .world()
+            .resource::<FactionObservations>()
+            .faction(Faction::Player)
+            .observes(hostile));
     }
 
     #[test]

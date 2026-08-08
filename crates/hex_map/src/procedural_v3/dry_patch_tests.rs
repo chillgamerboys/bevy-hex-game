@@ -353,10 +353,12 @@ fn deep_forest_stitched_patch_keeps_authored_volumes_out_of_protected_approaches
         catalog,
     )
     .expect("Deep Forest should construct inside a stitched vegetation patch");
-    assert!(plan.features.by_id.values().all(|feature| feature
-        .blocker_footprint
-        .iter()
-        .all(|blocker| !protected.contains(&blocker.coord))));
+    assert!(plan.features.by_id.values().all(|feature| {
+        feature
+            .blocker_footprint
+            .iter()
+            .all(|blocker| !protected.contains(&blocker.coord))
+    }));
     let metrics = match deep_forest::validate_patch(context, &recipe, &plan, catalog) {
         super::selection::WorldValidation::Valid(metrics) => metrics,
         super::selection::WorldValidation::Invalid(issues) => {
@@ -1177,9 +1179,9 @@ fn center_hills_confluence_topology_policy_is_exhaustive() {
                     "a confluence without an opposite inlet must fail its explicit recipe policy",
                 );
                 assert!(
-                    issues.iter().any(|issue| issue
-                        .detail
-                        .contains("requires an inlet opposite its")),
+                    issues
+                        .iter()
+                        .any(|issue| issue.detail.contains("requires an inlet opposite its")),
                     "unexpected policy error for outlet {outlet:?}, inlet bits {inlet_bits:06b}: {issues:?}"
                 );
                 rejected = rejected.saturating_add(1);
@@ -1249,9 +1251,11 @@ fn western_composite_volcano_revalidates_its_exact_outlet_authority() {
             .saturating_sub(volcano_settings.bridge_clearance)
             .max(3),])
     );
-    assert!(terminals.iter().all(|position| !context
-        .mask()
-        .contains(&HexSide::West.neighbor(position.coord))));
+    assert!(terminals.iter().all(|position| {
+        !context
+            .mask()
+            .contains(&HexSide::West.neighbor(position.coord))
+    }));
     let validate =
         |plan: &GeneratedPatchPlan| volcano::validate_patch(context, plan, &volcano_settings);
 

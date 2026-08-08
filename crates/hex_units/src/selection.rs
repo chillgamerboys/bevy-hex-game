@@ -39,6 +39,7 @@ use hex_core::{
 
 use crate::movement::{Body, Footing, Reach, Standing};
 use crate::units::{MovingTo, Party, Player, StandsOn, TileQuery, UnitRegistry};
+use crate::AuthoredObjectOccupancy;
 use crate::Faction;
 use crate::UnitOccupancy;
 
@@ -163,6 +164,7 @@ struct PreviewKey {
     budget: Option<u32>,
     terrain: u64,
     occupancy: u64,
+    authored_objects: u64,
 }
 
 /// The current search, and what is drawn from it.
@@ -574,13 +576,17 @@ fn redraw_overlays(
     mode: Option<Res<State<Mode>>>,
     revision: Res<TerrainRevision>,
     blockers: Option<Res<TraversalBlockers>>,
+    authored_objects: Option<Res<AuthoredObjectOccupancy>>,
     tiles: TileQuery,
     selected: Query<(Entity, &UnitId, &StandsOn, &Body, Option<&Turn>), With<Selected>>,
     positions: Query<(&UnitId, &StandsOn, Option<&MovingTo>)>,
     drawn: Query<Entity, DrawnOverlays>,
 ) {
-    let (Some(assets), Some(overlays), Some(table), Some(mode)) = (assets, overlays, table, mode)
+    let (Some(assets), Some(overlays), Some(table), Some(mode), Some(authored_objects)) =
+        (assets, overlays, table, mode, authored_objects)
     else {
+        preview.reach = None;
+        preview.of = None;
         return;
     };
 
@@ -609,6 +615,7 @@ fn redraw_overlays(
             budget,
             terrain: revision.0,
             occupancy: occupancy.fingerprint(),
+            authored_objects: authored_objects.fingerprint(),
         })
     });
 
@@ -623,7 +630,13 @@ fn redraw_overlays(
     if key != preview.of {
         preview.reach = selection.and_then(|(_, unit, standing, body, _)| {
             let key = key?;
-            let footing = Footing::from_tiles(tiles.iter(), &table, *body, blockers.as_deref());
+            let footing = Footing::from_tiles_with_object_occupancy(
+                tiles.iter(),
+                &table,
+                *body,
+                blockers.as_deref(),
+                &authored_objects,
+            );
             Some(Reach::with_occupancy(
                 standing.0, &footing, key.budget, &occupancy, *unit,
             ))

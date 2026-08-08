@@ -41,7 +41,7 @@ use super::world::{
 use super::V3GenerationError;
 use crate::settings::{
     ordered_simple_seam_lanes, ProceduralV3Settings, V3EnvironmentSettings, V3LayoutSettings,
-    V3RecipeSettings, V3WaterfallSettings, MAX_PROCEDURAL_LEVEL,
+    V3RecipeSettings, V3WaterfallSettings, MAX_V3_LEVEL,
 };
 
 const HIGH_LAND_LEVEL: i32 = 27;
@@ -312,9 +312,9 @@ impl WaterfallHydrology {
                         "Ring19 Waterfall translated profile leaves insufficient lowland support",
                     )]);
                 }
-                if profile.bridge_deck > MAX_PROCEDURAL_LEVEL {
+                if profile.bridge_deck > MAX_V3_LEVEL {
                     return Err(vec![recipe_issue(format!(
-                        "Ring19 Waterfall translated bridge deck exceeds level {MAX_PROCEDURAL_LEVEL}"
+                        "Ring19 Waterfall translated bridge deck exceeds level {MAX_V3_LEVEL}"
                     ))]);
                 }
                 let resolved = Self {
@@ -717,6 +717,7 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
         V3RecipeSettings::Beach(_) => "Beach",
         V3RecipeSettings::Shore(_) => "Shore",
         V3RecipeSettings::DeepMountain(_) => "DeepMountain",
+        V3RecipeSettings::CrystalAscent(_) => "CrystalAscent",
     }
 }
 
@@ -5165,13 +5166,16 @@ mod tests {
             .iter()
             .map(|lane| lane.iter().copied().collect::<BTreeSet<_>>())
             .collect::<Vec<_>>();
-        assert!(lane_sets.iter().enumerate().all(|(index, lane)| lane_sets
-            .iter()
-            .enumerate()
-            .all(|(other_index, other)| index == other_index || lane.is_disjoint(other))));
-        assert!(course.main_lanes.iter().all(|lane| lane
-            .windows(2)
-            .all(|pair| matches!(pair, [first, second] if first.distance(*second) == 1))));
+        assert!(lane_sets.iter().enumerate().all(|(index, lane)| {
+            lane_sets
+                .iter()
+                .enumerate()
+                .all(|(other_index, other)| index == other_index || lane.is_disjoint(other))
+        }));
+        assert!(course.main_lanes.iter().all(|lane| {
+            lane.windows(2)
+                .all(|pair| matches!(pair, [first, second] if first.distance(*second) == 1))
+        }));
         assert!(course
             .main_lanes
             .iter()
@@ -5312,14 +5316,13 @@ mod tests {
             assert_eq!(terminal.top.level, 3);
             assert_eq!(terminal.state, LiquidFlowState::Still);
             assert_eq!(terminal.downstream, None);
-            assert!(layout
-                .patches
-                .get(&PatchId(0))
-                .is_some_and(|patch| patch.mask.contains(
+            assert!(layout.patches.get(&PatchId(0)).is_some_and(|patch| {
+                patch.mask.contains(
                     &frame
                         .to_world(terminal.top.coord)
-                        .expect("terminal world coordinate")
-                )));
+                        .expect("terminal world coordinate"),
+                )
+            }));
         }
     }
 

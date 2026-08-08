@@ -635,13 +635,15 @@ pub(crate) mod tests {
         }
     }
 
-    /// Every encounter a scenario names exists, parses, and rosters both sides.
+    /// Every encounter a scenario names exists, parses, and rosters its intended sides.
     ///
     /// Same reasoning as the world and lighting checks — the path is a plain string, so
     /// a typo would otherwise be a loading screen that hangs for the one scenario nobody
     /// clicked. `Encounter`'s `Deserialize` runs `validate()`, so this also proves the
     /// roster is *placeable* in the ways a single file can be judged: no empty roster, no
-    /// coordinate that is not a hex, no two units sharing one exact surface.
+    /// coordinate that is not a hex, no two units sharing one exact surface. Crystal
+    /// Ascent is the one approved non-combat showcase; every other scenario must still
+    /// provide somebody to fight.
     #[test]
     fn every_scenario_names_an_encounter_that_exists_and_parses() {
         for scenario in &library().scenarios {
@@ -651,11 +653,19 @@ pub(crate) mod tests {
                 "scenario {:?} rosters no player units",
                 scenario.name
             );
-            assert!(
-                encounter.unit_count(EncounterFaction::Hostile) >= 1,
-                "scenario {:?} rosters nobody to fight",
-                scenario.name
-            );
+            let hostile_count = encounter.unit_count(EncounterFaction::Hostile);
+            if scenario.name == "Crystal Ascent" {
+                assert_eq!(
+                    hostile_count, 0,
+                    "the Crystal Ascent showcase should remain non-combat"
+                );
+            } else {
+                assert!(
+                    hostile_count >= 1,
+                    "scenario {:?} rosters nobody to fight",
+                    scenario.name
+                );
+            }
             for unit in encounter.entries() {
                 assert!(
                     !unit.archetype.is_empty(),
@@ -1416,6 +1426,71 @@ pub(crate) mod tests {
         assert!(
             separation > 4,
             "Party Trial must begin beyond engagement range"
+        );
+    }
+
+    /// Crystal Ascent is a traversal-and-lighting showcase, not an encounter arena.
+    /// Its content freezes the public 144-level recipe and starts the complete shipped
+    /// party together at the lower apron without inventing a dummy hostile.
+    #[test]
+    fn crystal_ascent_showcase_freezes_its_world_and_non_combat_party() {
+        let library = library();
+        let scenario = library
+            .scenarios
+            .iter()
+            .find(|scenario| scenario.name == "Crystal Ascent")
+            .expect("the shipped library should contain Crystal Ascent");
+
+        assert_eq!(
+            scenario.world,
+            "config/worlds/procedural-crystal-ascent.ron"
+        );
+        assert_eq!(scenario.generation_seed, Some(1_592_598_566));
+
+        let world_text = fs::read_to_string(assets_dir().join(&scenario.world))
+            .expect("the Crystal Ascent world should be readable");
+        let world: MapSettings =
+            ron::from_str(&world_text).expect("the Crystal Ascent world should parse");
+        assert_eq!(world.grid_radius, 40);
+        let TerrainSettings::Procedural(hex_map::ProceduralSettings::V3(v3)) = &world.terrain
+        else {
+            panic!("Crystal Ascent must remain a V3 procedural world");
+        };
+        let hex_map::V3LayoutSettings::Single(patch) = &v3.layout else {
+            panic!("Crystal Ascent must remain a standalone Single patch");
+        };
+        assert_eq!(
+            patch.environment,
+            hex_map::V3EnvironmentSettings::TemperateGrassland
+        );
+        let hex_map::V3RecipeSettings::CrystalAscent(settings) = &patch.recipe else {
+            panic!("Crystal Ascent must use its dedicated recipe");
+        };
+        assert_eq!(settings.base_level, 6);
+        assert_eq!(settings.rise_levels, 144);
+
+        let encounter = encounter_of(scenario);
+        assert_eq!(encounter.rosters.len(), 1);
+        let roster = encounter
+            .rosters
+            .first()
+            .expect("Crystal Ascent should retain its player roster");
+        assert_eq!(roster.faction, EncounterFaction::Player);
+        assert_eq!(
+            roster
+                .units
+                .iter()
+                .map(|unit| unit.archetype.as_str())
+                .collect::<Vec<_>>(),
+            vec!["hedge-mage", "raider", "wolf"]
+        );
+        assert_eq!(encounter.unit_count(EncounterFaction::Hostile), 0);
+        assert_eq!(
+            roster.placement,
+            EncounterPlacement::Formation {
+                center: FormationCenter::Anchor("party_start".to_owned()),
+                spread: 2,
+            }
         );
     }
 

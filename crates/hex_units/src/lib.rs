@@ -22,6 +22,8 @@
 
 use bevy::prelude::*;
 
+/// Exact occupancy projected from opt-in authored non-terrain objects.
+pub mod authored_object_occupancy;
 /// Planning exact, rotating, compressed whole-party routes.
 pub mod formation;
 /// Which surfaces a piece may step between.
@@ -49,6 +51,9 @@ pub mod units;
 /// Turning a spell's shape into the exact voxels it reaches.
 pub mod volumes;
 
+pub use authored_object_occupancy::{
+    AuthoredObjectOccupancy, AuthoredObjectOccupancySystems, InvalidAuthoredObjectRun,
+};
 pub use formation::{
     plan_formation_move, plan_formation_move_with_occupancy, rotated, FormationMember,
     FormationPlan, FormationPlanError,
@@ -70,7 +75,8 @@ pub use terrain_occupancy::{
 };
 pub use terrain_reconciliation::{plan_unsupported_actor_landing, NoLanding};
 pub use trajectories::{
-    known_trajectory_is_clear, sight_segment_is_clear, supercover, terrain_sight_is_clear,
+    authored_object_sight_segment_is_clear, known_trajectory_is_clear, sight_segment_is_clear,
+    supercover, terrain_and_authored_object_sight_is_clear, terrain_sight_is_clear,
     trajectory_destination, trajectory_is_clear, trajectory_voxels,
 };
 pub use units::{
@@ -90,6 +96,7 @@ pub fn plugin(app: &mut App) {
     app.add_plugins((
         hex_anim::plugin,
         terrain_occupancy::plugin,
+        authored_object_occupancy::plugin,
         movement::plugin,
         units::plugin,
         selection::plugin,

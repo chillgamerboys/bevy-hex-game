@@ -243,6 +243,26 @@
             ),
         ),
         (
+            id: "crystal-ascent",
+            display_name: "Crystal Ascent",
+            description: "A crystal-lit Gothic stair coils through a 144-level dark tower into a woodland crown.",
+            tags: ["Landmark", "Vertical", "Interior"],
+            // Replaced by the renderer-approved Crystal Ascent capture at visual review.
+            preview: "ui/sandbox/caves.png",
+            scenario: "Crystal Ascent",
+            fixed_seed: Some(1592598566),
+            player_region: (
+                center: Anchor("crystal_ascent.lower_entry"),
+                radius: 4,
+            ),
+            // Schema-v2 Sandbox always carries both staging regions even though the
+            // packaged Crystal Ascent scenario itself intentionally has no enemies.
+            hostile_region: (
+                center: Anchor("crystal_ascent.upper_exit"),
+                radius: 4,
+            ),
+        ),
+        (
             id: "seven-regions",
             display_name: "Seven Regions",
             description: "One connected world joins hills, mountains, waterfall, forest, fort, caves, and sky islands.",

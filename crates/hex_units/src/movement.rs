@@ -48,7 +48,9 @@ use hex_core::{
     TilePos, TraversalBlockers, TraversalEndpoint, TraversalProfile, UnitId,
 };
 
-use crate::{TerrainOccupancySystems, UnitOccupancy};
+use crate::{
+    AuthoredObjectOccupancy, AuthoredObjectOccupancySystems, TerrainOccupancySystems, UnitOccupancy,
+};
 
 /// Ordering for systems that consume a unit's logical position.
 #[derive(SystemSet, Copy, Clone, Eq, PartialEq, Hash, Debug)]
@@ -120,6 +122,7 @@ pub fn plugin(app: &mut App) {
             .in_set(AppSystems::Update)
             .in_set(PausableSystems)
             .after(TerrainOccupancySystems::Publish)
+            .after(AuthoredObjectOccupancySystems::Publish)
             .before(hex_anim::AnimationSystems::Drive),
     );
     // Committing to a long walk and then being ambushed halfway should leave the piece
@@ -226,6 +229,38 @@ impl Footing {
         body: Body,
         blockers: Option<&TraversalBlockers>,
     ) -> Self {
+        Self::from_tiles_with_optional_object_occupancy(tiles, table, body, blockers, None)
+    }
+
+    /// Collects standable surfaces while enforcing exact authored-object volume.
+    ///
+    /// Production movement and pathfinding use this constructor after the session's
+    /// [`AuthoredObjectOccupancy`] has been published. The older [`Self::from_tiles`]
+    /// remains available to generator validation and synthetic fixtures that have no
+    /// authored-object authority.
+    pub fn from_tiles_with_object_occupancy<'a>(
+        tiles: impl Iterator<Item = (&'a TilePos, &'a HexSpan, &'a SubstanceId, &'a Headroom)>,
+        table: &SubstanceTable,
+        body: Body,
+        blockers: Option<&TraversalBlockers>,
+        authored_objects: &AuthoredObjectOccupancy,
+    ) -> Self {
+        Self::from_tiles_with_optional_object_occupancy(
+            tiles,
+            table,
+            body,
+            blockers,
+            Some(authored_objects),
+        )
+    }
+
+    fn from_tiles_with_optional_object_occupancy<'a>(
+        tiles: impl Iterator<Item = (&'a TilePos, &'a HexSpan, &'a SubstanceId, &'a Headroom)>,
+        table: &SubstanceTable,
+        body: Body,
+        blockers: Option<&TraversalBlockers>,
+        authored_objects: Option<&AuthoredObjectOccupancy>,
+    ) -> Self {
         let profile = body.traversal_profile();
         let mut footing = Self {
             profile,
@@ -236,6 +271,11 @@ impl Footing {
 
         for (pos, span, substance, headroom) in tiles {
             if blockers.is_some_and(|blockers| blockers.contains(*pos)) {
+                continue;
+            }
+            if authored_objects
+                .is_some_and(|occupancy| occupancy.blocks_standing_body(*pos, profile))
+            {
                 continue;
             }
             if !profile.admits_surface(table.is_solid(*substance), *headroom) {
@@ -1107,6 +1147,32 @@ mod tests {
 
         assert!(footing.at(start.0).is_some());
         assert!(footing.at(blocked.0).is_none());
+    }
+
+    #[test]
+    fn exact_authored_object_volume_removes_only_overlapping_body_footing() {
+        let start = tile(HexCoord::ORIGIN, 4);
+        let blocked = tile(HexCoord::from_axial(1, 0), 4);
+        let clear_above = tile(HexCoord::from_axial(2, 0), 4);
+        let tiles = [start, blocked, clear_above];
+        let authored = AuthoredObjectOccupancy::from_runs([
+            hex_core::AuthoredObjectVoxelRun::new(blocked.0.above(), 5),
+            hex_core::AuthoredObjectVoxelRun::new(clear_above.0.above().above().above(), 7),
+        ])
+        .expect("authored-object fixture");
+        let footing = Footing::from_tiles_with_object_occupancy(
+            tiles
+                .iter()
+                .map(|(pos, span, substance, headroom)| (pos, span, substance, headroom)),
+            &table(),
+            NORMAL,
+            None,
+            &authored,
+        );
+
+        assert!(footing.at(start.0).is_some());
+        assert!(footing.at(blocked.0).is_none());
+        assert!(footing.at(clear_above.0).is_some());
     }
 
     /// A run buried inside a column is not a surface, however solid it is.

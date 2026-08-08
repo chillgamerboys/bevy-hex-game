@@ -330,11 +330,17 @@ impl LocalPatchFrame {
         for light in lights.values_mut() {
             light.origin = self.translate_position(light.origin, direction)?;
             if self.compose_presentation_rotation {
-                if let Some(PlannedLightPresentation::CaveCrystal(crystal)) =
-                    &mut light.presentation
-                {
-                    crystal.rotation =
-                        compose_rotation_steps(crystal.rotation, self.rotation, direction);
+                if let Some(presentation) = &mut light.presentation {
+                    match presentation {
+                        PlannedLightPresentation::CaveCrystal(crystal) => {
+                            crystal.rotation =
+                                compose_rotation_steps(crystal.rotation, self.rotation, direction);
+                        }
+                        PlannedLightPresentation::CrystalAscent(crystal) => {
+                            crystal.rotation =
+                                compose_rotation_steps(crystal.rotation, self.rotation, direction);
+                        }
+                    }
                 }
             }
         }

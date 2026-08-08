@@ -531,6 +531,13 @@ fn encode_recipe_settings(encoder: &mut FingerprintEncoder, recipe: &V3RecipeSet
             encoder.i32(settings.treeline);
             encoder.i32(settings.snowline);
         }
+        V3RecipeSettings::CrystalAscent(settings) => {
+            // Tags 10 and 15 are already reserved by the parallel Outpost and
+            // Garden recipe contracts; recipe tags are append-only.
+            encoder.tag(16);
+            encoder.i32(settings.base_level);
+            encoder.i32(settings.rise_levels);
+        }
     }
 }
 
@@ -980,6 +987,23 @@ pub(super) fn encode_light_presentation(
             });
             encoder.tag(crystal.rotation);
         }
+        Some(PlannedLightPresentation::CrystalAscent(crystal)) => {
+            // Additive tag: the established cave-crystal bytes above remain
+            // unchanged for all existing V3 fingerprints.
+            encoder.tag(2);
+            match crystal.kind {
+                super::world::CrystalAscentCrystalKind::Landing(kind) => {
+                    encoder.tag(0);
+                    encoder.tag(match kind {
+                        CaveCrystalKind::LowCluster => 0,
+                        CaveCrystalKind::Branched => 1,
+                        CaveCrystalKind::Spire => 2,
+                    });
+                }
+                super::world::CrystalAscentCrystalKind::Heart => encoder.tag(1),
+            }
+            encoder.tag(crystal.rotation);
+        }
     }
 }
 
@@ -1078,8 +1102,8 @@ mod tests {
     };
     use crate::settings::{
         CubeCoord, EdgeElevationSettings, Ring19BoundaryOutletSettings,
-        Ring19LiquidConnectionSettings, SharedEdgeSettings, V3HillsSettings, V3PrairieSettings,
-        WalkerPortSettings,
+        Ring19LiquidConnectionSettings, SharedEdgeSettings, V3CrystalAscentSettings,
+        V3HillsSettings, V3PrairieSettings, WalkerPortSettings,
     };
 
     fn world_edges() -> PatchEdgesSettings {
@@ -1243,6 +1267,43 @@ mod tests {
             1_560_625_848_665_618_143,
             "update only with an explicit V3 fingerprint-encoding decision"
         );
+    }
+
+    #[test]
+    fn crystal_ascent_uses_the_reserved_additive_recipe_tag_and_both_fields() {
+        let mut encoder = FingerprintEncoder::new();
+        encode_recipe_settings(
+            &mut encoder,
+            &V3RecipeSettings::CrystalAscent(V3CrystalAscentSettings {
+                base_level: 6,
+                rise_levels: 144,
+            }),
+        );
+
+        let mut expected = vec![16];
+        expected.extend_from_slice(&6_i32.to_le_bytes());
+        expected.extend_from_slice(&144_i32.to_le_bytes());
+        assert_eq!(encoder.bytes, expected);
+
+        let baseline = encoder.finish_settings();
+        let mut changed_base = FingerprintEncoder::new();
+        encode_recipe_settings(
+            &mut changed_base,
+            &V3RecipeSettings::CrystalAscent(V3CrystalAscentSettings {
+                base_level: 7,
+                rise_levels: 144,
+            }),
+        );
+        let mut changed_rise = FingerprintEncoder::new();
+        encode_recipe_settings(
+            &mut changed_rise,
+            &V3RecipeSettings::CrystalAscent(V3CrystalAscentSettings {
+                base_level: 6,
+                rise_levels: 145,
+            }),
+        );
+        assert_ne!(baseline, changed_base.finish_settings());
+        assert_ne!(baseline, changed_rise.finish_settings());
     }
 
     #[test]

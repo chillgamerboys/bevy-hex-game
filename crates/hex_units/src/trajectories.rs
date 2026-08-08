@@ -17,7 +17,7 @@ use hex_core::{
     ElementId, ExactGridPoint, HexCoord, Level, TerrainBatchId, TerrainImpact, TilePos,
 };
 
-use crate::{KnownTerrainOccupancy, TerrainOccupancy};
+use crate::{AuthoredObjectOccupancy, KnownTerrainOccupancy, TerrainOccupancy};
 
 /// Why a resolved effect volume could not be clipped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,6 +137,21 @@ pub fn sight_segment_is_clear(
     sight_segment_is_clear_in_corridor(source, destination, terrain, &corridor, None)
 }
 
+/// Whether opt-in authored objects leave one exact sight segment unobstructed.
+///
+/// Unlike standing-character terrain sight, authored objects never receive the
+/// observer-relative low-cover omission. Exact face, edge, corner, and endpoint-only
+/// contacts remain clear through the same strict-interior kernel.
+#[must_use]
+pub fn authored_object_sight_segment_is_clear(
+    source: ExactGridPoint,
+    destination: ExactGridPoint,
+    authored_objects: &AuthoredObjectOccupancy,
+) -> bool {
+    let corridor = sight_candidate_columns(source.anchor(), destination.anchor());
+    sight_segment_is_clear_in_corridor(source, destination, authored_objects, &corridor, None)
+}
+
 /// Whether a standing observer has terrain-clear sight to an exposed surface.
 ///
 /// The center ray starts at the centre of the second air voxel above
@@ -156,18 +171,48 @@ pub fn terrain_sight_is_clear(
     target_surface: TilePos,
     terrain: &TerrainOccupancy,
 ) -> bool {
+    sight_bundle_is_clear(observer_support, target_surface, terrain, None)
+}
+
+/// Whether terrain and opt-in authored objects leave a standing sight bundle clear.
+///
+/// Terrain retains its observer-relative low-cover projection. Authored-object runs
+/// always intersect at full height, so an opted-in pillar cannot become transparent
+/// merely because its top is near the observer's support level.
+#[must_use]
+pub fn terrain_and_authored_object_sight_is_clear(
+    observer_support: TilePos,
+    target_surface: TilePos,
+    terrain: &TerrainOccupancy,
+    authored_objects: &AuthoredObjectOccupancy,
+) -> bool {
+    sight_bundle_is_clear(
+        observer_support,
+        target_surface,
+        terrain,
+        Some(authored_objects),
+    )
+}
+
+fn sight_bundle_is_clear(
+    observer_support: TilePos,
+    target_surface: TilePos,
+    terrain: &TerrainOccupancy,
+    authored_objects: Option<&AuthoredObjectOccupancy>,
+) -> bool {
     let eye = ExactGridPoint::standing_eye(observer_support);
     let corridor = sight_candidate_columns(observer_support.coord, target_surface.coord);
     let low_cover_band = (
         observer_support.level.saturating_sub(1),
         observer_support.level.saturating_add(1),
     );
-    if sight_segment_is_clear_in_corridor(
+    if combined_sight_segment_is_clear(
         eye,
         ExactGridPoint::voxel_top_center(target_surface),
         terrain,
+        authored_objects,
         &corridor,
-        Some(low_cover_band),
+        low_cover_band,
     ) {
         return true;
     }
@@ -179,12 +224,13 @@ pub fn terrain_sight_is_clear(
             .zip(ExactGridPoint::voxel_top_corners(target_surface))
             .enumerate()
     {
-        if sight_segment_is_clear_in_corridor(
+        if combined_sight_segment_is_clear(
             source,
             destination,
             terrain,
+            authored_objects,
             &corridor,
-            Some(low_cover_band),
+            low_cover_band,
         ) {
             clear_corners += 1;
             if clear_corners >= 3 {
@@ -197,6 +243,20 @@ pub fn terrain_sight_is_clear(
         }
     }
     false
+}
+
+fn combined_sight_segment_is_clear(
+    source: ExactGridPoint,
+    destination: ExactGridPoint,
+    terrain: &TerrainOccupancy,
+    authored_objects: Option<&AuthoredObjectOccupancy>,
+    corridor: &[HexCoord],
+    low_cover_band: (Level, Level),
+) -> bool {
+    sight_segment_is_clear_in_corridor(source, destination, terrain, corridor, Some(low_cover_band))
+        && authored_objects.is_none_or(|occupancy| {
+            sight_segment_is_clear_in_corridor(source, destination, occupancy, corridor, None)
+        })
 }
 
 fn sight_candidate_columns(source: HexCoord, destination: HexCoord) -> Vec<HexCoord> {
@@ -295,10 +355,26 @@ fn round_ratio(numerator: i128, positive_denominator: i128) -> i128 {
     }
 }
 
+trait SightRunOccupancy {
+    fn column_runs(&self, coord: HexCoord) -> &[(Level, Level)];
+}
+
+impl SightRunOccupancy for TerrainOccupancy {
+    fn column_runs(&self, coord: HexCoord) -> &[(Level, Level)] {
+        self.column_runs(coord)
+    }
+}
+
+impl SightRunOccupancy for AuthoredObjectOccupancy {
+    fn column_runs(&self, coord: HexCoord) -> &[(Level, Level)] {
+        self.column_runs(coord)
+    }
+}
+
 fn sight_segment_is_clear_in_corridor(
     source: ExactGridPoint,
     destination: ExactGridPoint,
-    terrain: &TerrainOccupancy,
+    occupancy: &impl SightRunOccupancy,
     corridor: &[HexCoord],
     low_cover_band: Option<(Level, Level)>,
 ) -> bool {
@@ -308,7 +384,7 @@ fn sight_segment_is_clear_in_corridor(
         return true;
     }
     corridor.iter().copied().all(|coord| {
-        terrain.runs_in_column(coord).all(|(bottom, top)| {
+        occupancy.column_runs(coord).iter().all(|&(bottom, top)| {
             let blocking_top = if bottom < top
                 && low_cover_band
                     .is_some_and(|(minimum, maximum)| (minimum..=maximum).contains(&top))
@@ -625,6 +701,15 @@ mod tests {
             .expect("single-voxel runs are valid")
     }
 
+    fn authored(voxels: impl IntoIterator<Item = TilePos>) -> AuthoredObjectOccupancy {
+        AuthoredObjectOccupancy::from_runs(
+            voxels
+                .into_iter()
+                .map(|pos| hex_core::AuthoredObjectVoxelRun::new(pos, pos.level)),
+        )
+        .expect("single-voxel authored runs are valid")
+    }
+
     fn advance(mut coord: HexCoord, direction: Sextant, distance: u32) -> HexCoord {
         for _ in 0..distance {
             coord = coord.neighbor(direction);
@@ -762,6 +847,53 @@ mod tests {
             interior_source,
             interior_destination,
             &blocker,
+        ));
+    }
+
+    #[test]
+    fn authored_object_segments_share_strict_tangencies_and_interior_crossings() {
+        let blocker = authored([at(0, 0, 0)]);
+        let tangent_source = ExactGridPoint::voxel_top_center(at(-2, 0, 0));
+        let tangent_destination = ExactGridPoint::voxel_top_center(at(2, 0, 0));
+        assert!(authored_object_sight_segment_is_clear(
+            tangent_source,
+            tangent_destination,
+            &blocker,
+        ));
+
+        let interior_source = ExactGridPoint::voxel_center(at(-2, 0, 0));
+        let interior_destination = ExactGridPoint::voxel_center(at(2, 0, 0));
+        assert!(!authored_object_sight_segment_is_clear(
+            interior_source,
+            interior_destination,
+            &blocker,
+        ));
+    }
+
+    #[test]
+    fn authored_object_runs_never_receive_terrain_low_cover_omission() {
+        let observer = at(0, 0, 0);
+        let target = at(4, 0, 0);
+        let wall_columns = (1..=3)
+            .flat_map(|q| (-2..=2).map(move |r| at(q, r, 1)))
+            .collect::<Vec<_>>();
+        let low_run = TerrainOccupancy::from_runs(
+            wall_columns.iter().copied().map(|top| (top, RunBottom(0))),
+        )
+        .expect("grounded one-level terrain wall");
+        let object = AuthoredObjectOccupancy::from_runs(
+            wall_columns
+                .into_iter()
+                .map(|top| hex_core::AuthoredObjectVoxelRun::new(top, 0)),
+        )
+        .expect("grounded authored-object wall");
+
+        assert!(terrain_sight_is_clear(observer, target, &low_run));
+        assert!(!terrain_and_authored_object_sight_is_clear(
+            observer,
+            target,
+            &TerrainOccupancy::default(),
+            &object,
         ));
     }
 

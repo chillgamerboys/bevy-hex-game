@@ -143,10 +143,30 @@ pub(crate) struct CaveCrystalPresentation {
     pub(crate) rotation: u8,
 }
 
+/// Authored crystal silhouette used by the Crystal Ascent landmark.
+///
+/// Landing fixtures intentionally reuse the cave silhouettes. The heart is a
+/// separate, blocking 24-level authored object whose exact occupied volume is
+/// published to gameplay alongside this presentation intent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum CrystalAscentCrystalKind {
+    Landing(CaveCrystalKind),
+    Heart,
+}
+
+/// Deterministic presentation intent for one Crystal Ascent fixture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct CrystalAscentCrystalPresentation {
+    pub(crate) kind: CrystalAscentCrystalKind,
+    /// Preferred clockwise 60-degree turn count in `0..6`.
+    pub(crate) rotation: u8,
+}
+
 /// Optional map-owned presentation intent attached to a semantic gameplay light.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PlannedLightPresentation {
     CaveCrystal(CaveCrystalPresentation),
+    CrystalAscent(CrystalAscentCrystalPresentation),
 }
 
 /// Exact logical source used later to spawn a public `GameplayLight`.
@@ -706,6 +726,40 @@ impl GeneratedWorldPlan {
                 expected_blockers.insert(*blocker);
             }
         }
+        for (id, light) in &self.lights {
+            if !matches!(
+                light.presentation,
+                Some(PlannedLightPresentation::CrystalAscent(
+                    CrystalAscentCrystalPresentation {
+                        kind: CrystalAscentCrystalKind::Heart,
+                        ..
+                    }
+                ))
+            ) {
+                continue;
+            }
+            for coord in light.origin.coord.within_radius(4) {
+                let blocker = TilePos::new(coord, light.origin.level);
+                if !self.volume.surfaces.contains_key(&blocker) {
+                    issues.push(WorldValidationIssue::new(
+                        WorldIssueCode::Blocker,
+                        format!(
+                            "Crystal Ascent heart light {id:?} cannot project its radius-four blocker onto missing footing {blocker:?}"
+                        ),
+                    ));
+                    continue;
+                }
+                if expected_blockers.contains(&blocker) {
+                    issues.push(WorldValidationIssue::new(
+                        WorldIssueCode::Blocker,
+                        format!(
+                            "Crystal Ascent heart light {id:?} overlaps another authored blocker at {blocker:?}"
+                        ),
+                    ));
+                }
+                expected_blockers.insert(blocker);
+            }
+        }
         if self.blockers != expected_blockers {
             issues.push(WorldValidationIssue::new(
                 WorldIssueCode::Blocker,
@@ -1180,10 +1234,11 @@ fn validate_feature_membership(
 }
 
 pub(super) fn valid_stable_name(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+    let mut bytes = name.bytes();
+    bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
+        && bytes.all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-' | b'.')
+        })
 }
 
 /// Recipe-independent category for a validation issue.
@@ -1944,9 +1999,11 @@ mod tests {
                     downstream: None,
                 },
             );
-        assert!(boundary_issues(&undeclared).iter().any(|issue| issue
-            .detail
-            .contains("must exactly equal its declared lanes")));
+        assert!(boundary_issues(&undeclared).iter().any(|issue| {
+            issue
+                .detail
+                .contains("must exactly equal its declared lanes")
+        }));
 
         let outside = lanes
             .iter()
