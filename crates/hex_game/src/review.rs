@@ -609,7 +609,8 @@ fn capture_timeout_diagnostic(
             | Screen::LatticeDemo
             | Screen::CharacterCreator
             | Screen::SpellCreator
-            | Screen::Sandbox => CapturePhase::AwaitingScenario,
+            | Screen::Sandbox
+            | Screen::Multiplayer => CapturePhase::AwaitingScenario,
             Screen::Loading => CapturePhase::Loading,
             Screen::Gameplay if !state.view_applied => CapturePhase::AwaitingCamera,
             Screen::Gameplay if !terrain_ready => CapturePhase::AwaitingTerrain,
