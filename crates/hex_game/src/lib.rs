@@ -30,6 +30,7 @@ mod creation_store;
 #[cfg(feature = "dev")]
 mod dev_time_controls;
 mod menus;
+mod multiplayer_gameplay;
 mod preferences;
 mod readouts;
 #[cfg(feature = "map-review")]

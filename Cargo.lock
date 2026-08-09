@@ -3728,6 +3728,7 @@ version = "0.4.0"
 dependencies = [
  "atomicwrites",
  "bevy",
+ "bevy_replicon",
  "hex_ai",
  "hex_anim",
  "hex_assets",
@@ -3737,6 +3738,7 @@ dependencies = [
  "hex_gameplay_model",
  "hex_lattice",
  "hex_map",
+ "hex_multiplayer",
  "hex_objects",
  "hex_perception",
  "hex_test_support",

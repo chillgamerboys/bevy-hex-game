@@ -28,10 +28,40 @@ pub(super) fn apply(
     if ctx.in_combat || ctx.formation.mode != PartyMovementMode::Group {
         return Err(CommandRefusal::PartyMovementUnavailable);
     }
+    if ctx
+        .formations
+        .and_then(|catalog| catalog.get(&ctx.formation.preset))
+        .is_none()
+    {
+        return Err(party_refusal(PartyMoveRefusal::WrongAnchor));
+    }
+    let mut owned_members = BTreeSet::new();
+    for &member in &ctx.party.members {
+        let Some(entity) = ctx.registry.entity_of(member) else {
+            return Err(CommandRefusal::MissingUnitData {
+                unit: member,
+                data: UnitData::EntityRecord,
+            });
+        };
+        let owner = actors
+            .get(entity)
+            .ok()
+            .and_then(|(_, _, _, _, owner, _, _)| owner.copied())
+            .unwrap_or_default();
+        if owner.0 == issued_seat {
+            owned_members.insert(member);
+        }
+    }
     let expected_anchor = ctx
         .formations
         .and_then(|catalog| catalog.get(&ctx.formation.preset))
-        .and_then(|preset| ctx.formation.anchor_member(preset));
+        .and_then(|preset| {
+            hex_units::formation_subset_anchor(
+                preset,
+                ctx.formation,
+                &owned_members.iter().copied().collect::<Vec<_>>(),
+            )
+        });
     if expected_anchor != Some(anchor) {
         return Err(party_refusal(PartyMoveRefusal::WrongAnchor));
     }
@@ -41,7 +71,7 @@ pub(super) fn apply(
         });
     };
     let occupancy =
-        current_occupancy(ctx.occupancy, ctx.reserved).without(ctx.party.members.iter().copied());
+        current_occupancy(ctx.occupancy, ctx.reserved).without(owned_members.iter().copied());
 
     let mut named = BTreeSet::new();
     let mut destinations = BTreeSet::new();
@@ -120,12 +150,7 @@ pub(super) fn apply(
         prepared.push(PreparedPath { entity, steps });
     }
 
-    if let Some(&member) = ctx
-        .party
-        .members
-        .iter()
-        .find(|member| !named.contains(member))
-    {
+    if let Some(&member) = owned_members.iter().find(|member| !named.contains(member)) {
         return Err(party_refusal(PartyMoveRefusal::MissingMember { member }));
     }
 

@@ -29,7 +29,7 @@
 
 use bevy::prelude::*;
 use hex_assets::{Effect, ManaAxis, Spell};
-use hex_core::{AppSystems, PerceptionSystems};
+use hex_core::{AppSystems, AuthoritativeSystems, PerceptionSystems, SimulationRole};
 
 /// What an enemy does with its turn. A placeholder, and says so.
 mod ai;
@@ -171,8 +171,13 @@ pub enum CombatSystems {
 
 /// Adds the combat loop.
 pub fn plugin(app: &mut App) {
-    app.init_resource::<hex_core::InputBindings>();
+    app.init_resource::<hex_core::InputBindings>()
+        .init_resource::<SimulationRole>();
     app.add_message::<CombatEvent>();
+    app.configure_sets(
+        Update,
+        AuthoritativeSystems.run_if(resource_equals(SimulationRole::Authority)),
+    );
     app.configure_sets(
         Update,
         (
@@ -184,6 +189,7 @@ pub fn plugin(app: &mut App) {
             CombatSystems::Advance,
         )
             .chain()
+            .in_set(AuthoritativeSystems)
             .in_set(AppSystems::Update),
     );
     app.configure_sets(

@@ -19,6 +19,10 @@ pub(super) fn plugin(app: &mut App) {
     app.init_state::<Screen>();
     app.register_type::<Screen>();
     app.add_plugins((
+        hex_multiplayer::MultiplayerPlugin,
+        crate::multiplayer_gameplay::plugin,
+    ));
+    app.add_plugins((
         splash::plugin,
         main_menu::plugin,
         settings::plugin,

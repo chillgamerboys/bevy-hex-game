@@ -43,8 +43,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use bevy::prelude::*;
 
 use hex_core::{
-    AppSystems, KnowledgeExpiry, KnowledgeSource, LatticeCoord, PausableSystems, PerceptionSystems,
-    RoundElapsed, Screen, UnitId,
+    AppSystems, AuthoritativeSystems, KnowledgeExpiry, KnowledgeSource, LatticeCoord,
+    PausableSystems, PerceptionSystems, RoundElapsed, Screen, UnitId,
 };
 use hex_lattice::{CellKind, LatticeSpec, LatticeState};
 use hex_perception::FactionMapKnowledge;
@@ -421,6 +421,7 @@ pub(crate) fn plugin(app: &mut App) {
             Update,
             sync_spatial_visibility
                 .in_set(AppSystems::Update)
+                .in_set(AuthoritativeSystems)
                 .in_set(PausableSystems)
                 // World perception publishes the authoritative observation first;
                 // combat only adapts it into the lattice read seam.
@@ -436,6 +437,7 @@ pub(crate) fn plugin(app: &mut App) {
             (refresh_known_truth, mirror_truth)
                 .chain()
                 .in_set(AppSystems::Update)
+                .in_set(AuthoritativeSystems)
                 .in_set(PausableSystems)
                 // Payment, damage and Reveal all write facts this projection reads.
                 .after(crate::CombatSystems::Apply)
@@ -446,6 +448,7 @@ pub(crate) fn plugin(app: &mut App) {
             Update,
             decay_on_round
                 .in_set(AppSystems::Update)
+                .in_set(AuthoritativeSystems)
                 .in_set(PausableSystems)
                 // A shared set, not `.chain()`: `RoundElapsed` is written inside
                 // `Advance`, and reading it in a system merely *declared* later

@@ -248,13 +248,26 @@ lanes:
     builder: worker
     branch: worker/client-hosted-gameplay-authority
     owns:
+      - Cargo.lock#hex-game-multiplayer-dependency-edges
       - crates/hex_core/src/commands.rs#direct-versus-authenticated-queue-origin
+      - crates/hex_combat/src/authority_host.rs#authority-role-gates
       - crates/hex_combat/src/commands/move_party.rs#per-seat-party-subset
+      - crates/hex_combat/src/commands/spell_resolution.rs#authority-role-gates
+      - crates/hex_combat/src/effects.rs#replica-projection-and-authority-role-gates
+      - crates/hex_combat/src/knowledge.rs#authority-role-gates
       - crates/hex_combat/src/lib.rs#authoritative-system-set-gate
       - crates/hex_combat/src/turns.rs#replica-turn-projection
+      - crates/hex_combat/tests/contracts.rs#multiplayer-authority-module
+      - crates/hex_combat/tests/contracts/damage.rs#non-host-rest-contract
+      - crates/hex_combat/tests/contracts/funnel.rs#per-seat-party-subset-contract
       - crates/hex_units/src/formation.rs#explicit-seat-subset-anchor
+      - crates/hex_units/src/lib.rs#formation-and-motion-exports
+      - crates/hex_units/src/movement.rs#authority-gate-registration
       - crates/hex_units/src/units.rs#seat-subset-planning-and-motion-projection
+      - crates/hex_units/tests/contracts.rs#multiplayer-authority-module
       - crates/hex_anim/src/lib.rs#replica-animation-clock
+      - crates/hex_game/Cargo.toml#multiplayer-gameplay-dependencies
+      - crates/hex_game/src/lib.rs#multiplayer-gameplay-module
       - crates/hex_game/src/multiplayer_gameplay.rs
       - crates/hex_game/src/screens/mod.rs#multiplayer-gameplay-composition
       - crates/hex_combat/tests/contracts/multiplayer_authority.rs
@@ -271,8 +284,8 @@ lanes:
     sizing:
       model: gpt-5.6-sol
       effort: high
-    state: dispatched
-    pr: null
+    state: in-review
+    pr: 194
 
   - id: L3
     title: World replication and disclosure

@@ -218,18 +218,90 @@ pub struct LocalGameCommandRequest {
 /// this is a queue and not a set or a message (see the module docs).
 #[derive(Resource, Debug, Default)]
 pub struct CommandQueue {
-    queue: VecDeque<IssuedCommand>,
+    queue: VecDeque<QueuedCommand>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct QueuedCommand {
+    issued: IssuedCommand,
+    origin: CommandOrigin,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CommandOrigin {
+    Direct,
+    Authenticated {
+        source_seat: PlayerSeat,
+        request_id: CommandRequestId,
+    },
 }
 
 impl CommandQueue {
     /// Adds a command after everything already waiting.
     pub fn push(&mut self, issued: IssuedCommand) {
-        self.queue.push_back(issued);
+        self.queue.push_back(QueuedCommand {
+            issued,
+            origin: CommandOrigin::Direct,
+        });
+    }
+
+    /// Adds a command stamped by authenticated session ingress.
+    ///
+    /// `issued.seat` is the reducer-facing effective owner, which may be a temporarily
+    /// delegated canonical seat. `source_seat` remains the authenticated human identity
+    /// used for idempotence and result routing.
+    pub fn push_authenticated(
+        &mut self,
+        issued: IssuedCommand,
+        source_seat: PlayerSeat,
+        request_id: CommandRequestId,
+    ) {
+        self.queue.push_back(QueuedCommand {
+            issued,
+            origin: CommandOrigin::Authenticated {
+                source_seat,
+                request_id,
+            },
+        });
     }
 
     /// Takes the oldest waiting command. The applier's loop.
     pub fn pop(&mut self) -> Option<IssuedCommand> {
-        self.queue.pop_front()
+        self.queue.pop_front().map(|queued| queued.issued)
+    }
+
+    /// Removes direct human commands before they can reach the reducer.
+    ///
+    /// The returned commands deliberately omit the claimed seat. A composition adapter
+    /// reissues them through seatless local/wire ingress, while direct AI/system entries
+    /// and already-authenticated entries retain their relative queue order.
+    pub fn take_direct_human_commands(&mut self) -> Vec<GameCommand> {
+        let mut commands = Vec::new();
+        self.queue.retain(|queued| {
+            let direct_human =
+                queued.origin == CommandOrigin::Direct && queued.issued.seat.is_human();
+            if direct_human {
+                commands.push(queued.issued.command.clone());
+            }
+            !direct_human
+        });
+        commands
+    }
+
+    /// Whether one authenticated request is still waiting for the reducer.
+    #[must_use]
+    pub fn contains_authenticated(
+        &self,
+        source_seat: PlayerSeat,
+        request_id: CommandRequestId,
+    ) -> bool {
+        self.queue.iter().any(|queued| {
+            queued.origin
+                == CommandOrigin::Authenticated {
+                    source_seat,
+                    request_id,
+                }
+        })
     }
 
     /// Whether anything is waiting.
@@ -247,7 +319,7 @@ impl CommandQueue {
     pub fn holds_command_for(&self, unit: UnitId) -> bool {
         self.queue
             .iter()
-            .any(|issued| issued.command.unit() == unit)
+            .any(|queued| queued.issued.command.unit() == unit)
     }
 
     /// Whether an answer to an open decision is already waiting for `unit`.
@@ -257,7 +329,7 @@ impl CommandQueue {
     /// queued for the same unit, which is what asking the broader question would do.
     #[must_use]
     pub fn holds_answer_for(&self, unit: UnitId) -> bool {
-        self.queue.iter().any(|issued| match issued.command {
+        self.queue.iter().any(|queued| match queued.issued.command {
             GameCommand::ChooseDisables { unit: named, .. }
             | GameCommand::ChooseRestores { unit: named, .. } => named == unit,
             _ => false,
@@ -377,6 +449,32 @@ mod tests {
         assert_eq!(queue.pop().map(|i| i.command.unit()), Some(UnitId(1)));
         assert_eq!(queue.pop().map(|i| i.command.unit()), Some(UnitId(2)));
         assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn direct_human_commands_are_removed_without_touching_ai_or_authenticated_work() {
+        let mut queue = CommandQueue::default();
+        let human = GameCommand::EndTurn { unit: UnitId(1) };
+        let ai = IssuedCommand {
+            seat: PlayerSeat::AI,
+            command: GameCommand::EndTurn { unit: UnitId(2) },
+        };
+        let authenticated = IssuedCommand {
+            seat: PlayerSeat(3),
+            command: GameCommand::EndTurn { unit: UnitId(3) },
+        };
+        queue.push(IssuedCommand {
+            seat: PlayerSeat(5),
+            command: human.clone(),
+        });
+        queue.push(ai.clone());
+        queue.push_authenticated(authenticated.clone(), PlayerSeat(3), CommandRequestId(9));
+
+        assert_eq!(queue.take_direct_human_commands(), vec![human]);
+        assert!(queue.contains_authenticated(PlayerSeat(3), CommandRequestId(9)));
+        assert_eq!(queue.pop(), Some(ai));
+        assert_eq!(queue.pop(), Some(authenticated));
+        assert!(!queue.contains_authenticated(PlayerSeat(3), CommandRequestId(9)));
     }
 
     #[test]

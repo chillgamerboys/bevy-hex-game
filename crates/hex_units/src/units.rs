@@ -43,7 +43,8 @@ use crate::movement::{route_with_occupancy, Body, Footing, MovementCrossings, Re
 use crate::pathing::{leg_duration, reached_step_index};
 use crate::selection::Selected;
 use crate::{
-    plan_formation_move_with_occupancy, FormationMember, FormationPlanError, UnitOccupancy,
+    formation_subset_anchor, plan_formation_subset_move_with_occupancy, FormationMember,
+    FormationPlanError, UnitOccupancy,
 };
 
 const PLAYER_SWATCH_ID: &str = "unit/player";
@@ -123,6 +124,59 @@ impl MovingTo {
             started: false,
             reconciled_step: 0,
         }
+    }
+
+    /// Reconstructs an exact authoritative route clock on a replica.
+    ///
+    /// Returns `None` for an empty route, a non-finite clock/speed, negative elapsed
+    /// time, or a reconciled index outside the route.
+    #[must_use]
+    pub fn from_authoritative_clock(
+        path: Vec<Standing>,
+        speed: f32,
+        elapsed: f64,
+        started: bool,
+        reconciled_step: usize,
+    ) -> Option<Self> {
+        if path.is_empty()
+            || !speed.is_finite()
+            || !elapsed.is_finite()
+            || elapsed < 0.0
+            || reconciled_step >= path.len()
+        {
+            return None;
+        }
+        Some(Self {
+            path,
+            speed,
+            elapsed,
+            started,
+            reconciled_step,
+        })
+    }
+
+    /// Exact committed domain speed.
+    #[must_use]
+    pub const fn speed(&self) -> f32 {
+        self.speed
+    }
+
+    /// Exact elapsed authoritative route time.
+    #[must_use]
+    pub const fn elapsed(&self) -> f64 {
+        self.elapsed
+    }
+
+    /// Whether the route epoch has been established.
+    #[must_use]
+    pub const fn started(&self) -> bool {
+        self.started
+    }
+
+    /// Last route step committed as the exact discrete position.
+    #[must_use]
+    pub const fn reconciled_step(&self) -> usize {
+        self.reconciled_step
     }
 
     fn advance(&mut self, delta: f64) -> Option<usize> {
@@ -496,22 +550,46 @@ fn on_tile_clicked(
         let Some(preset) = formations.get(&formation.preset) else {
             return;
         };
-        let Some(anchor) = formation.anchor_member(preset) else {
+        let Some((selected, owner, _, _, _turn)) = players.iter().next() else {
             return;
         };
-        if queue.holds_command_for(anchor)
-            || party_players
-                .iter()
-                .any(|(_, _, _, _, busy, moving)| busy || moving)
-        {
+        let issuing_seat = owner.copied().unwrap_or_default().0;
+        let owned_members = party
+            .members
+            .iter()
+            .copied()
+            .filter(|member| {
+                party_players
+                    .iter()
+                    .find(|(unit, _, _, _, _, _)| **unit == *member)
+                    .is_some_and(|(_, owner, _, _, _, _)| {
+                        owner.copied().unwrap_or_default().0 == issuing_seat
+                    })
+            })
+            .collect::<Vec<_>>();
+        if !owned_members.contains(selected) {
             return;
         }
-        let Some((_, owner, anchor_standing, anchor_body, _, _)) = party_players
+        let Some(anchor) = formation_subset_anchor(preset, formation, &owned_members) else {
+            return;
+        };
+        let Some((_, _, anchor_standing, anchor_body, _, _)) = party_players
             .iter()
             .find(|(unit, _, _, _, _, _)| **unit == anchor)
         else {
             return;
         };
+        if queue.holds_command_for(anchor)
+            || party_players
+                .iter()
+                .any(|(unit, owner, _, _, busy, moving)| {
+                    owner.copied().unwrap_or_default().0 == issuing_seat
+                        && owned_members.contains(unit)
+                        && (busy || moving)
+                })
+        {
+            return;
+        }
         let anchor_footing = Arc::new(Footing::from_tiles(
             tiles.iter(),
             &table,
@@ -521,7 +599,7 @@ fn on_tile_clicked(
         let Some(destination) = anchor_footing.at(*pos) else {
             return;
         };
-        let external_occupancy = occupancy.without(party.members.iter().copied());
+        let external_occupancy = occupancy.without(owned_members.iter().copied());
         let Some(anchor_path) = route_with_occupancy(
             anchor_standing.0,
             destination,
@@ -539,8 +617,8 @@ fn on_tile_clicked(
         // six-member move needs one index rather than six duplicate map projections;
         // retaining the profile-keyed cache keeps future heterogeneous parties valid.
         let mut footing_by_body = vec![(*anchor_body, Arc::clone(&anchor_footing))];
-        let mut members = Vec::with_capacity(party.members.len());
-        for member in &party.members {
+        let mut members = Vec::with_capacity(owned_members.len());
+        for member in &owned_members {
             let Some((unit, _, standing, body, _, _)) = party_players
                 .iter()
                 .find(|(unit, _, _, _, _, _)| *unit == member)
@@ -568,15 +646,16 @@ fn on_tile_clicked(
                 footing: member_footing,
             });
         }
-        match plan_formation_move_with_occupancy(
+        match plan_formation_subset_move_with_occupancy(
             preset,
             formation,
+            anchor,
             &anchor_path,
             members,
             &external_occupancy,
         ) {
             Ok(plan) => queue.push(IssuedCommand {
-                seat: owner.copied().unwrap_or_default().0,
+                seat: issuing_seat,
                 command: GameCommand::MoveParty {
                     anchor,
                     paths: plan.paths,
