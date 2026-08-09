@@ -255,7 +255,14 @@ fn combined_sight_segment_is_clear(
 ) -> bool {
     sight_segment_is_clear_in_corridor(source, destination, terrain, corridor, Some(low_cover_band))
         && authored_objects.is_none_or(|occupancy| {
-            sight_segment_is_clear_in_corridor(source, destination, occupancy, corridor, None)
+            occupancy.is_empty()
+                || sight_segment_is_clear_in_corridor(
+                    source,
+                    destination,
+                    occupancy,
+                    corridor,
+                    None,
+                )
         })
 }
 
@@ -405,15 +412,29 @@ fn segment_crosses_open_run(
     bottom: Level,
     top: Level,
 ) -> bool {
+    let source_level = source.level_sixths();
+    let destination_level = destination.level_sixths();
+    let run_bottom = i64::from(bottom) * 6 - 3;
+    let run_top = i64::from(top) * 6 + 3;
+    // A strict sight blocker needs a nonzero interval inside both the segment and
+    // the run. Reject vertically disjoint runs before constructing rationals or
+    // evaluating the three horizontal slab pairs. Equality is an exact tangency and
+    // therefore remains clear by contract.
+    if source_level.min(destination_level) >= run_top
+        || source_level.max(destination_level) <= run_bottom
+    {
+        return false;
+    }
+
     let mut lower = Rational::new(0, 1);
     let mut upper = Rational::new(1, 1);
     if !intersect_open_interval(
         &mut lower,
         &mut upper,
-        source.level_sixths(),
-        destination.level_sixths() - source.level_sixths(),
-        i64::from(bottom) * 6 - 3,
-        i64::from(top) * 6 + 3,
+        source_level,
+        destination_level - source_level,
+        run_bottom,
+        run_top,
     ) {
         return false;
     }
