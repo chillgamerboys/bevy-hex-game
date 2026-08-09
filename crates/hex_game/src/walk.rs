@@ -484,6 +484,7 @@ fn parse_screen(name: &str) -> Result<Screen, String> {
     match name {
         "Splash" => Ok(Screen::Splash),
         "Title" => Ok(Screen::Title),
+        "Multiplayer" => Ok(Screen::Multiplayer),
         "Sandbox" => Ok(Screen::Sandbox),
         "Settings" => Ok(Screen::Settings),
         "LatticeDemo" => Ok(Screen::LatticeDemo),
@@ -492,7 +493,7 @@ fn parse_screen(name: &str) -> Result<Screen, String> {
         "Loading" => Ok(Screen::Loading),
         "Gameplay" => Ok(Screen::Gameplay),
         _ => Err(format!(
-            "unknown screen {name:?}; expected Splash, Title, Sandbox, Settings, CharacterCreator, SpellCreator, LatticeDemo, Loading, or Gameplay"
+            "unknown screen {name:?}; expected Splash, Title, Multiplayer, Sandbox, Settings, CharacterCreator, SpellCreator, LatticeDemo, Loading, or Gameplay"
         )),
     }
 }
@@ -2928,6 +2929,7 @@ mod tests {
         for name in [
             "Splash",
             "Title",
+            "Multiplayer",
             "Sandbox",
             "Settings",
             "CharacterCreator",
@@ -2945,6 +2947,7 @@ mod tests {
     fn the_shipped_walk_scripts_parse_and_validate() {
         for script in [
             "../../walks/gameplay_ui.ron",
+            "../../walks/multiplayer_session.ron",
             "../../walks/waterfall.ron",
             "../../walks/forest.ron",
             "../../walks/readme_party_trial.ron",
@@ -3058,6 +3061,7 @@ mod tests {
         let mut launches_sandbox = false;
         for script in [
             "../../walks/gameplay_ui.ron",
+            "../../walks/multiplayer_session.ron",
             "../../walks/waterfall.ron",
             "../../walks/forest.ron",
             "../../walks/readme_party_trial.ron",
