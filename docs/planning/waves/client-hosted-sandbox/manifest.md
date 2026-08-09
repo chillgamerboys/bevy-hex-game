@@ -116,6 +116,36 @@ overlong-lived certificates, and unsupported key algorithms. Aeronet's no-valida
 configuration remains forbidden. Ratifier: coordinator, preserving the user-approved SPKI
 contract.
 
+### 2026-08-08 — L2 exact-symbol territory remap
+
+The 2026-08-08 pre-dispatch re-sweep found that draft PRs #186, #188, #189, and
+stacked #190 still have their previously recorded heads and have not landed on `dev`.
+The coordinator re-cut L2 around their exact symbols instead of editing their active
+AI, reducer, casting, selection, movement-feedback, HUD, or save hunks:
+
+- a gameplay-owned pre-reducer adapter extracts only legacy direct commands carrying a
+  human seat, discards that untrusted seat, and reissues the command through
+  `LocalGameCommandRequest` (authority) or seatless `GameCommandRequest` (replica);
+- authenticated commands re-enter `CommandQueue` with an internal correlation marker;
+  a post-reducer adapter derives acceptance/refusal from the consumed marker and
+  structured `CombatEvent`, so `commands/mod.rs` remains untouched;
+- AI commands retain their direct `PlayerSeat::AI` route and the whole existing
+  `CombatSystems` chain is placed inside `AuthoritativeSystems`, so `ai.rs` remains
+  untouched;
+- movement gating is applied to `MovementSystems::Reconcile` from the owning plugin
+  registration, without editing PR #188's `movement.rs` reach/feedback regions or
+  `selection.rs`;
+- group movement is re-cut through the untouched `formation.rs`, `units.rs`, and
+  `commands/move_party.rs` symbols; the complete owned subset remains atomically
+  validated;
+- existing click, cast, lattice, turn, Rest, and party-strip emitters therefore need no
+  edits in draft-owned hot files, while no direct human command can reach authority
+  reduction in the composed application.
+
+This remap resolves only L2's open-PR dispatch condition. It does not waive L3's
+world-owner decision or any combined evidence gate. Ratifier: coordinator, preserving
+the user-directed 2026-08-08 instruction to proceed through L2–L4.
+
 ## Shared foundation
 
 Live contracts this wave builds on:
@@ -218,15 +248,15 @@ lanes:
     builder: worker
     branch: worker/client-hosted-gameplay-authority
     owns:
-      - crates/hex_ai/src/lib.rs#AI-command-seat-and-authority-gates
-      - crates/hex_combat/src/commands/mod.rs#request-result-and-delegation-adapter
+      - crates/hex_core/src/commands.rs#direct-versus-authenticated-queue-origin
       - crates/hex_combat/src/commands/move_party.rs#per-seat-party-subset
-      - crates/hex_combat/src/commands/rest.rs#issuing-member-contract
-      - crates/hex_combat/src/lib.rs#authoritative-system-gates-and-replica-projection
-      - crates/hex_units/src/units.rs#local-request-ingress-and-unit-replica
-      - crates/hex_units/src/movement.rs#authoritative-domain-movement-gate
-      - crates/hex_units/src/selection.rs#seat-scoped-command-emission
-      - crates/hex_game/src/screens/gameplay.rs#local-ingress-and-client-menu-adapter
+      - crates/hex_combat/src/lib.rs#authoritative-system-set-gate
+      - crates/hex_combat/src/turns.rs#replica-turn-projection
+      - crates/hex_units/src/formation.rs#explicit-seat-subset-anchor
+      - crates/hex_units/src/units.rs#seat-subset-planning-and-motion-projection
+      - crates/hex_anim/src/lib.rs#replica-animation-clock
+      - crates/hex_game/src/multiplayer_gameplay.rs
+      - crates/hex_game/src/screens/mod.rs#multiplayer-gameplay-composition
       - crates/hex_combat/tests/contracts/multiplayer_authority.rs
       - crates/hex_units/tests/contracts/multiplayer_authority.rs
       - docs/planning/waves/client-hosted-sandbox/manifest.md#L2-row
@@ -241,7 +271,7 @@ lanes:
     sizing:
       model: gpt-5.6-sol
       effort: high
-    state: queued
+    state: dispatched
     pr: null
 
   - id: L3

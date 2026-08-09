@@ -2,6 +2,11 @@
 
 Last swept 2026-08-08 after `git fetch origin --prune`.
 
+Re-swept immediately before L2 dispatch on 2026-08-08. All five recorded draft heads,
+bases, and footprints were unchanged; `origin/dev` remained
+`92662d456746506093e8de61f54f1d619085e1fe`. The L2 exact-symbol remap is recorded in
+the manifest amendment of the same date.
+
 Commands:
 
 ```sh
@@ -28,7 +33,8 @@ visible.
   Cargo/docs/test selector are coordinator-only. PR 187 is a semantic input to the world
   snapshot review even if text merges cleanly.
 - **L1:** no current branch touches `crates/hex_multiplayer/**`.
-- **L2:** blocked by 186/188/189/190 unless exact symbols are remapped.
+- **L2:** exact symbols remapped in the 2026-08-08 manifest amendment. L2 does not edit
+  the draft-owned AI, reducer, casting, selection, movement-feedback, HUD, or save hunks.
 - **L3:** blocked by 186/187/190 and world-owner ratification.
 - **L4:** blocked by 186/188/189/190 unless exact symbols are remapped.
 
