@@ -476,7 +476,7 @@ place** — they are meant to be replaced.
 | **Enemy behaviour** | deterministic `baseline-v1`: revive, reveal, direct-damage cast, self-enchant, strike, then approach an observed live hostile | A rout threshold to know when to stop and a broader tactical policy; this remains a deliberately small baseline rather than a balance decision |
 | **Engage range** | 4 hexes, 6 to disengage; perception will gate the reach trigger on observation | The numbers remain a feel question. The disengage margin stays spatial hysteresis; the separate lost-contact rule searches for one round |
 | **What height is worth** | +1 hex of range per 5 levels above the target | The value remains provisional; engagement and spell targeting now share the rule |
-| **How the tints look** | pale warm white, 0.22 alpha for range and 0.6 for the route | Nothing but taste. The constants are at the top of `hex_units::selection`; change the numbers rather than the structure |
+| **How the tints look** | pale warm white, 0.22 alpha for range and 0.6 for the affordable route; a rose × marks a connected hovered destination beyond the current budget | Nothing but taste. The constants are at the top of `hex_units::selection`; change the numbers rather than the structure |
 
 **No randomness** is *not* provisional. The design is explicit that uncertainty comes
 from hidden information rather than dice, so the turn order is deterministic: ties
