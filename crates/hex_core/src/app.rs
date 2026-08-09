@@ -50,6 +50,8 @@ pub enum Screen {
     Title,
     /// Persistent pre-alpha display and volume preferences.
     Settings,
+    /// Direct-host/join setup, lobby, verification, reconnect, and session-end routes.
+    Multiplayer,
     /// Local mechanics test reached only from Character Creator.
     ///
     /// Exists as an isolated manual-verification surface for casting, fusions, mana,

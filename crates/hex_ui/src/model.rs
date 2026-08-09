@@ -1261,6 +1261,8 @@ impl Default for MainMenuView {
 pub enum MainMenuIntent {
     /// Open the three Campaign slots.
     OpenCampaign,
+    /// Open client-hosted multiplayer.
+    OpenMultiplayer,
     /// Enter the persistent Sandbox draft.
     OpenSandbox,
     /// Open the creator tools hierarchy.
