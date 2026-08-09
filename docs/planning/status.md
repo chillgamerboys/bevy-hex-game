@@ -25,12 +25,15 @@ height-validated underground chamber network with exact opaque cutaway roofs.
 
 The selectable **Crystal Ascent** landmark occupies one radius-40 world. Its
 monumental lower aperture opens into a crystal chamber and central shaft; three exact
-four-wide clockwise stair circuits climb 144 levels through eighteen crystal-lit
-landings before emerging around a radius-12 oculus into a protected woodland
+four-wide clockwise stair circuits, joined by four independent lanes at each
+contraction, climb 144 levels through eighteen crystal-lit landings before emerging
+around a radius-12 oculus into a protected woodland
 clearing. The recipe accepts rises from 100 through 200, keeps its architecture
 seed-independent, publishes stable lower/chamber/upper anchors and terminal pads, and
-validates ordinary traversal, one-level transitions, headroom, lighting coverage,
-and the absence of cross-loop shortcuts. Macro composition remains deferred.
+validates exact handoff edges, ordinary traversal, one-level transitions, turning-pad
+headroom, per-crystal light pairs, and the absence of non-handoff cross-loop shortcuts.
+The standalone party starts on the exterior apron facing inward. Macro composition
+remains deferred.
 
 V3 now has fifteen recipe variants: Hills, Sky Islands, Mountains, Caves, Waterfall,
 Forest, Fort, Volcano, Deep Forest, Prairie, Shallow Sea, Beach, Shore, Deep Mountain,

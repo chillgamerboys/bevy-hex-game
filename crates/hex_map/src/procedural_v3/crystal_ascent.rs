@@ -45,7 +45,8 @@ const OCULUS_RADIUS: u32 = 12;
 const CLEARING_RADIUS: u32 = 18;
 const SHELL_INNER_RADIUS: u32 = 28;
 const SHELL_OUTER_RADIUS: u32 = 32;
-const BUTTRESS_OUTER_RADIUS: u32 = 35;
+const BUTTRESS_INNER_RADIUS: u32 = 30;
+const BUTTRESS_OUTER_RADIUS: u32 = SITE_RADIUS;
 const BUTTRESS_FLANK_OFFSET: i32 = 8;
 const CIRCUIT_BANDS: [(u32, u32); 3] = [(24, 27), (21, 24), (18, 21)];
 const CIRCUIT_COUNT: usize = 3;
@@ -367,6 +368,12 @@ fn construct_patch_with_streams(
         base,
         summit,
     )?;
+    // The protected terminal is the exterior apron at the mouth of the arch.
+    // The Dark interior begins one ring inward so a party spawned on the terminal
+    // remains in exterior daylight while crossing the physical threshold.
+    for position in &geometry.lower_pad {
+        surface_intents.insert(*position, exterior_surface());
+    }
     build_buttresses_and_ribs(&mut masses, &mut surface_intents, settings)?;
     let stair_surfaces = geometry.stair_surfaces.clone();
     build_crown(
@@ -419,7 +426,7 @@ fn construct_patch_with_streams(
             (metadata.interior == Some(INTERIOR)).then_some(*position)
         })
         .collect::<BTreeSet<_>>();
-    let entrance_surfaces = radial_pad(32, 0, 4, base)
+    let entrance_surfaces = radial_pad(SITE_RADIUS.saturating_sub(1), 0, 4, base)
         .into_iter()
         .filter(|position| interior_floors.contains(position))
         .collect();
@@ -505,20 +512,25 @@ fn expected_circuit_surfaces(
             let boundary_low = flight_boundary(settings.base_level, settings.rise_levels, flight);
             let boundary_high =
                 flight_boundary(settings.base_level, settings.rise_levels, flight + 1);
-            let delta = boundary_high.saturating_sub(boundary_low);
-            let level = boundary_low.saturating_add(
-                i32::try_from(offset)
-                    .ok()?
-                    .saturating_mul(delta)
-                    .checked_div(i32::try_from(radius).ok()?)?,
-            );
+            let level =
+                flight_tread_level(circuit, side, radius, offset, boundary_low, boundary_high)?;
             surfaces.insert(TilePos::new(*ring.get(raw)?, level));
         }
     }
 
-    // The last tread of each circuit opens onto a four-wide terminal landing.
-    // Consecutive circuit landings overlap at exactly their shared band boundary,
-    // keeping the contraction connected without widening either authored landing.
+    // Each contraction is a four-wide radial transfer corridor. The outgoing and
+    // incoming circuits own one four-by-four turning pad apiece and overlap only
+    // on the four cells at their shared radial boundary.
+    if circuit > 0 {
+        let incoming_level = flight_boundary(
+            settings.base_level,
+            settings.rise_levels,
+            circuit.checked_mul(FLIGHTS_PER_CIRCUIT)?,
+        );
+        for radius in inner..=outer {
+            surfaces.extend(radial_forward_pad(radius, 0, 4, incoming_level));
+        }
+    }
     let outgoing_level = flight_boundary(
         settings.base_level,
         settings.rise_levels,
@@ -526,6 +538,11 @@ fn expected_circuit_surfaces(
     );
     for radius in inner..=outer {
         surfaces.insert(TilePos::new(landing_coord(radius, 0), outgoing_level));
+    }
+    if circuit + 1 < CIRCUIT_COUNT {
+        for radius in inner..=outer {
+            surfaces.extend(radial_forward_pad(radius, 0, 4, outgoing_level));
+        }
     }
 
     if circuit == 0 {
@@ -582,18 +599,12 @@ fn expected_flight_lane(
         .checked_add(side)?;
     let boundary_low = flight_boundary(settings.base_level, settings.rise_levels, flight);
     let boundary_high = flight_boundary(settings.base_level, settings.rise_levels, flight + 1);
-    let delta = boundary_high.saturating_sub(boundary_low);
     let side_start = side.checked_mul(radius_usize)?;
     let mut lane = Vec::with_capacity(radius_usize.saturating_add(1));
     for offset in 0..radius_usize {
         let progress = side_start.checked_add(offset)?;
         let raw = start_index(radius).checked_add(progress)? % ring.len();
-        let level = boundary_low.saturating_add(
-            i32::try_from(offset)
-                .ok()?
-                .saturating_mul(delta)
-                .checked_div(i32::try_from(radius).ok()?)?,
-        );
+        let level = flight_tread_level(circuit, side, radius, offset, boundary_low, boundary_high)?;
         lane.push(TilePos::new(*ring.get(raw)?, level));
     }
     let next_side = side.checked_add(1)? % FLIGHTS_PER_CIRCUIT;
@@ -602,6 +613,185 @@ fn expected_flight_lane(
         boundary_high,
     ));
     Some(lane)
+}
+
+fn expected_transfer_seam(
+    settings: &V3CrystalAscentSettings,
+    left_circuit: usize,
+) -> Option<BTreeSet<TilePos>> {
+    let (left_inner, _) = CIRCUIT_BANDS.get(left_circuit).copied()?;
+    let (_, right_outer) = CIRCUIT_BANDS.get(left_circuit.checked_add(1)?).copied()?;
+    if left_inner != right_outer {
+        return None;
+    }
+    let level = flight_boundary(
+        settings.base_level,
+        settings.rise_levels,
+        left_circuit
+            .checked_add(1)?
+            .checked_mul(FLIGHTS_PER_CIRCUIT)?,
+    );
+    Some(radial_forward_pad(left_inner, 0, 4, level))
+}
+
+fn expected_transfer_lane(
+    settings: &V3CrystalAscentSettings,
+    left_circuit: usize,
+    lane: usize,
+) -> Option<Vec<TilePos>> {
+    if lane >= 4 {
+        return None;
+    }
+    let (_, left_outer) = CIRCUIT_BANDS.get(left_circuit).copied()?;
+    let (right_inner, _) = CIRCUIT_BANDS.get(left_circuit.checked_add(1)?).copied()?;
+    let level = flight_boundary(
+        settings.base_level,
+        settings.rise_levels,
+        left_circuit
+            .checked_add(1)?
+            .checked_mul(FLIGHTS_PER_CIRCUIT)?,
+    );
+    (right_inner..=left_outer)
+        .rev()
+        .map(|radius| {
+            let ring = ring_coordinates(radius);
+            let raw = start_index(radius).checked_add(lane)? % ring.len();
+            Some(TilePos::new(*ring.get(raw)?, level))
+        })
+        .collect()
+}
+
+fn expected_transfer_pad_cells(
+    settings: &V3CrystalAscentSettings,
+    left_circuit: usize,
+) -> Option<BTreeSet<TilePos>> {
+    let (left_inner, left_outer) = CIRCUIT_BANDS.get(left_circuit).copied()?;
+    let (right_inner, right_outer) = CIRCUIT_BANDS.get(left_circuit.checked_add(1)?).copied()?;
+    if left_inner != right_outer {
+        return None;
+    }
+    let level = flight_boundary(
+        settings.base_level,
+        settings.rise_levels,
+        left_circuit
+            .checked_add(1)?
+            .checked_mul(FLIGHTS_PER_CIRCUIT)?,
+    );
+    Some(
+        (right_inner..=left_outer)
+            .flat_map(|radius| radial_forward_pad(radius, 0, 4, level))
+            .collect::<BTreeSet<_>>(),
+    )
+}
+
+fn expected_lower_interior_approach(settings: &V3CrystalAscentSettings) -> BTreeSet<TilePos> {
+    (SHELL_INNER_RADIUS..SITE_RADIUS)
+        .flat_map(|radius| radial_pad(radius, 0, 4, settings.base_level))
+        .collect()
+}
+
+type TransferEdge = (TilePos, TilePos);
+
+fn canonical_transfer_edge(first: TilePos, second: TilePos) -> Option<TransferEdge> {
+    (first.coord.distance(second.coord) == 1 && first.level.abs_diff(second.level) <= 1).then_some(
+        if first < second {
+            (first, second)
+        } else {
+            (second, first)
+        },
+    )
+}
+
+fn expected_transfer_edge_allowlist(
+    settings: &V3CrystalAscentSettings,
+    left_circuit: usize,
+    left_surfaces: &BTreeSet<TilePos>,
+    right_surfaces: &BTreeSet<TilePos>,
+) -> Option<BTreeSet<TransferEdge>> {
+    let right_circuit = left_circuit.checked_add(1)?;
+    let (left_inner, left_outer) = CIRCUIT_BANDS.get(left_circuit).copied()?;
+    let (right_inner, right_outer) = CIRCUIT_BANDS.get(right_circuit).copied()?;
+    if left_inner != right_outer {
+        return None;
+    }
+
+    let transfer_cells = (0..4)
+        .map(|lane| expected_transfer_lane(settings, left_circuit, lane))
+        .collect::<Option<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect::<BTreeSet<_>>();
+    let mut allowed_left = transfer_cells
+        .intersection(left_surfaces)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let mut allowed_right = transfer_cells
+        .intersection(right_surfaces)
+        .copied()
+        .collect::<BTreeSet<_>>();
+
+    // A four-wide hex corridor turning from a circumferential flight into a radial
+    // transfer contains one unavoidable corner triangle at each end. Include only
+    // the immediate tread on either side of the authored corridor; the equality
+    // check below still rejects every more distant cross-circuit adjacency.
+    for radius in left_inner..=left_outer {
+        let lane = expected_flight_lane(
+            settings,
+            left_circuit,
+            FLIGHTS_PER_CIRCUIT.saturating_sub(1),
+            radius,
+        )?;
+        let guard = lane
+            .iter()
+            .rev()
+            .copied()
+            .find(|surface| !transfer_cells.contains(surface))?;
+        allowed_left.insert(guard);
+    }
+    for radius in right_inner..=right_outer {
+        let lane = expected_flight_lane(settings, right_circuit, 0, radius)?;
+        let guard = lane
+            .iter()
+            .copied()
+            .find(|surface| !transfer_cells.contains(surface))?;
+        allowed_right.insert(guard);
+    }
+
+    Some(
+        allowed_left
+            .iter()
+            .flat_map(|left| {
+                allowed_right
+                    .iter()
+                    .filter_map(move |right| canonical_transfer_edge(*left, *right))
+            })
+            .collect(),
+    )
+}
+
+fn actual_transfer_edges(
+    ordinary: &OrdinaryGraph,
+    left_surfaces: &BTreeSet<TilePos>,
+    right_surfaces: &BTreeSet<TilePos>,
+) -> BTreeSet<TransferEdge> {
+    left_surfaces
+        .iter()
+        .flat_map(|left| {
+            ordinary
+                .neighbors(*left)
+                .iter()
+                .copied()
+                .filter(|right| right_surfaces.contains(right))
+                .filter_map(|right| canonical_transfer_edge(*left, right))
+        })
+        .collect()
+}
+
+fn transfer_edges_are_exact(
+    expected: &BTreeSet<TransferEdge>,
+    actual: &BTreeSet<TransferEdge>,
+) -> bool {
+    actual == expected
 }
 
 fn review_anchor(
@@ -699,14 +889,7 @@ fn build_stairs(
         .collect::<BTreeSet<_>>();
     for position in &stair_surfaces {
         add_platform(masses, *position, SolidMaterialRole::WorkedStone)?;
-        surface_intents.insert(
-            *position,
-            if position.level == summit {
-                exterior_surface()
-            } else {
-                interior_surface()
-            },
-        );
+        surface_intents.insert(*position, interior_surface());
     }
 
     let landing_alcoves = expected_landing_alcoves(settings);
@@ -715,7 +898,7 @@ fn build_stairs(
         surface_intents.insert(*alcove, interior_surface());
     }
 
-    let lower_pad = radial_pad(35, 0, 4, base);
+    let lower_pad = radial_pad(SITE_RADIUS, 0, 4, base);
     let upper_pad = radial_pad(31, 3, 4, summit);
     let bottom_chamber = TilePos::new(HexCoord::from_axial(5, 0), base);
     let lower_entry = *lower_pad
@@ -871,19 +1054,17 @@ fn build_shell(
 }
 
 fn expected_buttress_columns(settings: &V3CrystalAscentSettings) -> BTreeMap<HexCoord, Level> {
-    let shell_top = settings
+    let shell_surface = settings
         .base_level
         .saturating_add(settings.rise_levels)
         .saturating_add(8);
     let mut columns = BTreeMap::new();
     for side in 0..FLIGHTS_PER_CIRCUIT {
-        for radius in SHELL_OUTER_RADIUS.saturating_add(1)..=BUTTRESS_OUTER_RADIUS {
-            let setback = i32::try_from(radius.saturating_sub(SHELL_OUTER_RADIUS))
+        for radius in BUTTRESS_INNER_RADIUS..=BUTTRESS_OUTER_RADIUS {
+            let outward_rise = i32::try_from(radius.saturating_sub(BUTTRESS_INNER_RADIUS))
                 .unwrap_or(i32::MAX)
-                .saturating_mul(10);
-            let top = shell_top
-                .saturating_sub(setback)
-                .max(settings.base_level.saturating_add(8));
+                .saturating_mul(2);
+            let top = shell_surface.saturating_add(1).saturating_add(outward_rise);
             for offset in [-BUTTRESS_FLANK_OFFSET, BUTTRESS_FLANK_OFFSET] {
                 if let Some(coord) = ring_offset_coord(radius, side, offset) {
                     columns.insert(coord, top);
@@ -895,21 +1076,23 @@ fn expected_buttress_columns(settings: &V3CrystalAscentSettings) -> BTreeMap<Hex
 }
 
 fn expected_rib_voxels(settings: &V3CrystalAscentSettings) -> BTreeSet<TilePos> {
+    let shell_surface = settings
+        .base_level
+        .saturating_add(settings.rise_levels)
+        .saturating_add(8);
+    let buttress_crown = shell_surface.saturating_add(
+        i32::try_from(BUTTRESS_OUTER_RADIUS.saturating_sub(BUTTRESS_INNER_RADIUS))
+            .unwrap_or(i32::MAX)
+            .saturating_mul(2),
+    );
     let mut ribs = BTreeSet::new();
     for side in 0..FLIGHTS_PER_CIRCUIT {
-        let tier = flight_boundary(
-            settings.base_level,
-            settings.rise_levels,
-            side.saturating_mul(3),
-        );
         for offset in -BUTTRESS_FLANK_OFFSET..=BUTTRESS_FLANK_OFFSET {
-            let Some(coord) = ring_offset_coord(SHELL_OUTER_RADIUS.saturating_add(1), side, offset)
-            else {
+            let Some(coord) = ring_offset_coord(BUTTRESS_OUTER_RADIUS, side, offset) else {
                 continue;
             };
-            let rise =
-                13_i32.saturating_add(BUTTRESS_FLANK_OFFSET.saturating_sub(offset.abs()).max(0));
-            ribs.insert(TilePos::new(coord, tier.saturating_add(rise)));
+            let rise = BUTTRESS_FLANK_OFFSET.saturating_sub(offset.abs()).max(0);
+            ribs.insert(TilePos::new(coord, buttress_crown.saturating_add(rise)));
         }
     }
     ribs
@@ -919,18 +1102,16 @@ fn expected_architecture_voxels_for_side(
     settings: &V3CrystalAscentSettings,
     side: usize,
 ) -> BTreeSet<TilePos> {
-    let shell_top = settings
+    let shell_surface = settings
         .base_level
         .saturating_add(settings.rise_levels)
         .saturating_add(8);
     let mut voxels = BTreeSet::new();
-    for radius in SHELL_OUTER_RADIUS.saturating_add(1)..=BUTTRESS_OUTER_RADIUS {
-        let setback = i32::try_from(radius.saturating_sub(SHELL_OUTER_RADIUS))
+    for radius in BUTTRESS_INNER_RADIUS..=BUTTRESS_OUTER_RADIUS {
+        let outward_rise = i32::try_from(radius.saturating_sub(BUTTRESS_INNER_RADIUS))
             .unwrap_or(i32::MAX)
-            .saturating_mul(10);
-        let top = shell_top
-            .saturating_sub(setback)
-            .max(settings.base_level.saturating_add(8));
+            .saturating_mul(2);
+        let top = shell_surface.saturating_add(1).saturating_add(outward_rise);
         for offset in [-BUTTRESS_FLANK_OFFSET, BUTTRESS_FLANK_OFFSET] {
             let Some(coord) = ring_offset_coord(radius, side, offset) else {
                 continue;
@@ -938,18 +1119,17 @@ fn expected_architecture_voxels_for_side(
             voxels.extend((0..top).map(|level| TilePos::new(coord, level)));
         }
     }
-    let tier = flight_boundary(
-        settings.base_level,
-        settings.rise_levels,
-        side.saturating_mul(3),
+    let buttress_crown = shell_surface.saturating_add(
+        i32::try_from(BUTTRESS_OUTER_RADIUS.saturating_sub(BUTTRESS_INNER_RADIUS))
+            .unwrap_or(i32::MAX)
+            .saturating_mul(2),
     );
     for offset in -BUTTRESS_FLANK_OFFSET..=BUTTRESS_FLANK_OFFSET {
-        let Some(coord) = ring_offset_coord(SHELL_OUTER_RADIUS.saturating_add(1), side, offset)
-        else {
+        let Some(coord) = ring_offset_coord(BUTTRESS_OUTER_RADIUS, side, offset) else {
             continue;
         };
-        let rise = 13_i32.saturating_add(BUTTRESS_FLANK_OFFSET.saturating_sub(offset.abs()).max(0));
-        voxels.insert(TilePos::new(coord, tier.saturating_add(rise)));
+        let rise = BUTTRESS_FLANK_OFFSET.saturating_sub(offset.abs()).max(0);
+        voxels.insert(TilePos::new(coord, buttress_crown.saturating_add(rise)));
     }
     voxels
 }
@@ -1621,33 +1801,95 @@ pub(crate) fn validate_crystal_ascent(
         )));
     }
 
-    for left in 0..CIRCUIT_COUNT {
-        for right in left.saturating_add(1)..CIRCUIT_COUNT {
-            let Some(left_surfaces) = expected_circuits.get(left) else {
+    for left in 0..CIRCUIT_COUNT.saturating_sub(1) {
+        let right = left.saturating_add(1);
+        let Some(left_surfaces) = expected_circuits.get(left) else {
+            continue;
+        };
+        let Some(right_surfaces) = expected_circuits.get(right) else {
+            continue;
+        };
+        let expected_seam = expected_transfer_seam(settings, left).unwrap_or_default();
+        let actual_seam = left_surfaces
+            .intersection(right_surfaces)
+            .copied()
+            .collect::<BTreeSet<_>>();
+        if expected_seam.len() != 4 || actual_seam != expected_seam {
+            issues.push(recipe_issue(format!(
+                "circuits {left} and {right} must share exactly their four-cell transfer seam"
+            )));
+        }
+
+        let mut transfer_cells = BTreeSet::new();
+        let mut valid_transfer_lanes = 0_usize;
+        for lane_index in 0..4 {
+            let Some(lane) = expected_transfer_lane(settings, left, lane_index) else {
                 continue;
             };
-            let Some(right_surfaces) = expected_circuits.get(right) else {
-                continue;
-            };
-            let seam_level = flight_boundary(
-                base,
-                settings.rise_levels,
-                right.saturating_mul(FLIGHTS_PER_CIRCUIT),
-            );
-            let invalid_edge = left_surfaces.iter().any(|surface| {
-                ordinary.neighbors(*surface).iter().any(|neighbor| {
-                    right_surfaces.contains(neighbor)
-                        && (right != left.saturating_add(1)
-                            || surface.level.abs_diff(seam_level) > 1
-                            || neighbor.level.abs_diff(seam_level) > 1)
-                })
-            });
-            if invalid_edge {
-                issues.push(recipe_issue(format!(
-                    "circuits {left} and {right} contain an unintended cross-loop adjacency"
-                )));
+            let disjoint = lane.iter().all(|surface| transfer_cells.insert(*surface));
+            let contained = lane
+                .iter()
+                .all(|surface| left_surfaces.contains(surface) || right_surfaces.contains(surface));
+            let admitted = lane.iter().all(|surface| ordinary.contains(*surface))
+                && lane.windows(2).all(|pair| {
+                    pair.first().zip(pair.get(1)).is_some_and(|(from, to)| {
+                        from.coord.distance(to.coord) == 1
+                            && from.level.abs_diff(to.level) <= 1
+                            && ordinary.admits(*from, *to)
+                    })
+                });
+            if disjoint && contained && admitted {
+                valid_transfer_lanes = valid_transfer_lanes.saturating_add(1);
             }
         }
+        if valid_transfer_lanes != 4 {
+            issues.push(recipe_issue(format!(
+                "circuits {left} and {right} retain {valid_transfer_lanes} of four independent transfer lanes"
+            )));
+        }
+
+        let transfer_pad = expected_transfer_pad_cells(settings, left).unwrap_or_default();
+        if transfer_pad.len() != 28
+            || transfer_pad.iter().any(|surface| {
+                !ordinary.contains(*surface)
+                    || plan
+                        .volume
+                        .surface_headroom(*surface)
+                        .is_none_or(|headroom| headroom.0 < 8)
+            })
+        {
+            issues.push(recipe_issue(format!(
+                "circuits {left} and {right} must retain exact four-by-four turning pads with eight-level headroom"
+            )));
+        }
+
+        let expected_transfer_edges =
+            expected_transfer_edge_allowlist(settings, left, left_surfaces, right_surfaces)
+                .unwrap_or_default();
+        let actual_edges = actual_transfer_edges(&ordinary, left_surfaces, right_surfaces);
+        if expected_transfer_edges.is_empty()
+            || !transfer_edges_are_exact(&expected_transfer_edges, &actual_edges)
+        {
+            issues.push(recipe_issue(format!(
+                "circuits {left} and {right} contain an ordinary edge outside their exact transfer corridor"
+            )));
+        }
+    }
+    if expected_circuits
+        .first()
+        .zip(expected_circuits.last())
+        .is_some_and(|(first, last)| {
+            first.iter().any(|surface| {
+                ordinary
+                    .neighbors(*surface)
+                    .iter()
+                    .any(|neighbor| last.contains(neighbor))
+            })
+        })
+    {
+        issues.push(recipe_issue(
+            "circuits 0 and 2 contain an unintended cross-loop adjacency",
+        ));
     }
 
     let allowed_midlevel = expected_stair_surfaces
@@ -1676,7 +1918,7 @@ pub(crate) fn validate_crystal_ascent(
         }
     }
 
-    let lower_pad = radial_pad(35, 0, 4, base);
+    let lower_pad = radial_pad(SITE_RADIUS, 0, 4, base);
     let upper_pad = radial_pad(31, 3, 4, summit);
     let summit_trail = expected_summit_trail(settings);
     for (name, expected) in [
@@ -1701,6 +1943,34 @@ pub(crate) fn validate_crystal_ascent(
                 "protected route {name:?} does not equal its exact authored footprint"
             )));
         }
+    }
+    if lower_pad.iter().any(|surface| {
+        plan.volume
+            .surfaces
+            .get(surface)
+            .is_none_or(|metadata| metadata.interior.is_some())
+    }) {
+        issues.push(recipe_issue(
+            "the exact four-wide lower terminal must remain an exterior apron",
+        ));
+    }
+    let expected_entrances = radial_pad(SITE_RADIUS.saturating_sub(1), 0, 4, base);
+    let actual_entrances = plan
+        .interiors
+        .by_id
+        .get(&INTERIOR)
+        .map(|interior| &interior.entrances);
+    if actual_entrances != Some(&expected_entrances)
+        || expected_entrances.iter().any(|surface| {
+            plan.volume
+                .surfaces
+                .get(surface)
+                .is_none_or(|metadata| metadata.interior != Some(INTERIOR))
+        })
+    {
+        issues.push(recipe_issue(
+            "the Dark interior must begin at the exact four-wide radius-31 threshold",
+        ));
     }
     let expected_clearing = expected_summit_clearing(settings);
     if plan
@@ -1785,12 +2055,27 @@ pub(crate) fn validate_crystal_ascent(
         .into_iter()
         .map(|coord| TilePos::new(coord, base))
         .collect::<BTreeSet<_>>();
-    if chamber_route
-        .iter()
-        .any(|surface| !plan.volume.surfaces.contains_key(surface))
+    if chamber_route.iter().any(|surface| {
+        plan.volume
+            .surfaces
+            .get(surface)
+            .is_none_or(|metadata| metadata.interior != Some(INTERIOR))
+    }) {
+        issues.push(recipe_issue(
+            "bottom chamber does not retain its exact radius-23 Interior floor",
+        ));
+    }
+    let lower_interior_approach = expected_lower_interior_approach(settings);
+    if lower_interior_approach.len() != 16
+        || lower_interior_approach.iter().any(|surface| {
+            plan.volume
+                .surfaces
+                .get(surface)
+                .is_none_or(|metadata| metadata.interior != Some(INTERIOR))
+        })
     {
         issues.push(recipe_issue(
-            "bottom chamber does not retain its exact radius-23 floor",
+            "the lower radius-28 through radius-31 approach must remain exactly four-wide and Interior",
         ));
     }
 
@@ -1830,18 +2115,105 @@ pub(crate) fn validate_crystal_ascent(
             "landing crystal fixtures do not equal all eighteen destination alcoves",
         ));
     }
+    for origin in &expected_fixture_origins {
+        let pair = plan
+            .lights
+            .values()
+            .filter(|light| light.origin == *origin)
+            .collect::<Vec<_>>();
+        let exact_bright = pair.iter().filter(|light| {
+            light.level == IlluminationLevel::Bright
+                && light.radius == LANDING_BRIGHT_RADIUS
+                && matches!(
+                    light.presentation,
+                    Some(PlannedLightPresentation::CrystalAscent(
+                        CrystalAscentCrystalPresentation {
+                            kind: CrystalAscentCrystalKind::Landing(_),
+                            rotation: 0..=5,
+                        }
+                    ))
+                )
+        });
+        let exact_dim = pair.iter().filter(|light| {
+            light.level == IlluminationLevel::Dim
+                && light.radius == LANDING_DIM_RADIUS
+                && light.presentation.is_none()
+        });
+        if pair.len() != 2 || exact_bright.count() != 1 || exact_dim.count() != 1 {
+            issues.push(recipe_issue(format!(
+                "landing crystal at {origin:?} must own one exact Bright/Dim gameplay-light pair"
+            )));
+            break;
+        }
+    }
+    let heart_origin = TilePos::new(HexCoord::ORIGIN, base);
+    let heart_pair = plan
+        .lights
+        .values()
+        .filter(|light| light.origin == heart_origin)
+        .collect::<Vec<_>>();
+    let exact_heart_bright = heart_pair
+        .iter()
+        .filter(|light| {
+            light.level == IlluminationLevel::Bright
+                && light.radius == HEART_BRIGHT_RADIUS
+                && matches!(
+                    light.presentation,
+                    Some(PlannedLightPresentation::CrystalAscent(
+                        CrystalAscentCrystalPresentation {
+                            kind: CrystalAscentCrystalKind::Heart,
+                            rotation: 0,
+                        }
+                    ))
+                )
+        })
+        .count();
+    let exact_heart_dim = heart_pair
+        .iter()
+        .filter(|light| {
+            light.level == IlluminationLevel::Dim
+                && light.radius == HEART_DIM_RADIUS
+                && light.presentation.is_none()
+        })
+        .count();
+    if heart_pair.len() != 2 || exact_heart_bright != 1 || exact_heart_dim != 1 {
+        issues.push(recipe_issue(
+            "cathedral heart must own one exact Bright/Dim gameplay-light pair",
+        ));
+    }
+    if stair_surfaces.iter().any(|surface| {
+        plan.volume
+            .surfaces
+            .get(surface)
+            .is_none_or(|metadata| metadata.interior != Some(INTERIOR))
+    }) {
+        issues.push(recipe_issue(
+            "the complete authored staircase must remain in one Dark interior domain",
+        ));
+    }
     let dim_sources = plan
         .lights
         .values()
         .filter(|light| light.level == IlluminationLevel::Dim)
         .collect::<Vec<_>>();
-    for surface in stair_surfaces.iter().chain(&chamber_route) {
+    let required_dim_surfaces = stair_surfaces
+        .iter()
+        .chain(&chamber_route)
+        .chain(&lower_interior_approach)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    for surface in &required_dim_surfaces {
         if !dim_sources.iter().any(|source| {
-            upper_dome_contains(
-                ExactGridPoint::voxel_center(source.origin),
-                ExactGridPoint::voxel_center(*surface),
-                source.radius,
-            )
+            plan.volume
+                .surfaces
+                .get(&source.origin)
+                .and_then(|metadata| metadata.interior)
+                == Some(INTERIOR)
+                && upper_dome_contains(
+                    ExactGridPoint::voxel_center(source.origin),
+                    ExactGridPoint::voxel_center(*surface),
+                    source.radius,
+                )
         }) {
             issues.push(recipe_issue(format!(
                 "required interior route surface {surface:?} is not at least Dim"
@@ -1956,7 +2328,9 @@ pub(crate) fn validate_crystal_ascent(
             .floors
             .iter()
             .filter(|surface| {
-                surface.level == base && surface.coord.distance(HexCoord::ORIGIN) <= CHAMBER_RADIUS
+                surface.level == base
+                    && surface.coord.distance(HexCoord::ORIGIN) <= CHAMBER_RADIUS
+                    && ordinary.contains(**surface)
             })
             .count()
     });
@@ -2103,6 +2477,28 @@ fn flight_boundary(base: Level, rise: Level, flight: usize) -> Level {
             .saturating_mul(rise)
             .checked_div(i32::try_from(FLIGHT_COUNT).unwrap_or(1))
             .unwrap_or_default(),
+    )
+}
+
+fn flight_tread_level(
+    circuit: usize,
+    side: usize,
+    radius: u32,
+    offset: usize,
+    boundary_low: Level,
+    boundary_high: Level,
+) -> Option<Level> {
+    let transfer_landing_depth = if circuit > 0 && side == 0 { 3 } else { 0 };
+    let adjusted_offset = u32::try_from(offset)
+        .ok()?
+        .saturating_sub(transfer_landing_depth);
+    let adjusted_run = radius.saturating_sub(transfer_landing_depth).max(1);
+    let delta = boundary_high.saturating_sub(boundary_low);
+    boundary_low.checked_add(
+        i32::try_from(adjusted_offset)
+            .ok()?
+            .saturating_mul(delta)
+            .checked_div(i32::try_from(adjusted_run).ok()?)?,
     )
 }
 
@@ -2283,7 +2679,13 @@ fn recipe_issue(detail: impl Into<String>) -> WorldValidationIssue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hex_core::BiomeRegionId;
+
     use crate::procedural_v3::crystal_ascent_assets::tests::runtime_art_catalog;
+    use crate::procedural_v3::layout::{
+        HexSide, LayoutKind, ResolvedEdgeContract, ResolvedEdgeId, ResolvedEdgeReference,
+        ResolvedElevationBand, ResolvedLiquidPort, ResolvedPatch, ResolvedWalkerPorts,
+    };
     use crate::procedural_v3::local_frame::LocalPatchFrame;
     use crate::settings::{
         PatchEdgeContractSettings, PatchEdgesSettings, PatchMaskSettings, PatchSpec,
@@ -2358,6 +2760,129 @@ mod tests {
         raw_plan_with_mode(rise_levels, PatchBuildMode::CanonicalFallback)
     }
 
+    fn exact_radius_site_layout() -> ResolvedLayoutPlan {
+        let mask = HexCoord::ORIGIN
+            .within_radius(SITE_RADIUS)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let edges = HexSide::ALL
+            .into_iter()
+            .map(|side| (side, ResolvedEdgeReference::WorldBoundary))
+            .collect();
+        ResolvedLayoutPlan {
+            kind: LayoutKind::Single,
+            grid_radius: 40,
+            footprint: mask.clone(),
+            patches: BTreeMap::from([(
+                PatchId(0),
+                ResolvedPatch {
+                    biome_region: BiomeRegionId(0),
+                    rotation_turns: 0,
+                    mask,
+                    edges,
+                },
+            )]),
+            shared_edges: BTreeMap::new(),
+            boundary_liquid_outlets: BTreeMap::new(),
+        }
+    }
+
+    fn translated_rotated_macro_site_layout(rotation_turns: u8) -> ResolvedLayoutPlan {
+        const FIXTURE_MACRO_RADIUS: u32 = 77;
+        const FIXTURE_PATCH_RADIUS: u32 = 40;
+        let center = HexCoord::from_axial(20, -10);
+        let [center_x, center_y, center_z] = center.to_cubic_array();
+        let crystal_mask = HexCoord::ORIGIN
+            .within_radius(FIXTURE_PATCH_RADIUS)
+            .into_iter()
+            .map(|coord| {
+                let [x, y, z] = coord.to_cubic_array();
+                HexCoord::new_cubic(x + center_x, y + center_y, z + center_z)
+            })
+            .collect::<BTreeSet<_>>();
+        let footprint = HexCoord::ORIGIN
+            .within_radius(FIXTURE_MACRO_RADIUS)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let remainder = footprint
+            .difference(&crystal_mask)
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let boundary_pairs = crystal_mask
+            .iter()
+            .flat_map(|coord| {
+                coord
+                    .neighbors()
+                    .into_iter()
+                    .filter(|neighbor| remainder.contains(neighbor))
+                    .map(|neighbor| (*coord, neighbor))
+            })
+            .collect::<BTreeSet<_>>();
+        let first_side = HexSide::ALL
+            .into_iter()
+            .max_by_key(|side| {
+                boundary_pairs
+                    .iter()
+                    .filter(|(first, second)| side.neighbor(*first) == *second)
+                    .count()
+            })
+            .expect("the translated fixture has a boundary direction");
+        let edges = HexSide::ALL
+            .into_iter()
+            .map(|side| (side, ResolvedEdgeReference::WorldBoundary))
+            .collect::<BTreeMap<_, _>>();
+        ResolvedLayoutPlan {
+            kind: LayoutKind::Macro,
+            grid_radius: FIXTURE_MACRO_RADIUS,
+            footprint,
+            patches: BTreeMap::from([
+                (
+                    PatchId(0),
+                    ResolvedPatch {
+                        biome_region: BiomeRegionId(0),
+                        rotation_turns,
+                        mask: crystal_mask,
+                        edges: edges.clone(),
+                    },
+                ),
+                (
+                    PatchId(1),
+                    ResolvedPatch {
+                        biome_region: BiomeRegionId(1),
+                        rotation_turns: 0,
+                        mask: remainder,
+                        edges,
+                    },
+                ),
+            ]),
+            shared_edges: BTreeMap::from([(
+                ResolvedEdgeId(0),
+                ResolvedEdgeContract {
+                    first: (PatchId(0), first_side),
+                    second: (PatchId(1), first_side.opposite()),
+                    elevation: ResolvedElevationBand {
+                        preferred: 0,
+                        min: 0,
+                        max: 0,
+                    },
+                    walker: ResolvedWalkerPorts {
+                        count: 0,
+                        width: 0,
+                        ports: Vec::new(),
+                    },
+                    liquid: ResolvedLiquidPort::Dry,
+                    approach_depth: 0,
+                    boundary_pairs,
+                    protected_approaches: BTreeMap::from([
+                        (PatchId(0), BTreeSet::new()),
+                        (PatchId(1), BTreeSet::new()),
+                    ]),
+                },
+            )]),
+            boundary_liquid_outlets: BTreeMap::new(),
+        }
+    }
+
     fn validated_metrics(
         plan: &GeneratedWorldPlan,
         objects: &CrystalAscentObjectSet,
@@ -2395,6 +2920,479 @@ mod tests {
     }
 
     #[test]
+    fn chamber_metric_counts_only_ordinary_floor_outside_the_heart() {
+        let (plan, objects) = raw_plan(144);
+        let metrics = validated_metrics(&plan, &objects, 144);
+        let chamber_area = 1_u32 + 3 * CHAMBER_RADIUS * CHAMBER_RADIUS.saturating_add(1);
+        let heart_area = 1_u32 + 3 * 4 * 5;
+        assert_eq!(metrics.chamber_surfaces, chamber_area - heart_area);
+        assert_eq!(metrics.chamber_surfaces, 1_596);
+    }
+
+    #[test]
+    fn lower_terminal_is_exterior_and_dark_interior_begins_one_ring_inward() {
+        let (plan, objects) = raw_plan(144);
+        validated_metrics(&plan, &objects, 144);
+        let base = 6;
+        let apron = radial_pad(SITE_RADIUS, 0, 4, base);
+        assert!(apron.iter().all(|surface| {
+            plan.volume
+                .surfaces
+                .get(surface)
+                .is_some_and(|metadata| metadata.interior.is_none())
+        }));
+
+        let threshold = radial_pad(SITE_RADIUS - 1, 0, 4, base);
+        let interior = plan
+            .interiors
+            .by_id
+            .get(&INTERIOR)
+            .expect("Crystal Ascent should publish its Dark interior");
+        assert_eq!(interior.entrances, threshold);
+        assert!(threshold.iter().all(|surface| {
+            plan.volume
+                .surfaces
+                .get(surface)
+                .is_some_and(|metadata| metadata.interior == Some(INTERIOR))
+        }));
+
+        let approach = expected_lower_interior_approach(&V3CrystalAscentSettings {
+            base_level: base,
+            rise_levels: 144,
+        });
+        assert_eq!(approach.len(), 16);
+        assert!(approach.iter().all(|surface| {
+            (SHELL_INNER_RADIUS..SITE_RADIUS).contains(&surface.coord.distance(HexCoord::ORIGIN))
+                && plan
+                    .volume
+                    .surfaces
+                    .get(surface)
+                    .is_some_and(|metadata| metadata.interior == Some(INTERIOR))
+        }));
+    }
+
+    #[test]
+    fn summit_stair_remains_interior_until_it_reaches_the_exterior_crown() {
+        let (plan, objects) = raw_plan(144);
+        validated_metrics(&plan, &objects, 144);
+        let settings = V3CrystalAscentSettings {
+            base_level: 6,
+            rise_levels: 144,
+        };
+        let summit = settings.base_level + settings.rise_levels;
+        let stairs = expected_all_stair_surfaces(&settings);
+        let summit_stairs = stairs
+            .iter()
+            .filter(|surface| surface.level == summit)
+            .copied()
+            .collect::<BTreeSet<_>>();
+        assert!(!summit_stairs.is_empty());
+        assert!(summit_stairs.iter().all(|surface| {
+            plan.volume
+                .surfaces
+                .get(surface)
+                .is_some_and(|metadata| metadata.interior == Some(INTERIOR))
+        }));
+
+        let exterior_crown = expected_summit_clearing(&settings)
+            .difference(&stairs)
+            .next()
+            .copied()
+            .expect("summit clearing should include exterior cells beyond the stair threshold");
+        assert!(plan
+            .volume
+            .surfaces
+            .get(&exterior_crown)
+            .is_some_and(|metadata| metadata.interior.is_none()));
+    }
+
+    #[test]
+    fn contractions_publish_exact_four_cell_seams_and_four_disjoint_lanes() {
+        for rise_levels in [100, 144, 200] {
+            let (plan, objects) = raw_plan(rise_levels);
+            validated_metrics(&plan, &objects, rise_levels);
+            let recipe_settings = V3CrystalAscentSettings {
+                base_level: 6,
+                rise_levels,
+            };
+            let ordinary = OrdinaryGraph::from_volume(&plan.volume, Some(&plan.blockers));
+            let circuits = (0..CIRCUIT_COUNT)
+                .map(|circuit| {
+                    expected_circuit_surfaces(&recipe_settings, circuit)
+                        .expect("authored circuit should resolve")
+                })
+                .collect::<Vec<_>>();
+
+            for left in 0..CIRCUIT_COUNT - 1 {
+                let right = left + 1;
+                let left_surfaces = circuits
+                    .get(left)
+                    .expect("left authored circuit should exist");
+                let right_surfaces = circuits
+                    .get(right)
+                    .expect("right authored circuit should exist");
+                let seam = expected_transfer_seam(&recipe_settings, left)
+                    .expect("authored transfer seam should resolve");
+                assert_eq!(seam.len(), 4);
+                assert_eq!(
+                    left_surfaces
+                        .intersection(right_surfaces)
+                        .copied()
+                        .collect::<BTreeSet<_>>(),
+                    seam
+                );
+                let mut claimed = BTreeSet::new();
+                for lane_index in 0..4 {
+                    let lane = expected_transfer_lane(&recipe_settings, left, lane_index)
+                        .expect("authored transfer lane should resolve");
+                    assert!(lane.iter().all(|surface| ordinary.contains(*surface)));
+                    assert!(lane.windows(2).all(|pair| {
+                        let [from, to] = pair else { return false };
+                        ordinary.admits(*from, *to)
+                    }));
+                    assert!(lane.into_iter().all(|surface| claimed.insert(surface)));
+                }
+
+                let transfer_pad = expected_transfer_pad_cells(&recipe_settings, left)
+                    .expect("authored transfer pads should resolve");
+                assert_eq!(transfer_pad.len(), 28);
+                assert!(transfer_pad.iter().all(|surface| {
+                    ordinary.contains(*surface)
+                        && plan
+                            .volume
+                            .surface_headroom(*surface)
+                            .is_some_and(|headroom| headroom.0 >= 8)
+                }));
+
+                let expected_edges = expected_transfer_edge_allowlist(
+                    &recipe_settings,
+                    left,
+                    left_surfaces,
+                    right_surfaces,
+                )
+                .expect("authored transfer edge allowlist should resolve");
+                let actual_edges = actual_transfer_edges(&ordinary, left_surfaces, right_surfaces);
+                assert_eq!(actual_edges, expected_edges);
+                assert_eq!(
+                    actual_edges.len(),
+                    21,
+                    "rise {rise_levels} contraction {left}->{right} changed its exact transfer-edge topology"
+                );
+                assert_eq!(
+                    actual_edges
+                        .iter()
+                        .filter(|(first, second)| {
+                            !seam.contains(first) && !seam.contains(second)
+                        })
+                        .count(),
+                    1,
+                    "rise {rise_levels} contraction {left}->{right} should retain exactly one intentional hex-corner diagonal"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn transfer_edge_allowlist_rejects_a_non_corridor_edge() {
+        let recipe_settings = V3CrystalAscentSettings {
+            base_level: 6,
+            rise_levels: 144,
+        };
+        let left = 0;
+        let right = left + 1;
+        let left_surfaces =
+            expected_circuit_surfaces(&recipe_settings, left).expect("left circuit should resolve");
+        let right_surfaces = expected_circuit_surfaces(&recipe_settings, right)
+            .expect("right circuit should resolve");
+        let expected = expected_transfer_edge_allowlist(
+            &recipe_settings,
+            left,
+            &left_surfaces,
+            &right_surfaces,
+        )
+        .expect("authored transfer edge allowlist should resolve");
+        let seam_level = flight_boundary(
+            recipe_settings.base_level,
+            recipe_settings.rise_levels,
+            FLIGHTS_PER_CIRCUIT,
+        );
+        let shared_radius = CIRCUIT_BANDS
+            .get(left)
+            .expect("left circuit band should exist")
+            .0;
+        let forbidden = canonical_transfer_edge(
+            TilePos::new(landing_coord(shared_radius, 3), seam_level),
+            TilePos::new(
+                landing_coord(shared_radius.saturating_sub(1), 3),
+                seam_level,
+            ),
+        )
+        .expect("the synthetic corruption should be one geometric walker edge");
+        assert!(!expected.contains(&forbidden));
+
+        let mut corrupted = expected.clone();
+        assert!(corrupted.insert(forbidden));
+        assert!(!transfer_edges_are_exact(&expected, &corrupted));
+    }
+
+    #[test]
+    fn accepted_rises_have_exact_boundaries_and_four_flat_incoming_pad_treads() {
+        let base = 6;
+        for rise_levels in [100, 144, 200] {
+            for flight in 0..=FLIGHT_COUNT {
+                let expected = base
+                    + i32::try_from(flight).expect("fixture flight fits i32") * rise_levels
+                        / i32::try_from(FLIGHT_COUNT).expect("fixture flight count fits i32");
+                assert_eq!(
+                    flight_boundary(base, rise_levels, flight),
+                    expected,
+                    "rise {rise_levels} flight {flight} changed its exact boundary"
+                );
+            }
+            assert_eq!(
+                flight_boundary(base, rise_levels, FLIGHT_COUNT),
+                base + rise_levels
+            );
+
+            for circuit in 1..CIRCUIT_COUNT {
+                let (inner, outer) = *CIRCUIT_BANDS
+                    .get(circuit)
+                    .expect("accepted circuit should have an authored band");
+                let flight = circuit * FLIGHTS_PER_CIRCUIT;
+                let boundary_low = base
+                    + i32::try_from(flight).expect("fixture flight fits i32") * rise_levels
+                        / i32::try_from(FLIGHT_COUNT).expect("fixture flight count fits i32");
+                let boundary_high = base
+                    + i32::try_from(flight + 1).expect("fixture flight fits i32") * rise_levels
+                        / i32::try_from(FLIGHT_COUNT).expect("fixture flight count fits i32");
+                for radius in inner..=outer {
+                    for offset in 0..4 {
+                        assert_eq!(
+                            flight_tread_level(
+                                circuit,
+                                0,
+                                radius,
+                                offset,
+                                boundary_low,
+                                boundary_high,
+                            ),
+                            Some(boundary_low),
+                            "rise {rise_levels} circuit {circuit} radius {radius} offset {offset} must remain on the flat transfer pad"
+                        );
+                    }
+
+                    let mut levels = (0..usize::try_from(radius)
+                        .expect("fixture radius fits usize"))
+                        .map(|offset| {
+                            flight_tread_level(
+                                circuit,
+                                0,
+                                radius,
+                                offset,
+                                boundary_low,
+                                boundary_high,
+                            )
+                            .expect("accepted fixture tread should resolve")
+                        })
+                        .collect::<Vec<_>>();
+                    levels.push(boundary_high);
+                    assert!(levels.windows(2).all(|pair| {
+                        let [from, to] = pair else { return false };
+                        from <= to && from.abs_diff(*to) <= 1
+                    }));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn validator_rejects_a_transfer_seam_with_only_three_lanes() {
+        let (mut plan, objects) = raw_plan(144);
+        let recipe_settings = V3CrystalAscentSettings {
+            base_level: 6,
+            rise_levels: 144,
+        };
+        let removed = expected_transfer_seam(&recipe_settings, 0)
+            .and_then(|seam| seam.iter().next().copied())
+            .expect("first transfer should have a seam cell");
+        assert!(plan.volume.surfaces.remove(&removed).is_some());
+        for id in [StructureId(1), StructureId(2)] {
+            assert!(plan
+                .structures
+                .by_id
+                .get_mut(&id)
+                .expect("adjacent circuit structure should exist")
+                .voxels
+                .remove(&removed));
+        }
+        let WorldValidation::Invalid(issues) =
+            validate_crystal_ascent(&plan, &recipe_settings, &objects)
+        else {
+            panic!("removing one transfer lane must invalidate Crystal Ascent")
+        };
+        assert!(issues.iter().any(|issue| {
+            issue.detail.contains("four independent transfer lanes")
+                || issue.detail.contains("four-cell transfer seam")
+        }));
+    }
+
+    #[test]
+    fn exact_radius_32_site_constructs_after_translation_and_every_rotation() {
+        let recipe_settings = V3CrystalAscentSettings {
+            base_level: 6,
+            rise_levels: 144,
+        };
+        let catalog = runtime_art_catalog();
+        let trees = TemperateTreeSet::resolve(catalog, "Crystal Ascent exact-site test")
+            .expect("tracked tree set should resolve");
+        let objects = CrystalAscentObjectSet::resolve(catalog)
+            .expect("tracked Crystal Ascent objects should resolve");
+        let layout = exact_radius_site_layout();
+        layout
+            .validate()
+            .expect("exact radius-32 fixture should be a valid Single patch layout");
+        let patch = PatchRecipeContext::resolve(&layout, PatchId(0))
+            .expect("exact-site patch should resolve");
+        assert_eq!(
+            patch
+                .local_frame()
+                .expect("exact-site frame should resolve")
+                .local_mask(patch.mask())
+                .expect("exact-site mask should normalize"),
+            HexCoord::ORIGIN
+                .within_radius(SITE_RADIUS)
+                .into_iter()
+                .collect()
+        );
+        let fragment = construct_patch(
+            patch,
+            &recipe_settings,
+            0.4,
+            PatchBuildMode::CanonicalFallback,
+            &trees,
+            &objects,
+        )
+        .unwrap_or_else(|issues| {
+            panic!(
+                "the exact radius-32 site should construct: {}",
+                issues
+                    .into_iter()
+                    .map(|issue| issue.detail)
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            )
+        });
+        assert_eq!(fragment.volume.mask, layout.footprint);
+
+        let center = HexCoord::from_axial(20, -10);
+        for rotation_turns in 0..6 {
+            let frame = LocalPatchFrame::from_resolved_ring19(center, SITE_RADIUS, rotation_turns);
+            let expected_world_mask = HexCoord::ORIGIN
+                .within_radius(SITE_RADIUS)
+                .into_iter()
+                .map(|coord| {
+                    frame
+                        .to_world(coord)
+                        .expect("small translated site coordinate should remain in range")
+                })
+                .collect::<BTreeSet<_>>();
+            let mut transformed = fragment.clone();
+            frame
+                .patch_to_world(&mut transformed)
+                .expect("exact-site semantics should translate and rotate");
+            assert_eq!(transformed.volume.mask, expected_world_mask);
+            assert_eq!(
+                frame
+                    .canonical_local_world(&transformed)
+                    .expect("exact-site semantics should normalize")
+                    .volume,
+                fragment.volume
+            );
+        }
+    }
+
+    #[test]
+    fn real_macro_patch_context_constructs_at_a_translated_site_in_every_rotation() {
+        let recipe_settings = V3CrystalAscentSettings {
+            base_level: 6,
+            rise_levels: 144,
+        };
+        let (_, canonical, _) = raw_fragment(144, PatchBuildMode::CanonicalFallback);
+        let catalog = runtime_art_catalog();
+        let trees = TemperateTreeSet::resolve(catalog, "Crystal Ascent Macro-frame test")
+            .expect("tracked tree set should resolve");
+        let objects = CrystalAscentObjectSet::resolve(catalog)
+            .expect("tracked Crystal Ascent objects should resolve");
+        let translated_center = HexCoord::from_axial(20, -10);
+
+        for rotation_turns in 0..6 {
+            let layout = translated_rotated_macro_site_layout(rotation_turns);
+            layout
+                .validate()
+                .unwrap_or_else(|error| panic!("translated Macro fixture must validate: {error}"));
+            let patch = PatchRecipeContext::resolve(&layout, PatchId(0))
+                .expect("translated Macro patch should resolve through the production context");
+            let frame = patch
+                .local_frame()
+                .expect("translated Macro patch should resolve its production frame");
+            assert_eq!(frame.center(), translated_center);
+            let fragment = construct_patch(
+                patch,
+                &recipe_settings,
+                0.4,
+                PatchBuildMode::CanonicalFallback,
+                &trees,
+                &objects,
+            )
+            .unwrap_or_else(|issues| {
+                panic!(
+                    "translated/rotated Macro patch should construct: {}",
+                    issues
+                        .into_iter()
+                        .map(|issue| issue.detail)
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                )
+            });
+            assert_eq!(
+                fragment.volume.mask,
+                layout
+                    .patches
+                    .get(&PatchId(0))
+                    .expect("translated Crystal Ascent patch should exist")
+                    .mask
+            );
+            for anchor in [LOWER_ENTRY, BOTTOM_CHAMBER, UPPER_EXIT] {
+                let expected = frame
+                    .position_to_world(
+                        *canonical
+                            .anchors
+                            .get(anchor)
+                            .expect("canonical Crystal Ascent anchor should exist"),
+                    )
+                    .expect("fixture anchor should translate and rotate");
+                assert_eq!(
+                    fragment.anchors.get(anchor).copied(),
+                    Some(expected),
+                    "translated Crystal Ascent anchor should exist"
+                );
+            }
+
+            let local = frame
+                .canonical_local_world(&fragment)
+                .expect("production Macro semantics should normalize");
+            assert_eq!(local.volume, canonical.volume);
+            assert_eq!(local.features, canonical.features);
+            assert_eq!(local.structures, canonical.structures);
+            assert_eq!(local.blockers, canonical.blockers);
+            assert_eq!(local.lights, canonical.lights);
+            assert_eq!(local.biome_regions, canonical.biome_regions);
+            assert_eq!(local.interiors, canonical.interiors);
+            assert_eq!(local.anchors, canonical.anchors);
+        }
+    }
+
+    #[test]
     fn boundary_rises_preserve_all_authored_geometry_contracts() {
         for rise_levels in [100, 144, 200] {
             let (plan, objects) = raw_plan(rise_levels);
@@ -2408,6 +3406,65 @@ mod tests {
             assert_eq!(metrics.crystal_fixtures, 19);
             assert_eq!(metrics.gameplay_lights, 38);
         }
+    }
+
+    #[test]
+    fn validator_rejects_a_landing_light_moved_to_another_fixture_origin() {
+        let (mut plan, objects) = raw_plan(144);
+        let recipe_settings = V3CrystalAscentSettings {
+            base_level: 6,
+            rise_levels: 144,
+        };
+        let fixture_origins = expected_landing_alcoves(&recipe_settings);
+        let [source, destination, ..] = fixture_origins.as_slice() else {
+            panic!("landing fixtures should expose at least two origins")
+        };
+        let moved = plan.lights.values_mut().find(|light| {
+            light.origin == *source
+                && light.level == IlluminationLevel::Dim
+                && light.radius == LANDING_DIM_RADIUS
+                && light.presentation.is_none()
+        });
+        moved
+            .expect("the source fixture should own its exact Dim light")
+            .origin = *destination;
+
+        let WorldValidation::Invalid(issues) =
+            validate_crystal_ascent(&plan, &recipe_settings, &objects)
+        else {
+            panic!("moving one light to another fixture must invalidate Crystal Ascent")
+        };
+        assert!(issues.iter().any(|issue| issue
+            .detail
+            .contains("exact Bright/Dim gameplay-light pair")));
+    }
+
+    #[test]
+    fn validator_rejects_a_malformed_heart_light_pair() {
+        let (mut plan, objects) = raw_plan(144);
+        let recipe_settings = V3CrystalAscentSettings {
+            base_level: 6,
+            rise_levels: 144,
+        };
+        let heart_origin = TilePos::new(HexCoord::ORIGIN, recipe_settings.base_level);
+        let malformed = plan.lights.values_mut().find(|light| {
+            light.origin == heart_origin
+                && light.level == IlluminationLevel::Dim
+                && light.radius == HEART_DIM_RADIUS
+                && light.presentation.is_none()
+        });
+        malformed
+            .expect("the cathedral heart should own its exact Dim light")
+            .radius = HEART_DIM_RADIUS.saturating_sub(1);
+
+        let WorldValidation::Invalid(issues) =
+            validate_crystal_ascent(&plan, &recipe_settings, &objects)
+        else {
+            panic!("malforming one heart light must invalidate Crystal Ascent")
+        };
+        assert!(issues.iter().any(|issue| issue
+            .detail
+            .contains("cathedral heart must own one exact Bright/Dim gameplay-light pair")));
     }
 
     #[test]

@@ -10,6 +10,9 @@
     AssertCameraMode(Map),
     Key("C"),
     AssertCameraMode(Character),
+    ClickAnchor(name: "crystal_ascent.lower_entry", expected: (q: -17, r: -15, level: 6)),
+    AwaitPartyIdle(max_frames: 600),
+    AssertSelectedAt(expected: (q: -17, r: -15, level: 6)),
     Settle(60),
     Capture("01-crystal-ascent-lower-exterior-entrance-character"),
 

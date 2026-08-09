@@ -2146,6 +2146,14 @@ mod tests {
             clicks,
             vec![
                 (
+                    "crystal_ascent.lower_entry",
+                    CameraRouteTile {
+                        q: -17,
+                        r: -15,
+                        level: 6,
+                    },
+                ),
+                (
                     "crystal_ascent.bottom_chamber",
                     CameraRouteTile {
                         q: 5,

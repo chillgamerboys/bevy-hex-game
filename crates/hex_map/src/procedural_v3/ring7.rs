@@ -1255,6 +1255,10 @@ mod tests {
                     env!("CARGO_MANIFEST_DIR"),
                     "/../../assets/art/objects/prop/crystal-spire.ron"
                 )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/prop/crystal-cathedral-heart.ron"
+                )),
             ] {
                 let blueprint: ObjectBlueprint =
                     ron::from_str(source).expect("tracked object blueprint should parse");

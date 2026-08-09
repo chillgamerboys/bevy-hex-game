@@ -5355,10 +5355,10 @@ mod tests {
             mask,
             HexSide::West,
             starts,
-            127,
+            MAX_V3_LEVEL - 1,
             HexSide::East,
             ends,
-            114,
+            MAX_V3_LEVEL - 14,
             FixtureOutlet::Shared,
         );
         let patch = PatchRecipeContext::resolve(&layout, PatchId(0)).expect("fixture patch");

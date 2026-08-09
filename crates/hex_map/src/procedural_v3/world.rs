@@ -1294,10 +1294,10 @@ mod tests {
 
     #[test]
     fn stable_names_are_deliberately_narrow() {
-        for valid in ["party_start", "bridge_2", "a"] {
+        for valid in ["party_start", "bridge_2", "river.port", "a"] {
             assert!(valid_stable_name(valid), "{valid:?} should be valid");
         }
-        for invalid in ["", "Party", "two words", "river.port", "café"] {
+        for invalid in ["", "Party", "two words", "river/port", "café"] {
             assert!(!valid_stable_name(invalid), "{invalid:?} should be invalid");
         }
     }

@@ -433,28 +433,39 @@ radial bands are `24..=27`, `21..=24`, and `18..=21`; each circuit contains six
 flights and six corner landings. Flight boundary `i` is
 `base_level + floor(i * rise_levels / 18)`, and rises are distributed along each
 flight so every ordinary transition is flat or one level. Flights retain at least
-four clear levels, corner landings retain at least eight, and transfer landings are
-the only connections between consecutive circuits. Validation rejects narrower
-coverage, cross-loop shortcuts, void crossings, wall clipping, insufficient
-headroom, or a lower-to-upper route whose elevation differs from the requested rise.
+four clear levels, corner landings retain at least eight, and every contraction's two
+four-by-four turning pads retain eight-level clearance across their 28 unique cells.
+The exact allowlisted handoff graph is the only connection between consecutive
+circuits: an exact four-cell ownership seam, four pairwise-disjoint radial transfer
+lanes, their immediate entry and exit edges, and one unavoidable adjacent hex-corner
+diagonal. Every other cross-circuit edge is invalid. This prevents a single
+articulation tile without pretending that a flat hex-grid corner is a square-grid
+vertex cut. Validation also rejects narrower coverage, void crossings, wall clipping,
+insufficient headroom, or a lower-to-upper route whose elevation differs from the
+requested rise.
 
 The summit is a soil-and-grass crown around the oculus. Radius 18 remains an open
 clearing; existing broadleaf trees become denser outside it while an exact four-wide
 trail stays clear. Stable `crystal_ascent.lower_entry`,
 `crystal_ascent.bottom_chamber`, and `crystal_ascent.upper_exit` anchors identify the
 landmark, and exact four-wide lower and upper terminal pads remain protected. The
-upper terminal is opposite the lower aperture. The patch constructor is translation-
-and-rotation safe, but Macro placement is deliberately deferred until the larger
+radius-32 lower terminal is an exterior apron; the Dark interior begins at the exact
+four-wide radius-31 threshold. The upper terminal is opposite the lower aperture.
+Every authored voxel remains inside the radius-32 site. A real Macro patch context
+constructs and round-trips its volume, blockers, regions, lights, and anchors after
+translation and any of the six rotations; recipe-owned decorative rotation values
+remain world-stable. Macro placement is deliberately deferred until the larger
 authored world defines its composition contract.
 
 Each of the eighteen outward landing alcoves reuses one accepted cave-crystal asset.
-It publishes paired Bright radius-4 and Dim radius-18 gameplay lights, with only the
-Bright source owning the visual object and its non-shadow-casting 4,500-lumen point
-light. The cathedral heart publishes paired Bright radius-8 and Dim radius-24 sources,
-one visual object, and four vertically distributed point lights. The complete chamber
-and stairs share one Dark interior domain; the lower apron and summit crown remain
-exterior. Physical light and emissive materials communicate these rules but never
-establish gameplay illumination.
+Every alcove origin publishes exactly one Bright radius-4 source and one Dim radius-18
+source, with only the Bright source owning the visual object and its non-shadow-casting
+4,500-lumen point light. The cathedral-heart origin similarly owns exactly one Bright
+radius-8 source and one Dim radius-24 source, one visual object, and four vertically
+distributed point lights. The complete chamber, radius-28-through-31 entrance
+approach, and stairs share one Dark interior domain and resolve to at least Dim; the
+lower apron and summit crown remain exterior. Physical light and emissive materials
+communicate these rules but never establish gameplay illumination.
 
 The heart is the first authored prop to opt into exact gameplay occupancy. Its
 preflighted structural voxels are rotated and compacted into

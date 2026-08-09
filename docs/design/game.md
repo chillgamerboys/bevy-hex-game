@@ -377,8 +377,12 @@ whole interior into daylight.
 
 The standalone scenario fixes the climb at 144 voxel levels while the authored recipe
 accepts 100 through 200 for later composition. Four-wide stairs and landings support a
-full party, ordinary transitions remain flat or one level, and the lower and upper
-terminals remain opposite one another. The cathedral heart is physical world volume:
+full party, ordinary transitions remain flat or one level, and each contraction
+retains four independent transfer lanes. The lower exterior apron and upper terminal
+remain opposite one another, with the Dark interior beginning just inside the lower
+threshold. On a fresh showcase launch, the standard party occupies three exact cells
+of that four-wide apron and faces inward; save restoration remains authoritative over
+that staging. The cathedral heart is physical world volume:
 characters cannot enter it and sight cannot pass through its interior. Small crystals
 are presentation and illumination fixtures rather than blockers. Map, Third Person,
 and First Person remain ordinary camera choices; no automatic gameplay cutaway is

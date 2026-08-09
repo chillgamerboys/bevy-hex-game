@@ -17,14 +17,16 @@
 use bevy::prelude::*;
 use hex_assets::{
     choose_settings, Encounter, EncounterPlacement, LightingSettings, Scenario, SelectSettings,
-    SettingsRegistry, CONFIG_EXTENSIONS,
+    SettingsRegistry, SubstanceTable, CONFIG_EXTENSIONS,
 };
 use hex_core::{
-    GameplaySetup, GameplaySetupFailure, InteriorRegions, MapAnchors, MapViewHint, ResolvedMapSeed,
-    Screen, SimSeeds, SpecialMovementRegions, TerrainReady,
+    GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexSpan, HexTile, InteriorRegions,
+    MapAnchorId, MapAnchors, MapViewHint, PartyFormation, ResolvedMapSeed, Screen, Sextant,
+    SimSeeds, SpecialMovementRegions, SubstanceId, TerrainReady, TilePos, TraversalBlockers,
+    UnitId,
 };
 use hex_map::{MapSettings, TerrainSettings};
-use hex_units::Faction;
+use hex_units::{Body, Faction, Footing, Player, StandsOn};
 use hex_world::TimeOfDay;
 
 use crate::screens::CreatorSandboxReturn;
@@ -50,6 +52,9 @@ pub(super) fn plugin(app: &mut App) {
             OnEnter(Screen::Gameplay),
             (
                 initialize_time_of_day.in_set(GameplaySetup::Resources),
+                stage_crystal_ascent_showcase_party
+                    .after(GameplaySetup::Actors)
+                    .before(GameplaySetup::Restore),
                 finalize_gameplay_setup.in_set(GameplaySetup::Finalize),
             ),
         )
@@ -58,6 +63,122 @@ pub(super) fn plugin(app: &mut App) {
             validate_gameplay_lighting_contract.run_if(in_state(Screen::Gameplay)),
         )
         .add_systems(OnExit(Screen::Gameplay), clear_session_resources);
+}
+
+const CRYSTAL_ASCENT_SHOWCASE: &str = "Crystal Ascent Showcase";
+const CRYSTAL_ASCENT_SITE_RADIUS: u32 = 32;
+const CRYSTAL_ASCENT_LOWER_ENTRY: &str = "crystal_ascent.lower_entry";
+const CRYSTAL_ASCENT_BOTTOM_CHAMBER: &str = "crystal_ascent.bottom_chamber";
+
+/// Stages the shipped Crystal Ascent party on its exact exterior terminal.
+///
+/// Encounter formations deliberately express a *region*, not an exact multi-unit
+/// footprint, and their schema has no travel-facing field. That is right for ordinary
+/// generated maps, but this showcase promises something narrower: three stable party
+/// members on the landmark's four-wide apron, looking through the entrance. Resolve
+/// that one launch after generic actors exist and before save restoration/perception.
+/// A pending save therefore remains authoritative, while a fresh launch never exposes
+/// the generic formation's temporary positions to gameplay systems.
+fn stage_crystal_ascent_showcase_party(
+    mut commands: Commands,
+    encounter: Option<Res<Encounter>>,
+    anchors: Option<Res<MapAnchors>>,
+    interiors: Option<Res<InteriorRegions>>,
+    table: Option<Res<SubstanceTable>>,
+    blockers: Option<Res<TraversalBlockers>>,
+    failure: Option<Res<GameplaySetupFailure>>,
+    mut formation: Option<ResMut<PartyFormation>>,
+    players: Query<(Entity, &UnitId, &Body), With<Player>>,
+    tiles: Query<(&TilePos, &HexSpan, &SubstanceId, &Headroom), With<HexTile>>,
+) {
+    let Some(encounter) = encounter else { return };
+    if encounter.name != CRYSTAL_ASCENT_SHOWCASE || failure.is_some() {
+        return;
+    }
+
+    let result = (|| {
+        let anchors = anchors
+            .as_deref()
+            .ok_or("the generated map published no anchors")?;
+        let interiors = interiors
+            .as_deref()
+            .ok_or("the generated map published no interior regions")?;
+        let table = table
+            .as_deref()
+            .ok_or("the substance table is unavailable")?;
+        let formation = formation
+            .as_deref_mut()
+            .ok_or("party formation state is unavailable")?;
+        let lower_entry = anchors
+            .get(&MapAnchorId::from(CRYSTAL_ASCENT_LOWER_ENTRY))
+            .ok_or("the lower-entry anchor is missing")?;
+        let bottom_chamber = anchors
+            .get(&MapAnchorId::from(CRYSTAL_ASCENT_BOTTOM_CHAMBER))
+            .ok_or("the bottom-chamber anchor is missing")?;
+
+        let mut members = players
+            .iter()
+            .map(|(entity, unit, body)| (entity, *unit, *body))
+            .collect::<Vec<_>>();
+        members.sort_by_key(|(_, unit, _)| *unit);
+        if members.len() != 3 {
+            return Err("the standard showcase party did not spawn exactly three members");
+        }
+        let body = members
+            .first()
+            .map(|(_, _, body)| *body)
+            .ok_or("the standard showcase party is empty")?;
+        if members
+            .iter()
+            .any(|(_, _, member_body)| *member_body != body)
+        {
+            return Err("the standard showcase party no longer shares one staging footprint");
+        }
+
+        let footing = Footing::from_tiles(tiles.iter(), table, body, blockers.as_deref());
+        let mut apron = lower_entry
+            .coord
+            .within_radius(2)
+            .into_iter()
+            .filter(|coord| coord.distance(HexCoord::ORIGIN) == CRYSTAL_ASCENT_SITE_RADIUS)
+            .map(|coord| TilePos::new(coord, lower_entry.level))
+            .filter(|position| interiors.get(*position).is_none())
+            .filter_map(|position| footing.at(position))
+            .collect::<Vec<_>>();
+        apron
+            .sort_by_key(|standing| (standing.pos.coord.distance(lower_entry.coord), standing.pos));
+        apron.dedup_by_key(|standing| standing.pos);
+        if apron.len() != 4 || apron.iter().all(|standing| standing.pos != lower_entry) {
+            return Err("the lower exterior terminal is not an exact four-wide standable apron");
+        }
+
+        let facing = Sextant::ALL
+            .into_iter()
+            .min_by_key(|direction| {
+                (
+                    lower_entry
+                        .coord
+                        .neighbor(*direction)
+                        .distance(bottom_chamber.coord),
+                    *direction,
+                )
+            })
+            .ok_or("the entrance has no inward-facing sextant")?;
+        for ((entity, _, _), standing) in members.into_iter().zip(apron) {
+            commands.entity(entity).insert((
+                StandsOn(standing),
+                Transform::from_translation(standing.world_position()),
+            ));
+        }
+        formation.facing = facing;
+        Ok::<(), &'static str>(())
+    })();
+
+    if let Err(detail) = result {
+        let reason = format!("Crystal Ascent showcase staging failed: {detail}.");
+        error!("{reason}");
+        commands.insert_resource(GameplaySetupFailure::new(reason));
+    }
 }
 
 /// The exact scenario and resolved seed frozen by its typed launch owner.
@@ -488,8 +609,8 @@ pub(crate) mod tests {
         InteriorRegions, IssuedCommand, KnowledgeState, LatticeCoord, LightDomain,
         LocalMapKnowledge, MapAnchorId, MapAnchors, MapViewHint, Mode, PartyFormation,
         PausableSystems, Pause, PendingDecision, PerceptionSystems, PlayerSeat, ResolvedMapSeed,
-        Screen, SpecialMovementRegion, SpecialMovementRegions, SubstanceId, TerrainReady, TilePos,
-        TraversalBlockers, TraversalProfile, Turn, UnitId,
+        Screen, Sextant, SpecialMovementRegion, SpecialMovementRegions, SubstanceId, TerrainReady,
+        TilePos, TraversalBlockers, TraversalProfile, Turn, UnitId,
     };
     use hex_lattice::{LatticeSpec, LatticeState};
     use hex_map::{
@@ -499,8 +620,8 @@ pub(crate) mod tests {
         can_observe, can_observe_with_authored_objects, FactionMapKnowledge, ResolvedIllumination,
     };
     use hex_units::{
-        either_in_reach, plan_formation_move, AuthoredObjectOccupancy, Body, Downed, Enemy,
-        Faction, Footing, FormationMember, Player, Reach, StandsOn, TerrainOccupancy,
+        either_in_reach, plan_formation_move, Archetype, AuthoredObjectOccupancy, Body, Downed,
+        Enemy, Faction, Footing, FormationMember, Player, Reach, StandsOn, TerrainOccupancy,
         UnitOccupancy,
     };
     use hex_world::TimeOfDay;
@@ -508,8 +629,9 @@ pub(crate) mod tests {
     use super::{
         clear_session_resources, finalize_gameplay_setup, initialize_time_of_day,
         scenario_contract_error, scenario_contract_error_for_launch, setup_failure_destination,
-        validate_gameplay_lighting_contract, validate_loaded_scenario, ActiveScenario,
-        ScenarioContractStatus, ScenarioTimeOverride, ScenarioToLoad,
+        stage_crystal_ascent_showcase_party, validate_gameplay_lighting_contract,
+        validate_loaded_scenario, ActiveScenario, ScenarioContractStatus, ScenarioTimeOverride,
+        ScenarioToLoad,
     };
 
     fn library() -> ScenarioLibrary {
@@ -1647,6 +1769,113 @@ pub(crate) mod tests {
         );
     }
 
+    /// The generic encounter formation owns a spawn *region*. This landmark's terminal
+    /// is narrower: freeze the exact fresh-launch staging that the scenario adapter
+    /// publishes before perception sees any party member.
+    #[test]
+    fn crystal_ascent_showcase_stages_every_party_member_on_the_exact_apron() {
+        let mut app = procedural_gameplay_app("Crystal Ascent");
+        enter_screen(&mut app, Screen::Gameplay);
+
+        assert!(
+            !app.world().contains_resource::<GameplaySetupFailure>(),
+            "exact apron staging failed: {:?}",
+            app.world()
+                .get_resource::<GameplaySetupFailure>()
+                .map(|failure| failure.reason.as_str())
+        );
+        let mut party = {
+            let world = app.world_mut();
+            let mut players = world
+                .query_filtered::<(&UnitId, &Archetype, &StandsOn, &Transform), With<Player>>();
+            players
+                .iter(world)
+                .map(|(unit, archetype, standing, transform)| {
+                    assert_eq!(
+                        transform.translation,
+                        standing.0.world_position(),
+                        "{unit:?} presentation did not follow its authoritative staging surface"
+                    );
+                    (*unit, archetype.0.clone(), standing.0.pos)
+                })
+                .collect::<Vec<_>>()
+        };
+        party.sort_by_key(|(unit, ..)| *unit);
+        assert_eq!(
+            party,
+            vec![
+                (
+                    UnitId(0),
+                    "hedge-mage".to_owned(),
+                    TilePos::new(HexCoord::new_cubic(-17, -15, 32), 6),
+                ),
+                (
+                    UnitId(1),
+                    "raider".to_owned(),
+                    TilePos::new(HexCoord::new_cubic(-18, -14, 32), 6),
+                ),
+                (
+                    UnitId(2),
+                    "wolf".to_owned(),
+                    TilePos::new(HexCoord::new_cubic(-16, -16, 32), 6),
+                ),
+            ],
+            "the stable roster must occupy three exact cells of the four-wide lower apron"
+        );
+        let interiors = app.world().resource::<InteriorRegions>();
+        assert!(party.iter().all(|(_, _, position)| {
+            position.coord.distance(HexCoord::ORIGIN) == 32 && interiors.get(*position).is_none()
+        }));
+
+        let formation = app.world().resource::<PartyFormation>();
+        assert_eq!(formation.facing, Sextant::A);
+        let lower_entry = app
+            .world()
+            .resource::<MapAnchors>()
+            .get(&MapAnchorId::from("crystal_ascent.lower_entry"))
+            .expect("the showcase should publish its lower entry");
+        let chamber = app
+            .world()
+            .resource::<MapAnchors>()
+            .get(&MapAnchorId::from("crystal_ascent.bottom_chamber"))
+            .expect("the showcase should publish its bottom chamber");
+        assert!(
+            lower_entry
+                .coord
+                .neighbor(formation.facing)
+                .distance(chamber.coord)
+                < lower_entry.coord.distance(chamber.coord),
+            "the party's initial travel-facing must point inward through the entrance"
+        );
+    }
+
+    #[test]
+    fn non_crystal_scenarios_keep_generic_formation_staging() {
+        let mut app = procedural_gameplay_app("Procedural Hills");
+        enter_screen(&mut app, Screen::Gameplay);
+
+        assert!(
+            !app.world().contains_resource::<GameplaySetupFailure>(),
+            "the Crystal Ascent adapter interfered with another scenario"
+        );
+        let party_start = app
+            .world()
+            .resource::<MapAnchors>()
+            .get(&MapAnchorId::from("party_start"))
+            .expect("Procedural Hills should publish party_start");
+        let mut party = {
+            let world = app.world_mut();
+            let mut players = world.query_filtered::<(&UnitId, &StandsOn), With<Player>>();
+            players
+                .iter(world)
+                .map(|(unit, standing)| (*unit, standing.0.pos))
+                .collect::<Vec<_>>()
+        };
+        party.sort_by_key(|(unit, _)| *unit);
+        assert_eq!(party.len(), 1);
+        assert_eq!(party.first().copied(), Some((UnitId(0), party_start)));
+    }
+
     #[test]
     fn crystal_ascent_showcase_builds_the_complete_runtime_contract() {
         let mut app = procedural_gameplay_app("Crystal Ascent");
@@ -2461,7 +2690,12 @@ pub(crate) mod tests {
         }
         app.add_systems(
             OnEnter(Screen::Gameplay),
-            finalize_gameplay_setup.in_set(GameplaySetup::Finalize),
+            (
+                stage_crystal_ascent_showcase_party
+                    .after(GameplaySetup::Actors)
+                    .before(GameplaySetup::Restore),
+                finalize_gameplay_setup.in_set(GameplaySetup::Finalize),
+            ),
         );
 
         while app.plugins_state() != PluginsState::Cleaned {
