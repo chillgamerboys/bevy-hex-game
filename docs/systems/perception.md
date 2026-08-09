@@ -82,11 +82,12 @@ the entrance, required route, and critical chambers while preserving dark option
 branches. Crystal Ascent treats its chamber and complete stair as one Dark interior:
 each of its eighteen landing crystals publishes a Bright-radius-4/Dim-radius-18 pair,
 and its cathedral heart publishes a Bright-radius-8/Dim-radius-24 pair. Only the
-Bright member owns the shared visual fixture. The apron and woodland crown remain
-exterior, so exterior daylight does not leak through the entrance or summit aperture
-under the domain contract. Authored emissive crystal meshes and restrained physical
-point lights communicate these rules at their exact sites, but they never implement
-gameplay illumination.
+Bright member owns the shared visual fixture. The apron and non-stair woodland crown
+remain exterior; the stair footprint stays Interior through the upper terminal and
+transitions after leaving the route. Exterior daylight therefore does not leak
+through the entrance or summit aperture under the domain contract. Authored emissive
+crystal meshes and restrained physical point lights communicate these rules at their
+exact sites, but they never implement gameplay illumination.
 
 ## Sight
 

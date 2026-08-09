@@ -423,7 +423,7 @@ Crystal Ascent is a deterministic standalone landmark recipe over a radius-40 wo
 Its authored site occupies radius 32, begins at `base_level`, and accepts an exact rise
 from 100 through 200 levels. The shipped showcase uses base level 6 and a 144-level
 rise. Its monumental geometry is seed-independent; seed streams vary only the landing
-crystal silhouettes and rotations and the summit tree placement.
+crystal silhouettes and rotations plus the summit tree placement and rotations.
 
 A twelve-hex-wide, eighteen-level-high pointed lower aperture opens into a radius-23
 worked-stone chamber. The radius-four cathedral-heart reservation blocks the chamber
@@ -451,11 +451,12 @@ trail stays clear. Stable `crystal_ascent.lower_entry`,
 landmark, and exact four-wide lower and upper terminal pads remain protected. The
 radius-32 lower terminal is an exterior apron; the Dark interior begins at the exact
 four-wide radius-31 threshold. The upper terminal is opposite the lower aperture.
-Every authored voxel remains inside the radius-32 site. A real Macro patch context
-constructs and round-trips its volume, blockers, regions, lights, and anchors after
-translation and any of the six rotations; recipe-owned decorative rotation values
-remain world-stable. Macro placement is deliberately deferred until the larger
-authored world defines its composition contract.
+Landmark architecture and fixtures remain inside the radius-32 site, while the
+standalone recipe fills the surrounding radius-40 world with ordinary grass terrain.
+A real Macro patch context constructs and round-trips its volume, blockers, regions,
+lights, and anchors after translation and any of the six rotations; recipe-owned
+decorative rotation values remain world-stable. Macro placement is deliberately
+deferred until the larger authored world defines its composition contract.
 
 Each of the eighteen outward landing alcoves reuses one accepted cave-crystal asset.
 Every alcove origin publishes exactly one Bright radius-4 source and one Dim radius-18
@@ -463,9 +464,11 @@ source, with only the Bright source owning the visual object and its non-shadow-
 4,500-lumen point light. The cathedral-heart origin similarly owns exactly one Bright
 radius-8 source and one Dim radius-24 source, one visual object, and four vertically
 distributed point lights. The complete chamber, radius-28-through-31 entrance
-approach, and stairs share one Dark interior domain and resolve to at least Dim; the
-lower apron and summit crown remain exterior. Physical light and emissive materials
-communicate these rules but never establish gameplay illumination.
+approach, and stairs share one Dark interior domain and resolve to at least Dim. The
+lower apron and non-stair summit crown are exterior; the stair footprint stays
+Interior through its upper terminal and transitions only after the route exits onto
+the crown. Physical light and emissive materials communicate these rules but never
+establish gameplay illumination.
 
 The heart is the first authored prop to opt into exact gameplay occupancy. Its
 preflighted structural voxels are rotated and compacted into
