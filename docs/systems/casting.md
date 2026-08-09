@@ -417,8 +417,14 @@ volume is rejected rather than sorted, deduplicated, normalized, or repaired.
 Authority clips against complete `TerrainOccupancy`; preview and AI clip against
 `KnownTerrainOccupancy`. Hidden blockers therefore cannot change faction-facing
 choices even though full physical truth may remove a candidate at application.
-Obstruction-aware sight, when it lands, must reuse this supercover rather than grow an
-independently rounded ray.
+Sight reuses the same exact rational intersection kernel through a separate
+strict-interior wrapper. That wrapper accepts exact head, top-face-center, and corner
+points, tests complete supplied runs symmetrically, and treats boundary-only
+tangencies as clear. Standing-character visibility adds its observer-relative
+grounded-exposed-top low-cover projection outside that raw query; disconnected
+one-voxel runs retain their complete volume. The final visibility answer may therefore
+be directional. Neither layer changes this casting section's closed-contact
+`supercover`, Direct, Arc, or radial-clipping results.
 
 ## The command
 

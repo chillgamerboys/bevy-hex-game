@@ -26,6 +26,7 @@ pub mod perception;
 pub mod presentation;
 pub mod setup;
 pub mod spatial;
+pub mod surface_features;
 pub mod terrain;
 pub mod terrain_impact;
 pub mod traversal;
@@ -59,9 +60,9 @@ pub use input::{
 pub use lattice_ids::{EnchantId, LatticeCoord};
 pub use occupancy::{OccupancyBlock, UnitOccupancy};
 pub use perception::{
-    ExteriorIllumination, GameplayLight, IlluminationLevel, KnowledgeExpiry, KnowledgeSource,
-    KnowledgeState, KnownTraversal, LightDomain, LocalMapKnowledge, PerceptionSystems, SightBand,
-    SightProfile,
+    upper_dome_contains, ExactGridPoint, ExteriorIllumination, GameplayLight, IlluminationLevel,
+    KnowledgeExpiry, KnowledgeSource, KnowledgeState, KnownTraversal, LightDomain,
+    LocalMapKnowledge, PerceptionSystems, SightBand, SightProfile,
 };
 pub use presentation::{
     CanopyOccluder, PresentationOcclusion, PresentationOcclusionReason, PresentationSystems,
@@ -69,6 +70,12 @@ pub use presentation::{
 };
 pub use setup::GameplaySetupFailure;
 pub use spatial::{BiomeRegionId, BiomeRegions, TraversalBlockers};
+pub use surface_features::{
+    validate_surface_feature_outcomes, PlaceSurfaceFeature, SurfaceFeature, SurfaceFeatureBatchId,
+    SurfaceFeatureId, SurfaceFeatureKind, SurfaceFeaturePlacementOutcome,
+    SurfaceFeaturePlacementRejection, SurfaceFeaturePlacementResult, SurfaceFeatureValidationError,
+    SurfaceFeatures,
+};
 pub use terrain::{
     CutawayOccluder, InteriorRegionId, InteriorRegions, MapAnchorId, MapAnchors, MapViewHint,
     ResolvedMapSeed, SpecialMovementRegion, SpecialMovementRegions, TerrainReady,
@@ -80,5 +87,7 @@ pub use terrain_impact::{
 };
 pub use traversal::{TraversalEndpoint, TraversalProfile};
 pub use unit_ids::{ControlOwner, PlayerSeat, SimSeeds, UnitId};
-pub use view::{CameraFocusTarget, CenterInspectionCamera, InspectionCameraSubject};
+pub use view::{
+    CameraFocusTarget, CenterInspectionCamera, InspectionCameraSubject, ZoomSensitivityOverride,
+};
 pub use voxel::{Headroom, Level, RunBottom, SubstanceId, TerrainEdit, TilePos, MAX_HEADROOM};

@@ -50,14 +50,15 @@ Before a feature PR or wave is declared ready:
 - partial epics remain open even when a leaf PR merges.
 
 Documentation corrections belong in the candidate. A connected Linear workflow
-should move a ticket to Done only after its complete promised outcome lands on `dev`;
-missing Linear access does not block the merge.
+should retire a ticket only after its complete promised outcome lands on `dev`;
+missing Linear access does not block the merge. Retirement means `Done` unless the
+free-workspace deletion policy below applies.
 
 After merge:
 
 1. verify the merge commit on `origin/dev`;
 2. re-fetch affected Linear tickets when available;
-3. set fully delivered tickets to Done;
+3. retire fully delivered tickets using the retention policy below;
 4. rewrite partial tickets around their remaining acceptance work;
 5. cancel or deduplicate obsolete administrative work; and
 6. perform a contradiction pass across every available projection.
@@ -72,6 +73,38 @@ The terminal check is:
 Use `$reconcile-delivery-state` for this workflow. If Linear is unavailable, report a
 visible warning and a concrete update list rather than silently treating repository
 state as a proxy.
+
+## Free-workspace issue budget and retention
+
+The repository is the durable delivery record; Linear is the small coordination view. The
+free workspace has a finite issue budget, so do not mirror the wave queue into Linear:
+
+- the committed wave manifest owns lane ids, state, blockers, ownership, and PRs;
+- `/plan-epic` and `/inject` reuse a relevant existing `HEX-N` when one exists and otherwise
+  leave `ticket: null`; they never create one child per lane;
+- a lane without a ticket is ordinary and mergeable, and its audit records `unlinked`; and
+- incidental debt is recorded in the manifest or handoff instead of becoming an issue by
+  default. A reproducible UI defect remains the one creation exception because
+  `$linear-ui-bug-intake` owns its parent and duplicate search.
+
+Completed issues owned by this workflow are deleted after delivery when all of these are
+true:
+
+1. the complete promised outcome is verified on `origin/dev`;
+2. the identifier, title, outcome, exact `dev` SHA, and delivery PR are recorded durably in
+   the wave manifest, PR, or applicable repository status document;
+3. no residual acceptance item, active child, dependency, regression investigation, or
+   other-owner coordination need remains; and
+4. the issue is re-fetched immediately before deletion and the deletion is verified.
+
+Do not delete a partial epic, an active duplicate target, an issue owned by the other owner,
+or the current UI bug-bash parent. Move those to the truthful live state and preserve them.
+If the connector cannot delete, report the exact manual deletion instead of pretending that
+`Done` frees the issue budget. Deletion follows Linear's recoverability window and can become
+permanent, so the durable repository record must exist first.
+
+Every skill other than `$linear-ui-bug-intake` reconciles and links existing issues and
+never creates. Missing Linear access produces a visible warning and the wave proceeds.
 
 ## UI bug intake
 

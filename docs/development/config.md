@@ -16,7 +16,7 @@ you do not need to recompile the game.
 | `spells.ron` | Spells: what each requires, how it is cast, and what it does |
 | `camera.ron` | Initial map and close-character frames, pan speed, zoom and tilt |
 | `combat.ron` | Engagement thresholds, movement budget, height bonus, what a strike costs, and the open design questions as policy knobs that reject unbuilt variants with a reason |
-| `perception.ron` | Active sight profile, Bright/Dim/Dark ranges, and the downhill sight bonus |
+| `perception.ron` | Active Bright/Dim/Dark sight radii |
 | `lighting.ron` | Sun brightness, colour and angle, ambient light, the sky gradient and its hex clouds |
 | `player.ron` | Player piece size and movement speed |
 | `scenarios.ron` | Internal world + lighting + encounter launch definitions used by Campaign, Sandbox, saves, retry, review, and tests |
@@ -368,12 +368,12 @@ profiles without coupling them to renderer brightness:
 active: Expansive,
 ```
 
-`Expansive` uses Bright/Dim/Dark horizontal and vertical limits of `36/12/1`,
-`Focused` uses `24/8/1`, and `Tight` uses `18/6/1`. Each axis remains independently
-authored, so vertical visibility can be tuned for caves and sky layers without
-widening the ground footprint. Every profile must keep Bright at least Dim, Dim at
-least Dark, and Dark exactly one in both axes. Invalid edits and unknown fields are
-reported while the last valid settings remain active.
+`Expansive` uses Bright/Dim/Dark radii of `36/12/1`, `Focused` uses `24/8/1`, and
+`Tight` uses `18/6/1`. Every profile must keep Bright at least Dim, Dim at least Dark,
+and Dark exactly one. Each radius feeds the exact upper-dome predicate: horizontal
+distance and upward voxel distance combine by `h² + u² <= radius²`, while downward
+vertical distance is ignored. Invalid edits and unknown fields are reported while the
+last valid settings remain active.
 
 **Use the retained Perlin preset.** Perlin remains a separate, optional terrain
 preset; it is not one of the versioned procedural recipes:

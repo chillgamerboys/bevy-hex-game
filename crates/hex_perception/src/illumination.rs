@@ -5,7 +5,10 @@ use std::collections::BTreeMap;
 use bevy_ecs::prelude::Resource;
 use bevy_ecs::reflect::ReflectResource;
 use bevy_reflect::Reflect;
-use hex_core::{ExteriorIllumination, GameplayLight, IlluminationLevel, LightDomain, TilePos};
+use hex_core::{
+    upper_dome_contains, ExactGridPoint, ExteriorIllumination, GameplayLight, IlluminationLevel,
+    LightDomain, TilePos,
+};
 
 use crate::{PerceptionError, SurfaceSnapshots};
 
@@ -109,8 +112,9 @@ impl ResolvedIllumination {
 /// Resolves objective illumination at an arbitrary exact position and domain.
 ///
 /// Exterior positions start at the authored ambient tier; interiors start Dark.
-/// Applicable local sources must share the target's domain and fall inside both the
-/// inclusive horizontal hex radius and inclusive absolute vertical radius.
+/// Applicable local sources must share the target's domain and fall inside their
+/// inclusive upper-dome radius. Downward reach is cylindrical; upward reach follows
+/// the exact spherical cap shared with sight.
 #[must_use]
 pub fn resolve_illumination_at(
     pos: TilePos,
@@ -127,8 +131,11 @@ pub fn resolve_illumination_at(
         .iter()
         .filter(|source| {
             source.domain == domain
-                && source.pos.coord.distance(pos.coord) <= source.light.radius
-                && source.pos.level.abs_diff(pos.level) <= source.light.radius
+                && upper_dome_contains(
+                    ExactGridPoint::voxel_center(source.pos),
+                    ExactGridPoint::voxel_center(pos),
+                    source.light.radius,
+                )
         })
         .fold(ambient, |level, source| level.max(source.light.level))
 }
@@ -170,25 +177,29 @@ mod tests {
     }
 
     #[test]
-    fn local_radius_is_inclusive_on_both_axes() {
+    fn local_radius_uses_an_inclusive_upper_dome_and_downward_cylinder() {
         let exterior = ExteriorIllumination::new(IlluminationLevel::Dark);
         let light = source(
             pos(0, 0, 10),
             LightDomain::Exterior,
             IlluminationLevel::Dim,
-            2,
+            5,
         );
 
         assert_eq!(
-            resolve_illumination_at(pos(2, 0, 12), LightDomain::Exterior, exterior, &[light],),
+            resolve_illumination_at(pos(3, 0, 14), LightDomain::Exterior, exterior, &[light],),
             IlluminationLevel::Dim
         );
         assert_eq!(
-            resolve_illumination_at(pos(3, 0, 12), LightDomain::Exterior, exterior, &[light],),
+            resolve_illumination_at(pos(4, 0, 14), LightDomain::Exterior, exterior, &[light],),
             IlluminationLevel::Dark
         );
         assert_eq!(
-            resolve_illumination_at(pos(2, 0, 13), LightDomain::Exterior, exterior, &[light],),
+            resolve_illumination_at(pos(5, 0, -100), LightDomain::Exterior, exterior, &[light],),
+            IlluminationLevel::Dim
+        );
+        assert_eq!(
+            resolve_illumination_at(pos(6, 0, -100), LightDomain::Exterior, exterior, &[light],),
             IlluminationLevel::Dark
         );
     }

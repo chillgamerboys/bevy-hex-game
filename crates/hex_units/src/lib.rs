@@ -59,7 +59,8 @@ pub use movement::{
 };
 pub use pathing::HexPathingLine;
 pub use selection::{
-    HoveredSurface, PathOverlay, RangeOverlay, Selected, TargetReticle, TerrainRevision, UnitRing,
+    HoveredSurface, OutOfRangeOverlay, PathOverlay, RangeOverlay, Selected, TargetReticle,
+    TerrainRevision, UnitRing,
 };
 pub use targeting::{either_in_reach, high_ground_bonus, in_reach, in_touch_reach};
 pub use terrain_creation::{
@@ -70,8 +71,8 @@ pub use terrain_occupancy::{
 };
 pub use terrain_reconciliation::{plan_unsupported_actor_landing, NoLanding};
 pub use trajectories::{
-    known_trajectory_is_clear, supercover, trajectory_destination, trajectory_is_clear,
-    trajectory_voxels,
+    known_trajectory_is_clear, sight_segment_is_clear, supercover, terrain_sight_is_clear,
+    trajectory_destination, trajectory_is_clear, trajectory_voxels,
 };
 pub use units::{
     Archetype, Downed, Enemy, MovingTo, Party, Player, StandsOn, StopMovingAt, UnitAllocator,

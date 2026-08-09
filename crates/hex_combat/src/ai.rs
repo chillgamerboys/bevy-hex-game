@@ -85,6 +85,14 @@ pub struct AiDecisionTraces {
 /// Maximum exact decision snapshots retained for live developer inspection.
 pub const MAX_AI_DECISION_TRACES: usize = 64;
 
+/// Marks the actor whose currently queued command was emitted by the AI adapter.
+///
+/// The command wire format intentionally carries no runtime provenance. This
+/// transient marker lets the applier distinguish an AI-selected cast from a manual
+/// or replay-issued command without changing that serialized contract.
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct AiIssuedCommand;
+
 impl AiDecisionTraces {
     fn record(&mut self, mut trace: AiDecisionTrace) {
         trace.sequence = self.next_sequence;
@@ -242,6 +250,7 @@ struct AiWorld<'w> {
 }
 
 fn drive_ai(
+    mut ecs_commands: Commands,
     turn_order: Res<TurnOrder>,
     unit_registry: Res<UnitRegistry>,
     pending: Res<PendingDecision>,
@@ -447,6 +456,7 @@ fn drive_ai(
         warn!("AI {actor_id:?} returned an invalid selection: {failure:?}");
     }
     if let Some(command) = command {
+        ecs_commands.entity(actor_entity).insert(AiIssuedCommand);
         queue.push(IssuedCommand {
             seat: request.controller,
             command,

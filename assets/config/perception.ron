@@ -1,30 +1,25 @@
 // Authoritative gameplay sight ranges.
 //
 // These values do not sample rendered lights, shadows, or exposure. Perception
-// selects one band from the target's deterministic illumination tier. Horizontal
-// hex distance and vertical voxel distance remain independent so tall worlds can
-// be tuned without widening the ground footprint.
+// selects one radius from the target's deterministic illumination tier. Downward
+// targets keep the full horizontal radius; upward distance consumes the same exact
+// radius budget.
 (
     active: Expansive,
 
     expansive: (
-        bright: (horizontal: 36, vertical: 36),
-        dim: (horizontal: 12, vertical: 12),
-        dark: (horizontal: 1, vertical: 1),
+        bright: (radius: 36),
+        dim: (radius: 12),
+        dark: (radius: 1),
     ),
     focused: (
-        bright: (horizontal: 24, vertical: 24),
-        dim: (horizontal: 8, vertical: 8),
-        dark: (horizontal: 1, vertical: 1),
+        bright: (radius: 24),
+        dim: (radius: 8),
+        dark: (radius: 1),
     ),
     tight: (
-        bright: (horizontal: 18, vertical: 18),
-        dim: (horizontal: 6, vertical: 6),
-        dark: (horizontal: 1, vertical: 1),
+        bright: (radius: 18),
+        dim: (radius: 6),
+        dark: (radius: 1),
     ),
-
-    // Bright and dim sight gain one horizontal hex per four full downhill
-    // levels, capped at six. Darkness never receives an elevation bonus.
-    downhill_levels_per_bonus: 4,
-    max_downhill_bonus: 6,
 )
