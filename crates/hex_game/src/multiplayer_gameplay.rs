@@ -28,12 +28,30 @@ use hex_multiplayer::{
 };
 use hex_units::{Downed, HexPathingLine, MovementSystems, MovingTo, StandsOn, UnitRegistry};
 
-#[derive(Resource, Debug, Default)]
+#[derive(Resource, Debug)]
 struct LocalRequestIds {
     last: u64,
 }
 
+impl Default for LocalRequestIds {
+    fn default() -> Self {
+        Self::for_process(hex_multiplayer::SessionPeerId::generate())
+    }
+}
+
 impl LocalRequestIds {
+    fn for_process(identity: hex_multiplayer::SessionPeerId) -> Self {
+        let identity = identity.to_bytes();
+        let mut epoch = [0_u8; 8];
+        epoch.copy_from_slice(&identity[..8]);
+        Self {
+            // A fresh process must not restart at one against the host's retained
+            // reconnect/idempotence cache. Reserving the top bit guarantees at least
+            // half the u64 range remains for monotonic allocation.
+            last: u64::from_be_bytes(epoch) & (u64::MAX >> 1),
+        }
+    }
+
     fn allocate(&mut self) -> Option<CommandRequestId> {
         self.last = self.last.checked_add(1)?;
         Some(CommandRequestId(self.last))
@@ -825,7 +843,7 @@ mod tests {
         let mut app = App::new();
         app.insert_resource(role)
             .init_resource::<CommandQueue>()
-            .init_resource::<LocalRequestIds>()
+            .insert_resource(LocalRequestIds { last: 0 })
             .add_message::<LocalGameCommandRequest>()
             .add_message::<GameCommandRequest>()
             .add_systems(Update, route_direct_human_commands);
@@ -902,7 +920,7 @@ mod tests {
             hex_multiplayer::MultiplayerPlugin,
         ))
         .init_resource::<CommandQueue>()
-        .init_resource::<LocalRequestIds>()
+        .insert_resource(LocalRequestIds { last: 0 })
         .init_resource::<PendingAuthorityRequests>()
         .add_systems(Update, route_direct_human_commands)
         .add_systems(
@@ -1123,7 +1141,7 @@ mod tests {
     #[test]
     fn gameplay_teardown_never_reuses_local_request_ids() {
         let mut app = App::new();
-        app.init_resource::<LocalRequestIds>()
+        app.insert_resource(LocalRequestIds { last: 0 })
             .init_resource::<PendingAuthorityRequests>()
             .init_resource::<BoundaryProjection>()
             .init_resource::<AuthorityBoundary>()
@@ -1141,6 +1159,25 @@ mod tests {
             Some(CommandRequestId(2)),
             "returning through a lobby must not collide with the sequencer cache"
         );
+    }
+
+    #[test]
+    fn restarted_process_uses_a_distinct_monotonic_request_epoch() {
+        let mut first =
+            LocalRequestIds::for_process(hex_multiplayer::SessionPeerId::from_bytes([0x11; 16]));
+        let mut restarted =
+            LocalRequestIds::for_process(hex_multiplayer::SessionPeerId::from_bytes([0x22; 16]));
+
+        let first_request = first.allocate().expect("the first epoch has capacity");
+        let next_request = first.allocate().expect("the first epoch stays monotonic");
+        let restarted_request = restarted
+            .allocate()
+            .expect("the restarted epoch has capacity");
+
+        assert_eq!(next_request.0, first_request.0 + 1);
+        assert_ne!(restarted_request, first_request);
+        assert!(first_request.0 <= (u64::MAX >> 1) + 1);
+        assert!(restarted_request.0 <= (u64::MAX >> 1) + 1);
     }
 
     #[test]
