@@ -13,7 +13,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use bevy::prelude::*;
-use hex_core::{HexCoord, HexTile, Level, RunBottom, TerrainSystems, TilePos};
+use hex_core::{
+    GameplaySetup, HexCoord, HexTile, Level, RunBottom, Screen, TerrainSystems, TilePos,
+};
 
 /// Ordering hook for systems that need the latest exact material occupancy.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -131,6 +133,17 @@ impl TerrainOccupancy {
         })
     }
 
+    /// Iterates the compact inclusive material runs in one column, bottom first.
+    ///
+    /// Consumers performing exact segment tests can intersect a whole run directly
+    /// instead of expanding every occupied voxel. Missing columns yield no ranges.
+    pub fn runs_in_column(&self, coord: HexCoord) -> impl Iterator<Item = (Level, Level)> + '_ {
+        self.columns
+            .get(&coord)
+            .into_iter()
+            .flat_map(|ranges| ranges.iter().copied())
+    }
+
     /// Whether no material run has been published.
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -139,13 +152,44 @@ impl TerrainOccupancy {
 }
 
 /// Registers exact terrain-occupancy publication.
-pub(crate) fn plugin(app: &mut App) {
-    app.init_resource::<TerrainOccupancy>().add_systems(
+pub fn plugin(app: &mut App) {
+    app.configure_sets(
+        OnEnter(Screen::Gameplay),
+        TerrainOccupancySystems::Publish
+            .after(GameplaySetup::Restore)
+            .before(GameplaySetup::Perception),
+    )
+    .add_systems(
+        OnEnter(Screen::Gameplay),
+        publish_initial_terrain_occupancy.in_set(TerrainOccupancySystems::Publish),
+    )
+    .add_systems(
         Update,
         rebuild_terrain_occupancy
             .in_set(TerrainOccupancySystems::Publish)
-            .in_set(TerrainSystems::RefreshProjections),
-    );
+            .in_set(TerrainSystems::RefreshProjections)
+            .run_if(occupancy_session_active),
+    )
+    .add_systems(OnExit(Screen::Gameplay), clear_terrain_occupancy);
+}
+
+/// Publishes occupancy after terrain and restored actors exist but before perception.
+fn publish_initial_terrain_occupancy(
+    mut commands: Commands,
+    runs: Query<(Option<&TilePos>, Option<&RunBottom>), With<HexTile>>,
+) {
+    publish_complete_terrain_occupancy(&mut commands, &runs);
+}
+
+fn clear_terrain_occupancy(mut commands: Commands) {
+    commands.remove_resource::<TerrainOccupancy>();
+}
+
+fn occupancy_session_active(
+    occupancy: Option<Res<TerrainOccupancy>>,
+    tiles: Query<(), With<HexTile>>,
+) -> bool {
+    occupancy.is_some() || !tiles.is_empty()
 }
 
 /// Rebuilds the compact projection when any material-run entity appears or leaves.
@@ -156,22 +200,37 @@ pub(crate) fn plugin(app: &mut App) {
 /// plausible-looking partial occupancy.
 fn rebuild_terrain_occupancy(
     mut commands: Commands,
-    runs: Query<(&TilePos, Option<&RunBottom>), With<HexTile>>,
+    runs: Query<(Option<&TilePos>, Option<&RunBottom>), With<HexTile>>,
     added_tiles: Query<(), Added<HexTile>>,
+    changed_tops: Query<(), (With<HexTile>, Changed<TilePos>)>,
     changed_bottoms: Query<(), (With<HexTile>, Changed<RunBottom>)>,
-    mut removed: RemovedComponents<HexTile>,
+    mut removed_tiles: RemovedComponents<HexTile>,
+    mut removed_tops: RemovedComponents<TilePos>,
+    mut removed_bottoms: RemovedComponents<RunBottom>,
 ) {
-    let removed_count = removed.read().count();
-    if added_tiles.is_empty() && changed_bottoms.is_empty() && removed_count == 0 {
+    let removed_count =
+        removed_tiles.read().count() + removed_tops.read().count() + removed_bottoms.read().count();
+    if added_tiles.is_empty()
+        && changed_tops.is_empty()
+        && changed_bottoms.is_empty()
+        && removed_count == 0
+    {
         return;
     }
 
+    publish_complete_terrain_occupancy(&mut commands, &runs);
+}
+
+fn publish_complete_terrain_occupancy(
+    commands: &mut Commands,
+    runs: &Query<(Option<&TilePos>, Option<&RunBottom>), With<HexTile>>,
+) {
     let Some(complete) = runs
         .iter()
-        .map(|(&top, bottom)| bottom.copied().map(|bottom| (top, bottom)))
+        .map(|(top, bottom)| top.copied().zip(bottom.copied()))
         .collect::<Option<Vec<_>>>()
     else {
-        error!("withdrawing terrain occupancy: a material-run entity omits RunBottom");
+        error!("withdrawing terrain occupancy: a material-run entity omits TilePos or RunBottom");
         commands.remove_resource::<TerrainOccupancy>();
         return;
     };
@@ -190,7 +249,7 @@ fn rebuild_terrain_occupancy(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hex_test_app::HeadlessAppBuilder;
+    use hex_test_app::{enter_gameplay, HeadlessAppBuilder};
 
     fn occupancy_app() -> HeadlessAppBuilder {
         let mut builder = HeadlessAppBuilder::new();
@@ -206,8 +265,18 @@ mod tests {
     #[derive(Resource, Default)]
     struct SeenOccupancy(Vec<bool>);
 
+    #[derive(Resource, Default)]
+    struct SawInitialOccupancy(bool);
+
     fn observe_occupancy(terrain: Res<TerrainOccupancy>, mut seen: ResMut<SeenOccupancy>) {
         seen.0.push(terrain.contains(at(1, 0, 2)));
+    }
+
+    fn observe_initial_occupancy(
+        terrain: Res<TerrainOccupancy>,
+        mut seen: ResMut<SawInitialOccupancy>,
+    ) {
+        seen.0 = terrain.contains(at(1, 0, 2));
     }
 
     fn at(q: i32, r: i32, level: Level) -> TilePos {
@@ -279,6 +348,73 @@ mod tests {
     }
 
     #[test]
+    fn gameplay_restore_publishes_occupancy_before_initial_perception() {
+        let mut builder = HeadlessAppBuilder::new().with_states().with_gameplay_sets();
+        plugin(builder.app_mut());
+        builder.app_mut().init_resource::<SawInitialOccupancy>();
+        builder.app_mut().add_systems(
+            OnEnter(Screen::Gameplay),
+            observe_initial_occupancy.in_set(GameplaySetup::Perception),
+        );
+        let mut app = builder.build();
+        app.world_mut().spawn((HexTile, at(1, 0, 2), RunBottom(0)));
+
+        enter_gameplay(&mut app);
+
+        assert!(app.world().resource::<SawInitialOccupancy>().0);
+        assert!(app
+            .world()
+            .resource::<TerrainOccupancy>()
+            .contains(at(1, 0, 1)));
+    }
+
+    #[test]
+    fn malformed_gameplay_restore_withdraws_occupancy_before_perception() {
+        let mut builder = HeadlessAppBuilder::new().with_states().with_gameplay_sets();
+        plugin(builder.app_mut());
+        let mut app = builder.build();
+        app.world_mut().insert_resource(
+            TerrainOccupancy::from_runs([(at(0, 0, 0), RunBottom(0))])
+                .expect("seed occupancy is valid"),
+        );
+        app.world_mut().spawn((HexTile, at(1, 0, 2)));
+
+        enter_gameplay(&mut app);
+
+        assert!(!app.world().contains_resource::<TerrainOccupancy>());
+    }
+
+    #[test]
+    fn leaving_gameplay_withdraws_the_owned_readiness_resource() {
+        let mut builder = HeadlessAppBuilder::new().with_states().with_gameplay_sets();
+        plugin(builder.app_mut());
+        builder.app_mut().add_systems(
+            OnExit(Screen::Gameplay),
+            |mut commands: Commands, tiles: Query<Entity, With<HexTile>>| {
+                for entity in &tiles {
+                    commands.entity(entity).despawn();
+                }
+            },
+        );
+        let mut app = builder.build();
+        app.world_mut().spawn((HexTile, at(0, 0, 1), RunBottom(0)));
+        enter_gameplay(&mut app);
+        assert!(app.world().contains_resource::<TerrainOccupancy>());
+
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Title);
+        app.update();
+
+        assert!(!app.world().contains_resource::<TerrainOccupancy>());
+        app.update();
+        assert!(
+            !app.world().contains_resource::<TerrainOccupancy>(),
+            "deferred tile removals after teardown must not recreate an empty readiness resource"
+        );
+    }
+
+    #[test]
     fn entity_replacement_republishes_the_complete_stack() {
         let mut app = occupancy_app().build();
         app.world_mut().spawn((HexTile, at(0, 0, 1), RunBottom(0)));
@@ -305,6 +441,25 @@ mod tests {
         assert!(occupancy.contains(at(0, 0, 4)));
         assert!(!occupancy.contains(at(0, 0, 6)));
         assert!(!occupancy.contains(at(0, 0, 7)));
+    }
+
+    #[test]
+    fn changed_top_and_bottom_republish_without_waiting_for_entity_replacement() {
+        let mut app = occupancy_app().build();
+        let run = app
+            .world_mut()
+            .spawn((HexTile, at(0, 0, 2), RunBottom(0)))
+            .id();
+        app.update();
+
+        app.world_mut().entity_mut(run).insert(at(1, 0, 4));
+        app.world_mut().entity_mut(run).insert(RunBottom(3));
+        app.update();
+
+        let occupancy = app.world().resource::<TerrainOccupancy>();
+        assert!(!occupancy.contains(at(0, 0, 1)));
+        assert!(occupancy.contains(at(1, 0, 3)));
+        assert!(occupancy.contains(at(1, 0, 4)));
     }
 
     #[test]
@@ -359,6 +514,38 @@ mod tests {
             !app.world().contains_resource::<TerrainOccupancy>(),
             "a tile without RunBottom must withdraw the complete projection"
         );
+    }
+
+    #[test]
+    fn removing_either_required_bound_withdraws_the_complete_projection() {
+        let mut app = occupancy_app().build();
+        let run = app
+            .world_mut()
+            .spawn((HexTile, at(0, 0, 2), RunBottom(0)))
+            .id();
+        app.update();
+        assert!(app.world().contains_resource::<TerrainOccupancy>());
+
+        app.world_mut().entity_mut(run).remove::<RunBottom>();
+        app.update();
+        assert!(!app.world().contains_resource::<TerrainOccupancy>());
+
+        app.world_mut().entity_mut(run).insert(RunBottom(0));
+        app.update();
+        assert!(app.world().contains_resource::<TerrainOccupancy>());
+
+        app.world_mut().entity_mut(run).remove::<TilePos>();
+        app.update();
+        assert!(!app.world().contains_resource::<TerrainOccupancy>());
+    }
+
+    #[test]
+    fn tile_without_a_top_position_withdraws_the_projection() {
+        let mut app = occupancy_app().build();
+        app.world_mut().spawn((HexTile, RunBottom(0)));
+        app.update();
+
+        assert!(!app.world().contains_resource::<TerrainOccupancy>());
     }
 
     #[test]

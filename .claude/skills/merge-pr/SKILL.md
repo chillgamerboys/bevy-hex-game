@@ -20,7 +20,9 @@ Read `/tmp/audit-pr-receipt-<PR>.json` and require all of the following:
 - matching PR number, full head SHA, and base branch;
 - review and validation status `pass`;
 - visual value `pass` or `not_applicable`;
-- manual runtime value `PASS` or `N/A`;
+- manual runtime value `PASS` or `N/A` — for a `source→wave/*` lane, `N/A` means the
+  deferral to the combined wave PR that `/audit-pr` recorded and that
+  `.github/workflows/manual-runtime-signoff.yaml` already grants, not a hook closure;
 - local `HEAD`, the pushed PR head, and the receipt head are identical; and
 - the worktree is clean.
 
@@ -50,12 +52,16 @@ requires the combined head rather than any source-lane receipt.
 
 Follow [delivery-state.md](../../../docs/development/delivery-state.md). If one linked
 issue's complete promised outcome has now landed on `dev`, invoke `/update-linear` to
-verify and move it to the live `Done` equivalent. A source PR entering a wave, a
-partial epic, or a symptom-level fix remains non-terminal. Linear failure is reported
-but never changes a valid merge result.
+retire it: `Done` when it must be retained, or verified deletion after the required durable
+record exists under the free-workspace policy. A source PR entering a wave, a partial epic,
+or a symptom-level fix remains non-terminal. Linear failure is reported but never changes a
+valid merge result.
 
 Before deleting the remote head, verify it is neither `dev` nor `main`, is not a base
-for any open PR, and is not a still-needed source lane. Then delete only that explicit
+for any open PR, and is not a still-needed source lane. Never delete a `wave/*` branch
+while its manifest under `docs/planning/waves/<slug>/` lists a lane whose `state` is not
+yet `merged-to-wave` or `deferred` — a dispatched lane that has not opened its PR yet is
+invisible to the open-PR check. Then delete only that explicit
 remote ref and fetch with prune. Never delete or switch the local Conductor branch;
 its upstream may show `[gone]` until the workspace is retired.
 

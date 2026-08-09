@@ -10,7 +10,7 @@ use bevy_ecs::prelude::*;
 use bevy_reflect::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::{InteriorRegionId, Level, TilePos, TraversalEndpoint};
+use crate::{HexCoord, InteriorRegionId, TilePos, TraversalEndpoint};
 
 /// Gameplay-relevant illumination at an exact position.
 ///
@@ -49,32 +49,22 @@ impl ExteriorIllumination {
     }
 }
 
-/// Horizontal and vertical sight limits for one illumination tier.
+/// Sight radius for one illumination tier.
 #[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct SightBand {
-    /// Maximum horizontal hex distance from an observer.
-    pub horizontal: u32,
-    /// Maximum absolute voxel-level distance from an observer.
-    pub vertical: u32,
+    /// Inclusive radius of the exact upper-dome sight volume.
+    pub radius: u32,
 }
 
 impl SightBand {
-    /// Creates a sight band with independent horizontal and vertical limits.
+    /// Creates an inclusive upper-dome sight band.
     #[must_use]
-    pub const fn new(horizontal: u32, vertical: u32) -> Self {
-        Self {
-            horizontal,
-            vertical,
-        }
+    pub const fn new(radius: u32) -> Self {
+        Self { radius }
     }
 }
 
 /// Sight limits selected by gameplay illumination.
-///
-/// Downhill sight may extend beyond the horizontal band by one hex for every
-/// `downhill_levels_per_bonus` full levels below the observer, up to
-/// `max_downhill_bonus`. A non-positive divisor disables the bonus rather than
-/// allowing invalid settings to divide by zero.
 #[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SightProfile {
     /// Limits under direct sunlight or equally strong local light.
@@ -83,27 +73,14 @@ pub struct SightProfile {
     pub dim: SightBand,
     /// Limits without ambient or local light.
     pub dark: SightBand,
-    /// Full downhill levels required for one additional horizontal hex.
-    pub downhill_levels_per_bonus: Level,
-    /// Maximum horizontal range added by downhill elevation.
-    pub max_downhill_bonus: u32,
 }
 
 impl SightProfile {
-    /// Hard authored cap for downhill sight extension.
-    ///
-    /// Designer-facing settings must not exceed this value. Keeping the limit on
-    /// the shared contract prevents an asset loader from silently widening sight
-    /// beyond the rule used by headless tests and future adapters.
-    pub const MAX_DOWNHILL_BONUS: u32 = 6;
-
     /// Initial ordinary sight contract used by the V3 perception roadmap.
     pub const DEFAULT: Self = Self {
-        bright: SightBand::new(36, 36),
-        dim: SightBand::new(12, 12),
-        dark: SightBand::new(1, 1),
-        downhill_levels_per_bonus: 4,
-        max_downhill_bonus: Self::MAX_DOWNHILL_BONUS,
+        bright: SightBand::new(36),
+        dim: SightBand::new(12),
+        dark: SightBand::new(1),
     };
 
     /// Returns the base limits for an illumination tier.
@@ -115,31 +92,148 @@ impl SightProfile {
             IlluminationLevel::Bright => self.bright,
         }
     }
-
-    /// Returns the capped horizontal bonus for a target below the observer.
-    ///
-    /// `downhill_levels` is measured as a non-negative difference. Passing zero
-    /// therefore produces no bonus, as does a malformed non-positive divisor.
-    /// Darkness never receives the elevation bonus.
-    #[must_use]
-    pub fn downhill_bonus(self, illumination: IlluminationLevel, downhill_levels: Level) -> u32 {
-        if illumination == IlluminationLevel::Dark
-            || downhill_levels <= 0
-            || self.downhill_levels_per_bonus <= 0
-        {
-            return 0;
-        }
-        let bonus = downhill_levels / self.downhill_levels_per_bonus;
-        u32::try_from(bonus)
-            .unwrap_or(u32::MAX)
-            .min(self.max_downhill_bonus)
-    }
 }
 
 impl Default for SightProfile {
     fn default() -> Self {
         Self::DEFAULT
     }
+}
+
+/// One exact point in the stacked hex grid, stored in sixths of a voxel.
+///
+/// Sixth-voxel coordinates represent voxel centres, horizontal top-face corners,
+/// and vertical top faces without floating point. The horizontal coordinates are
+/// cube coordinates whose three components always sum to zero. `anchor` identifies
+/// the voxel column that authored the point and lets exact line queries build a
+/// narrow candidate corridor without rounding a corner back to an arbitrary tile.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ExactGridPoint {
+    cube_sixths: [i64; 3],
+    level_sixths: i64,
+    anchor: HexCoord,
+}
+
+impl ExactGridPoint {
+    const SIXTHS_PER_VOXEL: i64 = 6;
+    const TOP_FACE_OFFSET: i64 = 3;
+    const STANDING_EYE_OFFSET: i64 = 12;
+    const STANDING_BODY_TOP_OFFSET: i64 = 15;
+    const TOP_FACE_CORNER_OFFSETS: [[i64; 3]; 6] = [
+        [4, -2, -2],
+        [2, 2, -4],
+        [-2, 4, -2],
+        [-4, 2, 2],
+        [-2, -2, 4],
+        [2, -4, 2],
+    ];
+
+    /// Returns the centre of one exact voxel.
+    #[must_use]
+    pub fn voxel_center(pos: TilePos) -> Self {
+        Self::at_offsets(pos, [0, 0, 0], 0)
+    }
+
+    /// Returns the centre of a material voxel's top face.
+    #[must_use]
+    pub fn voxel_top_center(pos: TilePos) -> Self {
+        Self::at_offsets(pos, [0, 0, 0], Self::TOP_FACE_OFFSET)
+    }
+
+    /// Returns the eye point of a standing two-voxel-tall character.
+    ///
+    /// `support` is the material voxel beneath the character. The eye is the centre
+    /// of the second air voxel above that support, at `support.level + 2`.
+    #[must_use]
+    pub fn standing_eye(support: TilePos) -> Self {
+        Self::at_offsets(support, [0, 0, 0], Self::STANDING_EYE_OFFSET)
+    }
+
+    /// Returns the six exact corners of a material voxel's top face.
+    ///
+    /// Cube-coordinate corner offsets are permutations of `(2/3, -1/3, -1/3)`.
+    /// Expressing them in sixths keeps all later intersection tests integral.
+    #[must_use]
+    pub fn voxel_top_corners(pos: TilePos) -> [Self; 6] {
+        Self::TOP_FACE_CORNER_OFFSETS
+            .map(|offsets| Self::at_offsets(pos, offsets, Self::TOP_FACE_OFFSET))
+    }
+
+    /// Returns the six exact upper corners of a standing character's body volume.
+    ///
+    /// `support` is the material voxel beneath a two-voxel-tall character. The
+    /// corners lie at `support.level + 2.5`, on the upper boundary of those two air
+    /// voxels. Their stable ordering matches [`Self::voxel_top_corners`], allowing
+    /// sight to pair corresponding source and target corners without cross-corner
+    /// keyholes.
+    #[must_use]
+    pub fn standing_body_top_corners(support: TilePos) -> [Self; 6] {
+        Self::TOP_FACE_CORNER_OFFSETS
+            .map(|offsets| Self::at_offsets(support, offsets, Self::STANDING_BODY_TOP_OFFSET))
+    }
+
+    fn at_offsets(pos: TilePos, offsets: [i64; 3], level_offset: i64) -> Self {
+        let scale = Self::SIXTHS_PER_VOXEL;
+        let [q_offset, r_offset, s_offset] = offsets;
+        let q = i64::from(pos.coord.x());
+        let r = i64::from(pos.coord.y());
+        // Widen before deriving the third cube component. `HexCoord::z()` returns
+        // `i32`, so a valid boundary coordinate such as `(i32::MIN, 1, i32::MAX)`
+        // would otherwise overflow while evaluating `-x` in debug builds.
+        let s = -q - r;
+        Self {
+            cube_sixths: [
+                q * scale + q_offset,
+                r * scale + r_offset,
+                s * scale + s_offset,
+            ],
+            level_sixths: i64::from(pos.level) * scale + level_offset,
+            anchor: pos.coord,
+        }
+    }
+
+    /// Returns the exact cube coordinates in sixths of a voxel.
+    #[must_use]
+    pub const fn cube_sixths(self) -> [i64; 3] {
+        self.cube_sixths
+    }
+
+    /// Returns the exact vertical coordinate in sixths of a voxel.
+    #[must_use]
+    pub const fn level_sixths(self) -> i64 {
+        self.level_sixths
+    }
+
+    /// Returns the voxel column that authored this point.
+    #[must_use]
+    pub const fn anchor(self) -> HexCoord {
+        self.anchor
+    }
+}
+
+/// Whether `target` is inside `source`'s inclusive upper-dome radius.
+///
+/// Horizontal distance is the continuous cube-coordinate distance. Only upward
+/// vertical distance contributes, so the shape is a sphere's upper half over an
+/// unbounded-downward cylinder. All arithmetic is widened before squaring; boundary
+/// points are accepted exactly and no floating-point epsilon participates.
+#[must_use]
+pub fn upper_dome_contains(source: ExactGridPoint, target: ExactGridPoint, radius: u32) -> bool {
+    let source_cube = source.cube_sixths();
+    let target_cube = target.cube_sixths();
+    let horizontal_sixths = source_cube
+        .into_iter()
+        .zip(target_cube)
+        .map(|(source, target)| i128::from(target) - i128::from(source))
+        .map(i128::abs)
+        .max()
+        .unwrap_or(0);
+    let upward_sixths =
+        (i128::from(target.level_sixths()) - i128::from(source.level_sixths())).max(0);
+    let radius_sixths = i128::from(radius) * i128::from(ExactGridPoint::SIXTHS_PER_VOXEL);
+
+    horizontal_sixths * horizontal_sixths + upward_sixths * upward_sixths
+        <= radius_sixths * radius_sixths
 }
 
 /// How much a faction currently knows about an exact map position.
@@ -227,11 +321,10 @@ impl KnowledgeExpiry {
 
 /// Generated spatial domain containing a light source or exact position.
 ///
-/// A source affects only targets in the same domain. Domains are derived from exact
-/// current positions; [`GameplayLight`] intentionally does not cache one, because a
-/// carried light may cross a cave entrance. The first perception milestone also uses
-/// matching domains as a coarse sight-eligibility boundary so lit interiors cannot
-/// leak through opaque roofs; portal-aware sight may later refine that separate rule.
+/// A light source affects only targets in the same domain. Domains are derived from
+/// exact current positions; [`GameplayLight`] intentionally does not cache one,
+/// because a carried light may cross a cave entrance. Sight itself uses physical
+/// terrain obstruction and may cross a domain boundary through an open threshold.
 #[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum LightDomain {
     /// Open-air terrain and structures.
@@ -244,20 +337,21 @@ pub enum LightDomain {
 /// An obstruction-agnostic gameplay light source.
 ///
 /// Perception combines this component with the source entity's exact [`TilePos`] and
-/// freshly derived [`LightDomain`]. `radius` applies equally to horizontal hex
-/// distance and absolute vertical level distance. Physical lights and emissive
-/// materials are presentation details and do not establish gameplay sight.
+/// freshly derived [`LightDomain`]. `radius` uses the shared exact upper-dome metric:
+/// upward distance consumes horizontal reach while downward targets keep the full
+/// cylinder. Physical lights and emissive materials are presentation details and do
+/// not establish gameplay sight.
 #[derive(Component, Reflect, Debug, Clone, Copy, PartialEq, Eq)]
 #[reflect(Component)]
 pub struct GameplayLight {
     /// Illumination contributed inside the source area.
     pub level: IlluminationLevel,
-    /// Inclusive horizontal and vertical source radius.
+    /// Inclusive upper-dome source radius.
     pub radius: u32,
 }
 
 impl GameplayLight {
-    /// Creates a gameplay light with one radius for both distance axes.
+    /// Creates a gameplay light with one exact upper-dome radius.
     #[must_use]
     pub const fn new(level: IlluminationLevel, radius: u32) -> Self {
         Self { level, radius }
@@ -385,28 +479,125 @@ mod tests {
     }
 
     #[test]
-    fn default_sight_profile_selects_contract_bands_and_caps_downhill_bonus() {
+    fn default_sight_profile_selects_contract_radii() {
         let profile = SightProfile::default();
-        assert_eq!(
-            profile.band(IlluminationLevel::Bright),
-            SightBand::new(36, 36)
-        );
-        assert_eq!(profile.band(IlluminationLevel::Dim), SightBand::new(12, 12));
-        assert_eq!(profile.band(IlluminationLevel::Dark), SightBand::new(1, 1));
-        assert_eq!(profile.downhill_bonus(IlluminationLevel::Bright, 3), 0);
-        assert_eq!(profile.downhill_bonus(IlluminationLevel::Bright, 4), 1);
-        assert_eq!(profile.downhill_bonus(IlluminationLevel::Dim, 100), 6);
-        assert_eq!(profile.downhill_bonus(IlluminationLevel::Bright, -4), 0);
-        assert_eq!(profile.downhill_bonus(IlluminationLevel::Dark, 100), 0);
+        assert_eq!(profile.band(IlluminationLevel::Bright), SightBand::new(36));
+        assert_eq!(profile.band(IlluminationLevel::Dim), SightBand::new(12));
+        assert_eq!(profile.band(IlluminationLevel::Dark), SightBand::new(1));
     }
 
     #[test]
-    fn malformed_downhill_divisor_disables_bonus() {
-        let profile = SightProfile {
-            downhill_levels_per_bonus: 0,
-            ..SightProfile::default()
-        };
-        assert_eq!(profile.downhill_bonus(IlluminationLevel::Bright, 12), 0);
+    fn exact_points_represent_eye_body_top_and_all_regular_hex_corners() {
+        let surface = TilePos::new(HexCoord::from_axial(2, -3), 7);
+        let centre = ExactGridPoint::voxel_center(surface);
+        let top = ExactGridPoint::voxel_top_center(surface);
+        let eye = ExactGridPoint::standing_eye(surface);
+        let body_top_corners = ExactGridPoint::standing_body_top_corners(surface);
+
+        assert_eq!(centre.cube_sixths(), [12, -18, 6]);
+        assert_eq!(centre.level_sixths(), 42);
+        assert_eq!(top.level_sixths(), 45);
+        assert_eq!(eye.level_sixths(), 54);
+        assert!(body_top_corners
+            .iter()
+            .all(|corner| corner.level_sixths() == 57));
+        assert_eq!(top.anchor(), surface.coord);
+
+        let corners = ExactGridPoint::voxel_top_corners(surface);
+        assert_eq!(corners.len(), 6);
+        for (corner, body_top_corner) in corners.into_iter().zip(body_top_corners) {
+            assert_eq!(corner.cube_sixths().into_iter().sum::<i64>(), 0);
+            assert_eq!(corner.level_sixths(), top.level_sixths());
+            assert_eq!(corner.anchor(), surface.coord);
+            assert_eq!(body_top_corner.cube_sixths(), corner.cube_sixths());
+            assert_eq!(body_top_corner.anchor(), surface.coord);
+            let offsets = corner
+                .cube_sixths()
+                .into_iter()
+                .zip(centre.cube_sixths())
+                .map(|(corner, centre)| corner - centre)
+                .collect::<Vec<_>>();
+            let large = offsets
+                .iter()
+                .copied()
+                .find(|offset| offset.abs() == 4)
+                .expect("one corner axis has magnitude four sixths");
+            assert_eq!(offsets.iter().filter(|offset| offset.abs() == 2).count(), 2);
+            assert!(offsets
+                .iter()
+                .copied()
+                .filter(|offset| offset.abs() == 2)
+                .all(|offset| offset.signum() == -large.signum()));
+        }
+    }
+
+    #[test]
+    fn upper_dome_uses_an_inclusive_squared_boundary() {
+        let source = ExactGridPoint::voxel_center(TilePos::new(HexCoord::ORIGIN, 0));
+        let boundary = ExactGridPoint::voxel_center(TilePos::new(HexCoord::from_axial(3, 0), 4));
+        let outside = ExactGridPoint::voxel_center(TilePos::new(HexCoord::from_axial(4, 0), 4));
+
+        assert!(upper_dome_contains(source, boundary, 5));
+        assert!(!upper_dome_contains(source, outside, 5));
+        assert!(upper_dome_contains(boundary, source, 3));
+        assert!(!upper_dome_contains(boundary, source, 2));
+    }
+
+    #[test]
+    fn upper_dome_is_a_downward_cylinder_and_preserves_half_levels() {
+        let origin = TilePos::new(HexCoord::ORIGIN, 0);
+        let source = ExactGridPoint::standing_eye(origin);
+        let far_below =
+            ExactGridPoint::voxel_top_center(TilePos::new(HexCoord::from_axial(5, 0), -100));
+        let half_level_up = ExactGridPoint::voxel_top_center(TilePos::new(HexCoord::ORIGIN, 2));
+
+        assert!(upper_dome_contains(source, far_below, 5));
+        assert!(!upper_dome_contains(source, far_below, 4));
+        assert!(!upper_dome_contains(source, half_level_up, 0));
+        assert!(upper_dome_contains(source, half_level_up, 1));
+    }
+
+    #[test]
+    fn upper_dome_handles_wide_coordinates_without_narrowing_or_overflow() {
+        let source = ExactGridPoint::voxel_center(TilePos::new(
+            HexCoord::from_axial(-1_000_000_000, 0),
+            -1_000_000_000,
+        ));
+        let target = ExactGridPoint::voxel_center(TilePos::new(
+            HexCoord::from_axial(1_000_000_000, 0),
+            1_000_000_000,
+        ));
+
+        assert!(upper_dome_contains(source, target, u32::MAX));
+        assert!(!upper_dome_contains(source, target, 2_000_000_000));
+    }
+
+    #[test]
+    fn exact_points_widen_before_deriving_a_boundary_cube_component() {
+        let coord = HexCoord::from_axial(i32::MIN, 1);
+        let point = ExactGridPoint::voxel_center(TilePos::new(coord, 0));
+
+        assert_eq!(
+            point.cube_sixths(),
+            [i64::from(i32::MIN) * 6, 6, i64::from(i32::MAX) * 6]
+        );
+        assert!(upper_dome_contains(point, point, 0));
+    }
+
+    #[test]
+    fn standing_body_top_corners_remain_exact_at_coordinate_and_level_boundaries() {
+        let support = TilePos::new(HexCoord::from_axial(i32::MIN, 1), i32::MAX);
+        let corners = ExactGridPoint::standing_body_top_corners(support);
+
+        assert!(corners
+            .iter()
+            .all(|corner| corner.anchor() == support.coord));
+        assert!(corners
+            .iter()
+            .all(|corner| corner.cube_sixths().into_iter().sum::<i64>() == 0));
+        assert!(corners
+            .iter()
+            .all(|corner| { corner.level_sixths() == i64::from(i32::MAX) * 6 + 15 }));
     }
 
     #[test]

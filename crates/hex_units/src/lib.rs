@@ -71,8 +71,8 @@ pub use terrain_occupancy::{
 };
 pub use terrain_reconciliation::{plan_unsupported_actor_landing, NoLanding};
 pub use trajectories::{
-    known_trajectory_is_clear, supercover, trajectory_destination, trajectory_is_clear,
-    trajectory_voxels,
+    known_trajectory_is_clear, sight_segment_is_clear, supercover, terrain_sight_is_clear,
+    trajectory_destination, trajectory_is_clear, trajectory_voxels,
 };
 pub use units::{
     Archetype, Downed, Enemy, MovingTo, Party, Player, StandsOn, StopMovingAt, UnitAllocator,

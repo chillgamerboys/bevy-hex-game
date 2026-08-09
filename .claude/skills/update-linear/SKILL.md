@@ -1,13 +1,13 @@
 ---
 name: update-linear
-description: "Link an existing HEX issue to a GitHub PR and apply an explicitly requested workflow transition after reconciling delivery scope. Never creates issues; UI bug creation belongs to linear-ui-bug-intake."
+description: "Link an existing HEX issue to a GitHub PR, apply an explicitly requested workflow transition, or delete a fully delivered issue under the repository retention policy. Never creates issues; UI bug creation belongs to linear-ui-bug-intake."
 ---
 
 # Link a PR and update existing work
 
-This skill has two narrow responsibilities: idempotent PR linkage and explicit state
-transition for an existing issue. It never searches for work to create and never
-turns a PR merge into evidence that a larger epic is complete.
+This skill has three narrow responsibilities: idempotent PR linkage, explicit state
+transition, and policy-governed deletion for an existing issue. It never searches for work
+to create and never turns a PR merge into evidence that a larger epic is complete.
 
 ## Inputs and lookup
 
@@ -43,7 +43,8 @@ exact recommended operations; Linear remains a soft coordination dependency.
 
 Do not replace a valid different link without explicit user direction. Do not create a
 ticket as a fallback. Initial UI observations use the repository's canonical
-`linear-ui-bug-intake` workflow.
+`linear-ui-bug-intake` workflow. Wave lanes are keyed by their manifest lane ids and reuse
+existing tickets only when they add coordination value.
 
 ## Transition mode
 
@@ -67,7 +68,24 @@ After any transition, re-fetch the issue and verify the returned workflow state.
 failed or unverifiable write is a warning that must be surfaced, never reported as
 success and never used to block an otherwise valid code merge.
 
+## Delete mode
+
+Delete only when the user or a lifecycle skill explicitly requests retirement under the
+free-workspace policy in
+[delivery-state.md](../../../docs/development/delivery-state.md). Re-fetch the issue and
+verify every precondition there: complete delivery on `origin/dev`, a durable record of the
+identifier/title/outcome/exact SHA/PR, no residual scope or active descendants, and no
+other-owner or regression-history reason to retain it. Never delete the current UI bug-bash
+parent, a partial epic, an active duplicate target, or an issue owned by the other owner.
+
+Use the connector's declared deletion operation; do not invent an endpoint. Verify the
+returned deletion state or confirm an immediate lookup returns an explicit not-found result;
+a timeout or connector error is not deletion evidence. If deletion is unavailable, report
+the exact manual action. Do not substitute `Done` and claim that the free-plan issue budget
+was reclaimed.
+
 ## Report
 
-Report the issue and PR URLs, prior and resulting workflow state, linkage changes,
-verification result, and any recommended operation left unapplied.
+Report the issue and PR URLs, prior and resulting workflow state or verified deletion,
+linkage changes, durable record location, verification result, and any recommended operation
+left unapplied.

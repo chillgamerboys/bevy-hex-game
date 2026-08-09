@@ -227,9 +227,16 @@ messages, logs, snapshots, or deterministic contracts. Add a missing hook rather
 infer logic from pixels; a logic-only wave uses the verified-maintainer N/A
 classification.
 
-The complete decision table, manifest, review budget, stale-parent reconciliation,
-and cleanup rules are in
-[parallel development and integration waves](docs/development/parallel-development.md).
+A lane PR into `wave/*` runs the ordinary audit and merge gate, but defers its exact-head
+manual runtime sign-off to the combined wave PR — the CI sign-off job already exempts a
+`wave/*` base for exactly that reason. The single `wave/* → dev` merge carries the real
+combined head's own exact-head classification — a named-human playtest for changed
+presentation or experience, or the verified-maintainer N/A a logic-only wave already uses.
+
+The complete decision table, review budget, and stale-parent reconciliation are in
+[parallel development and integration waves](docs/development/parallel-development.md); the
+wave manifest, lane field table, ownership algebra, merge order, and cleanup rules are in
+[the wave protocol](docs/development/wave-protocol.md).
 Before declaring a PR or wave complete, also reconcile implementation,
 status/design/roadmap docs, GitHub, and—when available—Linear using
 [the delivery-state contract](docs/development/delivery-state.md). Linear is strongly

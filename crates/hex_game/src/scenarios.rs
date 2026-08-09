@@ -1883,6 +1883,7 @@ pub(crate) mod tests {
         }
         app.add_plugins((
             hex_map::plugin,
+            hex_units::terrain_occupancy::plugin,
             hex_units::movement::plugin,
             hex_perception::plugin,
         ));
@@ -2465,13 +2466,15 @@ pub(crate) mod tests {
             KnowledgeState::Observed,
             "the real terrain and actor plugins should feed initial player knowledge"
         );
+        let first_hostile_knowledge = app
+            .world()
+            .resource::<FactionMapKnowledge>()
+            .faction(hex_units::Faction::Player)
+            .state(first_hostile);
         assert_eq!(
-            app.world()
-                .resource::<FactionMapKnowledge>()
-                .faction(hex_units::Faction::Player)
-                .state(first_hostile),
-            KnowledgeState::Observed,
-            "bright-map faction knowledge should include the hostile anchor"
+            first_hostile_knowledge,
+            KnowledgeState::Unknown,
+            "bright range must not reveal the hostile anchor through intervening terrain"
         );
         app.insert_resource(InteriorRegions::new());
         app.insert_resource(MapViewHint::new((1.0, 2.0, 3.0), (0.0, 0.0, 0.0)));
@@ -2508,6 +2511,14 @@ pub(crate) mod tests {
                 .state(first_party),
             KnowledgeState::Observed,
             "re-entry should rebuild initial player knowledge"
+        );
+        assert_eq!(
+            app.world()
+                .resource::<FactionMapKnowledge>()
+                .faction(hex_units::Faction::Player)
+                .state(first_hostile),
+            first_hostile_knowledge,
+            "re-entry should reproduce obstruction-aware hostile visibility"
         );
         assert_eq!(
             app.world_mut()
