@@ -305,6 +305,7 @@ fn initialize_sandbox(
     gameplay_session: Option<Res<SandboxSession>>,
     overlay: Option<Res<CreatorContentOverlay>>,
     setup_failure: Option<Res<GameplaySetupFailure>>,
+    direct_host: Option<Res<super::multiplayer::PendingDirectHostSetup>>,
     mut state: ResMut<SandboxState>,
     mut notice: ResMut<SandboxNotice>,
 ) {
@@ -331,6 +332,9 @@ fn initialize_sandbox(
             let _previewed = state.preview_character(RosterChoice::Custom(character));
         }
         commands.remove_resource::<CreatorPickerReturn>();
+    } else if direct_host.is_some() {
+        state.enter(SandboxEntryOrigin::Multiplayer);
+        commands.remove_resource::<super::creator::CreatorSandboxReturn>();
     } else if gameplay_session.is_some() {
         let origin = state.entry_origin;
         state.enter(origin);
@@ -810,6 +814,7 @@ fn handle_sandbox_intents(
     store: Res<CreationStore>,
     catalogs: SandboxLaunchCatalogs,
     creator_return: Option<Res<super::creator::CreatorSandboxReturn>>,
+    direct_host: Option<Res<super::multiplayer::PendingDirectHostSetup>>,
     mut seeds: ResMut<SandboxSeedSequence>,
     mut main_menu: ResMut<MainMenuModel>,
     mut commands: Commands,
@@ -834,6 +839,11 @@ fn handle_sandbox_intents(
                     commands.insert_resource(super::creator::CreatorRestoreRequest(navigation));
                     commands.remove_resource::<super::creator::CreatorSandboxReturn>();
                     next.set(Screen::CharacterCreator);
+                }
+                SandboxBackResult::Exit(SandboxDestination::Multiplayer) => {
+                    commands.remove_resource::<super::multiplayer::PendingDirectHostSetup>();
+                    commands.remove_resource::<super::multiplayer::PreparedDirectSandboxSession>();
+                    next.set(Screen::Multiplayer);
                 }
             },
             SandboxIntent::OpenMapBrowser => state.open_map_browser(),
@@ -887,6 +897,13 @@ fn handle_sandbox_intents(
             }
             SandboxIntent::ClearSlot { side, slot } => state.clear_character(*side, *slot),
             SandboxIntent::CreateCharacter => {
+                if direct_host.is_some() {
+                    notice.0 = Some(
+                        "Direct multiplayer supports only shipped characters in this milestone."
+                            .to_owned(),
+                    );
+                    continue;
+                }
                 let SandboxRoute::CharacterPicker { side, slot } = state.route else {
                     continue;
                 };
@@ -898,6 +915,21 @@ fn handle_sandbox_intents(
                 next.set(Screen::CharacterCreator);
             }
             SandboxIntent::StartSandbox => {
+                if direct_host.is_some()
+                    && state
+                        .draft
+                        .party
+                        .iter()
+                        .chain(&state.draft.enemies)
+                        .flatten()
+                        .any(|character| matches!(character, RosterChoice::Custom(_)))
+                {
+                    notice.0 = Some(
+                        "Direct multiplayer supports only shipped characters in this milestone."
+                            .to_owned(),
+                    );
+                    continue;
+                }
                 let prepared = match prepare_sandbox_launch(&state, &store, &catalogs) {
                     Ok(prepared) => prepared,
                     Err(blocker) => {
@@ -1625,6 +1657,7 @@ fn handle_deployment_actions(
     mut session: Option<ResMut<DeploymentSession>>,
     mut phase: ResMut<GameplayPhase>,
     mut runtime: DeploymentRuntime,
+    direct_host: Option<Res<super::multiplayer::PendingDirectHostSetup>>,
     mut commands: Commands,
     mut next: ResMut<NextState<Screen>>,
 ) {
@@ -1795,6 +1828,15 @@ fn handle_deployment_actions(
                 }
                 commands.remove_resource::<DeploymentSession>();
                 commands.remove_resource::<DeploymentMarkerMaterials>();
+                if direct_host.is_some() {
+                    // L3 inserts `PreparedDirectSandboxSession` at this exact frozen
+                    // deployment boundary after computing the complete public-world
+                    // fingerprint. Returning to the session screen tears down this
+                    // generated setup world; hosting opens only if that resource exists.
+                    *phase = GameplayPhase::Preparing;
+                    next.set(Screen::Multiplayer);
+                    continue;
+                }
                 *phase = GameplayPhase::Active;
                 continue;
             }

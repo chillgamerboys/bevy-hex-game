@@ -45,6 +45,14 @@ pub enum MultiplayerEndReason {
     Kicked,
     /// Protocol or security validation failed.
     ProtocolViolation,
+    /// Protocol, build, or shipped-content identity is incompatible.
+    Incompatible,
+    /// The host no longer accepts new players.
+    LobbyClosed,
+    /// Every available human seat or party assignment is claimed.
+    LobbyFull,
+    /// The invite or reconnect credential was rejected.
+    InvalidCredential,
     /// Exact world verification failed.
     MapMismatch,
     /// The encounter/session ended normally.

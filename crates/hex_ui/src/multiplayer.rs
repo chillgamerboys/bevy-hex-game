@@ -251,6 +251,19 @@ fn render_join_direct(root: &mut ChildSpawnerCommands, assets: &UiAssets, view: 
                 MultiplayerIntent::JoinDirect,
                 !view.join_code.is_empty(),
             );
+            if view.reconnect_available {
+                action_button(
+                    form,
+                    assets,
+                    "Reconnect Reserved Seat",
+                    MultiplayerIntent::ReconnectDirect,
+                    !view.join_code.is_empty(),
+                );
+                form.spawn(fine(
+                    assets,
+                    "Reconnect uses the private rotating credential stored by this app; the pasted code supplies only the pinned host endpoint.",
+                ));
+            }
             action_button(form, assets, "Back", MultiplayerIntent::Back, true);
         });
     render_network_limits(root, assets, "the host's selected");

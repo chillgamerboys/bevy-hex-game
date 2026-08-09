@@ -399,6 +399,12 @@ pub enum OutcomeAction {
     Retry,
     /// Retry the exact frozen Sandbox launch.
     RetryExact,
+    /// Reopen the host-owned assignment lobby after a multiplayer outcome.
+    ReturnToLobby,
+    /// Close the host-owned multiplayer session for every peer.
+    CloseSession,
+    /// Leave a multiplayer session without asserting a host transition.
+    LeaveSession,
     /// Return to the session's owning screen.
     Return,
 }
@@ -1349,6 +1355,8 @@ pub struct MultiplayerView {
     pub share_code: Option<SensitiveText>,
     /// Explicit join-code editor; ordinary diagnostics redact it.
     pub join_code: SensitiveText,
+    /// Whether a private reconnect credential is available in temporary storage.
+    pub reconnect_available: bool,
     /// Six stable seat cards in canonical order.
     pub seats: Vec<MultiplayerSeatView>,
     /// Scenario/map summary from the frozen manifest.
@@ -1373,6 +1381,7 @@ impl Default for MultiplayerView {
             advertised_port: "7777".to_owned(),
             share_code: None,
             join_code: SensitiveText::default(),
+            reconnect_available: false,
             seats: (0_u8..PlayerSeat::HUMAN_COUNT as u8)
                 .filter_map(PlayerSeat::human)
                 .map(MultiplayerSeatView::vacant)
@@ -1410,6 +1419,8 @@ pub enum MultiplayerIntent {
     ConfigureSandbox,
     /// Start one explicit pinned direct connection.
     JoinDirect,
+    /// Reconnect to the entered endpoint with the private rotating credential in storage.
+    ReconnectDirect,
     /// Move one character to a claimed destination seat (host-only).
     AssignUnit {
         /// Stable shipped party-member identity.
