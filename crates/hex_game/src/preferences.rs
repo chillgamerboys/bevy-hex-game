@@ -4,13 +4,13 @@ use bevy::prelude::*;
 use bevy::window::{MonitorSelection, PresentMode, WindowMode};
 use hex_assets::{DisplaySettings, PresentModeSetting};
 use hex_core::input::InputBindingOverrides;
-use hex_core::InputBindings;
+use hex_core::{InputBindings, ZoomSensitivityOverride};
 use hex_gameplay_model::HudComponentPreferences;
 use serde::{Deserialize, Serialize};
 
 use crate::storage::{read, write_atomic, StoragePaths};
 
-const PREFERENCES_VERSION: u32 = 3;
+const PREFERENCES_VERSION: u32 = 4;
 
 /// Persisted frame-presentation choice.
 #[derive(Serialize, Deserialize, Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +38,49 @@ impl FramePresentation {
             Self::Vsync => "Vsync",
             Self::NoVsync => "No Vsync",
             Self::Mailbox => "Mailbox",
+        }
+    }
+}
+
+/// Persisted camera zoom speed preference.
+#[derive(Serialize, Deserialize, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ZoomSpeed {
+    VeryLow,
+    Low,
+    #[default]
+    Normal,
+    High,
+    VeryHigh,
+}
+
+impl ZoomSpeed {
+    pub(crate) const fn next(self) -> Self {
+        match self {
+            Self::VeryLow => Self::Low,
+            Self::Low => Self::Normal,
+            Self::Normal => Self::High,
+            Self::High => Self::VeryHigh,
+            Self::VeryHigh => Self::VeryLow,
+        }
+    }
+
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::VeryLow => "Very Low",
+            Self::Low => "Low",
+            Self::Normal => "Normal",
+            Self::High => "High",
+            Self::VeryHigh => "Very High",
+        }
+    }
+
+    pub(crate) const fn sensitivity(self) -> f32 {
+        match self {
+            Self::VeryLow => 0.05,
+            Self::Low => 0.08,
+            Self::Normal => 0.1,
+            Self::High => 0.15,
+            Self::VeryHigh => 0.2,
         }
     }
 }
@@ -71,6 +114,8 @@ pub(crate) struct UserPreferences {
     pub(crate) binding_overrides: InputBindingOverrides,
     #[serde(default)]
     pub(crate) hud_visibility: HudComponentPreferences,
+    #[serde(default)]
+    pub(crate) zoom_speed: ZoomSpeed,
 }
 
 impl Default for UserPreferences {
@@ -88,6 +133,7 @@ impl Default for UserPreferences {
             ui_volume: 0.8,
             binding_overrides: InputBindingOverrides::default(),
             hud_visibility: HudComponentPreferences::default(),
+            zoom_speed: ZoomSpeed::Normal,
         }
     }
 }
@@ -101,6 +147,10 @@ impl UserPreferences {
                 Ok(self)
             }
             2 => {
+                self.version = PREFERENCES_VERSION;
+                Ok(self)
+            }
+            3 => {
                 self.version = PREFERENCES_VERSION;
                 Ok(self)
             }
@@ -239,6 +289,7 @@ fn adopt_authored_presentation(
     reason = "validated logical window dimensions are at most 3840×2160 and therefore exactly representable as f32"
 )]
 fn apply_preferences(
+    mut commands: Commands,
     preferences: Res<UserPreferences>,
     mut buses: ResMut<AudioBusVolumes>,
     mut bindings: ResMut<InputBindings>,
@@ -257,6 +308,9 @@ fn apply_preferences(
         hud.replace_preferences(preferences.hud_visibility);
     }
     ui_scale.0 = preferences.ui_scale;
+    commands.insert_resource(ZoomSensitivityOverride(
+        preferences.zoom_speed.sensitivity(),
+    ));
     for mut window in &mut windows {
         window.mode = if preferences.fullscreen {
             WindowMode::BorderlessFullscreen(MonitorSelection::Current)
@@ -373,7 +427,7 @@ mod tests {
     }
 
     #[test]
-    fn version_three_round_trip_persists_only_binding_overrides_and_hud_preferences() {
+    fn current_version_round_trip_persists_overrides_hud_and_zoom() {
         let mut bindings = InputBindings::default();
         bindings
             .assign(InputAction::ToggleParty, KeyChord::plain(KeyCode::KeyY))
@@ -388,7 +442,7 @@ mod tests {
             },
             ..default()
         };
-        let encoded = ron::ser::to_string(&preferences).expect("v3 preferences encode");
+        let encoded = ron::ser::to_string(&preferences).expect("current preferences encode");
         assert!(encoded.contains("ToggleParty"));
         assert!(
             !encoded.contains("ToggleCamera"),
@@ -396,9 +450,9 @@ mod tests {
         );
 
         let restarted = ron::from_str::<UserPreferences>(&encoded)
-            .expect("v3 preferences decode")
+            .expect("current preferences decode")
             .upgrade()
-            .expect("v3 preferences remain current");
+            .expect("current preferences remain current");
         restarted.validate().expect("round trip remains valid");
         assert_eq!(restarted, preferences);
         assert_eq!(
@@ -406,6 +460,28 @@ mod tests {
                 .chord(InputAction::ToggleParty),
             KeyChord::plain(KeyCode::KeyY)
         );
+    }
+
+    #[test]
+    fn version_three_preferences_upgrade_and_gain_default_zoom_speed() {
+        let text = r#"(
+            version: 3,
+            fullscreen: false,
+            window_width: 1920,
+            window_height: 1080,
+            presentation: Vsync,
+            ui_scale: Auto,
+            master_volume: 1.0,
+            music_volume: 0.8,
+            effects_volume: 0.8,
+            ui_volume: 0.8,
+        )"#;
+        let restarted = ron::from_str::<UserPreferences>(text)
+            .expect("v3 shape remains readable")
+            .upgrade()
+            .expect("v3 preferences upgrade");
+        assert_eq!(restarted.version, PREFERENCES_VERSION);
+        assert_eq!(restarted.zoom_speed, ZoomSpeed::Normal);
     }
 
     #[test]

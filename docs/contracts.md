@@ -37,7 +37,7 @@ than agreed, the fallback the gameplay side ships without it is in
 | `TraversalBlockers` — exact feature-occupied surfaces consumed by validation, perception, and movement | world | perception / `hex_units` | live | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
 | `SurfaceFeatureBatchId` / `PlaceSurfaceFeature` — exact semantic placement request | future gameplay requester | future world authority | **reserved** — shared types and structural validation only; no runtime publisher or consumer | [planning/boundary.md](planning/boundary.md) M |
 | `SurfaceFeatureId` / `SurfaceFeatureKind` / `SurfaceFeature` / `SurfaceFeaturePlacementOutcome` / `SurfaceFeatures` — correlated answer and complete stack-safe semantic projection | future world authority | future gameplay consumer | **reserved** — shared types and structural validation only; no live registry, placement, or schedule | [planning/boundary.md](planning/boundary.md) M |
-| `RunBottom(Level)` — each run's lowest voxel; exact occupancy for terrain casting and obstruction-aware trajectories | world | gameplay | **live** | [planning/boundary.md](planning/boundary.md) C |
+| `RunBottom(Level)` — each run's lowest voxel; exact occupancy for terrain casting, trajectories, and paired seven-ray sight | world | gameplay / perception | **live** | [planning/boundary.md](planning/boundary.md) C |
 | `TerrainImpact { batch, volume, ElementId, power }` — declarative canonical-volume voxel damage | gameplay | world | **live** — #175 owns map admission/resolution; #180 adds the paid gameplay spell publisher and monotonic batch ledger | [planning/boundary.md](planning/boundary.md) G |
 | `TerrainImpactOutcome` — one applied or rejected answer with exact per-voxel health transitions | world | gameplay | **live** — #175 publishes the answer, #178 validates it exhaustively, and #180 correlates it under the authority hold before settlement and release | [planning/boundary.md](planning/boundary.md) H |
 | `DamagedVoxels` — exact partial-health projection, never a visibility grant | world | shared presentation | live | [planning/boundary.md](planning/boundary.md) H |
@@ -53,6 +53,7 @@ than agreed, the fallback the gameplay side ships without it is in
 | `IlluminationLevel` / `ExteriorIllumination` — gameplay illumination, never sampled from the renderer | world | perception | live | [systems/perception.md](systems/perception.md) |
 | `GameplayLight` + derived `LightDomain` — fixed V3 cave sources published and consumed | world | perception | live | [systems/perception.md](systems/perception.md) |
 | `SightProfile` / `SightBand` — sight limits per illumination tier | perception | perception | live | [systems/perception.md](systems/perception.md) |
+| Exact paired sight bundle — head center to target top center plus six matching standing-body-top-corner to target-corner strict-interior rays; one observer owns the three-of-six threshold; character LOS alone omits a run's exposed top voxel when its top is within one level of that observer's support and the run continues below it, while the raw symmetric kernel retains full runs | core / gameplay | perception | live | [systems/perception.md](systems/perception.md) |
 | `LocalMapKnowledge` — faction-generic Observed/Remembered traversal projection; AI consumer live, player movement adapter pending | perception | `hex_combat` / `hex_units` | **partial** | [systems/perception.md](systems/perception.md) |
 | `FactionMapKnowledge` — current observations gate hostile lattice views, cast anchors, and AI identities | perception | `hex_combat` | live | [systems/perception.md](systems/perception.md) |
 | `KnowledgeSource` / `KnowledgeExpiry` — how a lattice fact was learned and when it stops being true | core | combat | live | [systems/combat.md](systems/combat.md) |
@@ -60,7 +61,7 @@ than agreed, the fallback the gameplay side ships without it is in
 | `TargetReticleRequest` / `WorldMarkerSuppression` — one disclosed target marker and phase-level suppression over unit-owned, non-pickable world markers | gameplay adapter | unit presentation | live | [systems/combat.md](systems/combat.md) |
 | `CanopyOccluder` — exact authored canopy membership, separate from whole-tree behavior; runtime consumer pending | shared art / `hex_objects` | pending | **partial** | [systems/asset-workshop.md](systems/asset-workshop.md) |
 | `TreeOccluder` / `TreeFadeAmount` — stack-safe whole-tree identity and renderer-neutral camera opacity | world | presentation | live | [systems/camera.md](systems/camera.md) |
-| `PresentationOcclusion` — review-roof, Character-camera proximity, and Sandbox-deployment reasons live; faction-fog producer pending | shared | presentation | **partial** | [systems/camera.md](systems/camera.md), [systems/perception.md](systems/perception.md) |
+| `PresentationOcclusion` — faction fog, review-roof, Character-camera proximity, and Sandbox-deployment reasons compose through one visibility owner | shared | presentation | **live** | [systems/camera.md](systems/camera.md), [systems/perception.md](systems/perception.md) |
 | `perception.ron` — sight tunables as designer-facing settings | world | perception | live | [planning/boundary.md](planning/boundary.md) J |
 
 ## Ordering
@@ -69,7 +70,7 @@ than agreed, the fallback the gameplay side ships without it is in
 |---|---|---|---|---|
 | `GameplaySetup` — `Resources → Terrain → Actors → Restore → Perception → View → Finalize` | core | all | live | [`CLAUDE.md`](../CLAUDE.md) |
 | `PerceptionSystems` — headless phases through `PublishKnowledge` | core | perception | live | [systems/perception.md](systems/perception.md) |
-| `PerceptionSystems::ApplyPresentation` — fog projection phase | core | perception | reserved | [systems/perception.md](systems/perception.md) |
+| `PerceptionSystems::ApplyPresentation` — tactical-shroud and hostile-fog projection phase | core | perception / presentation | live | [systems/perception.md](systems/perception.md) |
 | `PresentationSystems` — camera obstruction → renderer-owned materials → composed visibility | core | world / presentation | live | [systems/camera.md](systems/camera.md) |
 | `TerrainSystems` — `ApplyWorld → RefreshProjections → ReconcileActors → ConsumeOutcomes` before perception and later combat authority | core | world / gameplay | **live** — #175 supplies map `ApplyWorld`, #178 supplies the shared ordering, and #180 wires occupancy/movement refresh, deterministic actor settlement and authority adoption, then matching-outcome consumption | [planning/boundary.md](planning/boundary.md) H |
 | `AppSystems`, `PausableSystems` | core | all | live | [`CLAUDE.md`](../CLAUDE.md) |

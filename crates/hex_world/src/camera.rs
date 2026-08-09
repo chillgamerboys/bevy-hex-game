@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use bevy::input::mouse::MouseWheel;
+use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use bevy::transform::TransformSystems;
@@ -10,7 +10,7 @@ use hex_assets::{to_color, CameraSettings, ResolvedLighting, Rgb};
 use hex_core::{
     config::HEX_CIRCUMRADIUS, AppSystems, CameraFocusTarget, CenterInspectionCamera, GameplaySetup,
     HexSpan, HexTile, InputAction, InputBindings, InspectionCameraSubject, MapViewHint, Screen,
-    TilePos, UnitId,
+    TilePos, UnitId, ZoomSensitivityOverride,
 };
 
 use crate::{
@@ -29,6 +29,13 @@ const HEX_FACE_DISTANCE: f32 = HEX_CIRCUMRADIUS * 0.866_025_4;
 const CHARACTER_UPWARD_COMPOSITION_ALLOWANCE: f32 = std::f32::consts::PI / 12.0;
 /// Extra room beyond a generated map's initial frame for deliberate zooming out.
 const MAP_VIEW_ZOOM_HEADROOM: f32 = 1.1;
+/// Approximate pixels per logical scroll line on macOS trackpads.
+///
+/// `MouseScrollUnit::Pixel` delivers raw pixel deltas that can be hundreds of
+/// units per gesture, while `Line` delivers ~1.0 per notch. Dividing pixel
+/// deltas by this constant normalises them into line-equivalent units so the
+/// configured `zoom_sensitivity` works consistently across input devices.
+const PIXEL_SCROLL_LINE_HEIGHT: f32 = 40.0;
 /// Marks the sky-dome entity so `follow_camera` can pin it to the camera.
 #[derive(Component, Reflect)]
 #[reflect(Component)]
@@ -1179,6 +1186,7 @@ fn orbit_camera(
     mut ev_scroll: MessageReader<MouseWheel>,
     input_mouse: Res<ButtonInput<MouseButton>>,
     settings: Res<CameraSettings>,
+    zoom_override: Option<Res<ZoomSensitivityOverride>>,
     mode: Res<CameraMode>,
     hint: Option<Res<MapViewHint>>,
     mut last_cursor: Local<Option<Vec2>>,
@@ -1209,7 +1217,10 @@ fn orbit_camera(
     }
 
     for ev in ev_scroll.read() {
-        scroll += ev.y;
+        scroll += match ev.unit {
+            MouseScrollUnit::Line => ev.y,
+            MouseScrollUnit::Pixel => ev.y / PIXEL_SCROLL_LINE_HEIGHT,
+        };
     }
 
     for (mut pan_orbit, mut transform) in query.iter_mut() {
@@ -1228,7 +1239,10 @@ fn orbit_camera(
         }
         if scroll.abs() > 0.0 {
             any = true;
-            pan_orbit.radius -= scroll * pan_orbit.radius * settings.zoom_sensitivity;
+            let sensitivity = zoom_override
+                .as_deref()
+                .map_or(settings.zoom_sensitivity, |o| o.0);
+            pan_orbit.radius -= scroll * pan_orbit.radius * sensitivity;
             // dont allow zoom to reach zero or you get stuck
             pan_orbit.radius = f32::max(pan_orbit.radius, settings.min_zoom);
             pan_orbit.radius = f32::min(

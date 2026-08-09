@@ -29,7 +29,10 @@ acceptance scope and state with the PR and
 
 Linear is never a merge gate. Do not create a ticket here. New UI observations belong
 through the repository's canonical `linear-ui-bug-intake` workflow; existing issue
-linkage or state correction belongs to `/update-linear`.
+linkage, state correction, or policy-governed deletion belongs to `/update-linear`.
+
+A wave lane routinely carries no ticket because the manifest is its queue and primary key.
+Record `linear.status: "unlinked"` and continue; it never changes `overall_status`.
 
 ## Required phases
 
@@ -43,6 +46,21 @@ Run in order and stop after the first failure:
    work requires a verified-maintainer `N/A` naming the typed hook closure. The full
    recorded SHA must equal the PR head. `BLOCKED`, placeholders, stale SHAs, or agent
    self-signoff fail the gate.
+
+   **A PR whose base is `wave/*` is a source lane and defers this evidence.**
+   `.github/workflows/manual-runtime-signoff.yaml` already exempts a `wave/*` base on the
+   grounds that exact-head sign-off belongs to the combined wave PR into `dev`. Record
+   `manual_runtime: "N/A"` with `validation.summary` naming the deferral and the wave
+   branch — for a source lane the `N/A` justification is that deferral, not a hook
+   closure, and a presentation-touching lane is expected to use it. The combined
+   `wave/* → dev` PR is classified at its own exact head under the ordinary two-way rule
+   above — a named-human `PASS` for changed presentation or experience, a
+   verified-maintainer `N/A` naming the hook closure for a logic-only wave. Wave topology
+   alone does not manufacture a visual gate, and no lane's evidence may be copied onto the
+   wave PR. For a `wave/*` base the body's sign-off fields are **not read**, so unfilled
+   template placeholders there are expected and do not fail the gate; every other body
+   requirement still applies. See
+   [wave-protocol.md](../../../docs/development/wave-protocol.md).
 
 Do not rerun visual review, run a second validation tier, mutate documentation, append
 audit records, or silently downgrade a failed check. The template and the gameplay/map

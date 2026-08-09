@@ -73,6 +73,17 @@ impl CenterInspectionCamera {
     }
 }
 
+/// Player-chosen zoom sensitivity that takes precedence over the authored
+/// `CameraSettings::zoom_sensitivity` value (`hex_assets`, not linkable here
+/// since `hex_core` does not depend on it).
+///
+/// Inserted by the preferences system. When present, the camera uses this
+/// instead of the RON-authored `zoom_sensitivity` so that hot-reload cannot
+/// clobber the player's choice.
+#[derive(Resource, Reflect, Debug, Clone, Copy, PartialEq)]
+#[reflect(Resource)]
+pub struct ZoomSensitivityOverride(pub f32);
+
 #[cfg(test)]
 mod tests {
     use super::*;

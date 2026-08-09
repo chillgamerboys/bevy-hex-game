@@ -5,11 +5,11 @@
 //! named playtest preset before converting it to that shared runtime contract.
 
 use bevy::prelude::*;
-use hex_core::{Level, SightBand, SightProfile};
+use hex_core::{SightBand, SightProfile};
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer};
 
-/// `assets/config/perception.ron` — gameplay sight limits and elevation bonus.
+/// `assets/config/perception.ron` — gameplay sight radii.
 #[derive(Asset, Resource, Reflect, Debug, Clone, PartialEq, Eq)]
 #[reflect(Resource)]
 pub struct PerceptionSettings {
@@ -21,10 +21,6 @@ pub struct PerceptionSettings {
     pub focused: SightRanges,
     /// Restrained sight range used for comparison captures.
     pub tight: SightRanges,
-    /// Full downhill levels required for one additional horizontal hex.
-    pub downhill_levels_per_bonus: Level,
-    /// Maximum horizontal range added by downhill elevation.
-    pub max_downhill_bonus: u32,
 }
 
 impl PerceptionSettings {
@@ -46,8 +42,6 @@ impl PerceptionSettings {
             bright: ranges.bright.into(),
             dim: ranges.dim.into(),
             dark: ranges.dark.into(),
-            downhill_levels_per_bonus: self.downhill_levels_per_bonus,
-            max_downhill_bonus: self.max_downhill_bonus,
         }
     }
 
@@ -64,16 +58,6 @@ impl PerceptionSettings {
             .validate_covers("expansive", self.focused, "focused")?;
         self.focused
             .validate_covers("focused", self.tight, "tight")?;
-        if self.downhill_levels_per_bonus <= 0 {
-            return Err("perception.ron: downhill_levels_per_bonus must be positive".to_owned());
-        }
-        let contract_cap = SightProfile::MAX_DOWNHILL_BONUS;
-        if self.max_downhill_bonus > contract_cap {
-            return Err(format!(
-                "perception.ron: max_downhill_bonus must not exceed {}",
-                contract_cap
-            ));
-        }
         Ok(())
     }
 }
@@ -86,8 +70,6 @@ impl Default for PerceptionSettings {
             expansive: SightRanges::new(36, 12),
             focused: SightRanges::new(24, 8),
             tight: SightRanges::new(18, 6),
-            downhill_levels_per_bonus: 4,
-            max_downhill_bonus: 6,
         }
     }
 }
@@ -99,8 +81,6 @@ struct UnvalidatedPerceptionSettings {
     expansive: SightRanges,
     focused: SightRanges,
     tight: SightRanges,
-    downhill_levels_per_bonus: Level,
-    max_downhill_bonus: u32,
 }
 
 impl<'de> Deserialize<'de> for PerceptionSettings {
@@ -114,8 +94,6 @@ impl<'de> Deserialize<'de> for PerceptionSettings {
             expansive: raw.expansive,
             focused: raw.focused,
             tight: raw.tight,
-            downhill_levels_per_bonus: raw.downhill_levels_per_bonus,
-            max_downhill_bonus: raw.max_downhill_bonus,
         };
         settings.validate().map_err(D::Error::custom)?;
         Ok(settings)
@@ -134,7 +112,7 @@ pub enum SightPreset {
     Tight,
 }
 
-/// Horizontal and vertical limits for every illumination tier.
+/// Upper-dome radii for every illumination tier.
 #[derive(Reflect, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct SightRanges {
@@ -149,9 +127,9 @@ pub struct SightRanges {
 impl SightRanges {
     const fn new(bright: u32, dim: u32) -> Self {
         Self {
-            bright: SightBandSettings::new(bright, bright),
-            dim: SightBandSettings::new(dim, dim),
-            dark: SightBandSettings::new(1, 1),
+            bright: SightBandSettings::new(bright),
+            dim: SightBandSettings::new(dim),
+            dark: SightBandSettings::new(1),
         }
     }
 
@@ -161,32 +139,20 @@ impl SightRanges {
             ("dim", self.dim),
             ("dark", self.dark),
         ] {
-            if band.horizontal == 0 {
+            if band.radius == 0 {
                 return Err(format!(
-                    "perception.ron: {name}.{tier}.horizontal must be at least 1"
-                ));
-            }
-            if band.vertical == 0 {
-                return Err(format!(
-                    "perception.ron: {name}.{tier}.vertical must be at least 1"
+                    "perception.ron: {name}.{tier}.radius must be at least 1"
                 ));
             }
         }
-        if self.dark != SightBandSettings::new(1, 1) {
+        if self.dark != SightBandSettings::new(1) {
             return Err(format!(
-                "perception.ron: {name}.dark must be exactly horizontal 1, vertical 1"
+                "perception.ron: {name}.dark.radius must be exactly 1"
             ));
         }
-        if self.bright.horizontal < self.dim.horizontal
-            || self.dim.horizontal < self.dark.horizontal
-        {
+        if self.bright.radius < self.dim.radius || self.dim.radius < self.dark.radius {
             return Err(format!(
-                "perception.ron: {name} horizontal sight must satisfy bright >= dim >= dark"
-            ));
-        }
-        if self.bright.vertical < self.dim.vertical || self.dim.vertical < self.dark.vertical {
-            return Err(format!(
-                "perception.ron: {name} vertical sight must satisfy bright >= dim >= dark"
+                "perception.ron: {name} sight radius must satisfy bright >= dim >= dark"
             ));
         }
         Ok(())
@@ -203,16 +169,10 @@ impl SightRanges {
             ("dim", self.dim, narrower.dim),
             ("dark", self.dark, narrower.dark),
         ] {
-            if broader.horizontal < narrower.horizontal {
+            if broader.radius < narrower.radius {
                 return Err(format!(
-                    "perception.ron: {name}.{tier}.horizontal must be at least \
-                     {narrower_name}.{tier}.horizontal"
-                ));
-            }
-            if broader.vertical < narrower.vertical {
-                return Err(format!(
-                    "perception.ron: {name}.{tier}.vertical must be at least \
-                     {narrower_name}.{tier}.vertical"
+                    "perception.ron: {name}.{tier}.radius must be at least \
+                     {narrower_name}.{tier}.radius"
                 ));
             }
         }
@@ -220,30 +180,25 @@ impl SightRanges {
     }
 }
 
-/// Authoring representation of one independent horizontal/vertical sight band.
+/// Authoring representation of one upper-dome sight radius.
 #[derive(Reflect, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct SightBandSettings {
-    /// Maximum horizontal hex distance from an observer.
-    pub horizontal: u32,
-    /// Maximum absolute voxel-level distance from an observer.
-    pub vertical: u32,
+    /// Inclusive radius in hex/voxel units.
+    pub radius: u32,
 }
 
 impl SightBandSettings {
     /// Creates one authoring sight band.
     #[must_use]
-    pub const fn new(horizontal: u32, vertical: u32) -> Self {
-        Self {
-            horizontal,
-            vertical,
-        }
+    pub const fn new(radius: u32) -> Self {
+        Self { radius }
     }
 }
 
 impl From<SightBandSettings> for SightBand {
     fn from(value: SightBandSettings) -> Self {
-        Self::new(value.horizontal, value.vertical)
+        Self::new(value.radius)
     }
 }
 
@@ -277,21 +232,17 @@ mod tests {
         assert_eq!(
             settings.profile(SightPreset::Focused),
             SightProfile {
-                bright: SightBand::new(24, 24),
-                dim: SightBand::new(8, 8),
-                dark: SightBand::new(1, 1),
-                downhill_levels_per_bonus: 4,
-                max_downhill_bonus: 6,
+                bright: SightBand::new(24),
+                dim: SightBand::new(8),
+                dark: SightBand::new(1),
             }
         );
         assert_eq!(
             settings.profile(SightPreset::Tight),
             SightProfile {
-                bright: SightBand::new(18, 18),
-                dim: SightBand::new(6, 6),
-                dark: SightBand::new(1, 1),
-                downhill_levels_per_bonus: 4,
-                max_downhill_bonus: 6,
+                bright: SightBand::new(18),
+                dim: SightBand::new(6),
+                dark: SightBand::new(1),
             }
         );
     }
@@ -303,75 +254,29 @@ mod tests {
                 PERCEPTION_RON.replacen("active: Expansive", &format!("active: {name}"), 1);
             let settings: PerceptionSettings =
                 ron::from_str(&authored).expect("every named preset should parse");
-            assert_eq!(settings.active_profile().bright.horizontal, expected);
+            assert_eq!(settings.active_profile().bright.radius, expected);
         }
-    }
-
-    #[test]
-    fn horizontal_and_vertical_limits_are_independent() {
-        let authored = PERCEPTION_RON.replacen(
-            "bright: (horizontal: 36, vertical: 36)",
-            "bright: (horizontal: 36, vertical: 32)",
-            1,
-        );
-        let settings: PerceptionSettings =
-            ron::from_str(&authored).expect("asymmetric sight bands should parse");
-        assert_eq!(settings.active_profile().bright, SightBand::new(36, 32));
     }
 
     #[test]
     fn invalid_profiles_are_rejected_during_deserialization() {
         for (needle, replacement, expected) in [
             (
-                "bright: (horizontal: 36, vertical: 36)",
-                "bright: (horizontal: 0, vertical: 36)",
-                "expansive.bright.horizontal",
+                "bright: (radius: 36)",
+                "bright: (radius: 0)",
+                "expansive.bright.radius",
             ),
             (
-                "dim: (horizontal: 12, vertical: 12)",
-                "dim: (horizontal: 12, vertical: 0)",
-                "expansive.dim.vertical",
+                "dark: (radius: 1)",
+                "dark: (radius: 2)",
+                "expansive.dark.radius",
             ),
             (
-                "dark: (horizontal: 1, vertical: 1)",
-                "dark: (horizontal: 2, vertical: 1)",
-                "expansive.dark",
+                "bright: (radius: 24)",
+                "bright: (radius: 37)",
+                "expansive.bright.radius",
             ),
-            (
-                "bright: (horizontal: 24, vertical: 24)",
-                "bright: (horizontal: 7, vertical: 24)",
-                "focused horizontal",
-            ),
-            (
-                "dim: (horizontal: 6, vertical: 6)",
-                "dim: (horizontal: 6, vertical: 19)",
-                "tight vertical",
-            ),
-            (
-                "downhill_levels_per_bonus: 4",
-                "downhill_levels_per_bonus: 0",
-                "downhill_levels_per_bonus",
-            ),
-            (
-                "downhill_levels_per_bonus: 4",
-                "downhill_levels_per_bonus: -1",
-                "downhill_levels_per_bonus",
-            ),
-            (
-                "max_downhill_bonus: 6",
-                "max_downhill_bonus: 7",
-                "max_downhill_bonus",
-            ),
-            (
-                "bright: (horizontal: 36, vertical: 36)",
-                "bright: (horizontal: 23, vertical: 36)",
-                "expansive.bright.horizontal",
-            ),
-            (
-                "dim: (horizontal: 8, vertical: 8)",
-                "dim: (horizontal: 8, vertical: 5)",
-                "focused.dim.vertical",
-            ),
+            ("dim: (radius: 6)", "dim: (radius: 9)", "focused.dim.radius"),
         ] {
             let invalid = PERCEPTION_RON.replacen(needle, replacement, 1);
             assert_ne!(
@@ -401,8 +306,8 @@ mod tests {
                 "distance",
             ),
             (
-                "bright: (horizontal: 36, vertical: 36)",
-                "bright: (horizontal: 36, vertical: 36, diagonal: 36)",
+                "bright: (radius: 36)",
+                "bright: (radius: 36, diagonal: 36)",
                 "diagonal",
             ),
         ] {
@@ -503,11 +408,7 @@ mod tests {
         );
         let previous = app.world().resource::<PerceptionSettings>().clone();
 
-        let invalid = PERCEPTION_RON.replacen(
-            "downhill_levels_per_bonus: 4",
-            "downhill_levels_per_bonus: 0",
-            1,
-        );
+        let invalid = PERCEPTION_RON.replacen("bright: (radius: 36)", "bright: (radius: 0)", 1);
         fs::write(&perception_path, invalid)
             .expect("the invalid perception edit should be written");
         app.world()

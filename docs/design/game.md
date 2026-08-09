@@ -391,16 +391,29 @@ its acknowledgments, presentation, and logs cannot reveal those hidden outcomes.
 
 The full contract is [casting.md](../systems/casting.md).
 
-Elevation helps sight downhill without revealing stacked surfaces by accident:
-Bright and Dim sight gain one horizontal hex for every four complete levels above
-the target, capped at six. Dark sight gains nothing.
+Sight uses an asymmetric grid-space range volume. Horizontal distance and only the
+upward part of vertical distance combine by the inclusive squared rule; downward
+vertical distance is ignored. The result is a downward cylinder with a spherical
+half-dome above it. Target illumination selects radius 36 in Bright conditions, 12 in
+Dim conditions, and 1 in Dark conditions.
 
 Characters travel in a formation. Once combat starts, controls switch to moving each
 character independently.
 
-What a faction can observe uses separate horizontal and vertical sight bands, which
-is what lets the rule address multiple floors without collapsing them. What the
-camera happens to frame is presentation, not knowledge.
+Range alone does not establish observation. For every in-range target, exact terrain
+material must leave clear either the character-head-center to target-top-center ray or
+at least three of six rays from the matching corners of the standing body's top face
+to the target top face. For character LOS only, the exposed top voxel of a material run
+is low cover when that run tops out within one level of the observer's support and has
+material directly beneath its top. Its deeper core remains solid. A disconnected
+one-voxel platform, or a run topped farther away—including character-height walls and
+vertically remote roofs or decks—keeps its full blocking volume. There is no separate
+near-distance exception, and exact tangencies are clear. Because low cover is
+classified relative to the observer, observation may differ in the reverse direction
+even though the underlying exact segment test is symmetric. What the camera happens to
+frame is presentation, not knowledge.
+The tactical map intentionally keeps current terrain visible and pickable under a dark
+shroud while withholding unobserved hostile units and observation-only cues.
 
 Each tile type should be distinguishable by colour and design. A tile is a **3D prism
 with a hex base**, so it has five coordinates: cube coordinates horizontally (see

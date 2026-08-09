@@ -29,6 +29,7 @@ mod content_debug;
 mod creation_store;
 #[cfg(feature = "dev")]
 mod dev_time_controls;
+mod fog;
 mod menus;
 mod preferences;
 mod readouts;
@@ -233,7 +234,7 @@ impl Plugin for AppPlugin {
             casting::plugin,
             readouts::plugin,
         ));
-        app.add_plugins(terrain_health_bars::plugin);
+        app.add_plugins((fog::plugin, terrain_health_bars::plugin));
 
         #[cfg(feature = "test-support")]
         app.add_plugins(test_support::plugin);
