@@ -1,0 +1,15 @@
+[
+    AwaitScreen("Title"),
+    AwaitButton("Multiplayer"),
+    Click(name: "Multiplayer"),
+    AwaitScreen("Multiplayer"),
+    Settle(4),
+    Capture("multiplayer-home"),
+    Click(name: "Host Direct"),
+    Settle(4),
+    Capture("multiplayer-host-direct"),
+    Click(name: "Back"),
+    Click(name: "Join Direct"),
+    Settle(4),
+    Capture("multiplayer-join-direct"),
+]
