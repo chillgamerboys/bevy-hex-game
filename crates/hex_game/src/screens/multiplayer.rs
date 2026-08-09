@@ -9,7 +9,9 @@ use std::collections::BTreeSet;
 use bevy::prelude::*;
 use bevy_replicon::prelude::{ClientState, ProtocolHash};
 use hex_assets::AcceptedContentRevision;
-use hex_core::{CommandRequestId, PlayerSeat, Screen, SimulationRole, UnitId};
+use hex_core::{
+    CommandRequestId, InputAction, InputBindings, PlayerSeat, Screen, SimulationRole, UnitId,
+};
 use hex_gameplay_model::{
     MainMenuModel, MainMenuRoute, MultiplayerBackResult, MultiplayerEndReason, MultiplayerModel,
     MultiplayerRole,
@@ -173,6 +175,7 @@ pub(super) fn plugin(app: &mut App) {
     ));
 
     app.init_resource::<MultiplayerModel>()
+        .init_resource::<InputBindings>()
         .init_resource::<MultiplayerDraft>()
         .init_resource::<SessionUiNotice>()
         .init_resource::<SessionProjection>()
@@ -188,6 +191,7 @@ pub(super) fn plugin(app: &mut App) {
         .add_systems(
             Update,
             (
+                handle_back_input,
                 handle_intents.after(UiSystems::EmitIntents),
                 start_queued_direct_session,
             )
@@ -214,6 +218,16 @@ pub(super) fn plugin(app: &mut App) {
                 .run_if(in_state(Screen::Gameplay)),
         )
         .add_systems(OnEnter(Screen::Gameplay), reset_gameplay_session_flags);
+}
+
+fn handle_back_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    bindings: Res<InputBindings>,
+    mut intents: MessageWriter<UiIntent>,
+) {
+    if bindings.just_pressed(&keys, InputAction::Cancel) {
+        intents.write(UiIntent::Multiplayer(MultiplayerIntent::Back));
+    }
 }
 
 fn load_stored_credential(
@@ -1317,6 +1331,30 @@ mod tests {
         assert!(direct_endpoint(&draft).is_err());
         draft.advertised_port = "not-a-port".to_owned();
         assert!(direct_endpoint(&draft).is_err());
+    }
+
+    #[test]
+    fn canonical_cancel_binding_emits_the_same_typed_back_intent_as_the_button() {
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<InputBindings>()
+            .add_message::<UiIntent>()
+            .add_systems(Update, handle_back_input);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Escape);
+
+        app.update();
+
+        let intents = app
+            .world_mut()
+            .resource_mut::<Messages<UiIntent>>()
+            .drain()
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            intents.as_slice(),
+            [UiIntent::Multiplayer(MultiplayerIntent::Back)]
+        ));
     }
 
     #[test]
