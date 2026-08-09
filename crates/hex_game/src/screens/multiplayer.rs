@@ -503,6 +503,7 @@ fn handle_intents(
             }
             MultiplayerIntent::Back => match model.back() {
                 MultiplayerBackResult::Home => {
+                    commands.remove_resource::<DirectStartQueue>();
                     commands.remove_resource::<PendingDirectHostSetup>();
                     commands.remove_resource::<PreparedDirectSandboxSession>();
                     notice.0 = None;
@@ -581,6 +582,13 @@ fn leave_session(
         (Some(MultiplayerRole::Client), Some(active)) => {
             commands.entity(active.entity).despawn();
             commands.remove_resource::<ActiveDirectSession>();
+            commands.remove_resource::<PendingClientHello>();
+            commands.insert_resource(SimulationRole::Authority);
+            model.enter_home();
+            notice.0 = None;
+        }
+        (Some(MultiplayerRole::Client), None) => {
+            commands.remove_resource::<DirectStartQueue>();
             commands.remove_resource::<PendingClientHello>();
             commands.insert_resource(SimulationRole::Authority);
             model.enter_home();
@@ -1270,8 +1278,8 @@ mod tests {
     use super::*;
     use hex_core::{Faction, SimSeeds, TilePos};
     use hex_multiplayer::{
-        BoundedText, BoundedVec, MapManifestV1, ProtocolVersion, RosterEntryV1, RulesManifestV1,
-        SessionPeerId, UnitDeploymentV1, MAX_IDENTITY_BYTES,
+        BoundedText, BoundedVec, InviteToken, MapManifestV1, ProtocolVersion, RosterEntryV1,
+        RulesManifestV1, SessionPeerId, UnitDeploymentV1, MAX_IDENTITY_BYTES,
     };
 
     fn text(value: &str) -> BoundedText<MAX_IDENTITY_BYTES> {
@@ -1533,6 +1541,37 @@ mod tests {
             .drain()
             .next()
             .is_none());
+    }
+
+    #[test]
+    fn cancelling_a_queued_join_before_socket_start_opens_no_connection() {
+        let mut app = intent_adapter_app(MultiplayerRole::Client);
+        app.world_mut()
+            .resource_mut::<MultiplayerModel>()
+            .show_join_direct();
+        let code = DirectConnectionCode {
+            endpoint: DirectEndpoint::new("127.0.0.1", 7_777).expect("loopback endpoint is valid"),
+            certificate_fingerprint: CertificateFingerprint::from_bytes([3; 32]),
+            invite_token: InviteToken::from_bytes([4; 16]),
+        }
+        .encode();
+        app.world_mut().resource_mut::<MultiplayerDraft>().join_code =
+            SensitiveText::new(code.expose_for_sharing());
+        app.world_mut()
+            .write_message(UiIntent::Multiplayer(MultiplayerIntent::JoinDirect));
+        app.world_mut()
+            .write_message(UiIntent::Multiplayer(MultiplayerIntent::Back));
+
+        app.update();
+
+        assert!(app.world().get_resource::<DirectStartQueue>().is_none());
+        let model = app.world().resource::<MultiplayerModel>();
+        assert_eq!(model.route, hex_gameplay_model::MultiplayerRoute::Home);
+        assert_eq!(model.role, None);
+        assert_eq!(
+            *app.world().resource::<SimulationRole>(),
+            SimulationRole::Authority
+        );
     }
 
     #[test]
