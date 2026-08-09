@@ -26,6 +26,7 @@ mod lattice_demo;
 mod layout;
 mod main_menu;
 mod model;
+mod multiplayer;
 mod outcome;
 mod party;
 mod review;
@@ -57,12 +58,14 @@ pub use model::{
     DeploymentIntent, DeploymentQueueEntryView, DeploymentView, FormationSlotView, GameplayAction,
     GameplayChromeView, GameplayHudView, GameplayLatticesView, InitiativeEntryView,
     InitiativeIntent, InitiativeSide, InitiativeView, LatticeDemoIntent, LatticeDemoSpellView,
-    LatticeDemoView, LatticeIntent, MainMenuIntent, MainMenuView, OutcomeAction, OutcomeActionView,
-    OutcomeIntent, OutcomeView, OwnLatticeView, PartyIntent, PartyMemberView, PartyView, PauseView,
-    SandboxCharacterView, SandboxIntent, SandboxLatticeCellKind, SandboxLatticeCellView,
-    SandboxMapView, SandboxRosterSlotView, SandboxView, SettingsIntent, SettingsModalView,
-    SettingsTab, TargetLatticeStateView, TargetLatticeView, TargetPulseView, UiBindingRow,
-    UiIntent, UiSetting, UiSettingRow, UiSettingsView,
+    LatticeDemoView, LatticeIntent, MainMenuIntent, MainMenuView, MultiplayerAssignmentView,
+    MultiplayerIntent, MultiplayerSeatConnectionView, MultiplayerSeatView, MultiplayerTextField,
+    MultiplayerView, OutcomeAction, OutcomeActionView, OutcomeIntent, OutcomeView, OwnLatticeView,
+    PartyIntent, PartyMemberView, PartyView, PauseView, SandboxCharacterView, SandboxIntent,
+    SandboxLatticeCellKind, SandboxLatticeCellView, SandboxMapView, SandboxRosterSlotView,
+    SandboxView, SensitiveText, SettingsIntent, SettingsModalView, SettingsTab,
+    TargetLatticeStateView, TargetLatticeView, TargetPulseView, UiBindingRow, UiIntent, UiSetting,
+    UiSettingRow, UiSettingsView,
 };
 #[cfg(feature = "dev-tools")]
 pub use model::{DevTimeIntent, DevTimeView};
@@ -2004,6 +2007,7 @@ impl Plugin for UiPlugin {
         .init_resource::<DeploymentView>()
         .init_resource::<InitiativeView>()
         .init_resource::<MainMenuView>()
+        .init_resource::<MultiplayerView>()
         .init_resource::<TargetPulseView>()
         .add_plugins(element_visual::plugin)
         .add_plugins((
@@ -2020,6 +2024,7 @@ impl Plugin for UiPlugin {
             screens::plugin,
             action_rail::plugin,
             main_menu::plugin,
+            multiplayer::plugin,
         ))
         .add_plugins((
             sandbox::plugin,
