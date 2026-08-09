@@ -284,7 +284,7 @@ lanes:
     sizing:
       model: gpt-5.6-sol
       effort: high
-    state: in-review
+    state: merged-to-wave
     pr: 194
 
   - id: L3
@@ -453,6 +453,17 @@ mismatch refusal, reconnect/delegation, host pause, and client local menu. A nam
 records an exact-head PASS using two native processes or machines for movement feel, local
 cameras, combat decisions, disconnect/restart/rejoin, outcome, retry, and return to title.
 Typed hooks—not pixels—prove all logical claims.
+
+## Integration checkpoints
+
+- L1 merged through PR #193 and is recorded at the wave base before gameplay authority.
+- L2 merged through PR #194 at wave commit
+  `28aec80e218309586f6763657427ff2b66d8b107`. Combined-diff audit before merge found and
+  fixed foreign-seat formation slots entering subset planning, ambiguous same-unit request
+  correlation, stale teardown boundaries/request-id reuse, and restarted-client collisions
+  with the retained idempotence cache. GitHub merged when auto-merge was requested because
+  the repository does not require the full matrix; the already-running exact-head CI is
+  therefore still mandatory evidence, and any failure is repaired additively on the wave.
 
 ## Stop conditions
 
