@@ -207,7 +207,7 @@ lanes:
     sizing:
       model: gpt-5.6-sol
       effort: high
-    state: queued
+    state: in-progress
     pr: null
 
   - id: L2
