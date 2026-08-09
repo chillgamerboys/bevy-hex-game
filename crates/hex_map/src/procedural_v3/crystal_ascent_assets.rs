@@ -20,6 +20,7 @@ use super::{CaveCrystalAssetError, CaveCrystalKind, CaveCrystalObjectSet};
 pub(crate) const CRYSTAL_CATHEDRAL_HEART_ID: &str = "prop/crystal-cathedral-heart";
 const CRYSTAL_BODY_STYLE_ID: &str = "crystal/cyan-body";
 const CRYSTAL_GLOW_STYLE_ID: &str = "crystal/cyan-glow";
+const HEART_HEIGHT: u8 = 30;
 
 /// Fully preflighted object ids used by the landmark renderer and occupancy adapter.
 #[derive(Debug, Clone)]
@@ -182,13 +183,13 @@ fn validate_heart(blueprint: &ObjectBlueprint) -> Result<(), CrystalAscentAssetE
         || blueprint.connectivity != ConnectivityPolicy::Free
         || blueprint.bounds.radius != 4
         || blueprint.bounds.min_level != 0
-        || blueprint.bounds.height != 24
+        || blueprint.bounds.height != HEART_HEIGHT
         || blueprint.origin.q != 0
         || blueprint.origin.r != 0
         || blueprint.origin.level != 0
     {
         return Err(CrystalAscentAssetError::new(format!(
-            "Crystal Ascent heart '{}' must be a free radius-4 Prop with origin (0, 0, 0) and levels 0..=23",
+            "Crystal Ascent heart '{}' must be a free radius-4 Prop with origin (0, 0, 0) and levels 0..=29",
             blueprint.id
         )));
     }
@@ -218,6 +219,8 @@ fn validate_heart(blueprint: &ObjectBlueprint) -> Result<(), CrystalAscentAssetE
     let mut has_body = false;
     let mut has_glow = false;
     let mut levels = BTreeSet::new();
+    let mut layers = BTreeMap::<i32, BTreeSet<(i32, i32)>>::new();
+    let mut glow_voxels = BTreeSet::<(i32, i32, i32)>::new();
     for placement in &blueprint.placements {
         if placement.part != ObjectPart::Prop(PropPart::Structure) {
             return Err(CrystalAscentAssetError::new(format!(
@@ -229,6 +232,11 @@ fn validate_heart(blueprint: &ObjectBlueprint) -> Result<(), CrystalAscentAssetE
             has_body = true;
         } else if placement.style == glow_style {
             has_glow = true;
+            glow_voxels.insert((
+                placement.position.q,
+                placement.position.r,
+                placement.position.level,
+            ));
         } else {
             return Err(CrystalAscentAssetError::new(format!(
                 "Crystal Ascent heart '{}' uses unsupported style '{}'",
@@ -236,14 +244,110 @@ fn validate_heart(blueprint: &ObjectBlueprint) -> Result<(), CrystalAscentAssetE
             )));
         }
         levels.insert(placement.position.level);
+        layers
+            .entry(placement.position.level)
+            .or_default()
+            .insert((placement.position.q, placement.position.r));
     }
-    if !has_body || !has_glow || levels != (0..24).collect::<BTreeSet<_>>() {
+    if !has_body || !has_glow || levels != (0..i32::from(HEART_HEIGHT)).collect::<BTreeSet<_>>() {
         return Err(CrystalAscentAssetError::new(format!(
-            "Crystal Ascent heart '{}' must use body and glow voxels across every level 0..=23",
+            "Crystal Ascent heart '{}' must use body and glow voxels across every level 0..=29",
+            blueprint.id
+        )));
+    }
+    let expected_layers = expected_heart_layers();
+    if layers != expected_layers {
+        return Err(CrystalAscentAssetError::new(format!(
+            "Crystal Ascent heart '{}' must retain its exact 30-level irregular-prism silhouette",
+            blueprint.id
+        )));
+    }
+    if glow_voxels != expected_heart_glow_voxels(&expected_layers) {
+        return Err(CrystalAscentAssetError::new(format!(
+            "Crystal Ascent heart '{}' must retain its exact irregular ridge-glow accents",
             blueprint.id
         )));
     }
     Ok(())
+}
+
+fn expected_heart_layers() -> BTreeMap<i32, BTreeSet<(i32, i32)>> {
+    fn disk(radius: i32) -> BTreeSet<(i32, i32)> {
+        (-radius..=radius)
+            .flat_map(|q| (-radius..=radius).map(move |r| (q, r)))
+            .filter(|(q, r)| q.abs().max(r.abs()).max((-q - r).abs()) <= radius)
+            .collect()
+    }
+
+    let mut layers = BTreeMap::new();
+    layers.insert(0, disk(4));
+    layers.insert(
+        1,
+        disk(3)
+            .difference(&BTreeSet::from([(-3, 0), (0, 3)]))
+            .copied()
+            .collect(),
+    );
+    layers.insert(
+        2,
+        disk(2)
+            .difference(&BTreeSet::from([(-2, 0), (0, 2), (2, 0)]))
+            .copied()
+            .collect(),
+    );
+    let prism = BTreeSet::from([
+        (-2, 1),
+        (-1, 0),
+        (-1, 1),
+        (-1, 2),
+        (0, -1),
+        (0, 0),
+        (0, 1),
+        (1, -2),
+        (1, -1),
+        (1, 0),
+        (2, -2),
+        (2, -1),
+    ]);
+    for level in 3..=24 {
+        layers.insert(level, prism.clone());
+    }
+    let mut crown = disk(1);
+    crown.extend([(-1, 2), (2, -1)]);
+    for level in 25..=27 {
+        layers.insert(level, crown.clone());
+    }
+    layers.insert(28, BTreeSet::from([(0, -1), (0, 0), (1, -1)]));
+    layers.insert(29, BTreeSet::from([(1, -1)]));
+    layers
+}
+
+fn expected_heart_glow_voxels(
+    layers: &BTreeMap<i32, BTreeSet<(i32, i32)>>,
+) -> BTreeSet<(i32, i32, i32)> {
+    layers
+        .iter()
+        .flat_map(|(level, coords)| {
+            coords.iter().filter_map(move |(q, r)| {
+                let glow = if *level == 29 {
+                    true
+                } else if *level >= 25 {
+                    (*q == -1 && *r == 2) || (*q == 2 && *r == -1 && *level % 2 == 1)
+                } else if *level >= 3 {
+                    (*q == -2 && *r == 1 && *level % 3 != 1)
+                        || (*q == 2 && *r == -1 && *level % 4 == 1)
+                        || (*q == 1 && *r == -2 && *level % 7 == 0)
+                } else {
+                    (q.saturating_mul(17)
+                        .saturating_add(r.saturating_mul(11))
+                        .saturating_add(level.saturating_mul(5)))
+                    .rem_euclid(19)
+                        == 0
+                };
+                glow.then_some((*q, *r, *level))
+            })
+        })
+        .collect()
 }
 
 fn compact_heart_runs(blueprint: &ObjectBlueprint) -> Vec<(LocalAxialCoord, i32, i32)> {
@@ -345,6 +449,21 @@ pub(crate) mod tests {
         )))
         .expect("tracked cathedral heart should parse");
         validate_heart(&blueprint).expect("tracked cathedral heart should satisfy the contract");
+        assert_eq!(blueprint.placements.len(), 407);
+        let layer_counts = blueprint.placements.iter().fold(
+            BTreeMap::<i32, usize>::new(),
+            |mut counts, placement| {
+                *counts.entry(placement.position.level).or_default() += 1;
+                counts
+            },
+        );
+        assert_eq!(layer_counts.get(&0), Some(&61));
+        assert_eq!(layer_counts.get(&1), Some(&35));
+        assert_eq!(layer_counts.get(&2), Some(&16));
+        assert!((3..=24).all(|level| layer_counts.get(&level) == Some(&12)));
+        assert!((25..=27).all(|level| layer_counts.get(&level) == Some(&9)));
+        assert_eq!(layer_counts.get(&28), Some(&3));
+        assert_eq!(layer_counts.get(&29), Some(&1));
     }
 
     #[test]
@@ -364,8 +483,34 @@ pub(crate) mod tests {
             .collect::<BTreeSet<_>>();
         let visual_origin = TilePos::new(HexCoord::ORIGIN, support_level + 1);
 
-        for steps in 0..6 {
+        let expected_tip_offsets = [(1, -1), (1, 0), (0, 1), (-1, 1), (-1, 0), (0, -1)];
+        for (steps, (tip_q, tip_r)) in expected_tip_offsets.into_iter().enumerate() {
+            let steps = u8::try_from(steps).expect("six rotations fit u8");
             let rotation = HexObjectRotation::new(steps).expect("test rotation is canonical");
+            let projected = objects
+                .project_heart_runs(visual_origin, rotation)
+                .expect("tracked heart projection should remain in range");
+            assert_eq!(projected.runs.len(), 61);
+            let tips = projected
+                .iter()
+                .filter(|run| run.top.level == visual_origin.level + 29)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                tips.len(),
+                1,
+                "rotation {steps} must keep one fractured tip"
+            );
+            let tip = tips
+                .first()
+                .expect("one exact fractured tip was asserted above");
+            assert_eq!(
+                tip.top.coord,
+                HexCoord::from_axial(
+                    visual_origin.coord.x() + tip_q,
+                    visual_origin.coord.y() + tip_r,
+                ),
+                "rotation {steps} must rotate the asymmetric upper prism exactly"
+            );
             let blockers = objects
                 .project_heart_traversal_blockers(supports.iter().copied(), visual_origin, rotation)
                 .expect("tracked heart projection should remain in range");

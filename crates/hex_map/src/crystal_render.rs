@@ -249,7 +249,7 @@ fn prepare_requests(
                     ),
                     CrystalAscentCrystalKind::Heart => (
                         objects.heart_id().clone(),
-                        [2.0_f32, 8.0, 14.0, 20.0]
+                        [2.0_f32, 10.0, 18.0, 27.0]
                             .into_iter()
                             .map(|level| Vec3::Y * level)
                             .collect(),
@@ -628,7 +628,7 @@ mod tests {
             heart.instance.rotation(),
             HexObjectRotation::new(2).expect("fixture rotation should be valid")
         );
-        assert_local_y_offsets(&heart.point_light_offsets, &[2.0, 8.0, 14.0, 20.0]);
+        assert_local_y_offsets(&heart.point_light_offsets, &[2.0, 10.0, 18.0, 27.0]);
         let expected_occupancy = objects
             .project_heart_runs(heart.instance.origin(), heart.instance.rotation())
             .expect("fixture heart occupancy should project");
@@ -690,7 +690,7 @@ mod tests {
         let heart_children = child_entities(app.world(), heart_root);
         assert_eq!(heart_children.len(), 4);
         let heart_offsets = global_y_offsets(app.world(), heart_root, &heart_children);
-        for (actual, expected) in heart_offsets.iter().zip([0.8, 3.2, 5.6, 8.0]) {
+        for (actual, expected) in heart_offsets.iter().zip([0.8, 4.0, 7.2, 10.8]) {
             assert_near(*actual, expected);
         }
 

@@ -426,15 +426,19 @@ rise. Its monumental geometry is seed-independent; seed streams vary only the la
 crystal silhouettes and rotations plus the summit tree placement and rotations.
 
 A twelve-hex-wide, eighteen-level-high pointed lower aperture opens into a radius-23
-worked-stone chamber. The radius-four cathedral-heart reservation blocks the chamber
-centre while the shaft above it remains open and contracts to a radius-12 summit
-oculus. Exactly three clockwise stair circuits climb around that void. Their four-wide
+worked-stone chamber. The radius-four cathedral-heart reservation contains a
+30-level asymmetric crystal: a broad fractured base, long irregular-prism body, and
+off-centre crown. It blocks the chamber centre while the shaft above it remains open
+and contracts to a radius-11 summit oculus. Exactly three clockwise stair circuits
+climb around that void. Their four-wide
 radial bands are `24..=27`, `21..=24`, and `18..=21`; each circuit contains six
 flights and six corner landings. Flight boundary `i` is
 `base_level + floor(i * rise_levels / 18)`, and rises are distributed along each
 flight so every ordinary transition is flat or one level. Flights retain at least
 four clear levels, corner landings retain at least eight, and every contraction's two
 four-by-four turning pads retain eight-level clearance across their 28 unique cells.
+Each circuit is carved into a radial worked-stone haunch: its four lanes thicken from
+two through eight voxels toward the wall while retaining the exact same walkable top.
 The exact allowlisted handoff graph is the only connection between consecutive
 circuits: an exact four-cell ownership seam, four pairwise-disjoint radial transfer
 lanes, their immediate entry and exit edges, and one unavoidable adjacent hex-corner
@@ -457,8 +461,9 @@ Landmark architecture and fixtures remain inside the radius-32 site, while the
 standalone recipe fills the surrounding radius-40 world with ordinary grass terrain.
 A real Macro patch context constructs and round-trips its volume, blockers, regions,
 lights, and anchors after translation and any of the six rotations; recipe-owned
-decorative rotation values remain world-stable. Macro placement is deliberately
-deferred until the larger authored world defines its composition contract.
+decorative rotations compose from recipe-local orientation into world space and
+round-trip exactly. Macro placement is deliberately deferred until the larger
+authored world defines its composition contract.
 
 Each of the eighteen outward landing alcoves reuses one accepted cave-crystal asset.
 Every alcove origin publishes exactly one Bright radius-4 source and one Dim radius-18

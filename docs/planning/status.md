@@ -27,8 +27,10 @@ The selectable **Crystal Ascent** landmark occupies one radius-40 world. Its
 monumental lower aperture opens into a crystal chamber and central shaft; three exact
 four-wide clockwise stair circuits, joined by four independent lanes at each
 contraction, climb 144 levels through eighteen crystal-lit landings before emerging
-around a radius-12 oculus into a protected woodland
-clearing. The recipe accepts rises from 100 through 200, keeps its architecture
+around a radius-11 oculus into a protected woodland
+clearing. A 30-level irregular-prism heart dominates the chamber, and each circuit's
+four stair lanes sit on an exact two-/four-/six-/eight-voxel radial stone haunch. The
+recipe accepts rises from 100 through 200, keeps its architecture
 seed-independent, publishes stable lower/chamber/upper anchors, an upper
 corner-landing review anchor, and terminal pads, and
 validates exact handoff edges, ordinary traversal, one-level transitions, turning-pad

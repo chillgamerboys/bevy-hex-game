@@ -1729,7 +1729,7 @@ mod tests {
         assert_eq!(heart.connectivity, ConnectivityPolicy::Free);
         assert_eq!(heart.bounds.radius, 4);
         assert_eq!(heart.bounds.min_level, 0);
-        assert_eq!(heart.bounds.height, 24);
+        assert_eq!(heart.bounds.height, 30);
         assert_eq!(heart.origin, LocalVoxelCoord::new(0, 0, 0));
         assert!(heart.canopy_occluders.is_empty());
         assert!(heart
@@ -1750,7 +1750,7 @@ mod tests {
                 .iter()
                 .map(|placement| placement.position.level)
                 .collect::<BTreeSet<_>>(),
-            (0..24).collect::<BTreeSet<_>>()
+            (0..30).collect::<BTreeSet<_>>()
         );
         let expected_heart_footprint = (-4_i32..=4)
             .flat_map(|q| (-4_i32..=4).map(move |r| LocalAxialCoord::new(q, r)))
@@ -1792,8 +1792,8 @@ mod tests {
             ),
             (
                 5_183_140_313_222_150_403,
-                9_652_748_088_792_271_647,
-                2_286_574_576_222_903_349,
+                10_433_221_081_678_676_936,
+                4_689_356_606_817_881_777,
             )
         );
         let expected_object_fingerprints = BTreeMap::from([
@@ -1808,7 +1808,7 @@ mod tests {
             (id("prop/crystal-branched"), 632_179_240_403_471_067),
             (
                 id("prop/crystal-cathedral-heart"),
-                7_289_663_172_659_263_250,
+                9_632_068_769_354_352_933,
             ),
             (id("prop/crystal-low-cluster"), 1_307_286_824_627_267_907),
             (id("prop/crystal-spire"), 1_248_030_652_803_885_799),

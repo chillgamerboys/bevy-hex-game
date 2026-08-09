@@ -6,7 +6,7 @@
     bounds: (
         radius: 4,
         min_level: 0,
-        height: 24,
+        height: 30,
     ),
     connectivity: Free,
     origin: (q: 0, r: 0, level: 0),
@@ -18,12 +18,12 @@
         ),
         (
             position: (q: -4, r: 1, level: 0),
-            style: "crystal/cyan-body",
+            style: "crystal/cyan-glow",
             part: Prop(Structure),
         ),
         (
             position: (q: -4, r: 2, level: 0),
-            style: "crystal/cyan-glow",
+            style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
         (
@@ -163,7 +163,7 @@
         ),
         (
             position: (q: 0, r: 0, level: 0),
-            style: "crystal/cyan-body",
+            style: "crystal/cyan-glow",
             part: Prop(Structure),
         ),
         (
@@ -303,21 +303,16 @@
         ),
         (
             position: (q: 4, r: -2, level: 0),
-            style: "crystal/cyan-glow",
+            style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
         (
             position: (q: 4, r: -1, level: 0),
-            style: "crystal/cyan-body",
+            style: "crystal/cyan-glow",
             part: Prop(Structure),
         ),
         (
             position: (q: 4, r: 0, level: 0),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -3, r: 0, level: 1),
             style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
@@ -333,7 +328,7 @@
         ),
         (
             position: (q: -3, r: 3, level: 1),
-            style: "crystal/cyan-glow",
+            style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
         (
@@ -422,18 +417,13 @@
             part: Prop(Structure),
         ),
         (
-            position: (q: 0, r: 3, level: 1),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
             position: (q: 1, r: -3, level: 1),
             style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
         (
             position: (q: 1, r: -2, level: 1),
-            style: "crystal/cyan-body",
+            style: "crystal/cyan-glow",
             part: Prop(Structure),
         ),
         (
@@ -498,36 +488,6 @@
         ),
         (
             position: (q: 3, r: 0, level: 1),
-            style: "crystal/cyan-glow",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -3, r: 0, level: 2),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -3, r: 1, level: 2),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -3, r: 2, level: 2),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -3, r: 3, level: 2),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -2, r: -1, level: 2),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -2, r: 0, level: 2),
             style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
@@ -539,16 +499,6 @@
         (
             position: (q: -2, r: 2, level: 2),
             style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -2, r: 3, level: 2),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -1, r: -2, level: 2),
-            style: "crystal/cyan-glow",
             part: Prop(Structure),
         ),
         (
@@ -568,16 +518,6 @@
         ),
         (
             position: (q: -1, r: 2, level: 2),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -1, r: 3, level: 2),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 0, r: -3, level: 2),
             style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
@@ -602,21 +542,6 @@
             part: Prop(Structure),
         ),
         (
-            position: (q: 0, r: 2, level: 2),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 0, r: 3, level: 2),
-            style: "crystal/cyan-glow",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 1, r: -3, level: 2),
-            style: "crystal/cyan-glow",
-            part: Prop(Structure),
-        ),
-        (
             position: (q: 1, r: -2, level: 2),
             style: "crystal/cyan-body",
             part: Prop(Structure),
@@ -633,17 +558,7 @@
         ),
         (
             position: (q: 1, r: 1, level: 2),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 1, r: 2, level: 2),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 2, r: -3, level: 2),
-            style: "crystal/cyan-body",
+            style: "crystal/cyan-glow",
             part: Prop(Structure),
         ),
         (
@@ -657,88 +572,8 @@
             part: Prop(Structure),
         ),
         (
-            position: (q: 2, r: 0, level: 2),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 2, r: 1, level: 2),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 3, r: -3, level: 2),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 3, r: -2, level: 2),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 3, r: -1, level: 2),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 3, r: 0, level: 2),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -3, r: 0, level: 3),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -3, r: 1, level: 3),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -3, r: 2, level: 3),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -3, r: 3, level: 3),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -2, r: -1, level: 3),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -2, r: 0, level: 3),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
             position: (q: -2, r: 1, level: 3),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -2, r: 2, level: 3),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -2, r: 3, level: 3),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -1, r: -2, level: 3),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -1, r: -1, level: 3),
-            style: "crystal/cyan-body",
+            style: "crystal/cyan-glow",
             part: Prop(Structure),
         ),
         (
@@ -757,47 +592,17 @@
             part: Prop(Structure),
         ),
         (
-            position: (q: -1, r: 3, level: 3),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 0, r: -3, level: 3),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 0, r: -2, level: 3),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
             position: (q: 0, r: -1, level: 3),
             style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
         (
             position: (q: 0, r: 0, level: 3),
-            style: "crystal/cyan-glow",
+            style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
         (
             position: (q: 0, r: 1, level: 3),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 0, r: 2, level: 3),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 0, r: 3, level: 3),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 1, r: -3, level: 3),
             style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
@@ -817,21 +622,6 @@
             part: Prop(Structure),
         ),
         (
-            position: (q: 1, r: 1, level: 3),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 1, r: 2, level: 3),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 2, r: -3, level: 3),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
             position: (q: 2, r: -2, level: 3),
             style: "crystal/cyan-body",
             part: Prop(Structure),
@@ -842,87 +632,7 @@
             part: Prop(Structure),
         ),
         (
-            position: (q: 2, r: 0, level: 3),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 2, r: 1, level: 3),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 3, r: -3, level: 3),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 3, r: -2, level: 3),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 3, r: -1, level: 3),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 3, r: 0, level: 3),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -3, r: 0, level: 4),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -3, r: 1, level: 4),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -3, r: 2, level: 4),
-            style: "crystal/cyan-glow",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -3, r: 3, level: 4),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -2, r: -1, level: 4),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -2, r: 0, level: 4),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
             position: (q: -2, r: 1, level: 4),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -2, r: 2, level: 4),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -2, r: 3, level: 4),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -1, r: -2, level: 4),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -1, r: -1, level: 4),
             style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
@@ -942,21 +652,6 @@
             part: Prop(Structure),
         ),
         (
-            position: (q: -1, r: 3, level: 4),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 0, r: -3, level: 4),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 0, r: -2, level: 4),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
             position: (q: 0, r: -1, level: 4),
             style: "crystal/cyan-body",
             part: Prop(Structure),
@@ -968,21 +663,6 @@
         ),
         (
             position: (q: 0, r: 1, level: 4),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 0, r: 2, level: 4),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 0, r: 3, level: 4),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 1, r: -3, level: 4),
             style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
@@ -1002,21 +682,6 @@
             part: Prop(Structure),
         ),
         (
-            position: (q: 1, r: 1, level: 4),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 1, r: 2, level: 4),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 2, r: -3, level: 4),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
             position: (q: 2, r: -2, level: 4),
             style: "crystal/cyan-body",
             part: Prop(Structure),
@@ -1027,53 +692,8 @@
             part: Prop(Structure),
         ),
         (
-            position: (q: 2, r: 0, level: 4),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 2, r: 1, level: 4),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 3, r: -3, level: 4),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 3, r: -2, level: 4),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 3, r: -1, level: 4),
-            style: "crystal/cyan-glow",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 3, r: 0, level: 4),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -2, r: 0, level: 5),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
             position: (q: -2, r: 1, level: 5),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -2, r: 2, level: 5),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -1, r: -1, level: 5),
-            style: "crystal/cyan-body",
+            style: "crystal/cyan-glow",
             part: Prop(Structure),
         ),
         (
@@ -1088,11 +708,6 @@
         ),
         (
             position: (q: -1, r: 2, level: 5),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 0, r: -2, level: 5),
             style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
@@ -1112,11 +727,6 @@
             part: Prop(Structure),
         ),
         (
-            position: (q: 0, r: 2, level: 5),
-            style: "crystal/cyan-glow",
-            part: Prop(Structure),
-        ),
-        (
             position: (q: 1, r: -2, level: 5),
             style: "crystal/cyan-body",
             part: Prop(Structure),
@@ -1132,43 +742,18 @@
             part: Prop(Structure),
         ),
         (
-            position: (q: 1, r: 1, level: 5),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
             position: (q: 2, r: -2, level: 5),
             style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
         (
             position: (q: 2, r: -1, level: 5),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 2, r: 0, level: 5),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -2, r: 0, level: 6),
-            style: "crystal/cyan-body",
+            style: "crystal/cyan-glow",
             part: Prop(Structure),
         ),
         (
             position: (q: -2, r: 1, level: 6),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -2, r: 2, level: 6),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -1, r: -1, level: 6),
-            style: "crystal/cyan-body",
+            style: "crystal/cyan-glow",
             part: Prop(Structure),
         ),
         (
@@ -1187,11 +772,6 @@
             part: Prop(Structure),
         ),
         (
-            position: (q: 0, r: -2, level: 6),
-            style: "crystal/cyan-glow",
-            part: Prop(Structure),
-        ),
-        (
             position: (q: 0, r: -1, level: 6),
             style: "crystal/cyan-body",
             part: Prop(Structure),
@@ -1203,11 +783,6 @@
         ),
         (
             position: (q: 0, r: 1, level: 6),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 0, r: 2, level: 6),
             style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
@@ -1227,11 +802,6 @@
             part: Prop(Structure),
         ),
         (
-            position: (q: 1, r: 1, level: 6),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
             position: (q: 2, r: -2, level: 6),
             style: "crystal/cyan-body",
             part: Prop(Structure),
@@ -1242,27 +812,7 @@
             part: Prop(Structure),
         ),
         (
-            position: (q: 2, r: 0, level: 6),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -2, r: 0, level: 7),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
             position: (q: -2, r: 1, level: 7),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -2, r: 2, level: 7),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -1, r: -1, level: 7),
             style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
@@ -1282,11 +832,6 @@
             part: Prop(Structure),
         ),
         (
-            position: (q: 0, r: -2, level: 7),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
             position: (q: 0, r: -1, level: 7),
             style: "crystal/cyan-body",
             part: Prop(Structure),
@@ -1302,13 +847,8 @@
             part: Prop(Structure),
         ),
         (
-            position: (q: 0, r: 2, level: 7),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
             position: (q: 1, r: -2, level: 7),
-            style: "crystal/cyan-body",
+            style: "crystal/cyan-glow",
             part: Prop(Structure),
         ),
         (
@@ -1318,11 +858,6 @@
         ),
         (
             position: (q: 1, r: 0, level: 7),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 1, r: 1, level: 7),
             style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
@@ -1337,28 +872,8 @@
             part: Prop(Structure),
         ),
         (
-            position: (q: 2, r: 0, level: 7),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -2, r: 0, level: 8),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
             position: (q: -2, r: 1, level: 8),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -2, r: 2, level: 8),
             style: "crystal/cyan-glow",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -1, r: -1, level: 8),
-            style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
         (
@@ -1377,27 +892,17 @@
             part: Prop(Structure),
         ),
         (
-            position: (q: 0, r: -2, level: 8),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
             position: (q: 0, r: -1, level: 8),
             style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
         (
             position: (q: 0, r: 0, level: 8),
-            style: "crystal/cyan-glow",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 0, r: 1, level: 8),
             style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
         (
-            position: (q: 0, r: 2, level: 8),
+            position: (q: 0, r: 1, level: 8),
             style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
@@ -1417,11 +922,6 @@
             part: Prop(Structure),
         ),
         (
-            position: (q: 1, r: 1, level: 8),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
             position: (q: 2, r: -2, level: 8),
             style: "crystal/cyan-body",
             part: Prop(Structure),
@@ -1432,28 +932,8 @@
             part: Prop(Structure),
         ),
         (
-            position: (q: 2, r: 0, level: 8),
-            style: "crystal/cyan-glow",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -2, r: 0, level: 9),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
             position: (q: -2, r: 1, level: 9),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -2, r: 2, level: 9),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -1, r: -1, level: 9),
-            style: "crystal/cyan-body",
+            style: "crystal/cyan-glow",
             part: Prop(Structure),
         ),
         (
@@ -1468,11 +948,6 @@
         ),
         (
             position: (q: -1, r: 2, level: 9),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 0, r: -2, level: 9),
             style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
@@ -1492,11 +967,6 @@
             part: Prop(Structure),
         ),
         (
-            position: (q: 0, r: 2, level: 9),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
             position: (q: 1, r: -2, level: 9),
             style: "crystal/cyan-body",
             part: Prop(Structure),
@@ -1512,43 +982,18 @@
             part: Prop(Structure),
         ),
         (
-            position: (q: 1, r: 1, level: 9),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
             position: (q: 2, r: -2, level: 9),
             style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
         (
             position: (q: 2, r: -1, level: 9),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 2, r: 0, level: 9),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -2, r: 0, level: 10),
-            style: "crystal/cyan-body",
+            style: "crystal/cyan-glow",
             part: Prop(Structure),
         ),
         (
             position: (q: -2, r: 1, level: 10),
             style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -2, r: 2, level: 10),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: -1, r: -1, level: 10),
-            style: "crystal/cyan-glow",
             part: Prop(Structure),
         ),
         (
@@ -1563,11 +1008,6 @@
         ),
         (
             position: (q: -1, r: 2, level: 10),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 0, r: -2, level: 10),
             style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
@@ -1587,13 +1027,8 @@
             part: Prop(Structure),
         ),
         (
-            position: (q: 0, r: 2, level: 10),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
             position: (q: 1, r: -2, level: 10),
-            style: "crystal/cyan-glow",
+            style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
         (
@@ -1603,11 +1038,6 @@
         ),
         (
             position: (q: 1, r: 0, level: 10),
-            style: "crystal/cyan-body",
-            part: Prop(Structure),
-        ),
-        (
-            position: (q: 1, r: 1, level: 10),
             style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
@@ -1622,8 +1052,8 @@
             part: Prop(Structure),
         ),
         (
-            position: (q: 2, r: 0, level: 10),
-            style: "crystal/cyan-body",
+            position: (q: -2, r: 1, level: 11),
+            style: "crystal/cyan-glow",
             part: Prop(Structure),
         ),
         (
@@ -1633,6 +1063,11 @@
         ),
         (
             position: (q: -1, r: 1, level: 11),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 2, level: 11),
             style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
@@ -1652,6 +1087,11 @@
             part: Prop(Structure),
         ),
         (
+            position: (q: 1, r: -2, level: 11),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
             position: (q: 1, r: -1, level: 11),
             style: "crystal/cyan-body",
             part: Prop(Structure),
@@ -1662,12 +1102,32 @@
             part: Prop(Structure),
         ),
         (
+            position: (q: 2, r: -2, level: 11),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 2, r: -1, level: 11),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -2, r: 1, level: 12),
+            style: "crystal/cyan-glow",
+            part: Prop(Structure),
+        ),
+        (
             position: (q: -1, r: 0, level: 12),
             style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
         (
             position: (q: -1, r: 1, level: 12),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 2, level: 12),
             style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
@@ -1687,12 +1147,32 @@
             part: Prop(Structure),
         ),
         (
+            position: (q: 1, r: -2, level: 12),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
             position: (q: 1, r: -1, level: 12),
             style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
         (
             position: (q: 1, r: 0, level: 12),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 2, r: -2, level: 12),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 2, r: -1, level: 12),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -2, r: 1, level: 13),
             style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
@@ -1707,17 +1187,27 @@
             part: Prop(Structure),
         ),
         (
+            position: (q: -1, r: 2, level: 13),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
             position: (q: 0, r: -1, level: 13),
             style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
         (
             position: (q: 0, r: 0, level: 13),
-            style: "crystal/cyan-glow",
+            style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
         (
             position: (q: 0, r: 1, level: 13),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 1, r: -2, level: 13),
             style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
@@ -1732,6 +1222,21 @@
             part: Prop(Structure),
         ),
         (
+            position: (q: 2, r: -2, level: 13),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 2, r: -1, level: 13),
+            style: "crystal/cyan-glow",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -2, r: 1, level: 14),
+            style: "crystal/cyan-glow",
+            part: Prop(Structure),
+        ),
+        (
             position: (q: -1, r: 0, level: 14),
             style: "crystal/cyan-body",
             part: Prop(Structure),
@@ -1742,8 +1247,13 @@
             part: Prop(Structure),
         ),
         (
+            position: (q: -1, r: 2, level: 14),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
             position: (q: 0, r: -1, level: 14),
-            style: "crystal/cyan-glow",
+            style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
         (
@@ -1757,6 +1267,11 @@
             part: Prop(Structure),
         ),
         (
+            position: (q: 1, r: -2, level: 14),
+            style: "crystal/cyan-glow",
+            part: Prop(Structure),
+        ),
+        (
             position: (q: 1, r: -1, level: 14),
             style: "crystal/cyan-body",
             part: Prop(Structure),
@@ -1767,13 +1282,33 @@
             part: Prop(Structure),
         ),
         (
+            position: (q: 2, r: -2, level: 14),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 2, r: -1, level: 14),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -2, r: 1, level: 15),
+            style: "crystal/cyan-glow",
+            part: Prop(Structure),
+        ),
+        (
             position: (q: -1, r: 0, level: 15),
             style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
         (
             position: (q: -1, r: 1, level: 15),
-            style: "crystal/cyan-glow",
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 2, level: 15),
+            style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
         (
@@ -1792,13 +1327,33 @@
             part: Prop(Structure),
         ),
         (
+            position: (q: 1, r: -2, level: 15),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
             position: (q: 1, r: -1, level: 15),
             style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
         (
             position: (q: 1, r: 0, level: 15),
-            style: "crystal/cyan-glow",
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 2, r: -2, level: 15),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 2, r: -1, level: 15),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -2, r: 1, level: 16),
+            style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
         (
@@ -1808,6 +1363,11 @@
         ),
         (
             position: (q: -1, r: 1, level: 16),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 2, level: 16),
             style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
@@ -1827,6 +1387,11 @@
             part: Prop(Structure),
         ),
         (
+            position: (q: 1, r: -2, level: 16),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
             position: (q: 1, r: -1, level: 16),
             style: "crystal/cyan-body",
             part: Prop(Structure),
@@ -1837,12 +1402,32 @@
             part: Prop(Structure),
         ),
         (
+            position: (q: 2, r: -2, level: 16),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 2, r: -1, level: 16),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -2, r: 1, level: 17),
+            style: "crystal/cyan-glow",
+            part: Prop(Structure),
+        ),
+        (
             position: (q: -1, r: 0, level: 17),
             style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
         (
             position: (q: -1, r: 1, level: 17),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 2, level: 17),
             style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
@@ -1862,6 +1447,11 @@
             part: Prop(Structure),
         ),
         (
+            position: (q: 1, r: -2, level: 17),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
             position: (q: 1, r: -1, level: 17),
             style: "crystal/cyan-body",
             part: Prop(Structure),
@@ -1872,12 +1462,157 @@
             part: Prop(Structure),
         ),
         (
-            position: (q: 0, r: 0, level: 18),
+            position: (q: 2, r: -2, level: 17),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 2, r: -1, level: 17),
             style: "crystal/cyan-glow",
             part: Prop(Structure),
         ),
         (
+            position: (q: -2, r: 1, level: 18),
+            style: "crystal/cyan-glow",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 0, level: 18),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 1, level: 18),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 2, level: 18),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 0, r: -1, level: 18),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 0, r: 0, level: 18),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 0, r: 1, level: 18),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 1, r: -2, level: 18),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 1, r: -1, level: 18),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 1, r: 0, level: 18),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 2, r: -2, level: 18),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 2, r: -1, level: 18),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -2, r: 1, level: 19),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 0, level: 19),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 1, level: 19),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 2, level: 19),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 0, r: -1, level: 19),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
             position: (q: 0, r: 0, level: 19),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 0, r: 1, level: 19),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 1, r: -2, level: 19),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 1, r: -1, level: 19),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 1, r: 0, level: 19),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 2, r: -2, level: 19),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 2, r: -1, level: 19),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -2, r: 1, level: 20),
+            style: "crystal/cyan-glow",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 0, level: 20),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 1, level: 20),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 2, level: 20),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 0, r: -1, level: 20),
             style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
@@ -1887,17 +1622,427 @@
             part: Prop(Structure),
         ),
         (
+            position: (q: 0, r: 1, level: 20),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 1, r: -2, level: 20),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 1, r: -1, level: 20),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 1, r: 0, level: 20),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 2, r: -2, level: 20),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 2, r: -1, level: 20),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -2, r: 1, level: 21),
+            style: "crystal/cyan-glow",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 0, level: 21),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 1, level: 21),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 2, level: 21),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 0, r: -1, level: 21),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
             position: (q: 0, r: 0, level: 21),
             style: "crystal/cyan-body",
             part: Prop(Structure),
         ),
         (
-            position: (q: 0, r: 0, level: 22),
+            position: (q: 0, r: 1, level: 21),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 1, r: -2, level: 21),
             style: "crystal/cyan-glow",
             part: Prop(Structure),
         ),
         (
+            position: (q: 1, r: -1, level: 21),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 1, r: 0, level: 21),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 2, r: -2, level: 21),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 2, r: -1, level: 21),
+            style: "crystal/cyan-glow",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -2, r: 1, level: 22),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 0, level: 22),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 1, level: 22),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 2, level: 22),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 0, r: -1, level: 22),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 0, r: 0, level: 22),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 0, r: 1, level: 22),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 1, r: -2, level: 22),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 1, r: -1, level: 22),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 1, r: 0, level: 22),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 2, r: -2, level: 22),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 2, r: -1, level: 22),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -2, r: 1, level: 23),
+            style: "crystal/cyan-glow",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 0, level: 23),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 1, level: 23),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 2, level: 23),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 0, r: -1, level: 23),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
             position: (q: 0, r: 0, level: 23),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 0, r: 1, level: 23),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 1, r: -2, level: 23),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 1, r: -1, level: 23),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 1, r: 0, level: 23),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 2, r: -2, level: 23),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 2, r: -1, level: 23),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -2, r: 1, level: 24),
+            style: "crystal/cyan-glow",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 0, level: 24),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 1, level: 24),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 2, level: 24),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 0, r: -1, level: 24),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 0, r: 0, level: 24),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 0, r: 1, level: 24),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 1, r: -2, level: 24),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 1, r: -1, level: 24),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 1, r: 0, level: 24),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 2, r: -2, level: 24),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 2, r: -1, level: 24),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 0, level: 25),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 1, level: 25),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 2, level: 25),
+            style: "crystal/cyan-glow",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 0, r: -1, level: 25),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 0, r: 0, level: 25),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 0, r: 1, level: 25),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 1, r: -1, level: 25),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 1, r: 0, level: 25),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 2, r: -1, level: 25),
+            style: "crystal/cyan-glow",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 0, level: 26),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 1, level: 26),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 2, level: 26),
+            style: "crystal/cyan-glow",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 0, r: -1, level: 26),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 0, r: 0, level: 26),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 0, r: 1, level: 26),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 1, r: -1, level: 26),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 1, r: 0, level: 26),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 2, r: -1, level: 26),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 0, level: 27),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 1, level: 27),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 2, level: 27),
+            style: "crystal/cyan-glow",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 0, r: -1, level: 27),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 0, r: 0, level: 27),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 0, r: 1, level: 27),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 1, r: -1, level: 27),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 1, r: 0, level: 27),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 2, r: -1, level: 27),
+            style: "crystal/cyan-glow",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 0, r: -1, level: 28),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 0, r: 0, level: 28),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 1, r: -1, level: 28),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 1, r: -1, level: 29),
             style: "crystal/cyan-glow",
             part: Prop(Structure),
         ),

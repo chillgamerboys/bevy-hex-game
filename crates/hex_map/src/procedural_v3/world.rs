@@ -146,7 +146,7 @@ pub(crate) struct CaveCrystalPresentation {
 /// Authored crystal silhouette used by the Crystal Ascent landmark.
 ///
 /// Landing fixtures intentionally reuse the cave silhouettes. The heart is a
-/// separate, blocking 24-level authored object whose exact occupied volume is
+/// separate, blocking 30-level authored object whose exact occupied volume is
 /// published to gameplay alongside this presentation intent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum CrystalAscentCrystalKind {

@@ -1,8 +1,8 @@
 //! Deterministic authored Crystal Ascent landmark.
 //!
 //! The landmark is a true stacked V3 volume: the chamber remains open, stair
-//! treads are one-voxel platforms, and the shell/crown are separate occupied runs.
-//! Only crystal silhouettes and summit trees vary with the seed.
+//! treads sit on radial stone haunches, and the shell/crown are separate occupied
+//! runs. Only crystal silhouettes and summit trees vary with the seed.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -41,7 +41,7 @@ use crate::settings::{
 
 const SITE_RADIUS: u32 = 32;
 const CHAMBER_RADIUS: u32 = 23;
-const OCULUS_RADIUS: u32 = 12;
+const OCULUS_RADIUS: u32 = 11;
 const CLEARING_RADIUS: u32 = 18;
 const SHELL_INNER_RADIUS: u32 = 28;
 const SHELL_OUTER_RADIUS: u32 = 32;
@@ -908,8 +908,10 @@ fn build_stairs(
         .iter()
         .flat_map(|surfaces| surfaces.iter().copied())
         .collect::<BTreeSet<_>>();
+    let haunch_thicknesses = expected_stair_haunch_thicknesses(&circuit_surfaces)?;
     for position in &stair_surfaces {
-        add_platform(masses, *position, SolidMaterialRole::WorkedStone)?;
+        let thickness = haunch_thicknesses.get(position).copied().unwrap_or(1);
+        add_platform_with_thickness(masses, *position, SolidMaterialRole::WorkedStone, thickness)?;
         surface_intents.insert(*position, interior_surface());
     }
 
@@ -965,6 +967,36 @@ fn build_stairs(
         corner_landing,
         upper_contraction,
     })
+}
+
+fn expected_stair_haunch_thicknesses(
+    circuit_surfaces: &[BTreeSet<TilePos>],
+) -> Result<BTreeMap<TilePos, Level>, Vec<WorldValidationIssue>> {
+    let mut thicknesses = BTreeMap::<TilePos, Level>::new();
+    for (circuit, surfaces) in circuit_surfaces.iter().enumerate() {
+        let Some((inner, outer)) = CIRCUIT_BANDS.get(circuit).copied() else {
+            return Err(vec![recipe_issue(format!(
+                "Crystal Ascent circuit {circuit} has no authored radial band"
+            ))]);
+        };
+        for position in surfaces {
+            let radius = position.coord.distance(HexCoord::ORIGIN);
+            if !(inner..=outer).contains(&radius) {
+                continue;
+            }
+            let lane = radius.saturating_sub(inner).saturating_add(1);
+            let thickness = i32::try_from(lane.saturating_mul(2)).map_err(|error| {
+                vec![recipe_issue(format!(
+                    "Crystal Ascent stair haunch thickness overflows at {position:?}: {error}"
+                ))]
+            })?;
+            thicknesses
+                .entry(*position)
+                .and_modify(|existing| *existing = (*existing).max(thickness))
+                .or_insert(thickness);
+        }
+    }
+    Ok(thicknesses)
 }
 
 fn build_shell(
@@ -1657,6 +1689,38 @@ pub(crate) fn validate_crystal_ascent(
             "Crystal Ascent cannot derive all three authored stair circuits",
         ));
     }
+    match expected_stair_haunch_thicknesses(&expected_circuits) {
+        Ok(haunches) => {
+            'haunch: for (surface, thickness) in haunches {
+                let bottom = surface
+                    .level
+                    .saturating_add(1)
+                    .saturating_sub(thickness)
+                    .max(0);
+                for level in bottom..=surface.level {
+                    let material = solid_material_at(&plan.volume, surface.coord, level);
+                    if material.is_none()
+                        || (level > base && material != Some(SolidMaterialRole::WorkedStone))
+                    {
+                        issues.push(recipe_issue(format!(
+                            "stair haunch below {surface:?} is not the exact {thickness}-voxel solid worked-stone support"
+                        )));
+                        break 'haunch;
+                    }
+                }
+                if bottom > base.saturating_add(1)
+                    && solid_material_at(&plan.volume, surface.coord, bottom.saturating_sub(1))
+                        .is_some()
+                {
+                    issues.push(recipe_issue(format!(
+                        "stair haunch below {surface:?} extends beneath its exact {thickness}-voxel support"
+                    )));
+                    break 'haunch;
+                }
+            }
+        }
+        Err(mut haunch_issues) => issues.append(&mut haunch_issues),
+    }
     let mut validated_circuits = 0_usize;
     for circuit in 0..CIRCUIT_COUNT {
         let id = StructureId(u32::try_from(circuit.saturating_add(1)).unwrap_or(u32::MAX));
@@ -2019,7 +2083,7 @@ pub(crate) fn validate_crystal_ascent(
         != Some(&expected_clearing)
     {
         issues.push(recipe_issue(
-            "summit clearing does not equal the authored radius-12 through radius-18 footprint",
+            "summit clearing does not equal the authored radius-11 through radius-18 footprint",
         ));
     }
 
@@ -2084,7 +2148,7 @@ pub(crate) fn validate_crystal_ascent(
         .any(|surface| !plan.volume.surfaces.contains_key(surface))
     {
         issues.push(recipe_issue(
-            "summit must retain an open radius-12 oculus with a complete rim",
+            "summit must retain an open radius-11 oculus with a complete rim",
         ));
     }
 
@@ -2422,6 +2486,26 @@ fn exact_clear_levels_above(volume: &VolumePlan, surface: TilePos) -> Option<Lev
     )
 }
 
+fn solid_material_at(
+    volume: &VolumePlan,
+    coord: HexCoord,
+    level: Level,
+) -> Option<SolidMaterialRole> {
+    volume
+        .columns
+        .get(&coord)?
+        .elements
+        .iter()
+        .find_map(|element| match element {
+            VolumeElement::Solid(mass)
+                if mass.levels.bottom <= level && level < mass.levels.top =>
+            {
+                Some(mass.material)
+            }
+            _ => None,
+        })
+}
+
 fn add_ground(
     masses: &mut BTreeMap<HexCoord, Vec<MassSpec>>,
     coord: HexCoord,
@@ -2453,6 +2537,20 @@ fn add_platform(
     position: TilePos,
     material: SolidMaterialRole,
 ) -> Result<(), Vec<WorldValidationIssue>> {
+    add_platform_with_thickness(masses, position, material, 1)
+}
+
+fn add_platform_with_thickness(
+    masses: &mut BTreeMap<HexCoord, Vec<MassSpec>>,
+    position: TilePos,
+    material: SolidMaterialRole,
+    thickness: Level,
+) -> Result<(), Vec<WorldValidationIssue>> {
+    if thickness < 1 {
+        return Err(vec![recipe_issue(format!(
+            "platform {position:?} requires positive thickness"
+        ))]);
+    }
     let column = masses.get_mut(&position.coord).ok_or_else(|| {
         vec![recipe_issue(format!(
             "platform {position:?} leaves the authored mask"
@@ -2464,12 +2562,23 @@ fn add_platform(
     {
         return Ok(());
     }
-    push_mass(
-        column,
-        position.level,
-        position.level.saturating_add(1),
-        material,
-    );
+    let top = position.level.saturating_add(1);
+    let mut bottom = top.saturating_sub(thickness).max(0);
+    let mut existing = column.to_vec();
+    existing.sort_unstable_by_key(|mass| (mass.bottom, mass.top, mass.material));
+    for mass in existing {
+        if mass.top <= bottom || mass.bottom >= top {
+            continue;
+        }
+        if mass.bottom <= bottom {
+            bottom = mass.top;
+            continue;
+        }
+        return Err(vec![recipe_issue(format!(
+            "platform support {bottom}..{top} at {position:?} overlaps isolated authored mass {mass:?}"
+        ))]);
+    }
+    push_mass(column, bottom, top, material);
     Ok(())
 }
 
@@ -2958,6 +3067,172 @@ mod tests {
     }
 
     #[test]
+    fn stair_treads_retain_exact_radial_stone_haunches() {
+        for rise_levels in [100, 144, 200] {
+            let (plan, objects) = raw_plan(rise_levels);
+            let metrics = validated_metrics(&plan, &objects, rise_levels);
+            let settings = V3CrystalAscentSettings {
+                base_level: 6,
+                rise_levels,
+            };
+            let circuits = (0..CIRCUIT_COUNT)
+                .map(|circuit| {
+                    expected_circuit_surfaces(&settings, circuit)
+                        .expect("authored circuit should resolve")
+                })
+                .collect::<Vec<_>>();
+            let haunches = expected_stair_haunch_thicknesses(&circuits)
+                .expect("authored haunches should resolve");
+            assert_eq!(haunches.len(), 1_668);
+
+            let mut lane_thicknesses = BTreeMap::<u32, BTreeSet<Level>>::new();
+            for (surface, thickness) in &haunches {
+                let lane =
+                    u32::try_from(*thickness).expect("haunch thickness should be positive") / 2;
+                lane_thicknesses.entry(lane).or_default().insert(*thickness);
+
+                let bottom = surface
+                    .level
+                    .saturating_add(1)
+                    .saturating_sub(*thickness)
+                    .max(0);
+                for level in bottom..=surface.level {
+                    let solid = solid_material_at(&plan.volume, surface.coord, level);
+                    assert!(
+                        solid.is_some(),
+                        "rise {rise_levels} leaves air inside {thickness}-voxel haunch below {surface:?} at level {level}"
+                    );
+                    if level > settings.base_level {
+                        assert_eq!(
+                            solid,
+                            Some(SolidMaterialRole::WorkedStone),
+                            "elevated haunch support must be carved worked stone"
+                        );
+                    }
+                }
+            }
+            assert_eq!(
+                lane_thicknesses,
+                BTreeMap::from([
+                    (1, BTreeSet::from([2])),
+                    (2, BTreeSet::from([4])),
+                    (3, BTreeSet::from([6])),
+                    (4, BTreeSet::from([8])),
+                ])
+            );
+            assert_eq!(
+                metrics.stair_surfaces as usize,
+                expected_all_stair_surfaces(&settings).len()
+            );
+            for (circuit, (inner, outer)) in CIRCUIT_BANDS.iter().copied().enumerate() {
+                let surfaces = circuits
+                    .get(circuit)
+                    .expect("authored circuit should exist");
+                for surface in surfaces {
+                    let radius = surface.coord.distance(HexCoord::ORIGIN);
+                    if !(inner..=outer).contains(&radius) {
+                        continue;
+                    }
+                    let expected = i32::try_from(
+                        radius
+                            .saturating_sub(inner)
+                            .saturating_add(1)
+                            .saturating_mul(2),
+                    )
+                    .expect("four authored lanes fit a level");
+                    assert!(
+                        haunches.get(surface).is_some_and(|actual| *actual >= expected),
+                        "circuit {circuit} radius {radius} must deepen outward to at least {expected} voxels"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn malformed_outer_stair_haunch_fails_recipe_validation() {
+        let (plan, objects) = raw_plan(144);
+        let settings = V3CrystalAscentSettings {
+            base_level: 6,
+            rise_levels: 144,
+        };
+        let circuits = (0..CIRCUIT_COUNT)
+            .map(|circuit| {
+                expected_circuit_surfaces(&settings, circuit)
+                    .expect("authored circuit should resolve")
+            })
+            .collect::<Vec<_>>();
+        let haunches =
+            expected_stair_haunch_thicknesses(&circuits).expect("authored haunches should resolve");
+        let (surface, thickness) = haunches
+            .iter()
+            .find(|(surface, thickness)| **thickness == 8 && surface.level > 20)
+            .map(|(surface, thickness)| (*surface, *thickness))
+            .expect("fixture should contain an elevated outer-lane haunch");
+        let bottom = surface.level + 1 - thickness;
+        let mut missing = plan.clone();
+        let column = missing
+            .volume
+            .columns
+            .get_mut(&surface.coord)
+            .expect("haunch column should exist");
+        let mass = column
+            .elements
+            .iter_mut()
+            .find_map(|element| match element {
+                VolumeElement::Solid(mass)
+                    if mass.material == SolidMaterialRole::WorkedStone
+                        && mass.levels.bottom == bottom
+                        && mass.levels.top == surface.level + 1 =>
+                {
+                    Some(mass)
+                }
+                _ => None,
+            })
+            .expect("outer-lane support should be one compact worked-stone run");
+        mass.levels.bottom += 1;
+
+        let WorldValidation::Invalid(issues) =
+            validate_crystal_ascent(&missing, &settings, &objects)
+        else {
+            panic!("missing haunch voxel must fail recipe validation");
+        };
+        assert!(issues
+            .iter()
+            .any(|issue| issue.detail.contains("stair haunch")));
+
+        let mut oversized = plan;
+        let column = oversized
+            .volume
+            .columns
+            .get_mut(&surface.coord)
+            .expect("haunch column should exist");
+        let mass = column
+            .elements
+            .iter_mut()
+            .find_map(|element| match element {
+                VolumeElement::Solid(mass)
+                    if mass.material == SolidMaterialRole::WorkedStone
+                        && mass.levels.bottom == bottom
+                        && mass.levels.top == surface.level + 1 =>
+                {
+                    Some(mass)
+                }
+                _ => None,
+            })
+            .expect("outer-lane support should be one compact worked-stone run");
+        mass.levels.bottom -= 1;
+        let WorldValidation::Invalid(issues) =
+            validate_crystal_ascent(&oversized, &settings, &objects)
+        else {
+            panic!("over-deep haunch must fail recipe validation");
+        };
+        assert!(issues.iter().any(|issue| issue
+            .detail
+            .contains("extends beneath its exact 8-voxel support")));
+    }
+
+    #[test]
     fn interior_review_anchors_are_stable_clear_and_fixture_aware() {
         let (plan, objects) = raw_plan(144);
         validated_metrics(&plan, &objects, 144);
@@ -3079,6 +3354,31 @@ mod tests {
             .copied()
             .collect::<BTreeSet<_>>();
         assert!(!summit_stairs.is_empty());
+        assert_eq!(OCULUS_RADIUS, 11);
+        assert!(plan.volume.surfaces.keys().all(|surface| {
+            surface.level != summit || surface.coord.distance(HexCoord::ORIGIN) >= OCULUS_RADIUS
+        }));
+        let rim = ring_coordinates(OCULUS_RADIUS)
+            .into_iter()
+            .map(|coord| TilePos::new(coord, summit))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(rim.len(), 66);
+        assert!(rim
+            .iter()
+            .all(|surface| plan.volume.surfaces.contains_key(surface)));
+        for radius in OCULUS_RADIUS..=21 {
+            assert_eq!(
+                stairs
+                    .iter()
+                    .filter(|surface| {
+                        surface.level == summit
+                            && surface.coord.distance(HexCoord::ORIGIN) == radius
+                    })
+                    .count(),
+                4,
+                "summit ingress must remain exactly four wide at radius {radius}"
+            );
+        }
         assert!(summit_stairs.iter().all(|surface| {
             plan.volume
                 .surfaces
@@ -3453,6 +3753,23 @@ mod tests {
                     .get(&PatchId(0))
                     .expect("translated Crystal Ascent patch should exist")
                     .mask
+            );
+            let heart_rotation = fragment
+                .lights
+                .values()
+                .find_map(|light| match light.presentation {
+                    Some(PlannedLightPresentation::CrystalAscent(
+                        CrystalAscentCrystalPresentation {
+                            kind: CrystalAscentCrystalKind::Heart,
+                            rotation,
+                        },
+                    )) => Some(rotation),
+                    _ => None,
+                })
+                .expect("translated Crystal Ascent should retain its heart presentation");
+            assert_eq!(
+                heart_rotation, rotation_turns,
+                "Macro patch rotation must compose into asymmetric heart occupancy"
             );
             for anchor in [LOWER_ENTRY, BOTTOM_CHAMBER, UPPER_EXIT] {
                 let expected = frame

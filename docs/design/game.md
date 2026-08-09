@@ -375,6 +375,12 @@ contracts inward like a Gothic cathedral, and emerges through an oculus into a w
 summit clearing. Smaller landing crystals make the route readable without turning the
 whole interior into daylight.
 
+The cathedral heart is a tall, asymmetric prism rather than a concentric pyramid:
+its fractured footing narrows quickly into a long irregular body and an off-centre
+crown. The stair tops remain four hexes wide, but their carved worked-stone support
+deepens across the route toward the wall instead of ending as a one-voxel shelf. The
+summit opening is a compact radius-11 oculus.
+
 The standalone scenario fixes the climb at 144 voxel levels while the authored recipe
 accepts 100 through 200 for later composition. Four-wide stairs and landings support a
 full party, ordinary transitions remain flat or one level, and each contraction
