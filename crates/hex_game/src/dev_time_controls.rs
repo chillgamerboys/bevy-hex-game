@@ -113,7 +113,7 @@ mod tests {
     };
     use hex_core::{
         ExteriorIllumination, GameplaySetup, Headroom, HexCoord, HexSpan, HexTile,
-        IlluminationLevel, InteriorRegions, PerceptionSystems, TerrainReady, TilePos,
+        IlluminationLevel, InteriorRegions, PerceptionSystems, RunBottom, TerrainReady, TilePos,
         TraversalBlockers,
     };
     use hex_perception::{PerceptionRuntimeStats, ResolvedIllumination};
@@ -409,10 +409,16 @@ mod tests {
             .insert_resource(TraversalBlockers::new())
             .insert_resource(TerrainReady)
             .insert_resource(table)
-            .add_plugins((hex_world::sky::plugin, hex_perception::plugin, plugin));
+            .add_plugins((
+                hex_world::sky::plugin,
+                hex_units::terrain_occupancy::plugin,
+                hex_perception::plugin,
+                plugin,
+            ));
         app.world_mut().spawn((
             HexTile,
             position,
+            RunBottom(position.level),
             HexSpan::new(0.0, 1.0),
             stone,
             Headroom(2),
