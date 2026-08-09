@@ -38,10 +38,6 @@ impl LocalRequestIds {
         self.last = self.last.checked_add(1)?;
         Some(CommandRequestId(self.last))
     }
-
-    fn reset(&mut self) {
-        self.last = 0;
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -126,7 +122,10 @@ pub(super) fn plugin(app: &mut App) {
         )
         .add_systems(
             OnExit(Screen::Gameplay),
-            (reset_request_state, despawn_authority_replicas),
+            (
+                close_gameplay_authority_requests,
+                despawn_authority_replicas,
+            ),
         );
 }
 
@@ -192,6 +191,13 @@ fn enqueue_authenticated_commands(
             seat: effective_seat,
             command: request.command.clone(),
         };
+        // One reducer pass drains the whole queue. Keeping at most one request for
+        // an acting unit makes every refusal event correlate exactly to one pending
+        // request, including two clients racing to command the same canonical unit.
+        if queue.holds_command_for(request.command.unit()) {
+            resolutions.write(refused_resolution(request, CommandRefusalReason::Busy));
+            continue;
+        }
         queue.push_authenticated(issued.clone(), request.source_seat, request.request_id);
         pending.0.push_back(PendingAuthorityRequest {
             source_seat: request.source_seat,
@@ -769,13 +775,31 @@ fn conceal_unprojected_hostiles(
     }
 }
 
-fn reset_request_state(
-    mut ids: ResMut<LocalRequestIds>,
+fn close_gameplay_authority_requests(
     mut pending: ResMut<PendingAuthorityRequests>,
     mut projected: ResMut<BoundaryProjection>,
+    mut boundary: ResMut<AuthorityBoundary>,
+    mut resolutions: MessageWriter<AuthorityCommandResolution>,
 ) {
-    ids.reset();
-    pending.0.clear();
+    for request in pending.0.drain(..) {
+        resolutions.write(AuthorityCommandResolution {
+            source_seat: request.source_seat,
+            request_id: request.request_id,
+            outcome: CommandOutcome::Refused(CommandRefusalReason::WrongMode),
+        });
+    }
+    if projected.queue_nonempty && boundary.finish_command().is_err() {
+        warn!("gameplay teardown found an unbalanced authority queue boundary");
+    }
+    if projected.decision_open && boundary.finish_decision().is_err() {
+        warn!("gameplay teardown found an unbalanced authority decision boundary");
+    }
+    for _ in 0..projected.movements {
+        if boundary.finish_movement().is_err() {
+            warn!("gameplay teardown found an unbalanced authority movement boundary");
+            break;
+        }
+    }
     *projected = BoundaryProjection::default();
 }
 
@@ -947,6 +971,53 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_race_for_one_unit_is_refused_before_reducer_correlation() {
+        let mut app = App::new();
+        app.init_resource::<CommandQueue>()
+            .init_resource::<PendingAuthorityRequests>()
+            .add_message::<AuthenticatedCommandRequest>()
+            .add_message::<AuthorityCommandResolution>()
+            .add_systems(Update, enqueue_authenticated_commands);
+        let command = GameCommand::EndTurn { unit: UnitId(9) };
+        for (seat, request_id) in [(PlayerSeat(1), 11), (PlayerSeat(2), 12)] {
+            app.world_mut()
+                .resource_mut::<Messages<AuthenticatedCommandRequest>>()
+                .write(AuthenticatedCommandRequest {
+                    source_seat: seat,
+                    player_identity: hex_multiplayer::SessionPeerId::from_bytes([seat.0; 16]),
+                    request_id: CommandRequestId(request_id),
+                    command: command.clone(),
+                });
+        }
+
+        app.update();
+
+        assert!(app
+            .world()
+            .resource::<CommandQueue>()
+            .contains_authenticated(PlayerSeat(1), CommandRequestId(11)));
+        assert!(!app
+            .world()
+            .resource::<CommandQueue>()
+            .contains_authenticated(PlayerSeat(2), CommandRequestId(12)));
+        assert_eq!(
+            app.world().resource::<PendingAuthorityRequests>().0.len(),
+            1
+        );
+        assert_eq!(
+            app.world_mut()
+                .resource_mut::<Messages<AuthorityCommandResolution>>()
+                .drain()
+                .collect::<Vec<_>>(),
+            vec![AuthorityCommandResolution {
+                source_seat: PlayerSeat(2),
+                request_id: CommandRequestId(12),
+                outcome: CommandOutcome::Refused(CommandRefusalReason::Busy),
+            }]
+        );
+    }
+
+    #[test]
     fn consumed_authenticated_request_is_correlated_to_one_result() {
         let mut app = App::new();
         app.init_resource::<CommandQueue>()
@@ -1046,6 +1117,29 @@ mod tests {
                 None,
             ),
             PlayerSeat::HOST
+        );
+    }
+
+    #[test]
+    fn gameplay_teardown_never_reuses_local_request_ids() {
+        let mut app = App::new();
+        app.init_resource::<LocalRequestIds>()
+            .init_resource::<PendingAuthorityRequests>()
+            .init_resource::<BoundaryProjection>()
+            .init_resource::<AuthorityBoundary>()
+            .add_message::<AuthorityCommandResolution>()
+            .add_systems(Update, close_gameplay_authority_requests);
+        assert_eq!(
+            app.world_mut().resource_mut::<LocalRequestIds>().allocate(),
+            Some(CommandRequestId(1))
+        );
+
+        app.update();
+
+        assert_eq!(
+            app.world_mut().resource_mut::<LocalRequestIds>().allocate(),
+            Some(CommandRequestId(2)),
+            "returning through a lobby must not collide with the sequencer cache"
         );
     }
 

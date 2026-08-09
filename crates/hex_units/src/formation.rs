@@ -150,7 +150,7 @@ pub fn plan_formation_subset_move_with_occupancy(
             .iter()
             .find_map(|(&unit, &assigned)| (assigned == slot.offset).then_some(unit));
         if let Some(unit) = occupant {
-            if unit != anchor && !ordered.contains(&unit) {
+            if unit != anchor && members.contains_key(&unit) && !ordered.contains(&unit) {
                 ordered.push(unit);
             }
         }
@@ -550,6 +550,55 @@ mod tests {
             })
             .collect();
         (preset, formation, anchor_path, members)
+    }
+
+    #[test]
+    fn subset_planning_ignores_other_seats_authored_slots() {
+        let (preset, formation, _global_path, members) = six_member_case(FormationTerrain::Open, 3);
+        let subset_ids = [UnitId(1), UnitId(3)];
+        let anchor = formation_subset_anchor(&preset, &formation, &subset_ids)
+            .expect("the subset should receive its first authored slot as anchor");
+        let anchor_member = members
+            .iter()
+            .find(|member| member.unit == anchor)
+            .expect("the fixture should contain the subset anchor");
+        let destination = TilePos::new(
+            translated(anchor_member.standing.pos.coord, HexCoord::from_axial(3, 0)),
+            anchor_member.standing.pos.level,
+        );
+        let anchor_destination = anchor_member
+            .footing
+            .at(destination)
+            .expect("the open fixture should contain the translated destination");
+        let anchor_path = route(
+            anchor_member.standing,
+            anchor_destination,
+            &anchor_member.footing,
+        )
+        .expect("the open fixture should connect the subset route");
+        let subset = members
+            .into_iter()
+            .filter(|member| subset_ids.contains(&member.unit))
+            .collect::<Vec<_>>();
+
+        let plan = plan_formation_subset_move_with_occupancy(
+            &preset,
+            &formation,
+            anchor,
+            &anchor_path,
+            subset,
+            &UnitOccupancy::default(),
+        )
+        .expect("foreign formation occupants must not enter the seat-owned plan");
+
+        assert_eq!(plan.paths.first().map(|path| path.member), Some(anchor));
+        assert_eq!(
+            plan.paths
+                .iter()
+                .map(|path| path.member)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(subset_ids)
+        );
     }
 
     #[test]
