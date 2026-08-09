@@ -186,6 +186,16 @@ arms to the wave in `d942d5c7`; L4 still does not edit `walk.rs`, and the new ar
 #188/#190's `HoverTile`/`AssertCameraMode` hunks. This is an additive clarification of the
 same remap, not lane territory. Ratifier: coordinator.
 
+Composed L4 work then exposed two more coordinator-owned integration gaps. A host-only
+lobby entered `Loading` after accepting the host fingerprint but had no remote
+`ClientMapReady` event capable of activating it. The shared authority now activates
+immediately when the host is the only claimed seat, while still waiting for every claimed
+guest in an ordinary lobby. The first L4 visual-walk fixture also required the generic
+screen parser and checked-in script registry to recognize the already-reserved Multiplayer
+screen. Commit `943b497c` fixes both without touching #188/#190's camera-step variants;
+`f2da0c71` carries the identical L4-owned setup-frame script onto the wave so the combined
+all-feature test remains green before the L4 merge. Ratifier: coordinator.
+
 ## Shared foundation
 
 Live contracts this wave builds on:
@@ -538,6 +548,12 @@ amend this manifest after owner review.
   map-review timeout and visual-walk root-classification arms. This keeps the new app
   state and neutral shared-tooling fallout outside L4's lane queue and compiles with every
   feature while preserving #188/#190's active walk hunks.
+- `943b497cfb3a6fdeb4080b4f7119d10a6b8266cd` — coordinator-owned composed fix for
+  host-only activation plus the generic visual-walk Multiplayer parser/registry. Focused
+  evidence: 42 `hex_multiplayer` unit tests, the host-plus-six-client contract, and the
+  all-feature walk screen/script validators PASS. `f2da0c71dc0825b822f822c72cd8790186393382`
+  mirrors L4's direct-setup script onto the wave so the registry never points at an absent
+  file while L4 remains merge-blocked on L3.
 
 ## Close-out
 
