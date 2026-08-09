@@ -1382,7 +1382,7 @@ impl Default for MultiplayerView {
             share_code: None,
             join_code: SensitiveText::default(),
             reconnect_available: false,
-            seats: (0_u8..PlayerSeat::HUMAN_COUNT as u8)
+            seats: (0_u8..=PlayerSeat::LAST_HUMAN.0)
                 .filter_map(PlayerSeat::human)
                 .map(MultiplayerSeatView::vacant)
                 .collect(),

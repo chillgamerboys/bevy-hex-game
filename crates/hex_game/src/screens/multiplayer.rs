@@ -117,7 +117,7 @@ impl SessionUiRequestIds {
 enum DirectStartQueue {
     Host {
         endpoint: DirectEndpoint,
-        prepared: PreparedDirectSandboxSession,
+        prepared: Box<PreparedDirectSandboxSession>,
     },
     Join {
         code: DirectConnectionCode,
@@ -267,7 +267,7 @@ fn queue_prepared_host_after_sandbox(
     model.connecting(MultiplayerRole::Host);
     commands.insert_resource(DirectStartQueue::Host {
         endpoint: pending.endpoint.clone(),
-        prepared,
+        prepared: Box::new(prepared),
     });
 }
 
@@ -514,7 +514,7 @@ fn direct_endpoint(draft: &MultiplayerDraft) -> Result<DirectEndpoint, String> {
     let port = draft
         .advertised_port
         .parse::<u16>()
-        .map_err(|_| "UDP port must be a number from 1 through 65535.".to_owned())?;
+        .map_err(|_error| "UDP port must be a number from 1 through 65535.".to_owned())?;
     DirectEndpoint::new(draft.advertised_host.trim(), port)
         .map_err(|error| format!("Advertised endpoint refused: {error}."))
 }
@@ -589,7 +589,7 @@ fn start_queued_direct_session(world: &mut World) {
     };
     let result = match request {
         DirectStartQueue::Host { endpoint, prepared } => {
-            start_direct_host(world, endpoint, prepared)
+            start_direct_host(world, endpoint, *prepared)
         }
         DirectStartQueue::Join {
             code,
@@ -1055,7 +1055,7 @@ fn publish_view(
 }
 
 fn default_seats() -> Vec<MultiplayerSeatView> {
-    (0_u8..PlayerSeat::HUMAN_COUNT as u8)
+    (0_u8..=PlayerSeat::LAST_HUMAN.0)
         .filter_map(PlayerSeat::human)
         .map(MultiplayerSeatView::vacant)
         .collect()

@@ -702,8 +702,12 @@ mod tests {
             local_menu_open: true,
             ..Default::default()
         };
-        view.seats[1].local = true;
-        view.seats[1].connection = MultiplayerSeatConnectionView::Connected;
+        let guest = view
+            .seats
+            .get_mut(1)
+            .expect("six-seat fixture has seat two");
+        guest.local = true;
+        guest.connection = MultiplayerSeatConnectionView::Connected;
         app.world_mut().insert_resource(view);
         app.world_mut()
             .resource_mut::<NextState<Screen>>()
