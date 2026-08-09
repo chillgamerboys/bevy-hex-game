@@ -109,6 +109,7 @@ fn render_screen(root: &mut ChildSpawnerCommands, assets: &UiAssets, view: &Mult
         MultiplayerRoute::Connecting => render_waiting(
             root,
             assets,
+            view.role,
             "Connecting",
             "Opening the encrypted, certificate-pinned direct session and waiting for admission.",
         ),
@@ -116,12 +117,14 @@ fn render_screen(root: &mut ChildSpawnerCommands, assets: &UiAssets, view: &Mult
         MultiplayerRoute::Loading => render_waiting(
             root,
             assets,
+            view.role,
             "Verifying World",
             "Every peer is generating the frozen shipped map and comparing the complete public-world fingerprint.",
         ),
         MultiplayerRoute::Reconnecting => render_waiting(
             root,
             assets,
+            view.role,
             "Reconnecting",
             "Your reserved seat is being reclaimed at a safe authority boundary. Local camera and selection will be restored locally.",
         ),
@@ -290,22 +293,26 @@ fn render_network_limits(root: &mut ChildSpawnerCommands, assets: &UiAssets, por
 fn render_waiting(
     root: &mut ChildSpawnerCommands,
     assets: &UiAssets,
+    role: Option<MultiplayerRole>,
     heading_text: &str,
     detail: &str,
 ) {
+    let (action_label, action) = waiting_action(role);
     root.spawn((Name::new(heading_text.to_owned()), panel()))
         .insert(action_panel_node(680.0))
         .with_children(|status| {
             status.spawn(heading(assets, heading_text));
             status.spawn(blurb(assets, detail));
-            action_button(
-                status,
-                assets,
-                "Leave Session",
-                MultiplayerIntent::LeaveSession,
-                true,
-            );
+            action_button(status, assets, action_label, action, true);
         });
+}
+
+fn waiting_action(role: Option<MultiplayerRole>) -> (&'static str, MultiplayerIntent) {
+    if role == Some(MultiplayerRole::Host) {
+        ("Close Session", MultiplayerIntent::CloseSession)
+    } else {
+        ("Leave Session", MultiplayerIntent::LeaveSession)
+    }
 }
 
 fn render_lobby(root: &mut ChildSpawnerCommands, assets: &UiAssets, view: &MultiplayerView) {
@@ -688,6 +695,18 @@ mod tests {
         ] {
             assert!(!route_title(route).is_empty());
         }
+    }
+
+    #[test]
+    fn waiting_states_never_offer_the_host_an_action_that_authority_refuses() {
+        assert_eq!(
+            waiting_action(Some(MultiplayerRole::Host)),
+            ("Close Session", MultiplayerIntent::CloseSession)
+        );
+        assert_eq!(
+            waiting_action(Some(MultiplayerRole::Client)),
+            ("Leave Session", MultiplayerIntent::LeaveSession)
+        );
     }
 
     #[cfg(feature = "test-support")]
