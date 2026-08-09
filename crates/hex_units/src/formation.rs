@@ -46,6 +46,28 @@ pub enum FormationPlanError {
     Occupied(OccupancyBlock),
 }
 
+/// Selects the deterministic anchor for one complete party subset.
+///
+/// The authored global anchor wins when it belongs to the subset. Otherwise slots are
+/// considered in authored order, preserving a stable anchor for every seat without
+/// rewriting the shared formation assignment.
+#[must_use]
+pub fn formation_subset_anchor(
+    preset: &FormationPreset,
+    formation: &PartyFormation,
+    members: &[UnitId],
+) -> Option<UnitId> {
+    let global = formation.anchor_member(preset);
+    if global.is_some_and(|unit| members.contains(&unit)) {
+        return global;
+    }
+    preset.slots.iter().find_map(|slot| {
+        formation.assignments.iter().find_map(|(&unit, &assigned)| {
+            (assigned == slot.offset && members.contains(&unit)).then_some(unit)
+        })
+    })
+}
+
 /// Builds an atomic formation plan, returning the first member that cannot be placed.
 pub fn plan_formation_move(
     preset: &FormationPreset,
@@ -78,10 +100,48 @@ pub fn plan_formation_move_with_occupancy(
         .iter()
         .find_map(|(&unit, &slot)| (slot == anchor_slot).then_some(unit))
         .ok_or(FormationPlanError::InvalidFormation)?;
+    plan_formation_subset_move_with_occupancy(
+        preset,
+        formation,
+        anchor,
+        anchor_path,
+        members,
+        occupancy,
+    )
+}
+
+/// Builds an atomic route for one seat-owned party subset around an explicit anchor.
+///
+/// The member list is the complete subset the caller intends to move. Authored slot
+/// offsets remain shared across the whole party, but the selected seat's anchor replaces
+/// the preset's global anchor for route order and translation.
+pub fn plan_formation_subset_move_with_occupancy(
+    preset: &FormationPreset,
+    formation: &PartyFormation,
+    anchor: UnitId,
+    anchor_path: &[Standing],
+    members: Vec<FormationMember>,
+    occupancy: &UnitOccupancy,
+) -> Result<FormationPlan, FormationPlanError> {
+    if preset.anchor().is_none() || !formation.assignments.contains_key(&anchor) {
+        return Err(FormationPlanError::InvalidFormation);
+    }
+    let member_ids = members.iter().map(|member| member.unit).collect::<Vec<_>>();
+    if formation_subset_anchor(preset, formation, &member_ids) != Some(anchor) {
+        return Err(FormationPlanError::InvalidFormation);
+    }
     let mut members: BTreeMap<_, _> = members
         .into_iter()
         .map(|member| (member.unit, member))
         .collect();
+    if !members.contains_key(&anchor) {
+        return Err(FormationPlanError::NoSafeSlot(anchor));
+    }
+    let anchor_offset = formation
+        .assignments
+        .get(&anchor)
+        .copied()
+        .ok_or(FormationPlanError::InvalidFormation)?;
     let mut ordered = Vec::with_capacity(members.len());
     ordered.push(anchor);
     for slot in &preset.slots {
@@ -140,7 +200,9 @@ pub fn plan_formation_move_with_occupancy(
                 .get(&unit)
                 .copied()
                 .ok_or(FormationPlanError::InvalidFormation)?;
-            let ideal_coord = translated(anchor_step.pos.coord, rotated(slot, facing));
+            let relative_slot =
+                HexCoord::from_axial(slot.x() - anchor_offset.x(), slot.y() - anchor_offset.y());
+            let ideal_coord = translated(anchor_step.pos.coord, rotated(relative_slot, facing));
 
             let chosen = if unit == anchor {
                 member.footing.at(anchor_step.pos).and_then(|destination| {

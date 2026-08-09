@@ -736,6 +736,36 @@ fn a_wrongly_owned_party_member_rejects_the_whole_move() {
 }
 
 #[test]
+fn group_movement_commits_only_the_issuing_seats_complete_subset() {
+    let (mut app, anchor, rear) = pair_party_app();
+    app.world_mut()
+        .entity_mut(rear)
+        .insert(ControlOwner(PlayerSeat(1)));
+    let destination = HexCoord::from_axial(1, 0);
+    let command = party_command(
+        UnitId(1),
+        vec![(UnitId(1), &[HexCoord::ORIGIN, destination])],
+    );
+
+    push_as(&mut app, PlayerSeat::HOST, command);
+    settle(&mut app);
+
+    assert_eq!(
+        standing_of(&mut app, anchor),
+        Some(TilePos::new(destination, GROUND_LEVEL)),
+        "the issuing seat's complete subset should commit atomically"
+    );
+    assert_eq!(
+        standing_of(&mut app, rear),
+        Some(TilePos::new(HexCoord::from_axial(-1, 0), GROUND_LEVEL)),
+        "another seat's party member remains canonical occupancy, not part of the move"
+    );
+    assert!(take_events(&mut app)
+        .into_iter()
+        .all(|event| !matches!(event, CombatEvent::CommandRefused { .. })));
+}
+
+#[test]
 fn a_party_route_cannot_enter_a_nonparty_body() {
     let (mut app, anchor, rear) = pair_party_app();
     let destination = HexCoord::from_axial(1, 0);

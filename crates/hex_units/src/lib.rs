@@ -50,8 +50,9 @@ pub mod units;
 pub mod volumes;
 
 pub use formation::{
-    plan_formation_move, plan_formation_move_with_occupancy, rotated, FormationMember,
-    FormationPlan, FormationPlanError,
+    formation_subset_anchor, plan_formation_move, plan_formation_move_with_occupancy,
+    plan_formation_subset_move_with_occupancy, rotated, FormationMember, FormationPlan,
+    FormationPlanError,
 };
 pub use hex_core::{Faction, OccupancyBlock, UnitOccupancy};
 pub use movement::{

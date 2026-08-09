@@ -47,8 +47,8 @@ use std::collections::{BTreeMap, VecDeque};
 use bevy::prelude::*;
 
 use hex_core::{
-    AppSystems, EffectEnd, EffectId, EffectPayload, Mode, PausableSystems, PendingDecision,
-    PersistentEffect, RoundElapsed, Screen, TerrainSystems, Turn, UnitId,
+    AppSystems, AuthoritativeSystems, EffectEnd, EffectId, EffectPayload, Mode, PausableSystems,
+    PendingDecision, PersistentEffect, RoundElapsed, Screen, TerrainSystems, Turn, UnitId,
 };
 use hex_lattice::LatticeState;
 use hex_units::UnitRegistry;
@@ -114,6 +114,18 @@ impl PersistentEffects {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.effects.is_empty()
+    }
+
+    /// Replaces the local ledger with an ordered disclosure-safe replica projection.
+    ///
+    /// Effect handles are authority-private implementation details, so replicas allocate
+    /// local handles in the already-authoritative projection order. No due work is copied:
+    /// only the listen host may tick or resolve persistent effects.
+    pub fn replace_replica(&mut self, projected: impl IntoIterator<Item = PersistentEffect>) {
+        self.clear();
+        for effect in projected {
+            self.insert(effect);
+        }
     }
 
     /// Removes every persistent effect carried by `target`.
@@ -481,6 +493,7 @@ pub(crate) fn plugin(app: &mut App) {
         (tick_turn_effects, open_due_decision)
             .chain()
             .in_set(AppSystems::Update)
+            .in_set(AuthoritativeSystems)
             .in_set(PausableSystems)
             // A shared set, not `.before(a_system)`: the tick has to be complete
             // before anything decides what to do with the turn, and `Act` is what
@@ -493,6 +506,7 @@ pub(crate) fn plugin(app: &mut App) {
         Update,
         expire_round_effects
             .in_set(AppSystems::Update)
+            .in_set(AuthoritativeSystems)
             .in_set(PausableSystems)
             .after(crate::CombatSystems::Advance)
             .run_if(in_state(Mode::Combat)),
