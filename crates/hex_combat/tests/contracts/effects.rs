@@ -117,6 +117,25 @@ fn spells(burn_turns: u16) -> SpellBook {
         },
     );
     by_name.insert(
+        "Self Ward".to_owned(),
+        Spell {
+            requirements: vec![GemRequirement {
+                element: "Metal".to_owned(),
+                mana: 1,
+            }],
+            casting: CastingAxis::Enchantment { defense: 1 },
+            mana: ManaAxis::Fixed,
+            co_castable: false,
+            targeting: TargetingSpec {
+                range: 0,
+                reach: TargetingReach::Ranged,
+                shape: TargetShape::SelfCast,
+                trajectory: Trajectory::None,
+            },
+            effects: Vec::new(),
+        },
+    );
+    by_name.insert(
         "Mend".to_owned(),
         Spell {
             requirements: vec![GemRequirement {
@@ -1252,6 +1271,71 @@ fn run_until_acting(app: &mut App, unit: UnitId) {
 }
 
 // --- tests -------------------------------------------------------------------
+
+#[test]
+fn self_cast_refuses_an_off_self_anchor_before_payment() {
+    let mut app = test_app(2);
+    let catalog = app.world().resource::<ElementCatalog>().clone();
+    let book = app.world().resource::<SpellBook>().clone();
+    let caster = spawn(
+        &mut app,
+        UnitId(1),
+        Faction::Player,
+        HexCoord::ORIGIN,
+        20,
+        lattice_casting(&book, &catalog, "Self Ward", "Metal", 2),
+    );
+    let target = TilePos::new(HexCoord::from_axial(1, 0), GROUND);
+    spawn_at(
+        &mut app,
+        UnitId(2),
+        Faction::Hostile,
+        target,
+        10,
+        lattice_casting(&book, &catalog, "Ward", "Metal", 3),
+    );
+    publish_spatial_knowledge(&mut app);
+    enter_combat(&mut app);
+
+    let command = GameCommand::Cast {
+        unit: UnitId(1),
+        spell: "Self Ward".to_owned(),
+        target,
+        facing: None,
+        mana: None,
+    };
+    let refusal = CommandRefusal::TargetOutOfRange {
+        spell: "Self Ward".to_owned(),
+        target,
+    };
+    let mut reducer = hex_combat::authority_snapshot(app.world())
+        .expect("the composed self-cast fixture freezes into pure authority");
+    assert_eq!(
+        reducer.apply(IssuedCommand {
+            seat: PlayerSeat::default(),
+            command: command.clone(),
+        }),
+        Err(refusal.clone()),
+        "the reducer and ECS adapter must reject the same wire target"
+    );
+    let mana_before = lattice_mana(&app, caster);
+    let _ = take_events(&mut app);
+    push(&mut app, command.clone());
+    app.update();
+
+    assert_eq!(lattice_mana(&app, caster), mana_before);
+    assert!(
+        !app.world()
+            .entity(caster)
+            .get::<Turn>()
+            .expect("the refused caster retains its turn")
+            .acted
+    );
+    assert_eq!(
+        take_events(&mut app),
+        vec![CombatEvent::CommandRefused { command, refusal }]
+    );
+}
 
 #[test]
 fn touch_restoration_accepts_self_and_every_flat_hex_direction() {

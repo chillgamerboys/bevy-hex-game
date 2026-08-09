@@ -184,10 +184,19 @@ pub(super) fn apply(
             spell: spell_name.to_owned(),
         });
     }
-    // `SelfCast` is the one shape whose reach is not a question. Touch is a distinct
-    // occupied-unit rule, never range one: it receives no high-ground bonus and never
-    // authorizes an empty adjacent surface.
-    if !matches!(spec.targeting.shape, TargetShape::SelfCast) {
+    // `SelfCast` is bound to the caster's exact authoritative anchor. The command still
+    // carries a target, so reject a stale or malicious off-self anchor before observation
+    // and payment rather than silently retargeting it during volume resolution. Touch is
+    // a distinct occupied-unit rule, never range one: it receives no high-ground bonus
+    // and never authorizes an empty adjacent surface.
+    if matches!(spec.targeting.shape, TargetShape::SelfCast) {
+        if target != standing.pos {
+            return Err(CommandRefusal::TargetOutOfRange {
+                spell: spell_name.to_owned(),
+                target,
+            });
+        }
+    } else {
         match spec.targeting.reach {
             TargetingReach::Ranged => {
                 let levels = ctx.combat.map_or(DEFAULT_LEVELS_PER_BONUS, |settings| {
