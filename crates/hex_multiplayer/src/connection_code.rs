@@ -1,6 +1,6 @@
 //! Versioned direct-connect codes with explicit endpoint and certificate identity.
 
-use std::fmt;
+use std::{fmt, net::IpAddr};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
@@ -14,8 +14,8 @@ const CONNECTION_CODE_PREFIX: &str = "HEX1.";
 
 /// SHA-256 digest carried by a connection code to pin the host certificate.
 ///
-/// The 32-byte shape is stable. Whether the digest covers the SPKI or the complete leaf
-/// certificate is deliberately not encoded until the audited verifier choice is ratified.
+/// The digest covers the complete DER-encoded `SubjectPublicKeyInfo`. Direct clients use
+/// the project-owned verifier rather than `wtransport`'s leaf-DER convenience verifier.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CertificateFingerprint([u8; Self::BYTE_LENGTH]);
 
@@ -57,12 +57,7 @@ impl DirectEndpoint {
     /// Validates a DNS name or textual IP literal and non-zero UDP port.
     pub fn new(host: impl Into<String>, port: u16) -> Result<Self, ConnectionCodeError> {
         let host = BoundedText::new(host).map_err(ConnectionCodeError::InvalidHostText)?;
-        if !host.as_str().is_ascii()
-            || !host.as_str().chars().all(|character| {
-                character.is_ascii_alphanumeric()
-                    || matches!(character, '.' | '-' | ':' | '[' | ']' | '%' | '_')
-            })
-        {
+        if !valid_advertised_host(host.as_str()) {
             return Err(ConnectionCodeError::InvalidHostSyntax);
         }
         if port == 0 {
@@ -82,6 +77,37 @@ impl DirectEndpoint {
     pub const fn port(&self) -> u16 {
         self.port
     }
+}
+
+fn valid_advertised_host(host: &str) -> bool {
+    if !host.is_ascii() {
+        return false;
+    }
+    let unwrapped = host
+        .strip_prefix('[')
+        .and_then(|candidate| candidate.strip_suffix(']'))
+        .unwrap_or(host);
+    if unwrapped.parse::<IpAddr>().is_ok() {
+        return true;
+    }
+    if unwrapped != host {
+        return false;
+    }
+    host.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && label
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_alphanumeric)
+            && label
+                .as_bytes()
+                .last()
+                .is_some_and(u8::is_ascii_alphanumeric)
+            && label
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    })
 }
 
 /// Decoded direct-connect information.
@@ -270,5 +296,27 @@ mod tests {
             DirectConnectionCode::parse("HEX2.invalid"),
             Err(ConnectionCodeError::WrongVersion)
         );
+    }
+
+    #[test]
+    fn endpoint_accepts_dns_and_ip_literals_but_rejects_uri_fragments() {
+        assert!(DirectEndpoint::new("host.example", 7777).is_ok());
+        assert!(DirectEndpoint::new("127.0.0.1", 7777).is_ok());
+        assert!(DirectEndpoint::new("::1", 7777).is_ok());
+        assert!(DirectEndpoint::new("[::1]", 7777).is_ok());
+        for invalid in [
+            "-host.example",
+            "host-.example",
+            "host_name.example",
+            "[not-ip]",
+            "host.example/path",
+            "host.example:7777",
+            "host.example.",
+        ] {
+            assert_eq!(
+                DirectEndpoint::new(invalid, 7777),
+                Err(ConnectionCodeError::InvalidHostSyntax)
+            );
+        }
     }
 }
