@@ -3792,16 +3792,21 @@ dependencies = [
  "aeronet_channel",
  "aeronet_replicon",
  "aeronet_webtransport",
+ "atomicwrites",
  "base64",
  "bevy_app",
  "bevy_ecs",
  "bevy_replicon",
  "bevy_state",
+ "bevy_time",
  "hex_core",
  "hex_lattice",
  "rand 0.8.7",
+ "rcgen",
  "serde",
  "serde_json",
+ "sha2",
+ "x509-parser",
 ]
 
 [[package]]
