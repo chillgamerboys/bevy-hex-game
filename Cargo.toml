@@ -34,6 +34,7 @@ bevy_math = "0.19"
 bevy_platform = "0.19"
 bevy_reflect = "0.19"
 bevy_state = "0.19"
+bevy_time = "0.19"
 bevy-inspector-egui = "0.37"
 bevy_egui = { version = "0.40.1", default-features = false, features = [
     "bevy_ui",
@@ -44,8 +45,11 @@ bevy_egui = { version = "0.40.1", default-features = false, features = [
 atomicwrites = "0.4.4"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 rand = "0.8.5"
+rcgen = "=0.13.2"
 ron = "0.12.2"
+sha2 = "=0.10.9"
 xxhash-rust = { version = "0.8.6", features = ["xxh3"] }
+x509-parser = "=0.17.0"
 serde = { version = "1.0.229", features = ["derive"] }
 base64 = "0.22.1"
 bevy_replicon = { version = "=0.41.1", default-features = false, features = ["client", "server"] }
