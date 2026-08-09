@@ -179,6 +179,13 @@ no world-owned boundary. The coordinator injection remains separately shared aut
 This amendment resolves L4's open-PR territory condition only; L3 remains owner-blocked
 and L4 remains merge-blocked on L3. Ratifier: coordinator.
 
+After L4's first compile, adding `Screen::Multiplayer` exposed two exhaustive shared-tooling
+consumers that were not named by the banked map: the review timeout classifier and visual
+walk root validator. The coordinator moved `Screen::Multiplayer` plus those neutral match
+arms to the wave in `d942d5c7`; L4 still does not edit `walk.rs`, and the new arm is outside
+#188/#190's `HoverTile`/`AssertCameraMode` hunks. This is an additive clarification of the
+same remap, not lane territory. Ratifier: coordinator.
+
 ## Shared foundation
 
 Live contracts this wave builds on:
@@ -358,7 +365,6 @@ lanes:
     builder: worker
     branch: worker/client-hosted-session-ui
     owns:
-      - crates/hex_core/src/app.rs#Screen-Multiplayer-variant
       - crates/hex_gameplay_model/src/multiplayer.rs
       - crates/hex_gameplay_model/src/main_menu.rs#multiplayer-route-only
       - crates/hex_gameplay_model/src/sandbox.rs#multiplayer-entry-and-destination
@@ -527,6 +533,11 @@ amend this manifest after owner review.
   exact retry/return/close transitions, protocol hash `9148828228917372281`, and
   in-memory host-plus-six-client coverage. Focused evidence: 43 unit tests + 1 direct
   session contract, strict `hex_multiplayer` Clippy, and warning-denied rustdoc all PASS.
+- `d942d5c726db549acd8e92a46afe5ef0a6774f21` — coordinator-owned
+  `Screen::Multiplayer` reservation plus exhaustive
+  map-review timeout and visual-walk root-classification arms. This keeps the new app
+  state and neutral shared-tooling fallout outside L4's lane queue and compiles with every
+  feature while preserving #188/#190's active walk hunks.
 
 ## Close-out
 

@@ -917,6 +917,7 @@ fn capture_structural_issues(
             Screen::LatticeDemo => &["Lattice Demo Screen"],
             Screen::CharacterCreator | Screen::SpellCreator => &["Creator Screen"],
             Screen::Sandbox => &["Sandbox"],
+            Screen::Multiplayer => &["Multiplayer"],
             Screen::Loading => &["Loading Screen"],
             Screen::Gameplay => &["Gameplay HUD Safe Frame"],
         };
