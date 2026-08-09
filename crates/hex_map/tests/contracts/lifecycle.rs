@@ -873,6 +873,7 @@ fn v3_crystal_ascent_teardown_and_reentry_preserve_the_complete_landmark() {
             "crystal_ascent.bottom_chamber",
             "crystal_ascent.upper_exit",
             "crystal_ascent.mid_flight",
+            "crystal_ascent.corner_landing",
             "crystal_ascent.upper_contraction",
         ])
     );

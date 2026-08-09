@@ -1908,6 +1908,7 @@ pub(crate) mod tests {
         for name in [
             "crystal_ascent.lower_entry",
             "crystal_ascent.bottom_chamber",
+            "crystal_ascent.corner_landing",
             "crystal_ascent.upper_exit",
         ] {
             assert!(
@@ -1924,6 +1925,9 @@ pub(crate) mod tests {
         let mid_flight = anchors
             .get(&MapAnchorId::from("crystal_ascent.mid_flight"))
             .expect("Crystal Ascent should publish its deterministic mid-flight review point");
+        let corner_landing = anchors
+            .get(&MapAnchorId::from("crystal_ascent.corner_landing"))
+            .expect("Crystal Ascent should publish its deterministic corner-landing review point");
         let upper_contraction = anchors
             .get(&MapAnchorId::from("crystal_ascent.upper_contraction"))
             .expect("Crystal Ascent should publish its upper-contraction review point");
@@ -1938,7 +1942,12 @@ pub(crate) mod tests {
             assert_eq!(resolved.domain, LightDomain::Exterior);
             assert_eq!(resolved.level, IlluminationLevel::Bright);
         }
-        for interior in [bottom_chamber, mid_flight, upper_contraction] {
+        for interior in [
+            bottom_chamber,
+            mid_flight,
+            corner_landing,
+            upper_contraction,
+        ] {
             let resolved = illumination
                 .get(interior)
                 .unwrap_or_else(|| panic!("missing resolved illumination at {interior:?}"));

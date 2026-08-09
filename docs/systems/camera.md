@@ -215,8 +215,12 @@ ordinary pointer movement and bounded party-idle waiting, followed by an exact c
 that the selected unit's authoritative footing and the camera-focus surface both equal
 the requested destination. Sky Islands exercises only its reachable ordinary ground
 bridge. Crystal Ascent proves real movement from its lower entrance through the heart
-chamber, mid-flight, upper contraction, and woodland summit, with Character and First
-Person evidence at the vertical landmarks.
+chamber, mid-flight, a crystal-lit upper corner landing, upper contraction, and
+woodland summit. The landing has exact Character and First Person captures so its
+eight-level clearance and adjacent fixture are reviewed from both close cameras.
+The route switches through the real Formation panel into Solo movement before the
+ascent, leaving the other party members on the apron so the long camera proof does not
+turn into an unrelated atomic-formation routing test.
 
 The separate `walks/camera_first_person.ron` route is a focused Mountains proof, not
 an eighteenth manifest entry. It uses typed `AssertCameraMode(Map|Character|FirstPerson)`

@@ -29,7 +29,8 @@ four-wide clockwise stair circuits, joined by four independent lanes at each
 contraction, climb 144 levels through eighteen crystal-lit landings before emerging
 around a radius-12 oculus into a protected woodland
 clearing. The recipe accepts rises from 100 through 200, keeps its architecture
-seed-independent, publishes stable lower/chamber/upper anchors and terminal pads, and
+seed-independent, publishes stable lower/chamber/upper anchors, an upper
+corner-landing review anchor, and terminal pads, and
 validates exact handoff edges, ordinary traversal, one-level transitions, turning-pad
 headroom, per-crystal light pairs, and the absence of non-handoff cross-loop shortcuts.
 The standalone party starts on the exterior apron facing inward. Macro composition

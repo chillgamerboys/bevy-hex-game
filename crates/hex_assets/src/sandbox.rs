@@ -187,6 +187,7 @@ mod tests {
             .expect("Crystal Ascent should be selectable in Sandbox");
         assert_eq!(crystal_ascent.scenario, "Crystal Ascent");
         assert_eq!(crystal_ascent.fixed_seed, Some(1_592_598_566));
+        assert_eq!(crystal_ascent.preview, "ui/sandbox/crystal-ascent.png");
         assert_eq!(
             crystal_ascent.player_region.center,
             SandboxRegionCenter::Anchor("crystal_ascent.lower_entry".to_owned())

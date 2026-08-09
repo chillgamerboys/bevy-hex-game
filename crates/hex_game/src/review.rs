@@ -43,6 +43,7 @@ use hex_units::{Body, Footing, Selected, Standing, StandsOn};
 use hex_world::{CameraMode, CameraSystems, PanOrbitCamera};
 
 use crate::capture::{prepare_capture_path, write_png};
+use crate::fog::{FOG_CAP_DEPTH_BIAS, FOG_CAP_INSET, FOG_CAP_LIFT, FOG_CAP_THICKNESS};
 use crate::scenarios::ScenarioToLoad;
 
 const SCENARIO_ENV: &str = "HEX_REVIEW_SCENARIO";
@@ -63,8 +64,15 @@ const READBACK_TIMEOUT: Duration = Duration::from_secs(30);
 const MIN_VISIBLE_TILES: usize = 32;
 const MIN_VISIBLE_TILE_PERCENT: usize = 5;
 const ILLUMINATION_CAP_THICKNESS: f32 = 0.02;
-const ILLUMINATION_CAP_INSET: f32 = 0.84;
-const ILLUMINATION_CAP_LIFT: f32 = 0.08;
+const ILLUMINATION_CAP_INSET: f32 = FOG_CAP_INSET;
+/// Physical separation above the complete tactical-fog prism.
+///
+/// The air gap is the authoritative non-coplanarity guarantee when OIT is active;
+/// the material depth bias below also keeps the ordinary transparent pass ordered.
+const ILLUMINATION_CAP_CLEARANCE: f32 = 0.02;
+const ILLUMINATION_CAP_LIFT: f32 = FOG_CAP_LIFT + FOG_CAP_THICKNESS + ILLUMINATION_CAP_CLEARANCE;
+/// Sorts the translucent diagnostic after tactical fog as well as above it.
+const ILLUMINATION_CAP_DEPTH_BIAS: f32 = FOG_CAP_DEPTH_BIAS + 8.0;
 
 /// Installs review automation only when its environment is present.
 pub(super) fn plugin(app: &mut App) {
@@ -456,6 +464,7 @@ impl ReviewIlluminationMaterials {
 enum ReviewView {
     Default,
     Rotated,
+    CounterRotated,
     Rear,
     TopDown,
 }
@@ -485,10 +494,11 @@ impl ReviewView {
         match value {
             "default" => Ok(Self::Default),
             "rotated" => Ok(Self::Rotated),
+            "counter-rotated" | "counter_rotated" => Ok(Self::CounterRotated),
             "rear" => Ok(Self::Rear),
             "top-down" | "top_down" => Ok(Self::TopDown),
             _ => Err(format!(
-                "{VIEW_ENV} must be default, rotated, rear, or top-down; got {value:?}"
+                "{VIEW_ENV} must be default, rotated, counter-rotated, rear, or top-down; got {value:?}"
             )),
         }
     }
@@ -954,17 +964,7 @@ fn apply_review_illumination_overlay(
         let mut overlay = commands.spawn((
             Mesh3d(game_assets.hex_tile.clone()),
             MeshMaterial3d(overlay_materials.for_level(surface.level)),
-            Transform {
-                translation: surface.position.coord.to_world(
-                    surface.span.top + ILLUMINATION_CAP_LIFT + ILLUMINATION_CAP_THICKNESS * 0.5,
-                ),
-                scale: Vec3::new(
-                    ILLUMINATION_CAP_INSET,
-                    ILLUMINATION_CAP_THICKNESS,
-                    ILLUMINATION_CAP_INSET,
-                ),
-                ..default()
-            },
+            review_illumination_transform(surface.position, surface.span),
             Pickable::IGNORE,
             NotShadowCaster,
             ReviewIlluminationOverlay,
@@ -1021,6 +1021,20 @@ fn collect_review_illumination_surfaces<'a>(
     Ok(surfaces)
 }
 
+fn review_illumination_transform(position: TilePos, span: HexSpan) -> Transform {
+    Transform {
+        translation: position
+            .coord
+            .to_world(span.top + ILLUMINATION_CAP_LIFT + ILLUMINATION_CAP_THICKNESS * 0.5),
+        scale: Vec3::new(
+            ILLUMINATION_CAP_INSET,
+            ILLUMINATION_CAP_THICKNESS,
+            ILLUMINATION_CAP_INSET,
+        ),
+        ..default()
+    }
+}
+
 fn review_illumination_material(level: IlluminationLevel) -> StandardMaterial {
     let color = match level {
         IlluminationLevel::Dark => Color::srgba(0.03, 0.04, 0.10, 0.72),
@@ -1031,7 +1045,7 @@ fn review_illumination_material(level: IlluminationLevel) -> StandardMaterial {
         base_color: color,
         alpha_mode: AlphaMode::Blend,
         unlit: true,
-        depth_bias: 8.0,
+        depth_bias: ILLUMINATION_CAP_DEPTH_BIAS,
         ..default()
     }
 }
@@ -1056,6 +1070,13 @@ fn apply_camera_view(
             focus + Quat::from_rotation_y(2.0 * std::f32::consts::PI / 3.0) * offset,
             camera_up(
                 focus + Quat::from_rotation_y(2.0 * std::f32::consts::PI / 3.0) * offset,
+                focus,
+            ),
+        ),
+        ReviewView::CounterRotated => (
+            focus + Quat::from_rotation_y(-2.0 * std::f32::consts::PI / 3.0) * offset,
+            camera_up(
+                focus + Quat::from_rotation_y(-2.0 * std::f32::consts::PI / 3.0) * offset,
                 focus,
             ),
         ),
@@ -1452,6 +1473,41 @@ mod tests {
     }
 
     #[test]
+    fn illumination_caps_layer_above_tactical_fog_with_independent_render_priority() {
+        let position = TilePos::new(HexCoord::from_axial(2, -1), 6);
+        let span = HexSpan::new(2.0, 2.8);
+        let transform = review_illumination_transform(position, span);
+        let diagnostic_bottom = transform.translation.y - transform.scale.y * 0.5;
+        let fog_top = span.top + FOG_CAP_LIFT + FOG_CAP_THICKNESS;
+
+        assert!(
+            diagnostic_bottom > fog_top,
+            "the diagnostic prism must not be coplanar with tactical fog"
+        );
+        assert!(
+            diagnostic_bottom - fog_top >= ILLUMINATION_CAP_CLEARANCE - 1e-5,
+            "the complete diagnostic prism needs its authored air gap above fog"
+        );
+        assert!((transform.scale.x - FOG_CAP_INSET).abs() < f32::EPSILON);
+        assert!((transform.scale.y - ILLUMINATION_CAP_THICKNESS).abs() < f32::EPSILON);
+
+        for level in [
+            IlluminationLevel::Dark,
+            IlluminationLevel::Dim,
+            IlluminationLevel::Bright,
+        ] {
+            let material = review_illumination_material(level);
+            assert!(material.unlit);
+            assert_eq!(material.alpha_mode, AlphaMode::Blend);
+            assert!((material.depth_bias - ILLUMINATION_CAP_DEPTH_BIAS).abs() < f32::EPSILON);
+            assert!(
+                material.depth_bias - FOG_CAP_DEPTH_BIAS >= 1.0,
+                "the diagnostic needs a distinct integer bias bucket after tactical fog"
+            );
+        }
+    }
+
+    #[test]
     fn illumination_overlay_projects_exact_stacked_surfaces_and_cutaway_markers() {
         let coord = HexCoord::from_axial(2, -1);
         let cave_floor = TilePos::new(coord, 6);
@@ -1786,10 +1842,16 @@ mod tests {
     #[test]
     fn review_views_have_exact_deterministic_poses() {
         assert_eq!(ReviewView::parse("rear"), Ok(ReviewView::Rear));
+        assert_eq!(
+            ReviewView::parse("counter-rotated"),
+            Ok(ReviewView::CounterRotated)
+        );
         let focus = Vec3::new(1.0, 2.0, 3.0);
         let eye = focus + Vec3::new(0.0, 4.0, 3.0);
         let offset = eye - focus;
         let rotated_eye = focus + Quat::from_rotation_y(2.0 * std::f32::consts::PI / 3.0) * offset;
+        let counter_rotated_eye =
+            focus + Quat::from_rotation_y(-2.0 * std::f32::consts::PI / 3.0) * offset;
         let rear_eye = focus + Quat::from_rotation_y(std::f32::consts::PI) * offset;
         let top_down_eye = focus + Vec3::Y * offset.length();
         for (view, expected_eye, expected_up) in [
@@ -1798,6 +1860,11 @@ mod tests {
                 ReviewView::Rotated,
                 rotated_eye,
                 camera_up(rotated_eye, focus),
+            ),
+            (
+                ReviewView::CounterRotated,
+                counter_rotated_eye,
+                camera_up(counter_rotated_eye, focus),
             ),
             (ReviewView::Rear, rear_eye, camera_up(rear_eye, focus)),
             (ReviewView::TopDown, top_down_eye, Vec3::NEG_Z),
@@ -1833,6 +1900,7 @@ mod tests {
         for view in [
             ReviewView::Default,
             ReviewView::Rotated,
+            ReviewView::CounterRotated,
             ReviewView::Rear,
             ReviewView::TopDown,
         ] {
@@ -1897,33 +1965,53 @@ mod tests {
     }
 
     #[test]
-    fn first_person_capture_uses_head_height_horizon_and_map_azimuth() {
+    fn first_person_capture_uses_head_height_horizon_and_every_map_azimuth() {
         let settings = test_camera_settings();
         let map_focus = Vec3::ZERO;
         let map_eye = Vec3::new(8.0, 10.0, 6.0);
         let target = Vec3::new(-2.0, 4.0, 5.0);
-        let backward = map_eye.xz().normalize();
-        let expected_forward = Vec3::new(-backward.x, 0.0, -backward.y);
-        let mut transform = Transform::from_translation(map_eye).looking_at(map_focus, Vec3::Y);
-        let mut orbit = PanOrbitCamera {
-            focus: map_focus,
-            radius: map_eye.length(),
-        };
 
-        apply_first_person_camera_view(
-            map_eye,
-            map_focus,
-            target,
-            &settings,
-            &mut transform,
-            &mut orbit,
-        );
+        for view in [
+            ReviewView::Default,
+            ReviewView::Rotated,
+            ReviewView::CounterRotated,
+            ReviewView::Rear,
+            ReviewView::TopDown,
+        ] {
+            let mut transform = Transform::from_translation(map_eye).looking_at(map_focus, Vec3::Y);
+            let mut orbit = PanOrbitCamera {
+                focus: map_focus,
+                radius: map_eye.length(),
+            };
+            apply_camera_view(view, map_eye, map_focus, &mut transform, &mut orbit)
+                .expect("the map pose should be valid");
+            let backward = Vec3::new(
+                transform.translation.x - orbit.focus.x,
+                0.0,
+                transform.translation.z - orbit.focus.z,
+            )
+            .try_normalize()
+            .or_else(|| {
+                Vec3::new(map_eye.x - map_focus.x, 0.0, map_eye.z - map_focus.z).try_normalize()
+            })
+            .expect("the fallback review azimuth should be nonzero");
+            let expected_forward = -backward;
 
-        let expected_eye = target + Vec3::Y * settings.first_person_eye_height;
-        assert!(transform.translation.distance(expected_eye) < 1e-5);
-        assert!(transform.forward().as_vec3().dot(expected_forward) > 0.99999);
-        assert!(orbit.focus.distance(expected_eye + expected_forward) < 1e-5);
-        assert!((orbit.radius - 1.0).abs() < f32::EPSILON);
+            apply_first_person_camera_view(
+                map_eye,
+                map_focus,
+                target,
+                &settings,
+                &mut transform,
+                &mut orbit,
+            );
+
+            let expected_eye = target + Vec3::Y * settings.first_person_eye_height;
+            assert!(transform.translation.distance(expected_eye) < 1e-5);
+            assert!(transform.forward().as_vec3().dot(expected_forward) > 0.99999);
+            assert!(orbit.focus.distance(expected_eye + expected_forward) < 1e-5);
+            assert!((orbit.radius - 1.0).abs() < f32::EPSILON);
+        }
     }
 
     #[test]

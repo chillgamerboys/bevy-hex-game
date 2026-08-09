@@ -94,7 +94,7 @@ The optional review overrides are:
 | Variable | Effect |
 |---|---|
 | `HEX_REVIEW_SEED` | Replaces the configured seed of a seeded scenario |
-| `HEX_REVIEW_VIEW` | Authors the deterministic Map pose as `default`, `rotated`, `rear` (180° orbit), or `top-down`; character cameras retain its horizontal azimuth while applying their own pitch, except that `top-down` has no horizontal component and falls back to the original Map heading |
+| `HEX_REVIEW_VIEW` | Authors the deterministic Map pose as `default`, `rotated` (+120°), `counter-rotated` (-120°), `rear` (180°), or `top-down`; character cameras retain its horizontal azimuth while applying their own pitch, except that `top-down` has no horizontal component and falls back to the original Map heading |
 | `HEX_REVIEW_CAMERA` | Uses the `map`, close `character`, or `first-person` camera |
 | `HEX_REVIEW_TIME` | Sets a cyclic-lighting hour from `0.0` up to, but not including, `24.0` |
 | `HEX_REVIEW_LIQUID_PHASE` | Freezes liquid animation at a finite phase in seconds, wrapped over its visual cycle; captures default to `0.0` |
@@ -111,8 +111,10 @@ actor cannot stand on fails the review process instead of silently capturing the
 wrong place. The full cutaway still requires the selected actor to occupy an exact
 interior surface and affects only that interior; ordinary gameplay retains the opaque
 roof and resolves tight views through camera collision instead. The illumination
-overlay reads `ResolvedIllumination` and never changes
-gameplay light, physical lights, faction knowledge, fog, or picking.
+overlay reads `ResolvedIllumination`. Its diagnostic caps are physically separated
+and render-ordered above tactical fog caps, so both translucent projections compose
+deterministically; it never changes gameplay light, physical lights, faction
+knowledge, ordinary fog behavior, or picking.
 
 For example, this exposes the complete generated cave network for a top-down overview:
 

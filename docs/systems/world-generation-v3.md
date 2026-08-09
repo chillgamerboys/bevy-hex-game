@@ -448,7 +448,9 @@ The summit is a soil-and-grass crown around the oculus. Radius 18 remains an ope
 clearing; existing broadleaf trees become denser outside it while an exact four-wide
 trail stays clear. Stable `crystal_ascent.lower_entry`,
 `crystal_ascent.bottom_chamber`, and `crystal_ascent.upper_exit` anchors identify the
-landmark, and exact four-wide lower and upper terminal pads remain protected. The
+landmark. Stable `crystal_ascent.mid_flight`, `crystal_ascent.corner_landing`, and
+`crystal_ascent.upper_contraction` anchors provide exact interior review positions,
+and exact four-wide lower and upper terminal pads remain protected. The
 radius-32 lower terminal is an exterior apron; the Dark interior begins at the exact
 four-wide radius-31 threshold. The upper terminal is opposite the lower aperture.
 Landmark architecture and fixtures remain inside the radius-32 site, while the

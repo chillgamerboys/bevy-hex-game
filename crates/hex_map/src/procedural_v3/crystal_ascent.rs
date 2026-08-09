@@ -70,6 +70,7 @@ const UPPER_TERMINAL: &str = "crystal_ascent.upper_terminal_pad";
 const EXIT_TRAIL: &str = "crystal_ascent.summit_exit_trail";
 const SUMMIT_CLEARING: &str = "crystal_ascent.summit_clearing";
 const MID_FLIGHT: &str = "crystal_ascent.mid_flight";
+const CORNER_LANDING: &str = "crystal_ascent.corner_landing";
 const UPPER_CONTRACTION: &str = "crystal_ascent.upper_contraction";
 
 /// Deterministic diagnostics for selection, reports, and acceptance tests.
@@ -129,6 +130,7 @@ struct AuthoredGeometry {
     bottom_chamber: TilePos,
     upper_exit: TilePos,
     mid_flight: TilePos,
+    corner_landing: TilePos,
     upper_contraction: TilePos,
 }
 
@@ -447,6 +449,7 @@ fn construct_patch_with_streams(
         (BOTTOM_CHAMBER.to_owned(), geometry.bottom_chamber),
         (UPPER_EXIT.to_owned(), geometry.upper_exit),
         (MID_FLIGHT.to_owned(), geometry.mid_flight),
+        (CORNER_LANDING.to_owned(), geometry.corner_landing),
         (UPPER_CONTRACTION.to_owned(), geometry.upper_contraction),
     ]);
     let biome_regions = volume
@@ -804,6 +807,24 @@ fn review_anchor(
     lane.get(lane.len().checked_div(2)?).copied()
 }
 
+fn corner_landing_anchor(settings: &V3CrystalAscentSettings) -> Option<TilePos> {
+    let circuit = CIRCUIT_COUNT.checked_sub(1)?;
+    let side = FLIGHTS_PER_CIRCUIT.checked_sub(2)?;
+    let (_, outer) = CIRCUIT_BANDS.get(circuit).copied()?;
+    let landing = expected_landing_surfaces(settings, circuit, side)?;
+    let position = TilePos::new(
+        landing_coord(outer, side),
+        flight_boundary(
+            settings.base_level,
+            settings.rise_levels,
+            circuit
+                .checked_mul(FLIGHTS_PER_CIRCUIT)?
+                .checked_add(side)?,
+        ),
+    );
+    landing.contains(&position).then_some(position)
+}
+
 fn expected_landing_alcoves(settings: &V3CrystalAscentSettings) -> Vec<TilePos> {
     let mut alcoves = Vec::with_capacity(LANDING_COUNT);
     for circuit in 0..CIRCUIT_COUNT {
@@ -900,7 +921,11 @@ fn build_stairs(
 
     let lower_pad = radial_pad(SITE_RADIUS, 0, 4, base);
     let upper_pad = radial_pad(31, 3, 4, summit);
-    let bottom_chamber = TilePos::new(HexCoord::from_axial(5, 0), base);
+    // Keep the public chamber anchor on the entrance axis, far enough from the
+    // radius-four heart that both close cameras can frame the complete object.
+    // The selected actor then looks naturally inward from the aperture toward
+    // the heart instead of placing the third-person boom inside its facets.
+    let bottom_chamber = TilePos::new(landing_coord(16, 0), base);
     let lower_entry = *lower_pad
         .iter()
         .nth(1)
@@ -912,6 +937,11 @@ fn build_stairs(
     let mid_flight = review_anchor(settings, 1, 2, 22).ok_or_else(|| {
         vec![recipe_issue(
             "Crystal Ascent mid-flight review anchor cannot resolve its route point",
+        )]
+    })?;
+    let corner_landing = corner_landing_anchor(settings).ok_or_else(|| {
+        vec![recipe_issue(
+            "Crystal Ascent corner-landing review anchor cannot resolve its route point",
         )]
     })?;
     let upper_contraction = review_anchor(settings, 2, 4, 19).ok_or_else(|| {
@@ -932,6 +962,7 @@ fn build_stairs(
         bottom_chamber,
         upper_exit,
         mid_flight,
+        corner_landing,
         upper_contraction,
     })
 }
@@ -1591,6 +1622,12 @@ pub(crate) fn validate_crystal_ascent(
             )));
         }
     }
+    let expected_chamber = TilePos::new(landing_coord(16, 0), base);
+    if plan.anchors.get(BOTTOM_CHAMBER).copied() != Some(expected_chamber) {
+        issues.push(recipe_issue(format!(
+            "anchor {BOTTOM_CHAMBER:?} must remain at exact entrance-axis vista {expected_chamber:?}"
+        )));
+    }
     let Some(lower) = plan.anchors.get(LOWER_ENTRY).copied() else {
         return WorldValidation::Invalid(vec![recipe_issue("missing lower entry anchor")]);
     };
@@ -1907,6 +1944,7 @@ pub(crate) fn validate_crystal_ascent(
 
     for (name, expected) in [
         (MID_FLIGHT, review_anchor(settings, 1, 2, 22)),
+        (CORNER_LANDING, corner_landing_anchor(settings)),
         (UPPER_CONTRACTION, review_anchor(settings, 2, 4, 19)),
     ] {
         if plan.anchors.get(name).copied() != expected
@@ -2916,6 +2954,60 @@ mod tests {
         assert_eq!(
             (metrics.circuits, metrics.flights, metrics.landings),
             (3, 18, 18)
+        );
+    }
+
+    #[test]
+    fn interior_review_anchors_are_stable_clear_and_fixture_aware() {
+        let (plan, objects) = raw_plan(144);
+        validated_metrics(&plan, &objects, 144);
+        let chamber = plan
+            .anchors
+            .get(BOTTOM_CHAMBER)
+            .copied()
+            .expect("Crystal Ascent should publish its bottom-chamber review anchor");
+        assert_eq!(chamber, TilePos::new(HexCoord::from_axial(-8, -8), 6));
+        assert!(plan
+            .volume
+            .surface_headroom(chamber)
+            .is_some_and(|headroom| headroom.0 >= 2));
+        assert!(!plan.blockers.contains(&chamber));
+
+        let settings = V3CrystalAscentSettings {
+            base_level: 6,
+            rise_levels: 144,
+        };
+        let anchor = plan
+            .anchors
+            .get(CORNER_LANDING)
+            .copied()
+            .expect("Crystal Ascent should publish its corner-landing review anchor");
+        assert_eq!(anchor, TilePos::new(HexCoord::from_axial(-10, 21), 134));
+        assert!(expected_landing_surfaces(&settings, 2, 4)
+            .expect("upper corner landing should resolve")
+            .contains(&anchor));
+        assert!(plan
+            .volume
+            .surface_headroom(anchor)
+            .is_some_and(|headroom| headroom.0 >= 8));
+        assert_eq!(
+            plan.lights
+                .values()
+                .filter(|light| {
+                    light.origin.level == anchor.level
+                        && light.origin.coord.distance(anchor.coord) == 1
+                        && matches!(
+                            light.presentation,
+                            Some(PlannedLightPresentation::CrystalAscent(
+                                CrystalAscentCrystalPresentation {
+                                    kind: CrystalAscentCrystalKind::Landing(_),
+                                    ..
+                                }
+                            ))
+                        )
+                })
+                .count(),
+            1
         );
     }
 

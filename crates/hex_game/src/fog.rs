@@ -18,9 +18,10 @@ use hex_core::{
 use hex_perception::FactionMapKnowledge;
 use hex_units::{Enemy, Faction};
 
-const FOG_CAP_THICKNESS: f32 = 0.02;
-const FOG_CAP_INSET: f32 = 0.84;
-const FOG_CAP_LIFT: f32 = 0.08;
+pub(super) const FOG_CAP_THICKNESS: f32 = 0.02;
+pub(super) const FOG_CAP_INSET: f32 = 0.84;
+pub(super) const FOG_CAP_LIFT: f32 = 0.08;
+pub(super) const FOG_CAP_DEPTH_BIAS: f32 = 8.0;
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 struct FogOverlay(TilePos);
@@ -297,7 +298,7 @@ fn fog_material() -> StandardMaterial {
         base_color: Color::srgba(0.03, 0.04, 0.10, 0.72),
         alpha_mode: AlphaMode::Blend,
         unlit: true,
-        depth_bias: 8.0,
+        depth_bias: FOG_CAP_DEPTH_BIAS,
         ..default()
     }
 }
@@ -506,10 +507,14 @@ mod tests {
         let material = fog_material();
         assert!(material.unlit);
         assert_eq!(material.alpha_mode, AlphaMode::Blend);
+        assert!((material.depth_bias - FOG_CAP_DEPTH_BIAS).abs() < f32::EPSILON);
         let transform = fog_transform(pos(3), HexSpan::new(1.0, 2.0));
         assert!((transform.scale.x - FOG_CAP_INSET).abs() < f32::EPSILON);
         assert!((transform.scale.y - FOG_CAP_THICKNESS).abs() < f32::EPSILON);
-        assert!(transform.translation.y > 2.0);
+        assert!(
+            (transform.translation.y - (2.0 + FOG_CAP_LIFT + FOG_CAP_THICKNESS * 0.5)).abs()
+                < f32::EPSILON
+        );
     }
 
     #[test]

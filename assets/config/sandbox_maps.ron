@@ -247,8 +247,7 @@
             display_name: "Crystal Ascent",
             description: "A crystal-lit Gothic stair coils through a 144-level dark tower into a woodland crown.",
             tags: ["Landmark", "Vertical", "Interior"],
-            // Replaced by the renderer-approved Crystal Ascent capture at visual review.
-            preview: "ui/sandbox/caves.png",
+            preview: "ui/sandbox/crystal-ascent.png",
             scenario: "Crystal Ascent",
             fixed_seed: Some(1592598566),
             player_region: (

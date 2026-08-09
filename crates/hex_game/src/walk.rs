@@ -2135,6 +2135,21 @@ mod tests {
             seed: Some(1_592_598_566),
             suppress_hostiles: false,
         }));
+        assert!(steps.windows(4).any(|steps| matches!(
+            steps,
+            [
+                WalkStep::Key(open),
+                WalkStep::AwaitButton(name),
+                WalkStep::Click {
+                    name: clicked,
+                    index: 0
+                },
+                WalkStep::Key(key),
+            ] if open == "F"
+                && name == "Party Movement Mode"
+                && clicked == "Party Movement Mode"
+                && key == "Escape"
+        )));
         let clicks = steps
             .iter()
             .filter_map(|step| match step {
@@ -2146,18 +2161,10 @@ mod tests {
             clicks,
             vec![
                 (
-                    "crystal_ascent.lower_entry",
-                    CameraRouteTile {
-                        q: -17,
-                        r: -15,
-                        level: 6,
-                    },
-                ),
-                (
                     "crystal_ascent.bottom_chamber",
                     CameraRouteTile {
-                        q: 5,
-                        r: 0,
+                        q: -8,
+                        r: -8,
                         level: 6,
                     },
                 ),
@@ -2167,6 +2174,14 @@ mod tests {
                         q: 22,
                         r: 0,
                         level: 74,
+                    },
+                ),
+                (
+                    "crystal_ascent.corner_landing",
+                    CameraRouteTile {
+                        q: -10,
+                        r: 21,
+                        level: 134,
                     },
                 ),
                 (
@@ -2187,6 +2202,11 @@ mod tests {
                 ),
             ]
         );
+        assert!(steps.contains(&WalkStep::ClickTile {
+            q: -20,
+            r: -19,
+            level: Some(6),
+        }));
         let captures = steps
             .iter()
             .filter_map(|step| match step {
@@ -2201,11 +2221,13 @@ mod tests {
                 "02-crystal-ascent-bottom-chamber-heart-character",
                 "03-crystal-ascent-bottom-chamber-heart-first-person",
                 "04-crystal-ascent-mid-flight-first-person",
-                "05-crystal-ascent-mid-flight-clockwise-first-person",
-                "06-crystal-ascent-mid-flight-counterclockwise-first-person",
-                "07-crystal-ascent-upper-contraction-first-person",
-                "08-crystal-ascent-summit-oculus-clearing-character",
-                "09-crystal-ascent-summit-clearing-first-person",
+                "05-crystal-ascent-mid-flight-character",
+                "06-crystal-ascent-corner-landing-character",
+                "07-crystal-ascent-corner-landing-first-person",
+                "08-crystal-ascent-upper-contraction-first-person",
+                "09-crystal-ascent-upper-contraction-character",
+                "10-crystal-ascent-summit-oculus-clearing-character",
+                "11-crystal-ascent-summit-clearing-first-person",
             ]
         );
         assert_eq!(
@@ -2213,7 +2235,7 @@ mod tests {
                 .iter()
                 .filter(|step| matches!(step, WalkStep::OrbitCamera { .. }))
                 .count(),
-            2
+            8
         );
         assert!(steps.windows(2).any(|pair| matches!(
             pair,
