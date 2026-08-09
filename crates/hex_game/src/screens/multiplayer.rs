@@ -907,7 +907,6 @@ fn report_client_map_ready(
     };
     if ready.fingerprint != manifest.map.expected_public_fingerprint {
         notice.0 = Some("The generated world does not match the host manifest.".to_owned());
-        return;
     }
     reports.write(ClientMapReady {
         public_world_fingerprint: ready.fingerprint,
@@ -1545,5 +1544,70 @@ mod tests {
             .drain()
             .next()
             .is_none());
+    }
+
+    fn map_ready_report(
+        actual: PublicWorldFingerprint,
+    ) -> (Vec<ClientMapReady>, Option<String>, bool) {
+        let manifest = manifest();
+        let mut lobby = LobbySnapshot::new(SessionPeerId::from_bytes([1; 16]), &manifest)
+            .expect("manifest creates a lobby");
+        lobby.phase = LobbyPhase::Loading;
+        let mut model = MultiplayerModel::default();
+        model.connecting(MultiplayerRole::Client);
+        assert!(model.admitted(MultiplayerRole::Client, PlayerSeat(1)));
+
+        let mut app = App::new();
+        app.insert_resource(model)
+            .insert_resource(SessionProjection {
+                lobby: Some(lobby),
+                manifest: Some(manifest),
+            })
+            .insert_resource(DirectWorldReady {
+                fingerprint: actual,
+            })
+            .init_resource::<MapReadyReportState>()
+            .init_resource::<SessionUiNotice>()
+            .add_message::<ClientMapReady>()
+            .add_systems(Update, report_client_map_ready);
+
+        app.update();
+
+        let reports = app
+            .world_mut()
+            .resource_mut::<Messages<ClientMapReady>>()
+            .drain()
+            .collect();
+        let notice = app.world().resource::<SessionUiNotice>().0.clone();
+        let sent = app.world().resource::<MapReadyReportState>().sent;
+        (reports, notice, sent)
+    }
+
+    #[test]
+    fn client_reports_its_actual_world_fingerprint_once_even_when_it_mismatches() {
+        let expected = PublicWorldFingerprint(9);
+        let (matching, notice, sent) = map_ready_report(expected);
+        assert_eq!(
+            matching,
+            vec![ClientMapReady {
+                public_world_fingerprint: expected,
+            }]
+        );
+        assert_eq!(notice, None);
+        assert!(sent);
+
+        let actual = PublicWorldFingerprint(99);
+        let (mismatching, notice, sent) = map_ready_report(actual);
+        assert_eq!(
+            mismatching,
+            vec![ClientMapReady {
+                public_world_fingerprint: actual,
+            }]
+        );
+        assert_eq!(
+            notice.as_deref(),
+            Some("The generated world does not match the host manifest.")
+        );
+        assert!(sent, "the mismatch must not be reported repeatedly");
     }
 }
