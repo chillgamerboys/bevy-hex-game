@@ -1,8 +1,9 @@
 # Client-hosted Sandbox wave
 
-- **Status:** planning
-- **Wave branch:** `wave/client-hosted-sandbox` (not cut until the foundation lands on `dev`)
+- **Status:** dispatching
+- **Wave branch:** `wave/client-hosted-sandbox`
 - **Base:** `origin/dev@92662d456746506093e8de61f54f1d619085e1fe`
+- **Foundation tip:** `02356b00a5f7a9f26ebe788d8afc45ed58d5baa6`
 - **Coordinator:** `@shrav-k`
 - **Epic:** user-approved Client-Hosted Multiplayer Epic, 2026-08-08 (`ticket: null`)
 - **Outcome:** up to six players can host or join one shipped Sandbox encounter over an
@@ -88,6 +89,33 @@ proven transport-neutral direct protocol and do not belong in this wave.
 
 Decisions are amendable, never silently edited. An amendment records its ratifier and date.
 
+## Amendments
+
+### 2026-08-08 — authorized wave-cut exception
+
+The user explicitly authorized creating the wave branch after the planning artifact and
+behavior-neutral foundation had already been completed on
+`shrav-k/client-hosted-multiplayer`. The coordinator therefore cut
+`wave/client-hosted-sandbox` at exact foundation commit
+`02356b00a5f7a9f26ebe788d8afc45ed58d5baa6` rather than first landing those commits on
+`dev`. The single draft wave PR carries the additive `origin/dev` merge, planning
+artifacts, foundation, and subsequent lanes back to `dev`; no rebase or branch rename is
+involved. This explicitly supersedes only the “foundation lands on `dev` before wave cut”
+sequencing rule below. It does not waive any lane territory, ownership, merge, or evidence
+gate. Ratifier: user; recorded by coordinator.
+
+### 2026-08-08 — preserve SPKI pinning with an audited verifier
+
+The coordinator selected the contract-preserving option for decision 15: L1 will use a
+custom native rustls `ServerCertVerifier` that hashes the certificate
+`SubjectPublicKeyInfo` and compares it to the connection-code pin. The verifier must also
+enforce the certificate validity interval, a maximum 14-day total lifetime, an ECDSA
+P-256 public key, and real TLS handshake-signature verification through rustls's supported
+algorithms. Tests must prove rejection for a wrong SPKI, expired/not-yet-valid or
+overlong-lived certificates, and unsupported key algorithms. Aeronet's no-validation
+configuration remains forbidden. Ratifier: coordinator, preserving the user-approved SPKI
+contract.
+
 ## Shared foundation
 
 Live contracts this wave builds on:
@@ -107,7 +135,8 @@ Live contracts this wave builds on:
 - **Shared app:** `AppSystems`, `PausableSystems`, `GameplaySetup`, one global `Mode`,
   and `GameplayPhase` at `crates/hex_core/src/app.rs:54`.
 
-Required behavior-neutral foundation, owned and landed on `dev` before the wave is cut:
+Required behavior-neutral foundation, originally specified to land on `dev` before the
+wave cut and now carried at the wave base under the recorded exception:
 
 1. **Joint architecture decision:** declare new `hex_multiplayer` as shared protocol and
    session infrastructure. It may depend on shared domain types but may not query map,
@@ -130,7 +159,7 @@ Required behavior-neutral foundation, owned and landed on `dev` before the wave 
    optional and absent from Milestone A. Root Cargo and plugin composition remain
    coordinator territory.
 
-### Certificate-pin implementation blocker
+### Certificate-pin implementation decision
 
 The dependency audit found a concrete mismatch between the locked connection-code
 contract and the available safe convenience API. `aeronet_webtransport 0.21.0` exposes
@@ -139,14 +168,10 @@ configured digest with SHA-256 of the complete leaf-certificate DER, not the SPK
 Passing the documented SPKI digest to that verifier would therefore reject a valid host;
 using its disable-verification path remains forbidden.
 
-The transport-neutral foundation retains a typed 32-byte `CertificateFingerprint` and
-does not guess at verifier behavior. Before L1 dispatch, the coordinator must ratify one
-audited implementation: preserve SPKI pinning with a custom rustls verifier that also
-enforces expiry, the maximum 14-day certificate lifetime, and P-256 constraints; or amend
-decision 15 to pin the complete per-session leaf certificate DER with the built-in
-verifier. The latter is the smaller implementation and preserves exact per-session
-certificate identity, but it changes the named digest contract and cannot be done
-silently.
+The transport-neutral foundation retains a typed 32-byte `CertificateFingerprint`. The
+amendment above selects an audited custom SPKI verifier that preserves decision 15 and the
+built-in verifier's validity, maximum-lifetime, and key-algorithm constraints. L1 must
+retain real handshake-signature verification and add negative tests for every constraint.
 
 The current user approval ratifies the product behavior, but it is not recorded as the
 separate world-owner sign-off required by item 4. That sign-off remains a dispatch
@@ -172,9 +197,7 @@ lanes:
       - crates/hex_multiplayer/src/testing.rs
       - crates/hex_multiplayer/tests/direct_session.rs
       - docs/planning/waves/client-hosted-sandbox/manifest.md#L1-row
-    dispatch_blockers:
-      - behavior-neutral multiplayer foundation landed on dev and wave branch cut from that exact head
-      - certificate fingerprint verifier choice ratified and recorded as an amendment
+    dispatch_blockers: []
     merge_blockers: []
     fences: []
     selector:
@@ -208,7 +231,6 @@ lanes:
       - crates/hex_units/tests/contracts/multiplayer_authority.rs
       - docs/planning/waves/client-hosted-sandbox/manifest.md#L2-row
     dispatch_blockers:
-      - behavior-neutral multiplayer foundation landed on dev and wave branch cut from that exact head
       - PRs 186, 188, 189, and stacked PR 190 have landed or every overlapping symbol is remapped in an amended manifest
     merge_blockers: [L1]
     fences: []
@@ -238,7 +260,6 @@ lanes:
       - crates/hex_perception/tests/multiplayer_disclosure.rs
       - docs/planning/waves/client-hosted-sandbox/manifest.md#L3-row
     dispatch_blockers:
-      - behavior-neutral multiplayer foundation landed on dev and wave branch cut from that exact head
       - explicit world-owner ratification of WorldSnapshotV1 fields and complete public fingerprint
       - PRs 186, 187, and stacked PR 190 have landed or every overlapping symbol is remapped in an amended manifest
     merge_blockers: [L1]
@@ -275,7 +296,6 @@ lanes:
       - walks/multiplayer_session.ron
       - docs/planning/waves/client-hosted-sandbox/manifest.md#L4-row
     dispatch_blockers:
-      - behavior-neutral multiplayer foundation landed on dev and wave branch cut from that exact head
       - PRs 186, 188, 189, and stacked PR 190 have landed or every overlapping symbol is remapped in an amended manifest
     merge_blockers: [L1, L2, L3]
     fences: []
@@ -335,11 +355,18 @@ measured against `origin/dev` to expose its complete inherited footprint.
 No open PR touches the new `crates/hex_multiplayer/**` namespace. Re-sweep immediately
 before foundation landing, wave creation, every lane dispatch, and integration.
 
+The pre-dispatch re-sweep on 2026-08-08 fetched and pruned `origin`, found
+`origin/dev` unchanged at `92662d456746506093e8de61f54f1d619085e1fe`, and found PRs
+186–190 at the same heads, bases, and measured footprints. L1 remains uncontested. The
+listed L2–L4 overlap blockers remain active. A complete scan of non-completed Hex Game
+Linear work found no existing multiplayer ticket, so the deliberately sparse lane
+`ticket: null` fields remain reconciled.
+
 ## Integration order
 
-1. Land the behavior-neutral foundation on `dev`, including the explicit world-owner
-   `WorldSnapshotV1` agreement; refresh territory; then cut `wave/client-hosted-sandbox`
-   from that exact `origin/dev` head.
+1. Under the recorded user-authorized exception, carry the behavior-neutral foundation
+   at wave base `02356b00a5f7a9f26ebe788d8afc45ed58d5baa6`; retain explicit
+   world-owner `WorldSnapshotV1` agreement as an L3 dispatch condition.
 2. Dispatch L1 immediately. Dispatch L2–L4 only when their territory blockers are true;
    merge blockers do not serialize their construction.
 3. Merge L1 first. Run the selector-chosen composed-tree checks.
