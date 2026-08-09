@@ -24,10 +24,12 @@ use hex_core::{CommandRequestId, GameCommand, LocalGameCommandRequest, PlayerSea
 
 use crate::{
     AdmissionAccepted, AdmissionRefusal, AdmissionRefusalReason, AuthorityBoundary,
-    AuthoritySequence, AuthorizedSessionClient, ClientHello, ClientMapReady, CommandBegin,
-    CommandOutcome, CommandRefusalReason, CommandResult, CommandSequencer, GameCommandRequest,
-    LobbySnapshot, MapReadyStatus, ReconnectCredentialStorage, RequestRateLimiter,
-    SessionActivationError, SessionAdmissionAuthority, SessionCloseReason, SessionClosed,
+    AuthoritySequence, AuthorizedSessionClient, ClientHello, ClientLobbyAction, ClientLobbyRequest,
+    ClientMapReady, CommandBegin, CommandOutcome, CommandRefusalReason, CommandResult,
+    CommandSequencer, GameCommandRequest, HostSessionAction, HostSessionControlRequest,
+    LobbyMutationError, LobbySnapshot, MapReadyStatus, ReconnectCredentialStorage,
+    RequestRateLimiter, SessionActivationError, SessionAdmissionAuthority, SessionCloseReason,
+    SessionClosed, SessionControlOutcome, SessionControlRefusal, SessionControlResult,
     SessionManifestV1, SessionPeerId, StoredReconnectCredential, MAX_LIVE_SNAPSHOT_BYTES,
 };
 
@@ -39,6 +41,8 @@ const SNAPSHOT_HEADER_BYTES: usize = 2 + 8 + 4;
 pub enum SessionRuntimeSystems {
     /// Authenticate newly connected clients before accepting other requests.
     Admission,
+    /// Apply seatless client lobby requests and trusted listen-host session controls.
+    LobbyControl,
     /// Convert host-derived identities and wire/local requests into authority work.
     CommandIngress,
     /// Consume reducer outcomes and emit ordered, idempotent results.
@@ -108,6 +112,9 @@ struct RemoteSessionLifecycle {
     received_typed_close: bool,
     transport_disconnect_pending: bool,
 }
+
+#[derive(Resource, Debug, Default)]
+struct LobbyRequestRateLimiter(RequestRateLimiter);
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 struct DisconnectAfterFlush {
@@ -280,17 +287,20 @@ impl std::error::Error for SnapshotHeaderError {}
 pub(crate) fn install_runtime(app: &mut bevy_app::App) {
     app.init_resource::<CommandSequencer>()
         .init_resource::<RequestRateLimiter>()
+        .init_resource::<LobbyRequestRateLimiter>()
         .init_resource::<AuthorityBoundary>()
         .init_resource::<LocalCommandSource>()
         .init_resource::<SessionRuntimeClock>()
         .init_resource::<RemoteSessionLifecycle>()
         .add_message::<AuthenticatedCommandRequest>()
         .add_message::<AuthorityCommandResolution>()
+        .add_message::<HostSessionControlRequest>()
         .add_message::<CredentialStorageStatus>()
         .configure_sets(
             PreUpdate,
             (
                 SessionRuntimeSystems::Admission,
+                SessionRuntimeSystems::LobbyControl,
                 SessionRuntimeSystems::CommandIngress,
                 SessionRuntimeSystems::CommandResults,
                 SessionRuntimeSystems::CredentialStorage,
@@ -303,6 +313,9 @@ pub(crate) fn install_runtime(app: &mut bevy_app::App) {
             (
                 handle_client_hello.in_set(SessionRuntimeSystems::Admission),
                 handle_client_map_ready.in_set(SessionRuntimeSystems::Admission),
+                (handle_remote_lobby_requests, handle_host_session_controls)
+                    .chain()
+                    .in_set(SessionRuntimeSystems::LobbyControl),
                 handle_remote_commands.in_set(SessionRuntimeSystems::CommandIngress),
                 handle_local_commands.in_set(SessionRuntimeSystems::CommandIngress),
                 handle_authority_results.in_set(SessionRuntimeSystems::CommandResults),
@@ -411,6 +424,205 @@ fn handle_client_map_ready(
                 schedule_disconnect_after_flush(connection, &mut commands);
             }
         }
+    }
+}
+
+fn handle_remote_lobby_requests(
+    mut requests: MessageReader<FromClient<ClientLobbyRequest>>,
+    clients: Query<&AuthorizedSessionClient, With<AuthorizedClient>>,
+    mut authority: Option<ResMut<SessionAdmissionAuthority>>,
+    clock: Res<SessionRuntimeClock>,
+    mut limiter: ResMut<LobbyRequestRateLimiter>,
+    mut results: MessageWriter<ToClients<SessionControlResult>>,
+    mut lobbies: MessageWriter<ToClients<LobbySnapshot>>,
+    mut closed: MessageWriter<ToClients<SessionClosed>>,
+    mut commands: Commands,
+) {
+    for request in requests.read() {
+        let Some(connection) = request.client_id.entity() else {
+            continue;
+        };
+        let Ok(client) = clients.get(connection) else {
+            send_control_result(
+                request.client_id,
+                request.request_id,
+                SessionControlOutcome::Refused(SessionControlRefusal::NotAuthorized),
+                &mut results,
+            );
+            schedule_disconnect_after_flush(connection, &mut commands);
+            continue;
+        };
+        let Some(authority) = authority.as_mut() else {
+            send_control_result(
+                request.client_id,
+                request.request_id,
+                SessionControlOutcome::Refused(SessionControlRefusal::NotAuthorized),
+                &mut results,
+            );
+            continue;
+        };
+
+        let outcome = match request.action {
+            ClientLobbyAction::SetReady(ready) => {
+                if limiter.0.allow(client.seat, clock.elapsed()).is_err() {
+                    Err(SessionControlRefusal::RateLimited)
+                } else {
+                    authority
+                        .lobby_mut()
+                        .set_ready(client.seat, ready)
+                        .map_err(map_lobby_control_error)
+                }
+            }
+            ClientLobbyAction::Leave => authority
+                .leave(connection)
+                .map(|_seat| ())
+                .map_err(map_lobby_control_error),
+        };
+        let outcome = match outcome {
+            Ok(()) => {
+                lobbies.write(ToClients {
+                    targets: SendTargets::All,
+                    message: authority.lobby().snapshot_owned(),
+                });
+                if request.action == ClientLobbyAction::Leave {
+                    closed.write(ToClients {
+                        targets: SendTargets::Single(request.client_id),
+                        message: SessionClosed {
+                            reason: SessionCloseReason::SessionEnded,
+                        },
+                    });
+                    schedule_disconnect_after_flush(connection, &mut commands);
+                }
+                SessionControlOutcome::Accepted
+            }
+            Err(reason) => SessionControlOutcome::Refused(reason),
+        };
+        send_control_result(request.client_id, request.request_id, outcome, &mut results);
+    }
+}
+
+fn handle_host_session_controls(
+    mut requests: MessageReader<HostSessionControlRequest>,
+    mut authority: Option<ResMut<SessionAdmissionAuthority>>,
+    mut local_results: MessageWriter<SessionControlResult>,
+    mut lobbies: MessageWriter<ToClients<LobbySnapshot>>,
+    mut closed: MessageWriter<ToClients<SessionClosed>>,
+    mut commands: Commands,
+) {
+    for request in requests.read() {
+        let Some(authority) = authority.as_mut() else {
+            local_results.write(SessionControlResult {
+                request_id: request.request_id,
+                outcome: SessionControlOutcome::Refused(SessionControlRefusal::NotAuthorized),
+            });
+            continue;
+        };
+
+        let mut publish_lobby = true;
+        let outcome = match request.action {
+            HostSessionAction::AssignUnit { unit, destination } => authority
+                .lobby_mut()
+                .assign_unit(unit, destination)
+                .map_err(map_lobby_control_error),
+            HostSessionAction::Kick { seat } => authority
+                .kick(seat)
+                .map(|connection| {
+                    if let Some(connection) = connection {
+                        closed.write(ToClients {
+                            targets: SendTargets::Single(ClientId::Client(connection)),
+                            message: SessionClosed {
+                                reason: SessionCloseReason::Kicked,
+                            },
+                        });
+                        schedule_disconnect_after_flush(connection, &mut commands);
+                    }
+                })
+                .map_err(map_lobby_control_error),
+            HostSessionAction::BeginLoading {
+                public_world_fingerprint,
+            } => authority
+                .begin_loading(public_world_fingerprint)
+                .map(|_snapshot| ())
+                .map_err(map_activation_control_error),
+            HostSessionAction::EnterOutcome => authority
+                .enter_outcome()
+                .map(|_snapshot| ())
+                .map_err(map_lobby_control_error),
+            HostSessionAction::RetryExact {
+                public_world_fingerprint,
+            } => authority
+                .retry_loading(public_world_fingerprint)
+                .map(|_snapshot| ())
+                .map_err(map_activation_control_error),
+            HostSessionAction::ReturnToLobby => authority
+                .return_to_lobby()
+                .map(|_snapshot| ())
+                .map_err(map_lobby_control_error),
+            HostSessionAction::CloseSession => {
+                let connections = authority.connected_peers();
+                closed.write(ToClients {
+                    targets: SendTargets::CLIENTS_ONLY,
+                    message: SessionClosed {
+                        reason: SessionCloseReason::HostClosed,
+                    },
+                });
+                authority.close();
+                for (_seat, connection) in connections {
+                    schedule_disconnect_after_flush(connection, &mut commands);
+                }
+                publish_lobby = false;
+                Ok(())
+            }
+        };
+
+        let outcome = match outcome {
+            Ok(()) => {
+                if publish_lobby {
+                    lobbies.write(ToClients {
+                        targets: SendTargets::All,
+                        message: authority.lobby().snapshot_owned(),
+                    });
+                }
+                SessionControlOutcome::Accepted
+            }
+            Err(reason) => SessionControlOutcome::Refused(reason),
+        };
+        local_results.write(SessionControlResult {
+            request_id: request.request_id,
+            outcome,
+        });
+    }
+}
+
+fn map_activation_control_error(error: SessionActivationError) -> SessionControlRefusal {
+    match error {
+        SessionActivationError::MapMismatch => SessionControlRefusal::MapMismatch,
+        SessionActivationError::WrongPhase => SessionControlRefusal::WrongPhase,
+        SessionActivationError::NotAuthorized => SessionControlRefusal::NotAuthorized,
+        SessionActivationError::Lobby(error) => map_lobby_control_error(error),
+    }
+}
+
+fn map_lobby_control_error(error: LobbyMutationError) -> SessionControlRefusal {
+    match error {
+        LobbyMutationError::LobbyClosed => SessionControlRefusal::LobbyClosed,
+        LobbyMutationError::WrongPhase => SessionControlRefusal::WrongPhase,
+        LobbyMutationError::NonHumanSeat
+        | LobbyMutationError::HostReadinessIsImplicit
+        | LobbyMutationError::HostCannotDisconnect
+        | LobbyMutationError::HostCannotBeRemoved => SessionControlRefusal::InvalidSeat,
+        LobbyMutationError::VacantDestination
+        | LobbyMutationError::SeatNotConnected
+        | LobbyMutationError::VacantSeat
+        | LobbyMutationError::DuplicateActiveSeat => SessionControlRefusal::SeatUnavailable,
+        LobbyMutationError::WouldEmptyClaimedSeat => SessionControlRefusal::WouldEmptySeat,
+        LobbyMutationError::LobbyFull => SessionControlRefusal::LobbyFull,
+        LobbyMutationError::InvalidManifest
+        | LobbyMutationError::InvalidLobby(_)
+        | LobbyMutationError::Bound(_)
+        | LobbyMutationError::MissingHost
+        | LobbyMutationError::DuplicatePlayerIdentity
+        | LobbyMutationError::UnknownAssignedUnit => SessionControlRefusal::InvalidLobby,
     }
 }
 
@@ -751,6 +963,21 @@ fn send_result(
     results.write(ToClients {
         targets: SendTargets::Single(target),
         message: result,
+    });
+}
+
+fn send_control_result(
+    target: ClientId,
+    request_id: CommandRequestId,
+    outcome: SessionControlOutcome,
+    results: &mut MessageWriter<ToClients<SessionControlResult>>,
+) {
+    results.write(ToClients {
+        targets: SendTargets::Single(target),
+        message: SessionControlResult {
+            request_id,
+            outcome,
+        },
     });
 }
 

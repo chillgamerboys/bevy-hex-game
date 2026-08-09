@@ -178,6 +178,35 @@ impl SessionAdmissionAuthority {
         Ok(self.lobby.snapshot_owned())
     }
 
+    /// Re-enters loading from an encounter outcome using the frozen manifest.
+    pub fn retry_loading(
+        &mut self,
+        host_fingerprint: PublicWorldFingerprint,
+    ) -> Result<LobbySnapshot, SessionActivationError> {
+        if host_fingerprint != self.manifest.map.expected_public_fingerprint {
+            return Err(SessionActivationError::MapMismatch);
+        }
+        self.lobby
+            .retry_loading(&self.manifest)
+            .map_err(SessionActivationError::Lobby)?;
+        self.map_ready.clear();
+        self.map_ready.insert(PlayerSeat::HOST);
+        Ok(self.lobby.snapshot_owned())
+    }
+
+    /// Marks the active encounter as terminal while retaining reconnect eligibility.
+    pub fn enter_outcome(&mut self) -> Result<LobbySnapshot, LobbyMutationError> {
+        self.lobby.enter_outcome()?;
+        Ok(self.lobby.snapshot_owned())
+    }
+
+    /// Reopens assignment after an outcome and clears launch verification/readiness.
+    pub fn return_to_lobby(&mut self) -> Result<LobbySnapshot, LobbyMutationError> {
+        self.lobby.return_to_lobby()?;
+        self.map_ready.clear();
+        Ok(self.lobby.snapshot_owned())
+    }
+
     /// Records one authenticated peer's map fingerprint and activates when all claimed
     /// seats have reported the exact expected public world.
     pub fn report_map_ready(
@@ -227,6 +256,38 @@ impl SessionAdmissionAuthority {
         Some(seat)
     }
 
+    /// Removes one guest from an open lobby and invalidates its reconnect credential.
+    /// Returns the physical connection that should receive a typed kick before teardown.
+    pub fn kick(&mut self, seat: PlayerSeat) -> Result<Option<Entity>, LobbyMutationError> {
+        self.lobby.remove_guest(seat)?;
+        let connection = self
+            .peers
+            .remove(&seat)
+            .and_then(|peer| peer.active_connection);
+        if let Some(connection) = connection {
+            self.connections.remove(&connection);
+        }
+        self.map_ready.remove(&seat);
+        Ok(connection)
+    }
+
+    /// Applies an explicit remote leave. Open-lobby seats are vacated; later phases retain
+    /// their canonical assignment through the ordinary reservation/delegation path.
+    pub fn leave(&mut self, connection: Entity) -> Result<PlayerSeat, LobbyMutationError> {
+        let seat = self
+            .connections
+            .get(&connection)
+            .copied()
+            .ok_or(LobbyMutationError::SeatNotConnected)?;
+        if self.lobby.snapshot().phase == LobbyPhase::Open {
+            self.kick(seat)?;
+            Ok(seat)
+        } else {
+            self.disconnect(connection)
+                .ok_or(LobbyMutationError::SeatNotConnected)
+        }
+    }
+
     /// Invalidates all credentials and closes the host-owned session.
     pub fn close(&mut self) {
         self.connections.clear();
@@ -253,6 +314,15 @@ impl SessionAdmissionAuthority {
         self.peers
             .get(&seat)
             .and_then(|peer| peer.active_connection)
+    }
+
+    /// Snapshot of every connected non-host peer and its canonical seat.
+    #[must_use]
+    pub fn connected_peers(&self) -> Vec<(PlayerSeat, Entity)> {
+        self.peers
+            .iter()
+            .filter_map(|(&seat, peer)| peer.active_connection.map(|connection| (seat, connection)))
+            .collect()
     }
 
     fn admit_invited(

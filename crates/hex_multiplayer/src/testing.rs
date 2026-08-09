@@ -20,7 +20,7 @@ use crate::{
     AdmissionAccepted, AdmissionCredential, AdmissionRefusal, AdmissionSetupError,
     AuthenticatedCommandRequest, ClientHello, CommandResult, InviteToken, LobbySnapshot,
     MultiplayerPlugin, ReconnectCredential, SessionAdmissionAuthority, SessionClosed,
-    SessionManifestV1,
+    SessionControlResult, SessionManifestV1,
 };
 
 /// Messages captured from one deterministic client app.
@@ -36,6 +36,8 @@ pub struct ClientProbe {
     pub manifests: Vec<SessionManifestV1>,
     /// Final or duplicate command results.
     pub command_results: Vec<CommandResult>,
+    /// Typed seatless-lobby request results.
+    pub control_results: Vec<SessionControlResult>,
     /// Typed session termination notifications.
     pub closed: Vec<SessionClosed>,
 }
@@ -286,6 +288,7 @@ fn capture_client_messages(
     mut lobbies: MessageReader<LobbySnapshot>,
     mut manifests: MessageReader<SessionManifestV1>,
     mut command_results: MessageReader<CommandResult>,
+    mut control_results: MessageReader<SessionControlResult>,
     mut closed: MessageReader<SessionClosed>,
     mut probe: bevy_ecs::prelude::ResMut<ClientProbe>,
 ) {
@@ -296,6 +299,9 @@ fn capture_client_messages(
     probe
         .command_results
         .extend(command_results.read().copied());
+    probe
+        .control_results
+        .extend(control_results.read().copied());
     probe.closed.extend(closed.read().copied());
 }
 

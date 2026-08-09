@@ -457,6 +457,51 @@ impl LobbyAuthority {
         Ok(())
     }
 
+    /// Removes one non-host player from an open lobby and returns their assignments to
+    /// the host. Active-session removal uses disconnect/delegation instead so canonical
+    /// ownership never changes while authority work may be in flight.
+    pub fn remove_guest(&mut self, seat: PlayerSeat) -> Result<(), LobbyMutationError> {
+        if self.snapshot.phase != LobbyPhase::Open {
+            return Err(LobbyMutationError::LobbyClosed);
+        }
+        if seat == PlayerSeat::HOST {
+            return Err(LobbyMutationError::HostCannotBeRemoved);
+        }
+        let index = seat.human_index().ok_or(LobbyMutationError::NonHumanSeat)?;
+        let removed = self
+            .snapshot
+            .seats
+            .get(index)
+            .ok_or(LobbyMutationError::NonHumanSeat)?;
+        if !removed.connection.is_claimed() {
+            return Err(LobbyMutationError::VacantSeat);
+        }
+        let mut host_units = self
+            .snapshot
+            .seats
+            .first()
+            .map(|host| host.assigned_units.as_slice().to_vec())
+            .ok_or(LobbyMutationError::MissingHost)?;
+        host_units.extend_from_slice(removed.assigned_units.as_slice());
+        host_units.sort_unstable();
+        let host_units = BoundedVec::new(host_units)?;
+
+        let host = self
+            .snapshot
+            .seats
+            .first_mut()
+            .ok_or(LobbyMutationError::MissingHost)?;
+        host.assigned_units = host_units;
+        host.ready = false;
+        let removed = self
+            .snapshot
+            .seats
+            .get_mut(index)
+            .ok_or(LobbyMutationError::NonHumanSeat)?;
+        *removed = LobbySeatSnapshot::vacant(seat);
+        Ok(())
+    }
+
     /// Changes a connected guest's ready state. The host does not need a ready flag.
     pub fn set_ready(&mut self, seat: PlayerSeat, ready: bool) -> Result<(), LobbyMutationError> {
         if self.snapshot.phase != LobbyPhase::Open {
@@ -478,9 +523,32 @@ impl LobbyAuthority {
         &mut self,
         manifest: &SessionManifestV1,
     ) -> Result<(), LobbyMutationError> {
-        if self.snapshot.phase != LobbyPhase::Open {
-            return Err(LobbyMutationError::LobbyClosed);
+        self.transition_to_loading(manifest, LobbyPhase::Open)
+    }
+
+    /// Re-enters loading from an encounter outcome using the same frozen manifest and
+    /// assignments. Readiness remains the launch readiness already accepted for this
+    /// encounter; disconnected seats may continue through host delegation.
+    pub fn retry_loading(
+        &mut self,
+        manifest: &SessionManifestV1,
+    ) -> Result<(), LobbyMutationError> {
+        self.transition_to_loading(manifest, LobbyPhase::Outcome)
+    }
+
+    fn transition_to_loading(
+        &mut self,
+        manifest: &SessionManifestV1,
+        expected_phase: LobbyPhase,
+    ) -> Result<(), LobbyMutationError> {
+        if self.snapshot.phase != expected_phase {
+            return Err(if expected_phase == LobbyPhase::Open {
+                LobbyMutationError::LobbyClosed
+            } else {
+                LobbyMutationError::WrongPhase
+            });
         }
+        let previous_summary = self.snapshot.launch_summary.clone();
         let claimed_seats = self
             .snapshot
             .seats
@@ -496,8 +564,8 @@ impl LobbyAuthority {
             claimed_seats,
         });
         if let Err(error) = self.snapshot.validate(manifest) {
-            self.snapshot.phase = LobbyPhase::Open;
-            self.snapshot.launch_summary = None;
+            self.snapshot.phase = expected_phase;
+            self.snapshot.launch_summary = previous_summary;
             return Err(LobbyMutationError::InvalidLobby(error));
         }
         Ok(())
@@ -521,6 +589,20 @@ impl LobbyAuthority {
         Ok(())
     }
 
+    /// Reopens assignment after an encounter outcome and clears every guest readiness
+    /// flag. Canonical claimed seats and assignments survive the transition.
+    pub fn return_to_lobby(&mut self) -> Result<(), LobbyMutationError> {
+        if self.snapshot.phase != LobbyPhase::Outcome {
+            return Err(LobbyMutationError::WrongPhase);
+        }
+        self.snapshot.phase = LobbyPhase::Open;
+        self.snapshot.launch_summary = None;
+        for seat in self.snapshot.seats.iter_mut().skip(1) {
+            seat.ready = false;
+        }
+        Ok(())
+    }
+
     /// Closes admission and session mechanics.
     pub fn close(&mut self) {
         self.snapshot.phase = LobbyPhase::Closed;
@@ -531,8 +613,11 @@ impl LobbyAuthority {
         if seat == PlayerSeat::HOST {
             return Err(LobbyMutationError::HostCannotDisconnect);
         }
+        let clear_ready = self.snapshot.phase == LobbyPhase::Open;
         let entry = self.seat_mut(seat)?;
-        entry.ready = false;
+        if clear_ready {
+            entry.ready = false;
+        }
         entry.connection = match entry.connection {
             SeatConnectionState::Connected => SeatConnectionState::Reserved {
                 remaining_millis: Self::DISCONNECT_RESERVATION_MILLIS,
@@ -655,6 +740,8 @@ pub enum LobbyMutationError {
     WrongPhase,
     /// Host loss terminates the session instead of reserving seat zero.
     HostCannotDisconnect,
+    /// Seat zero cannot be removed from its own host-owned lobby.
+    HostCannotBeRemoved,
     /// Reconnect targeted a vacant seat.
     VacantSeat,
     /// Reconnect targeted a seat that already has a live connection.
@@ -685,6 +772,7 @@ impl fmt::Display for LobbyMutationError {
             Self::SeatNotConnected => "seat is not connected",
             Self::WrongPhase => "lobby transition is not valid in this phase",
             Self::HostCannotDisconnect => "host loss closes the session",
+            Self::HostCannotBeRemoved => "the host cannot be removed from its own lobby",
             Self::VacantSeat => "vacant seat cannot reconnect",
             Self::DuplicateActiveSeat => "seat already has a live connection",
         })
@@ -949,6 +1037,71 @@ mod tests {
             lobby.snapshot().seats.first().map(|seat| seat.ready),
             Some(false)
         );
+        assert_eq!(
+            lobby.snapshot().seats.get(1).map(|seat| seat.ready),
+            Some(false)
+        );
+        assert_eq!(lobby.snapshot().validate(&manifest), Ok(()));
+    }
+
+    #[test]
+    fn removing_an_open_lobby_guest_returns_assignments_and_vacates_the_seat() {
+        let manifest = manifest();
+        let mut lobby = LobbyAuthority::new(SessionPeerId::from_bytes([1; 16]), &manifest)
+            .expect("valid fixture lobby");
+        let guest = lobby
+            .admit_guest(SessionPeerId::from_bytes([2; 16]))
+            .expect("guest should fit");
+
+        assert_eq!(lobby.remove_guest(guest), Ok(()));
+        assert_eq!(
+            lobby
+                .snapshot()
+                .seats
+                .first()
+                .map(|seat| seat.assigned_units.as_slice()),
+            Some([UnitId(0), UnitId(1)].as_slice())
+        );
+        assert_eq!(
+            lobby.snapshot().seats.get(1).map(|seat| seat.connection),
+            Some(SeatConnectionState::Vacant)
+        );
+        assert_eq!(lobby.snapshot().validate(&manifest), Ok(()));
+    }
+
+    #[test]
+    fn retry_preserves_launch_readiness_while_return_to_lobby_clears_it() {
+        let manifest = manifest();
+        let mut lobby = LobbyAuthority::new(SessionPeerId::from_bytes([1; 16]), &manifest)
+            .expect("valid fixture lobby");
+        let guest = lobby
+            .admit_guest(SessionPeerId::from_bytes([2; 16]))
+            .expect("guest should fit");
+        lobby.set_ready(guest, true).expect("guest can ready");
+        lobby.begin_loading(&manifest).expect("lobby can launch");
+        lobby.activate().expect("loading can activate");
+
+        lobby
+            .disconnect(guest)
+            .expect("active guest can disconnect");
+        assert_eq!(
+            lobby.snapshot().seats.get(1).map(|seat| seat.ready),
+            Some(true),
+            "an active disconnect must not erase accepted launch readiness"
+        );
+        lobby
+            .reconnect(guest)
+            .expect("guest can reclaim before delegation");
+        lobby.enter_outcome().expect("active encounter can end");
+        lobby
+            .retry_loading(&manifest)
+            .expect("outcome can retry exactly");
+        lobby.activate().expect("retry loading can activate");
+        lobby.enter_outcome().expect("retried encounter can end");
+        lobby.return_to_lobby().expect("outcome can reopen lobby");
+
+        assert_eq!(lobby.snapshot().phase, LobbyPhase::Open);
+        assert_eq!(lobby.snapshot().launch_summary, None);
         assert_eq!(
             lobby.snapshot().seats.get(1).map(|seat| seat.ready),
             Some(false)

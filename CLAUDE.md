@@ -165,6 +165,8 @@ decisions.
 queries private map, unit, combat, or perception implementations. Wire command requests
 cannot supply a seat; authority derives it from admission state. `CombatState` stays on
 the host, and clients receive disclosure-safe `UnitReplica`/`SessionReplica` projections.
+Wire lobby requests also cannot supply a seat and are limited to readiness/leave;
+assignment, kick, launch, retry, return, and close are local-only host control messages.
 Installing `MultiplayerPlugin` alone opens no socket and leaves offline single-player in
 `SimulationRole::Authority`.
 

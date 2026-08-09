@@ -71,6 +71,13 @@ authority reducer sees an `IssuedCommand`. The host retains AI, combat truth, wo
 mutation, admission, global pause, and persistence. In particular, `CombatState` never
 crosses the network boundary.
 
+Lobby mutation follows the same rule. `ClientLobbyRequest` can only set the authenticated
+guest's readiness or leave; it has no seat field. Assignment, kick, launch, retry,
+return-to-lobby, and close use `HostSessionControlRequest`, which is a trusted local Bevy
+message and is deliberately absent from protocol registration. Both paths converge on the
+one `SessionAdmissionAuthority`, return a typed `SessionControlResult`, and publish its
+canonical `LobbySnapshot`.
+
 The shared crate owns stable data and transport registration, while each domain owns its
 adapter. Gameplay publishes authorized `UnitReplica`/`SessionReplica` values. The world
 owner alone exports/imports the pending `WorldSnapshotV1` contract. Perception decides
@@ -83,10 +90,11 @@ open a socket. Offline play defaults to `SimulationRole::Authority`; a remote cl
 must explicitly select `Replica`. Direct Connect and a later Steam transport share the
 same messages, manifests, snapshots, seat checks, and saves.
 
-The exact direct certificate digest is still a recorded implementation blocker:
-`wtransport 0.6.1`'s safe convenience verifier hashes complete leaf-certificate DER,
-while the approved product contract names SPKI SHA-256. The wave manifest requires an
-explicit audited verifier choice and forbids disable-validation shortcuts.
+Direct transport pins SHA-256 of the exact certificate `SubjectPublicKeyInfo` through the
+project-owned `SpkiPinVerifier`. It retains certificate validity/lifetime, P-256 key, and
+TLS handshake-signature checks; the production-unsafe disable-validation path is never
+used. This preserves the connection-code contract despite `wtransport 0.6.1`'s safe
+convenience verifier hashing complete leaf-certificate DER instead.
 
 ### `hex_map` is a leaf, on purpose
 

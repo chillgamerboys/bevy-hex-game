@@ -11,6 +11,7 @@
 
 mod auth;
 mod connection_code;
+mod control;
 #[cfg(feature = "direct")]
 mod direct;
 mod limits;
@@ -34,6 +35,10 @@ pub use auth::{
 pub use connection_code::{
     CertificateFingerprint, ConnectionCodeError, DirectConnectionCode, DirectEndpoint,
     EncodedConnectionCode,
+};
+pub use control::{
+    ClientLobbyAction, ClientLobbyRequest, HostSessionAction, HostSessionControlRequest,
+    SessionControlOutcome, SessionControlRefusal, SessionControlResult,
 };
 #[cfg(feature = "direct")]
 pub use direct::{

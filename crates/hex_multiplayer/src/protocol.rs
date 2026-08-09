@@ -26,13 +26,14 @@ use crate::{
         MAX_ABS_LATTICE_COORDINATE, MAX_COMMAND_BYTES, MAX_DECISION_CELLS, MAX_IDENTITY_BYTES,
         MAX_PARTY_MEMBERS, MAX_ROUTE_STEPS,
     },
-    BuildIdentityV1, ContentFingerprint, LobbySnapshot, PublicWorldFingerprint,
-    ReconnectCredential, SessionManifestV1, SessionPeerId, SessionReplica, UnitReplica,
+    BuildIdentityV1, ClientLobbyRequest, ContentFingerprint, LobbySnapshot, PublicWorldFingerprint,
+    ReconnectCredential, SessionControlResult, SessionManifestV1, SessionPeerId, SessionReplica,
+    UnitReplica,
 };
 
 /// Project-owned schema material not visible to Replicon's type/order hashing.
 pub const PROTOCOL_SCHEMA_TAG: &str =
-    "hex-multiplayer/v1;seatless-command;bounded-wire;authorized-projections";
+    "hex-multiplayer/v1;seatless-command-and-lobby;bounded-wire;authorized-projections";
 
 /// Monotonic ordering assigned by the simulation authority.
 #[derive(
@@ -227,6 +228,7 @@ pub fn register_protocol(app: &mut App) {
         .add_custom(PROTOCOL_SCHEMA_TAG);
 
     app.add_client_message::<ClientHello>(Channel::Ordered)
+        .add_client_message::<ClientLobbyRequest>(Channel::Ordered)
         .add_client_message_with(
             Channel::Ordered,
             serialize_command_request,
@@ -239,6 +241,8 @@ pub fn register_protocol(app: &mut App) {
         .make_message_independent::<AdmissionRefusal>()
         .add_server_message::<CommandResult>(Channel::Ordered)
         .make_message_independent::<CommandResult>()
+        .add_server_message::<SessionControlResult>(Channel::Ordered)
+        .make_message_independent::<SessionControlResult>()
         .add_server_message::<SessionManifestV1>(Channel::Ordered)
         .make_message_independent::<SessionManifestV1>()
         .add_server_message::<LobbySnapshot>(Channel::Ordered)

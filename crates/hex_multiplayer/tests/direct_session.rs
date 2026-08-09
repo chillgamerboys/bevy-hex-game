@@ -1,14 +1,15 @@
 //! Exact in-memory composition contract for custom admission, sequencing, and reconnect.
 
-use bevy_replicon::prelude::{AuthorizedClient, SendTargets, ToClients};
-use hex_core::{CommandRequestId, Faction, GameCommand, PlayerSeat, SimSeeds, TilePos, UnitId};
+use bevy_replicon::prelude::AuthorizedClient;
+use hex_core::{CommandRequestId, Faction, GameCommand, SimSeeds, TilePos, UnitId};
 use hex_multiplayer::{
     AdmissionRefusalReason, AuthorityCommandResolution, AuthoritySequence, AuthorizedSessionClient,
-    BoundedText, BoundedVec, BuildIdentityV1, ChannelSessionHarness, ClientMapReady,
-    CommandOutcome, CommandSequencer, ContentFingerprint, GameCommandRequest, HostProbe,
-    InviteToken, LobbyPhase, MapManifestV1, ProtocolVersion, PublicWorldFingerprint, RosterEntryV1,
+    BoundedText, BoundedVec, BuildIdentityV1, ChannelSessionHarness, ClientLobbyAction,
+    ClientLobbyRequest, ClientMapReady, CommandOutcome, CommandSequencer, ContentFingerprint,
+    GameCommandRequest, HostProbe, HostSessionAction, HostSessionControlRequest, InviteToken,
+    LobbyPhase, MapManifestV1, ProtocolVersion, PublicWorldFingerprint, RosterEntryV1,
     RulesManifestV1, SeatConnectionState, SessionAdmissionAuthority, SessionCloseReason,
-    SessionClosed, SessionManifestV1, SessionPeerId, UnitDeploymentV1, MAX_IDENTITY_BYTES,
+    SessionControlOutcome, SessionManifestV1, SessionPeerId, UnitDeploymentV1, MAX_IDENTITY_BYTES,
 };
 
 #[expect(clippy::expect_used, reason = "static fixture identity is valid")]
@@ -117,24 +118,45 @@ fn host_plus_six_clients_admit_play_retry_restart_reconnect_and_close() {
         Some(AdmissionRefusalReason::LobbyFull)
     );
 
-    {
-        let mut authority = harness
-            .host_mut()
+    for (index, &client) in clients.iter().take(5).enumerate() {
+        harness
+            .client_mut(client)
+            .expect("admitted client exists")
             .world_mut()
-            .resource_mut::<SessionAdmissionAuthority>();
-        for seat_index in 1_u8..=5 {
-            authority
-                .lobby_mut()
-                .set_ready(PlayerSeat(seat_index), true)
-                .expect("each admitted guest can ready");
-        }
+            .write_message(ClientLobbyRequest {
+                request_id: CommandRequestId(100 + u64::try_from(index).unwrap_or(u64::MAX)),
+                action: ClientLobbyAction::SetReady(true),
+            });
+    }
+    harness.pump(16);
+    for &client in clients.iter().take(5) {
+        assert!(harness.client_probe(client).is_some_and(|probe| {
+            probe
+                .control_results
+                .iter()
+                .any(|result| result.outcome == SessionControlOutcome::Accepted)
+        }));
     }
     harness
         .host_mut()
         .world_mut()
-        .resource_mut::<SessionAdmissionAuthority>()
-        .begin_loading(expected_world)
-        .expect("ready lobby should begin loading");
+        .write_message(HostSessionControlRequest {
+            request_id: CommandRequestId(200),
+            action: HostSessionAction::BeginLoading {
+                public_world_fingerprint: expected_world,
+            },
+        });
+    harness.pump(4);
+    assert_eq!(
+        harness
+            .host()
+            .world()
+            .resource::<SessionAdmissionAuthority>()
+            .lobby()
+            .snapshot()
+            .phase,
+        LobbyPhase::Loading
+    );
     for &client in clients.iter().take(5) {
         harness
             .client_mut(client)
@@ -306,17 +328,97 @@ fn host_plus_six_clients_admit_play_retry_restart_reconnect_and_close() {
             }
         ))));
 
-    harness.host_mut().world_mut().write_message(ToClients {
-        targets: SendTargets::CLIENTS_ONLY,
-        message: SessionClosed {
-            reason: SessionCloseReason::HostClosed,
-        },
-    });
     harness
         .host_mut()
         .world_mut()
-        .resource_mut::<SessionAdmissionAuthority>()
-        .close();
+        .write_message(HostSessionControlRequest {
+            request_id: CommandRequestId(201),
+            action: HostSessionAction::EnterOutcome,
+        });
+    harness.pump(4);
+    assert_eq!(
+        harness
+            .host()
+            .world()
+            .resource::<SessionAdmissionAuthority>()
+            .lobby()
+            .snapshot()
+            .phase,
+        LobbyPhase::Outcome
+    );
+    harness
+        .host_mut()
+        .world_mut()
+        .write_message(HostSessionControlRequest {
+            request_id: CommandRequestId(202),
+            action: HostSessionAction::RetryExact {
+                public_world_fingerprint: expected_world,
+            },
+        });
+    harness.pump(4);
+    assert_eq!(
+        harness
+            .host()
+            .world()
+            .resource::<SessionAdmissionAuthority>()
+            .lobby()
+            .snapshot()
+            .phase,
+        LobbyPhase::Loading
+    );
+    for &client in clients.iter().take(5) {
+        harness
+            .client_mut(client)
+            .expect("admitted client exists")
+            .world_mut()
+            .write_message(ClientMapReady {
+                public_world_fingerprint: expected_world,
+            });
+    }
+    harness.pump(16);
+    assert_eq!(
+        harness
+            .host()
+            .world()
+            .resource::<SessionAdmissionAuthority>()
+            .lobby()
+            .snapshot()
+            .phase,
+        LobbyPhase::Active
+    );
+
+    harness
+        .host_mut()
+        .world_mut()
+        .write_message(HostSessionControlRequest {
+            request_id: CommandRequestId(203),
+            action: HostSessionAction::EnterOutcome,
+        });
+    harness.pump(4);
+    harness
+        .host_mut()
+        .world_mut()
+        .write_message(HostSessionControlRequest {
+            request_id: CommandRequestId(204),
+            action: HostSessionAction::ReturnToLobby,
+        });
+    harness.pump(4);
+    let returned_lobby = harness
+        .host()
+        .world()
+        .resource::<SessionAdmissionAuthority>()
+        .lobby()
+        .snapshot();
+    assert_eq!(returned_lobby.phase, LobbyPhase::Open);
+    assert!(returned_lobby.seats.iter().skip(1).all(|seat| !seat.ready));
+
+    harness
+        .host_mut()
+        .world_mut()
+        .write_message(HostSessionControlRequest {
+            request_id: CommandRequestId(205),
+            action: HostSessionAction::CloseSession,
+        });
     harness.pump(12);
     assert!(harness.client_probe(first_client).is_some_and(|probe| {
         probe

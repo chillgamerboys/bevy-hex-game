@@ -68,7 +68,7 @@ mod tests {
         );
         assert_eq!(
             format!("{:?}", first.world().resource::<ProtocolHash>()),
-            "ProtocolHash(18188909546323316220)"
+            "ProtocolHash(9148828228917372281)"
         );
     }
 
