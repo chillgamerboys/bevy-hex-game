@@ -32,6 +32,12 @@ jobs:
           WAIVER_ACTOR: ${{ github.actor }}
           GH_TOKEN: ${{ github.token }}
         run: |
+          # GitHub normalises PR body line endings to CRLF, but grep -x below
+          # matches whole lines against LF-only patterns built from env vars.
+          # Strip the CR so exact-line matches work regardless of that source
+          # formatting.
+          PR_BODY="$(printf '%s' "$PR_BODY" | tr -d '\r')"
+
           case "$BASE_REF" in
             wave/*)
               echo "Source lane targets $BASE_REF; exact-head sign-off is deferred to the combined wave PR into dev."

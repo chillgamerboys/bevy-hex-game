@@ -1,0 +1,4 @@
+interface:
+  display_name: "Plan Epic"
+  short_description: "Decompose a wave into owned lanes and a dispatch queue"
+  default_prompt: "Use $plan-epic to decompose this wave into lanes with disjoint crate authority and file ownership, sequence them with separate dispatch and merge blockers, and commit the wave manifest."

@@ -13,7 +13,9 @@ follow the complete **Before opening a PR** procedure in
 
 1. Require the local commit to equal the pushed PR head when a PR exists.
 2. Run the tracked Markdown relative-link check.
-3. Run the fail-closed scope plan against the exact PR base and head, and record it.
+3. Run the fail-closed scope plan against the exact PR base and head, and record it. A
+   combined wave candidate plans against `origin/dev...origin/wave/<slug>` — never
+   against a source lane's own base, which would select only that lane's concerns.
 4. For Rust-affecting work, run format and dependency policy. Run Clippy, selected
    test concerns, residual doctests, warnings-denied docs, graph/partition checks, and
    the default-feature shipping release build exactly when the plan selects them.

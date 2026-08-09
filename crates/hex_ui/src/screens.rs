@@ -430,9 +430,10 @@ fn spawn_settings_content(
             }
         });
     surface.spawn(heading(assets, view.tab.label()));
-    if view.tab == SettingsTab::General {
+    if !view.rows.is_empty() {
         spawn_general_settings(surface, assets, view);
-    } else {
+    }
+    if view.tab.input_category().is_some() {
         spawn_binding_settings(surface, assets, view);
     }
 }

@@ -6,3 +6,4 @@ __pycache__/
 /.context/visual-walks/
 /.context/asset-workshop/
 /assets/.asset-workshop-cache/
+/.claude/settings.local.json

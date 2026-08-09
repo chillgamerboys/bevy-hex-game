@@ -238,6 +238,7 @@ fn adjust_general_setting(preferences: &mut UserPreferences, setting: UiSetting)
         UiSetting::MusicVolume => cycle_volume(&mut preferences.music_volume),
         UiSetting::EffectsVolume => cycle_volume(&mut preferences.effects_volume),
         UiSetting::UiVolume => cycle_volume(&mut preferences.ui_volume),
+        UiSetting::ZoomSpeed => preferences.zoom_speed = preferences.zoom_speed.next(),
     }
 }
 
@@ -267,10 +268,10 @@ fn project_settings_view(
     notice: Option<String>,
 ) -> UiSettingsView {
     let resolved = InputBindings::from_overrides(preferences.binding_overrides.clone());
-    let rows = if session.tab == SettingsTab::General {
-        general_rows(preferences)
-    } else {
-        Vec::new()
+    let rows = match session.tab {
+        SettingsTab::General => general_rows(preferences),
+        SettingsTab::Camera => camera_rows(preferences),
+        _ => Vec::new(),
     };
     let bindings = session
         .tab
@@ -363,6 +364,14 @@ fn general_rows(preferences: &UserPreferences) -> Vec<UiSettingRow> {
             value: percent(preferences.ui_volume),
         },
     ]
+}
+
+fn camera_rows(preferences: &UserPreferences) -> Vec<UiSettingRow> {
+    vec![UiSettingRow {
+        setting: UiSetting::ZoomSpeed,
+        label: "Zoom speed".to_owned(),
+        value: preferences.zoom_speed.label().to_owned(),
+    }]
 }
 
 fn percent(value: f32) -> String {
