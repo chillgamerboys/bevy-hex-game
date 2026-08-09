@@ -146,6 +146,39 @@ This remap resolves only L2's open-PR dispatch condition. It does not waive L3's
 world-owner decision or any combined evidence gate. Ratifier: coordinator, preserving
 the user-directed 2026-08-08 instruction to proceed through L2–L4.
 
+### 2026-08-09 — L4 exact-symbol remap and shared lobby-control injection
+
+The L4 pre-dispatch sweep found `origin/dev` unchanged at
+`92662d456746506093e8de61f54f1d619085e1fe` and the five draft heads unchanged at
+#186 `d3ec9e7b`, #187 `244b6b7b`, #188 `3234f060`, #189 `fbf9ee7c`, and stacked
+#190 `15102e23`. L4 is re-cut around their exact presentation symbols:
+
+- #186 changes only `publish_hud_view`/`disclosed_actor` and their disclosure fixtures in
+  `screens/gameplay.rs`; L4 owns the earlier pause/outcome routing and adds separate tests;
+- #189 adds only `CreatorIntent::SetTouch` in `hex_ui::model`; L4 appends dedicated
+  multiplayer view/intent types without editing the Creator enum;
+- #188 and #190 extend `walk.rs` with `HoverTile` and `AssertCameraMode`; L4 does not edit
+  the walk runner and uses its existing generic screen/button/capture steps from a new
+  `walks/multiplayer_session.ron` fixture;
+- none of #186–#190 changes the Main Menu model/renderer/adapter, the new multiplayer
+  modules, `screens/mod.rs`, or `gameplay_app.rs` regions owned by L4.
+
+The sweep also found that L1 intentionally exposes host-owned pure lobby mechanics but
+does not yet register a seatless client readiness/leave request or a trusted local
+host-control ingress for assignment, kick, launch, retry, return-to-lobby, and close.
+Allowing L4 to query or mutate admission internals directly would create a second session
+authority. Before L4 dispatch, the coordinator therefore injects one transport-neutral
+shared control contract into `hex_multiplayer`, its deterministic registration order,
+runtime adapters, and the in-memory harness. The injection must derive every remote seat
+from `AuthorizedSessionClient`, return typed outcomes, broadcast one canonical
+`LobbySnapshot`, and retain secret-redaction and message bounds.
+
+L4 is reclassified from `shared` to `gameplay`: it owns gameplay-facing screen behavior
+and adapts that behavior through shared `hex_game`/`hex_ui` presentation files, but crosses
+no world-owned boundary. The coordinator injection remains separately shared authority.
+This amendment resolves L4's open-PR territory condition only; L3 remains owner-blocked
+and L4 remains merge-blocked on L3. Ratifier: coordinator.
+
 ## Shared foundation
 
 Live contracts this wave builds on:
@@ -321,7 +354,7 @@ lanes:
     title: Session UI and application adapters
     order: orders/L4-session-ui.md
     ticket: null
-    authority: shared
+    authority: gameplay
     builder: worker
     branch: worker/client-hosted-session-ui
     owns:
@@ -340,6 +373,7 @@ lanes:
       - docs/planning/waves/client-hosted-sandbox/manifest.md#L4-row
     dispatch_blockers:
       - PRs 186, 188, 189, and stacked PR 190 have landed or every overlapping symbol is remapped in an amended manifest
+      - coordinator shared lobby-control injection has landed on the wave
     merge_blockers: [L1, L2, L3]
     fences: []
     selector:
