@@ -145,6 +145,7 @@ struct ActiveDirectSession {
 struct PendingClientHello {
     credential: AdmissionCredential,
     sent: bool,
+    transport_observed: bool,
 }
 
 #[derive(Resource, Debug, Default)]
@@ -203,6 +204,7 @@ pub(super) fn plugin(app: &mut App) {
             (
                 send_client_hello,
                 capture_session_messages,
+                detect_failed_client_connection,
                 sync_host_session,
                 finish_host_shutdown,
                 report_client_map_ready,
@@ -689,6 +691,7 @@ fn start_direct_join(
     world.insert_resource(PendingClientHello {
         credential,
         sent: false,
+        transport_observed: false,
     });
     world.insert_resource(SimulationRole::Replica);
     world.remove_resource::<DirectWorldReady>();
@@ -710,11 +713,18 @@ fn send_client_hello(
     let Some(pending) = pending.as_mut() else {
         return;
     };
-    if pending.sent
-        || state
-            .as_deref()
-            .is_none_or(|state| *state.get() != ClientState::Connected)
-    {
+    let Some(state) = state.as_deref() else {
+        return;
+    };
+    match *state.get() {
+        ClientState::Disconnected => return,
+        ClientState::Connecting => {
+            pending.transport_observed = true;
+            return;
+        }
+        ClientState::Connected => pending.transport_observed = true,
+    }
+    if pending.sent {
         return;
     }
     let Some(accepted) = accepted else {
@@ -766,6 +776,15 @@ fn capture_session_messages(
     for message in accepted.read() {
         if !model.admitted(MultiplayerRole::Client, message.seat) {
             notice.0 = Some("The host admitted an invalid human seat.".to_owned());
+            end_active_session(
+                MultiplayerEndReason::ProtocolViolation,
+                active.as_deref(),
+                &mut model,
+                &mut commands,
+            );
+            next_screen.set(Screen::Multiplayer);
+        } else {
+            commands.remove_resource::<PendingClientHello>();
         }
     }
     if let Some(manifest) = manifests.read().last() {
@@ -773,7 +792,9 @@ fn capture_session_messages(
     }
     if let Some(lobby) = lobbies.read().last() {
         projection.lobby = Some(lobby.clone());
-        project_lobby_phase(lobby.phase, ready.as_deref(), &mut model, &mut next_screen);
+        if model.role.is_some() {
+            project_lobby_phase(lobby.phase, ready.as_deref(), &mut model, &mut next_screen);
+        }
     }
     for refusal in refused.read() {
         notice.0 = Some(admission_refusal_copy(refusal.reason).to_owned());
@@ -823,6 +844,39 @@ fn capture_session_messages(
         );
         next_screen.set(Screen::Multiplayer);
     }
+}
+
+fn detect_failed_client_connection(
+    state: Option<Res<State<ClientState>>>,
+    pending: Option<Res<PendingClientHello>>,
+    active: Option<Res<ActiveDirectSession>>,
+    mut model: ResMut<MultiplayerModel>,
+    mut notice: ResMut<SessionUiNotice>,
+    mut commands: Commands,
+    mut next_screen: ResMut<NextState<Screen>>,
+) {
+    let (Some(state), Some(pending), Some(active)) = (state, pending, active) else {
+        return;
+    };
+    if active.role != MultiplayerRole::Client
+        || model.role != Some(MultiplayerRole::Client)
+        || model.local_seat.is_some()
+        || !pending.transport_observed
+        || *state.get() != ClientState::Disconnected
+    {
+        return;
+    }
+    notice.0 = Some(
+        "The direct connection ended before admission completed. Check the host address, UDP forwarding, and firewall, then try again."
+            .to_owned(),
+    );
+    end_active_session(
+        MultiplayerEndReason::ConnectionFailed,
+        Some(&active),
+        &mut model,
+        &mut commands,
+    );
+    next_screen.set(Screen::Multiplayer);
 }
 
 fn sync_host_session(
@@ -1572,6 +1626,58 @@ mod tests {
             *app.world().resource::<SimulationRole>(),
             SimulationRole::Authority
         );
+    }
+
+    #[test]
+    fn pre_admission_disconnect_is_typed_only_after_transport_was_observed() {
+        let mut model = MultiplayerModel::default();
+        model.connecting(MultiplayerRole::Client);
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+            .insert_state(Screen::Multiplayer)
+            .insert_state(ClientState::Disconnected)
+            .insert_resource(model)
+            .insert_resource(SimulationRole::Replica)
+            .insert_resource(SessionUiNotice::default())
+            .add_systems(Update, detect_failed_client_connection);
+        let connection = app.world_mut().spawn_empty().id();
+        app.insert_resource(ActiveDirectSession {
+            entity: connection,
+            role: MultiplayerRole::Client,
+            hosted_code: None,
+        })
+        .insert_resource(PendingClientHello {
+            credential: AdmissionCredential::Invite(InviteToken::from_bytes([4; 16])),
+            sent: false,
+            transport_observed: false,
+        });
+
+        app.update();
+        assert!(app.world().get_resource::<ActiveDirectSession>().is_some());
+        app.world_mut()
+            .resource_mut::<PendingClientHello>()
+            .transport_observed = true;
+
+        app.update();
+
+        assert!(app.world().get_resource::<ActiveDirectSession>().is_none());
+        assert!(app.world().get_resource::<PendingClientHello>().is_none());
+        assert_eq!(
+            *app.world().resource::<SimulationRole>(),
+            SimulationRole::Authority
+        );
+        let model = app.world().resource::<MultiplayerModel>();
+        assert_eq!(model.route, hex_gameplay_model::MultiplayerRoute::Ended);
+        assert_eq!(
+            model.ended_reason,
+            Some(MultiplayerEndReason::ConnectionFailed)
+        );
+        assert!(app
+            .world()
+            .resource::<SessionUiNotice>()
+            .0
+            .as_deref()
+            .is_some_and(|message| message.contains("before admission completed")));
     }
 
     #[test]

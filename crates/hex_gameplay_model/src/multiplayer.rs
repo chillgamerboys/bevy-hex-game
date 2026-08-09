@@ -37,6 +37,8 @@ pub enum MultiplayerRole {
 /// Stable reason displayed after returning from a failed or ended session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MultiplayerEndReason {
+    /// The direct transport ended before custom admission completed.
+    ConnectionFailed,
     /// Listen host transport ended; host migration is unsupported.
     HostDisconnected,
     /// Host explicitly closed the session.
@@ -112,7 +114,10 @@ impl MultiplayerModel {
 
     /// Records successful custom admission and opens the assignment lobby.
     pub fn admitted(&mut self, role: MultiplayerRole, seat: PlayerSeat) -> bool {
-        if !seat.is_human() || (role == MultiplayerRole::Host && seat != PlayerSeat::HOST) {
+        if !seat.is_human()
+            || (role == MultiplayerRole::Host && seat != PlayerSeat::HOST)
+            || (role == MultiplayerRole::Client && seat == PlayerSeat::HOST)
+        {
             return false;
         }
         self.set_session_route(MultiplayerRoute::Lobby, Some(role), Some(seat));
@@ -239,6 +244,7 @@ mod tests {
     fn admission_rejects_non_human_and_nonzero_host_seats() {
         let mut model = MultiplayerModel::default();
         assert!(!model.admitted(MultiplayerRole::Client, PlayerSeat::AI));
+        assert!(!model.admitted(MultiplayerRole::Client, PlayerSeat::HOST));
         assert!(!model.admitted(MultiplayerRole::Host, PlayerSeat(1)));
         assert!(model.admitted(MultiplayerRole::Host, PlayerSeat::HOST));
         assert_eq!(model.route, MultiplayerRoute::Lobby);
