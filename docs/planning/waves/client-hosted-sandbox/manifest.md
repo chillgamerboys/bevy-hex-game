@@ -358,8 +358,10 @@ lanes:
     builder: worker
     branch: worker/client-hosted-session-ui
     owns:
+      - crates/hex_core/src/app.rs#Screen-Multiplayer-variant
       - crates/hex_gameplay_model/src/multiplayer.rs
       - crates/hex_gameplay_model/src/main_menu.rs#multiplayer-route-only
+      - crates/hex_gameplay_model/src/sandbox.rs#multiplayer-entry-and-destination
       - crates/hex_gameplay_model/src/lib.rs#multiplayer-module-export
       - crates/hex_ui/src/multiplayer.rs
       - crates/hex_ui/src/main_menu.rs#fifth-product-route
@@ -368,6 +370,8 @@ lanes:
       - crates/hex_game/src/screens/multiplayer.rs
       - crates/hex_game/src/screens/main_menu.rs#multiplayer-intent-adapter
       - crates/hex_game/src/screens/mod.rs#multiplayer-plugin-and-screen-teardown
+      - crates/hex_game/src/screens/sandbox.rs#multiplayer-host-deployment-handoff
+      - crates/hex_game/src/screens/gameplay.rs#multiplayer-pause-and-outcome-routing
       - crates/hex_game/tests/gameplay_app.rs#multiplayer-session-journey
       - walks/multiplayer_session.ron
       - docs/planning/waves/client-hosted-sandbox/manifest.md#L4-row
@@ -383,7 +387,7 @@ lanes:
     sizing:
       model: gpt-5.6-sol
       effort: high
-    state: queued
+    state: dispatched
     pr: null
 ```
 
@@ -516,7 +520,13 @@ amend this manifest after owner review.
 
 ## Injection log
 
-- None.
+- `2f4015a79dcd0cc1b772b1aa5688694ceb5f1462` — coordinator-owned shared
+  lobby-control seam required by the 2026-08-09 L4 amendment. Added seatless
+  `ClientLobbyRequest`, non-wire `HostSessionControlRequest`, typed
+  `SessionControlResult`, one ordered runtime authority path, open-lobby kick/leave,
+  exact retry/return/close transitions, protocol hash `9148828228917372281`, and
+  in-memory host-plus-six-client coverage. Focused evidence: 43 unit tests + 1 direct
+  session contract, strict `hex_multiplayer` Clippy, and warning-denied rustdoc all PASS.
 
 ## Close-out
 
