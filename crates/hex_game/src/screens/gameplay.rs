@@ -539,10 +539,20 @@ fn handle_outcome_actions(
             continue;
         };
         match (*action, outcome) {
-            (OutcomeAction::Continue, EncounterOutcome::Victory) if sandbox.is_none() => {
+            (OutcomeAction::Continue, EncounterOutcome::Victory)
+                if sandbox.is_none()
+                    && multiplayer
+                        .as_deref()
+                        .is_none_or(|model| model.role.is_none()) =>
+            {
                 next_mode.set(Mode::Exploring);
             }
-            (OutcomeAction::Retry, EncounterOutcome::Defeat) if sandbox.is_none() => {
+            (OutcomeAction::Retry, EncounterOutcome::Defeat)
+                if sandbox.is_none()
+                    && multiplayer
+                        .as_deref()
+                        .is_none_or(|model| model.role.is_none()) =>
+            {
                 let Some(active) = active.as_deref() else {
                     error!("cannot retry: active scenario launch input was not retained");
                     continue;
@@ -572,7 +582,11 @@ fn handle_outcome_actions(
                 commands.insert_resource(sandbox.launch.rules.clone());
                 next_screen.set(Screen::Loading);
             }
-            (OutcomeAction::Return, _) => {
+            (OutcomeAction::Return, _)
+                if multiplayer
+                    .as_deref()
+                    .is_none_or(|model| model.role.is_none()) =>
+            {
                 let destination = gameplay_return_screen(origin.as_deref(), sandbox.is_some());
                 prepare_main_menu_for_gameplay_return(destination, &mut main_menu);
                 next_screen.set(destination);
@@ -1364,6 +1378,40 @@ mod tests {
             *app.world().resource::<State<Screen>>().get(),
             Screen::Sandbox
         );
+    }
+
+    #[test]
+    fn remote_client_cannot_inject_unrendered_local_outcome_navigation() {
+        let mut multiplayer = MultiplayerModel::default();
+        multiplayer.connecting(MultiplayerRole::Client);
+        assert!(multiplayer.admitted(MultiplayerRole::Client, PlayerSeat(1)));
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .insert_state(Screen::Gameplay)
+            .add_sub_state::<Mode>()
+            .add_message::<hex_ui::UiIntent>()
+            .init_resource::<MainMenuModel>()
+            .insert_resource(multiplayer)
+            .insert_resource(EncounterResolution(Some(EncounterOutcome::Victory)))
+            .insert_resource(sample_sandbox_session(9_001))
+            .insert_resource(GameplaySessionOrigin::Sandbox)
+            .add_systems(Update, handle_outcome_actions);
+        for action in [OutcomeAction::RetryExact, OutcomeAction::Return] {
+            app.world_mut().write_message(hex_ui::UiIntent::Outcome(
+                hex_ui::OutcomeIntent::Activate(action),
+            ));
+        }
+
+        app.update();
+        app.update();
+
+        assert_eq!(
+            *app.world().resource::<State<Screen>>().get(),
+            Screen::Gameplay
+        );
+        assert!(!app
+            .world()
+            .contains_resource::<crate::scenarios::ScenarioToLoad>());
     }
 
     #[test]
