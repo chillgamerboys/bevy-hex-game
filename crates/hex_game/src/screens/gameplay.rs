@@ -965,7 +965,7 @@ mod tests {
         CombatSettings, Encounter, EncounterFaction, EncounterPlacement, Roster, RosterEntry,
         ScenarioLibrary,
     };
-    use hex_core::{HexCoord, ResolvedMapSeed, TilePos};
+    use hex_core::{HexCoord, PlayerSeat, ResolvedMapSeed, TilePos};
     use hex_gameplay_model::{CampaignSlotId, SandboxCharacter, SandboxMapSelection};
 
     use super::super::sandbox::{SandboxDeploymentSnapshot, SandboxLaunchSnapshot};
@@ -1427,6 +1427,69 @@ mod tests {
         assert_eq!(
             app.world().resource::<MainMenuModel>().route,
             MainMenuRoute::Root
+        );
+    }
+
+    fn multiplayer_pause_app(role: SimulationRole, session_role: MultiplayerRole) -> App {
+        let mut model = MultiplayerModel::default();
+        model.connecting(session_role);
+        let seat = if session_role == MultiplayerRole::Host {
+            PlayerSeat::HOST
+        } else {
+            PlayerSeat(1)
+        };
+        assert!(model.admitted(session_role, seat));
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .insert_state(Screen::Gameplay)
+            .insert_state(Pause(false))
+            .insert_resource(role)
+            .insert_resource(model)
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<InputBindings>()
+            .init_resource::<HudState>()
+            .init_resource::<GameplayHudContext>()
+            .init_resource::<MainMenuModel>()
+            .add_systems(Update, handle_input);
+        app
+    }
+
+    #[test]
+    fn host_escape_changes_global_pause_while_client_escape_is_local_only() {
+        let mut host = multiplayer_pause_app(SimulationRole::Authority, MultiplayerRole::Host);
+        host.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Escape);
+        host.update();
+        host.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
+        host.update();
+        assert_eq!(*host.world().resource::<State<Pause>>().get(), Pause(true));
+        assert!(!host.world().resource::<MultiplayerModel>().local_menu_open);
+
+        let mut client = multiplayer_pause_app(SimulationRole::Replica, MultiplayerRole::Client);
+        client
+            .world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Escape);
+        client.update();
+        client
+            .world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
+        client.update();
+        assert_eq!(
+            *client.world().resource::<State<Pause>>().get(),
+            Pause(false),
+            "a remote menu must not manufacture global pause"
+        );
+        assert!(
+            client
+                .world()
+                .resource::<MultiplayerModel>()
+                .local_menu_open
         );
     }
 

@@ -879,7 +879,8 @@ fn project_lobby_phase(
             next_screen.set(Screen::Multiplayer);
         }
         LobbyPhase::Active if ready.is_some() => next_screen.set(Screen::Gameplay),
-        LobbyPhase::Active | LobbyPhase::Outcome => {}
+        LobbyPhase::Active => model.show_loading(),
+        LobbyPhase::Outcome => {}
         LobbyPhase::Closed => model.end(MultiplayerEndReason::SessionEnded),
     }
 }
@@ -1370,5 +1371,179 @@ mod tests {
         let mut invalid = manifest();
         invalid.shipped_roster = BoundedVec::default();
         assert!(PreparedDirectSandboxSession::new(invalid, "invalid").is_none());
+    }
+
+    #[test]
+    fn pending_host_without_world_handoff_opens_no_session() {
+        let endpoint = DirectEndpoint::new("127.0.0.1", 7_777).expect("loopback endpoint is valid");
+        let mut app = App::new();
+        app.init_resource::<MultiplayerModel>()
+            .init_resource::<SessionUiNotice>()
+            .insert_resource(PendingDirectHostSetup { endpoint })
+            .add_systems(Update, queue_prepared_host_after_sandbox);
+
+        app.update();
+
+        assert!(app.world().get_resource::<DirectStartQueue>().is_none());
+        assert!(app.world().get_resource::<ActiveDirectSession>().is_none());
+        assert_eq!(
+            app.world().resource::<SessionUiNotice>().0.as_deref(),
+            Some(
+                "The complete public-world snapshot contract is not available yet; hosting was not started."
+            )
+        );
+    }
+
+    #[test]
+    fn exact_world_handoff_only_queues_the_explicit_host_start() {
+        let endpoint = DirectEndpoint::new("127.0.0.1", 7_777).expect("loopback endpoint is valid");
+        let prepared = PreparedDirectSandboxSession::new(manifest(), "Frozen test encounter")
+            .expect("valid manifest prepares a host handoff");
+        let mut app = App::new();
+        app.init_resource::<MultiplayerModel>()
+            .init_resource::<SessionUiNotice>()
+            .insert_resource(PendingDirectHostSetup { endpoint })
+            .insert_resource(prepared)
+            .add_systems(Update, queue_prepared_host_after_sandbox);
+
+        app.update();
+
+        assert!(matches!(
+            app.world().get_resource::<DirectStartQueue>(),
+            Some(DirectStartQueue::Host { .. })
+        ));
+        assert!(app.world().get_resource::<ActiveDirectSession>().is_none());
+        assert_eq!(
+            app.world().resource::<MultiplayerModel>().role,
+            Some(MultiplayerRole::Host)
+        );
+    }
+
+    #[test]
+    fn active_phase_waits_for_the_exact_local_world_before_gameplay() {
+        let mut model = MultiplayerModel::default();
+        assert!(model.admitted(MultiplayerRole::Client, PlayerSeat(1)));
+        let mut next_screen = NextState::Unchanged;
+
+        project_lobby_phase(LobbyPhase::Active, None, &mut model, &mut next_screen);
+
+        assert_eq!(model.route, hex_gameplay_model::MultiplayerRoute::Loading);
+        assert!(matches!(next_screen, NextState::Unchanged));
+
+        let ready = DirectWorldReady {
+            fingerprint: PublicWorldFingerprint(9),
+        };
+        project_lobby_phase(
+            LobbyPhase::Active,
+            Some(&ready),
+            &mut model,
+            &mut next_screen,
+        );
+        assert!(matches!(next_screen, NextState::Pending(Screen::Gameplay)));
+    }
+
+    fn intent_adapter_app(role: MultiplayerRole) -> App {
+        let mut model = MultiplayerModel::default();
+        model.connecting(role);
+        let seat = if role == MultiplayerRole::Host {
+            PlayerSeat::HOST
+        } else {
+            PlayerSeat(1)
+        };
+        assert!(model.admitted(role, seat));
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+            .insert_state(Screen::Multiplayer)
+            .insert_resource(model)
+            .init_resource::<MultiplayerDraft>()
+            .init_resource::<StoredCredentialState>()
+            .init_resource::<SessionProjection>()
+            .init_resource::<SessionUiRequestIds>()
+            .init_resource::<SessionUiNotice>()
+            .init_resource::<MainMenuModel>()
+            .add_message::<UiIntent>()
+            .add_message::<HostSessionControlRequest>()
+            .add_message::<ClientLobbyRequest>()
+            .add_systems(Update, handle_intents);
+        app
+    }
+
+    #[test]
+    fn client_host_only_action_is_a_typed_local_refusal_with_no_wire_request() {
+        let mut app = intent_adapter_app(MultiplayerRole::Client);
+        app.world_mut()
+            .write_message(UiIntent::Multiplayer(MultiplayerIntent::AssignUnit {
+                unit: UnitId(0),
+                destination: PlayerSeat(1),
+            }));
+
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<SessionUiNotice>().0.as_deref(),
+            Some("Only the listen host may perform that session action.")
+        );
+        assert!(app
+            .world_mut()
+            .resource_mut::<Messages<HostSessionControlRequest>>()
+            .drain()
+            .next()
+            .is_none());
+        assert!(app
+            .world_mut()
+            .resource_mut::<Messages<ClientLobbyRequest>>()
+            .drain()
+            .next()
+            .is_none());
+    }
+
+    #[test]
+    fn role_adapter_keeps_host_controls_local_and_client_readiness_seatless() {
+        let mut host = intent_adapter_app(MultiplayerRole::Host);
+        host.world_mut()
+            .write_message(UiIntent::Multiplayer(MultiplayerIntent::AssignUnit {
+                unit: UnitId(0),
+                destination: PlayerSeat(1),
+            }));
+        host.update();
+        let host_request = host
+            .world_mut()
+            .resource_mut::<Messages<HostSessionControlRequest>>()
+            .drain()
+            .next()
+            .expect("listen host receives a trusted local request");
+        assert_eq!(
+            host_request.action,
+            HostSessionAction::AssignUnit {
+                unit: UnitId(0),
+                destination: PlayerSeat(1),
+            }
+        );
+        assert!(host
+            .world_mut()
+            .resource_mut::<Messages<ClientLobbyRequest>>()
+            .drain()
+            .next()
+            .is_none());
+
+        let mut client = intent_adapter_app(MultiplayerRole::Client);
+        client
+            .world_mut()
+            .write_message(UiIntent::Multiplayer(MultiplayerIntent::SetReady(true)));
+        client.update();
+        let client_request = client
+            .world_mut()
+            .resource_mut::<Messages<ClientLobbyRequest>>()
+            .drain()
+            .next()
+            .expect("guest readiness produces one seatless request");
+        assert_eq!(client_request.action, ClientLobbyAction::SetReady(true));
+        assert!(client
+            .world_mut()
+            .resource_mut::<Messages<HostSessionControlRequest>>()
+            .drain()
+            .next()
+            .is_none());
     }
 }
