@@ -207,7 +207,7 @@ lanes:
     sizing:
       model: gpt-5.6-sol
       effort: high
-    state: in-review
+    state: merged-to-wave
     pr: 193
 
   - id: L2
