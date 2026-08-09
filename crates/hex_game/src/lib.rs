@@ -121,6 +121,7 @@ impl Plugin for AppPlugin {
                     ..default()
                 })
                 .set(LogPlugin {
+                    level: bevy::log::Level::WARN,
                     custom_layer: file_log_layer,
                     ..default()
                 }),
