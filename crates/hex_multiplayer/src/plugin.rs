@@ -30,9 +30,11 @@ impl Plugin for MultiplayerPlugin {
         app.add_plugins((
             aeronet_webtransport::client::WebTransportClientPlugin,
             aeronet_webtransport::server::WebTransportServerPlugin,
-        ));
+        ))
+        .add_observer(crate::direct::respond_to_direct_session);
 
         register_protocol(app);
+        crate::runtime::install_runtime(app);
     }
 }
 
@@ -66,7 +68,7 @@ mod tests {
         );
         assert_eq!(
             format!("{:?}", first.world().resource::<ProtocolHash>()),
-            "ProtocolHash(3363288148386025673)"
+            "ProtocolHash(18188909546323316220)"
         );
     }
 

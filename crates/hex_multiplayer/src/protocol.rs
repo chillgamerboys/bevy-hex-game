@@ -130,6 +130,7 @@ pub enum AdmissionCredential {
 
 /// First ordered message on every physical client connection.
 #[derive(Message, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ClientHello {
     /// Replicon's order-sensitive protocol hash.
     pub protocol_hash: ProtocolHash,
@@ -237,8 +238,11 @@ pub fn register_protocol(app: &mut App) {
         .add_server_message::<AdmissionRefusal>(Channel::Ordered)
         .make_message_independent::<AdmissionRefusal>()
         .add_server_message::<CommandResult>(Channel::Ordered)
+        .make_message_independent::<CommandResult>()
         .add_server_message::<SessionManifestV1>(Channel::Ordered)
+        .make_message_independent::<SessionManifestV1>()
         .add_server_message::<LobbySnapshot>(Channel::Ordered)
+        .make_message_independent::<LobbySnapshot>()
         .add_server_message::<SessionClosed>(Channel::Ordered)
         .make_message_independent::<SessionClosed>()
         .replicate::<UnitReplica>()
@@ -518,6 +522,10 @@ fn deserialize_command_request(
     _context: &mut ServerReceiveCtx,
     message: &mut Bytes,
 ) -> BevyResult<GameCommandRequest> {
+    decode_command_request(message)
+}
+
+fn decode_command_request(message: &mut Bytes) -> BevyResult<GameCommandRequest> {
     if message.len() > MAX_COMMAND_BYTES {
         return Err(BevyError::error(CommandWireError::MessageTooLarge));
     }
@@ -633,5 +641,28 @@ mod tests {
             invalid_cell.validate(),
             Err(CommandWireError::LatticeCellOutsideDomain)
         );
+    }
+
+    #[test]
+    fn arbitrary_auth_and_command_envelopes_fail_closed_without_panicking() {
+        for length in 0_usize..512 {
+            let arbitrary = (0..length)
+                .map(|index| {
+                    index
+                        .wrapping_mul(31)
+                        .wrapping_add(length.wrapping_mul(17))
+                        .to_le_bytes()[0]
+                })
+                .collect::<Vec<_>>();
+
+            let mut auth_bytes = Bytes::from(arbitrary.clone());
+            let _auth_result = postcard_utils::from_buf::<ClientHello, _>(&mut auth_bytes);
+
+            let mut command_bytes = Bytes::from(arbitrary);
+            let _command_result = decode_command_request(&mut command_bytes);
+        }
+
+        let mut oversized = Bytes::from(vec![0_u8; MAX_COMMAND_BYTES.saturating_add(1)]);
+        assert!(decode_command_request(&mut oversized).is_err());
     }
 }

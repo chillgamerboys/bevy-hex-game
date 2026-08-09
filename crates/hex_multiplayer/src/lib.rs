@@ -9,18 +9,36 @@
 //! Merely installing [`MultiplayerPlugin`] does not open a socket. Steam will later supply
 //! another connection/lobby backend without changing the protocol types in this crate.
 
+mod auth;
 mod connection_code;
+#[cfg(feature = "direct")]
+mod direct;
 mod limits;
 mod lobby;
 mod manifest;
 mod plugin;
 mod protocol;
 mod replica;
+mod runtime;
 mod secret;
+mod sequence;
+#[cfg(feature = "test-harness")]
+mod testing;
 
+pub use auth::{
+    AdmissionGrant, AdmissionSetupError, AtomicFileReconnectCredentialStore,
+    AuthorizedSessionClient, CredentialStoreError, MapReadyStatus, MemoryReconnectCredentialStore,
+    ReconnectCredentialStorage, ReconnectCredentialStore, SessionActivationError,
+    SessionAdmissionAuthority, StoredReconnectCredential,
+};
 pub use connection_code::{
     CertificateFingerprint, ConnectionCodeError, DirectConnectionCode, DirectEndpoint,
     EncodedConnectionCode,
+};
+#[cfg(feature = "direct")]
+pub use direct::{
+    DirectTransportError, PreparedDirectHost, PreparedDirectJoin, SpkiPinVerifier,
+    DEFAULT_DIRECT_PORT, DIRECT_SESSION_PATH,
 };
 pub use limits::{
     BoundError, BoundedText, BoundedVec, MAX_ABS_COMMAND_COORDINATE, MAX_ABS_COMMAND_LEVEL,
@@ -30,8 +48,8 @@ pub use limits::{
     MAX_UNIT_EFFECTS,
 };
 pub use lobby::{
-    LaunchSummaryV1, LobbyPhase, LobbySeatSnapshot, LobbySnapshot, LobbyValidationError,
-    SeatConnectionState, SessionPeerId,
+    LaunchSummaryV1, LobbyAuthority, LobbyMutationError, LobbyPhase, LobbySeatSnapshot,
+    LobbySnapshot, LobbyValidationError, SeatConnectionState, SessionPeerId,
 };
 pub use manifest::{
     BuildIdentityV1, ContentFingerprint, ManifestValidationError, MapManifestV1, ProtocolVersion,
@@ -48,4 +66,16 @@ pub use protocol::{
 pub use replica::{
     MotionReplicaV1, ReplicaValidationError, SessionOutcome, SessionReplica, UnitReplica,
 };
+pub use runtime::{
+    split_bounded_snapshot, AuthenticatedCommandRequest, AuthorityCommandResolution,
+    CredentialStorageOperation, CredentialStorageStatus, LiveSnapshotHeaderV1, LocalCommandSource,
+    SessionRuntimeClock, SessionRuntimeSystems, SnapshotHeaderError,
+};
 pub use secret::{InviteToken, ReconnectCredential};
+pub use sequence::{
+    AuthorityBoundary, BoundaryError, CommandBegin, CommandSequencer, RateLimitError,
+    RequestRateLimiter, SequencerError, DEFAULT_REQUEST_BURST, DEFAULT_REQUEST_WINDOW,
+    MAX_CACHED_RESULTS_PER_SEAT, MAX_IN_FLIGHT_REQUESTS_PER_SEAT,
+};
+#[cfg(feature = "test-harness")]
+pub use testing::{ChannelSessionHarness, ClientProbe, HarnessError, HostProbe};

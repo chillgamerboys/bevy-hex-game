@@ -4,6 +4,7 @@ use std::{collections::BTreeSet, fmt};
 
 use bevy_ecs::prelude::Message;
 use hex_core::{PlayerSeat, UnitId};
+use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -18,6 +19,14 @@ pub struct SessionPeerId([u8; Self::BYTE_LENGTH]);
 impl SessionPeerId {
     /// Identity byte length.
     pub const BYTE_LENGTH: usize = 16;
+
+    /// Generates an identity from the operating system's cryptographic random source.
+    #[must_use]
+    pub fn generate() -> Self {
+        let mut bytes = [0_u8; Self::BYTE_LENGTH];
+        OsRng.fill_bytes(&mut bytes);
+        Self(bytes)
+    }
 
     /// Constructs a session identity from exact bytes.
     #[must_use]
@@ -57,6 +66,8 @@ pub enum SeatConnectionState {
     },
     /// The player remains disconnected and the host may temporarily command its units.
     TemporarilyDelegated,
+    /// The player reconnected after delegation and is waiting for a safe authority boundary.
+    ReclaimPending,
 }
 
 impl SeatConnectionState {
@@ -69,7 +80,7 @@ impl SeatConnectionState {
     /// Whether the player is currently connected.
     #[must_use]
     pub const fn is_connected(self) -> bool {
-        matches!(self, Self::Connected)
+        matches!(self, Self::Connected | Self::ReclaimPending)
     }
 }
 
@@ -218,7 +229,9 @@ impl LobbySnapshot {
             .seats
             .first()
             .ok_or(LobbyValidationError::MissingHost)?;
-        if host.player != Some(self.host_identity) || !host.connection.is_claimed() {
+        if host.player != Some(self.host_identity)
+            || !matches!(host.connection, SeatConnectionState::Connected)
+        {
             return Err(LobbyValidationError::MissingHost);
         }
         if host.assigned_units.is_empty() {
@@ -235,7 +248,14 @@ impl LobbySnapshot {
             }
         }
 
-        if !matches!(self.phase, LobbyPhase::Open) {
+        if matches!(self.phase, LobbyPhase::Open) && self.launch_summary.is_some() {
+            return Err(LobbyValidationError::UnexpectedLaunchSummary);
+        }
+
+        if matches!(
+            self.phase,
+            LobbyPhase::Loading | LobbyPhase::Active | LobbyPhase::Outcome
+        ) {
             for seat in self
                 .seats
                 .iter()
@@ -248,13 +268,430 @@ impl LobbySnapshot {
             if assignments != roster {
                 return Err(LobbyValidationError::UnassignedRosterUnit);
             }
-            if self.launch_summary.is_none() {
-                return Err(LobbyValidationError::MissingLaunchSummary);
-            }
+            let summary = self
+                .launch_summary
+                .as_ref()
+                .ok_or(LobbyValidationError::MissingLaunchSummary)?;
+            validate_launch_summary(self, manifest, summary)?;
+        } else if let Some(summary) = &self.launch_summary {
+            validate_launch_summary(self, manifest, summary)?;
         }
         Ok(())
     }
 }
+
+fn validate_launch_summary(
+    lobby: &LobbySnapshot,
+    manifest: &SessionManifestV1,
+    summary: &LaunchSummaryV1,
+) -> Result<(), LobbyValidationError> {
+    if summary.scenario_identity != manifest.scenario_identity
+        || summary.public_world_fingerprint != manifest.map.expected_public_fingerprint
+    {
+        return Err(LobbyValidationError::LaunchIdentityMismatch);
+    }
+    let claimed = lobby
+        .seats
+        .iter()
+        .filter(|seat| seat.connection.is_claimed())
+        .count();
+    if usize::from(summary.claimed_seats) != claimed {
+        return Err(LobbyValidationError::ClaimedSeatCountMismatch);
+    }
+    Ok(())
+}
+
+/// Mutable host-owned lobby mechanics behind [`LobbySnapshot`].
+///
+/// This type never stores transport entity ids or credentials. Admission binds a physical
+/// connection to a seat separately, while this authority preserves canonical assignments
+/// across disconnects and reconnects.
+#[derive(Debug, Clone)]
+pub struct LobbyAuthority {
+    snapshot: LobbySnapshot,
+}
+
+impl LobbyAuthority {
+    /// Real-time reservation before host delegation becomes eligible.
+    pub const DISCONNECT_RESERVATION_MILLIS: u32 = 30_000;
+
+    /// Creates a host-owned open lobby from a validated frozen manifest.
+    pub fn new(
+        host_identity: SessionPeerId,
+        manifest: &SessionManifestV1,
+    ) -> Result<Self, LobbyMutationError> {
+        manifest
+            .validate()
+            .map_err(|_error| LobbyMutationError::InvalidManifest)?;
+        let snapshot = LobbySnapshot::new(host_identity, manifest)?;
+        Ok(Self { snapshot })
+    }
+
+    /// Returns the current disclosure-safe projection.
+    #[must_use]
+    pub const fn snapshot(&self) -> &LobbySnapshot {
+        &self.snapshot
+    }
+
+    /// Returns a cloned projection suitable for an ordered server message.
+    #[must_use]
+    pub fn snapshot_owned(&self) -> LobbySnapshot {
+        self.snapshot.clone()
+    }
+
+    /// Finds the seat occupied by one stable player identity.
+    #[must_use]
+    pub fn seat_for_player(&self, player: SessionPeerId) -> Option<PlayerSeat> {
+        self.snapshot
+            .seats
+            .iter()
+            .find(|seat| seat.player == Some(player))
+            .map(|seat| seat.seat)
+    }
+
+    /// Claims the lowest free non-host seat and transfers one host-owned party member.
+    ///
+    /// Automatic transfer keeps the invariant that every admitted human owns at least one
+    /// character. The host always retains one; a lobby with no transferable member is full
+    /// even if an unused numeric seat remains.
+    pub fn admit_guest(&mut self, player: SessionPeerId) -> Result<PlayerSeat, LobbyMutationError> {
+        if self.snapshot.phase != LobbyPhase::Open {
+            return Err(LobbyMutationError::LobbyClosed);
+        }
+        if self.seat_for_player(player).is_some() {
+            return Err(LobbyMutationError::DuplicatePlayerIdentity);
+        }
+        let guest_index = self
+            .snapshot
+            .seats
+            .iter()
+            .enumerate()
+            .skip(1)
+            .find(|(_, seat)| !seat.connection.is_claimed())
+            .map(|(index, _)| index)
+            .ok_or(LobbyMutationError::LobbyFull)?;
+
+        let mut host_units = self
+            .snapshot
+            .seats
+            .first()
+            .map(|seat| seat.assigned_units.as_slice().to_vec())
+            .ok_or(LobbyMutationError::MissingHost)?;
+        if host_units.len() <= 1 {
+            return Err(LobbyMutationError::LobbyFull);
+        }
+        let transferred = host_units.pop().ok_or(LobbyMutationError::LobbyFull)?;
+        let host = self
+            .snapshot
+            .seats
+            .first_mut()
+            .ok_or(LobbyMutationError::MissingHost)?;
+        host.assigned_units = BoundedVec::new(host_units)?;
+        host.ready = false;
+
+        let guest = self
+            .snapshot
+            .seats
+            .get_mut(guest_index)
+            .ok_or(LobbyMutationError::LobbyFull)?;
+        guest.connection = SeatConnectionState::Connected;
+        guest.player = Some(player);
+        guest.assigned_units = BoundedVec::new(vec![transferred])?;
+        guest.ready = false;
+        Ok(guest.seat)
+    }
+
+    /// Moves one party member between claimed seats and clears affected readiness.
+    pub fn assign_unit(
+        &mut self,
+        unit: UnitId,
+        destination: PlayerSeat,
+    ) -> Result<(), LobbyMutationError> {
+        if self.snapshot.phase != LobbyPhase::Open {
+            return Err(LobbyMutationError::LobbyClosed);
+        }
+        let destination_index = destination
+            .human_index()
+            .ok_or(LobbyMutationError::NonHumanSeat)?;
+        let destination_seat = self
+            .snapshot
+            .seats
+            .get(destination_index)
+            .ok_or(LobbyMutationError::NonHumanSeat)?;
+        if !destination_seat.connection.is_claimed() {
+            return Err(LobbyMutationError::VacantDestination);
+        }
+        let source_index = self
+            .snapshot
+            .seats
+            .iter()
+            .position(|seat| seat.assigned_units.contains(&unit))
+            .ok_or(LobbyMutationError::UnknownAssignedUnit)?;
+        if source_index == destination_index {
+            return Ok(());
+        }
+
+        let mut source_units = self
+            .snapshot
+            .seats
+            .get(source_index)
+            .map(|seat| seat.assigned_units.as_slice().to_vec())
+            .ok_or(LobbyMutationError::UnknownAssignedUnit)?;
+        if source_units.len() <= 1 {
+            return Err(LobbyMutationError::WouldEmptyClaimedSeat);
+        }
+        source_units.retain(|candidate| *candidate != unit);
+        let mut destination_units = destination_seat.assigned_units.as_slice().to_vec();
+        destination_units.push(unit);
+        let destination_units = BoundedVec::new(destination_units)?;
+        let source_units = BoundedVec::new(source_units)?;
+
+        if let Some(source) = self.snapshot.seats.get_mut(source_index) {
+            source.assigned_units = source_units;
+            source.ready = false;
+        }
+        if let Some(target) = self.snapshot.seats.get_mut(destination_index) {
+            target.assigned_units = destination_units;
+            target.ready = false;
+        }
+        Ok(())
+    }
+
+    /// Changes a connected guest's ready state. The host does not need a ready flag.
+    pub fn set_ready(&mut self, seat: PlayerSeat, ready: bool) -> Result<(), LobbyMutationError> {
+        if self.snapshot.phase != LobbyPhase::Open {
+            return Err(LobbyMutationError::LobbyClosed);
+        }
+        if seat == PlayerSeat::HOST {
+            return Err(LobbyMutationError::HostReadinessIsImplicit);
+        }
+        let entry = self.seat_mut(seat)?;
+        if !entry.connection.is_connected() {
+            return Err(LobbyMutationError::SeatNotConnected);
+        }
+        entry.ready = ready;
+        Ok(())
+    }
+
+    /// Freezes admission and enters map loading after all launch invariants pass.
+    pub fn begin_loading(
+        &mut self,
+        manifest: &SessionManifestV1,
+    ) -> Result<(), LobbyMutationError> {
+        if self.snapshot.phase != LobbyPhase::Open {
+            return Err(LobbyMutationError::LobbyClosed);
+        }
+        let claimed_seats = self
+            .snapshot
+            .seats
+            .iter()
+            .filter(|seat| seat.connection.is_claimed())
+            .count();
+        let claimed_seats =
+            u8::try_from(claimed_seats).map_err(|_error| LobbyMutationError::LobbyFull)?;
+        self.snapshot.phase = LobbyPhase::Loading;
+        self.snapshot.launch_summary = Some(LaunchSummaryV1 {
+            scenario_identity: manifest.scenario_identity.clone(),
+            public_world_fingerprint: manifest.map.expected_public_fingerprint,
+            claimed_seats,
+        });
+        if let Err(error) = self.snapshot.validate(manifest) {
+            self.snapshot.phase = LobbyPhase::Open;
+            self.snapshot.launch_summary = None;
+            return Err(LobbyMutationError::InvalidLobby(error));
+        }
+        Ok(())
+    }
+
+    /// Activates gameplay after every connected peer has verified the generated map.
+    pub fn activate(&mut self) -> Result<(), LobbyMutationError> {
+        if self.snapshot.phase != LobbyPhase::Loading {
+            return Err(LobbyMutationError::WrongPhase);
+        }
+        self.snapshot.phase = LobbyPhase::Active;
+        Ok(())
+    }
+
+    /// Marks an encounter outcome while retaining assignments and reconnect eligibility.
+    pub fn enter_outcome(&mut self) -> Result<(), LobbyMutationError> {
+        if self.snapshot.phase != LobbyPhase::Active {
+            return Err(LobbyMutationError::WrongPhase);
+        }
+        self.snapshot.phase = LobbyPhase::Outcome;
+        Ok(())
+    }
+
+    /// Closes admission and session mechanics.
+    pub fn close(&mut self) {
+        self.snapshot.phase = LobbyPhase::Closed;
+    }
+
+    /// Reserves a disconnected non-host seat without changing assignments.
+    pub fn disconnect(&mut self, seat: PlayerSeat) -> Result<(), LobbyMutationError> {
+        if seat == PlayerSeat::HOST {
+            return Err(LobbyMutationError::HostCannotDisconnect);
+        }
+        let entry = self.seat_mut(seat)?;
+        entry.ready = false;
+        entry.connection = match entry.connection {
+            SeatConnectionState::Connected => SeatConnectionState::Reserved {
+                remaining_millis: Self::DISCONNECT_RESERVATION_MILLIS,
+            },
+            SeatConnectionState::ReclaimPending => SeatConnectionState::TemporarilyDelegated,
+            _ => return Err(LobbyMutationError::SeatNotConnected),
+        };
+        Ok(())
+    }
+
+    /// Advances reservation clocks using real elapsed time supplied by the composition root.
+    pub fn advance_reservations(&mut self, elapsed_millis: u32) {
+        for seat in &mut self.snapshot.seats {
+            let SeatConnectionState::Reserved { remaining_millis } = seat.connection else {
+                continue;
+            };
+            seat.connection = if elapsed_millis >= remaining_millis {
+                SeatConnectionState::TemporarilyDelegated
+            } else {
+                SeatConnectionState::Reserved {
+                    remaining_millis: remaining_millis - elapsed_millis,
+                }
+            };
+        }
+    }
+
+    /// Reconnects a reserved seat, deferring delegation revocation when necessary.
+    pub fn reconnect(&mut self, seat: PlayerSeat) -> Result<(), LobbyMutationError> {
+        let entry = self.seat_mut(seat)?;
+        entry.connection = match entry.connection {
+            SeatConnectionState::Reserved { .. } => SeatConnectionState::Connected,
+            SeatConnectionState::TemporarilyDelegated => SeatConnectionState::ReclaimPending,
+            SeatConnectionState::Connected | SeatConnectionState::ReclaimPending => {
+                return Err(LobbyMutationError::DuplicateActiveSeat);
+            }
+            SeatConnectionState::Vacant => return Err(LobbyMutationError::VacantSeat),
+        };
+        Ok(())
+    }
+
+    /// Revokes all pending host delegations at a quiescent authority boundary.
+    pub fn apply_safe_reclaims(&mut self, boundary_is_quiescent: bool) -> usize {
+        if !boundary_is_quiescent {
+            return 0;
+        }
+        let mut reclaimed = 0;
+        for seat in &mut self.snapshot.seats {
+            if seat.connection == SeatConnectionState::ReclaimPending {
+                seat.connection = SeatConnectionState::Connected;
+                reclaimed += 1;
+            }
+        }
+        reclaimed
+    }
+
+    /// Whether the host currently has temporary authority for this canonical seat.
+    #[must_use]
+    pub fn host_can_delegate(&self, seat: PlayerSeat) -> bool {
+        seat.human_index()
+            .and_then(|index| self.snapshot.seats.get(index))
+            .is_some_and(|entry| {
+                matches!(
+                    entry.connection,
+                    SeatConnectionState::TemporarilyDelegated | SeatConnectionState::ReclaimPending
+                )
+            })
+    }
+
+    /// Whether the canonical player may submit new work from this seat.
+    ///
+    /// A reconnecting player remains blocked while temporary host delegation is pending
+    /// revocation. This prevents host and client work from entering the same authority
+    /// boundary before [`Self::apply_safe_reclaims`] observes quiescence.
+    #[must_use]
+    pub fn player_can_issue_commands(&self, seat: PlayerSeat) -> bool {
+        seat.human_index()
+            .and_then(|index| self.snapshot.seats.get(index))
+            .is_some_and(|entry| entry.connection == SeatConnectionState::Connected)
+    }
+
+    fn seat_mut(&mut self, seat: PlayerSeat) -> Result<&mut LobbySeatSnapshot, LobbyMutationError> {
+        let index = seat.human_index().ok_or(LobbyMutationError::NonHumanSeat)?;
+        self.snapshot
+            .seats
+            .get_mut(index)
+            .ok_or(LobbyMutationError::NonHumanSeat)
+    }
+}
+
+/// Why a host-owned lobby transition was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LobbyMutationError {
+    /// The frozen manifest was invalid.
+    InvalidManifest,
+    /// The current lobby projection was invalid.
+    InvalidLobby(LobbyValidationError),
+    /// A bounded assignment container rejected the transition.
+    Bound(BoundError),
+    /// New admission or assignment changes are closed.
+    LobbyClosed,
+    /// No numeric seat and transferable character remain.
+    LobbyFull,
+    /// The host seat is absent or malformed.
+    MissingHost,
+    /// The stable player identity was already admitted.
+    DuplicatePlayerIdentity,
+    /// A caller supplied the AI/system seat or another invalid seat.
+    NonHumanSeat,
+    /// An assignment target is vacant.
+    VacantDestination,
+    /// The requested unit is not currently assigned.
+    UnknownAssignedUnit,
+    /// The move would leave a claimed human without a character.
+    WouldEmptyClaimedSeat,
+    /// Host readiness is implicit and cannot be toggled.
+    HostReadinessIsImplicit,
+    /// The seat does not have a live connection for this transition.
+    SeatNotConnected,
+    /// The transition is valid only in another lobby phase.
+    WrongPhase,
+    /// Host loss terminates the session instead of reserving seat zero.
+    HostCannotDisconnect,
+    /// Reconnect targeted a vacant seat.
+    VacantSeat,
+    /// Reconnect targeted a seat that already has a live connection.
+    DuplicateActiveSeat,
+}
+
+impl From<BoundError> for LobbyMutationError {
+    fn from(error: BoundError) -> Self {
+        Self::Bound(error)
+    }
+}
+
+impl fmt::Display for LobbyMutationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::InvalidManifest => "cannot create a lobby from an invalid manifest",
+            Self::InvalidLobby(_) => "lobby state does not satisfy launch invariants",
+            Self::Bound(_) => "lobby transition exceeded an assignment bound",
+            Self::LobbyClosed => "lobby admission and assignment are closed",
+            Self::LobbyFull => "lobby has no seat with an assignable character",
+            Self::MissingHost => "lobby host seat is missing",
+            Self::DuplicatePlayerIdentity => "player identity is already admitted",
+            Self::NonHumanSeat => "seat is outside the human range",
+            Self::VacantDestination => "assignment destination is vacant",
+            Self::UnknownAssignedUnit => "unit is not assigned in this lobby",
+            Self::WouldEmptyClaimedSeat => "assignment would leave a player without a character",
+            Self::HostReadinessIsImplicit => "the host does not use a ready flag",
+            Self::SeatNotConnected => "seat is not connected",
+            Self::WrongPhase => "lobby transition is not valid in this phase",
+            Self::HostCannotDisconnect => "host loss closes the session",
+            Self::VacantSeat => "vacant seat cannot reconnect",
+            Self::DuplicateActiveSeat => "seat already has a live connection",
+        })
+    }
+}
+
+impl std::error::Error for LobbyMutationError {}
 
 /// Why a lobby projection violates the six-seat/session contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -283,6 +720,12 @@ pub enum LobbyValidationError {
     UnassignedRosterUnit,
     /// A non-open phase lacks its frozen launch summary.
     MissingLaunchSummary,
+    /// An open lobby unexpectedly carries frozen launch facts.
+    UnexpectedLaunchSummary,
+    /// Frozen scenario or map identity disagrees with the manifest.
+    LaunchIdentityMismatch,
+    /// Frozen claimed-seat count disagrees with the six-seat projection.
+    ClaimedSeatCountMismatch,
 }
 
 impl fmt::Display for LobbyValidationError {
@@ -302,6 +745,11 @@ impl fmt::Display for LobbyValidationError {
             Self::ConnectedSeatNotReady(_) => "connected non-host seat is not ready",
             Self::UnassignedRosterUnit => "not every roster unit is assigned at launch",
             Self::MissingLaunchSummary => "launched lobby is missing a launch summary",
+            Self::UnexpectedLaunchSummary => "open lobby unexpectedly has a launch summary",
+            Self::LaunchIdentityMismatch => "launch summary disagrees with the frozen manifest",
+            Self::ClaimedSeatCountMismatch => {
+                "launch summary claimed-seat count disagrees with the lobby"
+            }
         })
     }
 }
@@ -400,5 +848,111 @@ mod tests {
             guest.ready = true;
         }
         assert_eq!(lobby.validate(&manifest), Ok(()));
+    }
+
+    #[test]
+    fn admission_uses_lowest_seat_and_preserves_one_character_per_human() {
+        let manifest = manifest();
+        let host = SessionPeerId::from_bytes([1; 16]);
+        let guest = SessionPeerId::from_bytes([2; 16]);
+        let mut lobby = LobbyAuthority::new(host, &manifest).expect("valid fixture lobby");
+
+        assert_eq!(lobby.admit_guest(guest), Ok(PlayerSeat(1)));
+        let snapshot = lobby.snapshot_owned();
+        assert_eq!(
+            snapshot.seats.first().map(|seat| seat.assigned_units.len()),
+            Some(1)
+        );
+        assert_eq!(
+            snapshot.seats.get(1).map(|seat| seat.assigned_units.len()),
+            Some(1)
+        );
+        assert_eq!(
+            lobby.admit_guest(SessionPeerId::from_bytes([3; 16])),
+            Err(LobbyMutationError::LobbyFull),
+            "host must retain its final character"
+        );
+        assert_eq!(lobby.snapshot().validate(&manifest), Ok(()));
+    }
+
+    #[test]
+    fn disconnect_delegation_and_reclaim_wait_for_a_safe_boundary() {
+        let manifest = manifest();
+        let host = SessionPeerId::from_bytes([1; 16]);
+        let guest = SessionPeerId::from_bytes([2; 16]);
+        let mut lobby = LobbyAuthority::new(host, &manifest).expect("valid fixture lobby");
+        let seat = lobby.admit_guest(guest).expect("guest should fit");
+
+        assert_eq!(lobby.disconnect(seat), Ok(()));
+        lobby.advance_reservations(29_999);
+        assert!(matches!(
+            lobby.snapshot().seats.get(1).map(|seat| seat.connection),
+            Some(SeatConnectionState::Reserved {
+                remaining_millis: 1
+            })
+        ));
+        lobby.advance_reservations(1);
+        assert!(lobby.host_can_delegate(seat));
+        assert_eq!(lobby.reconnect(seat), Ok(()));
+        assert_eq!(
+            lobby.snapshot().seats.get(1).map(|seat| seat.connection),
+            Some(SeatConnectionState::ReclaimPending)
+        );
+        assert!(!lobby.player_can_issue_commands(seat));
+        assert_eq!(lobby.apply_safe_reclaims(false), 0);
+        assert!(lobby.host_can_delegate(seat));
+        assert_eq!(lobby.apply_safe_reclaims(true), 1);
+        assert_eq!(
+            lobby.snapshot().seats.get(1).map(|seat| seat.connection),
+            Some(SeatConnectionState::Connected)
+        );
+        assert!(!lobby.host_can_delegate(seat));
+        assert!(lobby.player_can_issue_commands(seat));
+    }
+
+    #[test]
+    fn assignment_changes_clear_both_seats_readiness() {
+        let mut manifest = manifest();
+        let third = RosterEntryV1 {
+            unit: UnitId(2),
+            archetype_identity: text("warrior"),
+            character_identity: text("gamma"),
+            faction: Faction::Player,
+        };
+        let mut roster = manifest.shipped_roster.as_slice().to_vec();
+        roster.push(third);
+        manifest.shipped_roster = BoundedVec::new(roster).expect("three roster entries fit");
+        manifest.deployment = BoundedVec::new(vec![
+            UnitDeploymentV1 {
+                unit: UnitId(0),
+                position: TilePos::ORIGIN,
+            },
+            UnitDeploymentV1 {
+                unit: UnitId(1),
+                position: TilePos::ORIGIN,
+            },
+            UnitDeploymentV1 {
+                unit: UnitId(2),
+                position: TilePos::ORIGIN,
+            },
+        ])
+        .expect("three deployments fit");
+        let mut lobby = LobbyAuthority::new(SessionPeerId::from_bytes([1; 16]), &manifest)
+            .expect("valid fixture lobby");
+        let guest = lobby
+            .admit_guest(SessionPeerId::from_bytes([2; 16]))
+            .expect("guest should fit");
+        lobby.set_ready(guest, true).expect("guest can ready");
+
+        assert_eq!(lobby.assign_unit(UnitId(0), guest), Ok(()));
+        assert_eq!(
+            lobby.snapshot().seats.first().map(|seat| seat.ready),
+            Some(false)
+        );
+        assert_eq!(
+            lobby.snapshot().seats.get(1).map(|seat| seat.ready),
+            Some(false)
+        );
+        assert_eq!(lobby.snapshot().validate(&manifest), Ok(()));
     }
 }

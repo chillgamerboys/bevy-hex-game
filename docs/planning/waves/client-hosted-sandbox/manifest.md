@@ -207,8 +207,8 @@ lanes:
     sizing:
       model: gpt-5.6-sol
       effort: high
-    state: queued
-    pr: null
+    state: in-review
+    pr: 193
 
   - id: L2
     title: Gameplay authority
