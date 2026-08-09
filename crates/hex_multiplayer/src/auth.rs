@@ -175,6 +175,7 @@ impl SessionAdmissionAuthority {
             .map_err(SessionActivationError::Lobby)?;
         self.map_ready.clear();
         self.map_ready.insert(PlayerSeat::HOST);
+        self.activate_if_every_claimed_seat_is_ready()?;
         Ok(self.lobby.snapshot_owned())
     }
 
@@ -191,6 +192,7 @@ impl SessionAdmissionAuthority {
             .map_err(SessionActivationError::Lobby)?;
         self.map_ready.clear();
         self.map_ready.insert(PlayerSeat::HOST);
+        self.activate_if_every_claimed_seat_is_ready()?;
         Ok(self.lobby.snapshot_owned())
     }
 
@@ -227,6 +229,14 @@ impl SessionAdmissionAuthority {
         }
         self.map_ready.insert(seat);
 
+        if self.activate_if_every_claimed_seat_is_ready()? {
+            Ok(MapReadyStatus::Activated)
+        } else {
+            Ok(MapReadyStatus::Waiting)
+        }
+    }
+
+    fn activate_if_every_claimed_seat_is_ready(&mut self) -> Result<bool, SessionActivationError> {
         let all_claimed_ready = self
             .lobby
             .snapshot()
@@ -238,9 +248,9 @@ impl SessionAdmissionAuthority {
             self.lobby
                 .activate()
                 .map_err(SessionActivationError::Lobby)?;
-            Ok(MapReadyStatus::Activated)
+            Ok(true)
         } else {
-            Ok(MapReadyStatus::Waiting)
+            Ok(false)
         }
     }
 
@@ -974,6 +984,18 @@ mod tests {
             authority.report_map_ready(connection, PublicWorldFingerprint(12)),
             Ok(MapReadyStatus::Activated)
         );
+        assert_eq!(authority.lobby().snapshot().phase, LobbyPhase::Active);
+    }
+
+    #[test]
+    fn host_only_lobby_activates_after_its_exact_host_fingerprint() {
+        let mut authority = authority();
+
+        let snapshot = authority
+            .begin_loading(PublicWorldFingerprint(12))
+            .expect("the exact host world should launch");
+
+        assert_eq!(snapshot.phase, LobbyPhase::Active);
         assert_eq!(authority.lobby().snapshot().phase, LobbyPhase::Active);
     }
 
