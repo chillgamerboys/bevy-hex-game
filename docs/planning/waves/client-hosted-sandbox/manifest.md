@@ -196,6 +196,14 @@ screen. Commit `943b497c` fixes both without touching #188/#190's camera-step va
 `f2da0c71` carries the identical L4-owned setup-frame script onto the wave so the combined
 all-feature test remains green before the L4 merge. Ratifier: coordinator.
 
+The first full L4 application gate then found that the shared structural task registry
+still encoded the pre-wave four-action Main Menu even though the renderer correctly
+exposed the locked fifth Multiplayer action. L4 therefore updates that behavior-coupled
+shared oracle, its headless application assertion, and the canonical runtime UI
+verification inventory in the same lane. This changes no runtime behavior and keeps the
+fifth route covered by the same focus/layout matrix as the existing product routes.
+Ratifier: coordinator.
+
 ## Shared foundation
 
 Live contracts this wave builds on:

@@ -1010,7 +1010,7 @@ mod structural_tests {
                 if case == UiTaskCase::MainMenu {
                     assert_eq!(
                         snapshot.focus_order,
-                        ["Campaign", "Sandbox", "Tools", "Settings"]
+                        ["Campaign", "Sandbox", "Multiplayer", "Tools", "Settings"]
                     );
                 }
                 if case == UiTaskCase::Campaign {
@@ -2594,7 +2594,8 @@ pub mod test_support {
         }
     }
 
-    const MAIN_MENU_CONTROLS: &[&str] = &["Campaign", "Sandbox", "Tools", "Settings"];
+    const MAIN_MENU_CONTROLS: &[&str] =
+        &["Campaign", "Sandbox", "Multiplayer", "Tools", "Settings"];
     const SETTINGS_NAV_CONTROLS: &[&str] = &[
         "Back",
         "Settings Tab General",

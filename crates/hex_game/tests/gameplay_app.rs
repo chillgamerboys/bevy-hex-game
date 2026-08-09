@@ -657,12 +657,12 @@ fn combat_observation_preserves_canonical_summary_and_zero_unit_identity() {
 }
 
 #[test]
-fn shipping_main_menu_has_four_actions_and_campaign_has_three_slots() {
+fn shipping_main_menu_has_five_actions_and_campaign_has_three_slots() {
     use hex_ui::test_support::UiTaskCase;
 
     assert_eq!(
         UiTaskCase::MainMenu.contract().immediate_controls,
-        ["Campaign", "Sandbox", "Tools", "Settings"]
+        ["Campaign", "Sandbox", "Multiplayer", "Tools", "Settings"]
     );
     let menu = hex_ui::MainMenuView::default();
     assert_eq!(menu.campaign_slots.len(), 3);
