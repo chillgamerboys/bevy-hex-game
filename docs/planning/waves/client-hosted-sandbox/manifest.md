@@ -411,8 +411,8 @@ lanes:
     sizing:
       model: gpt-5.6-sol
       effort: high
-    state: dispatched
-    pr: null
+    state: in-review
+    pr: 195
 ```
 
 ## Ownership map
