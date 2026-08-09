@@ -37,7 +37,7 @@ pub enum MultiplayerRole {
 /// Stable reason displayed after returning from a failed or ended session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MultiplayerEndReason {
-    /// The direct transport ended before custom admission completed.
+    /// A direct client connection or listen-host endpoint failed.
     ConnectionFailed,
     /// Listen host transport ended; host migration is unsupported.
     HostDisconnected,

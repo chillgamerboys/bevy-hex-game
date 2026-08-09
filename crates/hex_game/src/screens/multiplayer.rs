@@ -205,6 +205,7 @@ pub(super) fn plugin(app: &mut App) {
                 send_client_hello,
                 capture_session_messages,
                 detect_failed_client_connection,
+                detect_failed_host_endpoint,
                 sync_host_session,
                 finish_host_shutdown,
                 report_client_map_ready,
@@ -879,6 +880,36 @@ fn detect_failed_client_connection(
     next_screen.set(Screen::Multiplayer);
 }
 
+fn detect_failed_host_endpoint(
+    active: Option<Res<ActiveDirectSession>>,
+    entities: Query<()>,
+    mut model: ResMut<MultiplayerModel>,
+    mut notice: ResMut<SessionUiNotice>,
+    mut commands: Commands,
+    mut next_screen: ResMut<NextState<Screen>>,
+) {
+    let Some(active) = active else {
+        return;
+    };
+    if active.role != MultiplayerRole::Host
+        || model.role != Some(MultiplayerRole::Host)
+        || entities.get(active.entity).is_ok()
+    {
+        return;
+    }
+    notice.0 = Some(
+        "The direct host endpoint closed. Check whether the UDP port is already in use or blocked, then try again."
+            .to_owned(),
+    );
+    end_active_session(
+        MultiplayerEndReason::ConnectionFailed,
+        Some(&active),
+        &mut model,
+        &mut commands,
+    );
+    next_screen.set(Screen::Multiplayer);
+}
+
 fn sync_host_session(
     authority: Option<Res<SessionAdmissionAuthority>>,
     active: Option<Res<ActiveDirectSession>>,
@@ -1232,7 +1263,7 @@ fn end_active_session(
     commands: &mut Commands,
 ) {
     if let Some(active) = active {
-        commands.entity(active.entity).despawn();
+        commands.entity(active.entity).try_despawn();
     }
     commands.remove_resource::<ActiveDirectSession>();
     commands.remove_resource::<PendingClientHello>();
@@ -1678,6 +1709,43 @@ mod tests {
             .0
             .as_deref()
             .is_some_and(|message| message.contains("before admission completed")));
+    }
+
+    #[test]
+    fn closed_listen_endpoint_returns_host_to_a_typed_failure() {
+        let mut model = MultiplayerModel::default();
+        model.connecting(MultiplayerRole::Host);
+        assert!(model.admitted(MultiplayerRole::Host, PlayerSeat::HOST));
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+            .insert_state(Screen::Multiplayer)
+            .insert_resource(model)
+            .insert_resource(SimulationRole::Authority)
+            .insert_resource(SessionUiNotice::default())
+            .add_systems(Update, detect_failed_host_endpoint);
+        let endpoint = app.world_mut().spawn_empty().id();
+        assert!(app.world_mut().despawn(endpoint));
+        app.insert_resource(ActiveDirectSession {
+            entity: endpoint,
+            role: MultiplayerRole::Host,
+            hosted_code: None,
+        });
+
+        app.update();
+
+        assert!(app.world().get_resource::<ActiveDirectSession>().is_none());
+        let model = app.world().resource::<MultiplayerModel>();
+        assert_eq!(model.route, hex_gameplay_model::MultiplayerRoute::Ended);
+        assert_eq!(
+            model.ended_reason,
+            Some(MultiplayerEndReason::ConnectionFailed)
+        );
+        assert!(app
+            .world()
+            .resource::<SessionUiNotice>()
+            .0
+            .as_deref()
+            .is_some_and(|message| message.contains("endpoint closed")));
     }
 
     #[test]
