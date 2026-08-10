@@ -367,9 +367,12 @@ impl WorldSnapshotV1 {
             }
             if let Some(downstream) = liquid.downstream {
                 validate_position(downstream)?;
-                if liquid.position.coord.distance(downstream.coord) != 1
-                    || downstream.level > liquid.position.level
-                {
+                // Flow is authored per material run and copied onto every occupied
+                // voxel in that run. A lower voxel may therefore name the adjacent
+                // downstream run's top above its own level. `hex_map` validates the
+                // run-level topology against live voxel state before mutation; the
+                // shared untrusted-input boundary enforces adjacency and bounds only.
+                if liquid.position.coord.distance(downstream.coord) != 1 {
                     return Err(WorldSnapshotValidationError::InvalidLiquidFlow(
                         liquid.position,
                     ));
@@ -735,9 +738,7 @@ impl WorldDeltaOperationV1 {
                 validate_position(value.position)?;
                 if let Some(downstream) = value.downstream {
                     validate_position(downstream)?;
-                    if value.position.coord.distance(downstream.coord) != 1
-                        || downstream.level > value.position.level
-                    {
+                    if value.position.coord.distance(downstream.coord) != 1 {
                         return Err(WorldSnapshotValidationError::InvalidLiquidFlow(
                             value.position,
                         ));
@@ -1153,6 +1154,32 @@ mod tests {
             snapshot.validate(),
             Err(WorldSnapshotValidationError::DanglingSurface(_))
         ));
+    }
+
+    #[test]
+    fn liquid_voxels_accept_an_adjacent_run_level_downstream() {
+        let mut snapshot = world();
+        let source = TilePos::new(HexCoord::ORIGIN, 0);
+        let downstream = TilePos::new(HexCoord::from_axial(1, 0), 2);
+        let liquid = WorldLiquidSnapshotV1 {
+            position: source,
+            substance: text("water"),
+            flow: WorldLiquidFlowV1::Current,
+            downstream: Some(downstream),
+        };
+        snapshot.liquids = BoundedVec::new(vec![liquid.clone()]).expect("liquid fits");
+
+        assert_eq!(snapshot.validate(), Ok(()));
+
+        let delta = WorldDeltaV1 {
+            version: WORLD_DELTA_VERSION_V1,
+            authority_sequence: AuthoritySequence(3),
+            base_fingerprint: PublicWorldFingerprint(1),
+            target_fingerprint: PublicWorldFingerprint(2),
+            operations: BoundedVec::new(vec![WorldDeltaOperationV1::UpsertLiquid(liquid)])
+                .expect("operation fits"),
+        };
+        assert_eq!(delta.validate(), Ok(()));
     }
 
     #[test]
