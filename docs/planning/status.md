@@ -7,6 +7,21 @@ with the code, the code is right and this needs an edit.
 What is *planned* is [roadmap.md](roadmap.md). What the game is *for* is
 [the design](../design/game.md). This is the gap between them.
 
+## In delivery
+
+The **Crystal Mountain** wave is under implementation and is not yet a claim about
+`dev`. Its intended selectable radius-77 Macro world places the existing
+base-6/rise-144 Crystal Ascent at world origin, surrounds its level-150 summit with a
+five-cell temperate Forest basin and higher inner/outer ridges, and makes one
+four-wide level-6 tunnel the only ordinary route from the mountain foot to that basin.
+The tunnel crosses the outer and inner mountain instances before joining the landmark,
+then shares one Dark interior and light domain with the complete Ascent. The wave also
+adds explicit surface-walker connections, cross-biome spanning-feature settings,
+stable anchor aliases, a selectable non-combat showcase, and review-cutaway feature
+reconciliation. Its generator, typed integration closure, deterministic captures,
+benchmarks, and named human camera/play review remain acceptance work until the
+combined wave lands.
+
 ## What is built
 
 A playable skeleton. Workspace boundaries enforced by Cargo, CI on three platforms,

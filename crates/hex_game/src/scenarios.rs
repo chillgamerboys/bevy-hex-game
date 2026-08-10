@@ -916,9 +916,9 @@ pub(crate) mod tests {
     /// a typo would otherwise be a loading screen that hangs for the one scenario nobody
     /// clicked. `Encounter`'s `Deserialize` runs `validate()`, so this also proves the
     /// roster is *placeable* in the ways a single file can be judged: no empty roster, no
-    /// coordinate that is not a hex, no two units sharing one exact surface. Crystal
-    /// Ascent is the one approved non-combat showcase; every other scenario must still
-    /// provide somebody to fight.
+    /// coordinate that is not a hex, no two units sharing one exact surface. The two
+    /// Crystal traversal showcases are approved non-combat maps; every other scenario
+    /// must still provide somebody to fight.
     #[test]
     fn every_scenario_names_an_encounter_that_exists_and_parses() {
         for scenario in &library().scenarios {
@@ -929,10 +929,13 @@ pub(crate) mod tests {
                 scenario.name
             );
             let hostile_count = encounter.unit_count(EncounterFaction::Hostile);
-            if scenario.name == "Crystal Ascent" {
+            if matches!(
+                scenario.name.as_str(),
+                "Crystal Ascent" | "Crystal Mountain"
+            ) {
                 assert_eq!(
                     hostile_count, 0,
-                    "the Crystal Ascent showcase should remain non-combat"
+                    "the Crystal traversal showcases should remain non-combat"
                 );
             } else {
                 assert!(
@@ -1764,6 +1767,92 @@ pub(crate) mod tests {
             roster.placement,
             EncounterPlacement::Formation {
                 center: FormationCenter::Anchor("party_start".to_owned()),
+                spread: 2,
+            }
+        );
+    }
+
+    /// The selectable Crystal Mountain content freezes the intended Macro roster and
+    /// launches the standard party from the stable world-owned foot anchor. Exact
+    /// tunnel and route behavior remains generator-owned and is proved in map tests.
+    #[test]
+    fn crystal_mountain_showcase_names_its_macro_world_and_non_combat_party() {
+        let library = library();
+        let scenario = library
+            .scenarios
+            .iter()
+            .find(|scenario| scenario.name == "Crystal Mountain")
+            .expect("the shipped library should contain Crystal Mountain");
+
+        assert_eq!(
+            scenario.world,
+            "config/worlds/procedural-crystal-mountain.ron"
+        );
+        assert_eq!(
+            scenario.encounter,
+            "config/encounters/crystal-mountain-showcase.ron"
+        );
+        assert_eq!(scenario.generation_seed, Some(1_592_598_566));
+
+        let world_text = fs::read_to_string(assets_dir().join(&scenario.world))
+            .expect("the Crystal Mountain world should be readable");
+        let world: MapSettings =
+            ron::from_str(&world_text).expect("the Crystal Mountain world should parse");
+        assert_eq!(world.grid_radius, 77);
+        let TerrainSettings::Procedural(hex_map::ProceduralSettings::V3(v3)) = &world.terrain
+        else {
+            panic!("Crystal Mountain must remain a V3 procedural world");
+        };
+        let hex_map::V3LayoutSettings::Macro(layout) = &v3.layout else {
+            panic!("Crystal Mountain must remain a Macro world");
+        };
+        assert_eq!(layout.macro_radius, 3);
+        assert_eq!(
+            layout
+                .instances
+                .iter()
+                .map(|instance| (instance.name.as_str(), instance.cells.len()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("crystal-ascent", 7),
+                ("summit-forest", 5),
+                ("inner-mountain", 7),
+                ("outer-mountain", 18),
+            ]
+        );
+        let landmark = layout
+            .instances
+            .first()
+            .expect("Crystal Mountain should retain its central landmark instance");
+        assert_eq!(landmark.rotation_turns, 0);
+        let hex_map::V3RecipeSettings::CrystalAscent(settings) = &landmark.recipe else {
+            panic!("Crystal Mountain's central instance must use CrystalAscent");
+        };
+        assert_eq!(settings.base_level, 6);
+        assert_eq!(settings.rise_levels, 144);
+        assert!(layout.critical_route.is_empty());
+
+        let encounter = encounter_of(scenario);
+        assert_eq!(encounter.name, "Crystal Mountain Showcase");
+        assert_eq!(encounter.rosters.len(), 1);
+        let roster = encounter
+            .rosters
+            .first()
+            .expect("Crystal Mountain should retain its player roster");
+        assert_eq!(roster.faction, EncounterFaction::Player);
+        assert_eq!(
+            roster
+                .units
+                .iter()
+                .map(|unit| unit.archetype.as_str())
+                .collect::<Vec<_>>(),
+            vec!["hedge-mage", "raider", "wolf"]
+        );
+        assert_eq!(encounter.unit_count(EncounterFaction::Hostile), 0);
+        assert_eq!(
+            roster.placement,
+            EncounterPlacement::Formation {
+                center: FormationCenter::Anchor("crystal_mountain.foot_apron".to_owned()),
                 spread: 2,
             }
         );

@@ -362,9 +362,66 @@ terrain: Procedural((
 reserved headroom must all fit at or below V3's level-256 ceiling. That ceiling does
 not change the retained V1/V2 validation limits. The landmark's three stair circuits,
 four-wide routes, entrance, chamber, shaft, oculus, lights, and summit clearing are
-recipe invariants rather than additional tuning fields. Crystal Ascent currently
-requires `TemperateGrassland`, rejects overlays and Macro placement, and varies only
-crystal presentation and summit trees with the scenario seed.
+recipe invariants rather than additional tuning fields. Crystal Ascent requires
+`TemperateGrassland`, rejects overlays, and varies only crystal presentation and
+summit trees with the scenario seed. The standalone world still owns the complete
+radius-40 footprint. Macro may dispatch the recipe only through Crystal Mountain's
+specialized exact radius-32 landmark claim; an arbitrary Macro instance cannot stretch
+or clip the authored site.
+
+**Compose Crystal Mountain with a cross-biome tunnel.** The in-delivery selectable
+world uses a radius-three `Macro` layout over a radius-77 map. Four logical instances
+own all 37 atomic cells: the central seven-cell Crystal Ascent landmark, five
+consecutive radius-two Forest cells at level 149–151, the remaining radius-two inner
+mountain wall, and the complete radius-three outer ridge. Crystal Ascent keeps
+`base_level: 6`, `rise_levels: 144`, and `rotation_turns: 0`.
+
+Macro's defaulted extensions separate surface connectivity from a feature that crosses
+several biomes:
+
+- `walker_connections` declares ordinary surface ports without making them part of the
+  legacy `critical_route`; Crystal Mountain joins the summit terminal to the Forest
+  basin at level 150;
+- `spanning_features` declares the ordered instance route and exact dimensions of the
+  level-6, four-wide tunnel from the world boundary to Crystal Ascent's lower aperture;
+  and
+- `anchor_aliases` publishes stable world-level names for an instance anchor.
+
+An empty `critical_route` is valid only when exactly one spanning feature supplies the
+canonical route. Existing Macro files omit all three defaulted collections and keep
+their former settings fingerprint byte-for-byte. The tunnel's instance order is
+`outer-mountain`, `inner-mountain`, then `crystal-ascent`; its six clear levels and
+three solid roof levels are validated independently from the surface walker port. See
+the shipped `config/worlds/procedural-crystal-mountain.ron` for the complete cell
+roster. The new fields have this exact shape:
+
+```ron
+walker_connections: [
+    (first_instance: "crystal-ascent", second_instance: "summit-forest", width: 4, level: 150),
+],
+spanning_features: [
+    Tunnel((
+        name: "crystal_mountain.tunnel",
+        canonical_route: true,
+        instance_route: ["outer-mountain", "inner-mountain", "crystal-ascent"],
+        boundary_terminal: (instance: "outer-mountain", side: West),
+        destination_anchor: (instance: "crystal-ascent", anchor: "crystal_ascent.lower_entry"),
+        floor_level: 6,
+        width: 4,
+        clearance: 6,
+        roof_thickness: 3,
+    )),
+],
+anchor_aliases: [
+    (alias: "crystal_mountain.ascent_threshold", instance: "crystal-ascent", anchor: "crystal_ascent.lower_entry"),
+],
+critical_route: [],
+```
+
+Walker widths are `2..=4`; tunnel widths use the same bound. A tunnel route contains
+at least two unique, pairwise-adjacent non-aquatic instances. Its boundary terminal
+belongs to the first route instance, its destination to the last, and
+`floor_level + clearance + roof_thickness` must remain inside V3's level-256 ceiling.
 
 **Use V3 Waterfall terrain.** The first shipped V3 recipe uses an explicit
 single-patch layout. Its edge-to-edge three-wide liquid topology, eleven-level fall,

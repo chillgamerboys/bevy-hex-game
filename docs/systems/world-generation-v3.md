@@ -71,8 +71,8 @@ leave stale current or fall descriptors behind.
   connected patches.
 - `Ring19` fills one radius-55 footprint with a central patch, six first-ring
   patches, and twelve second-ring patches.
-- `Macro(MacroLayoutSettings)` fills the radius-77 Mountain Range footprint from
-  37 radius-12-scale atomic cells, then collapses those cells into authored logical
+- `Macro(MacroLayoutSettings)` fills a radius-77 footprint from 37
+  radius-12-scale atomic cells, then collapses those cells into authored logical
   biome instances.
 
 A `PatchSpec` contains an environment, a typed recipe, named overlays, one connected
@@ -203,6 +203,50 @@ intentionally not required. The party starts on central Shore, the hostile start
 central Hills, and review anchors cover coast, inland, foothill, massif front, and the
 Deep Mountain base.
 
+Crystal Mountain is the second authored Macro layout and the first to use a spanning
+feature. Four logical instances own the complete 37-cell graph:
+
+1. `crystal-ascent` owns the centre and all six radius-one cells, then claims exactly
+   the radius-32 authored landmark footprint around world origin;
+2. `summit-forest` owns five consecutive upper radius-two cells and keeps a connected
+   temperate basin at levels 149–151;
+3. `inner-mountain` owns the other seven radius-two cells; and
+4. `outer-mountain` owns all eighteen radius-three cells and rises into the enclosing
+   level-180-through-192 ridge.
+
+The exact radius-32 claim may borrow only its required fringe columns from adjacent
+atomic masks. Those columns are subtracted from their former masks before recipe
+construction, then complete coverage, disjoint ownership, and every remaining logical
+mask's connectivity are revalidated. In composite mode the landmark's radius-32 fringe
+receives summit terrain instead of the standalone world's base-level grass.
+
+Macro has three defaulted, orthogonal collections for this composition.
+`walker_connections` declares explicit ordinary surface ports independently from the
+legacy `critical_route`; Crystal Mountain uses one exact four-wide connection between
+the landmark's upper terminal and the Forest basin. `spanning_features` declares a
+stable name, ordered instance route, world-boundary terminal, destination anchor,
+floor, width, clearance, and roof thickness. `anchor_aliases` maps instance-local
+anchors to stable world names. An empty `critical_route` is admitted only when exactly
+one spanning feature is marked as the canonical route.
+
+The `crystal_mountain.tunnel` route follows `outer-mountain` → `inner-mountain` →
+`crystal-ascent`, entering from the outer instance's west world boundary and ending at
+`crystal_ascent.lower_entry`. It remains flat at level 6, has exactly four lanes, six
+clear levels, and at least three solid roof levels. Its eight-wide, twelve-level
+exterior mouth narrows to the four-lane passage. Resolved seam facts record exact
+subsurface lane pairs and never masquerade as surface walker ports. Routing minimizes
+length and then turns within the declared instance order, with stable coordinate
+tie-breaking. The final twelve centerline rows transition from rough stone to worked
+Gothic masonry. The tunnel is the only ordinary foot-to-basin route; the ridge and
+surface masks expose no alternative ascent.
+
+The tunnel floor retains the `BiomeRegionId` of its horizontal owner. One Dark
+interior and light domain spans the passage and Crystal Ascent, with only the foot and
+summit thresholds marked as exterior entrances. Stable world anchors cover the foot
+apron, mouth, midpoint, Gothic transition, Ascent threshold, summit exit, basin
+clearing, and ridge while retaining every `crystal_ascent.*` review anchor. The world
+uses Macro namespace prefix 63 for feature, light, and interior IDs.
+
 Single and Ring7 retain their shipped 4-bit patch / 28-bit local numeric namespace.
 Ring19 uses a layout-specific 5-bit patch / 27-bit local namespace, so patch ids
 16–18 cannot alias local feature, structure, liquid, light, interior, or
@@ -233,6 +277,11 @@ Settings, semantic-plan, and materialized-map fingerprints use separate V3 domai
 They exclude timings and unordered iteration, include every field that affects their
 respective output, and are stable only within V3. V1/V2 fingerprints are frozen while
 those implementations remain; V3 is not required to reproduce them.
+
+Macro's walker, spanning-feature, and anchor-alias settings extend the settings
+fingerprint only when at least one collection is nonempty. A legacy Macro file whose
+three defaulted collections are empty retains its exact prior byte stream and
+fingerprint; adding the schema with empty defaults cannot rewrite Mountain Range.
 
 Reports record generator version, resolved seed, candidate, repair actions, fallback
 use, the three fingerprints, metrics, and timings. Diagnostic collections are sorted
@@ -462,8 +511,9 @@ standalone recipe fills the surrounding radius-40 world with ordinary grass terr
 A real Macro patch context constructs and round-trips its volume, blockers, regions,
 lights, and anchors after translation and any of the six rotations; recipe-owned
 decorative rotations compose from recipe-local orientation into world space and
-round-trip exactly. Macro placement is deliberately deferred until the larger
-authored world defines its composition contract.
+round-trip exactly. Arbitrary Macro placement remains invalid. Crystal Mountain is the
+first admitted composite: it fixes the landmark at world origin with rotation zero and
+claims its exact radius-32 site without resizing the architecture.
 
 Each of the eighteen outward landing alcoves reuses one accepted cave-crystal asset.
 Every alcove origin publishes exactly one Bright radius-4 source and one Dim radius-18
@@ -507,10 +557,21 @@ fort remains generated static geometry, not a player construction system.
 ### Composite
 
 Ring7, Ring19, and Macro first resolve global routes, elevation profiles, liquid
-ports, and protected seam approaches. They then run each recipe against its resolved
-mask and contracts, validate fragment-local invariants, and finally validate the
-exact combined `TilePos` graph. Materials and decorative boundaries are classified
-only after the geometry and semantics are accepted.
+ports, spanning-feature reservations, and protected seam approaches. They then run
+each recipe against its resolved mask and contracts and validate fragment-local
+invariants. Composition has separate merge and finalize stages: normal fragments are
+merged without publishing a final world, each spanning feature is applied exactly
+once to the combined volume, and only then does whole-world validation admit the exact
+`TilePos` graph. Materials and decorative boundaries are classified only after the
+geometry and semantics are accepted.
+
+This stage split is load-bearing for cross-biome passages. Liquids and decoration must
+observe the reserved corridor, while no patch may independently carve its idea of one
+side of a tunnel. The global pass preserves overlying surfaces, carries horizontal
+biome ownership onto the new floor, and publishes one continuous interior, lighting,
+and cutaway projection. Missing seam lanes, an undeclared opening, a roof or bedrock
+breach, a blocker collision, or a second ordinary foot-to-destination path rejects the
+complete candidate.
 
 Directed liquid ports are realized during checked composition, not by a later blend
 pass. Every declared lane must resolve to exactly one terminal source node and one
@@ -557,7 +618,8 @@ The normative delivery order is:
 13. `Ring19` and the selectable Two Rings map;
 14. Macro layout, adjacency, coastal/alpine recipes, and the selectable Mountain
     Range map;
-15. V1/V2 removal.
+15. Macro spanning features and the selectable Crystal Mountain map;
+16. V1/V2 removal.
 
 See [planning/status.md](../planning/status.md) for progress through this sequence.
 
@@ -599,6 +661,15 @@ adjacency behavior, exact sea strata, one shared water body with a continuous st
 coastal/sea footprint, acyclic descending tributaries, coastal coverage, massif
 shape, and the Shore-to-massif-base route.
 
+Crystal Mountain coverage additionally fixes the exact seven-cell logical landmark
+core, radius-32 claim and connected remainders; five-cell Forest basin; enclosing
+inner/outer ridges; explicit summit walker port; ordered subsurface instance route;
+four level-6 lanes; six-level clearance; three-level roof; one continuous interior and
+light domain; complete Dim coverage; and the absence of a surface bypass, undeclared
+seam opening, liquid collision, bedrock breach, or shortcut. Representative seeds and
+all six landmark rotations exercise the patch constructor even though the shipped
+world fixes rotation zero.
+
 Recipe tests must enforce each runnable recipe's topology and protected routes.
 Fast fixed corpora run in CI; ignored 10,000-seed recipe corpora must produce 100%
 valid final maps including fallback and target less than 1% fallback use.
@@ -612,8 +683,11 @@ Ring19 on the same runner and budgets generation p95 at no more than 2.5× Ring1
 character-camera collision remains below 2 ms p95. Review packs must include
 deterministic reports and default, rotated, top-down, and character-camera captures.
 Mountain Range additionally requires coast, watershed, both mountain tiers,
-front-massif, and rear-silhouette views. Manual review must traverse every critical
-recipe route and every open composite seam before that surface ships. The landed Two
+front-massif, and rear-silhouette views. Crystal Mountain requires Map, First Person,
+and Third Person frames of the foot portal, natural tunnel, Gothic transition,
+Crystal chamber, ascent, summit, Forest basin, and ridge, plus review-only illumination
+and full-cutaway frames. Manual review must traverse every critical recipe route and
+every open composite seam before that surface ships. The landed Two
 Rings surface received its final visual and play approval at the reviewed wave head;
 Mountain Range's 2026-08-03 delivery record contains its four-view deterministic pack
 and a 45-step, eight-frame feature-only walk with exact arrival and focus assertions.

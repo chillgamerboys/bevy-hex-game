@@ -262,6 +262,25 @@
             ),
         ),
         (
+            id: "crystal-mountain",
+            display_name: "Crystal Mountain",
+            description: "A tunnel beneath enclosing alpine ridges is the only ordinary route into Crystal Ascent and its high woodland basin.",
+            tags: ["Macro", "Interior", "Vertical"],
+            preview: "ui/sandbox/crystal-mountain.png",
+            scenario: "Crystal Mountain",
+            fixed_seed: Some(1592598566),
+            player_region: (
+                center: Anchor("crystal_mountain.foot_apron"),
+                radius: 4,
+            ),
+            // Schema-v2 Sandbox retains both staging regions even though the
+            // packaged Crystal Mountain scenario intentionally has no enemies.
+            hostile_region: (
+                center: Anchor("crystal_mountain.basin_clearing"),
+                radius: 4,
+            ),
+        ),
+        (
             id: "seven-regions",
             display_name: "Seven Regions",
             description: "One connected world joins hills, mountains, waterfall, forest, fort, caves, and sky islands.",

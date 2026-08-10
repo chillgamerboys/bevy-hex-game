@@ -218,6 +218,10 @@ const SHIPPED_CAMPAIGN_INPUTS: &[(&str, &str)] = &[
         include_str!("../../../assets/config/worlds/procedural-crystal-ascent.ron"),
     ),
     (
+        "config/worlds/procedural-crystal-mountain.ron",
+        include_str!("../../../assets/config/worlds/procedural-crystal-mountain.ron"),
+    ),
+    (
         "config/worlds/procedural-deep-forest.ron",
         include_str!("../../../assets/config/worlds/procedural-deep-forest.ron"),
     ),
@@ -288,6 +292,10 @@ const SHIPPED_CAMPAIGN_INPUTS: &[(&str, &str)] = &[
     (
         "config/encounters/crystal-ascent-showcase.ron",
         include_str!("../../../assets/config/encounters/crystal-ascent-showcase.ron"),
+    ),
+    (
+        "config/encounters/crystal-mountain-showcase.ron",
+        include_str!("../../../assets/config/encounters/crystal-mountain-showcase.ron"),
     ),
     (
         "config/encounters/open-ground.ron",
