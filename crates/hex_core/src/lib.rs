@@ -27,6 +27,7 @@ pub mod perception;
 pub mod presentation;
 pub mod setup;
 pub mod spatial;
+pub mod surface_features;
 pub mod terrain;
 pub mod terrain_impact;
 pub mod traversal;
@@ -71,6 +72,12 @@ pub use presentation::{
 };
 pub use setup::GameplaySetupFailure;
 pub use spatial::{BiomeRegionId, BiomeRegions, TraversalBlockers};
+pub use surface_features::{
+    validate_surface_feature_outcomes, PlaceSurfaceFeature, SurfaceFeature, SurfaceFeatureBatchId,
+    SurfaceFeatureId, SurfaceFeatureKind, SurfaceFeaturePlacementOutcome,
+    SurfaceFeaturePlacementRejection, SurfaceFeaturePlacementResult, SurfaceFeatureValidationError,
+    SurfaceFeatures,
+};
 pub use terrain::{
     CutawayOccluder, InteriorRegionId, InteriorRegions, MapAnchorId, MapAnchors, MapViewHint,
     ResolvedMapSeed, SpecialMovementRegion, SpecialMovementRegions, TerrainReady,

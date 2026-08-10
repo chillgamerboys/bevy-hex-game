@@ -23,7 +23,10 @@ pub fn despawn_screen(
     move |mut commands: Commands, query: Query<(Entity, &DespawnOnExit)>| {
         for (entity, tag) in &query {
             if tag.0 == screen {
-                commands.entity(entity).despawn();
+                // Screen-tagged panels may also be descendants of a tagged frame.
+                // Recursive parent removal can therefore satisfy a later queued
+                // child removal before deferred commands are applied.
+                commands.entity(entity).try_despawn();
             }
         }
     }
@@ -94,7 +97,11 @@ fn paint_menu_background(
 
 #[cfg(test)]
 mod tests {
-    use bevy::{state::app::StatesPlugin, MinimalPlugins};
+    use bevy::{
+        ecs::error::{panic as panic_on_error, FallbackErrorHandler},
+        state::app::StatesPlugin,
+        MinimalPlugins,
+    };
 
     use super::*;
 
@@ -113,5 +120,29 @@ mod tests {
                 .map(|background| background.0),
             Some(FALLBACK_BACKGROUND)
         );
+    }
+
+    #[test]
+    fn screen_cleanup_is_idempotent_for_nested_owned_roots() {
+        let mut app = App::new();
+        app.insert_resource(FallbackErrorHandler(panic_on_error))
+            .add_systems(Update, despawn_screen(Screen::Gameplay));
+        let child = app
+            .world_mut()
+            .spawn((
+                Name::new("Nested Screen Panel"),
+                DespawnOnExit(Screen::Gameplay),
+            ))
+            .id();
+        let parent = app
+            .world_mut()
+            .spawn((Name::new("Screen Frame"), DespawnOnExit(Screen::Gameplay)))
+            .add_child(child)
+            .id();
+
+        app.update();
+
+        assert!(app.world().get_entity(parent).is_err());
+        assert!(app.world().get_entity(child).is_err());
     }
 }

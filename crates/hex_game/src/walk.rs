@@ -35,7 +35,7 @@ use bevy::camera::{ClearColorConfig, ImageRenderTarget, NormalizedRenderTarget, 
 use bevy::ecs::system::SystemParam;
 use bevy::input::InputSystems;
 use bevy::picking::backend::HitData;
-use bevy::picking::events::{Click, Pointer};
+use bevy::picking::events::{Click, Over, Pointer};
 use bevy::picking::pointer::{Location, PointerButton, PointerId};
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
@@ -245,6 +245,16 @@ enum WalkStep {
     /// surface. Stacked terrain must name its exact surface instead of letting
     /// the runner guess which entity a real pointer would have hit.
     ClickTile {
+        q: i32,
+        r: i32,
+        #[serde(default)]
+        level: Option<hex_core::Level>,
+    },
+    /// Hover one exact exposed terrain entity through the ordinary picking observer path.
+    ///
+    /// This is separate from [`Self::ClickTile`] so presentation walks can inspect
+    /// pre-commit movement and targeting feedback without authorizing a command.
+    HoverTile {
         q: i32,
         r: i32,
         #[serde(default)]
@@ -626,6 +636,22 @@ fn primary_tile_click(target: Entity, window: Entity) -> Option<Pointer<Click>> 
         count: 1,
     };
     Some(Pointer::new(PointerId::Mouse, location, click, target))
+}
+
+fn primary_tile_hover(target: Entity, window: Entity) -> Option<Pointer<Over>> {
+    let target_window = bevy::window::WindowRef::Entity(window).normalize(Some(window))?;
+    let location = Location {
+        target: NormalizedRenderTarget::Window(target_window),
+        position: Vec2::ZERO,
+    };
+    Some(Pointer::new(
+        PointerId::Mouse,
+        location,
+        Over {
+            hit: HitData::new(target, 0.0, None, None),
+        },
+        target,
+    ))
 }
 
 /// What the capture observer reports back to the runner.
@@ -1340,6 +1366,31 @@ fn run_walk(
                 }
             }
         }
+        WalkStep::HoverTile { q, r, level } => {
+            let coord = HexCoord::from_axial(q, r);
+            match resolve_tile_click_target(tiles.iter(), coord, level) {
+                Ok(None) => {}
+                Ok(Some((target, pos))) => {
+                    let Ok((window, _)) = primary_window.single() else {
+                        return;
+                    };
+                    let Some(over) = primary_tile_hover(target, window) else {
+                        error!("visual walk could not normalize the primary window for {step:?}");
+                        state.failed = true;
+                        exit.write(AppExit::error());
+                        return;
+                    };
+                    info!("visual walk hovering terrain {pos:?} through pointer picking");
+                    commands.trigger(over);
+                    state.advance();
+                }
+                Err(reason) => {
+                    error!("visual walk refused {step:?}: {reason}");
+                    state.failed = true;
+                    exit.write(AppExit::error());
+                }
+            }
+        }
         WalkStep::ClickAnchor { ref name, expected } => {
             let Some(anchors) = content.anchors.as_deref() else {
                 return;
@@ -1574,6 +1625,7 @@ mod tests {
     struct PointerRecord {
         target: Option<Entity>,
         primary: bool,
+        hovered: bool,
     }
 
     #[derive(Resource, Clone, Copy)]
@@ -1588,9 +1640,20 @@ mod tests {
         }
     }
 
+    fn issue_requested_pointer_hover(mut commands: Commands, request: Res<PointerRequest>) {
+        if let Some(over) = primary_tile_hover(request.target, request.window) {
+            commands.trigger(over);
+        }
+    }
+
     fn record_pointer_click(click: On<Pointer<Click>>, mut record: ResMut<PointerRecord>) {
         record.target = Some(click.event_target());
         record.primary = click.button == PointerButton::Primary;
+    }
+
+    fn record_pointer_hover(over: On<Pointer<Over>>, mut record: ResMut<PointerRecord>) {
+        record.target = Some(over.event_target());
+        record.hovered = true;
     }
 
     #[derive(Resource, Default, Debug, PartialEq, Eq)]
@@ -1618,6 +1681,7 @@ mod tests {
         AwaitTerrain,
         ClickTile(q: 2, r: -2),
         ClickTile(q: 2, r: -2, level: Some(7)),
+        HoverTile(q: 3, r: -2, level: Some(7)),
         ClickAnchor(name: "bridge", expected: (q: 0, r: 0, level: 16)),
         AwaitPartyIdle(max_frames: 600),
         AssertSelectedAt(expected: (q: 0, r: 0, level: 16)),
@@ -1643,7 +1707,7 @@ mod tests {
     #[test]
     fn a_full_script_parses_with_every_step_kind() {
         let steps: Vec<WalkStep> = ron::from_str(FULL_SCRIPT).expect("script parses");
-        assert_eq!(steps.len(), 19);
+        assert_eq!(steps.len(), 20);
         assert_eq!(steps.first(), Some(&WalkStep::AwaitScreen("Title".into())));
         assert_eq!(
             steps.get(3),
@@ -1678,6 +1742,14 @@ mod tests {
         );
         assert_eq!(
             steps.get(10),
+            Some(&WalkStep::HoverTile {
+                q: 3,
+                r: -2,
+                level: Some(7),
+            })
+        );
+        assert_eq!(
+            steps.get(11),
             Some(&WalkStep::ClickAnchor {
                 name: "bridge".to_owned(),
                 expected: CameraRouteTile {
@@ -1688,11 +1760,11 @@ mod tests {
             })
         );
         assert_eq!(
-            steps.get(11),
+            steps.get(12),
             Some(&WalkStep::AwaitPartyIdle { max_frames: 600 })
         );
         assert_eq!(
-            steps.get(12),
+            steps.get(13),
             Some(&WalkStep::AssertSelectedAt {
                 expected: CameraRouteTile {
                     q: 0,
@@ -1702,7 +1774,7 @@ mod tests {
             })
         );
         assert_eq!(
-            steps.get(13),
+            steps.get(14),
             Some(&WalkStep::OrbitCamera {
                 yaw_turns: 0.33333334,
                 pitch_fraction: -0.1,
@@ -3063,6 +3135,23 @@ mod tests {
         let record = app.world().resource::<PointerRecord>();
         assert_eq!(record.target, Some(target));
         assert!(record.primary);
+    }
+
+    #[test]
+    fn tile_hover_uses_the_real_primary_pointer_observer_path() {
+        let mut app = App::new();
+        let window = app.world_mut().spawn(Window::default()).id();
+        let target = app.world_mut().spawn_empty().id();
+        app.init_resource::<PointerRecord>()
+            .insert_resource(PointerRequest { target, window })
+            .add_observer(record_pointer_hover)
+            .add_systems(Update, issue_requested_pointer_hover);
+
+        app.update();
+
+        let record = app.world().resource::<PointerRecord>();
+        assert_eq!(record.target, Some(target));
+        assert!(record.hovered);
     }
 
     #[test]

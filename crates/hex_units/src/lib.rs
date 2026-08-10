@@ -64,7 +64,8 @@ pub use movement::{
 };
 pub use pathing::HexPathingLine;
 pub use selection::{
-    HoveredSurface, PathOverlay, RangeOverlay, Selected, TargetReticle, TerrainRevision, UnitRing,
+    HoveredSurface, OutOfRangeOverlay, PathOverlay, RangeOverlay, Selected, TargetReticle,
+    TerrainRevision, UnitRing,
 };
 pub use targeting::{either_in_reach, high_ground_bonus, in_reach};
 pub use terrain_creation::{
