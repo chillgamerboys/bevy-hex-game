@@ -93,6 +93,11 @@ pub struct AiSpellObservation {
     pub name: String,
     /// Raw direct disables before defenses.
     pub direct_disables: u16,
+    /// Disabled cells restored by the resolved spell effects.
+    ///
+    /// This is effect-derived policy input, not an inference from the display name.
+    #[serde(default)]
+    pub restore_hexes: u16,
     /// Whether the shape has one positional subject.
     pub single_target: bool,
     /// Whether this is a self enchantment.
@@ -513,7 +518,14 @@ fn choose_cells(request: &DecisionRequest, restoring: bool) -> Option<AiSelectio
                     AiCellKind::Spell => 3,
                 }
             };
-            Some((rank, cell.mana.unwrap_or(0), *coord))
+            let mana = if restoring {
+                // Restoration's documented utility order breaks equal-kind ties by
+                // coordinate. Held mana matters only when choosing what to disable.
+                0
+            } else {
+                cell.mana.unwrap_or(0)
+            };
+            Some((rank, mana, *coord))
         })
         .collect();
     ranked.sort_unstable();
@@ -546,13 +558,46 @@ fn choose_turn_action(request: &DecisionRequest) -> Option<ActionKey> {
         })
     };
 
-    if let Some(key) = request
-        .observation
-        .allies
-        .iter()
-        .filter(|ally| ally.downed)
-        .min_by_key(|ally| ally.unit)
-        .and_then(|ally| cast_named_at("Renewal", ally.position))
+    let spell_facts = &request.observation.actor.spells;
+    let mut restorative_actions = Vec::new();
+    for target_unit in std::iter::once(&request.observation.actor)
+        .chain(request.observation.allies.iter())
+        .filter(|unit| {
+            unit.lattice
+                .cells
+                .iter()
+                .any(|cell| cell.disabled == Some(true))
+        })
+    {
+        for action in actions {
+            let GameCommand::Cast { spell, target, .. } = &action.command else {
+                continue;
+            };
+            if *target != target_unit.position {
+                continue;
+            }
+            let Some(facts) = spell_facts
+                .iter()
+                .find(|facts| facts.name == *spell && facts.restore_hexes > 0)
+            else {
+                continue;
+            };
+            restorative_actions.push((
+                if target_unit.downed { 0_u8 } else { 1_u8 },
+                target_unit.unit,
+                std::cmp::Reverse(facts.restore_hexes),
+                spell.as_str(),
+                action.key,
+            ));
+        }
+    }
+    if let Some(key) = restorative_actions
+        .into_iter()
+        .min_by(|left, right| {
+            (left.0, left.1, left.2, left.3, left.4)
+                .cmp(&(right.0, right.1, right.2, right.3, right.4))
+        })
+        .map(|(_, _, _, _, key)| key)
     {
         return Some(key);
     }
@@ -567,7 +612,6 @@ fn choose_turn_action(request: &DecisionRequest) -> Option<ActionKey> {
         return Some(key);
     }
 
-    let spell_facts = &request.observation.actor.spells;
     if let Some(key) = actions
         .iter()
         .filter_map(|action| {
@@ -955,6 +999,20 @@ mod tests {
     }
 
     #[test]
+    fn legacy_spell_observations_default_to_no_restoration() {
+        let encoded = r#"{
+            "name":"Legacy",
+            "direct_disables":0,
+            "single_target":true,
+            "self_enchantment":false,
+            "enchantment_active":false
+        }"#;
+        let decoded: AiSpellObservation =
+            serde_json::from_str(encoded).expect("legacy spell observation deserializes");
+        assert_eq!(decoded.restore_hexes, 0);
+    }
+
+    #[test]
     fn stale_or_foreign_keys_do_not_resolve() {
         let request = request();
         let action = request
@@ -1048,6 +1106,246 @@ mod tests {
                 .map(|action| &action.command),
             Some(GameCommand::Channel { unit: UnitId(1) })
         ));
+    }
+
+    #[test]
+    fn baseline_selects_a_renamed_restorative_spell_by_effect() {
+        let mut request = request();
+        let target = TilePos::new(HexCoord::from_axial(1, 0), 1);
+        request.observation.actor.spells = vec![
+            AiSpellObservation {
+                name: "Greater Mend".to_owned(),
+                direct_disables: 0,
+                restore_hexes: 2,
+                single_target: true,
+                self_enchantment: false,
+                enchantment_active: false,
+            },
+            AiSpellObservation {
+                name: "Mend".to_owned(),
+                direct_disables: 0,
+                restore_hexes: 1,
+                single_target: true,
+                self_enchantment: false,
+                enchantment_active: false,
+            },
+        ];
+        request.observation.allies = vec![AiAlliedUnit {
+            unit: UnitId(2),
+            position: target,
+            downed: true,
+            lattice: AiLatticeObservation {
+                capacity: Some(1),
+                cells: vec![AiLatticeCell {
+                    coord: LatticeCoord::ORIGIN,
+                    kind: Some(AiCellKind::Spell),
+                    disabled: Some(true),
+                    mana: None,
+                }],
+            },
+            spells: Vec::new(),
+        }];
+        request.legal_actions = LegalActionSet::from_canonical_commands(
+            LegalActionFingerprint(11),
+            vec![
+                GameCommand::EndTurn { unit: UnitId(1) },
+                GameCommand::Cast {
+                    unit: UnitId(1),
+                    spell: "Mend".to_owned(),
+                    target,
+                    facing: None,
+                    mana: None,
+                },
+                GameCommand::Cast {
+                    unit: UnitId(1),
+                    spell: "Greater Mend".to_owned(),
+                    target,
+                    facing: None,
+                    mana: None,
+                },
+            ],
+        );
+
+        let AiSelection::Action(key) = BaselineAlgorithm.select(&request) else {
+            panic!("a normal turn should select an action");
+        };
+        assert!(matches!(
+            request
+                .legal_actions
+                .resolve(key)
+                .map(|action| &action.command),
+            Some(GameCommand::Cast { spell, target: found, .. })
+                if spell == "Greater Mend" && *found == target
+        ));
+    }
+
+    #[test]
+    fn baseline_restores_downed_allies_before_damaged_self_and_never_hostiles() {
+        let mut request = request();
+        let ally_position = TilePos::new(HexCoord::from_axial(1, 0), 1);
+        let hostile_position = TilePos::new(HexCoord::from_axial(0, 1), 1);
+        request.observation.actor.lattice.cells.push(AiLatticeCell {
+            coord: LatticeCoord::new(1, 0),
+            kind: Some(AiCellKind::Blank),
+            disabled: Some(true),
+            mana: None,
+        });
+        request.observation.actor.spells = vec![AiSpellObservation {
+            name: "Patch".to_owned(),
+            direct_disables: 0,
+            restore_hexes: 1,
+            single_target: true,
+            self_enchantment: false,
+            enchantment_active: false,
+        }];
+        request.observation.allies = vec![AiAlliedUnit {
+            unit: UnitId(2),
+            position: ally_position,
+            downed: true,
+            lattice: AiLatticeObservation {
+                capacity: Some(1),
+                cells: vec![AiLatticeCell {
+                    coord: LatticeCoord::ORIGIN,
+                    kind: Some(AiCellKind::Blank),
+                    disabled: Some(true),
+                    mana: None,
+                }],
+            },
+            spells: Vec::new(),
+        }];
+        request.observation.hostiles = vec![AiObservedHostile {
+            unit: UnitId(0),
+            position: hostile_position,
+            downed: true,
+            lattice: AiLatticeObservation {
+                capacity: Some(1),
+                cells: vec![AiLatticeCell {
+                    coord: LatticeCoord::ORIGIN,
+                    kind: Some(AiCellKind::Blank),
+                    disabled: Some(true),
+                    mana: None,
+                }],
+            },
+        }];
+        request.legal_actions = LegalActionSet::from_canonical_commands(
+            LegalActionFingerprint(12),
+            vec![
+                GameCommand::EndTurn { unit: UnitId(1) },
+                GameCommand::Cast {
+                    unit: UnitId(1),
+                    spell: "Patch".to_owned(),
+                    target: request.observation.actor.position,
+                    facing: None,
+                    mana: None,
+                },
+                GameCommand::Cast {
+                    unit: UnitId(1),
+                    spell: "Patch".to_owned(),
+                    target: ally_position,
+                    facing: None,
+                    mana: None,
+                },
+                GameCommand::Cast {
+                    unit: UnitId(1),
+                    spell: "Patch".to_owned(),
+                    target: hostile_position,
+                    facing: None,
+                    mana: None,
+                },
+            ],
+        );
+
+        let AiSelection::Action(key) = BaselineAlgorithm.select(&request) else {
+            panic!("a normal turn should select an action");
+        };
+        assert!(matches!(
+            request
+                .legal_actions
+                .resolve(key)
+                .map(|action| &action.command),
+            Some(GameCommand::Cast { target, .. }) if *target == ally_position
+        ));
+
+        request.observation.allies.clear();
+        request
+            .observation
+            .actor
+            .lattice
+            .cells
+            .iter_mut()
+            .find(|cell| cell.coord == LatticeCoord::new(1, 0))
+            .expect("fixture contains the damaged self cell")
+            .disabled = Some(false);
+        let AiSelection::Action(key) = BaselineAlgorithm.select(&request) else {
+            panic!("a normal turn should select an action");
+        };
+        assert!(matches!(
+            request
+                .legal_actions
+                .resolve(key)
+                .map(|action| &action.command),
+            Some(GameCommand::EndTurn { .. })
+        ));
+    }
+
+    #[test]
+    fn restoration_cell_priority_uses_kind_then_coordinate_not_mana() {
+        let mut request = request();
+        let spell = LatticeCoord::new(2, 0);
+        let fusion = LatticeCoord::new(1, 0);
+        let lower_gem = LatticeCoord::new(-1, 0);
+        let higher_gem = LatticeCoord::new(0, 1);
+        let blank = LatticeCoord::new(0, -1);
+        request.kind = AiDecisionKind::ChooseRestores;
+        request.observation.actor.lattice = AiLatticeObservation {
+            capacity: Some(5),
+            cells: vec![
+                AiLatticeCell {
+                    coord: spell,
+                    kind: Some(AiCellKind::Spell),
+                    disabled: Some(true),
+                    mana: None,
+                },
+                AiLatticeCell {
+                    coord: fusion,
+                    kind: Some(AiCellKind::Fusion),
+                    disabled: Some(true),
+                    mana: None,
+                },
+                AiLatticeCell {
+                    coord: lower_gem,
+                    kind: Some(AiCellKind::Gem),
+                    disabled: Some(true),
+                    mana: Some(9),
+                },
+                AiLatticeCell {
+                    coord: higher_gem,
+                    kind: Some(AiCellKind::Gem),
+                    disabled: Some(true),
+                    mana: Some(0),
+                },
+                AiLatticeCell {
+                    coord: blank,
+                    kind: Some(AiCellKind::Blank),
+                    disabled: Some(true),
+                    mana: None,
+                },
+            ],
+        };
+        request.cell_choices = Some(CellChoiceSet::from_cells(
+            CellChoiceFingerprint(13),
+            UnitId(1),
+            5,
+            vec![spell, fusion, lower_gem, higher_gem, blank],
+        ));
+
+        let AiSelection::Cells(selection) = BaselineAlgorithm.select(&request) else {
+            panic!("a restoration decision should select cells");
+        };
+        assert_eq!(
+            selection.cells,
+            vec![spell, fusion, lower_gem, higher_gem, blank]
+        );
     }
 
     #[test]

@@ -607,7 +607,7 @@ fn publish_hud_view(
     let next = match mode.get() {
         Mode::Exploring => GameplayHudView {
             phase: GameplayPhase::Active,
-            actor: context.acting.as_ref().map(|actor| actor.unit),
+            actor: disclosed_actor(context.acting.as_ref()),
             actor_label: context
                 .acting
                 .as_ref()
@@ -717,7 +717,7 @@ fn publish_hud_view(
             }
             GameplayHudView {
                 phase: GameplayPhase::Active,
-                actor: context.acting.as_ref().map(|actor| actor.unit),
+                actor: disclosed_actor(context.acting.as_ref()),
                 actor_label: actor,
                 round: format!("Round {}", order.round + 1),
                 movement_remaining,
@@ -730,6 +730,12 @@ fn publish_hud_view(
     if *view != next {
         *view = next;
     }
+}
+
+fn disclosed_actor(actor: Option<&UiUnitIdentity>) -> Option<UnitId> {
+    actor
+        .filter(|actor| actor.disclosed)
+        .map(|actor| actor.unit)
 }
 
 fn decision_confirmation_availability(remaining: Option<usize>) -> ActionAvailability {
@@ -1038,18 +1044,34 @@ mod tests {
     }
 
     #[test]
+    fn unobserved_hostile_actor_has_neither_identity_nor_unit_id_in_the_hud_view() {
+        let actor = UiUnitIdentity {
+            unit: UnitId(9),
+            name: "raider #9".to_owned(),
+            faction: hex_units::Faction::Hostile,
+            party_slot: None,
+            disclosed: false,
+        };
+
+        assert_eq!(actor.label(), "Unobserved hostile");
+        assert_eq!(disclosed_actor(Some(&actor)), None);
+    }
+
+    #[test]
     fn decision_hints_name_owner_and_affected_target() {
         let owner = UiUnitIdentity {
             unit: UnitId(1),
             name: "hedge-mage #1".to_owned(),
             faction: hex_units::Faction::Player,
             party_slot: Some(0),
+            disclosed: true,
         };
         let target = UiUnitIdentity {
             unit: UnitId(2),
             name: "raider #2".to_owned(),
             faction: hex_units::Faction::Player,
             party_slot: Some(1),
+            disclosed: true,
         };
         let context = GameplayUiContext {
             decision_owner: Some(owner),

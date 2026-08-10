@@ -17,7 +17,7 @@ use hex_ai::{
 };
 use hex_assets::{
     AiProfileCatalog, CastingAxis, CombatSettings, ContentIndex, Effect, ElementCatalog, SpellBook,
-    SubstanceTable, TargetShape, Trajectory,
+    SubstanceTable, TargetShape, TargetingReach, Trajectory,
 };
 use hex_core::{
     Busy, CommandQueue, ControlOwner, GameCommand, GameplaySetup, GameplaySetupFailure,
@@ -27,8 +27,9 @@ use hex_core::{
 use hex_lattice::{castable, CellKind, LatticeSpec, LatticeState, LatticeStats};
 use hex_perception::{FactionKnowledge, FactionMapKnowledge, SurfaceSnapshot};
 use hex_units::{
-    known_trajectory_is_clear, targeting, trajectory_destination, volumes, Body, Downed, Enemy,
-    Faction, Footing, KnownTerrainOccupancy, Player, Reach, StandsOn, UnitOccupancy, UnitRegistry,
+    in_touch_reach, known_trajectory_is_clear, targeting, trajectory_destination, volumes, Body,
+    Downed, Enemy, Faction, Footing, KnownTerrainOccupancy, Player, Reach, StandsOn, UnitOccupancy,
+    UnitRegistry,
 };
 use xxhash_rust::xxh3::xxh3_64;
 
@@ -83,6 +84,14 @@ pub struct AiDecisionTraces {
 
 /// Maximum exact decision snapshots retained for live developer inspection.
 pub const MAX_AI_DECISION_TRACES: usize = 64;
+
+/// Marks the actor whose currently queued command was emitted by the AI adapter.
+///
+/// The command wire format intentionally carries no runtime provenance. This
+/// transient marker lets the applier distinguish an AI-selected cast from a manual
+/// or replay-issued command without changing that serialized contract.
+#[derive(Component, Debug, Clone, Copy)]
+pub(crate) struct AiIssuedCommand;
 
 impl AiDecisionTraces {
     fn record(&mut self, mut trace: AiDecisionTrace) {
@@ -241,6 +250,7 @@ struct AiWorld<'w> {
 }
 
 fn drive_ai(
+    mut ecs_commands: Commands,
     turn_order: Res<TurnOrder>,
     unit_registry: Res<UnitRegistry>,
     pending: Res<PendingDecision>,
@@ -342,6 +352,7 @@ fn drive_ai(
                             world.elements.as_deref(),
                             world.combat.as_deref(),
                             table,
+                            &world.knowledge,
                         ),
                         None,
                     )
@@ -445,6 +456,7 @@ fn drive_ai(
         warn!("AI {actor_id:?} returned an invalid selection: {failure:?}");
     }
     if let Some(command) = command {
+        ecs_commands.entity(actor_entity).insert(AiIssuedCommand);
         queue.push(IssuedCommand {
             seat: request.controller,
             command,
@@ -617,6 +629,7 @@ fn enumerate_turn_actions(
     elements: Option<&ElementCatalog>,
     combat: Option<&CombatSettings>,
     substances: &SubstanceTable,
+    lattice_knowledge: &FactionLatticeKnowledge,
 ) -> Vec<GameCommand> {
     let id = *actor.1;
     let Some(turn) = actor.5 else {
@@ -720,19 +733,39 @@ fn enumerate_turn_actions(
                 if matches!(spell.targeting.shape, TargetShape::SelfCast) {
                     vec![actor.2 .0.pos]
                 } else {
-                    anchors
-                        .iter()
-                        .copied()
-                        .filter(|target| {
-                            targeting::in_reach(
-                                actor.2 .0.pos,
-                                *target,
-                                u32::from(spell.targeting.range),
-                                combat.map_or(5, |settings| settings.levels_per_bonus_range),
-                            )
-                        })
-                        .collect()
+                    match spell.targeting.reach {
+                        TargetingReach::Ranged => anchors
+                            .iter()
+                            .copied()
+                            .filter(|target| {
+                                targeting::in_reach(
+                                    actor.2 .0.pos,
+                                    *target,
+                                    u32::from(spell.targeting.range),
+                                    combat.map_or(5, |settings| settings.levels_per_bonus_range),
+                                )
+                            })
+                            .collect(),
+                        TargetingReach::Touch => units
+                            .iter()
+                            .filter(|target_unit| authorized_units.contains(target_unit.1))
+                            .filter(|target_unit| {
+                                spatial.state(target_unit.2 .0.pos) == KnowledgeState::Observed
+                            })
+                            .filter(|target_unit| {
+                                *target_unit.1 == id
+                                    || in_touch_reach(footing, actor.2 .0.pos, target_unit.2 .0.pos)
+                            })
+                            .map(|target_unit| target_unit.2 .0.pos)
+                            .collect::<BTreeSet<_>>()
+                            .into_iter()
+                            .collect(),
+                    }
                 };
+            let restores = spell
+                .effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::RestoreHexes { .. }));
             let facings: &[Option<Sextant>] = if volumes::needs_facing(&spell.targeting.shape) {
                 &[
                     Some(Sextant::A),
@@ -746,6 +779,17 @@ fn enumerate_turn_actions(
                 &[None]
             };
             for target in spell_anchors {
+                if restores
+                    && !restoration_target_is_legal(
+                        actor,
+                        target,
+                        units,
+                        &authorized_units,
+                        lattice_knowledge,
+                    )
+                {
+                    continue;
+                }
                 if !trajectory_available(
                     spell.targeting.trajectory,
                     actor.2 .0.pos,
@@ -777,6 +821,52 @@ fn enumerate_turn_actions(
         }
     }
     commands
+}
+
+fn restoration_target_is_legal(
+    actor: (
+        Entity,
+        &UnitId,
+        &StandsOn,
+        &Body,
+        &Faction,
+        Option<&Turn>,
+        bool,
+        bool,
+        Option<&ControlOwner>,
+        Option<&AiController>,
+        Option<&LatticeSpec>,
+        Option<&LatticeState>,
+        Option<&LatticeStats>,
+        bool,
+    ),
+    target: TilePos,
+    units: &UnitQuery,
+    authorized: &BTreeSet<UnitId>,
+    knowledge: &FactionLatticeKnowledge,
+) -> bool {
+    units
+        .iter()
+        .filter(|candidate| authorized.contains(candidate.1) && candidate.2 .0.pos == target)
+        .any(|candidate| {
+            let hostile = actor.4.is_hostile_to(*candidate.4);
+            let hostile_knowledge = hostile
+                .then(|| knowledge.view(*actor.4, *candidate.1))
+                .flatten();
+            if hostile && !hostile_knowledge.is_some_and(|known| known.is_complete()) {
+                return false;
+            }
+            let (Some(spec), Some(state)) = (candidate.10, candidate.11) else {
+                return false;
+            };
+            if hostile && !hostile_knowledge.is_some_and(|known| known.is_complete_for(spec)) {
+                return false;
+            }
+            if !spec.cells().any(|(coord, _)| state.is_disabled(coord)) {
+                return false;
+            }
+            true
+        })
 }
 
 fn trajectory_available(
@@ -1011,6 +1101,12 @@ fn allied(
                     _ => 0,
                 })
             });
+            let restore_hexes = spell.effects.iter().fold(0u16, |total, effect| {
+                total.saturating_add(match effect {
+                    Effect::RestoreHexes { count } => u16::from(*count),
+                    _ => 0,
+                })
+            });
             let self_enchantment = matches!(spell.casting, CastingAxis::Enchantment { .. })
                 && matches!(spell.targeting.shape, TargetShape::SelfCast);
             let enchantment_active = state
@@ -1024,6 +1120,7 @@ fn allied(
                 spell_observations.push(AiSpellObservation {
                     name: name.to_owned(),
                     direct_disables,
+                    restore_hexes,
                     single_target: matches!(spell.targeting.shape, TargetShape::Single),
                     self_enchantment,
                     enchantment_active,
@@ -1155,8 +1252,11 @@ fn tile_key(pos: &TilePos) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::platform::collections::HashMap;
     use hex_ai::{AiGroupId, AiProfile};
-    use hex_core::HexCoord;
+    use hex_assets::{ManaAxis, Spell, SpellFile, TargetingSpec};
+    use hex_core::{HexCoord, HexSpan, TraversalProfile};
+    use hex_units::Standing;
 
     #[test]
     fn legal_sets_ignore_input_order() {
@@ -1256,6 +1356,117 @@ mod tests {
         assert_eq!(
             configured_algorithm(&controller, Some(&profiles)),
             AiAlgorithmId("last".to_owned())
+        );
+    }
+
+    #[test]
+    fn allied_observation_derives_restoration_from_effects_not_spell_name() {
+        let misleading_name = "Shatter";
+        let spell_file = SpellFile {
+            spells: HashMap::from([
+                (
+                    "Heal".to_owned(),
+                    Spell {
+                        requirements: Vec::new(),
+                        casting: CastingAxis::Evocation,
+                        mana: ManaAxis::Fixed,
+                        co_castable: false,
+                        targeting: TargetingSpec {
+                            range: 0,
+                            reach: TargetingReach::Touch,
+                            shape: TargetShape::Single,
+                            trajectory: Trajectory::None,
+                        },
+                        effects: vec![Effect::DisableHexes {
+                            count: 1,
+                            targeted: false,
+                        }],
+                    },
+                ),
+                (
+                    misleading_name.to_owned(),
+                    Spell {
+                        requirements: Vec::new(),
+                        casting: CastingAxis::Evocation,
+                        mana: ManaAxis::Fixed,
+                        co_castable: false,
+                        targeting: TargetingSpec {
+                            range: 0,
+                            reach: TargetingReach::Touch,
+                            shape: TargetShape::Single,
+                            trajectory: Trajectory::None,
+                        },
+                        effects: vec![
+                            Effect::RestoreHexes { count: 2 },
+                            Effect::RestoreHexes { count: 3 },
+                        ],
+                    },
+                ),
+            ]),
+        };
+        let spells = SpellBook::from_file(&spell_file);
+        let named_heal = spells.id("Heal").expect("control spell is indexed");
+        let restorative = spells.id(misleading_name).expect("test spell is indexed");
+        let elements = ElementCatalog::default();
+        let content = ContentIndex::build(&elements, &spells, &SubstanceTable::default())
+            .expect("name-free restoration effects resolve without other content");
+        let spec = LatticeSpec::default()
+            .with(LatticeCoord::ORIGIN, CellKind::Spell { spell: named_heal })
+            .with(
+                LatticeCoord::new(1, 0),
+                CellKind::Spell { spell: restorative },
+            );
+        let state = LatticeState::default();
+        let id = UnitId(41);
+        let standing = StandsOn(Standing {
+            pos: TilePos::new(HexCoord::ORIGIN, 1),
+            span: HexSpan::new(0.0, 1.0),
+        });
+        let body = Body::new(TraversalProfile::WALKER);
+        let faction = Faction::Hostile;
+
+        let observation = allied(
+            (
+                Entity::PLACEHOLDER,
+                &id,
+                &standing,
+                &body,
+                &faction,
+                None,
+                false,
+                false,
+                None,
+                None,
+                Some(&spec),
+                Some(&state),
+                None,
+                true,
+            ),
+            Some(&spells),
+            Some(&content),
+            Some(&elements),
+        );
+
+        assert_eq!(
+            observation.spells,
+            vec![
+                AiSpellObservation {
+                    name: "Heal".to_owned(),
+                    direct_disables: 1,
+                    restore_hexes: 0,
+                    single_target: true,
+                    self_enchantment: false,
+                    enchantment_active: false,
+                },
+                AiSpellObservation {
+                    name: misleading_name.to_owned(),
+                    direct_disables: 0,
+                    restore_hexes: 5,
+                    single_target: true,
+                    self_enchantment: false,
+                    enchantment_active: false,
+                },
+            ]
         );
     }
 }

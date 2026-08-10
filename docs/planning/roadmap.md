@@ -31,19 +31,23 @@ Creator chart with retained SVG masters and runtime glyphs. E0 rehomes the curre
 Scrying Eye content under Divination and removes Daylight; it does not add Scrying
 Eye's off-sight live feed, Invisibility, spell-created illumination, or any other
 school mechanic. Those follow-on releases remain separately sequenced after the
-foundation.
+foundation. PR #189 / HEX-79 delivers tier-one Life Heal, explicit touch reach,
+pre-payment restoration refusals, and effect-semantic AI selection. The remaining
+Life release still owns Cleanse, Conjure Plant, starter-template migration, and its
+combined school acceptance.
 
 ## Upcoming
 
 | Epic | Scope | Owner |
 |---|---|---|
 | Terrain magic | **Partial / In Progress:** permanent `Single`/`Column` stone evocation, the #175/#178 world resolver, answer schema, and ordering foundation, and #180's explicit Impact/Fireball content, paid monotonic `TerrainImpact` emission, matching-outcome consumption, fresh occupancy/movement ordering, deterministic unsupported-actor settlement, authority adoption, and typed frozen failure are live. Remaining HEX-19 work keeps authored Interior membership with no dynamic cave daylight and defers area construction, enchantment-bound terrain, fluid dynamics, feature destruction, and terrain save/restore persistence | combat | <!-- linear: HEX-19 owner: shravan-kumaran -->
-| Trajectories and lingering effects | **Partial / In Progress:** #162's exact `Direct`/`Arc`/`None` material trajectories share one symmetric integer supercover; faction-facing preview, cycling, and AI use authorized knowledge while command authority retains full occupancy. #180 adds live radial per-voxel clipping and stable friendly-fire area Disable/Burn behind one held resolution transaction. Remaining HEX-24 work is area Restore/Reveal policy, area-lingering zones, dispel, and later sight reuse | combat | <!-- linear: HEX-24 owner: shravan-kumaran -->
+| Trajectories and lingering effects | **Partial / In Progress:** #162's exact `Direct`/`Arc`/`None` material trajectories share one symmetric integer supercover; faction-facing preview, cycling, and AI use authorized knowledge while command authority retains full occupancy. #180 adds live radial per-voxel clipping and stable friendly-fire area Disable/Burn behind one held resolution transaction. Sight now reuses the rational intersection foundation through an independent strict-interior policy without changing casting's closed-contact results. Remaining HEX-24 work is area Restore/Reveal policy, area-lingering zones, and dispel | combat | <!-- linear: HEX-24 owner: shravan-kumaran -->
 | Magic outside combat | general real-time casting and its input model; Rest has moved into outcomes/recovery and does not settle this deferred question | combat | <!-- linear: HEX-25 owner: shravan-kumaran -->
 | Co-casting and rituals | variable-mana group casting after Wave 7 supplies a real Channel action and evidence for initiative and action economy | combat | <!-- linear: HEX-26 owner: shravan-kumaran -->
 | Engine upkeep | the one budgeted Bevy 0.20 upgrade (~Q4 2026) plus the feature trim, landed together in a quiet window before any release | game | <!-- linear: HEX-18 owner: shravan-kumaran -->
-| Perception presentation | faction fog, remembered rendering, picking gates, and composition with explicit review-roof visibility and whole-tree opacity | perception |
-| Scenario camera policy | decide when Map mode is appropriate and limit its availability by scenario now that the human-approved Character view is live | world / presentation |
+| Fog presentation refinements | full-scene shading for cliff sides and tall props, soft transitions, and fades beyond the live exact-surface tactical caps; current terrain intentionally remains public and pickable | perception |
+| Tactical first-person camera | **Delivered / HEX-89:** #190's rebindable `C` action cycles Map → Third Person → First Person → Map with fixed-eye right-drag look, tactical click movement, disclosure-safe retargeting, composable model hiding, and exact Map-pose restoration; automated contracts and the exact-`dev` native acceptance route passed at `8a8e45e4` | world / presentation |
+| Scenario camera policy | decide when Map mode is appropriate and limit its availability by scenario after the three-view cycle lands; do not conflate that policy with first-person locomotion | world / presentation |
 | Remaining movement and combat perception adapters | unknown-route restriction; detection, engagement, ordinary-attack targeting, and one-round last-known-position behavior in isolated owner-reviewed PRs; AI and casting anchors are already live | units/combat |
 | V1/V2 legacy removal | remove the frozen V1/V2 parsers, generators, assets, and runtime tests now that every active shipped procedural scenario resolves through V3 | map |
 | Named rule regions | revisit a content-addressable exact-surface overlay when the first region-sensitive spell lands; do not combine biome identity, lighting, and anti-magic into generic tile tags | map/combat |
@@ -55,6 +59,7 @@ foundation.
 | Epic | Delivered |
 |---|---|
 | Canonical elemental-grid foundation | PR #184 / HEX-37, HEX-56, and HEX-57: 18 canonical schools, revision-bound packaged-content migration, a neutral 180-pair element × tough-substance matrix, retained SVG/runtime glyphs, and the accessible radius-two Creator chart |
+| Tier-one Life Heal | PR #189 / HEX-79: exact `Touch` reach, one-cell caster-chosen restoration, pre-payment privacy and eligibility refusals, next-round revival, effect-semantic AI selection, and explicit self/ally aiming feedback |
 | Run bottoms on tiles | Every material-run entity publishes exact inclusive integer bounds through `RunBottom` and `TilePos`, including stacked platform/cave runs and terrain-edit rebuilds |
 | Casting UX | HEX-21 landed in Wave 3: cursor shape previews, blocked reasons, target cycling, and per-element cast presentation |
 | Combat readability | HEX-23 landed in Wave 3: initiative order, detailed lattice panels, and the structured combat log |
@@ -73,7 +78,8 @@ foundation.
 | Tactical integrity (Wave 7; player-facing organization superseded) | Exact-surface occupancy, Channel, deterministic summaries/simulations, and the measured decision to retain the shipped four-hex movement default remain; old tuning/report UI does not |
 | Gameplay foundation and scoped validation | Wave 8: one pure serializable combat authority projected through ECS/animation/UI, renderer-free gameplay screen models, concern-specific integration targets, and fail-closed dependency-scoped validation with unchanged broad owner gates <!-- linear: HEX-28 owner: shravan-kumaran --> |
 | Unified map validation | Map unit, deterministic generation, and real-plugin publication contracts now share the repository scope selector, one explicit integration target, optimized dependency execution, per-concern timing/JUnit evidence, and unchanged PR/stress/visual acceptance |
-| V3 active recipe migration | Hills, Sky Islands, Mountains, Caves, Waterfall, Forest, Fort, Volcano, Deep Forest, Prairie, Shallow Sea, Beach, Shore, and Deep Mountain all use the V3 semantic pipeline in shipped scenarios |
+| V3 active recipe migration | Hills, Sky Islands, Mountains, Caves, Waterfall, Forest, Fort, Volcano, Deep Forest, Prairie, Shallow Sea, Beach, Shore, Deep Mountain, and Crystal Ascent all use the V3 semantic pipeline in shipped scenarios |
+| Crystal Ascent authored landmark | Selectable radius-40 vertical biome with a monumental lower aperture, open chamber and 30-level irregular-prism heart, three four-wide contracting stair circuits on outward-deepening worked-stone haunches over 100–200 levels, eighteen crystal-lit landings, exact heart occupancy, and a woodland-clearing crown around the radius-11 summit oculus |
 | Forest authored objects | Forest publishes rotated vegetation `ObjectInstance`s and exact blockers; `hex_objects` propagates whole-tree camera roots and retains authored canopy masks as separate art metadata |
 | Structures and Fort | V3 Fort ships worked-stone walls, towers, gates, keep, wall walks, stairs, battlements, and validated defensive circulation |
 | Seven-region composition | Ring7 composes all seven V3 recipe variants in one connected radius-33 world with global routes, elevation seams, and hydrology |
@@ -81,7 +87,8 @@ foundation.
 | Nineteen-region composition | Ring19 composes the selectable radius-55 Two Rings map from 19 fixed logical regions, 42 physically redundant seams, one mountain-fed confluence/outlet water graph, and a separate volcano lava outlet |
 | Macro Mountain Range | The selectable radius-77 / 18,019-column world composes 37 atomic cells into 30 logical biome instances with Macro-only adjacency validation, coastal and alpine recipes, one joined watershed, graded mountain tiers, a five-cell massif, generated framing, and a validated Shore-to-massif-base route |
 | Cave lighting and presentation | V3 Caves publishes deterministic gameplay lights over required routes plus authored emissive crystals and restrained presentation-only physical lights |
-| Character-first camera | Player-authoritative full-range look, radius-only terrain collision with stable recovery, near-character occlusion, whole-tree fading, ordinary opaque cave roofs, seed-exact multi-azimuth traversal over every selectable map and Two Rings region, and Alberto's 2026-08-01 native motion/readability approval |
+| Obstruction-aware visibility and tactical shroud | Target-lit 36/12/1 upper-dome range, a global paired seven-ray character-volume LOS bundle with observer-relative grounded exposed-top low cover, intact deeper cores and disconnected/remote roof-deck blockers, physical cross-domain sight, current-map dark caps, and composable concealment of unobserved hostiles |
+| Third-person camera foundation | Player-authoritative full-range look, radius-only terrain collision with stable recovery, near-character occlusion, whole-tree fading, ordinary opaque cave roofs, seed-exact multi-azimuth traversal over every selectable map and Two Rings region, and Alberto's 2026-08-01 native motion/readability approval |
 
 ## Sequencing — independent lanes behind one contract
 
@@ -100,9 +107,9 @@ The map owner keeps semantic plans private and publishes exact shared consequenc
 Recipe PRs do not edit gameplay-owned crates. Two Rings received the wave's final
 human visual and play approval before landing.
 
-**Perception lane:** knowledge-safe casting and AI plus cave gameplay-light and
-physical presentation are live. Fog presentation → movement adapter →
-engagement/ordinary-targeting/lost-contact adapters remain.
+**Perception lane:** knowledge-safe casting and AI, cave gameplay-light and physical
+presentation, exact terrain LOS, and the live-map tactical shroud are live. Movement
+adapter → engagement/ordinary-targeting/lost-contact adapters remain.
 `hex_perception` may observe unit positions, while `hex_units` reads only
 `LocalMapKnowledge` from `hex_core`. Every adapter that changes an owned crate is
 isolated and reviewed by that owner.
@@ -150,8 +157,8 @@ exact-head hook-backed evidence (CONTRIBUTING.md has the rules).
   co-casting, initiative, action economy, and rout remain future gameplay decisions.
   Perception adapters and `RunBottom`-dependent obstruction/trajectory work were
   optional satellites, not retroactive Wave 4 gates. `RunBottom`-backed construction
-  and trajectories subsequently landed; the remaining perception adapters stay
-  Upcoming.
+  and trajectories, obstruction-aware sight, and tactical shroud subsequently landed;
+  the remaining gameplay perception adapters stay Upcoming.
 - **Wave 5 — pre-alpha continuity (delivered).** A stable app shell and default New Game,
   one disposable exploration-resume slot, persistent settings and audio/input seams,
   and release-artifact scaffolding. This wave gets ahead of productization without
@@ -412,11 +419,12 @@ The decision-complete contract is
 ### Spatial perception
 
 Remaining perception work follows
-[the perception contract](../systems/perception.md): presentation and each remaining
-gameplay-owned adapter stay separate, while spatial observation and hidden lattice
-contents remain distinct information channels. Casting and AI already use the live
-faction authority; fog/picking, unknown-frontier movement, engagement, ordinary
-attacks, and lost-contact search do not.
+[the perception contract](../systems/perception.md): renderer refinements and each
+remaining gameplay-owned adapter stay separate, while spatial observation and hidden
+lattice contents remain distinct information channels. Casting, AI, obstruction LOS,
+surface shrouding, hostile concealment, and anonymous initiative already use the live
+faction authority; unknown-frontier movement, engagement, ordinary attacks, and
+lost-contact search do not.
 
 ### The map rows
 

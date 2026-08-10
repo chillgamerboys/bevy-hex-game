@@ -49,7 +49,9 @@ use hex_core::{
     TraversalProfile, UnitId,
 };
 
-use crate::{TerrainOccupancySystems, UnitOccupancy};
+use crate::{
+    AuthoredObjectOccupancy, AuthoredObjectOccupancySystems, TerrainOccupancySystems, UnitOccupancy,
+};
 
 /// Ordering for systems that consume a unit's logical position.
 #[derive(SystemSet, Copy, Clone, Eq, PartialEq, Hash, Debug)]
@@ -127,6 +129,7 @@ pub fn plugin(app: &mut App) {
             .in_set(AuthoritativeSystems)
             .in_set(PausableSystems)
             .after(TerrainOccupancySystems::Publish)
+            .after(AuthoredObjectOccupancySystems::Publish)
             .before(hex_anim::AnimationSystems::Drive),
     );
     // Committing to a long walk and then being ambushed halfway should leave the piece
@@ -235,6 +238,38 @@ impl Footing {
         body: Body,
         blockers: Option<&TraversalBlockers>,
     ) -> Self {
+        Self::from_tiles_with_optional_object_occupancy(tiles, table, body, blockers, None)
+    }
+
+    /// Collects standable surfaces while enforcing exact authored-object volume.
+    ///
+    /// Production movement and pathfinding use this constructor after the session's
+    /// [`AuthoredObjectOccupancy`] has been published. The older [`Self::from_tiles`]
+    /// remains available to generator validation and synthetic fixtures that have no
+    /// authored-object authority.
+    pub fn from_tiles_with_object_occupancy<'a>(
+        tiles: impl Iterator<Item = (&'a TilePos, &'a HexSpan, &'a SubstanceId, &'a Headroom)>,
+        table: &SubstanceTable,
+        body: Body,
+        blockers: Option<&TraversalBlockers>,
+        authored_objects: &AuthoredObjectOccupancy,
+    ) -> Self {
+        Self::from_tiles_with_optional_object_occupancy(
+            tiles,
+            table,
+            body,
+            blockers,
+            Some(authored_objects),
+        )
+    }
+
+    fn from_tiles_with_optional_object_occupancy<'a>(
+        tiles: impl Iterator<Item = (&'a TilePos, &'a HexSpan, &'a SubstanceId, &'a Headroom)>,
+        table: &SubstanceTable,
+        body: Body,
+        blockers: Option<&TraversalBlockers>,
+        authored_objects: Option<&AuthoredObjectOccupancy>,
+    ) -> Self {
         let profile = body.traversal_profile();
         let mut footing = Self {
             profile,
@@ -245,6 +280,11 @@ impl Footing {
 
         for (pos, span, substance, headroom) in tiles {
             if blockers.is_some_and(|blockers| blockers.contains(*pos)) {
+                continue;
+            }
+            if authored_objects
+                .is_some_and(|occupancy| occupancy.blocks_standing_body(*pos, profile))
+            {
                 continue;
             }
             if !profile.admits_surface(table.is_solid(*substance), *headroom) {
@@ -395,8 +435,9 @@ impl Reach {
     /// Floods outward from `start`, stopping after `budget` steps if there is one.
     ///
     /// `None` means unlimited, which is what exploring uses — there is no turn and so
-    /// no movement budget. The whole standable graph is around 1,300 surfaces with at
-    /// most six edges each, so even the unbounded search is trivial.
+    /// no movement budget. The search is linear in the standable graph (at most six
+    /// outgoing edges per surface); callers that use a shipped large map cache the
+    /// unbounded result rather than recomputing it per interaction.
     #[must_use]
     pub fn from(start: Standing, footing: &Footing, budget: Option<u32>) -> Self {
         Self::flood(start, footing, budget, None, None)
@@ -523,6 +564,15 @@ impl Reach {
     #[must_use]
     pub fn cost(&self, pos: TilePos) -> Option<u32> {
         self.steps.get(&pos).map(|step| step.cost)
+    }
+
+    /// The exact standing surface reached at `pos`, if this search discovered it.
+    ///
+    /// Presentation uses this to mark a distant destination without allocating and
+    /// reversing the complete route merely to recover its last element.
+    #[must_use]
+    pub fn standing(&self, pos: TilePos) -> Option<Standing> {
+        self.steps.get(&pos).map(|step| step.standing)
     }
 
     /// The surfaces walked over to get there, starting with the surface stood on now.
@@ -878,6 +928,44 @@ mod tests {
         assert_eq!(reach.surfaces().count(), 19);
     }
 
+    /// Manual release-mode guard for the largest current flat selection graph.
+    ///
+    /// Radius 77 contains 18,019 surfaces. The movement preview builds this search
+    /// once per stable selection, so its p95 must remain inside one 50 ms frame even
+    /// when every surface belongs to the connected component.
+    #[test]
+    #[ignore = "manual release-mode radius-77 movement-preview benchmark"]
+    fn radius_77_disclosed_preview_release_p95_stays_under_fifty_ms() {
+        let tiles: Vec<_> = HexCoord::ORIGIN
+            .within_radius(77)
+            .into_iter()
+            .map(|coord| tile(coord, 4))
+            .collect();
+        assert_eq!(tiles.len(), 18_019, "the benchmark radius drifted");
+
+        let occupancy = UnitOccupancy::default();
+        let mut samples = Vec::with_capacity(20);
+        for _ in 0..20 {
+            let started = std::time::Instant::now();
+            let footing = footing_from(&tiles);
+            let origin = footing
+                .ground(HexCoord::ORIGIN)
+                .expect("the benchmark origin should be standable");
+            let reach = Reach::with_occupancy(origin, &footing, None, &occupancy, UnitId(1));
+            assert_eq!(reach.surfaces().count(), tiles.len());
+            samples.push(started.elapsed());
+        }
+        samples.sort_unstable();
+        let p95 = samples
+            .get(18)
+            .copied()
+            .expect("twenty samples should have a p95");
+        assert!(
+            p95 < std::time::Duration::from_millis(50),
+            "radius-77 movement-preview p95 was {p95:?}"
+        );
+    }
+
     /// The path is as long as the cost says, and starts where the piece stands.
     #[test]
     fn a_path_is_as_long_as_its_cost() {
@@ -1116,6 +1204,80 @@ mod tests {
 
         assert!(footing.at(start.0).is_some());
         assert!(footing.at(blocked.0).is_none());
+    }
+
+    #[test]
+    fn exact_authored_object_volume_removes_only_overlapping_body_footing() {
+        let start = tile(HexCoord::ORIGIN, 4);
+        let blocked = tile(HexCoord::from_axial(1, 0), 4);
+        let clear_above = tile(HexCoord::from_axial(2, 0), 4);
+        let tiles = [start, blocked, clear_above];
+        let authored = AuthoredObjectOccupancy::from_runs([
+            hex_core::AuthoredObjectVoxelRun::new(blocked.0.above(), 5),
+            hex_core::AuthoredObjectVoxelRun::new(clear_above.0.above().above().above(), 7),
+        ])
+        .expect("authored-object fixture");
+        let footing = Footing::from_tiles_with_object_occupancy(
+            tiles
+                .iter()
+                .map(|(pos, span, substance, headroom)| (pos, span, substance, headroom)),
+            &table(),
+            NORMAL,
+            None,
+            &authored,
+        );
+
+        assert!(footing.at(start.0).is_some());
+        assert!(footing.at(blocked.0).is_none());
+        assert!(footing.at(clear_above.0).is_some());
+    }
+
+    #[test]
+    fn authored_object_overlap_uses_the_movers_exact_body_height() {
+        let surface_level = 10;
+        let first = tile(HexCoord::from_axial(0, 0), surface_level);
+        let second = tile(HexCoord::from_axial(1, 0), surface_level);
+        let third = tile(HexCoord::from_axial(2, 0), surface_level);
+        let support_only = tile(HexCoord::from_axial(3, 0), surface_level);
+        let surfaces = [first, second, third, support_only];
+        let authored = AuthoredObjectOccupancy::from_runs([
+            hex_core::AuthoredObjectVoxelRun::new(first.0.above(), surface_level + 1),
+            hex_core::AuthoredObjectVoxelRun::new(second.0.above().above(), surface_level + 2),
+            hex_core::AuthoredObjectVoxelRun::new(
+                third.0.above().above().above(),
+                surface_level + 3,
+            ),
+            hex_core::AuthoredObjectVoxelRun::new(support_only.0, surface_level),
+        ])
+        .expect("height-specific authored-object fixture");
+
+        let footing_for_height = |levels_tall| {
+            Footing::from_tiles_with_object_occupancy(
+                surfaces
+                    .iter()
+                    .map(|(pos, span, substance, headroom)| (pos, span, substance, headroom)),
+                &table(),
+                Body::new(TraversalProfile {
+                    levels_tall,
+                    max_climb: 1,
+                    max_drop: 1,
+                }),
+                None,
+                &authored,
+            )
+        };
+
+        let walker = footing_for_height(2);
+        assert!(walker.at(first.0).is_none());
+        assert!(walker.at(second.0).is_none());
+        assert!(walker.at(third.0).is_some());
+        assert!(walker.at(support_only.0).is_some());
+
+        let tall = footing_for_height(3);
+        assert!(tall.at(first.0).is_none());
+        assert!(tall.at(second.0).is_none());
+        assert!(tall.at(third.0).is_none());
+        assert!(tall.at(support_only.0).is_some());
     }
 
     /// A run buried inside a column is not a surface, however solid it is.

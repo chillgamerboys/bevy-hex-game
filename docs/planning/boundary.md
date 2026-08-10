@@ -178,19 +178,31 @@ encounter-owned exact `TilePos` overlay. No current system depends on it.
 
 ## C — Run bottoms (exact occupancy: casting legality, line-of-sight, cover)
 
-**Delivered**: material-sensitive trajectories, future sight, and cover want column
+**Delivered**: material-sensitive trajectories and obstruction-aware sight use column
 occupancy. Every material-run
 entity now publishes its inclusive top (`TilePos`) and bottom (`RunBottom`) alongside
 its world extent (`HexSpan`). Gameplay does not divide by `level_height` or infer from
 the saturated `Headroom` clearance fact. The published bounds feed one gameplay-owned
 exact occupancy projection and deterministic trajectory supercover; faction-facing
 trajectory choices filter that geometry through authorized knowledge, while full truth
-stays at command authority. Obstruction-aware sight remains later work and must reuse
-the primitive rather than introduce a second ray.
+stays at command authority. Sight reuses the same exact rational intersection kernel
+with a strict-interior contact policy while casting retains its closed-contact
+supercover. Each in-range observer-target pair uses at most seven sight segments: one
+head-center to target-top-center ray and six one-to-one rays from the standing-body-top
+corners to the matching target corners. A single observer needs three clear perimeter
+rays when the center is blocked; corners never cross-pair or pool between observers.
 
-Initial spatial perception is deliberately obstruction-agnostic and does not need
-this component. Gameplay lights are radial within one light domain; sight uses exact
-horizontal and vertical bands.
+Spatial perception consumes this component after the unchanged target-illumination
+range gate. The paired bundle applies globally to every in-range target, with no
+near-field cutoff. Character LOS omits only the exposed top voxel of a compact run
+whose top lies within one level of the observer's support and has material directly
+beneath it; any deeper core remains blocking. A disconnected one-voxel run and every
+run topped farther away retain their full volume, so floating platforms, two-level
+walls, and vertically remote roofs or decks still obstruct the exact paired rays. The
+raw strict-interior segment kernel continues to test complete runs symmetrically,
+while this observer-relative low-cover classification means the resulting character
+visibility need not be symmetric. Gameplay lights remain obstruction-agnostic within
+one light domain; sight may cross domains through a material-clear opening.
 
 That reasoning holds for *sight*, but casting still needs the same datum, and for a
 different reason. [casting.md](../systems/casting.md) validates a cast against the
@@ -198,8 +210,7 @@ voxels it would affect — is this voxel solid, is it empty enough to conjure in
 somebody's supporting surface — and none of those are answerable without exact
 occupancy. Wave 3 deliberately shipped terrain effects fail-closed rather than
 reconstructing it; `RunBottom` now underpins permanent construction and live
-obstruction-aware trajectories, and remains the foundation for future
-obstruction-aware sight.
+obstruction-aware trajectories and sight.
 
 One component answers casting legality, conjuration placement, trajectory, cover, and
 pathing alike, using the existing published-data pattern rather than a new API surface.
@@ -218,14 +229,11 @@ You already hold both bounds when merging runs in the spawn pass. Every run enti
 including stacked runs under bridges, overhangs, and caves, carries it. Spawn-bundle
 tests assert the exact inclusive bottom and top for each such run.
 
-**Publication and the first casting consumers are live:** permanent construction and
+**Publication and the casting/sight consumers are live:** permanent construction and
 material-sensitive trajectory checks use the shared type and map adapter without
-reconstructing occupancy from presentation facts. Cover and obstruction-aware sight
-remain downstream.
-Obstruction-aware sight may still use its independent approximation while its consumer
-waits: a sight line is
-blocked iff some intervening column's highest run top reaches it. Wrong only
-for shooting *under* bridges and overhangs.
+reconstructing occupancy from presentation facts. Perception publishes occupancy
+before its first setup observation and traces compact complete runs, including real
+air gaps beneath bridges and overhangs. Cover remains downstream.
 
 ## G — Declarative terrain damage (accepted contract)
 
@@ -453,7 +461,7 @@ for direct edits and resolved impacts. Dynamic cave-aperture daylight remains de
 
 ## J — Sight tunables as settings
 
-**Need**: `SightProfile::DEFAULT` hardcodes the 36/12/1 bands and the downhill rule in
+**Need**: `SightProfile::DEFAULT` hardcodes the 36/12/1 radii in
 `hex_core`. Every other tunable in the game lives in `assets/config/*.ron`, validated
 at load and hot-reloadable, which is what makes playtesting a file edit.
 
@@ -462,9 +470,10 @@ the same loader pattern as `combat.ron`. The world owner owns the values and the
 gameplay owner reviews any shared loader-infrastructure change. **The numbers stay
 yours** — this is about where they live, not what they are.
 
-Note also that sight and spell range deliberately use *different* elevation rules:
-sight gains one hex per four levels capped at six, spell range gains one per five,
-uncapped. Sight is not reach, and they should be tuned apart.
+Sight now uses the canonical upper-dome range predicate selected for later targeting:
+horizontal and upward distance combine by the inclusive squared rule, while downward
+vertical distance is ignored. Combat targeting retains its older stepped high-ground
+bonus until its own gameplay-owned migration; movement receives no range bonus.
 
 `SightProfile::DEFAULT` remains the headless-test compatibility fallback; gameplay
 uses the validated active profile.
@@ -521,6 +530,52 @@ world integrity. Conjured bedrock would be an indestructible wall; conjured liqu
 creates the hanging-water problem ask K has not solved. The palette stays the world
 owner's to widen, and gating a material purely because it is powerful remains a balance
 decision that belongs in cost and tier.
+
+## M — Authoritative surface-feature placement (accepted vocabulary; runtime reserved)
+
+**Status — reserved, not live.** `hex_core` defines and structurally validates the
+renderer-independent placement vocabulary. No runtime system publishes or consumes
+these values, no `SurfaceFeatures` resource is inserted by default, no schedule is
+configured, and no placement, rendering, perception, or gameplay behavior changes.
+The first producer and consumer belong to the separate Life mechanics delivery.
+
+`SurfaceFeatureBatchId` is a monotonically allocated, session-local requester
+correlation, never an authored or durable identity. `SurfaceFeatureId` is allocated by
+the authoritative world producer and is stable only within one active map instance; it
+is not a Bevy `Entity`, private V3 `FeatureId`, or Campaign wire identity.
+`SurfaceFeatureKind` is a closed semantic enum, initially `TallGrass`, and carries no
+asset, mesh, palette, generator, blocker, or presentation data.
+
+`SurfaceFeature` contains only its stable id, semantic kind, and exact support
+`TilePos`. `PlaceSurfaceFeature` requests one kind at one exact support.
+`SurfaceFeaturePlacementOutcome` supplies exactly one correlated answer: an applied
+answer carries the complete feature record that must appear in the producer's next
+valid complete projection, while a rejected answer carries no feature. Rejections use
+the fixed precedence `ReusedBatch`, `TerrainUnavailable`, `UnsupportedKind`,
+`InvalidSupport`, then `FeatureConflict`; the first processed use consumes the batch
+whether applied or rejected.
+
+`SurfaceFeatures` is a deterministic complete projection ordered by feature id, with
+exact-support lookup that never collapses levels. Shared validation proves structural
+identity and request/outcome consistency only; material validity, occupancy, stacking,
+blocking, sight, rendering, duration, and removal remain producer or later-mechanics
+policy. Once a consumer exists, a present empty projection means "ready with no
+semantic features," while a missing projection means unavailable and fails closed.
+That future readiness rule does not make the resource live in this foundation.
+
+Shared/core owns the ids, records, request/outcome vocabulary, projection container,
+and structural validation. A later `hex_map` adapter is the sole authority for
+admission, id allocation, mutation, support reconciliation, complete replacement,
+presentation mapping, and outcome publication. Later gameplay owns batch allocation,
+payment, pending authority, adoption, AI, and feedback. `hex_objects` remains an
+`ObjectInstance` renderer, and `hex_perception` gains no behavior here. Private V3
+plans and identities remain private and are not migrated by this contract.
+
+The intended first runtime use processes requests in the existing ordered
+world-consequence flow and publishes the complete projection plus one outcome before
+gameplay consumes it. The later implementation must select and test the exact existing
+shared phase. This reservation creates no parallel terrain, zone, perception, or
+render schedule.
 
 ## D1 — Pre-spawn terrain edit replay
 
@@ -633,11 +688,10 @@ blocked rather than approximated.
   `MapAnchorId`, scenarios and encounters can reference every anchor the
   generator already publishes.
 - **Destructible features (trees, structures)**: deliberately not folded into contract G.
-  `TerrainImpact` covers material voxels; V3 features are semantic instances with
-  separate blocker/canopy projections, and authored object parts explicitly carry no
-  gameplay meaning. The first feature-damaging spell therefore needs its own exact
-  occupancy, response, and acknowledgment contract. Until that need is scheduled,
-  fireballs leave forests and structures standing, as [status.md](status.md) records.
+  Section M reserves placement vocabulary only; it supplies no feature-damage,
+  destruction, or removal contract. `TerrainImpact` still affects material voxels
+  only, and fireballs leave forests and structures standing until a separate
+  feature-response contract is scheduled.
 - **A callable query API for terrain**: deliberately not asked for. `hex_map` is a leaf
   and should stay one; gameplay computing `Footing`, occupancy, and trajectories from
   published components is the same pattern that already works for movement. Ask C is

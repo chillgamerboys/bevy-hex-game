@@ -73,7 +73,10 @@ impl fmt::Display for RiverTerrainIssue {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidInputVolume(issues) => {
-                write!(formatter, "river terrain received an invalid volume: {issues:?}")
+                write!(
+                    formatter,
+                    "river terrain received an invalid volume: {issues:?}"
+                )
             }
             Self::MissingLiquidFill { position } => {
                 write!(formatter, "river node {position:?} has no exact water fill")

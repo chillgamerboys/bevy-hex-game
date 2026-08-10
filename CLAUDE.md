@@ -69,7 +69,7 @@ cargo run --release -p hex_game --features map-review
 
 `HEX_REVIEW_VIEW` accepts `default`, `rotated`, `rear`, or `top-down` and requires
 `HEX_REVIEW_CAPTURE`; omitting the view uses `default`. `HEX_REVIEW_CAMERA` accepts
-`map` or `character` and also requires a capture. `HEX_REVIEW_TIME` accepts an hour in
+`map`, `character`, or `first-person` and also requires a capture. `HEX_REVIEW_TIME` accepts an hour in
 `[0, 24)` and can be used with or without a capture, but the selected scenario must use
 cyclic lighting. `HEX_REVIEW_LIQUID_PHASE` accepts any finite phase in seconds and
 freezes liquid presentation there; captures default to `0.0`, while launches without a

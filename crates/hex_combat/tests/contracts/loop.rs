@@ -37,7 +37,10 @@ fn test_app() -> App {
     let app = builder.app_mut();
     // The shipped combat.ron values; production loads the file instead.
     app.insert_resource(hex_assets::CombatSettings::default());
-    app.add_plugins(hex_combat::plugin);
+    app.add_plugins((
+        hex_units::authored_object_occupancy::plugin,
+        hex_combat::plugin,
+    ));
     builder.build()
 }
 

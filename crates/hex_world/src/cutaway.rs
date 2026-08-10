@@ -19,11 +19,12 @@ use bevy::transform::TransformSystems;
 
 use hex_assets::CameraSettings;
 use hex_core::{
-    CameraFocusTarget, CutawayOccluder, InteriorRegionId, InteriorRegions, PresentationOcclusion,
-    PresentationOcclusionReason, PresentationSystems, Screen, TreeFadeAmount, TreeOccluder,
+    CameraFocusTarget, CutawayOccluder, InspectionCameraSubject, InteriorRegionId, InteriorRegions,
+    PresentationOcclusion, PresentationOcclusionReason, PresentationSystems, Screen,
+    TreeFadeAmount, TreeOccluder,
 };
 
-use crate::camera::{CameraMode, PanOrbitCamera};
+use crate::camera::{CameraMode, PanOrbitCamera, ResolvedCameraSubject};
 
 /// Small conservative margin around each transformed render-chunk bound in addition
 /// to the camera's configured near-plane probe radius.
@@ -166,47 +167,49 @@ fn reconcile_interior_cutaway(
     }
 }
 
-type CharacterOcclusionCandidates =
-    Or<(With<CameraFocusTarget>, With<CharacterCameraOcclusionOwner>)>;
+type CharacterOcclusionCandidates = Or<(
+    With<CameraFocusTarget>,
+    With<InspectionCameraSubject>,
+    With<CharacterCameraOcclusionOwner>,
+)>;
 
-/// Hides only the selected unit when a collision-limited camera would sit inside it.
+/// Hides the exact selected or inspected unit owned by the active close camera.
 ///
-/// The camera remains fully player-authored. This is presentation help for the
-/// near-first-person result of a tight-space or unusual-angle radius retraction, not
-/// an alternate camera angle. Exit hysteresis prevents a one-frame visibility toggle
-/// around the authored threshold.
+/// Character mode retains the collision-limited radius threshold and exit hysteresis.
+/// First Person always hides the complete subject root so the camera cannot see the
+/// ordinary world model from inside it. The owner marker lets retargeting and mode
+/// exit clear only this camera reason while fog and other presentation owners remain.
 fn reconcile_character_proximity(
     mut commands: Commands,
     mode: Res<CameraMode>,
+    subject: Res<ResolvedCameraSubject>,
     settings: Res<CameraSettings>,
     cameras: Query<(&PanOrbitCamera, &GlobalTransform), Without<CameraFocusTarget>>,
-    mut candidates: ParamSet<(
-        Query<Entity, With<CameraFocusTarget>>,
-        Query<
-            (
-                Entity,
-                Has<CharacterCameraOcclusionOwner>,
-                Option<&mut PresentationOcclusion>,
-            ),
-            CharacterOcclusionCandidates,
-        >,
-    )>,
+    mut candidates: Query<
+        (
+            Entity,
+            Has<CharacterCameraOcclusionOwner>,
+            Option<&mut PresentationOcclusion>,
+        ),
+        CharacterOcclusionCandidates,
+    >,
 ) {
-    let focused = {
-        let targets = candidates.p0();
-        targets.single().ok()
-    };
+    let focused = subject.entity();
     let effective_radius = (*mode == CameraMode::Character)
         .then(|| cameras.single().ok())
         .flatten()
         .map(|(camera, transform)| transform.translation().distance(camera.focus));
     let exit_hysteresis = settings.character_collision_margin * 0.25;
 
-    for (entity, owned, occlusion) in &mut candidates.p1() {
+    for (entity, owned, occlusion) in &mut candidates {
         let threshold =
             settings.character_self_hide_radius + if owned { exit_hysteresis } else { 0.0 };
-        let should_hide =
-            Some(entity) == focused && effective_radius.is_some_and(|radius| radius <= threshold);
+        let should_hide = Some(entity) == focused
+            && match *mode {
+                CameraMode::Map => false,
+                CameraMode::Character => effective_radius.is_some_and(|radius| radius <= threshold),
+                CameraMode::FirstPerson => true,
+            };
 
         match occlusion {
             Some(occlusion) => set_reason(
@@ -240,7 +243,7 @@ fn reconcile_character_proximity(
 fn reconcile_tree_fades(
     mode: Res<CameraMode>,
     settings: Res<CameraSettings>,
-    targets: Query<&CameraFocusTarget>,
+    subject: Res<ResolvedCameraSubject>,
     cameras: Query<(&PanOrbitCamera, &GlobalTransform), Without<CameraFocusTarget>>,
     time: Res<Time>,
     mut timelines: ResMut<TreeFadeTimelines>,
@@ -255,31 +258,41 @@ fn reconcile_tree_fades(
     )>,
     mut reported_invalid_cardinality: Local<Option<(usize, usize)>>,
 ) {
-    let corridor =
-        if *mode != CameraMode::Character {
-            *reported_invalid_cardinality = None;
-            None
-        } else {
-            let cardinality = (targets.iter().count(), cameras.iter().count());
-            if cardinality == (1, 1) {
-                *reported_invalid_cardinality = None;
-                targets.single().ok().zip(cameras.single().ok()).map(
-                    |(target, (camera, transform))| {
-                        (target.surface, transform.translation(), camera.focus)
-                    },
-                )
-            } else {
-                if reported_invalid_cardinality.as_ref() != Some(&cardinality) {
-                    warn!(
-                    "tree fading requires exactly one focus target and one orbit camera; found \
-                     {} targets and {} cameras",
-                    cardinality.0, cardinality.1
-                );
-                    *reported_invalid_cardinality = Some(cardinality);
-                }
-                None
+    if *mode != CameraMode::Character {
+        *reported_invalid_cardinality = None;
+        if timelines.roots.is_empty() {
+            return;
+        }
+        for (_, mut fade) in trees.p1().iter_mut() {
+            if (fade.amount() - TreeFadeAmount::OPAQUE.amount()).abs() > f32::EPSILON {
+                *fade = TreeFadeAmount::OPAQUE;
             }
-        };
+        }
+        timelines.roots.clear();
+        return;
+    }
+
+    let cardinality = (
+        usize::from(subject.surface().is_some()),
+        cameras.iter().count(),
+    );
+    let corridor = if cardinality == (1, 1) {
+        *reported_invalid_cardinality = None;
+        subject
+            .surface()
+            .zip(cameras.single().ok())
+            .map(|(surface, (camera, transform))| (surface, transform.translation(), camera.focus))
+    } else {
+        if reported_invalid_cardinality.as_ref() != Some(&cardinality) {
+            warn!(
+                "tree fading requires one resolved camera subject and one orbit camera; found \
+                 {} subjects and {} cameras",
+                cardinality.0, cardinality.1
+            );
+            *reported_invalid_cardinality = Some(cardinality);
+        }
+        None
+    };
 
     if corridor.is_none() && timelines.roots.is_empty() {
         return;
@@ -548,7 +561,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::*;
-    use hex_core::{HexCoord, TilePos};
+    use hex_core::{HexCoord, TilePos, UnitId};
     use hex_test_app::HeadlessAppBuilder;
 
     #[derive(Resource, Default)]
@@ -586,6 +599,9 @@ mod tests {
             character_collision_release_delay: 0.2,
             character_self_hide_radius: 1.0,
             character_pitch: 0.3,
+            first_person_eye_height: 0.6,
+            first_person_pitch: 0.0,
+            first_person_fov_degrees: 60.0,
             pan_speed: 0.4,
             pan_speed_offset: 10.0,
             min_pitch: 0.25,
@@ -603,6 +619,7 @@ mod tests {
             .app_mut()
             .insert_resource(camera_settings())
             .init_resource::<CameraMode>()
+            .init_resource::<ResolvedCameraSubject>()
             .init_resource::<TreeFadeTimelines>()
             .add_systems(
                 PostUpdate,
@@ -631,6 +648,11 @@ mod tests {
                 CameraFocusTarget::new(target),
             ))
             .id();
+        builder
+            .app_mut()
+            .world_mut()
+            .resource_mut::<ResolvedCameraSubject>()
+            .set(target_entity, target);
         let camera = builder
             .app_mut()
             .world_mut()
@@ -690,6 +712,79 @@ mod tests {
         app.update();
     }
 
+    fn character_camera_lifecycle_app() -> (App, Entity, Entity) {
+        let mut builder = HeadlessAppBuilder::new()
+            .with_minimal_plugins()
+            .with_state_plugin();
+        builder.app_mut().add_plugins(TransformPlugin);
+        builder
+            .app_mut()
+            .init_state::<Screen>()
+            .insert_resource(camera_settings())
+            .init_resource::<CameraMode>()
+            .init_resource::<ResolvedCameraSubject>()
+            .add_plugins(plugin);
+        let target = builder
+            .app_mut()
+            .world_mut()
+            .spawn((
+                Transform::default(),
+                Visibility::Inherited,
+                PresentationOcclusion::default(),
+                CameraFocusTarget::new(TilePos::ORIGIN),
+            ))
+            .id();
+        builder
+            .app_mut()
+            .world_mut()
+            .resource_mut::<ResolvedCameraSubject>()
+            .set(target, TilePos::ORIGIN);
+        let focus = Vec3::Y * camera_settings().character_focus_height;
+        let camera = builder
+            .app_mut()
+            .world_mut()
+            .spawn((
+                Transform::from_translation(focus + Vec3::Z * 0.8),
+                PanOrbitCamera { focus, radius: 7.0 },
+            ))
+            .id();
+        let mut app = builder.build();
+        app.update();
+        (app, target, camera)
+    }
+
+    fn assert_character_camera_owned(app: &App, target: Entity, cycle: usize, mode: CameraMode) {
+        assert_hidden(app, target);
+        let target_ref = app.world().entity(target);
+        assert!(
+            target_ref.contains::<CharacterCameraOcclusionOwner>(),
+            "cycle {cycle} failed to acquire {mode:?} camera proximity ownership"
+        );
+        assert!(
+            target_ref
+                .get::<PresentationOcclusion>()
+                .expect("the unit should retain its composable reason set")
+                .contains(PresentationOcclusionReason::CharacterCameraProximity),
+            "cycle {cycle} failed to acquire the {mode:?} camera proximity reason"
+        );
+    }
+
+    fn assert_character_camera_released(app: &App, target: Entity, cycle: usize, mode: CameraMode) {
+        assert_ordinary(app, target);
+        let target_ref = app.world().entity(target);
+        assert!(
+            !target_ref.contains::<CharacterCameraOcclusionOwner>(),
+            "cycle {cycle} leaked {mode:?} camera proximity ownership"
+        );
+        assert!(
+            !target_ref
+                .get::<PresentationOcclusion>()
+                .expect("the unit should retain its composable reason set")
+                .contains(PresentationOcclusionReason::CharacterCameraProximity),
+            "cycle {cycle} leaked the {mode:?} camera proximity reason"
+        );
+    }
+
     #[test]
     fn close_character_occlusion_uses_entry_and_exit_hysteresis() {
         let target_pos = position(0, 0, 7);
@@ -728,16 +823,82 @@ mod tests {
     }
 
     #[test]
-    fn map_mode_clears_only_camera_owned_character_occlusion() {
+    fn first_person_hides_the_selected_subject_at_any_camera_distance() {
         let target_pos = position(0, 0, 7);
         let (mut app, target, camera) = test_app(target_pos, InteriorRegionId(2));
+        *app.world_mut().resource_mut::<CameraMode>() = CameraMode::FirstPerson;
+        set_camera_distance(&mut app, camera, 60.0);
+
+        app.update();
+
+        assert_hidden(&app, target);
+        let target_ref = app.world().entity(target);
+        assert!(target_ref.contains::<CharacterCameraOcclusionOwner>());
+        assert!(target_ref
+            .get::<PresentationOcclusion>()
+            .expect("the subject should retain composable occlusion")
+            .contains(PresentationOcclusionReason::CharacterCameraProximity));
+
+        *app.world_mut().resource_mut::<CameraMode>() = CameraMode::Map;
+        app.update();
+        assert_ordinary(&app, target);
+        let target_ref = app.world().entity(target);
+        assert!(!target_ref.contains::<CharacterCameraOcclusionOwner>());
+        assert!(!target_ref
+            .get::<PresentationOcclusion>()
+            .expect("mode exit should retain the empty composable reason set")
+            .contains(PresentationOcclusionReason::CharacterCameraProximity));
+    }
+
+    #[test]
+    fn first_person_hides_and_retargets_the_exact_inspection_subject() {
+        let selected_pos = position(0, 0, 7);
+        let inspected_pos = position(2, -1, 11);
+        let (mut app, selected, _) = test_app(selected_pos, InteriorRegionId(2));
+        let inspected_unit = UnitId(92);
+        let inspected = app
+            .world_mut()
+            .spawn((
+                Transform::from_translation(inspected_pos.coord.to_world(0.0)),
+                Visibility::Inherited,
+                PresentationOcclusion::default(),
+                inspected_unit,
+                InspectionCameraSubject::new(inspected_unit, inspected_pos),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<ResolvedCameraSubject>()
+            .set(inspected, inspected_pos);
+        *app.world_mut().resource_mut::<CameraMode>() = CameraMode::FirstPerson;
+
+        app.update();
+
+        assert_ordinary(&app, selected);
+        assert_hidden(&app, inspected);
+
+        app.world_mut()
+            .resource_mut::<ResolvedCameraSubject>()
+            .set(selected, selected_pos);
+        app.update();
+
+        assert_hidden(&app, selected);
+        assert_ordinary(&app, inspected);
+        assert!(!app
+            .world()
+            .entity(inspected)
+            .contains::<CharacterCameraOcclusionOwner>());
+    }
+
+    #[test]
+    fn map_mode_clears_only_first_person_camera_occlusion() {
+        let target_pos = position(0, 0, 7);
+        let (mut app, target, _) = test_app(target_pos, InteriorRegionId(2));
         app.world_mut()
             .entity_mut(target)
             .get_mut::<PresentationOcclusion>()
             .expect("the target should retain composable occlusion")
             .insert(PresentationOcclusionReason::Fog);
-        *app.world_mut().resource_mut::<CameraMode>() = CameraMode::Character;
-        set_camera_distance(&mut app, camera, 0.8);
+        *app.world_mut().resource_mut::<CameraMode>() = CameraMode::FirstPerson;
         app.update();
         assert_hidden(&app, target);
 
@@ -818,6 +979,9 @@ mod tests {
                 CameraFocusTarget::new(target_pos),
             ))
             .id();
+        app.world_mut()
+            .resource_mut::<ResolvedCameraSubject>()
+            .set(second, target_pos);
         app.update();
         assert_ordinary(&app, first);
         assert_hidden(&app, second);
@@ -825,6 +989,9 @@ mod tests {
         app.world_mut()
             .entity_mut(second)
             .remove::<CameraFocusTarget>();
+        app.world_mut()
+            .resource_mut::<ResolvedCameraSubject>()
+            .clear();
         app.update();
         assert_ordinary(&app, first);
         assert_ordinary(&app, second);
@@ -840,64 +1007,41 @@ mod tests {
 
     #[test]
     fn repeated_gameplay_exits_clear_character_camera_occlusion() {
-        let mut builder = HeadlessAppBuilder::new()
-            .with_minimal_plugins()
-            .with_state_plugin();
-        builder.app_mut().add_plugins(TransformPlugin);
-        builder
-            .app_mut()
-            .init_state::<Screen>()
-            .insert_resource(camera_settings())
-            .init_resource::<CameraMode>()
-            .add_plugins(plugin);
-        let target = builder
-            .app_mut()
-            .world_mut()
-            .spawn((
-                Transform::default(),
-                Visibility::Inherited,
-                PresentationOcclusion::default(),
-                CameraFocusTarget::new(TilePos::ORIGIN),
-            ))
-            .id();
-        let focus = Vec3::Y * camera_settings().character_focus_height;
-        let camera = builder
-            .app_mut()
-            .world_mut()
-            .spawn((
-                Transform::from_translation(focus + Vec3::Z * 0.8),
-                PanOrbitCamera { focus, radius: 7.0 },
-            ))
-            .id();
-        let mut app = builder.build();
-        app.update();
+        let (mut app, target, camera) = character_camera_lifecycle_app();
 
         for cycle in 0..100 {
             enter_screen(&mut app, Screen::Gameplay);
             *app.world_mut().resource_mut::<CameraMode>() = CameraMode::Character;
             set_camera_distance(&mut app, camera, 0.8);
             app.update();
-            assert_hidden(&app, target);
+            assert_character_camera_owned(&app, target, cycle, CameraMode::Character);
 
             enter_screen(&mut app, Screen::Title);
-            assert_ordinary(&app, target);
-            let target_ref = app.world().entity(target);
-            assert!(
-                !target_ref.contains::<CharacterCameraOcclusionOwner>(),
-                "cycle {cycle} leaked camera proximity ownership"
-            );
-            assert!(
-                !target_ref
-                    .get::<PresentationOcclusion>()
-                    .expect("the unit should retain its composable reason set")
-                    .contains(PresentationOcclusionReason::CharacterCameraProximity),
-                "cycle {cycle} leaked the camera proximity reason"
-            );
+            assert_character_camera_released(&app, target, cycle, CameraMode::Character);
         }
     }
 
     #[test]
-    fn ordinary_gameplay_keeps_every_cave_roof_in_map_and_character_modes() {
+    fn repeated_gameplay_reentry_restores_and_releases_first_person_character_occlusion() {
+        let (mut app, target, camera) = character_camera_lifecycle_app();
+        set_camera_distance(&mut app, camera, 60.0);
+
+        for cycle in 0..100 {
+            *app.world_mut().resource_mut::<CameraMode>() = CameraMode::FirstPerson;
+            enter_screen(&mut app, Screen::Gameplay);
+            assert_character_camera_owned(&app, target, cycle, CameraMode::FirstPerson);
+
+            enter_screen(&mut app, Screen::Title);
+            assert_character_camera_released(&app, target, cycle, CameraMode::FirstPerson);
+
+            // Mirror the camera owner's gameplay teardown so the next transition
+            // proves First Person can acquire this presentation owner from Map again.
+            *app.world_mut().resource_mut::<CameraMode>() = CameraMode::Map;
+        }
+    }
+
+    #[test]
+    fn ordinary_gameplay_keeps_every_cave_roof_in_all_camera_modes() {
         let target = position(0, 0, 7);
         let region = InteriorRegionId(2);
         let (mut app, _, _) = test_app(target, region);
@@ -909,6 +1053,11 @@ mod tests {
         assert_ordinary(&app, distant);
 
         *app.world_mut().resource_mut::<CameraMode>() = CameraMode::Character;
+        app.update();
+        assert_ordinary(&app, near);
+        assert_ordinary(&app, distant);
+
+        *app.world_mut().resource_mut::<CameraMode>() = CameraMode::FirstPerson;
         app.update();
         assert_ordinary(&app, near);
         assert_ordinary(&app, distant);
@@ -1054,6 +1203,58 @@ mod tests {
         assert!((fade_amount(&app, blocking) - TREE_FADED_OPACITY).abs() < f32::EPSILON);
         assert!((fade_amount(&app, same_tree_clear) - TREE_FADED_OPACITY).abs() < f32::EPSILON);
         assert!((fade_amount(&app, stacked_other) - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn first_person_restores_tree_fades_immediately_and_character_resumes_them() {
+        let target = position(0, 0, 7);
+        let root = position(1, 0, 7);
+        let (mut app, subject, _) = test_app(target, InteriorRegionId(1));
+        let inspected_unit = UnitId(93);
+        app.world_mut()
+            .entity_mut(subject)
+            .remove::<CameraFocusTarget>()
+            .insert((
+                inspected_unit,
+                InspectionCameraSubject::new(inspected_unit, target),
+            ));
+        *app.world_mut().resource_mut::<CameraMode>() = CameraMode::Character;
+        let eye = Vec3::new(0.0, 4.0, 7.0);
+        let focus = target.coord.to_world(0.4);
+        let tree = spawn_tree_chunk(&mut app, root, eye.lerp(focus, 0.5), Vec3::splat(0.5));
+        app.world_mut()
+            .resource_mut::<TreeFadeTimelines>()
+            .roots
+            .insert(
+                root,
+                TreeFadeTimeline {
+                    amount: TREE_FADED_OPACITY,
+                    clear_seconds: 0.0,
+                },
+            );
+
+        app.update();
+        assert!((fade_amount(&app, tree) - TREE_FADED_OPACITY).abs() < f32::EPSILON);
+
+        *app.world_mut().resource_mut::<CameraMode>() = CameraMode::FirstPerson;
+        app.update();
+        assert!((fade_amount(&app, tree) - 1.0).abs() < f32::EPSILON);
+        assert!(
+            app.world().resource::<TreeFadeTimelines>().roots.is_empty(),
+            "first person must clear every third-person fade timeline"
+        );
+
+        *app.world_mut().resource_mut::<CameraMode>() = CameraMode::Character;
+        app.update();
+        assert!(
+            fade_amount(&app, tree) < 1.0,
+            "returning to Character must resume exact corridor fading"
+        );
+        assert!(app
+            .world()
+            .resource::<TreeFadeTimelines>()
+            .roots
+            .contains_key(&root));
     }
 
     #[test]

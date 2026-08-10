@@ -10,6 +10,7 @@ use bevy::prelude::*;
 use hex_combat::TurnOrder;
 use hex_core::{AppSystems, GameplaySystems, Mode, PendingDecision, Screen, UnitId};
 use hex_gameplay_model::{HudState, HudTransientSurface, MainViewDestination};
+use hex_perception::FactionMapKnowledge;
 use hex_units::{Faction, Party, Player, Selected, StandsOn, UnitRegistry};
 
 use crate::casting::{Aiming, CastReadout};
@@ -59,10 +60,14 @@ pub(crate) struct UiUnitIdentity {
     pub(crate) name: String,
     pub(crate) faction: Faction,
     pub(crate) party_slot: Option<usize>,
+    pub(crate) disclosed: bool,
 }
 
 impl UiUnitIdentity {
     pub(crate) fn label(&self) -> String {
+        if self.faction == Faction::Hostile && !self.disclosed {
+            return "Unobserved hostile".to_owned();
+        }
         match (self.faction, self.party_slot) {
             (Faction::Player, Some(slot)) => {
                 format!("ALLY {} · {}", slot + 1, self.name.to_uppercase())
@@ -113,9 +118,10 @@ pub(crate) fn refresh(
     inspection: Res<HudInspection>,
     party: Res<Party>,
     registry: Res<UnitRegistry>,
+    knowledge: Option<Res<FactionMapKnowledge>>,
     selected: Query<&UnitId, (With<Player>, With<Selected>)>,
     identities: Query<(&UnitId, &Name, &Faction)>,
-    positions: Query<(&UnitId, &Faction, &StandsOn)>,
+    positions: Query<(&UnitId, &StandsOn)>,
 ) {
     let retained_ally = context
         .inspector
@@ -131,12 +137,19 @@ pub(crate) fn refresh(
             name: name.as_str().to_owned(),
             faction: *faction,
             party_slot: party.members.iter().position(|member| *member == *unit),
+            disclosed: *faction == Faction::Player
+                || knowledge.as_deref().is_some_and(|knowledge| {
+                    knowledge.faction(Faction::Player).unit(*unit).is_some()
+                }),
         })
     };
 
     let acting = order.current().and_then(identity);
     let selected_ally = selected.iter().next().and_then(|unit| identity(*unit));
-    let inspected = inspection.subject.and_then(identity);
+    let inspected = inspection
+        .subject
+        .and_then(identity)
+        .filter(|identity| identity.disclosed);
     let requested_character = match (hud.stored_main_view(), hud.raw_transient()) {
         (MainViewDestination::Character(unit), _) => Some(unit),
         (_, Some(HudTransientSurface::Character(unit))) => Some(unit),
@@ -165,25 +178,18 @@ pub(crate) fn refresh(
         decision_target.as_ref(),
     );
 
-    let aimed_unit = aiming.0.as_ref().and_then(|aim| {
-        positions.iter().find_map(|(unit, faction, standing)| {
-            (*faction == Faction::Hostile && standing.0.pos == aim.anchor).then_some(*unit)
+    let aimed_target = aiming.0.as_ref().and_then(|aim| {
+        positions.iter().find_map(|(unit, standing)| {
+            (standing.0.pos == aim.anchor)
+                .then_some(*unit)
+                .and_then(identity)
         })
     });
     let inspected_target = inspected_for_main
         .filter(|identity| identity.faction == Faction::Hostile)
-        .cloned()
-        .map(|unit| (TargetProvenance::Inspected, unit));
-    let target = inspected_target.or_else(|| {
-        retained.unit.and_then(identity).map(|unit| {
-            let provenance = if aimed_unit == Some(unit.unit) {
-                TargetProvenance::Aim
-            } else {
-                TargetProvenance::Pinned
-            };
-            (provenance, unit)
-        })
-    });
+        .cloned();
+    let retained_target = retained.unit.and_then(identity);
+    let target = resolve_target(aimed_target, inspected_target, retained_target);
 
     let invariant_error = invariant_error(
         *mode.get(),
@@ -211,6 +217,26 @@ pub(crate) fn refresh(
         }
         *context = next;
     }
+}
+
+fn resolve_target(
+    aimed: Option<UiUnitIdentity>,
+    inspected: Option<UiUnitIdentity>,
+    retained: Option<UiUnitIdentity>,
+) -> Option<(TargetProvenance, UiUnitIdentity)> {
+    aimed
+        .filter(|unit| unit.disclosed)
+        .map(|unit| (TargetProvenance::Aim, unit))
+        .or_else(|| {
+            inspected
+                .filter(|unit| unit.disclosed)
+                .map(|unit| (TargetProvenance::Inspected, unit))
+        })
+        .or_else(|| {
+            retained
+                .filter(|unit| unit.disclosed)
+                .map(|unit| (TargetProvenance::Pinned, unit))
+        })
 }
 
 fn resolve_inspector(
@@ -311,6 +337,7 @@ mod tests {
             name: format!("unit #{id}"),
             faction,
             party_slot: (faction == Faction::Player).then_some(0),
+            disclosed: true,
         }
     }
 
@@ -318,6 +345,14 @@ mod tests {
     fn ally_identity_includes_party_slot_and_faction() {
         assert_eq!(unit(3, Faction::Player).label(), "ALLY 1 · UNIT #3");
         assert_eq!(unit(9, Faction::Hostile).label(), "HOSTILE · UNIT #9");
+    }
+
+    #[test]
+    fn undisclosed_hostile_identity_is_anonymous() {
+        let mut hostile = unit(9, Faction::Hostile);
+        hostile.disclosed = false;
+
+        assert_eq!(hostile.label(), "Unobserved hostile");
     }
 
     #[test]
@@ -443,6 +478,30 @@ mod tests {
             ),
             None,
             "a hostile Character Main View must not retain an unrelated ally lattice"
+        );
+    }
+
+    #[test]
+    fn disclosed_ally_aim_owns_target_feedback_ahead_of_other_inspection() {
+        let ally = unit(4, Faction::Player);
+        let inspected = unit(9, Faction::Hostile);
+        let retained = unit(10, Faction::Hostile);
+
+        assert_eq!(
+            resolve_target(Some(ally.clone()), Some(inspected), Some(retained),),
+            Some((TargetProvenance::Aim, ally))
+        );
+    }
+
+    #[test]
+    fn undisclosed_aim_never_replaces_a_disclosed_pinned_target() {
+        let mut hidden = unit(9, Faction::Hostile);
+        hidden.disclosed = false;
+        let retained = unit(10, Faction::Hostile);
+
+        assert_eq!(
+            resolve_target(Some(hidden), None, Some(retained.clone())),
+            Some((TargetProvenance::Pinned, retained))
         );
     }
 

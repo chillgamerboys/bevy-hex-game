@@ -129,6 +129,11 @@ fn sync_world_markers(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::readouts::{context::TargetProvenance, UiUnitIdentity};
+    use hex_perception::{
+        apply_observations, FactionObservation, FactionObservations, ObservedUnit, SurfaceSnapshot,
+        SurfaceSnapshots,
+    };
 
     #[derive(Resource, Default)]
     struct InspectionAtUiContext {
@@ -145,10 +150,79 @@ mod tests {
         observed.main_view = hud.stored_main_view();
     }
 
+    fn observed_hostile_knowledge(
+        unit: hex_core::UnitId,
+        position: hex_core::TilePos,
+    ) -> FactionMapKnowledge {
+        let surfaces = SurfaceSnapshots::try_from_iter([SurfaceSnapshot {
+            pos: position,
+            span: hex_core::HexSpan::from_ground(1.0),
+            substance: hex_core::SubstanceId(1),
+            headroom: hex_core::Headroom(2),
+            is_solid: true,
+            blocked: false,
+            domain: hex_core::LightDomain::Exterior,
+        }])
+        .expect("the marker fixture has one unique surface");
+        let mut observation = FactionObservation::new();
+        observation.insert_surface(position);
+        observation
+            .try_insert_unit(ObservedUnit {
+                id: unit,
+                faction: Faction::Hostile,
+                pos: position,
+                provides_sight: true,
+            })
+            .expect("the marker fixture has one unique hostile");
+        let mut knowledge = FactionMapKnowledge::new();
+        apply_observations(
+            &mut knowledge,
+            &surfaces,
+            &FactionObservations::with_faction(Faction::Player, observation),
+        );
+        knowledge
+    }
+
     #[test]
     fn player_identity_never_requires_hostile_knowledge() {
         assert!(is_disclosed(hex_core::UnitId(1), Faction::Player, None));
         assert!(!is_disclosed(hex_core::UnitId(9), Faction::Hostile, None));
+    }
+
+    #[test]
+    fn allied_aim_projects_a_target_reticle_without_hostile_knowledge() {
+        let mut app = App::new();
+        app.insert_resource(GameplayPhase::Active)
+            .insert_resource(WorldMarkerSuppression::default())
+            .init_resource::<UnitRegistry>()
+            .init_resource::<GameplayUiContext>()
+            .add_systems(Update, sync_world_markers);
+
+        let unit = hex_core::UnitId(2);
+        let entity = app.world_mut().spawn((unit, Faction::Player)).id();
+        app.world_mut()
+            .resource_mut::<UnitRegistry>()
+            .register(unit, entity);
+        let identity = UiUnitIdentity {
+            unit,
+            name: "ally #2".to_owned(),
+            faction: Faction::Player,
+            party_slot: Some(1),
+            disclosed: true,
+        };
+        app.world_mut().resource_mut::<GameplayUiContext>().target =
+            Some((TargetProvenance::Aim, identity));
+
+        app.update();
+
+        assert_eq!(
+            app.world().get::<TargetReticleRequest>(entity),
+            Some(&TargetReticleRequest::new(unit))
+        );
+        assert!(!app
+            .world()
+            .resource::<WorldMarkerSuppression>()
+            .is_suppressed());
     }
 
     #[test]
@@ -217,5 +291,64 @@ mod tests {
             hex_gameplay_model::MainViewDestination::Closed
         );
         assert!(app.world().get::<InspectionCameraSubject>(entity).is_none());
+    }
+
+    #[test]
+    fn world_markers_conceal_and_reveal_with_current_hostile_observation() {
+        let mut app = App::new();
+        app.insert_resource(GameplayPhase::Active)
+            .insert_resource(WorldMarkerSuppression::default())
+            .init_resource::<UnitRegistry>()
+            .init_resource::<GameplayUiContext>()
+            .add_systems(Update, sync_world_markers);
+
+        let unit = hex_core::UnitId(9);
+        let position = hex_core::TilePos::ORIGIN;
+        let entity = app.world_mut().spawn((unit, Faction::Hostile)).id();
+        app.world_mut()
+            .resource_mut::<UnitRegistry>()
+            .register(unit, entity);
+        let identity = UiUnitIdentity {
+            unit,
+            name: "wolf #9".to_owned(),
+            faction: Faction::Hostile,
+            party_slot: None,
+            disclosed: true,
+        };
+        {
+            let mut context = app.world_mut().resource_mut::<GameplayUiContext>();
+            context.acting = Some(identity.clone());
+            context.target = Some((TargetProvenance::Pinned, identity));
+        }
+        app.insert_resource(observed_hostile_knowledge(unit, position));
+
+        app.update();
+        assert_eq!(
+            app.world().get::<TargetReticleRequest>(entity),
+            Some(&TargetReticleRequest::new(unit))
+        );
+        assert!(!app
+            .world()
+            .resource::<WorldMarkerSuppression>()
+            .is_suppressed());
+
+        app.world_mut().remove_resource::<FactionMapKnowledge>();
+        app.update();
+        assert!(app.world().get::<TargetReticleRequest>(entity).is_none());
+        assert!(app
+            .world()
+            .resource::<WorldMarkerSuppression>()
+            .is_suppressed());
+
+        app.insert_resource(observed_hostile_knowledge(unit, position));
+        app.update();
+        assert_eq!(
+            app.world().get::<TargetReticleRequest>(entity),
+            Some(&TargetReticleRequest::new(unit))
+        );
+        assert!(!app
+            .world()
+            .resource::<WorldMarkerSuppression>()
+            .is_suppressed());
     }
 }
