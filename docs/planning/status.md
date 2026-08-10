@@ -492,11 +492,13 @@ lifecycle, idle-churn, and release-performance gates are live. Seed-exact
 multi-azimuth walks exercise ordinary pointer movement to a proved destination on every
 standalone selectable map and every Two Rings region. Alberto approved the corrected
 third-person camera's motion and readability in a native Two Rings release walk at
-runtime head `2397d8e` on 2026-08-01; First Person still requires its own native
-motion/control-feel review for final acceptance. Map remains available without a
-scenario restriction. A generated `MapViewHint` may extend its zoom ceiling with ten
-percent headroom, so a large initial frame such as Mountain Range does not snap inward
-on the first scroll; Third Person retains its authored ceiling.
+runtime head `2397d8e` on 2026-08-01. On 2026-08-10, `shrav-k` approved First Person's
+native three-state cycle, look and movement feel, retargeting, model restoration, and
+exact Map-pose restoration on the combined `dev` head `8a8e45e4`. Map remains
+available without a scenario restriction. A generated `MapViewHint` may extend its
+zoom ceiling with ten percent headroom, so a large initial frame such as Mountain
+Range does not snap inward on the first scroll; Third Person retains its authored
+ceiling.
 
 ## What is provisional
 
