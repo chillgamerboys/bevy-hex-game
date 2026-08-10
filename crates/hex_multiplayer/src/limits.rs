@@ -41,17 +41,20 @@ pub const MAX_WORLD_COLUMNS: usize = 65_536;
 pub const MAX_WORLD_RUNS_PER_COLUMN: usize = 1_024;
 /// Maximum entries in any flat world-owned semantic projection.
 ///
-/// The same mechanically derived 65,536-column envelope bounds memberships,
-/// blockers, lights, liquids, presentation objects, and remembered surfaces. The
-/// aggregate serialized frame remains independently capped at 64 MiB.
-pub const MAX_WORLD_PROJECTION_ENTRIES: usize = 65_536;
+/// The largest shipped measurement is Crystal Ascent's 135,739 exact interior-roof
+/// voxels. Twice that is 271,478 and the next power of two is 524,288. The aggregate
+/// serialized frame remains independently capped at 64 MiB before deserialization.
+pub const MAX_WORLD_PROJECTION_ENTRIES: usize = 524_288;
 /// Maximum exact blocker/edit-protection surfaces carried by one presentation object.
 ///
 /// The largest shipped authored object footprint is radius four (61 surfaces); twice
 /// that measurement is 122 and the next power of two is 128.
 pub const MAX_OBJECT_BLOCKER_SURFACES: usize = 128;
 /// Maximum ordered operations in one authority-boundary world delta.
-pub const MAX_WORLD_DELTA_OPERATIONS: usize = 65_536;
+///
+/// This matches the shipped flat-projection envelope so a complete semantic
+/// collection can be replaced or removed in one transactional boundary.
+pub const MAX_WORLD_DELTA_OPERATIONS: usize = 524_288;
 /// Largest absolute cube coordinate accepted from an untrusted command.
 pub const MAX_ABS_COMMAND_COORDINATE: u32 = 4_096;
 /// Largest absolute voxel level accepted from an untrusted command.

@@ -549,7 +549,7 @@ pub enum WorldSnapshotValidationError {
     DanglingSurface(TilePos),
     /// Camera framing was non-finite or degenerate.
     InvalidViewHint,
-    /// Liquid flow was uphill or not horizontally adjacent.
+    /// Liquid flow did not name a horizontally adjacent coordinate.
     InvalidLiquidFlow(TilePos),
     /// Object rotation was outside the six hex orientations.
     InvalidObjectRotation,

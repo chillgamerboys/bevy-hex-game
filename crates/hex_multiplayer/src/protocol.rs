@@ -34,7 +34,7 @@ use crate::{
 
 /// Project-owned schema material not visible to Replicon's type/order hashing.
 pub const PROTOCOL_SCHEMA_TAG: &str =
-    "hex-multiplayer/v1;seatless-command-and-lobby;bounded-wire;authorized-projections;session-bound-live-world-v1;run-level-liquid-flow";
+    "hex-multiplayer/v1;seatless-command-and-lobby;bounded-wire;authorized-projections;session-bound-live-world-v1;run-level-liquid-flow;shipped-projection-524288";
 
 /// Monotonic ordering assigned by the simulation authority.
 #[derive(
