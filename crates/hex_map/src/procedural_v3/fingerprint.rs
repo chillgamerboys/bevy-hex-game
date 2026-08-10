@@ -10,12 +10,12 @@ use hex_core::{HexCoord, IlluminationLevel, MapViewHint, TilePos};
 use xxhash_rust::xxh3::xxh3_64;
 
 use crate::settings::{
-    EdgeLiquidSettings, MacroAccessSettings, MacroAxisSettings, MacroHeadwaterSettings,
-    MacroLayoutSettings, MacroLiquidConnectionSettings, NamedOverlaySettings,
-    PatchEdgeContractSettings, PatchEdgesSettings, PatchMaskSettings, PatchSpec,
-    ProceduralV3Settings, Ring19BoundarySide, Ring19RegionSettings, SharedEdgeSettings,
-    V3EnvironmentSettings, V3LayoutSettings, V3OverlaySettings, V3RecipeSettings, V3Ring19Settings,
-    V3Ring7Settings,
+    EdgeLiquidSettings, MacroAccessSettings, MacroAxisSettings, MacroBoundarySideSettings,
+    MacroHeadwaterSettings, MacroLayoutSettings, MacroLiquidConnectionSettings,
+    MacroSpanningFeatureSettings, NamedOverlaySettings, PatchEdgeContractSettings,
+    PatchEdgesSettings, PatchMaskSettings, PatchSpec, ProceduralV3Settings, Ring19BoundarySide,
+    Ring19RegionSettings, SharedEdgeSettings, V3EnvironmentSettings, V3LayoutSettings,
+    V3OverlaySettings, V3RecipeSettings, V3Ring19Settings, V3Ring7Settings,
 };
 
 use super::layout::{
@@ -37,6 +37,8 @@ use super::world::{
 const SETTINGS_DOMAIN: &[u8] = b"bevy-hex-game/procedural-v3/settings";
 const SEMANTIC_PLAN_DOMAIN: &[u8] = b"bevy-hex-game/procedural-v3/semantic-plan";
 const MATERIALIZED_WORLD_DOMAIN: &[u8] = b"bevy-hex-game/procedural-v3/materialized-world";
+const MACRO_EXTENSION_TAG: u8 = 128;
+const MACRO_EXTENSION_VERSION: u8 = 1;
 
 /// Canonical V3 fingerprint payload.
 ///
@@ -303,7 +305,74 @@ fn encode_macro_settings(
     for instance in &settings.critical_route {
         encoder.str(instance)?;
     }
+    if !settings.walker_connections.is_empty()
+        || !settings.spanning_features.is_empty()
+        || !settings.anchor_aliases.is_empty()
+    {
+        encoder.tag(MACRO_EXTENSION_TAG);
+        encoder.u8(MACRO_EXTENSION_VERSION);
+
+        let mut walkers = settings.walker_connections.clone();
+        for walker in &mut walkers {
+            if walker.second_instance < walker.first_instance {
+                std::mem::swap(&mut walker.first_instance, &mut walker.second_instance);
+            }
+        }
+        walkers.sort_unstable();
+        encoder.collection_count(walkers.len())?;
+        for walker in walkers {
+            encoder.str(&walker.first_instance)?;
+            encoder.str(&walker.second_instance)?;
+            encoder.u32(walker.width);
+            encoder.i32(walker.level);
+        }
+
+        let mut features = settings.spanning_features.clone();
+        features.sort_unstable();
+        encoder.collection_count(features.len())?;
+        for feature in features {
+            match feature {
+                MacroSpanningFeatureSettings::Tunnel(tunnel) => {
+                    encoder.tag(0);
+                    encoder.str(&tunnel.name)?;
+                    encoder.u8(u8::from(tunnel.canonical_route));
+                    encoder.collection_count(tunnel.instance_route.len())?;
+                    for instance in tunnel.instance_route {
+                        encoder.str(&instance)?;
+                    }
+                    encoder.str(&tunnel.boundary_terminal.instance)?;
+                    encoder.tag(macro_boundary_side_tag(tunnel.boundary_terminal.side));
+                    encoder.str(&tunnel.destination_anchor.instance)?;
+                    encoder.str(&tunnel.destination_anchor.anchor)?;
+                    encoder.i32(tunnel.floor_level);
+                    encoder.u32(tunnel.width);
+                    encoder.u32(tunnel.clearance);
+                    encoder.u32(tunnel.roof_thickness);
+                }
+            }
+        }
+
+        let mut aliases = settings.anchor_aliases.clone();
+        aliases.sort_unstable();
+        encoder.collection_count(aliases.len())?;
+        for alias in aliases {
+            encoder.str(&alias.alias)?;
+            encoder.str(&alias.instance)?;
+            encoder.str(&alias.anchor)?;
+        }
+    }
     Ok(())
+}
+
+const fn macro_boundary_side_tag(side: MacroBoundarySideSettings) -> u8 {
+    match side {
+        MacroBoundarySideSettings::East => 0,
+        MacroBoundarySideSettings::SouthEast => 1,
+        MacroBoundarySideSettings::SouthWest => 2,
+        MacroBoundarySideSettings::West => 3,
+        MacroBoundarySideSettings::NorthWest => 4,
+        MacroBoundarySideSettings::NorthEast => 5,
+    }
 }
 
 const fn macro_axis_tag(axis: MacroAxisSettings) -> u8 {
@@ -1101,10 +1170,26 @@ mod tests {
         StructureId, StructurePlan,
     };
     use crate::settings::{
-        CubeCoord, EdgeElevationSettings, Ring19BoundaryOutletSettings,
-        Ring19LiquidConnectionSettings, SharedEdgeSettings, V3CrystalAscentSettings,
-        V3HillsSettings, V3PrairieSettings, WalkerPortSettings,
+        CubeCoord, EdgeElevationSettings, MacroAnchorAliasSettings, MacroAnchorReferenceSettings,
+        MacroBoundaryTerminalSettings, MacroSpanningFeatureSettings, MacroTunnelSettings,
+        MacroWalkerConnectionSettings, MapSettings, ProceduralSettings,
+        Ring19BoundaryOutletSettings, Ring19LiquidConnectionSettings, SharedEdgeSettings,
+        TerrainSettings, V3CrystalAscentSettings, V3HillsSettings, V3PrairieSettings,
+        WalkerPortSettings,
     };
+
+    const MOUNTAIN_RANGE_RON: &str =
+        include_str!("../../../../assets/config/worlds/procedural-mountain-range.ron");
+    const TWO_RINGS_RON: &str =
+        include_str!("../../../../assets/config/worlds/procedural-two-rings.ron");
+
+    fn shipped_v3_settings(source: &str) -> (u32, f32, ProceduralV3Settings) {
+        let settings: MapSettings = ron::from_str(source).expect("shipped V3 settings parse");
+        let TerrainSettings::Procedural(ProceduralSettings::V3(v3)) = settings.terrain else {
+            panic!("shipped fixture must use procedural V3");
+        };
+        (settings.grid_radius, settings.level_height, v3)
+    }
 
     fn world_edges() -> PatchEdgesSettings {
         PatchEdgesSettings {
@@ -1304,6 +1389,182 @@ mod tests {
         );
         assert_ne!(baseline, changed_base.finish_settings());
         assert_ne!(baseline, changed_rise.finish_settings());
+    }
+
+    #[test]
+    fn empty_macro_extensions_preserve_shipped_settings_fingerprints() {
+        let (radius, level_height, mountain_range) = shipped_v3_settings(MOUNTAIN_RANGE_RON);
+        let V3LayoutSettings::Macro(layout) = &mountain_range.layout else {
+            unreachable!("Mountain Range is Macro");
+        };
+        assert!(layout.walker_connections.is_empty());
+        assert!(layout.spanning_features.is_empty());
+        assert!(layout.anchor_aliases.is_empty());
+        assert_eq!(
+            settings_fingerprint(radius, level_height, &mountain_range)
+                .expect("Mountain Range settings encode"),
+            2_843_243_527_997_079_402,
+            "defaulted empty Macro extensions append no bytes"
+        );
+
+        let (radius, level_height, two_rings) = shipped_v3_settings(TWO_RINGS_RON);
+        assert_eq!(
+            settings_fingerprint(radius, level_height, &two_rings)
+                .expect("Two Rings settings encode"),
+            2_347_243_186_379_186_390,
+            "the unrelated Ring19 settings identity remains byte-identical"
+        );
+    }
+
+    #[test]
+    fn macro_extension_identity_is_conditional_canonical_and_complete() {
+        let (radius, level_height, mut settings) = shipped_v3_settings(MOUNTAIN_RANGE_RON);
+        let V3LayoutSettings::Macro(layout) = &mut settings.layout else {
+            unreachable!("Mountain Range is Macro");
+        };
+        layout.walker_connections = vec![
+            MacroWalkerConnectionSettings {
+                first_instance: "hills-center".to_owned(),
+                second_instance: "hills-lower".to_owned(),
+                width: 4,
+                level: 150,
+            },
+            MacroWalkerConnectionSettings {
+                first_instance: "hills-upper".to_owned(),
+                second_instance: "hills-upper-outer".to_owned(),
+                width: 2,
+                level: 24,
+            },
+        ];
+        layout.spanning_features = vec![
+            MacroSpanningFeatureSettings::Tunnel(MacroTunnelSettings {
+                name: "crystal_mountain.tunnel".to_owned(),
+                canonical_route: false,
+                instance_route: ["hills-lower-outer", "hills-lower", "hills-center"]
+                    .map(str::to_owned)
+                    .to_vec(),
+                boundary_terminal: MacroBoundaryTerminalSettings {
+                    instance: "hills-lower-outer".to_owned(),
+                    side: MacroBoundarySideSettings::NorthWest,
+                },
+                destination_anchor: MacroAnchorReferenceSettings {
+                    instance: "hills-center".to_owned(),
+                    anchor: "crystal_ascent.lower_entry".to_owned(),
+                },
+                floor_level: 6,
+                width: 4,
+                clearance: 6,
+                roof_thickness: 3,
+            }),
+            MacroSpanningFeatureSettings::Tunnel(MacroTunnelSettings {
+                name: "review.secondary".to_owned(),
+                canonical_route: false,
+                instance_route: ["hills-upper-outer", "hills-upper"]
+                    .map(str::to_owned)
+                    .to_vec(),
+                boundary_terminal: MacroBoundaryTerminalSettings {
+                    instance: "hills-upper-outer".to_owned(),
+                    side: MacroBoundarySideSettings::SouthEast,
+                },
+                destination_anchor: MacroAnchorReferenceSettings {
+                    instance: "hills-upper".to_owned(),
+                    anchor: "review.destination".to_owned(),
+                },
+                floor_level: 7,
+                width: 2,
+                clearance: 3,
+                roof_thickness: 2,
+            }),
+        ];
+        layout.anchor_aliases = vec![
+            MacroAnchorAliasSettings {
+                alias: "crystal_mountain.ascent_threshold".to_owned(),
+                instance: "hills-center".to_owned(),
+                anchor: "crystal_ascent.lower_entry".to_owned(),
+            },
+            MacroAnchorAliasSettings {
+                alias: "crystal_mountain.ridge".to_owned(),
+                instance: "hills-upper".to_owned(),
+                anchor: "ridge".to_owned(),
+            },
+        ];
+        let baseline = settings_fingerprint(radius, level_height, &settings)
+            .expect("extended Macro settings encode");
+
+        let mut reordered = settings.clone();
+        let V3LayoutSettings::Macro(reordered_layout) = &mut reordered.layout else {
+            unreachable!("reordered fixture remains Macro");
+        };
+        reordered_layout.walker_connections.reverse();
+        for walker in &mut reordered_layout.walker_connections {
+            std::mem::swap(&mut walker.first_instance, &mut walker.second_instance);
+        }
+        reordered_layout.spanning_features.reverse();
+        reordered_layout.anchor_aliases.reverse();
+        assert_eq!(
+            baseline,
+            settings_fingerprint(radius, level_height, &reordered)
+                .expect("reordered Macro settings encode"),
+            "unordered extension collections and unordered walker endpoints canonicalize"
+        );
+
+        let mut changed_walker = settings.clone();
+        let V3LayoutSettings::Macro(layout) = &mut changed_walker.layout else {
+            unreachable!();
+        };
+        layout
+            .walker_connections
+            .first_mut()
+            .expect("fixture has explicit walkers")
+            .level += 1;
+        assert_ne!(
+            baseline,
+            settings_fingerprint(radius, level_height, &changed_walker).expect("settings encode")
+        );
+
+        let mut changed_tunnel = settings.clone();
+        let V3LayoutSettings::Macro(layout) = &mut changed_tunnel.layout else {
+            unreachable!();
+        };
+        let MacroSpanningFeatureSettings::Tunnel(tunnel) = layout
+            .spanning_features
+            .first_mut()
+            .expect("fixture has spanning features");
+        tunnel.roof_thickness += 1;
+        assert_ne!(
+            baseline,
+            settings_fingerprint(radius, level_height, &changed_tunnel).expect("settings encode")
+        );
+
+        let mut changed_alias = settings.clone();
+        let V3LayoutSettings::Macro(layout) = &mut changed_alias.layout else {
+            unreachable!();
+        };
+        layout
+            .anchor_aliases
+            .first_mut()
+            .expect("fixture has anchor aliases")
+            .anchor
+            .push_str(".changed");
+        assert_ne!(
+            baseline,
+            settings_fingerprint(radius, level_height, &changed_alias).expect("settings encode")
+        );
+
+        assert_eq!(MACRO_EXTENSION_TAG, 128);
+        assert_eq!(MACRO_EXTENSION_VERSION, 1);
+        assert_eq!(
+            [
+                MacroBoundarySideSettings::East,
+                MacroBoundarySideSettings::SouthEast,
+                MacroBoundarySideSettings::SouthWest,
+                MacroBoundarySideSettings::West,
+                MacroBoundarySideSettings::NorthWest,
+                MacroBoundarySideSettings::NorthEast,
+            ]
+            .map(macro_boundary_side_tag),
+            [0, 1, 2, 3, 4, 5]
+        );
     }
 
     #[test]

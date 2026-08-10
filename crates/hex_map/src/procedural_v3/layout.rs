@@ -13,12 +13,12 @@ use hex_core::{BiomeRegionId, HexCoord, Level};
 use crate::settings::{
     ordered_simple_seam_lanes, ring19_region_coord, seam_approaches_are_independent,
     EdgeElevationSettings, EdgeLiquidPortSettings, EdgeLiquidSettings, MacroAccessSettings,
-    MacroAxisSettings, MacroBiomeInstanceSettings, MacroLayoutSettings,
-    MacroLiquidConnectionSettings, PatchEdgeContractSettings, PatchEdgesSettings,
-    PatchMaskSettings, PatchSpec, ProceduralV3Settings, Ring19BoundarySide, SharedEdgeSettings,
-    V3LayoutSettings, V3RecipeSettings, V3Ring19Settings, V3Ring7Settings, WalkerPortSettings,
-    MAX_SEAM_PORT_WIDTH, MAX_V3_LEVEL, MAX_WALKER_PORT_COUNT, V3_MACRO_CELL_COUNT,
-    V3_RING19_REGION_COUNT,
+    MacroAxisSettings, MacroBiomeInstanceSettings, MacroBoundarySideSettings, MacroLayoutSettings,
+    MacroLiquidConnectionSettings, MacroSpanningFeatureSettings, PatchEdgeContractSettings,
+    PatchEdgesSettings, PatchMaskSettings, PatchSpec, ProceduralV3Settings, Ring19BoundarySide,
+    SharedEdgeSettings, V3LayoutSettings, V3RecipeSettings, V3Ring19Settings, V3Ring7Settings,
+    WalkerPortSettings, MAX_SEAM_PORT_WIDTH, MAX_V3_LEVEL, MAX_WALKER_PORT_COUNT,
+    V3_MACRO_CELL_COUNT, V3_RING19_REGION_COUNT,
 };
 
 const RING_RADIUS: u32 = 33;
@@ -27,6 +27,7 @@ const RING19_RADIUS: u32 = 55;
 const MACRO_RADIUS: u32 = 77;
 const MACRO_CELL_RADIUS: u32 = 3;
 const MACRO_CELL_OFFSET: i32 = 22;
+const CRYSTAL_ASCENT_SITE_RADIUS: u32 = 32;
 pub(crate) const RING19_LOCAL_FRAME_SCALE: u32 = 12;
 
 /// Stable complete-world layout family.
@@ -198,6 +199,69 @@ pub(crate) struct ResolvedPatch {
     pub(crate) rotation_turns: u8,
     pub(crate) mask: BTreeSet<HexCoord>,
     pub(crate) edges: BTreeMap<HexSide, ResolvedEdgeReference>,
+}
+
+/// Exact resolved vocabulary owned by Macro extensions rather than patch recipes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedMacroContracts {
+    pub(crate) walker_connections: Vec<ResolvedMacroWalkerConnection>,
+    pub(crate) spanning_features: BTreeMap<String, ResolvedMacroSpanningFeature>,
+    pub(crate) anchor_aliases: BTreeMap<String, ResolvedMacroAnchorReference>,
+}
+
+/// One explicit surface aperture oriented in authored instance order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedMacroWalkerConnection {
+    pub(crate) first: PatchId,
+    pub(crate) second: PatchId,
+    pub(crate) level: Level,
+    pub(crate) port: ResolvedPort,
+}
+
+/// One exact whole-world feature after instance and seam resolution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ResolvedMacroSpanningFeature {
+    Tunnel(ResolvedMacroTunnel),
+}
+
+/// One exact level tunnel from an outer-world terminal through ordered instance seams.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedMacroTunnel {
+    pub(crate) name: String,
+    pub(crate) canonical_route: bool,
+    pub(crate) instance_route: Vec<PatchId>,
+    pub(crate) boundary_terminal: ResolvedMacroBoundaryTerminal,
+    pub(crate) destination_anchor: ResolvedMacroAnchorReference,
+    pub(crate) floor_level: Level,
+    pub(crate) width: u32,
+    pub(crate) clearance: u32,
+    pub(crate) roof_thickness: u32,
+    /// Ordered exact seam apertures, one fewer than `instance_route`.
+    pub(crate) seams: Vec<ResolvedMacroSubsurfaceSeam>,
+}
+
+/// One exact world-boundary aperture oriented inside-to-outside.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedMacroBoundaryTerminal {
+    pub(crate) instance: PatchId,
+    pub(crate) side: HexSide,
+    pub(crate) lanes: BTreeSet<(HexCoord, HexCoord)>,
+    pub(crate) inward_approach: BTreeSet<HexCoord>,
+}
+
+/// One exact tunnel seam oriented from the preceding route instance to the next.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedMacroSubsurfaceSeam {
+    pub(crate) source: PatchId,
+    pub(crate) destination: PatchId,
+    pub(crate) port: ResolvedPort,
+}
+
+/// One instance-local anchor reference after logical-name resolution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedMacroAnchorReference {
+    pub(crate) instance: PatchId,
+    pub(crate) anchor: String,
 }
 
 /// Complete mask and seam topology consumed by candidate recipes.
@@ -881,6 +945,8 @@ fn resolve_macro(
         );
     }
 
+    claim_macro_landmark_masks(settings, &footprint, &mut masks, &mut patches)?;
+
     let named_ids = settings
         .instances
         .iter()
@@ -924,6 +990,18 @@ fn resolve_macro(
             Some(ordered_patch_pair(*first, *second))
         })
         .collect::<BTreeSet<_>>();
+    let explicit_walker_pairs = settings
+        .walker_connections
+        .iter()
+        .filter_map(|connection| {
+            let first = named_ids.get(connection.first_instance.as_str())?;
+            let second = named_ids.get(connection.second_instance.as_str())?;
+            Some((
+                ordered_patch_pair(*first, *second),
+                (connection.width, connection.level),
+            ))
+        })
+        .collect::<BTreeMap<_, _>>();
 
     let mut shared_edges = BTreeMap::new();
     for (first_index, first_instance) in settings.instances.iter().enumerate() {
@@ -950,7 +1028,25 @@ fn resolve_macro(
             let second_side = first_side.opposite();
             let pair = ordered_patch_pair(first_id, second_id);
             let liquid = liquids.get(&pair).copied();
-            let walker_connection = critical_walker_pairs.contains(&pair);
+            let (walker, exact_walker_level) = explicit_walker_pairs.get(&pair).map_or_else(
+                || {
+                    let walker = if critical_walker_pairs.contains(&pair) {
+                        WalkerPortSettings { count: 1, width: 2 }
+                    } else {
+                        WalkerPortSettings { count: 0, width: 0 }
+                    };
+                    (walker, None)
+                },
+                |(width, level)| {
+                    (
+                        WalkerPortSettings {
+                            count: 1,
+                            width: *width,
+                        },
+                        Some(*level),
+                    )
+                },
+            );
             let (first_authored, second_authored, exact_liquid_level) = macro_shared_settings(
                 first_id,
                 first_side,
@@ -959,7 +1055,8 @@ fn resolve_macro(
                 second_side,
                 second_instance,
                 settings.approach_depth,
-                walker_connection,
+                walker,
+                exact_walker_level,
                 liquid,
             );
             let mut contract = resolve_shared_edge_with_pairs(
@@ -986,14 +1083,510 @@ fn resolve_macro(
         }
     }
 
-    Ok(ResolvedLayoutPlan {
+    let resolved = ResolvedLayoutPlan {
         kind: LayoutKind::Macro,
         grid_radius,
         footprint,
         patches,
         shared_edges,
         boundary_liquid_outlets: BTreeMap::new(),
+    };
+    resolve_macro_contracts(settings, &resolved)?;
+    Ok(resolved)
+}
+
+/// Applies exact authored landmark claims before shared seams are constructed.
+///
+/// Atomic Macro cells remain the designer-facing ownership graph. Crystal Ascent's
+/// authored radius-32 site is slightly larger than the nearest-center union of its
+/// central seven cells, so the missing fringe columns are transferred from their
+/// current owners here. Doing this before seam resolution keeps every boundary pair,
+/// surface port, and subsurface port authoritative for the final masks.
+fn claim_macro_landmark_masks(
+    settings: &MacroLayoutSettings,
+    footprint: &BTreeSet<HexCoord>,
+    masks: &mut BTreeMap<PatchId, BTreeSet<HexCoord>>,
+    patches: &mut BTreeMap<PatchId, ResolvedPatch>,
+) -> Result<(), LayoutValidationError> {
+    let crystal_instances = settings
+        .instances
+        .iter()
+        .enumerate()
+        .filter(|(_, instance)| matches!(instance.recipe, V3RecipeSettings::CrystalAscent(_)))
+        .map(|(index, _)| PatchId(u32::try_from(index).unwrap_or(u32::MAX)))
+        .collect::<Vec<_>>();
+    let Some(crystal_id) = crystal_instances.first().copied() else {
+        return Ok(());
+    };
+    if crystal_instances.len() != 1 {
+        return Err(invalid_macro_contract(
+            "Macro supports exactly one CrystalAscent landmark claim",
+        ));
+    }
+    let central_seven = HexCoord::ORIGIN
+        .within_radius(1)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let authored_cells = settings
+        .instances
+        .get(usize::try_from(crystal_id.0).unwrap_or(usize::MAX))
+        .map(|instance| {
+            instance
+                .cells
+                .iter()
+                .filter_map(|cell| HexCoord::try_new_cubic(cell.x, cell.y, cell.z))
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    if authored_cells != central_seven {
+        return Err(invalid_macro_contract(
+            "CrystalAscent must own exactly Macro's central seven atomic cells",
+        ));
+    }
+
+    let claim = HexCoord::ORIGIN
+        .within_radius(CRYSTAL_ASCENT_SITE_RADIUS)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    if !claim.is_subset(footprint) {
+        return Err(invalid_macro_contract(
+            "CrystalAscent radius-32 claim falls outside the Macro footprint",
+        ));
+    }
+
+    let mut owner_by_coord = masks
+        .iter()
+        .flat_map(|(id, mask)| mask.iter().map(move |coord| (*coord, *id)))
+        .collect::<BTreeMap<_, _>>();
+    for coord in claim {
+        let Some(owner) = owner_by_coord.get(&coord).copied() else {
+            return Err(invalid_macro_contract(format!(
+                "CrystalAscent claim column {coord:?} has no Macro owner"
+            )));
+        };
+        if owner == crystal_id {
+            continue;
+        }
+        let removed = masks
+            .get_mut(&owner)
+            .is_some_and(|mask| mask.remove(&coord));
+        if !removed {
+            return Err(invalid_macro_contract(format!(
+                "CrystalAscent claim column {coord:?} could not be removed from {owner:?}"
+            )));
+        }
+        masks.entry(crystal_id).or_default().insert(coord);
+        owner_by_coord.insert(coord, crystal_id);
+    }
+
+    let mut covered = BTreeSet::new();
+    for (id, mask) in &*masks {
+        if mask.is_empty() || !connected(mask) {
+            return Err(invalid_macro_contract(format!(
+                "CrystalAscent radius-32 claim disconnects or empties donor patch {id:?}"
+            )));
+        }
+        for coord in mask {
+            if !covered.insert(*coord) {
+                return Err(invalid_macro_contract(format!(
+                    "CrystalAscent radius-32 claim overlaps column {coord:?}"
+                )));
+            }
+        }
+    }
+    if covered != *footprint {
+        return Err(invalid_macro_contract(
+            "CrystalAscent radius-32 claim does not preserve complete Macro coverage",
+        ));
+    }
+
+    for (id, mask) in &*masks {
+        let patch = patches.get_mut(id).ok_or_else(|| {
+            invalid_macro_contract(format!(
+                "CrystalAscent radius-32 claim has no resolved patch for {id:?}"
+            ))
+        })?;
+        patch.mask.clone_from(mask);
+    }
+    Ok(())
+}
+
+/// Resolves Macro-only surface, subsurface, and anchor contracts against current masks.
+///
+/// This remains separate from `ResolvedLayoutPlan` so a composed landmark may adjust
+/// exact mask ownership and then resolve the same authored contracts again without
+/// reconstructing seam geometry in the composition layer.
+pub(crate) fn resolve_macro_contracts(
+    settings: &MacroLayoutSettings,
+    layout: &ResolvedLayoutPlan,
+) -> Result<ResolvedMacroContracts, LayoutValidationError> {
+    if layout.kind != LayoutKind::Macro {
+        return Err(invalid_macro_contract(
+            "Macro contracts require a resolved Macro layout",
+        ));
+    }
+    let named_ids = settings
+        .instances
+        .iter()
+        .enumerate()
+        .map(|(index, instance)| {
+            (
+                instance.name.as_str(),
+                PatchId(u32::try_from(index).unwrap_or(u32::MAX)),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    let mut walker_settings = settings.walker_connections.clone();
+    walker_settings.sort_unstable();
+    let mut walker_connections = Vec::with_capacity(walker_settings.len());
+    for connection in walker_settings {
+        let authored_first =
+            macro_named_patch(&named_ids, &connection.first_instance, "walker connection")?;
+        let authored_second =
+            macro_named_patch(&named_ids, &connection.second_instance, "walker connection")?;
+        let (first, second) = ordered_patch_pair(authored_first, authored_second);
+        let port = resolved_explicit_macro_walker_port(
+            layout,
+            first,
+            second,
+            connection.width,
+            connection.level,
+        )?;
+        walker_connections.push(ResolvedMacroWalkerConnection {
+            first,
+            second,
+            level: connection.level,
+            port,
+        });
+    }
+
+    let mut feature_settings = settings.spanning_features.clone();
+    feature_settings.sort_unstable();
+    let mut spanning_features = BTreeMap::new();
+    for feature in feature_settings {
+        let MacroSpanningFeatureSettings::Tunnel(tunnel) = feature;
+        let boundary_instance = macro_named_patch(
+            &named_ids,
+            &tunnel.boundary_terminal.instance,
+            "tunnel boundary terminal",
+        )?;
+        let boundary_terminal = resolve_macro_boundary_terminal(
+            layout,
+            boundary_instance,
+            macro_boundary_side(tunnel.boundary_terminal.side),
+            tunnel.width,
+            settings.approach_depth,
+        )?;
+        let instance_route = tunnel
+            .instance_route
+            .iter()
+            .map(|name| macro_named_patch(&named_ids, name, "tunnel instance route"))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut previous = boundary_terminal
+            .lanes
+            .iter()
+            .map(|(inside, _)| *inside)
+            .collect::<BTreeSet<_>>();
+        let mut seams = Vec::with_capacity(instance_route.len().saturating_sub(1));
+        for pair in instance_route.windows(2) {
+            let Some(source) = pair.first().copied() else {
+                continue;
+            };
+            let Some(destination) = pair.get(1).copied() else {
+                continue;
+            };
+            let port = resolve_exact_macro_seam_port(
+                layout,
+                source,
+                destination,
+                tunnel.width,
+                settings.approach_depth,
+                Some(&previous),
+            )?;
+            previous = port
+                .lanes
+                .iter()
+                .map(|(_, destination)| *destination)
+                .collect();
+            seams.push(ResolvedMacroSubsurfaceSeam {
+                source,
+                destination,
+                port,
+            });
+        }
+        let destination_anchor = ResolvedMacroAnchorReference {
+            instance: macro_named_patch(
+                &named_ids,
+                &tunnel.destination_anchor.instance,
+                "tunnel destination anchor",
+            )?,
+            anchor: tunnel.destination_anchor.anchor,
+        };
+        let name = tunnel.name;
+        let resolved = ResolvedMacroSpanningFeature::Tunnel(ResolvedMacroTunnel {
+            name: name.clone(),
+            canonical_route: tunnel.canonical_route,
+            instance_route,
+            boundary_terminal,
+            destination_anchor,
+            floor_level: tunnel.floor_level,
+            width: tunnel.width,
+            clearance: tunnel.clearance,
+            roof_thickness: tunnel.roof_thickness,
+            seams,
+        });
+        if spanning_features.insert(name.clone(), resolved).is_some() {
+            return Err(invalid_macro_contract(format!(
+                "duplicate resolved spanning-feature name {name:?}"
+            )));
+        }
+    }
+
+    let mut alias_settings = settings.anchor_aliases.clone();
+    alias_settings.sort_unstable();
+    let mut anchor_aliases = BTreeMap::new();
+    for alias in alias_settings {
+        let reference = ResolvedMacroAnchorReference {
+            instance: macro_named_patch(&named_ids, &alias.instance, "anchor alias")?,
+            anchor: alias.anchor,
+        };
+        if anchor_aliases
+            .insert(alias.alias.clone(), reference)
+            .is_some()
+        {
+            return Err(invalid_macro_contract(format!(
+                "duplicate resolved anchor alias {:?}",
+                alias.alias
+            )));
+        }
+    }
+
+    Ok(ResolvedMacroContracts {
+        walker_connections,
+        spanning_features,
+        anchor_aliases,
     })
+}
+
+fn macro_named_patch(
+    named_ids: &BTreeMap<&str, PatchId>,
+    name: &str,
+    label: &str,
+) -> Result<PatchId, LayoutValidationError> {
+    named_ids.get(name).copied().ok_or_else(|| {
+        invalid_macro_contract(format!("{label} references unknown instance {name:?}"))
+    })
+}
+
+fn invalid_macro_contract(message: impl Into<String>) -> LayoutValidationError {
+    LayoutValidationError::one(LayoutIssue::InvalidMacroSettings(message.into()))
+}
+
+fn resolved_explicit_macro_walker_port(
+    layout: &ResolvedLayoutPlan,
+    first: PatchId,
+    second: PatchId,
+    width: u32,
+    level: Level,
+) -> Result<ResolvedPort, LayoutValidationError> {
+    let pair = ordered_patch_pair(first, second);
+    let matching = layout
+        .shared_edges
+        .values()
+        .filter(|edge| ordered_patch_pair(edge.first.0, edge.second.0) == pair)
+        .collect::<Vec<_>>();
+    let [edge] = matching.as_slice() else {
+        return Err(invalid_macro_contract(format!(
+            "explicit walker {first:?} <-> {second:?} must resolve exactly one shared edge"
+        )));
+    };
+    if edge.walker.count != 1
+        || edge.walker.width != width
+        || edge.walker.ports.len() != 1
+        || edge.elevation
+            != (ResolvedElevationBand {
+                preferred: level,
+                min: level,
+                max: level,
+            })
+    {
+        return Err(invalid_macro_contract(format!(
+            "explicit walker {first:?} <-> {second:?} disagrees with its resolved width-{width}, level-{level} shared-edge contract"
+        )));
+    }
+    edge.walker.ports.first().cloned().ok_or_else(|| {
+        invalid_macro_contract(format!(
+            "explicit walker {first:?} <-> {second:?} has no resolved surface port"
+        ))
+    })
+}
+
+fn resolve_exact_macro_seam_port(
+    layout: &ResolvedLayoutPlan,
+    source: PatchId,
+    destination: PatchId,
+    width: u32,
+    approach_depth: u32,
+    previous: Option<&BTreeSet<HexCoord>>,
+) -> Result<ResolvedPort, LayoutValidationError> {
+    let source_mask = layout
+        .patches
+        .get(&source)
+        .map(|patch| &patch.mask)
+        .ok_or_else(|| invalid_macro_contract(format!("missing source patch {source:?}")))?;
+    let destination_mask = layout
+        .patches
+        .get(&destination)
+        .map(|patch| &patch.mask)
+        .ok_or_else(|| {
+            invalid_macro_contract(format!("missing destination patch {destination:?}"))
+        })?;
+    let pairs = boundary_pairs(source_mask, destination_mask);
+    let candidates = macro_boundary_port_candidates(
+        &pairs,
+        source_mask,
+        destination_mask,
+        width,
+        approach_depth,
+        &layout.footprint,
+    );
+    let selected = candidates.into_iter().min_by(|first, second| {
+        macro_candidate_route_score(&first.port, previous)
+            .cmp(&macro_candidate_route_score(&second.port, previous))
+            .then_with(|| first.port.cmp(&second.port))
+    });
+    selected.map(|candidate| candidate.port).ok_or_else(|| {
+        invalid_macro_contract(format!(
+            "instances {source:?} and {destination:?} cannot resolve one width-{width} exact seam port"
+        ))
+    })
+}
+
+fn macro_candidate_route_score(
+    port: &ResolvedPort,
+    previous: Option<&BTreeSet<HexCoord>>,
+) -> (u32, u64) {
+    let Some(previous) = previous.filter(|points| !points.is_empty()) else {
+        let lane_bias = port
+            .lanes
+            .iter()
+            .map(|(source, _)| source.distance(HexCoord::ORIGIN))
+            .sum::<u32>();
+        return (0, u64::from(lane_bias));
+    };
+    let distances = port
+        .lanes
+        .iter()
+        .map(|(source, _)| {
+            previous
+                .iter()
+                .map(|prior| source.distance(*prior))
+                .min()
+                .unwrap_or(u32::MAX)
+        })
+        .collect::<Vec<_>>();
+    (
+        distances.iter().copied().max().unwrap_or(u32::MAX),
+        distances.iter().map(|distance| u64::from(*distance)).sum(),
+    )
+}
+
+fn resolve_macro_boundary_terminal(
+    layout: &ResolvedLayoutPlan,
+    instance: PatchId,
+    side: HexSide,
+    width: u32,
+    approach_depth: u32,
+) -> Result<ResolvedMacroBoundaryTerminal, LayoutValidationError> {
+    let mask = layout
+        .patches
+        .get(&instance)
+        .map(|patch| &patch.mask)
+        .ok_or_else(|| invalid_macro_contract(format!("missing boundary patch {instance:?}")))?;
+    let boundary = mask
+        .iter()
+        .copied()
+        .filter_map(|inside| {
+            let outside = side.neighbor(inside);
+            (!layout.footprint.contains(&outside)).then_some((inside, outside))
+        })
+        .collect::<BTreeSet<_>>();
+    let ordered = ordered_simple_seam_lanes(&boundary).ok_or_else(|| {
+        invalid_macro_contract(format!(
+            "patch {instance:?} has no simple outer boundary on {side:?}"
+        ))
+    })?;
+    let width = usize::try_from(width).map_err(|error| {
+        invalid_macro_contract(format!("boundary width does not fit usize: {error}"))
+    })?;
+    let mut boundary_anchor = HexCoord::ORIGIN;
+    while layout.footprint.contains(&side.neighbor(boundary_anchor)) {
+        boundary_anchor = side.neighbor(boundary_anchor);
+    }
+    let candidate = ordered
+        .windows(width)
+        .filter_map(|window| {
+            let lanes = window.iter().copied().collect::<BTreeSet<_>>();
+            let inside = lanes
+                .iter()
+                .map(|(coord, _)| *coord)
+                .collect::<BTreeSet<_>>();
+            let inward_approach =
+                approach_corridor(&inside, mask, side.opposite(), approach_depth)?;
+            if boundary_outlet_touches_other_patch(
+                &inside,
+                &inward_approach,
+                mask,
+                &layout.footprint,
+            ) {
+                return None;
+            }
+            let maximum_anchor_distance = inside
+                .iter()
+                .map(|coord| coord.distance(boundary_anchor))
+                .max()
+                .unwrap_or_default();
+            let total_anchor_distance = inside
+                .iter()
+                .map(|coord| coord.distance(boundary_anchor))
+                .sum::<u32>();
+            Some((
+                maximum_anchor_distance,
+                total_anchor_distance,
+                lanes,
+                inward_approach,
+            ))
+        })
+        .min_by(|first, second| {
+            first
+                .0
+                .cmp(&second.0)
+                .then_with(|| first.1.cmp(&second.1))
+                .then_with(|| first.2.cmp(&second.2))
+        });
+    let Some((_, _, lanes, inward_approach)) = candidate else {
+        return Err(invalid_macro_contract(format!(
+            "patch {instance:?} cannot resolve one width-{width} boundary terminal on {side:?}"
+        )));
+    };
+    Ok(ResolvedMacroBoundaryTerminal {
+        instance,
+        side,
+        lanes,
+        inward_approach,
+    })
+}
+
+const fn macro_boundary_side(side: MacroBoundarySideSettings) -> HexSide {
+    match side {
+        MacroBoundarySideSettings::East => HexSide::East,
+        MacroBoundarySideSettings::SouthEast => HexSide::SouthEast,
+        MacroBoundarySideSettings::SouthWest => HexSide::SouthWest,
+        MacroBoundarySideSettings::West => HexSide::West,
+        MacroBoundarySideSettings::NorthWest => HexSide::NorthWest,
+        MacroBoundarySideSettings::NorthEast => HexSide::NorthEast,
+    }
 }
 
 fn representative_boundary_side(pairs: &BTreeSet<(HexCoord, HexCoord)>) -> Option<HexSide> {
@@ -1018,7 +1611,8 @@ fn macro_shared_settings(
     second_side: HexSide,
     second: &MacroBiomeInstanceSettings,
     approach_depth: u32,
-    walker_connection: bool,
+    walker: WalkerPortSettings,
+    exact_walker_level: Option<Level>,
     liquid: Option<&MacroLiquidConnectionSettings>,
 ) -> (
     PatchEdgeContractSettings,
@@ -1058,25 +1652,34 @@ fn macro_shared_settings(
     } else {
         None
     };
-    let preferred = if let Some(shared_step) = shared_alpine_step {
+    let preferred = if let Some(exact) = exact_walker_level {
+        exact
+    } else if let Some(shared_step) = shared_alpine_step {
         shared_step
     } else if let Some(buttress) = deep_mountain_buttress {
         buttress
-    } else if walker_connection {
+    } else if walker.count > 0 {
         first_datum.max(second_datum)
     } else {
         (first_datum + second_datum) / 2
     };
-    let elevation = EdgeElevationSettings {
-        preferred,
-        min: preferred.saturating_sub(1),
-        max: preferred.saturating_add(1).min(MAX_V3_LEVEL),
-    };
-    let land_connection = walker_connection
+    let elevation = exact_walker_level.map_or(
+        EdgeElevationSettings {
+            preferred,
+            min: preferred.saturating_sub(1),
+            max: preferred.saturating_add(1).min(MAX_V3_LEVEL),
+        },
+        |level| EdgeElevationSettings {
+            preferred: level,
+            min: level,
+            max: level,
+        },
+    );
+    let land_connection = walker.count > 0
         && matches!(first.access, MacroAccessSettings::Land)
         && matches!(second.access, MacroAccessSettings::Land);
     let walker = if land_connection {
-        WalkerPortSettings { count: 1, width: 2 }
+        walker
     } else {
         WalkerPortSettings { count: 0, width: 0 }
     };
@@ -2975,11 +3578,14 @@ impl std::error::Error for LayoutValidationError {}
 mod tests {
     use super::*;
     use crate::settings::{
-        EdgeElevationSettings, EdgeLiquidPortSettings, MapSettings, PatchEdgesSettings,
-        ProceduralSettings, Ring19BoundaryOutletSettings, Ring19LiquidConnectionSettings,
-        Ring19RegionSettings, TerrainSettings, V3CavesSettings, V3EnvironmentSettings,
-        V3ForestSettings, V3FortSettings, V3HillsSettings, V3MountainsSettings, V3RecipeSettings,
-        V3Ring19Settings, V3SkyIslandsSettings, V3WaterfallSettings, WalkerPortSettings,
+        CubeCoord, EdgeElevationSettings, EdgeLiquidPortSettings, MacroAnchorAliasSettings,
+        MacroAnchorReferenceSettings, MacroBoundarySideSettings, MacroBoundaryTerminalSettings,
+        MacroSpanningFeatureSettings, MacroTunnelSettings, MacroWalkerConnectionSettings,
+        MapSettings, PatchEdgesSettings, ProceduralSettings, Ring19BoundaryOutletSettings,
+        Ring19LiquidConnectionSettings, Ring19RegionSettings, TerrainSettings, V3CavesSettings,
+        V3CrystalAscentSettings, V3EnvironmentSettings, V3ForestSettings, V3FortSettings,
+        V3HillsSettings, V3MountainsSettings, V3RecipeSettings, V3Ring19Settings,
+        V3SkyIslandsSettings, V3WaterfallSettings, WalkerPortSettings,
     };
 
     const MOUNTAIN_RANGE_RON: &str =
@@ -2991,6 +3597,55 @@ mod tests {
         let TerrainSettings::Procedural(ProceduralSettings::V3(settings)) = settings.terrain else {
             panic!("shipped Mountain Range settings should use procedural V3");
         };
+        settings
+    }
+
+    fn crystal_ascent_macro_settings() -> ProceduralV3Settings {
+        let mut settings = mountain_range_settings();
+        let V3LayoutSettings::Macro(layout) = &mut settings.layout else {
+            unreachable!("Mountain Range helper must return a Macro layout");
+        };
+        let central_cells = HexCoord::ORIGIN
+            .within_radius(1)
+            .into_iter()
+            .map(|coord| {
+                let [x, y, z] = coord.to_cubic_array();
+                CubeCoord { x, y, z }
+            })
+            .collect::<Vec<_>>();
+        let central_tuples = central_cells
+            .iter()
+            .map(|coord| (coord.x, coord.y, coord.z))
+            .collect::<BTreeSet<_>>();
+        for instance in &mut layout.instances {
+            instance
+                .cells
+                .retain(|cell| !central_tuples.contains(&(cell.x, cell.y, cell.z)));
+        }
+        layout
+            .instances
+            .retain(|instance| instance.name == "hills-center" || !instance.cells.is_empty());
+        let crystal = layout
+            .instances
+            .iter_mut()
+            .find(|instance| instance.name == "hills-center")
+            .expect("the fixture retains the central instance");
+        crystal.cells = central_cells;
+        crystal.recipe = V3RecipeSettings::CrystalAscent(V3CrystalAscentSettings {
+            base_level: 6,
+            rise_levels: 144,
+        });
+        crystal.elevation.low = 6;
+        crystal.elevation.high = 150;
+        layout.liquid_connections.clear();
+        layout.headwaters.clear();
+        layout.walker_connections.clear();
+        layout.spanning_features.clear();
+        layout.anchor_aliases.clear();
+        layout.critical_route = vec![
+            "hills-lower-outer".to_owned(),
+            "mountains-tier1-lower-outer".to_owned(),
+        ];
         settings
     }
 
@@ -3365,6 +4020,223 @@ mod tests {
         assert!(
             segments_by_logical_side.values().any(|count| *count > 1),
             "one logical compass side must be able to retain several region-pair segments"
+        );
+    }
+
+    #[test]
+    fn crystal_ascent_claims_radius_32_before_macro_seams_are_resolved() {
+        let settings = crystal_ascent_macro_settings();
+        let V3LayoutSettings::Macro(macro_settings) = &settings.layout else {
+            unreachable!("Crystal Ascent fixture must use Macro");
+        };
+        let crystal_index = macro_settings
+            .instances
+            .iter()
+            .position(|instance| matches!(instance.recipe, V3RecipeSettings::CrystalAscent(_)))
+            .expect("fixture contains Crystal Ascent");
+        let crystal_settings = macro_settings
+            .instances
+            .get(crystal_index)
+            .expect("resolved Crystal Ascent index exists");
+        assert_eq!(
+            crystal_settings
+                .cells
+                .iter()
+                .map(|cell| (cell.x, cell.y, cell.z))
+                .collect::<BTreeSet<_>>(),
+            HexCoord::ORIGIN
+                .within_radius(1)
+                .into_iter()
+                .map(|coord| {
+                    let [x, y, z] = coord.to_cubic_array();
+                    (x, y, z)
+                })
+                .collect(),
+            "the logical landmark owns exactly Macro's central seven atomic cells"
+        );
+
+        let first = resolve_layout(MACRO_RADIUS, &settings)
+            .expect("the radius-32 landmark claim should preserve a valid Macro layout");
+        let second = resolve_layout(MACRO_RADIUS, &settings)
+            .expect("the radius-32 landmark claim should be deterministic");
+        assert_eq!(first, second);
+        assert!(first.validate().is_ok());
+        assert_eq!(first.footprint.len(), 18_019);
+        let crystal_id = PatchId(u32::try_from(crystal_index).expect("fixture index fits u32"));
+        let crystal_mask = &first
+            .patches
+            .get(&crystal_id)
+            .expect("Crystal Ascent patch resolves")
+            .mask;
+        let exact_site = HexCoord::ORIGIN
+            .within_radius(CRYSTAL_ASCENT_SITE_RADIUS)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        assert!(
+            exact_site.is_subset(crystal_mask),
+            "every authored radius-32 site column belongs to Crystal Ascent"
+        );
+        assert!(
+            first.patches.values().all(|patch| connected(&patch.mask)),
+            "the landmark claim must leave every donor mask connected and nonempty"
+        );
+        assert_eq!(
+            first
+                .patches
+                .values()
+                .map(|patch| patch.mask.len())
+                .sum::<usize>(),
+            18_019,
+            "the landmark claim preserves all 18,019 columns exactly once"
+        );
+        let covered = first
+            .patches
+            .values()
+            .flat_map(|patch| patch.mask.iter().copied())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(covered, first.footprint);
+        assert!(first.shared_edges.values().all(|edge| {
+            let first_patch = first
+                .patches
+                .get(&edge.first.0)
+                .expect("edge first patch exists");
+            let second_patch = first
+                .patches
+                .get(&edge.second.0)
+                .expect("edge second patch exists");
+            edge.boundary_pairs == boundary_pairs(&first_patch.mask, &second_patch.mask)
+        }));
+
+        let mut invalid = settings.clone();
+        let V3LayoutSettings::Macro(invalid_macro) = &mut invalid.layout else {
+            unreachable!("invalid fixture remains Macro");
+        };
+        invalid_macro
+            .instances
+            .iter_mut()
+            .find(|instance| matches!(instance.recipe, V3RecipeSettings::CrystalAscent(_)))
+            .expect("invalid fixture retains Crystal Ascent")
+            .cells
+            .pop();
+        let error = resolve_layout(MACRO_RADIUS, &invalid)
+            .expect_err("a remote or partial atomic claim must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("must own exactly Macro's central seven atomic cells"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn explicit_macro_walker_reuses_shared_edge_while_tunnel_ports_stay_subsurface() {
+        let mut settings = crystal_ascent_macro_settings();
+        let V3LayoutSettings::Macro(macro_settings) = &mut settings.layout else {
+            unreachable!("Crystal Ascent fixture must use Macro");
+        };
+        macro_settings.walker_connections = vec![MacroWalkerConnectionSettings {
+            first_instance: "hills-center".to_owned(),
+            second_instance: "hills-lower".to_owned(),
+            width: 4,
+            level: 150,
+        }];
+        macro_settings.spanning_features =
+            vec![MacroSpanningFeatureSettings::Tunnel(MacroTunnelSettings {
+                name: "crystal_mountain.tunnel".to_owned(),
+                canonical_route: true,
+                instance_route: ["hills-lower-outer", "hills-lower", "hills-center"]
+                    .map(str::to_owned)
+                    .to_vec(),
+                boundary_terminal: MacroBoundaryTerminalSettings {
+                    instance: "hills-lower-outer".to_owned(),
+                    side: MacroBoundarySideSettings::NorthWest,
+                },
+                destination_anchor: MacroAnchorReferenceSettings {
+                    instance: "hills-center".to_owned(),
+                    anchor: "crystal_ascent.lower_entry".to_owned(),
+                },
+                floor_level: 6,
+                width: 4,
+                clearance: 6,
+                roof_thickness: 3,
+            })];
+        macro_settings.anchor_aliases = vec![MacroAnchorAliasSettings {
+            alias: "crystal_mountain.ascent_threshold".to_owned(),
+            instance: "hills-center".to_owned(),
+            anchor: "crystal_ascent.lower_entry".to_owned(),
+        }];
+        macro_settings.critical_route.clear();
+
+        let layout = resolve_layout(MACRO_RADIUS, &settings)
+            .expect("Crystal Mountain-style Macro contracts resolve");
+        let V3LayoutSettings::Macro(macro_settings) = &settings.layout else {
+            unreachable!("Crystal Ascent fixture must remain Macro");
+        };
+        let contracts = resolve_macro_contracts(macro_settings, &layout)
+            .expect("resolved extension contracts match the final masks");
+        let walker = contracts
+            .walker_connections
+            .first()
+            .expect("one explicit surface walker resolves");
+        assert_eq!(walker.level, 150);
+        assert_eq!(walker.port.lanes.len(), 4);
+        let matching_edge = layout
+            .shared_edges
+            .values()
+            .find(|edge| {
+                ordered_patch_pair(edge.first.0, edge.second.0)
+                    == ordered_patch_pair(walker.first, walker.second)
+            })
+            .expect("the explicit surface walker has one shared edge");
+        assert_eq!(matching_edge.walker.count, 1);
+        assert_eq!(matching_edge.walker.width, 4);
+        assert_eq!(
+            matching_edge.elevation,
+            ResolvedElevationBand {
+                preferred: 150,
+                min: 150,
+                max: 150,
+            }
+        );
+        assert_eq!(matching_edge.walker.ports.first(), Some(&walker.port));
+
+        let ResolvedMacroSpanningFeature::Tunnel(tunnel) = contracts
+            .spanning_features
+            .get("crystal_mountain.tunnel")
+            .expect("the named tunnel resolves");
+        assert_eq!(tunnel.seams.len(), 2);
+        assert!(tunnel.seams.iter().all(|seam| seam.port.lanes.len() == 4));
+        for seam in &tunnel.seams {
+            let edge = layout
+                .shared_edges
+                .values()
+                .find(|edge| {
+                    ordered_patch_pair(edge.first.0, edge.second.0)
+                        == ordered_patch_pair(seam.source, seam.destination)
+                })
+                .expect("each tunnel crossing also has a physical instance seam");
+            assert!(
+                edge.walker.ports.is_empty()
+                    || edge.walker.ports.iter().all(|port| port != &seam.port),
+                "subsurface tunnel lanes remain separate from ordinary surface ports"
+            );
+        }
+        assert_eq!(tunnel.floor_level, 6);
+        assert_eq!(tunnel.width, 4);
+        assert_eq!(tunnel.clearance, 6);
+        assert_eq!(tunnel.roof_thickness, 3);
+        assert_eq!(tunnel.boundary_terminal.lanes.len(), 4);
+        assert_eq!(
+            tunnel.destination_anchor.anchor,
+            "crystal_ascent.lower_entry"
+        );
+        assert_eq!(
+            contracts
+                .anchor_aliases
+                .get("crystal_mountain.ascent_threshold")
+                .expect("stable alias resolves")
+                .instance,
+            tunnel.destination_anchor.instance
         );
     }
 

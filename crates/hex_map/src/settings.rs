@@ -508,8 +508,111 @@ pub struct MacroLayoutSettings {
     /// Authored inland origins for directed rivers that would otherwise begin at a seam.
     #[serde(default)]
     pub headwaters: Vec<MacroHeadwaterSettings>,
+    /// Explicit ordinary surface apertures independent of the canonical route.
+    #[serde(default)]
+    pub walker_connections: Vec<MacroWalkerConnectionSettings>,
+    /// Whole-world features which cross one or more logical biome instances.
+    #[serde(default)]
+    pub spanning_features: Vec<MacroSpanningFeatureSettings>,
+    /// Stable world-level names for anchors produced inside logical instances.
+    #[serde(default)]
+    pub anchor_aliases: Vec<MacroAnchorAliasSettings>,
     /// Ordered logical instances crossed by the canonical ordinary-walker route.
     pub critical_route: Vec<String>,
+}
+
+/// One explicit ordinary surface aperture between adjacent Macro instances.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MacroWalkerConnectionSettings {
+    /// First logical instance name.
+    pub first_instance: String,
+    /// Second logical instance name.
+    pub second_instance: String,
+    /// Exact width of the single resolved surface aperture.
+    pub width: u32,
+    /// Exact shared support-surface level of the aperture.
+    pub level: Level,
+}
+
+/// One feature authored once across the complete Macro world.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+pub enum MacroSpanningFeatureSettings {
+    /// A roofed, level passage through an ordered sequence of instances.
+    Tunnel(MacroTunnelSettings),
+}
+
+/// Designer-facing contract for one cross-instance tunnel.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MacroTunnelSettings {
+    /// Stable feature name used by diagnostics, IDs, and fingerprints.
+    pub name: String,
+    /// Whether this feature replaces the legacy surface `critical_route`.
+    pub canonical_route: bool,
+    /// Ordered logical instances crossed from the world boundary to the destination.
+    pub instance_route: Vec<String>,
+    /// Exact outer-world side and owning instance for the entrance.
+    pub boundary_terminal: MacroBoundaryTerminalSettings,
+    /// Instance-local anchor where the tunnel terminates.
+    pub destination_anchor: MacroAnchorReferenceSettings,
+    /// Exact support-surface level throughout the tunnel.
+    pub floor_level: Level,
+    /// Exact lane count across every tunnel seam.
+    pub width: u32,
+    /// Number of clear voxel levels above the support surface.
+    pub clearance: u32,
+    /// Minimum number of solid voxel levels retained above the clearance.
+    pub roof_thickness: u32,
+}
+
+/// One Macro world-boundary terminal before exact lanes are resolved.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MacroBoundaryTerminalSettings {
+    /// Logical instance which owns the inside cells of the terminal.
+    pub instance: String,
+    /// Outer side through which the feature enters the complete world.
+    pub side: MacroBoundarySideSettings,
+}
+
+/// Clockwise world sides available to Macro boundary terminals.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+pub enum MacroBoundarySideSettings {
+    /// East.
+    East,
+    /// South-east.
+    SouthEast,
+    /// South-west.
+    SouthWest,
+    /// West.
+    West,
+    /// North-west.
+    NorthWest,
+    /// North-east.
+    NorthEast,
+}
+
+/// One anchor produced by a named Macro instance.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MacroAnchorReferenceSettings {
+    /// Logical instance which produces the anchor.
+    pub instance: String,
+    /// Stable instance-local anchor name.
+    pub anchor: String,
+}
+
+/// One stable world-level alias for an instance-local anchor.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MacroAnchorAliasSettings {
+    /// Stable world-level anchor name published to consumers.
+    pub alias: String,
+    /// Logical instance which produces the source anchor.
+    pub instance: String,
+    /// Stable instance-local source anchor name.
+    pub anchor: String,
 }
 
 /// One logical biome occupying one or more connected atomic macro cells.
@@ -1536,18 +1639,24 @@ impl MacroLayoutSettings {
                     instance.name
                 ));
             }
-            if matches!(instance.recipe, V3RecipeSettings::CrystalAscent(_)) {
-                return Err(format!(
-                    "V3 Macro instance {:?} uses CrystalAscent, whose union-mask implementation is unavailable",
-                    instance.name
-                ));
+            if let V3RecipeSettings::CrystalAscent(crystal_ascent) = &instance.recipe {
+                if instance.environment != V3EnvironmentSettings::TemperateGrassland {
+                    return Err(format!(
+                        "V3 Macro instance {:?}: V3 CrystalAscent requires the TemperateGrassland environment",
+                        instance.name
+                    ));
+                }
+                crystal_ascent
+                    .validate_landmark()
+                    .map_err(|error| format!("V3 Macro instance {:?}: {error}", instance.name))?;
+            } else {
+                validate_v3_recipe(
+                    &instance.recipe,
+                    instance.environment,
+                    MACRO_RECIPE_VALIDATION_RADIUS,
+                )
+                .map_err(|error| format!("V3 Macro instance {:?}: {error}", instance.name))?;
             }
-            validate_v3_recipe(
-                &instance.recipe,
-                instance.environment,
-                MACRO_RECIPE_VALIDATION_RADIUS,
-            )
-            .map_err(|error| format!("V3 Macro instance {:?}: {error}", instance.name))?;
             if !matches!(
                 &instance.recipe,
                 V3RecipeSettings::Hills(_)
@@ -1559,6 +1668,7 @@ impl MacroLayoutSettings {
                     | V3RecipeSettings::Beach(_)
                     | V3RecipeSettings::Shore(_)
                     | V3RecipeSettings::DeepMountain(_)
+                    | V3RecipeSettings::CrystalAscent(_)
             ) {
                 return Err(format!(
                     "V3 Macro instance {:?} uses a recipe whose union-mask implementation is unavailable",
@@ -1627,7 +1737,253 @@ impl MacroLayoutSettings {
         validate_macro_adjacency(&self.instances, &adjacency)?;
         self.validate_liquid_connections(&names, &adjacency)?;
         self.validate_headwaters(&names)?;
+        self.validate_walker_connections(&names, &adjacency)?;
+        self.validate_spanning_features(&names, &adjacency, &owners)?;
+        self.validate_anchor_aliases(&names)?;
         self.validate_critical_route(&names, &adjacency)
+    }
+
+    fn validate_walker_connections(
+        &self,
+        names: &BTreeMap<&str, usize>,
+        adjacency: &[BTreeSet<usize>],
+    ) -> Result<(), String> {
+        let mut occupied_seams = BTreeSet::new();
+        for connection in &self.walker_connections {
+            let first =
+                self.macro_instance_index(names, &connection.first_instance, "walker connection")?;
+            let second =
+                self.macro_instance_index(names, &connection.second_instance, "walker connection")?;
+            if first == second
+                || !adjacency
+                    .get(first)
+                    .is_some_and(|neighbors| neighbors.contains(&second))
+            {
+                return Err(format!(
+                    "V3 Macro walker connection {:?} -> {:?} must use one external instance seam",
+                    connection.first_instance, connection.second_instance
+                ));
+            }
+            for index in [first, second] {
+                let instance = self.instances.get(index).ok_or_else(|| {
+                    format!("V3 Macro walker connection resolved invalid instance index {index}")
+                })?;
+                if !matches!(instance.access, MacroAccessSettings::Land) {
+                    return Err(format!(
+                        "V3 Macro walker connection instance {:?} must use Land access",
+                        instance.name
+                    ));
+                }
+            }
+            validate_macro_walker_width(connection.width)?;
+            if !(0..=MAX_V3_LEVEL).contains(&connection.level) {
+                return Err(format!(
+                    "V3 Macro walker connection level must be between 0 and {MAX_V3_LEVEL}"
+                ));
+            }
+            let seam = ordered_index_pair(first, second);
+            if !occupied_seams.insert(seam) {
+                return Err(format!(
+                    "V3 Macro instances {:?} and {:?} have more than one explicit walker connection",
+                    connection.first_instance, connection.second_instance
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_spanning_features(
+        &self,
+        names: &BTreeMap<&str, usize>,
+        adjacency: &[BTreeSet<usize>],
+        owners: &BTreeMap<(i32, i32, i32), usize>,
+    ) -> Result<(), String> {
+        let mut feature_names = BTreeSet::new();
+        for feature in &self.spanning_features {
+            match feature {
+                MacroSpanningFeatureSettings::Tunnel(tunnel) => {
+                    if !is_stable_identifier(&tunnel.name) {
+                        return Err(format!(
+                            "V3 Macro tunnel name {:?} must be a lowercase stable identifier",
+                            tunnel.name
+                        ));
+                    }
+                    if !feature_names.insert(tunnel.name.as_str()) {
+                        return Err(format!(
+                            "V3 Macro contains duplicate spanning-feature name {:?}",
+                            tunnel.name
+                        ));
+                    }
+                    self.validate_tunnel(tunnel, names, adjacency, owners)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_tunnel(
+        &self,
+        tunnel: &MacroTunnelSettings,
+        names: &BTreeMap<&str, usize>,
+        adjacency: &[BTreeSet<usize>],
+        owners: &BTreeMap<(i32, i32, i32), usize>,
+    ) -> Result<(), String> {
+        if tunnel.instance_route.len() < 2 {
+            return Err(format!(
+                "V3 Macro tunnel {:?} instance_route must contain at least two instances",
+                tunnel.name
+            ));
+        }
+        let mut route = Vec::<usize>::with_capacity(tunnel.instance_route.len());
+        let mut visited = BTreeSet::new();
+        for name in &tunnel.instance_route {
+            let index = self.macro_instance_index(names, name, "tunnel instance_route")?;
+            if !visited.insert(index) {
+                return Err(format!(
+                    "V3 Macro tunnel {:?} repeats instance {name:?}",
+                    tunnel.name
+                ));
+            }
+            let instance = self.instances.get(index).ok_or_else(|| {
+                format!(
+                    "V3 Macro tunnel {:?} resolved invalid instance index {index}",
+                    tunnel.name
+                )
+            })?;
+            if matches!(instance.access, MacroAccessSettings::Aquatic) {
+                return Err(format!(
+                    "V3 Macro tunnel {:?} may not cross Aquatic instance {name:?}",
+                    tunnel.name
+                ));
+            }
+            if let Some(previous) = route.last().copied() {
+                if !adjacency
+                    .get(previous)
+                    .is_some_and(|neighbors| neighbors.contains(&index))
+                {
+                    return Err(format!(
+                        "V3 Macro tunnel {:?} consecutive instances are not adjacent at {name:?}",
+                        tunnel.name
+                    ));
+                }
+            }
+            route.push(index);
+        }
+
+        let boundary_instance = self.macro_instance_index(
+            names,
+            &tunnel.boundary_terminal.instance,
+            "tunnel boundary_terminal",
+        )?;
+        if route.first().copied() != Some(boundary_instance) {
+            return Err(format!(
+                "V3 Macro tunnel {:?} boundary_terminal must belong to the first instance_route entry",
+                tunnel.name
+            ));
+        }
+        let delta = macro_boundary_delta(tunnel.boundary_terminal.side);
+        let owns_boundary = owners.iter().any(|(cell, owner)| {
+            *owner == boundary_instance
+                && cube_tuple_radius((cell.0 + delta.0, cell.1 + delta.1, cell.2 + delta.2))
+                    > MACRO_CELL_RADIUS
+        });
+        if !owns_boundary {
+            return Err(format!(
+                "V3 Macro tunnel {:?} boundary_terminal {:?} does not reach the authored world side {:?}",
+                tunnel.name, tunnel.boundary_terminal.instance, tunnel.boundary_terminal.side
+            ));
+        }
+
+        let destination_instance = self.macro_instance_index(
+            names,
+            &tunnel.destination_anchor.instance,
+            "tunnel destination_anchor",
+        )?;
+        if route.last().copied() != Some(destination_instance) {
+            return Err(format!(
+                "V3 Macro tunnel {:?} destination_anchor must belong to the last instance_route entry",
+                tunnel.name
+            ));
+        }
+        if !is_stable_identifier(&tunnel.destination_anchor.anchor) {
+            return Err(format!(
+                "V3 Macro tunnel {:?} destination anchor {:?} must be a lowercase stable identifier",
+                tunnel.name, tunnel.destination_anchor.anchor
+            ));
+        }
+        validate_macro_walker_width(tunnel.width)?;
+        if tunnel.floor_level < 1 {
+            return Err(format!(
+                "V3 Macro tunnel {:?} floor_level must be at least 1",
+                tunnel.name
+            ));
+        }
+        if tunnel.clearance < 2 {
+            return Err(format!(
+                "V3 Macro tunnel {:?} clearance must be at least 2",
+                tunnel.name
+            ));
+        }
+        if tunnel.roof_thickness == 0 {
+            return Err(format!(
+                "V3 Macro tunnel {:?} roof_thickness must be at least 1",
+                tunnel.name
+            ));
+        }
+        let highest_reserved = i64::from(tunnel.floor_level)
+            .checked_add(i64::from(tunnel.clearance))
+            .and_then(|level| level.checked_add(i64::from(tunnel.roof_thickness)))
+            .ok_or_else(|| {
+                format!(
+                    "V3 Macro tunnel {:?} vertical reservation overflows",
+                    tunnel.name
+                )
+            })?;
+        if highest_reserved > i64::from(MAX_V3_LEVEL) {
+            return Err(format!(
+                "V3 Macro tunnel {:?} floor, clearance, and roof must remain at or below level {MAX_V3_LEVEL}",
+                tunnel.name
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_anchor_aliases(&self, names: &BTreeMap<&str, usize>) -> Result<(), String> {
+        let mut aliases = BTreeSet::new();
+        for alias in &self.anchor_aliases {
+            if !is_stable_identifier(&alias.alias) {
+                return Err(format!(
+                    "V3 Macro anchor alias {:?} must be a lowercase stable identifier",
+                    alias.alias
+                ));
+            }
+            if !aliases.insert(alias.alias.as_str()) {
+                return Err(format!(
+                    "V3 Macro contains duplicate anchor alias {:?}",
+                    alias.alias
+                ));
+            }
+            self.macro_instance_index(names, &alias.instance, "anchor alias")?;
+            if !is_stable_identifier(&alias.anchor) {
+                return Err(format!(
+                    "V3 Macro anchor alias {:?} source {:?} must be a lowercase stable identifier",
+                    alias.alias, alias.anchor
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn macro_instance_index(
+        &self,
+        names: &BTreeMap<&str, usize>,
+        name: &str,
+        label: &str,
+    ) -> Result<usize, String> {
+        names
+            .get(name)
+            .copied()
+            .ok_or_else(|| format!("V3 Macro {label} references unknown instance {name:?}"))
     }
 
     fn validate_liquid_connections(
@@ -1798,8 +2154,30 @@ impl MacroLayoutSettings {
         names: &BTreeMap<&str, usize>,
         adjacency: &[BTreeSet<usize>],
     ) -> Result<(), String> {
+        let canonical_features = self
+            .spanning_features
+            .iter()
+            .filter(|feature| match feature {
+                MacroSpanningFeatureSettings::Tunnel(tunnel) => tunnel.canonical_route,
+            })
+            .count();
+        if self.critical_route.is_empty() {
+            return if canonical_features == 1 {
+                Ok(())
+            } else {
+                Err(format!(
+                    "V3 Macro empty critical_route requires exactly one canonical spanning feature, got {canonical_features}"
+                ))
+            };
+        }
         if self.critical_route.len() < 2 {
             return Err("V3 Macro critical_route must contain at least two instances".to_owned());
+        }
+        if canonical_features != 0 {
+            return Err(
+                "V3 Macro cannot combine a legacy critical_route with a canonical spanning feature"
+                    .to_owned(),
+            );
         }
         let mut previous: Option<usize> = None;
         let mut visited = BTreeSet::new();
@@ -2106,6 +2484,34 @@ fn macro_instance_adjacency(
         }
     }
     Ok(adjacency)
+}
+
+const fn ordered_index_pair(first: usize, second: usize) -> (usize, usize) {
+    if first < second {
+        (first, second)
+    } else {
+        (second, first)
+    }
+}
+
+const fn macro_boundary_delta(side: MacroBoundarySideSettings) -> (i32, i32, i32) {
+    match side {
+        MacroBoundarySideSettings::East => (1, 0, -1),
+        MacroBoundarySideSettings::SouthEast => (0, 1, -1),
+        MacroBoundarySideSettings::SouthWest => (-1, 1, 0),
+        MacroBoundarySideSettings::West => (-1, 0, 1),
+        MacroBoundarySideSettings::NorthWest => (0, -1, 1),
+        MacroBoundarySideSettings::NorthEast => (1, -1, 0),
+    }
+}
+
+fn validate_macro_walker_width(width: u32) -> Result<(), String> {
+    if !(2..=MAX_SEAM_PORT_WIDTH).contains(&width) {
+        return Err(format!(
+            "V3 Macro walker width must be between 2 and {MAX_SEAM_PORT_WIDTH}"
+        ));
+    }
+    Ok(())
 }
 
 fn validate_macro_liquid_width(width: u32) -> Result<(), String> {
@@ -3537,6 +3943,10 @@ impl V3CrystalAscentSettings {
         if grid_radius != 40 {
             return Err("procedural V3 CrystalAscent requires grid_radius exactly 40".to_owned());
         }
+        self.validate_landmark()
+    }
+
+    fn validate_landmark(&self) -> Result<(), String> {
         if self.base_level < 5 {
             return Err(
                 "V3 CrystalAscent base_level must leave room for bedrock and strata".to_owned(),
@@ -4364,6 +4774,69 @@ mod tests {
             panic!("the shipped Mountain Range settings should use V3 Macro");
         };
         layout
+    }
+
+    fn macro_layout_mut(settings: &mut MapSettings) -> &mut MacroLayoutSettings {
+        let TerrainSettings::Procedural(ProceduralSettings::V3(ProceduralV3Settings {
+            layout: V3LayoutSettings::Macro(layout),
+        })) = &mut settings.terrain
+        else {
+            panic!("the shipped Mountain Range settings should use V3 Macro");
+        };
+        layout
+    }
+
+    fn macro_with_contract_extensions() -> MapSettings {
+        let mut settings = shipped_macro_settings();
+        let layout = macro_layout_mut(&mut settings);
+        let crystal = layout
+            .instances
+            .iter_mut()
+            .find(|instance| instance.name == "hills-center")
+            .expect("the shipped Macro fixture contains hills-center");
+        crystal.environment = V3EnvironmentSettings::TemperateGrassland;
+        crystal.recipe = V3RecipeSettings::CrystalAscent(V3CrystalAscentSettings {
+            base_level: 6,
+            rise_levels: 144,
+        });
+        layout.walker_connections = vec![MacroWalkerConnectionSettings {
+            first_instance: "hills-center".to_owned(),
+            second_instance: "prairie-route".to_owned(),
+            width: 4,
+            level: 150,
+        }];
+        layout.spanning_features =
+            vec![MacroSpanningFeatureSettings::Tunnel(MacroTunnelSettings {
+                name: "crystal_mountain.tunnel".to_owned(),
+                canonical_route: true,
+                instance_route: [
+                    "hills-lower-outer",
+                    "hills-lower",
+                    "waterfall-lower",
+                    "hills-center",
+                ]
+                .map(str::to_owned)
+                .to_vec(),
+                boundary_terminal: MacroBoundaryTerminalSettings {
+                    instance: "hills-lower-outer".to_owned(),
+                    side: MacroBoundarySideSettings::NorthWest,
+                },
+                destination_anchor: MacroAnchorReferenceSettings {
+                    instance: "hills-center".to_owned(),
+                    anchor: "crystal_ascent.lower_entry".to_owned(),
+                },
+                floor_level: 6,
+                width: 4,
+                clearance: 6,
+                roof_thickness: 3,
+            })];
+        layout.anchor_aliases = vec![MacroAnchorAliasSettings {
+            alias: "crystal_mountain.ascent_threshold".to_owned(),
+            instance: "hills-center".to_owned(),
+            anchor: "crystal_ascent.lower_entry".to_owned(),
+        }];
+        layout.critical_route.clear();
+        settings
     }
 
     fn named_macro_instances(
@@ -5362,31 +5835,137 @@ mod tests {
     }
 
     #[test]
-    fn crystal_ascent_is_rejected_by_the_current_macro_composer() {
+    fn crystal_ascent_macro_validation_is_radius_neutral_but_still_strict() {
         let mut settings = shipped_macro_settings();
-        let TerrainSettings::Procedural(ProceduralSettings::V3(ProceduralV3Settings {
-            layout: V3LayoutSettings::Macro(layout),
-        })) = &mut settings.terrain
-        else {
-            panic!("the shipped Mountain Range settings should use V3 Macro")
-        };
+        let layout = macro_layout_mut(&mut settings);
         let instance = layout
             .instances
-            .first_mut()
-            .expect("the shipped Macro fixture has at least one instance");
+            .iter_mut()
+            .find(|instance| instance.name == "hills-center")
+            .expect("the shipped Macro fixture contains hills-center");
         instance.environment = V3EnvironmentSettings::TemperateGrassland;
         instance.recipe = V3RecipeSettings::CrystalAscent(V3CrystalAscentSettings {
             base_level: 6,
             rise_levels: 144,
         });
 
+        settings
+            .validate()
+            .expect("Macro accepts radius-neutral CrystalAscent landmark settings");
+        let crystal = V3CrystalAscentSettings {
+            base_level: 6,
+            rise_levels: 144,
+        };
+        assert!(
+            crystal.validate(39).is_err(),
+            "standalone CrystalAscent must retain its exact radius-40 contract"
+        );
+        assert!(crystal.validate(40).is_ok());
+
+        let layout = macro_layout_mut(&mut settings);
+        let instance = layout
+            .instances
+            .iter_mut()
+            .find(|instance| instance.name == "hills-center")
+            .expect("the mutated Macro fixture retains hills-center");
+        instance.recipe = V3RecipeSettings::CrystalAscent(V3CrystalAscentSettings {
+            base_level: 6,
+            rise_levels: 99,
+        });
         let error = settings
             .validate()
-            .expect_err("Macro must reject CrystalAscent until union-mask composition lands");
+            .expect_err("Macro must retain radius-neutral rise validation");
+        assert!(error.contains("rise_levels must be between 100 and 200"));
+    }
+
+    #[test]
+    fn macro_extensions_validate_canonical_routes_levels_and_stable_aliases() {
+        let settings = macro_with_contract_extensions();
+        settings
+            .validate()
+            .expect("the approved Macro extension vocabulary should validate");
+
+        let mut missing_canonical = settings.clone();
+        macro_layout_mut(&mut missing_canonical)
+            .spanning_features
+            .clear();
+        let error = missing_canonical
+            .validate()
+            .expect_err("an empty critical route needs one canonical spanning feature");
+        assert!(error.contains("exactly one canonical spanning feature"));
+
+        for level in [-1, MAX_V3_LEVEL + 1] {
+            let mut invalid = settings.clone();
+            macro_layout_mut(&mut invalid)
+                .walker_connections
+                .first_mut()
+                .expect("the fixture has one walker connection")
+                .level = level;
+            let error = invalid
+                .validate()
+                .expect_err("an explicit walker level outside the V3 ceiling must fail");
+            assert!(error.contains("walker connection level"), "{error}");
+        }
+
+        let mut invalid_alias = settings.clone();
+        macro_layout_mut(&mut invalid_alias)
+            .anchor_aliases
+            .first_mut()
+            .expect("the fixture has one alias")
+            .alias = "Invalid Alias".to_owned();
+        let error = invalid_alias
+            .validate()
+            .expect_err("world-level aliases must be stable identifiers");
+        assert!(error.contains("anchor alias"), "{error}");
+
+        let mut invalid_boundary = settings.clone();
+        let MacroSpanningFeatureSettings::Tunnel(tunnel) = macro_layout_mut(&mut invalid_boundary)
+            .spanning_features
+            .first_mut()
+            .expect("the fixture has one tunnel");
+        tunnel.boundary_terminal.side = MacroBoundarySideSettings::East;
+        let error = invalid_boundary
+            .validate()
+            .expect_err("the terminal owner must reach its declared world side");
         assert!(
-            error.contains("CrystalAscent, whose union-mask implementation is unavailable"),
-            "unexpected error: {error}"
+            error.contains("does not reach the authored world side"),
+            "{error}"
         );
+    }
+
+    #[test]
+    fn macro_extension_ron_is_defaulted_and_rejects_unknown_fields() {
+        let legacy = shipped_macro_settings();
+        let layout = macro_layout(&legacy);
+        assert!(layout.walker_connections.is_empty());
+        assert!(layout.spanning_features.is_empty());
+        assert!(layout.anchor_aliases.is_empty());
+
+        ron::from_str::<MacroWalkerConnectionSettings>(
+            r#"(
+                first_instance: "crystal-ascent",
+                second_instance: "summit-forest",
+                width: 4,
+                level: 150,
+                typoed_field: 1,
+            )"#,
+        )
+        .expect_err("Macro walker connections must reject unknown fields");
+        ron::from_str::<MacroSpanningFeatureSettings>(
+            r#"Tunnel((
+                name: "crystal_mountain.tunnel",
+                canonical_route: true,
+                instance_route: ["outer-mountain", "inner-mountain", "crystal-ascent"],
+                boundary_terminal: (instance: "outer-mountain", side: West),
+                destination_anchor: (instance: "crystal-ascent", anchor: "crystal_ascent.lower_entry"),
+                floor_level: 6,
+                width: 4,
+                clearance: 6,
+                roof_thickness: 3,
+                typoed_field: 1,
+            ))"#,
+        )
+        .expect_err("Macro tunnels must reject unknown fields");
     }
 
     #[test]
