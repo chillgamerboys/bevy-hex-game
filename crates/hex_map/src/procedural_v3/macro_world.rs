@@ -13,7 +13,7 @@ use hex_core::{HexCoord, Level, MapViewHint, TilePos};
 use crate::procedural::{MacroMetrics, MountainRangeMetrics};
 use crate::settings::{
     MacroAxisSettings, MacroBiomeInstanceSettings, MacroHeadwaterSettings, MacroLayoutSettings,
-    ProceduralV3Settings, V3LayoutSettings, V3RecipeSettings,
+    ProceduralV3Settings, V3LayoutSettings, V3RecipeSettings, MAX_V3_LEVEL,
 };
 
 use super::composition::{
@@ -23,7 +23,7 @@ use super::layout::{
     resolve_layout, PatchId, ResolvedLayoutPlan, ResolvedLiquidElevation, ResolvedLiquidPort,
 };
 use super::liquid::{LiquidBodyId, LiquidBodyPlan, LiquidFlowState, LiquidNode, LiquidPlan};
-use super::patch::PatchRecipeContext;
+use super::patch::{PatchBuildMode, PatchRecipeContext};
 use super::seam::shape_walker_seams;
 use super::seed::SeedStreams;
 use super::selection::{
@@ -31,7 +31,7 @@ use super::selection::{
     ValidatedWorldSelection, WorldValidation,
 };
 use super::traversal::OrdinaryGraph;
-use super::vegetation::{TemperateVegetationSet, VegetationObjectSpec};
+use super::vegetation::{TemperateTreeSet, TemperateVegetationSet, VegetationObjectSpec};
 use super::volume::{
     FillMaterialRole, LevelInterval, NonSolidFill, SolidMass, SolidMaterialRole, SurfaceAccess,
     SurfaceMetadata, VolumeColumn, VolumeElement, VolumePlan,
@@ -40,7 +40,7 @@ use super::world::{
     FeatureId, FeatureKind, FeaturePlan, GeneratedWorldPlan, InteriorPlan, PlannedFeature,
     StructurePlan, WorldIssueCode, WorldValidationIssue,
 };
-use super::V3GenerationError;
+use super::{CrystalAscentObjectSet, V3GenerationError};
 
 const PARTY_START: &str = "party_start";
 const HOSTILE_START: &str = "hostile_start";
@@ -77,6 +77,13 @@ struct MacroWorldSetup<'a> {
     vegetation: TemperateVegetationSet,
     canonical_anchors: BTreeMap<String, PatchAnchorRef>,
     alpine_climate: MacroAlpineClimate,
+    crystal_ascent_assets: Option<MacroCrystalAscentAssets>,
+}
+
+#[derive(Debug, Clone)]
+struct MacroCrystalAscentAssets {
+    trees: TemperateTreeSet,
+    objects: CrystalAscentObjectSet,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -196,12 +203,28 @@ fn resolve_macro_world_setup<'a>(
     })?;
     let canonical_anchors = canonical_anchor_settings(macro_settings)?;
     let alpine_climate = resolve_macro_alpine_climate(macro_settings)?;
+    let crystal_ascent_assets = macro_settings
+        .instances
+        .iter()
+        .any(|instance| matches!(instance.recipe, V3RecipeSettings::CrystalAscent(_)))
+        .then(|| {
+            let trees = TemperateTreeSet::resolve(art_catalog, "Macro Crystal Ascent")
+                .map_err(V3GenerationError::RecipeContract)?;
+            let objects = CrystalAscentObjectSet::resolve(art_catalog).map_err(|error| {
+                V3GenerationError::RecipeContract(format!(
+                    "Macro Crystal Ascent authored object preflight failed: {error}"
+                ))
+            })?;
+            Ok::<_, V3GenerationError>(MacroCrystalAscentAssets { trees, objects })
+        })
+        .transpose()?;
     Ok(MacroWorldSetup {
         layout,
         settings: macro_settings,
         vegetation,
         canonical_anchors,
         alpine_climate,
+        crystal_ascent_assets,
     })
 }
 
@@ -241,6 +264,7 @@ fn construct_world(
         vegetation,
         canonical_anchors,
         alpine_climate,
+        crystal_ascent_assets,
     } = setup;
     let natural_levels =
         super::macro_landform::plan_base_surface_levels(&layout, macro_settings, candidate)?;
@@ -285,20 +309,71 @@ fn construct_world(
         let patch = PatchRecipeContext::resolve(&layout, patch_id)?;
         let streams =
             candidate.map(|(seed, candidate)| SeedStreams::new(seed, candidate, patch_id.0));
-        fragments.push(construct_fragment(
-            patch,
-            instance,
-            macro_settings,
-            alpine_climate,
-            natural_levels
-                .get(&patch_id)
-                .or_else(|| alpine_levels.get(&patch_id)),
-            &alpine_levels,
-            &world_support,
-            streams,
-            &vegetation,
-            provisional_view_hint,
-        )?);
+        let fragment = if let V3RecipeSettings::CrystalAscent(settings) = &instance.recipe {
+            let assets = crystal_ascent_assets.as_ref().ok_or_else(|| {
+                V3GenerationError::RecipeContract(
+                    "Macro Crystal Ascent assets were not preflighted".to_owned(),
+                )
+            })?;
+            let mode = candidate.map_or(PatchBuildMode::CanonicalFallback, |(seed, candidate)| {
+                PatchBuildMode::Candidate {
+                    world_seed: seed,
+                    candidate,
+                }
+            });
+            let fragment = super::crystal_ascent::construct_patch(
+                patch,
+                settings,
+                level_height,
+                mode,
+                &assets.trees,
+                &assets.objects,
+            )
+            .map_err(|issues| {
+                V3GenerationError::RecipeContract(format!(
+                    "Macro Crystal Ascent construction failed: {}",
+                    issues
+                        .into_iter()
+                        .map(|issue| issue.detail)
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                ))
+            })?;
+            match super::crystal_ascent::validate_composite_fragment(
+                &fragment,
+                &layout,
+                settings,
+                &assets.objects,
+            ) {
+                WorldValidation::Valid(_) => fragment,
+                WorldValidation::Invalid(issues) => {
+                    return Err(V3GenerationError::RecipeContract(format!(
+                        "Macro Crystal Ascent validation failed: {}",
+                        issues
+                            .into_iter()
+                            .map(|issue| issue.detail)
+                            .collect::<Vec<_>>()
+                            .join("; ")
+                    )));
+                }
+            }
+        } else {
+            construct_fragment(
+                patch,
+                instance,
+                macro_settings,
+                alpine_climate,
+                natural_levels
+                    .get(&patch_id)
+                    .or_else(|| alpine_levels.get(&patch_id)),
+                &alpine_levels,
+                &world_support,
+                streams,
+                &vegetation,
+                provisional_view_hint,
+            )?
+        };
+        fragments.push(fragment);
     }
 
     let generated_maximum_level = fragments
@@ -1179,7 +1254,7 @@ fn base_surface_levels(
                     .saturating_add(sampled_noise)
                     .clamp(instance.elevation.low, instance.elevation.high),
             };
-            if !(4..=104).contains(&level) {
+            if !(4..=MAX_V3_LEVEL).contains(&level) {
                 return Err(V3GenerationError::RecipeContract(format!(
                     "Macro instance {:?} produced invalid surface level {level} at {coord:?}",
                     instance.name
@@ -3098,7 +3173,12 @@ fn place_vegetation(
                     && !blockers
                         .iter()
                         .any(|blocker: &TilePos| blocker.coord == surface.coord)
-                    && vegetation_below_climate_ceiling(layer.kind, surface.level, alpine_climate)
+                    && vegetation_below_climate_ceiling(
+                        &instance.recipe,
+                        layer.kind,
+                        surface.level,
+                        alpine_climate,
+                    )
             })
             .collect::<Vec<_>>();
         eligible.sort_unstable_by_key(|surface| {
@@ -3186,10 +3266,22 @@ fn place_vegetation(
 }
 
 fn vegetation_below_climate_ceiling(
+    recipe: &V3RecipeSettings,
     kind: FeatureKind,
     level: Level,
     alpine_climate: MacroAlpineClimate,
 ) -> bool {
+    // The alpine treeline is a climate rule for foothill vegetation, not a
+    // global world-height limit. An authored temperate Forest basin remains a
+    // forest even when a landmark places it above an enclosing mountain tier.
+    if kind == FeatureKind::Tree
+        && matches!(
+            recipe,
+            V3RecipeSettings::Forest(_) | V3RecipeSettings::DeepForest(_)
+        )
+    {
+        return true;
+    }
     let ceiling = if kind == FeatureKind::Tree {
         alpine_climate.treeline
     } else {
@@ -4386,23 +4478,38 @@ mod tests {
             SolidMaterialRole::Snow
         );
         assert!(vegetation_below_climate_ceiling(
+            &mountain.recipe,
             FeatureKind::Tree,
             39,
             climate
         ));
         assert!(!vegetation_below_climate_ceiling(
+            &mountain.recipe,
             FeatureKind::Tree,
             40,
             climate
         ));
         assert!(vegetation_below_climate_ceiling(
+            &mountain.recipe,
             FeatureKind::TallGrass,
             35,
             climate
         ));
         assert!(!vegetation_below_climate_ceiling(
+            &mountain.recipe,
             FeatureKind::TallGrass,
             36,
+            climate
+        ));
+        let forest = settings
+            .instances
+            .iter()
+            .find(|instance| matches!(instance.recipe, V3RecipeSettings::Forest(_)))
+            .expect("tracked Mountain Range should contain a Forest instance");
+        assert!(vegetation_below_climate_ceiling(
+            &forest.recipe,
+            FeatureKind::Tree,
+            150,
             climate
         ));
     }

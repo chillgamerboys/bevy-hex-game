@@ -552,8 +552,14 @@ pub(crate) enum LiquidSeamIssue {
     MissingMergedNode(TilePos),
 }
 
-/// Merges complete patch fragments into one strict whole-world semantic plan.
-pub(crate) fn compose_world(
+/// Merges complete patch fragments into one whole-world semantic plan.
+///
+/// The returned plan has passed layout, fragment, namespacing, collision, and
+/// liquid-seam checks, but it has deliberately not passed final whole-world
+/// validation yet. World-spanning authored features use this narrow stage to
+/// mutate the combined semantic volume exactly once, after patch-local work is
+/// complete and before the normal strict validator admits the result.
+pub(crate) fn merge_world(
     layout: ResolvedLayoutPlan,
     fragments: Vec<GeneratedPatchPlan>,
     settings: WorldCompositionSettings,
@@ -666,7 +672,7 @@ pub(crate) fn compose_world(
         insert_unique(&mut anchors, alias, position, CollisionKind::Anchor)?;
     }
 
-    let world = GeneratedWorldPlan {
+    Ok(GeneratedWorldPlan {
         layout,
         volume,
         liquids,
@@ -678,13 +684,29 @@ pub(crate) fn compose_world(
         interiors,
         anchors,
         view_hint: settings.view_hint,
-    };
+    })
+}
+
+/// Runs the unchanged strict whole-world validator after any world-owned
+/// spanning-feature finalization has completed.
+pub(crate) fn finalize_world(
+    world: GeneratedWorldPlan,
+) -> Result<GeneratedWorldPlan, WorldCompositionError> {
     let issues = world.validate();
     if issues.is_empty() {
         Ok(world)
     } else {
         Err(WorldCompositionError::FinalValidation(issues))
     }
+}
+
+/// Merges and immediately validates a world with no spanning-feature pass.
+pub(crate) fn compose_world(
+    layout: ResolvedLayoutPlan,
+    fragments: Vec<GeneratedPatchPlan>,
+    settings: WorldCompositionSettings,
+) -> Result<GeneratedWorldPlan, WorldCompositionError> {
+    finalize_world(merge_world(layout, fragments, settings)?)
 }
 
 #[derive(Debug, Clone, Copy)]

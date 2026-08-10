@@ -13,7 +13,7 @@ use hex_core::{
 };
 
 use super::composition::{compose_single_patch, GeneratedPatchPlan};
-use super::layout::{resolve_layout, PatchId, ResolvedLayoutPlan};
+use super::layout::{resolve_layout, LayoutKind, PatchId, ResolvedLayoutPlan};
 use super::patch::{PatchBuildMode, PatchRecipeContext};
 use super::seed::SeedStream;
 use super::selection::{
@@ -341,6 +341,7 @@ fn construct_patch_with_streams(
 
     let base = settings.base_level;
     let summit = base.saturating_add(settings.rise_levels);
+    let composite = patch.layout().kind == LayoutKind::Macro;
     let mut masses = local_mask
         .iter()
         .copied()
@@ -351,8 +352,13 @@ fn construct_patch_with_streams(
     for coord in &local_mask {
         let radius = coord.distance(HexCoord::ORIGIN);
         if radius > SITE_RADIUS {
-            add_ground(&mut masses, *coord, base, SolidMaterialRole::Grass);
-            surface_intents.insert(TilePos::new(*coord, base), exterior_surface());
+            // A Macro claim may retain a few central-cell fringe columns beyond
+            // the exact radius-32 authored site. Those columns belong to the
+            // high woodland crown, not the standalone level-six showcase apron.
+            // Standalone generation keeps its historical base-level grass.
+            let fringe_level = if composite { summit } else { base };
+            add_ground(&mut masses, *coord, fringe_level, SolidMaterialRole::Grass);
+            surface_intents.insert(TilePos::new(*coord, fringe_level), exterior_surface());
         } else if radius <= CHAMBER_RADIUS
             || (radius < SHELL_INNER_RADIUS && is_lower_connector(*coord))
             || (radius >= SHELL_INNER_RADIUS && is_lower_aperture(*coord))
@@ -2462,6 +2468,44 @@ pub(crate) fn validate_crystal_ascent(
     })
 }
 
+/// Validates the complete authored landmark while it is still a patch-local
+/// fragment, before Macro namespaces its IDs and aliases into the combined
+/// world. This deliberately skips the standalone radius contract: the resolved
+/// Macro mask remains authoritative, while every stair, shell, light, blocker,
+/// interior, and terminal invariant stays identical to the standalone recipe.
+pub(crate) fn validate_composite_fragment(
+    fragment: &GeneratedPatchPlan,
+    layout: &ResolvedLayoutPlan,
+    settings: &V3CrystalAscentSettings,
+    objects: &CrystalAscentObjectSet,
+) -> WorldValidation<CrystalAscentMetrics> {
+    let patch = match PatchRecipeContext::resolve(layout, fragment.patch_id) {
+        Ok(patch) => patch,
+        Err(error) => {
+            return WorldValidation::Invalid(vec![recipe_issue(format!(
+                "Crystal Ascent composite fragment has no resolved Macro patch: {error}"
+            ))]);
+        }
+    };
+    let frame = match patch.local_frame() {
+        Ok(frame) => frame,
+        Err(error) => {
+            return WorldValidation::Invalid(vec![recipe_issue(format!(
+                "Crystal Ascent composite frame could not be resolved: {error}"
+            ))]);
+        }
+    };
+    let isolated = match frame.canonical_local_world(fragment) {
+        Ok(isolated) => isolated,
+        Err(error) => {
+            return WorldValidation::Invalid(vec![recipe_issue(format!(
+                "Crystal Ascent composite fragment could not be normalized: {error}"
+            ))]);
+        }
+    };
+    validate_crystal_ascent(&isolated, settings, objects)
+}
+
 fn exact_clear_levels_above(volume: &VolumePlan, surface: TilePos) -> Option<Level> {
     volume.surfaces.get(&surface)?;
     let from = surface.level.checked_add(1)?;
@@ -3746,6 +3790,10 @@ mod tests {
                         .join("; ")
                 )
             });
+            assert!(matches!(
+                validate_composite_fragment(&fragment, &layout, &recipe_settings, &objects),
+                WorldValidation::Valid(_)
+            ));
             assert_eq!(
                 fragment.volume.mask,
                 layout
@@ -3790,12 +3838,62 @@ mod tests {
             let local = frame
                 .canonical_local_world(&fragment)
                 .expect("production Macro semantics should normalize");
-            assert_eq!(local.volume, canonical.volume);
+            let authored_site = HexCoord::ORIGIN
+                .within_radius(SITE_RADIUS)
+                .into_iter()
+                .collect::<BTreeSet<_>>();
+            for coord in &authored_site {
+                assert_eq!(
+                    local.volume.columns.get(coord),
+                    canonical.volume.columns.get(coord),
+                    "Macro composition must preserve exact authored-site volume at {coord:?}"
+                );
+            }
+            let local_site_surfaces = local
+                .volume
+                .surfaces
+                .iter()
+                .filter(|(surface, _)| authored_site.contains(&surface.coord))
+                .collect::<BTreeMap<_, _>>();
+            let canonical_site_surfaces = canonical
+                .volume
+                .surfaces
+                .iter()
+                .filter(|(surface, _)| authored_site.contains(&surface.coord))
+                .collect::<BTreeMap<_, _>>();
+            assert_eq!(local_site_surfaces, canonical_site_surfaces);
+            let composite_fringe = local
+                .volume
+                .mask
+                .difference(&authored_site)
+                .copied()
+                .collect::<BTreeSet<_>>();
+            assert!(!composite_fringe.is_empty());
+            for coord in &composite_fringe {
+                let surface = TilePos::new(*coord, 150);
+                assert!(local.volume.surfaces.contains_key(&surface));
+                assert_eq!(
+                    solid_material_at(&local.volume, *coord, 150),
+                    Some(SolidMaterialRole::Grass)
+                );
+                assert!(!local.volume.surfaces.contains_key(&TilePos::new(*coord, 6)));
+            }
             assert_eq!(local.features, canonical.features);
             assert_eq!(local.structures, canonical.structures);
             assert_eq!(local.blockers, canonical.blockers);
             assert_eq!(local.lights, canonical.lights);
-            assert_eq!(local.biome_regions, canonical.biome_regions);
+            assert_eq!(
+                local
+                    .biome_regions
+                    .iter()
+                    .filter(|(surface, _)| authored_site.contains(&surface.coord))
+                    .collect::<BTreeMap<_, _>>(),
+                canonical
+                    .biome_regions
+                    .iter()
+                    .filter(|(surface, _)| authored_site.contains(&surface.coord))
+                    .collect::<BTreeMap<_, _>>()
+            );
             assert_eq!(local.interiors, canonical.interiors);
             assert_eq!(local.anchors, canonical.anchors);
         }
