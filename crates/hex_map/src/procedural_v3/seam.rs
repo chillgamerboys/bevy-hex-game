@@ -8,6 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use hex_core::{HexCoord, Level, SpecialMovementRegion, TilePos, TraversalProfile};
 
+use crate::settings::MAX_SEAM_PORT_WIDTH;
+
 use super::layout::{LayoutKind, PatchId, ResolvedEdgeContract, ResolvedEdgeId};
 use super::patch::PatchRecipeContext;
 use super::traversal::OrdinaryGraph;
@@ -124,7 +126,7 @@ pub(crate) fn shape_walker_seams(
 
     for edge in patch.shared_edges() {
         let ports = edge.walker_ports();
-        if !valid_two_wide_contract(
+        if !valid_walker_contract(
             edge.contract.walker.count,
             edge.contract.walker.width,
             &ports,
@@ -251,7 +253,7 @@ pub(crate) fn validate_patch_walker_seams(
 
     for edge in patch.shared_edges() {
         let ports = edge.walker_ports();
-        if !valid_two_wide_contract(
+        if !valid_walker_contract(
             edge.contract.walker.count,
             edge.contract.walker.width,
             &ports,
@@ -357,9 +359,9 @@ pub(crate) fn validate_world_walker_seams(
 ) {
     let ordinary = OrdinaryGraph::from_volume(&plan.volume, Some(&plan.blockers));
     for (edge_id, edge) in &plan.layout.shared_edges {
-        if !valid_two_wide_contract(edge.walker.count, edge.walker.width, &edge.walker.ports) {
+        if !valid_walker_contract(edge.walker.count, edge.walker.width, &edge.walker.ports) {
             issues.push(seam_issue(format!(
-                "shared seam {edge_id:?} does not retain exact two-wide walker ports"
+                "shared seam {edge_id:?} does not retain its exact declared walker-port width"
             )));
             continue;
         }
@@ -520,18 +522,41 @@ fn seam_issue(detail: impl Into<String>) -> WorldValidationIssue {
     WorldValidationIssue::new(WorldIssueCode::Traversal, detail)
 }
 
-fn valid_two_wide_contract(count: u8, width: u32, ports: &[super::layout::ResolvedPort]) -> bool {
+fn valid_walker_contract(count: u8, width: u32, ports: &[super::layout::ResolvedPort]) -> bool {
     if count == 0 {
         return width == 0 && ports.is_empty();
     }
-    width == 2
+    (2..=MAX_SEAM_PORT_WIDTH).contains(&width)
         && usize::from(count) == ports.len()
-        && ports.iter().all(|port| port.lanes.len() == 2)
+        && ports
+            .iter()
+            .all(|port| port.lanes.len() == usize::try_from(width).unwrap_or(usize::MAX))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn walker_contract_accepts_exact_explicit_width_four_without_loosening_legacy_bounds() {
+        let lanes = [
+            (HexCoord::from_axial(0, 0), HexCoord::from_axial(1, 0)),
+            (HexCoord::from_axial(0, 1), HexCoord::from_axial(1, 1)),
+            (HexCoord::from_axial(0, 2), HexCoord::from_axial(1, 2)),
+            (HexCoord::from_axial(0, 3), HexCoord::from_axial(1, 3)),
+        ]
+        .into_iter()
+        .collect();
+        let port = super::super::layout::ResolvedPort {
+            lanes,
+            first_approach: BTreeSet::new(),
+            second_approach: BTreeSet::new(),
+        };
+        assert!(valid_walker_contract(1, 4, &[port.clone()]));
+        assert!(!valid_walker_contract(1, 3, &[port.clone()]));
+        assert!(!valid_walker_contract(1, 5, &[port]));
+        assert!(valid_walker_contract(0, 0, &[]));
+    }
 
     #[test]
     fn seam_closure_regions_preserve_legacy_ids_and_fit_ring19_local_bits() {
