@@ -31,9 +31,10 @@ Creator chart with retained SVG masters and runtime glyphs. E0 rehomes the curre
 Scrying Eye content under Divination and removes Daylight; it does not add Scrying
 Eye's off-sight live feed, Invisibility, spell-created illumination, or any other
 school mechanic. Those follow-on releases remain separately sequenced after the
-foundation. HEX-79 is the current implementation candidate for tier-one Life Heal,
-explicit touch reach, pre-payment restoration refusals, and effect-semantic AI
-selection; it remains pending integration on `dev` and is not listed as Delivered.
+foundation. PR #189 / HEX-79 delivers tier-one Life Heal, explicit touch reach,
+pre-payment restoration refusals, and effect-semantic AI selection. The remaining
+Life release still owns Cleanse, Conjure Plant, starter-template migration, and its
+combined school acceptance.
 
 ## Upcoming
 
@@ -58,6 +59,7 @@ selection; it remains pending integration on `dev` and is not listed as Delivere
 | Epic | Delivered |
 |---|---|
 | Canonical elemental-grid foundation | PR #184 / HEX-37, HEX-56, and HEX-57: 18 canonical schools, revision-bound packaged-content migration, a neutral 180-pair element × tough-substance matrix, retained SVG/runtime glyphs, and the accessible radius-two Creator chart |
+| Tier-one Life Heal | PR #189 / HEX-79: exact `Touch` reach, one-cell caster-chosen restoration, pre-payment privacy and eligibility refusals, next-round revival, effect-semantic AI selection, and explicit self/ally aiming feedback |
 | Run bottoms on tiles | Every material-run entity publishes exact inclusive integer bounds through `RunBottom` and `TilePos`, including stacked platform/cave runs and terrain-edit rebuilds |
 | Casting UX | HEX-21 landed in Wave 3: cursor shape previews, blocked reasons, target cycling, and per-element cast presentation |
 | Combat readability | HEX-23 landed in Wave 3: initiative order, detailed lattice panels, and the structured combat log |

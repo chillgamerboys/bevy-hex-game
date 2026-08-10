@@ -238,9 +238,12 @@ legality ladder, and drains the lattice that paid for it. Damage names a count; 
 chooses which hexes go down**, answering through a `ChooseDisables` command so the choice
 is replayable rather than made inside the applier. A unit whose every hex is disabled
 leaves the turn order and is **downed** — retained with its lattice rather than
-despawned. Renewal restores chosen cells, removes `Downed`, and returns the unit at the
-next round boundary; exploration Rest recovers the party immediately. A strike deals
-damage the same way, through the same decision.
+despawned. Heal restores one chosen cell on the caster or a mutually touch-adjacent
+Observed unit; a hostile also requires complete current lattice knowledge. Renewal
+remains the stronger ranged two-cell restoration. Either removes `Downed` after a
+successful restore and returns the unit at the next round boundary; exploration Rest
+recovers the party immediately. A strike deals damage the same way, through the same
+decision.
 
 **Channel is live.** An active, non-downed combatant can spend its one action to
 restore each element by that unit's Channelling value, capped by Attunement capacity.
@@ -290,9 +293,9 @@ the host validates count, uniqueness, eligibility, and fingerprint before buildi
 the same replayable command. Movement scoring shares one authorized graph, one actor
 reach/predecessor projection, and one reverse distance map per live observed hostile.
 Victory and Defeat retain the
-battlefield, Retry rebuilds the same resolved seed, Renewal revives at the next round
-boundary, and exploration Rest recovers the whole party. The minimalist tactical HUD
-keeps Party, Initiative, Activity, and Action Bar independently configurable, hosts
+battlefield, Retry rebuilds the same resolved seed, Heal and Renewal revive at the next
+round boundary, and exploration Rest recovers the whole party. The minimalist tactical
+HUD keeps Party, Initiative, Activity, and Action Bar independently configurable, hosts
 Character/Formation/Required Decision in one typed Main View, and keeps actor,
 selected ally, decision owner, aimed target, and retained target as explicit roles.
 Required decisions remain forced while ordinary components are hidden. Party and
@@ -521,7 +524,7 @@ produce the same order across runs and saves.
 It disables hexes and it can put a unit down, and that is deliberately as far as it
 goes. **Downed is provisional**: the design leaves both functional death — a threshold
 arriving before zero — and permadeath open, and a unit whose lattice is spent simply
-leaves the turn order while retaining its lattice for restoration. Renewal can
+leaves the turn order while retaining its lattice for restoration. Heal or Renewal can
 reactivate it for the next round, and exploration Rest recovers it. How many hexes a
 spell disables, how long a fight runs, and what a strike costs are all knobs rather
 than answers; `strike_disables`
@@ -649,8 +652,8 @@ The live implementation retains these explicit limitations:
   unsupported actors deterministically, adopt their exact positions into combat
   authority, and freeze with a typed diagnostic if no legal landing exists.
 - **Downed-first death is provisional.** A fully disabled unit initially leaves the
-  turn order and retains its lattice. Renewal restores it into the next round and Rest
-  recovers it after combat; functional death and permadeath remain open.
+  turn order and retains its lattice. Heal or Renewal restores it into the next round
+  and Rest recovers it after combat; functional death and permadeath remain open.
 - **Supported area unit effects reach every exact occupant in the clipped volume.**
   `volumes::resolve` produces the full voxel list, and the transaction snapshots exact
   occupants at payment, orders authored effect then stable `UnitId`, queues one public

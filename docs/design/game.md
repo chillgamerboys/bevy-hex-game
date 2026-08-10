@@ -475,16 +475,16 @@ the other end.
 Brakes already proposed by the design: rituals can function on a degraded lattice,
 channelling can remain available, rout and surrender can end fights before the slog,
 and healing can restore hexes mid-combat. Two are now playable: Channel spends one
-action to recover live, unlocked gems, and Renewal can restore chosen disabled cells
-and return a downed unit at the next round boundary. Rituals, rout, and surrender
-remain deferred.
+action to recover live, unlocked gems, while Heal and Renewal can restore chosen
+disabled cells and return a downed unit at the next round boundary. Rituals, rout, and
+surrender remain deferred.
 
 Additional candidates: desperation effects that strengthen as a lattice weakens, a
 floor on boss action count, and cheap partial recovery as a standard action.
 
-**Ruled 2026-07-27, updated 2026-07-30:** the initial missing brakes were deferred
-because you cannot tune a spiral you have not felt. Channel and Renewal/Restore have
-since landed as provisional playable brakes without deciding the remaining policy.
+**Ruled 2026-07-27, updated 2026-08-10:** the initial missing brakes were deferred
+because you cannot tune a spiral you have not felt. Channel and Heal/Renewal restoration
+have since landed as provisional playable brakes without deciding the remaining policy.
 The loop now includes defender-chosen disables, downing, Burn, Reveal, recovery, and
 the combat readouts. Whether it reads as *nothing, nothing, nothing, collapse* is a
 deterministic-simulation and bounded Sandbox playtest question. Rituals, rout,
