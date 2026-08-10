@@ -634,6 +634,15 @@ amend this manifest after owner review.
   delegation. Focused evidence: 47 multiplayer unit tests, the all-feature
   host-plus-six-client direct-session contract, strict all-target/all-feature Clippy, and
   warning-denied rustdoc all PASS.
+- `0e146862c223aadc0449a7d69a69f708d21eb7d0` — coordinator-owned bound correction after
+  L3 measured the shipped radius-40 Crystal Ascent configuration at 135,739 exact
+  interior-roof entries, disproving the banked 65,536 flat-projection estimate. Applying
+  the locked twice-largest-measurement/next-power-of-two rule yields a 524,288-entry
+  projection and delta envelope; the independent 64 MiB pre-deserialization frame cap is
+  unchanged. The protocol tag and golden hash advance to `4077301579023059970`.
+  Ratified under the user's 2026-08-10 temporary world-authority delegation. Focused
+  evidence: the 47-test multiplayer suite, all-feature host-plus-six-client direct-session
+  contract, strict all-target/all-feature Clippy, and warning-denied rustdoc all PASS.
 
 ## Close-out
 
