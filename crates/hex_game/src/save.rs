@@ -134,6 +134,10 @@ const SHIPPED_CAMPAIGN_INPUTS: &[(&str, &str)] = &[
         include_str!("../../../assets/art/objects/prop/crystal-branched.ron"),
     ),
     (
+        "art/objects/prop/crystal-cathedral-heart.ron",
+        include_str!("../../../assets/art/objects/prop/crystal-cathedral-heart.ron"),
+    ),
+    (
         "art/objects/prop/crystal-low-cluster.ron",
         include_str!("../../../assets/art/objects/prop/crystal-low-cluster.ron"),
     ),
@@ -210,6 +214,10 @@ const SHIPPED_CAMPAIGN_INPUTS: &[(&str, &str)] = &[
         include_str!("../../../assets/config/worlds/procedural-caves.ron"),
     ),
     (
+        "config/worlds/procedural-crystal-ascent.ron",
+        include_str!("../../../assets/config/worlds/procedural-crystal-ascent.ron"),
+    ),
+    (
         "config/worlds/procedural-deep-forest.ron",
         include_str!("../../../assets/config/worlds/procedural-deep-forest.ron"),
     ),
@@ -276,6 +284,10 @@ const SHIPPED_CAMPAIGN_INPUTS: &[(&str, &str)] = &[
     (
         "config/encounters/bridge-crossing.ron",
         include_str!("../../../assets/config/encounters/bridge-crossing.ron"),
+    ),
+    (
+        "config/encounters/crystal-ascent-showcase.ron",
+        include_str!("../../../assets/config/encounters/crystal-ascent-showcase.ron"),
     ),
     (
         "config/encounters/open-ground.ron",
@@ -2818,7 +2830,7 @@ mod tests {
         let example: LegacyResumeFile =
             ron::from_str(example_text).expect("the elemental example resume should parse");
         assert_eq!(example.build_version, build_identity());
-        assert_eq!(example.scenario_digest, 0xAE4D_2600_D983_8AC5);
+        assert_eq!(example.scenario_digest, 0x8787_E39A_663B_88A9);
         assert_eq!(example.units.len(), 6, "Party Trial is a complete 3v3");
         validate_legacy_resume(&example).expect("the elemental example record itself is valid");
 

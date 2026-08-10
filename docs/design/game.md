@@ -365,6 +365,35 @@ properties and elevations:
   evocations unless they have special properties like an anti-magic field; fewer
   allow enchantments, since a fixed stone wall cannot be cast on water
 
+### Crystal Ascent landmark
+
+Crystal Ascent is a vertical transition biome intended to become one landmark inside
+a larger authored world. A monumental aperture enters at the bottom into an open,
+dark chamber dominated by one large cyan crystal. The playable route does not cross
+the central void: it coils upward in three broad circuits along the enclosing walls,
+contracts inward like a Gothic cathedral, and emerges through an oculus into a wooded
+summit clearing. Smaller landing crystals make the route readable without turning the
+whole interior into daylight.
+
+The cathedral heart is a tall, asymmetric prism rather than a concentric pyramid:
+its fractured footing narrows quickly into a long irregular body and an off-centre
+crown. The stair tops remain four hexes wide, but their carved worked-stone support
+deepens across the route toward the wall instead of ending as a one-voxel shelf. The
+summit opening is a compact radius-11 oculus.
+
+The standalone scenario fixes the climb at 144 voxel levels while the authored recipe
+accepts 100 through 200 for later composition. Four-wide stairs and landings support a
+full party, ordinary transitions remain flat or one level, and each contraction
+retains four independent transfer lanes. The lower exterior apron and upper terminal
+remain opposite one another, with the Dark interior beginning just inside the lower
+threshold. On a fresh showcase launch, the standard party occupies three exact cells
+of that four-wide apron and faces inward; save restoration remains authoritative over
+that staging. The cathedral heart is physical world volume:
+characters cannot enter it and sight cannot pass through its interior. Small crystals
+are presentation and illumination fixtures rather than blockers. Map, Third Person,
+and First Person remain ordinary camera choices; no automatic gameplay cutaway is
+introduced for the tower.
+
 ### Magic shapes the world; the world decides how
 
 **Evocations make persistent terrain changes.** They last at least across multiple

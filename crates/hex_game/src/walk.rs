@@ -49,6 +49,7 @@ use hex_core::{
     HexTile, MapAnchorId, MapAnchors, ResolvedMapSeed, Screen, TilePos,
 };
 use hex_units::{MovingTo, Party, Selected, StandsOn, UnitRegistry};
+use hex_world::CameraMode;
 use serde::Deserialize;
 
 use crate::capture::write_png;
@@ -280,6 +281,8 @@ enum WalkStep {
     /// click also leaves the party idle, so idleness alone cannot prove a route
     /// was accepted or completed.
     AssertSelectedAt { expected: CameraRouteTile },
+    /// Prove that ordinary input selected the expected camera perspective.
+    AssertCameraMode(WalkCameraMode),
     /// Wait until a named button exists without activating it.
     AwaitButton(String),
     /// Install an authored immutable UI presentation state without solving combat.
@@ -318,6 +321,25 @@ enum WalkStep {
         #[serde(default)]
         suppress_hostiles: bool,
     },
+}
+
+/// Stable review vocabulary kept separate from the runtime resource's Rust names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+enum WalkCameraMode {
+    Map,
+    Character,
+    FirstPerson,
+}
+
+impl WalkCameraMode {
+    fn matches(self, actual: CameraMode) -> bool {
+        matches!(
+            (self, actual),
+            (Self::Map, CameraMode::Map)
+                | (Self::Character, CameraMode::Character)
+                | (Self::FirstPerson, CameraMode::FirstPerson)
+        )
+    }
 }
 
 /// Stack-safe position serialized by camera-route evidence.
@@ -690,6 +712,7 @@ struct WalkUiCamera;
 #[derive(SystemParam)]
 struct WalkContent<'w, 's> {
     failure: Option<Res<'w, GameplaySetupFailure>>,
+    camera_mode: Option<Res<'w, CameraMode>>,
     library: Option<Res<'w, ScenarioLibrary>>,
     anchors: Option<Res<'w, MapAnchors>>,
     party: Option<Res<'w, Party>>,
@@ -1163,6 +1186,25 @@ fn run_walk(
                 }
             }
         }
+        WalkStep::AssertCameraMode(expected) => {
+            let Some(actual) = content.camera_mode.as_deref() else {
+                error!("visual walk cannot assert camera mode before CameraMode exists");
+                state.failed = true;
+                exit.write(AppExit::error());
+                return;
+            };
+            if expected.matches(*actual) {
+                info!("visual walk proved camera mode {expected:?}");
+                state.advance();
+            } else {
+                error!(
+                    "visual walk expected camera mode {expected:?}, found {:?}",
+                    *actual
+                );
+                state.failed = true;
+                exit.write(AppExit::error());
+            }
+        }
         WalkStep::Settle(frames) => {
             state.settled += 1;
             if state.settled >= frames {
@@ -1539,6 +1581,9 @@ fn run_walk(
 mod tests {
     use super::*;
 
+    const FIRST_PERSON_CAMERA_SCRIPT: &str = "../../walks/camera_first_person.ron";
+    const CRYSTAL_ASCENT_CAMERA_SCRIPT: &str = "../../walks/camera_crystal_ascent.ron";
+
     const CAMERA_ROUTE_SCRIPTS: &[(&str, &str)] = &[
         ("../../walks/camera_crossing.ron", "The Crossing"),
         (
@@ -1556,6 +1601,7 @@ mod tests {
         ("../../walks/camera_deep_forest.ron", "Deep Forest"),
         ("../../walks/camera_prairie.ron", "Prairie"),
         ("../../walks/camera_fort.ron", "Fort"),
+        ("../../walks/camera_crystal_ascent.ron", "Crystal Ascent"),
         ("../../walks/camera_seven_regions.ron", "Seven Regions"),
         ("../../walks/camera_two_rings.ron", "Two Rings"),
         ("../../walks/camera_mountain_range.ron", "Mountain Range"),
@@ -1892,6 +1938,68 @@ mod tests {
             },
         })
         .is_err());
+        validate_step(&WalkStep::AssertCameraMode(WalkCameraMode::FirstPerson))
+            .expect("every typed camera mode should be a valid assertion");
+    }
+
+    #[test]
+    fn first_person_walk_proves_the_three_state_cycle_and_tactical_controls() {
+        let steps: Vec<WalkStep> =
+            ron::from_str(include_str!("../../../walks/camera_first_person.ron"))
+                .expect("the focused first-person walk should parse");
+        for step in &steps {
+            validate_step(step).expect("the focused first-person walk should validate");
+        }
+
+        let asserted_modes = steps
+            .iter()
+            .filter_map(|step| match step {
+                WalkStep::AssertCameraMode(mode) => Some(*mode),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            asserted_modes,
+            vec![
+                WalkCameraMode::Map,
+                WalkCameraMode::Character,
+                WalkCameraMode::FirstPerson,
+                WalkCameraMode::Map,
+            ],
+            "the walk must prove Map -> Character -> First Person -> Map in order"
+        );
+        let cycles_to = |expected| {
+            steps.windows(2).any(|pair| {
+                matches!(
+                    pair,
+                    [WalkStep::Key(key), WalkStep::AssertCameraMode(actual)]
+                        if key == "C" && *actual == expected
+                )
+            })
+        };
+        assert!(cycles_to(WalkCameraMode::Character));
+        assert!(cycles_to(WalkCameraMode::FirstPerson));
+        assert!(cycles_to(WalkCameraMode::Map));
+        assert_eq!(
+            steps
+                .iter()
+                .filter(|step| matches!(step, WalkStep::Capture(_)))
+                .count(),
+            4,
+            "the walk should retain before-move, after-move, look, and restored-Map evidence"
+        );
+        assert!(
+            steps
+                .iter()
+                .any(|step| matches!(step, WalkStep::OrbitCamera { .. })),
+            "right-drag look must be exercised through the ordinary input adapter"
+        );
+        assert!(
+            steps
+                .iter()
+                .any(|step| matches!(step, WalkStep::AssertSelectedAt { .. })),
+            "click-to-move must be proved at an exact stack-safe destination"
+        );
     }
 
     #[test]
@@ -2034,7 +2142,7 @@ mod tests {
                 "deployment-only Sandbox map {id:?} must remain in the shipping catalog"
             );
         }
-        assert_eq!(routes.len(), 16);
+        assert_eq!(routes.len(), 17);
 
         for route in &manifest.routes {
             assert!(
@@ -2083,6 +2191,139 @@ mod tests {
                 CameraRouteDestination::Anchor { name, .. } if name == "bridge"
             )
         }));
+    }
+
+    #[test]
+    fn crystal_ascent_walk_proves_the_vertical_route_and_both_close_cameras() {
+        let steps: Vec<WalkStep> =
+            ron::from_str(include_str!("../../../walks/camera_crystal_ascent.ron"))
+                .expect("the Crystal Ascent camera walk should parse");
+        for step in &steps {
+            validate_step(step).expect("the Crystal Ascent camera walk should validate");
+        }
+
+        assert!(steps.contains(&WalkStep::StartScenario {
+            name: "Crystal Ascent".to_owned(),
+            seed: Some(1_592_598_566),
+            suppress_hostiles: false,
+        }));
+        assert!(steps.windows(4).any(|steps| matches!(
+            steps,
+            [
+                WalkStep::Key(open),
+                WalkStep::AwaitButton(name),
+                WalkStep::Click {
+                    name: clicked,
+                    index: 0
+                },
+                WalkStep::Key(key),
+            ] if open == "F"
+                && name == "Party Movement Mode"
+                && clicked == "Party Movement Mode"
+                && key == "Escape"
+        )));
+        let clicks = steps
+            .iter()
+            .filter_map(|step| match step {
+                WalkStep::ClickAnchor { name, expected } => Some((name.as_str(), *expected)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            clicks,
+            vec![
+                (
+                    "crystal_ascent.bottom_chamber",
+                    CameraRouteTile {
+                        q: -8,
+                        r: -8,
+                        level: 6,
+                    },
+                ),
+                (
+                    "crystal_ascent.mid_flight",
+                    CameraRouteTile {
+                        q: 22,
+                        r: 0,
+                        level: 74,
+                    },
+                ),
+                (
+                    "crystal_ascent.corner_landing",
+                    CameraRouteTile {
+                        q: -10,
+                        r: 21,
+                        level: 134,
+                    },
+                ),
+                (
+                    "crystal_ascent.upper_contraction",
+                    CameraRouteTile {
+                        q: -19,
+                        r: 19,
+                        level: 138,
+                    },
+                ),
+                (
+                    "crystal_ascent.upper_exit",
+                    CameraRouteTile {
+                        q: 16,
+                        r: 15,
+                        level: 150,
+                    },
+                ),
+            ]
+        );
+        assert!(steps.contains(&WalkStep::ClickTile {
+            q: -20,
+            r: -19,
+            level: Some(6),
+        }));
+        let captures = steps
+            .iter()
+            .filter_map(|step| match step {
+                WalkStep::Capture(name) => Some(name.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            captures,
+            vec![
+                "01-crystal-ascent-lower-exterior-entrance-character",
+                "02-crystal-ascent-bottom-chamber-heart-character",
+                "03-crystal-ascent-bottom-chamber-heart-first-person",
+                "04-crystal-ascent-mid-flight-first-person",
+                "05-crystal-ascent-mid-flight-character",
+                "06-crystal-ascent-corner-landing-character",
+                "07-crystal-ascent-corner-landing-first-person",
+                "08-crystal-ascent-upper-contraction-first-person",
+                "09-crystal-ascent-upper-contraction-character",
+                "10-crystal-ascent-summit-oculus-clearing-character",
+                "11-crystal-ascent-summit-clearing-first-person",
+            ]
+        );
+        assert_eq!(
+            steps
+                .iter()
+                .filter(|step| matches!(step, WalkStep::OrbitCamera { .. }))
+                .count(),
+            8
+        );
+        assert!(steps.windows(2).any(|pair| matches!(
+            pair,
+            [WalkStep::Key(key), WalkStep::AssertCameraMode(WalkCameraMode::Character)]
+                if key == "C"
+        )));
+        assert!(steps.windows(2).any(|pair| matches!(
+            pair,
+            [WalkStep::Key(key), WalkStep::AssertCameraMode(WalkCameraMode::FirstPerson)]
+                if key == "C"
+        )));
+        assert!(steps.ends_with(&[
+            WalkStep::Key("Backspace".to_owned()),
+            WalkStep::AwaitScreen("Title".to_owned()),
+        ]));
+        assert!(CAMERA_ROUTE_SCRIPTS.contains(&(CRYSTAL_ASCENT_CAMERA_SCRIPT, "Crystal Ascent")));
     }
 
     #[test]
@@ -3040,6 +3281,7 @@ mod tests {
         ]
         .into_iter()
         .chain(CAMERA_ROUTE_SCRIPTS.iter().map(|(path, _)| *path))
+        .chain(std::iter::once(FIRST_PERSON_CAMERA_SCRIPT))
         {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(script);
             let text = std::fs::read_to_string(&path)
@@ -3153,6 +3395,7 @@ mod tests {
         ]
         .into_iter()
         .chain(CAMERA_ROUTE_SCRIPTS.iter().map(|(path, _)| *path))
+        .chain(std::iter::once(FIRST_PERSON_CAMERA_SCRIPT))
         {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(script);
             let text = std::fs::read_to_string(&path)

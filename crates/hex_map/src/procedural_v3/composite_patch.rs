@@ -88,6 +88,9 @@ pub(crate) fn construct_fragment(
             mode,
             art_catalog,
         ),
+        V3RecipeSettings::CrystalAscent(_) => Err(vec![composite_issue(
+            "Crystal Ascent patch construction is not wired yet",
+        )]),
         V3RecipeSettings::ShallowSea(_)
         | V3RecipeSettings::Beach(_)
         | V3RecipeSettings::Shore(_)
@@ -169,6 +172,9 @@ pub(crate) fn validate_fragment(
             fragment,
             art_catalog,
         )),
+        V3RecipeSettings::CrystalAscent(_) => WorldValidation::Invalid(vec![composite_issue(
+            "Crystal Ascent patch validation is not wired yet",
+        )]),
         V3RecipeSettings::ShallowSea(_)
         | V3RecipeSettings::Beach(_)
         | V3RecipeSettings::Shore(_)

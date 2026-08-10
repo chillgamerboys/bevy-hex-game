@@ -15,8 +15,8 @@ use hex_core::{
 };
 use hex_lattice::{LatticeSpec, LatticeState};
 use hex_units::{
-    plan_unsupported_actor_landing, Body, Downed, Footing, MovingTo, StandsOn, StopMovingAt,
-    TerrainOccupancy, UnitOccupancy, UnitRegistry,
+    plan_unsupported_actor_landing, AuthoredObjectOccupancy, Body, Downed, Footing, MovingTo,
+    StandsOn, StopMovingAt, TerrainOccupancy, UnitOccupancy, UnitRegistry,
 };
 
 use crate::{CombatEvent, SpellResolutionFailure, SpellResolutionStatus};
@@ -154,6 +154,7 @@ fn settle_unsupported_actors(
     mut resolution: ResMut<crate::SpellResolutionState>,
     terrain_ready: Option<Res<TerrainReady>>,
     terrain_occupancy: Option<Res<TerrainOccupancy>>,
+    authored_objects: Option<Res<AuthoredObjectOccupancy>>,
     substances: Option<Res<SubstanceTable>>,
     blockers: Option<Res<hex_core::TraversalBlockers>>,
     tiles: TileQuery,
@@ -170,11 +171,10 @@ fn settle_unsupported_actors(
     if !resolution.needs_terrain_settlement_attempt() {
         return;
     }
-    if terrain_ready.is_none() || terrain_occupancy.is_none() {
+    if terrain_ready.is_none() || terrain_occupancy.is_none() || authored_objects.is_none() {
         if resolution.terrain_settlement_required() {
             resolution.freeze(SpellResolutionFailure::SettlementUnavailable {
-                reason: "complete terrain publication is unavailable after an applied impact"
-                    .to_owned(),
+                reason: "complete terrain or authored-object publication is unavailable after an applied impact".to_owned(),
             });
         }
         return;
@@ -183,6 +183,14 @@ fn settle_unsupported_actors(
         if resolution.terrain_settlement_required() {
             resolution.freeze(SpellResolutionFailure::SettlementUnavailable {
                 reason: "SubstanceTable is unavailable after an applied impact".to_owned(),
+            });
+        }
+        return;
+    };
+    let Some(authored_objects) = authored_objects.as_deref() else {
+        if resolution.terrain_settlement_required() {
+            resolution.freeze(SpellResolutionFailure::SettlementUnavailable {
+                reason: "AuthoredObjectOccupancy is unavailable during settlement".to_owned(),
             });
         }
         return;
@@ -228,7 +236,13 @@ fn settle_unsupported_actors(
             });
             return;
         };
-        let footing = Footing::from_tiles(tiles.iter(), substances, body, blockers.as_deref());
+        let footing = Footing::from_tiles_with_object_occupancy(
+            tiles.iter(),
+            substances,
+            body,
+            blockers.as_deref(),
+            authored_objects,
+        );
         if footing.at(standing.pos).is_some() {
             continue;
         }
