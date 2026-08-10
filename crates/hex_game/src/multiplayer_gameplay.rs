@@ -323,6 +323,8 @@ fn disclosure_safe_refusal(refusal: &CommandRefusal) -> CommandRefusalReason {
         | CommandRefusal::TargetDowned { .. }
         | CommandRefusal::TargetNotHostile { .. }
         | CommandRefusal::TargetOutOfMeleeReach { .. }
+        | CommandRefusal::TargetUnoccupied { .. }
+        | CommandRefusal::TargetOutOfTouchReach { .. }
         | CommandRefusal::ActingUnitDowned { .. }
         | CommandRefusal::UnknownSpell { .. }
         | CommandRefusal::MissingSpellDefinition { .. }
@@ -336,6 +338,7 @@ fn disclosure_safe_refusal(refusal: &CommandRefusal) -> CommandRefusalReason {
         | CommandRefusal::SpellNotInscribed { .. }
         | CommandRefusal::CastBlocked { .. }
         | CommandRefusal::CastPlanStale { .. }
+        | CommandRefusal::RestorationTarget { .. }
         | CommandRefusal::RestorationUnavailable
         | CommandRefusal::RestUnavailable => CommandRefusalReason::InvalidTarget,
         CommandRefusal::Restoration { .. }
@@ -1186,6 +1189,24 @@ mod tests {
             disclosure_safe_refusal(&CommandRefusal::TargetUnobserved {
                 spell: "Scrying Eye".to_owned(),
                 target: TilePos::ORIGIN,
+            }),
+            CommandRefusalReason::InvalidTarget
+        );
+        assert_eq!(
+            disclosure_safe_refusal(&CommandRefusal::TargetUnoccupied {
+                target: TilePos::ORIGIN,
+            }),
+            CommandRefusalReason::InvalidTarget
+        );
+        assert_eq!(
+            disclosure_safe_refusal(&CommandRefusal::TargetOutOfTouchReach { target: UnitId(42) }),
+            CommandRefusalReason::InvalidTarget
+        );
+        assert_eq!(
+            disclosure_safe_refusal(&CommandRefusal::RestorationTarget {
+                reason: hex_combat::RestorationTargetRefusal::IncompleteHostileKnowledge {
+                    target: UnitId(42),
+                },
             }),
             CommandRefusalReason::InvalidTarget
         );
