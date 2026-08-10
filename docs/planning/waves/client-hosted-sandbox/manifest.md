@@ -614,13 +614,17 @@ amend this manifest after owner review.
   `CommandRefusal`: maps occupied/touch/restoration target details to the existing
   disclosure-safe `InvalidTarget` wire reason and locks that privacy boundary with
   regression assertions.
-- Current coordinator protocol amendment — adds canonical bounded `WorldSnapshotV1`,
+- `25af4c99` — coordinator protocol amendment adding canonical bounded `WorldSnapshotV1`,
   ordered `WorldDeltaV1`, `PlayerKnowledgeSnapshotV1`, allocation-header-bound
   `LiveSessionSnapshotV1`, random `SessionInstanceId`, exact endpoint/SPKI/certificate
   expiry reconnect binding, matching-session deletion, deterministic message order, and
-  protocol hash `9839260687359081537`. Focused evidence: 48 unit tests, the all-feature
-  host-plus-six-client direct session contract, crate doctests, formatting, and compile
-  checks all PASS before dispatching L3.
+  protocol hash `9839260687359081537`. Exact-head evidence: 59 selector tests; 180 rules;
+  93 trajectory; 416 gameplay contracts plus 5 spell-resolution postflight tests; 29
+  simulation; 147 app plus 11 UI postflight; 106 map-unit, 440 map-generation, 81
+  map-contract, and 923 residual tests; workspace doctests; strict workspace Clippy;
+  warning-denied docs; shipping release; formatting; dependency/license policy; deprecated
+  UI terminology; and relative links all PASS before L3 dispatch. The residual partition
+  includes the all-feature host-plus-six-client direct session contract.
 
 ## Close-out
 
