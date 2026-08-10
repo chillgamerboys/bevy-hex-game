@@ -625,6 +625,15 @@ amend this manifest after owner review.
   warning-denied docs; shipping release; formatting; dependency/license policy; deprecated
   UI terminology; and relative links all PASS before L3 dispatch. The residual partition
   includes the all-feature host-plus-six-client direct session contract.
+- `50aadfb03e05c8b2db85bba17b50b3ff90a4e6ad` — coordinator-owned protocol repair after
+  L3's V3 round-trip exposed that liquid flow is authored once per material run and copied
+  to each occupied voxel. The shared untrusted-input boundary now retains coordinate
+  bounds and horizontal adjacency while map authority validates downstream topology
+  against the live run; the protocol tag and golden hash advance to
+  `4042159340786758443`. Ratified under the user's 2026-08-10 temporary world-authority
+  delegation. Focused evidence: 47 multiplayer unit tests, the all-feature
+  host-plus-six-client direct-session contract, strict all-target/all-feature Clippy, and
+  warning-denied rustdoc all PASS.
 
 ## Close-out
 
