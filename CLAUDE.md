@@ -165,6 +165,10 @@ decisions.
 queries private map, unit, combat, or perception implementations. Wire command requests
 cannot supply a seat; authority derives it from admission state. `CombatState` stays on
 the host, and clients receive disclosure-safe `UnitReplica`/`SessionReplica` projections.
+Generator-neutral `WorldSnapshotV1`/`WorldDeltaV1` and authorized
+`PlayerKnowledgeSnapshotV1` are stable shared data contracts, but only world/perception
+adapters export, validate, import, or disclose their domain state. Reconnect state is
+bound to a random `SessionInstanceId`, endpoint/SPKI, and certificate expiry.
 Wire lobby requests also cannot supply a seat and are limited to readiness/leave;
 assignment, kick, launch, retry, return, and close are local-only host control messages.
 Installing `MultiplayerPlugin` alone opens no socket and leaves offline single-player in

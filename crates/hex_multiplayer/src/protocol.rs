@@ -13,7 +13,7 @@ use bevy_replicon::{
     prelude::{
         AppRuleExt, Channel, ClientMessageAppExt, ProtocolHash, ProtocolHasher, ServerMessageAppExt,
     },
-    shared::message::ctx::{ClientSendCtx, ServerReceiveCtx},
+    shared::message::ctx::{ClientReceiveCtx, ClientSendCtx, ServerReceiveCtx, ServerSendCtx},
 };
 use hex_core::{
     CommandRequestId, GameCommand, LatticeCoord, PartyPath, PlayerSeat, Sextant, TilePos, UnitId,
@@ -26,14 +26,15 @@ use crate::{
         MAX_ABS_LATTICE_COORDINATE, MAX_COMMAND_BYTES, MAX_DECISION_CELLS, MAX_IDENTITY_BYTES,
         MAX_PARTY_MEMBERS, MAX_ROUTE_STEPS,
     },
-    BuildIdentityV1, ClientLobbyRequest, ContentFingerprint, LobbySnapshot, PublicWorldFingerprint,
+    split_bounded_snapshot, BuildIdentityV1, ClientLobbyRequest, ContentFingerprint,
+    LiveSessionSnapshotV1, LiveSnapshotHeaderV1, LobbySnapshot, PublicWorldFingerprint,
     ReconnectCredential, SessionControlResult, SessionManifestV1, SessionPeerId, SessionReplica,
-    UnitReplica,
+    UnitReplica, WorldDeltaV1, MAX_LIVE_SNAPSHOT_BYTES,
 };
 
 /// Project-owned schema material not visible to Replicon's type/order hashing.
 pub const PROTOCOL_SCHEMA_TAG: &str =
-    "hex-multiplayer/v1;seatless-command-and-lobby;bounded-wire;authorized-projections";
+    "hex-multiplayer/v1;seatless-command-and-lobby;bounded-wire;authorized-projections;session-bound-live-world-v1";
 
 /// Monotonic ordering assigned by the simulation authority.
 #[derive(
@@ -146,6 +147,8 @@ pub struct ClientHello {
 /// Typed successful admission response, including the next rotating reconnect secret.
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdmissionAccepted {
+    /// Concrete host session that issued this rotating credential.
+    pub session_instance_id: crate::SessionInstanceId,
     /// Canonical human seat derived by the host.
     pub seat: PlayerSeat,
     /// Stable admitted-player identity, never a transport entity id.
@@ -213,6 +216,8 @@ pub enum SessionCloseReason {
 /// Independent typed session termination notification.
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionClosed {
+    /// Concrete session whose stored reconnect state may be deleted.
+    pub session_instance_id: crate::SessionInstanceId,
     /// Stable reason displayed after returning to Multiplayer.
     pub reason: SessionCloseReason,
 }
@@ -247,11 +252,119 @@ pub fn register_protocol(app: &mut App) {
         .make_message_independent::<SessionManifestV1>()
         .add_server_message::<LobbySnapshot>(Channel::Ordered)
         .make_message_independent::<LobbySnapshot>()
+        .add_server_message_with(
+            Channel::Ordered,
+            serialize_live_session_snapshot,
+            deserialize_live_session_snapshot,
+        )
+        .make_message_independent::<LiveSessionSnapshotV1>()
+        .add_server_message_with(
+            Channel::Ordered,
+            serialize_world_delta,
+            deserialize_world_delta,
+        )
+        .make_message_independent::<WorldDeltaV1>()
         .add_server_message::<SessionClosed>(Channel::Ordered)
         .make_message_independent::<SessionClosed>()
         .replicate::<UnitReplica>()
         .replicate::<SessionReplica>();
 }
+
+fn serialize_live_session_snapshot(
+    _context: &mut ServerSendCtx,
+    snapshot: &LiveSessionSnapshotV1,
+    message: &mut Vec<u8>,
+) -> BevyResult<()> {
+    let start = message.len();
+    let header_end = start
+        .checked_add(LiveSnapshotHeaderV1::ENCODED_BYTES)
+        .ok_or_else(|| BevyError::error(SnapshotWireError::HeaderBounds))?;
+    message.resize(header_end, 0);
+    postcard_utils::to_extend_mut(snapshot, message)?;
+    let payload_bytes = message.len().saturating_sub(header_end);
+    let header = match LiveSnapshotHeaderV1::new(snapshot.baseline_sequence, payload_bytes) {
+        Ok(header) => header,
+        Err(error) => {
+            message.truncate(start);
+            return Err(BevyError::error(error));
+        }
+    };
+    if let Err(error) = snapshot.validate_with_header(header) {
+        message.truncate(start);
+        return Err(BevyError::error(error));
+    }
+    let header_slot = message
+        .get_mut(start..header_end)
+        .ok_or_else(|| BevyError::error(SnapshotWireError::HeaderBounds))?;
+    header_slot.copy_from_slice(&header.encode());
+    Ok(())
+}
+
+fn deserialize_live_session_snapshot(
+    _context: &mut ClientReceiveCtx,
+    message: &mut Bytes,
+) -> BevyResult<LiveSessionSnapshotV1> {
+    let (header, _payload) = split_bounded_snapshot(message.as_ref()).map_err(BevyError::error)?;
+    let mut payload = message.split_off(LiveSnapshotHeaderV1::ENCODED_BYTES);
+    *message = Bytes::new();
+    let snapshot: LiveSessionSnapshotV1 = postcard_utils::from_buf(&mut payload)?;
+    if !payload.is_empty() {
+        return Err(BevyError::error(SnapshotWireError::TrailingData));
+    }
+    snapshot
+        .validate_with_header(header)
+        .map_err(BevyError::error)?;
+    Ok(snapshot)
+}
+
+fn serialize_world_delta(
+    _context: &mut ServerSendCtx,
+    delta: &WorldDeltaV1,
+    message: &mut Vec<u8>,
+) -> BevyResult<()> {
+    delta.validate().map_err(BevyError::error)?;
+    let start = message.len();
+    postcard_utils::to_extend_mut(delta, message)?;
+    if message.len().saturating_sub(start) > MAX_LIVE_SNAPSHOT_BYTES {
+        message.truncate(start);
+        return Err(BevyError::error(SnapshotWireError::MessageTooLarge));
+    }
+    Ok(())
+}
+
+fn deserialize_world_delta(
+    _context: &mut ClientReceiveCtx,
+    message: &mut Bytes,
+) -> BevyResult<WorldDeltaV1> {
+    if message.len() > MAX_LIVE_SNAPSHOT_BYTES {
+        return Err(BevyError::error(SnapshotWireError::MessageTooLarge));
+    }
+    let delta: WorldDeltaV1 = postcard_utils::from_buf(message)?;
+    if !message.is_empty() {
+        return Err(BevyError::error(SnapshotWireError::TrailingData));
+    }
+    delta.validate().map_err(BevyError::error)?;
+    Ok(delta)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SnapshotWireError {
+    MessageTooLarge,
+    TrailingData,
+    HeaderBounds,
+}
+
+impl fmt::Display for SnapshotWireError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::MessageTooLarge => "world snapshot/delta exceeds the 64 MiB frame cap",
+            Self::TrailingData => "world snapshot/delta contains trailing data",
+            Self::HeaderBounds => "live snapshot header bounds are invalid",
+        })
+    }
+}
+
+impl std::error::Error for SnapshotWireError {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct BoundedPartyPath {

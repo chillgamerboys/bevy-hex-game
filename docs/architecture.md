@@ -80,9 +80,11 @@ canonical `LobbySnapshot`.
 
 The shared crate owns stable data and transport registration, while each domain owns its
 adapter. Gameplay publishes authorized `UnitReplica`/`SessionReplica` values. The world
-owner alone exports/imports the pending `WorldSnapshotV1` contract. Perception decides
-which hostile projections exist; networking applies that authorized view and must not
-reconstruct hidden facts from private implementations.
+owner alone exports/imports the ratified generator-neutral `WorldSnapshotV1`, computes
+`PublicWorldFingerprintV1`, and transactionally derives/applies `WorldDeltaV1`.
+Perception alone exports/imports `PlayerKnowledgeSnapshotV1` and decides which hostile
+projections exist; networking applies that authorized view and cannot represent or
+reconstruct private generator plans, hostile knowledge, or `CombatState`.
 
 `MultiplayerPlugin` installs custom-auth Replicon, Aeronet adapters, and WebTransport
 capability in one deterministic registration order. It does not spawn an endpoint or
@@ -95,6 +97,11 @@ project-owned `SpkiPinVerifier`. It retains certificate validity/lifetime, P-256
 TLS handshake-signature checks; the production-unsafe disable-validation path is never
 used. This preserves the connection-code contract despite `wtransport 0.6.1`'s safe
 convenience verifier hashing complete leaf-certificate DER instead.
+
+Every concrete host run has a random `SessionInstanceId`. Reconnect persistence binds
+that id to the endpoint, SPKI pin, exact verified certificate expiry, seat/player
+identity, and rotating credential. Only a matching typed closure, expiry, or successful
+replacement can remove it; an unrelated failed endpoint never consumes recoverable state.
 
 ### `hex_map` is a leaf, on purpose
 

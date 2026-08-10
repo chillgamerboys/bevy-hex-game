@@ -15,14 +15,23 @@ use bevy_replicon::prelude::ProtocolHash;
 use hex_core::PlayerSeat;
 
 use crate::{
-    AdmissionAccepted, AdmissionCredential, AdmissionRefusalReason, ClientHello, InviteToken,
-    LobbyAuthority, LobbyMutationError, LobbyPhase, LobbySnapshot, ManifestValidationError,
-    PublicWorldFingerprint, ReconnectCredential, SessionManifestV1, SessionPeerId,
+    AdmissionAccepted, AdmissionCredential, AdmissionRefusalReason, CertificateFingerprint,
+    ClientHello, DirectEndpoint, InviteToken, LobbyAuthority, LobbyMutationError, LobbyPhase,
+    LobbySnapshot, ManifestValidationError, PublicWorldFingerprint, ReconnectCredential,
+    SessionInstanceId, SessionManifestV1, SessionPeerId, MAX_ADVERTISED_HOST_BYTES,
 };
 
-const CREDENTIAL_FILE_MAGIC: &[u8; 6] = b"HEXRC1";
-const CREDENTIAL_FILE_BYTES: usize =
-    CREDENTIAL_FILE_MAGIC.len() + 1 + SessionPeerId::BYTE_LENGTH + ReconnectCredential::BYTE_LENGTH;
+const CREDENTIAL_FILE_MAGIC: &[u8; 6] = b"HEXRC2";
+const CREDENTIAL_FILE_FIXED_BYTES: usize = CREDENTIAL_FILE_MAGIC.len()
+    + SessionInstanceId::BYTE_LENGTH
+    + 8
+    + 2
+    + 2
+    + CertificateFingerprint::BYTE_LENGTH
+    + 1
+    + SessionPeerId::BYTE_LENGTH
+    + ReconnectCredential::BYTE_LENGTH;
+const CREDENTIAL_FILE_MAX_BYTES: usize = CREDENTIAL_FILE_FIXED_BYTES + MAX_ADVERTISED_HOST_BYTES;
 
 /// Stable authorization derived by the host for one physical connection.
 ///
@@ -363,7 +372,13 @@ impl SessionAdmissionAuthority {
         );
         self.connections.insert(connection, seat);
         self.invite_token = InviteToken::generate();
-        Ok(grant(seat, player, reconnect_credential, false))
+        Ok(grant(
+            self.manifest.session_instance_id,
+            seat,
+            player,
+            reconnect_credential,
+            false,
+        ))
     }
 
     fn admit_reconnecting(
@@ -396,7 +411,13 @@ impl SessionAdmissionAuthority {
             record.active_connection = Some(connection);
         }
         self.connections.insert(connection, seat);
-        Ok(grant(seat, peer.player, rotated, true))
+        Ok(grant(
+            self.manifest.session_instance_id,
+            seat,
+            peer.player,
+            rotated,
+            true,
+        ))
     }
 
     fn unique_peer_identity(&self) -> SessionPeerId {
@@ -426,6 +447,7 @@ impl fmt::Debug for SessionAdmissionAuthority {
 }
 
 fn grant(
+    session_instance_id: crate::SessionInstanceId,
     seat: PlayerSeat,
     player_identity: SessionPeerId,
     reconnect_credential: ReconnectCredential,
@@ -437,6 +459,7 @@ fn grant(
             player_identity,
         },
         accepted: AdmissionAccepted {
+            session_instance_id,
             seat,
             player_identity,
             reconnect_credential,
@@ -509,9 +532,46 @@ impl fmt::Display for SessionActivationError {
 
 impl std::error::Error for SessionActivationError {}
 
+/// Direct endpoint/certificate facts bound to persisted reconnect state.
+///
+/// The candidate binding is derived from the pinned connection code. Runtime storage
+/// persists it only after the TLS verifier accepts those exact certificate facts and
+/// the host emits [`AdmissionAccepted`].
+#[derive(Resource, Debug, Clone, PartialEq, Eq)]
+pub struct ReconnectEndpointBinding {
+    /// Advertised endpoint used for this session.
+    pub endpoint: DirectEndpoint,
+    /// Exact pinned SPKI digest.
+    pub certificate_fingerprint: CertificateFingerprint,
+    /// Verified leaf certificate expiry as Unix seconds.
+    pub certificate_expires_unix_seconds: u64,
+}
+
+impl ReconnectEndpointBinding {
+    /// Validates a non-zero certificate expiry.
+    pub fn new(
+        endpoint: DirectEndpoint,
+        certificate_fingerprint: CertificateFingerprint,
+        certificate_expires_unix_seconds: u64,
+    ) -> Result<Self, CredentialStoreError> {
+        if certificate_expires_unix_seconds == 0 {
+            return Err(CredentialStoreError::Malformed);
+        }
+        Ok(Self {
+            endpoint,
+            certificate_fingerprint,
+            certificate_expires_unix_seconds,
+        })
+    }
+}
+
 /// Credential material persisted by a reconnecting client.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct StoredReconnectCredential {
+    /// Concrete host session that issued the credential.
+    pub session_instance_id: SessionInstanceId,
+    /// Verified endpoint/SPKI/certificate-lifetime binding.
+    pub endpoint_binding: ReconnectEndpointBinding,
     /// Canonical seat assigned by the host.
     pub seat: PlayerSeat,
     /// Stable session player identity.
@@ -524,6 +584,8 @@ impl fmt::Debug for StoredReconnectCredential {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("StoredReconnectCredential")
+            .field("session_instance_id", &self.session_instance_id)
+            .field("endpoint_binding", &self.endpoint_binding)
             .field("seat", &self.seat)
             .field("player_identity", &self.player_identity)
             .field("reconnect_credential", &self.reconnect_credential)
@@ -531,13 +593,23 @@ impl fmt::Debug for StoredReconnectCredential {
     }
 }
 
-impl From<AdmissionAccepted> for StoredReconnectCredential {
-    fn from(accepted: AdmissionAccepted) -> Self {
+impl StoredReconnectCredential {
+    /// Combines one accepted rotating credential with the verified direct endpoint.
+    #[must_use]
+    pub fn new(accepted: AdmissionAccepted, endpoint_binding: ReconnectEndpointBinding) -> Self {
         Self {
+            session_instance_id: accepted.session_instance_id,
+            endpoint_binding,
             seat: accepted.seat,
             player_identity: accepted.player_identity,
             reconnect_credential: accepted.reconnect_credential,
         }
+    }
+
+    /// Whether the pinned certificate can no longer authenticate this endpoint.
+    #[must_use]
+    pub const fn is_expired_at(&self, unix_seconds: u64) -> bool {
+        unix_seconds >= self.endpoint_binding.certificate_expires_unix_seconds
     }
 }
 
@@ -550,8 +622,13 @@ pub trait ReconnectCredentialStore: Send + Sync + 'static {
         &self,
         credential: StoredReconnectCredential,
     ) -> Result<(), CredentialStoreError>;
-    /// Deletes reconnect state when the session ends.
-    fn delete(&self) -> Result<(), CredentialStoreError>;
+    /// Deletes reconnect state only when it belongs to `session_instance_id`.
+    fn delete_if_session(
+        &self,
+        session_instance_id: SessionInstanceId,
+    ) -> Result<bool, CredentialStoreError>;
+    /// Deletes reconnect state only after its verified certificate expiry.
+    fn delete_if_expired(&self, unix_seconds: u64) -> Result<bool, CredentialStoreError>;
 }
 
 /// Bevy resource wrapping an injected reconnect credential store.
@@ -586,7 +663,7 @@ impl ReconnectCredentialStore for MemoryReconnectCredentialStore {
     fn load(&self) -> Result<Option<StoredReconnectCredential>, CredentialStoreError> {
         self.0
             .read()
-            .map(|stored| *stored)
+            .map(|stored| stored.clone())
             .map_err(|_poisoned| CredentialStoreError::Unavailable)
     }
 
@@ -602,17 +679,43 @@ impl ReconnectCredentialStore for MemoryReconnectCredentialStore {
         Ok(())
     }
 
-    fn delete(&self) -> Result<(), CredentialStoreError> {
+    fn delete_if_session(
+        &self,
+        session_instance_id: SessionInstanceId,
+    ) -> Result<bool, CredentialStoreError> {
         let mut stored = self
             .0
             .write()
             .map_err(|_poisoned| CredentialStoreError::Unavailable)?;
-        *stored = None;
-        Ok(())
+        if stored
+            .as_ref()
+            .is_some_and(|stored| stored.session_instance_id == session_instance_id)
+        {
+            *stored = None;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    fn delete_if_expired(&self, unix_seconds: u64) -> Result<bool, CredentialStoreError> {
+        let mut stored = self
+            .0
+            .write()
+            .map_err(|_poisoned| CredentialStoreError::Unavailable)?;
+        if stored
+            .as_ref()
+            .is_some_and(|stored| stored.is_expired_at(unix_seconds))
+        {
+            *stored = None;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 }
 
-/// Atomic fixed-size file store beneath an application-selected temporary-data path.
+/// Atomic bounded-size file store beneath an application-selected temporary-data path.
 #[derive(Debug, Clone)]
 pub struct AtomicFileReconnectCredentialStore {
     path: PathBuf,
@@ -639,9 +742,9 @@ impl ReconnectCredentialStore for AtomicFileReconnectCredentialStore {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(CredentialStoreError::Io(error)),
         };
-        let mut bytes = Vec::with_capacity(CREDENTIAL_FILE_BYTES.saturating_add(1));
+        let mut bytes = Vec::with_capacity(CREDENTIAL_FILE_MAX_BYTES.saturating_add(1));
         std::io::Read::by_ref(&mut file)
-            .take(u64::try_from(CREDENTIAL_FILE_BYTES.saturating_add(1)).unwrap_or(u64::MAX))
+            .take(u64::try_from(CREDENTIAL_FILE_MAX_BYTES.saturating_add(1)).unwrap_or(u64::MAX))
             .read_to_end(&mut bytes)?;
         decode_stored_credential(&bytes).map(Some)
     }
@@ -653,7 +756,7 @@ impl ReconnectCredentialStore for AtomicFileReconnectCredentialStore {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let bytes = encode_stored_credential(credential);
+        let bytes = encode_stored_credential(&credential);
         let mut options = OpenOptions::new();
         options.write(true).create(true).truncate(true);
         #[cfg(unix)]
@@ -667,7 +770,34 @@ impl ReconnectCredentialStore for AtomicFileReconnectCredentialStore {
         Ok(())
     }
 
-    fn delete(&self) -> Result<(), CredentialStoreError> {
+    fn delete_if_session(
+        &self,
+        session_instance_id: SessionInstanceId,
+    ) -> Result<bool, CredentialStoreError> {
+        let Some(stored) = self.load()? else {
+            return Ok(false);
+        };
+        if stored.session_instance_id != session_instance_id {
+            return Ok(false);
+        }
+        self.delete_file()?;
+        Ok(true)
+    }
+
+    fn delete_if_expired(&self, unix_seconds: u64) -> Result<bool, CredentialStoreError> {
+        let Some(stored) = self.load()? else {
+            return Ok(false);
+        };
+        if !stored.is_expired_at(unix_seconds) {
+            return Ok(false);
+        }
+        self.delete_file()?;
+        Ok(true)
+    }
+}
+
+impl AtomicFileReconnectCredentialStore {
+    fn delete_file(&self) -> Result<(), CredentialStoreError> {
         match std::fs::remove_file(&self.path) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -676,9 +806,26 @@ impl ReconnectCredentialStore for AtomicFileReconnectCredentialStore {
     }
 }
 
-fn encode_stored_credential(credential: StoredReconnectCredential) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(CREDENTIAL_FILE_BYTES);
+fn encode_stored_credential(credential: &StoredReconnectCredential) -> Vec<u8> {
+    let host = credential.endpoint_binding.endpoint.host().as_bytes();
+    let mut bytes = Vec::with_capacity(CREDENTIAL_FILE_FIXED_BYTES.saturating_add(host.len()));
     bytes.extend_from_slice(CREDENTIAL_FILE_MAGIC);
+    bytes.extend_from_slice(&credential.session_instance_id.to_bytes());
+    bytes.extend_from_slice(
+        &credential
+            .endpoint_binding
+            .certificate_expires_unix_seconds
+            .to_be_bytes(),
+    );
+    bytes.extend_from_slice(&u16::try_from(host.len()).unwrap_or(u16::MAX).to_be_bytes());
+    bytes.extend_from_slice(host);
+    bytes.extend_from_slice(&credential.endpoint_binding.endpoint.port().to_be_bytes());
+    bytes.extend_from_slice(
+        &credential
+            .endpoint_binding
+            .certificate_fingerprint
+            .to_bytes(),
+    );
     bytes.push(credential.seat.0);
     bytes.extend_from_slice(&credential.player_identity.to_bytes());
     bytes.extend_from_slice(&credential.reconnect_credential.to_bytes());
@@ -688,13 +835,35 @@ fn encode_stored_credential(credential: StoredReconnectCredential) -> Vec<u8> {
 fn decode_stored_credential(
     bytes: &[u8],
 ) -> Result<StoredReconnectCredential, CredentialStoreError> {
-    if bytes.len() != CREDENTIAL_FILE_BYTES {
+    if bytes.len() < CREDENTIAL_FILE_FIXED_BYTES || bytes.len() > CREDENTIAL_FILE_MAX_BYTES {
         return Err(CredentialStoreError::Malformed);
     }
     let mut remaining = bytes;
     if take_array::<6>(&mut remaining)? != *CREDENTIAL_FILE_MAGIC {
         return Err(CredentialStoreError::Malformed);
     }
+    let session_instance_id = SessionInstanceId::from_bytes(take_array::<16>(&mut remaining)?);
+    if !session_instance_id.is_valid() {
+        return Err(CredentialStoreError::Malformed);
+    }
+    let certificate_expires_unix_seconds = u64::from_be_bytes(take_array::<8>(&mut remaining)?);
+    if certificate_expires_unix_seconds == 0 {
+        return Err(CredentialStoreError::Malformed);
+    }
+    let host_length = usize::from(u16::from_be_bytes(take_array::<2>(&mut remaining)?));
+    if host_length == 0 || host_length > MAX_ADVERTISED_HOST_BYTES {
+        return Err(CredentialStoreError::Malformed);
+    }
+    let (host, tail) = remaining
+        .split_at_checked(host_length)
+        .ok_or(CredentialStoreError::Malformed)?;
+    remaining = tail;
+    let host = std::str::from_utf8(host).map_err(|_error| CredentialStoreError::Malformed)?;
+    let port = u16::from_be_bytes(take_array::<2>(&mut remaining)?);
+    let endpoint =
+        DirectEndpoint::new(host, port).map_err(|_error| CredentialStoreError::Malformed)?;
+    let certificate_fingerprint =
+        CertificateFingerprint::from_bytes(take_array::<32>(&mut remaining)?);
     let seat_byte = take_array::<1>(&mut remaining)?;
     let seat = PlayerSeat::human(
         seat_byte
@@ -709,6 +878,12 @@ fn decode_stored_credential(
         return Err(CredentialStoreError::Malformed);
     }
     Ok(StoredReconnectCredential {
+        session_instance_id,
+        endpoint_binding: ReconnectEndpointBinding {
+            endpoint,
+            certificate_fingerprint,
+            certificate_expires_unix_seconds,
+        },
         seat,
         player_identity,
         reconnect_credential,
@@ -794,6 +969,7 @@ mod tests {
             })
             .collect();
         SessionManifestV1 {
+            session_instance_id: crate::SessionInstanceId::from_bytes([1; 16]),
             protocol: ProtocolVersion::default(),
             build: BuildIdentityV1::new("0.4.0", "fixture").expect("valid build"),
             content_fingerprint: ContentFingerprint(11),
@@ -903,6 +1079,10 @@ mod tests {
             .expect("guest should be admitted");
         let original = admitted.accepted.reconnect_credential;
         assert_eq!(
+            admitted.accepted.session_instance_id,
+            authority.manifest().session_instance_id
+        );
+        assert_eq!(
             authority.admit(
                 Entity::from_bits(2),
                 &hello(&authority, AdmissionCredential::Reconnect(original)),
@@ -918,6 +1098,10 @@ mod tests {
             )
             .expect("reserved seat should reconnect");
         assert!(reconnected.reconnected);
+        assert_eq!(
+            reconnected.accepted.session_instance_id,
+            authority.manifest().session_instance_id
+        );
         assert!(!reconnected.accepted.reconnect_credential.matches(original));
         assert_eq!(
             authority.admit(
@@ -1002,14 +1186,29 @@ mod tests {
     #[test]
     fn memory_and_atomic_file_stores_round_trip_and_delete_secrets() {
         let stored = StoredReconnectCredential {
+            session_instance_id: SessionInstanceId::from_bytes([3; 16]),
+            endpoint_binding: ReconnectEndpointBinding::new(
+                DirectEndpoint::new("127.0.0.1", 7777).expect("endpoint should be valid"),
+                CertificateFingerprint::from_bytes([9; 32]),
+                2_000,
+            )
+            .expect("binding should be valid"),
             seat: PlayerSeat(3),
             player_identity: SessionPeerId::from_bytes([4; 16]),
             reconnect_credential: ReconnectCredential::from_bytes([5; 32]),
         };
         let memory = MemoryReconnectCredentialStore::default();
-        memory.store_atomically(stored).expect("memory store works");
+        memory
+            .store_atomically(stored.clone())
+            .expect("memory store works");
         assert!(matches!(memory.load(), Ok(Some(value)) if value == stored));
-        memory.delete().expect("memory delete works");
+        assert!(!memory
+            .delete_if_session(SessionInstanceId::from_bytes([8; 16]))
+            .expect("unrelated closure should be harmless"));
+        assert!(matches!(memory.load(), Ok(Some(value)) if value == stored));
+        assert!(memory
+            .delete_if_session(stored.session_instance_id)
+            .expect("matching memory delete works"));
         assert!(matches!(memory.load(), Ok(None)));
 
         let nonce = SystemTime::now()
@@ -1022,25 +1221,35 @@ mod tests {
         ));
         let path = directory.join("reconnect.bin");
         let file = AtomicFileReconnectCredentialStore::new(&path);
-        file.store_atomically(stored).expect("atomic store works");
+        file.store_atomically(stored.clone())
+            .expect("atomic store works");
         assert!(matches!(file.load(), Ok(Some(value)) if value == stored));
         assert_eq!(
             std::fs::read(&path)
                 .expect("stored credential should be readable")
                 .len(),
-            CREDENTIAL_FILE_BYTES
+            encode_stored_credential(&stored).len()
         );
-        file.delete().expect("atomic delete works");
+        assert!(!file
+            .delete_if_expired(1_999)
+            .expect("unexpired state should be preserved"));
+        assert!(file
+            .delete_if_expired(2_000)
+            .expect("expired state should be deleted"));
         assert!(matches!(file.load(), Ok(None)));
         let _cleanup_result = std::fs::remove_dir(&directory);
     }
 
     #[test]
     fn malformed_stored_bytes_fail_closed_without_allocating_past_the_cap() {
-        for length in 0..=CREDENTIAL_FILE_BYTES.saturating_add(1) {
+        for length in 0..CREDENTIAL_FILE_FIXED_BYTES {
             let bytes = vec![0_u8; length];
             assert!(decode_stored_credential(&bytes).is_err());
         }
+        assert!(
+            decode_stored_credential(&vec![0_u8; CREDENTIAL_FILE_MAX_BYTES.saturating_add(1)])
+                .is_err()
+        );
         assert_eq!(
             BoundedText::<1>::new("too long"),
             Err(BoundError::TextTooLong {

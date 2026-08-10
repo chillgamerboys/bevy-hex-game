@@ -20,6 +20,7 @@ fn text(value: &str) -> BoundedText<MAX_IDENTITY_BYTES> {
 #[expect(clippy::expect_used, reason = "static fixture manifest is valid")]
 fn manifest() -> SessionManifestV1 {
     SessionManifestV1 {
+        session_instance_id: hex_multiplayer::SessionInstanceId::from_bytes([4; 16]),
         protocol: ProtocolVersion::default(),
         build: BuildIdentityV1::new("0.4.0", "direct-session-test").expect("valid build"),
         content_fingerprint: ContentFingerprint(100),

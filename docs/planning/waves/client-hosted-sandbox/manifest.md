@@ -2,7 +2,8 @@
 
 - **Status:** dispatching
 - **Wave branch:** `wave/client-hosted-sandbox`
-- **Base:** `origin/dev@92662d456746506093e8de61f54f1d619085e1fe`
+- **Refreshed base:** `origin/dev@1dca1065c7681737ce424fa187879ea31974e356`
+- **Dev refresh merge:** `e610e26c50398e43ff23bc4db0890ba7463f11ae`
 - **Foundation tip:** `02356b00a5f7a9f26ebe788d8afc45ed58d5baa6`
 - **Coordinator:** `@shrav-k`
 - **Epic:** user-approved Client-Hosted Multiplayer Epic, 2026-08-08 (`ticket: null`)
@@ -72,11 +73,13 @@ proven transport-neutral direct protocol and do not belong in this wave.
     its baseline sequence.
 15. **Direct transport.** Direct hosting uses WebTransport on editable UDP port `7777`, a
     per-session self-signed certificate pinned by SPKI SHA-256, and a redacted versioned
-    `HEX1.<base64url>` code carrying advertised endpoint, fingerprint, and a 128-bit invite
-    token. Production-unsafe certificate bypass is forbidden.
+    `HEX1.<base64url>` code carrying advertised endpoint, fingerprint, exact certificate
+    expiry, and a 128-bit invite token. Production-unsafe certificate bypass is forbidden.
 16. **Reconnect secret.** A rotating 256-bit reconnect token is written atomically to
-    temporary application storage, is never included in `Debug` or ordinary logs, and is
-    deleted when the session ends.
+    temporary application storage with its random session instance, endpoint/SPKI,
+    certificate expiry, seat, and player identity. It is never included in `Debug` or
+    ordinary logs, and is deleted only for the matching typed closure, expiry, or a
+    successful replacement.
 17. **Untrusted bounds.** Serialized commands are capped at 64 KiB; decoded strings,
     vectors, paths, and domain values are validated; request bursts are rate limited; and
     snapshot allocation is capped before deserialization.
@@ -196,6 +199,56 @@ screen. Commit `943b497c` fixes both without touching #188/#190's camera-step va
 `f2da0c71` carries the identical L4-owned setup-frame script onto the wave so the combined
 all-feature test remains green before the L4 merge. Ratifier: coordinator.
 
+### 2026-08-10 — temporary world authority and generator-neutral restore contract
+
+World owner `trova97` is unavailable for two weeks and asked the team to review and land
+their ready work, then place multiplayer on top. The user explicitly delegated temporary
+world authority to the coordinator, authorized additive changes/review reconciliation,
+and supplied the required exact-head human verdicts. PRs #186–#190 are now represented on
+`dev`; the delivery-state reconciliation finished at
+`origin/dev@1dca1065c7681737ce424fa187879ea31974e356`. The coordinator merged that exact
+`dev` additively into the wave as
+`e610e26c50398e43ff23bc4db0890ba7463f11ae`. No Trova source branch was deleted.
+
+The temporary authority ratifies the following L3 contract:
+
+- reconnect and Campaign restore import a complete generator-neutral `WorldSnapshotV1`;
+  regenerating `SessionManifestV1` is not a restore path;
+- canonical stable-name columns retain every non-air voxel run and the complete published
+  tile tuple: exact `TilePos`, integer `RunBottom`, `HexSpan` bit patterns, stable-name
+  `SubstanceId`, and integer `Headroom`;
+- the snapshot also retains partial voxel health, anchors, interior floors/roof voxels,
+  special and biome memberships, traversal blockers, exact view hint, gameplay lights,
+  liquid material/flow/downstream state, and current feature/crystal object consequences
+  required for rendering, blockers, and edit protection;
+- generator plans, private recipe identities, transient `PlannedStructure` descriptors
+  whose only runtime consequence is already in voxels, entities, handles, materials,
+  cameras, transport state, and hostile knowledge are excluded. The reserved #187
+  surface-feature vocabulary remains absent until a live producer exists;
+- `PublicWorldFingerprintV1` covers canonical stable-name state and every public semantic
+  projection. It is distinct from the generator-owned
+  `GenerationReport::map_fingerprint` and changes after authoritative terrain mutation;
+- collection limits are derived from twice the largest shipped configured map measurement,
+  rounded up to a power of two: radius 77 is 18,019 columns, producing a 65,536-column and
+  flat-projection envelope. The radius-four 61-surface authored footprint produces a
+  128-surface per-object envelope. Names remain 128 bytes, existing coordinate/level
+  bounds remain authoritative, and every live snapshot/delta frame is capped at 64 MiB
+  before deserialization.
+
+Before L3 dispatch, the coordinator-owned shared protocol defines canonical snapshot
+entries, ordered `WorldDeltaV1` upserts/removals with base/target fingerprints,
+`PlayerKnowledgeSnapshotV1`, and `LiveSessionSnapshotV1`. The live payload carries the
+manifest, current world, authorized shared-player knowledge, unit/session replicas, and a
+baseline equal to both the fixed allocation header and `SessionReplica`. Deltas are
+authority-boundary ordered and must apply transactionally and idempotently in L3.
+
+Every manifest/admission/closure now carries a random 128-bit `SessionInstanceId`.
+Reconnect storage binds that id to endpoint/SPKI, exact verified certificate expiry,
+seat/player identity, and the rotating credential. An unrelated endpoint refusal or
+closure cannot delete the retained session. Host/client protocol registration remains one
+deterministic order and its golden hash changes with this amendment. Ratifier: user under
+the temporary world-owner delegation; recorded and implemented by coordinator.
+
 ## Shared foundation
 
 Live contracts this wave builds on:
@@ -211,9 +264,10 @@ Live contracts this wave builds on:
   `crates/hex_core/src/terrain_impact.rs:258`, and
   `crates/hex_map/src/procedural.rs:36`.
 - **Shared loader:** `AcceptedContentRevision::fingerprint` at
-  `crates/hex_assets/src/content_index.rs:235`.
+  `crates/hex_assets/src/content_index.rs:252`.
 - **Shared app:** `AppSystems`, `PausableSystems`, `GameplaySetup`, one global `Mode`,
-  and `GameplayPhase` at `crates/hex_core/src/app.rs:54`.
+  and `GameplayPhase` at `crates/hex_core/src/app.rs:89` and
+  `crates/hex_core/src/app.rs:115`–`231`.
 
 Required behavior-neutral foundation, originally specified to land on `dev` before the
 wave cut and now carried at the wave base under the recorded exception:
@@ -229,11 +283,11 @@ wave cut and now carried at the wave base under the recorded exception:
 3. **Shared wire vocabulary:** add the versioned protocol/session/replica types, redacted
    secret wrappers, deterministic registration order, structural limits, and protocol
    hash in `hex_multiplayer`. No socket opens merely because its plugin is installed.
-4. **World-owned review draft:** the world owner must explicitly ratify the fields and
-   round-trip fingerprint of `WorldSnapshotV1` before L3 dispatch, including whether
-   stable generator-neutral presentation consequences are snapshotted (recommended) or
-   regenerated. Regeneration alone does not meet the Campaign snapshot contract. The
-   shared type is a data contract; only `hex_map` exports/imports it.
+4. **World-owned snapshot contract:** the temporary delegated world authority ratified
+   the complete fields, generator-neutral presentation consequences, and round-trip
+   `PublicWorldFingerprintV1` in the 2026-08-10 amendment. Regeneration alone does not
+   meet reconnect or Campaign restore. The shared type is a data contract; only `hex_map`
+   exports/imports it.
 5. **Coordinator-only dependency/composition:** pin the Bevy-0.19-compatible Replicon and
    Aeronet `0.21` stack, add fail-closed Cargo features/selectors, and keep `steam`
    optional and absent from Milestone A. Root Cargo and plugin composition remain
@@ -253,9 +307,9 @@ amendment above selects an audited custom SPKI verifier that preserves decision 
 built-in verifier's validity, maximum-lifetime, and key-algorithm constraints. L1 must
 retain real handshake-signature verification and add negative tests for every constraint.
 
-The current user approval ratifies the product behavior, but it is not recorded as the
-separate world-owner sign-off required by item 4. That sign-off remains a dispatch
-condition for L3.
+The 2026-08-10 temporary world-authority amendment is the explicit sign-off required by
+item 4. L3 must still stop on any round-trip mismatch, private-information leak, or need
+to serialize generator-private state.
 
 ## Dispatch queue
 
@@ -323,8 +377,7 @@ lanes:
       - crates/hex_combat/tests/contracts/multiplayer_authority.rs
       - crates/hex_units/tests/contracts/multiplayer_authority.rs
       - docs/planning/waves/client-hosted-sandbox/manifest.md#L2-row
-    dispatch_blockers:
-      - PRs 186, 188, 189, and stacked PR 190 have landed or every overlapping symbol is remapped in an amended manifest
+    dispatch_blockers: []
     merge_blockers: [L1]
     fences: []
     selector:
@@ -352,9 +405,7 @@ lanes:
       - crates/hex_perception/src/runtime.rs#multiplayer-player-faction-disclosure
       - crates/hex_perception/tests/multiplayer_disclosure.rs
       - docs/planning/waves/client-hosted-sandbox/manifest.md#L3-row
-    dispatch_blockers:
-      - explicit world-owner ratification of WorldSnapshotV1 fields and complete public fingerprint
-      - PRs 186, 187, and stacked PR 190 have landed or every overlapping symbol is remapped in an amended manifest
+    dispatch_blockers: []
     merge_blockers: [L1]
     fences: []
     selector:
@@ -391,9 +442,7 @@ lanes:
       - crates/hex_game/tests/gameplay_app.rs#multiplayer-session-journey
       - walks/multiplayer_session.ron
       - docs/planning/waves/client-hosted-sandbox/manifest.md#L4-row
-    dispatch_blockers:
-      - PRs 186, 188, 189, and stacked PR 190 have landed or every overlapping symbol is remapped in an amended manifest
-      - coordinator shared lobby-control injection has landed on the wave
+    dispatch_blockers: []
     merge_blockers: [L1, L2, L3]
     fences: []
     selector:
@@ -404,7 +453,7 @@ lanes:
       model: gpt-5.6-sol
       effort: high
     state: dispatched
-    pr: null
+    pr: 195
 ```
 
 ## Ownership map
@@ -443,35 +492,37 @@ measured against `origin/dev` to expose its complete inherited footprint.
 
 | PR | Branch / base | Measured footprint | Multiplayer relationship | Disposition |
 |---|---|---:|---|---|
-| #186 visibility | `wave/visibility` / `dev` | 34 files, +3597/−518 | perception, core exports, save, gameplay UI | blocks L2/L3/L4 regions until landed or remapped |
-| #187 surface contract | `wave/hex-81-surface-feature-contract` / `dev` | 4 files, +852/−6 | `hex_core` public world contract and boundary docs | blocks WorldSnapshotV1 ratification/remap |
-| #188 movement feedback | `wave/hex-87-movement-feedback` / `dev` | 8 files, +881/−85 | unit movement/selection and gameplay walk | blocks L2/L4 movement regions |
-| #189 Heal | `wave/hex-79-heal` / `dev` | 37 files, +3018/−244 | combat authority, save, UI, content identity | blocks L2/L4 authority/UI regions |
-| #190 first person | `wave/hex-89-first-person` / `wave/visibility` | 52 files, +5366/−775 | inherited visibility plus world camera and gameplay walk | blocks L2/L3/L4 until stack lands or exact regions are remapped |
+| #186 visibility | `wave/visibility` / `dev` | 34 files, +3597/−518 | perception, core exports, save, gameplay UI | landed as `3f2f6dc4`; exact-head runtime PASS recorded |
+| #187 surface contract | `wave/hex-81-surface-feature-contract` / `dev` | 4 files, +852/−6 | `hex_core` public world contract and boundary docs | landed as `0e14e89d`; verified behavior-neutral |
+| #188 movement feedback | `wave/hex-87-movement-feedback` / `dev` | 8 files, +881/−85 | unit movement/selection and gameplay walk | landed as `9267d9f8`; exact-head runtime PASS recorded |
+| #189 Heal | `wave/hex-79-heal` / `dev` | 37 files, +3018/−244 | combat authority, save, UI, content identity | landed as `b6ac0455`; targeting repair and exact-head runtime PASS recorded |
+| #190 first person | `wave/hex-89-first-person` / `wave/visibility` | 52 files, +5366/−775 | inherited visibility plus world camera and gameplay walk | unique work landed through composed `32577c26`; delivery reconciled at `1dca1065` after exact-head runtime PASS |
 
-No open PR touches the new `crates/hex_multiplayer/**` namespace. Re-sweep immediately
-before foundation landing, wave creation, every lane dispatch, and integration.
+No open PR touched the coordinator-owned `crates/hex_multiplayer/**` namespace during
+this landing train. Re-sweep immediately before each remaining lane integration.
 
-The pre-dispatch re-sweep on 2026-08-08 fetched and pruned `origin`, found
-`origin/dev` unchanged at `92662d456746506093e8de61f54f1d619085e1fe`, and found PRs
-186–190 at the same heads, bases, and measured footprints. L1 remains uncontested. The
-listed L2–L4 overlap blockers remain active. A complete scan of non-completed Hex Game
-Linear work found no existing multiplayer ticket, so the deliberately sparse lane
-`ticket: null` fields remain reconciled.
+The post-train re-sweep on 2026-08-10 fetched `origin/dev@1dca1065`, confirmed all five
+footprints represented there, and resolved every L3 dispatch blocker through the explicit
+temporary-authority amendment above. A complete scan had found no existing multiplayer
+ticket, so the deliberately sparse lane `ticket: null` fields remain reconciled.
+The same sweep found new PR #196 (`feat/lattice-fusion-gem-sharing@25d0be5d`): its three
+lattice files do not overlap L3 or the shared protocol, while its one-line
+`crates/hex_game/src/lib.rs` edit touches a coordinator-only composition hotspot. Re-sweep
+and compose it if it lands before L4/final integration; it does not block L3 dispatch.
 
 ## Integration order
 
 1. Under the recorded user-authorized exception, carry the behavior-neutral foundation
-   at wave base `02356b00a5f7a9f26ebe788d8afc45ed58d5baa6`; retain explicit
-   world-owner `WorldSnapshotV1` agreement as an L3 dispatch condition.
-2. Dispatch L1 immediately. Dispatch L2–L4 only when their territory blockers are true;
-   merge blockers do not serialize their construction.
-3. Merge L1 first. Run the selector-chosen composed-tree checks.
-4. Merge L2 and L3 in either order. After each merge, refresh the other branch, inspect
-   removed lines, re-plan the selector, and run its composed concerns.
+   at wave base `02356b00a5f7a9f26ebe788d8afc45ed58d5baa6`.
+2. L1 and L2 are merged. The 2026-08-10 amendment satisfies L3's world decision and all
+   five former territory blockers are represented on the refreshed wave.
+3. Commit and gate the coordinator-owned session/snapshot protocol amendment, then cut L3
+   from that exact wave head.
+4. Merge L3. Refresh L4 on the new wave, inspect removed lines, re-plan the selector, and
+   run its composed concerns.
 5. Merge L4 last, then let the coordinator apply only root Cargo/plugin composition and
    combined fixes.
-6. Run the exact-head combined gate before the single wave PR targets `dev`.
+6. Run the exact-head combined gate before the single wave PR merges to `dev`.
 
 Milestone B (`client-hosted-campaign`) is a fresh wave after A lands. Milestone C is a
 two-level Steam stack after Campaign. Neither is injected into this wave.
@@ -518,12 +569,17 @@ Typed hooks—not pixels—prove all logical claims.
   with the retained idempotence cache. GitHub merged when auto-merge was requested because
   the repository does not require the full matrix; the already-running exact-head CI is
   therefore still mandatory evidence, and any failure is repaired additively on the wave.
+- Final temporary-owner delivery state is represented by
+  `origin/dev@1dca1065c7681737ce424fa187879ea31974e356`; the additive wave refresh is
+  `e610e26c50398e43ff23bc4db0890ba7463f11ae`. The only forecast conflicts were the
+  additive `hex_core` export seam and `hex_units` seat-subset/object-occupancy composition;
+  focused core/unit/multiplayer checks passed after resolution.
 
 ## Stop conditions
 
 - Authority cannot be gated without moving presentation-only systems behind authority.
-- `WorldSnapshotV1` cannot reproduce the complete public world contract or lacks explicit
-  world-owner agreement.
+- `WorldSnapshotV1` cannot reproduce the complete public world contract ratified by the
+  temporary delegated world authority.
 - Client exploration requires simulation prediction for acceptable feel.
 - Disclosure filtering leaks private combat/lattice facts.
 - A refreshed open-PR footprint disagrees with a banked map or creates unowned overlap.
@@ -554,6 +610,17 @@ amend this manifest after owner review.
   all-feature walk screen/script validators PASS. `f2da0c71dc0825b822f822c72cd8790186393382`
   mirrors L4's direct-setup script onto the wave so the registry never points at an absent
   file while L4 remains merge-blocked on L3.
+- `bd1d0800` — composed-head repair after the landed Heal command vocabulary extended
+  `CommandRefusal`: maps occupied/touch/restoration target details to the existing
+  disclosure-safe `InvalidTarget` wire reason and locks that privacy boundary with
+  regression assertions.
+- Current coordinator protocol amendment — adds canonical bounded `WorldSnapshotV1`,
+  ordered `WorldDeltaV1`, `PlayerKnowledgeSnapshotV1`, allocation-header-bound
+  `LiveSessionSnapshotV1`, random `SessionInstanceId`, exact endpoint/SPKI/certificate
+  expiry reconnect binding, matching-session deletion, deterministic message order, and
+  protocol hash `9839260687359081537`. Focused evidence: 48 unit tests, the all-feature
+  host-plus-six-client direct session contract, crate doctests, formatting, and compile
+  checks all PASS before dispatching L3.
 
 ## Close-out
 

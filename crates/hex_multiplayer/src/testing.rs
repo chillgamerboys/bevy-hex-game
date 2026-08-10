@@ -351,6 +351,7 @@ mod tests {
 
     fn manifest() -> SessionManifestV1 {
         SessionManifestV1 {
+            session_instance_id: crate::SessionInstanceId::from_bytes([3; 16]),
             protocol: ProtocolVersion::default(),
             build: BuildIdentityV1::new("0.4.0", "harness").expect("valid build"),
             content_fingerprint: ContentFingerprint(1),

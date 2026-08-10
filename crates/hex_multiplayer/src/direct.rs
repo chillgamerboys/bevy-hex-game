@@ -26,7 +26,10 @@ use x509_parser::{
     prelude::{FromDer as _, X509Certificate},
 };
 
-use crate::{CertificateFingerprint, DirectConnectionCode, DirectEndpoint, InviteToken};
+use crate::{
+    CertificateFingerprint, DirectConnectionCode, DirectEndpoint, InviteToken,
+    ReconnectEndpointBinding,
+};
 
 /// Default editable UDP port shown by Host Direct.
 pub const DEFAULT_DIRECT_PORT: u16 = 7777;
@@ -51,7 +54,8 @@ impl PreparedDirectHost {
         advertised_endpoint: DirectEndpoint,
         invite_token: InviteToken,
     ) -> Result<Self, DirectTransportError> {
-        let (identity, fingerprint) = generate_identity(&advertised_endpoint)?;
+        let (identity, fingerprint, certificate_expires_unix_seconds) =
+            generate_identity(&advertised_endpoint)?;
         let config = ServerConfig::builder()
             .with_bind_default(advertised_endpoint.port())
             .with_identity(identity)
@@ -64,6 +68,7 @@ impl PreparedDirectHost {
             connection_code: DirectConnectionCode {
                 endpoint: advertised_endpoint,
                 certificate_fingerprint: fingerprint,
+                certificate_expires_unix_seconds,
                 invite_token,
             },
         })
@@ -102,13 +107,15 @@ pub struct PreparedDirectJoin {
     config: ClientConfig,
     target: String,
     invite_token: InviteToken,
+    reconnect_binding: ReconnectEndpointBinding,
 }
 
 impl PreparedDirectJoin {
     /// Parses a share code and configures mandatory SPKI validation.
     pub fn new(connection_code: &DirectConnectionCode) -> Result<Self, DirectTransportError> {
-        let verifier = Arc::new(SpkiPinVerifier::new(
+        let verifier = Arc::new(SpkiPinVerifier::with_expiry(
             connection_code.certificate_fingerprint,
+            connection_code.certificate_expires_unix_seconds,
         ));
         let tls_config = tls::client::build_default_tls_config(
             Arc::new(rustls::RootCertStore::empty()),
@@ -125,6 +132,12 @@ impl PreparedDirectJoin {
             config,
             target: direct_target(&connection_code.endpoint),
             invite_token: connection_code.invite_token,
+            reconnect_binding: ReconnectEndpointBinding::new(
+                connection_code.endpoint.clone(),
+                connection_code.certificate_fingerprint,
+                connection_code.certificate_expires_unix_seconds,
+            )
+            .map_err(|_error| DirectTransportError::InvalidCertificateIdentity)?,
         })
     }
 
@@ -136,6 +149,7 @@ impl PreparedDirectJoin {
 
     /// Creates the outgoing WebTransport session and marks it as Replicon's client.
     pub fn connect(self, world: &mut World) -> Entity {
+        world.insert_resource(self.reconnect_binding);
         let client = world.spawn(AeronetRepliconClient).id();
         WebTransportClient::connect(self.config, self.target).apply(world.entity_mut(client));
         client
@@ -148,6 +162,7 @@ impl fmt::Debug for PreparedDirectJoin {
             .debug_struct("PreparedDirectJoin")
             .field("target", &self.target)
             .field("invite_token", &self.invite_token)
+            .field("reconnect_binding", &self.reconnect_binding)
             .field("config", &"[PINNED WEBTRANSPORT CLIENT CONFIG]")
             .finish()
     }
@@ -161,6 +176,7 @@ impl fmt::Debug for PreparedDirectJoin {
 #[derive(Debug)]
 pub struct SpkiPinVerifier {
     expected: CertificateFingerprint,
+    expected_expiry: Option<u64>,
     supported_algorithms: WebPkiSupportedAlgorithms,
 }
 
@@ -170,6 +186,16 @@ impl SpkiPinVerifier {
     pub fn new(expected: CertificateFingerprint) -> Self {
         Self {
             expected,
+            expected_expiry: None,
+            supported_algorithms: rustls::crypto::ring::default_provider()
+                .signature_verification_algorithms,
+        }
+    }
+
+    fn with_expiry(expected: CertificateFingerprint, expected_expiry: u64) -> Self {
+        Self {
+            expected,
+            expected_expiry: Some(expected_expiry),
             supported_algorithms: rustls::crypto::ring::default_provider()
                 .signature_verification_algorithms,
         }
@@ -185,7 +211,13 @@ impl ServerCertVerifier for SpkiPinVerifier {
         _ocsp_response: &[u8],
         now: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
-        verify_pinned_certificate(self.expected, end_entity, intermediates, now)?;
+        verify_pinned_certificate(
+            self.expected,
+            self.expected_expiry,
+            end_entity,
+            intermediates,
+            now,
+        )?;
         Ok(ServerCertVerified::assertion())
     }
 
@@ -224,6 +256,7 @@ impl ServerCertVerifier for SpkiPinVerifier {
 
 fn verify_pinned_certificate(
     expected: CertificateFingerprint,
+    expected_expiry: Option<u64>,
     end_entity: &CertificateDer<'_>,
     intermediates: &[CertificateDer<'_>],
     now: UnixTime,
@@ -246,6 +279,9 @@ fn verify_pinned_certificate(
     }
     if now > not_after {
         return Err(rustls::CertificateError::Expired.into());
+    }
+    if expected_expiry.is_some_and(|expected| u64::try_from(not_after) != Ok(expected)) {
+        return Err(rustls::CertificateError::BadEncoding.into());
     }
     let lifetime = not_after
         .checked_sub(not_before)
@@ -278,7 +314,7 @@ fn verify_pinned_certificate(
 
 fn generate_identity(
     endpoint: &DirectEndpoint,
-) -> Result<(wtransport::Identity, CertificateFingerprint), DirectTransportError> {
+) -> Result<(wtransport::Identity, CertificateFingerprint, u64), DirectTransportError> {
     let san = certificate_san(endpoint.host());
     let identity = wtransport::Identity::self_signed_builder()
         .subject_alt_names([san])
@@ -292,7 +328,11 @@ fn generate_identity(
         .first()
         .ok_or(DirectTransportError::MissingLeafCertificate)?;
     let fingerprint = spki_fingerprint(certificate.der())?;
-    Ok((identity, fingerprint))
+    let (_remaining, parsed) = X509Certificate::from_der(certificate.der())
+        .map_err(|_error| DirectTransportError::InvalidCertificateEncoding)?;
+    let expires = u64::try_from(parsed.validity().not_after.timestamp())
+        .map_err(|_error| DirectTransportError::InvalidCertificateEncoding)?;
+    Ok((identity, fingerprint, expires))
 }
 
 fn spki_fingerprint(der: &[u8]) -> Result<CertificateFingerprint, DirectTransportError> {
@@ -433,6 +473,40 @@ mod tests {
             u64::try_from(START + 1).expect("positive")
         )
         .is_ok());
+        let certificate = identity
+            .certificate_chain()
+            .as_slice()
+            .first()
+            .expect("test identity has a leaf");
+        let der = CertificateDer::from(certificate.der().to_vec());
+        assert!(SpkiPinVerifier::with_expiry(
+            expected,
+            u64::try_from(START + 86_400).expect("positive expiry")
+        )
+        .verify_server_cert(
+            &der,
+            &[],
+            &ServerName::try_from("localhost").expect("valid server name"),
+            &[],
+            UnixTime::since_unix_epoch(Duration::from_secs(
+                u64::try_from(START + 1).expect("positive timestamp")
+            )),
+        )
+        .is_ok());
+        assert!(SpkiPinVerifier::with_expiry(
+            expected,
+            u64::try_from(START + 86_399).expect("positive expiry")
+        )
+        .verify_server_cert(
+            &der,
+            &[],
+            &ServerName::try_from("localhost").expect("valid server name"),
+            &[],
+            UnixTime::since_unix_epoch(Duration::from_secs(
+                u64::try_from(START + 1).expect("positive timestamp")
+            )),
+        )
+        .is_err());
         assert!(verify_at(
             &identity,
             CertificateFingerprint::from_bytes([9; 32]),

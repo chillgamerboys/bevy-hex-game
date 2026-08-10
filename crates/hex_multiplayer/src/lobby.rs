@@ -874,6 +874,7 @@ mod tests {
             })
             .collect();
         SessionManifestV1 {
+            session_instance_id: crate::SessionInstanceId::from_bytes([2; 16]),
             protocol: ProtocolVersion::default(),
             build: BuildIdentityV1::new("0.4.0", "fixture").expect("valid fixture build"),
             content_fingerprint: ContentFingerprint(1),
