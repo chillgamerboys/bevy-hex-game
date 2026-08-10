@@ -67,7 +67,7 @@ pub use selection::{
     HoveredSurface, OutOfRangeOverlay, PathOverlay, RangeOverlay, Selected, TargetReticle,
     TerrainRevision, UnitRing,
 };
-pub use targeting::{either_in_reach, high_ground_bonus, in_reach};
+pub use targeting::{either_in_reach, high_ground_bonus, in_reach, in_touch_reach};
 pub use terrain_creation::{
     resolve_creation_volume, validate_creation_volume, CreationBody, TerrainCreationBlock,
 };

@@ -63,7 +63,7 @@ pub use knowledge::{
 };
 pub use outcomes::{
     CastBlockReason, CombatData, CombatEvent, CommandRefusal, EncounterOutcome, PartyMoveRefusal,
-    RestorationRefusal, UnitData,
+    RestorationRefusal, RestorationTargetRefusal, UnitData,
 };
 pub use resolution::{encounter_unresolved, EncounterResolution};
 pub use spell_resolution::{SpellResolutionFailure, SpellResolutionState, SpellResolutionStatus};
@@ -221,6 +221,7 @@ mod creator_tests {
             co_castable: false,
             targeting: TargetingSpec {
                 range: 3,
+                reach: hex_assets::TargetingReach::Ranged,
                 shape: TargetShape::Single,
                 trajectory: Trajectory::None,
             },

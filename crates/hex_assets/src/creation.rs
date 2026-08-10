@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AxialPair, CastingAxis, Effect, ElementCatalog, LatticeFile, ManaAxis, Spell, SpellBook,
-    SpellFile, TargetShape, TargetingSpec, Trajectory, UnvalidatedArchetype, UnvalidatedCell,
-    UnvalidatedEntry,
+    SpellFile, TargetShape, TargetingReach, TargetingSpec, Trajectory, UnvalidatedArchetype,
+    UnvalidatedCell, UnvalidatedEntry,
 };
 use crate::{LoadSettings, CONFIG_EXTENSIONS};
 
@@ -230,6 +230,7 @@ impl SavedSpell {
                 co_castable: false,
                 targeting: TargetingSpec {
                     range: 3,
+                    reach: TargetingReach::Ranged,
                     shape: TargetShape::Single,
                     trajectory: Trajectory::None,
                 },
@@ -675,6 +676,59 @@ mod tests {
         assert_eq!(library.allocate_character_id(), CustomCharacterId(1));
         assert_eq!(library.allocate_character_id(), CustomCharacterId(2));
         assert_eq!(library.allocate_spell_id(), CustomSpellId(1));
+    }
+
+    #[test]
+    fn creator_targeting_defaults_to_ranged_and_preserves_explicit_touch() {
+        let mut library = CreationLibraryFile::default();
+        let mut spell = SavedSpell::blank(library.allocate_spell_id(), "Touch Draft");
+        assert_eq!(spell.spell.targeting.reach, TargetingReach::Ranged);
+        spell.spell.targeting.range = 0;
+        spell.spell.targeting.reach = TargetingReach::Touch;
+        spell.spell.targeting.trajectory = Trajectory::None;
+        library.spells.push(spell);
+
+        let serialized = ron::to_string(&library).expect("creator library serializes");
+        let decoded: CreationLibraryFile =
+            ron::from_str(&serialized).expect("creator library decodes");
+        assert_eq!(
+            decoded
+                .spells
+                .first()
+                .expect("the touch draft survives")
+                .spell
+                .targeting
+                .reach,
+            TargetingReach::Touch
+        );
+    }
+
+    #[test]
+    fn legacy_creator_library_without_reach_decodes_as_ranged() {
+        let mut library = CreationLibraryFile::default();
+        let id = library.allocate_spell_id();
+        library
+            .spells
+            .push(SavedSpell::blank(id, "Legacy Ranged Draft"));
+        let current = ron::to_string(&library).expect("current creator library serializes");
+        let legacy = current.replace("reach:Ranged,", "");
+        assert_ne!(
+            legacy, current,
+            "fixture must actually omit the reach field"
+        );
+
+        let decoded: CreationLibraryFile =
+            ron::from_str(&legacy).expect("legacy creator library decodes");
+        assert_eq!(
+            decoded
+                .spells
+                .first()
+                .expect("the legacy draft survives")
+                .spell
+                .targeting
+                .reach,
+            TargetingReach::Ranged
+        );
     }
 
     #[test]

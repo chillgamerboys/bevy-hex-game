@@ -31,7 +31,9 @@ Creator chart with retained SVG masters and runtime glyphs. E0 rehomes the curre
 Scrying Eye content under Divination and removes Daylight; it does not add Scrying
 Eye's off-sight live feed, Invisibility, spell-created illumination, or any other
 school mechanic. Those follow-on releases remain separately sequenced after the
-foundation.
+foundation. HEX-79 is the current implementation candidate for tier-one Life Heal,
+explicit touch reach, pre-payment restoration refusals, and effect-semantic AI
+selection; it remains pending integration on `dev` and is not listed as Delivered.
 
 ## Upcoming
 

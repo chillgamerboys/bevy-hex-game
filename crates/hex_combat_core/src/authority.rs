@@ -16,7 +16,8 @@ use xxhash_rust::xxh3::xxh3_64;
 
 use crate::{
     CastBlockReason, CombatData, CombatEvent, CommandRefusal, EncounterOutcome,
-    FrozenCombatContent, FrozenEffect, FrozenTargeting, RestorationRefusal, UnitData,
+    FrozenCombatContent, FrozenEffect, FrozenTargeting, RestorationRefusal,
+    RestorationTargetRefusal, UnitData,
 };
 
 /// Current pure rules-policy schema.
@@ -1264,6 +1265,7 @@ impl CombatState {
                 });
             }
             FrozenTargeting::SelfOnly => {}
+            FrozenTargeting::Touch => {}
             FrozenTargeting::ExactSurface { range } => {
                 let high_ground = actor_position.level.saturating_sub(target.level).max(0);
                 let bonus = u32::try_from(high_ground)
@@ -1288,14 +1290,68 @@ impl CombatState {
             .units
             .values()
             .find(|candidate| candidate.position == target)
-            .map(|candidate| (candidate.id, candidate.downed));
+            .map(|candidate| (candidate.id, candidate.downed, candidate.faction));
+        if matches!(spell.targeting, FrozenTargeting::Touch) {
+            let (target_unit, _, _) =
+                target_unit.ok_or(CommandRefusal::TargetUnoccupied { target })?;
+            if target_unit != unit {
+                let links = self.arena.links_for(unit);
+                if !links.contains(&(actor_position, target))
+                    || !links.contains(&(target, actor_position))
+                {
+                    return Err(CommandRefusal::TargetOutOfTouchReach {
+                        target: target_unit,
+                    });
+                }
+            }
+        }
+        let restores = spell
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, FrozenEffect::RestoreHexes { .. }));
+        if restores {
+            let (target_unit, _, target_faction) =
+                target_unit.ok_or(CommandRefusal::TargetUnoccupied { target })?;
+            if actor_faction.is_hostile_to(target_faction)
+                && !self
+                    .reveals
+                    .get(&(actor_faction, target_unit))
+                    .is_some_and(|expiry| *expiry > self.round)
+            {
+                return Err(CommandRefusal::RestorationTarget {
+                    reason: RestorationTargetRefusal::IncompleteHostileKnowledge {
+                        target: target_unit,
+                    },
+                });
+            }
+            let lattice = self
+                .units
+                .get(&target_unit)
+                .and_then(|target| target.lattice.as_ref())
+                .ok_or(CommandRefusal::RestorationTarget {
+                    reason: RestorationTargetRefusal::MissingLattice {
+                        target: target_unit,
+                    },
+                })?;
+            if !lattice
+                .spec
+                .cells()
+                .any(|(coord, _)| lattice.state.is_disabled(coord))
+            {
+                return Err(CommandRefusal::RestorationTarget {
+                    reason: RestorationTargetRefusal::FullyRestored {
+                        target: target_unit,
+                    },
+                });
+            }
+        }
         let damages = spell.effects.iter().any(|effect| {
             matches!(
                 effect,
                 FrozenEffect::DisableHexes { .. } | FrozenEffect::Burn { .. }
             )
         });
-        if let Some((target, true)) = target_unit {
+        if let Some((target, true, _)) = target_unit {
             if damages {
                 return Err(CommandRefusal::TargetDowned { target });
             }
@@ -1360,7 +1416,7 @@ impl CombatState {
         for effect in spell.effects {
             match effect {
                 FrozenEffect::DisableHexes { count } => {
-                    let Some((target, _)) = target_unit else {
+                    let Some((target, _, _)) = target_unit else {
                         continue;
                     };
                     let Some(lattice) = self
@@ -1393,7 +1449,7 @@ impl CombatState {
                     }
                 }
                 FrozenEffect::Burn { turns } => {
-                    let Some((target, _)) = target_unit else {
+                    let Some((target, _, _)) = target_unit else {
                         continue;
                     };
                     if turns == 0
@@ -1425,7 +1481,7 @@ impl CombatState {
                     });
                 }
                 FrozenEffect::RestoreHexes { count } => {
-                    let Some((target, _)) = target_unit else {
+                    let Some((target, _, _)) = target_unit else {
                         continue;
                     };
                     let disabled = self
@@ -1449,7 +1505,7 @@ impl CombatState {
                     }
                 }
                 FrozenEffect::Reveal { tier } => {
-                    let Some((subject, _)) = target_unit else {
+                    let Some((subject, _, _)) = target_unit else {
                         continue;
                     };
                     let Some(lattice) = self
@@ -2203,17 +2259,35 @@ fn baseline_command(state: &CombatState, owner: UnitId) -> Result<GameCommand, S
         return Ok(GameCommand::EndTurn { unit: owner });
     }
 
+    if let Some(lattice) = actor.lattice.as_ref() {
+        for spell in state.content.spells().filter(|spell| {
+            spell
+                .effects
+                .iter()
+                .any(|effect| matches!(effect, FrozenEffect::RestoreHexes { .. }))
+        }) {
+            let Some(cell) = spell_cell(&lattice.spec, &lattice.state, spell.id) else {
+                continue;
+            };
+            if castable(&lattice.spec, &lattice.state, cell, &state.content).is_err() {
+                continue;
+            }
+            if let Some(target) = baseline_restoration_target(state, owner, spell.targeting) {
+                return Ok(GameCommand::Cast {
+                    unit: owner,
+                    spell: spell.name.clone(),
+                    target,
+                    facing: None,
+                    mana: None,
+                });
+            }
+        }
+    }
+
     if let Some(target) = state.units.values().find(|target| {
         !target.downed
             && actor.faction.is_hostile_to(target.faction)
-            && state
-                .arena
-                .links_for(owner)
-                .contains(&(actor.position, target.position))
-            && state
-                .arena
-                .links_for(owner)
-                .contains(&(target.position, actor.position))
+            && symmetric_reach(state, owner, actor.position, target.position)
     }) {
         return Ok(GameCommand::Strike {
             unit: owner,
@@ -2222,7 +2296,12 @@ fn baseline_command(state: &CombatState, owner: UnitId) -> Result<GameCommand, S
     }
 
     if let Some(lattice) = actor.lattice.as_ref() {
-        for spell in state.content.spells() {
+        for spell in state.content.spells().filter(|spell| {
+            !spell
+                .effects
+                .iter()
+                .any(|effect| matches!(effect, FrozenEffect::RestoreHexes { .. }))
+        }) {
             let Some(cell) = spell_cell(&lattice.spec, &lattice.state, spell.id) else {
                 continue;
             };
@@ -2230,39 +2309,29 @@ fn baseline_command(state: &CombatState, owner: UnitId) -> Result<GameCommand, S
                 continue;
             }
             let target = match spell.targeting {
-                FrozenTargeting::SelfOnly => Some(actor.position),
+                FrozenTargeting::SelfOnly => state
+                    .arena
+                    .observes(actor.faction, actor.position)
+                    .then_some(actor.position),
+                FrozenTargeting::Touch => state
+                    .units
+                    .values()
+                    .filter(|candidate| !candidate.downed)
+                    .filter(|candidate| actor.faction.is_hostile_to(candidate.faction))
+                    .filter(|candidate| state.arena.observes(actor.faction, candidate.position))
+                    .filter(|candidate| {
+                        symmetric_reach(state, owner, actor.position, candidate.position)
+                    })
+                    .map(|candidate| candidate.position)
+                    .next(),
                 FrozenTargeting::ExactSurface { range } => state
                     .units
                     .values()
                     .filter(|candidate| !candidate.downed)
-                    .filter(|candidate| {
-                        let restoration = spell
-                            .effects
-                            .iter()
-                            .any(|effect| matches!(effect, FrozenEffect::RestoreHexes { .. }));
-                        if restoration {
-                            candidate.faction == actor.faction
-                                && candidate.lattice.as_ref().is_some_and(|lattice| {
-                                    lattice
-                                        .spec
-                                        .cells()
-                                        .any(|(coord, _)| lattice.state.is_disabled(coord))
-                                })
-                        } else {
-                            actor.faction.is_hostile_to(candidate.faction)
-                        }
-                    })
+                    .filter(|candidate| actor.faction.is_hostile_to(candidate.faction))
                     .filter(|candidate| state.arena.observes(actor.faction, candidate.position))
                     .filter(|candidate| {
-                        let high_ground = actor
-                            .position
-                            .level
-                            .saturating_sub(candidate.position.level)
-                            .max(0);
-                        let bonus = u32::try_from(high_ground).unwrap_or(u32::MAX)
-                            / state.rules.levels_per_bonus_range;
-                        actor.position.coord.distance(candidate.position.coord)
-                            <= range.saturating_add(bonus)
+                        target_in_range(state, actor.position, candidate.position, range)
                     })
                     .map(|candidate| candidate.position)
                     .next(),
@@ -2329,6 +2398,50 @@ fn baseline_command(state: &CombatState, owner: UnitId) -> Result<GameCommand, S
     }
 
     Ok(GameCommand::EndTurn { unit: owner })
+}
+
+fn baseline_restoration_target(
+    state: &CombatState,
+    owner: UnitId,
+    targeting: FrozenTargeting,
+) -> Option<TilePos> {
+    let actor = state.units.get(&owner)?;
+    state
+        .units
+        .values()
+        .filter(|candidate| candidate.faction == actor.faction)
+        .filter(|candidate| state.arena.observes(actor.faction, candidate.position))
+        .filter(|candidate| {
+            candidate.lattice.as_ref().is_some_and(|lattice| {
+                lattice
+                    .spec
+                    .cells()
+                    .any(|(coord, _)| lattice.state.is_disabled(coord))
+            })
+        })
+        .filter(|candidate| match targeting {
+            FrozenTargeting::SelfOnly => candidate.id == owner,
+            FrozenTargeting::Touch => {
+                candidate.id == owner
+                    || symmetric_reach(state, owner, actor.position, candidate.position)
+            }
+            FrozenTargeting::ExactSurface { range } => {
+                target_in_range(state, actor.position, candidate.position, range)
+            }
+        })
+        .min_by_key(|candidate| (!candidate.downed, candidate.id))
+        .map(|candidate| candidate.position)
+}
+
+fn symmetric_reach(state: &CombatState, actor: UnitId, from: TilePos, to: TilePos) -> bool {
+    let links = state.arena.links_for(actor);
+    links.contains(&(from, to)) && links.contains(&(to, from))
+}
+
+fn target_in_range(state: &CombatState, from: TilePos, to: TilePos, range: u32) -> bool {
+    let high_ground = from.level.saturating_sub(to.level).max(0);
+    let bonus = u32::try_from(high_ground).unwrap_or(u32::MAX) / state.rules.levels_per_bonus_range;
+    from.coord.distance(to.coord) <= range.saturating_add(bonus)
 }
 
 fn cell_priority(kind: CellKind) -> u8 {
@@ -2534,6 +2647,14 @@ mod tests {
     }
 
     fn spell_content(name: &str, effect: FrozenEffect) -> FrozenCombatContent {
+        spell_content_with_targeting(name, effect, FrozenTargeting::ExactSurface { range: 5 })
+    }
+
+    fn spell_content_with_targeting(
+        name: &str,
+        effect: FrozenEffect,
+        targeting: FrozenTargeting,
+    ) -> FrozenCombatContent {
         FrozenCombatContent::new(
             [crate::FrozenSpell {
                 id: hex_core::SpellId(0),
@@ -2543,7 +2664,7 @@ mod tests {
                     mana: 1,
                 }],
                 casting: crate::FrozenCasting::Evocation,
-                targeting: FrozenTargeting::ExactSurface { range: 5 },
+                targeting,
                 effects: vec![effect],
             }],
             [],
@@ -2573,6 +2694,374 @@ mod tests {
         );
         let state = LatticeState::new(&spec, &stats);
         (spec, state, stats)
+    }
+
+    fn damaged_caster_lattice() -> (LatticeSpec, LatticeState, LatticeStats) {
+        let spell = LatticeCoord::ORIGIN;
+        let [gem, damaged, ..] = spell.neighbors();
+        let spec = LatticeSpec::default()
+            .with(
+                spell,
+                CellKind::Spell {
+                    spell: hex_core::SpellId(0),
+                },
+            )
+            .with(
+                gem,
+                CellKind::Gem {
+                    element: ElementId(0),
+                },
+            )
+            .with(damaged, CellKind::Blank);
+        let stats = LatticeStats::new(
+            BTreeMap::from([(ElementId(0), 4)]),
+            BTreeMap::from([(ElementId(0), 1)]),
+        );
+        let mut state = LatticeState::new(&spec, &stats);
+        apply_disables(&mut state, &[damaged]);
+        (spec, state, stats)
+    }
+
+    fn heal_content() -> FrozenCombatContent {
+        spell_content_with_targeting(
+            "Heal",
+            FrozenEffect::RestoreHexes { count: 1 },
+            FrozenTargeting::Touch,
+        )
+    }
+
+    fn heal_command(target: TilePos) -> IssuedCommand {
+        IssuedCommand {
+            seat: PlayerSeat(0),
+            command: GameCommand::Cast {
+                unit: UnitId(0),
+                spell: "Heal".to_owned(),
+                target,
+                facing: None,
+                mana: None,
+            },
+        }
+    }
+
+    fn caster_mana(state: &CombatState) -> u32 {
+        state
+            .units
+            .get(&UnitId(0))
+            .and_then(|unit| unit.lattice.as_ref())
+            .map_or(0, |lattice| lattice.state.total_gem_mana())
+    }
+
+    fn assert_unpaid_refusal(state: &mut CombatState, target: TilePos, expected: CommandRefusal) {
+        let before_units = state.units.clone();
+        let before_pending = state.pending.clone();
+        let before_commands = state.commands.clone();
+        let before_mana = caster_mana(state);
+
+        assert_eq!(state.apply(heal_command(target)), Err(expected));
+        assert_eq!(state.units, before_units);
+        assert_eq!(state.pending, before_pending);
+        assert_eq!(state.commands, before_commands);
+        assert_eq!(caster_mana(state), before_mana);
+    }
+
+    #[test]
+    fn pure_touch_restoration_accepts_self_without_a_self_link() {
+        let (caster_spec, caster_state, caster_stats) = damaged_caster_lattice();
+        let mut sim = CombatState::start_with_content(
+            rules(4),
+            corridor(3),
+            ElementNames::new(BTreeMap::from([(ElementId(0), "Life".to_owned())])),
+            heal_content(),
+            [
+                CombatUnit::new(
+                    UnitId(0),
+                    PlayerSeat(0),
+                    Faction::Player,
+                    position(0, 0),
+                    20,
+                )
+                .with_lattice(caster_spec, caster_state, caster_stats),
+                CombatUnit::new(
+                    UnitId(1),
+                    PlayerSeat(0),
+                    Faction::Hostile,
+                    position(2, 0),
+                    10,
+                ),
+            ],
+        )
+        .expect("self-heal fixture");
+
+        sim.apply(heal_command(position(0, 0)))
+            .expect("self is always in touch reach");
+
+        assert_eq!(caster_mana(&sim), 3);
+        assert_eq!(
+            sim.pending,
+            PendingDecision::ChooseRestores {
+                decider: UnitId(0),
+                target: UnitId(0),
+                count: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn pure_touch_restoration_requires_observed_occupancy_and_bidirectional_links() {
+        let surfaces = [position(0, 0), position(1, 0), position(2, 0)];
+        let one_way = ArenaSnapshot::new(
+            surfaces,
+            [
+                (position(0, 0), position(1, 0)),
+                (position(1, 0), position(2, 0)),
+                (position(2, 0), position(1, 0)),
+            ],
+        )
+        .expect("one-way fixture")
+        .with_observation(Faction::Player, surfaces)
+        .with_observation(Faction::Hostile, surfaces);
+        let (caster_spec, caster_state, caster_stats) = caster_lattice();
+        let (ally_spec, ally_state, ally_stats) = blank_lattice(1, true);
+        let mut one_way_state = CombatState::start_with_content(
+            rules(4),
+            one_way,
+            ElementNames::default(),
+            heal_content(),
+            [
+                CombatUnit::new(
+                    UnitId(0),
+                    PlayerSeat(0),
+                    Faction::Player,
+                    position(0, 0),
+                    20,
+                )
+                .with_lattice(caster_spec, caster_state, caster_stats),
+                CombatUnit::new(
+                    UnitId(1),
+                    PlayerSeat(0),
+                    Faction::Player,
+                    position(1, 0),
+                    15,
+                )
+                .with_lattice(ally_spec, ally_state, ally_stats),
+                CombatUnit::new(
+                    UnitId(2),
+                    PlayerSeat(0),
+                    Faction::Hostile,
+                    position(2, 0),
+                    10,
+                ),
+            ],
+        )
+        .expect("one-way state");
+        assert_unpaid_refusal(
+            &mut one_way_state,
+            position(1, 0),
+            CommandRefusal::TargetOutOfTouchReach { target: UnitId(1) },
+        );
+
+        let (caster_spec, caster_state, caster_stats) = caster_lattice();
+        let unobserved = ArenaSnapshot::new(
+            surfaces,
+            [
+                (position(0, 0), position(1, 0)),
+                (position(1, 0), position(0, 0)),
+                (position(1, 0), position(2, 0)),
+                (position(2, 0), position(1, 0)),
+            ],
+        )
+        .expect("unobserved fixture")
+        .with_observation(Faction::Player, [position(0, 0)])
+        .with_observation(Faction::Hostile, surfaces);
+        let mut empty_state = CombatState::start_with_content(
+            rules(4),
+            unobserved,
+            ElementNames::default(),
+            heal_content(),
+            [
+                CombatUnit::new(
+                    UnitId(0),
+                    PlayerSeat(0),
+                    Faction::Player,
+                    position(0, 0),
+                    20,
+                )
+                .with_lattice(caster_spec, caster_state, caster_stats),
+                CombatUnit::new(
+                    UnitId(2),
+                    PlayerSeat(0),
+                    Faction::Hostile,
+                    position(2, 0),
+                    10,
+                ),
+            ],
+        )
+        .expect("unobserved empty state");
+        assert_unpaid_refusal(
+            &mut empty_state,
+            position(1, 0),
+            CommandRefusal::TargetUnobserved {
+                spell: "Heal".to_owned(),
+                target: position(1, 0),
+            },
+        );
+
+        empty_state.arena = empty_state
+            .arena
+            .clone()
+            .with_observation(Faction::Player, surfaces);
+        assert_unpaid_refusal(
+            &mut empty_state,
+            position(1, 0),
+            CommandRefusal::TargetUnoccupied {
+                target: position(1, 0),
+            },
+        );
+    }
+
+    #[test]
+    fn pure_restoration_rejects_missing_or_fully_restored_lattices_before_payment() {
+        let (caster_spec, caster_state, caster_stats) = caster_lattice();
+        let mut missing = CombatState::start_with_content(
+            rules(4),
+            corridor(3),
+            ElementNames::default(),
+            heal_content(),
+            [
+                CombatUnit::new(
+                    UnitId(0),
+                    PlayerSeat(0),
+                    Faction::Player,
+                    position(0, 0),
+                    20,
+                )
+                .with_lattice(caster_spec, caster_state, caster_stats),
+                CombatUnit::new(
+                    UnitId(1),
+                    PlayerSeat(0),
+                    Faction::Player,
+                    position(1, 0),
+                    15,
+                ),
+                CombatUnit::new(
+                    UnitId(2),
+                    PlayerSeat(0),
+                    Faction::Hostile,
+                    position(2, 0),
+                    10,
+                ),
+            ],
+        )
+        .expect("missing-lattice fixture");
+        assert_unpaid_refusal(
+            &mut missing,
+            position(1, 0),
+            CommandRefusal::RestorationTarget {
+                reason: RestorationTargetRefusal::MissingLattice { target: UnitId(1) },
+            },
+        );
+
+        let (caster_spec, caster_state, caster_stats) = caster_lattice();
+        let (ally_spec, ally_state, ally_stats) = blank_lattice(1, false);
+        let mut healthy = CombatState::start_with_content(
+            rules(4),
+            corridor(3),
+            ElementNames::default(),
+            heal_content(),
+            [
+                CombatUnit::new(
+                    UnitId(0),
+                    PlayerSeat(0),
+                    Faction::Player,
+                    position(0, 0),
+                    20,
+                )
+                .with_lattice(caster_spec, caster_state, caster_stats),
+                CombatUnit::new(
+                    UnitId(1),
+                    PlayerSeat(0),
+                    Faction::Player,
+                    position(1, 0),
+                    15,
+                )
+                .with_lattice(ally_spec, ally_state, ally_stats),
+                CombatUnit::new(
+                    UnitId(2),
+                    PlayerSeat(0),
+                    Faction::Hostile,
+                    position(2, 0),
+                    10,
+                ),
+            ],
+        )
+        .expect("healthy-lattice fixture");
+        assert_unpaid_refusal(
+            &mut healthy,
+            position(1, 0),
+            CommandRefusal::RestorationTarget {
+                reason: RestorationTargetRefusal::FullyRestored { target: UnitId(1) },
+            },
+        );
+    }
+
+    #[test]
+    fn pure_hostile_restoration_requires_an_active_complete_reveal() {
+        let (caster_spec, caster_state, caster_stats) = caster_lattice();
+        let (target_spec, target_state, target_stats) = blank_lattice(1, true);
+        let mut sim = CombatState::start_with_content(
+            rules(4),
+            corridor(2),
+            ElementNames::default(),
+            heal_content(),
+            [
+                CombatUnit::new(
+                    UnitId(0),
+                    PlayerSeat(0),
+                    Faction::Player,
+                    position(0, 0),
+                    20,
+                )
+                .with_lattice(caster_spec, caster_state, caster_stats),
+                CombatUnit::new(
+                    UnitId(1),
+                    PlayerSeat(0),
+                    Faction::Hostile,
+                    position(1, 0),
+                    10,
+                )
+                .with_lattice(target_spec, target_state, target_stats),
+            ],
+        )
+        .expect("hostile restoration fixture");
+        assert_unpaid_refusal(
+            &mut sim,
+            position(1, 0),
+            CommandRefusal::RestorationTarget {
+                reason: RestorationTargetRefusal::IncompleteHostileKnowledge { target: UnitId(1) },
+            },
+        );
+
+        sim.reveals
+            .insert((Faction::Player, UnitId(1)), sim.round.saturating_add(1));
+        assert_eq!(
+            baseline_command(&sim, UnitId(0)),
+            Ok(GameCommand::Strike {
+                unit: UnitId(0),
+                target: UnitId(1),
+            }),
+            "baseline policy never chooses a legal hostile restoration"
+        );
+        sim.apply(heal_command(position(1, 0)))
+            .expect("active complete Reveal authorizes the hostile lattice");
+        assert_eq!(caster_mana(&sim), 3);
+        assert_eq!(
+            sim.pending,
+            PendingDecision::ChooseRestores {
+                decider: UnitId(0),
+                target: UnitId(1),
+                count: 1,
+            }
+        );
     }
 
     fn blank_lattice(count: usize, disabled: bool) -> (LatticeSpec, LatticeState, LatticeStats) {
@@ -2787,7 +3276,7 @@ mod tests {
             UnitId(1),
             PlayerSeat(0),
             Faction::Player,
-            position(1, 0),
+            position(0, 0),
             15,
         )
         .with_lattice(ally_spec, ally_state, ally_stats);
@@ -2796,13 +3285,17 @@ mod tests {
             rules(4),
             corridor(4),
             ElementNames::new(BTreeMap::from([(ElementId(0), "Life".to_owned())])),
-            spell_content("Renew", FrozenEffect::RestoreHexes { count: 1 }),
+            spell_content_with_targeting(
+                "Renew",
+                FrozenEffect::RestoreHexes { count: 1 },
+                FrozenTargeting::Touch,
+            ),
             [
                 CombatUnit::new(
                     UnitId(0),
                     PlayerSeat(0),
                     Faction::Player,
-                    position(0, 0),
+                    position(1, 0),
                     20,
                 )
                 .with_lattice(caster_spec, caster_state, caster_stats),
@@ -2811,18 +3304,29 @@ mod tests {
                     UnitId(2),
                     PlayerSeat(0),
                     Faction::Hostile,
-                    position(3, 0),
+                    position(2, 0),
                     10,
                 ),
             ],
         )
         .expect("fixture state");
+        assert_eq!(
+            baseline_command(&sim, UnitId(0)),
+            Ok(GameCommand::Cast {
+                unit: UnitId(0),
+                spell: "Renew".to_owned(),
+                target: position(0, 0),
+                facing: None,
+                mana: None,
+            }),
+            "semantic restoration outranks the adjacent hostile Strike and includes Downed allies"
+        );
         sim.apply(IssuedCommand {
             seat: PlayerSeat(0),
             command: GameCommand::Cast {
                 unit: UnitId(0),
                 spell: "Renew".to_owned(),
-                target: position(1, 0),
+                target: position(0, 0),
                 facing: None,
                 mana: None,
             },

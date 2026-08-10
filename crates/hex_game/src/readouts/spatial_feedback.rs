@@ -190,6 +190,42 @@ mod tests {
     }
 
     #[test]
+    fn allied_aim_projects_a_target_reticle_without_hostile_knowledge() {
+        let mut app = App::new();
+        app.insert_resource(GameplayPhase::Active)
+            .insert_resource(WorldMarkerSuppression::default())
+            .init_resource::<UnitRegistry>()
+            .init_resource::<GameplayUiContext>()
+            .add_systems(Update, sync_world_markers);
+
+        let unit = hex_core::UnitId(2);
+        let entity = app.world_mut().spawn((unit, Faction::Player)).id();
+        app.world_mut()
+            .resource_mut::<UnitRegistry>()
+            .register(unit, entity);
+        let identity = UiUnitIdentity {
+            unit,
+            name: "ally #2".to_owned(),
+            faction: Faction::Player,
+            party_slot: Some(1),
+            disclosed: true,
+        };
+        app.world_mut().resource_mut::<GameplayUiContext>().target =
+            Some((TargetProvenance::Aim, identity));
+
+        app.update();
+
+        assert_eq!(
+            app.world().get::<TargetReticleRequest>(entity),
+            Some(&TargetReticleRequest::new(unit))
+        );
+        assert!(!app
+            .world()
+            .resource::<WorldMarkerSuppression>()
+            .is_suppressed());
+    }
+
+    #[test]
     fn disclosure_loss_closes_inspection_before_ui_context_projection() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
