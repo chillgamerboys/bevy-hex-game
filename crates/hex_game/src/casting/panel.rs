@@ -9,7 +9,7 @@ use hex_core::{
 use hex_ui::{CastingAimView, CastingPanelContentView, CastingPanelView, CastingSpellView};
 use hex_units::{Faction, UnitRegistry};
 
-use crate::readouts::{DisableSelection, GameplayUiContext};
+use crate::readouts::{DisableSelection, GameplayUiContext, TargetProvenance};
 
 use super::preview::AimVolume;
 use super::{Aiming, CastReadout};
@@ -91,12 +91,7 @@ pub(super) fn publish_view(
                 })
                 .collect(),
             aiming: aiming.0.as_ref().map(|aim| CastingAimView {
-                label: format!(
-                    "AIMING {} · {} VOXELS / {} SURFACES",
-                    aim.spell.to_uppercase(),
-                    volume.voxels,
-                    volume.painted
-                ),
+                label: aim_label(&aim.spell, &volume, &context),
                 controls_enabled: readout.unavailable.is_none(),
                 confirm_shortcut: confirm_shortcut.clone(),
                 next_target_shortcut: bindings.chord(InputAction::NextTarget).label(),
@@ -108,6 +103,43 @@ pub(super) fn publish_view(
     if *view != next {
         *view = next;
     }
+}
+
+fn aim_label(spell: &str, volume: &AimVolume, context: &GameplayUiContext) -> String {
+    let target = context
+        .target
+        .as_ref()
+        .filter(|(provenance, _)| *provenance == TargetProvenance::Aim)
+        .map(|(_, target)| {
+            let identity = target.label();
+            if context
+                .caster
+                .as_ref()
+                .is_some_and(|caster| caster.unit == target.unit)
+            {
+                format!("SELF · {identity}")
+            } else {
+                identity
+            }
+        });
+    target.map_or_else(
+        || {
+            format!(
+                "AIMING {} · {} VOXELS / {} SURFACES",
+                spell.to_uppercase(),
+                volume.voxels,
+                volume.painted
+            )
+        },
+        |target| {
+            format!(
+                "AIMING {} · TARGET {target} · {} VOXELS / {} SURFACES",
+                spell.to_uppercase(),
+                volume.voxels,
+                volume.painted
+            )
+        },
+    )
 }
 
 pub(crate) fn queue_current_player_command(
@@ -138,4 +170,46 @@ pub(crate) fn queue_current_player_command(
         seat: owner.copied().unwrap_or_default().0,
         command: command(unit),
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hex_core::UnitId;
+
+    fn identity(unit: u64, slot: usize, name: &str) -> crate::readouts::UiUnitIdentity {
+        crate::readouts::UiUnitIdentity {
+            unit: UnitId(unit),
+            name: name.to_owned(),
+            faction: Faction::Player,
+            party_slot: Some(slot),
+            disclosed: true,
+        }
+    }
+
+    #[test]
+    fn aim_summary_names_self_and_allied_targets_explicitly() {
+        let caster = identity(1, 0, "healer");
+        let ally = identity(2, 1, "scout");
+        let volume = AimVolume {
+            voxels: 1,
+            painted: 1,
+        };
+        let mut context = GameplayUiContext {
+            caster: Some(caster.clone()),
+            target: Some((TargetProvenance::Aim, caster)),
+            ..default()
+        };
+
+        assert_eq!(
+            aim_label("Heal", &volume, &context),
+            "AIMING HEAL · TARGET SELF · ALLY 1 · HEALER · 1 VOXELS / 1 SURFACES"
+        );
+
+        context.target = Some((TargetProvenance::Aim, ally));
+        assert_eq!(
+            aim_label("Heal", &volume, &context),
+            "AIMING HEAL · TARGET ALLY 2 · SCOUT · 1 VOXELS / 1 SURFACES"
+        );
+    }
 }

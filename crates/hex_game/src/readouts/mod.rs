@@ -15,7 +15,7 @@ mod lattice;
 mod log;
 mod spatial_feedback;
 
-pub(crate) use context::{GameplayUiContext, UiUnitIdentity};
+pub(crate) use context::{GameplayUiContext, TargetProvenance, UiUnitIdentity};
 pub(crate) use lattice::DisableSelection;
 pub(crate) use log::ActivityNotice;
 

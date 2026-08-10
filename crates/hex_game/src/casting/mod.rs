@@ -52,6 +52,7 @@ use hex_core::{
     InputAction, InputBindings, IssuedCommand, KnowledgeState, LatticeCoord, Mode, PausableSystems,
     PendingDecision, PlayerSeat, Screen, Sextant, SpellId, TilePos, Turn, UnitId,
 };
+use hex_gameplay_model::{HudComponent, HudState};
 use hex_lattice::{castable, CastBlocked, CellKind, LatticeSpec, LatticeState};
 use hex_perception::{FactionKnowledge, FactionMapKnowledge, SurfaceSnapshot};
 use hex_units::{
@@ -765,6 +766,7 @@ fn resolve_aim_input(
     substances: Option<Res<SubstanceTable>>,
     unit_states: Query<(&UnitId, Has<Downed>)>,
     restoration_targets: RestorationTargetQuery,
+    mut hud: Option<ResMut<HudState>>,
 ) {
     if pending.is_open() {
         return;
@@ -838,6 +840,9 @@ fn resolve_aim_input(
             let Some(anchor) = targets.first().copied().or(fallback) else {
                 return;
             };
+            if let Some(hud) = hud.as_deref_mut() {
+                let _ = hud.dismiss_transient_component(HudComponent::ActionBar);
+            }
             Some(Aim { spell, anchor })
         }
         AimRequest::Next => {
@@ -868,6 +873,9 @@ fn resolve_aim_input(
                 &unit_states,
                 restorable.as_ref(),
             );
+            if let Some(hud) = hud.as_deref_mut() {
+                let _ = hud.dismiss_transient_component(HudComponent::ActionBar);
+            }
             Some(Aim {
                 anchor: step_target(&targets, aim.anchor).unwrap_or(aim.anchor),
                 spell: aim.spell,
@@ -1150,6 +1158,21 @@ mod tests {
 
     use super::*;
 
+    fn shipped_substances() -> SubstanceTable {
+        let substance_file: SubstanceFile = ron::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/config/substances.ron"
+        )))
+        .expect("substances.ron parses");
+        let palette: ArtPalette = ron::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/art/palette.ron"
+        )))
+        .expect("palette.ron parses");
+        SubstanceTable::from_file(&substance_file, &palette)
+            .expect("shipped substances resolve through the art palette")
+    }
+
     #[test]
     fn focused_ui_owns_enter_and_tab_without_hiding_the_explicit_cancel_key() {
         let bindings = InputBindings::default();
@@ -1180,21 +1203,9 @@ mod tests {
             "/../../assets/config/spells.ron"
         )))
         .expect("spells.ron parses");
-        let substance_file: SubstanceFile = ron::from_str(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../assets/config/substances.ron"
-        )))
-        .expect("substances.ron parses");
-        let palette: ArtPalette = ron::from_str(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../assets/art/palette.ron"
-        )))
-        .expect("palette.ron parses");
-
         let elements = ElementCatalog::from_file(&element_file);
         let spells = SpellBook::from_file(&spell_file);
-        let substances = SubstanceTable::from_file(&substance_file, &palette)
-            .expect("shipped substances resolve through the art palette");
+        let substances = shipped_substances();
         ContentIndex::build(&elements, &spells, &substances)
             .expect("shipped content cross-references resolve");
         (elements, spells)
@@ -1295,6 +1306,134 @@ mod tests {
         assert!(
             !allowed.contains(&opaque_hostile),
             "live hostile lattice damage must not leak through an opaque view"
+        );
+    }
+
+    #[test]
+    fn restoration_target_cycle_includes_damaged_self_and_touch_ally() {
+        type UnitStateQuery<'w, 's> = Query<'w, 's, (&'static UnitId, Has<Downed>)>;
+
+        let (readout, caster) = readout_of(&["Heal"]);
+        let row = readout.row("Heal").expect("the Heal row should exist");
+        let ally = UnitId(2);
+        let ally_pos = at(1, 0, caster.standing.level);
+        let units = [
+            (caster.unit, Faction::Player, caster.standing),
+            (ally, Faction::Player, ally_pos),
+        ];
+        let spatial = observed_spatial(&units);
+        let spec = LatticeSpec::default().with(LatticeCoord::ORIGIN, CellKind::Blank);
+        let mut damaged = LatticeState::new(&spec, &LatticeStats::default());
+        apply_disables(&mut damaged, &[LatticeCoord::ORIGIN]);
+
+        let mut world = World::new();
+        world.spawn((caster.unit, Faction::Player, spec.clone(), damaged.clone()));
+        world.spawn((ally, Faction::Player, spec, damaged));
+
+        let lattice_knowledge = FactionLatticeKnowledge::default();
+        let mut query_state = SystemState::<(
+            UnitStateQuery<'static, 'static>,
+            RestorationTargetQuery<'static, 'static>,
+        )>::new(&mut world);
+        let (unit_states, restoration_targets) = query_state
+            .get(&world)
+            .expect("the restoration queries have no fallible parameters");
+        let player = spatial.faction(Faction::Player);
+        let allowed = restorable_target_ids(
+            player,
+            Faction::Player,
+            &lattice_knowledge,
+            &restoration_targets,
+        );
+        let terrain = known_terrain(player);
+        let substances = shipped_substances();
+
+        assert_eq!(allowed, BTreeSet::from([caster.unit, ally]));
+        assert_eq!(
+            targets_in_range(
+                &readout,
+                &caster,
+                row,
+                player,
+                &terrain,
+                Some(&substances),
+                &unit_states,
+                Some(&allowed),
+            ),
+            vec![caster.standing, ally_pos],
+        );
+    }
+
+    #[test]
+    fn restoration_ui_intent_aims_damaged_self_then_touch_ally() {
+        let (readout, caster) = readout_of(&["Heal"]);
+        let ally = UnitId(2);
+        let ally_pos = at(1, 0, caster.standing.level);
+        let units = [
+            (caster.unit, Faction::Player, caster.standing),
+            (ally, Faction::Player, ally_pos),
+        ];
+        let spatial = observed_spatial(&units);
+        let spec = LatticeSpec::default().with(LatticeCoord::ORIGIN, CellKind::Blank);
+        let mut damaged = LatticeState::new(&spec, &LatticeStats::default());
+        apply_disables(&mut damaged, &[LatticeCoord::ORIGIN]);
+        let mut hud = HudState::default();
+        let preferences = hud.preferences();
+        let compact = hex_gameplay_model::HudContext::compact(
+            hex_gameplay_model::HudContextEligibility::all(),
+        );
+        assert_eq!(
+            hud.activate_component(HudComponent::ActionBar, compact),
+            hex_gameplay_model::HudActionResult::RuntimeChanged
+        );
+
+        let mut app = App::new();
+        app.insert_resource(readout)
+            .insert_resource(hud)
+            .init_resource::<Aiming>()
+            .init_resource::<AimExit>()
+            .init_resource::<CommandQueue>()
+            .init_resource::<PendingDecision>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<InputBindings>()
+            .insert_resource(spatial)
+            .init_resource::<FactionLatticeKnowledge>()
+            .insert_resource(shipped_substances())
+            .add_message::<hex_ui::UiIntent>()
+            .add_systems(Update, resolve_aim_input);
+        app.world_mut()
+            .spawn((caster.unit, Faction::Player, spec.clone(), damaged.clone()));
+        app.world_mut()
+            .spawn((ally, Faction::Player, spec, damaged));
+
+        app.world_mut()
+            .write_message(hex_ui::UiIntent::Casting(hex_ui::CastingIntent::Begin(
+                "Heal".to_owned(),
+            )));
+        app.update();
+        assert_eq!(
+            app.world().resource::<Aiming>().0.as_ref(),
+            Some(&Aim {
+                spell: "Heal".to_owned(),
+                anchor: caster.standing,
+            })
+        );
+        assert_eq!(app.world().resource::<HudState>().raw_transient(), None);
+        assert_eq!(
+            app.world().resource::<HudState>().preferences(),
+            preferences,
+            "revealing the map for an aim must not rewrite HUD preferences"
+        );
+
+        app.world_mut()
+            .write_message(hex_ui::UiIntent::Casting(hex_ui::CastingIntent::NextTarget));
+        app.update();
+        assert_eq!(
+            app.world().resource::<Aiming>().0.as_ref(),
+            Some(&Aim {
+                spell: "Heal".to_owned(),
+                anchor: ally_pos,
+            })
         );
     }
 
