@@ -552,9 +552,9 @@ mod tests {
             first_approach: BTreeSet::new(),
             second_approach: BTreeSet::new(),
         };
-        assert!(valid_walker_contract(1, 4, &[port.clone()]));
-        assert!(!valid_walker_contract(1, 3, &[port.clone()]));
-        assert!(!valid_walker_contract(1, 5, &[port]));
+        assert!(valid_walker_contract(1, 4, std::slice::from_ref(&port)));
+        assert!(!valid_walker_contract(1, 3, std::slice::from_ref(&port)));
+        assert!(!valid_walker_contract(1, 5, std::slice::from_ref(&port)));
         assert!(valid_walker_contract(0, 0, &[]));
     }
 
