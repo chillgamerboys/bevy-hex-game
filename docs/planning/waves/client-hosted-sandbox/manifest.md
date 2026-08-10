@@ -651,6 +651,11 @@ amend this manifest after owner review.
   Ratified under the user's 2026-08-10 temporary world-authority delegation. Focused
   evidence: the 47-test multiplayer suite, all-feature host-plus-six-client direct-session
   contract, strict all-target/all-feature Clippy, and warning-denied rustdoc all PASS.
+- `d1d71b89` — coordinator-owned selector classification for the new map-owned
+  `world_snapshot.rs` seam. A standalone change to that adapter now selects the complete
+  gate without relying on unknown-path fallback, because it crosses generation,
+  publication, multiplayer protocol, reconnect, and disclosure consumers. All 60 selector
+  regression tests PASS, and the exact path reports every concern with no unknown files.
 
 ## Close-out
 

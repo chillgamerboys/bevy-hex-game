@@ -363,6 +363,12 @@
       "reason": "Map publication and presentation changes require unit and headless contract evidence."
     },
     {
+      "name": "map-world-snapshot",
+      "patterns": ["crates/hex_map/src/world_snapshot.rs"],
+      "full": true,
+      "reason": "The complete world snapshot adapter crosses generation, publication, multiplayer protocol, reconnect, and disclosure seams."
+    },
+    {
       "name": "map-foundations",
       "patterns": [
         "crates/hex_map/Cargo.toml",

@@ -226,6 +226,13 @@ class TestScopeTests(unittest.TestCase):
             ("map_unit", "map_contracts", "clippy", "docs", "shipping"),
         )
 
+    def test_map_world_snapshot_fails_closed_across_every_consumer(self) -> None:
+        decision = self.classify("crates/hex_map/src/world_snapshot.rs")
+        self.assertTrue(decision.full)
+        self.assertEqual(decision.concerns, tuple(self.config["all_concerns"]))
+        self.assertEqual(decision.unknown_files, ())
+        self.assertIn("map-world-snapshot", decision.matched_rules)
+
     def test_map_damage_resolver_selects_unit_and_contract_evidence(self) -> None:
         decision = self.classify("crates/hex_map/src/terrain_damage.rs")
         self.assertFalse(decision.full)
