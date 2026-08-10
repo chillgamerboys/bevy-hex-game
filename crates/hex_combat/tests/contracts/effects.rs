@@ -389,7 +389,10 @@ fn test_app_with_arena(burn_turns: u16, arena: SyntheticArena) -> App {
         .expect("the shared synthetic arena must be valid");
     let app = builder.app_mut();
     app.insert_resource(CombatSettings::default());
-    app.add_plugins(hex_combat::plugin);
+    app.add_plugins((
+        hex_units::authored_object_occupancy::plugin,
+        hex_combat::plugin,
+    ));
     app.init_resource::<UnitRegistry>();
 
     let catalog = elements();

@@ -178,8 +178,11 @@ pub fn plugin(app: &mut App) {
         (
             CombatSystems::Act
                 .after(PerceptionSystems::PublishKnowledge)
-                .after(hex_units::TerrainOccupancySystems::Publish),
-            CombatSystems::Apply.after(hex_units::TerrainOccupancySystems::Publish),
+                .after(hex_units::TerrainOccupancySystems::Publish)
+                .after(hex_units::AuthoredObjectOccupancySystems::Publish),
+            CombatSystems::Apply
+                .after(hex_units::TerrainOccupancySystems::Publish)
+                .after(hex_units::AuthoredObjectOccupancySystems::Publish),
             CombatSystems::Resolve,
             CombatSystems::Advance,
         )

@@ -46,6 +46,7 @@ use hex_core::{
 
 use crate::movement::{Body, Footing, Reach, Standing};
 use crate::units::{MovingTo, Party, Player, StandsOn, TileQuery, UnitRegistry};
+use crate::AuthoredObjectOccupancy;
 use crate::Faction;
 use crate::UnitOccupancy;
 
@@ -193,6 +194,7 @@ struct PreviewKey {
     from: TilePos,
     terrain: u64,
     disclosure: u64,
+    authored_objects: u64,
 }
 
 /// The current search, and what is drawn from it.
@@ -615,6 +617,7 @@ fn redraw_overlays(
     mode: Option<Res<State<Mode>>>,
     revision: Res<TerrainRevision>,
     blockers: Option<Res<TraversalBlockers>>,
+    authored_objects: Option<Res<AuthoredObjectOccupancy>>,
     tiles: TileQuery,
     selected: Query<
         (Entity, &UnitId, &Faction, &StandsOn, &Body, Option<&Turn>),
@@ -630,8 +633,13 @@ fn redraw_overlays(
     )>,
     drawn: Query<Entity, DrawnOverlays>,
 ) {
-    let (Some(assets), Some(overlays), Some(table), Some(mode)) = (assets, overlays, table, mode)
+    let (Some(assets), Some(overlays), Some(table), Some(mode), Some(authored_objects)) =
+        (assets, overlays, table, mode, authored_objects)
     else {
+        for overlay in &drawn {
+            commands.entity(overlay).despawn();
+        }
+        *preview = MovementPreview::default();
         return;
     };
 
@@ -677,6 +685,7 @@ fn redraw_overlays(
                 from: standing.0.pos,
                 terrain: revision.0,
                 disclosure: disclosed_occupancy.fingerprint(),
+                authored_objects: authored_objects.fingerprint(),
             },
             budget,
         ))
@@ -700,7 +709,13 @@ fn redraw_overlays(
     let reach_dirty = key != preview.of || footing_changed;
     if reach_dirty {
         preview.reach = if let (Some(_), Some((_, unit, _, standing, body, _))) = (key, selection) {
-            let footing = Footing::from_tiles(tiles.iter(), &table, *body, blockers.as_deref());
+            let footing = Footing::from_tiles_with_object_occupancy(
+                tiles.iter(),
+                &table,
+                *body,
+                blockers.as_deref(),
+                &authored_objects,
+            );
             Some(Reach::with_occupancy(
                 standing.0,
                 &footing,

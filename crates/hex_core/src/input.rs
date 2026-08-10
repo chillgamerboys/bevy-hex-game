@@ -40,7 +40,7 @@ pub enum InputAction {
     OpenCharacterView,
     /// Open formation controls in the Main View.
     OpenFormationView,
-    /// Toggle close/map camera framing.
+    /// Cycle Map, third-person, and first-person camera framing.
     ToggleCamera,
     /// Save a quiescent exploration state.
     Save,
@@ -210,7 +210,7 @@ impl InputAction {
                 KeyCode::KeyF,
             ),
             Self::ToggleCamera => InputActionMetadata::rebindable(
-                "Map / Character Camera",
+                "Cycle Camera View",
                 InputCategory::Camera,
                 InputContext::Gameplay,
                 KeyCode::KeyC,
@@ -1036,6 +1036,10 @@ mod tests {
         assert_eq!(
             bindings.chord(InputAction::ToggleCamera),
             KeyChord::plain(KeyCode::KeyC)
+        );
+        assert_eq!(
+            InputAction::ToggleCamera.metadata().label,
+            "Cycle Camera View"
         );
         assert_eq!(
             bindings.chord(InputAction::EndTurn),

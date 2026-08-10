@@ -473,9 +473,9 @@ class TestScopeTests(unittest.TestCase):
         partition = self.config["partition_checks"]["map"]
         self.assertEqual(
             partition["expected_counts"],
-            {"map_unit": 99, "map_generation": 413, "map_contracts": 80},
+            {"map_unit": 106, "map_generation": 440, "map_contracts": 81},
         )
-        self.assertEqual(partition["expected_ignored"], 28)
+        self.assertEqual(partition["expected_ignored"], 29)
 
     def test_map_commands_share_the_optimized_test_profile(self) -> None:
         for concern in ("map_unit", "map_generation", "map_contracts"):

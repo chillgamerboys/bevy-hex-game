@@ -277,11 +277,13 @@ hex_core     HexTile, HexCoord, TilePos, RunBottom, HexSpan, SubstanceId, Headro
              TraversalEndpoint, TraversalProfile, SpecialMovementRegion,
              SpecialMovementRegions, InteriorRegionId, InteriorRegions,
              CutawayOccluder, MapViewHint, BiomeRegions, TraversalBlockers,
+             AuthoredObjectVoxelRun, AuthoredObjectVoxelRuns,
              TerrainEdit, TerrainImpact, TerrainImpactOutcome, and DamagedVoxels
              — the shared vocabulary
 hex_assets   the substance table
 hex_map      voxel storage, generation, rendering — nothing else can see this
-hex_units reads tiles; cannot see hex_map
+hex_units    reads tiles and authored-object run components, publishing exact terrain
+             and object occupancy resources; cannot see hex_map
 ```
 
 The map exposes rendered footing through components on tile entities:
@@ -297,6 +299,17 @@ from those roof voxels receive the `CutawayOccluder` component needed by live
 presentation queries. `hex_units` queries the footing components. It never reads
 `VoxelMap` or any generator, so terrain storage and generation can be replaced wholesale
 — chunked, streamed, generated differently — without anything else noticing.
+
+Opt-in authored objects attach `AuthoredObjectVoxelRuns` to their root entity. Each run
+names an exact inclusive bottom-to-top voxel interval in one column. During gameplay
+setup restore, and again in `TerrainSystems::RefreshProjections` after object changes,
+`hex_units` validates every source and publishes their compact union as the
+always-present `AuthoredObjectOccupancy` resource. An empty resource is authoritative;
+missing or malformed publication fails consumers closed. Ordinary path construction
+and direct movement reject a footing when its standing two-voxel body overlaps that
+exact volume. Static authored recipes may additionally project affected support
+surfaces into `TraversalBlockers` for generator- and AI-side topology validation.
+Casting remains governed by terrain occupancy only.
 
 **Writing** goes the other way, through a message:
 

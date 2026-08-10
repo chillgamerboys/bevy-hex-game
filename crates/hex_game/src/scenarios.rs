@@ -17,14 +17,16 @@
 use bevy::prelude::*;
 use hex_assets::{
     choose_settings, Encounter, EncounterPlacement, LightingSettings, Scenario, SelectSettings,
-    SettingsRegistry, CONFIG_EXTENSIONS,
+    SettingsRegistry, SubstanceTable, CONFIG_EXTENSIONS,
 };
 use hex_core::{
-    GameplaySetup, GameplaySetupFailure, InteriorRegions, MapAnchors, MapViewHint, ResolvedMapSeed,
-    Screen, SimSeeds, SpecialMovementRegions, TerrainReady,
+    GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexSpan, HexTile, InteriorRegions,
+    MapAnchorId, MapAnchors, MapViewHint, PartyFormation, ResolvedMapSeed, Screen, Sextant,
+    SimSeeds, SpecialMovementRegions, SubstanceId, TerrainReady, TilePos, TraversalBlockers,
+    UnitId,
 };
 use hex_map::{MapSettings, TerrainSettings};
-use hex_units::Faction;
+use hex_units::{Body, Faction, Footing, Player, StandsOn};
 use hex_world::TimeOfDay;
 
 use crate::screens::CreatorSandboxReturn;
@@ -50,6 +52,9 @@ pub(super) fn plugin(app: &mut App) {
             OnEnter(Screen::Gameplay),
             (
                 initialize_time_of_day.in_set(GameplaySetup::Resources),
+                stage_crystal_ascent_showcase_party
+                    .after(GameplaySetup::Actors)
+                    .before(GameplaySetup::Restore),
                 finalize_gameplay_setup.in_set(GameplaySetup::Finalize),
             ),
         )
@@ -58,6 +63,122 @@ pub(super) fn plugin(app: &mut App) {
             validate_gameplay_lighting_contract.run_if(in_state(Screen::Gameplay)),
         )
         .add_systems(OnExit(Screen::Gameplay), clear_session_resources);
+}
+
+const CRYSTAL_ASCENT_SHOWCASE: &str = "Crystal Ascent Showcase";
+const CRYSTAL_ASCENT_SITE_RADIUS: u32 = 32;
+const CRYSTAL_ASCENT_LOWER_ENTRY: &str = "crystal_ascent.lower_entry";
+const CRYSTAL_ASCENT_BOTTOM_CHAMBER: &str = "crystal_ascent.bottom_chamber";
+
+/// Stages the shipped Crystal Ascent party on its exact exterior terminal.
+///
+/// Encounter formations deliberately express a *region*, not an exact multi-unit
+/// footprint, and their schema has no travel-facing field. That is right for ordinary
+/// generated maps, but this showcase promises something narrower: three stable party
+/// members on the landmark's four-wide apron, looking through the entrance. Resolve
+/// that one launch after generic actors exist and before save restoration/perception.
+/// A pending save therefore remains authoritative, while a fresh launch never exposes
+/// the generic formation's temporary positions to gameplay systems.
+fn stage_crystal_ascent_showcase_party(
+    mut commands: Commands,
+    encounter: Option<Res<Encounter>>,
+    anchors: Option<Res<MapAnchors>>,
+    interiors: Option<Res<InteriorRegions>>,
+    table: Option<Res<SubstanceTable>>,
+    blockers: Option<Res<TraversalBlockers>>,
+    failure: Option<Res<GameplaySetupFailure>>,
+    mut formation: Option<ResMut<PartyFormation>>,
+    players: Query<(Entity, &UnitId, &Body), With<Player>>,
+    tiles: Query<(&TilePos, &HexSpan, &SubstanceId, &Headroom), With<HexTile>>,
+) {
+    let Some(encounter) = encounter else { return };
+    if encounter.name != CRYSTAL_ASCENT_SHOWCASE || failure.is_some() {
+        return;
+    }
+
+    let result = (|| {
+        let anchors = anchors
+            .as_deref()
+            .ok_or("the generated map published no anchors")?;
+        let interiors = interiors
+            .as_deref()
+            .ok_or("the generated map published no interior regions")?;
+        let table = table
+            .as_deref()
+            .ok_or("the substance table is unavailable")?;
+        let formation = formation
+            .as_deref_mut()
+            .ok_or("party formation state is unavailable")?;
+        let lower_entry = anchors
+            .get(&MapAnchorId::from(CRYSTAL_ASCENT_LOWER_ENTRY))
+            .ok_or("the lower-entry anchor is missing")?;
+        let bottom_chamber = anchors
+            .get(&MapAnchorId::from(CRYSTAL_ASCENT_BOTTOM_CHAMBER))
+            .ok_or("the bottom-chamber anchor is missing")?;
+
+        let mut members = players
+            .iter()
+            .map(|(entity, unit, body)| (entity, *unit, *body))
+            .collect::<Vec<_>>();
+        members.sort_by_key(|(_, unit, _)| *unit);
+        if members.len() != 3 {
+            return Err("the standard showcase party did not spawn exactly three members");
+        }
+        let body = members
+            .first()
+            .map(|(_, _, body)| *body)
+            .ok_or("the standard showcase party is empty")?;
+        if members
+            .iter()
+            .any(|(_, _, member_body)| *member_body != body)
+        {
+            return Err("the standard showcase party no longer shares one staging footprint");
+        }
+
+        let footing = Footing::from_tiles(tiles.iter(), table, body, blockers.as_deref());
+        let mut apron = lower_entry
+            .coord
+            .within_radius(2)
+            .into_iter()
+            .filter(|coord| coord.distance(HexCoord::ORIGIN) == CRYSTAL_ASCENT_SITE_RADIUS)
+            .map(|coord| TilePos::new(coord, lower_entry.level))
+            .filter(|position| interiors.get(*position).is_none())
+            .filter_map(|position| footing.at(position))
+            .collect::<Vec<_>>();
+        apron
+            .sort_by_key(|standing| (standing.pos.coord.distance(lower_entry.coord), standing.pos));
+        apron.dedup_by_key(|standing| standing.pos);
+        if apron.len() != 4 || apron.iter().all(|standing| standing.pos != lower_entry) {
+            return Err("the lower exterior terminal is not an exact four-wide standable apron");
+        }
+
+        let facing = Sextant::ALL
+            .into_iter()
+            .min_by_key(|direction| {
+                (
+                    lower_entry
+                        .coord
+                        .neighbor(*direction)
+                        .distance(bottom_chamber.coord),
+                    *direction,
+                )
+            })
+            .ok_or("the entrance has no inward-facing sextant")?;
+        for ((entity, _, _), standing) in members.into_iter().zip(apron) {
+            commands.entity(entity).insert((
+                StandsOn(standing),
+                Transform::from_translation(standing.world_position()),
+            ));
+        }
+        formation.facing = facing;
+        Ok::<(), &'static str>(())
+    })();
+
+    if let Err(detail) = result {
+        let reason = format!("Crystal Ascent showcase staging failed: {detail}.");
+        error!("{reason}");
+        commands.insert_resource(GameplaySetupFailure::new(reason));
+    }
 }
 
 /// The exact scenario and resolved seed frozen by its typed launch owner.
@@ -482,30 +603,35 @@ pub(crate) mod tests {
         MAX_COMBAT_SUMMARY_DETAILS,
     };
     use hex_core::{
-        AppSystems, Busy, CommandQueue, ControlOwner, ExteriorIllumination, GameCommand,
-        GameplayLight, GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan,
-        HexTile, IlluminationLevel, InteriorRegions, IssuedCommand, KnowledgeState, LatticeCoord,
+        AppSystems, AuthoredObjectVoxelRun, AuthoredObjectVoxelRuns, Busy, CommandQueue,
+        ControlOwner, ExteriorIllumination, GameCommand, GameplayLight, GameplaySetup,
+        GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile, IlluminationLevel,
+        InteriorRegions, IssuedCommand, KnowledgeState, LatticeCoord, LightDomain,
         LocalMapKnowledge, MapAnchorId, MapAnchors, MapViewHint, Mode, PartyFormation,
         PausableSystems, Pause, PendingDecision, PerceptionSystems, PlayerSeat, ResolvedMapSeed,
-        Screen, SpecialMovementRegion, SpecialMovementRegions, SubstanceId, TerrainReady, TilePos,
-        TraversalBlockers, Turn, UnitId,
+        Screen, Sextant, SpecialMovementRegion, SpecialMovementRegions, SubstanceId, TerrainReady,
+        TilePos, TraversalBlockers, TraversalProfile, Turn, UnitId,
     };
     use hex_lattice::{LatticeSpec, LatticeState};
     use hex_map::{
         GenerationReport, MapSettings, ProceduralRecipeMetrics, TerrainSettings, VoxelMap,
     };
-    use hex_perception::{FactionMapKnowledge, ResolvedIllumination};
+    use hex_perception::{
+        can_observe, can_observe_with_authored_objects, FactionMapKnowledge, ResolvedIllumination,
+    };
     use hex_units::{
-        either_in_reach, plan_formation_move, Body, Downed, Enemy, Faction, Footing,
-        FormationMember, Player, Reach, StandsOn, UnitOccupancy,
+        either_in_reach, plan_formation_move, Archetype, AuthoredObjectOccupancy, Body, Downed,
+        Enemy, Faction, Footing, FormationMember, Player, Reach, StandsOn, TerrainOccupancy,
+        UnitOccupancy,
     };
     use hex_world::TimeOfDay;
 
     use super::{
         clear_session_resources, finalize_gameplay_setup, initialize_time_of_day,
         scenario_contract_error, scenario_contract_error_for_launch, setup_failure_destination,
-        validate_gameplay_lighting_contract, validate_loaded_scenario, ActiveScenario,
-        ScenarioContractStatus, ScenarioTimeOverride, ScenarioToLoad,
+        stage_crystal_ascent_showcase_party, validate_gameplay_lighting_contract,
+        validate_loaded_scenario, ActiveScenario, ScenarioContractStatus, ScenarioTimeOverride,
+        ScenarioToLoad,
     };
 
     fn library() -> ScenarioLibrary {
@@ -557,6 +683,155 @@ pub(crate) mod tests {
         }
         RuntimeArtCatalog::from_sources(palette, &styles, &manifest, objects)
             .expect("the shipped runtime art graph should resolve")
+    }
+
+    /// Independently projects every occupied cell in a shipped blueprint into the
+    /// exact world columns of its runtime instance. The production Crystal Ascent
+    /// adapter compacts the same source cells before publishing them; keeping this
+    /// derivation in the acceptance test prevents a self-fulfilling component check.
+    fn expected_object_occupancy(
+        blueprint: &ObjectBlueprint,
+        instance: &ObjectInstance,
+    ) -> AuthoredObjectOccupancy {
+        let runs = blueprint.placements.iter().map(|placement| {
+            let rotated = instance
+                .rotation()
+                .rotate_voxel(placement.position, blueprint.origin)
+                .expect("shipped object coordinates should rotate without overflow");
+            let q = instance
+                .origin()
+                .coord
+                .x()
+                .checked_add(
+                    rotated
+                        .q
+                        .checked_sub(blueprint.origin.q)
+                        .expect("shipped local q offset should be exact"),
+                )
+                .expect("shipped world q should be exact");
+            let r = instance
+                .origin()
+                .coord
+                .y()
+                .checked_add(
+                    rotated
+                        .r
+                        .checked_sub(blueprint.origin.r)
+                        .expect("shipped local r offset should be exact"),
+                )
+                .expect("shipped world r should be exact");
+            let level = instance
+                .origin()
+                .level
+                .checked_add(
+                    rotated
+                        .level
+                        .checked_sub(blueprint.origin.level)
+                        .expect("shipped local level offset should be exact"),
+                )
+                .expect("shipped world level should be exact");
+            let position = TilePos::new(HexCoord::from_axial(q, r), level);
+            AuthoredObjectVoxelRun::new(position, position.level)
+        });
+        AuthoredObjectOccupancy::from_runs(runs)
+            .expect("the shipped object's projected cells should form valid runs")
+    }
+
+    /// Proves and returns the live heart instance, source runs, and exact authority.
+    pub(crate) fn crystal_heart_occupancy_snapshot(
+        app: &mut App,
+    ) -> (
+        ObjectInstance,
+        AuthoredObjectVoxelRuns,
+        AuthoredObjectOccupancy,
+    ) {
+        let (instance, published_runs) = {
+            let world = app.world_mut();
+            let mut objects = world.query::<(&ObjectInstance, &AuthoredObjectVoxelRuns)>();
+            let mut hearts = objects.iter(world).filter(|(instance, _)| {
+                instance.object_id().as_str() == "prop/crystal-cathedral-heart"
+            });
+            let (instance, runs) = hearts
+                .next()
+                .expect("Crystal Ascent should publish one occupied cathedral heart");
+            assert!(
+                hearts.next().is_none(),
+                "Crystal Ascent published two hearts"
+            );
+            (instance.clone(), runs.clone())
+        };
+        let blueprint = app
+            .world()
+            .resource::<RuntimeArtCatalog>()
+            .object(instance.object_id())
+            .expect("the live heart should resolve through the shipped art catalog");
+        let expected = expected_object_occupancy(blueprint, &instance);
+        let published = AuthoredObjectOccupancy::from_runs(published_runs.iter())
+            .expect("the heart component should contain valid compact runs");
+        assert_eq!(
+            published, expected,
+            "heart runs diverged from its blueprint"
+        );
+        assert_eq!(
+            app.world().resource::<AuthoredObjectOccupancy>(),
+            &expected,
+            "authoritative occupancy diverged from the heart component"
+        );
+        let published_cells = published_runs
+            .iter()
+            .map(|run| {
+                usize::try_from(run.top.level.saturating_sub(run.bottom).saturating_add(1))
+                    .expect("shipped heart run length should fit usize")
+            })
+            .sum::<usize>();
+        assert_eq!(
+            published_cells,
+            blueprint.placements.len(),
+            "heart compaction lost or invented an authored structural cell"
+        );
+        (instance, published_runs, expected)
+    }
+
+    /// Finds one chamber pair blocked only by the shipped heart's seven-ray volume.
+    pub(crate) fn crystal_heart_blocked_sight_pair(
+        app: &App,
+        heart: TilePos,
+    ) -> (TilePos, TilePos) {
+        let illumination = app.world().resource::<ResolvedIllumination>();
+        let terrain = app.world().resource::<TerrainOccupancy>();
+        let authored = app.world().resource::<AuthoredObjectOccupancy>();
+        let profile = app
+            .world()
+            .resource::<PerceptionSettings>()
+            .active_profile();
+        let candidates = illumination
+            .iter()
+            .map(|(position, _)| position)
+            .filter(|position| {
+                position.level == heart.level.saturating_sub(1)
+                    && (5..=7).contains(&position.coord.distance(heart.coord))
+            })
+            .collect::<Vec<_>>();
+        for observer in candidates.iter().copied() {
+            for target in candidates.iter().copied() {
+                if observer == target {
+                    continue;
+                }
+                if can_observe(observer, target, illumination, profile, terrain)
+                    && !can_observe_with_authored_objects(
+                        observer,
+                        target,
+                        illumination,
+                        profile,
+                        terrain,
+                        authored,
+                    )
+                {
+                    return (observer, target);
+                }
+            }
+        }
+        panic!("the shipped heart should block at least one otherwise-clear chamber sight bundle");
     }
 
     /// The encounter a scenario names, read off disk.
@@ -635,13 +910,15 @@ pub(crate) mod tests {
         }
     }
 
-    /// Every encounter a scenario names exists, parses, and rosters both sides.
+    /// Every encounter a scenario names exists, parses, and rosters its intended sides.
     ///
     /// Same reasoning as the world and lighting checks — the path is a plain string, so
     /// a typo would otherwise be a loading screen that hangs for the one scenario nobody
     /// clicked. `Encounter`'s `Deserialize` runs `validate()`, so this also proves the
     /// roster is *placeable* in the ways a single file can be judged: no empty roster, no
-    /// coordinate that is not a hex, no two units sharing one exact surface.
+    /// coordinate that is not a hex, no two units sharing one exact surface. Crystal
+    /// Ascent is the one approved non-combat showcase; every other scenario must still
+    /// provide somebody to fight.
     #[test]
     fn every_scenario_names_an_encounter_that_exists_and_parses() {
         for scenario in &library().scenarios {
@@ -651,11 +928,19 @@ pub(crate) mod tests {
                 "scenario {:?} rosters no player units",
                 scenario.name
             );
-            assert!(
-                encounter.unit_count(EncounterFaction::Hostile) >= 1,
-                "scenario {:?} rosters nobody to fight",
-                scenario.name
-            );
+            let hostile_count = encounter.unit_count(EncounterFaction::Hostile);
+            if scenario.name == "Crystal Ascent" {
+                assert_eq!(
+                    hostile_count, 0,
+                    "the Crystal Ascent showcase should remain non-combat"
+                );
+            } else {
+                assert!(
+                    hostile_count >= 1,
+                    "scenario {:?} rosters nobody to fight",
+                    scenario.name
+                );
+            }
             for unit in encounter.entries() {
                 assert!(
                     !unit.archetype.is_empty(),
@@ -1419,6 +1704,511 @@ pub(crate) mod tests {
         );
     }
 
+    /// Crystal Ascent is a traversal-and-lighting showcase, not an encounter arena.
+    /// Its content freezes the public 144-level recipe and starts the complete shipped
+    /// party together at the lower apron without inventing a dummy hostile.
+    #[test]
+    fn crystal_ascent_showcase_freezes_its_world_and_non_combat_party() {
+        let library = library();
+        let scenario = library
+            .scenarios
+            .iter()
+            .find(|scenario| scenario.name == "Crystal Ascent")
+            .expect("the shipped library should contain Crystal Ascent");
+
+        assert_eq!(
+            scenario.world,
+            "config/worlds/procedural-crystal-ascent.ron"
+        );
+        assert_eq!(scenario.generation_seed, Some(1_592_598_566));
+
+        let world_text = fs::read_to_string(assets_dir().join(&scenario.world))
+            .expect("the Crystal Ascent world should be readable");
+        let world: MapSettings =
+            ron::from_str(&world_text).expect("the Crystal Ascent world should parse");
+        assert_eq!(world.grid_radius, 40);
+        let TerrainSettings::Procedural(hex_map::ProceduralSettings::V3(v3)) = &world.terrain
+        else {
+            panic!("Crystal Ascent must remain a V3 procedural world");
+        };
+        let hex_map::V3LayoutSettings::Single(patch) = &v3.layout else {
+            panic!("Crystal Ascent must remain a standalone Single patch");
+        };
+        assert_eq!(
+            patch.environment,
+            hex_map::V3EnvironmentSettings::TemperateGrassland
+        );
+        let hex_map::V3RecipeSettings::CrystalAscent(settings) = &patch.recipe else {
+            panic!("Crystal Ascent must use its dedicated recipe");
+        };
+        assert_eq!(settings.base_level, 6);
+        assert_eq!(settings.rise_levels, 144);
+
+        let encounter = encounter_of(scenario);
+        assert_eq!(encounter.rosters.len(), 1);
+        let roster = encounter
+            .rosters
+            .first()
+            .expect("Crystal Ascent should retain its player roster");
+        assert_eq!(roster.faction, EncounterFaction::Player);
+        assert_eq!(
+            roster
+                .units
+                .iter()
+                .map(|unit| unit.archetype.as_str())
+                .collect::<Vec<_>>(),
+            vec!["hedge-mage", "raider", "wolf"]
+        );
+        assert_eq!(encounter.unit_count(EncounterFaction::Hostile), 0);
+        assert_eq!(
+            roster.placement,
+            EncounterPlacement::Formation {
+                center: FormationCenter::Anchor("party_start".to_owned()),
+                spread: 2,
+            }
+        );
+    }
+
+    /// The generic encounter formation owns a spawn *region*. This landmark's terminal
+    /// is narrower: freeze the exact fresh-launch staging that the scenario adapter
+    /// publishes before perception sees any party member.
+    #[test]
+    fn crystal_ascent_showcase_stages_every_party_member_on_the_exact_apron() {
+        let mut app = procedural_gameplay_app("Crystal Ascent");
+        enter_screen(&mut app, Screen::Gameplay);
+
+        assert!(
+            !app.world().contains_resource::<GameplaySetupFailure>(),
+            "exact apron staging failed: {:?}",
+            app.world()
+                .get_resource::<GameplaySetupFailure>()
+                .map(|failure| failure.reason.as_str())
+        );
+        let mut party = {
+            let world = app.world_mut();
+            let mut players = world
+                .query_filtered::<(&UnitId, &Archetype, &StandsOn, &Transform), With<Player>>();
+            players
+                .iter(world)
+                .map(|(unit, archetype, standing, transform)| {
+                    assert_eq!(
+                        transform.translation,
+                        standing.0.world_position(),
+                        "{unit:?} presentation did not follow its authoritative staging surface"
+                    );
+                    (*unit, archetype.0.clone(), standing.0.pos)
+                })
+                .collect::<Vec<_>>()
+        };
+        party.sort_by_key(|(unit, ..)| *unit);
+        assert_eq!(
+            party,
+            vec![
+                (
+                    UnitId(0),
+                    "hedge-mage".to_owned(),
+                    TilePos::new(HexCoord::new_cubic(-17, -15, 32), 6),
+                ),
+                (
+                    UnitId(1),
+                    "raider".to_owned(),
+                    TilePos::new(HexCoord::new_cubic(-18, -14, 32), 6),
+                ),
+                (
+                    UnitId(2),
+                    "wolf".to_owned(),
+                    TilePos::new(HexCoord::new_cubic(-16, -16, 32), 6),
+                ),
+            ],
+            "the stable roster must occupy three exact cells of the four-wide lower apron"
+        );
+        let interiors = app.world().resource::<InteriorRegions>();
+        assert!(party.iter().all(|(_, _, position)| {
+            position.coord.distance(HexCoord::ORIGIN) == 32 && interiors.get(*position).is_none()
+        }));
+
+        let formation = app.world().resource::<PartyFormation>();
+        assert_eq!(formation.facing, Sextant::A);
+        let lower_entry = app
+            .world()
+            .resource::<MapAnchors>()
+            .get(&MapAnchorId::from("crystal_ascent.lower_entry"))
+            .expect("the showcase should publish its lower entry");
+        let chamber = app
+            .world()
+            .resource::<MapAnchors>()
+            .get(&MapAnchorId::from("crystal_ascent.bottom_chamber"))
+            .expect("the showcase should publish its bottom chamber");
+        assert!(
+            lower_entry
+                .coord
+                .neighbor(formation.facing)
+                .distance(chamber.coord)
+                < lower_entry.coord.distance(chamber.coord),
+            "the party's initial travel-facing must point inward through the entrance"
+        );
+    }
+
+    #[test]
+    fn non_crystal_scenarios_keep_generic_formation_staging() {
+        let mut app = procedural_gameplay_app("Procedural Hills");
+        enter_screen(&mut app, Screen::Gameplay);
+
+        assert!(
+            !app.world().contains_resource::<GameplaySetupFailure>(),
+            "the Crystal Ascent adapter interfered with another scenario"
+        );
+        let party_start = app
+            .world()
+            .resource::<MapAnchors>()
+            .get(&MapAnchorId::from("party_start"))
+            .expect("Procedural Hills should publish party_start");
+        let mut party = {
+            let world = app.world_mut();
+            let mut players = world.query_filtered::<(&UnitId, &StandsOn), With<Player>>();
+            players
+                .iter(world)
+                .map(|(unit, standing)| (*unit, standing.0.pos))
+                .collect::<Vec<_>>()
+        };
+        party.sort_by_key(|(unit, _)| *unit);
+        assert_eq!(party.len(), 1);
+        assert_eq!(party.first().copied(), Some((UnitId(0), party_start)));
+    }
+
+    #[test]
+    fn crystal_ascent_showcase_builds_the_complete_runtime_contract() {
+        let mut app = procedural_gameplay_app("Crystal Ascent");
+        enter_screen(&mut app, Screen::Gameplay);
+
+        assert!(
+            app.world().contains_resource::<TerrainReady>(),
+            "Crystal Ascent did not finish terrain generation: {:?}",
+            app.world()
+                .get_resource::<GameplaySetupFailure>()
+                .map(|failure| failure.reason.as_str())
+        );
+        let report = app.world().resource::<GenerationReport>();
+        let Some(ProceduralRecipeMetrics::CrystalAscent(metrics)) = &report.recipe_metrics else {
+            panic!(
+                "Crystal Ascent published unexpected metrics: {:?}",
+                report.recipe_metrics
+            );
+        };
+        assert_eq!(metrics.circuits, 3);
+        assert_eq!(metrics.flights, 18);
+        assert_eq!(metrics.landings, 18);
+        assert_eq!(metrics.crystal_fixtures, 19);
+        assert_eq!(metrics.gameplay_lights, 38);
+        assert_eq!(metrics.rise_levels, 144);
+        assert!(metrics.minimum_stair_headroom >= 4);
+        assert!(metrics.critical_route_steps > 144);
+
+        let anchors = app.world().resource::<MapAnchors>();
+        for name in [
+            "crystal_ascent.lower_entry",
+            "crystal_ascent.bottom_chamber",
+            "crystal_ascent.corner_landing",
+            "crystal_ascent.upper_exit",
+        ] {
+            assert!(
+                anchors.get(&MapAnchorId::from(name)).is_some(),
+                "Crystal Ascent omitted {name}"
+            );
+        }
+        let lower_entry = anchors
+            .get(&MapAnchorId::from("crystal_ascent.lower_entry"))
+            .expect("Crystal Ascent should publish its lower entry");
+        let bottom_chamber = anchors
+            .get(&MapAnchorId::from("crystal_ascent.bottom_chamber"))
+            .expect("Crystal Ascent should publish its bottom chamber");
+        let mid_flight = anchors
+            .get(&MapAnchorId::from("crystal_ascent.mid_flight"))
+            .expect("Crystal Ascent should publish its deterministic mid-flight review point");
+        let corner_landing = anchors
+            .get(&MapAnchorId::from("crystal_ascent.corner_landing"))
+            .expect("Crystal Ascent should publish its deterministic corner-landing review point");
+        let upper_contraction = anchors
+            .get(&MapAnchorId::from("crystal_ascent.upper_contraction"))
+            .expect("Crystal Ascent should publish its upper-contraction review point");
+        let upper_exit = anchors
+            .get(&MapAnchorId::from("crystal_ascent.upper_exit"))
+            .expect("Crystal Ascent should publish its upper exit");
+        let illumination = app.world().resource::<ResolvedIllumination>();
+        for exterior in [lower_entry, upper_exit] {
+            let resolved = illumination
+                .get(exterior)
+                .unwrap_or_else(|| panic!("missing resolved illumination at {exterior:?}"));
+            assert_eq!(resolved.domain, LightDomain::Exterior);
+            assert_eq!(resolved.level, IlluminationLevel::Bright);
+        }
+        for interior in [
+            bottom_chamber,
+            mid_flight,
+            corner_landing,
+            upper_contraction,
+        ] {
+            let resolved = illumination
+                .get(interior)
+                .unwrap_or_else(|| panic!("missing resolved illumination at {interior:?}"));
+            assert!(matches!(resolved.domain, LightDomain::Interior(_)));
+            assert!(
+                resolved.level >= IlluminationLevel::Dim,
+                "required interior review point {interior:?} resolved {:?}",
+                resolved.level
+            );
+        }
+        assert!(
+            app.world()
+                .resource::<InteriorRegions>()
+                .surfaces()
+                .next()
+                .is_some(),
+            "Crystal Ascent did not publish its dark interior domain"
+        );
+        let gameplay_lights = {
+            let world = app.world_mut();
+            let mut lights = world.query::<&GameplayLight>();
+            lights
+                .iter(world)
+                .map(|light| (light.level, light.radius))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(gameplay_lights.len(), 38);
+        assert_eq!(
+            gameplay_lights
+                .iter()
+                .filter(|light| **light == (IlluminationLevel::Bright, 4))
+                .count(),
+            18
+        );
+        assert_eq!(
+            gameplay_lights
+                .iter()
+                .filter(|light| **light == (IlluminationLevel::Dim, 18))
+                .count(),
+            18
+        );
+        assert_eq!(
+            gameplay_lights
+                .iter()
+                .filter(|light| **light == (IlluminationLevel::Bright, 8))
+                .count(),
+            1
+        );
+        assert_eq!(
+            gameplay_lights
+                .iter()
+                .filter(|light| **light == (IlluminationLevel::Dim, 24))
+                .count(),
+            1
+        );
+        let physical_lights = app
+            .world_mut()
+            .query::<&PointLight>()
+            .iter(app.world())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            physical_lights.len(),
+            22,
+            "the 18 landing crystals and four heart emitters should each publish once"
+        );
+        assert!(physical_lights.iter().all(|light| {
+            (light.intensity - 4_500.0).abs() <= f32::EPSILON
+                && (light.range - 4.5).abs() <= f32::EPSILON
+                && !light.shadow_maps_enabled
+                && !light.contact_shadows_enabled
+        }));
+        let crystal_objects = {
+            let world = app.world_mut();
+            let mut objects = world.query::<&ObjectInstance>();
+            objects
+                .iter(world)
+                .filter(|instance| instance.object_id().as_str().starts_with("prop/crystal-"))
+                .map(|instance| {
+                    (
+                        instance.object_id().as_str().to_owned(),
+                        TilePos::new(
+                            instance.origin().coord,
+                            instance.origin().level.saturating_sub(1),
+                        ),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            crystal_objects
+                .iter()
+                .filter(|(id, _)| id == "prop/crystal-cathedral-heart")
+                .count(),
+            1,
+            "the visual heart and its authoritative occupancy must share one root"
+        );
+        assert_eq!(
+            crystal_objects.len(),
+            19,
+            "the heart and all 18 landing crystals should be visible fixtures"
+        );
+        let illumination = app.world().resource::<ResolvedIllumination>();
+        for (_, floor) in &crystal_objects {
+            let resolved = illumination
+                .get(*floor)
+                .unwrap_or_else(|| panic!("missing fixture illumination at {floor:?}"));
+            assert_eq!(resolved.level, IlluminationLevel::Bright);
+            assert!(matches!(resolved.domain, LightDomain::Interior(_)));
+        }
+        assert_eq!(
+            app.world_mut()
+                .query::<&AuthoredObjectVoxelRuns>()
+                .iter(app.world())
+                .count(),
+            1,
+            "only the cathedral heart should opt into authored occupancy"
+        );
+        let (first_heart, first_runs, first_occupancy) = crystal_heart_occupancy_snapshot(&mut app);
+        let first_occupancy_fingerprint = first_occupancy.fingerprint();
+        assert_ne!(first_occupancy_fingerprint, 0);
+        let heart_support = TilePos::new(
+            first_heart.origin().coord,
+            first_heart.origin().level.saturating_sub(1),
+        );
+        assert!(first_occupancy.blocks_standing_body(heart_support, TraversalProfile::WALKER));
+        assert!(app
+            .world()
+            .resource::<TraversalBlockers>()
+            .contains(heart_support));
+        let first_blocked_pair = crystal_heart_blocked_sight_pair(&app, first_heart.origin());
+        assert_eq!(
+            app.world_mut()
+                .query_filtered::<Entity, With<Player>>()
+                .iter(app.world())
+                .count(),
+            3
+        );
+        assert!(standing_pos::<Enemy>(&mut app).is_none());
+
+        enter_screen(&mut app, Screen::Title);
+        assert!(
+            !app.world().contains_resource::<AuthoredObjectOccupancy>(),
+            "Title must not retain gameplay occupancy authority"
+        );
+        assert_eq!(
+            app.world_mut()
+                .query::<&AuthoredObjectVoxelRuns>()
+                .iter(app.world())
+                .count(),
+            0,
+            "Title must not retain the generated heart source"
+        );
+
+        enter_screen(&mut app, Screen::Gameplay);
+        assert!(app.world().contains_resource::<TerrainReady>());
+        let (second_heart, second_runs, second_occupancy) =
+            crystal_heart_occupancy_snapshot(&mut app);
+        assert_eq!(second_heart, first_heart);
+        assert_eq!(second_runs, first_runs);
+        assert_eq!(second_occupancy, first_occupancy);
+        assert_eq!(second_occupancy.fingerprint(), first_occupancy_fingerprint);
+        assert_eq!(
+            crystal_heart_blocked_sight_pair(&app, second_heart.origin()),
+            first_blocked_pair,
+            "re-entry must rebuild identical seven-ray obstruction"
+        );
+    }
+
+    #[test]
+    #[ignore = "manual release/debug Crystal Ascent end-to-end boundary-rise benchmark"]
+    fn crystal_ascent_boundary_rises_track_materialization_perception_and_entity_counts() {
+        for rise_levels in [100, 144, 200] {
+            let mut app = procedural_gameplay_app("Crystal Ascent");
+            {
+                let mut map = app.world_mut().resource_mut::<MapSettings>();
+                let TerrainSettings::Procedural(hex_map::ProceduralSettings::V3(v3)) =
+                    &mut map.terrain
+                else {
+                    panic!("Crystal Ascent benchmark should retain V3 settings");
+                };
+                let hex_map::V3LayoutSettings::Single(patch) = &mut v3.layout else {
+                    panic!("Crystal Ascent benchmark should retain its Single patch");
+                };
+                let hex_map::V3RecipeSettings::CrystalAscent(settings) = &mut patch.recipe else {
+                    panic!("Crystal Ascent benchmark should retain its recipe");
+                };
+                settings.rise_levels = rise_levels;
+                map.validate()
+                    .unwrap_or_else(|error| panic!("rise {rise_levels} must validate: {error}"));
+            }
+
+            let started = Instant::now();
+            enter_screen(&mut app, Screen::Gameplay);
+            let setup_elapsed = started.elapsed();
+            assert!(
+                app.world().contains_resource::<TerrainReady>(),
+                "rise {rise_levels} setup failed: {:?}",
+                app.world()
+                    .get_resource::<GameplaySetupFailure>()
+                    .map(|failure| failure.reason.as_str())
+            );
+
+            let (columns, material_runs) = {
+                let map = app.world().resource::<VoxelMap>();
+                (
+                    map.columns().count(),
+                    map.columns()
+                        .map(|(_, column)| hex_map::runs(column).len())
+                        .sum::<usize>(),
+                )
+            };
+            let (tile_entities, total_entities, object_instances, point_lights) = {
+                let world = app.world_mut();
+                let tile_entities = world
+                    .query_filtered::<Entity, With<HexTile>>()
+                    .iter(world)
+                    .count();
+                let object_instances = world.query::<&ObjectInstance>().iter(world).count();
+                let point_lights = world.query::<&PointLight>().iter(world).count();
+                (
+                    tile_entities,
+                    world.iter_entities().count(),
+                    object_instances,
+                    point_lights,
+                )
+            };
+            let illumination_surfaces = app.world().resource::<ResolvedIllumination>().len();
+            let perception = *app
+                .world()
+                .resource::<hex_perception::PerceptionRuntimeStats>();
+            let report = app.world().resource::<GenerationReport>();
+            let Some(ProceduralRecipeMetrics::CrystalAscent(metrics)) = &report.recipe_metrics
+            else {
+                panic!("rise {rise_levels} omitted Crystal Ascent metrics");
+            };
+            assert_eq!(metrics.rise_levels, rise_levels);
+            assert_eq!(columns, 4_921);
+            assert_eq!(object_instances, 61);
+            assert_eq!(point_lights, 22);
+            assert!(
+                illumination_surfaces >= metrics.ordinary_surfaces as usize,
+                "resolved illumination must include every ordinary route surface"
+            );
+            assert!((1..=2).contains(&perception.illumination_resolutions));
+            assert!((1..=2).contains(&perception.observation_resolutions));
+            eprintln!(
+                "CRYSTAL_ASCENT_RUNTIME rise={rise_levels} setup={setup_elapsed:?} \
+                 generation_us={} columns={columns} material_runs={material_runs} \
+                 tile_entities={tile_entities} total_entities={total_entities} \
+                 ordinary_surfaces={} illumination_surfaces={illumination_surfaces} \
+                 object_instances={object_instances} point_lights={point_lights}",
+                report.elapsed_micros, metrics.ordinary_surfaces,
+            );
+
+            enter_screen(&mut app, Screen::Title);
+            assert!(!app.world().contains_resource::<VoxelMap>());
+            assert!(!app.world().contains_resource::<ResolvedIllumination>());
+            assert!(!app.world().contains_resource::<AuthoredObjectOccupancy>());
+        }
+    }
+
     /// Automated combat UI walks use minimal flat fixtures instead of making ability
     /// assertions depend on the Crossing's routing and six-unit initiative.
     #[test]
@@ -1884,6 +2674,7 @@ pub(crate) mod tests {
         app.add_plugins((
             hex_map::plugin,
             hex_units::terrain_occupancy::plugin,
+            hex_units::authored_object_occupancy::plugin,
             hex_units::movement::plugin,
             hex_perception::plugin,
         ));
@@ -1908,7 +2699,12 @@ pub(crate) mod tests {
         }
         app.add_systems(
             OnEnter(Screen::Gameplay),
-            finalize_gameplay_setup.in_set(GameplaySetup::Finalize),
+            (
+                stage_crystal_ascent_showcase_party
+                    .after(GameplaySetup::Actors)
+                    .before(GameplaySetup::Restore),
+                finalize_gameplay_setup.in_set(GameplaySetup::Finalize),
+            ),
         );
 
         while app.plugins_state() != PluginsState::Cleaned {

@@ -10,6 +10,7 @@
 //! their common language belongs.
 
 pub mod app;
+pub mod authored_occupancy;
 pub mod commands;
 pub mod config;
 #[cfg(feature = "test-support")]
@@ -38,6 +39,7 @@ pub use app::{
     AppSystems, GameplayPhase, GameplaySetup, GameplaySystems, Mode, PausableSystems, Pause,
     RoundElapsed, Screen, Turn,
 };
+pub use authored_occupancy::{AuthoredObjectVoxelRun, AuthoredObjectVoxelRuns};
 pub use commands::{Busy, CommandQueue, GameCommand, IssuedCommand, PendingDecision};
 #[cfg(feature = "test-support")]
 pub use deterministic_fixture::{

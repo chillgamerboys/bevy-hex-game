@@ -48,7 +48,8 @@ use hex_core::{
 };
 use hex_perception::FactionMapKnowledge;
 use hex_units::{
-    Body, Downed, Faction, MovingTo, Party, StandsOn, TerrainOccupancy, UnitOccupancy, UnitRegistry,
+    AuthoredObjectOccupancy, Body, Downed, Faction, MovingTo, Party, StandsOn, TerrainOccupancy,
+    UnitOccupancy, UnitRegistry,
 };
 
 use crate::ai::AiIssuedCommand;
@@ -150,6 +151,8 @@ struct Verb<'a> {
     formations: Option<&'a FormationCatalog>,
     /// Exact world-space obstacles excluded from footing for movement and reach.
     blockers: Option<&'a TraversalBlockers>,
+    /// Complete opt-in authored-object volume used by direct movement validation.
+    authored_objects: Option<&'a AuthoredObjectOccupancy>,
     /// Live exact surfaces plus every committed route in flight at drain start.
     occupancy: &'a UnitOccupancy,
     /// Units this drain already committed domain movement for. `Busy` lands via
@@ -184,6 +187,12 @@ struct PartyStores<'w> {
     party: Res<'w, Party>,
     formation: ResMut<'w, PartyFormation>,
     formations: Option<Res<'w, FormationCatalog>>,
+}
+
+#[derive(SystemParam)]
+struct MovementWorld<'w> {
+    blockers: Option<Res<'w, TraversalBlockers>>,
+    authored_objects: Option<Res<'w, AuthoredObjectOccupancy>>,
 }
 
 #[derive(SystemParam)]
@@ -269,7 +278,7 @@ fn apply_commands(
     elements: Option<Res<ElementCatalog>>,
     mut stores: ResolutionStores,
     combat: Option<Res<CombatSettings>>,
-    blockers: Option<Res<TraversalBlockers>>,
+    movement_world: MovementWorld,
     tiles: TileQuery,
     mut units: UnitStores,
     mut party_stores: PartyStores,
@@ -478,7 +487,8 @@ fn apply_commands(
                 party: &party_stores.party,
                 formation: &mut party_stores.formation,
                 formations: party_stores.formations.as_deref(),
-                blockers: blockers.as_deref(),
+                blockers: movement_world.blockers.as_deref(),
+                authored_objects: movement_world.authored_objects.as_deref(),
                 occupancy: &occupancy,
                 committed: &mut committed,
                 reserved: &mut reserved,
@@ -601,7 +611,8 @@ fn apply_commands(
             party: &party_stores.party,
             formation: &mut party_stores.formation,
             formations: party_stores.formations.as_deref(),
-            blockers: blockers.as_deref(),
+            blockers: movement_world.blockers.as_deref(),
+            authored_objects: movement_world.authored_objects.as_deref(),
             occupancy: &occupancy,
             committed: &mut committed,
             reserved: &mut reserved,

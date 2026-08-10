@@ -14,7 +14,7 @@ you do not need to recompile the game.
 | `art/object_catalog.ron` + `art/objects/*.ron` | The validated authored plant, effect, and prop catalog; normally edited through `cargo editor` |
 | `elements.ron` | The six-basic wheel, opposition, and the six direct pair plus six direct triple fusion recipes |
 | `spells.ron` | Spells: what each requires, how it is cast, and what it does |
-| `camera.ron` | Initial map and close-character frames, pan speed, zoom and tilt |
+| `camera.ron` | Initial Map, third-person, and first-person frames, lens, pan speed, zoom, and tilt |
 | `combat.ron` | Engagement thresholds, movement budget, height bonus, what a strike costs, and the open design questions as policy knobs that reject unbuilt variants with a reason |
 | `perception.ron` | Active Bright/Dim/Dark sight radii |
 | `lighting.ron` | Sun brightness, colour and angle, ambient light, the sky gradient and its hex clouds |
@@ -41,7 +41,7 @@ How quickly you *see* the change depends on which file:
 
 | File | When it takes effect |
 |---|---|
-| `camera.ron` | Movement/follow values straight away; close preset on the next `C`; initial map frame on the next rebuild |
+| `camera.ron` | Follow, eye-height, and lens values straight away; entry pitch/radius on the next mode entry; initial Map frame on the next rebuild |
 | `display.ron` | Straight away until the player saves a local presentation choice in Settings |
 | `world.ron` | On the next world rebuild |
 | `substances.ron` | On the next world rebuild |
@@ -94,13 +94,13 @@ The optional review overrides are:
 | Variable | Effect |
 |---|---|
 | `HEX_REVIEW_SEED` | Replaces the configured seed of a seeded scenario |
-| `HEX_REVIEW_VIEW` | Uses `default`, `rotated`, `rear` (180° orbit), or `top-down` map view |
-| `HEX_REVIEW_CAMERA` | Uses the `map` or close `character` camera |
+| `HEX_REVIEW_VIEW` | Authors the deterministic Map pose as `default`, `rotated` (+120°), `counter-rotated` (-120°), `rear` (180°), or `top-down`; character cameras retain its horizontal azimuth while applying their own pitch, except that `top-down` has no horizontal component and falls back to the original Map heading |
+| `HEX_REVIEW_CAMERA` | Uses the `map`, close `character`, or `first-person` camera |
 | `HEX_REVIEW_TIME` | Sets a cyclic-lighting hour from `0.0` up to, but not including, `24.0` |
 | `HEX_REVIEW_LIQUID_PHASE` | Freezes liquid animation at a finite phase in seconds, wrapped over its visual cycle; captures default to `0.0` |
 | `HEX_REVIEW_FOCUS_ANCHOR` | Moves the selected actor to one exact generated map anchor before framing |
 | `HEX_REVIEW_CUTAWAY` | `full` hides the complete roof of the selected interior; ordinary gameplay never removes it |
-| `HEX_REVIEW_ILLUMINATION` | `overlay` draws exact cave-interior gameplay illumination tiers: charcoal Dark, blue Dim, and cyan-green Bright |
+| `HEX_REVIEW_ILLUMINATION` | `overlay` draws exact authored-interior gameplay illumination tiers: charcoal Dark, blue Dim, and cyan-green Bright |
 
 `HEX_REVIEW_VIEW`, `HEX_REVIEW_CAMERA`, `HEX_REVIEW_FOCUS_ANCHOR`, and
 `HEX_REVIEW_CUTAWAY` and `HEX_REVIEW_ILLUMINATION` require `HEX_REVIEW_CAPTURE`.
@@ -111,8 +111,10 @@ actor cannot stand on fails the review process instead of silently capturing the
 wrong place. The full cutaway still requires the selected actor to occupy an exact
 interior surface and affects only that interior; ordinary gameplay retains the opaque
 roof and resolves tight views through camera collision instead. The illumination
-overlay reads `ResolvedIllumination` and never changes
-gameplay light, physical lights, faction knowledge, fog, or picking.
+overlay reads `ResolvedIllumination`. Its diagnostic caps are physically separated
+and render-ordered above tactical fog caps, so both translucent projections compose
+deterministically; it never changes gameplay light, physical lights, faction
+knowledge, ordinary fog behavior, or picking.
 
 For example, this exposes the complete generated cave network for a top-down overview:
 
@@ -330,6 +332,39 @@ checks that placement against the loaded combat policy so combat through rock ca
 interrupt entry. Recipe and environment combinations are validated together:
 Mountains requires `Frozen`, Caves requires `Rocky`, and invalid combinations leave
 the previous valid hot-reloaded settings active.
+
+`CrystalAscent` authors one complete vertical landmark in a radius-40 `Single` patch:
+
+```ron
+terrain: Procedural((
+    generator_version: 3,
+    layout: Single((
+        environment: TemperateGrassland,
+        recipe: CrystalAscent((
+            base_level: 6,
+            rise_levels: 144,
+        )),
+        overlays: [],
+        mask: WholeWorld,
+        edges: (
+            east: WorldBoundary,
+            south_east: WorldBoundary,
+            south_west: WorldBoundary,
+            west: WorldBoundary,
+            north_west: WorldBoundary,
+            north_east: WorldBoundary,
+        ),
+    )),
+)),
+```
+
+`rise_levels` accepts 100 through 200. `base_level`, the rise, the crown, and its
+reserved headroom must all fit at or below V3's level-256 ceiling. That ceiling does
+not change the retained V1/V2 validation limits. The landmark's three stair circuits,
+four-wide routes, entrance, chamber, shaft, oculus, lights, and summit clearing are
+recipe invariants rather than additional tuning fields. Crystal Ascent currently
+requires `TemperateGrassland`, rejects overlays and Macro placement, and varies only
+crystal presentation and summit trees with the scenario seed.
 
 **Use V3 Waterfall terrain.** The first shipped V3 recipe uses an explicit
 single-patch layout. Its edge-to-edge three-wide liquid topology, eleven-level fall,

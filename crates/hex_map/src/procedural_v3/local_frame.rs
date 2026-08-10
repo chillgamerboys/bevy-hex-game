@@ -91,7 +91,7 @@ impl LocalPatchFrame {
             center,
             scale: max_distance.min(12),
             rotation: rotation % 6,
-            compose_presentation_rotation: kind == LayoutKind::Ring19,
+            compose_presentation_rotation: matches!(kind, LayoutKind::Ring19 | LayoutKind::Macro),
         })
     }
 
@@ -330,11 +330,17 @@ impl LocalPatchFrame {
         for light in lights.values_mut() {
             light.origin = self.translate_position(light.origin, direction)?;
             if self.compose_presentation_rotation {
-                if let Some(PlannedLightPresentation::CaveCrystal(crystal)) =
-                    &mut light.presentation
-                {
-                    crystal.rotation =
-                        compose_rotation_steps(crystal.rotation, self.rotation, direction);
+                if let Some(presentation) = &mut light.presentation {
+                    match presentation {
+                        PlannedLightPresentation::CaveCrystal(crystal) => {
+                            crystal.rotation =
+                                compose_rotation_steps(crystal.rotation, self.rotation, direction);
+                        }
+                        PlannedLightPresentation::CrystalAscent(crystal) => {
+                            crystal.rotation =
+                                compose_rotation_steps(crystal.rotation, self.rotation, direction);
+                        }
+                    }
                 }
             }
         }
@@ -776,5 +782,47 @@ mod tests {
             panic!("fixture crystal presentation");
         };
         assert_eq!(crystal.rotation, 1);
+    }
+
+    #[test]
+    fn macro_frame_composes_and_round_trips_presentation_rotations() {
+        let translation = HexCoord::from_axial(21, 0);
+        let world_mask = BTreeSet::from([
+            translation,
+            checked_coord_sum(HexCoord::from_axial(1, 0), translation)
+                .expect("fixture translation"),
+        ]);
+        let frame = LocalPatchFrame::resolve_rotated(&world_mask, LayoutKind::Macro, 33, 4)
+            .expect("Macro frame");
+        let mut patch = presentation_fixture();
+        frame
+            .patch_to_world(&mut patch)
+            .expect("Macro presentation should project");
+
+        assert_eq!(
+            patch
+                .features
+                .by_id
+                .get(&FeatureId(0))
+                .expect("fixture feature")
+                .rotation
+                .steps(),
+            0
+        );
+        let Some(PlannedLightPresentation::CaveCrystal(crystal)) = patch
+            .lights
+            .get(&LightId(0))
+            .expect("fixture light")
+            .presentation
+        else {
+            panic!("fixture crystal presentation");
+        };
+        assert_eq!(crystal.rotation, 5);
+
+        let local = frame
+            .canonical_local_world(&patch)
+            .expect("Macro presentation should return to recipe-local coordinates");
+        assert_eq!(local.features, presentation_fixture().features);
+        assert_eq!(local.lights, presentation_fixture().lights);
     }
 }

@@ -14,11 +14,12 @@ use hex_core::{
 };
 
 use crate::procedural::{
-    CavesMetrics as CavesReportMetrics, DeepForestMetrics as DeepForestReportMetrics,
-    ForestMetrics as ForestReportMetrics, FortMetrics as FortReportMetrics, GenerationReport,
-    HillsMetrics as HillsReportMetrics, MountainsMetrics as MountainsReportMetrics,
-    PrairieMetrics as PrairieReportMetrics, ProceduralRecipeMetrics, TacticalMetrics,
-    VolcanoMetrics as VolcanoReportMetrics, WaterfallMetrics as WaterfallReportMetrics,
+    CavesMetrics as CavesReportMetrics, CrystalAscentMetrics as CrystalAscentReportMetrics,
+    DeepForestMetrics as DeepForestReportMetrics, ForestMetrics as ForestReportMetrics,
+    FortMetrics as FortReportMetrics, GenerationReport, HillsMetrics as HillsReportMetrics,
+    MountainsMetrics as MountainsReportMetrics, PrairieMetrics as PrairieReportMetrics,
+    ProceduralRecipeMetrics, TacticalMetrics, VolcanoMetrics as VolcanoReportMetrics,
+    WaterfallMetrics as WaterfallReportMetrics,
 };
 use crate::settings::{ProceduralV3Settings, V3LayoutSettings, V3RecipeSettings};
 use crate::terrain::TerrainPalette;
@@ -29,6 +30,9 @@ use world::WorldValidationIssue;
 
 mod caves;
 pub(crate) use caves::{CaveCrystalAssetError, CaveCrystalObjectSet};
+mod crystal_ascent;
+mod crystal_ascent_assets;
+pub(crate) use crystal_ascent_assets::{CrystalAscentAssetError, CrystalAscentObjectSet};
 mod composite_patch;
 mod composition;
 mod deep_forest;
@@ -89,7 +93,8 @@ mod world;
 #[cfg(test)]
 pub(crate) use world::PlannedFeature;
 pub(crate) use world::{
-    CaveCrystalKind, FeatureId, FeatureKind, LightId, PlannedLightPresentation,
+    CaveCrystalKind, CrystalAscentCrystalKind, FeatureId, FeatureKind, LightId,
+    PlannedLightPresentation,
 };
 
 /// Failure to construct or validate one V3 world.
@@ -201,6 +206,7 @@ pub(crate) fn ensure_recipe_available(
                     | V3RecipeSettings::DeepForest(_)
                     | V3RecipeSettings::Volcano(_)
                     | V3RecipeSettings::Prairie(_)
+                    | V3RecipeSettings::CrystalAscent(_)
             ) =>
         {
             Ok(())
@@ -432,6 +438,29 @@ pub(crate) fn build(
                 started,
                 volcano_report_metrics,
                 |metrics| ProceduralRecipeMetrics::Volcano(volcano_recipe_metrics(metrics)),
+            )
+        }
+        V3LayoutSettings::Single(patch)
+            if matches!(patch.recipe, V3RecipeSettings::CrystalAscent(_)) =>
+        {
+            let art_catalog = art_catalog.ok_or_else(|| {
+                V3GenerationError::RecipeContract(
+                    "Crystal Ascent requires the accepted runtime art catalog".to_owned(),
+                )
+            })?;
+            finish_build(
+                crystal_ascent::generate(grid_radius, level_height, settings, seed, art_catalog)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                crystal_ascent_report_metrics,
+                |metrics| {
+                    ProceduralRecipeMetrics::CrystalAscent(crystal_ascent_recipe_metrics(metrics))
+                },
             )
         }
         V3LayoutSettings::Single(patch) => Err(V3GenerationError::RecipeUnavailable(recipe_name(
@@ -925,6 +954,40 @@ fn caves_recipe_metrics(metrics: &caves::CavesMetrics) -> CavesReportMetrics {
     }
 }
 
+fn crystal_ascent_report_metrics(
+    metrics: &crystal_ascent::CrystalAscentMetrics,
+) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: metrics.rise_levels,
+        critical_route_steps: metrics.critical_route_steps,
+        reachable_surfaces: metrics.ordinary_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        environment_signature_percent: 100,
+        ..Default::default()
+    }
+}
+
+fn crystal_ascent_recipe_metrics(
+    metrics: &crystal_ascent::CrystalAscentMetrics,
+) -> CrystalAscentReportMetrics {
+    CrystalAscentReportMetrics {
+        circuits: metrics.circuits,
+        flights: metrics.flights,
+        landings: metrics.landings,
+        stair_surfaces: metrics.stair_surfaces,
+        chamber_surfaces: metrics.chamber_surfaces,
+        crown_surfaces: metrics.crown_surfaces,
+        tree_roots: metrics.tree_roots,
+        crystal_fixtures: metrics.crystal_fixtures,
+        gameplay_lights: metrics.gameplay_lights,
+        ordinary_surfaces: metrics.ordinary_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        critical_route_steps: metrics.critical_route_steps,
+        rise_levels: metrics.rise_levels,
+        minimum_stair_headroom: metrics.minimum_stair_headroom,
+    }
+}
+
 fn candidate_notes(notes: Vec<CandidateNote>) -> Vec<String> {
     let mut reported = Vec::new();
     for note in notes {
@@ -982,6 +1045,7 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
         V3RecipeSettings::Beach(_) => "Beach",
         V3RecipeSettings::Shore(_) => "Shore",
         V3RecipeSettings::DeepMountain(_) => "DeepMountain",
+        V3RecipeSettings::CrystalAscent(_) => "CrystalAscent",
     }
 }
 
@@ -990,7 +1054,7 @@ mod tests {
     use super::*;
     use crate::settings::{
         PatchEdgeContractSettings, PatchEdgesSettings, PatchMaskSettings, PatchSpec,
-        V3EnvironmentSettings, V3HillsSettings,
+        V3CrystalAscentSettings, V3EnvironmentSettings, V3HillsSettings,
     };
 
     fn world_edges() -> PatchEdgesSettings {
@@ -1013,6 +1077,24 @@ mod tests {
                     valley_level: 15,
                     max_relief: 8,
                     hills_per_bank: 3,
+                }),
+                overlays: Vec::new(),
+                mask: PatchMaskSettings::WholeWorld,
+                edges: world_edges(),
+            }),
+        };
+
+        assert_eq!(ensure_recipe_available(&settings), Ok(()));
+    }
+
+    #[test]
+    fn implemented_crystal_ascent_is_reported_available() {
+        let settings = ProceduralV3Settings {
+            layout: V3LayoutSettings::Single(PatchSpec {
+                environment: V3EnvironmentSettings::TemperateGrassland,
+                recipe: V3RecipeSettings::CrystalAscent(V3CrystalAscentSettings {
+                    base_level: 6,
+                    rise_levels: 144,
                 }),
                 overlays: Vec::new(),
                 mask: PatchMaskSettings::WholeWorld,
