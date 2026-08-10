@@ -212,7 +212,7 @@ feature. Four logical instances own the complete 37-cell graph:
    temperate basin at levels 149–151;
 3. `inner-mountain` owns the other seven radius-two cells; and
 4. `outer-mountain` owns all eighteen radius-three cells and rises into the enclosing
-   level-180-through-192 ridge.
+   level-178-through-192 ridge.
 
 The exact radius-32 claim may borrow only its required fringe columns from adjacent
 atomic masks. Those columns are subtracted from their former masks before recipe

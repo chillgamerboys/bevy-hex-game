@@ -51,7 +51,7 @@
                     elevation: (low: 149, high: 151, grade_axis: NorthWest),
                 ),
                 // The remainder of radius two is one inner mountain wall. Its
-                // seventeen-level scarp above the basin prevents ordinary surface
+                // nineteen-level scarp above the basin prevents ordinary surface
                 // adjacency outside the one explicit summit port.
                 (
                     name: "inner-mountain",
@@ -67,12 +67,12 @@
                     environment: Alpine,
                     recipe: Mountains((
                         base_level: 170,
-                        relief: 10,
+                        relief: 14,
                         peak_count: 7,
                     )),
                     rotation_turns: 0,
                     access: Scenic,
-                    elevation: (low: 170, high: 180, grade_axis: West),
+                    elevation: (low: 170, high: 184, grade_axis: West),
                 ),
                 // The complete radius-three ring is one broad outer slope and the
                 // map's highest enclosing ridge.
@@ -100,13 +100,13 @@
                     ],
                     environment: Alpine,
                     recipe: Mountains((
-                        base_level: 180,
-                        relief: 12,
+                        base_level: 178,
+                        relief: 14,
                         peak_count: 7,
                     )),
                     rotation_turns: 0,
                     access: Scenic,
-                    elevation: (low: 180, high: 192, grade_axis: West),
+                    elevation: (low: 178, high: 192, grade_axis: West),
                 ),
             ],
             liquid_connections: [],
