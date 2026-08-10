@@ -59,7 +59,7 @@ pub(crate) use layout::HexSide;
 mod liquid;
 pub(crate) use liquid::LiquidFlowState;
 mod materialize;
-pub(crate) use materialize::MapPresentationProjection;
+pub(crate) use materialize::{MapPresentationProjection, MaterializedLiquidVoxel};
 mod mountains;
 mod patch;
 mod prairie;
@@ -90,11 +90,10 @@ mod volume;
 pub(crate) use volume::FillMaterialRole;
 mod waterfall;
 mod world;
-#[cfg(test)]
-pub(crate) use world::PlannedFeature;
 pub(crate) use world::{
-    CaveCrystalKind, CrystalAscentCrystalKind, FeatureId, FeatureKind, LightId,
-    PlannedLightPresentation,
+    CaveCrystalKind, CaveCrystalPresentation, CaveCrystalSiteKind, CrystalAscentCrystalKind,
+    CrystalAscentCrystalPresentation, FeatureId, FeatureKind, LightId, PlannedFeature,
+    PlannedGameplayLight, PlannedLightPresentation,
 };
 
 /// Failure to construct or validate one V3 world.

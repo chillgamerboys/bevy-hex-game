@@ -398,11 +398,19 @@ lanes:
     builder: worker
     branch: worker/client-hosted-world-replication
     owns:
+      - crates/hex_map/Cargo.toml#hex-multiplayer-world-dto-dependency
       - crates/hex_map/src/world_snapshot.rs
       - crates/hex_map/src/grid.rs#snapshot-import-export-and-terrain-deltas
       - crates/hex_map/src/lib.rs#world-snapshot-publication
+      - crates/hex_map/src/terrain_damage.rs#snapshot-hydration
+      - crates/hex_map/src/procedural_v3/mod.rs#snapshot-internal-reexports
+      - crates/hex_map/src/procedural_v3/materialize.rs#generator-neutral-snapshot-adapter
       - crates/hex_map/tests/contracts/world_snapshot.rs
+      - crates/hex_perception/Cargo.toml#multiplayer-knowledge-and-visibility-dependencies
+      - crates/hex_perception/src/knowledge.rs#player-knowledge-snapshot-hydration
       - crates/hex_perception/src/runtime.rs#multiplayer-player-faction-disclosure
+      - crates/hex_perception/src/snapshots.rs#remembered-run-bottom-projection
+      - crates/hex_perception/src/lib.rs#multiplayer-knowledge-publication
       - crates/hex_perception/tests/multiplayer_disclosure.rs
       - docs/planning/waves/client-hosted-sandbox/manifest.md#L3-row
     dispatch_blockers: []
@@ -415,7 +423,7 @@ lanes:
     sizing:
       model: gpt-5.6-sol
       effort: high
-    state: queued
+    state: dispatched
     pr: null
 
   - id: L4

@@ -9,14 +9,17 @@ description = "Deterministic gameplay illumination, faction sight, and remembere
 bevy_app = { workspace = true }
 bevy_ecs = { workspace = true }
 bevy_log = { workspace = true }
+bevy_replicon = { workspace = true }
 bevy_reflect = { workspace = true }
 bevy_state = { workspace = true, features = ["bevy_app", "bevy_reflect"] }
 hex_assets = { workspace = true }
 hex_core = { workspace = true }
+hex_multiplayer = { workspace = true }
 hex_units = { workspace = true }
 
 [dev-dependencies]
 bevy_platform = { workspace = true }
+bevy_time = { workspace = true }
 hex_test_app = { workspace = true }
 
 [lints]
