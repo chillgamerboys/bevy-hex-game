@@ -880,7 +880,7 @@ pub struct PlayerKnownSurfaceV1 {
 /// Complete shared player-faction remembered terrain view.
 ///
 /// Hostile unit, lattice, and combat state are intentionally not representable here.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Message, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlayerKnowledgeSnapshotV1 {
     /// Exact knowledge schema.
