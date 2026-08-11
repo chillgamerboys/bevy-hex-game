@@ -10,9 +10,39 @@ use hex_lattice::LatticeState;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    limits::{BoundedVec, MAX_ROUTE_STEPS, MAX_SESSION_UNITS, MAX_UNIT_EFFECTS},
+    limits::{
+        BoundError, BoundedText, BoundedVec, MAX_IDENTITY_BYTES, MAX_ROUTE_STEPS,
+        MAX_SESSION_UNITS, MAX_UNIT_EFFECTS,
+    },
     AuthoritySequence,
 };
+
+/// Bounded shipped archetype identity disclosed with one visible unit.
+///
+/// This is enough for a replica to materialize the correct actor shell without receiving
+/// an encounter's undisclosed hostile roster or any private lattice/AI state.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ArchetypeIdentityV1(BoundedText<MAX_IDENTITY_BYTES>);
+
+impl ArchetypeIdentityV1 {
+    /// Validates one stable shipped archetype identity.
+    pub fn new(value: impl Into<String>) -> Result<Self, BoundError> {
+        BoundedText::new(value).map(Self)
+    }
+
+    /// Borrows the validated identity.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+
+    /// Consumes the wrapper and returns the stable identity.
+    #[must_use]
+    pub fn into_string(self) -> String {
+        self.0.into_string()
+    }
+}
 
 /// Exact authoritative domain route and clock used for client interpolation.
 ///
@@ -71,6 +101,8 @@ impl MotionReplicaV1 {
 pub struct UnitReplica {
     /// Stable session unit identity.
     pub unit: UnitId,
+    /// Shipped archetype identity, disclosed only while this unit itself is visible.
+    pub archetype: ArchetypeIdentityV1,
     /// Disclosed faction.
     pub faction: Faction,
     /// Exact authoritative surface position.
@@ -210,3 +242,30 @@ impl fmt::Display for ReplicaValidationError {
 }
 
 impl std::error::Error for ReplicaValidationError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn archetype_identity_is_nonempty_bounded_and_control_free() {
+        let identity = ArchetypeIdentityV1::new("warrior");
+        assert!(identity.is_ok());
+        assert_eq!(
+            identity.map(|value| value.into_string()),
+            Ok("warrior".to_owned())
+        );
+        assert_eq!(ArchetypeIdentityV1::new(""), Err(BoundError::EmptyText));
+        assert_eq!(
+            ArchetypeIdentityV1::new("x".repeat(MAX_IDENTITY_BYTES + 1)),
+            Err(BoundError::TextTooLong {
+                maximum: MAX_IDENTITY_BYTES,
+                actual: MAX_IDENTITY_BYTES + 1,
+            })
+        );
+        assert_eq!(
+            ArchetypeIdentityV1::new("warrior\nadmin"),
+            Err(BoundError::ControlCharacter)
+        );
+    }
+}

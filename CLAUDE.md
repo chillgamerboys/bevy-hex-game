@@ -69,7 +69,7 @@ cargo run --release -p hex_game --features map-review
 
 `HEX_REVIEW_VIEW` accepts `default`, `rotated`, `rear`, or `top-down` and requires
 `HEX_REVIEW_CAPTURE`; omitting the view uses `default`. `HEX_REVIEW_CAMERA` accepts
-`map` or `character` and also requires a capture. `HEX_REVIEW_TIME` accepts an hour in
+`map`, `character`, or `first-person` and also requires a capture. `HEX_REVIEW_TIME` accepts an hour in
 `[0, 24)` and can be used with or without a capture, but the selected scenario must use
 cyclic lighting. `HEX_REVIEW_LIQUID_PHASE` accepts any finite phase in seconds and
 freezes liquid presentation there; captures default to `0.0`, while launches without a
@@ -165,6 +165,10 @@ decisions.
 queries private map, unit, combat, or perception implementations. Wire command requests
 cannot supply a seat; authority derives it from admission state. `CombatState` stays on
 the host, and clients receive disclosure-safe `UnitReplica`/`SessionReplica` projections.
+Generator-neutral `WorldSnapshotV1`/`WorldDeltaV1` and authorized
+`PlayerKnowledgeSnapshotV1` are stable shared data contracts, but only world/perception
+adapters export, validate, import, or disclose their domain state. Reconnect state is
+bound to a random `SessionInstanceId`, endpoint/SPKI, and certificate expiry.
 Wire lobby requests also cannot supply a seat and are limited to readiness/leave;
 assignment, kick, launch, retry, return, and close are local-only host control messages.
 Installing `MultiplayerPlugin` alone opens no socket and leaves offline single-player in

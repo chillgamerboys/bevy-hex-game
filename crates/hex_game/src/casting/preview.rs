@@ -32,21 +32,27 @@
 //! observer. Off the lit set there is no marker and a click still means "walk there".
 //! The other two layers keep `Pickable::IGNORE` so they cannot shadow the markers.
 
+use std::collections::BTreeSet;
+
 use bevy::picking::events::{Click, Pointer};
 use bevy::picking::Pickable;
 use bevy::prelude::*;
 
-use hex_assets::{GameAssets, TargetShape, Trajectory};
+use hex_assets::{GameAssets, SubstanceTable, TargetShape, TargetingReach, Trajectory};
+use hex_combat::FactionLatticeKnowledge;
 use hex_core::{Headroom, HexSpan, HexTile, KnowledgeState, Pause, TilePos};
 use hex_perception::FactionMapKnowledge;
 use hex_units::trajectories::clip_known_effect_volume;
-use hex_units::Faction;
+use hex_units::{in_touch_reach, Body, Faction, Footing};
 use hex_units::{
     known_trajectory_is_clear, resolve_creation_volume, trajectory_destination, volumes,
     KnownTerrainOccupancy, TerrainRevision,
 };
 
-use super::{facing_toward, in_range, Aim, Aiming, CastReadout};
+use super::{
+    facing_toward, in_range, known_footing, restorable_target_ids, Aim, Aiming, CastReadout,
+    RestorationTargetQuery,
+};
 
 /// Thickness of an overlay cap in world units, matched to `hex_units::selection` so the
 /// casting layers read as the same kind of paint as the movement ones.
@@ -145,12 +151,15 @@ pub struct AimVolume {
 pub(super) struct DrawKey {
     aim: Aim,
     from: TilePos,
+    body: Body,
     terrain: u64,
     range: u32,
+    reach: TargetingReach,
     levels_per_bonus: u32,
     shape: TargetShape,
     trajectory: Trajectory,
     creates_terrain: bool,
+    restorable: Option<BTreeSet<hex_core::UnitId>>,
     knowledge_available: bool,
 }
 
@@ -169,36 +178,47 @@ pub(super) fn redraw_preview(
     mut materials: ResMut<Assets<StandardMaterial>>,
     revision: Res<TerrainRevision>,
     knowledge: Option<Res<FactionMapKnowledge>>,
+    lattice_knowledge: Option<Res<FactionLatticeKnowledge>>,
+    substances: Option<Res<SubstanceTable>>,
     tiles: TileQuery,
+    restoration_targets: RestorationTargetQuery,
     drawn: Query<Entity, DrawnPreview>,
 ) {
     let Some(assets) = assets else { return };
     let knowledge_changed = knowledge
         .as_ref()
         .is_some_and(|knowledge| knowledge.is_changed());
-
-    let wanted = aiming
-        .0
+    let substances_changed = substances
         .as_ref()
-        .zip(readout.caster)
-        .map(|(aim, caster)| DrawKey {
+        .is_some_and(|substances| substances.is_changed());
+
+    let wanted = aiming.0.as_ref().zip(readout.caster).map(|(aim, caster)| {
+        let row = readout.row(&aim.spell);
+        let restorable = row.filter(|row| row.restores).map(|_| {
+            knowledge
+                .as_deref()
+                .map(|knowledge| knowledge.faction(Faction::Player))
+                .zip(lattice_knowledge.as_deref())
+                .map_or_else(BTreeSet::new, |(spatial, known)| {
+                    restorable_target_ids(spatial, Faction::Player, known, &restoration_targets)
+                })
+        });
+        DrawKey {
             aim: aim.clone(),
             from: caster.standing,
+            body: caster.body,
             terrain: revision.0,
-            range: readout.row(&aim.spell).map_or(0, |row| row.range),
+            range: row.map_or(0, |row| row.range),
+            reach: row.map_or(TargetingReach::Ranged, |row| row.reach),
             levels_per_bonus: readout.levels_per_bonus,
-            shape: readout
-                .row(&aim.spell)
-                .map_or(TargetShape::Single, |row| row.shape.clone()),
-            trajectory: readout
-                .row(&aim.spell)
-                .map_or(Trajectory::None, |row| row.trajectory),
-            creates_terrain: readout
-                .row(&aim.spell)
-                .is_some_and(|row| row.creates_terrain),
+            shape: row.map_or(TargetShape::Single, |row| row.shape.clone()),
+            trajectory: row.map_or(Trajectory::None, |row| row.trajectory),
+            creates_terrain: row.is_some_and(|row| row.creates_terrain),
+            restorable,
             knowledge_available: knowledge.is_some(),
-        });
-    if drawn_key.0 == wanted && !knowledge_changed {
+        }
+    });
+    if drawn_key.0 == wanted && !knowledge_changed && !substances_changed {
         return;
     }
     for marker in &drawn {
@@ -245,16 +265,32 @@ pub(super) fn redraw_preview(
         })
         .map(|(pos, span, _)| (*pos, span.top))
         .collect();
+    let occupied: BTreeSet<TilePos> = player_knowledge
+        .into_iter()
+        .flat_map(|knowledge| knowledge.units())
+        .filter(|(id, _)| {
+            key.restorable
+                .as_ref()
+                .is_none_or(|allowed| allowed.contains(id))
+        })
+        .map(|(_, unit)| unit.pos)
+        .collect();
+    let touch_footing = player_knowledge
+        .zip(substances.as_deref())
+        .map(|(knowledge, substances)| known_footing(knowledge, substances, key.body));
 
     let anchors = legal_anchors(
         &surfaces,
         key.from,
         row.range,
+        row.reach,
         readout.levels_per_bonus,
         &row.shape,
         row.trajectory,
         row.creates_terrain,
         &known_terrain,
+        touch_footing.as_ref(),
+        &occupied,
     );
     for (pos, top) in &anchors {
         commands.spawn((
@@ -352,17 +388,28 @@ fn legal_anchors(
     surfaces: &[(TilePos, f32)],
     from: TilePos,
     range: u32,
+    reach: TargetingReach,
     levels_per_bonus: u32,
     shape: &TargetShape,
     trajectory: Trajectory,
     creates_terrain: bool,
     terrain: &KnownTerrainOccupancy,
+    touch_footing: Option<&Footing>,
+    occupied: &BTreeSet<TilePos>,
 ) -> Vec<(TilePos, f32)> {
     surfaces
         .iter()
         .filter(|(pos, _)| match shape {
             TargetShape::SelfCast => *pos == from,
-            _ => in_range(from, *pos, range, levels_per_bonus),
+            _ => match reach {
+                TargetingReach::Ranged => in_range(from, *pos, range, levels_per_bonus),
+                TargetingReach::Touch => {
+                    occupied.contains(pos)
+                        && (*pos == from
+                            || touch_footing
+                                .is_some_and(|footing| in_touch_reach(footing, from, *pos)))
+                }
+            },
         })
         .filter(|(pos, _)| {
             matches!(trajectory, Trajectory::None)
@@ -484,12 +531,87 @@ pub(super) fn clear_preview(
 
 #[cfg(test)]
 mod tests {
-    use hex_core::HexCoord;
+    use hex_assets::{ArtPalette, SubstanceFile};
+    use hex_core::{HexCoord, TraversalProfile};
 
     use super::*;
 
     fn at(q: i32, r: i32, level: i32) -> TilePos {
         TilePos::new(HexCoord::from_axial(q, r), level)
+    }
+
+    fn footing(surfaces: &[TilePos]) -> Footing {
+        let palette: ArtPalette = ron::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/art/palette.ron"
+        )))
+        .expect("palette.ron parses");
+        let file: SubstanceFile = ron::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/config/substances.ron"
+        )))
+        .expect("substances.ron parses");
+        let table = SubstanceTable::from_file(&file, &palette)
+            .expect("shipped substances resolve through the art palette");
+        let stone = table.id("stone").expect("stone is shipped solid footing");
+        let tiles: Vec<_> = surfaces
+            .iter()
+            .map(|pos| (*pos, HexSpan::new(0.0, 1.0), stone, Headroom(3)))
+            .collect();
+
+        Footing::from_tiles(
+            tiles
+                .iter()
+                .map(|(pos, span, substance, headroom)| (pos, span, substance, headroom)),
+            &table,
+            Body::new(TraversalProfile::WALKER),
+            None,
+        )
+    }
+
+    #[test]
+    fn touch_anchor_paint_requires_an_occupied_mutual_step_or_self() {
+        let from = at(0, 0, 4);
+        let flat = at(1, 0, 4);
+        let stepped = at(0, 1, 5);
+        let empty = at(-1, 1, 4);
+        let cliff = at(-1, 0, 6);
+        let far = at(2, 0, 4);
+        let positions = [from, flat, stepped, empty, cliff, far];
+        let surfaces: Vec<_> = positions.iter().map(|pos| (*pos, 1.0)).collect();
+        let footing = footing(&positions);
+        let occupied = BTreeSet::from([from, flat, stepped, cliff, far]);
+
+        let anchors: BTreeSet<_> = legal_anchors(
+            &surfaces,
+            from,
+            0,
+            TargetingReach::Touch,
+            5,
+            &TargetShape::Single,
+            Trajectory::None,
+            false,
+            &KnownTerrainOccupancy::default(),
+            Some(&footing),
+            &occupied,
+        )
+        .into_iter()
+        .map(|(pos, _)| pos)
+        .collect();
+
+        assert_eq!(anchors, BTreeSet::from([from, flat, stepped]));
+        assert!(
+            !anchors.contains(&empty),
+            "empty adjacent terrain is not a target"
+        );
+        assert!(
+            !anchors.contains(&cliff),
+            "a two-level cliff is not touch reach"
+        );
+        assert!(
+            !anchors.contains(&far),
+            "occupied distant terrain is not touch reach"
+        );
     }
 
     #[test]
@@ -500,16 +622,20 @@ mod tests {
         let blocker = at(1, 0, 2);
         let observed = KnownTerrainOccupancy::from_observed_surfaces([blocker]);
         let hidden = KnownTerrainOccupancy::default();
+        let occupied = BTreeSet::new();
 
         assert!(legal_anchors(
             &surfaces,
             from,
             3,
+            TargetingReach::Ranged,
             5,
             &TargetShape::Single,
             Trajectory::Direct,
             false,
             &observed,
+            None,
+            &occupied,
         )
         .is_empty());
         assert_eq!(
@@ -517,11 +643,14 @@ mod tests {
                 &surfaces,
                 from,
                 3,
+                TargetingReach::Ranged,
                 5,
                 &TargetShape::Single,
                 Trajectory::Arc { rise: 3 },
                 false,
                 &observed,
+                None,
+                &occupied,
             ),
             surfaces
         );
@@ -530,11 +659,14 @@ mod tests {
                 &surfaces,
                 from,
                 3,
+                TargetingReach::Ranged,
                 5,
                 &TargetShape::Single,
                 Trajectory::None,
                 false,
                 &hidden,
+                None,
+                &occupied,
             ),
             surfaces
         );
@@ -543,11 +675,14 @@ mod tests {
                 &surfaces,
                 from,
                 3,
+                TargetingReach::Ranged,
                 5,
                 &TargetShape::Single,
                 Trajectory::Direct,
                 false,
                 &hidden,
+                None,
+                &occupied,
             ),
             surfaces,
             "an unknown world blocker must not remove a preview marker"

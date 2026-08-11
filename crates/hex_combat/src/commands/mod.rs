@@ -32,7 +32,7 @@
 //! commands too. Validation is what differs by [`Mode`] — free movement in
 //! real time, turn ownership and budgets in combat.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -48,9 +48,11 @@ use hex_core::{
 };
 use hex_perception::FactionMapKnowledge;
 use hex_units::{
-    Body, Downed, Faction, MovingTo, Party, StandsOn, TerrainOccupancy, UnitOccupancy, UnitRegistry,
+    AuthoredObjectOccupancy, Body, Downed, Faction, MovingTo, Party, StandsOn, TerrainOccupancy,
+    UnitOccupancy, UnitRegistry,
 };
 
+use crate::ai::AiIssuedCommand;
 use crate::outcomes::{CombatEvent, CommandRefusal};
 use crate::turns::TurnOrder;
 
@@ -149,6 +151,8 @@ struct Verb<'a> {
     formations: Option<&'a FormationCatalog>,
     /// Exact world-space obstacles excluded from footing for movement and reach.
     blockers: Option<&'a TraversalBlockers>,
+    /// Complete opt-in authored-object volume used by direct movement validation.
+    authored_objects: Option<&'a AuthoredObjectOccupancy>,
     /// Live exact surfaces plus every committed route in flight at drain start.
     occupancy: &'a UnitOccupancy,
     /// Units this drain already committed domain movement for. `Busy` lands via
@@ -186,8 +190,15 @@ struct PartyStores<'w> {
 }
 
 #[derive(SystemParam)]
+struct MovementWorld<'w> {
+    blockers: Option<Res<'w, TraversalBlockers>>,
+    authored_objects: Option<Res<'w, AuthoredObjectOccupancy>>,
+}
+
+#[derive(SystemParam)]
 struct UnitStores<'w, 's> {
     actors: ActorQuery<'w, 's>,
+    ai_commands: Query<'w, 's, (), With<AiIssuedCommand>>,
     lattices: cast::LatticeQuery<'w, 's>,
     lattice_stats: Query<'w, 's, &'static hex_lattice::LatticeStats>,
     occupants: Query<
@@ -267,13 +278,14 @@ fn apply_commands(
     elements: Option<Res<ElementCatalog>>,
     mut stores: ResolutionStores,
     combat: Option<Res<CombatSettings>>,
-    blockers: Option<Res<TraversalBlockers>>,
+    movement_world: MovementWorld,
     tiles: TileQuery,
     mut units: UnitStores,
     mut party_stores: PartyStores,
 ) {
     let mut committed: Vec<Entity> = Vec::new();
     let mut reserved = BTreeMap::new();
+    let mut consumed_ai_issuers = BTreeSet::new();
     let mut emitted: Vec<CombatEvent> = Vec::new();
     let in_combat = *mode.get() == Mode::Combat;
     let occupancy = UnitOccupancy::from_positions(units.occupants.iter().flat_map(
@@ -383,6 +395,13 @@ fn apply_commands(
     }
 
     while let Some(issued) = queue.pop() {
+        let unit = issued.command.unit();
+        let ai_issuer = registry.entity_of(unit).filter(|entity| {
+            units.ai_commands.contains(*entity) && consumed_ai_issuers.insert(*entity)
+        });
+        if let Some(entity) = ai_issuer {
+            commands.entity(entity).remove::<AiIssuedCommand>();
+        }
         if matches!(
             stores.resolution.status(),
             crate::SpellResolutionStatus::Frozen(_)
@@ -411,7 +430,6 @@ fn apply_commands(
                 .as_deref()
                 .is_some_and(|authority| authority.handles(&issued.command))
         {
-            let unit = issued.command.unit();
             let observed = issued.clone();
             let recorded = issued.command.clone();
             let answered_spell_decision =
@@ -469,7 +487,8 @@ fn apply_commands(
                 party: &party_stores.party,
                 formation: &mut party_stores.formation,
                 formations: party_stores.formations.as_deref(),
-                blockers: blockers.as_deref(),
+                blockers: movement_world.blockers.as_deref(),
+                authored_objects: movement_world.authored_objects.as_deref(),
                 occupancy: &occupancy,
                 committed: &mut committed,
                 reserved: &mut reserved,
@@ -534,7 +553,6 @@ fn apply_commands(
             drop_command(&mut emitted, &issued, refusal);
             continue;
         }
-        let unit = issued.command.unit();
         let Some(entity) = registry.entity_of(unit) else {
             record_adapter_refusal(
                 stores.authority.as_deref_mut(),
@@ -593,7 +611,8 @@ fn apply_commands(
             party: &party_stores.party,
             formation: &mut party_stores.formation,
             formations: party_stores.formations.as_deref(),
-            blockers: blockers.as_deref(),
+            blockers: movement_world.blockers.as_deref(),
+            authored_objects: movement_world.authored_objects.as_deref(),
             occupancy: &occupancy,
             committed: &mut committed,
             reserved: &mut reserved,
@@ -644,6 +663,7 @@ fn apply_commands(
                 &mut stores.terrain_edits,
                 &mut stores.terrain_impacts,
                 &mut commands,
+                &tiles,
                 &mut units.actors,
                 &mut units.lattices,
                 unit,
@@ -683,6 +703,8 @@ fn apply_commands(
             ),
         };
         if let Err(refusal) = outcome {
+            let end_hidden_blocked_hostile_turn =
+                end_ai_turn_after_hidden_blocker(&observed.command, &refusal, ai_issuer.is_some());
             if in_combat {
                 if let Some(authority) = stores.authority.as_deref_mut() {
                     if matches!(&observed.command, GameCommand::Cast { .. })
@@ -703,6 +725,17 @@ fn apply_commands(
                 }
             }
             drop_command(&mut emitted, &issued, refusal);
+            if end_hidden_blocked_hostile_turn {
+                // The AI may not inspect authoritative material hidden from its
+                // faction just to predict this refusal. Ending the automated turn
+                // is the fail-closed fallback: it reveals no blocker and prevents
+                // the same knowledge-valid but authority-blocked cast from parking
+                // combat forever.
+                queue.push(IssuedCommand {
+                    seat: observed.seat,
+                    command: GameCommand::EndTurn { unit },
+                });
+            }
         } else {
             let mut needs_settled_adoption = false;
             let mut authority_ready = true;
@@ -764,6 +797,16 @@ fn apply_commands(
         project_authority_reveals(&authority.state, &emitted, &mut stores.knowledge);
     }
     stores.events.write_batch(emitted);
+}
+
+fn end_ai_turn_after_hidden_blocker(
+    command: &GameCommand,
+    refusal: &CommandRefusal,
+    issued_by_ai: bool,
+) -> bool {
+    issued_by_ai
+        && matches!(command, GameCommand::Cast { .. })
+        && matches!(refusal, CommandRefusal::TrajectoryBlocked { .. })
 }
 
 fn project_authority_reveals(
@@ -1099,5 +1142,27 @@ mod tests {
             cells: vec![LatticeCoord::ORIGIN],
         };
         assert_eq!(modal_refusal(&pending, &resolution, &answer), None);
+    }
+
+    #[test]
+    fn hidden_blocker_fallback_applies_only_to_ai_issued_casts() {
+        let cast = GameCommand::Cast {
+            unit: UnitId(7),
+            spell: "Ember".to_owned(),
+            target: TilePos::ORIGIN,
+            facing: None,
+            mana: None,
+        };
+        let blocked = CommandRefusal::TrajectoryBlocked {
+            spell: "Ember".to_owned(),
+        };
+
+        assert!(end_ai_turn_after_hidden_blocker(&cast, &blocked, true));
+        assert!(!end_ai_turn_after_hidden_blocker(&cast, &blocked, false));
+        assert!(!end_ai_turn_after_hidden_blocker(
+            &GameCommand::EndTurn { unit: UnitId(7) },
+            &blocked,
+            true,
+        ));
     }
 }

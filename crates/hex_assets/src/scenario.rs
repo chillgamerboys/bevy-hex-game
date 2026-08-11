@@ -314,10 +314,10 @@ mod tests {
     /// Whether that encounter places its units through generated *anchors* is a
     /// cross-file fact — the encounter is a separate asset — so it is checked in
     /// `hex_game`, which is allowed to open both. This crate can only see the path.
-    /// Procedural Hills, the additive vegetation biomes, and the composite wave map
-    /// deliberately share one canonical review seed so their visual differences are
-    /// directly comparable. Mountain Range likewise shares the Mountains review seed
-    /// so the single-patch and macro-world massifs can be compared directly.
+    /// Procedural Hills, the additive vegetation biomes, Crystal Ascent, and the
+    /// composite wave map deliberately share one canonical review seed so their visual
+    /// differences are directly comparable. Mountain Range likewise shares the Mountains
+    /// review seed so the single-patch and macro-world massifs can be compared directly.
     #[test]
     fn procedural_scenarios_use_only_the_intended_shared_seed_and_name_an_encounter() {
         let library: ScenarioLibrary =
@@ -331,8 +331,8 @@ mod tests {
 
         assert_eq!(
             generated.len(),
-            14,
-            "the scenario library should include all fourteen generated maps"
+            15,
+            "the scenario library should include all fifteen generated maps"
         );
         let mut by_seed = BTreeMap::<u64, BTreeSet<&str>>::new();
         for scenario in &generated {
@@ -354,7 +354,13 @@ mod tests {
                 (129_704_046, BTreeSet::from(["Mountain Range", "Mountains"]),),
                 (
                     1_592_598_566,
-                    BTreeSet::from(["Deep Forest", "Prairie", "Procedural Hills", "Two Rings"]),
+                    BTreeSet::from([
+                        "Crystal Ascent",
+                        "Deep Forest",
+                        "Prairie",
+                        "Procedural Hills",
+                        "Two Rings",
+                    ]),
                 ),
             ]),
             "only the approved directly comparable maps may share a configured seed"

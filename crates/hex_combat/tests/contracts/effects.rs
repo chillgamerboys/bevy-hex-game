@@ -18,11 +18,14 @@ use bevy::prelude::*;
 
 use hex_assets::{
     CastingAxis, CombatSettings, ContentIndex, Effect, ElementCatalog, ElementFile, GemRequirement,
-    ManaAxis, Spell, SpellBook, SpellFile, SubstanceTable, TargetShape, TargetingSpec, Trajectory,
+    ManaAxis, Spell, SpellBook, SpellFile, SubstanceTable, TargetShape, TargetingReach,
+    TargetingSpec, Trajectory,
 };
 use hex_combat::{
-    CombatEvent, CommandRefusal, FactionLatticeKnowledge, Initiative, PersistentEffects, TurnOrder,
+    CombatEvent, CommandRefusal, FactionLatticeKnowledge, Initiative, PersistentEffects,
+    RestorationTargetRefusal, TurnOrder,
 };
+use hex_combat_core::FrozenTargeting;
 use hex_core::{
     CommandQueue, ControlOwner, EffectEnd, EffectPayload, GameCommand, Headroom, HexCoord, HexSpan,
     HexTile, IssuedCommand, LatticeCoord, LightDomain, Mode, PendingDecision, PlayerSeat,
@@ -33,7 +36,7 @@ use hex_perception::{
     apply_observations, FactionMapKnowledge, FactionObservation, FactionObservations, ObservedUnit,
     SurfaceSnapshot, SurfaceSnapshots,
 };
-use hex_test_support::{SyntheticArena, TestAppBuilder, STONE};
+use hex_test_support::{SurfaceSpec, SyntheticArena, TestAppBuilder, STONE};
 use hex_units::{Body, Downed, Faction, Standing, StandsOn, TerrainOccupancy, UnitRegistry};
 
 /// The level every unit in these tests stands on.
@@ -63,6 +66,7 @@ fn elements() -> ElementCatalog {
 fn spells(burn_turns: u16) -> SpellBook {
     let single = TargetingSpec {
         range: 3,
+        reach: hex_assets::TargetingReach::Ranged,
         shape: TargetShape::Single,
         trajectory: Trajectory::None,
     };
@@ -113,6 +117,44 @@ fn spells(burn_turns: u16) -> SpellBook {
         },
     );
     by_name.insert(
+        "Self Ward".to_owned(),
+        Spell {
+            requirements: vec![GemRequirement {
+                element: "Metal".to_owned(),
+                mana: 1,
+            }],
+            casting: CastingAxis::Enchantment { defense: 1 },
+            mana: ManaAxis::Fixed,
+            co_castable: false,
+            targeting: TargetingSpec {
+                range: 0,
+                reach: TargetingReach::Ranged,
+                shape: TargetShape::SelfCast,
+                trajectory: Trajectory::None,
+            },
+            effects: Vec::new(),
+        },
+    );
+    by_name.insert(
+        "Mend".to_owned(),
+        Spell {
+            requirements: vec![GemRequirement {
+                element: "Fire".to_owned(),
+                mana: 1,
+            }],
+            casting: CastingAxis::Evocation,
+            mana: ManaAxis::Fixed,
+            co_castable: false,
+            targeting: TargetingSpec {
+                range: 0,
+                reach: TargetingReach::Touch,
+                shape: TargetShape::Single,
+                trajectory: Trajectory::None,
+            },
+            effects: vec![Effect::RestoreHexes { count: 1 }],
+        },
+    );
+    by_name.insert(
         "Scry".to_owned(),
         Spell {
             requirements: vec![GemRequirement {
@@ -124,6 +166,7 @@ fn spells(burn_turns: u16) -> SpellBook {
             co_castable: false,
             targeting: TargetingSpec {
                 range: 3,
+                reach: hex_assets::TargetingReach::Ranged,
                 shape: TargetShape::Single,
                 trajectory: Trajectory::None,
             },
@@ -142,6 +185,7 @@ fn spells(burn_turns: u16) -> SpellBook {
             co_castable: false,
             targeting: TargetingSpec {
                 range: 3,
+                reach: hex_assets::TargetingReach::Ranged,
                 shape: TargetShape::Sphere { radius: 2 },
                 trajectory: Trajectory::None,
             },
@@ -176,6 +220,7 @@ fn spells(burn_turns: u16) -> SpellBook {
             co_castable: false,
             targeting: TargetingSpec {
                 range: 3,
+                reach: hex_assets::TargetingReach::Ranged,
                 shape: TargetShape::Column { height: 2 },
                 trajectory: Trajectory::None,
             },
@@ -201,6 +246,7 @@ fn spells(burn_turns: u16) -> SpellBook {
                 co_castable: false,
                 targeting: TargetingSpec {
                     range: 3,
+                    reach: hex_assets::TargetingReach::Ranged,
                     shape: TargetShape::Single,
                     trajectory,
                 },
@@ -279,11 +325,30 @@ fn capture_events(mut events: MessageReader<CombatEvent>, mut captured: ResMut<C
 #[derive(Resource, Default)]
 struct CapturedTerrainEdits(Vec<TerrainEdit>);
 
+#[derive(Resource, Default)]
+struct StripLatticeBeforeApply(Option<Entity>);
+
 fn capture_terrain_edits(
     mut edits: MessageReader<TerrainEdit>,
     mut captured: ResMut<CapturedTerrainEdits>,
 ) {
     captured.0.extend(edits.read().cloned());
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "the one-frame hostile privacy fixture must publish a valid authority projection"
+)]
+fn strip_lattice_before_apply(world: &mut World) {
+    let entity = world.resource_mut::<StripLatticeBeforeApply>().0.take();
+    let Some(entity) = entity else {
+        return;
+    };
+    world
+        .entity_mut(entity)
+        .remove::<(LatticeSpec, LatticeState)>();
+    hex_combat::publish_combat_adapter_facts(world)
+        .expect("the stripped lattice is a complete adapter projection");
 }
 
 /// Samples the seam between deciding and applying.
@@ -301,19 +366,33 @@ fn watch_seam(pending: Res<PendingDecision>, queue: Res<CommandQueue>, mut seam:
 
 // --- harness -----------------------------------------------------------------
 
+fn test_app(burn_turns: u16) -> App {
+    test_app_with_arena(burn_turns, SyntheticArena::flat_radius(12, GROUND))
+}
+
 #[expect(
     clippy::expect_used,
     reason = "test helper outside a #[test] fn; fixture content that will not resolve \
               IS the failure"
 )]
-fn test_app(burn_turns: u16) -> App {
+fn test_app_with_arena(burn_turns: u16, arena: SyntheticArena) -> App {
+    let terrain = TerrainOccupancy::from_runs(
+        arena
+            .surfaces()
+            .iter()
+            .map(|surface| (surface.position, RunBottom(surface.bottom))),
+    )
+    .expect("the synthetic arena publishes valid exact runs");
     let mut builder = TestAppBuilder::new()
         .with_fixed_step(Duration::ZERO)
-        .with_arena(SyntheticArena::flat_radius(12, GROUND))
+        .with_arena(arena)
         .expect("the shared synthetic arena must be valid");
     let app = builder.app_mut();
     app.insert_resource(CombatSettings::default());
-    app.add_plugins(hex_combat::plugin);
+    app.add_plugins((
+        hex_units::authored_object_occupancy::plugin,
+        hex_combat::plugin,
+    ));
     app.init_resource::<UnitRegistry>();
 
     let catalog = elements();
@@ -324,19 +403,16 @@ fn test_app(burn_turns: u16) -> App {
     app.insert_resource(catalog);
     app.insert_resource(book);
     app.insert_resource(index);
-    app.insert_resource(
-        TerrainOccupancy::from_runs(
-            HexCoord::ORIGIN
-                .within_radius(12)
-                .into_iter()
-                .map(|coord| (TilePos::new(coord, GROUND), RunBottom(GROUND))),
-        )
-        .expect("the synthetic floor publishes valid exact runs"),
-    );
+    app.insert_resource(terrain);
 
     app.init_resource::<Seam>();
     app.init_resource::<CapturedEvents>();
     app.init_resource::<CapturedTerrainEdits>();
+    app.init_resource::<StripLatticeBeforeApply>();
+    app.add_systems(
+        Update,
+        strip_lattice_before_apply.in_set(hex_combat::CombatSystems::Act),
+    );
     app.add_systems(
         Update,
         watch_seam
@@ -386,6 +462,24 @@ fn spawn(
     initiative: u32,
     lattice: (LatticeSpec, LatticeStats),
 ) -> Entity {
+    spawn_at(
+        app,
+        id,
+        faction,
+        TilePos::new(coord, GROUND),
+        initiative,
+        lattice,
+    )
+}
+
+fn spawn_at(
+    app: &mut App,
+    id: UnitId,
+    faction: Faction,
+    position: TilePos,
+    initiative: u32,
+    lattice: (LatticeSpec, LatticeStats),
+) -> Entity {
     let (spec, stats) = lattice;
     let state = LatticeState::new(&spec, &stats);
     let entity = app
@@ -395,7 +489,7 @@ fn spawn(
             id,
             ControlOwner::default(),
             StandsOn(Standing {
-                pos: TilePos::new(coord, GROUND),
+                pos: position,
                 span: HexSpan::new(0.0, 1.0),
             }),
             Body::new(TraversalProfile::WALKER),
@@ -403,6 +497,33 @@ fn spawn(
             spec,
             state,
             stats,
+        ))
+        .id();
+    app.world_mut()
+        .resource_mut::<UnitRegistry>()
+        .register(id, entity);
+    entity
+}
+
+fn spawn_latticeless(
+    app: &mut App,
+    id: UnitId,
+    faction: Faction,
+    position: TilePos,
+    initiative: u32,
+) -> Entity {
+    let entity = app
+        .world_mut()
+        .spawn((
+            faction,
+            id,
+            ControlOwner::default(),
+            StandsOn(Standing {
+                pos: position,
+                span: HexSpan::new(0.0, 1.0),
+            }),
+            Body::new(TraversalProfile::WALKER),
+            Initiative(initiative),
         ))
         .id();
     app.world_mut()
@@ -786,6 +907,318 @@ fn disabled_count(app: &App, entity: Entity) -> usize {
         .count()
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "a fixture unit losing its lattice is the failure under test, not zero mana"
+)]
+fn lattice_mana(app: &App, entity: Entity) -> u32 {
+    app.world()
+        .entity(entity)
+        .get::<LatticeState>()
+        .expect("fixture caster has lattice state")
+        .total_gem_mana()
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "a fixture unit losing its lattice is a malformed test fixture"
+)]
+fn disable_cells(app: &mut App, entity: Entity, cells: &[LatticeCoord]) {
+    let mut target = app.world_mut().entity_mut(entity);
+    let mut state = target
+        .get_mut::<LatticeState>()
+        .expect("fixture target has lattice state");
+    hex_lattice::apply_disables(&mut state, cells);
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "a fixture unit losing its lattice is a malformed test fixture"
+)]
+fn disable_all_cells(app: &mut App, entity: Entity) -> Vec<LatticeCoord> {
+    let cells = app
+        .world()
+        .entity(entity)
+        .get::<LatticeSpec>()
+        .expect("fixture target has lattice spec")
+        .cells()
+        .map(|(coord, _)| coord)
+        .collect::<Vec<_>>();
+    disable_cells(app, entity, &cells);
+    cells
+}
+
+fn enter_combat(app: &mut App) {
+    app.world_mut()
+        .resource_mut::<NextState<Mode>>()
+        .set(Mode::Combat);
+    app.update();
+}
+
+fn mend_command(caster: UnitId, target: TilePos) -> GameCommand {
+    GameCommand::Cast {
+        unit: caster,
+        spell: "Mend".to_owned(),
+        target,
+        facing: None,
+        mana: None,
+    }
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "a successful fixture cast must retain its canonical turn and lattice"
+)]
+fn assert_mend_opens_restoration(
+    app: &mut App,
+    caster_entity: Entity,
+    caster: UnitId,
+    target_pos: TilePos,
+    target: UnitId,
+) {
+    let mana_before = lattice_mana(app, caster_entity);
+    let _ = take_events(app);
+
+    push(app, mend_command(caster, target_pos));
+    app.update();
+
+    assert_eq!(
+        lattice_mana(app, caster_entity),
+        mana_before - 1,
+        "an accepted Mend pays its authored one mana"
+    );
+    assert!(
+        app.world()
+            .entity(caster_entity)
+            .get::<Turn>()
+            .expect("accepted caster retains its turn while the decision is open")
+            .acted,
+        "an accepted restoration spends the action"
+    );
+    assert_eq!(
+        *app.world().resource::<PendingDecision>(),
+        PendingDecision::ChooseRestores {
+            decider: caster,
+            target,
+            count: 1,
+        }
+    );
+    assert_eq!(
+        take_events(app),
+        vec![CombatEvent::Cast {
+            caster,
+            spell: "Mend".to_owned(),
+            target: target_pos,
+        }],
+        "the paid cast opens the decision without applying restoration early"
+    );
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "the acting caster must retain its canonical turn after a refused cast"
+)]
+fn assert_mend_refused_before_payment(
+    app: &mut App,
+    caster_entity: Entity,
+    caster: UnitId,
+    target: TilePos,
+    refusal: CommandRefusal,
+) {
+    let command = mend_command(caster, target);
+    let mana_before = lattice_mana(app, caster_entity);
+    let _ = take_events(app);
+
+    push(app, command.clone());
+    app.update();
+
+    assert_eq!(
+        lattice_mana(app, caster_entity),
+        mana_before,
+        "a refused restoration must not spend mana"
+    );
+    assert!(
+        !app.world()
+            .entity(caster_entity)
+            .get::<Turn>()
+            .expect("refused caster retains its turn")
+            .acted,
+        "a refused restoration must not spend the action"
+    );
+    assert_eq!(
+        *app.world().resource::<PendingDecision>(),
+        PendingDecision::None,
+        "a refused restoration must not open an exact-cell decision"
+    );
+    assert_eq!(
+        take_events(app),
+        vec![CombatEvent::CommandRefused { command, refusal }],
+        "only the typed refusal may be published"
+    );
+}
+
+fn raised_neighbor_arena(target: TilePos) -> SyntheticArena {
+    let flat = SyntheticArena::flat_radius(12, GROUND);
+    SyntheticArena::new(
+        flat.surfaces()
+            .iter()
+            .copied()
+            .filter(|surface| surface.position.coord != target.coord)
+            .chain([SurfaceSpec::stone(target)]),
+    )
+}
+
+fn spawn_mend_healer_and_keeper(app: &mut App) -> Entity {
+    let catalog = app.world().resource::<ElementCatalog>().clone();
+    let book = app.world().resource::<SpellBook>().clone();
+    let healer = spawn(
+        app,
+        UnitId(1),
+        Faction::Player,
+        HexCoord::ORIGIN,
+        30,
+        lattice_casting(&book, &catalog, "Mend", "Fire", 2),
+    );
+    spawn(
+        app,
+        UnitId(3),
+        Faction::Hostile,
+        HexCoord::from_axial(0, 3),
+        10,
+        lattice_casting(&book, &catalog, "Ward", "Metal", 3),
+    );
+    healer
+}
+
+#[derive(Clone, Copy)]
+enum MendTargetFixture {
+    Empty,
+    LatticelessAlly,
+    LatticelessHostile,
+    HealthyAlly,
+    HealthyHostile,
+    DamagedAlly,
+    DamagedHostile,
+    DownedAlly,
+}
+
+fn mend_fight(target_pos: TilePos, target: MendTargetFixture) -> (App, Entity, Option<Entity>) {
+    let mut app = if target_pos.level == GROUND {
+        test_app(2)
+    } else {
+        test_app_with_arena(2, raised_neighbor_arena(target_pos))
+    };
+    let healer = spawn_mend_healer_and_keeper(&mut app);
+    let catalog = app.world().resource::<ElementCatalog>().clone();
+    let book = app.world().resource::<SpellBook>().clone();
+    let target_entity = match target {
+        MendTargetFixture::Empty => None,
+        MendTargetFixture::LatticelessAlly | MendTargetFixture::LatticelessHostile => {
+            let faction = if matches!(target, MendTargetFixture::LatticelessAlly) {
+                Faction::Player
+            } else {
+                Faction::Hostile
+            };
+            Some(spawn_latticeless(
+                &mut app,
+                UnitId(2),
+                faction,
+                target_pos,
+                20,
+            ))
+        }
+        MendTargetFixture::HealthyAlly | MendTargetFixture::HealthyHostile => {
+            let faction = if matches!(target, MendTargetFixture::HealthyAlly) {
+                Faction::Player
+            } else {
+                Faction::Hostile
+            };
+            Some(spawn_at(
+                &mut app,
+                UnitId(2),
+                faction,
+                target_pos,
+                20,
+                lattice_casting(&book, &catalog, "Ward", "Metal", 3),
+            ))
+        }
+        MendTargetFixture::DamagedAlly | MendTargetFixture::DamagedHostile => {
+            let faction = if matches!(target, MendTargetFixture::DamagedAlly) {
+                Faction::Player
+            } else {
+                Faction::Hostile
+            };
+            let entity = spawn_at(
+                &mut app,
+                UnitId(2),
+                faction,
+                target_pos,
+                20,
+                lattice_casting(&book, &catalog, "Ward", "Metal", 3),
+            );
+            disable_cells(&mut app, entity, &[LatticeCoord::new(-1, 0)]);
+            Some(entity)
+        }
+        MendTargetFixture::DownedAlly => {
+            let entity = spawn_at(
+                &mut app,
+                UnitId(2),
+                Faction::Player,
+                target_pos,
+                20,
+                lattice_casting(&book, &catalog, "Ward", "Metal", 3),
+            );
+            let _ = disable_all_cells(&mut app, entity);
+            app.world_mut().entity_mut(entity).insert(Downed);
+            Some(entity)
+        }
+    };
+    if matches!(target, MendTargetFixture::Empty) {
+        publish_spatial_knowledge_with_surfaces(&mut app, [target_pos]);
+    } else {
+        publish_spatial_knowledge(&mut app);
+    }
+    enter_combat(&mut app);
+    (app, healer, target_entity)
+}
+
+fn revealed_hostile_fight() -> (App, Entity, Entity, TilePos) {
+    let mut app = test_app(2);
+    let catalog = app.world().resource::<ElementCatalog>().clone();
+    let book = app.world().resource::<SpellBook>().clone();
+    spawn(
+        &mut app,
+        UnitId(1),
+        Faction::Player,
+        HexCoord::from_axial(-1, 0),
+        30,
+        lattice_casting(&book, &catalog, "Scry", "Fire", 2),
+    );
+    let healer = spawn(
+        &mut app,
+        UnitId(2),
+        Faction::Player,
+        HexCoord::ORIGIN,
+        20,
+        lattice_casting(&book, &catalog, "Mend", "Fire", 2),
+    );
+    let target_pos = TilePos::new(HexCoord::from_axial(1, 0), GROUND);
+    let hostile = spawn_at(
+        &mut app,
+        UnitId(3),
+        Faction::Hostile,
+        target_pos,
+        10,
+        lattice_casting(&book, &catalog, "Ward", "Metal", 3),
+    );
+    disable_cells(&mut app, hostile, &[LatticeCoord::new(-1, 0)]);
+    publish_spatial_knowledge(&mut app);
+    enter_combat(&mut app);
+    scry(&mut app, UnitId(1), target_pos);
+    run_until_acting(&mut app, UnitId(2));
+    (app, healer, hostile, target_pos)
+}
+
 /// How many more turns of burn a unit is carrying, summed across its fires.
 ///
 /// Turns *remaining*, not records held: a one-turn burn that has already bitten is still
@@ -841,6 +1274,297 @@ fn run_until_acting(app: &mut App, unit: UnitId) {
 }
 
 // --- tests -------------------------------------------------------------------
+
+#[test]
+fn self_cast_refuses_an_off_self_anchor_before_payment() {
+    let mut app = test_app(2);
+    let catalog = app.world().resource::<ElementCatalog>().clone();
+    let book = app.world().resource::<SpellBook>().clone();
+    let caster = spawn(
+        &mut app,
+        UnitId(1),
+        Faction::Player,
+        HexCoord::ORIGIN,
+        20,
+        lattice_casting(&book, &catalog, "Self Ward", "Metal", 2),
+    );
+    let target = TilePos::new(HexCoord::from_axial(1, 0), GROUND);
+    spawn_at(
+        &mut app,
+        UnitId(2),
+        Faction::Hostile,
+        target,
+        10,
+        lattice_casting(&book, &catalog, "Ward", "Metal", 3),
+    );
+    publish_spatial_knowledge(&mut app);
+    enter_combat(&mut app);
+
+    let command = GameCommand::Cast {
+        unit: UnitId(1),
+        spell: "Self Ward".to_owned(),
+        target,
+        facing: None,
+        mana: None,
+    };
+    let refusal = CommandRefusal::TargetOutOfRange {
+        spell: "Self Ward".to_owned(),
+        target,
+    };
+    let mut reducer = hex_combat::authority_snapshot(app.world())
+        .expect("the composed self-cast fixture freezes into pure authority");
+    assert_eq!(
+        reducer.apply(IssuedCommand {
+            seat: PlayerSeat::default(),
+            command: command.clone(),
+        }),
+        Err(refusal.clone()),
+        "the reducer and ECS adapter must reject the same wire target"
+    );
+    let mana_before = lattice_mana(&app, caster);
+    let _ = take_events(&mut app);
+    push(&mut app, command.clone());
+    app.update();
+
+    assert_eq!(lattice_mana(&app, caster), mana_before);
+    assert!(
+        !app.world()
+            .entity(caster)
+            .get::<Turn>()
+            .expect("the refused caster retains its turn")
+            .acted
+    );
+    assert_eq!(
+        take_events(&mut app),
+        vec![CombatEvent::CommandRefused { command, refusal }]
+    );
+}
+
+#[test]
+fn touch_restoration_accepts_self_and_every_flat_hex_direction() {
+    let self_pos = TilePos::new(HexCoord::ORIGIN, GROUND);
+    {
+        let mut app = test_app(2);
+        let healer = spawn_mend_healer_and_keeper(&mut app);
+        disable_cells(&mut app, healer, &[LatticeCoord::new(-1, 0)]);
+        publish_spatial_knowledge(&mut app);
+        enter_combat(&mut app);
+
+        assert_eq!(
+            hex_combat::authority_snapshot(app.world())
+                .expect("touch content freezes into the active combat authority")
+                .content
+                .spell("Mend")
+                .expect("Mend remains in the frozen content projection")
+                .targeting,
+            FrozenTargeting::Touch,
+            "the Bevy host must not collapse Touch into ranged zero"
+        );
+
+        assert_mend_opens_restoration(&mut app, healer, UnitId(1), self_pos, UnitId(1));
+    }
+
+    for neighbor in HexCoord::ORIGIN.neighbors() {
+        let target_pos = TilePos::new(neighbor, GROUND);
+        let (mut app, healer, _) = mend_fight(target_pos, MendTargetFixture::DamagedAlly);
+
+        assert_mend_opens_restoration(&mut app, healer, UnitId(1), target_pos, UnitId(2));
+    }
+}
+
+#[test]
+fn touch_restoration_accepts_a_mutual_one_level_step() {
+    let target_pos = TilePos::new(HexCoord::from_axial(1, 0), GROUND + 1);
+    let (mut app, healer, _) = mend_fight(target_pos, MendTargetFixture::DamagedAlly);
+
+    assert_mend_opens_restoration(&mut app, healer, UnitId(1), target_pos, UnitId(2));
+}
+
+#[test]
+fn touch_restoration_refuses_empty_distant_and_two_level_targets_before_payment() {
+    let empty = TilePos::new(HexCoord::from_axial(1, 0), GROUND);
+    let (mut app, healer, _) = mend_fight(empty, MendTargetFixture::Empty);
+    assert_mend_refused_before_payment(
+        &mut app,
+        healer,
+        UnitId(1),
+        empty,
+        CommandRefusal::TargetUnoccupied { target: empty },
+    );
+
+    for target_pos in [
+        TilePos::new(HexCoord::from_axial(2, 0), GROUND),
+        TilePos::new(HexCoord::from_axial(1, 0), GROUND + 2),
+    ] {
+        let (mut app, healer, _) = mend_fight(target_pos, MendTargetFixture::DamagedAlly);
+        assert_mend_refused_before_payment(
+            &mut app,
+            healer,
+            UnitId(1),
+            target_pos,
+            CommandRefusal::TargetOutOfTouchReach { target: UnitId(2) },
+        );
+    }
+}
+
+#[test]
+fn unobserved_touch_anchor_does_not_reveal_whether_it_is_occupied() {
+    let target = TilePos::new(HexCoord::from_axial(1, 0), GROUND);
+    for fixture in [MendTargetFixture::Empty, MendTargetFixture::DamagedAlly] {
+        let (mut app, healer, _) = mend_fight(target, fixture);
+        apply_observations(
+            &mut app.world_mut().resource_mut::<FactionMapKnowledge>(),
+            &SurfaceSnapshots::default(),
+            &FactionObservations::default(),
+        );
+
+        assert_mend_refused_before_payment(
+            &mut app,
+            healer,
+            UnitId(1),
+            target,
+            CommandRefusal::TargetUnobserved {
+                spell: "Mend".to_owned(),
+                target,
+            },
+        );
+    }
+}
+
+#[test]
+fn restoration_target_validation_precedes_payment_and_decision() {
+    let target_pos = TilePos::new(HexCoord::from_axial(1, 0), GROUND);
+    for (fixture, reason) in [
+        (
+            MendTargetFixture::LatticelessAlly,
+            RestorationTargetRefusal::MissingLattice { target: UnitId(2) },
+        ),
+        (
+            MendTargetFixture::HealthyAlly,
+            RestorationTargetRefusal::FullyRestored { target: UnitId(2) },
+        ),
+        (
+            MendTargetFixture::HealthyHostile,
+            RestorationTargetRefusal::IncompleteHostileKnowledge { target: UnitId(2) },
+        ),
+        (
+            MendTargetFixture::LatticelessHostile,
+            RestorationTargetRefusal::IncompleteHostileKnowledge { target: UnitId(2) },
+        ),
+        (
+            MendTargetFixture::DamagedHostile,
+            RestorationTargetRefusal::IncompleteHostileKnowledge { target: UnitId(2) },
+        ),
+    ] {
+        let (mut app, healer, _) = mend_fight(target_pos, fixture);
+        assert_mend_refused_before_payment(
+            &mut app,
+            healer,
+            UnitId(1),
+            target_pos,
+            CommandRefusal::RestorationTarget { reason },
+        );
+    }
+}
+
+#[test]
+fn complete_hostile_reveal_permits_touch_restoration() {
+    let (mut app, healer, _, target_pos) = revealed_hostile_fight();
+    assert!(
+        app.world()
+            .resource::<FactionLatticeKnowledge>()
+            .view(Faction::Player, UnitId(3))
+            .is_some_and(hex_combat::LatticeKnowledge::is_complete),
+        "Scry must establish the complete hostile knowledge restoration requires"
+    );
+
+    assert_mend_opens_restoration(&mut app, healer, UnitId(2), target_pos, UnitId(3));
+}
+
+#[test]
+fn revealed_hostile_missing_live_lattice_is_refused_before_payment() {
+    let (mut app, healer, hostile, target_pos) = revealed_hostile_fight();
+    assert!(app
+        .world()
+        .resource::<FactionLatticeKnowledge>()
+        .view(Faction::Player, UnitId(3))
+        .is_some_and(hex_combat::LatticeKnowledge::is_complete));
+    app.world_mut().resource_mut::<StripLatticeBeforeApply>().0 = Some(hostile);
+
+    assert_mend_refused_before_payment(
+        &mut app,
+        healer,
+        UnitId(2),
+        target_pos,
+        CommandRefusal::RestorationTarget {
+            reason: RestorationTargetRefusal::MissingLattice { target: UnitId(3) },
+        },
+    );
+}
+
+#[test]
+fn allied_downed_restoration_opens_an_exact_choice_and_revives() {
+    let target_pos = TilePos::new(HexCoord::from_axial(1, 0), GROUND);
+    let (mut app, healer, patient) = mend_fight(target_pos, MendTargetFixture::DownedAlly);
+    let patient = patient.expect("the downed ally fixture is occupied");
+    let disabled = app
+        .world()
+        .entity(patient)
+        .get::<LatticeSpec>()
+        .expect("the downed ally retains its lattice")
+        .cells()
+        .map(|(coord, _)| coord)
+        .collect::<Vec<_>>();
+
+    assert_mend_opens_restoration(&mut app, healer, UnitId(1), target_pos, UnitId(2));
+    let restored = *disabled
+        .first()
+        .expect("the downed fixture disables at least one lattice cell");
+    push(
+        &mut app,
+        GameCommand::ChooseRestores {
+            unit: UnitId(1),
+            target: UnitId(2),
+            cells: vec![restored],
+        },
+    );
+    app.update();
+
+    let state = app
+        .world()
+        .entity(patient)
+        .get::<LatticeState>()
+        .expect("the revived ally retains its lattice");
+    assert!(!state.is_disabled(restored));
+    assert_eq!(disabled_count(&app, patient), disabled.len() - 1);
+    assert!(!app.world().entity(patient).contains::<Downed>());
+    assert_eq!(
+        *app.world().resource::<PendingDecision>(),
+        PendingDecision::None
+    );
+    let events = take_events(&mut app);
+    assert_eq!(
+        events.first(),
+        Some(&CombatEvent::HexesRestored {
+            caster: UnitId(1),
+            target: UnitId(2),
+            cells: vec![restored],
+        })
+    );
+    assert_eq!(
+        events.get(1),
+        Some(&CombatEvent::Revived {
+            unit: UnitId(2),
+            reenters_round: 1,
+        })
+    );
+    assert!(events
+        .iter()
+        .all(|event| !matches!(event, CombatEvent::CommandRefused { .. })));
+    let authority = hex_combat::authority_snapshot(app.world())
+        .expect("the live adapter must settle the revival into combat authority");
+    assert_eq!(authority.pending_revivals.get(&UnitId(2)), Some(&1));
+}
 
 /// A cast that burns takes nothing down at the moment it lands.
 ///

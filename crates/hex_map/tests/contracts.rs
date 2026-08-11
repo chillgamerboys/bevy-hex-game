@@ -38,12 +38,12 @@ use hex_assets::{
     VoxelStyleCatalog,
 };
 use hex_core::{
-    BiomeRegionId, BiomeRegions, CanopyOccluder, CutawayOccluder, DamagedVoxels, ElementId,
-    GameplayLight, GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile,
-    InteriorRegionId, InteriorRegions, Level, MapAnchorId, MapAnchors, MapViewHint,
-    PausableSystems, Pause, PerceptionSystems, PresentationOcclusion, ResolvedMapSeed, RunBottom,
-    Screen, SpecialMovementRegion, SpecialMovementRegions, SubstanceId, TerrainBatchId,
-    TerrainEdit, TerrainImpact, TerrainImpactDisposition, TerrainImpactOutcome,
+    AuthoredObjectVoxelRuns, BiomeRegionId, BiomeRegions, CanopyOccluder, CutawayOccluder,
+    DamagedVoxels, ElementId, GameplayLight, GameplaySetupFailure, Headroom, HexCoord, HexGrid,
+    HexSpan, HexTile, IlluminationLevel, InteriorRegionId, InteriorRegions, Level, MapAnchorId,
+    MapAnchors, MapViewHint, PausableSystems, Pause, PerceptionSystems, PresentationOcclusion,
+    ResolvedMapSeed, RunBottom, Screen, SpecialMovementRegion, SpecialMovementRegions, SubstanceId,
+    TerrainBatchId, TerrainEdit, TerrainImpact, TerrainImpactDisposition, TerrainImpactOutcome,
     TerrainImpactRejection, TerrainImpactResult, TerrainReady, TerrainSystems, TerrainVoxelHealth,
     TilePos, TraversalBlockers, TreeOccluder, MAX_HEADROOM,
 };
@@ -56,8 +56,9 @@ use hex_map::{
     ProceduralV1Settings, ProceduralV2Settings, ProceduralV3Settings, Ring19Metrics, Ring7Metrics,
     SkyIslandsSettings, SubstanceRun, TacticalMetrics, TacticalSettings, TerrainSettings,
     V2EnvironmentSettings, V2HillsSettings, V2RecipeSettings, V3CavesSettings,
-    V3DeepForestSettings, V3EnvironmentSettings, V3ForestSettings, V3FortSettings, V3HillsSettings,
-    V3LayoutSettings, V3RecipeSettings, V3WaterfallSettings, VoxelMap,
+    V3CrystalAscentSettings, V3DeepForestSettings, V3EnvironmentSettings, V3ForestSettings,
+    V3FortSettings, V3HillsSettings, V3LayoutSettings, V3RecipeSettings, V3WaterfallSettings,
+    VoxelMap,
 };
 use hex_test_support::{enter_gameplay, TestAppBuilder};
 
@@ -213,6 +214,7 @@ fn runtime_art_catalog_without(omitted_object: Option<&str>) -> RuntimeArtCatalo
         include_str!("../../../assets/art/objects/prop/snowy-grass-tuft.ron"),
         include_str!("../../../assets/art/objects/prop/crystal-low-cluster.ron"),
         include_str!("../../../assets/art/objects/prop/crystal-branched.ron"),
+        include_str!("../../../assets/art/objects/prop/crystal-cathedral-heart.ron"),
         include_str!("../../../assets/art/objects/prop/crystal-spire.ron"),
     ] {
         let blueprint: ObjectBlueprint =
@@ -531,6 +533,36 @@ fn v3_caves_app_without_art_catalog() -> App {
         })),
     });
     app.insert_resource(ResolvedMapSeed(736_283_041));
+    app
+}
+
+fn v3_crystal_ascent_app() -> App {
+    let mut app = procedural_app();
+    app.insert_resource(MapSettings {
+        grid_radius: 40,
+        level_height: 0.4,
+        terrain: TerrainSettings::Procedural(ProceduralSettings::V3(ProceduralV3Settings {
+            layout: V3LayoutSettings::Single(PatchSpec {
+                environment: V3EnvironmentSettings::TemperateGrassland,
+                recipe: V3RecipeSettings::CrystalAscent(V3CrystalAscentSettings {
+                    base_level: 6,
+                    rise_levels: 144,
+                }),
+                overlays: Vec::new(),
+                mask: PatchMaskSettings::WholeWorld,
+                edges: PatchEdgesSettings {
+                    east: PatchEdgeContractSettings::WorldBoundary,
+                    south_east: PatchEdgeContractSettings::WorldBoundary,
+                    south_west: PatchEdgeContractSettings::WorldBoundary,
+                    west: PatchEdgeContractSettings::WorldBoundary,
+                    north_west: PatchEdgeContractSettings::WorldBoundary,
+                    north_east: PatchEdgeContractSettings::WorldBoundary,
+                },
+            }),
+        })),
+    });
+    app.insert_resource(ResolvedMapSeed(1_592_598_566));
+    app.insert_resource(runtime_art_catalog());
     app
 }
 
@@ -970,3 +1002,5 @@ mod publication;
 mod terrain_damage;
 #[path = "contracts/terrain_edits.rs"]
 mod terrain_edits;
+#[path = "contracts/world_snapshot.rs"]
+mod world_snapshot;

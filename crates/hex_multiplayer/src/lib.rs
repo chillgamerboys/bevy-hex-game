@@ -23,14 +23,15 @@ mod replica;
 mod runtime;
 mod secret;
 mod sequence;
+mod snapshot;
 #[cfg(feature = "test-harness")]
 mod testing;
 
 pub use auth::{
     AdmissionGrant, AdmissionSetupError, AtomicFileReconnectCredentialStore,
     AuthorizedSessionClient, CredentialStoreError, MapReadyStatus, MemoryReconnectCredentialStore,
-    ReconnectCredentialStorage, ReconnectCredentialStore, SessionActivationError,
-    SessionAdmissionAuthority, StoredReconnectCredential,
+    ReconnectCredentialStorage, ReconnectCredentialStore, ReconnectEndpointBinding,
+    SessionActivationError, SessionAdmissionAuthority, StoredReconnectCredential,
 };
 pub use connection_code::{
     CertificateFingerprint, ConnectionCodeError, DirectConnectionCode, DirectEndpoint,
@@ -49,8 +50,9 @@ pub use limits::{
     BoundError, BoundedText, BoundedVec, MAX_ABS_COMMAND_COORDINATE, MAX_ABS_COMMAND_LEVEL,
     MAX_ABS_LATTICE_COORDINATE, MAX_ADVERTISED_HOST_BYTES, MAX_BUILD_IDENTITY_BYTES,
     MAX_COMMAND_BYTES, MAX_CONNECTION_CODE_BYTES, MAX_DECISION_CELLS, MAX_IDENTITY_BYTES,
-    MAX_LIVE_SNAPSHOT_BYTES, MAX_PARTY_MEMBERS, MAX_ROUTE_STEPS, MAX_SESSION_UNITS,
-    MAX_UNIT_EFFECTS,
+    MAX_LIVE_SNAPSHOT_BYTES, MAX_OBJECT_BLOCKER_SURFACES, MAX_PARTY_MEMBERS, MAX_ROUTE_STEPS,
+    MAX_SESSION_UNITS, MAX_UNIT_EFFECTS, MAX_WORLD_COLUMNS, MAX_WORLD_DELTA_OPERATIONS,
+    MAX_WORLD_PROJECTION_ENTRIES, MAX_WORLD_RUNS_PER_COLUMN,
 };
 pub use lobby::{
     LaunchSummaryV1, LobbyAuthority, LobbyMutationError, LobbyPhase, LobbySeatSnapshot,
@@ -58,8 +60,8 @@ pub use lobby::{
 };
 pub use manifest::{
     BuildIdentityV1, ContentFingerprint, ManifestValidationError, MapManifestV1, ProtocolVersion,
-    PublicWorldFingerprint, RosterEntryV1, RulesManifestV1, SessionManifestV1, UnitDeploymentV1,
-    SESSION_PROTOCOL_VERSION,
+    PublicWorldFingerprint, PublicWorldFingerprintV1, RosterEntryV1, RulesManifestV1,
+    SessionInstanceId, SessionManifestV1, UnitDeploymentV1, SESSION_PROTOCOL_VERSION,
 };
 pub use plugin::MultiplayerPlugin;
 pub use protocol::{
@@ -69,7 +71,8 @@ pub use protocol::{
     SessionClosed, PROTOCOL_SCHEMA_TAG,
 };
 pub use replica::{
-    MotionReplicaV1, ReplicaValidationError, SessionOutcome, SessionReplica, UnitReplica,
+    ArchetypeIdentityV1, MotionReplicaV1, ReplicaValidationError, SessionOutcome, SessionReplica,
+    UnitReplica,
 };
 pub use runtime::{
     split_bounded_snapshot, AuthenticatedCommandRequest, AuthorityCommandResolution,
@@ -81,6 +84,16 @@ pub use sequence::{
     AuthorityBoundary, BoundaryError, CommandBegin, CommandSequencer, RateLimitError,
     RequestRateLimiter, SequencerError, DEFAULT_REQUEST_BURST, DEFAULT_REQUEST_WINDOW,
     MAX_CACHED_RESULTS_PER_SEAT, MAX_IN_FLIGHT_REQUESTS_PER_SEAT,
+};
+pub use snapshot::{
+    BiomeRegionSnapshotV1, InteriorRoofSnapshotV1, InteriorSurfaceSnapshotV1,
+    LiveSessionSnapshotV1, LiveSessionSnapshotValidationError, PlayerKnowledgeSnapshotV1,
+    PlayerKnowledgeStateV1, PlayerKnownSurfaceV1, PlayerLightDomainV1, SpecialRegionSnapshotV1,
+    WorldAnchorSnapshotV1, WorldColumnSnapshotV1, WorldDamageSnapshotV1, WorldDeltaOperationV1,
+    WorldDeltaV1, WorldIlluminationV1, WorldLightSnapshotV1, WorldLiquidFlowV1,
+    WorldLiquidSnapshotV1, WorldObjectSnapshotV1, WorldRunSnapshotV1, WorldSnapshotV1,
+    WorldSnapshotValidationError, WorldViewHintSnapshotV1, LIVE_SESSION_SNAPSHOT_VERSION_V1,
+    PLAYER_KNOWLEDGE_SNAPSHOT_VERSION_V1, WORLD_DELTA_VERSION_V1, WORLD_SNAPSHOT_VERSION_V1,
 };
 #[cfg(feature = "test-harness")]
 pub use testing::{ChannelSessionHarness, ClientProbe, HarnessError, HostProbe};

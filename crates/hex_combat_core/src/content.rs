@@ -54,11 +54,29 @@ impl From<FrozenCasting> for Casting {
 pub enum FrozenTargeting {
     /// The caster's exact occupied surface.
     SelfOnly,
+    /// One observed occupied surface in bidirectional body-specific reach.
+    Touch,
     /// One observed exact surface within range.
     ExactSurface {
         /// Base horizontal range before high-ground bonus.
         range: u32,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FrozenTargeting;
+
+    #[test]
+    fn touch_targeting_round_trips_as_a_closed_discriminator() {
+        let encoded =
+            serde_json::to_string(&FrozenTargeting::Touch).expect("touch targeting serializes");
+        let decoded: FrozenTargeting =
+            serde_json::from_str(&encoded).expect("touch targeting deserializes");
+
+        assert_eq!(decoded, FrozenTargeting::Touch);
+        assert_ne!(decoded, FrozenTargeting::ExactSurface { range: 0 });
+    }
 }
 
 /// One supported active-combat spell effect.

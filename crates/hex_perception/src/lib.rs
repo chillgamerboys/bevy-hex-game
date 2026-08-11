@@ -23,7 +23,13 @@ mod snapshots;
 pub use illumination::{
     resolve_illumination_at, LightSourceSnapshot, ResolvedIllumination, ResolvedLight,
 };
-pub use knowledge::{apply_observations, FactionKnowledge, FactionMapKnowledge, KnownSurface};
+pub use knowledge::{
+    apply_observations, export_player_knowledge_snapshot_v1, import_player_knowledge_snapshot_v1,
+    FactionKnowledge, FactionMapKnowledge, KnownSurface, PlayerKnowledgeSnapshotError,
+};
 pub use runtime::{plugin, PerceptionRuntimeStats};
-pub use sight::{can_observe, resolve_observations, FactionObservation, FactionObservations};
+pub use sight::{
+    can_observe, can_observe_with_authored_objects, resolve_observations,
+    resolve_observations_with_authored_objects, FactionObservation, FactionObservations,
+};
 pub use snapshots::{ObservedUnit, PerceptionError, SurfaceSnapshot, SurfaceSnapshots};

@@ -53,6 +53,7 @@ fn test_app() -> App {
     });
     app.add_plugins((
         hex_anim::plugin,
+        hex_units::authored_object_occupancy::plugin,
         hex_units::movement::plugin,
         hex_combat::plugin,
     ));
@@ -157,7 +158,10 @@ fn combat_commands_fail_closed_when_the_authority_cannot_initialize() {
     let mut builder = TestAppBuilder::new();
     let app = builder.app_mut();
     app.insert_resource(hex_assets::CombatSettings::default());
-    app.add_plugins(hex_combat::plugin);
+    app.add_plugins((
+        hex_units::authored_object_occupancy::plugin,
+        hex_combat::plugin,
+    ));
     app.init_resource::<UnitRegistry>();
     let mut app = builder.build();
     spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20, 1);

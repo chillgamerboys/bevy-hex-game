@@ -92,6 +92,8 @@ pub enum ProceduralRecipeMetrics {
     Fort(FortMetrics),
     /// Underground topology, clearance, roof, and local-light measurements.
     Caves(CavesMetrics),
+    /// Monumental stair, chamber, crown, crystal, and route measurements.
+    CrystalAscent(CrystalAscentMetrics),
     /// Whole-world traversal, seam, and semantic-content measurements.
     Ring7(Ring7Metrics),
     /// Volcanic massif, lava, bridge, and route measurements.
@@ -313,6 +315,39 @@ pub struct CavesMetrics {
     pub reachable_elevation_levels: u32,
     /// Percentage of exterior surfaces topped with gravel.
     pub gravel_surface_percent: u32,
+}
+
+/// Exact deterministic measurements of one selected V3 Crystal Ascent plan.
+#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct CrystalAscentMetrics {
+    /// Exact clockwise stair circuits.
+    pub circuits: u32,
+    /// Exact rising flights across all circuits.
+    pub flights: u32,
+    /// Exact corner landings carrying crystal fixtures.
+    pub landings: u32,
+    /// Ordinary stair and transfer surfaces.
+    pub stair_surfaces: u32,
+    /// Ordinary surfaces in the bottom chamber.
+    pub chamber_surfaces: u32,
+    /// Exterior crown surfaces around the summit oculus.
+    pub crown_surfaces: u32,
+    /// Blocking broadleaf tree roots outside the summit clearing.
+    pub tree_roots: u32,
+    /// Authored crystal fixtures, including the cathedral heart.
+    pub crystal_fixtures: u32,
+    /// Paired Bright and Dim authoritative gameplay lights.
+    pub gameplay_lights: u32,
+    /// Ordinary walker surfaces in the admitted world.
+    pub ordinary_surfaces: u32,
+    /// Distinct ordinary elevations in the admitted world.
+    pub reachable_elevation_levels: u32,
+    /// Shortest ordinary route from lower entry to upper exit.
+    pub critical_route_steps: u32,
+    /// Exact requested lower-to-upper rise.
+    pub rise_levels: Level,
+    /// Smallest clear vertical interval above a stair surface.
+    pub minimum_stair_headroom: Level,
 }
 
 /// Exact deterministic measurements of one selected V3 Ring7 world.

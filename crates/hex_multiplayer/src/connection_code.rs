@@ -117,6 +117,8 @@ pub struct DirectConnectionCode {
     pub endpoint: DirectEndpoint,
     /// Pinned certificate digest.
     pub certificate_fingerprint: CertificateFingerprint,
+    /// Exact pinned certificate expiry as Unix seconds.
+    pub certificate_expires_unix_seconds: u64,
     /// One-time lobby admission secret.
     pub invite_token: InviteToken,
 }
@@ -127,13 +129,14 @@ impl DirectConnectionCode {
     pub fn encode(&self) -> EncodedConnectionCode {
         let host = self.endpoint.host().as_bytes();
         let mut payload = Vec::with_capacity(
-            2 + host.len() + 2 + CertificateFingerprint::BYTE_LENGTH + InviteToken::BYTE_LENGTH,
+            2 + host.len() + 2 + CertificateFingerprint::BYTE_LENGTH + 8 + InviteToken::BYTE_LENGTH,
         );
         let host_length = u16::try_from(host.len()).unwrap_or(u16::MAX);
         payload.extend_from_slice(&host_length.to_be_bytes());
         payload.extend_from_slice(host);
         payload.extend_from_slice(&self.endpoint.port().to_be_bytes());
         payload.extend_from_slice(&self.certificate_fingerprint.to_bytes());
+        payload.extend_from_slice(&self.certificate_expires_unix_seconds.to_be_bytes());
         payload.extend_from_slice(&self.invite_token.to_bytes());
         EncodedConnectionCode(format!(
             "{CONNECTION_CODE_PREFIX}{}",
@@ -167,6 +170,10 @@ impl DirectConnectionCode {
         let port = u16::from_be_bytes(take_array::<2>(&mut remaining)?);
         let certificate_fingerprint =
             CertificateFingerprint::from_bytes(take_array::<32>(&mut remaining)?);
+        let certificate_expires_unix_seconds = u64::from_be_bytes(take_array::<8>(&mut remaining)?);
+        if certificate_expires_unix_seconds == 0 {
+            return Err(ConnectionCodeError::InvalidCertificateExpiry);
+        }
         let invite_token = InviteToken::from_bytes(take_array::<16>(&mut remaining)?);
         if !remaining.is_empty() {
             return Err(ConnectionCodeError::TrailingData);
@@ -175,6 +182,7 @@ impl DirectConnectionCode {
         Ok(Self {
             endpoint: DirectEndpoint::new(host, port)?,
             certificate_fingerprint,
+            certificate_expires_unix_seconds,
             invite_token,
         })
     }
@@ -186,6 +194,10 @@ impl fmt::Debug for DirectConnectionCode {
             .debug_struct("DirectConnectionCode")
             .field("endpoint", &self.endpoint)
             .field("certificate_fingerprint", &self.certificate_fingerprint)
+            .field(
+                "certificate_expires_unix_seconds",
+                &self.certificate_expires_unix_seconds,
+            )
             .field("invite_token", &self.invite_token)
             .finish()
     }
@@ -230,6 +242,8 @@ pub enum ConnectionCodeError {
     InvalidHostSyntax,
     /// UDP port zero is never a joinable advertised endpoint.
     InvalidPort,
+    /// Pinned certificate expiry was zero/unassigned.
+    InvalidCertificateExpiry,
     /// Bytes remained after the complete version-1 payload.
     TrailingData,
 }
@@ -246,6 +260,9 @@ impl fmt::Display for ConnectionCodeError {
             Self::InvalidHostText(_) => "direct connection code host violates its text bound",
             Self::InvalidHostSyntax => "direct connection code host has invalid syntax",
             Self::InvalidPort => "direct connection code port must be non-zero",
+            Self::InvalidCertificateExpiry => {
+                "direct connection code certificate expiry must be non-zero"
+            }
             Self::TrailingData => "direct connection code contains trailing data",
         })
     }
@@ -270,6 +287,7 @@ mod tests {
         DirectConnectionCode {
             endpoint: DirectEndpoint::new("example.test", 7777).expect("valid endpoint"),
             certificate_fingerprint: CertificateFingerprint::from_bytes([3; 32]),
+            certificate_expires_unix_seconds: 2_000_000_000,
             invite_token: InviteToken::from_bytes([5; 16]),
         }
     }
@@ -283,6 +301,13 @@ mod tests {
         assert_eq!(decoded, original);
         assert_eq!(format!("{encoded:?}"), "EncodedConnectionCode([REDACTED])");
         assert!(!format!("{original:?}").contains("05050505"));
+
+        let mut invalid = original;
+        invalid.certificate_expires_unix_seconds = 0;
+        assert_eq!(
+            DirectConnectionCode::parse(invalid.encode().expose_for_sharing()),
+            Err(ConnectionCodeError::InvalidCertificateExpiry)
+        );
     }
 
     #[test]

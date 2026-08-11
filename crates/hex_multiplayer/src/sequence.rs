@@ -43,6 +43,15 @@ impl CommandSequencer {
         self.last_sequence
     }
 
+    /// Allocates one sequence for an authoritative boundary with no human request.
+    ///
+    /// AI turns, world mutation, and other host-system changes still need a unique
+    /// projection/delta sequence even though they do not produce a [`CommandResult`].
+    /// Callers must invoke this exactly once for one newly published boundary.
+    pub fn advance_system_boundary(&mut self) -> Result<AuthoritySequence, SequencerError> {
+        self.allocate_sequence()
+    }
+
     /// Begins one request without allocating a sequence or re-enqueueing a retry.
     pub fn begin(
         &mut self,
@@ -426,6 +435,26 @@ mod tests {
             .expect("seat two should finish");
         assert_ne!(first.outcome, second.outcome);
         assert!(first.authority_sequence < second.authority_sequence);
+    }
+
+    #[test]
+    fn system_boundaries_share_the_command_sequence_without_a_fake_seat() {
+        let mut sequencer = CommandSequencer::default();
+        let system = sequencer
+            .advance_system_boundary()
+            .expect("first system boundary should allocate");
+        assert_eq!(system, AuthoritySequence(1));
+
+        let request = CommandRequestId(4);
+        assert_eq!(
+            sequencer.begin(PlayerSeat::HOST, request),
+            Ok(CommandBegin::Enqueue)
+        );
+        let result = sequencer
+            .finish(PlayerSeat::HOST, request, CommandOutcome::Accepted)
+            .expect("human request should share the sequence");
+        assert_eq!(result.authority_sequence, AuthoritySequence(2));
+        assert_eq!(sequencer.last_sequence(), AuthoritySequence(2));
     }
 
     #[test]

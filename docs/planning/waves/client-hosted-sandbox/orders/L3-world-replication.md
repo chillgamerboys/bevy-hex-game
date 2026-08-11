@@ -6,9 +6,10 @@ Implement the world-owned complete export/import contract, current-world fingerp
 terrain deltas, reconnect restoration, static-generation verification, and player-faction
 disclosure projection. Only `hex_map` may inspect world storage.
 
-Do not start until the world owner explicitly ratifies `WorldSnapshotV1` and all L3
-dispatch blockers are true. Read `crates/hex_map/CLAUDE.md`, `docs/systems/map.md`, the
-manifest, and maps. A disagreement is an escalation, not a judgment call.
+The user ratified `WorldSnapshotV1` under the temporary world-owner delegation on
+2026-08-10 and every L3 dispatch blocker is now true. Read `crates/hex_map/CLAUDE.md`,
+`docs/systems/map.md`, the manifest amendment, and maps. A disagreement is an escalation,
+not a judgment call.
 
 ## Locked decisions (verbatim)
 
@@ -44,10 +45,10 @@ foundation amendment and owner review, not a lane-local protocol edit.
 1. Add deterministic, bounded `export_world_snapshot_v1` that serializes all material
    voxels by stable substance name, partial damage, anchors, interior/special/biome regions,
    traversal blockers, gameplay lights, view/presentation semantic projections,
-   generator/public identity, and every public fact required to reproduce the same
-   `TerrainReady` world. Implement the world owner's ratified presentation-consequence
-   choice; do not silently fall back to regeneration if the complete Campaign contract was
-   ratified.
+   and every public fact required to reproduce the same `TerrainReady` world. Export
+   current stable asset identity/placement/rotation/blocker/edit-protection consequences
+   for features and crystals plus liquid flow/downstream state; never regenerate these
+   from private plans during reconnect or Campaign restore.
 2. Add a canonical current-public-world fingerprint independent of generation-time
    `GenerationReport`. It changes after edits/damage and covers both storage and complete
    public semantic projections.
@@ -59,8 +60,10 @@ foundation amendment and owner review, not a lane-local protocol edit.
 4. Prove all tile publication tuples (`TilePos`, `RunBottom`, `HexSpan`, `SubstanceId`,
    `Headroom`) are identical after round trip. Compare damaged voxels, anchors/regions,
    blockers, knowledge inputs, and actor footing through typed hooks.
-5. Emit ordered terrain/public-semantic deltas with authority sequence after edits/impacts.
-   Deltas use stable names/domain positions, are idempotent by sequence, and are bounded.
+5. Diff two canonical snapshots at a quiescent authority boundary into ordered
+   `WorldDeltaV1` upserts/removals. Apply against the required base fingerprint in a
+   candidate state, verify the target fingerprint, commit transactionally, and treat an
+   already-applied authority sequence as an idempotent success.
 6. For initial launch, compare the locally generated current-public-world fingerprint with
    the frozen manifest/report. Do not send terrain when exact generation succeeds.
 7. For reconnect, export only at the shared authority boundary, project the client-
@@ -71,8 +74,10 @@ foundation amendment and owner review, not a lane-local protocol edit.
    or `DamagedVoxels` as a disclosure grant. Export remembered player knowledge separately
    as the authorized `PlayerKnowledgeSnapshotV1`; rebuild derived current caches and never
    export hostile-faction knowledge.
-9. Leave map generator plans, patch masks, recipe internals, meshes/materials, entity ids,
-   and cameras out of the snapshot.
+9. Leave map generator plans, patch masks, recipe identities, `PlannedStructure` when its
+   only consequence is in voxels, meshes/materials, entity ids, cameras, transport state,
+   and hostile knowledge out of the snapshot. Do not serialize the reserved #187 surface
+   feature vocabulary until a live producer exists.
 
 ## Required evidence
 

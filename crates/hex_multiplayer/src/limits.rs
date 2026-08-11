@@ -29,6 +29,32 @@ pub const MAX_ADVERTISED_HOST_BYTES: usize = 253;
 pub const MAX_CONNECTION_CODE_BYTES: usize = 512;
 /// Maximum compressed/serialized live snapshot allocation.
 pub const MAX_LIVE_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
+/// Maximum number of horizontal columns in a world snapshot.
+///
+/// The largest shipped configuration is Mountain Range at radius 77, or 18,019
+/// columns. Twice that measurement is 36,038 and the next power of two is 65,536.
+pub const MAX_WORLD_COLUMNS: usize = 65_536;
+/// Maximum material runs retained in one column.
+///
+/// This follows the existing accepted absolute level domain rather than permitting a
+/// second, larger snapshot-only vertical coordinate space.
+pub const MAX_WORLD_RUNS_PER_COLUMN: usize = 1_024;
+/// Maximum entries in any flat world-owned semantic projection.
+///
+/// The largest shipped measurement is Crystal Ascent's 135,739 exact interior-roof
+/// voxels. Twice that is 271,478 and the next power of two is 524,288. The aggregate
+/// serialized frame remains independently capped at 64 MiB before deserialization.
+pub const MAX_WORLD_PROJECTION_ENTRIES: usize = 524_288;
+/// Maximum exact blocker/edit-protection surfaces carried by one presentation object.
+///
+/// The largest shipped authored object footprint is radius four (61 surfaces); twice
+/// that measurement is 122 and the next power of two is 128.
+pub const MAX_OBJECT_BLOCKER_SURFACES: usize = 128;
+/// Maximum ordered operations in one authority-boundary world delta.
+///
+/// This matches the shipped flat-projection envelope so a complete semantic
+/// collection can be replaced or removed in one transactional boundary.
+pub const MAX_WORLD_DELTA_OPERATIONS: usize = 524_288;
 /// Largest absolute cube coordinate accepted from an untrusted command.
 pub const MAX_ABS_COMMAND_COORDINATE: u32 = 4_096;
 /// Largest absolute voxel level accepted from an untrusted command.

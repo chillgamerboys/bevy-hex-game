@@ -37,8 +37,8 @@ use hex_assets::{
 use hex_combat::{AiDecisionTraces, Initiative, TurnOrder};
 use hex_core::{
     Busy, ExteriorIllumination, GameCommand, Headroom, HexCoord, HexSpan, HexTile,
-    IlluminationLevel, InteriorRegions, Level, LightDomain, Mode, PerceptionSystems, Screen,
-    SubstanceId, TerrainReady, TilePos, TraversalBlockers, TraversalProfile, Turn, UnitId,
+    IlluminationLevel, InteriorRegions, Level, LightDomain, Mode, PerceptionSystems, RunBottom,
+    Screen, SubstanceId, TerrainReady, TilePos, TraversalBlockers, TraversalProfile, Turn, UnitId,
     MAX_HEADROOM,
 };
 use hex_perception::{
@@ -46,7 +46,10 @@ use hex_perception::{
     PerceptionRuntimeStats, SurfaceSnapshot, SurfaceSnapshots,
 };
 use hex_test_support::TestAppBuilder;
-use hex_units::{Body, Downed, Faction, MovingTo, Standing, StandsOn, UnitAllocator, UnitRegistry};
+use hex_units::{
+    Body, Downed, Faction, MovingTo, Standing, StandsOn, TerrainOccupancy, UnitAllocator,
+    UnitRegistry,
+};
 
 /// World height of one level in this fixture.
 const LEVEL_HEIGHT: f32 = 1.0;
@@ -81,7 +84,10 @@ fn test_app() -> App {
         speed: 5.0,
     });
     app.add_systems(OnEnter(Screen::Gameplay), spawn_terrain);
-    app.add_plugins(hex_combat::plugin);
+    app.add_plugins((
+        hex_units::authored_object_occupancy::plugin,
+        hex_combat::plugin,
+    ));
 
     builder.build()
 }
@@ -118,6 +124,7 @@ fn perception_combat_test_app() -> App {
     app.insert_resource(InteriorRegions::new());
     app.insert_resource(TraversalBlockers::new());
     app.insert_resource(TerrainReady);
+    app.insert_resource(perception_terrain_occupancy());
     app.insert_resource(PlayerSettings {
         scale: 0.25,
         speed: 5.0,
@@ -126,7 +133,11 @@ fn perception_combat_test_app() -> App {
         OnEnter(Screen::Gameplay),
         spawn_terrain.before(PerceptionSystems::ResolveIllumination),
     );
-    app.add_plugins((hex_perception::plugin, hex_combat::plugin));
+    app.add_plugins((
+        hex_units::authored_object_occupancy::plugin,
+        hex_perception::plugin,
+        hex_combat::plugin,
+    ));
 
     builder.build()
 }
@@ -145,6 +156,7 @@ fn spawn_terrain(mut commands: Commands) {
             span_at(GROUND_LEVEL),
             STONE,
             Headroom(MAX_HEADROOM),
+            RunBottom(GROUND_LEVEL),
         ));
         if bridged(coord) {
             commands.spawn((
@@ -154,9 +166,25 @@ fn spawn_terrain(mut commands: Commands) {
                 span_at(DECK_LEVEL),
                 STONE,
                 Headroom(MAX_HEADROOM),
+                RunBottom(DECK_LEVEL),
             ));
         }
     }
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "invalid shared terrain fixture data must fail during construction"
+)]
+fn perception_terrain_occupancy() -> TerrainOccupancy {
+    let mut runs = Vec::new();
+    for coord in HexCoord::ORIGIN.within_radius(10) {
+        runs.push((TilePos::new(coord, GROUND_LEVEL), RunBottom(GROUND_LEVEL)));
+        if bridged(coord) {
+            runs.push((TilePos::new(coord, DECK_LEVEL), RunBottom(DECK_LEVEL)));
+        }
+    }
+    TerrainOccupancy::from_runs(runs).expect("the perception terrain fixture is valid")
 }
 
 /// The rendered extent of a one-level run whose surface is at `level`.

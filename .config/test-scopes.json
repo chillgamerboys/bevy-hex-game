@@ -275,11 +275,11 @@
     "map": {
       "concerns": ["map_unit", "map_generation", "map_contracts"],
       "expected_counts": {
-        "map_unit": 99,
-        "map_generation": 413,
-        "map_contracts": 80
+        "map_unit": 109,
+        "map_generation": 440,
+        "map_contracts": 92
       },
-      "expected_ignored": 28,
+      "expected_ignored": 29,
       "full_command": [
         "cargo",
         "nextest",
@@ -361,6 +361,12 @@
       ],
       "concerns": ["map_unit", "map_contracts", "clippy", "docs", "shipping"],
       "reason": "Map publication and presentation changes require unit and headless contract evidence."
+    },
+    {
+      "name": "map-world-snapshot",
+      "patterns": ["crates/hex_map/src/world_snapshot.rs"],
+      "full": true,
+      "reason": "The complete world snapshot adapter crosses generation, publication, multiplayer protocol, reconnect, and disclosure seams."
     },
     {
       "name": "map-foundations",

@@ -3690,7 +3690,7 @@ fn validate_cave_vegetation(
                 Some(PlannedLightPresentation::CaveCrystal(crystal)) => {
                     crystal_alcove_height(crystal.kind)
                 }
-                None => 0,
+                Some(PlannedLightPresentation::CrystalAscent(_)) | None => 0,
             };
             light
                 .origin
@@ -4256,6 +4256,7 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
         V3RecipeSettings::Beach(_) => "Beach",
         V3RecipeSettings::Shore(_) => "Shore",
         V3RecipeSettings::DeepMountain(_) => "DeepMountain",
+        V3RecipeSettings::CrystalAscent(_) => "CrystalAscent",
     }
 }
 
@@ -4955,9 +4956,11 @@ mod tests {
         let WorldValidation::Invalid(issues) = validate_caves(&missing, cave_settings) else {
             panic!("missing exact cave light-target metadata must fail");
         };
-        assert!(issues.iter().any(|issue| issue
-            .detail
-            .contains("required-light route and optional-dark")));
+        assert!(issues.iter().any(|issue| {
+            issue
+                .detail
+                .contains("required-light route and optional-dark")
+        }));
 
         let mut retagged = selected.validated.plan.clone();
         let optional = retagged
@@ -4972,9 +4975,11 @@ mod tests {
         let WorldValidation::Invalid(issues) = validate_caves(&retagged, cave_settings) else {
             panic!("retagged exact cave light-target metadata must fail");
         };
-        assert!(issues.iter().any(|issue| issue
-            .detail
-            .contains("required-light route and optional-dark")));
+        assert!(issues.iter().any(|issue| {
+            issue
+                .detail
+                .contains("required-light route and optional-dark")
+        }));
 
         let mut self_attested = selected.validated.plan;
         let (critical, optional) = exact_cave_target_sets(&self_attested.features)
@@ -5068,7 +5073,7 @@ mod tests {
                 {
                     Some(light.origin)
                 }
-                Some(PlannedLightPresentation::CaveCrystal(_)) | None => None,
+                Some(_) | None => None,
             })
             .expect("reviewed Caves should contain an interior crystal alcove");
         let entrance_origin = selected
@@ -5082,7 +5087,7 @@ mod tests {
                 {
                     Some(light.origin)
                 }
-                Some(PlannedLightPresentation::CaveCrystal(_)) | None => None,
+                Some(_) | None => None,
             })
             .expect("reviewed Caves should contain an entrance crystal landing");
 

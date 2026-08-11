@@ -155,8 +155,8 @@ Application tests additionally cover input capture priority, fixed UI navigation
 Swap/Cancel conflict handling, row and confirmed-all restoration, schema-v3 migration,
 and preference survival across restart. Inspection tests prove first activation
 publishes one disclosed camera subject and one Map-center request, repeated activation
-opens Character Main View, Character mode follows, and none of those paths mutates
-selection, turn, caster, command ownership, or formation. Hostile cases must prove
+opens Character Main View, both character camera modes follow, and none of those paths
+mutates selection, turn, caster, command ownership, or formation. Hostile cases must prove
 that missing observation publishes no identity or location.
 
 Screenshots prove static presentation structure: hierarchy, layout, legibility,
@@ -195,7 +195,10 @@ native text rendering, and taste. It follows Main Menu → Campaign save/Continu
 Main Menu → Sandbox map/rosters/deployment/outcome/retry/return, Tools → Creator
 return, and post-restart presentation. During gameplay it exercises `H`, every
 component shortcut, both Main View shortcuts, first/repeated Party and disclosed
-Initiative activation in Map and Character camera modes, required-decision ownership,
-deployment/outcome suppression, Compact map-only presentation, key capture and one
-Swap conflict, then restarts to inspect how the saved preference/keybinding state is
-presented. Typed restart hooks separately prove exactly what persisted.
+Initiative activation in Map, Third Person, and First Person, required-decision
+ownership, deployment/outcome suppression, Compact map-only presentation, key capture
+and one Swap conflict, then restarts to inspect how the saved preference/keybinding
+state is presented. The First Person portion also checks a visible cursor, right-drag
+look, wheel no-op, WASD no-locomotion, click movement, exact followed-model restoration,
+and exact Map-pose restoration. Typed restart hooks separately prove exactly what
+persisted.

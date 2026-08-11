@@ -170,6 +170,14 @@ authored amount and the cells currently disabled. Restoring at least one cell re
 `Downed`, but the unit is held outside `TurnOrder` until the next wrap. At that boundary
 it rejoins the initiative sort by initiative then stable `UnitId`.
 
+Restoration validates the complete unit target before payment: the anchor is Observed
+and occupied, the target owns at least one disabled lattice cell, and a hostile target's
+complete current lattice is available through faction knowledge. `Touch` restoration
+accepts the caster itself or a different unit connected by a mutual edge in the
+caster's body-specific `Footing`; it is not range one and receives no high-ground
+bonus. Empty, unreachable, lattice-less, fully restored, and incompletely known hostile
+targets produce typed refusals without spending mana or the action.
+
 ### Channel closes the mana loop
 
 `GameCommand::Channel` is a canonical combat action for an active, non-downed unit
@@ -255,20 +263,34 @@ So the answer is drawn **before** the click rather than inferred after it:
 | **a ring** | at the feet of whoever is acting — the selection, out of combat |
 | **a faint tint** | over every surface this turn's movement can pay for |
 | **a stronger tint** | along the route to whatever the cursor is over |
+| **a rose ×** | on a connected destination this turn cannot afford |
 
-A tile that cannot be reached is simply not lit, and hovering it draws no route. This
-world-space path feedback remains available when every ordinary HUD component is
-hidden; the Action Bar contains controls only and does not duplicate the actor, round,
-or movement summary.
+A connected tile beyond the current movement budget receives one rose × instead of
+disappearing without explanation. Its crossed-stroke shape keeps the refusal readable
+without relying on colour. A tile with no traversable route still draws no route or
+refusal glyph. This world-space path feedback remains
+available when every ordinary HUD component is hidden; the Action Bar contains controls
+only and does not duplicate the actor, round, or movement summary.
 
 **There is no range tint while exploring.** Movement is unlimited there, so every
 connected surface qualifies and a tint over the whole map would say nothing. The route
 preview still draws, which is the half that carries information.
 
-Both tints come out of **one** search per selection, not one per hovered tile:
-`Reach`'s keys are the range and a walk back down its predecessors is the route. What
-costs something is rebuilding `Footing`, which reads every tile entity on the map — so
-that happens when the selection or its position changes, never when the cursor moves.
+Combat caches **one unbounded disclosure-safe search per selection**, never per hovered
+tile. Exact costs from that `Reach` are sliced by the current budget for range and
+affordable paths; a connected target with a larger cost receives the refusal ×. The
+search uses terrain, allied occupancy, and hostile occupancy already presentable to the
+local faction. Fogged hostile positions are excluded from every movement overlay so
+range, path, and refusal feedback cannot become a hidden-position oracle. The click and
+command pipeline still validates against authoritative occupancy, so presentation
+changes no movement rule. Exploring uses the same disclosed search without a budget
+slice. What costs something is rebuilding `Footing`, which reads every tile entity on
+the map; that happens when the selection, its position, disclosed occupancy, terrain,
+traversal profile, material footing, or blockers change, never when the cursor or budget
+does. A budget change only re-slices cached costs.
+Previews clear while the selected unit is `Busy`/`MovingTo` and rebuild once on arrival;
+input is unavailable during that interval, so this avoids whole-map searches at each
+published waypoint without withholding usable feedback.
 
 ## Vocabulary
 

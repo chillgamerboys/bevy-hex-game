@@ -1,0 +1,22 @@
+// Non-combat Crystal Ascent review party.
+//
+// This deliberately has no Hostile roster: the standalone showcase is for climbing,
+// lighting, visibility, and camera review. The standard shipped party begins together
+// on the lower apron at the recipe's canonical party_start anchor. The game adapter
+// resolves those three actors onto exact cells of the four-wide terminal and sets the
+// runtime formation facing inward; the generic encounter schema intentionally carries
+// neither an exact multi-unit footprint nor initial travel-facing.
+(
+    name: "Crystal Ascent Showcase",
+    rosters: [
+        (
+            faction: Player,
+            placement: Formation(center: Anchor("party_start"), spread: 2),
+            units: [
+                (archetype: "hedge-mage"),
+                (archetype: "raider"),
+                (archetype: "wolf"),
+            ],
+        ),
+    ],
+)

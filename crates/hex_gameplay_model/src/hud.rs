@@ -400,6 +400,20 @@ impl HudState {
         HudActionResult::RuntimeChanged
     }
 
+    /// Dismisses one exact temporary component surface without changing preferences.
+    ///
+    /// Contextual actions use this after they have acquired the state the temporary
+    /// surface was opened to choose. Matching the component matters: beginning an aim
+    /// may put away a Compact Action Bar so the world target is visible, but must not
+    /// close an unrelated Party, Activity, Character, or Formation surface.
+    pub fn dismiss_transient_component(&mut self, component: HudComponent) -> HudActionResult {
+        if self.transient != Some(HudTransientSurface::Component(component)) {
+            return HudActionResult::NoChange;
+        }
+        self.transient = None;
+        HudActionResult::RuntimeChanged
+    }
+
     /// Clears any ordinary route for an explicit inspection-context change.
     ///
     /// Unlike Escape, this intentionally clears stored state even when presentation
@@ -779,6 +793,39 @@ mod tests {
         state.activate_component(HudComponent::Activity, context);
         assert_eq!(state.raw_transient(), None);
         assert_eq!(state.preferences(), preferences);
+    }
+
+    #[test]
+    fn exact_transient_component_can_be_dismissed_without_touching_other_surfaces() {
+        let context = HudContext::compact(HudContextEligibility::all());
+        let mut state = HudState::default();
+        let preferences = state.preferences();
+
+        state.activate_component(HudComponent::ActionBar, context);
+        assert_eq!(
+            state.dismiss_transient_component(HudComponent::Party),
+            HudActionResult::NoChange
+        );
+        assert_eq!(
+            state.raw_transient(),
+            Some(HudTransientSurface::Component(HudComponent::ActionBar))
+        );
+        assert_eq!(
+            state.dismiss_transient_component(HudComponent::ActionBar),
+            HudActionResult::RuntimeChanged
+        );
+        assert_eq!(state.raw_transient(), None);
+        assert_eq!(state.preferences(), preferences);
+
+        state.open_character(UnitId(7), context);
+        assert_eq!(
+            state.dismiss_transient_component(HudComponent::ActionBar),
+            HudActionResult::NoChange
+        );
+        assert_eq!(
+            state.raw_transient(),
+            Some(HudTransientSurface::Character(UnitId(7)))
+        );
     }
 
     #[test]

@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use bevy::prelude::*;
 use hex_assets::{
     CastingAxis, CombatSettings, ContentIndex, Effect, ElementCatalog, SpellBook, SubstanceTable,
-    TargetShape,
+    TargetShape, TargetingReach,
 };
 use hex_combat_core::{
     ArenaSnapshot, CombatLattice, CombatState, CombatUnit, CombatUnitProjection, ElementNames,
@@ -24,7 +24,10 @@ use hex_core::{
 };
 use hex_lattice::{LatticeSpec, LatticeState, LatticeStats};
 use hex_perception::FactionMapKnowledge;
-use hex_units::{Body, Downed, Footing, StandsOn, TerrainOccupancy, TerrainOccupancySystems};
+use hex_units::{
+    AuthoredObjectOccupancy, AuthoredObjectOccupancySystems, Body, Downed, Footing, StandsOn,
+    TerrainOccupancy, TerrainOccupancySystems,
+};
 
 use crate::{Initiative, TurnOrder};
 
@@ -166,6 +169,7 @@ pub(crate) fn plugin(app: &mut App) {
         refresh_arena_after_terrain_publication
             .in_set(AuthoritativeSystems)
             .after(TerrainOccupancySystems::Publish)
+            .after(AuthoredObjectOccupancySystems::Publish)
             .before(TerrainSystems::ReconcileActors)
             .run_if(in_state(hex_core::Mode::Combat)),
     )
@@ -174,6 +178,7 @@ pub(crate) fn plugin(app: &mut App) {
         refresh_arena_after_terrain_publication
             .in_set(AuthoritativeSystems)
             .after(TerrainOccupancySystems::Publish)
+            .after(AuthoredObjectOccupancySystems::Publish)
             .after(hex_core::PerceptionSystems::PublishKnowledge)
             .before(crate::CombatSystems::Act)
             .run_if(in_state(hex_core::Mode::Combat)),
@@ -206,6 +211,7 @@ pub(crate) fn plugin(app: &mut App) {
 fn refresh_arena_after_terrain_publication(
     mut commands: Commands,
     occupancy: Option<Res<TerrainOccupancy>>,
+    authored_objects: Option<Res<AuthoredObjectOccupancy>>,
     mut authority: Option<ResMut<CombatAuthority>>,
     substances: Option<Res<SubstanceTable>>,
     blockers: Option<Res<hex_core::TraversalBlockers>>,
@@ -216,7 +222,16 @@ fn refresh_arena_after_terrain_publication(
     let Some(occupancy) = occupancy else {
         return;
     };
-    if !occupancy.is_changed() {
+    let Some(authored_objects) = authored_objects else {
+        if authority.is_some() {
+            let reason =
+                "cannot refresh combat arena: authored-object occupancy is unavailable".to_owned();
+            commands.remove_resource::<CombatAuthority>();
+            commands.insert_resource(CombatAuthorityFailure(reason));
+        }
+        return;
+    };
+    if !occupancy.is_changed() && !authored_objects.is_changed() {
         return;
     }
     let Some(authority) = authority.as_deref_mut() else {
@@ -231,6 +246,7 @@ fn refresh_arena_after_terrain_publication(
     match build_arena(
         substances,
         blockers.as_deref(),
+        &authored_objects,
         spatial.as_deref(),
         &tiles,
         &units,
@@ -256,6 +272,7 @@ fn initialize(
     content: Option<Res<ContentIndex>>,
     substances: Option<Res<SubstanceTable>>,
     blockers: Option<Res<hex_core::TraversalBlockers>>,
+    authored_objects: Option<Res<AuthoredObjectOccupancy>>,
     spatial: Option<Res<FactionMapKnowledge>>,
     tiles: TileFacts,
     units: UnitFacts,
@@ -272,6 +289,7 @@ fn initialize(
         content.as_deref(),
         substances.as_deref(),
         blockers.as_deref(),
+        authored_objects.as_deref(),
         spatial.as_deref(),
         &tiles,
         &units,
@@ -431,6 +449,7 @@ fn freeze(
     content: Option<&ContentIndex>,
     substances: Option<&SubstanceTable>,
     blockers: Option<&hex_core::TraversalBlockers>,
+    authored_objects: Option<&AuthoredObjectOccupancy>,
     spatial: Option<&FactionMapKnowledge>,
     tiles: &TileFacts,
     units: &UnitFacts,
@@ -440,6 +459,7 @@ fn freeze(
 ) -> Result<CombatState, String> {
     let settings = settings.ok_or("CombatSettings is unavailable")?;
     let substances = substances.ok_or("SubstanceTable is unavailable")?;
+    let authored_objects = authored_objects.ok_or("AuthoredObjectOccupancy is unavailable")?;
     let mut roster = Vec::new();
     for (
         id,
@@ -486,7 +506,14 @@ fn freeze(
         return Err("combat roster is empty".to_owned());
     }
 
-    let arena = build_arena(substances, blockers, spatial, tiles, units)?;
+    let arena = build_arena(
+        substances,
+        blockers,
+        authored_objects,
+        spatial,
+        tiles,
+        units,
+    )?;
 
     let mut element_names = BTreeMap::new();
     if let Some(elements) = elements {
@@ -543,6 +570,7 @@ fn freeze(
 fn build_arena(
     substances: &SubstanceTable,
     blockers: Option<&hex_core::TraversalBlockers>,
+    authored_objects: &AuthoredObjectOccupancy,
     spatial: Option<&FactionMapKnowledge>,
     tiles: &TileFacts,
     units: &UnitFacts,
@@ -565,7 +593,13 @@ fn build_arena(
     let mut links = BTreeSet::new();
     let mut links_by_body = Vec::new();
     for body in bodies {
-        let footing = Footing::from_tiles(all_tiles.iter().copied(), substances, body, blockers);
+        let footing = Footing::from_tiles_with_object_occupancy(
+            all_tiles.iter().copied(),
+            substances,
+            body,
+            blockers,
+            authored_objects,
+        );
         let mut body_links = BTreeSet::new();
         for from in footing.standings() {
             for neighbor in from.pos.coord.neighbors() {
@@ -611,9 +645,10 @@ fn freeze_content(
     let frozen_spells = spells
         .iter()
         .filter_map(|(id, name, spell)| {
-            let targeting = match spell.targeting.shape {
-                TargetShape::SelfCast => FrozenTargeting::SelfOnly,
-                TargetShape::Single => FrozenTargeting::ExactSurface {
+            let targeting = match (&spell.targeting.shape, spell.targeting.reach) {
+                (TargetShape::SelfCast, _) => FrozenTargeting::SelfOnly,
+                (TargetShape::Single, TargetingReach::Touch) => FrozenTargeting::Touch,
+                (TargetShape::Single, TargetingReach::Ranged) => FrozenTargeting::ExactSurface {
                     range: u32::from(spell.targeting.range),
                 },
                 _ => return None,

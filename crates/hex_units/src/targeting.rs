@@ -39,6 +39,8 @@
 
 use hex_core::TilePos;
 
+use crate::Footing;
+
 /// Extra hexes of range a caster at `from` gets for standing above `to`.
 ///
 /// `levels_per_bonus` is `combat.ron`'s `levels_per_bonus_range` knob — this
@@ -64,6 +66,18 @@ pub fn high_ground_bonus(from: TilePos, to: TilePos, levels_per_bonus: u32) -> u
 pub fn in_reach(from: TilePos, to: TilePos, base: u32, levels_per_bonus: u32) -> bool {
     from.coord.distance(to.coord)
         <= base.saturating_add(high_ground_bonus(from, to, levels_per_bonus))
+}
+
+/// Whether two *different* occupied surfaces are mutually step-adjacent for touch.
+///
+/// Touch uses the same exact, body-specific transition graph as melee, but requires
+/// the edge in both directions. That makes an ordinary one-level step valid low cover
+/// while rejecting cliffs, one-way drops, stacked surfaces, and guessed coordinate
+/// adjacency. Self-targeting is an identity rule owned by the caller and deliberately
+/// is not folded into this position-only predicate.
+#[must_use]
+pub fn in_touch_reach(footing: &Footing, from: TilePos, to: TilePos) -> bool {
+    from != to && footing.admits_step(from, to) && footing.admits_step(to, from)
 }
 
 /// Whether **either** of two units can reach the other at `base` range.

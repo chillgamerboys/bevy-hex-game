@@ -128,7 +128,18 @@ pub(super) fn apply(
                 member: path.member,
             }));
         }
-        let footing = hex_units::Footing::from_tiles(tiles.iter(), table, body, ctx.blockers);
+        let Some(authored_objects) = ctx.authored_objects else {
+            return Err(party_refusal(PartyMoveRefusal::InvalidMemberPath {
+                member: path.member,
+            }));
+        };
+        let footing = hex_units::Footing::from_tiles_with_object_occupancy(
+            tiles.iter(),
+            table,
+            body,
+            ctx.blockers,
+            authored_objects,
+        );
         let Some(steps) = ground_path(&path.path, standing, &footing) else {
             return Err(party_refusal(PartyMoveRefusal::InvalidMemberPath {
                 member: path.member,

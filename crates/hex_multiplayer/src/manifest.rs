@@ -4,6 +4,7 @@ use std::{collections::BTreeSet, fmt};
 
 use bevy_ecs::prelude::Message;
 use hex_core::{Faction, SimSeeds, TilePos, UnitId};
+use rand::{rngs::OsRng, RngCore as _};
 use serde::{Deserialize, Serialize};
 
 use crate::limits::{
@@ -49,9 +50,53 @@ impl BuildIdentityV1 {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ContentFingerprint(pub u64);
 
-/// Complete public terrain/world digest reported after deterministic generation.
+/// Random identity of one concrete host session.
+///
+/// This is not a credential. It prevents reconnect state, live snapshots, and typed
+/// closure messages from one run being applied to another run that happens to use the
+/// same scenario, endpoint, or build.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct SessionInstanceId([u8; Self::BYTE_LENGTH]);
+
+impl SessionInstanceId {
+    /// Random identity size (128 bits).
+    pub const BYTE_LENGTH: usize = 16;
+
+    /// Generates a fresh identity from the operating system random source.
+    #[must_use]
+    pub fn generate() -> Self {
+        let mut bytes = [0_u8; Self::BYTE_LENGTH];
+        while bytes == [0; Self::BYTE_LENGTH] {
+            OsRng.fill_bytes(&mut bytes);
+        }
+        Self(bytes)
+    }
+
+    /// Constructs an identity from exact bytes for decoding and deterministic tests.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; Self::BYTE_LENGTH]) -> Self {
+        Self(bytes)
+    }
+
+    /// Returns the exact identity bytes.
+    #[must_use]
+    pub const fn to_bytes(self) -> [u8; Self::BYTE_LENGTH] {
+        self.0
+    }
+
+    /// Whether this value is a generated/assigned session identity.
+    #[must_use]
+    pub fn is_valid(self) -> bool {
+        self.0 != [0; Self::BYTE_LENGTH]
+    }
+}
+
+/// Version-1 complete public terrain/world digest.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct PublicWorldFingerprint(pub u64);
+pub struct PublicWorldFingerprintV1(pub u64);
+
+/// Compatibility name retained for the existing launch-manifest API.
+pub use PublicWorldFingerprintV1 as PublicWorldFingerprint;
 
 /// Frozen map identity and deterministic generation inputs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -105,6 +150,8 @@ pub struct UnitDeploymentV1 {
 /// selection state. It is suitable for Direct Connect today and Steam later.
 #[derive(Message, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionManifestV1 {
+    /// Random identity of this concrete host session.
+    pub session_instance_id: SessionInstanceId,
     /// Protocol schema version.
     pub protocol: ProtocolVersion,
     /// Exact executable build identity.
@@ -129,6 +176,9 @@ impl SessionManifestV1 {
     /// Validates protocol version, shipped party shape, stable identity uniqueness, and
     /// complete deployment membership.
     pub fn validate(&self) -> Result<(), ManifestValidationError> {
+        if !self.session_instance_id.is_valid() {
+            return Err(ManifestValidationError::InvalidSessionInstanceId);
+        }
         if self.protocol != ProtocolVersion::default() {
             return Err(ManifestValidationError::UnsupportedProtocol);
         }
@@ -169,6 +219,8 @@ impl SessionManifestV1 {
 /// Why a frozen launch manifest is structurally invalid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ManifestValidationError {
+    /// A zero/unassigned session identity cannot bind reconnect state.
+    InvalidSessionInstanceId,
     /// The manifest uses a protocol schema this build cannot interpret.
     UnsupportedProtocol,
     /// At least one shipped party member is required.
@@ -188,6 +240,7 @@ pub enum ManifestValidationError {
 impl fmt::Display for ManifestValidationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
+            Self::InvalidSessionInstanceId => "manifest session instance id is invalid",
             Self::UnsupportedProtocol => "manifest protocol version is unsupported",
             Self::EmptyRoster => "manifest shipped roster is empty",
             Self::NonPlayerRosterEntry(_) => "manifest roster contains a non-player unit",
@@ -213,6 +266,7 @@ mod tests {
 
     fn fixture() -> SessionManifestV1 {
         SessionManifestV1 {
+            session_instance_id: SessionInstanceId::from_bytes([7; 16]),
             protocol: ProtocolVersion::default(),
             build: BuildIdentityV1::new("0.4.0", "fixture-revision")
                 .expect("fixture build identity should fit"),
@@ -262,6 +316,13 @@ mod tests {
 
     #[test]
     fn manifest_rejects_incomplete_or_foreign_deployment() {
+        let mut unbound = fixture();
+        unbound.session_instance_id = SessionInstanceId::from_bytes([0; 16]);
+        assert_eq!(
+            unbound.validate(),
+            Err(ManifestValidationError::InvalidSessionInstanceId)
+        );
+
         let mut manifest = fixture();
         manifest.deployment = BoundedVec::default();
         assert_eq!(

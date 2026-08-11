@@ -76,6 +76,23 @@ impl MapPresentationProjection {
         &self.lights
     }
 
+    /// Rebuilds only the generator-neutral runtime consequences carried by a live
+    /// world snapshot. Generator plans and structure recipe identities deliberately
+    /// remain absent: their surviving voxel/public consequences are restored by the
+    /// snapshot adapter instead.
+    pub(crate) fn from_snapshot_parts(
+        liquids: BTreeMap<TilePos, MaterializedLiquidVoxel>,
+        features: BTreeMap<FeatureId, PlannedFeature>,
+        lights: BTreeMap<LightId, PlannedGameplayLight>,
+    ) -> Self {
+        Self {
+            liquids,
+            features,
+            structures: BTreeMap::new(),
+            lights,
+        }
+    }
+
     /// Retains feature presentations whose exact authored support remains valid.
     ///
     /// Terrain edits may remove presentation-only features such as grass or cave flora.

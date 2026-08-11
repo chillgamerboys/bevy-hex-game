@@ -177,10 +177,10 @@ and Restore All requires confirmation.
 
 | Default input | Action |
 |---|---|
-| Right-mouse drag | Orbit the camera around its focus |
-| `W` `A` `S` `D` | Pan the camera in Map mode |
-| Mouse wheel | Zoom |
-| `C` | Toggle Map / Character camera modes |
+| Right-mouse drag | Look around the current camera focus; First Person keeps the cursor visible |
+| `W` `A` `S` `D` | Pan the camera in Map mode; First Person remains click-to-move |
+| Mouse wheel | Zoom in Map and Third Person; First Person keeps a fixed eye |
+| `C` | Cycle Map → Third Person → First Person → Map |
 | Hover / left-click a hex tile | Preview a route / move along it |
 | Click a spell row, then a lit target | Aim a cast |
 | `Tab` / `Enter` / `Q` | Cycle aimed units / confirm the cast or decision / cancel aiming |

@@ -63,7 +63,7 @@ pub use knowledge::{
 };
 pub use outcomes::{
     CastBlockReason, CombatData, CombatEvent, CommandRefusal, EncounterOutcome, PartyMoveRefusal,
-    RestorationRefusal, UnitData,
+    RestorationRefusal, RestorationTargetRefusal, UnitData,
 };
 pub use resolution::{encounter_unresolved, EncounterResolution};
 pub use spell_resolution::{SpellResolutionFailure, SpellResolutionState, SpellResolutionStatus};
@@ -183,8 +183,11 @@ pub fn plugin(app: &mut App) {
         (
             CombatSystems::Act
                 .after(PerceptionSystems::PublishKnowledge)
-                .after(hex_units::TerrainOccupancySystems::Publish),
-            CombatSystems::Apply.after(hex_units::TerrainOccupancySystems::Publish),
+                .after(hex_units::TerrainOccupancySystems::Publish)
+                .after(hex_units::AuthoredObjectOccupancySystems::Publish),
+            CombatSystems::Apply
+                .after(hex_units::TerrainOccupancySystems::Publish)
+                .after(hex_units::AuthoredObjectOccupancySystems::Publish),
             CombatSystems::Resolve,
             CombatSystems::Advance,
         )
@@ -224,6 +227,7 @@ mod creator_tests {
             co_castable: false,
             targeting: TargetingSpec {
                 range: 3,
+                reach: hex_assets::TargetingReach::Ranged,
                 shape: TargetShape::Single,
                 trajectory: Trajectory::None,
             },

@@ -56,6 +56,7 @@ fn test_app() -> App {
     // pieces on top of the ones these tests place by hand.
     app.add_plugins((
         hex_anim::plugin,
+        hex_units::authored_object_occupancy::plugin,
         hex_units::movement::plugin,
         hex_combat::plugin,
     ));

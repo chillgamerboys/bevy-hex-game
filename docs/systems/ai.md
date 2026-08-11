@@ -37,8 +37,12 @@ reachable/predecessor projection for the actor, and builds one reverse distance 
 for each live observed hostile. Algorithms can therefore compare complete authorized
 routes without either repeated breadth-first searches or access to hidden geometry.
 
-The shipped `baseline-v1` policy is intentionally small and deterministic. It prefers
-Renewal for the lowest-id downed ally, Scrying Eye for the lowest-id opaque hostile,
+The shipped `baseline-v1` policy is intentionally small and deterministic. It first
+prefers a legal restorative cast for a downed allied unit, then a damaged active ally
+or the caster.
+This policy is effect-semantic: `AiSpellObservation::restore_hexes` is derived from
+authored `RestoreHexes` effects, so neither Heal nor Renewal is recognized by its
+display name. The policy next prefers Scrying Eye for the lowest-id opaque hostile,
 the strongest single-target direct-damage cast, a missing self-enchantment, the
 lowest-id adjacent strike, and movement along the shortest complete route to an
 observed hostile, in that order. It re-enters the host after movement presentation

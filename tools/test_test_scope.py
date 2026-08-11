@@ -226,6 +226,13 @@ class TestScopeTests(unittest.TestCase):
             ("map_unit", "map_contracts", "clippy", "docs", "shipping"),
         )
 
+    def test_map_world_snapshot_fails_closed_across_every_consumer(self) -> None:
+        decision = self.classify("crates/hex_map/src/world_snapshot.rs")
+        self.assertTrue(decision.full)
+        self.assertEqual(decision.concerns, tuple(self.config["all_concerns"]))
+        self.assertEqual(decision.unknown_files, ())
+        self.assertIn("map-world-snapshot", decision.matched_rules)
+
     def test_map_damage_resolver_selects_unit_and_contract_evidence(self) -> None:
         decision = self.classify("crates/hex_map/src/terrain_damage.rs")
         self.assertFalse(decision.full)
@@ -473,9 +480,9 @@ class TestScopeTests(unittest.TestCase):
         partition = self.config["partition_checks"]["map"]
         self.assertEqual(
             partition["expected_counts"],
-            {"map_unit": 99, "map_generation": 413, "map_contracts": 80},
+            {"map_unit": 109, "map_generation": 440, "map_contracts": 92},
         )
-        self.assertEqual(partition["expected_ignored"], 28)
+        self.assertEqual(partition["expected_ignored"], 29)
 
     def test_map_commands_share_the_optimized_test_profile(self) -> None:
         for concern in ("map_unit", "map_generation", "map_contracts"):

@@ -59,14 +59,19 @@ pub enum HostSessionAction {
     },
     /// Freeze admission and begin exact map verification.
     BeginLoading {
-        /// Complete host-computed public world fingerprint.
+        /// Complete host-computed preflight public world fingerprint.
+        public_world_fingerprint: PublicWorldFingerprint,
+    },
+    /// Report the listen host's freshly generated map after entering Loading.
+    ReportHostMapReady {
+        /// Complete public fingerprint of the regenerated `TerrainReady` world.
         public_world_fingerprint: PublicWorldFingerprint,
     },
     /// Mark the active encounter as having reached its terminal outcome.
     EnterOutcome,
     /// Retry the frozen encounter from its exact manifest and initial deployment.
     RetryExact {
-        /// Complete host-computed public world fingerprint for the regenerated world.
+        /// Complete host-computed preflight fingerprint for the frozen world.
         public_world_fingerprint: PublicWorldFingerprint,
     },
     /// Reopen the assignment lobby after an encounter outcome and clear guest readiness.

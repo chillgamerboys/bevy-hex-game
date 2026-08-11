@@ -11,6 +11,7 @@ use hex_core::{
     PendingDecision, Screen, UnitId,
 };
 use hex_lattice::{LatticeSpec, LatticeState, LatticeStats};
+use hex_perception::FactionMapKnowledge;
 use hex_units::{Downed, Faction, Player, StandsOn, UnitRegistry};
 
 use crate::casting::{AimExit, Aiming};
@@ -115,13 +116,14 @@ pub(super) fn retain_target(
     mut exit: ResMut<AimExit>,
     order: Res<TurnOrder>,
     mut focus: ResMut<RetainedTarget>,
+    spatial: Option<Res<FactionMapKnowledge>>,
     units: Query<(&UnitId, &Faction, &StandsOn, Has<Downed>)>,
 ) {
     let ended = std::mem::take(&mut *exit);
     let target_valid = focus.unit.is_none_or(|retained| {
-        units
-            .iter()
-            .any(|(unit, _, _, downed)| *unit == retained && !downed)
+        units.iter().any(|(unit, faction, _, downed)| {
+            *unit == retained && target_is_disclosed(*unit, *faction, downed, spatial.as_deref())
+        })
     });
     if reconcile_retained_lifecycle(
         &mut focus,
@@ -143,13 +145,26 @@ pub(super) fn retain_target(
         .iter()
         .find(|(_, _, standing, _)| standing.0.pos == aim.anchor)
     {
-        if Faction::Player.is_hostile_to(*faction) && !downed {
+        if Faction::Player.is_hostile_to(*faction)
+            && target_is_disclosed(*unit, *faction, downed, spatial.as_deref())
+        {
             focus.unit = Some(*unit);
             focus.pinned_turn = order.current();
         } else {
             *focus = RetainedTarget::default();
         }
     }
+}
+
+fn target_is_disclosed(
+    unit: UnitId,
+    faction: Faction,
+    downed: bool,
+    spatial: Option<&FactionMapKnowledge>,
+) -> bool {
+    !downed
+        && (faction == Faction::Player
+            || spatial.is_some_and(|spatial| spatial.faction(Faction::Player).unit(unit).is_some()))
 }
 
 /// Clears a pin when its explicit lifetime ends.
@@ -512,7 +527,11 @@ mod tests {
     use std::collections::BTreeMap;
 
     use bevy::MinimalPlugins;
-    use hex_core::{ElementId, PlayerSeat};
+    use hex_core::{ElementId, Headroom, HexSpan, LightDomain, PlayerSeat, SubstanceId};
+    use hex_perception::{
+        apply_observations, FactionObservation, FactionObservations, ObservedUnit, SurfaceSnapshot,
+        SurfaceSnapshots,
+    };
 
     use hex_core::{HexCoord, LatticeCoord, TilePos};
 
@@ -529,6 +548,39 @@ mod tests {
 
     fn pos(x: i32, y: i32) -> TilePos {
         TilePos::new(HexCoord::from_axial(x, y), 0)
+    }
+
+    fn observed_spatial(
+        unit: UnitId,
+        position: TilePos,
+    ) -> (FactionMapKnowledge, SurfaceSnapshots) {
+        let surfaces = SurfaceSnapshots::try_from_iter([SurfaceSnapshot {
+            pos: position,
+            span: HexSpan::new(0.0, 1.0),
+            substance: SubstanceId(1),
+            headroom: Headroom(2),
+            is_solid: true,
+            blocked: false,
+            domain: LightDomain::Exterior,
+        }])
+        .expect("the target fixture has one surface");
+        let mut observation = FactionObservation::new();
+        observation.insert_surface(position);
+        observation
+            .try_insert_unit(ObservedUnit {
+                id: unit,
+                faction: Faction::Hostile,
+                pos: position,
+                provides_sight: true,
+            })
+            .expect("the target fixture has one identity");
+        let mut knowledge = FactionMapKnowledge::new();
+        apply_observations(
+            &mut knowledge,
+            &surfaces,
+            &FactionObservations::with_faction(Faction::Player, observation),
+        );
+        (knowledge, surfaces)
     }
 
     #[test]
@@ -662,6 +714,44 @@ mod tests {
             false,
         ));
         assert_eq!(invalid, RetainedTarget::default());
+    }
+
+    #[test]
+    fn same_frame_observation_loss_invalidates_a_retained_hostile() {
+        let unit = UnitId(7);
+        let position = pos(1, 0);
+        let actor = UnitId(1);
+        let (mut spatial, surfaces) = observed_spatial(unit, position);
+        let mut focus = RetainedTarget {
+            unit: Some(unit),
+            pinned_turn: Some(actor),
+        };
+
+        assert!(target_is_disclosed(
+            unit,
+            Faction::Hostile,
+            false,
+            Some(&spatial),
+        ));
+        assert!(!reconcile_retained_lifecycle(
+            &mut focus,
+            Mode::Combat,
+            AimExit::None,
+            Some(actor),
+            true,
+        ));
+
+        apply_observations(&mut spatial, &surfaces, &FactionObservations::default());
+        let target_valid = target_is_disclosed(unit, Faction::Hostile, false, Some(&spatial));
+        assert!(!target_valid);
+        assert!(!reconcile_retained_lifecycle(
+            &mut focus,
+            Mode::Combat,
+            AimExit::None,
+            Some(actor),
+            target_valid,
+        ));
+        assert_eq!(focus, RetainedTarget::default());
     }
 
     #[test]

@@ -28,13 +28,14 @@ use crate::{
     ClientMapReady, CommandBegin, CommandOutcome, CommandRefusalReason, CommandResult,
     CommandSequencer, GameCommandRequest, HostSessionAction, HostSessionControlRequest,
     LobbyMutationError, LobbySnapshot, MapReadyStatus, ReconnectCredentialStorage,
-    RequestRateLimiter, SessionActivationError, SessionAdmissionAuthority, SessionCloseReason,
-    SessionClosed, SessionControlOutcome, SessionControlRefusal, SessionControlResult,
-    SessionManifestV1, SessionPeerId, StoredReconnectCredential, MAX_LIVE_SNAPSHOT_BYTES,
+    ReconnectEndpointBinding, RequestRateLimiter, SessionActivationError,
+    SessionAdmissionAuthority, SessionCloseReason, SessionClosed, SessionControlOutcome,
+    SessionControlRefusal, SessionControlResult, SessionManifestV1, SessionPeerId,
+    StoredReconnectCredential, MAX_LIVE_SNAPSHOT_BYTES,
 };
 
 const SNAPSHOT_HEADER_VERSION: u16 = 1;
-const SNAPSHOT_HEADER_BYTES: usize = 2 + 8 + 4;
+const SNAPSHOT_HEADER_BYTES: usize = LiveSnapshotHeaderV1::ENCODED_BYTES;
 
 /// Ordering sets for the transport-neutral session adapters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]
@@ -111,6 +112,7 @@ struct RemoteSessionLifecycle {
     admitted: bool,
     received_typed_close: bool,
     transport_disconnect_pending: bool,
+    session_instance_id: Option<crate::SessionInstanceId>,
 }
 
 #[derive(Resource, Debug, Default)]
@@ -149,6 +151,8 @@ pub enum CredentialStorageStatus {
     Stored,
     /// Session teardown deleted any stored reconnect credential.
     Deleted,
+    /// A closure for another session left the current credential untouched.
+    Preserved,
     /// The requested storage operation failed; no path or secret is disclosed.
     Failed(CredentialStorageOperation),
 }
@@ -172,6 +176,9 @@ pub struct LiveSnapshotHeaderV1 {
 }
 
 impl LiveSnapshotHeaderV1 {
+    /// Fixed encoded header size in bytes.
+    pub const ENCODED_BYTES: usize = 2 + 8 + 4;
+
     /// Validates a payload length against the global pre-allocation cap.
     pub fn new(
         baseline_sequence: AuthoritySequence,
@@ -419,7 +426,10 @@ fn handle_client_map_ready(
                 };
                 closed.write(ToClients {
                     targets: SendTargets::Single(report.client_id),
-                    message: SessionClosed { reason },
+                    message: SessionClosed {
+                        session_instance_id: authority.manifest().session_instance_id,
+                        reason,
+                    },
                 });
                 schedule_disconnect_after_flush(connection, &mut commands);
             }
@@ -488,6 +498,7 @@ fn handle_remote_lobby_requests(
                     closed.write(ToClients {
                         targets: SendTargets::Single(request.client_id),
                         message: SessionClosed {
+                            session_instance_id: authority.manifest().session_instance_id,
                             reason: SessionCloseReason::SessionEnded,
                         },
                     });
@@ -531,6 +542,7 @@ fn handle_host_session_controls(
                         closed.write(ToClients {
                             targets: SendTargets::Single(ClientId::Client(connection)),
                             message: SessionClosed {
+                                session_instance_id: authority.manifest().session_instance_id,
                                 reason: SessionCloseReason::Kicked,
                             },
                         });
@@ -543,6 +555,12 @@ fn handle_host_session_controls(
             } => authority
                 .begin_loading(public_world_fingerprint)
                 .map(|_snapshot| ())
+                .map_err(map_activation_control_error),
+            HostSessionAction::ReportHostMapReady {
+                public_world_fingerprint,
+            } => authority
+                .report_host_map_ready(public_world_fingerprint)
+                .map(|_status| ())
                 .map_err(map_activation_control_error),
             HostSessionAction::EnterOutcome => authority
                 .enter_outcome()
@@ -563,6 +581,7 @@ fn handle_host_session_controls(
                 closed.write(ToClients {
                     targets: SendTargets::CLIENTS_ONLY,
                     message: SessionClosed {
+                        session_instance_id: authority.manifest().session_instance_id,
                         reason: SessionCloseReason::HostClosed,
                     },
                 });
@@ -841,15 +860,25 @@ fn on_connected_client_removed(
 fn persist_accepted_credential(
     mut accepted: MessageReader<AdmissionAccepted>,
     storage: Option<Res<ReconnectCredentialStorage>>,
+    endpoint_binding: Option<Res<ReconnectEndpointBinding>>,
     mut status: MessageWriter<CredentialStorageStatus>,
 ) {
     let Some(storage) = storage else {
         return;
     };
     for accepted in accepted.read() {
+        let Some(endpoint_binding) = endpoint_binding.as_ref() else {
+            status.write(CredentialStorageStatus::Failed(
+                CredentialStorageOperation::Store,
+            ));
+            continue;
+        };
         let outcome = storage
             .store()
-            .store_atomically(StoredReconnectCredential::from(*accepted));
+            .store_atomically(StoredReconnectCredential::new(
+                *accepted,
+                (**endpoint_binding).clone(),
+            ));
         status.write(if outcome.is_ok() {
             CredentialStorageStatus::Stored
         } else {
@@ -866,12 +895,14 @@ fn delete_closed_credential(
     let Some(storage) = storage else {
         return;
     };
-    for _ in closed.read() {
-        let outcome = storage.store().delete();
-        status.write(if outcome.is_ok() {
-            CredentialStorageStatus::Deleted
-        } else {
-            CredentialStorageStatus::Failed(CredentialStorageOperation::Delete)
+    for closed in closed.read() {
+        let outcome = storage
+            .store()
+            .delete_if_session(closed.session_instance_id);
+        status.write(match outcome {
+            Ok(true) => CredentialStorageStatus::Deleted,
+            Ok(false) => CredentialStorageStatus::Preserved,
+            Err(_error) => CredentialStorageStatus::Failed(CredentialStorageOperation::Delete),
         });
     }
 }
@@ -881,15 +912,19 @@ fn track_remote_session_messages(
     mut closed: MessageReader<SessionClosed>,
     mut lifecycle: ResMut<RemoteSessionLifecycle>,
 ) {
-    if accepted.read().next().is_some() {
+    if let Some(accepted) = accepted.read().last() {
         lifecycle.admitted = true;
         lifecycle.received_typed_close = false;
         lifecycle.transport_disconnect_pending = false;
+        lifecycle.session_instance_id = Some(accepted.session_instance_id);
     }
-    if closed.read().next().is_some() {
+    if let Some(closed) = closed.read().last() {
         lifecycle.admitted = false;
         lifecycle.received_typed_close = true;
         lifecycle.transport_disconnect_pending = false;
+        if lifecycle.session_instance_id == Some(closed.session_instance_id) {
+            lifecycle.session_instance_id = None;
+        }
     }
 }
 
@@ -913,7 +948,11 @@ fn emit_pending_host_disconnect(
     lifecycle.transport_disconnect_pending = false;
     lifecycle.admitted = false;
     if !lifecycle.received_typed_close {
+        let Some(session_instance_id) = lifecycle.session_instance_id.take() else {
+            return;
+        };
         closed.write(SessionClosed {
+            session_instance_id,
             reason: SessionCloseReason::HostDisconnected,
         });
     }

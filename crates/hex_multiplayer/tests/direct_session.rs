@@ -20,6 +20,7 @@ fn text(value: &str) -> BoundedText<MAX_IDENTITY_BYTES> {
 #[expect(clippy::expect_used, reason = "static fixture manifest is valid")]
 fn manifest() -> SessionManifestV1 {
     SessionManifestV1 {
+        session_instance_id: hex_multiplayer::SessionInstanceId::from_bytes([4; 16]),
         protocol: ProtocolVersion::default(),
         build: BuildIdentityV1::new("0.4.0", "direct-session-test").expect("valid build"),
         content_fingerprint: ContentFingerprint(100),
@@ -156,6 +157,27 @@ fn host_plus_six_clients_admit_play_retry_restart_reconnect_and_close() {
             .snapshot()
             .phase,
         LobbyPhase::Loading
+    );
+    harness
+        .host_mut()
+        .world_mut()
+        .write_message(HostSessionControlRequest {
+            request_id: CommandRequestId(20_000),
+            action: HostSessionAction::ReportHostMapReady {
+                public_world_fingerprint: expected_world,
+            },
+        });
+    harness.pump(4);
+    assert_eq!(
+        harness
+            .host()
+            .world()
+            .resource::<SessionAdmissionAuthority>()
+            .lobby()
+            .snapshot()
+            .phase,
+        LobbyPhase::Loading,
+        "the host report cannot activate while claimed guests are still loading"
     );
     for &client in clients.iter().take(5) {
         harness
@@ -366,6 +388,16 @@ fn host_plus_six_clients_admit_play_retry_restart_reconnect_and_close() {
             .phase,
         LobbyPhase::Loading
     );
+    harness
+        .host_mut()
+        .world_mut()
+        .write_message(HostSessionControlRequest {
+            request_id: CommandRequestId(20_001),
+            action: HostSessionAction::ReportHostMapReady {
+                public_world_fingerprint: expected_world,
+            },
+        });
+    harness.pump(4);
     for &client in clients.iter().take(5) {
         harness
             .client_mut(client)

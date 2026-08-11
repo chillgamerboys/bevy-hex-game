@@ -9,9 +9,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use hex_core::{HexCoord, Level};
 
-use crate::settings::{
-    MacroAxisSettings, MacroLayoutSettings, V3RecipeSettings, MAX_PROCEDURAL_LEVEL,
-};
+use crate::settings::{MacroAxisSettings, MacroLayoutSettings, V3RecipeSettings, MAX_V3_LEVEL};
 
 use super::layout::{LayoutKind, PatchId, ResolvedLayoutPlan};
 use super::seed::{SeedStream, SeedStreams};
@@ -145,7 +143,7 @@ pub(crate) fn plan_base_surface_levels(
                     ))
                 })?;
                 if !(key.low..=key.high).contains(&level)
-                    || !(MIN_SURFACE_LEVEL..=MAX_PROCEDURAL_LEVEL).contains(&level)
+                    || !(MIN_SURFACE_LEVEL..=MAX_V3_LEVEL).contains(&level)
                 {
                     return Err(landform_error(format!(
                         "temperate patch {} produced level {level} outside {}..={} at {coord:?}",
@@ -396,7 +394,7 @@ fn enforce_local_continuity(
             let low_maximum = bounds
                 .get(&low_coord)
                 .map(|bounds| bounds.1)
-                .unwrap_or(MAX_PROCEDURAL_LEVEL);
+                .unwrap_or(MAX_V3_LEVEL);
             let midpoint = low.saturating_add(high.saturating_sub(low) / 2);
             let mut next_low = midpoint.min(low_maximum).max(low);
             let mut next_high = midpoint
