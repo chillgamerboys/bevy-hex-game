@@ -753,23 +753,6 @@ mod tests {
     struct MultiplayerIntentLog(Vec<MultiplayerIntent>);
 
     #[cfg(feature = "test-support")]
-    #[derive(Resource, Default)]
-    struct MultiplayerPointerActivation(Option<Entity>);
-
-    #[cfg(feature = "test-support")]
-    fn apply_multiplayer_pointer_activation(
-        mut request: ResMut<MultiplayerPointerActivation>,
-        mut interactions: Query<&mut Interaction, With<Button>>,
-    ) {
-        let Some(entity) = request.0.take() else {
-            return;
-        };
-        *interactions
-            .get_mut(entity)
-            .expect("the requested multiplayer target remains interactive") = Interaction::Pressed;
-    }
-
-    #[cfg(feature = "test-support")]
     fn record_multiplayer_intents(
         mut intents: MessageReader<UiIntent>,
         mut log: ResMut<MultiplayerIntentLog>,
@@ -904,17 +887,18 @@ mod tests {
 
     #[cfg(feature = "test-support")]
     #[test]
-    fn host_connection_code_copy_emits_its_typed_intent_in_the_shared_ui_phase() {
+    fn host_connection_code_copy_accepts_a_real_pointer_press_after_gameplay_handoff() {
+        use bevy::{
+            input::{mouse::MouseButtonInput, ButtonState},
+            window::PrimaryWindow,
+        };
+
         let mut app = App::new();
         app.add_plugins(crate::test_support::HeadlessUiPlugin::new(1280, 720))
             .init_resource::<MultiplayerIntentLog>()
-            .init_resource::<MultiplayerPointerActivation>()
             .add_systems(
                 Update,
-                (
-                    apply_multiplayer_pointer_activation.before(UiSystems::EmitIntents),
-                    record_multiplayer_intents.after(UiSystems::EmitIntents),
-                ),
+                record_multiplayer_intents.after(UiSystems::EmitIntents),
             );
         app.world_mut().insert_resource(MultiplayerView {
             route: MultiplayerRoute::Lobby,
@@ -925,27 +909,60 @@ mod tests {
         });
         app.world_mut()
             .resource_mut::<NextState<Screen>>()
+            .set(Screen::Gameplay);
+        for _ in 0..8 {
+            app.update();
+        }
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
             .set(Screen::Multiplayer);
         for _ in 0..8 {
             app.update();
         }
 
-        let copy = app
+        let (copy, center) = app
             .world_mut()
-            .query::<(Entity, &Name, &MultiplayerControl)>()
+            .query::<(
+                Entity,
+                &Name,
+                &MultiplayerControl,
+                &ComputedNode,
+                &bevy::ui::UiGlobalTransform,
+            )>()
             .iter(app.world())
-            .find_map(|(entity, name, control)| {
+            .find_map(|(entity, name, control, computed, transform)| {
                 (name.as_str() == "Copy Connection Code"
                     && control.0 == MultiplayerIntent::CopyConnectionCode)
-                    .then_some(entity)
+                    .then_some((
+                        entity,
+                        transform.affine().translation * computed.inverse_scale_factor,
+                    ))
             })
             .expect("the host lobby exposes its copy action");
+
+        let window = app
+            .world_mut()
+            .query_filtered::<Entity, With<PrimaryWindow>>()
+            .single(app.world())
+            .expect("headless UI supplies one primary window");
         app.world_mut()
-            .resource_mut::<MultiplayerPointerActivation>()
-            .0 = Some(copy);
+            .entity_mut(window)
+            .get_mut::<Window>()
+            .expect("primary window remains live")
+            .set_physical_cursor_position(Some(center.as_dvec2()));
+        app.world_mut().write_message(MouseButtonInput {
+            button: MouseButton::Left,
+            state: ButtonState::Pressed,
+            window,
+        });
 
         app.update();
 
+        assert_eq!(
+            app.world().get::<Interaction>(copy),
+            Some(&Interaction::Pressed),
+            "Bevy's pointer hit-testing must press the exact lobby control"
+        );
         assert_eq!(
             app.world().resource::<MultiplayerIntentLog>().0,
             [MultiplayerIntent::CopyConnectionCode]

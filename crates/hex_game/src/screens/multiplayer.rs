@@ -1228,7 +1228,7 @@ fn drive_direct_map_loading(
             })
         {
             *phase = GameplayPhase::Active;
-            next_screen.set(Screen::Gameplay);
+            NextState::set_if_neq(&mut next_screen, Screen::Gameplay);
         }
         state.loading = false;
         state.started = false;
@@ -1889,12 +1889,15 @@ fn project_lobby_phase(
     match phase {
         LobbyPhase::Open => {
             model.show_lobby();
-            next_screen.set(Screen::Multiplayer);
+            // The host projects the open lobby every update. A reentrant transition
+            // would despawn and rebuild the whole UI before its pressed controls can
+            // emit intents, leaving the otherwise visible lobby pointer-inert.
+            next_screen.set_if_neq(Screen::Multiplayer);
         }
         LobbyPhase::Loading => {
             model.show_loading();
         }
-        LobbyPhase::Active if ready.is_some() => next_screen.set(Screen::Gameplay),
+        LobbyPhase::Active if ready.is_some() => next_screen.set_if_neq(Screen::Gameplay),
         LobbyPhase::Active => model.show_loading(),
         LobbyPhase::Outcome => {}
         LobbyPhase::Closed => model.end(MultiplayerEndReason::SessionEnded),
@@ -2574,7 +2577,38 @@ mod tests {
             &mut model,
             &mut next_screen,
         );
-        assert!(matches!(next_screen, NextState::Pending(Screen::Gameplay)));
+        assert!(matches!(
+            next_screen,
+            NextState::PendingIfNeq(Screen::Gameplay)
+        ));
+    }
+
+    #[test]
+    fn recurring_lobby_projection_never_reenters_the_current_screen() {
+        let mut model = MultiplayerModel::default();
+        assert!(model.admitted(MultiplayerRole::Host, PlayerSeat::HOST));
+        let mut next_screen = NextState::Unchanged;
+
+        project_lobby_phase(LobbyPhase::Open, None, &mut model, &mut next_screen);
+
+        assert!(matches!(
+            next_screen,
+            NextState::PendingIfNeq(Screen::Multiplayer)
+        ));
+
+        let ready = DirectWorldReady {
+            fingerprint: PublicWorldFingerprint(9),
+        };
+        project_lobby_phase(
+            LobbyPhase::Active,
+            Some(&ready),
+            &mut model,
+            &mut next_screen,
+        );
+        assert!(matches!(
+            next_screen,
+            NextState::PendingIfNeq(Screen::Gameplay)
+        ));
     }
 
     #[test]
