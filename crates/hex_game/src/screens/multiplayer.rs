@@ -33,13 +33,14 @@ use hex_multiplayer::{
     AuthorizedSessionClient, BoundedVec, BuildIdentityV1, CertificateFingerprint, ClientHello,
     ClientLobbyAction, ClientLobbyRequest, ClientMapReady, CommandSequencer, ContentFingerprint,
     CredentialStorageOperation, CredentialStorageStatus, DirectConnectionCode, DirectEndpoint,
-    HostSessionAction, HostSessionControlRequest, LiveSessionSnapshotV1, LiveSnapshotHeaderV1,
-    LobbyPhase, LobbySnapshot, PlayerKnowledgeSnapshotV1, PreparedDirectHost, PreparedDirectJoin,
-    PreparedDirectReconnect, PublicWorldFingerprint, ReconnectCredentialStorage,
-    ReconnectEndpointBinding, SeatConnectionState, SessionAdmissionAuthority, SessionCloseReason,
-    SessionClosed, SessionControlOutcome, SessionControlRefusal, SessionControlResult,
-    SessionInstanceId, SessionManifestV1, SessionReplica, StoredReconnectCredential, UnitReplica,
-    WorldDeltaV1, WorldSnapshotV1, LIVE_SESSION_SNAPSHOT_VERSION_V1, MAX_SESSION_UNITS,
+    EncodedConnectionCode, HostSessionAction, HostSessionControlRequest, LiveSessionSnapshotV1,
+    LiveSnapshotHeaderV1, LobbyPhase, LobbySnapshot, PlayerKnowledgeSnapshotV1, PreparedDirectHost,
+    PreparedDirectJoin, PreparedDirectReconnect, PublicWorldFingerprint,
+    ReconnectCredentialStorage, ReconnectEndpointBinding, SeatConnectionState,
+    SessionAdmissionAuthority, SessionCloseReason, SessionClosed, SessionControlOutcome,
+    SessionControlRefusal, SessionControlResult, SessionInstanceId, SessionManifestV1,
+    SessionReplica, StoredReconnectCredential, UnitReplica, WorldDeltaV1, WorldSnapshotV1,
+    LIVE_SESSION_SNAPSHOT_VERSION_V1, MAX_SESSION_UNITS,
 };
 use hex_perception::{
     export_player_knowledge_snapshot_v1, import_player_knowledge_snapshot_v1, FactionMapKnowledge,
@@ -165,6 +166,69 @@ struct ActiveDirectSession {
     entity: Entity,
     role: MultiplayerRole,
     hosted_code: Option<HostedCodeSource>,
+}
+
+trait ClipboardTextWriter {
+    fn write_text(&mut self, text: &str) -> Result<(), bevy::clipboard::ClipboardError>;
+}
+
+impl ClipboardTextWriter for Clipboard {
+    fn write_text(&mut self, text: &str) -> Result<(), bevy::clipboard::ClipboardError> {
+        Clipboard::set_text(self, text.to_owned())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConnectionCodeCopyError {
+    NoActiveHostCode,
+    ClipboardUnavailable,
+    ClipboardWriteFailed,
+}
+
+impl ConnectionCodeCopyError {
+    const fn message(self) -> &'static str {
+        match self {
+            Self::NoActiveHostCode => "No active host connection code is available to copy.",
+            Self::ClipboardUnavailable => "The system clipboard is unavailable on this device.",
+            Self::ClipboardWriteFailed => {
+                "The system clipboard refused the connection code. Try again."
+            }
+        }
+    }
+}
+
+fn hosted_connection_code(
+    active: Option<&ActiveDirectSession>,
+    authority: Option<&SessionAdmissionAuthority>,
+) -> Option<EncodedConnectionCode> {
+    let source = active
+        .filter(|active| active.role == MultiplayerRole::Host)?
+        .hosted_code
+        .as_ref()?;
+    let authority = authority?;
+    Some(
+        DirectConnectionCode {
+            endpoint: source.endpoint.clone(),
+            certificate_fingerprint: source.certificate_fingerprint,
+            certificate_expires_unix_seconds: source.certificate_expires_unix_seconds,
+            invite_token: authority.invite_token(),
+        }
+        .encode(),
+    )
+}
+
+fn copy_hosted_connection_code<W: ClipboardTextWriter>(
+    active: Option<&ActiveDirectSession>,
+    authority: Option<&SessionAdmissionAuthority>,
+    clipboard: Option<&mut W>,
+) -> Result<(), ConnectionCodeCopyError> {
+    let code = hosted_connection_code(active, authority)
+        .ok_or(ConnectionCodeCopyError::NoActiveHostCode)?;
+    let clipboard = clipboard.ok_or(ConnectionCodeCopyError::ClipboardUnavailable)?;
+    match clipboard.write_text(code.expose_for_sharing()) {
+        Ok(()) => Ok(()),
+        Err(_) => Err(ConnectionCodeCopyError::ClipboardWriteFailed),
+    }
 }
 
 #[derive(Resource, Debug)]
@@ -408,6 +472,7 @@ fn handle_intents(
     active: Option<Res<ActiveDirectSession>>,
     mut ids: ResMut<SessionUiRequestIds>,
     mut notice: ResMut<SessionUiNotice>,
+    mut clipboard: Option<ResMut<Clipboard>>,
     mut host_controls: MessageWriter<HostSessionControlRequest>,
     mut client_controls: MessageWriter<ClientLobbyRequest>,
     mut commands: Commands,
@@ -466,6 +531,19 @@ fn handle_intents(
                 commands.remove_resource::<PreparedDirectSandboxSession>();
                 notice.0 = None;
                 next_screen.set(Screen::Sandbox);
+            }
+            MultiplayerIntent::CopyConnectionCode => {
+                notice.0 = Some(
+                    match copy_hosted_connection_code(
+                        active.as_deref(),
+                        authority.as_deref(),
+                        clipboard.as_deref_mut(),
+                    ) {
+                        Ok(()) => "Direct connection code copied to the clipboard.",
+                        Err(error) => error.message(),
+                    }
+                    .to_owned(),
+                );
             }
             MultiplayerIntent::JoinDirect | MultiplayerIntent::ReconnectDirect => {
                 if active.is_some() {
@@ -1960,23 +2038,8 @@ fn publish_view(
             .collect()
     });
     let (can_launch, launch_blocker) = launch_gate(lobby.as_ref(), manifest.as_ref());
-    let share_code = active
-        .as_deref()
-        .filter(|active| active.role == MultiplayerRole::Host)
-        .and_then(|active| active.hosted_code.as_ref())
-        .zip(authority.as_deref())
-        .map(|(source, authority)| {
-            SensitiveText::new(
-                DirectConnectionCode {
-                    endpoint: source.endpoint.clone(),
-                    certificate_fingerprint: source.certificate_fingerprint,
-                    certificate_expires_unix_seconds: source.certificate_expires_unix_seconds,
-                    invite_token: authority.invite_token(),
-                }
-                .encode()
-                .expose_for_sharing(),
-            )
-        });
+    let share_code = hosted_connection_code(active.as_deref(), authority.as_deref())
+        .map(|code| SensitiveText::new(code.expose_for_sharing()));
     let launch_summary = lobby
         .as_ref()
         .and_then(|lobby| lobby.launch_summary.as_ref())
@@ -2283,6 +2346,86 @@ mod tests {
         assert!(direct_endpoint(&draft).is_err());
         draft.advertised_port = "not-a-port".to_owned();
         assert!(direct_endpoint(&draft).is_err());
+    }
+
+    #[derive(Default)]
+    struct RecordingClipboard {
+        writes: Vec<String>,
+        fail: bool,
+    }
+
+    impl ClipboardTextWriter for RecordingClipboard {
+        fn write_text(&mut self, text: &str) -> Result<(), bevy::clipboard::ClipboardError> {
+            if self.fail {
+                return Err(bevy::clipboard::ClipboardError::ClipboardNotSupported);
+            }
+            self.writes.push(text.to_owned());
+            Ok(())
+        }
+    }
+
+    fn hosted_copy_fixture() -> (ActiveDirectSession, SessionAdmissionAuthority) {
+        let authority = SessionAdmissionAuthority::with_session_secrets(
+            serde_json::from_str("99").expect("protocol hash is a serialized newtype"),
+            manifest(),
+            SessionPeerId::from_bytes([1; 16]),
+            InviteToken::from_bytes([4; 16]),
+        )
+        .expect("the deterministic admission fixture is valid");
+        let active = ActiveDirectSession {
+            entity: Entity::PLACEHOLDER,
+            role: MultiplayerRole::Host,
+            hosted_code: Some(HostedCodeSource {
+                endpoint: DirectEndpoint::new("127.0.0.1", 7_777)
+                    .expect("loopback endpoint is valid"),
+                certificate_fingerprint: CertificateFingerprint::from_bytes([3; 32]),
+                certificate_expires_unix_seconds: 2_000_000_000,
+            }),
+        };
+        (active, authority)
+    }
+
+    #[test]
+    fn copy_adapter_writes_the_current_host_authority_code_without_disclosing_it() {
+        let (active, authority) = hosted_copy_fixture();
+        let expected = hosted_connection_code(Some(&active), Some(&authority))
+            .expect("the host fixture has a current code");
+        let mut clipboard = RecordingClipboard::default();
+
+        assert_eq!(
+            copy_hosted_connection_code(Some(&active), Some(&authority), Some(&mut clipboard)),
+            Ok(())
+        );
+        assert_eq!(
+            clipboard.writes.first().map(String::as_str),
+            Some(expected.expose_for_sharing())
+        );
+        assert!(!format!("{expected:?}").contains(expected.expose_for_sharing()));
+    }
+
+    #[test]
+    fn copy_adapter_fails_closed_without_a_host_code_or_working_clipboard() {
+        let (active, authority) = hosted_copy_fixture();
+        let mut clipboard = RecordingClipboard::default();
+        assert_eq!(
+            copy_hosted_connection_code(None, Some(&authority), Some(&mut clipboard)),
+            Err(ConnectionCodeCopyError::NoActiveHostCode)
+        );
+        assert!(clipboard.writes.is_empty());
+        assert_eq!(
+            copy_hosted_connection_code::<RecordingClipboard>(
+                Some(&active),
+                Some(&authority),
+                None,
+            ),
+            Err(ConnectionCodeCopyError::ClipboardUnavailable)
+        );
+        clipboard.fail = true;
+        assert_eq!(
+            copy_hosted_connection_code(Some(&active), Some(&authority), Some(&mut clipboard)),
+            Err(ConnectionCodeCopyError::ClipboardWriteFailed)
+        );
+        assert!(clipboard.writes.is_empty());
     }
 
     #[test]

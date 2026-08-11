@@ -232,16 +232,7 @@ fn render_host_direct(root: &mut ChildSpawnerCommands, assets: &UiAssets, view: 
                 form.spawn((Name::new("Frozen Session Summary"), label(assets, summary.clone())));
             }
             if let Some(code) = &view.share_code {
-                form.spawn(heading(assets, "Direct connection code"));
-                form.spawn((
-                    Name::new("Direct Connection Code"),
-                    AccessibleLabel::new("Direct connection code, share only with invited players"),
-                    fine(assets, code.expose().to_owned()),
-                ));
-                form.spawn(fine(
-                    assets,
-                    "The code contains a one-time private invite. Share it only with players joining this lobby.",
-                ));
+                render_connection_code(form, assets, "Direct Connection Code", code);
             }
             action_button(form, assets, "Back", MultiplayerIntent::Back, true);
         });
@@ -351,11 +342,11 @@ fn render_lobby(root: &mut ChildSpawnerCommands, assets: &UiAssets, view: &Multi
     }
     if host {
         if let Some(code) = &view.share_code {
-            root.spawn((
-                Name::new("Lobby Direct Connection Code"),
-                AccessibleLabel::new("Direct connection code, share only with invited players"),
-                fine(assets, code.expose().to_owned()),
-            ));
+            root.spawn((Name::new("Lobby Direct Invite"), panel()))
+                .insert(action_panel_node(680.0))
+                .with_children(|invite| {
+                    render_connection_code(invite, assets, "Lobby Direct Connection Code", code);
+                });
         }
     }
 
@@ -424,7 +415,7 @@ fn render_lobby(root: &mut ChildSpawnerCommands, assets: &UiAssets, view: &Multi
                                         MultiplayerSeatConnectionView::Vacant
                                     )
                             }) {
-                                card_action_button(
+                                scrollable_card_action_button(
                                     moves,
                                     assets,
                                     &format!("Move to {}", destination.seat.0 + 1),
@@ -444,7 +435,7 @@ fn render_lobby(root: &mut ChildSpawnerCommands, assets: &UiAssets, view: &Multi
                     card.spawn(fine(assets, if seat.ready { "READY" } else { "NOT READY" }));
                 }
                 if seat.local && !host && seat.seat != PlayerSeat::HOST {
-                    card_action_button(
+                    scrollable_card_action_button(
                         card,
                         assets,
                         if seat.ready { "Not Ready" } else { "Ready" },
@@ -456,7 +447,7 @@ fn render_lobby(root: &mut ChildSpawnerCommands, assets: &UiAssets, view: &Multi
                     && seat.seat != PlayerSeat::HOST
                     && !matches!(seat.connection, MultiplayerSeatConnectionView::Vacant)
                 {
-                    card_action_button(
+                    scrollable_card_action_button(
                         card,
                         assets,
                         "Kick",
@@ -472,7 +463,7 @@ fn render_lobby(root: &mut ChildSpawnerCommands, assets: &UiAssets, view: &Multi
         .insert(action_panel_node(680.0))
         .with_children(|actions| {
             if host {
-                action_button(
+                scrollable_action_button(
                     actions,
                     assets,
                     "Launch",
@@ -482,7 +473,7 @@ fn render_lobby(root: &mut ChildSpawnerCommands, assets: &UiAssets, view: &Multi
                 if let Some(blocker) = &view.launch_blocker {
                     actions.spawn((Name::new("Launch Blocker"), fine(assets, blocker.clone())));
                 }
-                action_button(
+                scrollable_action_button(
                     actions,
                     assets,
                     "Close Session",
@@ -490,7 +481,7 @@ fn render_lobby(root: &mut ChildSpawnerCommands, assets: &UiAssets, view: &Multi
                     true,
                 );
             } else {
-                action_button(
+                scrollable_action_button(
                     actions,
                     assets,
                     "Leave Session",
@@ -549,6 +540,31 @@ fn action_panel_node(width: f32) -> Node {
     }
 }
 
+fn render_connection_code(
+    parent: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    code_name: &'static str,
+    code: &SensitiveText,
+) {
+    parent.spawn(heading(assets, "Direct connection code"));
+    parent.spawn((
+        Name::new(code_name),
+        AccessibleLabel::new("Direct connection code, share only with invited players"),
+        fine(assets, code.expose().to_owned()),
+    ));
+    action_button(
+        parent,
+        assets,
+        "Copy Connection Code",
+        MultiplayerIntent::CopyConnectionCode,
+        true,
+    );
+    parent.spawn(fine(
+        assets,
+        "The code contains a one-time private invite. Share it only with players joining this lobby.",
+    ));
+}
+
 fn action_button(
     parent: &mut ChildSpawnerCommands,
     assets: &UiAssets,
@@ -567,7 +583,25 @@ fn action_button(
     control.with_child(label(assets, text.to_owned()));
 }
 
-fn card_action_button(
+fn scrollable_action_button(
+    parent: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    text: &str,
+    intent: MultiplayerIntent,
+    enabled: bool,
+) {
+    let mut control = parent.spawn((
+        button(text.to_owned()),
+        MultiplayerControl(intent),
+        UiVisibilityRequirement::Scrollable,
+    ));
+    if !enabled {
+        control.insert(InteractionDisabled);
+    }
+    control.with_child(label(assets, text.to_owned()));
+}
+
+fn scrollable_card_action_button(
     parent: &mut ChildSpawnerCommands,
     assets: &UiAssets,
     text: &str,
@@ -577,7 +611,7 @@ fn card_action_button(
     let mut control = parent.spawn((
         fluid_button(text.to_owned()),
         MultiplayerControl(intent),
-        UiVisibilityRequirement::Immediate,
+        UiVisibilityRequirement::Scrollable,
     ));
     if !enabled {
         control.insert(InteractionDisabled);
@@ -765,6 +799,71 @@ mod tests {
             network_forwarding_copy(None),
             "Forward the host-selected UDP port to the host computer. Carrier-grade NAT (CGNAT) or restrictive networks may make direct hosting impossible."
         );
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn host_connection_code_exposes_one_immediate_copy_action_only_when_shareable() {
+        for route in [MultiplayerRoute::HostDirect, MultiplayerRoute::Lobby] {
+            let mut app = App::new();
+            app.add_plugins(crate::test_support::HeadlessUiPlugin::new(1280, 720));
+            app.world_mut().insert_resource(MultiplayerView {
+                route,
+                role: Some(MultiplayerRole::Host),
+                local_seat: Some(PlayerSeat::HOST),
+                share_code: Some(SensitiveText::new("HEX1.private-review-code")),
+                ..Default::default()
+            });
+            app.world_mut()
+                .resource_mut::<NextState<Screen>>()
+                .set(Screen::Multiplayer);
+            for _ in 0..8 {
+                app.update();
+            }
+
+            let snapshot = crate::test_support::ui_tree_snapshot(app.world_mut());
+            let copy = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.name == "Copy Connection Code" && node.focusable)
+                .expect("a shareable host code must expose a copy action");
+            assert_eq!(copy.keyboard_reachable, Some(true));
+            assert_eq!(
+                copy.visibility_requirement,
+                Some(UiVisibilityRequirement::Immediate)
+            );
+
+            let controls = app
+                .world_mut()
+                .query::<(&Name, &MultiplayerControl)>()
+                .iter(app.world())
+                .filter(|(name, control)| {
+                    name.as_str() == "Copy Connection Code"
+                        && control.0 == MultiplayerIntent::CopyConnectionCode
+                })
+                .count();
+            assert_eq!(controls, 1);
+        }
+
+        let mut app = App::new();
+        app.add_plugins(crate::test_support::HeadlessUiPlugin::new(1280, 720));
+        app.world_mut().insert_resource(MultiplayerView {
+            route: MultiplayerRoute::HostDirect,
+            role: Some(MultiplayerRole::Host),
+            share_code: None,
+            ..Default::default()
+        });
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Multiplayer);
+        for _ in 0..8 {
+            app.update();
+        }
+        assert!(app
+            .world_mut()
+            .query::<&Name>()
+            .iter(app.world())
+            .all(|name| name.as_str() != "Copy Connection Code"));
     }
 
     #[cfg(feature = "test-support")]

@@ -1419,6 +1419,8 @@ pub enum MultiplayerIntent {
     SetText(MultiplayerTextField, SensitiveText),
     /// Configure a shipped encounter through the existing Sandbox/deployment flow.
     ConfigureSandbox,
+    /// Copy the current host-issued private connection code to the system clipboard.
+    CopyConnectionCode,
     /// Start one explicit pinned direct connection.
     JoinDirect,
     /// Reconnect through the persisted pinned endpoint and private rotating credential.
