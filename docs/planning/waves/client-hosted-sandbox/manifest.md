@@ -685,14 +685,23 @@ Typed hooks—not pixels—prove all logical claims.
   across the six required viewport/scale cases. The 117-test all-feature `hex_ui` suite
   and the 33-step native Metal visual walk pass; all eight frames are retained for final
   exact-head inspection.
+- Combined commit `ff453533301f976bb6ef1296b4495c2383c4b9b1` repairs the blocking
+  invite-transfer defect captured in `HEX-93`. Both host code surfaces now expose one
+  keyboard- and pointer-operable Copy Connection Code action backed by Bevy's native
+  clipboard resource. The adapter derives the code only from the current host endpoint
+  and admission authority, reports typed local success/failure without logging the
+  secret, and fails closed when either source or clipboard is unavailable. Lobby
+  assignment and launch controls now declare their existing page-scroll route instead
+  of incorrectly claiming immediate visibility. Focused multiplayer tests, strict
+  package Clippy, and the expanded 36-step/9-frame native Metal walk pass.
 - The 2026-08-11 pre-final delivery reconciliation inspected all 56 non-completed Hex
   Game issues and every retained Done issue, then corrected architecture, status,
   roadmap, design, boundary, and contract projections around the live direct milestone
   and the still-upcoming Campaign/Steam milestones. The previously delivered E0
   foundation is now reconciled as Done in `HEX-37`, `HEX-56`, and `HEX-57` with PR #184
   and exact merge evidence. No multiplayer lane ticket was created: this manifest remains
-  the durable queue. UI fixes `HEX-91` and `HEX-92` remain non-terminal until the
-  combined wave reaches `dev`.
+  the durable queue. UI fixes `HEX-91`, `HEX-92`, and `HEX-93` remain non-terminal until
+  the combined wave reaches `dev`.
 
 ## Stop conditions
 
@@ -792,6 +801,13 @@ amend this manifest after owner review.
   selector maps that script to the gameplay-visual closure; and all lobby-card actions use
   constrained fluid geometry. `HEX-92` retains before-fix evidence and remains open until
   this exact fix reaches `dev`.
+- `ff453533301f976bb6ef1296b4495c2383c4b9b1` — combined Direct Connect usability
+  repair. A host can copy the current private invite from setup or lobby through the
+  native clipboard without exposing it to `Debug` or logs; absent/stale host authority
+  and clipboard failures are typed local refusals. The host-lobby visual fixture now
+  covers the action at 1920×1080, while lower assignment/session controls retain a
+  mechanically verified scroll route. `HEX-93` keeps the before-fix frame and remains
+  open until this exact fix reaches `dev`.
 
 ## Close-out
 
