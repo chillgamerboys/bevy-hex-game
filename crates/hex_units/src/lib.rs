@@ -82,8 +82,8 @@ pub use trajectories::{
     trajectory_destination, trajectory_is_clear, trajectory_voxels,
 };
 pub use units::{
-    Archetype, Downed, Enemy, MovingTo, Party, Player, StandsOn, StopMovingAt, UnitAllocator,
-    UnitRegistry,
+    spawn_replica_unit, Archetype, Downed, Enemy, MovingTo, Party, Player, ReplicaUnitSpawn,
+    ReplicaUnitSpawnError, StandsOn, StopMovingAt, UnitAllocator, UnitRegistry,
 };
 // `volumes` is deliberately not re-exported here. Its names are bare verbs —
 // `line`, `column`, `path`, `resolve` — that only read correctly qualified, and

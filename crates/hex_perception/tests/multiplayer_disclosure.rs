@@ -181,9 +181,18 @@ fn replication_app(with_disclosure: bool) -> App {
     app
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "the compile-time multiplayer fixture identity is intentionally infallible"
+)]
 fn replica(unit: UnitId, faction: Faction, position: TilePos, owner: PlayerSeat) -> UnitReplica {
     UnitReplica {
         unit,
+        archetype: hex_multiplayer::ArchetypeIdentityV1::new(match faction {
+            Faction::Player => "player",
+            Faction::Hostile => "hostile",
+        })
+        .expect("test archetype should be bounded"),
         faction,
         position,
         motion: None,

@@ -28,6 +28,7 @@ use hex_assets::{
 use hex_lattice::LatticeState;
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fmt,
     sync::Arc,
 };
 
@@ -310,6 +311,14 @@ impl UnitAllocator {
         self.next += 1;
         id
     }
+
+    fn reserve_after(&mut self, id: UnitId) -> Result<(), ReplicaUnitSpawnError> {
+        let next =
+            id.0.checked_add(1)
+                .ok_or(ReplicaUnitSpawnError::ExhaustedUnitId(id))?;
+        self.next = self.next.max(next);
+        Ok(())
+    }
 }
 
 /// Resolves between stable [`UnitId`]s and the entities carrying them.
@@ -354,6 +363,16 @@ impl UnitRegistry {
     #[must_use]
     pub fn id_of(&self, entity: Entity) -> Option<UnitId> {
         self.ids.get(&entity).copied()
+    }
+
+    /// Removes one stable identity before a replica-owned actor is despawned.
+    ///
+    /// Ordinary functional death retains its entity and never calls this. Disclosure
+    /// withdrawal is the first lifecycle that intentionally removes an actor shell.
+    pub fn unregister(&mut self, id: UnitId) -> Option<Entity> {
+        let entity = self.by_id.remove(&id)?;
+        self.ids.remove(&entity);
+        Some(entity)
     }
 
     fn clear(&mut self) {
@@ -1085,6 +1104,13 @@ fn unit_colors(palette: &ArtPalette) -> Result<(Color, Color), String> {
     Ok((required(PLAYER_SWATCH_ID)?, required(HOSTILE_SWATCH_ID)?))
 }
 
+const fn unit_swatch_id(faction: Faction) -> &'static str {
+    match faction {
+        Faction::Player => PLAYER_SWATCH_ID,
+        Faction::Hostile => HOSTILE_SWATCH_ID,
+    }
+}
+
 /// The identity bookkeeping a spawn threads through: deal an id, record it,
 /// and enrol player units in the party.
 struct UnitIdentity<'a> {
@@ -1315,6 +1341,113 @@ fn formation_surfaces(center: Standing, footing: &Footing, spread: Option<u32>) 
     surfaces
 }
 
+/// Disclosure-safe actor shell requested by a remote authoritative projection.
+///
+/// This intentionally has no AI controller, lattice specification, stats, or encounter
+/// placement identity. Those are authority/private content facts. A disclosed player
+/// normally already exists from the shipped local roster; this path primarily creates a
+/// hostile shell only when that hostile enters the shared player-faction view.
+#[derive(Debug, Clone)]
+pub struct ReplicaUnitSpawn<'a> {
+    /// Stable authority-owned identity.
+    pub id: UnitId,
+    /// Exact published surface.
+    pub standing: Standing,
+    /// Disclosed faction.
+    pub faction: Faction,
+    /// Canonical ownership; temporary delegation never changes it.
+    pub owner: ControlOwner,
+    /// Bounded shipped archetype identity already validated by the wire contract.
+    pub archetype: &'a str,
+    /// Authorized mutable lattice state, normally present only for a player actor.
+    pub lattice: Option<LatticeState>,
+}
+
+/// Why a disclosed replica actor could not be materialized.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplicaUnitSpawnError {
+    /// The stable identity is already registered to a local actor.
+    DuplicateUnit(UnitId),
+    /// Reserving later allocator identities would overflow the stable id domain.
+    ExhaustedUnitId(UnitId),
+    /// The shipped art palette lacks the faction's required piece swatch.
+    MissingPaletteSwatch(&'static str),
+}
+
+impl fmt::Display for ReplicaUnitSpawnError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DuplicateUnit(unit) => write!(formatter, "unit {unit:?} is already registered"),
+            Self::ExhaustedUnitId(unit) => {
+                write!(formatter, "unit {unit:?} exhausts the stable id domain")
+            }
+            Self::MissingPaletteSwatch(id) => {
+                write!(
+                    formatter,
+                    "art palette is missing required unit swatch {id:?}"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for ReplicaUnitSpawnError {}
+
+/// Creates one presentation/domain shell from a validated authorized replica.
+///
+/// The explicit id is registered and also advances the local allocator past it so later
+/// legitimate local deals cannot collide. No authority-only AI or lattice specification
+/// is reconstructed here.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the helper keeps presentation assets and identity registries explicit at the gameplay composition boundary"
+)]
+pub fn spawn_replica_unit(
+    commands: &mut Commands,
+    assets: &GameAssets,
+    materials: &mut Assets<StandardMaterial>,
+    palette: &ArtPalette,
+    settings: &PlayerSettings,
+    allocator: &mut UnitAllocator,
+    registry: &mut UnitRegistry,
+    party: &mut Party,
+    spawn: ReplicaUnitSpawn<'_>,
+) -> Result<Entity, ReplicaUnitSpawnError> {
+    if registry.entity_of(spawn.id).is_some() {
+        return Err(ReplicaUnitSpawnError::DuplicateUnit(spawn.id));
+    }
+    let swatch_id = unit_swatch_id(spawn.faction);
+    let color = palette
+        .get_str(swatch_id)
+        .map(|swatch| swatch.color().to_bevy_color())
+        .ok_or(ReplicaUnitSpawnError::MissingPaletteSwatch(swatch_id))?;
+    allocator.reserve_after(spawn.id)?;
+    let material = materials.add(StandardMaterial::from(color));
+    let entity = spawn_unit_shell(
+        commands,
+        assets,
+        UnitShell {
+            id: spawn.id,
+            standing: spawn.standing,
+            faction: spawn.faction,
+            owner: spawn.owner,
+            material,
+            archetype: spawn.archetype,
+            scale: settings.scale,
+            body: Body::new(TraversalProfile::WALKER),
+        },
+    );
+    if let Some(lattice) = spawn.lattice {
+        commands.entity(entity).insert(lattice);
+    }
+    registry.register(spawn.id, entity);
+    if spawn.faction == Faction::Player && !party.members.contains(&spawn.id) {
+        party.members.push(spawn.id);
+        party.members.sort_unstable();
+    }
+    Ok(entity)
+}
+
 /// Everything that differs between one unit and the next.
 ///
 /// Grouped into a struct because the alternative is an eight-argument function where
@@ -1343,35 +1476,25 @@ fn spawn_unit(
     spawn: UnitSpawn,
     identity: &mut UnitIdentity,
 ) {
-    let standing = spawn.standing;
-    let scale = spawn.settings.scale;
-    let [mesh_a, mesh_b] = assets.player_pieces.clone();
-
-    let child_transform = Transform {
-        // Offsets the mesh so its origin sits on the tile centre.
-        translation: Vec3::new(-scale, -scale, -10. * scale),
-        scale: Vec3::splat(scale),
-        ..default()
-    };
-
     let id = identity.allocator.allocate();
-    let mut unit = commands.spawn((
-        Transform::from_translation(standing.world_position()),
-        Visibility::default(),
-        PresentationOcclusion::default(),
-        StandsOn(standing),
-        spawn.body,
-        spawn.faction,
-        id,
-        match spawn.faction {
-            Faction::Player => ControlOwner::default(),
-            Faction::Hostile => ControlOwner(hex_core::PlayerSeat::AI),
+    let entity = spawn_unit_shell(
+        commands,
+        assets,
+        UnitShell {
+            id,
+            standing: spawn.standing,
+            faction: spawn.faction,
+            owner: match spawn.faction {
+                Faction::Player => ControlOwner::default(),
+                Faction::Hostile => ControlOwner(hex_core::PlayerSeat::AI),
+            },
+            material: spawn.material,
+            archetype: spawn.archetype,
+            scale: spawn.settings.scale,
+            body: spawn.body,
         },
-        Archetype(spawn.archetype.to_owned()),
-        // Archetype plus the stable id, so two wolves are distinguishable in the
-        // inspector and each one's name matches what the log calls it.
-        Name::new(format!("{} #{}", spawn.archetype, id.0)),
-    ));
+    );
+    let mut unit = commands.entity(entity);
 
     // The archetype seam, and the whole reason `Archetype` went on at spawn time: one
     // lookup here rather than per-unit stat code everywhere. The three ride together
@@ -1389,32 +1512,67 @@ fn spawn_unit(
         unit.insert(controller);
     }
 
-    match spawn.faction {
-        Faction::Player => unit.insert(Player),
-        Faction::Hostile => unit.insert(Enemy),
-    };
-    identity.registry.register(id, unit.id());
+    identity.registry.register(id, entity);
     if spawn.faction == Faction::Player {
         identity.party.members.push(id);
     }
+}
 
+struct UnitShell<'a> {
+    id: UnitId,
+    standing: Standing,
+    faction: Faction,
+    owner: ControlOwner,
+    material: Handle<StandardMaterial>,
+    archetype: &'a str,
+    scale: f32,
+    body: Body,
+}
+
+fn spawn_unit_shell(commands: &mut Commands, assets: &GameAssets, shell: UnitShell<'_>) -> Entity {
+    let [mesh_a, mesh_b] = assets.player_pieces.clone();
+    let child_transform = Transform {
+        // Offsets the mesh so its origin sits on the tile centre.
+        translation: Vec3::new(-shell.scale, -shell.scale, -10. * shell.scale),
+        scale: Vec3::splat(shell.scale),
+        ..default()
+    };
+    let mut unit = commands.spawn((
+        Transform::from_translation(shell.standing.world_position()),
+        Visibility::default(),
+        PresentationOcclusion::default(),
+        StandsOn(shell.standing),
+        shell.body,
+        shell.faction,
+        shell.id,
+        shell.owner,
+        Archetype(shell.archetype.to_owned()),
+        // Archetype plus the stable id, so two wolves are distinguishable in the
+        // inspector and each one's name matches what the log calls it.
+        Name::new(format!("{} #{}", shell.archetype, shell.id.0)),
+    ));
+    match shell.faction {
+        Faction::Player => unit.insert(Player),
+        Faction::Hostile => unit.insert(Enemy),
+    };
     unit.with_children(|parent| {
         // `Pickable::IGNORE` so clicks pass through to the tiles below. Without it a
         // unit standing between the cursor and the ground swallows the click and
         // movement silently stops working wherever a piece happens to be.
         parent.spawn((
             Mesh3d(mesh_a),
-            MeshMaterial3d(spawn.material.clone()),
+            MeshMaterial3d(shell.material.clone()),
             child_transform,
             Pickable::IGNORE,
         ));
         parent.spawn((
             Mesh3d(mesh_b),
-            MeshMaterial3d(spawn.material),
+            MeshMaterial3d(shell.material),
             child_transform,
             Pickable::IGNORE,
         ));
     });
+    unit.id()
 }
 
 #[cfg(test)]
@@ -1441,6 +1599,19 @@ mod tests {
     fn a_faction_is_not_hostile_to_itself() {
         assert!(!Faction::Player.is_hostile_to(Faction::Player));
         assert!(!Faction::Hostile.is_hostile_to(Faction::Hostile));
+    }
+
+    #[test]
+    fn unregister_removes_both_stable_identity_directions() {
+        let mut world = World::new();
+        let entity = world.spawn_empty().id();
+        let mut registry = UnitRegistry::default();
+        registry.register(UnitId(7), entity);
+
+        assert_eq!(registry.unregister(UnitId(7)), Some(entity));
+        assert_eq!(registry.entity_of(UnitId(7)), None);
+        assert_eq!(registry.id_of(entity), None);
+        assert_eq!(registry.unregister(UnitId(7)), None);
     }
 
     #[test]

@@ -10,6 +10,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy_replicon::prelude::Replicated;
 use hex_anim::Transformation;
+use hex_assets::{ArtPalette, GameAssets, PlayerSettings};
 use hex_combat::{
     CombatEvent, CombatSystems, CommandRefusal, EncounterOutcome, EncounterResolution,
     FactionLatticeKnowledge, PersistentEffects, TurnOrder,
@@ -19,14 +20,19 @@ use hex_core::{
     HexSpan, HexTile, IssuedCommand, LocalGameCommandRequest, Mode, Pause, PendingDecision,
     PlayerSeat, Screen, SimulationRole, TilePos, Turn, UnitId,
 };
-use hex_lattice::{LatticeSpec, LatticeState};
+use hex_lattice::LatticeState;
 use hex_multiplayer::{
-    AuthenticatedCommandRequest, AuthorityBoundary, AuthorityCommandResolution, BoundedVec,
-    CommandOutcome, CommandRefusalReason, CommandSequencer, GameCommandRequest, LobbyPhase,
-    MotionReplicaV1, SessionAdmissionAuthority, SessionOutcome, SessionReplica,
-    SessionRuntimeSystems, UnitReplica, MAX_ROUTE_STEPS, MAX_SESSION_UNITS, MAX_UNIT_EFFECTS,
+    ArchetypeIdentityV1, AuthenticatedCommandRequest, AuthorityBoundary,
+    AuthorityCommandResolution, AuthoritySequence, BoundedVec, CommandOutcome,
+    CommandRefusalReason, CommandSequencer, GameCommandRequest, LobbyPhase, MotionReplicaV1,
+    ReplicaValidationError, SequencerError, SessionAdmissionAuthority, SessionOutcome,
+    SessionReplica, SessionRuntimeSystems, UnitReplica, MAX_ROUTE_STEPS, MAX_SESSION_UNITS,
+    MAX_UNIT_EFFECTS,
 };
-use hex_units::{Downed, HexPathingLine, MovementSystems, MovingTo, StandsOn, UnitRegistry};
+use hex_units::{
+    spawn_replica_unit, Archetype, Downed, HexPathingLine, MovementSystems, MovingTo, Party,
+    ReplicaUnitSpawn, StandsOn, UnitAllocator, UnitRegistry,
+};
 
 #[derive(Resource, Debug)]
 struct LocalRequestIds {
@@ -81,11 +87,98 @@ struct BoundaryProjection {
     movements: usize,
 }
 
+/// Validated reconnect baseline applied only after L3 restores the world snapshot.
+#[derive(Message, Debug, Clone)]
+pub(crate) struct ApplyReplicaBaseline {
+    units: BTreeMap<UnitId, UnitReplica>,
+    session: SessionReplica,
+}
+
+impl ApplyReplicaBaseline {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "L4 begins constructing typed baselines once its live-snapshot adapter lands"
+        )
+    )]
+    pub(crate) fn new(
+        units: impl IntoIterator<Item = UnitReplica>,
+        session: SessionReplica,
+    ) -> Result<Self, ReplicaBaselineError> {
+        session
+            .validate()
+            .map_err(ReplicaBaselineError::InvalidSession)?;
+        let mut canonical = BTreeMap::new();
+        for unit in units {
+            unit.validate()
+                .map_err(|error| ReplicaBaselineError::InvalidUnit {
+                    unit: unit.unit,
+                    error,
+                })?;
+            let id = unit.unit;
+            if canonical.insert(id, unit).is_some() {
+                return Err(ReplicaBaselineError::DuplicateUnit(id));
+            }
+            if canonical.len() > MAX_SESSION_UNITS {
+                return Err(ReplicaBaselineError::TooManyUnits);
+            }
+        }
+        Ok(Self {
+            units: canonical,
+            session,
+        })
+    }
+}
+
+/// Why a locally received live-session baseline was not safe to apply.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "L4 exposes this typed refusal through its reconnect loading adapter"
+    )
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReplicaBaselineError {
+    InvalidSession(ReplicaValidationError),
+    InvalidUnit {
+        unit: UnitId,
+        error: ReplicaValidationError,
+    },
+    DuplicateUnit(UnitId),
+    TooManyUnits,
+}
+
+impl std::fmt::Display for ReplicaBaselineError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidSession(error) => write!(formatter, "invalid session baseline: {error}"),
+            Self::InvalidUnit { unit, error } => {
+                write!(formatter, "invalid unit baseline {unit:?}: {error}")
+            }
+            Self::DuplicateUnit(unit) => write!(formatter, "baseline repeats unit {unit:?}"),
+            Self::TooManyUnits => formatter.write_str("baseline exceeds the session unit bound"),
+        }
+    }
+}
+
+impl std::error::Error for ReplicaBaselineError {}
+
+#[derive(Resource, Debug, Default)]
+struct ReplicaBaselineState {
+    active: Option<ApplyReplicaBaseline>,
+    apply_active_once: bool,
+    apply_all_network_once: bool,
+}
+
 pub(super) fn plugin(app: &mut App) {
     app.init_resource::<LocalRequestIds>()
         .init_resource::<PendingAuthorityRequests>()
         .init_resource::<AuthorityReplicaEntities>()
         .init_resource::<BoundaryProjection>()
+        .init_resource::<ReplicaBaselineState>()
+        .add_message::<ApplyReplicaBaseline>()
         .add_systems(
             PreUpdate,
             enqueue_authenticated_commands
@@ -124,10 +217,14 @@ pub(super) fn plugin(app: &mut App) {
         .add_systems(
             Update,
             (
+                capture_replica_baseline,
+                release_replica_baseline_when_caught_up,
+                materialize_missing_unit_replicas,
                 apply_effect_replicas,
                 apply_unit_replicas,
                 apply_session_replica,
-                conceal_unprojected_hostiles,
+                withdraw_unprojected_hostiles,
+                finish_replica_baseline_transition,
             )
                 .chain()
                 .run_if(resource_equals(SimulationRole::Replica)),
@@ -143,6 +240,7 @@ pub(super) fn plugin(app: &mut App) {
             (
                 close_gameplay_authority_requests,
                 despawn_authority_replicas,
+                clear_replica_baseline,
             ),
         );
 }
@@ -419,6 +517,7 @@ struct AuthorityProjectionSources<'w, 's> {
         's,
         (
             &'static UnitId,
+            &'static Archetype,
             &'static Faction,
             &'static StandsOn,
             Option<&'static MovingTo>,
@@ -428,14 +527,14 @@ struct AuthorityProjectionSources<'w, 's> {
             Option<&'static LatticeState>,
         ),
     >,
-    unit_replicas: Query<'w, 's, &'static mut UnitReplica>,
-    session_replicas: Query<'w, 's, &'static mut SessionReplica>,
+    unit_replicas: Query<'w, 's, &'static UnitReplica>,
+    session_replicas: Query<'w, 's, &'static SessionReplica>,
 }
 
 fn publish_authority_replicas(
     mut commands: Commands,
     authority: Option<Res<SessionAdmissionAuthority>>,
-    sequencer: Res<CommandSequencer>,
+    mut sequencer: ResMut<CommandSequencer>,
     mode: Res<State<Mode>>,
     pause: Option<Res<State<Pause>>>,
     order: Res<TurnOrder>,
@@ -444,7 +543,7 @@ fn publish_authority_replicas(
     effects: Res<PersistentEffects>,
     lattice_knowledge: Res<FactionLatticeKnowledge>,
     mut entities: ResMut<AuthorityReplicaEntities>,
-    mut sources: AuthorityProjectionSources,
+    sources: AuthorityProjectionSources,
 ) {
     if authority.is_none() {
         return;
@@ -455,17 +554,20 @@ fn publish_authority_replicas(
         // for that boundary keeps the projection and CommandResult on one sequence.
         return;
     }
-    let mut visible = BTreeSet::new();
+    let mut desired_units = BTreeMap::new();
     let mut projected_units = sources.units.iter().collect::<Vec<_>>();
     projected_units.sort_by_key(|(unit, ..)| **unit);
 
-    for (unit, faction, standing, moving, owner, downed, turn, lattice) in projected_units {
+    for (unit, archetype, faction, standing, moving, owner, downed, turn, lattice) in
+        projected_units
+    {
         if *faction == Faction::Hostile && lattice_knowledge.view(Faction::Player, *unit).is_none()
         {
             continue;
         }
         let Some(replica) = unit_replica(
             *unit,
+            archetype,
             *faction,
             standing,
             moving,
@@ -481,34 +583,15 @@ fn publish_authority_replicas(
             error!("unit {unit:?} exceeded a multiplayer projection bound");
             continue;
         };
-        visible.insert(*unit);
-        match entities.units.get(unit).copied() {
-            Some(entity) => {
-                if let Ok(mut current) = sources.unit_replicas.get_mut(entity) {
-                    if *current != replica {
-                        *current = replica;
-                    }
-                }
-            }
-            None => {
-                let entity = commands.spawn((Replicated, replica)).id();
-                entities.units.insert(*unit, entity);
-            }
-        }
+        desired_units.insert(*unit, replica);
     }
 
     let stale = entities
         .units
         .keys()
         .copied()
-        .filter(|unit| !visible.contains(unit))
+        .filter(|unit| !desired_units.contains_key(unit))
         .collect::<Vec<_>>();
-    for unit in stale {
-        if let Some(entity) = entities.units.remove(&unit) {
-            commands.entity(entity).despawn();
-        }
-    }
-
     let initiative = match BoundedVec::<_, MAX_SESSION_UNITS>::new(order.order().to_vec()) {
         Ok(initiative) => initiative,
         Err(_) => {
@@ -516,7 +599,7 @@ fn publish_authority_replicas(
             return;
         }
     };
-    let session = SessionReplica {
+    let mut session = SessionReplica {
         authority_sequence: sequencer.last_sequence(),
         mode: *mode.get(),
         pause: pause.as_deref().map_or(Pause(false), |pause| *pause.get()),
@@ -529,12 +612,62 @@ fn publish_authority_replicas(
             EncounterOutcome::Defeat => SessionOutcome::Defeat,
         }),
     };
+
+    let units_changed = !stale.is_empty()
+        || desired_units.iter().any(|(unit, desired)| {
+            entities
+                .units
+                .get(unit)
+                .and_then(|entity| sources.unit_replicas.get(*entity).ok())
+                .is_none_or(|current| current != desired)
+        });
+    let current_session = entities
+        .session
+        .and_then(|entity| sources.session_replicas.get(entity).ok());
+    let session_facts_changed =
+        current_session.is_none_or(|current| !session_replica_facts_match(current, &session));
+    let domain_changed = units_changed || session_facts_changed;
+    let Ok(sequence) = authority_projection_sequence(
+        &mut sequencer,
+        current_session.map(|current| current.authority_sequence),
+        domain_changed,
+    ) else {
+        error!("authority sequence could not represent the next projection boundary");
+        return;
+    };
+    session.authority_sequence = sequence;
+
+    for (unit, replica) in desired_units {
+        match entities.units.get(&unit).copied() {
+            Some(entity) => {
+                if sources
+                    .unit_replicas
+                    .get(entity)
+                    .is_ok_and(|current| current != &replica)
+                {
+                    commands.entity(entity).insert(replica);
+                }
+            }
+            None => {
+                let entity = commands.spawn((Replicated, replica)).id();
+                entities.units.insert(unit, entity);
+            }
+        }
+    }
+    for unit in stale {
+        if let Some(entity) = entities.units.remove(&unit) {
+            commands.entity(entity).despawn();
+        }
+    }
+
     match entities.session {
         Some(entity) => {
-            if let Ok(mut current) = sources.session_replicas.get_mut(entity) {
-                if *current != session {
-                    *current = session;
-                }
+            if sources
+                .session_replicas
+                .get(entity)
+                .is_ok_and(|current| current != &session)
+            {
+                commands.entity(entity).insert(session);
             }
         }
         None => {
@@ -543,12 +676,47 @@ fn publish_authority_replicas(
     }
 }
 
+fn session_replica_facts_match(current: &SessionReplica, desired: &SessionReplica) -> bool {
+    let mut comparable = desired.clone();
+    comparable.authority_sequence = current.authority_sequence;
+    current == &comparable
+}
+
+fn authority_projection_sequence(
+    sequencer: &mut CommandSequencer,
+    published: Option<AuthoritySequence>,
+    domain_changed: bool,
+) -> Result<AuthoritySequence, ProjectionSequenceError> {
+    let Some(published) = published else {
+        return Ok(sequencer.last_sequence());
+    };
+    if sequencer.last_sequence() < published {
+        return Err(ProjectionSequenceError::PublishedAhead);
+    }
+    if domain_changed && sequencer.last_sequence() == published {
+        sequencer
+            .advance_system_boundary()
+            .map_err(ProjectionSequenceError::Sequencer)
+    } else {
+        // A command result may already have allocated the sequence for these facts.
+        // Reusing it keeps CommandResult and its first projection on one boundary.
+        Ok(sequencer.last_sequence())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProjectionSequenceError {
+    PublishedAhead,
+    Sequencer(SequencerError),
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "a unit replica is the deliberate flat boundary across these exact facts"
 )]
 fn unit_replica(
     unit: UnitId,
+    archetype: &Archetype,
     faction: Faction,
     standing: &StandsOn,
     moving: Option<&MovingTo>,
@@ -586,6 +754,7 @@ fn unit_replica(
     .ok()?;
     Some(UnitReplica {
         unit,
+        archetype: ArchetypeIdentityV1::new(archetype.0.clone()).ok()?,
         faction,
         position: standing.0.pos,
         motion,
@@ -601,24 +770,137 @@ fn unit_replica(
     })
 }
 
+fn capture_replica_baseline(
+    mut baselines: MessageReader<ApplyReplicaBaseline>,
+    mut state: ResMut<ReplicaBaselineState>,
+) {
+    for baseline in baselines.read() {
+        state.active = Some(baseline.clone());
+        state.apply_active_once = true;
+        state.apply_all_network_once = false;
+    }
+}
+
+fn release_replica_baseline_when_caught_up(
+    network: Query<&SessionReplica>,
+    mut state: ResMut<ReplicaBaselineState>,
+) {
+    let Some(baseline_sequence) = state
+        .active
+        .as_ref()
+        .map(|baseline| baseline.session.authority_sequence)
+    else {
+        return;
+    };
+    let caught_up = network.iter().any(|replica| {
+        replica.validate().is_ok() && replica.authority_sequence >= baseline_sequence
+    });
+    if caught_up {
+        state.active = None;
+        state.apply_active_once = false;
+        state.apply_all_network_once = true;
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "replica materialization explicitly joins presentation assets, world surfaces, and stable unit identity"
+)]
+fn materialize_missing_unit_replicas(
+    mut commands: Commands,
+    assets: Res<GameAssets>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    palette: Res<ArtPalette>,
+    settings: Res<PlayerSettings>,
+    mut allocator: ResMut<UnitAllocator>,
+    mut registry: ResMut<UnitRegistry>,
+    mut party: ResMut<Party>,
+    state: Res<ReplicaBaselineState>,
+    network: Query<&UnitReplica>,
+    tiles: Query<(&TilePos, &HexSpan), With<HexTile>>,
+) {
+    let surfaces = tiles
+        .iter()
+        .map(|(position, span)| (*position, *span))
+        .collect::<BTreeMap<_, _>>();
+    let projected = state.active.as_ref().map_or_else(
+        || network.iter().collect::<Vec<_>>(),
+        |baseline| baseline.units.values().collect::<Vec<_>>(),
+    );
+    for replica in projected {
+        if let Err(error) = replica.validate() {
+            error!("refusing to materialize invalid unit replica: {error}");
+            continue;
+        }
+        if registry.entity_of(replica.unit).is_some() {
+            continue;
+        }
+        let Some(span) = surfaces.get(&replica.position).copied() else {
+            error!(
+                "unit replica names an absent map surface: {:?}",
+                replica.position
+            );
+            continue;
+        };
+        let spawn = ReplicaUnitSpawn {
+            id: replica.unit,
+            standing: hex_units::Standing {
+                pos: replica.position,
+                span,
+            },
+            faction: replica.faction,
+            owner: replica.owner,
+            archetype: replica.archetype.as_str(),
+            lattice: replica.lattice.clone(),
+        };
+        if let Err(error) = spawn_replica_unit(
+            &mut commands,
+            &assets,
+            &mut materials,
+            &palette,
+            &settings,
+            &mut allocator,
+            &mut registry,
+            &mut party,
+            spawn,
+        ) {
+            error!("could not materialize disclosed unit replica: {error}");
+        }
+    }
+}
+
 fn apply_unit_replicas(
     mut commands: Commands,
     registry: Res<UnitRegistry>,
-    replicas: Query<&UnitReplica, Changed<UnitReplica>>,
+    state: Res<ReplicaBaselineState>,
+    network: Query<&UnitReplica>,
+    changed: Query<&UnitReplica, Changed<UnitReplica>>,
     tiles: Query<(&TilePos, &HexSpan), With<HexTile>>,
     mut units: Query<(
         Entity,
+        &Faction,
+        &Archetype,
         &mut StandsOn,
         &mut ControlOwner,
         &mut Transform,
         Option<&mut LatticeState>,
     )>,
 ) {
+    let replicas = if let Some(baseline) = &state.active {
+        if !state.apply_active_once {
+            return;
+        }
+        baseline.units.values().cloned().collect::<Vec<_>>()
+    } else if state.apply_all_network_once {
+        network.iter().cloned().collect::<Vec<_>>()
+    } else {
+        changed.iter().cloned().collect::<Vec<_>>()
+    };
     let surfaces = tiles
         .iter()
         .map(|(position, span)| (*position, *span))
         .collect::<BTreeMap<_, _>>();
-    for replica in &replicas {
+    for replica in replicas {
         if let Err(error) = replica.validate() {
             error!("refusing invalid unit replica: {error}");
             continue;
@@ -626,10 +908,18 @@ fn apply_unit_replicas(
         let Some(entity) = registry.entity_of(replica.unit) else {
             continue;
         };
-        let Ok((entity, mut standing, mut owner, mut transform, lattice)) = units.get_mut(entity)
+        let Ok((entity, faction, archetype, mut standing, mut owner, mut transform, lattice)) =
+            units.get_mut(entity)
         else {
             continue;
         };
+        if *faction != replica.faction || archetype.0 != replica.archetype.as_str() {
+            error!(
+                "refusing replica identity change for stable unit {:?}",
+                replica.unit
+            );
+            continue;
+        }
         let Some(span) = surfaces.get(&replica.position).copied() else {
             error!(
                 "unit replica names an absent map surface: {:?}",
@@ -649,9 +939,7 @@ fn apply_unit_replicas(
                 commands.entity(entity).insert(expected.clone());
             }
             (None, Some(_)) if replica.faction == Faction::Hostile => {
-                commands
-                    .entity(entity)
-                    .remove::<(LatticeSpec, LatticeState)>();
+                commands.entity(entity).remove::<LatticeState>();
             }
             (None, _) => {}
         }
@@ -715,16 +1003,24 @@ fn apply_unit_replicas(
 
 fn apply_effect_replicas(
     changed: Query<(), Changed<UnitReplica>>,
-    replicas: Query<&UnitReplica>,
+    network: Query<&UnitReplica>,
     mut removed: RemovedComponents<UnitReplica>,
+    state: Res<ReplicaBaselineState>,
     mut effects: ResMut<PersistentEffects>,
 ) {
     let replica_removed = removed.read().next().is_some();
-    if changed.is_empty() && !replica_removed {
+    let apply_baseline = state.active.is_some() && state.apply_active_once;
+    let apply_network = state.active.is_none()
+        && (state.apply_all_network_once || !changed.is_empty() || replica_removed);
+    if !apply_baseline && !apply_network {
         return;
     }
     let mut projected = Vec::new();
-    for replica in &replicas {
+    let replicas = state.active.as_ref().map_or_else(
+        || network.iter().collect::<Vec<_>>(),
+        |baseline| baseline.units.values().collect::<Vec<_>>(),
+    );
+    for replica in replicas {
         if let Err(error) = replica.validate() {
             error!("refusing effects from invalid unit replica: {error}");
             return;
@@ -745,14 +1041,23 @@ fn apply_effect_replicas(
 }
 
 fn apply_session_replica(
-    replicas: Query<&SessionReplica, Changed<SessionReplica>>,
+    network: Query<&SessionReplica>,
+    changed: Query<&SessionReplica, Changed<SessionReplica>>,
+    state: Res<ReplicaBaselineState>,
     mode: Option<ResMut<NextState<Mode>>>,
     pause: Option<ResMut<NextState<Pause>>>,
     mut order: ResMut<TurnOrder>,
     mut pending: ResMut<PendingDecision>,
     mut resolution: ResMut<EncounterResolution>,
 ) {
-    let Some(replica) = replicas.iter().next() else {
+    let replica = if let Some(baseline) = &state.active {
+        state.apply_active_once.then(|| baseline.session.clone())
+    } else if state.apply_all_network_once {
+        newest_valid_session(network.iter())
+    } else {
+        newest_valid_session(changed.iter())
+    };
+    let Some(replica) = replica else {
         return;
     };
     if let Err(error) = replica.validate() {
@@ -777,23 +1082,56 @@ fn apply_session_replica(
     });
 }
 
-fn conceal_unprojected_hostiles(
+fn newest_valid_session<'a>(
+    replicas: impl Iterator<Item = &'a SessionReplica>,
+) -> Option<SessionReplica> {
+    replicas
+        .filter_map(|replica| match replica.validate() {
+            Ok(()) => Some(replica.clone()),
+            Err(error) => {
+                error!("refusing invalid session replica: {error}");
+                None
+            }
+        })
+        .max_by_key(|replica| replica.authority_sequence)
+}
+
+fn withdraw_unprojected_hostiles(
     mut commands: Commands,
-    replicas: Query<&UnitReplica>,
+    state: Res<ReplicaBaselineState>,
+    network: Query<&UnitReplica>,
+    mut registry: ResMut<UnitRegistry>,
     units: Query<(Entity, &UnitId, &Faction)>,
 ) {
+    let replicas = state.active.as_ref().map_or_else(
+        || network.iter().collect::<Vec<_>>(),
+        |baseline| baseline.units.values().collect::<Vec<_>>(),
+    );
     let projected = replicas
-        .iter()
+        .into_iter()
+        .filter(|replica| replica.validate().is_ok())
         .map(|replica| replica.unit)
         .collect::<BTreeSet<_>>();
     for (entity, unit, faction) in &units {
         if *faction == Faction::Hostile && !projected.contains(unit) {
-            commands
-                .entity(entity)
-                .remove::<(LatticeSpec, LatticeState)>()
-                .insert(Visibility::Hidden);
+            let registered = registry.unregister(*unit);
+            if registered.is_some_and(|registered| registered != entity) {
+                error!("unit registry disagreed with hostile replica withdrawal for {unit:?}");
+            }
+            commands.entity(entity).despawn();
         }
     }
+}
+
+fn finish_replica_baseline_transition(mut state: ResMut<ReplicaBaselineState>) {
+    if state.apply_active_once || state.apply_all_network_once {
+        state.apply_active_once = false;
+        state.apply_all_network_once = false;
+    }
+}
+
+fn clear_replica_baseline(mut state: ResMut<ReplicaBaselineState>) {
+    *state = ReplicaBaselineState::default();
 }
 
 fn close_gameplay_authority_requests(
@@ -840,6 +1178,7 @@ fn despawn_authority_replicas(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hex_assets::{PaletteSwatch, SrgbColor, SwatchId};
     use hex_core::{EffectEnd, EffectPayload, PersistentEffect};
 
     fn router_app(role: SimulationRole) -> App {
@@ -851,6 +1190,183 @@ mod tests {
             .add_message::<GameCommandRequest>()
             .add_systems(Update, route_direct_human_commands);
         app
+    }
+
+    fn session_replica(sequence: u64) -> SessionReplica {
+        SessionReplica {
+            authority_sequence: AuthoritySequence(sequence),
+            mode: Mode::Exploring,
+            pause: Pause(false),
+            initiative: BoundedVec::default(),
+            active_turn: None,
+            round: 0,
+            pending_decision: PendingDecision::default(),
+            outcome: None,
+        }
+    }
+
+    fn bounded_unit(unit: UnitId, faction: Faction) -> UnitReplica {
+        UnitReplica {
+            unit,
+            archetype: ArchetypeIdentityV1::new(match faction {
+                Faction::Player => "player",
+                Faction::Hostile => "wolf",
+            })
+            .expect("test archetype should be bounded"),
+            faction,
+            position: TilePos::ORIGIN,
+            motion: None,
+            owner: ControlOwner(match faction {
+                Faction::Player => PlayerSeat::HOST,
+                Faction::Hostile => PlayerSeat::AI,
+            }),
+            lattice: None,
+            downed: false,
+            turn: None,
+            effects: BoundedVec::default(),
+        }
+    }
+
+    #[test]
+    fn projection_sequences_advance_for_system_facts_and_reuse_human_results() {
+        let mut system = CommandSequencer::default();
+        assert_eq!(
+            authority_projection_sequence(&mut system, Some(AuthoritySequence(0)), true),
+            Ok(AuthoritySequence(1))
+        );
+
+        let mut human = CommandSequencer::default();
+        let request = CommandRequestId(7);
+        assert!(human.begin(PlayerSeat::HOST, request).is_ok());
+        let result = human
+            .finish(PlayerSeat::HOST, request, CommandOutcome::Accepted)
+            .expect("begun command should finalize");
+        assert_eq!(result.authority_sequence, AuthoritySequence(1));
+        assert_eq!(
+            authority_projection_sequence(&mut human, Some(AuthoritySequence(0)), true),
+            Ok(AuthoritySequence(1)),
+            "the projection must share the accepted command boundary"
+        );
+    }
+
+    #[test]
+    fn reconnect_baseline_is_canonical_and_held_until_network_catches_up() {
+        let unit = bounded_unit(UnitId(4), Faction::Player);
+        assert!(matches!(
+            ApplyReplicaBaseline::new([unit.clone(), unit], session_replica(5),),
+            Err(ReplicaBaselineError::DuplicateUnit(UnitId(4)))
+        ));
+
+        let baseline = ApplyReplicaBaseline::new(
+            [bounded_unit(UnitId(4), Faction::Player)],
+            session_replica(5),
+        )
+        .expect("valid reconnect baseline should canonicalize");
+        let mut app = App::new();
+        app.init_resource::<ReplicaBaselineState>()
+            .add_message::<ApplyReplicaBaseline>()
+            .add_systems(
+                Update,
+                (
+                    capture_replica_baseline,
+                    release_replica_baseline_when_caught_up,
+                )
+                    .chain(),
+            );
+        app.world_mut()
+            .resource_mut::<Messages<ApplyReplicaBaseline>>()
+            .write(baseline);
+        app.update();
+        assert!(app
+            .world()
+            .resource::<ReplicaBaselineState>()
+            .active
+            .is_some());
+
+        let session_entity = app.world_mut().spawn(session_replica(4)).id();
+        app.update();
+        assert!(app
+            .world()
+            .resource::<ReplicaBaselineState>()
+            .active
+            .is_some());
+
+        app.world_mut()
+            .entity_mut(session_entity)
+            .insert(session_replica(5));
+        app.update();
+        let state = app.world().resource::<ReplicaBaselineState>();
+        assert!(state.active.is_none());
+        assert!(state.apply_all_network_once);
+    }
+
+    #[test]
+    fn disclosed_hostile_materializes_and_withdraws_as_a_complete_actor() {
+        let swatch_id =
+            SwatchId::new("unit/hostile").expect("test hostile swatch identity should be valid");
+        let swatch = PaletteSwatch::new(
+            "Hostile",
+            SrgbColor::new(0.8, 0.2, 0.2).expect("test color should be valid"),
+            BTreeSet::from(["test".to_owned()]),
+        )
+        .expect("test hostile swatch should be valid");
+        let palette = ArtPalette::new(BTreeMap::from([(swatch_id, swatch)]))
+            .expect("test palette should be valid");
+        let mut app = App::new();
+        app.insert_resource(GameAssets {
+            hex_tile: Handle::default(),
+            player_pieces: [Handle::default(), Handle::default()],
+        })
+        .insert_resource(Assets::<StandardMaterial>::default())
+        .insert_resource(palette)
+        .insert_resource(PlayerSettings {
+            scale: 1.0,
+            speed: 1.0,
+        })
+        .init_resource::<UnitAllocator>()
+        .init_resource::<UnitRegistry>()
+        .init_resource::<Party>()
+        .init_resource::<ReplicaBaselineState>()
+        .add_systems(
+            Update,
+            (
+                materialize_missing_unit_replicas,
+                withdraw_unprojected_hostiles,
+            )
+                .chain(),
+        );
+        app.world_mut()
+            .spawn((HexTile, TilePos::ORIGIN, HexSpan::new(0.0, 1.0)));
+        let projection = app
+            .world_mut()
+            .spawn(bounded_unit(UnitId(42), Faction::Hostile))
+            .id();
+
+        app.update();
+
+        let actor = app
+            .world()
+            .resource::<UnitRegistry>()
+            .entity_of(UnitId(42))
+            .expect("disclosed hostile should materialize");
+        assert_eq!(app.world().get::<Faction>(actor), Some(&Faction::Hostile));
+        assert_eq!(
+            app.world()
+                .get::<Archetype>(actor)
+                .map(|value| value.0.as_str()),
+            Some("wolf")
+        );
+        assert!(app.world().get::<LatticeState>(actor).is_none());
+
+        app.world_mut().entity_mut(projection).despawn();
+        app.update();
+
+        assert!(app
+            .world()
+            .resource::<UnitRegistry>()
+            .entity_of(UnitId(42))
+            .is_none());
+        assert!(app.world().get_entity(actor).is_err());
     }
 
     #[test]
@@ -1095,11 +1611,14 @@ mod tests {
         assert!(bounded.is_ok());
         let mut app = App::new();
         app.init_resource::<PersistentEffects>()
+            .init_resource::<ReplicaBaselineState>()
             .add_systems(Update, apply_effect_replicas);
         let replica = app
             .world_mut()
             .spawn(UnitReplica {
                 unit: UnitId(3),
+                archetype: ArchetypeIdentityV1::new("player")
+                    .expect("test archetype should be bounded"),
                 faction: Faction::Player,
                 position: TilePos::ORIGIN,
                 motion: None,
@@ -1228,6 +1747,7 @@ mod tests {
         });
         let replica = unit_replica(
             UnitId(9),
+            &Archetype("wolf".to_owned()),
             Faction::Hostile,
             &standing,
             None,
