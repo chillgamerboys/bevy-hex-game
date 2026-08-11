@@ -110,24 +110,25 @@ pub struct PreparedDirectJoin {
     reconnect_binding: ReconnectEndpointBinding,
 }
 
+/// Prepared pinned direct client reconnection.
+///
+/// Unlike [`PreparedDirectJoin`], this transport preparation needs no lobby invite:
+/// the ordered `ClientHello` authenticates with the private rotating reconnect
+/// credential. The persisted endpoint binding still supplies the exact host endpoint,
+/// SPKI pin, and verified certificate lifetime.
+pub struct PreparedDirectReconnect {
+    config: ClientConfig,
+    target: String,
+    reconnect_binding: ReconnectEndpointBinding,
+}
+
 impl PreparedDirectJoin {
     /// Parses a share code and configures mandatory SPKI validation.
     pub fn new(connection_code: &DirectConnectionCode) -> Result<Self, DirectTransportError> {
-        let verifier = Arc::new(SpkiPinVerifier::with_expiry(
+        let config = pinned_client_config(
             connection_code.certificate_fingerprint,
             connection_code.certificate_expires_unix_seconds,
-        ));
-        let tls_config = tls::client::build_default_tls_config(
-            Arc::new(rustls::RootCertStore::empty()),
-            Some(verifier),
-        );
-        let config = ClientConfig::builder()
-            .with_bind_default()
-            .with_custom_tls(tls_config)
-            .keep_alive_interval(Some(KEEP_ALIVE))
-            .max_idle_timeout(Some(IDLE_TIMEOUT))
-            .map_err(|_error| DirectTransportError::InvalidIdleTimeout)?
-            .build();
+        )?;
         Ok(Self {
             config,
             target: direct_target(&connection_code.endpoint),
@@ -149,10 +150,44 @@ impl PreparedDirectJoin {
 
     /// Creates the outgoing WebTransport session and marks it as Replicon's client.
     pub fn connect(self, world: &mut World) -> Entity {
-        world.insert_resource(self.reconnect_binding);
-        let client = world.spawn(AeronetRepliconClient).id();
-        WebTransportClient::connect(self.config, self.target).apply(world.entity_mut(client));
-        client
+        connect_prepared_client(world, self.config, self.target, self.reconnect_binding)
+    }
+}
+
+impl PreparedDirectReconnect {
+    /// Configures mandatory SPKI validation from one persisted session binding.
+    pub fn new(endpoint_binding: &ReconnectEndpointBinding) -> Result<Self, DirectTransportError> {
+        let reconnect_binding = ReconnectEndpointBinding::new(
+            endpoint_binding.endpoint.clone(),
+            endpoint_binding.certificate_fingerprint,
+            endpoint_binding.certificate_expires_unix_seconds,
+        )
+        .map_err(|_error| DirectTransportError::InvalidCertificateIdentity)?;
+        let config = pinned_client_config(
+            reconnect_binding.certificate_fingerprint,
+            reconnect_binding.certificate_expires_unix_seconds,
+        )?;
+        Ok(Self {
+            target: direct_target(&reconnect_binding.endpoint),
+            config,
+            reconnect_binding,
+        })
+    }
+
+    /// Creates the outgoing WebTransport session and marks it as Replicon's client.
+    pub fn connect(self, world: &mut World) -> Entity {
+        connect_prepared_client(world, self.config, self.target, self.reconnect_binding)
+    }
+}
+
+impl fmt::Debug for PreparedDirectReconnect {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PreparedDirectReconnect")
+            .field("target", &self.target)
+            .field("reconnect_binding", &self.reconnect_binding)
+            .field("config", &"[PINNED WEBTRANSPORT CLIENT CONFIG]")
+            .finish()
     }
 }
 
@@ -166,6 +201,40 @@ impl fmt::Debug for PreparedDirectJoin {
             .field("config", &"[PINNED WEBTRANSPORT CLIENT CONFIG]")
             .finish()
     }
+}
+
+fn pinned_client_config(
+    certificate_fingerprint: CertificateFingerprint,
+    certificate_expires_unix_seconds: u64,
+) -> Result<ClientConfig, DirectTransportError> {
+    let verifier = Arc::new(SpkiPinVerifier::with_expiry(
+        certificate_fingerprint,
+        certificate_expires_unix_seconds,
+    ));
+    let tls_config = tls::client::build_default_tls_config(
+        Arc::new(rustls::RootCertStore::empty()),
+        Some(verifier),
+    );
+    let config = ClientConfig::builder()
+        .with_bind_default()
+        .with_custom_tls(tls_config)
+        .keep_alive_interval(Some(KEEP_ALIVE))
+        .max_idle_timeout(Some(IDLE_TIMEOUT))
+        .map_err(|_error| DirectTransportError::InvalidIdleTimeout)?
+        .build();
+    Ok(config)
+}
+
+fn connect_prepared_client(
+    world: &mut World,
+    config: ClientConfig,
+    target: String,
+    reconnect_binding: ReconnectEndpointBinding,
+) -> Entity {
+    world.insert_resource(reconnect_binding);
+    let client = world.spawn(AeronetRepliconClient).id();
+    WebTransportClient::connect(config, target).apply(world.entity_mut(client));
+    client
 }
 
 /// Rustls verifier for one exact SHA-256 `SubjectPublicKeyInfo` pin.
@@ -455,6 +524,39 @@ mod tests {
         assert!(PreparedDirectJoin::new(&code).is_ok());
         assert!(format!("{prepared:?}").contains("[WEBTRANSPORT SERVER CONFIG]"));
         assert!(!format!("{prepared:?}").contains("07070707"));
+    }
+
+    #[test]
+    fn reconnect_preparation_uses_only_the_persisted_pinned_endpoint() {
+        let binding = ReconnectEndpointBinding::new(
+            DirectEndpoint::new("127.0.0.1", DEFAULT_DIRECT_PORT).expect("valid loopback endpoint"),
+            CertificateFingerprint::from_bytes([9; CertificateFingerprint::BYTE_LENGTH]),
+            2_000_000_000,
+        )
+        .expect("valid reconnect endpoint binding");
+
+        let prepared = PreparedDirectReconnect::new(&binding)
+            .expect("persisted binding should prepare a pinned reconnect");
+
+        assert!(format!("{prepared:?}").contains("127.0.0.1:7777"));
+        assert!(format!("{prepared:?}").contains("[PINNED WEBTRANSPORT CLIENT CONFIG]"));
+    }
+
+    #[test]
+    fn reconnect_preparation_revalidates_persisted_certificate_lifetime() {
+        let invalid = ReconnectEndpointBinding {
+            endpoint: DirectEndpoint::new("127.0.0.1", DEFAULT_DIRECT_PORT)
+                .expect("valid loopback endpoint"),
+            certificate_fingerprint: CertificateFingerprint::from_bytes(
+                [9; CertificateFingerprint::BYTE_LENGTH],
+            ),
+            certificate_expires_unix_seconds: 0,
+        };
+
+        assert!(matches!(
+            PreparedDirectReconnect::new(&invalid),
+            Err(DirectTransportError::InvalidCertificateIdentity)
+        ));
     }
 
     #[test]
