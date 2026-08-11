@@ -34,8 +34,8 @@ pub(super) fn plugin(app: &mut App) {
             Update,
             (
                 refresh_screen.in_set(UiSystems::Render),
-                emit_controls,
-                emit_text_changes,
+                emit_controls.in_set(UiSystems::EmitIntents),
+                emit_text_changes.in_set(UiSystems::EmitIntents),
             )
                 .run_if(in_state(Screen::Multiplayer)),
         )
@@ -46,7 +46,10 @@ pub(super) fn plugin(app: &mut App) {
         .add_systems(OnEnter(Screen::Gameplay), spawn_local_menu)
         .add_systems(
             Update,
-            (refresh_local_menu.in_set(UiSystems::Render), emit_controls)
+            (
+                refresh_local_menu.in_set(UiSystems::Render),
+                emit_controls.in_set(UiSystems::EmitIntents),
+            )
                 .run_if(in_state(Screen::Gameplay)),
         );
 }
@@ -745,6 +748,39 @@ fn refresh_local_menu(
 mod tests {
     use super::*;
 
+    #[cfg(feature = "test-support")]
+    #[derive(Resource, Default)]
+    struct MultiplayerIntentLog(Vec<MultiplayerIntent>);
+
+    #[cfg(feature = "test-support")]
+    #[derive(Resource, Default)]
+    struct MultiplayerPointerActivation(Option<Entity>);
+
+    #[cfg(feature = "test-support")]
+    fn apply_multiplayer_pointer_activation(
+        mut request: ResMut<MultiplayerPointerActivation>,
+        mut interactions: Query<&mut Interaction, With<Button>>,
+    ) {
+        let Some(entity) = request.0.take() else {
+            return;
+        };
+        *interactions
+            .get_mut(entity)
+            .expect("the requested multiplayer target remains interactive") = Interaction::Pressed;
+    }
+
+    #[cfg(feature = "test-support")]
+    fn record_multiplayer_intents(
+        mut intents: MessageReader<UiIntent>,
+        mut log: ResMut<MultiplayerIntentLog>,
+    ) {
+        for intent in intents.read() {
+            if let UiIntent::Multiplayer(intent) = intent {
+                log.0.push(intent.clone());
+            }
+        }
+    }
+
     #[test]
     fn connection_copy_distinguishes_all_reservation_states() {
         assert_eq!(
@@ -864,6 +900,56 @@ mod tests {
             .query::<&Name>()
             .iter(app.world())
             .all(|name| name.as_str() != "Copy Connection Code"));
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn host_connection_code_copy_emits_its_typed_intent_in_the_shared_ui_phase() {
+        let mut app = App::new();
+        app.add_plugins(crate::test_support::HeadlessUiPlugin::new(1280, 720))
+            .init_resource::<MultiplayerIntentLog>()
+            .init_resource::<MultiplayerPointerActivation>()
+            .add_systems(
+                Update,
+                (
+                    apply_multiplayer_pointer_activation.before(UiSystems::EmitIntents),
+                    record_multiplayer_intents.after(UiSystems::EmitIntents),
+                ),
+            );
+        app.world_mut().insert_resource(MultiplayerView {
+            route: MultiplayerRoute::Lobby,
+            role: Some(MultiplayerRole::Host),
+            local_seat: Some(PlayerSeat::HOST),
+            share_code: Some(SensitiveText::new("HEX1.private-review-code")),
+            ..Default::default()
+        });
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Multiplayer);
+        for _ in 0..8 {
+            app.update();
+        }
+
+        let copy = app
+            .world_mut()
+            .query::<(Entity, &Name, &MultiplayerControl)>()
+            .iter(app.world())
+            .find_map(|(entity, name, control)| {
+                (name.as_str() == "Copy Connection Code"
+                    && control.0 == MultiplayerIntent::CopyConnectionCode)
+                    .then_some(entity)
+            })
+            .expect("the host lobby exposes its copy action");
+        app.world_mut()
+            .resource_mut::<MultiplayerPointerActivation>()
+            .0 = Some(copy);
+
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<MultiplayerIntentLog>().0,
+            [MultiplayerIntent::CopyConnectionCode]
+        );
     }
 
     #[cfg(feature = "test-support")]
