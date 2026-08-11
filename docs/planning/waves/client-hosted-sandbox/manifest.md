@@ -431,7 +431,7 @@ lanes:
     # without hostile lattice disclosure. Static presentation and human experience
     # evidence remain deferred to the exact combined wave head; the user supplied an
     # additional native L3-candidate visual sanity PASS without a retained frame.
-    state: in-review
+    state: merged-to-wave
     pr: 200
 
   - id: L4
