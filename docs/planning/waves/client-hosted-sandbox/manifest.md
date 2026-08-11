@@ -527,7 +527,7 @@ Post-L3 coordinator injection territory (outside every lane row):
 
 | Authority | Exact regions | Composed end state |
 |---|---|---|
-| shared | `crates/hex_multiplayer/src/control.rs#host-map-ready-action`; `crates/hex_multiplayer/src/auth.rs#loading-and-host-readiness`; `crates/hex_multiplayer/src/replica.rs#bounded-archetype-identity`; `crates/hex_multiplayer/src/sequence.rs#system-boundary-sequence`; `crates/hex_multiplayer/src/protocol.rs#registration-order-and-hash`; corresponding `hex_multiplayer` tests | Loading has no implicit ready peer; every authoritative projection/delta owns a unique monotonic sequence; visible replicas carry enough shipped identity to materialize and no undisclosed entity exists |
+| shared | `crates/hex_multiplayer/src/control.rs#host-map-ready-action`; `crates/hex_multiplayer/src/auth.rs#loading-and-host-readiness`; `crates/hex_multiplayer/src/replica.rs#bounded-archetype-identity`; `crates/hex_multiplayer/src/sequence.rs#system-boundary-sequence`; `crates/hex_multiplayer/src/protocol.rs#registration-order-and-hash`; corresponding `hex_multiplayer` tests; compatibility-only `UnitReplica` initializer in `crates/hex_perception/tests/multiplayer_disclosure.rs` | Loading has no implicit ready peer; every authoritative projection/delta owns a unique monotonic sequence; visible replicas carry enough shipped identity to materialize and no undisclosed entity exists |
 | gameplay | `crates/hex_units/src/units.rs#replica-materialization-and-unregister`; `crates/hex_units/src/lib.rs#replica-lifecycle-export`; `crates/hex_game/src/multiplayer_gameplay.rs#replica-materialization-withdrawal-and-baseline`; corresponding unit/app tests | Replica actors are presentation/domain shells only, missing disclosed actors are created, withdrawal fully removes hostile shells, and reconnect baseline application follows world restore |
 
 L4 remains the sole owner of host/client loading orchestration, manifest construction,
@@ -723,6 +723,22 @@ amend this manifest after owner review.
   gate without relying on unknown-path fallback, because it crosses generation,
   publication, multiplayer protocol, reconnect, and disclosure consumers. All 60 selector
   regression tests PASS, and the exact path reports every concern with no unknown files.
+- `9d2b21b5aeb3637980047eca37a1e1d8b165239e` — post-L3 shared injection. Loading now
+  clears every readiness report and requires the host to submit the same real generated
+  world fingerprint as guests; visible unit replicas carry a bounded shipped archetype;
+  and non-command authority changes can allocate one ordered system boundary. The protocol
+  hash advances to `15623700813206168218`. Focused evidence: 51 multiplayer unit tests,
+  the host-plus-six-client direct-session contract, strict package Clippy, warning-denied
+  rustdoc, formatting, and diff hygiene all PASS.
+- `683b0be865b35486f68c88740a3493ac346ff2ab` — post-L3 gameplay injection. Replica
+  clients materialize only disclosure-safe actor shells, fully unregister and despawn
+  withdrawn hostiles, apply a canonical reconnect baseline until the ordered network view
+  catches up, and allocate/reuse authority projection sequences at the correct system or
+  human-command boundary. Focused evidence: 119 `hex_units` tests, 324 `hex_game` tests,
+  61 `hex_perception` unit tests plus all 3 multiplayer-disclosure contracts, strict
+  all-target/all-feature Clippy, warning-denied rustdoc, all-feature package compilation,
+  formatting, and diff hygiene all PASS. Manual benchmark-only tests remained ignored
+  under their existing classifications.
 
 ## Close-out
 
