@@ -249,6 +249,43 @@ closure cannot delete the retained session. Host/client protocol registration re
 deterministic order and its golden hash changes with this amendment. Ratifier: user under
 the temporary world-owner delegation; recorded and implemented by coordinator.
 
+### 2026-08-10 — post-L3 live-session composition seam
+
+The exact merged L3 audit disproved four placeholder assumptions in the dispatched L4
+branch: no producer creates its prepared-host handoff, `LobbyPhase::Loading` does not
+start either peer's real map load, reconnect snapshots/deltas are registered but have no
+application adapter, and a replica cannot materialize a newly disclosed hostile from the
+current `UnitReplica`. A fifth shared defect marks the host map-ready before a regenerated
+world has actually been verified. These are composition blockers, not new product scope.
+
+Before refreshing L4, the coordinator owns two explicit injections:
+
+- **Shared protocol/runtime:** add a trusted local host-ready action so begin/retry only
+  enter Loading and clear readiness; activation requires an actual matching report from
+  the host and every claimed guest. Add a bounded stable archetype identity to
+  `UnitReplica`, and a monotonic system-boundary sequence operation for authoritative
+  AI/world changes that have no human `CommandResult`. Update deterministic registration,
+  validation, protocol hash, and host-plus-client contracts together.
+- **Gameplay replica lifecycle:** materialize missing disclosed actors from
+  `UnitReplica` without AI or private lattice authority; fully despawn and unregister a
+  hostile when visibility withdraws its replica; apply reconnect unit/session baselines
+  only after world restoration and then accept strictly newer projections/deltas.
+
+L4 keeps its existing row and consumes those seams. At the shipped Sandbox deployment
+boundary it builds `SessionManifestV1` from accepted content, frozen rules/seeds/roster,
+deployment, and `CurrentWorldSnapshotV1`; it starts real host/client Loading, reports the
+locally generated public fingerprint, and activates only from the canonical lobby. During
+active-session reconnect it sends one targeted `LiveSessionSnapshotV1` at a quiescent
+authority boundary, queues bounded later deltas, restores world then player knowledge and
+authorized replicas, and preserves an unrelated stored credential unless endpoint,
+SPKI, certificate expiry, and session binding authorize replacement/deletion. Initial
+launch still regenerates the static map locally and never transfers terrain.
+
+The injection may edit only the exact coordinator regions recorded in the ownership map
+below. It does not expand L4's `owns`, expose hostile knowledge, or move world export/import
+out of L3. Ratifier: coordinator, implementing the already user-approved post-L3 composed
+refresh and preserving locked decisions 4, 13, 14, and 16.
+
 ## Shared foundation
 
 Live contracts this wave builds on:
@@ -486,6 +523,17 @@ Coordinator-only hotspots:
 - Protocol registration order in `crates/hex_multiplayer/src/protocol.rs` after the
   foundation. Lanes consume it; additions require coordinator injection.
 
+Post-L3 coordinator injection territory (outside every lane row):
+
+| Authority | Exact regions | Composed end state |
+|---|---|---|
+| shared | `crates/hex_multiplayer/src/control.rs#host-map-ready-action`; `crates/hex_multiplayer/src/auth.rs#loading-and-host-readiness`; `crates/hex_multiplayer/src/replica.rs#bounded-archetype-identity`; `crates/hex_multiplayer/src/sequence.rs#system-boundary-sequence`; `crates/hex_multiplayer/src/protocol.rs#registration-order-and-hash`; corresponding `hex_multiplayer` tests | Loading has no implicit ready peer; every authoritative projection/delta owns a unique monotonic sequence; visible replicas carry enough shipped identity to materialize and no undisclosed entity exists |
+| gameplay | `crates/hex_units/src/units.rs#replica-materialization-and-unregister`; `crates/hex_units/src/lib.rs#replica-lifecycle-export`; `crates/hex_game/src/multiplayer_gameplay.rs#replica-materialization-withdrawal-and-baseline`; corresponding unit/app tests | Replica actors are presentation/domain shells only, missing disclosed actors are created, withdrawal fully removes hostile shells, and reconnect baseline application follows world restore |
+
+L4 remains the sole owner of host/client loading orchestration, manifest construction,
+targeted snapshot/delta transport, reconnect credential matching, and session presentation
+inside the paths already listed in its row.
+
 Shared-file composed end states and hotspot rules:
 
 | File | Regions | Composed end state | Hotspot rule |
@@ -525,6 +573,11 @@ The same sweep found new PR #196 (`feat/lattice-fusion-gem-sharing@25d0be5d`): i
 lattice files do not overlap L3 or the shared protocol, while its one-line
 `crates/hex_game/src/lib.rs` edit touches a coordinator-only composition hotspot. Re-sweep
 and compose it if it lands before L4/final integration; it does not block L3 dispatch.
+
+The 2026-08-10 post-L3 re-sweep found `origin/dev` still at `1dca1065`, PR #196 still at
+`25d0be5d`, and no additional open PR. Its `LogPlugin.level = WARN` hunk remains disjoint
+from the multiplayer module/plugin regions, and a merge-tree against the wave is clean.
+PRs #192 and #195 are the wave and its remaining lane; neither is foreign territory.
 
 ## Integration order
 
@@ -590,6 +643,12 @@ Typed hooks—not pixels—prove all logical claims.
   `e610e26c50398e43ff23bc4db0890ba7463f11ae`. The only forecast conflicts were the
   additive `hex_core` export seam and `hex_units` seat-subset/object-occupancy composition;
   focused core/unit/multiplayer checks passed after resolution.
+- L3 merged through PR #200 as wave merge `85a4d2770b4e9bd4ba9671ec7d3556437125bb1a`
+  after the exact-head full matrix passed. The first candidate exposed stale frozen map
+  partition counts only; additive commit `a81b2c31` updated the enforced 109/440/92
+  evidence totals, and the corrected exhaustive/disjoint verifier plus macOS, Windows,
+  and Linux shipping checks all passed before merge. The coordinator recorded
+  `merged-to-wave` at `b3c3af4c` and the composed selector selects the complete gate.
 
 ## Stop conditions
 
