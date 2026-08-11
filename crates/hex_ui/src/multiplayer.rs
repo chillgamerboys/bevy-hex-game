@@ -228,7 +228,7 @@ fn render_host_direct(root: &mut ChildSpawnerCommands, assets: &UiAssets, view: 
             }
             action_button(form, assets, "Back", MultiplayerIntent::Back, true);
         });
-    render_network_limits(root, assets, &view.advertised_port);
+    render_network_limits(root, assets, Some(&view.advertised_port));
 }
 
 fn render_join_direct(root: &mut ChildSpawnerCommands, assets: &UiAssets, view: &MultiplayerView) {
@@ -269,25 +269,34 @@ fn render_join_direct(root: &mut ChildSpawnerCommands, assets: &UiAssets, view: 
             }
             action_button(form, assets, "Back", MultiplayerIntent::Back, true);
         });
-    render_network_limits(root, assets, "the host's selected");
+    render_network_limits(root, assets, None);
 }
 
-fn render_network_limits(root: &mut ChildSpawnerCommands, assets: &UiAssets, port: &str) {
+fn render_network_limits(
+    root: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    advertised_port: Option<&str>,
+) {
     root.spawn((Name::new("Direct Connect Limitations"), panel()))
         .insert(action_panel_node(760.0))
         .with_children(|help| {
             help.spawn(heading(assets, "Direct Internet requirements"));
-            help.spawn(fine(
-                assets,
-                format!(
-                    "Forward UDP {port} to the host computer. Carrier-grade NAT (CGNAT) or restrictive networks may make direct hosting impossible."
-                ),
-            ));
+            help.spawn(fine(assets, network_forwarding_copy(advertised_port)));
             help.spawn(fine(
                 assets,
                 "This build has no UPnP, public join-code service, STUN/TURN, or non-Steam relay. Steam relay traversal comes later; LAN and manually forwarded Internet connections work without Steam.",
             ));
         });
+}
+
+fn network_forwarding_copy(advertised_port: Option<&str>) -> String {
+    let instruction = advertised_port.map_or_else(
+        || "Forward the host-selected UDP port to the host computer.".to_owned(),
+        |port| format!("Forward UDP {port} to the host computer."),
+    );
+    format!(
+        "{instruction} Carrier-grade NAT (CGNAT) or restrictive networks may make direct hosting impossible."
+    )
 }
 
 fn render_waiting(
@@ -706,6 +715,18 @@ mod tests {
         assert_eq!(
             waiting_action(Some(MultiplayerRole::Client)),
             ("Leave Session", MultiplayerIntent::LeaveSession)
+        );
+    }
+
+    #[test]
+    fn direct_network_copy_names_the_numeric_or_host_selected_port() {
+        assert_eq!(
+            network_forwarding_copy(Some("7777")),
+            "Forward UDP 7777 to the host computer. Carrier-grade NAT (CGNAT) or restrictive networks may make direct hosting impossible."
+        );
+        assert_eq!(
+            network_forwarding_copy(None),
+            "Forward the host-selected UDP port to the host computer. Carrier-grade NAT (CGNAT) or restrictive networks may make direct hosting impossible."
         );
     }
 
