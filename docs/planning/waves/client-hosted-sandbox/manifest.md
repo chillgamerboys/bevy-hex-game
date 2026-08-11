@@ -398,11 +398,19 @@ lanes:
     builder: worker
     branch: worker/client-hosted-world-replication
     owns:
+      - crates/hex_map/Cargo.toml#hex-multiplayer-world-dto-dependency
       - crates/hex_map/src/world_snapshot.rs
       - crates/hex_map/src/grid.rs#snapshot-import-export-and-terrain-deltas
       - crates/hex_map/src/lib.rs#world-snapshot-publication
+      - crates/hex_map/src/terrain_damage.rs#snapshot-hydration
+      - crates/hex_map/src/procedural_v3/mod.rs#snapshot-internal-reexports
+      - crates/hex_map/src/procedural_v3/materialize.rs#generator-neutral-snapshot-adapter
       - crates/hex_map/tests/contracts/world_snapshot.rs
+      - crates/hex_perception/Cargo.toml#multiplayer-knowledge-and-visibility-dependencies
+      - crates/hex_perception/src/knowledge.rs#player-knowledge-snapshot-hydration
       - crates/hex_perception/src/runtime.rs#multiplayer-player-faction-disclosure
+      - crates/hex_perception/src/snapshots.rs#remembered-run-bottom-projection
+      - crates/hex_perception/src/lib.rs#multiplayer-knowledge-publication
       - crates/hex_perception/tests/multiplayer_disclosure.rs
       - docs/planning/waves/client-hosted-sandbox/manifest.md#L3-row
     dispatch_blockers: []
@@ -415,8 +423,16 @@ lanes:
     sizing:
       model: gpt-5.6-sol
       effort: high
-    state: queued
-    pr: null
+    # Handoff (2026-08-10, temporary world authority ratified by the user):
+    # PublicWorldFingerprintV1 covers every canonical world collection under the
+    # 524,288-entry envelope, 128-byte stable names, and 64 MiB frame cap. Exact
+    # teardown/import passed for Perlin, V1, V2, six V3 configurations, caves, Crystal
+    # Ascent, mutation, and partial damage. Replicon observe/withdraw/re-observe passed
+    # without hostile lattice disclosure. Static presentation and human experience
+    # evidence remain deferred to the exact combined wave head; the user supplied an
+    # additional native L3-candidate visual sanity PASS without a retained frame.
+    state: in-review
+    pr: 200
 
   - id: L4
     title: Session UI and application adapters

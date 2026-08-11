@@ -1002,3 +1002,5 @@ mod publication;
 mod terrain_damage;
 #[path = "contracts/terrain_edits.rs"]
 mod terrain_edits;
+#[path = "contracts/world_snapshot.rs"]
+mod world_snapshot;

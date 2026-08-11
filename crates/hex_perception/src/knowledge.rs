@@ -5,7 +5,16 @@ use std::collections::BTreeMap;
 use bevy_ecs::prelude::Resource;
 use bevy_ecs::reflect::ReflectResource;
 use bevy_reflect::Reflect;
-use hex_core::{KnowledgeState, LocalMapKnowledge, TilePos, UnitId};
+use hex_assets::SubstanceTable;
+use hex_core::{
+    Headroom, HexSpan, InteriorRegionId, KnowledgeState, LightDomain, LocalMapKnowledge, RunBottom,
+    TilePos, UnitId,
+};
+use hex_multiplayer::{
+    BoundError, BoundedText, BoundedVec, PlayerKnowledgeSnapshotV1, PlayerKnowledgeStateV1,
+    PlayerKnownSurfaceV1, PlayerLightDomainV1, WorldSnapshotValidationError, MAX_IDENTITY_BYTES,
+    MAX_WORLD_PROJECTION_ENTRIES, PLAYER_KNOWLEDGE_SNAPSHOT_VERSION_V1,
+};
 use hex_units::Faction;
 
 use crate::{
@@ -19,6 +28,7 @@ use crate::{
 #[derive(Reflect, Debug, Clone, Copy, PartialEq)]
 pub struct KnownSurface {
     state: KnowledgeState,
+    run_bottom: RunBottom,
     snapshot: SurfaceSnapshot,
 }
 
@@ -33,6 +43,12 @@ impl KnownSurface {
     #[must_use]
     pub const fn snapshot(self) -> SurfaceSnapshot {
         self.snapshot
+    }
+
+    /// Inclusive bottom of the exact public material run last observed.
+    #[must_use]
+    pub const fn run_bottom(self) -> RunBottom {
+        self.run_bottom
     }
 }
 
@@ -110,10 +126,14 @@ impl FactionKnowledge {
 
         for pos in observation.surfaces() {
             if let Some(snapshot) = current.get(pos) {
+                let Some(run_bottom) = current.run_bottom(pos) else {
+                    continue;
+                };
                 self.surfaces.insert(
                     pos,
                     KnownSurface {
                         state: KnowledgeState::Observed,
+                        run_bottom,
                         snapshot,
                     },
                 );
@@ -196,6 +216,176 @@ impl FactionMapKnowledge {
     pub fn publish_player_local_map_knowledge(&self, local: &mut LocalMapKnowledge) {
         self.publish_local_map_knowledge(Faction::Player, local);
     }
+}
+
+/// Why the disclosure-safe player knowledge snapshot could not cross the adapter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlayerKnowledgeSnapshotError {
+    /// Shared version, ordering, or public-value validation failed.
+    Structural(WorldSnapshotValidationError),
+    /// The bounded host export exceeded its accepted collection/text limits.
+    Bound(BoundError),
+    /// A remembered stable material is absent from accepted shipped content.
+    UnknownSubstance(String),
+    /// A serialized support fact disagrees with accepted substance content.
+    SubstanceMismatch(String),
+}
+
+impl std::fmt::Display for PlayerKnowledgeSnapshotError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Structural(error) => write!(formatter, "invalid player knowledge: {error}"),
+            Self::Bound(error) => write!(formatter, "player knowledge exceeds a bound: {error}"),
+            Self::UnknownSubstance(name) => {
+                write!(
+                    formatter,
+                    "player knowledge names unknown substance '{name}'"
+                )
+            }
+            Self::SubstanceMismatch(name) => write!(
+                formatter,
+                "player knowledge support fact disagrees with substance '{name}'"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PlayerKnowledgeSnapshotError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Structural(error) => Some(error),
+            Self::Bound(error) => Some(error),
+            Self::UnknownSubstance(_) | Self::SubstanceMismatch(_) => None,
+        }
+    }
+}
+
+impl From<WorldSnapshotValidationError> for PlayerKnowledgeSnapshotError {
+    fn from(value: WorldSnapshotValidationError) -> Self {
+        Self::Structural(value)
+    }
+}
+
+impl From<BoundError> for PlayerKnowledgeSnapshotError {
+    fn from(value: BoundError) -> Self {
+        Self::Bound(value)
+    }
+}
+
+/// Exports only the shared player-faction remembered terrain view.
+///
+/// Hostile-faction surfaces/units are structurally unreachable from this function,
+/// and observed units travel through `UnitReplica` rather than this terrain cache.
+pub fn export_player_knowledge_snapshot_v1(
+    knowledge: &FactionMapKnowledge,
+    substances: &SubstanceTable,
+) -> Result<PlayerKnowledgeSnapshotV1, PlayerKnowledgeSnapshotError> {
+    let surfaces = knowledge
+        .faction(Faction::Player)
+        .surfaces()
+        .map(|(position, known)| {
+            let snapshot = known.snapshot();
+            let name = substances.name(snapshot.substance).ok_or_else(|| {
+                PlayerKnowledgeSnapshotError::UnknownSubstance(format!("{:?}", snapshot.substance))
+            })?;
+            if snapshot.substance.is_air() || name == "air" {
+                return Err(PlayerKnowledgeSnapshotError::SubstanceMismatch(
+                    name.to_owned(),
+                ));
+            }
+            let state = match known.state() {
+                KnowledgeState::Remembered => PlayerKnowledgeStateV1::Remembered,
+                KnowledgeState::Observed => PlayerKnowledgeStateV1::Observed,
+                KnowledgeState::Unknown => {
+                    return Err(PlayerKnowledgeSnapshotError::SubstanceMismatch(
+                        "unknown knowledge cannot carry a surface".to_owned(),
+                    ));
+                }
+            };
+            Ok(PlayerKnownSurfaceV1 {
+                position,
+                state,
+                run_bottom: known.run_bottom().0,
+                span_bottom_bits: snapshot.span.bottom.to_bits(),
+                span_top_bits: snapshot.span.top.to_bits(),
+                substance: BoundedText::<MAX_IDENTITY_BYTES>::new(name)?,
+                headroom: snapshot.headroom.0,
+                is_solid: snapshot.is_solid,
+                blocked: snapshot.blocked,
+                light_domain: match snapshot.domain {
+                    LightDomain::Exterior => PlayerLightDomainV1::Exterior,
+                    LightDomain::Interior(region) => PlayerLightDomainV1::Interior(region.0),
+                },
+            })
+        })
+        .collect::<Result<Vec<_>, PlayerKnowledgeSnapshotError>>()?;
+    let snapshot = PlayerKnowledgeSnapshotV1 {
+        version: PLAYER_KNOWLEDGE_SNAPSHOT_VERSION_V1,
+        surfaces: BoundedVec::<_, MAX_WORLD_PROJECTION_ENTRIES>::new(surfaces)?,
+    };
+    snapshot.validate()?;
+    Ok(snapshot)
+}
+
+/// Replaces the replica's player view and rebuilds its compact movement projection.
+///
+/// Hostile knowledge is cleared rather than retained across reconnect, ensuring the
+/// wire contract can never accidentally preserve host-only faction facts.
+pub fn import_player_knowledge_snapshot_v1(
+    snapshot: &PlayerKnowledgeSnapshotV1,
+    substances: &SubstanceTable,
+    knowledge: &mut FactionMapKnowledge,
+    local: &mut LocalMapKnowledge,
+) -> Result<(), PlayerKnowledgeSnapshotError> {
+    snapshot.validate()?;
+    let mut surfaces = BTreeMap::new();
+    for entry in snapshot.surfaces.as_slice() {
+        let substance = substances.id(entry.substance.as_str()).ok_or_else(|| {
+            PlayerKnowledgeSnapshotError::UnknownSubstance(entry.substance.as_str().to_owned())
+        })?;
+        if substance.is_air()
+            || entry.substance.as_str() == "air"
+            || substances.is_solid(substance) != entry.is_solid
+        {
+            return Err(PlayerKnowledgeSnapshotError::SubstanceMismatch(
+                entry.substance.as_str().to_owned(),
+            ));
+        }
+        surfaces.insert(
+            entry.position,
+            KnownSurface {
+                state: match entry.state {
+                    PlayerKnowledgeStateV1::Remembered => KnowledgeState::Remembered,
+                    PlayerKnowledgeStateV1::Observed => KnowledgeState::Observed,
+                },
+                run_bottom: RunBottom(entry.run_bottom),
+                snapshot: SurfaceSnapshot {
+                    pos: entry.position,
+                    span: HexSpan::new(
+                        f32::from_bits(entry.span_bottom_bits),
+                        f32::from_bits(entry.span_top_bits),
+                    ),
+                    substance,
+                    headroom: Headroom(entry.headroom),
+                    is_solid: entry.is_solid,
+                    blocked: entry.blocked,
+                    domain: match entry.light_domain {
+                        PlayerLightDomainV1::Exterior => LightDomain::Exterior,
+                        PlayerLightDomainV1::Interior(region) => {
+                            LightDomain::Interior(InteriorRegionId(region))
+                        }
+                    },
+                },
+            },
+        );
+    }
+    knowledge.player = FactionKnowledge {
+        surfaces,
+        units: BTreeMap::new(),
+    };
+    knowledge.hostile = FactionKnowledge::new();
+    knowledge.publish_player_local_map_knowledge(local);
+    Ok(())
 }
 
 /// Applies current observations to both factions' independent knowledge.

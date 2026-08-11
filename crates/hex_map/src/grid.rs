@@ -22,13 +22,15 @@ use hex_assets::{
     SubstanceTable, TerrainDamageFile, TerrainDamageTable,
 };
 use hex_core::{
-    BiomeRegions, CutawayOccluder, DamagedVoxels, GameplayLight, GameplaySetup,
-    GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile, InteriorRegionId,
-    InteriorRegions, MapAnchorId, MapAnchors, MapViewHint, PerceptionSystems,
-    PresentationOcclusion, ResolvedMapSeed, RunBottom, Screen, SpecialMovementRegions, SubstanceId,
-    TerrainEdit, TerrainImpact, TerrainImpactOutcome, TerrainImpactRejection, TerrainImpactResult,
-    TerrainReady, TerrainSystems, TilePos, TraversalBlockers, TraversalProfile, TreeOccluder,
+    AuthoritativeSystems, BiomeRegions, CutawayOccluder, DamagedVoxels, GameplayLight,
+    GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile,
+    InteriorRegionId, InteriorRegions, MapAnchorId, MapAnchors, MapViewHint, PerceptionSystems,
+    PresentationOcclusion, ResolvedMapSeed, RunBottom, Screen, SimulationRole,
+    SpecialMovementRegions, SubstanceId, TerrainEdit, TerrainImpact, TerrainImpactDisposition,
+    TerrainImpactOutcome, TerrainImpactRejection, TerrainImpactResult, TerrainReady,
+    TerrainSystems, TilePos, TraversalBlockers, TraversalProfile, TreeOccluder,
 };
+use hex_multiplayer::AuthorityBoundary;
 
 use crate::crystal_render::{self, CrystalPresentationError};
 use crate::feature_render::{self, FeaturePresentationError};
@@ -41,6 +43,12 @@ use crate::settings::{MapSettings, TerrainSettings};
 use crate::terrain::{build_non_procedural_map, TerrainPalette};
 use crate::terrain_damage::TerrainDamageState;
 use crate::voxel::{runs, Column, SubstanceRun, VoxelMap};
+use crate::world_snapshot::{
+    apply_world_delta_v1, export_from_parts, prepare_world_snapshot_v1, CurrentWorldSnapshotV1,
+    PreparedWorldSnapshotV1, WorldExportParts, WorldReplicationOutcomeV1,
+    WorldReplicationRefusalV1, WorldReplicationRequestV1, WorldReplicationResultV1,
+    WorldReplicationStateV1,
+};
 use crate::{
     CavesReportMetrics, DeepForestReportMetrics, ForestReportMetrics, FortReportMetrics,
     GenerationReport, MacroMetrics, MountainRangeMetrics, PrairieReportMetrics,
@@ -69,6 +77,19 @@ struct PendingTerrainImpacts(Vec<PendingTerrainImpact>);
 /// without changing the world against a stale perception frame.
 #[derive(Resource, Debug, Default)]
 struct PendingTerrainEdits(Vec<TerrainEdit>);
+
+/// Whether map-owned truth changed since the current reconnect cache was published.
+#[derive(Resource, Debug, Default)]
+struct WorldSnapshotDirty(bool);
+
+/// A validated resource candidate waiting for the ordinary grid publication pass.
+#[derive(Resource, Debug)]
+struct PendingSnapshotGridBuild {
+    ordered_results: Vec<WorldReplicationResultV1>,
+    previous_sequence: Option<hex_multiplayer::AuthoritySequence>,
+}
+
+const MAX_WORLD_REPLICATION_REQUESTS_PER_UPDATE: usize = 64;
 
 /// Registers world construction and tile spawning.
 pub fn plugin(app: &mut App) {
@@ -107,9 +128,19 @@ pub fn plugin(app: &mut App) {
         .init_resource::<TerrainDamageState>()
         .init_resource::<PendingTerrainEdits>()
         .init_resource::<PendingTerrainImpacts>()
+        .init_resource::<WorldSnapshotDirty>()
+        .init_resource::<WorldReplicationStateV1>()
+        .init_resource::<AuthorityBoundary>()
+        .init_resource::<SimulationRole>()
         .add_message::<TerrainEdit>()
         .add_message::<TerrainImpact>()
         .add_message::<TerrainImpactOutcome>()
+        .add_message::<WorldReplicationRequestV1>()
+        .add_message::<WorldReplicationResultV1>()
+        .configure_sets(
+            Update,
+            AuthoritativeSystems.run_if(resource_equals(SimulationRole::Authority)),
+        )
         // Only ApplyWorld has participants today. The empty downstream sets reserve
         // the cross-crate protocol without moving gameplay behavior in this change.
         .configure_sets(
@@ -140,6 +171,7 @@ pub fn plugin(app: &mut App) {
             Update,
             (collect_terrain_edits, collect_terrain_impacts)
                 .in_set(TerrainSystems::ApplyWorld)
+                .in_set(AuthoritativeSystems)
                 .run_if(in_state(Screen::Gameplay)),
         )
         .add_systems(
@@ -150,9 +182,36 @@ pub fn plugin(app: &mut App) {
             )
                 .chain()
                 .in_set(TerrainSystems::ApplyWorld)
+                .in_set(AuthoritativeSystems)
                 .in_set(hex_core::PausableSystems)
                 .after(collect_terrain_edits)
                 .after(collect_terrain_impacts)
+                .run_if(in_state(Screen::Gameplay)),
+        )
+        .add_systems(
+            OnEnter(Screen::Gameplay),
+            publish_current_world_snapshot
+                .in_set(GameplaySetup::Terrain)
+                .after(spawn_grid)
+                .run_if(resource_exists::<TerrainReady>),
+        )
+        .add_systems(
+            Update,
+            publish_current_world_snapshot
+                .after(apply_terrain_changes)
+                .after(reject_pending_impacts_without_world)
+                .run_if(in_state(Screen::Gameplay))
+                .run_if(resource_exists::<TerrainReady>),
+        )
+        .add_systems(
+            Update,
+            (
+                apply_world_replication_requests,
+                spawn_imported_snapshot_grid,
+            )
+                .chain()
+                .in_set(TerrainSystems::ApplyWorld)
+                .after(publish_current_world_snapshot)
                 .run_if(in_state(Screen::Gameplay)),
         )
         .add_systems(OnExit(Screen::Gameplay), teardown_map);
@@ -178,6 +237,8 @@ fn generate_world(
     mut edits: ResMut<Messages<TerrainEdit>>,
     mut impacts: ResMut<Messages<TerrainImpact>>,
     mut outcomes: ResMut<Messages<TerrainImpactOutcome>>,
+    mut snapshot_dirty: ResMut<WorldSnapshotDirty>,
+    mut replication_state: ResMut<WorldReplicationStateV1>,
 ) {
     damage_state.reset(&mut damaged_voxels);
     pending_edits.0.clear();
@@ -185,6 +246,8 @@ fn generate_world(
     edits.clear();
     impacts.clear();
     outcomes.clear();
+    snapshot_dirty.0 = true;
+    replication_state.set_last_applied_sequence(None);
     commands.remove_resource::<GameplaySetupFailure>();
     commands.remove_resource::<TerrainReady>();
     commands.remove_resource::<VoxelMap>();
@@ -197,6 +260,8 @@ fn generate_world(
     commands.remove_resource::<TraversalBlockers>();
     commands.remove_resource::<BiomeRegions>();
     commands.remove_resource::<MapViewHint>();
+    commands.remove_resource::<CurrentWorldSnapshotV1>();
+    commands.remove_resource::<PendingSnapshotGridBuild>();
     let palette = match TerrainPalette::for_terrain(&table, &settings.terrain) {
         Ok(palette) => palette,
         Err(error) => {
@@ -353,6 +418,8 @@ fn teardown_map(
     mut edits: ResMut<Messages<TerrainEdit>>,
     mut impacts: ResMut<Messages<TerrainImpact>>,
     mut outcomes: ResMut<Messages<TerrainImpactOutcome>>,
+    mut snapshot_dirty: ResMut<WorldSnapshotDirty>,
+    mut replication_state: ResMut<WorldReplicationStateV1>,
 ) {
     for entity in &grids {
         commands.entity(entity).despawn();
@@ -363,6 +430,8 @@ fn teardown_map(
     edits.clear();
     impacts.clear();
     outcomes.clear();
+    snapshot_dirty.0 = false;
+    replication_state.set_last_applied_sequence(None);
     commands.remove_resource::<VoxelMap>();
     commands.remove_resource::<MapAnchors>();
     commands.remove_resource::<SpecialMovementRegions>();
@@ -372,6 +441,8 @@ fn teardown_map(
     commands.remove_resource::<MapViewHint>();
     commands.remove_resource::<GenerationReport>();
     commands.remove_resource::<MapPresentationProjection>();
+    commands.remove_resource::<CurrentWorldSnapshotV1>();
+    commands.remove_resource::<PendingSnapshotGridBuild>();
     liquid_render::clear_material_cache(&mut commands);
     commands.remove_resource::<TerrainReady>();
 }
@@ -539,6 +610,7 @@ enum MapPresentationError {
     Liquid(LiquidPresentationError),
     Feature(FeaturePresentationError),
     Crystal(CrystalPresentationError),
+    SnapshotResourcesMissing,
 }
 
 #[derive(SystemParam)]
@@ -548,12 +620,418 @@ struct MapPresentationAssets<'w> {
     liquid_materials: ResMut<'w, Assets<LiquidMaterial>>,
 }
 
+/// Borrow-only world inputs for canonical reconnect publication.
+#[derive(SystemParam)]
+struct WorldSnapshotSources<'w> {
+    map: Option<Res<'w, VoxelMap>>,
+    table: Option<Res<'w, SubstanceTable>>,
+    settings: Option<Res<'w, MapSettings>>,
+    damage: Option<Res<'w, DamagedVoxels>>,
+    anchors: Option<Res<'w, MapAnchors>>,
+    interiors: Option<Res<'w, InteriorRegions>>,
+    special_regions: Option<Res<'w, SpecialMovementRegions>>,
+    biome_regions: Option<Res<'w, BiomeRegions>>,
+    blockers: Option<Res<'w, TraversalBlockers>>,
+    view_hint: Option<Res<'w, MapViewHint>>,
+    presentation: Option<Res<'w, MapPresentationProjection>>,
+    art_catalog: Option<Res<'w, RuntimeArtCatalog>>,
+}
+
+impl WorldSnapshotSources<'_> {
+    fn export(&self) -> Result<hex_multiplayer::WorldSnapshotV1, crate::WorldSnapshotError> {
+        let map = self
+            .map
+            .as_deref()
+            .ok_or(crate::WorldSnapshotError::WorldUnavailable("VoxelMap"))?;
+        let table = self
+            .table
+            .as_deref()
+            .ok_or(crate::WorldSnapshotError::WorldUnavailable(
+                "SubstanceTable",
+            ))?;
+        let settings = self
+            .settings
+            .as_deref()
+            .ok_or(crate::WorldSnapshotError::WorldUnavailable("MapSettings"))?;
+        let damage = self
+            .damage
+            .as_deref()
+            .ok_or(crate::WorldSnapshotError::WorldUnavailable("DamagedVoxels"))?;
+        let anchors = self
+            .anchors
+            .as_deref()
+            .ok_or(crate::WorldSnapshotError::WorldUnavailable("MapAnchors"))?;
+        let interiors =
+            self.interiors
+                .as_deref()
+                .ok_or(crate::WorldSnapshotError::WorldUnavailable(
+                    "InteriorRegions",
+                ))?;
+        let special_regions =
+            self.special_regions
+                .as_deref()
+                .ok_or(crate::WorldSnapshotError::WorldUnavailable(
+                    "SpecialMovementRegions",
+                ))?;
+        export_from_parts(WorldExportParts {
+            map,
+            table,
+            settings,
+            damage,
+            anchors,
+            interiors,
+            special_regions,
+            biome_regions: self.biome_regions.as_deref(),
+            blockers: self.blockers.as_deref(),
+            view_hint: self.view_hint.as_deref(),
+            presentation: self.presentation.as_deref(),
+            art_catalog: self.art_catalog.as_deref(),
+        })
+    }
+}
+
+fn publish_current_world_snapshot(
+    mut commands: Commands,
+    sources: WorldSnapshotSources,
+    mut dirty: ResMut<WorldSnapshotDirty>,
+    mut next_screen: ResMut<NextState<Screen>>,
+) {
+    if !dirty.0 {
+        return;
+    }
+    match sources.export() {
+        Ok(snapshot) => {
+            commands.insert_resource(CurrentWorldSnapshotV1::new(snapshot));
+            dirty.0 = false;
+        }
+        Err(error) => {
+            error!("cannot publish current world snapshot: {error}");
+            commands.remove_resource::<CurrentWorldSnapshotV1>();
+            commands.remove_resource::<TerrainReady>();
+            commands.insert_resource(GameplaySetupFailure::new(format!(
+                "The active terrain cannot be synchronized: {error}."
+            )));
+            next_screen.set(Screen::Title);
+        }
+    }
+}
+
+/// Mutable session-local state cleared atomically with a restored world.
+#[derive(SystemParam)]
+struct WorldImportRuntime<'w, 's> {
+    grids: Query<'w, 's, Entity, With<HexGrid>>,
+    damage_state: ResMut<'w, TerrainDamageState>,
+    damaged_voxels: ResMut<'w, DamagedVoxels>,
+    pending_edits: ResMut<'w, PendingTerrainEdits>,
+    pending_impacts: ResMut<'w, PendingTerrainImpacts>,
+    edits: ResMut<'w, Messages<TerrainEdit>>,
+    impacts: ResMut<'w, Messages<TerrainImpact>>,
+    terrain_outcomes: ResMut<'w, Messages<TerrainImpactOutcome>>,
+    dirty: ResMut<'w, WorldSnapshotDirty>,
+    replication_state: ResMut<'w, WorldReplicationStateV1>,
+}
+
+fn apply_world_replication_requests(
+    mut commands: Commands,
+    mut requests: MessageReader<WorldReplicationRequestV1>,
+    mut results: MessageWriter<WorldReplicationResultV1>,
+    boundary: Res<AuthorityBoundary>,
+    current: Option<Res<CurrentWorldSnapshotV1>>,
+    pending_build: Option<Res<PendingSnapshotGridBuild>>,
+    table: Option<Res<SubstanceTable>>,
+    settings: Option<Res<MapSettings>>,
+    art_catalog: Option<Res<RuntimeArtCatalog>>,
+    mut runtime: WorldImportRuntime,
+) {
+    let incoming = requests.read().cloned().collect::<Vec<_>>();
+    if incoming.is_empty() {
+        return;
+    }
+    if pending_build.is_some() {
+        for request in incoming {
+            results.write(refused_world_request(
+                request.authority_sequence(),
+                WorldReplicationRefusalV1::BoundaryBusy,
+            ));
+        }
+        return;
+    }
+
+    let Some(table) = table.as_deref() else {
+        refuse_unavailable_world_requests(incoming, "SubstanceTable", &mut results);
+        return;
+    };
+    let Some(settings) = settings.as_deref() else {
+        refuse_unavailable_world_requests(incoming, "MapSettings", &mut results);
+        return;
+    };
+
+    let previous_sequence = runtime.replication_state.last_applied_sequence();
+    let mut staged_sequence = previous_sequence;
+    let mut staged_snapshot = current.as_deref().map(|current| current.snapshot().clone());
+    let mut latest_prepared: Option<PreparedWorldSnapshotV1> = None;
+    let mut ordered_results = Vec::new();
+
+    for (index, request) in incoming.into_iter().enumerate() {
+        let sequence = request.authority_sequence();
+        if index >= MAX_WORLD_REPLICATION_REQUESTS_PER_UPDATE {
+            ordered_results.push(refused_world_request(
+                sequence,
+                WorldReplicationRefusalV1::RequestBurstExceeded,
+            ));
+            continue;
+        }
+        let target_fingerprint = match &request {
+            WorldReplicationRequestV1::Restore { snapshot, .. } => snapshot.public_fingerprint,
+            WorldReplicationRequestV1::ApplyDelta(delta) => delta.target_fingerprint,
+        };
+        if let Some(last) = staged_sequence {
+            if sequence < last {
+                ordered_results.push(refused_world_request(
+                    sequence,
+                    WorldReplicationRefusalV1::StaleSequence,
+                ));
+                continue;
+            }
+            if sequence == last {
+                let outcome = if staged_snapshot
+                    .as_ref()
+                    .is_some_and(|snapshot| snapshot.public_fingerprint == target_fingerprint)
+                {
+                    WorldReplicationOutcomeV1::Duplicate {
+                        public_fingerprint: target_fingerprint,
+                    }
+                } else {
+                    WorldReplicationOutcomeV1::Refused(WorldReplicationRefusalV1::SequenceConflict)
+                };
+                ordered_results.push(WorldReplicationResultV1 {
+                    authority_sequence: sequence,
+                    outcome,
+                });
+                continue;
+            }
+        }
+        if !boundary.is_quiescent() {
+            ordered_results.push(refused_world_request(
+                sequence,
+                WorldReplicationRefusalV1::BoundaryBusy,
+            ));
+            continue;
+        }
+
+        let candidate = match request {
+            WorldReplicationRequestV1::Restore { snapshot, .. } => Ok(*snapshot),
+            WorldReplicationRequestV1::ApplyDelta(delta) => staged_snapshot
+                .as_ref()
+                .ok_or(WorldReplicationRefusalV1::MissingCurrentWorld)
+                .and_then(|base| {
+                    apply_world_delta_v1(base, &delta)
+                        .map_err(WorldReplicationRefusalV1::InvalidSnapshot)
+                }),
+        };
+        let candidate = match candidate {
+            Ok(candidate) => candidate,
+            Err(reason) => {
+                ordered_results.push(refused_world_request(sequence, reason));
+                continue;
+            }
+        };
+        let prepared =
+            match prepare_world_snapshot_v1(candidate, table, settings, art_catalog.as_deref()) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    ordered_results.push(refused_world_request(
+                        sequence,
+                        WorldReplicationRefusalV1::InvalidSnapshot(error),
+                    ));
+                    continue;
+                }
+            };
+        staged_snapshot = Some(prepared.snapshot.clone());
+        staged_sequence = Some(sequence);
+        ordered_results.push(WorldReplicationResultV1 {
+            authority_sequence: sequence,
+            outcome: WorldReplicationOutcomeV1::Applied {
+                public_fingerprint: prepared.snapshot.public_fingerprint,
+            },
+        });
+        latest_prepared = Some(prepared);
+    }
+
+    let Some(prepared) = latest_prepared else {
+        for result in ordered_results {
+            results.write(result);
+        }
+        return;
+    };
+    commit_prepared_world_snapshot(
+        &mut commands,
+        prepared,
+        ordered_results,
+        previous_sequence,
+        staged_sequence,
+        &mut runtime,
+    );
+}
+
+fn refuse_unavailable_world_requests(
+    requests: Vec<WorldReplicationRequestV1>,
+    resource: &'static str,
+    results: &mut MessageWriter<WorldReplicationResultV1>,
+) {
+    for request in requests {
+        results.write(refused_world_request(
+            request.authority_sequence(),
+            WorldReplicationRefusalV1::InvalidSnapshot(
+                crate::WorldSnapshotError::WorldUnavailable(resource),
+            ),
+        ));
+    }
+}
+
+fn refused_world_request(
+    authority_sequence: hex_multiplayer::AuthoritySequence,
+    reason: WorldReplicationRefusalV1,
+) -> WorldReplicationResultV1 {
+    WorldReplicationResultV1 {
+        authority_sequence,
+        outcome: WorldReplicationOutcomeV1::Refused(reason),
+    }
+}
+
+fn commit_prepared_world_snapshot(
+    commands: &mut Commands,
+    prepared: PreparedWorldSnapshotV1,
+    ordered_results: Vec<WorldReplicationResultV1>,
+    previous_sequence: Option<hex_multiplayer::AuthoritySequence>,
+    staged_sequence: Option<hex_multiplayer::AuthoritySequence>,
+    runtime: &mut WorldImportRuntime,
+) {
+    let PreparedWorldSnapshotV1 {
+        snapshot,
+        map,
+        damage,
+        anchors,
+        interiors,
+        special_regions,
+        biome_regions,
+        blockers,
+        view_hint,
+        presentation,
+    } = prepared;
+
+    for entity in &runtime.grids {
+        commands.entity(entity).despawn();
+    }
+    runtime
+        .damage_state
+        .restore(damage, &mut runtime.damaged_voxels);
+    runtime.pending_edits.0.clear();
+    runtime.pending_impacts.0.clear();
+    runtime.edits.clear();
+    runtime.impacts.clear();
+    runtime.terrain_outcomes.clear();
+    runtime.dirty.0 = false;
+    runtime
+        .replication_state
+        .set_last_applied_sequence(staged_sequence);
+
+    commands.remove_resource::<TerrainReady>();
+    commands.remove_resource::<GameplaySetupFailure>();
+    commands.remove_resource::<GenerationReport>();
+    commands.remove_resource::<MapViewHint>();
+    commands.remove_resource::<MapPresentationProjection>();
+    liquid_render::clear_material_cache(commands);
+    commands.insert_resource(map);
+    commands.insert_resource(anchors);
+    commands.insert_resource(interiors);
+    commands.insert_resource(special_regions);
+    commands.insert_resource(biome_regions);
+    commands.insert_resource(blockers);
+    if let Some(view_hint) = view_hint {
+        commands.insert_resource(view_hint);
+    }
+    if let Some(presentation) = presentation {
+        commands.insert_resource(presentation);
+    }
+    commands.insert_resource(CurrentWorldSnapshotV1::new(snapshot));
+    commands.insert_resource(PendingSnapshotGridBuild {
+        ordered_results,
+        previous_sequence,
+    });
+}
+
+fn spawn_imported_snapshot_grid(
+    mut commands: Commands,
+    pending: Option<Res<PendingSnapshotGridBuild>>,
+    mut results: MessageWriter<WorldReplicationResultV1>,
+    assets: Res<GameAssets>,
+    mut presentation_assets: MapPresentationAssets,
+    map: Option<Res<VoxelMap>>,
+    table: Option<Res<SubstanceTable>>,
+    settings: Option<Res<MapSettings>>,
+    liquid_visual_time: Res<LiquidVisualTime>,
+    interiors: Option<Res<InteriorRegions>>,
+    presentation: Option<Res<MapPresentationProjection>>,
+    art_catalog: Option<Res<RuntimeArtCatalog>>,
+    mut replication_state: ResMut<WorldReplicationStateV1>,
+) {
+    let Some(pending) = pending else {
+        return;
+    };
+    let built = match (map.as_deref(), table.as_deref(), settings.as_deref()) {
+        (Some(map), Some(table), Some(settings)) => build_grid(
+            &mut commands,
+            &assets,
+            &mut presentation_assets.materials,
+            &mut presentation_assets.meshes,
+            &mut presentation_assets.liquid_materials,
+            map,
+            table,
+            settings,
+            liquid_visual_time.phase_seconds(),
+            interiors.as_deref(),
+            presentation.as_deref(),
+            art_catalog.as_deref(),
+        ),
+        _ => Err(MapPresentationError::SnapshotResourcesMissing),
+    };
+    match built {
+        Ok(()) => {
+            commands.insert_resource(TerrainReady);
+            for result in &pending.ordered_results {
+                results.write(result.clone());
+            }
+        }
+        Err(error) => {
+            let reason = error.to_string();
+            fail_presentation_setup(&mut commands, &error);
+            commands.remove_resource::<CurrentWorldSnapshotV1>();
+            replication_state.set_last_applied_sequence(pending.previous_sequence);
+            for result in &pending.ordered_results {
+                if matches!(&result.outcome, WorldReplicationOutcomeV1::Applied { .. }) {
+                    results.write(refused_world_request(
+                        result.authority_sequence,
+                        WorldReplicationRefusalV1::PresentationFailed(reason.clone()),
+                    ));
+                } else {
+                    results.write(result.clone());
+                }
+            }
+        }
+    }
+    commands.remove_resource::<PendingSnapshotGridBuild>();
+}
+
 impl fmt::Display for MapPresentationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Liquid(error) => write!(formatter, "liquid presentation failed: {error}"),
             Self::Feature(error) => write!(formatter, "feature presentation failed: {error}"),
             Self::Crystal(error) => write!(formatter, "crystal presentation failed: {error}"),
+            Self::SnapshotResourcesMissing => {
+                formatter.write_str("snapshot presentation resources are missing")
+            }
         }
     }
 }
@@ -564,6 +1042,7 @@ impl std::error::Error for MapPresentationError {
             Self::Liquid(error) => Some(error),
             Self::Feature(error) => Some(error),
             Self::Crystal(error) => Some(error),
+            Self::SnapshotResourcesMissing => None,
         }
     }
 }
@@ -678,6 +1157,7 @@ struct TerrainMutation<'w> {
     pending: ResMut<'w, PendingTerrainImpacts>,
     damage_state: ResMut<'w, TerrainDamageState>,
     damaged_voxels: ResMut<'w, DamagedVoxels>,
+    snapshot_dirty: ResMut<'w, WorldSnapshotDirty>,
 }
 
 /// Claims direct edits outside the pausable mutation phase so they cannot age out.
@@ -826,8 +1306,10 @@ fn apply_terrain_changes(
         mut pending,
         mut damage_state,
         mut damaged_voxels,
+        mut snapshot_dirty,
     } = mutation;
     let mut changed = false;
+    let mut snapshot_changed = false;
     let mut changed_coords = BTreeSet::new();
     for edit in edits.0.drain(..) {
         let semantic_projection_protected = presentation.as_deref().is_some_and(|projection| {
@@ -838,6 +1320,7 @@ fn apply_terrain_changes(
         if apply_terrain_edit(&mut map, &table, &edit, semantic_projection_protected) {
             damage_state.forget_voxel(edit.pos(), &mut damaged_voxels);
             changed = true;
+            snapshot_changed = true;
             changed_coords.insert(edit.pos().coord);
             if let Some(interiors) = interiors.as_deref_mut() {
                 // A replacement is new material, not part of the authored roof even
@@ -877,6 +1360,14 @@ fn apply_terrain_changes(
                 })
             },
         );
+        snapshot_changed |= matches!(
+            &resolved.outcome.result,
+            TerrainImpactResult::Applied(voxels)
+                if voxels.iter().any(|voxel| matches!(
+                    voxel.disposition,
+                    TerrainImpactDisposition::Damaged | TerrainImpactDisposition::Destroyed
+                ))
+        );
         for position in &resolved.destroyed {
             changed = true;
             changed_coords.insert(position.coord);
@@ -885,6 +1376,10 @@ fn apply_terrain_changes(
             }
         }
         outcomes.write(resolved.outcome);
+    }
+
+    if snapshot_changed {
+        snapshot_dirty.0 = true;
     }
 
     if !changed {

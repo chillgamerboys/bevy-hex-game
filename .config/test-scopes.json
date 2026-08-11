@@ -275,9 +275,9 @@
     "map": {
       "concerns": ["map_unit", "map_generation", "map_contracts"],
       "expected_counts": {
-        "map_unit": 106,
+        "map_unit": 109,
         "map_generation": 440,
-        "map_contracts": 81
+        "map_contracts": 92
       },
       "expected_ignored": 29,
       "full_command": [
