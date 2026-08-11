@@ -76,7 +76,7 @@ fn spawn_screen(
             overflow: Overflow::scroll_y(),
             ..default()
         })
-        .with_children(|root| render_screen(root, &assets, &view));
+        .with_children(|root| render_screen(root, &assets, view));
 }
 
 fn refresh_screen(
@@ -94,7 +94,7 @@ fn refresh_screen(
         commands.entity(root).despawn_related::<Children>();
         commands
             .entity(root)
-            .with_children(|root| render_screen(root, &assets, &view));
+            .with_children(|root| render_screen(root, &assets, view));
     }
 }
 

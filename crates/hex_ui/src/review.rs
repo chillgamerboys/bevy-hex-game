@@ -261,11 +261,14 @@ pub fn apply_ui_review_fixture(commands: &mut Commands, name: &str) -> Result<()
             review.multiplayer = Some(multiplayer_lobby_fixture(false));
         }
         "multiplayer-mismatch" => {
-            let mut view = MultiplayerView::default();
-            view.route = hex_gameplay_model::MultiplayerRoute::Ended;
-            view.notice = Some(
-                "Build mismatch: host and client must use the exact same shipped build.".to_owned(),
-            );
+            let view = MultiplayerView {
+                route: hex_gameplay_model::MultiplayerRoute::Ended,
+                notice: Some(
+                    "Build mismatch: host and client must use the exact same shipped build."
+                        .to_owned(),
+                ),
+                ..default()
+            };
             review.multiplayer = Some(view);
         }
         "multiplayer-reconnect" => {
@@ -328,73 +331,74 @@ fn multiplayer_lobby_fixture(reconnecting: bool) -> MultiplayerView {
     } else {
         hex_core::PlayerSeat(1)
     };
-    let mut view = MultiplayerView::default();
-    view.route = hex_gameplay_model::MultiplayerRoute::Lobby;
-    view.role = Some(hex_gameplay_model::MultiplayerRole::Client);
-    view.local_seat = Some(local_seat);
-    view.seats = vec![
-        MultiplayerSeatView {
-            seat: hex_core::PlayerSeat::HOST,
-            connection: MultiplayerSeatConnectionView::Connected,
-            player_label: Some("Host · Aria".to_owned()),
-            assignments: vec![assignment(0, "Hedge Mage"), assignment(5, "Stone Warden")],
-            ready: true,
-            local: local_seat == hex_core::PlayerSeat::HOST,
-        },
-        MultiplayerSeatView {
-            seat: hex_core::PlayerSeat(1),
-            connection: MultiplayerSeatConnectionView::Connected,
-            player_label: Some("Milo".to_owned()),
-            assignments: vec![assignment(1, "Ember Knight")],
-            ready: true,
-            local: local_seat == hex_core::PlayerSeat(1),
-        },
-        MultiplayerSeatView {
-            seat: hex_core::PlayerSeat(2),
-            connection: MultiplayerSeatConnectionView::Connected,
-            player_label: Some("Nia".to_owned()),
-            assignments: vec![assignment(2, "Tidecaller")],
-            ready: true,
-            local: local_seat == hex_core::PlayerSeat(2),
-        },
-        MultiplayerSeatView {
-            seat: hex_core::PlayerSeat(3),
-            connection: if reconnecting {
-                MultiplayerSeatConnectionView::Delegated
-            } else {
-                MultiplayerSeatConnectionView::Reserved { seconds: 17 }
+    MultiplayerView {
+        route: hex_gameplay_model::MultiplayerRoute::Lobby,
+        role: Some(hex_gameplay_model::MultiplayerRole::Client),
+        local_seat: Some(local_seat),
+        seats: vec![
+            MultiplayerSeatView {
+                seat: hex_core::PlayerSeat::HOST,
+                connection: MultiplayerSeatConnectionView::Connected,
+                player_label: Some("Host · Aria".to_owned()),
+                assignments: vec![assignment(0, "Hedge Mage"), assignment(5, "Stone Warden")],
+                ready: true,
+                local: local_seat == hex_core::PlayerSeat::HOST,
             },
-            player_label: Some("Oren".to_owned()),
-            assignments: vec![assignment(3, "Gale Adept")],
-            ready: false,
-            local: local_seat == hex_core::PlayerSeat(3),
-        },
-        MultiplayerSeatView {
-            seat: hex_core::PlayerSeat(4),
-            connection: if reconnecting {
-                MultiplayerSeatConnectionView::ReclaimPending
-            } else {
-                MultiplayerSeatConnectionView::Delegated
+            MultiplayerSeatView {
+                seat: hex_core::PlayerSeat(1),
+                connection: MultiplayerSeatConnectionView::Connected,
+                player_label: Some("Milo".to_owned()),
+                assignments: vec![assignment(1, "Ember Knight")],
+                ready: true,
+                local: local_seat == hex_core::PlayerSeat(1),
             },
-            player_label: Some("Pia".to_owned()),
-            assignments: vec![assignment(4, "Bloom Sage")],
-            ready: false,
-            local: local_seat == hex_core::PlayerSeat(4),
-        },
-        MultiplayerSeatView::vacant(hex_core::PlayerSeat(5)),
-    ];
-    view.launch_summary = Some("Shipped Sandbox · Party Trial · seed 77".to_owned());
-    view.notice = reconnecting.then(|| {
-        "Seat 5 reconnected. Control returns after the current command, decision, and movement finish."
-            .to_owned()
-    });
-    view.can_launch = false;
-    view.launch_blocker = Some(if reconnecting {
-        "Seat 5 is waiting for a safe authority boundary.".to_owned()
-    } else {
-        "Seat 4 is disconnected; wait for reconnection or delegation.".to_owned()
-    });
-    view
+            MultiplayerSeatView {
+                seat: hex_core::PlayerSeat(2),
+                connection: MultiplayerSeatConnectionView::Connected,
+                player_label: Some("Nia".to_owned()),
+                assignments: vec![assignment(2, "Tidecaller")],
+                ready: true,
+                local: local_seat == hex_core::PlayerSeat(2),
+            },
+            MultiplayerSeatView {
+                seat: hex_core::PlayerSeat(3),
+                connection: if reconnecting {
+                    MultiplayerSeatConnectionView::Delegated
+                } else {
+                    MultiplayerSeatConnectionView::Reserved { seconds: 17 }
+                },
+                player_label: Some("Oren".to_owned()),
+                assignments: vec![assignment(3, "Gale Adept")],
+                ready: false,
+                local: local_seat == hex_core::PlayerSeat(3),
+            },
+            MultiplayerSeatView {
+                seat: hex_core::PlayerSeat(4),
+                connection: if reconnecting {
+                    MultiplayerSeatConnectionView::ReclaimPending
+                } else {
+                    MultiplayerSeatConnectionView::Delegated
+                },
+                player_label: Some("Pia".to_owned()),
+                assignments: vec![assignment(4, "Bloom Sage")],
+                ready: false,
+                local: local_seat == hex_core::PlayerSeat(4),
+            },
+            MultiplayerSeatView::vacant(hex_core::PlayerSeat(5)),
+        ],
+        launch_summary: Some("Shipped Sandbox · Party Trial · seed 77".to_owned()),
+        notice: reconnecting.then(|| {
+            "Seat 5 reconnected. Control returns after the current command, decision, and movement finish."
+                .to_owned()
+        }),
+        can_launch: false,
+        launch_blocker: Some(if reconnecting {
+            "Seat 5 is waiting for a safe authority boundary.".to_owned()
+        } else {
+            "Seat 4 is disconnected; wait for reconnection or delegation.".to_owned()
+        }),
+        ..default()
+    }
 }
 
 #[cfg(any(feature = "visual-review", feature = "test-support"))]
