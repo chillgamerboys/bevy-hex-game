@@ -34,6 +34,13 @@ use hex_units::{
     ReplicaUnitSpawn, StandsOn, UnitAllocator, UnitRegistry,
 };
 
+/// Cross-adapter ordering point after authoritative gameplay projections are visible.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum MultiplayerGameplaySystems {
+    /// Exact authority facts have been projected and deferred replica writes are flushed.
+    PublishAuthorityProjection,
+}
+
 #[derive(Resource, Debug)]
 struct LocalRequestIds {
     last: u64,
@@ -95,13 +102,6 @@ pub(crate) struct ApplyReplicaBaseline {
 }
 
 impl ApplyReplicaBaseline {
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "L4 begins constructing typed baselines once its live-snapshot adapter lands"
-        )
-    )]
     pub(crate) fn new(
         units: impl IntoIterator<Item = UnitReplica>,
         session: SessionReplica,
@@ -132,13 +132,6 @@ impl ApplyReplicaBaseline {
 }
 
 /// Why a locally received live-session baseline was not safe to apply.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "L4 exposes this typed refusal through its reconnect loading adapter"
-    )
-)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReplicaBaselineError {
     InvalidSession(ReplicaValidationError),
@@ -210,6 +203,7 @@ pub(super) fn plugin(app: &mut App) {
         .add_systems(
             Update,
             publish_authority_replicas
+                .in_set(MultiplayerGameplaySystems::PublishAuthorityProjection)
                 .after(CombatSystems::Advance)
                 .run_if(in_state(Screen::Gameplay))
                 .run_if(resource_equals(SimulationRole::Authority)),

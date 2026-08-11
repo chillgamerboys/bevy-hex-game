@@ -260,11 +260,11 @@ fn render_join_direct(root: &mut ChildSpawnerCommands, assets: &UiAssets, view: 
                     assets,
                     "Reconnect Reserved Seat",
                     MultiplayerIntent::ReconnectDirect,
-                    !view.join_code.is_empty(),
+                    true,
                 );
                 form.spawn(fine(
                     assets,
-                    "Reconnect uses the private rotating credential stored by this app; the pasted code supplies only the pinned host endpoint.",
+                    "Reconnect uses this app's private rotating credential and its persisted pinned host endpoint. The old invite code is not required.",
                 ));
             }
             action_button(form, assets, "Back", MultiplayerIntent::Back, true);

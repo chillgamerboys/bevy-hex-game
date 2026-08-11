@@ -9,23 +9,28 @@ use bevy::picking::Pickable;
 use bevy::prelude::*;
 use hex_assets::{
     character_lattice_file, character_runtime_key, combined_spell_file, AcceptedContentRevision,
-    CombatSettings, ContentIndex, CreationCellKind, CreationPresetCatalog, CustomCharacterId,
-    ElementCatalog, Encounter, EncounterFaction, EncounterPlacement, FixedSettingsFreeze,
-    FormationCenter, GameAssets, LatticeFile, LatticeLibrary, PlayerSettings, PresetAudience,
-    Roster, RosterEntry, SandboxDeploymentRegion, SandboxMapCatalog, SandboxMapDefinition,
-    SandboxRegionCenter, SavedCharacter, Scenario, ScenarioLibrary, SpellBook, SpellFile,
-    SubstanceTable,
+    ActionEconomy, ChannellingTrickle, CombatSettings, ContentIndex, CreationCellKind,
+    CreationPresetCatalog, CustomCharacterId, ElementCatalog, Encounter, EncounterFaction,
+    EncounterPlacement, FixedSettingsFreeze, FormationCenter, GameAssets, InitiativePolicy,
+    LatticeFile, LatticeLibrary, PlayerSettings, PresetAudience, Roster, RosterEntry, RoutPolicy,
+    SandboxDeploymentRegion, SandboxMapCatalog, SandboxMapDefinition, SandboxRegionCenter,
+    SavedCharacter, Scenario, ScenarioLibrary, SpellBook, SpellFile, SubstanceTable,
 };
 use hex_core::{
     GameplayPhase, GameplaySetup, GameplaySetupFailure, Headroom, HexSpan, HexTile,
-    PresentationOcclusion, PresentationOcclusionReason, ResolvedMapSeed, Screen, SubstanceId,
-    TilePos, TraversalBlockers, TraversalProfile, UnitId,
+    PresentationOcclusion, PresentationOcclusionReason, ResolvedMapSeed, Screen, SimSeeds,
+    SubstanceId, TilePos, TraversalBlockers, TraversalProfile, UnitId,
 };
 use hex_gameplay_model::{
     CampaignSlotId, CreatorNavigation, MainMenuModel, MainMenuRoute, SandboxBackResult,
     SandboxCharacter, SandboxDeploymentModel, SandboxDeploymentSlot, SandboxDeploymentStage,
     SandboxDestination, SandboxEntryOrigin, SandboxMapSelection, SandboxModel,
     SandboxPlacementRefusal, SandboxRoute, SandboxSide, SandboxSlotIndex, SandboxStartBlocker,
+};
+use hex_map::{CurrentWorldSnapshotV1, MapSettings, ProceduralSettings, TerrainSettings};
+use hex_multiplayer::{
+    BoundedText, BoundedVec, ContentFingerprint, MapManifestV1, ProtocolVersion, RosterEntryV1,
+    RulesManifestV1, SessionInstanceId, SessionManifestV1, UnitDeploymentV1, MAX_IDENTITY_BYTES,
 };
 use hex_units::{Archetype, Body, Faction, Footing, StandsOn};
 
@@ -1341,12 +1346,20 @@ type DeploymentTileQuery<'w, 's> = Query<
 fn enter_deployment(
     mut commands: Commands,
     session: Option<Res<DeploymentSession>>,
+    direct_load: Option<Res<super::multiplayer::DirectMapLoadState>>,
     mut phase: ResMut<GameplayPhase>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut actors: Query<&mut PresentationOcclusion, With<Faction>>,
 ) {
     let Some(_session) = session.as_deref() else {
-        *phase = GameplayPhase::Active;
+        *phase = if direct_load
+            .as_deref()
+            .is_some_and(super::multiplayer::DirectMapLoadState::is_loading)
+        {
+            GameplayPhase::Preparing
+        } else {
+            GameplayPhase::Active
+        };
         return;
     };
     *phase = GameplayPhase::Deployment;
@@ -1557,6 +1570,9 @@ struct DeploymentRuntime<'w, 's> {
     active: Option<ResMut<'w, crate::scenarios::ActiveScenario>>,
     sandbox: Option<ResMut<'w, SandboxSession>>,
     accepted: Option<Res<'w, AcceptedContentRevision>>,
+    current_world: Option<Res<'w, CurrentWorldSnapshotV1>>,
+    map_settings: Option<Res<'w, MapSettings>>,
+    sim_seeds: Option<Res<'w, SimSeeds>>,
     origin: Option<Res<'w, GameplaySessionOrigin>>,
 }
 
@@ -1564,6 +1580,139 @@ struct DeploymentRuntime<'w, 's> {
 struct OrderedDeploymentUnit {
     id: UnitId,
     entity: Entity,
+}
+
+fn direct_identity(value: &str) -> Result<BoundedText<MAX_IDENTITY_BYTES>, String> {
+    BoundedText::new(value).map_err(|error| format!("multiplayer identity is invalid: {error}"))
+}
+
+fn direct_generator_contract(settings: &MapSettings) -> (&'static str, u32) {
+    match &settings.terrain {
+        TerrainSettings::Showcase(_) => ("showcase", 1),
+        TerrainSettings::Perlin(_) => ("perlin", 1),
+        TerrainSettings::Procedural(ProceduralSettings::V1(_)) => ("procedural-v1", 1),
+        TerrainSettings::Procedural(ProceduralSettings::V2(_)) => ("procedural-v2", 2),
+        TerrainSettings::Procedural(ProceduralSettings::V3(_)) => ("procedural-v3", 3),
+    }
+}
+
+pub(crate) fn direct_rules_fingerprint(rules: &CombatSettings) -> u64 {
+    let mut bytes = b"hex-direct-sandbox-rules-v1".to_vec();
+    for value in [
+        rules.engage_range,
+        rules.disengage_margin,
+        rules.movement_per_turn,
+        rules.default_initiative,
+        rules.levels_per_bonus_range,
+        rules.divination_rounds_per_tier,
+    ] {
+        bytes.extend_from_slice(&value.to_be_bytes());
+    }
+    bytes.extend_from_slice(&rules.strike_disables.to_be_bytes());
+    bytes.push(match rules.initiative_policy {
+        InitiativePolicy::FlatComponent => 0,
+        InitiativePolicy::DerivedFromLattice => 1,
+        InitiativePolicy::RolledPerCombat => 2,
+        InitiativePolicy::RerolledEachRound => 3,
+        InitiativePolicy::FixedWithHold => 4,
+    });
+    bytes.push(match rules.action_economy {
+        ActionEconomy::MoveAndAction => 0,
+        ActionEconomy::StrictOneAction => 1,
+        ActionEconomy::FreeMovementPlusAction => 2,
+        ActionEconomy::ActionPoints => 3,
+    });
+    bytes.push(match rules.channelling_trickle {
+        ChannellingTrickle::BurstOnly => 0,
+        ChannellingTrickle::TrickleWithBurst => 1,
+    });
+    bytes.push(match rules.rout_policy {
+        RoutPolicy::FightToTheEnd => 0,
+        RoutPolicy::RoutThreshold => 1,
+        RoutPolicy::SurrenderOffers => 2,
+    });
+    xxhash_rust::xxh3::xxh3_64(&bytes)
+}
+
+fn prepare_direct_sandbox_session(
+    sandbox: &SandboxSession,
+    players: &[OrderedDeploymentUnit],
+    party_placements: &[TilePos],
+    accepted_content_revision: u64,
+    current_world: &CurrentWorldSnapshotV1,
+    map_settings: &MapSettings,
+    sim_seeds: SimSeeds,
+) -> Result<super::multiplayer::PreparedDirectSandboxSession, String> {
+    if sandbox
+        .launch
+        .enemies
+        .iter()
+        .any(|choice| matches!(choice, SandboxCharacter::Custom(_)))
+    {
+        return Err("Direct multiplayer supports only shipped hostile templates.".to_owned());
+    }
+    if players.len() != sandbox.launch.party.len()
+        || players.len() != party_placements.len()
+        || players.is_empty()
+    {
+        return Err("the frozen multiplayer party and deployment no longer agree".to_owned());
+    }
+
+    let mut roster = Vec::with_capacity(players.len());
+    let mut deployment = Vec::with_capacity(players.len());
+    for ((unit, choice), position) in players
+        .iter()
+        .zip(&sandbox.launch.party)
+        .zip(party_placements)
+    {
+        let SandboxCharacter::Template(template) = choice else {
+            return Err("Direct multiplayer supports only shipped character templates.".to_owned());
+        };
+        roster.push(RosterEntryV1 {
+            unit: unit.id,
+            archetype_identity: direct_identity(template)?,
+            character_identity: direct_identity(template)?,
+            faction: Faction::Player,
+        });
+        deployment.push(UnitDeploymentV1 {
+            unit: unit.id,
+            position: *position,
+        });
+    }
+
+    let (generator_identity, generator_version) = direct_generator_contract(map_settings);
+    let manifest = SessionManifestV1 {
+        session_instance_id: SessionInstanceId::generate(),
+        protocol: ProtocolVersion::default(),
+        build: super::multiplayer::local_build_identity()
+            .map_err(|error| format!("local build identity is invalid: {error}"))?,
+        content_fingerprint: ContentFingerprint(accepted_content_revision),
+        scenario_identity: direct_identity(&sandbox.launch.scenario)?,
+        map: MapManifestV1 {
+            catalog_identity: direct_identity(&sandbox.launch.map.catalog_id)?,
+            seed: sandbox.launch.map.resolved_seed.unwrap_or_default(),
+            generator_identity: direct_identity(generator_identity)?,
+            generator_version,
+            expected_public_fingerprint: current_world.fingerprint(),
+        },
+        rules: RulesManifestV1 {
+            profile_identity: direct_identity("sandbox-rules-v1")?,
+            fingerprint: direct_rules_fingerprint(&sandbox.launch.rules),
+        },
+        shipped_roster: BoundedVec::new(roster)
+            .map_err(|error| format!("multiplayer roster is invalid: {error}"))?,
+        deployment: BoundedVec::new(deployment)
+            .map_err(|error| format!("multiplayer deployment is invalid: {error}"))?,
+        simulation_seeds: sim_seeds,
+    };
+    let summary = format!(
+        "{} · {} party member{}",
+        sandbox.launch.scenario,
+        players.len(),
+        if players.len() == 1 { "" } else { "s" }
+    );
+    super::multiplayer::PreparedDirectSandboxSession::new(manifest, summary)
+        .ok_or_else(|| "the frozen multiplayer manifest failed validation".to_owned())
 }
 
 /// Associates the spawned roster with launch slots exclusively through stable ids.
@@ -1690,6 +1839,12 @@ fn handle_deployment_actions(
                     Some("SandboxSession is missing")
                 } else if runtime.accepted.is_none() {
                     Some("AcceptedContentRevision is missing")
+                } else if direct_host.is_some() && runtime.current_world.is_none() {
+                    Some("CurrentWorldSnapshotV1 is missing")
+                } else if direct_host.is_some() && runtime.map_settings.is_none() {
+                    Some("MapSettings is missing")
+                } else if direct_host.is_some() && runtime.sim_seeds.is_none() {
+                    Some("SimSeeds is missing")
                 } else if !matches!(
                     runtime.origin.as_deref(),
                     Some(GameplaySessionOrigin::Sandbox)
@@ -1779,6 +1934,43 @@ fn handle_deployment_actions(
                     .deployment
                     .ordered_placements(SandboxSide::Enemies)
                     .collect::<Vec<_>>();
+                let direct_prepared = if direct_host.is_some() {
+                    let (Some(current_world), Some(map_settings), Some(sim_seeds)) = (
+                        runtime.current_world.as_deref(),
+                        runtime.map_settings.as_deref(),
+                        runtime.sim_seeds.as_deref(),
+                    ) else {
+                        error!(
+                            "refusing Direct Host deployment because its world identity changed during validation"
+                        );
+                        session
+                            .deployment
+                            .refuse(SandboxPlacementRefusal::LaunchIdentityUnavailable);
+                        continue;
+                    };
+                    match prepare_direct_sandbox_session(
+                        sandbox,
+                        &players,
+                        &party_placements,
+                        accepted_content_revision,
+                        current_world,
+                        map_settings,
+                        *sim_seeds,
+                    ) {
+                        Ok(prepared) => Some(prepared),
+                        Err(reason) => {
+                            error!(
+                                "refusing Direct Host deployment because its manifest could not be frozen: {reason}"
+                            );
+                            session
+                                .deployment
+                                .refuse(SandboxPlacementRefusal::LaunchIdentityUnavailable);
+                            continue;
+                        }
+                    }
+                } else {
+                    None
+                };
                 let moves = deployment_moves(&players, &party_placements, &footing).and_then(
                     |mut moves| {
                         moves.extend(deployment_moves(&hostiles, &enemy_placements, &footing)?);
@@ -1828,11 +2020,8 @@ fn handle_deployment_actions(
                 }
                 commands.remove_resource::<DeploymentSession>();
                 commands.remove_resource::<DeploymentMarkerMaterials>();
-                if direct_host.is_some() {
-                    // L3 inserts `PreparedDirectSandboxSession` at this exact frozen
-                    // deployment boundary after computing the complete public-world
-                    // fingerprint. Returning to the session screen tears down this
-                    // generated setup world; hosting opens only if that resource exists.
+                if let Some(prepared) = direct_prepared {
+                    commands.insert_resource(prepared);
                     *phase = GameplayPhase::Preparing;
                     next.set(Screen::Multiplayer);
                     continue;
@@ -1969,6 +2158,71 @@ mod tests {
                 center: SandboxRegionCenter::Fixed(hex_assets::CubeCoord { x: 2, y: -2, z: 0 }),
                 radius: 1,
             },
+        }
+    }
+
+    #[test]
+    fn direct_rules_fingerprint_covers_every_combat_knob_and_policy() {
+        let base = CombatSettings::default();
+        let expected = direct_rules_fingerprint(&base);
+        assert_eq!(expected, direct_rules_fingerprint(&base));
+
+        macro_rules! assert_numeric_change {
+            ($field:ident, $value:expr) => {{
+                let mut changed = base.clone();
+                changed.$field = $value;
+                assert_ne!(
+                    direct_rules_fingerprint(&changed),
+                    expected,
+                    "{} must participate in the exact rules identity",
+                    stringify!($field)
+                );
+            }};
+        }
+
+        assert_numeric_change!(engage_range, base.engage_range.saturating_add(1));
+        assert_numeric_change!(disengage_margin, base.disengage_margin.saturating_add(1));
+        assert_numeric_change!(movement_per_turn, base.movement_per_turn.saturating_add(1));
+        assert_numeric_change!(
+            default_initiative,
+            base.default_initiative.saturating_add(1)
+        );
+        assert_numeric_change!(
+            levels_per_bonus_range,
+            base.levels_per_bonus_range.saturating_add(1)
+        );
+        assert_numeric_change!(strike_disables, base.strike_disables.saturating_add(1));
+        assert_numeric_change!(
+            divination_rounds_per_tier,
+            base.divination_rounds_per_tier.saturating_add(1)
+        );
+
+        for initiative_policy in [
+            InitiativePolicy::DerivedFromLattice,
+            InitiativePolicy::RolledPerCombat,
+            InitiativePolicy::RerolledEachRound,
+            InitiativePolicy::FixedWithHold,
+        ] {
+            let mut changed = base.clone();
+            changed.initiative_policy = initiative_policy;
+            assert_ne!(direct_rules_fingerprint(&changed), expected);
+        }
+        for action_economy in [
+            ActionEconomy::StrictOneAction,
+            ActionEconomy::FreeMovementPlusAction,
+            ActionEconomy::ActionPoints,
+        ] {
+            let mut changed = base.clone();
+            changed.action_economy = action_economy;
+            assert_ne!(direct_rules_fingerprint(&changed), expected);
+        }
+        let mut changed = base.clone();
+        changed.channelling_trickle = ChannellingTrickle::TrickleWithBurst;
+        assert_ne!(direct_rules_fingerprint(&changed), expected);
+        for rout_policy in [RoutPolicy::RoutThreshold, RoutPolicy::SurrenderOffers] {
+            let mut changed = base.clone();
+            changed.rout_policy = rout_policy;
+            assert_ne!(direct_rules_fingerprint(&changed), expected);
         }
     }
 

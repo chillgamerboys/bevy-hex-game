@@ -4,33 +4,52 @@
 //! [`PreparedDirectSandboxSession`] and [`DirectWorldReady`]; this module never substitutes
 //! `GenerationReport::map_fingerprint` for the complete public-world contract.
 
-use std::collections::BTreeSet;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use bevy::prelude::*;
-use bevy_replicon::prelude::{ClientState, ProtocolHash};
-use hex_assets::AcceptedContentRevision;
+use bevy_replicon::prelude::{ClientId, ClientState, ProtocolHash, SendTargets, ToClients};
+use hex_assets::{
+    AcceptedContentRevision, CombatSettings, CubeCoord, Encounter, EncounterFaction,
+    EncounterPlacement, FormationCenter, Roster, RosterEntry, ScenarioLibrary, SubstanceTable,
+};
 use hex_core::{
-    CommandRequestId, InputAction, InputBindings, PlayerSeat, Screen, SimulationRole, UnitId,
+    CommandRequestId, GameplayPhase, InputAction, InputBindings, LocalMapKnowledge, PlayerSeat,
+    ResolvedMapSeed, Screen, SimulationRole, UnitId,
 };
 use hex_gameplay_model::{
     MainMenuModel, MainMenuRoute, MultiplayerBackResult, MultiplayerEndReason, MultiplayerModel,
     MultiplayerRole,
 };
+use hex_map::{
+    diff_world_snapshots_v1, CurrentWorldSnapshotV1, WorldReplicationOutcomeV1,
+    WorldReplicationRefusalV1, WorldReplicationRequestV1, WorldReplicationResultV1,
+};
 use hex_multiplayer::{
     AdmissionAccepted, AdmissionCredential, AdmissionRefusal, AdmissionRefusalReason,
-    AtomicFileReconnectCredentialStore, BuildIdentityV1, CertificateFingerprint, ClientHello,
-    ClientLobbyAction, ClientLobbyRequest, ClientMapReady, ContentFingerprint,
+    AtomicFileReconnectCredentialStore, AuthorityBoundary, AuthoritySequence,
+    AuthorizedSessionClient, BoundedVec, BuildIdentityV1, CertificateFingerprint, ClientHello,
+    ClientLobbyAction, ClientLobbyRequest, ClientMapReady, CommandSequencer, ContentFingerprint,
     CredentialStorageOperation, CredentialStorageStatus, DirectConnectionCode, DirectEndpoint,
-    HostSessionAction, HostSessionControlRequest, LobbyPhase, LobbySnapshot, PreparedDirectHost,
-    PreparedDirectJoin, PublicWorldFingerprint, ReconnectCredentialStorage, SeatConnectionState,
-    SessionAdmissionAuthority, SessionCloseReason, SessionClosed, SessionControlOutcome,
-    SessionControlRefusal, SessionControlResult, SessionManifestV1, StoredReconnectCredential,
+    HostSessionAction, HostSessionControlRequest, LiveSessionSnapshotV1, LiveSnapshotHeaderV1,
+    LobbyPhase, LobbySnapshot, PlayerKnowledgeSnapshotV1, PreparedDirectHost, PreparedDirectJoin,
+    PreparedDirectReconnect, PublicWorldFingerprint, ReconnectCredentialStorage,
+    ReconnectEndpointBinding, SeatConnectionState, SessionAdmissionAuthority, SessionCloseReason,
+    SessionClosed, SessionControlOutcome, SessionControlRefusal, SessionControlResult,
+    SessionInstanceId, SessionManifestV1, SessionReplica, StoredReconnectCredential, UnitReplica,
+    WorldDeltaV1, WorldSnapshotV1, LIVE_SESSION_SNAPSHOT_VERSION_V1, MAX_SESSION_UNITS,
+};
+use hex_perception::{
+    export_player_knowledge_snapshot_v1, import_player_knowledge_snapshot_v1, FactionMapKnowledge,
 };
 use hex_ui::{
     MultiplayerAssignmentView, MultiplayerIntent, MultiplayerSeatConnectionView,
     MultiplayerSeatView, MultiplayerTextField, MultiplayerView, SensitiveText, UiIntent, UiSystems,
 };
 
+use crate::multiplayer_gameplay::{ApplyReplicaBaseline, MultiplayerGameplaySystems};
 use crate::storage::StoragePaths;
 
 /// World-owned, fully validated handoff created after shipped Sandbox deployment.
@@ -122,16 +141,23 @@ enum DirectStartQueue {
         prepared: Box<PreparedDirectSandboxSession>,
     },
     Join {
-        code: DirectConnectionCode,
+        target: DirectJoinTarget,
         credential: AdmissionCredential,
         reconnecting: bool,
     },
 }
 
 #[derive(Debug, Clone)]
+enum DirectJoinTarget {
+    Invite(DirectConnectionCode),
+    Reconnect(ReconnectEndpointBinding),
+}
+
+#[derive(Debug, Clone)]
 struct HostedCodeSource {
     endpoint: DirectEndpoint,
     certificate_fingerprint: CertificateFingerprint,
+    certificate_expires_unix_seconds: u64,
 }
 
 #[derive(Resource, Debug)]
@@ -153,6 +179,27 @@ struct MapReadyReportState {
     sent: bool,
 }
 
+/// One lobby loading epoch whose local world is being generated and verified.
+#[derive(Resource, Debug, Default)]
+pub(crate) struct DirectMapLoadState {
+    session: Option<SessionInstanceId>,
+    loading: bool,
+    started: bool,
+    awaiting_snapshot: bool,
+    restored_reconnect: bool,
+}
+
+impl DirectMapLoadState {
+    pub(crate) const fn is_loading(&self) -> bool {
+        self.loading
+    }
+
+    fn mark_reconnect_restored(&mut self) {
+        self.awaiting_snapshot = false;
+        self.restored_reconnect = true;
+    }
+}
+
 #[derive(Resource, Debug, Default)]
 struct HostOutcomeState {
     sent: bool,
@@ -160,6 +207,32 @@ struct HostOutcomeState {
 
 #[derive(Resource, Debug)]
 struct HostShutdownCountdown(u8);
+
+#[derive(Resource, Debug, Default)]
+struct PendingReconnectSnapshotTargets(BTreeSet<Entity>);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplicaWorldRequestKind {
+    Baseline(AuthoritySequence),
+    Delta(AuthoritySequence),
+}
+
+#[derive(Resource, Debug, Default)]
+struct ReplicaWorldSyncState {
+    baseline: Option<Box<LiveSessionSnapshotV1>>,
+    player_knowledge: Option<PlayerKnowledgeSnapshotV1>,
+    deltas: BTreeMap<AuthoritySequence, WorldDeltaV1>,
+    in_flight: Option<ReplicaWorldRequestKind>,
+}
+
+#[derive(Resource, Debug, Default)]
+struct HostWorldDeltaState {
+    snapshot: Option<WorldSnapshotV1>,
+    authority_sequence: Option<AuthoritySequence>,
+}
+
+#[derive(Resource, Debug, Default)]
+struct HostPlayerKnowledgeState(Option<PlayerKnowledgeSnapshotV1>);
 
 pub(super) fn plugin(app: &mut App) {
     app.init_resource::<StoragePaths>();
@@ -183,7 +256,12 @@ pub(super) fn plugin(app: &mut App) {
         .init_resource::<StoredCredentialState>()
         .init_resource::<SessionUiRequestIds>()
         .init_resource::<MapReadyReportState>()
+        .init_resource::<DirectMapLoadState>()
         .init_resource::<HostOutcomeState>()
+        .init_resource::<PendingReconnectSnapshotTargets>()
+        .init_resource::<ReplicaWorldSyncState>()
+        .init_resource::<HostWorldDeltaState>()
+        .init_resource::<HostPlayerKnowledgeState>()
         .add_systems(Startup, load_stored_credential)
         .add_systems(
             OnEnter(Screen::Multiplayer),
@@ -207,8 +285,19 @@ pub(super) fn plugin(app: &mut App) {
                 detect_failed_client_connection,
                 detect_failed_host_endpoint,
                 sync_host_session,
+                drive_direct_map_loading,
                 finish_host_shutdown,
-                report_client_map_ready,
+                observe_current_world_ready,
+                report_local_map_ready,
+                capture_reconnect_snapshot_targets,
+                publish_host_world_deltas
+                    .after(MultiplayerGameplaySystems::PublishAuthorityProjection),
+                send_pending_reconnect_snapshots,
+                finish_replica_world_request,
+                capture_replica_world_messages,
+                issue_replica_world_request,
+                apply_replica_player_knowledge,
+                publish_host_player_knowledge,
                 publish_host_outcome,
                 publish_view.before(UiSystems::Render),
             )
@@ -238,6 +327,22 @@ fn load_stored_credential(
     mut state: ResMut<StoredCredentialState>,
     mut notice: ResMut<SessionUiNotice>,
 ) {
+    let Some(now) = current_unix_seconds() else {
+        state.value = None;
+        notice.0 = Some(
+            "The system clock cannot validate the temporary reconnect credential; ordinary Direct Join remains available."
+                .to_owned(),
+        );
+        return;
+    };
+    if storage.store().delete_if_expired(now).is_err() {
+        state.value = None;
+        notice.0 = Some(
+            "Expired reconnect state could not be checked; ordinary Direct Join remains available."
+                .to_owned(),
+        );
+        return;
+    }
     match storage.store().load() {
         Ok(value) => state.value = value,
         Err(_) => {
@@ -296,7 +401,8 @@ fn handle_intents(
     mut intents: MessageReader<UiIntent>,
     mut model: ResMut<MultiplayerModel>,
     mut draft: ResMut<MultiplayerDraft>,
-    stored: Res<StoredCredentialState>,
+    mut stored: ResMut<StoredCredentialState>,
+    storage: Option<Res<ReconnectCredentialStorage>>,
     projection: Res<SessionProjection>,
     authority: Option<Res<SessionAdmissionAuthority>>,
     active: Option<Res<ActiveDirectSession>>,
@@ -366,25 +472,47 @@ fn handle_intents(
                     notice.0 = Some("A direct session is already active.".to_owned());
                     continue;
                 }
-                let code = match DirectConnectionCode::parse(draft.join_code.expose()) {
-                    Ok(code) => code,
-                    Err(error) => {
-                        notice.0 = Some(format!("Direct connection code refused: {error}."));
-                        continue;
-                    }
-                };
                 let reconnecting = matches!(intent, MultiplayerIntent::ReconnectDirect);
-                let credential = if reconnecting {
-                    let Some(stored) = stored.value else {
+                let (target, credential) = if reconnecting {
+                    let Some(stored_credential) = stored.value.clone() else {
                         notice.0 = Some(
                             "No private reconnect credential is available in temporary storage."
                                 .to_owned(),
                         );
                         continue;
                     };
-                    AdmissionCredential::Reconnect(stored.reconnect_credential)
+                    let Some(now) = current_unix_seconds() else {
+                        notice.0 = Some(
+                            "The system clock cannot validate the private reconnect credential."
+                                .to_owned(),
+                        );
+                        continue;
+                    };
+                    if stored_credential.is_expired_at(now) {
+                        if let Some(storage) = storage.as_deref() {
+                            let _deleted = storage.store().delete_if_expired(now);
+                        }
+                        stored.value = None;
+                        notice.0 = Some(
+                            "The saved host certificate has expired. Ask the host for a fresh session invite."
+                                .to_owned(),
+                        );
+                        continue;
+                    }
+                    (
+                        DirectJoinTarget::Reconnect(stored_credential.endpoint_binding),
+                        AdmissionCredential::Reconnect(stored_credential.reconnect_credential),
+                    )
                 } else {
-                    AdmissionCredential::Invite(code.invite_token)
+                    let code = match DirectConnectionCode::parse(draft.join_code.expose()) {
+                        Ok(code) => code,
+                        Err(error) => {
+                            notice.0 = Some(format!("Direct connection code refused: {error}."));
+                            continue;
+                        }
+                    };
+                    let credential = AdmissionCredential::Invite(code.invite_token);
+                    (DirectJoinTarget::Invite(code), credential)
                 };
                 if reconnecting {
                     model.connecting(MultiplayerRole::Client);
@@ -394,7 +522,7 @@ fn handle_intents(
                 }
                 notice.0 = None;
                 commands.insert_resource(DirectStartQueue::Join {
-                    code,
+                    target,
                     credential,
                     reconnecting,
                 });
@@ -528,6 +656,13 @@ fn handle_intents(
     }
 }
 
+fn current_unix_seconds() -> Option<u64> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|elapsed| elapsed.as_secs())
+}
+
 fn direct_endpoint(draft: &MultiplayerDraft) -> Result<DirectEndpoint, String> {
     let port = draft
         .advertised_port
@@ -617,10 +752,10 @@ fn start_queued_direct_session(world: &mut World) {
             start_direct_host(world, endpoint, *prepared)
         }
         DirectStartQueue::Join {
-            code,
+            target,
             credential,
             reconnecting,
-        } => start_direct_join(world, &code, credential, reconnecting),
+        } => start_direct_join(world, &target, credential, reconnecting),
     };
     if let Err(reason) = result {
         if let Some(mut model) = world.get_resource_mut::<MultiplayerModel>() {
@@ -646,6 +781,7 @@ fn start_direct_host(
     let hosted_code = HostedCodeSource {
         endpoint,
         certificate_fingerprint: direct.connection_code().certificate_fingerprint,
+        certificate_expires_unix_seconds: direct.connection_code().certificate_expires_unix_seconds,
     };
     let server = direct.open(world);
     world.insert_resource(authority);
@@ -662,6 +798,11 @@ fn start_direct_host(
     world.insert_resource(SimulationRole::Authority);
     world.remove_resource::<PendingDirectHostSetup>();
     world.remove_resource::<DirectWorldReady>();
+    world.insert_resource(DirectMapLoadState::default());
+    world.insert_resource(PendingReconnectSnapshotTargets::default());
+    world.insert_resource(ReplicaWorldSyncState::default());
+    world.insert_resource(HostWorldDeltaState::default());
+    world.insert_resource(HostPlayerKnowledgeState::default());
     world.resource_mut::<MapReadyReportState>().sent = false;
     let admitted = world
         .resource_mut::<MultiplayerModel>()
@@ -674,16 +815,21 @@ fn start_direct_host(
 
 fn start_direct_join(
     world: &mut World,
-    code: &DirectConnectionCode,
+    target: &DirectJoinTarget,
     credential: AdmissionCredential,
     reconnecting: bool,
 ) -> Result<(), String> {
     if world.get_resource::<AcceptedContentRevision>().is_none() {
         return Err("Shipped content is still loading; Direct Join was not started.".to_owned());
     }
-    let direct = PreparedDirectJoin::new(code)
-        .map_err(|error| format!("Could not prepare the pinned direct connection: {error}."))?;
-    let entity = direct.connect(world);
+    let entity = match target {
+        DirectJoinTarget::Invite(code) => PreparedDirectJoin::new(code)
+            .map_err(|error| format!("Could not prepare the pinned direct connection: {error}."))?
+            .connect(world),
+        DirectJoinTarget::Reconnect(binding) => PreparedDirectReconnect::new(binding)
+            .map_err(|error| format!("Could not prepare the pinned direct reconnect: {error}."))?
+            .connect(world),
+    };
     world.insert_resource(ActiveDirectSession {
         entity,
         role: MultiplayerRole::Client,
@@ -696,6 +842,11 @@ fn start_direct_join(
     });
     world.insert_resource(SimulationRole::Replica);
     world.remove_resource::<DirectWorldReady>();
+    world.insert_resource(DirectMapLoadState::default());
+    world.insert_resource(PendingReconnectSnapshotTargets::default());
+    world.insert_resource(ReplicaWorldSyncState::default());
+    world.insert_resource(HostWorldDeltaState::default());
+    world.insert_resource(HostPlayerKnowledgeState::default());
     world.resource_mut::<MapReadyReportState>().sent = false;
     if reconnecting {
         world.resource_mut::<MultiplayerModel>().show_reconnecting();
@@ -745,7 +896,7 @@ fn send_client_hello(
     pending.sent = true;
 }
 
-fn local_build_identity() -> Result<BuildIdentityV1, hex_multiplayer::BoundError> {
+pub(crate) fn local_build_identity() -> Result<BuildIdentityV1, hex_multiplayer::BoundError> {
     BuildIdentityV1::new(
         env!("CARGO_PKG_VERSION"),
         option_env!("HEX_GAME_BUILD_ID").unwrap_or(env!("CARGO_PKG_VERSION")),
@@ -822,6 +973,7 @@ fn capture_session_messages(
                 }
             },
             CredentialStorageStatus::Deleted => stored.value = None,
+            CredentialStorageStatus::Preserved => {}
             CredentialStorageStatus::Failed(operation) => {
                 notice.0 = Some(match operation {
                     CredentialStorageOperation::Store => {
@@ -948,6 +1100,686 @@ fn sync_host_session(
     );
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the composition adapter joins the frozen lobby, local launch owner, and screen state without moving authority into shared protocol code"
+)]
+fn drive_direct_map_loading(
+    screen: Res<State<Screen>>,
+    active: Option<Res<ActiveDirectSession>>,
+    authority: Option<Res<SessionAdmissionAuthority>>,
+    projection: Res<SessionProjection>,
+    scenarios: Option<Res<ScenarioLibrary>>,
+    sandbox: Option<Res<super::sandbox::SandboxSession>>,
+    local_rules: Option<Res<CombatSettings>>,
+    ready: Option<Res<DirectWorldReady>>,
+    mut state: ResMut<DirectMapLoadState>,
+    mut report_state: ResMut<MapReadyReportState>,
+    mut phase: ResMut<GameplayPhase>,
+    mut model: ResMut<MultiplayerModel>,
+    mut notice: ResMut<SessionUiNotice>,
+    mut commands: Commands,
+    mut next_screen: ResMut<NextState<Screen>>,
+) {
+    let lobby = authority
+        .as_deref()
+        .map(|authority| authority.lobby().snapshot_owned())
+        .or_else(|| projection.lobby.clone());
+    let manifest = authority
+        .as_deref()
+        .map(|authority| authority.manifest().clone())
+        .or_else(|| projection.manifest.clone());
+    let (Some(active), Some(lobby), Some(manifest)) = (active, lobby, manifest) else {
+        state.loading = false;
+        state.started = false;
+        state.awaiting_snapshot = false;
+        state.restored_reconnect = false;
+        state.session = None;
+        return;
+    };
+
+    let reconnect_epoch = active.role == MultiplayerRole::Client
+        && matches!(lobby.phase, LobbyPhase::Active | LobbyPhase::Outcome)
+        && (state.awaiting_snapshot || (ready.is_none() && !state.restored_reconnect));
+    let requires_load = lobby.phase == LobbyPhase::Loading || reconnect_epoch;
+    if !requires_load {
+        if matches!(lobby.phase, LobbyPhase::Active | LobbyPhase::Outcome)
+            && ready.as_deref().is_some_and(|ready| {
+                state.restored_reconnect
+                    || ready.fingerprint == manifest.map.expected_public_fingerprint
+            })
+        {
+            *phase = GameplayPhase::Active;
+            next_screen.set(Screen::Gameplay);
+        }
+        state.loading = false;
+        state.started = false;
+        state.awaiting_snapshot = false;
+        state.session = Some(manifest.session_instance_id);
+        return;
+    }
+
+    if state.session != Some(manifest.session_instance_id) || !state.loading {
+        state.session = Some(manifest.session_instance_id);
+        state.loading = true;
+        state.started = false;
+        state.awaiting_snapshot = reconnect_epoch;
+        state.restored_reconnect = false;
+        report_state.sent = false;
+        *phase = GameplayPhase::Preparing;
+        commands.remove_resource::<DirectWorldReady>();
+    }
+    model.show_loading();
+    if state.started || matches!(screen.get(), Screen::Loading | Screen::Gameplay) {
+        return;
+    }
+
+    let loading_input = match active.role {
+        MultiplayerRole::Host => {
+            let Some(sandbox) = sandbox.as_deref() else {
+                notice.0 = Some(
+                    "The host's frozen Sandbox launch is unavailable; exact map loading was refused."
+                        .to_owned(),
+                );
+                end_active_session(
+                    MultiplayerEndReason::ProtocolViolation,
+                    Some(&active),
+                    &mut model,
+                    &mut commands,
+                );
+                next_screen.set(Screen::Multiplayer);
+                return;
+            };
+            commands.insert_resource(sandbox.launch.rules.clone());
+            sandbox.launch.loading_input()
+        }
+        MultiplayerRole::Client => {
+            let (Some(scenarios), Some(local_rules)) =
+                (scenarios.as_deref(), local_rules.as_deref())
+            else {
+                return;
+            };
+            let local_rules_fingerprint = super::sandbox::direct_rules_fingerprint(local_rules);
+            if manifest.rules.profile_identity.as_str() != "sandbox-rules-v1"
+                || manifest.rules.fingerprint != local_rules_fingerprint
+            {
+                notice.0 = Some(
+                    "Rules mismatch: Direct multiplayer requires the exact shipped Sandbox rules."
+                        .to_owned(),
+                );
+                end_active_session(
+                    MultiplayerEndReason::Incompatible,
+                    Some(&active),
+                    &mut model,
+                    &mut commands,
+                );
+                next_screen.set(Screen::Multiplayer);
+                return;
+            }
+            match client_scenario_to_load(&manifest, scenarios) {
+                Ok(loading_input) => loading_input,
+                Err(reason) => {
+                    notice.0 = Some(reason);
+                    end_active_session(
+                        MultiplayerEndReason::Incompatible,
+                        Some(&active),
+                        &mut model,
+                        &mut commands,
+                    );
+                    next_screen.set(Screen::Multiplayer);
+                    return;
+                }
+            }
+        }
+    };
+
+    commands.insert_resource(loading_input);
+    commands.insert_resource(GameplayPhase::Preparing);
+    next_screen.set(Screen::Loading);
+    state.started = true;
+}
+
+fn client_scenario_to_load(
+    manifest: &SessionManifestV1,
+    scenarios: &ScenarioLibrary,
+) -> Result<crate::scenarios::ScenarioToLoad, String> {
+    let scenario = scenarios
+        .scenarios
+        .iter()
+        .find(|scenario| scenario.name == manifest.scenario_identity.as_str())
+        .cloned()
+        .ok_or_else(|| {
+            "Scenario mismatch: the host's shipped scenario is unavailable locally.".to_owned()
+        })?;
+    let mut units = Vec::with_capacity(manifest.shipped_roster.len());
+    for entry in manifest.shipped_roster.as_slice() {
+        let placement = manifest
+            .deployment
+            .as_slice()
+            .iter()
+            .find(|placement| placement.unit == entry.unit)
+            .ok_or_else(|| "The host manifest omits a party deployment surface.".to_owned())?;
+        units.push(RosterEntry {
+            archetype: entry.archetype_identity.as_str().to_owned(),
+            placement: Some(EncounterPlacement::Surface(placement.position)),
+            ai_profile: None,
+            ai_group: None,
+        });
+    }
+    let encounter = Encounter {
+        name: format!("Direct replica · {}", manifest.scenario_identity.as_str()),
+        rosters: vec![Roster {
+            faction: EncounterFaction::Player,
+            placement: EncounterPlacement::Formation {
+                center: FormationCenter::Fixed(CubeCoord { x: 0, y: 0, z: 0 }),
+                spread: 0,
+            },
+            units,
+        }],
+    };
+    Ok(crate::scenarios::ScenarioToLoad {
+        resolved_seed: scenario
+            .generation_seed
+            .map(|_configured| ResolvedMapSeed(manifest.map.seed)),
+        scenario,
+        encounter_override: Some(encounter),
+    })
+}
+
+fn observe_current_world_ready(
+    screen: Res<State<Screen>>,
+    state: Res<DirectMapLoadState>,
+    current: Option<Res<CurrentWorldSnapshotV1>>,
+    existing: Option<Res<DirectWorldReady>>,
+    mut commands: Commands,
+) {
+    if !state.loading || *screen.get() != Screen::Gameplay {
+        return;
+    }
+    let Some(current) = current.as_deref() else {
+        return;
+    };
+    let fingerprint = current.fingerprint();
+    if existing
+        .as_deref()
+        .is_some_and(|ready| ready.fingerprint == fingerprint)
+    {
+        return;
+    }
+    commands.insert_resource(DirectWorldReady { fingerprint });
+}
+
+fn capture_reconnect_snapshot_targets(
+    added: Query<(Entity, &AuthorizedSessionClient), Added<AuthorizedSessionClient>>,
+    authority: Option<Res<SessionAdmissionAuthority>>,
+    mut pending: ResMut<PendingReconnectSnapshotTargets>,
+) {
+    let Some(authority) = authority else {
+        return;
+    };
+    if authority.lobby().snapshot().phase == LobbyPhase::Open {
+        return;
+    }
+    for (connection, client) in &added {
+        if authority.active_connection(client.seat) == Some(connection) {
+            pending.0.insert(connection);
+        }
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a restart baseline intentionally joins the exact world, knowledge, and disclosure-safe gameplay projections at one quiescent authority boundary"
+)]
+fn send_pending_reconnect_snapshots(
+    boundary: Res<AuthorityBoundary>,
+    authority: Option<Res<SessionAdmissionAuthority>>,
+    current_world: Option<Res<CurrentWorldSnapshotV1>>,
+    knowledge: Option<Res<FactionMapKnowledge>>,
+    substances: Option<Res<SubstanceTable>>,
+    sequencer: Res<CommandSequencer>,
+    units: Query<&UnitReplica>,
+    sessions: Query<&SessionReplica>,
+    mut pending: ResMut<PendingReconnectSnapshotTargets>,
+    mut snapshots: MessageWriter<ToClients<LiveSessionSnapshotV1>>,
+) {
+    if pending.0.is_empty() || !boundary.is_quiescent() {
+        return;
+    }
+    let (Some(authority), Some(current_world), Some(knowledge), Some(substances)) =
+        (authority, current_world, knowledge, substances)
+    else {
+        return;
+    };
+    if !matches!(
+        authority.lobby().snapshot().phase,
+        LobbyPhase::Active | LobbyPhase::Outcome
+    ) {
+        return;
+    }
+    let Some(mut session) = sessions
+        .iter()
+        .filter(|session| session.validate().is_ok())
+        .max_by_key(|session| session.authority_sequence)
+        .cloned()
+    else {
+        return;
+    };
+    let mut units = units
+        .iter()
+        .filter(|unit| unit.validate().is_ok())
+        .cloned()
+        .collect::<Vec<_>>();
+    units.sort_by_key(|unit| unit.unit);
+    let Ok(units) = BoundedVec::<_, MAX_SESSION_UNITS>::new(units) else {
+        error!("reconnect baseline exceeded the authorized unit bound");
+        return;
+    };
+    let Ok(player_knowledge) = export_player_knowledge_snapshot_v1(&knowledge, &substances) else {
+        error!("player knowledge could not be exported for a reconnect baseline");
+        return;
+    };
+    let baseline_sequence = sequencer.last_sequence();
+    session.authority_sequence = baseline_sequence;
+    let snapshot = LiveSessionSnapshotV1 {
+        version: LIVE_SESSION_SNAPSHOT_VERSION_V1,
+        manifest: authority.manifest().clone(),
+        world: current_world.snapshot().clone(),
+        player_knowledge,
+        units,
+        session,
+        baseline_sequence,
+    };
+
+    let connected = authority
+        .connected_peers()
+        .into_iter()
+        .map(|(_seat, connection)| connection)
+        .collect::<BTreeSet<_>>();
+    pending.0.retain(|connection| {
+        if !connected.contains(connection) {
+            return false;
+        }
+        snapshots.write(ToClients {
+            targets: SendTargets::Single(ClientId::Client(*connection)),
+            message: snapshot.clone(),
+        });
+        false
+    });
+}
+
+fn capture_replica_world_messages(
+    role: Res<SimulationRole>,
+    projection: Res<SessionProjection>,
+    mut knowledge: MessageReader<PlayerKnowledgeSnapshotV1>,
+    mut snapshots: MessageReader<LiveSessionSnapshotV1>,
+    mut deltas: MessageReader<WorldDeltaV1>,
+    mut state: ResMut<ReplicaWorldSyncState>,
+    mut notice: ResMut<SessionUiNotice>,
+) {
+    if *role != SimulationRole::Replica {
+        knowledge.clear();
+        snapshots.clear();
+        deltas.clear();
+        return;
+    }
+    for projection in knowledge.read() {
+        if projection.validate().is_ok() {
+            state.player_knowledge = Some(projection.clone());
+        } else {
+            notice.0 = Some("The host sent an invalid player-knowledge projection.".to_owned());
+        }
+    }
+    for snapshot in snapshots.read() {
+        let structurally_valid = LiveSnapshotHeaderV1::new(snapshot.baseline_sequence, 0)
+            .is_ok_and(|header| snapshot.validate_with_header(header).is_ok());
+        if !structurally_valid {
+            notice.0 = Some("The host sent an invalid reconnect baseline.".to_owned());
+            continue;
+        }
+        let Some(manifest) = projection.manifest.as_ref() else {
+            continue;
+        };
+        if &snapshot.manifest != manifest
+            || snapshot.baseline_sequence != snapshot.session.authority_sequence
+        {
+            notice.0 = Some(
+                "The reconnect baseline did not match the admitted session manifest.".to_owned(),
+            );
+            continue;
+        }
+        if state
+            .baseline
+            .as_ref()
+            .is_none_or(|current| snapshot.baseline_sequence >= current.baseline_sequence)
+        {
+            state
+                .deltas
+                .retain(|sequence, _delta| *sequence > snapshot.baseline_sequence);
+            state.player_knowledge = None;
+            state.baseline = Some(Box::new(snapshot.clone()));
+            state.in_flight = None;
+        }
+    }
+    for delta in deltas.read() {
+        if delta.validate().is_err() {
+            notice.0 = Some("The host sent an invalid ordered world delta.".to_owned());
+            continue;
+        }
+        let covered_by_baseline = state
+            .baseline
+            .as_ref()
+            .is_some_and(|snapshot| delta.authority_sequence <= snapshot.baseline_sequence);
+        if !covered_by_baseline {
+            state
+                .deltas
+                .entry(delta.authority_sequence)
+                .or_insert_with(|| delta.clone());
+        }
+    }
+}
+
+fn issue_replica_world_request(
+    role: Res<SimulationRole>,
+    screen: Res<State<Screen>>,
+    load: Res<DirectMapLoadState>,
+    current_world: Option<Res<CurrentWorldSnapshotV1>>,
+    mut state: ResMut<ReplicaWorldSyncState>,
+    mut requests: MessageWriter<WorldReplicationRequestV1>,
+) {
+    if *role != SimulationRole::Replica
+        || *screen.get() != Screen::Gameplay
+        || current_world.is_none()
+        || state.in_flight.is_some()
+    {
+        return;
+    }
+    if load.awaiting_snapshot {
+        let Some(snapshot) = state.baseline.as_ref() else {
+            return;
+        };
+        let sequence = snapshot.baseline_sequence;
+        requests.write(WorldReplicationRequestV1::Restore {
+            baseline_sequence: sequence,
+            snapshot: Box::new(snapshot.world.clone()),
+        });
+        state.in_flight = Some(ReplicaWorldRequestKind::Baseline(sequence));
+        return;
+    }
+    let Some((&sequence, delta)) = state.deltas.first_key_value() else {
+        return;
+    };
+    requests.write(WorldReplicationRequestV1::ApplyDelta(delta.clone()));
+    state.in_flight = Some(ReplicaWorldRequestKind::Delta(sequence));
+}
+
+fn apply_replica_player_knowledge(
+    role: Res<SimulationRole>,
+    screen: Res<State<Screen>>,
+    load: Res<DirectMapLoadState>,
+    substances: Option<Res<SubstanceTable>>,
+    knowledge: Option<Res<FactionMapKnowledge>>,
+    local: Option<Res<LocalMapKnowledge>>,
+    mut state: ResMut<ReplicaWorldSyncState>,
+    mut notice: ResMut<SessionUiNotice>,
+    mut commands: Commands,
+) {
+    if *role != SimulationRole::Replica
+        || *screen.get() != Screen::Gameplay
+        || load.awaiting_snapshot
+        || state.in_flight.is_some()
+        || !state.deltas.is_empty()
+    {
+        return;
+    }
+    let (Some(projection), Some(substances)) =
+        (state.player_knowledge.take(), substances.as_deref())
+    else {
+        return;
+    };
+    let mut restored_knowledge = knowledge.as_deref().cloned().unwrap_or_default();
+    let mut restored_local = local.as_deref().cloned().unwrap_or_default();
+    if let Err(error) = import_player_knowledge_snapshot_v1(
+        &projection,
+        substances,
+        &mut restored_knowledge,
+        &mut restored_local,
+    ) {
+        notice.0 = Some(format!(
+            "The player-knowledge projection was refused: {error}."
+        ));
+        return;
+    }
+    commands.insert_resource(restored_knowledge);
+    commands.insert_resource(restored_local);
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "transactional world completion restores the matching knowledge and gameplay baseline before releasing replica presentation"
+)]
+fn finish_replica_world_request(
+    mut results: MessageReader<WorldReplicationResultV1>,
+    mut state: ResMut<ReplicaWorldSyncState>,
+    substances: Option<Res<SubstanceTable>>,
+    knowledge: Option<Res<FactionMapKnowledge>>,
+    local: Option<Res<LocalMapKnowledge>>,
+    active: Option<Res<ActiveDirectSession>>,
+    mut load: ResMut<DirectMapLoadState>,
+    mut model: ResMut<MultiplayerModel>,
+    mut notice: ResMut<SessionUiNotice>,
+    mut baselines: MessageWriter<ApplyReplicaBaseline>,
+    mut commands: Commands,
+    mut next_screen: ResMut<NextState<Screen>>,
+) {
+    let Some(in_flight) = state.in_flight else {
+        results.clear();
+        return;
+    };
+    let sequence = match in_flight {
+        ReplicaWorldRequestKind::Baseline(sequence) | ReplicaWorldRequestKind::Delta(sequence) => {
+            sequence
+        }
+    };
+    let Some(result) = results
+        .read()
+        .filter(|result| result.authority_sequence == sequence)
+        .last()
+        .cloned()
+    else {
+        return;
+    };
+    let resulting_fingerprint = match result.outcome {
+        WorldReplicationOutcomeV1::Applied { public_fingerprint }
+        | WorldReplicationOutcomeV1::Duplicate { public_fingerprint } => public_fingerprint,
+        WorldReplicationOutcomeV1::Refused(WorldReplicationRefusalV1::BoundaryBusy) => {
+            state.in_flight = None;
+            return;
+        }
+        WorldReplicationOutcomeV1::Refused(reason) => {
+            notice.0 = Some(format!(
+                "The ordered multiplayer world update was refused: {reason:?}."
+            ));
+            state.in_flight = None;
+            if let Some(active) = active.as_deref() {
+                end_active_session(
+                    MultiplayerEndReason::ProtocolViolation,
+                    Some(active),
+                    &mut model,
+                    &mut commands,
+                );
+                next_screen.set(Screen::Multiplayer);
+            }
+            return;
+        }
+    };
+
+    match in_flight {
+        ReplicaWorldRequestKind::Delta(sequence) => {
+            state.deltas.remove(&sequence);
+        }
+        ReplicaWorldRequestKind::Baseline(sequence) => {
+            let Some(snapshot) = state.baseline.take() else {
+                notice.0 = Some("The reconnect baseline disappeared during import.".to_owned());
+                state.in_flight = None;
+                return;
+            };
+            if snapshot.world.public_fingerprint != resulting_fingerprint {
+                notice.0 = Some(
+                    "The restored reconnect world did not match its target fingerprint.".to_owned(),
+                );
+                state.in_flight = None;
+                return;
+            }
+            let Some(substances) = substances.as_deref() else {
+                notice.0 = Some(
+                    "Shipped substances were unavailable while restoring reconnect knowledge."
+                        .to_owned(),
+                );
+                state.in_flight = None;
+                return;
+            };
+            let mut restored_knowledge = knowledge.as_deref().cloned().unwrap_or_default();
+            let mut restored_local = local.as_deref().cloned().unwrap_or_default();
+            if let Err(error) = import_player_knowledge_snapshot_v1(
+                &snapshot.player_knowledge,
+                substances,
+                &mut restored_knowledge,
+                &mut restored_local,
+            ) {
+                notice.0 = Some(format!(
+                    "The reconnect knowledge baseline was refused: {error}."
+                ));
+                state.in_flight = None;
+                return;
+            }
+            let baseline = match ApplyReplicaBaseline::new(
+                snapshot.units.as_slice().iter().cloned(),
+                snapshot.session.clone(),
+            ) {
+                Ok(baseline) => baseline,
+                Err(error) => {
+                    notice.0 = Some(format!(
+                        "The gameplay reconnect baseline was refused: {error}."
+                    ));
+                    state.in_flight = None;
+                    return;
+                }
+            };
+            commands.insert_resource(restored_knowledge);
+            commands.insert_resource(restored_local);
+            commands.insert_resource(DirectWorldReady {
+                fingerprint: resulting_fingerprint,
+            });
+            baselines.write(baseline);
+            load.mark_reconnect_restored();
+            state
+                .deltas
+                .retain(|delta_sequence, _delta| *delta_sequence > sequence);
+        }
+    }
+    state.in_flight = None;
+}
+
+fn publish_host_world_deltas(
+    role: Res<SimulationRole>,
+    authority: Option<Res<SessionAdmissionAuthority>>,
+    boundary: Res<AuthorityBoundary>,
+    current: Option<Res<CurrentWorldSnapshotV1>>,
+    mut sequencer: ResMut<CommandSequencer>,
+    mut state: ResMut<HostWorldDeltaState>,
+    mut deltas: MessageWriter<ToClients<WorldDeltaV1>>,
+    mut notice: ResMut<SessionUiNotice>,
+) {
+    let active = *role == SimulationRole::Authority
+        && authority
+            .as_deref()
+            .is_some_and(|authority| authority.lobby().snapshot().phase == LobbyPhase::Active);
+    let Some(current) = current else {
+        state.snapshot = None;
+        state.authority_sequence = None;
+        return;
+    };
+    if !active {
+        state.snapshot = None;
+        state.authority_sequence = None;
+        return;
+    }
+    let Some(previous) = state.snapshot.as_ref() else {
+        state.snapshot = Some(current.snapshot().clone());
+        state.authority_sequence = Some(sequencer.last_sequence());
+        return;
+    };
+    if previous.public_fingerprint == current.fingerprint() || !boundary.is_quiescent() {
+        return;
+    }
+    let last_delta = state.authority_sequence.unwrap_or_default();
+    let sequence = if sequencer.last_sequence() <= last_delta {
+        match sequencer.advance_system_boundary() {
+            Ok(sequence) => sequence,
+            Err(error) => {
+                notice.0 = Some(format!(
+                    "The authority sequence could not publish a world update: {error:?}."
+                ));
+                return;
+            }
+        }
+    } else {
+        sequencer.last_sequence()
+    };
+    let delta = match diff_world_snapshots_v1(previous, current.snapshot(), sequence) {
+        Ok(delta) => delta,
+        Err(error) => {
+            notice.0 = Some(format!(
+                "The authoritative world delta could not be built: {error}."
+            ));
+            return;
+        }
+    };
+    deltas.write(ToClients {
+        targets: SendTargets::CLIENTS_ONLY,
+        message: delta,
+    });
+    state.snapshot = Some(current.snapshot().clone());
+    state.authority_sequence = Some(sequence);
+}
+
+fn publish_host_player_knowledge(
+    role: Res<SimulationRole>,
+    authority: Option<Res<SessionAdmissionAuthority>>,
+    knowledge: Option<Res<FactionMapKnowledge>>,
+    substances: Option<Res<SubstanceTable>>,
+    mut state: ResMut<HostPlayerKnowledgeState>,
+    mut projections: MessageWriter<ToClients<PlayerKnowledgeSnapshotV1>>,
+) {
+    let active = *role == SimulationRole::Authority
+        && authority.as_deref().is_some_and(|authority| {
+            matches!(
+                authority.lobby().snapshot().phase,
+                LobbyPhase::Loading | LobbyPhase::Active | LobbyPhase::Outcome
+            )
+        });
+    if !active {
+        state.0 = None;
+        return;
+    }
+    let (Some(knowledge), Some(substances)) = (knowledge.as_deref(), substances.as_deref()) else {
+        return;
+    };
+    let Ok(snapshot) = export_player_knowledge_snapshot_v1(knowledge, substances) else {
+        error!("player knowledge could not be exported for ordered multiplayer projection");
+        return;
+    };
+    if state.0.as_ref() == Some(&snapshot) {
+        return;
+    }
+    projections.write(ToClients {
+        targets: SendTargets::CLIENTS_ONLY,
+        message: snapshot.clone(),
+    });
+    state.0 = Some(snapshot);
+}
+
 fn finish_host_shutdown(
     mut countdown: Option<ResMut<HostShutdownCountdown>>,
     active: Option<Res<ActiveDirectSession>>,
@@ -983,7 +1815,6 @@ fn project_lobby_phase(
         }
         LobbyPhase::Loading => {
             model.show_loading();
-            next_screen.set(Screen::Multiplayer);
         }
         LobbyPhase::Active if ready.is_some() => next_screen.set(Screen::Gameplay),
         LobbyPhase::Active => model.show_loading(),
@@ -992,15 +1823,17 @@ fn project_lobby_phase(
     }
 }
 
-fn report_client_map_ready(
+fn report_local_map_ready(
     model: Res<MultiplayerModel>,
     projection: Res<SessionProjection>,
     ready: Option<Res<DirectWorldReady>>,
     mut report_state: ResMut<MapReadyReportState>,
-    mut reports: MessageWriter<ClientMapReady>,
+    mut ids: ResMut<SessionUiRequestIds>,
+    mut client_reports: MessageWriter<ClientMapReady>,
+    mut host_reports: MessageWriter<HostSessionControlRequest>,
     mut notice: ResMut<SessionUiNotice>,
 ) {
-    if model.role != Some(MultiplayerRole::Client)
+    if model.role.is_none()
         || projection.lobby.as_ref().map(|lobby| lobby.phase) != Some(LobbyPhase::Loading)
     {
         report_state.sent = false;
@@ -1015,9 +1848,26 @@ fn report_client_map_ready(
     if ready.fingerprint != manifest.map.expected_public_fingerprint {
         notice.0 = Some("The generated world does not match the host manifest.".to_owned());
     }
-    reports.write(ClientMapReady {
-        public_world_fingerprint: ready.fingerprint,
-    });
+    match model.role {
+        Some(MultiplayerRole::Client) => {
+            client_reports.write(ClientMapReady {
+                public_world_fingerprint: ready.fingerprint,
+            });
+        }
+        Some(MultiplayerRole::Host) => {
+            let Some(request_id) = ids.allocate() else {
+                notice.0 = Some("Host map verification request IDs are exhausted.".to_owned());
+                return;
+            };
+            host_reports.write(HostSessionControlRequest {
+                request_id,
+                action: HostSessionAction::ReportHostMapReady {
+                    public_world_fingerprint: ready.fingerprint,
+                },
+            });
+        }
+        None => return,
+    }
     report_state.sent = true;
 }
 
@@ -1120,6 +1970,7 @@ fn publish_view(
                 DirectConnectionCode {
                     endpoint: source.endpoint.clone(),
                     certificate_fingerprint: source.certificate_fingerprint,
+                    certificate_expires_unix_seconds: source.certificate_expires_unix_seconds,
                     invite_token: authority.invite_token(),
                 }
                 .encode()
@@ -1269,6 +2120,11 @@ fn end_active_session(
     commands.remove_resource::<PendingClientHello>();
     commands.remove_resource::<SessionAdmissionAuthority>();
     commands.remove_resource::<DirectWorldReady>();
+    commands.insert_resource(DirectMapLoadState::default());
+    commands.insert_resource(PendingReconnectSnapshotTargets::default());
+    commands.insert_resource(ReplicaWorldSyncState::default());
+    commands.insert_resource(HostWorldDeltaState::default());
+    commands.insert_resource(HostPlayerKnowledgeState::default());
     commands.insert_resource(SimulationRole::Authority);
     model.end(reason);
 }
@@ -1361,10 +2217,12 @@ fn session_close_copy(reason: SessionCloseReason) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hex_core::{Faction, SimSeeds, TilePos};
+    use hex_assets::ScenarioCategory;
+    use hex_core::{Faction, HexCoord, SimSeeds, TilePos};
     use hex_multiplayer::{
-        BoundedText, BoundedVec, InviteToken, MapManifestV1, ProtocolVersion, RosterEntryV1,
-        RulesManifestV1, SessionPeerId, UnitDeploymentV1, MAX_IDENTITY_BYTES,
+        BoundedText, BoundedVec, InviteToken, MapManifestV1, ProtocolVersion, ReconnectCredential,
+        RosterEntryV1, RulesManifestV1, SessionInstanceId, SessionPeerId, UnitDeploymentV1,
+        MAX_IDENTITY_BYTES,
     };
 
     fn text(value: &str) -> BoundedText<MAX_IDENTITY_BYTES> {
@@ -1373,6 +2231,7 @@ mod tests {
 
     fn manifest() -> SessionManifestV1 {
         SessionManifestV1 {
+            session_instance_id: SessionInstanceId::from_bytes([6; 16]),
             protocol: ProtocolVersion::default(),
             build: local_build_identity().expect("local build fits"),
             content_fingerprint: ContentFingerprint(7),
@@ -1487,13 +2346,16 @@ mod tests {
             HostSessionAction::BeginLoading {
                 public_world_fingerprint: PublicWorldFingerprint(9),
             },
+            HostSessionAction::ReportHostMapReady {
+                public_world_fingerprint: PublicWorldFingerprint(9),
+            },
             HostSessionAction::RetryExact {
                 public_world_fingerprint: PublicWorldFingerprint(9),
             },
             HostSessionAction::ReturnToLobby,
             HostSessionAction::CloseSession,
         ];
-        assert_eq!(host.len(), 6);
+        assert_eq!(host.len(), 7);
     }
 
     #[test]
@@ -1572,6 +2434,71 @@ mod tests {
         assert!(matches!(next_screen, NextState::Pending(Screen::Gameplay)));
     }
 
+    #[test]
+    fn replica_loading_freezes_the_host_seed_party_identity_and_exact_deployment() {
+        let mut manifest = manifest();
+        manifest.deployment = BoundedVec::new(
+            (0_u64..6)
+                .map(|unit| UnitDeploymentV1 {
+                    unit: UnitId(unit),
+                    position: TilePos::new(
+                        HexCoord::from_axial(
+                            i32::try_from(unit).expect("small test coordinate"),
+                            0,
+                        ),
+                        2,
+                    ),
+                })
+                .collect(),
+        )
+        .expect("six deployments fit");
+        let scenario = hex_assets::Scenario {
+            name: "sandbox".to_owned(),
+            category: ScenarioCategory::Map,
+            blurb: "test".to_owned(),
+            world: "config/worlds/test.ron".to_owned(),
+            lighting: "config/lighting/test.ron".to_owned(),
+            generation_seed: Some(123),
+            starting_time_hours: None,
+            encounter: "config/encounters/test.ron".to_owned(),
+        };
+        let scenarios = ScenarioLibrary {
+            default_game: scenario.name.clone(),
+            scenarios: vec![scenario.clone()],
+        };
+
+        let loading = client_scenario_to_load(&manifest, &scenarios)
+            .expect("matching shipped scenario should adapt for replica loading");
+
+        assert_eq!(loading.scenario, scenario);
+        assert_eq!(
+            loading.resolved_seed,
+            Some(ResolvedMapSeed(manifest.map.seed))
+        );
+        let encounter = loading
+            .encounter_override
+            .expect("replica launch must suppress undisclosed authored hostiles");
+        assert_eq!(encounter.unit_count(EncounterFaction::Player), 6);
+        assert_eq!(encounter.unit_count(EncounterFaction::Hostile), 0);
+        let placements = encounter
+            .entries()
+            .map(|unit| match unit.placement {
+                EncounterPlacement::Surface(position) => Some(*position),
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()
+            .expect("every replica party member uses its exact host deployment");
+        assert_eq!(
+            placements,
+            manifest
+                .deployment
+                .as_slice()
+                .iter()
+                .map(|deployment| deployment.position)
+                .collect::<Vec<_>>()
+        );
+    }
+
     fn intent_adapter_app(role: MultiplayerRole) -> App {
         let mut model = MultiplayerModel::default();
         model.connecting(role);
@@ -1597,6 +2524,92 @@ mod tests {
             .add_message::<ClientLobbyRequest>()
             .add_systems(Update, handle_intents);
         app
+    }
+
+    fn stored_reconnect(certificate_expires_unix_seconds: u64) -> StoredReconnectCredential {
+        StoredReconnectCredential::new(
+            AdmissionAccepted {
+                session_instance_id: SessionInstanceId::from_bytes([6; 16]),
+                seat: PlayerSeat(1),
+                player_identity: SessionPeerId::from_bytes([2; 16]),
+                reconnect_credential: ReconnectCredential::from_bytes([5; 32]),
+            },
+            ReconnectEndpointBinding::new(
+                DirectEndpoint::new("127.0.0.1", 7_777).expect("loopback endpoint is valid"),
+                CertificateFingerprint::from_bytes([3; 32]),
+                certificate_expires_unix_seconds,
+            )
+            .expect("certificate expiry is valid"),
+        )
+    }
+
+    #[test]
+    fn reconnect_uses_the_persisted_pinned_endpoint_without_an_invite_code() {
+        let mut app = intent_adapter_app(MultiplayerRole::Client);
+        app.world_mut()
+            .resource_mut::<MultiplayerModel>()
+            .show_join_direct();
+        let expires = current_unix_seconds()
+            .expect("test clock is after the Unix epoch")
+            .saturating_add(3_600);
+        app.world_mut()
+            .resource_mut::<StoredCredentialState>()
+            .value = Some(stored_reconnect(expires));
+        assert!(app
+            .world()
+            .resource::<MultiplayerDraft>()
+            .join_code
+            .is_empty());
+
+        app.world_mut()
+            .write_message(UiIntent::Multiplayer(MultiplayerIntent::ReconnectDirect));
+        app.update();
+
+        let queued = app
+            .world()
+            .get_resource::<DirectStartQueue>()
+            .expect("reconnect intent should queue a pinned connection");
+        let DirectStartQueue::Join {
+            target,
+            credential,
+            reconnecting,
+        } = queued
+        else {
+            panic!("reconnect must not queue a host endpoint");
+        };
+        assert!(*reconnecting);
+        assert!(
+            matches!(target, DirectJoinTarget::Reconnect(binding) if binding.endpoint.host() == "127.0.0.1" && binding.endpoint.port() == 7_777)
+        );
+        assert!(matches!(credential, AdmissionCredential::Reconnect(_)));
+    }
+
+    #[test]
+    fn expired_reconnect_state_is_refused_and_removed_before_socket_start() {
+        let mut app = intent_adapter_app(MultiplayerRole::Client);
+        app.world_mut()
+            .resource_mut::<MultiplayerModel>()
+            .show_join_direct();
+        app.world_mut()
+            .resource_mut::<StoredCredentialState>()
+            .value = Some(stored_reconnect(1));
+
+        app.world_mut()
+            .write_message(UiIntent::Multiplayer(MultiplayerIntent::ReconnectDirect));
+        app.update();
+
+        assert!(app.world().get_resource::<DirectStartQueue>().is_none());
+        assert!(app
+            .world()
+            .resource::<StoredCredentialState>()
+            .value
+            .is_none());
+        assert_eq!(
+            app.world().resource::<SessionUiNotice>().0.as_deref(),
+            Some(
+                "The saved host certificate has expired. Ask the host for a fresh session invite."
+            )
+        );
     }
 
     #[test]
@@ -1637,6 +2650,7 @@ mod tests {
         let code = DirectConnectionCode {
             endpoint: DirectEndpoint::new("127.0.0.1", 7_777).expect("loopback endpoint is valid"),
             certificate_fingerprint: CertificateFingerprint::from_bytes([3; 32]),
+            certificate_expires_unix_seconds: 2_000_000_000,
             invite_token: InviteToken::from_bytes([4; 16]),
         }
         .encode();
@@ -1798,15 +2812,26 @@ mod tests {
     }
 
     fn map_ready_report(
+        role: MultiplayerRole,
         actual: PublicWorldFingerprint,
-    ) -> (Vec<ClientMapReady>, Option<String>, bool) {
+    ) -> (
+        Vec<ClientMapReady>,
+        Vec<HostSessionControlRequest>,
+        Option<String>,
+        bool,
+    ) {
         let manifest = manifest();
         let mut lobby = LobbySnapshot::new(SessionPeerId::from_bytes([1; 16]), &manifest)
             .expect("manifest creates a lobby");
         lobby.phase = LobbyPhase::Loading;
         let mut model = MultiplayerModel::default();
-        model.connecting(MultiplayerRole::Client);
-        assert!(model.admitted(MultiplayerRole::Client, PlayerSeat(1)));
+        model.connecting(role);
+        let seat = if role == MultiplayerRole::Host {
+            PlayerSeat::HOST
+        } else {
+            PlayerSeat(1)
+        };
+        assert!(model.admitted(role, seat));
 
         let mut app = App::new();
         app.insert_resource(model)
@@ -1818,9 +2843,11 @@ mod tests {
                 fingerprint: actual,
             })
             .init_resource::<MapReadyReportState>()
+            .init_resource::<SessionUiRequestIds>()
             .init_resource::<SessionUiNotice>()
             .add_message::<ClientMapReady>()
-            .add_systems(Update, report_client_map_ready);
+            .add_message::<HostSessionControlRequest>()
+            .add_systems(Update, report_local_map_ready);
 
         app.update();
 
@@ -1829,36 +2856,64 @@ mod tests {
             .resource_mut::<Messages<ClientMapReady>>()
             .drain()
             .collect();
+        let host_reports = app
+            .world_mut()
+            .resource_mut::<Messages<HostSessionControlRequest>>()
+            .drain()
+            .collect();
         let notice = app.world().resource::<SessionUiNotice>().0.clone();
         let sent = app.world().resource::<MapReadyReportState>().sent;
-        (reports, notice, sent)
+        (reports, host_reports, notice, sent)
     }
 
     #[test]
     fn client_reports_its_actual_world_fingerprint_once_even_when_it_mismatches() {
         let expected = PublicWorldFingerprint(9);
-        let (matching, notice, sent) = map_ready_report(expected);
+        let (matching, host_reports, notice, sent) =
+            map_ready_report(MultiplayerRole::Client, expected);
         assert_eq!(
             matching,
             vec![ClientMapReady {
                 public_world_fingerprint: expected,
             }]
         );
+        assert!(host_reports.is_empty());
         assert_eq!(notice, None);
         assert!(sent);
 
         let actual = PublicWorldFingerprint(99);
-        let (mismatching, notice, sent) = map_ready_report(actual);
+        let (mismatching, host_reports, notice, sent) =
+            map_ready_report(MultiplayerRole::Client, actual);
         assert_eq!(
             mismatching,
             vec![ClientMapReady {
                 public_world_fingerprint: actual,
             }]
         );
+        assert!(host_reports.is_empty());
         assert_eq!(
             notice.as_deref(),
             Some("The generated world does not match the host manifest.")
         );
         assert!(sent, "the mismatch must not be reported repeatedly");
+    }
+
+    #[test]
+    fn listen_host_reports_map_readiness_only_through_trusted_local_control() {
+        let expected = PublicWorldFingerprint(9);
+
+        let (client_reports, host_reports, notice, sent) =
+            map_ready_report(MultiplayerRole::Host, expected);
+
+        assert!(client_reports.is_empty());
+        assert_eq!(host_reports.len(), 1);
+        assert!(matches!(
+            host_reports.first().map(|request| &request.action),
+            Some(HostSessionAction::ReportHostMapReady {
+                public_world_fingerprint
+            }) if *public_world_fingerprint == expected
+        ));
+        assert_eq!(notice, None);
+        assert!(sent);
     }
 }

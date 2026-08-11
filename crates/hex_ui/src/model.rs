@@ -1421,7 +1421,7 @@ pub enum MultiplayerIntent {
     ConfigureSandbox,
     /// Start one explicit pinned direct connection.
     JoinDirect,
-    /// Reconnect to the entered endpoint with the private rotating credential in storage.
+    /// Reconnect through the persisted pinned endpoint and private rotating credential.
     ReconnectDirect,
     /// Move one character to a claimed destination seat (host-only).
     AssignUnit {
