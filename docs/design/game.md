@@ -191,6 +191,34 @@ channelling in it for free; more requires further points.
 
 ---
 
+## Multiplayer
+
+Multiplayer is client-hosted co-op over the same six-character party, not six parallel
+simulations. One listen host owns the world, AI, combat, global pause, admission, and
+session outcome. Up to six humans occupy exclusive seats and control assigned subsets
+of the party; the host owns unassigned characters by default and must retain at least
+one. Group movement includes only the issuing seat's assigned characters.
+
+Clients send seatless intents and render disclosure-safe authoritative projections.
+The authenticated connection determines the seat, so a client cannot claim another
+player's characters or the host-only AI seat. Exploration and combat keep the same one
+global mode, one active turn, and sequential decisions as single-player. This is not
+lockstep, rollback, simultaneous-turn co-op, or a prediction-first action game.
+
+The initial product path is encrypted Direct Connect for shipped Sandbox content. New
+players join and receive assignments in the lobby before launch; an admitted player may
+restart and reconnect during the encounter. A disconnected seat is reserved briefly
+before the host receives temporary control, and the returning player reclaims it only
+at a safe authority boundary. Host loss ends the session; host migration, spectators,
+dedicated servers, and custom-content transfer are outside the initial contract.
+
+Campaign co-op keeps saves with the host and opens a fresh assignment lobby on resume.
+Steam later supplies identity, invites, lobby discovery, and relay traversal without
+changing gameplay messages or authority. Direct Connect remains a supported fallback
+when Steam is absent.
+
+---
+
 ## Combat
 
 ### Damage

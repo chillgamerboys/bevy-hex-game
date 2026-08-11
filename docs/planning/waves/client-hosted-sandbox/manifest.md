@@ -1,6 +1,6 @@
 # Client-hosted Sandbox wave
 
-- **Status:** dispatching
+- **Status:** integrating
 - **Wave branch:** `wave/client-hosted-sandbox`
 - **Refreshed base:** `origin/dev@1dca1065c7681737ce424fa187879ea31974e356`
 - **Dev refresh merge:** `e610e26c50398e43ff23bc4db0890ba7463f11ae`
@@ -513,7 +513,7 @@ lanes:
     sizing:
       model: gpt-5.6-sol
       effort: high
-    state: in-review
+    state: merged-to-wave
     pr: 195
 ```
 
@@ -587,6 +587,13 @@ The 2026-08-10 post-L3 re-sweep found `origin/dev` still at `1dca1065`, PR #196 
 from the multiplayer module/plugin regions, and a merge-tree against the wave is clean.
 PRs #192 and #195 are the wave and its remaining lane; neither is foreign territory.
 
+The 2026-08-11 post-L4 re-sweep again found `origin/dev` at `1dca1065` and only foreign
+PR #196 at exact head `25d0be5d9a492d5c3ef679c087c126b51db722a9`. It remains behind
+`dev`, but its unique lattice work and one disjoint logging hunk produce a clean merge tree
+(`c9443ef730fb382600a0a249ee0d89db1e62078b`) against combined multiplayer candidate
+`c514fb58ee4ec448fbf2f3a242d754e8c7dbf626`. It therefore does not block the final wave
+gate. PR #195 is merged and retained; #192 is the sole multiplayer integration PR.
+
 ## Integration order
 
 1. Under the recorded user-authorized exception, carry the behavior-neutral foundation
@@ -657,6 +664,35 @@ Typed hooks—not pixels—prove all logical claims.
   evidence totals, and the corrected exhaustive/disjoint verifier plus macOS, Windows,
   and Linux shipping checks all passed before merge. The coordinator recorded
   `merged-to-wave` at `b3c3af4c` and the composed selector selects the complete gate.
+- L4 merged through PR #195 as wave merge
+  `e582060f649ce64817df0f42cafe3f0d60e1e4ba`. Its merge tree
+  `0e216ca3bbb5a58c1d069b0fd55d3ad70792b887` exactly matches the tree tested for lane
+  candidate `6da016f82d6763de531ebf950d853ec7dbd1c9e3`; CI run `31467394896`
+  passed the complete selected matrix on macOS, Windows, and Linux before merge. No source
+  branch was deleted.
+- Combined commit `0224e661f832aa2c04c662ee155a6f0f5ba41eff` extends the real
+  `aeronet_channel` host-plus-six-client contract through replicated movement, combat,
+  pending decisions, disclosure withdrawal/re-observation, restart/reconnect baseline,
+  a strictly newer terrain delta, duplicate retry, outcome, and retry reset. It compares
+  every admitted replica with the authorized host view after each sequence and proves the
+  refused overflow client receives no projection or delta. Deterministic fixed-tick time
+  is explicit in the multi-app harness, so replication is exercised rather than inferred
+  from messages alone.
+- Combined commit `c514fb58ee4ec448fbf2f3a242d754e8c7dbf626` classifies the
+  multiplayer walk fail-closed, adds eight deterministic session frames, and repairs
+  `HEX-92` by sizing every seat-card action within its owning content box. The repaired
+  ordinary/reconnect controls remain contained, keyboard reachable, and at least 44×44
+  across the six required viewport/scale cases. The 117-test all-feature `hex_ui` suite
+  and the 33-step native Metal visual walk pass; all eight frames are retained for final
+  exact-head inspection.
+- The 2026-08-11 pre-final delivery reconciliation inspected all 56 non-completed Hex
+  Game issues and every retained Done issue, then corrected architecture, status,
+  roadmap, design, boundary, and contract projections around the live direct milestone
+  and the still-upcoming Campaign/Steam milestones. The previously delivered E0
+  foundation is now reconciled as Done in `HEX-37`, `HEX-56`, and `HEX-57` with PR #184
+  and exact merge evidence. No multiplayer lane ticket was created: this manifest remains
+  the durable queue. UI fixes `HEX-91` and `HEX-92` remain non-terminal until the
+  combined wave reaches `dev`.
 
 ## Stop conditions
 
@@ -747,6 +783,15 @@ amend this manifest after owner review.
   all-target/all-feature Clippy, warning-denied rustdoc, all-feature package compilation,
   formatting, and diff hygiene all PASS. Manual benchmark-only tests remained ignored
   under their existing classifications.
+- `0224e661f832aa2c04c662ee155a6f0f5ba41eff` — combined deterministic acceptance
+  expansion. The channel harness advances Bevy's fixed tick explicitly and captures
+  player knowledge, live reconnect baselines, and ordered world deltas while comparing
+  replicated unit/session components after every authority boundary.
+- `c514fb58ee4ec448fbf2f3a242d754e8c7dbf626` — combined presentation and selector
+  repair. The checked-in multiplayer walk covers all required session surfaces; the
+  selector maps that script to the gameplay-visual closure; and all lobby-card actions use
+  constrained fluid geometry. `HEX-92` retains before-fix evidence and remains open until
+  this exact fix reaches `dev`.
 
 ## Close-out
 

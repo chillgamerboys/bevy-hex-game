@@ -601,77 +601,54 @@ as the message path, so rejected edits re-reject identically.
 **Fallback if deferred**: replay as ordinary `TerrainEdit` messages on the
 first gameplay frame — correct, with one respawn flash.
 
-## D2 — Terrain snapshot (the generator-proof save format)
+## D2 — World snapshot: the live generator-proof restore format
 
-**Need**: saves must not depend on generator code never changing. Any
-generator tweak — and, by design, any `generator_version` bump — relocates
-same-seed terrain, silently invalidating regen+replay restoration. A dump is
-immune.
+**Status: live.** Temporary world authority ratified the complete field and
+fingerprint contract on 2026-08-10, and the map-owned implementation now exports,
+validates, imports, and transactionally updates the current world. The bounded stable
+wire vocabulary lives in `hex_multiplayer` so reconnect can serialize it, but only
+`hex_map` may inspect private voxel/presentation state or resolve an accepted snapshot
+back into the ordinary `TerrainReady` publication path.
 
-**Ask**: a request/response pair. Types in `hex_core` (gameplay-side);
-serialization of the voxel map and consuming a provided snapshot instead of
-generating are map-side:
+`WorldSnapshotV1` records canonical non-air material runs by stable substance name,
+exact partial voxel health, anchors, interior floors and roofs, special/biome
+memberships, traversal blockers, the map view hint, gameplay lights, liquid
+flow/downstream state, and current feature/crystal object consequences required for
+rendering, blockers, edit protection, and actor footing. Every material run retains
+the complete public tuple: `TilePos`, `RunBottom`, `HexSpan` bit patterns,
+`SubstanceId` by stable name, and `Headroom`.
 
-```rust
-/// Gameplay requests; the map answers by inserting the resource.
-#[derive(Message, Debug, Clone, Copy)]
-pub struct TerrainSnapshotRequest;
+Generator recipes, patch plans, private repair identities, entities, asset handles,
+materials, cameras, and transport state are absent. `PlannedStructure` is absent when
+its runtime consequence is already represented by voxels. The reserved surface-feature
+placement vocabulary remains absent until it has a live producer. Player remembered
+knowledge is carried separately by `PlayerKnowledgeSnapshotV1`; hostile knowledge,
+hostile lattice state, and `CombatState` are not representable in either world
+snapshot.
 
-/// A generator-independent dump. Substances BY NAME — runtime ids come from an
-/// internal compatibility registry, while names are the durable snapshot contract.
-#[derive(Resource, Debug, Clone)]
-pub struct TerrainSnapshot {
-    pub names: Vec<String>,                 // index -> substance name
-    pub columns: Vec<(HexCoord, Vec<u8>)>,  // per column, per level, index into names
-}
-```
+`PublicWorldFingerprintV1` hashes canonical stable-name state and every public semantic
+projection above. It is intentionally distinct from the initial-generation
+`GenerationReport::map_fingerprint` and changes after authoritative mutation or damage.
+Export → teardown → import must reproduce that complete fingerprint and the same
+published world, including map-private remaining health. Import occurs only at a
+quiescent authority boundary; validation and preparation mutate nothing, and a failed
+snapshot or delta leaves the current world untouched.
 
-On load, gameplay inserts the snapshot (same shape) and the map consumes it
-during setup *instead of* generating. Size is trivial — a radius-12 world is
-roughly 15 KB before compression. This makes the dump the primary save
-format; seeded regen + edit replay becomes an optimization rather than a
-correctness requirement.
+`CurrentWorldSnapshotV1` caches map-owned truth after generation, mutation, damage, and
+import. `WorldDeltaV1` is a canonical diff between two snapshots, names its base and
+target fingerprints plus authority sequence, and applies transactionally and
+idempotently through `WorldReplicationRequestV1`. Collection limits follow twice the
+largest measured shipped configuration rounded to the next power of two: the current
+flat-projection/delta envelope is 524,288 entries, stable names are at most 128 bytes,
+and the independent pre-deserialization frame cap remains 64 MiB.
 
-**Fallback until it lands**: saves record `(seed, generator_version)` and,
-on mismatch at load, offer "restart this area" instead of drifting silently.
-This fallback is development-only while V1/V2 are still present. Gameplay-side
-tests refuse to mark a world savable unless its seed is explicit, and shipped
-procedural saves wait for the generator-independent snapshot rather than extending
-legacy generator lifetime.
-
-**Scheduling note (gameplay side agrees, and has moved to suit).** Your rule that no
-production save may depend on regenerating a V1/V2 seed still makes D2 a
-*prerequisite* for durable saves rather than an optimization — and D1 a prerequisite
-for restoring an edited world. The former Wave 5 single resume was superseded by
-exactly three Campaign slots plus one-time legacy migration. Those slots remain a
-deliberately disposable pre-alpha exception: each records an explicit seed, generator
-version, and content identities, then refuses drift instead of silently rebuilding a
-different world ([roadmap.md](roadmap.md)). They never claim production compatibility
-and do not save combat. D1 and D2 therefore remain asked without blocking that
-scaffold.
-When they land, contract H's outcome log is what makes a replayed impact reproducible
-without pinning the damage table's version.
-
-### Multiplayer refinement (asked; not yet world-owner agreed)
-
-Client-hosted reconnect and durable Campaign saves strengthen D2 from voxel columns to
-`WorldSnapshotV1`: versioned substances by stable name, exact partial damage, anchors,
-regions, traversal blockers, presentation-semantic consequences, knowledge inputs, and
-every other public fact required to restore the same `TerrainReady` world. Acceptance is
-an export → teardown → import round trip compared against a new complete public world
-fingerprint, not `GenerationReport::map_fingerprint` (which describes initial generation
-and is not updated by mutations).
-
-The open owner decision is whether stable generator-neutral consequences currently held
-inside V3's private presentation projection become explicit snapshot fields
-(recommended), or are regenerated. Regeneration alone is adequate for initial direct
-map verification but does not meet the generator-independent Campaign promise. Import
-must also hydrate both the public damaged-voxel projection and the map's private remaining
-health state, and it must occur only at a boundary with no terrain edit/impact batch in
-flight. Player remembered knowledge is a separate authorized reconnect snapshot; hostile
-knowledge remains host-only. Until the world owner ratifies this field list and
-fingerprint, `WorldSnapshotV1`, `LiveSessionSnapshotV1`, L3, and Campaign C1 remain
-blocked rather than approximated.
+Direct multiplayer still regenerates the frozen static map from `SessionManifestV1`
+for initial launch and compares the complete fingerprint on every peer. Restart-capable
+reconnect instead imports `LiveSessionSnapshotV1` (world, authorized player knowledge,
+unit/session replicas, and one matching baseline sequence) and then consumes strictly
+newer ordered deltas. The later Campaign multiplayer milestone will persist this live
+format in host-owned slots; the current local Campaign schema remains the explicit
+generator-bound pre-alpha compatibility path and does not make D2 partial again.
 
 ## F — Deliberate non-asks
 
