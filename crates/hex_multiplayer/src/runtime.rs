@@ -556,6 +556,12 @@ fn handle_host_session_controls(
                 .begin_loading(public_world_fingerprint)
                 .map(|_snapshot| ())
                 .map_err(map_activation_control_error),
+            HostSessionAction::ReportHostMapReady {
+                public_world_fingerprint,
+            } => authority
+                .report_host_map_ready(public_world_fingerprint)
+                .map(|_status| ())
+                .map_err(map_activation_control_error),
             HostSessionAction::EnterOutcome => authority
                 .enter_outcome()
                 .map(|_snapshot| ())

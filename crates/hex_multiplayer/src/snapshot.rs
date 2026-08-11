@@ -1221,6 +1221,7 @@ mod tests {
         };
         let unit = UnitReplica {
             unit: UnitId(1),
+            archetype: crate::ArchetypeIdentityV1::new("warrior").expect("fixture archetype fits"),
             faction: Faction::Player,
             position: TilePos::new(HexCoord::ORIGIN, 2),
             motion: None,

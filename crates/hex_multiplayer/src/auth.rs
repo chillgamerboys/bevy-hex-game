@@ -171,7 +171,11 @@ impl SessionAdmissionAuthority {
         }
     }
 
-    /// Begins loading, closes new admission, and records host map verification.
+    /// Begins loading and closes new admission after validating the host preflight world.
+    ///
+    /// No peer is marked ready here. The listen host must regenerate the frozen map and
+    /// report that actual result through [`Self::report_host_map_ready`], just like every
+    /// guest reports through [`Self::report_map_ready`].
     pub fn begin_loading(
         &mut self,
         host_fingerprint: PublicWorldFingerprint,
@@ -183,12 +187,10 @@ impl SessionAdmissionAuthority {
             .begin_loading(&self.manifest)
             .map_err(SessionActivationError::Lobby)?;
         self.map_ready.clear();
-        self.map_ready.insert(PlayerSeat::HOST);
-        self.activate_if_every_claimed_seat_is_ready()?;
         Ok(self.lobby.snapshot_owned())
     }
 
-    /// Re-enters loading from an encounter outcome using the frozen manifest.
+    /// Re-enters loading from an encounter outcome without carrying prior readiness.
     pub fn retry_loading(
         &mut self,
         host_fingerprint: PublicWorldFingerprint,
@@ -200,8 +202,6 @@ impl SessionAdmissionAuthority {
             .retry_loading(&self.manifest)
             .map_err(SessionActivationError::Lobby)?;
         self.map_ready.clear();
-        self.map_ready.insert(PlayerSeat::HOST);
-        self.activate_if_every_claimed_seat_is_ready()?;
         Ok(self.lobby.snapshot_owned())
     }
 
@@ -218,8 +218,16 @@ impl SessionAdmissionAuthority {
         Ok(self.lobby.snapshot_owned())
     }
 
-    /// Records one authenticated peer's map fingerprint and activates when all claimed
-    /// seats have reported the exact expected public world.
+    /// Records the listen host's actual regenerated map fingerprint.
+    pub fn report_host_map_ready(
+        &mut self,
+        fingerprint: PublicWorldFingerprint,
+    ) -> Result<MapReadyStatus, SessionActivationError> {
+        self.record_map_ready(PlayerSeat::HOST, fingerprint)
+    }
+
+    /// Records one authenticated guest's map fingerprint and activates when all claimed
+    /// seats, including the listen host, have reported the exact expected public world.
     pub fn report_map_ready(
         &mut self,
         connection: Entity,
@@ -233,6 +241,17 @@ impl SessionAdmissionAuthority {
             .get(&connection)
             .copied()
             .ok_or(SessionActivationError::NotAuthorized)?;
+        self.record_map_ready(seat, fingerprint)
+    }
+
+    fn record_map_ready(
+        &mut self,
+        seat: PlayerSeat,
+        fingerprint: PublicWorldFingerprint,
+    ) -> Result<MapReadyStatus, SessionActivationError> {
+        if self.lobby.snapshot().phase != LobbyPhase::Loading {
+            return Err(SessionActivationError::WrongPhase);
+        }
         if fingerprint != self.manifest.map.expected_public_fingerprint {
             return Err(SessionActivationError::MapMismatch);
         }
@@ -1165,6 +1184,10 @@ mod tests {
             Err(SessionActivationError::MapMismatch)
         );
         assert_eq!(
+            authority.report_host_map_ready(PublicWorldFingerprint(12)),
+            Ok(MapReadyStatus::Waiting)
+        );
+        assert_eq!(
             authority.report_map_ready(connection, PublicWorldFingerprint(12)),
             Ok(MapReadyStatus::Activated)
         );
@@ -1172,14 +1195,24 @@ mod tests {
     }
 
     #[test]
-    fn host_only_lobby_activates_after_its_exact_host_fingerprint() {
+    fn host_only_lobby_waits_for_its_regenerated_host_fingerprint() {
         let mut authority = authority();
 
         let snapshot = authority
             .begin_loading(PublicWorldFingerprint(12))
-            .expect("the exact host world should launch");
+            .expect("the exact preflight host world should enter loading");
 
-        assert_eq!(snapshot.phase, LobbyPhase::Active);
+        assert_eq!(snapshot.phase, LobbyPhase::Loading);
+        assert_eq!(authority.lobby().snapshot().phase, LobbyPhase::Loading);
+        assert_eq!(
+            authority.report_host_map_ready(PublicWorldFingerprint(999)),
+            Err(SessionActivationError::MapMismatch)
+        );
+        assert_eq!(authority.lobby().snapshot().phase, LobbyPhase::Loading);
+        assert_eq!(
+            authority.report_host_map_ready(PublicWorldFingerprint(12)),
+            Ok(MapReadyStatus::Activated)
+        );
         assert_eq!(authority.lobby().snapshot().phase, LobbyPhase::Active);
     }
 

@@ -71,7 +71,8 @@ pub use protocol::{
     SessionClosed, PROTOCOL_SCHEMA_TAG,
 };
 pub use replica::{
-    MotionReplicaV1, ReplicaValidationError, SessionOutcome, SessionReplica, UnitReplica,
+    ArchetypeIdentityV1, MotionReplicaV1, ReplicaValidationError, SessionOutcome, SessionReplica,
+    UnitReplica,
 };
 pub use runtime::{
     split_bounded_snapshot, AuthenticatedCommandRequest, AuthorityCommandResolution,
