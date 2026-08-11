@@ -127,6 +127,9 @@ fn spawn_actions(
 fn action_width(action: OutcomeAction) -> f32 {
     match action {
         OutcomeAction::Continue | OutcomeAction::Retry | OutcomeAction::RetryExact => 150.0,
+        OutcomeAction::ReturnToLobby
+        | OutcomeAction::CloseSession
+        | OutcomeAction::LeaveSession => 170.0,
         OutcomeAction::Return => 180.0,
     }
 }

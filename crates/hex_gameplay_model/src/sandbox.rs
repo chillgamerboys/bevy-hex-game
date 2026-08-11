@@ -609,6 +609,8 @@ pub enum SandboxEntryOrigin {
     MainMenu,
     /// Character Creator's Open in Sandbox action.
     Creator,
+    /// Direct Host setup; Back returns to the Multiplayer endpoint screen.
+    Multiplayer,
 }
 
 /// Typed destination when Back leaves Sandbox Overview.
@@ -618,6 +620,8 @@ pub enum SandboxDestination {
     MainMenu,
     /// Return to the originating Character Creator session.
     Creator,
+    /// Return to Direct Host setup without opening a socket.
+    Multiplayer,
 }
 
 /// Result of one Sandbox Back transition.
@@ -859,6 +863,7 @@ impl<CustomId> SandboxModel<CustomId> {
         match self.entry_origin {
             SandboxEntryOrigin::MainMenu => SandboxDestination::MainMenu,
             SandboxEntryOrigin::Creator => SandboxDestination::Creator,
+            SandboxEntryOrigin::Multiplayer => SandboxDestination::Multiplayer,
         }
     }
 
@@ -1038,7 +1043,11 @@ mod tests {
 
     #[test]
     fn every_route_has_one_exact_back_edge_and_preserves_the_draft() {
-        for origin in [SandboxEntryOrigin::MainMenu, SandboxEntryOrigin::Creator] {
+        for origin in [
+            SandboxEntryOrigin::MainMenu,
+            SandboxEntryOrigin::Creator,
+            SandboxEntryOrigin::Multiplayer,
+        ] {
             let mut model: SandboxModel<u64> = SandboxModel {
                 entry_origin: origin,
                 ..Default::default()
@@ -1049,6 +1058,7 @@ mod tests {
                 SandboxBackResult::Exit(match origin {
                     SandboxEntryOrigin::MainMenu => SandboxDestination::MainMenu,
                     SandboxEntryOrigin::Creator => SandboxDestination::Creator,
+                    SandboxEntryOrigin::Multiplayer => SandboxDestination::Multiplayer,
                 })
             );
             assert_eq!(model.draft, draft);

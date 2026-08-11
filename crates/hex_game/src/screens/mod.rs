@@ -9,6 +9,7 @@ pub(crate) mod gameplay;
 mod lattice_demo;
 mod loading;
 mod main_menu;
+pub(crate) mod multiplayer;
 pub(crate) mod sandbox;
 mod settings;
 mod splash;
@@ -25,6 +26,7 @@ pub(super) fn plugin(app: &mut App) {
     app.add_plugins((
         splash::plugin,
         main_menu::plugin,
+        multiplayer::plugin,
         settings::plugin,
         creator::plugin,
         sandbox::plugin,
