@@ -1,15 +1,25 @@
 //! Exact in-memory composition contract for custom admission, sequencing, and reconnect.
 
-use bevy_replicon::prelude::AuthorizedClient;
-use hex_core::{CommandRequestId, Faction, GameCommand, SimSeeds, TilePos, UnitId};
+use bevy_app::App;
+use bevy_replicon::prelude::{AuthorizedClient, ClientId, Replicated, SendTargets, ToClients};
+use hex_core::{
+    CommandRequestId, ControlOwner, Faction, GameCommand, HexCoord, Mode, Pause, PendingDecision,
+    PlayerSeat, SimSeeds, TilePos, Turn, UnitId,
+};
+use hex_lattice::LatticeState;
 use hex_multiplayer::{
-    AdmissionRefusalReason, AuthorityCommandResolution, AuthoritySequence, AuthorizedSessionClient,
-    BoundedText, BoundedVec, BuildIdentityV1, ChannelSessionHarness, ClientLobbyAction,
-    ClientLobbyRequest, ClientMapReady, CommandOutcome, CommandSequencer, ContentFingerprint,
-    GameCommandRequest, HostProbe, HostSessionAction, HostSessionControlRequest, InviteToken,
-    LobbyPhase, MapManifestV1, ProtocolVersion, PublicWorldFingerprint, RosterEntryV1,
-    RulesManifestV1, SeatConnectionState, SessionAdmissionAuthority, SessionCloseReason,
-    SessionControlOutcome, SessionManifestV1, SessionPeerId, UnitDeploymentV1, MAX_IDENTITY_BYTES,
+    AdmissionRefusalReason, ArchetypeIdentityV1, AuthorityCommandResolution, AuthoritySequence,
+    AuthorizedSessionClient, BoundedText, BoundedVec, BuildIdentityV1, ChannelSessionHarness,
+    ClientLobbyAction, ClientLobbyRequest, ClientMapReady, CommandOutcome, CommandSequencer,
+    ContentFingerprint, GameCommandRequest, HostProbe, HostSessionAction,
+    HostSessionControlRequest, InviteToken, LiveSessionSnapshotV1, LobbyPhase, MapManifestV1,
+    MotionReplicaV1, PlayerKnowledgeSnapshotV1, ProtocolVersion, PublicWorldFingerprint,
+    RosterEntryV1, RulesManifestV1, SeatConnectionState, SessionAdmissionAuthority,
+    SessionCloseReason, SessionControlOutcome, SessionManifestV1, SessionOutcome, SessionPeerId,
+    SessionReplica, UnitDeploymentV1, UnitReplica, WorldColumnSnapshotV1, WorldDamageSnapshotV1,
+    WorldDeltaOperationV1, WorldDeltaV1, WorldRunSnapshotV1, WorldSnapshotV1,
+    LIVE_SESSION_SNAPSHOT_VERSION_V1, MAX_IDENTITY_BYTES, PLAYER_KNOWLEDGE_SNAPSHOT_VERSION_V1,
+    WORLD_DELTA_VERSION_V1, WORLD_SNAPSHOT_VERSION_V1,
 };
 
 #[expect(clippy::expect_used, reason = "static fixture identity is valid")]
@@ -64,12 +74,151 @@ fn manifest() -> SessionManifestV1 {
     }
 }
 
+#[expect(clippy::expect_used, reason = "static fixture archetype is valid")]
+fn archetype(value: &str) -> ArchetypeIdentityV1 {
+    ArchetypeIdentityV1::new(value).expect("fixture archetype should fit")
+}
+
+fn unit_replica(
+    unit: UnitId,
+    faction: Faction,
+    owner: PlayerSeat,
+    position: TilePos,
+) -> UnitReplica {
+    UnitReplica {
+        unit,
+        archetype: archetype(if faction == Faction::Player {
+            "warrior"
+        } else {
+            "raider"
+        }),
+        faction,
+        position,
+        motion: None,
+        owner: ControlOwner(owner),
+        lattice: (faction == Faction::Player).then(LatticeState::default),
+        downed: false,
+        turn: None,
+        effects: BoundedVec::default(),
+    }
+}
+
+fn session_replica(sequence: AuthoritySequence) -> SessionReplica {
+    SessionReplica {
+        authority_sequence: sequence,
+        mode: Mode::Exploring,
+        pause: Pause(false),
+        initiative: BoundedVec::default(),
+        active_turn: None,
+        round: 0,
+        pending_decision: PendingDecision::None,
+        outcome: None,
+    }
+}
+
+#[expect(clippy::expect_used, reason = "static snapshot fixture is valid")]
+fn world_snapshot(fingerprint: PublicWorldFingerprint) -> WorldSnapshotV1 {
+    let coord = HexCoord::ORIGIN;
+    WorldSnapshotV1 {
+        version: WORLD_SNAPSHOT_VERSION_V1,
+        public_fingerprint: fingerprint,
+        columns: BoundedVec::new(vec![WorldColumnSnapshotV1 {
+            coord,
+            runs: BoundedVec::new(vec![WorldRunSnapshotV1 {
+                position: TilePos::new(coord, 2),
+                run_bottom: 0,
+                span_bottom_bits: 0.0_f32.to_bits(),
+                span_top_bits: 3.0_f32.to_bits(),
+                substance: text("stone"),
+                headroom: 4,
+            }])
+            .expect("one run should fit"),
+        }])
+        .expect("one column should fit"),
+        damage: BoundedVec::default(),
+        anchors: BoundedVec::default(),
+        interior_surfaces: BoundedVec::default(),
+        interior_roofs: BoundedVec::default(),
+        special_regions: BoundedVec::default(),
+        biome_regions: BoundedVec::default(),
+        blockers: BoundedVec::default(),
+        view_hint: None,
+        lights: BoundedVec::default(),
+        liquids: BoundedVec::default(),
+        objects: BoundedVec::default(),
+    }
+}
+
+fn player_knowledge() -> PlayerKnowledgeSnapshotV1 {
+    PlayerKnowledgeSnapshotV1 {
+        version: PLAYER_KNOWLEDGE_SNAPSHOT_VERSION_V1,
+        surfaces: BoundedVec::default(),
+    }
+}
+
+fn projected_units(app: &App) -> Vec<UnitReplica> {
+    let mut units = app
+        .world()
+        .iter_entities()
+        .filter_map(|entity| entity.get::<UnitReplica>().cloned())
+        .collect::<Vec<_>>();
+    units.sort_by_key(|unit| unit.unit);
+    units
+}
+
+fn projected_session(app: &App) -> Option<SessionReplica> {
+    app.world()
+        .iter_entities()
+        .find_map(|entity| entity.get::<SessionReplica>().cloned())
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "the harness owns every client index supplied by this fixture"
+)]
+fn assert_projection_equality(
+    harness: &ChannelSessionHarness,
+    admitted: &[usize],
+    overflow: usize,
+) {
+    let expected_units = projected_units(harness.host());
+    let expected_session = projected_session(harness.host());
+    for &client in admitted {
+        let client_app = harness.client(client).expect("admitted client app exists");
+        assert_eq!(
+            projected_units(client_app),
+            expected_units,
+            "client {client} unit projection must equal the authorized host view"
+        );
+        assert_eq!(
+            projected_session(client_app),
+            expected_session,
+            "client {client} session projection must equal the authorized host view"
+        );
+    }
+    let overflow_app = harness
+        .client(overflow)
+        .expect("overflow client app should remain connected");
+    assert!(projected_units(overflow_app).is_empty());
+    assert_eq!(projected_session(overflow_app), None);
+}
+
+#[expect(clippy::expect_used, reason = "fixture sequence cannot exhaust u64")]
+fn advance_system_boundary(harness: &mut ChannelSessionHarness) -> AuthoritySequence {
+    harness
+        .host_mut()
+        .world_mut()
+        .resource_mut::<CommandSequencer>()
+        .advance_system_boundary()
+        .expect("fixture sequence should advance")
+}
+
 #[test]
 fn host_plus_six_clients_admit_play_retry_restart_reconnect_and_close() {
     let manifest = manifest();
     let expected_world = manifest.map.expected_public_fingerprint;
     let mut harness = ChannelSessionHarness::new(
-        manifest,
+        manifest.clone(),
         SessionPeerId::from_bytes([1; SessionPeerId::BYTE_LENGTH]),
         InviteToken::from_bytes([2; InviteToken::BYTE_LENGTH]),
     )
@@ -107,6 +256,7 @@ fn host_plus_six_clients_admit_play_retry_restart_reconnect_and_close() {
     }
 
     let overflow = clients.get(5).copied().expect("sixth client exists");
+    let admitted = clients.iter().take(5).copied().collect::<Vec<_>>();
     let overflow_invite = harness.current_invite();
     harness.send_invite_hello(overflow, overflow_invite);
     harness.pump(12);
@@ -278,6 +428,208 @@ fn host_plus_six_clients_admit_play_retry_restart_reconnect_and_close() {
         first_probe.command_results
     );
 
+    let lobby = harness
+        .host()
+        .world()
+        .resource::<SessionAdmissionAuthority>()
+        .lobby()
+        .snapshot()
+        .clone();
+    let player_entities = (0_u64..6)
+        .map(|unit| {
+            let unit = UnitId(unit);
+            let owner = lobby
+                .seats
+                .iter()
+                .find(|seat| seat.assigned_units.contains(&unit))
+                .map(|seat| seat.seat)
+                .expect("every shipped party member has one canonical owner");
+            let entity = harness
+                .host_mut()
+                .world_mut()
+                .spawn((
+                    Replicated,
+                    unit_replica(unit, Faction::Player, owner, TilePos::ORIGIN),
+                ))
+                .id();
+            (unit, entity)
+        })
+        .collect::<Vec<_>>();
+    let session_entity = harness
+        .host_mut()
+        .world_mut()
+        .spawn((Replicated, session_replica(AuthoritySequence(1))))
+        .id();
+    harness.pump(16);
+    assert_projection_equality(&harness, &admitted, overflow);
+
+    let acting_entity = player_entities
+        .iter()
+        .find(|(unit, _entity)| *unit == acting_unit)
+        .map(|(_unit, entity)| *entity)
+        .expect("acting unit owns a replicated entity");
+    let destination = TilePos::new(HexCoord::from_axial(1, 0), 0);
+    let moving_sequence = advance_system_boundary(&mut harness);
+    {
+        let mut replica = harness
+            .host_mut()
+            .world_mut()
+            .get_mut::<UnitReplica>(acting_entity)
+            .expect("acting replica exists");
+        replica.motion = Some(MotionReplicaV1 {
+            route: BoundedVec::new(vec![TilePos::ORIGIN, destination])
+                .expect("fixture route should fit"),
+            speed_bits: 2.0_f32.to_bits(),
+            elapsed_bits: 0.25_f64.to_bits(),
+            started: true,
+            reconciled_step: 0,
+        });
+    }
+    harness
+        .host_mut()
+        .world_mut()
+        .get_mut::<SessionReplica>(session_entity)
+        .expect("session replica exists")
+        .authority_sequence = moving_sequence;
+    harness.pump(16);
+    assert_projection_equality(&harness, &admitted, overflow);
+
+    let settled_sequence = advance_system_boundary(&mut harness);
+    {
+        let mut replica = harness
+            .host_mut()
+            .world_mut()
+            .get_mut::<UnitReplica>(acting_entity)
+            .expect("acting replica exists");
+        replica.position = destination;
+        replica.motion = None;
+    }
+    harness
+        .host_mut()
+        .world_mut()
+        .get_mut::<SessionReplica>(session_entity)
+        .expect("session replica exists")
+        .authority_sequence = settled_sequence;
+    harness.pump(16);
+    assert_projection_equality(&harness, &admitted, overflow);
+
+    let hostile_unit = UnitId(100);
+    let hostile_entity = harness
+        .host_mut()
+        .world_mut()
+        .spawn((
+            Replicated,
+            unit_replica(
+                hostile_unit,
+                Faction::Hostile,
+                PlayerSeat::AI,
+                TilePos::new(HexCoord::from_axial(2, 0), 0),
+            ),
+        ))
+        .id();
+    let combat_sequence = advance_system_boundary(&mut harness);
+    {
+        let mut session = harness
+            .host_mut()
+            .world_mut()
+            .get_mut::<SessionReplica>(session_entity)
+            .expect("session replica exists");
+        session.authority_sequence = combat_sequence;
+        session.mode = Mode::Combat;
+        session.initiative =
+            BoundedVec::new(vec![acting_unit, hostile_unit]).expect("initiative should fit");
+        session.active_turn = Some(acting_unit);
+        session.round = 1;
+    }
+    harness
+        .host_mut()
+        .world_mut()
+        .get_mut::<UnitReplica>(acting_entity)
+        .expect("acting replica exists")
+        .turn = Some(Turn {
+        movement_left: 4,
+        acted: false,
+    });
+    harness.pump(16);
+    assert_projection_equality(&harness, &admitted, overflow);
+
+    let decision_sequence = advance_system_boundary(&mut harness);
+    {
+        let mut session = harness
+            .host_mut()
+            .world_mut()
+            .get_mut::<SessionReplica>(session_entity)
+            .expect("session replica exists");
+        session.authority_sequence = decision_sequence;
+        session.active_turn = Some(hostile_unit);
+        session.pending_decision = PendingDecision::ChooseDisables {
+            decider: acting_unit,
+            count: 1,
+            source: hostile_unit,
+        };
+    }
+    harness
+        .host_mut()
+        .world_mut()
+        .get_mut::<UnitReplica>(acting_entity)
+        .expect("acting replica exists")
+        .turn = None;
+    harness
+        .host_mut()
+        .world_mut()
+        .get_mut::<UnitReplica>(hostile_entity)
+        .expect("hostile replica exists")
+        .turn = Some(Turn {
+        movement_left: 3,
+        acted: true,
+    });
+    harness.pump(16);
+    assert_projection_equality(&harness, &admitted, overflow);
+
+    assert!(harness.host_mut().world_mut().despawn(hostile_entity));
+    let withdrawn_sequence = advance_system_boundary(&mut harness);
+    {
+        let mut session = harness
+            .host_mut()
+            .world_mut()
+            .get_mut::<SessionReplica>(session_entity)
+            .expect("session replica exists");
+        session.authority_sequence = withdrawn_sequence;
+        session.initiative = BoundedVec::new(vec![acting_unit]).expect("initiative should fit");
+        session.active_turn = Some(acting_unit);
+        session.pending_decision = PendingDecision::None;
+    }
+    harness.pump(16);
+    assert_projection_equality(&harness, &admitted, overflow);
+
+    let hostile_entity = harness
+        .host_mut()
+        .world_mut()
+        .spawn((
+            Replicated,
+            unit_replica(
+                hostile_unit,
+                Faction::Hostile,
+                PlayerSeat::AI,
+                TilePos::new(HexCoord::from_axial(2, 0), 0),
+            ),
+        ))
+        .id();
+    let observed_sequence = advance_system_boundary(&mut harness);
+    {
+        let mut session = harness
+            .host_mut()
+            .world_mut()
+            .get_mut::<SessionReplica>(session_entity)
+            .expect("session replica exists");
+        session.authority_sequence = observed_sequence;
+        session.initiative =
+            BoundedVec::new(vec![acting_unit, hostile_unit]).expect("initiative should fit");
+        session.active_turn = Some(hostile_unit);
+    }
+    harness.pump(16);
+    assert_projection_equality(&harness, &admitted, overflow);
+
     assert!(harness.restart_client(first_client));
     harness.pump(12);
     {
@@ -322,6 +674,78 @@ fn host_plus_six_clients_admit_play_retry_restart_reconnect_and_close() {
         "quiescent boundary should revoke temporary delegation"
     );
 
+    let baseline_session = projected_session(harness.host()).expect("host session exists");
+    let baseline_units = projected_units(harness.host());
+    let knowledge = player_knowledge();
+    let live_snapshot = LiveSessionSnapshotV1 {
+        version: LIVE_SESSION_SNAPSHOT_VERSION_V1,
+        manifest: manifest.clone(),
+        world: world_snapshot(expected_world),
+        player_knowledge: knowledge.clone(),
+        units: BoundedVec::new(baseline_units).expect("authorized units should fit"),
+        session: baseline_session,
+        baseline_sequence: observed_sequence,
+    };
+    let reconnected_connection = harness
+        .server_connection(first_client)
+        .expect("reconnected server-side session exists");
+    harness.host_mut().world_mut().write_message(ToClients {
+        targets: SendTargets::Single(ClientId::Client(reconnected_connection)),
+        message: knowledge.clone(),
+    });
+    harness.host_mut().world_mut().write_message(ToClients {
+        targets: SendTargets::Single(ClientId::Client(reconnected_connection)),
+        message: live_snapshot.clone(),
+    });
+    harness.pump(16);
+    let reconnect_probe = harness
+        .client_probe(first_client)
+        .expect("reconnected client has a probe");
+    assert_eq!(reconnect_probe.player_knowledge.last(), Some(&knowledge));
+    assert_eq!(reconnect_probe.live_snapshots.last(), Some(&live_snapshot));
+    assert_projection_equality(&harness, &admitted, overflow);
+
+    let delta_sequence = advance_system_boundary(&mut harness);
+    assert!(delta_sequence > observed_sequence);
+    harness
+        .host_mut()
+        .world_mut()
+        .get_mut::<SessionReplica>(session_entity)
+        .expect("session replica exists")
+        .authority_sequence = delta_sequence;
+    let world_delta = WorldDeltaV1 {
+        version: WORLD_DELTA_VERSION_V1,
+        authority_sequence: delta_sequence,
+        base_fingerprint: expected_world,
+        target_fingerprint: PublicWorldFingerprint(201),
+        operations: BoundedVec::new(vec![WorldDeltaOperationV1::UpsertDamage(
+            WorldDamageSnapshotV1 {
+                position: TilePos::new(HexCoord::ORIGIN, 1),
+                remaining: 1,
+                maximum: 2,
+            },
+        )])
+        .expect("one delta operation should fit"),
+    };
+    harness.host_mut().world_mut().write_message(ToClients {
+        targets: SendTargets::CLIENTS_ONLY,
+        message: world_delta.clone(),
+    });
+    harness.pump(16);
+    for &client in &admitted {
+        assert_eq!(
+            harness
+                .client_probe(client)
+                .and_then(|probe| probe.world_deltas.last()),
+            Some(&world_delta),
+            "client {client} should receive the ordered terrain delta"
+        );
+    }
+    assert!(harness
+        .client_probe(overflow)
+        .is_some_and(|probe| probe.world_deltas.is_empty()));
+    assert_projection_equality(&harness, &admitted, overflow);
+
     harness
         .client_mut(first_client)
         .expect("restarted client exists")
@@ -349,6 +773,20 @@ fn host_plus_six_clients_admit_play_retry_restart_reconnect_and_close() {
                 original_sequence: AuthoritySequence(1)
             }
         ))));
+    let duplicate_sequence = harness
+        .host()
+        .world()
+        .resource::<CommandSequencer>()
+        .last_sequence();
+    assert!(duplicate_sequence > delta_sequence);
+    harness
+        .host_mut()
+        .world_mut()
+        .get_mut::<SessionReplica>(session_entity)
+        .expect("session replica exists")
+        .authority_sequence = duplicate_sequence;
+    harness.pump(16);
+    assert_projection_equality(&harness, &admitted, overflow);
 
     harness
         .host_mut()
@@ -368,6 +806,29 @@ fn host_plus_six_clients_admit_play_retry_restart_reconnect_and_close() {
             .phase,
         LobbyPhase::Outcome
     );
+    let outcome_sequence = advance_system_boundary(&mut harness);
+    {
+        let mut session = harness
+            .host_mut()
+            .world_mut()
+            .get_mut::<SessionReplica>(session_entity)
+            .expect("session replica exists");
+        session.authority_sequence = outcome_sequence;
+        session.active_turn = None;
+        session.pending_decision = PendingDecision::None;
+        session.outcome = Some(SessionOutcome::Victory);
+    }
+    {
+        let mut hostile = harness
+            .host_mut()
+            .world_mut()
+            .get_mut::<UnitReplica>(hostile_entity)
+            .expect("hostile replica exists");
+        hostile.downed = true;
+        hostile.turn = None;
+    }
+    harness.pump(16);
+    assert_projection_equality(&harness, &admitted, overflow);
     harness
         .host_mut()
         .world_mut()
@@ -418,6 +879,28 @@ fn host_plus_six_clients_admit_play_retry_restart_reconnect_and_close() {
             .phase,
         LobbyPhase::Active
     );
+    assert!(harness.host_mut().world_mut().despawn(hostile_entity));
+    let retry_sequence = advance_system_boundary(&mut harness);
+    {
+        let mut session = harness
+            .host_mut()
+            .world_mut()
+            .get_mut::<SessionReplica>(session_entity)
+            .expect("session replica exists");
+        *session = session_replica(retry_sequence);
+    }
+    {
+        let mut acting = harness
+            .host_mut()
+            .world_mut()
+            .get_mut::<UnitReplica>(acting_entity)
+            .expect("acting replica exists");
+        acting.position = TilePos::ORIGIN;
+        acting.motion = None;
+        acting.turn = None;
+    }
+    harness.pump(16);
+    assert_projection_equality(&harness, &admitted, overflow);
 
     harness
         .host_mut()

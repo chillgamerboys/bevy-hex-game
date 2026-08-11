@@ -1,6 +1,6 @@
 //! Deterministic in-memory multi-app harness for session protocol tests.
 
-use std::fmt;
+use std::{fmt, time::Duration};
 
 use aeronet::io::server::{Server, ServerEndpoint};
 use aeronet_channel::{ChannelIo, ChannelIoPlugin};
@@ -13,14 +13,15 @@ use bevy_ecs::{
 };
 use bevy_replicon::prelude::{ClientState, ProtocolHash};
 use bevy_state::{app::StatesPlugin, state::State};
-use bevy_time::TimePlugin;
+use bevy_time::{TimePlugin, TimeUpdateStrategy};
 use hex_core::SimulationRole;
 
 use crate::{
     AdmissionAccepted, AdmissionCredential, AdmissionRefusal, AdmissionSetupError,
-    AuthenticatedCommandRequest, ClientHello, CommandResult, InviteToken, LobbySnapshot,
-    MultiplayerPlugin, ReconnectCredential, SessionAdmissionAuthority, SessionClosed,
-    SessionControlResult, SessionManifestV1,
+    AuthenticatedCommandRequest, ClientHello, CommandResult, InviteToken, LiveSessionSnapshotV1,
+    LobbySnapshot, MultiplayerPlugin, PlayerKnowledgeSnapshotV1, ReconnectCredential,
+    SessionAdmissionAuthority, SessionClosed, SessionControlResult, SessionManifestV1,
+    WorldDeltaV1,
 };
 
 /// Messages captured from one deterministic client app.
@@ -36,6 +37,12 @@ pub struct ClientProbe {
     pub manifests: Vec<SessionManifestV1>,
     /// Final or duplicate command results.
     pub command_results: Vec<CommandResult>,
+    /// Authorized remembered-player knowledge projections.
+    pub player_knowledge: Vec<PlayerKnowledgeSnapshotV1>,
+    /// Restart-capable reconnect baselines.
+    pub live_snapshots: Vec<LiveSessionSnapshotV1>,
+    /// Ordered world mutations newer than a reconnect baseline.
+    pub world_deltas: Vec<WorldDeltaV1>,
     /// Typed seatless-lobby request results.
     pub control_results: Vec<SessionControlResult>,
     /// Typed session termination notifications.
@@ -271,6 +278,9 @@ impl fmt::Debug for ChannelSessionHarness {
 fn session_app(replica: bool) -> App {
     let mut app = App::new();
     app.add_plugins((TimePlugin, StatesPlugin, MultiplayerPlugin, ChannelIoPlugin))
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+            50,
+        )))
         .init_resource::<ClientProbe>()
         .init_resource::<HostProbe>()
         .add_systems(Update, (capture_client_messages, capture_host_commands));
@@ -288,6 +298,9 @@ fn capture_client_messages(
     mut lobbies: MessageReader<LobbySnapshot>,
     mut manifests: MessageReader<SessionManifestV1>,
     mut command_results: MessageReader<CommandResult>,
+    mut player_knowledge: MessageReader<PlayerKnowledgeSnapshotV1>,
+    mut live_snapshots: MessageReader<LiveSessionSnapshotV1>,
+    mut world_deltas: MessageReader<WorldDeltaV1>,
     mut control_results: MessageReader<SessionControlResult>,
     mut closed: MessageReader<SessionClosed>,
     mut probe: bevy_ecs::prelude::ResMut<ClientProbe>,
@@ -299,6 +312,11 @@ fn capture_client_messages(
     probe
         .command_results
         .extend(command_results.read().copied());
+    probe
+        .player_knowledge
+        .extend(player_knowledge.read().cloned());
+    probe.live_snapshots.extend(live_snapshots.read().cloned());
+    probe.world_deltas.extend(world_deltas.read().cloned());
     probe
         .control_results
         .extend(control_results.read().copied());
