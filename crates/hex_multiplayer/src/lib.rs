@@ -43,8 +43,8 @@ pub use control::{
 };
 #[cfg(feature = "direct")]
 pub use direct::{
-    DirectTransportError, PreparedDirectHost, PreparedDirectJoin, SpkiPinVerifier,
-    DEFAULT_DIRECT_PORT, DIRECT_SESSION_PATH,
+    DirectTransportError, PreparedDirectHost, PreparedDirectJoin, PreparedDirectReconnect,
+    SpkiPinVerifier, DEFAULT_DIRECT_PORT, DIRECT_SESSION_PATH,
 };
 pub use limits::{
     BoundError, BoundedText, BoundedVec, MAX_ABS_COMMAND_COORDINATE, MAX_ABS_COMMAND_LEVEL,
