@@ -27,14 +27,14 @@ use crate::{
         MAX_PARTY_MEMBERS, MAX_ROUTE_STEPS,
     },
     split_bounded_snapshot, BuildIdentityV1, ClientLobbyRequest, ContentFingerprint,
-    LiveSessionSnapshotV1, LiveSnapshotHeaderV1, LobbySnapshot, PublicWorldFingerprint,
-    ReconnectCredential, SessionControlResult, SessionManifestV1, SessionPeerId, SessionReplica,
-    UnitReplica, WorldDeltaV1, MAX_LIVE_SNAPSHOT_BYTES,
+    LiveSessionSnapshotV1, LiveSnapshotHeaderV1, LobbySnapshot, PlayerKnowledgeSnapshotV1,
+    PublicWorldFingerprint, ReconnectCredential, SessionControlResult, SessionManifestV1,
+    SessionPeerId, SessionReplica, UnitReplica, WorldDeltaV1, MAX_LIVE_SNAPSHOT_BYTES,
 };
 
 /// Project-owned schema material not visible to Replicon's type/order hashing.
 pub const PROTOCOL_SCHEMA_TAG: &str =
-    "hex-multiplayer/v1;seatless-command-and-lobby;bounded-wire;authorized-projections;session-bound-live-world-v1;run-level-liquid-flow;shipped-projection-524288;visible-archetype-v1;explicit-host-map-ready;system-boundary-sequence";
+    "hex-multiplayer/v1;seatless-command-and-lobby;bounded-wire;authorized-projections;session-bound-live-world-v1;ordered-player-knowledge-v1;run-level-liquid-flow;shipped-projection-524288;visible-archetype-v1;explicit-host-map-ready;system-boundary-sequence";
 
 /// Monotonic ordering assigned by the simulation authority.
 #[derive(
@@ -252,6 +252,8 @@ pub fn register_protocol(app: &mut App) {
         .make_message_independent::<SessionManifestV1>()
         .add_server_message::<LobbySnapshot>(Channel::Ordered)
         .make_message_independent::<LobbySnapshot>()
+        .add_server_message::<PlayerKnowledgeSnapshotV1>(Channel::Ordered)
+        .make_message_independent::<PlayerKnowledgeSnapshotV1>()
         .add_server_message_with(
             Channel::Ordered,
             serialize_live_session_snapshot,
