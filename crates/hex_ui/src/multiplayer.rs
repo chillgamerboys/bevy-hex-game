@@ -9,10 +9,10 @@ use hex_core::{PlayerSeat, Screen};
 use hex_gameplay_model::{MultiplayerRole, MultiplayerRoute};
 
 use crate::{
-    blurb, body_text_role, button, despawn_screen, fine, heading, label, overlay_root, panel,
-    responsive_control_role, screen_root, screen_title, DespawnOnExit, MultiplayerIntent,
-    MultiplayerSeatConnectionView, MultiplayerTextField, MultiplayerView, SensitiveText, UiAssets,
-    UiIntent, UiSystems, UiVisibilityRequirement, ACCENT_EDGE, LABEL,
+    blurb, body_text_role, button, despawn_screen, fine, fluid_button, heading, label,
+    overlay_root, panel, responsive_control_role, screen_root, screen_title, DespawnOnExit,
+    MultiplayerIntent, MultiplayerSeatConnectionView, MultiplayerTextField, MultiplayerView,
+    SensitiveText, UiAssets, UiIntent, UiSystems, UiVisibilityRequirement, ACCENT_EDGE, LABEL,
 };
 
 const CONNECTION_CODE_CHAR_LIMIT: usize = 2_048;
@@ -51,7 +51,13 @@ pub(super) fn plugin(app: &mut App) {
         );
 }
 
-fn spawn_screen(mut commands: Commands, assets: Res<UiAssets>, view: Res<MultiplayerView>) {
+fn spawn_screen(
+    mut commands: Commands,
+    assets: Res<UiAssets>,
+    view: Res<MultiplayerView>,
+    review: Option<Res<crate::review::UiReviewPresentation>>,
+) {
+    let view = effective_view(&view, review.as_deref());
     commands
         .spawn((
             screen_root(Screen::Multiplayer, "Multiplayer"),
@@ -76,18 +82,29 @@ fn spawn_screen(mut commands: Commands, assets: Res<UiAssets>, view: Res<Multipl
 fn refresh_screen(
     mut commands: Commands,
     view: Res<MultiplayerView>,
+    review: Option<Res<crate::review::UiReviewPresentation>>,
     assets: Res<UiAssets>,
     roots: Query<Entity, With<MultiplayerSurface>>,
 ) {
-    if !view.is_changed() {
+    if !view.is_changed() && review.as_ref().is_none_or(|review| !review.is_changed()) {
         return;
     }
+    let view = effective_view(&view, review.as_deref());
     for root in &roots {
         commands.entity(root).despawn_related::<Children>();
         commands
             .entity(root)
             .with_children(|root| render_screen(root, &assets, &view));
     }
+}
+
+fn effective_view<'a>(
+    live: &'a MultiplayerView,
+    review: Option<&'a crate::review::UiReviewPresentation>,
+) -> &'a MultiplayerView {
+    review
+        .and_then(|review| review.multiplayer.as_ref())
+        .unwrap_or(live)
 }
 
 fn render_screen(root: &mut ChildSpawnerCommands, assets: &UiAssets, view: &MultiplayerView) {
@@ -407,7 +424,7 @@ fn render_lobby(root: &mut ChildSpawnerCommands, assets: &UiAssets, view: &Multi
                                         MultiplayerSeatConnectionView::Vacant
                                     )
                             }) {
-                                action_button(
+                                card_action_button(
                                     moves,
                                     assets,
                                     &format!("Move to {}", destination.seat.0 + 1),
@@ -427,7 +444,7 @@ fn render_lobby(root: &mut ChildSpawnerCommands, assets: &UiAssets, view: &Multi
                     card.spawn(fine(assets, if seat.ready { "READY" } else { "NOT READY" }));
                 }
                 if seat.local && !host && seat.seat != PlayerSeat::HOST {
-                    action_button(
+                    card_action_button(
                         card,
                         assets,
                         if seat.ready { "Not Ready" } else { "Ready" },
@@ -439,7 +456,7 @@ fn render_lobby(root: &mut ChildSpawnerCommands, assets: &UiAssets, view: &Multi
                     && seat.seat != PlayerSeat::HOST
                     && !matches!(seat.connection, MultiplayerSeatConnectionView::Vacant)
                 {
-                    action_button(
+                    card_action_button(
                         card,
                         assets,
                         "Kick",
@@ -550,6 +567,24 @@ fn action_button(
     control.with_child(label(assets, text.to_owned()));
 }
 
+fn card_action_button(
+    parent: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    text: &str,
+    intent: MultiplayerIntent,
+    enabled: bool,
+) {
+    let mut control = parent.spawn((
+        fluid_button(text.to_owned()),
+        MultiplayerControl(intent),
+        UiVisibilityRequirement::Immediate,
+    ));
+    if !enabled {
+        control.insert(InteractionDisabled);
+    }
+    control.with_child(label(assets, text.to_owned()));
+}
+
 fn text_field(
     parent: &mut ChildSpawnerCommands,
     assets: &UiAssets,
@@ -624,12 +659,14 @@ fn spawn_local_menu(mut commands: Commands) {
 fn refresh_local_menu(
     mut commands: Commands,
     view: Res<MultiplayerView>,
+    review: Option<Res<crate::review::UiReviewPresentation>>,
     assets: Res<UiAssets>,
     roots: Query<Entity, With<MultiplayerLocalMenu>>,
 ) {
-    if !view.is_changed() {
+    if !view.is_changed() && review.as_ref().is_none_or(|review| !review.is_changed()) {
         return;
     }
+    let view = effective_view(&view, review.as_deref());
     let visible = view.role == Some(MultiplayerRole::Client) && view.local_menu_open;
     for root in &roots {
         commands.entity(root).despawn_related::<Children>();
@@ -777,5 +814,76 @@ mod tests {
             .find(|(name, _)| name.as_str() == "Client Local Menu")
             .map(|(_, visibility)| *visibility);
         assert_eq!(menu, Some(Visibility::Inherited));
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn local_ready_control_stays_inside_its_seat_across_the_required_matrix() {
+        let matrix = [
+            (UVec2::new(1280, 720), crate::UiScaleMode::Auto),
+            (UVec2::new(1920, 1080), crate::UiScaleMode::Auto),
+            (UVec2::new(3840, 2160), crate::UiScaleMode::Auto),
+            (UVec2::new(1280, 720), crate::UiScaleMode::Percent200),
+            (UVec2::new(1920, 1080), crate::UiScaleMode::Percent200),
+            (UVec2::new(3840, 2160), crate::UiScaleMode::Percent200),
+        ];
+
+        for (size, mode) in matrix {
+            for (ready, connection) in [
+                (false, MultiplayerSeatConnectionView::Connected),
+                (true, MultiplayerSeatConnectionView::ReclaimPending),
+            ] {
+                let mut app = App::new();
+                app.add_plugins(crate::test_support::HeadlessUiPlugin::new(size.x, size.y))
+                    .insert_resource(crate::UiScalePreference(mode));
+                let mut view = MultiplayerView {
+                    route: MultiplayerRoute::Lobby,
+                    role: Some(MultiplayerRole::Client),
+                    local_seat: Some(PlayerSeat(1)),
+                    ..Default::default()
+                };
+                let guest = view
+                    .seats
+                    .get_mut(1)
+                    .expect("six-seat fixture has seat two");
+                guest.local = true;
+                guest.ready = ready;
+                guest.connection = connection;
+                app.world_mut().insert_resource(view);
+                app.world_mut()
+                    .resource_mut::<NextState<Screen>>()
+                    .set(Screen::Multiplayer);
+                for _ in 0..8 {
+                    app.update();
+                }
+
+                let snapshot = crate::test_support::ui_tree_snapshot(app.world_mut());
+                let card = snapshot
+                    .nodes
+                    .iter()
+                    .find(|node| node.name == "Lobby Seat 2")
+                    .expect("local seat card must render");
+                let action_name = if ready { "Not Ready" } else { "Ready" };
+                let action = snapshot
+                    .nodes
+                    .iter()
+                    .find(|node| node.name == action_name && node.focusable)
+                    .expect("local readiness action must render");
+                assert_eq!(action.parent_name.as_deref(), Some("Lobby Seat 2"));
+
+                let card_bounds = Rect::from_center_size(card.center, card.size);
+                let action_bounds = Rect::from_center_size(action.center, action.size);
+                let epsilon = 0.51;
+                assert!(
+                    action_bounds.min.x + epsilon >= card_bounds.min.x
+                        && action_bounds.max.x <= card_bounds.max.x + epsilon
+                        && action_bounds.min.y + epsilon >= card_bounds.min.y
+                        && action_bounds.max.y <= card_bounds.max.y + epsilon,
+                    "{action_name} escaped its seat at {size:?} {mode:?}: action={action_bounds:?}, card={card_bounds:?}"
+                );
+                assert_eq!(action.keyboard_reachable, Some(true));
+                assert_eq!(action.meets_minimum_target, Some(true));
+            }
+        }
     }
 }

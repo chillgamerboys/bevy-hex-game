@@ -88,11 +88,13 @@ class TestScopeTests(unittest.TestCase):
         )
 
     def test_gameplay_visual_change_does_not_select_map_corpora(self) -> None:
-        decision = self.classify("walks/gameplay_ui.ron")
-        self.assertFalse(decision.full)
-        self.assertEqual(
-            decision.concerns, ("app", "clippy", "docs", "shipping")
-        )
+        for path in ("walks/gameplay_ui.ron", "walks/multiplayer_session.ron"):
+            with self.subTest(path=path):
+                decision = self.classify(path)
+                self.assertFalse(decision.full)
+                self.assertEqual(
+                    decision.concerns, ("app", "clippy", "docs", "shipping")
+                )
 
     def test_combat_authority_change_selects_its_downstream_closure(self) -> None:
         decision = self.classify("crates/hex_combat_core/src/authority.rs")

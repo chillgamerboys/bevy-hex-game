@@ -465,6 +465,7 @@
       "name": "gameplay-visual",
       "patterns": [
         "walks/gameplay_ui.ron",
+        "walks/multiplayer_session.ron",
         "walks/readme_creator_sandbox.ron",
         "walks/readme_party_trial.ron"
       ],

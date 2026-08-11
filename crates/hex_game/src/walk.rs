@@ -417,6 +417,11 @@ fn validate_step(step: &WalkStep) -> Result<(), String> {
                     | "required-decision"
                     | "restore-decision"
                     | "aiming-disabled"
+                    | "multiplayer-lobby"
+                    | "multiplayer-mismatch"
+                    | "multiplayer-reconnect"
+                    | "multiplayer-host"
+                    | "multiplayer-client-menu"
                     | "sandbox-outcome"
             ) =>
         {
