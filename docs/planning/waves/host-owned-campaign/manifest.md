@@ -1,11 +1,9 @@
 # Host-owned Campaign multiplayer wave
 
-- **Status:** planned; dispatch begins only after the EOS feasibility/shared-contract
-  foundation lands on `dev`
+- **Status:** dispatching; L1 is the active lane
 - **Wave branch:** `wave/host-owned-campaign`
 - **Planning base:** `origin/dev@a0f95e62d02c663902b864cc08a89e831d9ba437`
-- **Wave base:** assigned from the exact post-foundation `origin/dev` merge before lane
-  branches are cut
+- **Wave base:** `origin/dev@c8506a71166a23777d31cc8504a53e61966bb069`
 - **Coordinator:** `@shrav-k`
 - **Epic:** user-approved Seamless Cross-Store Multiplayer plan, 2026-08-12
   (`ticket: null`)
@@ -122,7 +120,7 @@ owner adapters.
     full: true
   evidence: logic-only
   sizing: { model: gpt-5.6-sol, effort: high }
-  state: queued
+  state: active
   pr: null
 
 - id: L2
