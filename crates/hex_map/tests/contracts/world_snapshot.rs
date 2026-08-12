@@ -4,9 +4,10 @@ use super::*;
 use hex_core::SimulationRole;
 use hex_map::{
     diff_world_snapshots_v1, export_world_snapshot_v1, fingerprint_world_snapshot_v1,
-    validate_world_snapshot_v1_against_content, CurrentWorldSnapshotV1, WorldReplicationOutcomeV1,
-    WorldReplicationRefusalV1, WorldReplicationRequestV1, WorldReplicationResultV1,
-    WorldSnapshotError,
+    validate_world_snapshot_v1_against_content, CampaignWorldRestoreOutcomeV2,
+    CampaignWorldRestoreRefusalV2, CampaignWorldRestoreResultV2, CurrentWorldSnapshotV1,
+    PendingCampaignWorldSnapshotV2, WorldReplicationOutcomeV1, WorldReplicationRefusalV1,
+    WorldReplicationRequestV1, WorldReplicationResultV1, WorldSnapshotError,
 };
 use hex_multiplayer::{
     AuthorityBoundary, AuthoritySequence, BoundedText, BoundedVec, InteriorSurfaceSnapshotV1,
@@ -132,6 +133,66 @@ fn assert_round_trip(name: &str, mut app: App) {
     );
 }
 
+#[expect(
+    clippy::panic,
+    reason = "the shared test helper reports the exact shipped fixture that violated bootstrap"
+)]
+fn assert_campaign_process_round_trip(name: &str, fixture: fn() -> App) {
+    let mut source = fixture();
+    enter_gameplay(&mut source);
+    if let Some(failure) = source.world().get_resource::<GameplaySetupFailure>() {
+        panic!(
+            "{name} setup failed before Campaign export: {}",
+            failure.reason
+        );
+    }
+    let before = export_world_snapshot_v1(source.world())
+        .unwrap_or_else(|error| panic!("{name} should export for Campaign: {error}"));
+    let tile_tuples_before = tile_tuples(&mut source);
+
+    // A fresh App is the process-teardown boundary. In particular, no private map
+    // resource or generator report can leak from the exporting world.
+    drop(source);
+    let mut restored = fixture();
+    restored.world_mut().remove_resource::<ResolvedMapSeed>();
+    restored.insert_resource(PendingCampaignWorldSnapshotV2::new(before.clone()));
+    enter_gameplay(&mut restored);
+
+    if let Some(failure) = restored.world().get_resource::<GameplaySetupFailure>() {
+        panic!(
+            "{name} Campaign bootstrap failed after process teardown: {}",
+            failure.reason
+        );
+    }
+    assert!(
+        restored.world().contains_resource::<TerrainReady>(),
+        "{name}"
+    );
+    assert!(!restored
+        .world()
+        .contains_resource::<PendingCampaignWorldSnapshotV2>());
+    assert_eq!(
+        restored.world().resource::<CampaignWorldRestoreResultV2>(),
+        &CampaignWorldRestoreResultV2 {
+            outcome: CampaignWorldRestoreOutcomeV2::Applied {
+                public_fingerprint: before.public_fingerprint,
+            },
+        },
+        "{name} did not publish one typed Campaign acceptance"
+    );
+    assert_eq!(
+        export_world_snapshot_v1(restored.world())
+            .unwrap_or_else(|error| panic!("{name} Campaign world should re-export: {error}")),
+        before,
+        "{name} Campaign world drifted across process teardown"
+    );
+    assert_eq!(
+        tile_tuples(&mut restored),
+        tile_tuples_before,
+        "{name} public tile tuples drifted across Campaign bootstrap"
+    );
+}
+
 #[test]
 fn perlin_v1_v2_v3_and_stacked_cave_worlds_round_trip_exactly() {
     let fixtures: [(&str, fn() -> App); 10] = [
@@ -149,6 +210,68 @@ fn perlin_v1_v2_v3_and_stacked_cave_worlds_round_trip_exactly() {
     for (name, fixture) in fixtures {
         assert_round_trip(name, fixture());
     }
+}
+
+#[test]
+fn campaign_bootstrap_restores_every_world_family_without_regeneration() {
+    let fixtures: [(&str, fn() -> App); 10] = [
+        ("perlin", test_app),
+        ("procedural-v1", procedural_app),
+        ("procedural-v2", v2_hills_app),
+        ("procedural-v3", v3_hills_app),
+        ("v3-waterfall", v3_waterfall_app),
+        ("v3-volcano", v3_volcano_app),
+        ("v3-forest", v3_forest_app),
+        ("v3-fort", v3_fort_app),
+        ("stacked-caves", v3_caves_app),
+        ("v3-crystal-ascent", v3_crystal_ascent_app),
+    ];
+    for (name, fixture) in fixtures {
+        assert_campaign_process_round_trip(name, fixture);
+    }
+}
+
+#[test]
+fn malformed_campaign_world_refuses_without_partial_activation() {
+    let mut source = test_app();
+    enter_gameplay(&mut source);
+    let mut malformed =
+        export_world_snapshot_v1(source.world()).expect("source world should export");
+    malformed.public_fingerprint.0 ^= 1;
+    drop(source);
+
+    let mut restored = test_app();
+    restored.insert_resource(PendingCampaignWorldSnapshotV2::new(malformed));
+    enter_gameplay(&mut restored);
+
+    assert!(!restored.world().contains_resource::<TerrainReady>());
+    assert!(!restored.world().contains_resource::<VoxelMap>());
+    assert!(!restored
+        .world()
+        .contains_resource::<CurrentWorldSnapshotV1>());
+    assert!(!restored
+        .world()
+        .contains_resource::<PendingCampaignWorldSnapshotV2>());
+    let grid_count = {
+        let world = restored.world_mut();
+        let mut grids = world.query_filtered::<Entity, With<HexGrid>>();
+        grids.iter(world).count()
+    };
+    assert_eq!(grid_count, 0);
+    assert!(matches!(
+        &restored
+            .world()
+            .resource::<CampaignWorldRestoreResultV2>()
+            .outcome,
+        CampaignWorldRestoreOutcomeV2::Refused(CampaignWorldRestoreRefusalV2::InvalidSnapshot(
+            WorldSnapshotError::FingerprintMismatch { .. }
+        ))
+    ));
+    assert!(restored
+        .world()
+        .resource::<GameplaySetupFailure>()
+        .reason
+        .contains("saved Campaign world is incompatible"));
 }
 
 #[test]
@@ -426,6 +549,25 @@ fn mutated_and_partially_damaged_world_restores_exact_state() {
         Some(health)
     );
     assert!(app.world().resource::<VoxelMap>().get(cleared).is_air());
+
+    drop(app);
+    let mut restored = test_app();
+    restored.insert_resource(PendingCampaignWorldSnapshotV2::new(snapshot.clone()));
+    enter_gameplay(&mut restored);
+    assert_eq!(
+        export_world_snapshot_v1(restored.world())
+            .expect("Campaign-restored mutated world should export"),
+        snapshot
+    );
+    assert_eq!(
+        restored.world().resource::<DamagedVoxels>().get(damaged),
+        Some(health)
+    );
+    assert!(restored
+        .world()
+        .resource::<VoxelMap>()
+        .get(cleared)
+        .is_air());
 }
 
 #[test]
