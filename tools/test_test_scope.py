@@ -88,11 +88,13 @@ class TestScopeTests(unittest.TestCase):
         )
 
     def test_gameplay_visual_change_does_not_select_map_corpora(self) -> None:
-        decision = self.classify("walks/gameplay_ui.ron")
-        self.assertFalse(decision.full)
-        self.assertEqual(
-            decision.concerns, ("app", "clippy", "docs", "shipping")
-        )
+        for path in ("walks/gameplay_ui.ron", "walks/multiplayer_session.ron"):
+            with self.subTest(path=path):
+                decision = self.classify(path)
+                self.assertFalse(decision.full)
+                self.assertEqual(
+                    decision.concerns, ("app", "clippy", "docs", "shipping")
+                )
 
     def test_combat_authority_change_selects_its_downstream_closure(self) -> None:
         decision = self.classify("crates/hex_combat_core/src/authority.rs")
@@ -225,6 +227,13 @@ class TestScopeTests(unittest.TestCase):
             decision.concerns,
             ("map_unit", "map_contracts", "clippy", "docs", "shipping"),
         )
+
+    def test_map_world_snapshot_fails_closed_across_every_consumer(self) -> None:
+        decision = self.classify("crates/hex_map/src/world_snapshot.rs")
+        self.assertTrue(decision.full)
+        self.assertEqual(decision.concerns, tuple(self.config["all_concerns"]))
+        self.assertEqual(decision.unknown_files, ())
+        self.assertIn("map-world-snapshot", decision.matched_rules)
 
     def test_map_damage_resolver_selects_unit_and_contract_evidence(self) -> None:
         decision = self.classify("crates/hex_map/src/terrain_damage.rs")
@@ -473,7 +482,7 @@ class TestScopeTests(unittest.TestCase):
         partition = self.config["partition_checks"]["map"]
         self.assertEqual(
             partition["expected_counts"],
-            {"map_unit": 106, "map_generation": 440, "map_contracts": 81},
+            {"map_unit": 109, "map_generation": 440, "map_contracts": 92},
         )
         self.assertEqual(partition["expected_ignored"], 29)
 

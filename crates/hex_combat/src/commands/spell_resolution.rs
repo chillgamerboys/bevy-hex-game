@@ -10,8 +10,8 @@ use std::collections::BTreeMap;
 use bevy::prelude::*;
 use hex_assets::SubstanceTable;
 use hex_core::{
-    Busy, PausableSystems, PendingDecision, Screen, TerrainImpactOutcome, TerrainReady,
-    TerrainSystems, Turn, UnitId,
+    AuthoritativeSystems, Busy, PausableSystems, PendingDecision, Screen, TerrainImpactOutcome,
+    TerrainReady, TerrainSystems, Turn, UnitId,
 };
 use hex_lattice::{LatticeSpec, LatticeState};
 use hex_units::{
@@ -44,6 +44,7 @@ pub(super) fn plugin(app: &mut App) {
     app.add_systems(
         Update,
         stage_applied_outcomes
+            .in_set(AuthoritativeSystems)
             .in_set(TerrainSystems::RefreshProjections)
             .in_set(PausableSystems)
             .run_if(in_state(Screen::Gameplay)),
@@ -51,6 +52,7 @@ pub(super) fn plugin(app: &mut App) {
     .add_systems(
         Update,
         settle_unsupported_actors
+            .in_set(AuthoritativeSystems)
             .in_set(TerrainSystems::ReconcileActors)
             .in_set(PausableSystems)
             .run_if(in_state(Screen::Gameplay)),
@@ -58,6 +60,7 @@ pub(super) fn plugin(app: &mut App) {
     .add_systems(
         Update,
         consume_terrain_outcomes
+            .in_set(AuthoritativeSystems)
             .in_set(TerrainSystems::ConsumeOutcomes)
             .in_set(PausableSystems)
             .run_if(in_state(Screen::Gameplay)),

@@ -15,6 +15,8 @@ summary.
 | `bevy-inspector-egui` | `0.37` | Targets bevy 0.19. Isolated in `hex_dev`, `dev` feature only |
 | `ron` / `serde` | | Designer-facing settings |
 | `xxhash-rust`, `rand` | | Terrain hashing |
+| `bevy_replicon` | `0.41.1` | Server-authoritative replication and ordered protocol messages; no world-serialization feature |
+| `aeronet`, `aeronet_replicon`, `aeronet_webtransport` | `0.21.0` | Native direct encrypted transport. Installing the multiplayer plugin opens no socket |
 
 Toolchain pinned to **Rust 1.97.1** in `rust-toolchain.toml`. Bevy 0.19's MSRV is
 1.95, so this isn't optional — an older stable fails to build the dependency tree
@@ -140,6 +142,7 @@ hex_core → hex_ai → {hex_assets, hex_units, hex_combat}   (contracts, contro
 hex_core → {hex_assets, hex_units} → hex_perception → {hex_combat, hex_game}
 hex_core → hex_lattice → {hex_assets, hex_units, hex_combat}   (pure rules engine)
 hex_core → hex_anim ─────────────────────→ hex_units
+{hex_core, hex_lattice, Replicon, Aeronet} → hex_multiplayer ───────→ hex_game
 {Bevy, inspector} → hex_dev ────────────────────────────────────────→ hex_game
 ```
 
@@ -156,6 +159,20 @@ plus Creator navigation and edit history. It does not depend on assets, combat,
 units, the game binary, or renderer. `hex_game` adapts typed model transitions to
 Bevy resources, persistence, and navigation instead of owning a second copy of those
 decisions.
+
+**`hex_multiplayer` is shared protocol/session infrastructure.** It may carry stable
+`hex_core`/`hex_lattice` domain types and configure Replicon/Aeronet, but it never
+queries private map, unit, combat, or perception implementations. Wire command requests
+cannot supply a seat; authority derives it from admission state. `CombatState` stays on
+the host, and clients receive disclosure-safe `UnitReplica`/`SessionReplica` projections.
+Generator-neutral `WorldSnapshotV1`/`WorldDeltaV1` and authorized
+`PlayerKnowledgeSnapshotV1` are stable shared data contracts, but only world/perception
+adapters export, validate, import, or disclose their domain state. Reconnect state is
+bound to a random `SessionInstanceId`, endpoint/SPKI, and certificate expiry.
+Wire lobby requests also cannot supply a seat and are limited to readiness/leave;
+assignment, kick, launch, retry, return, and close are local-only host control messages.
+Installing `MultiplayerPlugin` alone opens no socket and leaves offline single-player in
+`SimulationRole::Authority`.
 
 **`hex_map`, `hex_world` and `hex_units` must not depend on each other.** Shared
 types go in `hex_core`. Cargo enforces this; a violating `use` fails to compile.
@@ -176,7 +193,8 @@ and AI. Neither gameplay crate may import map-generator internals.
 content (world files, `substances.ron`, lighting profiles, `perception.ron`).
 The **gameplay owner** has `hex_core`, `hex_units`, `hex_combat_core`, `hex_combat`, `hex_lattice`,
 `hex_anim`, generic `hex_assets` loader infrastructure, and gameplay schema/settings
-modules and content (`combat.ron`, `spells.ron`, `elements.ron`). `hex_game` is shared;
+modules and content (`combat.ron`, `spells.ron`, `elements.ron`). `hex_game` and
+`hex_multiplayer` are shared;
 `hex_objects` and `hex_editor` are shared presentation/tooling with no gameplay
 authority. Every fact that crosses between the owners, and whether it is live, agreed,
 reserved, or still an ask, is `docs/contracts.md`; the open asks are

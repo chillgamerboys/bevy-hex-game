@@ -9,6 +9,30 @@ use bevy_reflect::prelude::*;
 use bevy_state::prelude::*;
 use serde::{Deserialize, Serialize};
 
+/// Whether this process owns simulation truth or applies an authorized replica.
+///
+/// Offline single-player and a listen host use [`Self::Authority`]. A remote client
+/// explicitly selects [`Self::Replica`] before gameplay setup. Keeping this independent
+/// from transport connection state lets a listen host serve remote clients without
+/// accidentally disabling its own simulation.
+#[derive(Resource, Reflect, Serialize, Deserialize, Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[reflect(Resource)]
+pub enum SimulationRole {
+    /// Runs AI, reducers, domain movement, world mutation, and persistence.
+    #[default]
+    Authority,
+    /// Applies disclosure-safe state received from an authority.
+    Replica,
+}
+
+impl SimulationRole {
+    /// Whether this role owns simulation truth.
+    #[must_use]
+    pub const fn is_authority(self) -> bool {
+        matches!(self, Self::Authority)
+    }
+}
+
 /// The screen the player is currently looking at.
 ///
 /// The app starts at `Splash`, advances to `Title`, and waits for the player to
@@ -26,6 +50,8 @@ pub enum Screen {
     Title,
     /// Persistent pre-alpha display and volume preferences.
     Settings,
+    /// Direct-host/join setup, lobby, verification, reconnect, and session-end routes.
+    Multiplayer,
     /// Local mechanics test reached only from Character Creator.
     ///
     /// Exists as an isolated manual-verification surface for casting, fusions, mana,
@@ -47,7 +73,9 @@ pub enum Screen {
 ///
 /// A [`SubStates`] of [`Screen::Gameplay`], so it cannot exist while the player
 /// is in a menu — the type system rules out "paused on the title screen".
-#[derive(SubStates, Reflect, Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
+#[derive(
+    SubStates, Reflect, Serialize, Deserialize, Copy, Clone, Eq, PartialEq, Hash, Debug, Default,
+)]
 #[source(Screen = Screen::Gameplay)]
 pub struct Pause(pub bool);
 
@@ -55,7 +83,9 @@ pub struct Pause(pub bool);
 ///
 /// Ordinary scenarios move directly from `Preparing` to `Active`. Sandbox sessions
 /// pause at `Deployment` while the already-loaded terrain remains visible.
-#[derive(Resource, Reflect, Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
+#[derive(
+    Resource, Reflect, Serialize, Deserialize, Copy, Clone, Eq, PartialEq, Hash, Debug, Default,
+)]
 pub enum GameplayPhase {
     /// Resources and terrain are being prepared.
     Preparing,
@@ -78,7 +108,9 @@ pub enum GameplayPhase {
 /// Deliberately **not** sourced on `Pause(false)`. That would make the mode cease to
 /// exist the instant someone hit escape, taking any `OnEnter(Mode::Combat)` UI with
 /// it and resurrecting it on unpause.
-#[derive(SubStates, Reflect, Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
+#[derive(
+    SubStates, Reflect, Serialize, Deserialize, Copy, Clone, Eq, PartialEq, Hash, Debug, Default,
+)]
 #[source(Screen = Screen::Gameplay)]
 pub enum Mode {
     /// Real time. Move freely; nothing is waiting on anyone.
@@ -128,6 +160,14 @@ pub struct RoundElapsed;
 /// paused.
 #[derive(SystemSet, Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub struct PausableSystems;
+
+/// Systems that mutate authoritative simulation state.
+///
+/// The composition root gates this set from [`SimulationRole`]. It remains separate from
+/// [`PausableSystems`]: a host can be authoritative and paused, while a remote replica must
+/// never run reducers even when the host is unpaused.
+#[derive(SystemSet, Copy, Clone, Eq, PartialEq, Hash, Debug)]
+pub struct AuthoritativeSystems;
 
 /// Ordering for world construction on entering [`Screen::Gameplay`].
 ///

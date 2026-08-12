@@ -275,9 +275,9 @@
     "map": {
       "concerns": ["map_unit", "map_generation", "map_contracts"],
       "expected_counts": {
-        "map_unit": 106,
+        "map_unit": 109,
         "map_generation": 440,
-        "map_contracts": 81
+        "map_contracts": 92
       },
       "expected_ignored": 29,
       "full_command": [
@@ -363,6 +363,12 @@
       "reason": "Map publication and presentation changes require unit and headless contract evidence."
     },
     {
+      "name": "map-world-snapshot",
+      "patterns": ["crates/hex_map/src/world_snapshot.rs"],
+      "full": true,
+      "reason": "The complete world snapshot adapter crosses generation, publication, multiplayer protocol, reconnect, and disclosure seams."
+    },
+    {
       "name": "map-foundations",
       "patterns": [
         "crates/hex_map/Cargo.toml",
@@ -380,6 +386,12 @@
       "patterns": ["crates/hex_core/src/terrain_impact.rs"],
       "full": true,
       "reason": "The current shared file also owns the damaged-voxel projection consumed by map and application code; keep it fail-closed until those authorities are split by file."
+    },
+    {
+      "name": "multiplayer-protocol",
+      "patterns": ["crates/hex_multiplayer/**"],
+      "concerns": ["app", "residual", "clippy", "docs", "shipping"],
+      "reason": "Shared wire, authorization, lobby, replica, and transport registration contracts require headless composition, residual protocol tests, strict docs/lints, and shipping compatibility without selecting map corpora."
     },
     {
       "name": "shared-core",
@@ -453,6 +465,7 @@
       "name": "gameplay-visual",
       "patterns": [
         "walks/gameplay_ui.ron",
+        "walks/multiplayer_session.ron",
         "walks/readme_creator_sandbox.ron",
         "walks/readme_party_trial.ron"
       ],

@@ -7,11 +7,13 @@ use std::fmt;
 /// Renderer-free route within the Main Menu screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MainMenuRoute {
-    /// Four-action Main Menu root.
+    /// Five-action Main Menu root.
     #[default]
     Root,
     /// Exactly three Campaign slots.
     Campaign,
+    /// Client-hosted multiplayer entry; the app adapter moves this to its own screen.
+    Multiplayer,
     /// Creator and future tool entry points.
     Tools,
 }
@@ -121,7 +123,11 @@ mod tests {
 
     #[test]
     fn every_child_route_backs_to_root_without_a_phantom_transition() {
-        for route in [MainMenuRoute::Campaign, MainMenuRoute::Tools] {
+        for route in [
+            MainMenuRoute::Campaign,
+            MainMenuRoute::Multiplayer,
+            MainMenuRoute::Tools,
+        ] {
             let mut model = MainMenuModel::default();
             assert!(!model.back());
             model.show(route);

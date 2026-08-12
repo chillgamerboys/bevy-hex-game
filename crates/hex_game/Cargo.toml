@@ -7,8 +7,13 @@ autotests = false
 description = "Thin launcher library and composition root for gameplay, world, and runtime UI."
 
 [dependencies]
-bevy = { workspace = true }
+# Direct Connect exposes private invite codes through the native OS clipboard.
+# Bevy otherwise accepts writes into an in-process fallback that cannot be pasted
+# into a second game process.
+bevy = { workspace = true, features = ["system_clipboard"] }
+bevy_replicon = { workspace = true }
 atomicwrites = { workspace = true }
+hex_anim = { workspace = true }
 hex_assets = { workspace = true }
 hex_objects = { workspace = true }
 hex_combat = { workspace = true }
@@ -20,6 +25,7 @@ hex_units = { workspace = true }
 hex_map = { workspace = true }
 hex_perception = { workspace = true }
 hex_world = { workspace = true }
+hex_multiplayer = { workspace = true }
 hex_dev = { workspace = true, optional = true }
 ron = { workspace = true }
 serde = { workspace = true }
@@ -30,7 +36,6 @@ xxhash-rust = { workspace = true }
 # Only for the tests that open each scenario's world file and check it parses.
 ron = { workspace = true }
 hex_ai = { workspace = true }
-hex_anim = { workspace = true }
 hex_test_support = { workspace = true }
 
 [features]

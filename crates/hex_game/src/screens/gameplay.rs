@@ -19,9 +19,11 @@ use hex_combat::{
 use hex_core::{
     AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, GameplayPhase, GameplaySystems,
     InputAction, InputBindings, IssuedCommand, Mode, PartyFormation, PartyMovementMode, Pause,
-    PendingDecision, Screen, UnitId,
+    PendingDecision, Screen, SimulationRole, UnitId,
 };
-use hex_gameplay_model::{HudActionResult, HudState, MainMenuModel, MainMenuRoute};
+use hex_gameplay_model::{
+    HudActionResult, HudState, MainMenuModel, MainMenuRoute, MultiplayerModel, MultiplayerRole,
+};
 use hex_lattice::{CellKind, LatticeSpec, LatticeState, LatticeStats};
 use hex_units::{Archetype, Downed, Party, Player, Selected, UnitRegistry};
 
@@ -116,6 +118,8 @@ fn handle_gameplay_ui_intents(
     registry: Res<UnitRegistry>,
     owners: Query<(Option<&ControlOwner>, &hex_units::Faction)>,
     pause: Res<State<Pause>>,
+    role: Option<Res<SimulationRole>>,
+    mut multiplayer: Option<ResMut<MultiplayerModel>>,
     mut queue: ResMut<CommandQueue>,
     mut next_pause: ResMut<NextState<Pause>>,
 ) {
@@ -142,7 +146,15 @@ fn handle_gameplay_ui_intents(
                 &mut queue,
                 |unit| GameCommand::EndTurn { unit },
             ),
-            GameplayAction::Pause => next_pause.set(toggled_pause(*pause.get())),
+            GameplayAction::Pause => {
+                if role.as_deref() == Some(&SimulationRole::Replica) {
+                    if let Some(multiplayer) = multiplayer.as_mut() {
+                        let _changed = multiplayer.toggle_client_menu();
+                    }
+                } else {
+                    next_pause.set(toggled_pause(*pause.get()));
+                }
+            }
             GameplayAction::Rest if *mode.get() == Mode::Exploring => {
                 let player = registry.iter().find_map(|(unit, entity)| {
                     owners.get(entity).ok().and_then(|(owner, faction)| {
@@ -409,6 +421,7 @@ fn compact_lattice_label(name: &str) -> String {
 fn sync_outcome_view(
     resolution: Res<EncounterResolution>,
     sandbox: Option<Res<SandboxSession>>,
+    multiplayer: Option<Res<MultiplayerModel>>,
     mut view: ResMut<OutcomeView>,
 ) {
     let Some(outcome) = resolution.outcome() else {
@@ -417,7 +430,28 @@ fn sync_outcome_view(
         }
         return;
     };
-    let actions = if sandbox.is_some() {
+    let multiplayer_role = multiplayer.as_deref().and_then(|model| model.role);
+    let actions = if multiplayer_role == Some(MultiplayerRole::Host) {
+        vec![
+            OutcomeActionView {
+                action: OutcomeAction::RetryExact,
+                label: "Retry Exact".to_owned(),
+            },
+            OutcomeActionView {
+                action: OutcomeAction::ReturnToLobby,
+                label: "Return to Lobby".to_owned(),
+            },
+            OutcomeActionView {
+                action: OutcomeAction::CloseSession,
+                label: "Close Session".to_owned(),
+            },
+        ]
+    } else if multiplayer_role == Some(MultiplayerRole::Client) {
+        vec![OutcomeActionView {
+            action: OutcomeAction::LeaveSession,
+            label: "Leave Session".to_owned(),
+        }]
+    } else if sandbox.is_some() {
         vec![
             OutcomeActionView {
                 action: OutcomeAction::RetryExact,
@@ -454,13 +488,26 @@ fn sync_outcome_view(
             EncounterOutcome::Defeat => "Defeat",
         }
         .to_owned(),
-        detail: match (sandbox.is_some(), outcome) {
-            (true, EncounterOutcome::Victory) => "The Enemy roster can no longer continue.",
-            (true, EncounterOutcome::Defeat) => "The Party roster can no longer continue.",
-            (false, EncounterOutcome::Victory) => {
+        detail: match (multiplayer_role, sandbox.is_some(), outcome) {
+            (Some(MultiplayerRole::Host), _, EncounterOutcome::Victory) => {
+                "The Enemy roster can no longer continue. Choose the session's next host-owned transition."
+            }
+            (Some(MultiplayerRole::Host), _, EncounterOutcome::Defeat) => {
+                "The Party roster can no longer continue. Choose the session's next host-owned transition."
+            }
+            (Some(MultiplayerRole::Client), _, _) => {
+                "Waiting for the host to retry, reopen the lobby, or close the session."
+            }
+            (None, true, EncounterOutcome::Victory) => {
+                "The Enemy roster can no longer continue."
+            }
+            (None, true, EncounterOutcome::Defeat) => {
+                "The Party roster can no longer continue."
+            }
+            (None, false, EncounterOutcome::Victory) => {
                 "The encounter is complete. Continue the Campaign when ready."
             }
-            (false, EncounterOutcome::Defeat) => {
+            (None, false, EncounterOutcome::Defeat) => {
                 "Retry replays this scenario with the same resolved seed."
             }
         }
@@ -478,6 +525,7 @@ fn handle_outcome_actions(
     active: Option<Res<ActiveScenario>>,
     sandbox: Option<Res<SandboxSession>>,
     origin: Option<Res<GameplaySessionOrigin>>,
+    multiplayer: Option<Res<MultiplayerModel>>,
     mut commands: Commands,
     mut next_mode: ResMut<NextState<Mode>>,
     mut next_screen: ResMut<NextState<Screen>>,
@@ -491,10 +539,20 @@ fn handle_outcome_actions(
             continue;
         };
         match (*action, outcome) {
-            (OutcomeAction::Continue, EncounterOutcome::Victory) if sandbox.is_none() => {
+            (OutcomeAction::Continue, EncounterOutcome::Victory)
+                if sandbox.is_none()
+                    && multiplayer
+                        .as_deref()
+                        .is_none_or(|model| model.role.is_none()) =>
+            {
                 next_mode.set(Mode::Exploring);
             }
-            (OutcomeAction::Retry, EncounterOutcome::Defeat) if sandbox.is_none() => {
+            (OutcomeAction::Retry, EncounterOutcome::Defeat)
+                if sandbox.is_none()
+                    && multiplayer
+                        .as_deref()
+                        .is_none_or(|model| model.role.is_none()) =>
+            {
                 let Some(active) = active.as_deref() else {
                     error!("cannot retry: active scenario launch input was not retained");
                     continue;
@@ -502,7 +560,12 @@ fn handle_outcome_actions(
                 commands.insert_resource(active.0.clone());
                 next_screen.set(Screen::Loading);
             }
-            (OutcomeAction::RetryExact, _) if sandbox.is_some() => {
+            (OutcomeAction::RetryExact, _)
+                if sandbox.is_some()
+                    && multiplayer
+                        .as_deref()
+                        .is_none_or(|model| model.role.is_none()) =>
+            {
                 let Some(sandbox) = sandbox.as_deref() else {
                     error!(
                         "cannot retry exact Sandbox run: frozen launch snapshot was not retained"
@@ -519,10 +582,22 @@ fn handle_outcome_actions(
                 commands.insert_resource(sandbox.launch.rules.clone());
                 next_screen.set(Screen::Loading);
             }
-            (OutcomeAction::Return, _) => {
+            (OutcomeAction::Return, _)
+                if multiplayer
+                    .as_deref()
+                    .is_none_or(|model| model.role.is_none()) =>
+            {
                 let destination = gameplay_return_screen(origin.as_deref(), sandbox.is_some());
                 prepare_main_menu_for_gameplay_return(destination, &mut main_menu);
                 next_screen.set(destination);
+            }
+            (
+                OutcomeAction::ReturnToLobby
+                | OutcomeAction::CloseSession
+                | OutcomeAction::LeaveSession,
+                _,
+            ) => {
+                // The multiplayer session adapter consumes the same typed intent.
             }
             _ => {}
         }
@@ -864,6 +939,8 @@ fn handle_input(
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<InputBindings>,
     pause: Res<State<Pause>>,
+    role: Option<Res<SimulationRole>>,
+    mut multiplayer: Option<ResMut<MultiplayerModel>>,
     mut next_pause: ResMut<NextState<Pause>>,
     mut next_screen: ResMut<NextState<Screen>>,
     sandbox: Option<Res<SandboxSession>>,
@@ -875,11 +952,21 @@ fn handle_input(
     let escape_closed_surface = keys.just_pressed(KeyCode::Escape)
         && hud.close_active_surface(hud_context.0) != HudActionResult::NoChange;
     if bindings.just_pressed(&keys, InputAction::Pause) && !escape_closed_surface {
-        next_pause.set(toggled_pause(*pause.get()));
+        if role.as_deref() == Some(&SimulationRole::Replica) {
+            if let Some(multiplayer) = multiplayer.as_mut() {
+                let _changed = multiplayer.toggle_client_menu();
+            }
+        } else {
+            next_pause.set(toggled_pause(*pause.get()));
+        }
     }
     // The return action stays distinct from Escape, which always dismisses an
     // ordinary HUD task before the configured pause action may run.
-    if bindings.just_pressed(&keys, InputAction::ReturnTitle) {
+    if bindings.just_pressed(&keys, InputAction::ReturnTitle)
+        && multiplayer
+            .as_deref()
+            .is_none_or(|model| model.role.is_none())
+    {
         let destination = gameplay_return_screen(origin.as_deref(), sandbox.is_some());
         prepare_main_menu_for_gameplay_return(destination, &mut main_menu);
         next_screen.set(destination);
@@ -898,7 +985,7 @@ mod tests {
         CombatSettings, Encounter, EncounterFaction, EncounterPlacement, Roster, RosterEntry,
         ScenarioLibrary,
     };
-    use hex_core::{HexCoord, ResolvedMapSeed, TilePos};
+    use hex_core::{HexCoord, PlayerSeat, ResolvedMapSeed, TilePos};
     use hex_gameplay_model::{CampaignSlotId, SandboxCharacter, SandboxMapSelection};
 
     use super::super::sandbox::{SandboxDeploymentSnapshot, SandboxLaunchSnapshot};
@@ -1316,6 +1403,40 @@ mod tests {
     }
 
     #[test]
+    fn remote_client_cannot_inject_unrendered_local_outcome_navigation() {
+        let mut multiplayer = MultiplayerModel::default();
+        multiplayer.connecting(MultiplayerRole::Client);
+        assert!(multiplayer.admitted(MultiplayerRole::Client, PlayerSeat(1)));
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .insert_state(Screen::Gameplay)
+            .add_sub_state::<Mode>()
+            .add_message::<hex_ui::UiIntent>()
+            .init_resource::<MainMenuModel>()
+            .insert_resource(multiplayer)
+            .insert_resource(EncounterResolution(Some(EncounterOutcome::Victory)))
+            .insert_resource(sample_sandbox_session(9_001))
+            .insert_resource(GameplaySessionOrigin::Sandbox)
+            .add_systems(Update, handle_outcome_actions);
+        for action in [OutcomeAction::RetryExact, OutcomeAction::Return] {
+            app.world_mut().write_message(hex_ui::UiIntent::Outcome(
+                hex_ui::OutcomeIntent::Activate(action),
+            ));
+        }
+
+        app.update();
+        app.update();
+
+        assert_eq!(
+            *app.world().resource::<State<Screen>>().get(),
+            Screen::Gameplay
+        );
+        assert!(!app
+            .world()
+            .contains_resource::<crate::scenarios::ScenarioToLoad>());
+    }
+
+    #[test]
     fn campaign_return_intent_opens_the_main_menu_root() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin))
@@ -1376,6 +1497,69 @@ mod tests {
         assert_eq!(
             app.world().resource::<MainMenuModel>().route,
             MainMenuRoute::Root
+        );
+    }
+
+    fn multiplayer_pause_app(role: SimulationRole, session_role: MultiplayerRole) -> App {
+        let mut model = MultiplayerModel::default();
+        model.connecting(session_role);
+        let seat = if session_role == MultiplayerRole::Host {
+            PlayerSeat::HOST
+        } else {
+            PlayerSeat(1)
+        };
+        assert!(model.admitted(session_role, seat));
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .insert_state(Screen::Gameplay)
+            .insert_state(Pause(false))
+            .insert_resource(role)
+            .insert_resource(model)
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<InputBindings>()
+            .init_resource::<HudState>()
+            .init_resource::<GameplayHudContext>()
+            .init_resource::<MainMenuModel>()
+            .add_systems(Update, handle_input);
+        app
+    }
+
+    #[test]
+    fn host_escape_changes_global_pause_while_client_escape_is_local_only() {
+        let mut host = multiplayer_pause_app(SimulationRole::Authority, MultiplayerRole::Host);
+        host.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Escape);
+        host.update();
+        host.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
+        host.update();
+        assert_eq!(*host.world().resource::<State<Pause>>().get(), Pause(true));
+        assert!(!host.world().resource::<MultiplayerModel>().local_menu_open);
+
+        let mut client = multiplayer_pause_app(SimulationRole::Replica, MultiplayerRole::Client);
+        client
+            .world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Escape);
+        client.update();
+        client
+            .world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
+        client.update();
+        assert_eq!(
+            *client.world().resource::<State<Pause>>().get(),
+            Pause(false),
+            "a remote menu must not manufacture global pause"
+        );
+        assert!(
+            client
+                .world()
+                .resource::<MultiplayerModel>()
+                .local_menu_open
         );
     }
 

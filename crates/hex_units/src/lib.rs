@@ -55,8 +55,9 @@ pub use authored_object_occupancy::{
     AuthoredObjectOccupancy, AuthoredObjectOccupancySystems, InvalidAuthoredObjectRun,
 };
 pub use formation::{
-    plan_formation_move, plan_formation_move_with_occupancy, rotated, FormationMember,
-    FormationPlan, FormationPlanError,
+    formation_subset_anchor, plan_formation_move, plan_formation_move_with_occupancy,
+    plan_formation_subset_move_with_occupancy, rotated, FormationMember, FormationPlan,
+    FormationPlanError,
 };
 pub use hex_core::{Faction, OccupancyBlock, UnitOccupancy};
 pub use movement::{
@@ -81,8 +82,8 @@ pub use trajectories::{
     trajectory_destination, trajectory_is_clear, trajectory_voxels,
 };
 pub use units::{
-    Archetype, Downed, Enemy, MovingTo, Party, Player, StandsOn, StopMovingAt, UnitAllocator,
-    UnitRegistry,
+    spawn_replica_unit, Archetype, Downed, Enemy, MovingTo, Party, Player, ReplicaUnitSpawn,
+    ReplicaUnitSpawnError, StandsOn, StopMovingAt, UnitAllocator, UnitRegistry,
 };
 // `volumes` is deliberately not re-exported here. Its names are bare verbs —
 // `line`, `column`, `path`, `resolve` — that only read correctly qualified, and

@@ -1,20 +1,28 @@
 //! ECS projection and lifecycle for the headless perception rules.
 
-use bevy_app::{App, Update};
+use bevy_app::{App, PostStartup, PostUpdate, Update};
 use bevy_ecs::prelude::*;
 use bevy_ecs::reflect::ReflectResource;
-use bevy_ecs::schedule::common_conditions::{not, resource_exists};
+use bevy_ecs::schedule::common_conditions::{not, resource_equals, resource_exists};
 use bevy_ecs::system::SystemParam;
 use bevy_log::error;
 use bevy_reflect::Reflect;
+use bevy_replicon::{
+    prelude::{AuthorizedClient, ServerSystems},
+    server::visibility::{
+        client_visibility::ClientVisibility, filters_mask::FilterBit, registry::FilterRegistry,
+    },
+    shared::replication::registry::ReplicationRegistry,
+};
 use bevy_state::prelude::*;
 use hex_assets::{PerceptionSettings, SubstanceTable};
 use hex_core::{
-    ExteriorIllumination, GameplayLight, GameplaySetupFailure, Headroom, HexSpan, HexTile,
-    IlluminationLevel, InteriorRegions, LightDomain, LocalMapKnowledge, PausableSystems,
-    PerceptionSystems, RunBottom, Screen, SubstanceId, TerrainReady, TilePos, TraversalBlockers,
-    UnitId,
+    AuthoritativeSystems, ExteriorIllumination, GameplayLight, GameplaySetupFailure, Headroom,
+    HexSpan, HexTile, IlluminationLevel, InteriorRegions, LightDomain, LocalMapKnowledge,
+    PausableSystems, PerceptionSystems, RunBottom, Screen, SimulationRole, SubstanceId,
+    TerrainReady, TilePos, TraversalBlockers, UnitId,
 };
+use hex_multiplayer::{AuthorizedSessionClient, UnitReplica};
 use hex_units::{
     AuthoredObjectOccupancy, AuthoredObjectOccupancySystems, Body, Downed, Faction,
     MovementSystems, StandsOn, TerrainOccupancy, TerrainOccupancySystems,
@@ -31,6 +39,7 @@ type TileProjectionQuery<'w, 's> = Query<
     's,
     (
         Option<&'static TilePos>,
+        Option<&'static RunBottom>,
         Option<&'static HexSpan>,
         Option<&'static SubstanceId>,
         Option<&'static Headroom>,
@@ -93,6 +102,10 @@ struct PerceptionInvalidation {
     knowledge: bool,
 }
 
+/// Manual entity-visibility scope reserved for the shared player-faction view.
+#[derive(Resource, Debug, Clone, Copy)]
+struct PlayerDisclosureFilterBit(FilterBit);
+
 impl PerceptionInvalidation {
     const fn all() -> Self {
         Self {
@@ -142,10 +155,21 @@ pub fn plugin(app: &mut App) {
         .register_type::<PerceptionRuntimeStats>()
         .init_resource::<PerceptionInvalidation>()
         .init_resource::<PerceptionRuntimeStats>()
+        .init_resource::<SimulationRole>()
+        .configure_sets(
+            Update,
+            AuthoritativeSystems.run_if(resource_equals(SimulationRole::Authority)),
+        )
+        .configure_sets(
+            OnEnter(Screen::Gameplay),
+            AuthoritativeSystems.run_if(resource_equals(SimulationRole::Authority)),
+        )
+        .add_systems(PostStartup, register_player_disclosure_scope)
         .add_systems(
             OnEnter(Screen::Gameplay),
             resolve_illumination
                 .in_set(PerceptionSystems::ResolveIllumination)
+                .in_set(AuthoritativeSystems)
                 .run_if(resource_exists::<TerrainReady>)
                 .run_if(not(resource_exists::<GameplaySetupFailure>)),
         )
@@ -153,6 +177,7 @@ pub fn plugin(app: &mut App) {
             OnEnter(Screen::Gameplay),
             resolve_observation
                 .in_set(PerceptionSystems::ResolveObservation)
+                .in_set(AuthoritativeSystems)
                 .run_if(resource_exists::<TerrainReady>)
                 .run_if(not(resource_exists::<GameplaySetupFailure>)),
         )
@@ -160,6 +185,7 @@ pub fn plugin(app: &mut App) {
             OnEnter(Screen::Gameplay),
             publish_knowledge
                 .in_set(PerceptionSystems::PublishKnowledge)
+                .in_set(AuthoritativeSystems)
                 .run_if(resource_exists::<TerrainReady>)
                 .run_if(not(resource_exists::<GameplaySetupFailure>)),
         )
@@ -167,6 +193,7 @@ pub fn plugin(app: &mut App) {
             Update,
             detect_perception_input_changes
                 .in_set(PerceptionSystems::ResolveIllumination)
+                .in_set(AuthoritativeSystems)
                 .after(MovementSystems::Reconcile)
                 .after(TerrainOccupancySystems::Publish)
                 .after(AuthoredObjectOccupancySystems::Publish)
@@ -179,6 +206,7 @@ pub fn plugin(app: &mut App) {
             Update,
             resolve_illumination
                 .in_set(PerceptionSystems::ResolveIllumination)
+                .in_set(AuthoritativeSystems)
                 .in_set(PausableSystems)
                 .after(MovementSystems::Reconcile)
                 .run_if(in_state(Screen::Gameplay))
@@ -189,6 +217,7 @@ pub fn plugin(app: &mut App) {
             Update,
             resolve_observation
                 .in_set(PerceptionSystems::ResolveObservation)
+                .in_set(AuthoritativeSystems)
                 .in_set(PausableSystems)
                 .after(MovementSystems::Reconcile)
                 .run_if(in_state(Screen::Gameplay))
@@ -199,12 +228,58 @@ pub fn plugin(app: &mut App) {
             Update,
             publish_knowledge
                 .in_set(PerceptionSystems::PublishKnowledge)
+                .in_set(AuthoritativeSystems)
                 .in_set(PausableSystems)
                 .run_if(in_state(Screen::Gameplay))
                 .run_if(resource_exists::<TerrainReady>)
                 .run_if(not(resource_exists::<GameplaySetupFailure>)),
         )
+        .add_systems(
+            PostUpdate,
+            apply_player_disclosure_visibility.before(ServerSystems::Send),
+        )
         .add_systems(OnExit(Screen::Gameplay), clear_session);
+}
+
+fn register_player_disclosure_scope(world: &mut World) {
+    if world.contains_resource::<PlayerDisclosureFilterBit>()
+        || !world.contains_resource::<FilterRegistry>()
+        || !world.contains_resource::<ReplicationRegistry>()
+    {
+        return;
+    }
+    let bit = world.resource_scope(|world, mut filters: Mut<FilterRegistry>| {
+        world.resource_scope(|world, mut replication: Mut<ReplicationRegistry>| {
+            filters.register_scope::<Entity>(world, &mut replication)
+        })
+    });
+    world.insert_resource(PlayerDisclosureFilterBit(bit));
+}
+
+fn apply_player_disclosure_visibility(
+    filter: Option<Res<PlayerDisclosureFilterBit>>,
+    knowledge: Option<Res<FactionMapKnowledge>>,
+    replicas: Query<(Entity, &UnitReplica)>,
+    mut clients: Query<
+        &mut ClientVisibility,
+        (With<AuthorizedClient>, With<AuthorizedSessionClient>),
+    >,
+) {
+    let Some(filter) = filter else {
+        return;
+    };
+    for (entity, replica) in &replicas {
+        let visible = replica.faction == Faction::Player
+            || knowledge.as_deref().is_some_and(|knowledge| {
+                knowledge
+                    .faction(Faction::Player)
+                    .unit(replica.unit)
+                    .is_some()
+            });
+        for mut visibility in &mut clients {
+            visibility.set(entity, filter.0, visible);
+        }
+    }
 }
 
 #[derive(SystemParam)]
@@ -603,28 +678,32 @@ fn snapshot_surfaces(
     blockers: Option<&TraversalBlockers>,
 ) -> Result<SurfaceSnapshots, String> {
     let mut snapshots = Vec::new();
-    for (pos, span, substance, headroom) in tiles {
-        let (Some(pos), Some(span), Some(substance), Some(headroom)) =
-            (pos, span, substance, headroom)
+    for (pos, run_bottom, span, substance, headroom) in tiles {
+        let (Some(pos), Some(run_bottom), Some(span), Some(substance), Some(headroom)) =
+            (pos, run_bottom, span, substance, headroom)
         else {
             return Err(
-                "A HexTile is missing TilePos, HexSpan, SubstanceId, or Headroom.".to_owned(),
+                "A HexTile is missing TilePos, RunBottom, HexSpan, SubstanceId, or Headroom."
+                    .to_owned(),
             );
         };
         if headroom.0 <= 0 {
             continue;
         }
-        snapshots.push(SurfaceSnapshot {
-            pos: *pos,
-            span: *span,
-            substance: *substance,
-            headroom: *headroom,
-            is_solid: table.is_solid(*substance),
-            blocked: blockers.is_some_and(|blockers| blockers.contains(*pos)),
-            domain: domain_at(*pos, interiors),
-        });
+        snapshots.push((
+            *run_bottom,
+            SurfaceSnapshot {
+                pos: *pos,
+                span: *span,
+                substance: *substance,
+                headroom: *headroom,
+                is_solid: table.is_solid(*substance),
+                blocked: blockers.is_some_and(|blockers| blockers.contains(*pos)),
+                domain: domain_at(*pos, interiors),
+            },
+        ));
     }
-    SurfaceSnapshots::try_from_iter(snapshots)
+    SurfaceSnapshots::try_from_projected_iter(snapshots)
         .map_err(|error| format!("Perception received invalid terrain projections: {error}."))
 }
 
@@ -945,6 +1024,32 @@ mod tests {
     }
 
     #[test]
+    fn replica_role_does_not_resolve_authoritative_perception() {
+        let (mut app, substances) = runtime_app(IlluminationLevel::Bright);
+        app.insert_resource(SimulationRole::Replica);
+        let position = pos(0, 0, 3);
+        spawn_tile(&mut app, position, substances.stone, 4);
+        spawn_unit(&mut app, 1, Faction::Player, position);
+
+        enter(&mut app, Screen::Gameplay);
+        app.update();
+
+        assert_eq!(
+            *app.world().resource::<PerceptionRuntimeStats>(),
+            PerceptionRuntimeStats::default()
+        );
+        assert!(!app.world().contains_resource::<SurfaceSnapshots>());
+        assert!(!app.world().contains_resource::<ResolvedIllumination>());
+        assert!(!app.world().contains_resource::<FactionObservations>());
+        assert!(!app.world().contains_resource::<FactionMapKnowledge>());
+        assert!(!app.world().contains_resource::<GameplaySetupFailure>());
+        assert_eq!(
+            app.world().resource::<State<Screen>>().get(),
+            &Screen::Gameplay
+        );
+    }
+
+    #[test]
     fn full_run_one_level_ridge_is_observed_through_the_runtime_pipeline() {
         let (mut app, substances) = runtime_app(IlluminationLevel::Bright);
         let observer = pos(0, 0, 0);
@@ -993,7 +1098,9 @@ mod tests {
         enter(&mut app, Screen::Gameplay);
 
         let failure = app.world().resource::<GameplaySetupFailure>();
-        assert!(failure.reason.contains("missing TilePos, HexSpan"));
+        assert!(failure
+            .reason
+            .contains("missing TilePos, RunBottom, HexSpan"));
         assert!(!app.world().contains_resource::<ResolvedIllumination>());
         app.update();
         assert_eq!(
@@ -2057,6 +2164,11 @@ mod tests {
                 object_voxel,
                 7,
             )]));
+        // Prime every state-specific schedule before the entity-leak baseline.
+        // Bevy materializes schedule-owned system entities when an OnEnter schedule
+        // first runs; those one-time internals are not gameplay-session leaks.
+        enter(&mut app, Screen::Gameplay);
+        enter(&mut app, Screen::Title);
         let expected_entities = app.world().entities().len();
 
         for cycle in 0..100 {

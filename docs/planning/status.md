@@ -304,19 +304,19 @@ mutating selection, turn, caster, command ownership, or formation.
 Party Trial is the 3v3 integration and human regression case; Ability Lab and Raider
 Mirror remain its focused automated companions behind default-off stable fixture IDs.
 
-The **Campaign/Sandbox application shell is live**. The Main Menu exposes exactly
-Campaign, Sandbox, Tools, and Settings. Campaign projects exactly three indexed local
-records as Empty, Available, or Invalid. A new canonical Party Trial is bound to the
-chosen empty slot and occupies it only on its first safe manual save. Available cards
-show their party and accumulated active-play time; invalid records remain preserved
-and visibly refused. `campaigns.ron` is replaced atomically. When it is absent, one
-structurally valid legacy `resume.ron` is copied to slot 1 without modifying the
-legacy file, then checked against the current semantic content. Mountain Range changes
-those digest-bound shipped world inputs, so the narrow PR #175 legacy translation is
-intentionally no longer compatible: the imported record remains preserved as Invalid
-with a visible scenario-changed refusal. Only active, unpaused, non-terminal Campaign
-gameplay accrues time. Manual saving instead requires paused, safe, quiescent Campaign
-exploration.
+The **Campaign/Sandbox/Multiplayer application shell is live**. The Main Menu exposes
+exactly Campaign, Sandbox, Multiplayer, Tools, and Settings. Campaign projects exactly
+three indexed local records as Empty, Available, or Invalid. A new canonical Party
+Trial is bound to the chosen empty slot and occupies it only on its first safe manual
+save. Available cards show their party and accumulated active-play time; invalid
+records remain preserved and visibly refused. `campaigns.ron` is replaced atomically.
+When it is absent, one structurally valid legacy `resume.ron` is copied to slot 1
+without modifying the legacy file, then checked against the current semantic content.
+Mountain Range changes those digest-bound shipped world inputs, so the narrow PR #175
+legacy translation is intentionally no longer compatible: the imported record remains
+preserved as Invalid with a visible scenario-changed refusal. Only active, unpaused,
+non-terminal Campaign gameplay accrues time. Manual saving instead requires paused,
+safe, quiescent Campaign exploration.
 
 Sandbox is the sole player-facing authority for a temporary map, two ordered fixed
 six-slot rosters, character picks, deployment, and launch. Its in-memory default is
@@ -332,6 +332,31 @@ regions remain only as hidden actor-staging compatibility metadata. Start freeze
 shipped combat rules plus exact map/seed, ordered rosters, content revision, and
 deployment for Loading and Retry Exact. Terminal Sandbox play shows only
 Victory/Defeat, Retry Exact, and Return to Sandbox.
+
+Direct client-hosted Sandbox multiplayer is live for one listen host and up to five
+guests across the six human seats. Host Direct freezes one shipped Sandbox setup,
+opens an encrypted WebTransport endpoint, and shares a redacted `HEX1` connection
+code; Join Direct verifies the exact protocol, build, shipped content, certificate
+SPKI pin, and generated-world fingerprint before activation. The host assigns the six
+party members, every connected guest must own at least one, assignment changes clear
+readiness, and no new player is admitted after launch. Offline single-player uses the
+same seatless command ingress without opening a socket.
+
+The listen host owns simulation, AI, world mutation, pause, admission, and outcome
+actions. Clients submit intents and interpolate exact authoritative motion; they do not
+run rollback, lockstep, prediction, or private combat authority. A disconnected seat is
+reserved for 30 real-time seconds, then temporarily delegated to the host without
+changing canonical ownership. An admitted player can restart and rejoin with a rotating
+credential bound to the session, endpoint, and SPKI pin; reconnect restores a complete
+generator-neutral world and authorized player-knowledge/unit/session baseline before
+ordered later deltas. Host loss ends the session, while client Escape opens a local
+non-pausing menu.
+
+This first milestone supports shipped Sandbox content only. Internet hosts must arrange
+UDP forwarding themselves and may still fail behind CGNAT; there is no UPnP, STUN/TURN,
+public matchmaking, non-Steam relay, host migration, spectator mode, or dedicated
+server. Multiplayer Campaign saves and Steam invite/relay transport remain later
+milestones; the existing local Campaign slots are not exposed as multiplayer saves.
 
 Tools contains Character Creator, Spell Creator, and a disabled Map Creator marked
 Coming Soon. Creator origins and destinations are typed. Creating from a character
@@ -372,9 +397,9 @@ turn, no-progress, or outcome termination. It consumes exact per-unit scripts or
 deterministic non-random baseline controller. This is a regression workbench, not a
 claim that the baseline is optimal or balance is fun.
 
-Pure `hex_gameplay_model` transitions own Main Menu, Campaign, Sandbox, and Creator
-navigation, map/draft edits, slot identity, launch blockers, Retry identity, re-entry,
-and edit history without exposing mutable widget state.
+Pure `hex_gameplay_model` transitions own Main Menu, Campaign, Sandbox, Multiplayer,
+and Creator navigation, map/draft edits, slot identity, launch blockers, Retry identity,
+re-entry, and edit history without exposing mutable widget state.
 
 Gameplay validation is split by oracle into pure rules, focused ECS contracts,
 deterministic simulation, and model/headless-app partitions. One fail-closed concern

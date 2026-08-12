@@ -7,7 +7,9 @@ use std::fmt;
 use bevy_ecs::prelude::Resource;
 use bevy_ecs::reflect::ReflectResource;
 use bevy_reflect::Reflect;
-use hex_core::{Headroom, HexSpan, LightDomain, SubstanceId, TilePos, TraversalEndpoint, UnitId};
+use hex_core::{
+    Headroom, HexSpan, LightDomain, RunBottom, SubstanceId, TilePos, TraversalEndpoint, UnitId,
+};
 use hex_units::Faction;
 
 /// One exposed material surface as gameplay may currently inspect it.
@@ -67,6 +69,7 @@ pub struct ObservedUnit {
 #[reflect(Resource)]
 pub struct SurfaceSnapshots {
     by_pos: BTreeMap<TilePos, SurfaceSnapshot>,
+    run_bottom_by_pos: BTreeMap<TilePos, RunBottom>,
 }
 
 impl SurfaceSnapshots {
@@ -78,21 +81,48 @@ impl SurfaceSnapshots {
     pub fn try_from_iter(
         snapshots: impl IntoIterator<Item = SurfaceSnapshot>,
     ) -> Result<Self, PerceptionError> {
+        Self::try_from_projected_iter(
+            snapshots
+                .into_iter()
+                .map(|snapshot| (RunBottom(snapshot.pos.level), snapshot)),
+        )
+    }
+
+    /// Builds an exact-position index with each map-published run bottom.
+    ///
+    /// Runtime terrain uses this constructor so remembered knowledge can preserve
+    /// the complete public run tuple. Rule-only callers may continue using
+    /// [`Self::try_from_iter`], whose one-level default is sufficient when no map
+    /// projection exists.
+    pub fn try_from_projected_iter(
+        snapshots: impl IntoIterator<Item = (RunBottom, SurfaceSnapshot)>,
+    ) -> Result<Self, PerceptionError> {
         let mut snapshots = snapshots.into_iter().collect::<Vec<_>>();
-        snapshots.sort_by_key(|snapshot| snapshot.pos);
+        snapshots.sort_by_key(|(_run_bottom, snapshot)| snapshot.pos);
         let mut by_pos = BTreeMap::new();
-        for snapshot in snapshots {
+        let mut run_bottom_by_pos = BTreeMap::new();
+        for (run_bottom, snapshot) in snapshots {
             if by_pos.insert(snapshot.pos, snapshot).is_some() {
                 return Err(PerceptionError::DuplicateSurface(snapshot.pos));
             }
+            run_bottom_by_pos.insert(snapshot.pos, run_bottom);
         }
-        Ok(Self { by_pos })
+        Ok(Self {
+            by_pos,
+            run_bottom_by_pos,
+        })
     }
 
     /// Returns one current exact surface.
     #[must_use]
     pub fn get(&self, pos: TilePos) -> Option<SurfaceSnapshot> {
         self.by_pos.get(&pos).copied()
+    }
+
+    /// Inclusive bottom of the exact rendered run at `pos`.
+    #[must_use]
+    pub fn run_bottom(&self, pos: TilePos) -> Option<RunBottom> {
+        self.run_bottom_by_pos.get(&pos).copied()
     }
 
     /// Iterates over current surfaces in exact-position order.

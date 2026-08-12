@@ -58,6 +58,10 @@ fn handle_intents(
         };
         match intent {
             MainMenuIntent::OpenCampaign => model.show(MainMenuRoute::Campaign),
+            MainMenuIntent::OpenMultiplayer => {
+                model.show(MainMenuRoute::Multiplayer);
+                next.set(Screen::Multiplayer);
+            }
             MainMenuIntent::OpenSandbox => {
                 let _consumed = model.back();
                 next.set(Screen::Sandbox);
@@ -113,14 +117,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn root_has_exactly_the_four_product_routes() {
+    fn root_has_exactly_the_five_product_routes() {
         let routes = [
             MainMenuIntent::OpenCampaign,
             MainMenuIntent::OpenSandbox,
+            MainMenuIntent::OpenMultiplayer,
             MainMenuIntent::OpenTools,
             MainMenuIntent::OpenSettings,
         ];
-        assert_eq!(routes.len(), 4);
+        assert_eq!(routes.len(), 5);
     }
 
     fn navigation_app() -> App {
@@ -159,6 +164,24 @@ mod tests {
         assert_eq!(
             *app.world().resource::<State<Screen>>().get(),
             Screen::Sandbox
+        );
+    }
+
+    #[test]
+    fn multiplayer_route_uses_the_fifth_root_action_and_its_own_screen() {
+        let mut app = navigation_app();
+        app.world_mut()
+            .write_message(UiIntent::MainMenu(MainMenuIntent::OpenMultiplayer));
+        app.update();
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<MainMenuModel>().route,
+            MainMenuRoute::Multiplayer
+        );
+        assert_eq!(
+            *app.world().resource::<State<Screen>>().get(),
+            Screen::Multiplayer
         );
     }
 }

@@ -334,13 +334,16 @@ fn exploring_rest_recovers_only_the_party() {
         disable(&mut app, entity, &[LatticeCoord::ORIGIN]);
         app.world_mut().entity_mut(entity).insert(Downed);
     }
+    app.world_mut()
+        .entity_mut(second)
+        .insert(ControlOwner(PlayerSeat(5)));
     app.world_mut().resource_mut::<Party>().members = vec![UnitId(0), UnitId(1)];
 
     app.world_mut()
         .resource_mut::<CommandQueue>()
         .push(IssuedCommand {
-            seat: PlayerSeat::default(),
-            command: GameCommand::Rest { unit: UnitId(0) },
+            seat: PlayerSeat(5),
+            command: GameCommand::Rest { unit: UnitId(1) },
         });
     app.update();
 
