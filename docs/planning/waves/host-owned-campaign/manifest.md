@@ -120,8 +120,8 @@ owner adapters.
     full: true
   evidence: logic-only
   sizing: { model: gpt-5.6-sol, effort: high }
-  state: active
-  pr: null
+  state: in_review
+  pr: 203
 
 - id: L2
   title: C2 authoritative gameplay checkpoint
