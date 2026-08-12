@@ -808,6 +808,18 @@ amend this manifest after owner review.
   covers the action at 1920×1080, while lower assignment/session controls retain a
   mechanically verified scroll route. `HEX-93` keeps the before-fix frame and remains
   open until this exact fix reaches `dev`.
+- `3d047b1f` — combined replica-disclosure repair captured in `HEX-96`. The client now
+  composes its validated, visibility-filtered `UnitReplica` stream with imported
+  player-faction terrain knowledge before fog and gameplay presentation consume it.
+  The adapter retries the observed terrain-arrival race, withdraws current-only unit
+  facts with the replica, and leaves hostile-faction knowledge empty. Exact focused
+  evidence: all 65 `hex_perception` tests, all 276 `hex_game` tests, and strict
+  all-target/all-feature package Clippy PASS; five pre-existing manual benchmarks remain
+  ignored under their existing classifications.
+- `7ca1959d` — fresh local preferences now default to borderless fullscreen so separate
+  native host/client processes open as independent fullscreen windows. A persisted
+  windowed preference remains authoritative, and the exact default is locked by a unit
+  contract. Runtime and visual-walk evidence is recorded on the final combined head.
 
 ## Close-out
 
