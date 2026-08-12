@@ -29,6 +29,8 @@ pub const MAX_ADVERTISED_HOST_BYTES: usize = 253;
 pub const MAX_CONNECTION_CODE_BYTES: usize = 512;
 /// Maximum compressed/serialized live snapshot allocation.
 pub const MAX_LIVE_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
+/// Maximum compressed or uncompressed bytes in one streamed snapshot transfer.
+pub const MAX_SNAPSHOT_TRANSFER_BYTES: usize = 64 * 1024 * 1024;
 /// Maximum number of horizontal columns in a world snapshot.
 ///
 /// The largest shipped configuration is Mountain Range at radius 77, or 18,019

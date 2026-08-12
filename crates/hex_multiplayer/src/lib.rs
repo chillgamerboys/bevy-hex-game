@@ -6,10 +6,12 @@
 //! adapters in the composition root.
 //!
 //! Version 1 provides a server-authoritative listen-host foundation for Direct Connect.
-//! Merely installing [`MultiplayerPlugin`] does not open a socket. Steam will later supply
-//! another connection/lobby backend without changing the protocol types in this crate.
+//! Merely installing [`MultiplayerPlugin`] does not open a socket. EOS will later provide
+//! the universal Internet lobby/P2P path through `hex_online`; Steam remains an optional
+//! identity and native-invitation adapter. Neither changes the gameplay protocol here.
 
 mod auth;
+mod campaign;
 mod connection_code;
 mod control;
 #[cfg(feature = "direct")]
@@ -17,6 +19,7 @@ mod direct;
 mod limits;
 mod lobby;
 mod manifest;
+mod online;
 mod plugin;
 mod protocol;
 mod replica;
@@ -32,6 +35,11 @@ pub use auth::{
     AuthorizedSessionClient, CredentialStoreError, MapReadyStatus, MemoryReconnectCredentialStore,
     ReconnectCredentialStorage, ReconnectCredentialStore, ReconnectEndpointBinding,
     SessionActivationError, SessionAdmissionAuthority, StoredReconnectCredential,
+};
+pub use campaign::{
+    CampaignEffectCheckpointV2, CampaignEffectLedgerV2, CampaignUnitCheckpointV2,
+    CampaignValidationError, HostCampaignCheckpointV2, CAMPAIGN_CHECKPOINT_VERSION_V2,
+    MAX_CAMPAIGN_EFFECTS,
 };
 pub use connection_code::{
     CertificateFingerprint, ConnectionCodeError, DirectConnectionCode, DirectEndpoint,
@@ -62,6 +70,16 @@ pub use manifest::{
     BuildIdentityV1, ContentFingerprint, ManifestValidationError, MapManifestV1, ProtocolVersion,
     PublicWorldFingerprint, PublicWorldFingerprintV1, RosterEntryV1, RulesManifestV1,
     SessionInstanceId, SessionManifestV1, UnitDeploymentV1, SESSION_PROTOCOL_VERSION,
+};
+pub use online::{
+    OnlineIdentityProvider, OnlineIdentityState, OnlineJoinCode, OnlineJoinCodeDigest,
+    OnlineJoinCodeError, OnlineLobbyId, OnlinePrincipal, OnlineServiceRefusal, OnlineSessionEvent,
+    OnlineSessionOperation, OnlineSessionProgress, OnlineSessionRequest, PlatformBadge,
+    PlayerDisplayName, ReconnectTransportBinding, SessionTransportKind, SnapshotChunkV1,
+    SnapshotTransferHeaderV1, SnapshotTransferId, SnapshotTransferProgress,
+    SnapshotTransferValidationError, MAX_PLAYER_DISPLAY_NAME_BYTES, MAX_SNAPSHOT_CHUNKS,
+    MAX_SNAPSHOT_TRANSFER_BYTES, ONLINE_JOIN_CODE_RANDOM_BYTES, SNAPSHOT_CHUNK_BYTES,
+    SNAPSHOT_IN_FLIGHT_CHUNKS, SNAPSHOT_TRANSFER_VERSION_V1,
 };
 pub use plugin::MultiplayerPlugin;
 pub use protocol::{
