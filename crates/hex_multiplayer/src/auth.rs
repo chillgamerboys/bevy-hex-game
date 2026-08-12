@@ -13,6 +13,7 @@ use atomicwrites::{AllowOverwrite, AtomicFile};
 use bevy_ecs::prelude::{Component, Entity, Resource};
 use bevy_replicon::prelude::ProtocolHash;
 use hex_core::PlayerSeat;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     AdmissionAccepted, AdmissionCredential, AdmissionRefusalReason, CertificateFingerprint,
@@ -556,7 +557,7 @@ impl std::error::Error for SessionActivationError {}
 /// The candidate binding is derived from the pinned connection code. Runtime storage
 /// persists it only after the TLS verifier accepts those exact certificate facts and
 /// the host emits [`AdmissionAccepted`].
-#[derive(Resource, Debug, Clone, PartialEq, Eq)]
+#[derive(Resource, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReconnectEndpointBinding {
     /// Advertised endpoint used for this session.
     pub endpoint: DirectEndpoint,

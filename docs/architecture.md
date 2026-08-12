@@ -16,6 +16,8 @@ hex_core → {hex_assets, hex_units} → hex_perception → {hex_combat, hex_gam
 hex_core → hex_lattice → {hex_assets, hex_units, hex_combat}   (the pure rules engine)
 hex_core → hex_anim ─────────────────────→ hex_units
 {hex_core, hex_lattice, Replicon, Aeronet} → hex_multiplayer ───────→ hex_game
+{official EOS C runtime, libloading} → hex_eos_ffi ─→ hex_online ───→ hex_game
+                                      hex_multiplayer ────────┘
 {Bevy, bevy-inspector-egui} → hex_dev ──────────────────────────────→ hex_game
 {Bevy, bevy_egui, hex_core, hex_assets} → hex_editor  (standalone tool)
 {Bevy, hex_core} → hex_test_app → hex_test_support  (test-only app mechanics)
@@ -47,6 +49,8 @@ will, and no amount of documentation prevents it. A compiler error does.
 | `hex_perception` | Authoritative illumination, faction sight, and remembered map knowledge | `hex_core`, `hex_assets`, `hex_units` | world |
 | `hex_combat` | The loop: modes, turn order, algorithm-neutral AI host and legal-action enumeration, persistent effects, and faction lattice knowledge | `hex_core`, `hex_ai`, `hex_assets`, `hex_anim`, `hex_units`, `hex_lattice`, `hex_perception` | gameplay |
 | `hex_multiplayer` | Transport-neutral protocol, bounded wire containers, custom-admission vocabulary, lobby/manifest contracts, disclosure-safe replicas, and default-off Replicon/Aeronet composition | `hex_core`, `hex_lattice`, Bevy app/ECS sub-crates, Replicon, Aeronet; never map/unit/combat/perception implementations | shared infrastructure |
+| `hex_eos_ffi` | Minimal dynamically loaded official EOS C declarations and owned safe RAII results; the workspace's sole audited `unsafe` boundary | `libloading` and the explicitly staged official EOS runtime only | shared infrastructure |
+| `hex_online` | Safe store-neutral EOS identity/lobby/P2P lifecycle, callback validation, and Aeronet I/O adapters; deterministic mocks remain runtime-free | `hex_eos_ffi`, `hex_multiplayer`, Bevy app/ECS sub-crates | shared infrastructure |
 | `hex_dev` | World inspector. Behind the `dev` feature | Bevy, `bevy-inspector-egui` | gameplay |
 | `hex_game` | Thin executable library and composition root: observes authority, builds immutable UI view models, applies typed intents, and wires plugins | all runtime crates | shared |
 | `hex_editor` | Standalone palette, voxel-style, and object authoring; validated explicit writes, untracked recovery, and deterministic review packs | Bevy, `bevy_egui`, `hex_core`, `hex_assets` | shared tooling |
@@ -89,8 +93,18 @@ reconstruct private generator plans, hostile knowledge, or `CombatState`.
 `MultiplayerPlugin` installs custom-auth Replicon, Aeronet adapters, and WebTransport
 capability in one deterministic registration order. It does not spawn an endpoint or
 open a socket. Offline play defaults to `SimulationRole::Authority`; a remote client
-must explicitly select `Replica`. Direct Connect and a later Steam transport share the
-same messages, manifests, snapshots, seat checks, and saves.
+must explicitly select `Replica`. Direct Connect and the future EOS P2P path share the
+same messages, manifests, snapshots, seat checks, and saves. Steam does not become a
+second lobby or gameplay transport: its adapter supplies an EOS Connect credential and
+native rich-presence/invitation entry into the same EOS lobby.
+
+`hex_eos_ffi` is the only crate that opts out of the workspace-wide `unsafe_code =
+"forbid"` rule. It loads only an explicit absolute, release-staged EOS runtime path;
+ordinary source builds neither search for nor load a library. Raw pointers, C callbacks,
+and SDK handles never leave that crate. `hex_online` consumes only owned safe values and
+is default-off: adding its plugin without an explicitly installed backend opens no socket
+and emits typed `Disabled` refusals. SDK headers, redistributable binaries, product
+credentials, and deployment identifiers remain protected release inputs.
 
 Direct transport pins SHA-256 of the exact certificate `SubjectPublicKeyInfo` through the
 project-owned `SpkiPinVerifier`. It retains certificate validity/lifetime, P-256 key, and
@@ -187,8 +201,9 @@ Two roles, named so the arrangement survives a change of people:
 | **Gameplay owner** | `hex_core`, `hex_units`, `hex_combat`, `hex_lattice`, `hex_anim`, `hex_dev`, generic `hex_assets` loader infrastructure, and gameplay schema/settings modules and content: `combat.ron`, `spells.ron`, `elements.ron` |
 
 `hex_game` is **shared** — it is wiring, screens, scenarios and review tooling, and
-whoever needs a change makes it. `hex_multiplayer` is also shared, with a stricter
-dependency ceiling: it owns protocol/session contracts but no gameplay or world truth.
+whoever needs a change makes it. `hex_multiplayer`, `hex_eos_ffi`, and `hex_online` are
+also shared, with strict dependency ceilings: they own protocol, the audited SDK edge,
+and online-session infrastructure respectively, but no gameplay or world truth.
 `scenario.rs` and `scenarios.ron` sit in the same shared middle, flagged to the other
 side when a change touches their domain.
 

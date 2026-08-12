@@ -354,9 +354,19 @@ non-pausing menu.
 
 This first milestone supports shipped Sandbox content only. Internet hosts must arrange
 UDP forwarding themselves and may still fail behind CGNAT; there is no UPnP, STUN/TURN,
-public matchmaking, non-Steam relay, host migration, spectator mode, or dedicated
-server. Multiplayer Campaign saves and Steam invite/relay transport remain later
+public matchmaking, cross-store relay, host migration, spectator mode, or dedicated
+server. Multiplayer Campaign saves and universal EOS Internet sessions remain later
 milestones; the existing local Campaign slots are not exposed as multiplayer saves.
+
+The default-off online feasibility foundation now fixes transport-neutral EOS identity,
+lobby, reconnect, join-code, and streamed-snapshot vocabulary plus a safe mock backend.
+Its isolated `hex_eos_ffi` crate is the sole audited unsafe boundary and loads only an
+explicit checksum-staged official runtime path. This foundation does **not** make Play
+Online functional: no EOS platform, identity, lobby, packet connection, or socket is
+created by ordinary builds. Protected official headers/runtime, a configured development
+deployment, and live Device ID/Steam/lobby/P2P evidence remain required before the
+Universal Online wave dispatches. Steam is planned as identity and native invitation
+integration into the same EOS lobby, not as a second gameplay transport.
 
 Tools contains Character Creator, Spell Creator, and a disabled Map Creator marked
 Coming Soon. Creator origins and destinations are typed. Creating from a character

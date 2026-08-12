@@ -317,6 +317,7 @@
         ".config/test-scopes.json",
         ".config/nextest.toml",
         "tools/check_deprecated_ui_terms.py",
+        "tools/check_eos_sdk_abi.py",
         "tools/gameplay_scope.py",
         "tools/test_scope.py",
         ".github/workflows/**",
@@ -386,6 +387,18 @@
       "patterns": ["crates/hex_core/src/terrain_impact.rs"],
       "full": true,
       "reason": "The current shared file also owns the damaged-voxel projection consumed by map and application code; keep it fail-closed until those authorities are split by file."
+    },
+    {
+      "name": "eos-ffi-boundary",
+      "patterns": ["crates/hex_eos_ffi/**"],
+      "concerns": ["residual", "clippy", "docs"],
+      "reason": "The isolated dynamically loaded EOS boundary requires its safe wrapper tests and strict ABI-facing lint/docs coverage without making the private SDK or online service a source-build dependency."
+    },
+    {
+      "name": "online-session-infrastructure",
+      "patterns": ["crates/hex_online/**"],
+      "concerns": ["app", "residual", "clippy", "docs", "shipping"],
+      "reason": "Store-neutral identity, lobby, callback, and packet adapters require default-off app composition, safe mocks, residual tests, and shipping compatibility."
     },
     {
       "name": "multiplayer-protocol",
@@ -529,6 +542,8 @@
         "crates/hex_game/src/screens/sandbox.rs",
         "crates/hex_game/src/screens/creator.rs",
         "crates/hex_game/src/screens/gameplay.rs",
+        "crates/hex_game/src/screens/multiplayer.rs",
+        "crates/hex_game/src/campaign_authority.rs",
         "crates/hex_game/src/creation_store.rs",
         "crates/hex_game/src/save.rs",
         "crates/hex_game/src/storage.rs",

@@ -9,7 +9,7 @@ description = "Shared, transport-neutral multiplayer protocol and session contra
 default = ["direct"]
 # Direct native Internet/LAN transport. Installing the plugin never opens a socket;
 # a session runtime must explicitly request Host Direct or Join Direct.
-direct = ["dep:aeronet_webtransport", "dep:sha2", "dep:x509-parser"]
+direct = ["dep:aeronet_webtransport", "dep:x509-parser"]
 # In-memory multi-app transport used only by deterministic session tests.
 test-harness = ["dep:aeronet_channel"]
 
@@ -29,7 +29,7 @@ hex_core = { workspace = true }
 hex_lattice = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
-sha2 = { workspace = true, optional = true }
+sha2 = { workspace = true }
 x509-parser = { workspace = true, optional = true }
 
 [dev-dependencies]

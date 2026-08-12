@@ -53,7 +53,8 @@ combined school acceptance.
 | Named rule regions | revisit a content-addressable exact-surface overlay when the first region-sensitive spell lands; do not combine biome identity, lighting, and anti-magic into generic tile tags | map/combat |
 | Pre-spawn terrain edit replay | drain a `PendingTerrainEdits` resource after map build and before first spawn, so save-restore and authored pre-battle terrain cost zero respawns | map |
 | Client-hosted Campaign multiplayer | persist the live complete world/session snapshot in host-owned Campaign slots, open a fresh six-seat assignment lobby on resume, and allow only quiescent paused-exploration host saves; transport ids, secrets, cameras, and client selection never enter the save | game / world |
-| Steam multiplayer transport | add optional Steam identity, invite-only lobbies, invites, authenticated reconnect, and Steam Networking Sockets relay traversal behind the live transport-neutral session protocol; Direct Connect remains available without Steam | shared / game |
+| Universal EOS Internet multiplayer | add store-neutral Device ID/Steam-ticket identity, one EOS lobby and short-code discovery path, EOS P2P traversal/relay, authenticated reconnect, bounded streamed snapshots, outage recovery, and release staging behind the live transport-neutral protocol; Direct/LAN remains available without EOS | shared / game |
+| Steam-native online entry | add optional Steam ticket acquisition for EOS Connect plus rich-presence `connect`, native invitations, Join Game/cold-launch handling, and release acceptance; every Steam and standalone peer remains in the one EOS lobby and uses EOS P2P | shared / game |
 
 ## Delivered
 
@@ -376,8 +377,9 @@ layout, and retained debug symbols. Release documentation reserves the future
 credential and configuration slots for signing, Steam upload, and crash reporting.
 Live integrations, codesigning, notarization, upload, consent UI, and telemetry remain
 later productization work. The direct multiplayer protocol is live independently of
-Steam; Steam identity, invite-only lobby discovery, and relay transport remain the
-separate upcoming multiplayer milestone above.
+online services. EOS is the planned universal Internet lobby/P2P service; Steam later
+supplies silent platform identity and native invitations into that EOS session, not a
+second lobby or gameplay transport.
 
 ### Engine upkeep
 
