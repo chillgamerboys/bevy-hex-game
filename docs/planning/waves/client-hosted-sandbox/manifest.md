@@ -1,10 +1,13 @@
 # Client-hosted Sandbox wave
 
-- **Status:** integrating
+- **Status:** closed
 - **Wave branch:** `wave/client-hosted-sandbox`
 - **Refreshed base:** `origin/dev@1dca1065c7681737ce424fa187879ea31974e356`
 - **Dev refresh merge:** `e610e26c50398e43ff23bc4db0890ba7463f11ae`
 - **Foundation tip:** `02356b00a5f7a9f26ebe788d8afc45ed58d5baa6`
+- **Final candidate:** `dbe7d75e460010d8f6d0f1c542228a4934c324a6`
+- **Wave PR:** [#192](https://github.com/chillgamerboys/bevy-hex-game/pull/192)
+- **Dev merge:** `d0a3a334ebb719456c5a07a483212cacb068060a`
 - **Coordinator:** `@shrav-k`
 - **Epic:** user-approved Client-Hosted Multiplayer Epic, 2026-08-08 (`ticket: null`)
 - **Outcome:** up to six players can host or join one shipped Sandbox encounter over an
@@ -829,6 +832,17 @@ amend this manifest after owner review.
 
 ## Close-out
 
-Not started. At landing, retain the manifest as the durable outcome record, delete spent
-orders/maps, record the exact `dev` SHA and named runtime sign-off, close/retarget lane PRs,
-and remove the wave/source branches only after no open PR uses them as a base.
+Closed on 2026-08-12 after PR #192 landed on `dev` with merge commit
+`d0a3a334ebb719456c5a07a483212cacb068060a`. The exact reviewed candidate was
+`dbe7d75e460010d8f6d0f1c542228a4934c324a6`; its complete selector-selected CI matrix
+and macOS/Windows/Linux shipping builds passed. Shravan Kumaran recorded the required
+exact-head native `PASS` on 2026-08-12 using two clean-data macOS processes through
+Direct Host/Join, disclosed-hostile interaction, combat, and clean shutdown.
+
+Lane PRs #193, #194, #200, and #195 all merged into the wave before the combined PR.
+No open PR still targets the wave or a source lane. The order paths retained in the
+delivery ledger above are historical identifiers; their spent files and banked maps were
+deleted by this close-out. The workflow-owned wave and source branches are eligible for
+deletion, but this record does not delete them. No Linear epic existed for this wave.
+HEX-91, HEX-92, HEX-93, HEX-94, and HEX-96 are Done with the delivery recorded; HEX-95
+remains Backlog for its independent heading-inset defect.
