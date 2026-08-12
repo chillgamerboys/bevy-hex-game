@@ -17,8 +17,8 @@ use hex_combat::{
 };
 use hex_core::{
     Busy, CommandQueue, CommandRequestId, ControlOwner, Faction, GameCommand, GameplaySetup,
-    HexSpan, HexTile, IssuedCommand, LocalGameCommandRequest, Mode, Pause, PendingDecision,
-    PlayerSeat, Screen, SimulationRole, TilePos, Turn, UnitId,
+    GameplaySystems, HexSpan, HexTile, IssuedCommand, LocalGameCommandRequest, Mode, Pause,
+    PendingDecision, PerceptionSystems, PlayerSeat, Screen, SimulationRole, TilePos, Turn, UnitId,
 };
 use hex_lattice::LatticeState;
 use hex_multiplayer::{
@@ -29,6 +29,7 @@ use hex_multiplayer::{
     SessionReplica, SessionRuntimeSystems, UnitReplica, MAX_ROUTE_STEPS, MAX_SESSION_UNITS,
     MAX_UNIT_EFFECTS,
 };
+use hex_perception::{FactionMapKnowledge, FactionObservation, ObservedUnit};
 use hex_units::{
     spawn_replica_unit, Archetype, Downed, HexPathingLine, MovementSystems, MovingTo, Party,
     ReplicaUnitSpawn, StandsOn, UnitAllocator, UnitRegistry,
@@ -39,6 +40,8 @@ use hex_units::{
 pub(super) enum MultiplayerGameplaySystems {
     /// Exact authority facts have been projected and deferred replica writes are flushed.
     PublishAuthorityProjection,
+    /// Disclosure-safe replica facts have been composed into local presentation state.
+    ApplyReplicaProjection,
 }
 
 #[derive(Resource, Debug)]
@@ -172,6 +175,12 @@ pub(super) fn plugin(app: &mut App) {
         .init_resource::<BoundaryProjection>()
         .init_resource::<ReplicaBaselineState>()
         .add_message::<ApplyReplicaBaseline>()
+        .configure_sets(
+            Update,
+            MultiplayerGameplaySystems::ApplyReplicaProjection
+                .before(GameplaySystems::Selection)
+                .before(PerceptionSystems::ApplyPresentation),
+        )
         .add_systems(
             PreUpdate,
             enqueue_authenticated_commands
@@ -216,11 +225,13 @@ pub(super) fn plugin(app: &mut App) {
                 materialize_missing_unit_replicas,
                 apply_effect_replicas,
                 apply_unit_replicas,
+                project_replica_unit_knowledge,
                 apply_session_replica,
                 withdraw_unprojected_hostiles,
                 finish_replica_baseline_transition,
             )
                 .chain()
+                .in_set(MultiplayerGameplaySystems::ApplyReplicaProjection)
                 .run_if(resource_equals(SimulationRole::Replica)),
         )
         .add_systems(
@@ -995,6 +1006,63 @@ fn apply_unit_replicas(
     }
 }
 
+/// Composes the client's two disclosure-safe streams into its local knowledge view.
+///
+/// `PlayerKnowledgeSnapshotV1` owns remembered/current terrain while the presence of
+/// a validated `UnitReplica` is the authorization to expose that live actor. Keeping
+/// this join in one adapter lets every existing fog, inspection, targeting, and HUD
+/// consumer continue to read the canonical player-faction knowledge resource.
+fn project_replica_unit_knowledge(
+    state: Res<ReplicaBaselineState>,
+    network: Query<&UnitReplica>,
+    tiles: Query<&TilePos, With<HexTile>>,
+    knowledge: Option<ResMut<FactionMapKnowledge>>,
+) {
+    let Some(mut knowledge) = knowledge else {
+        return;
+    };
+    let surfaces = tiles.iter().copied().collect::<BTreeSet<_>>();
+    let replicas = state.active.as_ref().map_or_else(
+        || network.iter().collect::<Vec<_>>(),
+        |baseline| baseline.units.values().collect::<Vec<_>>(),
+    );
+    let mut projected = FactionObservation::new();
+    for replica in replicas {
+        if let Err(error) = replica.validate() {
+            error!("refusing to compose invalid unit replica into player knowledge: {error}");
+            knowledge.replace_player_unit_knowledge(&FactionObservation::default());
+            return;
+        }
+        // Replicon components can arrive before locally generated/restored terrain.
+        // Do not create an impossible knowledge fact during that bounded race; this
+        // system retries the complete projection on every update.
+        if !surfaces.contains(&replica.position) {
+            continue;
+        }
+        let observed = ObservedUnit {
+            id: replica.unit,
+            faction: replica.faction,
+            pos: replica.position,
+            provides_sight: !replica.downed,
+        };
+        if let Err(error) = projected.try_insert_unit(observed) {
+            error!("refusing ambiguous authorized unit projection: {error}");
+            knowledge.replace_player_unit_knowledge(&FactionObservation::default());
+            return;
+        }
+    }
+
+    let current = knowledge
+        .faction(Faction::Player)
+        .units()
+        .map(|(_, unit)| unit);
+    let desired = projected.units().map(|(_, unit)| unit);
+    if current.eq(desired) {
+        return;
+    }
+    knowledge.replace_player_unit_knowledge(&projected);
+}
+
 fn apply_effect_replicas(
     changed: Query<(), Changed<UnitReplica>>,
     network: Query<&UnitReplica>,
@@ -1361,6 +1429,57 @@ mod tests {
             .entity_of(UnitId(42))
             .is_none());
         assert!(app.world().get_entity(actor).is_err());
+    }
+
+    #[test]
+    fn authorized_replica_rebuilds_player_unit_knowledge_after_terrain_race_and_withdraws() {
+        let hostile = UnitId(42);
+        let mut app = App::new();
+        app.init_resource::<ReplicaBaselineState>()
+            .insert_resource(FactionMapKnowledge::new())
+            .add_systems(Update, project_replica_unit_knowledge);
+        let projection = app
+            .world_mut()
+            .spawn(bounded_unit(hostile, Faction::Hostile))
+            .id();
+
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<FactionMapKnowledge>()
+                .faction(Faction::Player)
+                .unit(hostile),
+            None,
+            "a replica must not create unit knowledge before its surface exists"
+        );
+
+        app.world_mut()
+            .spawn((HexTile, TilePos::ORIGIN, HexSpan::new(0.0, 1.0)));
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<FactionMapKnowledge>()
+                .faction(Faction::Player)
+                .unit(hostile),
+            Some(ObservedUnit {
+                id: hostile,
+                faction: Faction::Hostile,
+                pos: TilePos::ORIGIN,
+                provides_sight: true,
+            }),
+            "the filtered replica itself authorizes every player-knowledge consumer"
+        );
+
+        app.world_mut().entity_mut(projection).despawn();
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<FactionMapKnowledge>()
+                .faction(Faction::Player)
+                .unit(hostile),
+            None,
+            "withdrawal must remove the current-only hostile fact"
+        );
     }
 
     #[test]

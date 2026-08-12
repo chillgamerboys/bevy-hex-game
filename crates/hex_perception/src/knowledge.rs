@@ -216,6 +216,20 @@ impl FactionMapKnowledge {
     pub fn publish_player_local_map_knowledge(&self, local: &mut LocalMapKnowledge) {
         self.publish_local_map_knowledge(Faction::Player, local);
     }
+
+    /// Replaces only the player faction's current unit facts from an authorized view.
+    ///
+    /// Multiplayer terrain knowledge and live unit disclosure deliberately travel
+    /// through separate protocol projections. A replica adapter uses this seam to
+    /// compose its validated, disclosure-filtered unit projection with the imported
+    /// terrain snapshot. Unit facts remain current-only: withdrawing a replica and
+    /// passing the resulting observation removes it instead of remembering it.
+    ///
+    /// The hostile faction slot is untouched. Remote clients never populate it.
+    pub fn replace_player_unit_knowledge(&mut self, observation: &FactionObservation) {
+        self.player.units.clear();
+        self.player.units.extend(observation.units());
+    }
 }
 
 /// Why the disclosure-safe player knowledge snapshot could not cross the adapter.
@@ -570,6 +584,55 @@ mod tests {
         assert_eq!(
             knowledge.faction(Faction::Player).state(position),
             KnowledgeState::Remembered
+        );
+    }
+
+    #[test]
+    fn authorized_unit_projection_replaces_only_current_player_unit_knowledge() {
+        let position = pos(0, 5);
+        let current =
+            SurfaceSnapshots::try_from_iter([surface(position, 1, false)]).expect("surface");
+        let stale = ObservedUnit {
+            id: UnitId(7),
+            faction: Faction::Hostile,
+            pos: position,
+            provides_sight: true,
+        };
+        let disclosed = ObservedUnit {
+            id: UnitId(9),
+            faction: Faction::Hostile,
+            pos: position,
+            provides_sight: false,
+        };
+        let mut knowledge = FactionMapKnowledge::new();
+        apply_observations(
+            &mut knowledge,
+            &current,
+            &observations(Faction::Player, [position], [stale]),
+        );
+
+        let mut projection = FactionObservation::new();
+        projection
+            .try_insert_unit(disclosed)
+            .expect("unique authorized replica");
+        knowledge.replace_player_unit_knowledge(&projection);
+
+        assert_eq!(knowledge.faction(Faction::Player).unit(stale.id), None);
+        assert_eq!(
+            knowledge.faction(Faction::Player).unit(disclosed.id),
+            Some(disclosed)
+        );
+        assert_eq!(
+            knowledge.faction(Faction::Player).state(position),
+            KnowledgeState::Observed,
+            "the live unit projection must not replace imported terrain knowledge"
+        );
+
+        knowledge.replace_player_unit_knowledge(&FactionObservation::default());
+        assert_eq!(knowledge.faction(Faction::Player).unit(disclosed.id), None);
+        assert_eq!(
+            knowledge.faction(Faction::Player).state(position),
+            KnowledgeState::Observed
         );
     }
 

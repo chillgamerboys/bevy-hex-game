@@ -360,7 +360,8 @@ pub(super) fn plugin(app: &mut App) {
                 finish_replica_world_request,
                 capture_replica_world_messages,
                 issue_replica_world_request,
-                apply_replica_player_knowledge,
+                apply_replica_player_knowledge
+                    .before(MultiplayerGameplaySystems::ApplyReplicaProjection),
                 publish_host_player_knowledge,
                 publish_host_outcome,
                 publish_view.before(UiSystems::Render),
