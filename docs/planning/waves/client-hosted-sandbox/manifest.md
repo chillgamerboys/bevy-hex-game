@@ -816,10 +816,16 @@ amend this manifest after owner review.
   evidence: all 65 `hex_perception` tests, all 276 `hex_game` tests, and strict
   all-target/all-feature package Clippy PASS; five pre-existing manual benchmarks remain
   ignored under their existing classifications.
-- `7ca1959d` — fresh local preferences now default to borderless fullscreen so separate
-  native host/client processes open as independent fullscreen windows. A persisted
-  windowed preference remains authoritative, and the exact default is locked by a unit
-  contract. Runtime and visual-walk evidence is recorded on the final combined head.
+- `7ca1959d` — fresh local preferences now request borderless fullscreen by default. A
+  persisted windowed preference remains authoritative, and the exact preference default
+  is locked by a unit contract. Exact-head runtime review then exposed the native startup
+  gap repaired in `66c1e8f1` below.
+- `66c1e8f1` — native startup repair after exact-head runtime review showed that changing
+  the preference default alone did not promote an already-created macOS window. Ordinary
+  game builds now create the primary window in borderless fullscreen before the first
+  frame; persisted windowed choices still project after startup, while map-review and
+  visual-walk builds retain stable windowed evidence viewports. Both build-shape branches
+  are locked by the initial-window-mode contract.
 
 ## Close-out
 
