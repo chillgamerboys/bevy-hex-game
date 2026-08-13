@@ -1,6 +1,6 @@
 # Host-owned Campaign multiplayer wave
 
-- **Status:** dispatching; L1/L2 are merged and L3 is the active lane
+- **Status:** dispatching; L1/L2/L3 are merged and L4 is the active lane
 - **Wave branch:** `wave/host-owned-campaign`
 - **Planning base:** `origin/dev@a0f95e62d02c663902b864cc08a89e831d9ba437`
 - **Wave base:** `origin/dev@c8506a71166a23777d31cc8504a53e61966bb069`
@@ -193,7 +193,7 @@ owner adapters.
     full: false
   evidence: logic-only
   sizing: { model: gpt-5.6-sol, effort: high }
-  state: in_review
+  state: merged
   pr: 205
 
 - id: L4
@@ -228,7 +228,7 @@ owner adapters.
     full: false
   evidence: static-presentation
   sizing: { model: gpt-5.6-sol, effort: high }
-  state: queued
+  state: active
   pr: null
 ```
 
