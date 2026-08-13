@@ -206,6 +206,7 @@ owner adapters.
   owns:
     - crates/hex_gameplay_model/src/multiplayer.rs (Campaign routes/transitions only)
     - crates/hex_ui/src/model.rs (Campaign multiplayer view/intent fields only)
+    - crates/hex_ui/src/lib.rs (alphabetical Campaign view exports only)
     - crates/hex_ui/src/multiplayer.rs (Campaign browser/save/resume rendering only)
     - crates/hex_game/src/screens/multiplayer.rs (immutable Campaign view/intent adapter only)
     - crates/hex_game/src/save.rs (immutable save-status projection only)
