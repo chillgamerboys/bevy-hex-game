@@ -582,7 +582,7 @@ fn clear_campaign_save_notice(
 ) {
     notice.0 = None;
     if let Some(mut status) = status {
-        status.state = None;
+        *status = CampaignSaveStatusProjection::default();
     }
 }
 
@@ -606,7 +606,7 @@ fn clear_abandoned_campaign_session(
         runtime.pending = None;
     }
     if let Some(mut status) = status {
-        status.state = None;
+        *status = CampaignSaveStatusProjection::default();
     }
     notice.0 = None;
 }
@@ -2216,6 +2216,7 @@ fn publish_campaign_save_status(world: &mut World, operation_id: u64, state: Cam
 
 fn capture_remote_campaign_save_status(
     role: Res<SimulationRole>,
+    session: Option<Res<crate::screens::multiplayer::SessionProjection>>,
     mut statuses: MessageReader<CampaignSaveStatusV2>,
     mut projection: ResMut<CampaignSaveStatusProjection>,
     mut notice: ResMut<CampaignSaveNotice>,
@@ -2224,8 +2225,15 @@ fn capture_remote_campaign_save_status(
         statuses.clear();
         return;
     }
+    let Some(session_instance_id) = session
+        .as_deref()
+        .and_then(crate::screens::multiplayer::SessionProjection::session_instance_id)
+    else {
+        statuses.clear();
+        return;
+    };
     for status in statuses.read() {
-        if status.operation_id < projection.operation_id {
+        if !remote_campaign_status_applies(session_instance_id, projection.operation_id, status) {
             continue;
         }
         projection.operation_id = status.operation_id;
@@ -2238,6 +2246,14 @@ fn capture_remote_campaign_save_status(
             }
         });
     }
+}
+
+fn remote_campaign_status_applies(
+    session_instance_id: hex_multiplayer::SessionInstanceId,
+    operation_floor: u64,
+    status: &CampaignSaveStatusV2,
+) -> bool {
+    status.session_instance_id == session_instance_id && status.operation_id >= operation_floor
 }
 
 #[expect(
@@ -4486,6 +4502,33 @@ mod tests {
         if root.exists() {
             std::fs::remove_dir_all(root).expect("scratch directory should clean up");
         }
+    }
+
+    #[test]
+    fn remote_save_status_is_bound_to_the_current_session_and_monotonic_operation() {
+        let current = hex_multiplayer::SessionInstanceId::from_bytes([1; 16]);
+        let unrelated = hex_multiplayer::SessionInstanceId::from_bytes([2; 16]);
+        let status = |session_instance_id, operation_id| CampaignSaveStatusV2 {
+            session_instance_id,
+            operation_id,
+            state: CampaignSaveStateV2::Saved,
+        };
+
+        assert!(remote_campaign_status_applies(
+            current,
+            7,
+            &status(current, 7)
+        ));
+        assert!(!remote_campaign_status_applies(
+            current,
+            7,
+            &status(current, 6)
+        ));
+        assert!(!remote_campaign_status_applies(
+            current,
+            0,
+            &status(unrelated, 99)
+        ));
     }
 
     #[test]

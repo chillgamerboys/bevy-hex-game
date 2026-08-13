@@ -246,9 +246,17 @@ impl Default for MultiplayerDraft {
 struct SessionUiNotice(Option<String>);
 
 #[derive(Resource, Debug, Default)]
-struct SessionProjection {
+pub(crate) struct SessionProjection {
     lobby: Option<LobbySnapshot>,
     manifest: Option<SessionManifestV1>,
+}
+
+impl SessionProjection {
+    pub(crate) fn session_instance_id(&self) -> Option<SessionInstanceId> {
+        self.manifest
+            .as_ref()
+            .map(|manifest| manifest.session_instance_id)
+    }
 }
 
 #[derive(Resource, Debug, Default)]
