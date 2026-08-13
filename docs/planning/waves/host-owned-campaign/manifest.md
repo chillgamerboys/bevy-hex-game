@@ -231,7 +231,7 @@ owner adapters.
   evidence: static-presentation
   sizing: { model: gpt-5.6-sol, effort: high }
   state: in-review
-  pr: null
+  pr: 206
 ```
 
 ## Territory sweep
