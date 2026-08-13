@@ -1,6 +1,7 @@
 //! Direct Connect, six-seat lobby, and remote-client local-menu presentation.
 
 use bevy::input_focus::tab_navigation::TabIndex;
+use bevy::input_focus::InputFocus;
 use bevy::prelude::*;
 use bevy::text::EditableText;
 use bevy::ui::InteractionDisabled;
@@ -10,9 +11,10 @@ use hex_gameplay_model::{MultiplayerRole, MultiplayerRoute};
 
 use crate::{
     blurb, body_text_role, button, despawn_screen, fine, fluid_button, heading, label,
-    overlay_root, panel, responsive_control_role, screen_root, screen_title, DespawnOnExit,
-    MultiplayerIntent, MultiplayerSeatConnectionView, MultiplayerTextField, MultiplayerView,
-    SensitiveText, UiAssets, UiIntent, UiSystems, UiVisibilityRequirement, ACCENT_EDGE, LABEL,
+    overlay_root, panel, responsive_control_role, screen_root, screen_title,
+    CampaignSlotStatusView, DespawnOnExit, MultiplayerCampaignSaveStatusView, MultiplayerIntent,
+    MultiplayerSeatConnectionView, MultiplayerTextField, MultiplayerView, SensitiveText, UiAssets,
+    UiIntent, UiSystems, UiVisibilityRequirement, ACCENT_EDGE, LABEL, READ_ONLY_HUD,
 };
 
 const CONNECTION_CODE_CHAR_LIMIT: usize = 2_048;
@@ -25,8 +27,24 @@ struct MultiplayerSurface;
 #[derive(Component)]
 struct MultiplayerLocalMenu;
 
+#[derive(Component)]
+struct MultiplayerCampaignStatus;
+
 #[derive(Component, Clone)]
 struct MultiplayerControl(MultiplayerIntent);
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct MultiplayerPageIdentity {
+    route: MultiplayerRoute,
+    campaign_refusal: bool,
+    role: Option<MultiplayerRole>,
+}
+
+#[derive(Default)]
+struct MultiplayerPageScrollReset {
+    page: Option<MultiplayerPageIdentity>,
+    frames_remaining: u8,
+}
 
 pub(super) fn plugin(app: &mut App) {
     app.add_systems(OnEnter(Screen::Multiplayer), spawn_screen)
@@ -43,11 +61,16 @@ pub(super) fn plugin(app: &mut App) {
             OnExit(Screen::Multiplayer),
             despawn_screen(Screen::Multiplayer),
         )
+        .add_systems(
+            Last,
+            finish_page_change_scroll_reset.run_if(in_state(Screen::Multiplayer)),
+        )
         .add_systems(OnEnter(Screen::Gameplay), spawn_local_menu)
         .add_systems(
             Update,
             (
                 refresh_local_menu.in_set(UiSystems::Render),
+                refresh_campaign_save_status.in_set(UiSystems::Render),
                 emit_controls.in_set(UiSystems::EmitIntents),
             )
                 .run_if(in_state(Screen::Gameplay)),
@@ -87,17 +110,64 @@ fn refresh_screen(
     view: Res<MultiplayerView>,
     review: Option<Res<crate::review::UiReviewPresentation>>,
     assets: Res<UiAssets>,
-    roots: Query<Entity, With<MultiplayerSurface>>,
+    mut roots: Query<(Entity, &mut ScrollPosition), With<MultiplayerSurface>>,
+    parents: Query<&ChildOf>,
+    names: Query<&Name>,
+    mut focus: ResMut<InputFocus>,
+    mut focus_refreshes: ResMut<crate::focus::FocusRefreshRequests>,
+    mut previous_route: Local<Option<MultiplayerRoute>>,
 ) {
     if !view.is_changed() && review.as_ref().is_none_or(|review| !review.is_changed()) {
         return;
     }
     let view = effective_view(&view, review.as_deref());
-    for root in &roots {
+    let route_changed = *previous_route != Some(view.route);
+    for (root, mut scroll_position) in &mut roots {
+        if route_changed {
+            crate::focus::begin_route_refresh(
+                root,
+                &mut focus,
+                &parents,
+                &names,
+                &mut focus_refreshes,
+            );
+            *scroll_position = ScrollPosition::default();
+        }
         commands.entity(root).despawn_related::<Children>();
         commands
             .entity(root)
             .with_children(|root| render_screen(root, &assets, view));
+    }
+    *previous_route = Some(view.route);
+}
+
+/// Applies the page reset after focus restoration and Bevy's scroll-into-view pass.
+///
+/// Route activation and a newly surfaced Campaign refusal are both page changes.
+/// Running this in `Last` across the replacement-layout frames prevents the
+/// control that initiated a route transition from carrying its deferred
+/// scroll-into-view adjustment into the replacement page.
+fn finish_page_change_scroll_reset(
+    view: Res<MultiplayerView>,
+    review: Option<Res<crate::review::UiReviewPresentation>>,
+    mut roots: Query<&mut ScrollPosition, With<MultiplayerSurface>>,
+    mut reset: Local<MultiplayerPageScrollReset>,
+) {
+    let view = effective_view(&view, review.as_deref());
+    let page = MultiplayerPageIdentity {
+        route: view.route,
+        campaign_refusal: view.campaign_host.refusal.is_some(),
+        role: view.role,
+    };
+    if reset.page != Some(page) {
+        reset.page = Some(page);
+        reset.frames_remaining = 4;
+    }
+    if reset.frames_remaining > 0 {
+        for mut scroll_position in &mut roots {
+            *scroll_position = ScrollPosition::default();
+        }
+        reset.frames_remaining -= 1;
     }
 }
 
@@ -124,6 +194,7 @@ fn render_screen(root: &mut ChildSpawnerCommands, assets: &UiAssets, view: &Mult
 
     match view.route {
         MultiplayerRoute::Home => render_home(root, assets),
+        MultiplayerRoute::HostCampaign => render_host_campaign(root, assets, view),
         MultiplayerRoute::HostDirect => render_host_direct(root, assets, view),
         MultiplayerRoute::JoinDirect => render_join_direct(root, assets, view),
         MultiplayerRoute::Connecting => render_waiting(
@@ -139,7 +210,11 @@ fn render_screen(root: &mut ChildSpawnerCommands, assets: &UiAssets, view: &Mult
             assets,
             view.role,
             "Verifying World",
-            "Every peer is generating the frozen shipped map and comparing the complete public-world fingerprint.",
+            if view.campaign_session {
+                "Importing the host's complete Campaign baseline, then verifying the exact public-world fingerprint before activation."
+            } else {
+                "Every peer is generating the frozen shipped map and comparing the complete public-world fingerprint."
+            },
         ),
         MultiplayerRoute::Reconnecting => render_waiting(
             root,
@@ -155,6 +230,7 @@ fn render_screen(root: &mut ChildSpawnerCommands, assets: &UiAssets, view: &Mult
 fn route_title(route: MultiplayerRoute) -> &'static str {
     match route {
         MultiplayerRoute::Home => "Hex / Multiplayer",
+        MultiplayerRoute::HostCampaign => "Hex / Host Campaign",
         MultiplayerRoute::HostDirect => "Hex / Host Direct",
         MultiplayerRoute::JoinDirect => "Hex / Join Direct",
         MultiplayerRoute::Connecting => "Hex / Connecting",
@@ -173,6 +249,15 @@ fn render_home(root: &mut ChildSpawnerCommands, assets: &UiAssets) {
     root.spawn((Name::new("Multiplayer Home Actions"), panel()))
         .insert(action_panel_node(520.0))
         .with_children(|actions| {
+            actions.spawn(heading(assets, "Host a Campaign"));
+            action_button(
+                actions,
+                assets,
+                "Host Campaign",
+                MultiplayerIntent::OpenHostCampaign,
+                true,
+            );
+            actions.spawn(heading(assets, "Advanced · Direct/LAN"));
             action_button(
                 actions,
                 assets,
@@ -191,7 +276,138 @@ fn render_home(root: &mut ChildSpawnerCommands, assets: &UiAssets) {
         });
     root.spawn(fine(
         assets,
-        "Steam invites and relay traversal will use this same game protocol in a later milestone.",
+        "Direct/LAN remains available without an online service. Internet play currently requires a reachable forwarded UDP port.",
+    ));
+}
+
+fn render_host_campaign(
+    root: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    view: &MultiplayerView,
+) {
+    root.spawn(blurb(
+        assets,
+        "Choose a host-owned Campaign slot. Empty slots begin a new Campaign; occupied slots restore the complete checkpoint before opening a fresh assignment lobby.",
+    ));
+    root.spawn((Name::new("Campaign Direct Endpoint"), panel()))
+        .insert(action_panel_node(760.0))
+        .with_children(|endpoint| {
+            endpoint.spawn(heading(assets, "Direct/LAN endpoint"));
+            endpoint.spawn(fine(
+                assets,
+                "Resuming never restores old seats or credentials. Every session gets a fresh invite and fresh party assignments.",
+            ));
+            text_field(
+                endpoint,
+                assets,
+                "Advertised Host",
+                &view.advertised_host,
+                MultiplayerTextField::AdvertisedHost,
+                HOST_CHAR_LIMIT,
+            );
+            text_field(
+                endpoint,
+                assets,
+                "UDP Port",
+                &view.advertised_port,
+                MultiplayerTextField::AdvertisedPort,
+                PORT_CHAR_LIMIT,
+            );
+        });
+
+    if let Some(refusal) = &view.campaign_host.refusal {
+        root.spawn((Name::new("Campaign Host Refusal"), panel()))
+            .insert(action_panel_node(760.0))
+            .with_children(|panel| {
+                panel.spawn(heading(assets, "Campaign could not be hosted"));
+                panel.spawn(blurb(assets, refusal.clone()));
+            });
+    }
+
+    root.spawn((
+        Name::new("Multiplayer Campaign Slots"),
+        Node {
+            width: Val::Percent(100.0),
+            max_width: Val::Px(1_320.0),
+            flex_direction: FlexDirection::Row,
+            flex_wrap: FlexWrap::Wrap,
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Stretch,
+            column_gap: Val::Px(18.0),
+            row_gap: Val::Px(18.0),
+            ..default()
+        },
+    ))
+    .with_children(|cards| {
+        for slot in &view.campaign_slots {
+            cards
+                .spawn((
+                    Name::new(format!("Multiplayer Campaign Slot {}", slot.slot.number())),
+                    panel(),
+                ))
+                .insert(Node {
+                    width: Val::Px(390.0),
+                    min_width: Val::Px(280.0),
+                    min_height: Val::Px(300.0),
+                    flex_grow: 1.0,
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Stretch,
+                    row_gap: Val::Px(10.0),
+                    ..crate::panel_node()
+                })
+                .with_children(|card| {
+                    card.spawn(heading(
+                        assets,
+                        format!("Campaign Slot {}", slot.slot.number()),
+                    ));
+                    match &slot.status {
+                        CampaignSlotStatusView::Empty => {
+                            card.spawn(blurb(assets, "Empty Campaign slot"));
+                            scrollable_card_action_button(
+                                card,
+                                assets,
+                                &format!("Host New Campaign Slot {}", slot.slot.number()),
+                                MultiplayerIntent::HostCampaign(slot.slot),
+                                !view.campaign_host.preparing,
+                            );
+                        }
+                        CampaignSlotStatusView::Available { party, active_time } => {
+                            card.spawn(label(assets, format!("Active gameplay · {active_time}")));
+                            for member in party {
+                                card.spawn(label(assets, member.name.clone()));
+                                card.spawn(fine(assets, member.lattice.clone()));
+                            }
+                            scrollable_card_action_button(
+                                card,
+                                assets,
+                                &format!("Resume Campaign Slot {}", slot.slot.number()),
+                                MultiplayerIntent::HostCampaign(slot.slot),
+                                !view.campaign_host.preparing,
+                            );
+                        }
+                        CampaignSlotStatusView::Invalid { reason } => {
+                            card.spawn(blurb(assets, "Campaign unavailable"));
+                            card.spawn(fine(assets, reason.clone()));
+                        }
+                    }
+                    if view.campaign_host.preparing && view.campaign_host.slot == Some(slot.slot) {
+                        card.spawn(fine(
+                            assets,
+                            "Restoring and validating the complete checkpoint…",
+                        ));
+                    }
+                });
+        }
+    });
+
+    root.spawn((Name::new("Campaign Host Actions"), panel()))
+        .insert(action_panel_node(760.0))
+        .with_children(|actions| {
+            action_button(actions, assets, "Back", MultiplayerIntent::Back, true);
+        });
+    root.spawn(fine(
+        assets,
+        network_forwarding_copy(Some(&view.advertised_port)),
     ));
 }
 
@@ -337,6 +553,17 @@ fn waiting_action(role: Option<MultiplayerRole>) -> (&'static str, MultiplayerIn
 
 fn render_lobby(root: &mut ChildSpawnerCommands, assets: &UiAssets, view: &MultiplayerView) {
     let host = view.role == Some(MultiplayerRole::Host);
+    if view.campaign_session {
+        root.spawn((Name::new("Fresh Campaign Assignment"), panel()))
+            .insert(action_panel_node(760.0))
+            .with_children(|campaign| {
+                campaign.spawn(heading(assets, "Fresh Campaign assignment"));
+                campaign.spawn(fine(
+                    assets,
+                    "The host restored the Campaign checkpoint. Seats, readiness, reconnect credentials, cameras, and selections are new for this session.",
+                ));
+            });
+    }
     if let Some(summary) = &view.launch_summary {
         root.spawn((
             Name::new("Lobby Launch Summary"),
@@ -691,6 +918,73 @@ fn spawn_local_menu(mut commands: Commands) {
         DespawnOnExit(Screen::Gameplay),
         Visibility::Hidden,
     ));
+    commands.spawn((
+        Name::new("Campaign Save Status"),
+        MultiplayerCampaignStatus,
+        DespawnOnExit(Screen::Gameplay),
+        READ_ONLY_HUD,
+        Visibility::Hidden,
+        GlobalZIndex(9),
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(28.0),
+            left: Val::Percent(20.0),
+            width: Val::Percent(60.0),
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+    ));
+}
+
+fn refresh_campaign_save_status(
+    mut commands: Commands,
+    view: Res<MultiplayerView>,
+    review: Option<Res<crate::review::UiReviewPresentation>>,
+    assets: Res<UiAssets>,
+    roots: Query<Entity, With<MultiplayerCampaignStatus>>,
+) {
+    if !view.is_changed() && review.as_ref().is_none_or(|review| !review.is_changed()) {
+        return;
+    }
+    let view = effective_view(&view, review.as_deref());
+    let status = (view.role == Some(MultiplayerRole::Client))
+        .then_some(view.campaign_save_status.as_ref())
+        .flatten();
+    for root in &roots {
+        commands.entity(root).despawn_related::<Children>();
+        commands.entity(root).insert(if status.is_some() {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
+        let Some(status) = status else {
+            continue;
+        };
+        commands.entity(root).with_children(|status_root| {
+            status_root
+                .spawn((Name::new("Campaign Save Status Panel"), panel()))
+                .insert(action_panel_node(620.0))
+                .with_children(|status_panel| {
+                    status_panel.spawn(heading(&assets, "Campaign Save"));
+                    status_panel.spawn(blurb(&assets, campaign_save_status_copy(status)));
+                });
+        });
+    }
+}
+
+fn campaign_save_status_copy(status: &MultiplayerCampaignSaveStatusView) -> String {
+    match status {
+        MultiplayerCampaignSaveStatusView::Saving => {
+            "The host is saving the complete Campaign checkpoint…".to_owned()
+        }
+        MultiplayerCampaignSaveStatusView::Saved => {
+            "The host saved the Campaign checkpoint.".to_owned()
+        }
+        MultiplayerCampaignSaveStatusView::Refused { reason } => {
+            format!("The host could not save the Campaign: {reason}")
+        }
+    }
 }
 
 fn refresh_local_menu(
@@ -784,6 +1078,7 @@ mod tests {
     fn route_titles_cover_the_complete_multiplayer_model() {
         for route in [
             MultiplayerRoute::Home,
+            MultiplayerRoute::HostCampaign,
             MultiplayerRoute::HostDirect,
             MultiplayerRoute::JoinDirect,
             MultiplayerRoute::Connecting,
@@ -794,6 +1089,154 @@ mod tests {
         ] {
             assert!(!route_title(route).is_empty());
         }
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn campaign_browser_renders_three_slots_and_only_legal_host_actions() {
+        let mut app = App::new();
+        app.add_plugins(crate::test_support::HeadlessUiPlugin::new(1280, 720));
+        let mut view = MultiplayerView {
+            route: MultiplayerRoute::HostCampaign,
+            ..Default::default()
+        };
+        view.campaign_slots
+            .get_mut(1)
+            .expect("the default view has Campaign slot two")
+            .status = CampaignSlotStatusView::Available {
+            party: Vec::new(),
+            active_time: "42m".to_owned(),
+        };
+        view.campaign_slots
+            .get_mut(2)
+            .expect("the default view has Campaign slot three")
+            .status = CampaignSlotStatusView::Invalid {
+            reason: "Incompatible shipped content".to_owned(),
+        };
+        app.world_mut().insert_resource(view);
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Multiplayer);
+        for _ in 0..8 {
+            app.update();
+        }
+
+        let slots = app
+            .world_mut()
+            .query::<&Name>()
+            .iter(app.world())
+            .filter(|name| name.as_str().starts_with("Multiplayer Campaign Slot "))
+            .count();
+        assert_eq!(slots, 3);
+        let actions = app
+            .world_mut()
+            .query::<&MultiplayerControl>()
+            .iter(app.world())
+            .filter(|control| matches!(&control.0, MultiplayerIntent::HostCampaign(_)))
+            .count();
+        assert_eq!(actions, 2, "invalid slots must expose no host action");
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn page_changes_reset_the_shared_multiplayer_scroll_position() {
+        let mut app = App::new();
+        app.add_plugins(crate::test_support::HeadlessUiPlugin::new(1280, 720));
+        app.world_mut().insert_resource(MultiplayerView {
+            route: MultiplayerRoute::HostCampaign,
+            ..Default::default()
+        });
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Multiplayer);
+        for _ in 0..8 {
+            app.update();
+        }
+
+        let root = app
+            .world_mut()
+            .query_filtered::<Entity, With<MultiplayerSurface>>()
+            .single(app.world())
+            .expect("the Multiplayer screen has one scrolling root");
+        let previous_control = app
+            .world_mut()
+            .query::<(Entity, &MultiplayerControl)>()
+            .iter(app.world())
+            .find_map(|(entity, control)| {
+                matches!(&control.0, MultiplayerIntent::HostCampaign(_)).then_some(entity)
+            })
+            .expect("the Campaign browser exposes a host action");
+        app.insert_resource(InputFocus::from_entity(previous_control));
+        app.world_mut()
+            .entity_mut(root)
+            .insert(ScrollPosition(Vec2::new(0.0, 640.0)));
+        app.world_mut().resource_mut::<MultiplayerView>().route = MultiplayerRoute::HostDirect;
+        for _ in 0..3 {
+            app.update();
+        }
+
+        assert_eq!(
+            app.world()
+                .get::<ScrollPosition>(root)
+                .expect("the route root remains scrollable")
+                .0,
+            Vec2::ZERO
+        );
+
+        app.world_mut().resource_mut::<MultiplayerView>().route = MultiplayerRoute::HostCampaign;
+        for _ in 0..3 {
+            app.update();
+        }
+        app.world_mut()
+            .entity_mut(root)
+            .insert(ScrollPosition(Vec2::new(0.0, 640.0)));
+        app.world_mut()
+            .resource_mut::<MultiplayerView>()
+            .campaign_host
+            .refusal = Some("Incompatible shipped content".to_owned());
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(
+            app.world()
+                .get::<ScrollPosition>(root)
+                .expect("the Campaign route remains scrollable")
+                .0,
+            Vec2::ZERO
+        );
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn client_campaign_save_status_is_visible_and_never_blocks_gameplay_input() {
+        let mut app = App::new();
+        app.add_plugins(crate::test_support::HeadlessUiPlugin::new(1280, 720));
+        app.world_mut().insert_resource(MultiplayerView {
+            role: Some(MultiplayerRole::Client),
+            campaign_session: true,
+            campaign_save_status: Some(MultiplayerCampaignSaveStatusView::Saving),
+            ..Default::default()
+        });
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Gameplay);
+        for _ in 0..8 {
+            app.update();
+        }
+
+        let (visibility, pickable) = app
+            .world_mut()
+            .query_filtered::<(&Visibility, &Pickable), With<MultiplayerCampaignStatus>>()
+            .iter(app.world())
+            .next()
+            .expect("the client save status is a visible read-only projection");
+        assert_eq!(*visibility, Visibility::Inherited);
+        assert_eq!(*pickable, Pickable::IGNORE);
+        assert!(app
+            .world_mut()
+            .query::<&Text>()
+            .iter(app.world())
+            .any(|text| text.0.contains("host is saving the complete Campaign")));
     }
 
     #[test]

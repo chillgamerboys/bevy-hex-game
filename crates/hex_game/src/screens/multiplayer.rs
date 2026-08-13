@@ -13,8 +13,9 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy_replicon::prelude::{ClientId, ClientState, ProtocolHash, SendTargets, ToClients};
 use hex_assets::{
-    AcceptedContentRevision, CombatSettings, CubeCoord, Encounter, EncounterFaction,
-    EncounterPlacement, FormationCenter, Roster, RosterEntry, ScenarioLibrary, SubstanceTable,
+    AcceptedContentRevision, CombatSettings, CubeCoord, ElementCatalog, Encounter,
+    EncounterFaction, EncounterPlacement, FormationCenter, LatticeLibrary, Roster, RosterEntry,
+    ScenarioLibrary, SubstanceTable,
 };
 use hex_core::{
     CommandRequestId, GameplayPhase, InputAction, InputBindings, LocalMapKnowledge, PlayerSeat,
@@ -32,8 +33,9 @@ use hex_map::{
 use hex_multiplayer::{
     AdmissionAccepted, AdmissionCredential, AdmissionRefusal, AdmissionRefusalReason,
     AtomicFileReconnectCredentialStore, AuthorityBoundary, AuthoritySequence,
-    AuthorizedSessionClient, BoundedVec, BuildIdentityV1, CertificateFingerprint, ClientHello,
-    ClientLobbyAction, ClientLobbyRequest, ClientMapReady, CommandSequencer, ContentFingerprint,
+    AuthorizedSessionClient, BoundedVec, BuildIdentityV1, CampaignSaveRefusalV2,
+    CampaignSaveStateV2, CertificateFingerprint, ClientHello, ClientLobbyAction,
+    ClientLobbyRequest, ClientMapReady, CommandSequencer, ContentFingerprint,
     CredentialStorageOperation, CredentialStorageStatus, DirectConnectionCode, DirectEndpoint,
     EncodedConnectionCode, HostCampaignCheckpointV2, HostSessionAction, HostSessionControlRequest,
     LiveSessionSnapshotV1, LiveSnapshotHeaderV1, LobbyPhase, LobbySnapshot, MapManifestV1,
@@ -49,14 +51,19 @@ use hex_perception::{
     export_player_knowledge_snapshot_v1, import_player_knowledge_snapshot_v1, FactionMapKnowledge,
 };
 use hex_ui::{
-    MultiplayerAssignmentView, MultiplayerIntent, MultiplayerSeatConnectionView,
-    MultiplayerSeatView, MultiplayerTextField, MultiplayerView, SensitiveText, UiIntent, UiSystems,
+    MultiplayerAssignmentView, MultiplayerCampaignHostView, MultiplayerCampaignSaveStatusView,
+    MultiplayerIntent, MultiplayerSeatConnectionView, MultiplayerSeatView, MultiplayerTextField,
+    MultiplayerView, SensitiveText, UiIntent, UiSystems,
 };
 
 use crate::campaign_authority::{
     CampaignGameplayCheckpointV2, PendingCampaignGameplayCheckpointV2,
 };
 use crate::multiplayer_gameplay::{ApplyReplicaBaseline, MultiplayerGameplaySystems};
+use crate::save::{
+    CampaignMultiplayerHostRequest, CampaignMultiplayerHostStatus, CampaignSaveStatusProjection,
+    CampaignStore,
+};
 use crate::storage::StoragePaths;
 
 /// World-owned, fully validated handoff created after shipped Sandbox deployment.
@@ -587,7 +594,6 @@ fn queue_prepared_host_after_sandbox(
     let Some(pending) = pending else {
         return;
     };
-    model.show_host_direct();
     if active.is_some() {
         return;
     }
@@ -607,10 +613,16 @@ fn queue_prepared_host_after_sandbox(
         })
     };
     let Some(prepared) = prepared else {
-        notice.0 = Some(
-            "The complete frozen launch contract is not available yet; hosting was not started."
-                .to_owned(),
-        );
+        if model.route == hex_gameplay_model::MultiplayerRoute::HostCampaign {
+            model.show_host_campaign();
+            notice.0 = None;
+        } else {
+            model.show_host_direct();
+            notice.0 = Some(
+                "The complete frozen launch contract is not available yet; hosting was not started."
+                    .to_owned(),
+            );
+        }
         return;
     };
     model.connecting(MultiplayerRole::Host);
@@ -665,6 +677,10 @@ fn handle_intents(
             }
         };
         match intent {
+            MultiplayerIntent::OpenHostCampaign => {
+                notice.0 = None;
+                model.show_host_campaign();
+            }
             MultiplayerIntent::OpenHostDirect => {
                 notice.0 = None;
                 model.show_host_direct();
@@ -695,6 +711,24 @@ fn handle_intents(
                 commands.remove_resource::<PreparedDirectCampaignSession>();
                 notice.0 = None;
                 next_screen.set(Screen::Sandbox);
+            }
+            MultiplayerIntent::HostCampaign(slot) => {
+                if active.is_some() {
+                    notice.0 = Some("A direct session is already active.".to_owned());
+                    continue;
+                }
+                let endpoint = match direct_endpoint(&draft) {
+                    Ok(endpoint) => endpoint,
+                    Err(reason) => {
+                        notice.0 = Some(reason);
+                        continue;
+                    }
+                };
+                commands.insert_resource(PendingDirectHostSetup { endpoint });
+                commands.insert_resource(CampaignMultiplayerHostRequest { slot: *slot });
+                commands.remove_resource::<PreparedDirectSandboxSession>();
+                commands.remove_resource::<PreparedDirectCampaignSession>();
+                notice.0 = None;
             }
             MultiplayerIntent::CopyConnectionCode => {
                 notice.0 = Some(
@@ -2288,6 +2322,11 @@ fn publish_view(
     model: Res<MultiplayerModel>,
     draft: Res<MultiplayerDraft>,
     notice: Res<SessionUiNotice>,
+    campaign_store: Res<CampaignStore>,
+    campaign_lattices: Option<Res<LatticeLibrary>>,
+    campaign_elements: Option<Res<ElementCatalog>>,
+    campaign_host_status: Res<CampaignMultiplayerHostStatus>,
+    campaign_save_status: Res<CampaignSaveStatusProjection>,
     stored: Res<StoredCredentialState>,
     projection: Res<SessionProjection>,
     authority: Option<Res<SessionAdmissionAuthority>>,
@@ -2333,6 +2372,22 @@ fn publish_view(
             .collect()
     });
     let (can_launch, launch_blocker) = launch_gate(lobby.as_ref(), manifest.as_ref());
+    let campaign_session = manifest
+        .as_ref()
+        .is_some_and(|manifest| manifest.launch_kind == SessionLaunchKindV1::Campaign);
+    let campaign_save_status = campaign_session
+        .then_some(campaign_save_status.state)
+        .flatten()
+        .map(campaign_save_status_view);
+    let campaign_host = MultiplayerCampaignHostView {
+        slot: campaign_host_status.slot,
+        preparing: campaign_host_status.preparing,
+        refusal: campaign_host_status.refusal.map(|_refusal| {
+            campaign_host_status.notice.clone().unwrap_or_else(|| {
+                "The Campaign checkpoint could not be prepared for multiplayer.".to_owned()
+            })
+        }),
+    };
     let share_code = hosted_connection_code(active.as_deref(), authority.as_deref())
         .map(|code| SensitiveText::new(code.expose_for_sharing()));
     let launch_summary = lobby
@@ -2362,6 +2417,11 @@ fn publish_view(
         share_code,
         join_code: draft.join_code.clone(),
         reconnect_available: stored.value.is_some(),
+        campaign_slots: campaign_store
+            .slot_views(campaign_lattices.as_deref(), campaign_elements.as_deref()),
+        campaign_host,
+        campaign_session,
+        campaign_save_status,
         seats,
         launch_summary,
         notice: notice.0.clone(),
@@ -2371,6 +2431,32 @@ fn publish_view(
     };
     if *view != next {
         *view = next;
+    }
+}
+
+fn campaign_save_status_view(state: CampaignSaveStateV2) -> MultiplayerCampaignSaveStatusView {
+    match state {
+        CampaignSaveStateV2::Saving => MultiplayerCampaignSaveStatusView::Saving,
+        CampaignSaveStateV2::Saved => MultiplayerCampaignSaveStatusView::Saved,
+        CampaignSaveStateV2::Refused(refusal) => MultiplayerCampaignSaveStatusView::Refused {
+            reason: campaign_save_refusal_copy(refusal).to_owned(),
+        },
+    }
+}
+
+const fn campaign_save_refusal_copy(refusal: CampaignSaveRefusalV2) -> &'static str {
+    match refusal {
+        CampaignSaveRefusalV2::NotAuthority => "only the Campaign host can save",
+        CampaignSaveRefusalV2::UnsafeBoundary => "saving requires paused, quiescent exploration",
+        CampaignSaveRefusalV2::IncompleteCheckpoint => {
+            "the complete world or gameplay checkpoint was unavailable"
+        }
+        CampaignSaveRefusalV2::IncompatibleContent => {
+            "the accepted shipped content changed or is incompatible"
+        }
+        CampaignSaveRefusalV2::StorageUnavailable => {
+            "the host could not atomically write the checkpoint"
+        }
     }
 }
 
@@ -2943,8 +3029,45 @@ mod tests {
         assert_eq!(
             app.world().resource::<SessionUiNotice>().0.as_deref(),
             Some(
-                "The complete public-world snapshot contract is not available yet; hosting was not started."
+                "The complete frozen launch contract is not available yet; hosting was not started."
             )
+        );
+    }
+
+    #[test]
+    fn failed_campaign_handoff_returns_to_the_typed_campaign_browser() {
+        let endpoint = DirectEndpoint::new("127.0.0.1", 7_777).expect("loopback endpoint is valid");
+        let mut model = MultiplayerModel::default();
+        model.show_host_campaign();
+        let mut app = App::new();
+        app.insert_resource(model)
+            .init_resource::<SessionUiNotice>()
+            .insert_resource(PendingDirectHostSetup { endpoint })
+            .add_systems(Update, queue_prepared_host_after_sandbox);
+
+        app.update();
+
+        assert!(app.world().get_resource::<DirectStartQueue>().is_none());
+        assert_eq!(
+            app.world().resource::<MultiplayerModel>().route,
+            hex_gameplay_model::MultiplayerRoute::HostCampaign
+        );
+        assert_eq!(app.world().resource::<SessionUiNotice>().0, None);
+    }
+
+    #[test]
+    fn campaign_save_projection_uses_only_sanitized_refusal_copy() {
+        assert_eq!(
+            campaign_save_status_view(CampaignSaveStateV2::Saving),
+            MultiplayerCampaignSaveStatusView::Saving
+        );
+        assert_eq!(
+            campaign_save_status_view(CampaignSaveStateV2::Refused(
+                CampaignSaveRefusalV2::StorageUnavailable,
+            )),
+            MultiplayerCampaignSaveStatusView::Refused {
+                reason: "the host could not atomically write the checkpoint".to_owned(),
+            }
         );
     }
 
@@ -3402,6 +3525,32 @@ mod tests {
             .drain()
             .next()
             .is_none());
+    }
+
+    #[test]
+    fn campaign_host_intent_stages_only_slot_and_direct_endpoint_for_l3() {
+        let mut app = intent_adapter_app(MultiplayerRole::Host);
+        app.world_mut()
+            .resource_mut::<MultiplayerModel>()
+            .show_host_campaign();
+        app.world_mut()
+            .write_message(UiIntent::Multiplayer(MultiplayerIntent::HostCampaign(
+                hex_gameplay_model::CampaignSlotId::Two,
+            )));
+
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .resource::<CampaignMultiplayerHostRequest>()
+                .slot,
+            hex_gameplay_model::CampaignSlotId::Two
+        );
+        let endpoint = &app.world().resource::<PendingDirectHostSetup>().endpoint;
+        assert_eq!(endpoint.host(), "127.0.0.1");
+        assert_eq!(endpoint.port(), hex_multiplayer::DEFAULT_DIRECT_PORT);
+        assert!(app.world().get_resource::<DirectStartQueue>().is_none());
+        assert!(app.world().get_resource::<ActiveDirectSession>().is_none());
     }
 
     fn map_ready_report(
