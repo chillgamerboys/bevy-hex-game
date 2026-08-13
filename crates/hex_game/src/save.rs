@@ -4,7 +4,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::time::Real;
 use hex_assets::{
@@ -15,11 +14,20 @@ use hex_combat::{CombatSystems, EncounterResolution};
 use hex_core::{
     Busy, CommandQueue, GameplayPhase, GameplaySetup, GameplaySetupFailure, Headroom, HexSpan,
     HexTile, InputAction, InputBindings, Mode, PartyFormation, Pause, PendingDecision,
-    ResolvedMapSeed, Screen, SubstanceId, TilePos, TraversalBlockers, TraversalProfile, UnitId,
+    ResolvedMapSeed, Screen, SimSeeds, SimulationRole, SubstanceId, TilePos, TraversalBlockers,
+    TraversalProfile, UnitId,
 };
 use hex_gameplay_model::CampaignSlotId;
 use hex_lattice::{CellKind, LatticeState};
-use hex_map::{MapSettings, TerrainSettings};
+use hex_map::{
+    CampaignWorldRestoreOutcomeV2, CampaignWorldRestoreResultV2, CurrentWorldSnapshotV1,
+    MapSettings, PendingCampaignWorldSnapshotV2, TerrainSettings,
+};
+use hex_multiplayer::{
+    BoundedText, CampaignSaveRefusalV2, CampaignSaveStateV2, CampaignSaveStatusV2,
+    CampaignUnitCheckpointV2, ContentFingerprint, HostCampaignCheckpointV2, RulesManifestV1,
+    SessionAdmissionAuthority, CAMPAIGN_CHECKPOINT_VERSION_V2, MAX_IDENTITY_BYTES,
+};
 use hex_ui::{
     CampaignPartyMemberView, CampaignSlotStatusView, CampaignSlotView, MainMenuIntent,
     SandboxLatticeCellKind, SandboxLatticeCellView, UiIntent, UiSystems,
@@ -29,12 +37,18 @@ use hex_units::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::campaign_authority::{
+    export_campaign_gameplay_checkpoint, CampaignGameplayCheckpointV2,
+    CampaignGameplayRestoreOutcomeV2, CampaignGameplayRestoreResultV2,
+    PendingCampaignGameplayCheckpointV2,
+};
 use crate::scenarios::{ActiveScenario, ScenarioToLoad};
 use crate::screens::sandbox::GameplaySessionOrigin;
 use crate::storage::{read, write_atomic, StoragePaths};
 
 const LEGACY_RESUME_VERSION: u32 = 1;
-const CAMPAIGNS_VERSION: u32 = 1;
+const CAMPAIGNS_VERSION_V1: u32 = 1;
+const CAMPAIGNS_VERSION_V2: u32 = 2;
 
 /// Exact digest translation table for resumes written by PR #175's `dev` head.
 ///
@@ -334,17 +348,26 @@ struct CampaignsFile {
     /// Persisted so incompatible legacy slot-1 data cannot silently become empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     legacy_slot_one_refusal: Option<String>,
+    /// Strict legacy/V1 records. A successful V2 write clears only its selected slot.
     slots: [Option<CampaignSave>; 3],
+    /// Complete authority checkpoints introduced by document version 2.
+    #[serde(default, skip_serializing_if = "campaign_v2_slots_are_empty")]
+    v2_slots: [Option<CampaignSaveV2>; 3],
 }
 
 impl Default for CampaignsFile {
     fn default() -> Self {
         Self {
-            format_version: CAMPAIGNS_VERSION,
+            format_version: CAMPAIGNS_VERSION_V2,
             legacy_slot_one_refusal: None,
             slots: std::array::from_fn(|_| None),
+            v2_slots: std::array::from_fn(|_| None),
         }
     }
+}
+
+fn campaign_v2_slots_are_empty(slots: &[Option<CampaignSaveV2>; 3]) -> bool {
+    slots.iter().all(Option::is_none)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -364,6 +387,19 @@ struct CampaignSave {
     selected: Option<UnitId>,
     active_play_millis: u64,
     units: Vec<CampaignUnitSave>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct CampaignSaveV2 {
+    slot: CampaignSlotId,
+    checkpoint: HostCampaignCheckpointV2,
+}
+
+#[derive(Debug, Clone)]
+enum CampaignRecord {
+    V1(CampaignSave),
+    V2(Box<CampaignSaveV2>),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -405,6 +441,26 @@ impl Default for CampaignStore {
 #[derive(Resource, Debug, Default, Clone)]
 pub(crate) struct CampaignSaveNotice(pub(crate) Option<String>);
 
+/// Latest typed Campaign save projection consumed by multiplayer UI.
+#[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CampaignSaveStatusProjection {
+    pub(crate) operation_id: u64,
+    pub(crate) state: Option<CampaignSaveStateV2>,
+}
+
+#[derive(Resource, Debug, Default)]
+struct CampaignSaveRuntime {
+    next_operation_id: u64,
+    pending: Option<PendingCampaignWriteV2>,
+}
+
+#[derive(Debug)]
+struct PendingCampaignWriteV2 {
+    operation_id: u64,
+    slot: CampaignSlotId,
+    save: CampaignSaveV2,
+}
+
 /// Slot identity and elapsed time for the currently running Campaign session.
 #[derive(Resource, Debug, Clone)]
 pub(crate) struct ActiveCampaign {
@@ -442,10 +498,48 @@ impl ActiveCampaign {
 #[derive(Resource, Debug, Clone)]
 pub(crate) struct PendingCampaign(CampaignSave);
 
+/// A Direct/LAN host request selected by the multiplayer shell.
+///
+/// The endpoint remains in `PendingDirectHostSetup`; this save-owned request contains
+/// only the durable slot identity and therefore cannot leak transport state into a
+/// checkpoint.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CampaignMultiplayerHostRequest {
+    pub(crate) slot: CampaignSlotId,
+}
+
+/// Stable refusal category for preparing a host-owned Campaign lobby.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CampaignMultiplayerHostRefusal {
+    ContentUnavailable,
+    IncompatibleCheckpoint,
+    RestoreFailed,
+    IncompleteCheckpoint,
+}
+
+/// Renderer-safe progress/refusal projection for L4.
+#[derive(Resource, Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct CampaignMultiplayerHostStatus {
+    pub(crate) slot: Option<CampaignSlotId>,
+    pub(crate) preparing: bool,
+    pub(crate) refusal: Option<CampaignMultiplayerHostRefusal>,
+    pub(crate) notice: Option<String>,
+}
+
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
+struct PendingCampaignHostBootstrap {
+    slot: CampaignSlotId,
+    requires_v2_restore: bool,
+}
+
 pub(crate) fn plugin(app: &mut App) {
+    crate::campaign_authority::plugin(app);
     app.init_resource::<StoragePaths>()
         .init_resource::<CampaignStore>()
         .init_resource::<CampaignSaveNotice>()
+        .init_resource::<CampaignSaveStatusProjection>()
+        .init_resource::<CampaignSaveRuntime>()
+        .init_resource::<CampaignMultiplayerHostStatus>()
         .add_systems(Startup, load_campaigns)
         .add_systems(
             Update,
@@ -459,7 +553,17 @@ pub(crate) fn plugin(app: &mut App) {
         )
         .add_systems(
             Update,
-            (accumulate_active_play_time, save_exploration)
+            begin_campaign_multiplayer_host.run_if(in_state(Screen::Multiplayer)),
+        )
+        .add_systems(
+            Update,
+            (
+                accumulate_active_play_time,
+                commit_pending_campaign_save,
+                complete_campaign_multiplayer_bootstrap,
+                save_exploration,
+                capture_remote_campaign_save_status,
+            )
                 .chain()
                 .after(CombatSystems::Resolve),
         )
@@ -472,19 +576,37 @@ pub(crate) fn plugin(app: &mut App) {
         .add_systems(OnEnter(Screen::Sandbox), clear_abandoned_campaign_session);
 }
 
-fn clear_campaign_save_notice(mut notice: ResMut<CampaignSaveNotice>) {
+fn clear_campaign_save_notice(
+    mut notice: ResMut<CampaignSaveNotice>,
+    status: Option<ResMut<CampaignSaveStatusProjection>>,
+) {
     notice.0 = None;
+    if let Some(mut status) = status {
+        status.state = None;
+    }
 }
 
 fn clear_abandoned_campaign_session(
     mut commands: Commands,
     mut notice: ResMut<CampaignSaveNotice>,
+    runtime: Option<ResMut<CampaignSaveRuntime>>,
+    status: Option<ResMut<CampaignSaveStatusProjection>>,
     origin: Option<Res<GameplaySessionOrigin>>,
 ) {
     commands.remove_resource::<PendingCampaign>();
+    commands.remove_resource::<PendingCampaignWorldSnapshotV2>();
+    commands.remove_resource::<PendingCampaignGameplayCheckpointV2>();
+    commands.remove_resource::<CampaignMultiplayerHostRequest>();
+    commands.remove_resource::<PendingCampaignHostBootstrap>();
     commands.remove_resource::<ActiveCampaign>();
     if matches!(origin.as_deref(), Some(GameplaySessionOrigin::Campaign(_))) {
         commands.remove_resource::<GameplaySessionOrigin>();
+    }
+    if let Some(mut runtime) = runtime {
+        runtime.pending = None;
+    }
+    if let Some(mut status) = status {
+        status.state = None;
     }
     notice.0 = None;
 }
@@ -504,7 +626,7 @@ fn load_campaigns(paths: Res<StoragePaths>, mut store: ResMut<CampaignStore>) {
 
 fn decode_campaigns(text: &str) -> CampaignStore {
     match ron::from_str::<CampaignsFile>(text) {
-        Ok(file) if file.format_version == CAMPAIGNS_VERSION => CampaignStore {
+        Ok(file) if campaigns_file_refusal(&file).is_none() => CampaignStore {
             file: Some(file),
             unreadable: None,
             runtime_invalid: std::array::from_fn(|_| None),
@@ -512,10 +634,7 @@ fn decode_campaigns(text: &str) -> CampaignStore {
         },
         Ok(file) => CampaignStore {
             file: None,
-            unreadable: Some(format!(
-                "Campaign format {} is incompatible with {}.",
-                file.format_version, CAMPAIGNS_VERSION
-            )),
+            unreadable: campaigns_file_refusal(&file),
             runtime_invalid: std::array::from_fn(|_| None),
             catalog_invalid: std::array::from_fn(|_| None),
         },
@@ -526,6 +645,30 @@ fn decode_campaigns(text: &str) -> CampaignStore {
             catalog_invalid: std::array::from_fn(|_| None),
         },
     }
+}
+
+fn campaigns_file_refusal(file: &CampaignsFile) -> Option<String> {
+    if !matches!(
+        file.format_version,
+        CAMPAIGNS_VERSION_V1 | CAMPAIGNS_VERSION_V2
+    ) {
+        return Some(format!(
+            "Campaign format {} is incompatible with {}.",
+            file.format_version, CAMPAIGNS_VERSION_V2
+        ));
+    }
+    if file.format_version == CAMPAIGNS_VERSION_V1 && file.v2_slots.iter().any(Option::is_some) {
+        return Some("Campaign format 1 contains an impossible V2 checkpoint.".to_owned());
+    }
+    if file
+        .slots
+        .iter()
+        .zip(&file.v2_slots)
+        .any(|(v1, v2)| v1.is_some() && v2.is_some())
+    {
+        return Some("Campaign data contains two records for one slot.".to_owned());
+    }
+    None
 }
 
 fn migrate_legacy(paths: &StoragePaths) -> CampaignStore {
@@ -609,31 +752,16 @@ impl CampaignStore {
             .into_iter()
             .map(|slot| CampaignSlotView {
                 slot,
-                status: match self.slot(slot) {
+                status: match self.record(slot) {
                     Ok(None) => CampaignSlotStatusView::Empty,
-                    Ok(Some(save)) => CampaignSlotStatusView::Available {
-                        party: save
-                            .units
-                            .iter()
-                            .filter(|unit| unit.faction == Faction::Player)
-                            .map(|unit| CampaignPartyMemberView {
-                                name: campaign_party_member_name(unit, lattices),
-                                lattice: unit.lattice.as_ref().map_or_else(
-                                    || "No lattice".to_owned(),
-                                    |lattice| format!("{} mana", lattice.total_gem_mana()),
-                                ),
-                                cells: campaign_lattice_cells(unit, lattices, elements),
-                            })
-                            .collect(),
-                        active_time: format_active_time(save.active_play_millis),
-                    },
+                    Ok(Some(record)) => campaign_slot_status(&record, lattices, elements),
                     Err(reason) => CampaignSlotStatusView::Invalid { reason },
                 },
             })
             .collect()
     }
 
-    fn slot(&self, slot: CampaignSlotId) -> Result<Option<&CampaignSave>, String> {
+    fn record(&self, slot: CampaignSlotId) -> Result<Option<CampaignRecord>, String> {
         if let Some(reason) = &self.unreadable {
             return Err(reason.clone());
         }
@@ -659,19 +787,23 @@ impl CampaignStore {
         {
             return Err(reason.clone());
         }
-        let Some(save) = file.slots.get(slot.index()).and_then(Option::as_ref) else {
-            return Ok(None);
-        };
-        validate_campaign_save(save, slot)?;
-        Ok(Some(save))
+        if let Some(save) = file.v2_slots.get(slot.index()).and_then(Option::as_ref) {
+            validate_campaign_save_v2(save, slot)?;
+            return Ok(Some(CampaignRecord::V2(Box::new(save.clone()))));
+        }
+        if let Some(save) = file.slots.get(slot.index()).and_then(Option::as_ref) {
+            validate_campaign_save(save, slot)?;
+            return Ok(Some(CampaignRecord::V1(save.clone())));
+        }
+        Ok(None)
     }
 
-    fn available(&self, slot: CampaignSlotId) -> Option<CampaignSave> {
-        self.slot(slot).ok().flatten().cloned()
+    fn available_record(&self, slot: CampaignSlotId) -> Option<CampaignRecord> {
+        self.record(slot).ok().flatten()
     }
 
     fn is_empty(&self, slot: CampaignSlotId) -> bool {
-        matches!(self.slot(slot), Ok(None))
+        matches!(self.record(slot), Ok(None))
     }
 
     fn mark_invalid(&mut self, slot: CampaignSlotId, reason: String) {
@@ -686,13 +818,14 @@ impl CampaignStore {
         }
     }
 
+    #[cfg(test)]
     fn write_slot(
         &mut self,
         paths: &StoragePaths,
         slot: CampaignSlotId,
         save: CampaignSave,
     ) -> Result<(), String> {
-        if let Err(reason) = self.slot(slot) {
+        if let Err(reason) = self.record(slot) {
             return Err(format!(
                 "Campaign slot {} is invalid and was left untouched: {reason}",
                 slot.number()
@@ -703,6 +836,7 @@ impl CampaignStore {
             return Err("Campaign data is unavailable; it was left untouched.".to_owned());
         };
         let mut next = file.clone();
+        next.format_version = CAMPAIGNS_VERSION_V2;
         let Some(target) = next.slots.get_mut(slot.index()) else {
             return Err(format!(
                 "Campaign slot {} is outside the fixed slot document.",
@@ -710,6 +844,9 @@ impl CampaignStore {
             ));
         };
         *target = Some(save);
+        if let Some(target) = next.v2_slots.get_mut(slot.index()) {
+            *target = None;
+        }
         let serialized = encode_campaigns(&next)?;
         write_atomic(&paths.campaigns, &serialized)
             .map_err(|error| format!("Campaign could not be saved: {error}"))?;
@@ -721,6 +858,129 @@ impl CampaignStore {
             *refusal = None;
         }
         Ok(())
+    }
+
+    fn write_v2_slot(
+        &mut self,
+        paths: &StoragePaths,
+        slot: CampaignSlotId,
+        save: CampaignSaveV2,
+    ) -> Result<(), String> {
+        if let Err(reason) = self.record(slot) {
+            return Err(format!(
+                "Campaign slot {} is invalid and was left untouched: {reason}",
+                slot.number()
+            ));
+        }
+        validate_campaign_save_v2(&save, slot)?;
+        let Some(file) = &self.file else {
+            return Err("Campaign data is unavailable; it was left untouched.".to_owned());
+        };
+        let mut next = file.clone();
+        next.format_version = CAMPAIGNS_VERSION_V2;
+        let Some(target) = next.v2_slots.get_mut(slot.index()) else {
+            return Err(format!(
+                "Campaign slot {} is outside the fixed slot document.",
+                slot.number()
+            ));
+        };
+        *target = Some(save);
+        if let Some(target) = next.slots.get_mut(slot.index()) {
+            *target = None;
+        }
+        let serialized = encode_campaigns(&next)?;
+        write_atomic(&paths.campaigns, &serialized)
+            .map_err(|error| format!("Campaign could not be saved: {error}"))?;
+        self.file = Some(next);
+        if let Some(refusal) = self.runtime_invalid.get_mut(slot.index()) {
+            *refusal = None;
+        }
+        if let Some(refusal) = self.catalog_invalid.get_mut(slot.index()) {
+            *refusal = None;
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn slot(&self, slot: CampaignSlotId) -> Result<Option<&CampaignSave>, String> {
+        if let Some(reason) = &self.unreadable {
+            return Err(reason.clone());
+        }
+        let Some(file) = &self.file else {
+            return Err("Campaign data is unavailable.".to_owned());
+        };
+        if slot.index() == 0 {
+            if let Some(reason) = &file.legacy_slot_one_refusal {
+                return Err(reason.clone());
+            }
+        }
+        if let Some(reason) = self
+            .runtime_invalid
+            .get(slot.index())
+            .and_then(Option::as_ref)
+            .or_else(|| {
+                self.catalog_invalid
+                    .get(slot.index())
+                    .and_then(Option::as_ref)
+            })
+        {
+            return Err(reason.clone());
+        }
+        let save = file.slots.get(slot.index()).and_then(Option::as_ref);
+        if let Some(save) = save {
+            validate_campaign_save(save, slot)?;
+        }
+        Ok(save)
+    }
+
+    #[cfg(test)]
+    fn available(&self, slot: CampaignSlotId) -> Option<CampaignSave> {
+        self.slot(slot).ok().flatten().cloned()
+    }
+}
+
+fn campaign_slot_status(
+    record: &CampaignRecord,
+    lattices: Option<&LatticeLibrary>,
+    elements: Option<&ElementCatalog>,
+) -> CampaignSlotStatusView {
+    let (party, active_play_millis) = match record {
+        CampaignRecord::V1(save) => (
+            save.units
+                .iter()
+                .filter(|unit| unit.faction == Faction::Player)
+                .map(|unit| CampaignPartyMemberView {
+                    name: campaign_party_member_name(unit, lattices),
+                    lattice: unit.lattice.as_ref().map_or_else(
+                        || "No lattice".to_owned(),
+                        |lattice| format!("{} mana", lattice.total_gem_mana()),
+                    ),
+                    cells: campaign_lattice_cells(unit, lattices, elements),
+                })
+                .collect(),
+            save.active_play_millis,
+        ),
+        CampaignRecord::V2(save) => (
+            save.checkpoint
+                .units
+                .as_slice()
+                .iter()
+                .filter(|unit| unit.faction == Faction::Player)
+                .map(|unit| CampaignPartyMemberView {
+                    name: unit.display_name.as_str().to_owned(),
+                    lattice: unit.lattice.as_ref().map_or_else(
+                        || "No lattice".to_owned(),
+                        |lattice| format!("{} mana", lattice.total_gem_mana()),
+                    ),
+                    cells: campaign_v2_lattice_cells(unit, lattices, elements),
+                })
+                .collect(),
+            save.checkpoint.active_play_millis,
+        ),
+    };
+    CampaignSlotStatusView::Available {
+        party,
+        active_time: format_active_time(active_play_millis),
     }
 }
 
@@ -741,6 +1001,29 @@ fn campaign_lattice_cells(
     let Some(archetype) = archetype else {
         return Vec::new();
     };
+    project_campaign_lattice_cells(archetype, elements)
+}
+
+fn campaign_v2_lattice_cells(
+    unit: &CampaignUnitCheckpointV2,
+    lattices: Option<&LatticeLibrary>,
+    elements: Option<&ElementCatalog>,
+) -> Vec<SandboxLatticeCellView> {
+    let (Some(_state), Some(lattices), Some(elements)) =
+        (unit.lattice.as_ref(), lattices, elements)
+    else {
+        return Vec::new();
+    };
+    let Some(archetype) = lattices.get(unit.archetype_identity.as_str()) else {
+        return Vec::new();
+    };
+    project_campaign_lattice_cells(archetype, elements)
+}
+
+fn project_campaign_lattice_cells(
+    archetype: &hex_assets::Archetype,
+    elements: &ElementCatalog,
+) -> Vec<SandboxLatticeCellView> {
     archetype
         .spec
         .cells()
@@ -863,6 +1146,39 @@ fn validate_legacy_resume(resume: &LegacyResumeFile) -> Result<(), String> {
 
 fn validate_campaign_save(save: &CampaignSave, expected: CampaignSlotId) -> Result<(), String> {
     validate_campaign_save_against_catalog(save, expected, shipped_formation_catalog()?)
+}
+
+fn validate_campaign_save_v2(
+    save: &CampaignSaveV2,
+    expected: CampaignSlotId,
+) -> Result<(), String> {
+    if save.slot != expected {
+        return Err(format!(
+            "Campaign slot {} contains a record for slot {}.",
+            expected.number(),
+            save.slot.number()
+        ));
+    }
+    save.checkpoint
+        .validate()
+        .map_err(|error| format!("Campaign checkpoint is invalid: {error}."))?;
+    let local = crate::screens::multiplayer::local_build_identity()
+        .map_err(|error| format!("Local Campaign build identity is invalid: {error}."))?;
+    if save.checkpoint.build != local {
+        return Err(format!(
+            "Campaign build {:?} does not match this build {:?}.",
+            save.checkpoint.build, local
+        ));
+    }
+    validate_formation(
+        &save.checkpoint.formation,
+        save.checkpoint
+            .units
+            .as_slice()
+            .iter()
+            .map(|unit| (unit.unit, unit.faction)),
+        shipped_formation_catalog()?,
+    )
 }
 
 fn validate_campaign_save_against_catalog(
@@ -1014,14 +1330,23 @@ fn validate_campaign_catalog(
     library: Option<Res<ScenarioLibrary>>,
     accepted: Option<Res<AcceptedContentRevision>>,
     formations: Option<Res<FormationCatalog>>,
+    rules: Option<Res<hex_assets::CombatSettings>>,
     mut store: ResMut<CampaignStore>,
 ) {
-    let (Some(library), Some(accepted), Some(formations)) = (library, accepted, formations) else {
+    let (Some(library), Some(accepted), Some(formations), Some(rules)) =
+        (library, accepted, formations, rules)
+    else {
         return;
     };
     let refusals = std::array::from_fn(|index| {
         let slot = CampaignSlotId::ALL.get(index).copied()?;
-        let save = store.file.as_ref()?.slots.get(index)?.as_ref()?;
+        let file = store.file.as_ref()?;
+        if let Some(save) = file.v2_slots.get(index)?.as_ref() {
+            return validate_campaign_save_v2(save, slot).err().or_else(|| {
+                campaign_v2_content_refusal(save, &library, accepted.fingerprint(), &rules)
+            });
+        }
+        let save = file.slots.get(index)?.as_ref()?;
         validate_campaign_save_against_catalog(save, slot, &formations)
             .err()
             .or_else(|| campaign_content_refusal(save, &library, accepted.fingerprint()))
@@ -1029,6 +1354,46 @@ fn validate_campaign_catalog(
     if store.catalog_invalid != refusals {
         store.catalog_invalid = refusals;
     }
+}
+
+fn campaign_v2_content_refusal(
+    save: &CampaignSaveV2,
+    library: &ScenarioLibrary,
+    accepted_fingerprint: u64,
+    rules: &hex_assets::CombatSettings,
+) -> Option<String> {
+    let checkpoint = &save.checkpoint;
+    let Some(scenario) = library
+        .scenarios
+        .iter()
+        .find(|scenario| scenario.name == checkpoint.scenario_identity.as_str())
+    else {
+        return Some(format!(
+            "The saved scenario {:?} is no longer available.",
+            checkpoint.scenario_identity.as_str()
+        ));
+    };
+    if scenario_digest(scenario) != checkpoint.scenario_digest {
+        return Some(format!(
+            "The saved scenario {:?} changed and cannot be resumed.",
+            checkpoint.scenario_identity.as_str()
+        ));
+    }
+    if scenario.world != checkpoint.map_catalog_identity.as_str() {
+        return Some("The saved map catalog identity is incompatible.".to_owned());
+    }
+    if scenario.generation_seed.is_some() != checkpoint.resolved_seed.is_some() {
+        return Some("The saved seed contract is incompatible.".to_owned());
+    }
+    if checkpoint.content_fingerprint != ContentFingerprint(accepted_fingerprint) {
+        return Some("The saved authored content revision is incompatible.".to_owned());
+    }
+    if checkpoint.rules.profile_identity.as_str() != "campaign-rules-v1"
+        || checkpoint.rules.fingerprint != crate::screens::sandbox::direct_rules_fingerprint(rules)
+    {
+        return Some("The saved Campaign rules are incompatible.".to_owned());
+    }
+    None
 }
 
 fn campaign_content_refusal(
@@ -1075,12 +1440,122 @@ fn campaign_content_refusal(
     None
 }
 
+fn stage_new_campaign(
+    slot: CampaignSlotId,
+    library: &ScenarioLibrary,
+    accepted: &AcceptedContentRevision,
+    _formations: &FormationCatalog,
+    commands: &mut Commands,
+) -> Result<(), String> {
+    let scenario = library.default_scenario().ok_or_else(|| {
+        format!(
+            "The configured default game {:?} does not exist.",
+            library.default_game
+        )
+    })?;
+    commands.remove_resource::<GameplaySetupFailure>();
+    commands.remove_resource::<PendingCampaign>();
+    commands.remove_resource::<PendingCampaignWorldSnapshotV2>();
+    commands.remove_resource::<PendingCampaignGameplayCheckpointV2>();
+    commands.insert_resource(ActiveCampaign::new(slot, accepted.fingerprint(), 0));
+    commands.insert_resource(GameplaySessionOrigin::Campaign(slot));
+    commands.insert_resource(ScenarioToLoad {
+        scenario: scenario.clone(),
+        resolved_seed: scenario.generation_seed.map(ResolvedMapSeed),
+        encounter_override: None,
+    });
+    Ok(())
+}
+
+fn stage_saved_campaign(
+    slot: CampaignSlotId,
+    record: CampaignRecord,
+    library: &ScenarioLibrary,
+    accepted: &AcceptedContentRevision,
+    formations: &FormationCatalog,
+    rules: &hex_assets::CombatSettings,
+    commands: &mut Commands,
+) -> Result<bool, String> {
+    let requires_v2_restore = matches!(&record, CampaignRecord::V2(_));
+    match record {
+        CampaignRecord::V1(save) => {
+            validate_campaign_save_against_catalog(&save, slot, formations)?;
+            if let Some(reason) = campaign_content_refusal(&save, library, accepted.fingerprint()) {
+                return Err(reason);
+            }
+            let scenario = library
+                .scenarios
+                .iter()
+                .find(|scenario| scenario.name == save.scenario_name)
+                .ok_or_else(|| {
+                    format!(
+                        "The saved scenario {:?} is no longer available.",
+                        save.scenario_name
+                    )
+                })?;
+            commands.remove_resource::<GameplaySetupFailure>();
+            commands.remove_resource::<PendingCampaignWorldSnapshotV2>();
+            commands.remove_resource::<PendingCampaignGameplayCheckpointV2>();
+            commands.insert_resource(ScenarioToLoad {
+                scenario: scenario.clone(),
+                resolved_seed: save.resolved_seed.map(ResolvedMapSeed),
+                encounter_override: None,
+            });
+            commands.insert_resource(PendingCampaign(save.clone()));
+            commands.insert_resource(ActiveCampaign::new(
+                slot,
+                save.content_revision
+                    .unwrap_or_else(|| accepted.fingerprint()),
+                save.active_play_millis,
+            ));
+        }
+        CampaignRecord::V2(save) => {
+            if let Some(reason) =
+                campaign_v2_content_refusal(&save, library, accepted.fingerprint(), rules)
+            {
+                return Err(reason);
+            }
+            let checkpoint = save.checkpoint;
+            let scenario = library
+                .scenarios
+                .iter()
+                .find(|scenario| scenario.name == checkpoint.scenario_identity.as_str())
+                .ok_or_else(|| "The saved scenario is no longer available.".to_owned())?;
+            commands.remove_resource::<GameplaySetupFailure>();
+            commands.remove_resource::<PendingCampaign>();
+            commands.insert_resource(PendingCampaignWorldSnapshotV2::new(
+                checkpoint.world.clone(),
+            ));
+            commands.insert_resource(PendingCampaignGameplayCheckpointV2(
+                CampaignGameplayCheckpointV2 {
+                    units: checkpoint.units.clone(),
+                    effects: checkpoint.effects.clone(),
+                    formation: checkpoint.formation.clone(),
+                },
+            ));
+            commands.insert_resource(ScenarioToLoad {
+                scenario: scenario.clone(),
+                resolved_seed: checkpoint.resolved_seed.map(ResolvedMapSeed),
+                encounter_override: None,
+            });
+            commands.insert_resource(ActiveCampaign::new(
+                slot,
+                checkpoint.content_fingerprint.0,
+                checkpoint.active_play_millis,
+            ));
+        }
+    }
+    commands.insert_resource(GameplaySessionOrigin::Campaign(slot));
+    Ok(requires_v2_restore)
+}
+
 fn handle_campaign_intents(
     mut intents: MessageReader<UiIntent>,
     mut store: ResMut<CampaignStore>,
     library: Option<Res<ScenarioLibrary>>,
     accepted: Option<Res<AcceptedContentRevision>>,
     formations: Option<Res<FormationCatalog>>,
+    rules: Option<Res<hex_assets::CombatSettings>>,
     mut commands: Commands,
     mut next: ResMut<NextState<Screen>>,
 ) {
@@ -1088,128 +1563,263 @@ fn handle_campaign_intents(
         let UiIntent::MainMenu(intent) = intent else {
             continue;
         };
-        match *intent {
-            MainMenuIntent::NewCampaign(slot) => {
-                if !store.is_empty(slot) {
-                    continue;
-                }
-                let Some(library) = library.as_deref() else {
-                    commands.insert_resource(GameplaySetupFailure::new(
-                        "Campaign content is still loading.",
-                    ));
-                    continue;
-                };
-                let Some(accepted) = accepted.as_deref() else {
-                    commands.insert_resource(GameplaySetupFailure::new(
-                        "Campaign content is still loading.",
-                    ));
-                    continue;
-                };
-                let Some(_formations) = formations.as_deref() else {
-                    commands.insert_resource(GameplaySetupFailure::new(
-                        "Campaign content is still loading.",
-                    ));
-                    continue;
-                };
-                let Some(scenario) = library.default_scenario() else {
-                    let reason = format!(
-                        "The configured default game {:?} does not exist.",
-                        library.default_game
-                    );
-                    commands.insert_resource(GameplaySetupFailure::new(reason));
-                    continue;
-                };
-                commands.remove_resource::<GameplaySetupFailure>();
-                commands.remove_resource::<PendingCampaign>();
-                commands.insert_resource(ActiveCampaign::new(slot, accepted.fingerprint(), 0));
-                commands.insert_resource(GameplaySessionOrigin::Campaign(slot));
-                commands.insert_resource(ScenarioToLoad {
-                    scenario: scenario.clone(),
-                    resolved_seed: scenario.generation_seed.map(ResolvedMapSeed),
-                    encounter_override: None,
-                });
-                next.set(Screen::Loading);
-                return;
+        let (Some(library), Some(accepted), Some(formations), Some(rules)) = (
+            library.as_deref(),
+            accepted.as_deref(),
+            formations.as_deref(),
+            rules.as_deref(),
+        ) else {
+            if matches!(
+                intent,
+                MainMenuIntent::NewCampaign(_) | MainMenuIntent::ContinueCampaign(_)
+            ) {
+                commands.insert_resource(GameplaySetupFailure::new(
+                    "Campaign content is still loading.",
+                ));
+            }
+            continue;
+        };
+        let result = match *intent {
+            MainMenuIntent::NewCampaign(slot) if store.is_empty(slot) => {
+                stage_new_campaign(slot, library, accepted, formations, &mut commands)
             }
             MainMenuIntent::ContinueCampaign(slot) => {
-                let Some(save) = store.available(slot) else {
+                let Some(record) = store.available_record(slot) else {
                     continue;
                 };
-                let Some(library) = library.as_deref() else {
-                    commands.insert_resource(GameplaySetupFailure::new(
-                        "Campaign content is still loading.",
-                    ));
-                    continue;
-                };
-                let Some(accepted) = accepted.as_deref() else {
-                    commands.insert_resource(GameplaySetupFailure::new(
-                        "Campaign content is still loading.",
-                    ));
-                    continue;
-                };
-                let Some(formations) = formations.as_deref() else {
-                    commands.insert_resource(GameplaySetupFailure::new(
-                        "Campaign content is still loading.",
-                    ));
-                    continue;
-                };
-                if let Err(reason) = validate_campaign_save_against_catalog(&save, slot, formations)
-                {
-                    refuse_continue(&mut store, &mut commands, slot, reason);
-                    continue;
-                }
-                if let Some(reason) =
-                    campaign_content_refusal(&save, library, accepted.fingerprint())
-                {
-                    refuse_continue(&mut store, &mut commands, slot, reason);
-                    continue;
-                }
-                let Some(scenario) = library
-                    .scenarios
-                    .iter()
-                    .find(|scenario| scenario.name == save.scenario_name)
-                else {
-                    refuse_continue(
-                        &mut store,
-                        &mut commands,
-                        slot,
-                        format!(
-                            "The saved scenario {:?} is no longer available.",
-                            save.scenario_name
-                        ),
-                    );
-                    continue;
-                };
-                commands.remove_resource::<GameplaySetupFailure>();
-                commands.insert_resource(ScenarioToLoad {
-                    scenario: scenario.clone(),
-                    resolved_seed: save.resolved_seed.map(ResolvedMapSeed),
-                    encounter_override: None,
-                });
-                commands.insert_resource(PendingCampaign(save.clone()));
-                commands.insert_resource(ActiveCampaign::new(
+                stage_saved_campaign(
                     slot,
-                    save.content_revision
-                        .unwrap_or_else(|| accepted.fingerprint()),
-                    save.active_play_millis,
-                ));
-                commands.insert_resource(GameplaySessionOrigin::Campaign(slot));
+                    record,
+                    library,
+                    accepted,
+                    formations,
+                    rules,
+                    &mut commands,
+                )
+                .map(|_requires_v2_restore| ())
+                .inspect_err(|reason| {
+                    store.mark_catalog_invalid(slot, reason.clone());
+                })
+            }
+            _ => continue,
+        };
+        match result {
+            Ok(()) => {
                 next.set(Screen::Loading);
                 return;
             }
-            _ => {}
+            Err(reason) => commands.insert_resource(GameplaySetupFailure::new(reason)),
         }
     }
 }
 
-fn refuse_continue(
-    store: &mut CampaignStore,
-    commands: &mut Commands,
-    slot: CampaignSlotId,
-    reason: String,
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the Campaign host bootstrap validates one persisted slot against every accepted catalog before it may enter world setup"
+)]
+fn begin_campaign_multiplayer_host(
+    request: Option<Res<CampaignMultiplayerHostRequest>>,
+    endpoint: Option<Res<crate::screens::multiplayer::PendingDirectHostSetup>>,
+    mut store: ResMut<CampaignStore>,
+    library: Option<Res<ScenarioLibrary>>,
+    accepted: Option<Res<AcceptedContentRevision>>,
+    formations: Option<Res<FormationCatalog>>,
+    rules: Option<Res<hex_assets::CombatSettings>>,
+    mut status: ResMut<CampaignMultiplayerHostStatus>,
+    mut commands: Commands,
+    mut next: ResMut<NextState<Screen>>,
 ) {
-    store.mark_catalog_invalid(slot, reason.clone());
-    commands.insert_resource(GameplaySetupFailure::new(reason));
+    let Some(request) = request.as_deref().copied() else {
+        return;
+    };
+    commands.remove_resource::<CampaignMultiplayerHostRequest>();
+    commands.remove_resource::<crate::screens::multiplayer::PreparedDirectSandboxSession>();
+    commands.remove_resource::<crate::screens::multiplayer::PreparedDirectCampaignSession>();
+    status.slot = Some(request.slot);
+    status.preparing = false;
+    status.refusal = None;
+    status.notice = None;
+
+    if endpoint.is_none() {
+        refuse_campaign_multiplayer_host(
+            &mut status,
+            CampaignMultiplayerHostRefusal::ContentUnavailable,
+            "The Direct/LAN endpoint is unavailable; Campaign hosting was not started.",
+        );
+        return;
+    }
+    let (Some(library), Some(accepted), Some(formations), Some(rules)) = (
+        library.as_deref(),
+        accepted.as_deref(),
+        formations.as_deref(),
+        rules.as_deref(),
+    ) else {
+        refuse_campaign_multiplayer_host(
+            &mut status,
+            CampaignMultiplayerHostRefusal::ContentUnavailable,
+            "Campaign content is still loading.",
+        );
+        return;
+    };
+
+    let staged = match store.record(request.slot) {
+        Ok(None) => stage_new_campaign(request.slot, library, accepted, formations, &mut commands)
+            .map(|()| false),
+        Ok(Some(record)) => stage_saved_campaign(
+            request.slot,
+            record,
+            library,
+            accepted,
+            formations,
+            rules,
+            &mut commands,
+        ),
+        Err(reason) => Err(reason),
+    };
+    let requires_v2_restore = match staged {
+        Ok(value) => value,
+        Err(reason) => {
+            store.mark_catalog_invalid(request.slot, reason.clone());
+            refuse_campaign_multiplayer_host(
+                &mut status,
+                CampaignMultiplayerHostRefusal::IncompatibleCheckpoint,
+                reason,
+            );
+            return;
+        }
+    };
+
+    commands.remove_resource::<CampaignWorldRestoreResultV2>();
+    commands.remove_resource::<CampaignGameplayRestoreResultV2>();
+    commands.insert_resource(PendingCampaignHostBootstrap {
+        slot: request.slot,
+        requires_v2_restore,
+    });
+    status.preparing = true;
+    status.notice = Some(format!(
+        "Preparing Campaign slot {} for a fresh assignment lobby…",
+        request.slot.number()
+    ));
+    next.set(Screen::Loading);
+}
+
+fn refuse_campaign_multiplayer_host(
+    status: &mut CampaignMultiplayerHostStatus,
+    refusal: CampaignMultiplayerHostRefusal,
+    notice: impl Into<String>,
+) {
+    status.preparing = false;
+    status.refusal = Some(refusal);
+    status.notice = Some(notice.into());
+}
+
+fn complete_campaign_multiplayer_bootstrap(world: &mut World) {
+    let Some(bootstrap) = world
+        .get_resource::<PendingCampaignHostBootstrap>()
+        .copied()
+    else {
+        return;
+    };
+    if world
+        .get_resource::<State<Screen>>()
+        .is_none_or(|screen| *screen.get() != Screen::Gameplay)
+        || world
+            .get_resource::<GameplayPhase>()
+            .is_none_or(|phase| *phase != GameplayPhase::Active)
+    {
+        return;
+    }
+    if let Some(failure) = world.get_resource::<GameplaySetupFailure>() {
+        let reason = failure.reason.clone();
+        finish_campaign_multiplayer_refusal(
+            world,
+            CampaignMultiplayerHostRefusal::RestoreFailed,
+            reason,
+        );
+        return;
+    }
+    if bootstrap.requires_v2_restore {
+        let world_restored = world
+            .get_resource::<CampaignWorldRestoreResultV2>()
+            .is_some_and(|result| {
+                matches!(
+                    result.outcome,
+                    CampaignWorldRestoreOutcomeV2::Applied { .. }
+                )
+            });
+        let gameplay_restored = world
+            .get_resource::<CampaignGameplayRestoreResultV2>()
+            .is_some_and(|result| {
+                matches!(
+                    result.outcome,
+                    CampaignGameplayRestoreOutcomeV2::Applied { .. }
+                )
+            });
+        if !world_restored || !gameplay_restored {
+            // OnEnter restore systems may still be publishing their typed results.
+            return;
+        }
+    }
+    let Some(active) = world.get_resource::<ActiveCampaign>().cloned() else {
+        finish_campaign_multiplayer_refusal(
+            world,
+            CampaignMultiplayerHostRefusal::IncompleteCheckpoint,
+            "Campaign ownership disappeared before the multiplayer checkpoint was complete.",
+        );
+        return;
+    };
+    let checkpoint = match build_host_campaign_checkpoint(world, &active) {
+        Ok(checkpoint) => checkpoint,
+        Err((_refusal, reason)) => {
+            finish_campaign_multiplayer_refusal(
+                world,
+                CampaignMultiplayerHostRefusal::IncompleteCheckpoint,
+                reason,
+            );
+            return;
+        }
+    };
+    let prepared = match crate::screens::multiplayer::PreparedDirectCampaignSession::from_checkpoint(
+        checkpoint,
+        bootstrap.slot,
+    ) {
+        Ok(prepared) => prepared,
+        Err(reason) => {
+            finish_campaign_multiplayer_refusal(
+                world,
+                CampaignMultiplayerHostRefusal::IncompatibleCheckpoint,
+                reason,
+            );
+            return;
+        }
+    };
+    world.insert_resource(prepared);
+    world.remove_resource::<PendingCampaignHostBootstrap>();
+    world.remove_resource::<GameplaySetupFailure>();
+    let mut status = world.resource_mut::<CampaignMultiplayerHostStatus>();
+    status.preparing = false;
+    status.refusal = None;
+    status.notice = Some(format!(
+        "Campaign slot {} is ready for fresh seat assignment.",
+        bootstrap.slot.number()
+    ));
+    world
+        .resource_mut::<NextState<Screen>>()
+        .set(Screen::Multiplayer);
+}
+
+fn finish_campaign_multiplayer_refusal(
+    world: &mut World,
+    refusal: CampaignMultiplayerHostRefusal,
+    notice: impl Into<String>,
+) {
+    world.remove_resource::<PendingCampaignHostBootstrap>();
+    let notice = notice.into();
+    let mut status = world.resource_mut::<CampaignMultiplayerHostStatus>();
+    refuse_campaign_multiplayer_host(&mut status, refusal, notice);
+    world
+        .resource_mut::<NextState<Screen>>()
+        .set(Screen::Multiplayer);
 }
 
 fn accumulate_active_play_time(
@@ -1282,132 +1892,351 @@ fn safe_for_manual_campaign_save(
         && !resolved
 }
 
-#[derive(SystemParam)]
-struct SaveWorld<'w, 's> {
-    screen: Res<'w, State<Screen>>,
-    mode: Option<Res<'w, State<Mode>>>,
-    pause: Option<Res<'w, State<Pause>>>,
-    phase: Res<'w, GameplayPhase>,
-    queue: Res<'w, CommandQueue>,
-    pending: Res<'w, PendingDecision>,
-    resolution: Res<'w, EncounterResolution>,
-    active_scenario: Option<Res<'w, ActiveScenario>>,
-    active_campaign: Option<ResMut<'w, ActiveCampaign>>,
-    origin: Option<Res<'w, GameplaySessionOrigin>>,
-    accepted_content: Option<Res<'w, AcceptedContentRevision>>,
-    map: Option<Res<'w, MapSettings>>,
-    formation: Res<'w, PartyFormation>,
-    moving: Query<'w, 's, (), Or<(With<MovingTo>, With<Busy>)>>,
-    units: Query<
-        'w,
-        's,
-        (
-            &'static UnitId,
-            &'static Faction,
-            &'static UnitArchetype,
-            &'static StandsOn,
-            Option<&'static LatticeState>,
-            Option<&'static Name>,
-            Has<Downed>,
-            Has<Selected>,
-        ),
-    >,
-}
-
-fn save_exploration(
-    keys: Res<ButtonInput<KeyCode>>,
-    bindings: Res<InputBindings>,
-    mut world: SaveWorld,
-    paths: Res<StoragePaths>,
-    mut store: ResMut<CampaignStore>,
-    mut notice: ResMut<CampaignSaveNotice>,
-) {
-    if *world.screen.get() != Screen::Gameplay || !bindings.just_pressed(&keys, InputAction::Save) {
+fn save_exploration(world: &mut World) {
+    let requested = world
+        .get_resource::<State<Screen>>()
+        .is_some_and(|screen| *screen.get() == Screen::Gameplay)
+        && world
+            .get_resource::<InputBindings>()
+            .zip(world.get_resource::<ButtonInput<KeyCode>>())
+            .is_some_and(|(bindings, keys)| bindings.just_pressed(keys, InputAction::Save));
+    if !requested {
         return;
     }
-    let Some(active_campaign) = world.active_campaign.as_deref_mut() else {
-        notice.0 = Some("Campaign not saved: this session is temporary.".to_owned());
+    if !world.contains_resource::<CampaignSaveRuntime>() {
+        world.insert_resource(CampaignSaveRuntime::default());
+    }
+    if !world.contains_resource::<CampaignSaveStatusProjection>() {
+        world.insert_resource(CampaignSaveStatusProjection::default());
+    }
+    if world.resource::<CampaignSaveRuntime>().pending.is_some() {
+        world.resource_mut::<CampaignSaveNotice>().0 =
+            Some("Campaign save is already in progress.".to_owned());
+        return;
+    }
+
+    let Some(active) = world.get_resource::<ActiveCampaign>().cloned() else {
+        world.resource_mut::<CampaignSaveNotice>().0 =
+            Some("Campaign not saved: this session is temporary.".to_owned());
         return;
     };
-    if let Some(refusal) = campaign_origin_refusal(world.origin.as_deref(), active_campaign.slot) {
-        notice.0 = Some(refusal.to_owned());
+    let operation_id = {
+        let mut runtime = world.resource_mut::<CampaignSaveRuntime>();
+        let Some(next) = runtime.next_operation_id.checked_add(1) else {
+            world.resource_mut::<CampaignSaveNotice>().0 =
+                Some("Campaign not saved: save operation IDs are exhausted.".to_owned());
+            return;
+        };
+        runtime.next_operation_id = next;
+        next
+    };
+    if world
+        .get_resource::<SimulationRole>()
+        .is_some_and(|role| *role != SimulationRole::Authority)
+    {
+        refuse_campaign_save(
+            world,
+            operation_id,
+            CampaignSaveRefusalV2::NotAuthority,
+            "Campaign not saved: only the listen host owns the Campaign save.".to_owned(),
+        );
         return;
     }
+    if let Some(refusal) =
+        campaign_origin_refusal(world.get_resource::<GameplaySessionOrigin>(), active.slot)
+    {
+        refuse_campaign_save(
+            world,
+            operation_id,
+            CampaignSaveRefusalV2::NotAuthority,
+            refusal.to_owned(),
+        );
+        return;
+    }
+
+    let commands_settled = world.resource::<CommandQueue>().is_empty()
+        && !world.resource::<PendingDecision>().is_open()
+        && world
+            .query_filtered::<Entity, Or<(With<MovingTo>, With<Busy>)>>()
+            .iter(world)
+            .next()
+            .is_none();
     let safe = safe_for_manual_campaign_save(
-        *world.screen.get(),
-        world.mode.as_deref().map(|mode| *mode.get()),
-        world.pause.as_deref().map(|pause| *pause.get()),
-        *world.phase,
-        world.queue.is_empty() && !world.pending.is_open() && world.moving.is_empty(),
-        world.resolution.is_resolved(),
+        *world.resource::<State<Screen>>().get(),
+        world.get_resource::<State<Mode>>().map(|mode| *mode.get()),
+        world
+            .get_resource::<State<Pause>>()
+            .map(|pause| *pause.get()),
+        *world.resource::<GameplayPhase>(),
+        commands_settled,
+        world.resource::<EncounterResolution>().is_resolved(),
     );
     if !safe {
-        notice.0 = Some(
+        refuse_campaign_save(
+            world,
+            operation_id,
+            CampaignSaveRefusalV2::UnsafeBoundary,
             "Campaign not saved: pause during safe exploration with no movement or decision pending."
                 .to_owned(),
         );
         return;
     }
-    let (Some(active_scenario), Some(map)) = (world.active_scenario, world.map) else {
-        notice.0 = Some("Campaign not saved: scenario setup is incomplete.".to_owned());
-        return;
-    };
-    let Some(accepted_content) = world.accepted_content else {
-        notice.0 = Some("Campaign not saved: authored content is not accepted.".to_owned());
-        return;
-    };
-    if accepted_content.fingerprint() != active_campaign.content_revision {
-        notice.0 =
-            Some("Campaign not saved: authored content changed during this session.".to_owned());
-        return;
-    }
 
-    let mut snapshots: Vec<CampaignUnitSave> = world
-        .units
-        .iter()
-        .map(
-            |(id, faction, archetype, standing, lattice, name, downed, _)| CampaignUnitSave {
-                id: *id,
-                faction: *faction,
-                position: standing.0.pos,
-                archetype: archetype.0.clone(),
-                lattice: lattice.cloned(),
-                downed,
-                display_name: name
-                    .map(|name| name.as_str().to_owned())
-                    .unwrap_or_else(|| format!("Unit {}", id.0)),
-            },
-        )
-        .collect();
-    snapshots.sort_by_key(|unit| unit.id);
-    let selected = world
-        .units
-        .iter()
-        .find_map(|(id, _, _, _, _, _, _, selected)| selected.then_some(*id));
-    let slot = active_campaign.slot;
-    let save = CampaignSave {
-        slot,
-        build_version: build_identity().to_owned(),
-        scenario_name: active_scenario.0.scenario.name.clone(),
-        scenario_digest: scenario_digest(&active_scenario.0.scenario),
-        content_revision: Some(active_campaign.content_revision),
-        resolved_seed: active_scenario.0.resolved_seed.map(|seed| seed.0),
-        generator_version: generator_version(&map),
-        formation: world.formation.as_ref().clone(),
-        selected,
-        active_play_millis: active_campaign.active_play_millis(),
-        units: snapshots,
+    let checkpoint = match build_host_campaign_checkpoint(world, &active) {
+        Ok(checkpoint) => checkpoint,
+        Err((refusal, reason)) => {
+            refuse_campaign_save(world, operation_id, refusal, reason);
+            return;
+        }
     };
-    if let Err(reason) = validate_campaign_save(&save, slot) {
-        notice.0 = Some(format!("Campaign not saved: {reason}"));
+    let save = CampaignSaveV2 {
+        slot: active.slot,
+        checkpoint,
+    };
+    if let Err(reason) = validate_campaign_save_v2(&save, active.slot) {
+        refuse_campaign_save(
+            world,
+            operation_id,
+            CampaignSaveRefusalV2::IncompleteCheckpoint,
+            format!("Campaign not saved: {reason}"),
+        );
         return;
     }
-    match store.write_slot(&paths, slot, save) {
+    world.resource_mut::<CampaignSaveRuntime>().pending = Some(PendingCampaignWriteV2 {
+        operation_id,
+        slot: active.slot,
+        save,
+    });
+    publish_campaign_save_status(world, operation_id, CampaignSaveStateV2::Saving);
+    world.resource_mut::<CampaignSaveNotice>().0 =
+        Some(format!("Saving Campaign slot {}…", active.slot.number()));
+}
+
+fn build_host_campaign_checkpoint(
+    world: &mut World,
+    active: &ActiveCampaign,
+) -> Result<HostCampaignCheckpointV2, (CampaignSaveRefusalV2, String)> {
+    let active_scenario = world
+        .get_resource::<ActiveScenario>()
+        .cloned()
+        .ok_or_else(|| {
+            (
+                CampaignSaveRefusalV2::IncompleteCheckpoint,
+                "Campaign not saved: scenario setup is incomplete.".to_owned(),
+            )
+        })?;
+    let map = world
+        .get_resource::<MapSettings>()
+        .cloned()
+        .ok_or_else(|| {
+            (
+                CampaignSaveRefusalV2::IncompleteCheckpoint,
+                "Campaign not saved: map setup is incomplete.".to_owned(),
+            )
+        })?;
+    let simulation_seeds = world.get_resource::<SimSeeds>().copied().ok_or_else(|| {
+        (
+            CampaignSaveRefusalV2::IncompleteCheckpoint,
+            "Campaign not saved: simulation seeds are unavailable.".to_owned(),
+        )
+    })?;
+    let rules = world
+        .get_resource::<hex_assets::CombatSettings>()
+        .cloned()
+        .ok_or_else(|| {
+            (
+                CampaignSaveRefusalV2::IncompleteCheckpoint,
+                "Campaign not saved: gameplay rules are unavailable.".to_owned(),
+            )
+        })?;
+    let accepted = world
+        .get_resource::<AcceptedContentRevision>()
+        .map(AcceptedContentRevision::fingerprint)
+        .ok_or_else(|| {
+            (
+                CampaignSaveRefusalV2::IncompatibleContent,
+                "Campaign not saved: authored content is not accepted.".to_owned(),
+            )
+        })?;
+    if accepted != active.content_revision {
+        return Err((
+            CampaignSaveRefusalV2::IncompatibleContent,
+            "Campaign not saved: authored content changed during this session.".to_owned(),
+        ));
+    }
+    let world_snapshot = world
+        .get_resource::<CurrentWorldSnapshotV1>()
+        .map(|snapshot| snapshot.snapshot().clone())
+        .ok_or_else(|| {
+            (
+                CampaignSaveRefusalV2::IncompleteCheckpoint,
+                "Campaign not saved: the complete world snapshot is unavailable.".to_owned(),
+            )
+        })?;
+    let gameplay = export_campaign_gameplay_checkpoint(world).map_err(|error| {
+        (
+            CampaignSaveRefusalV2::IncompleteCheckpoint,
+            format!("Campaign not saved: gameplay checkpoint is incomplete: {error}."),
+        )
+    })?;
+    let identity = |value: String| {
+        BoundedText::<MAX_IDENTITY_BYTES>::new(value).map_err(|error| {
+            (
+                CampaignSaveRefusalV2::IncompleteCheckpoint,
+                format!("Campaign not saved: checkpoint identity is invalid: {error}."),
+            )
+        })
+    };
+    let (generator_identity, generator_version) = campaign_generator_contract(&map);
+    let checkpoint = HostCampaignCheckpointV2 {
+        version: CAMPAIGN_CHECKPOINT_VERSION_V2,
+        build: crate::screens::multiplayer::local_build_identity().map_err(|error| {
+            (
+                CampaignSaveRefusalV2::IncompleteCheckpoint,
+                format!("Campaign not saved: local build identity is invalid: {error}."),
+            )
+        })?,
+        content_fingerprint: ContentFingerprint(accepted),
+        scenario_identity: identity(active_scenario.0.scenario.name.clone())?,
+        scenario_digest: scenario_digest(&active_scenario.0.scenario),
+        map_catalog_identity: identity(active_scenario.0.scenario.world.clone())?,
+        generator_identity: identity(generator_identity.to_owned())?,
+        generator_version,
+        resolved_seed: active_scenario.0.resolved_seed.map(|seed| seed.0),
+        rules: RulesManifestV1 {
+            profile_identity: identity("campaign-rules-v1".to_owned())?,
+            fingerprint: crate::screens::sandbox::direct_rules_fingerprint(&rules),
+        },
+        simulation_seeds,
+        world: world_snapshot,
+        units: gameplay.units,
+        effects: gameplay.effects,
+        formation: gameplay.formation,
+        active_play_millis: active.active_play_millis(),
+    };
+    checkpoint.validate().map_err(|error| {
+        (
+            CampaignSaveRefusalV2::IncompleteCheckpoint,
+            format!("Campaign not saved: checkpoint validation failed: {error}."),
+        )
+    })?;
+    Ok(checkpoint)
+}
+
+fn campaign_generator_contract(map: &MapSettings) -> (&'static str, u32) {
+    match &map.terrain {
+        TerrainSettings::Showcase(_) => ("showcase", 1),
+        TerrainSettings::Perlin(_) => ("perlin", 1),
+        TerrainSettings::Procedural(hex_map::ProceduralSettings::V1(_)) => ("procedural-v1", 1),
+        TerrainSettings::Procedural(hex_map::ProceduralSettings::V2(_)) => ("procedural-v2", 2),
+        TerrainSettings::Procedural(hex_map::ProceduralSettings::V3(_)) => ("procedural-v3", 3),
+    }
+}
+
+fn commit_pending_campaign_save(world: &mut World) {
+    let Some(pending) = world.resource_mut::<CampaignSaveRuntime>().pending.take() else {
+        return;
+    };
+    let valid_owner = world
+        .get_resource::<SimulationRole>()
+        .is_none_or(|role| *role == SimulationRole::Authority)
+        && world
+            .get_resource::<ActiveCampaign>()
+            .is_some_and(|active| active.slot == pending.slot);
+    if !valid_owner {
+        refuse_campaign_save(
+            world,
+            pending.operation_id,
+            CampaignSaveRefusalV2::NotAuthority,
+            "Campaign save was cancelled because its authoritative session ended.".to_owned(),
+        );
+        return;
+    }
+    let paths = world.resource::<StoragePaths>().clone();
+    match world
+        .resource_mut::<CampaignStore>()
+        .write_v2_slot(&paths, pending.slot, pending.save)
+    {
         Ok(()) => {
-            active_campaign.mark_persisted();
-            notice.0 = Some(format!("Campaign slot {} saved.", slot.number()));
+            if let Some(mut active) = world.get_resource_mut::<ActiveCampaign>() {
+                active.mark_persisted();
+            }
+            publish_campaign_save_status(world, pending.operation_id, CampaignSaveStateV2::Saved);
+            world.resource_mut::<CampaignSaveNotice>().0 =
+                Some(format!("Campaign slot {} saved.", pending.slot.number()));
         }
-        Err(reason) => notice.0 = Some(reason),
+        Err(reason) => refuse_campaign_save(
+            world,
+            pending.operation_id,
+            CampaignSaveRefusalV2::StorageUnavailable,
+            reason,
+        ),
+    }
+}
+
+fn refuse_campaign_save(
+    world: &mut World,
+    operation_id: u64,
+    refusal: CampaignSaveRefusalV2,
+    notice: String,
+) {
+    publish_campaign_save_status(world, operation_id, CampaignSaveStateV2::Refused(refusal));
+    world.resource_mut::<CampaignSaveNotice>().0 = Some(notice);
+}
+
+fn publish_campaign_save_status(world: &mut World, operation_id: u64, state: CampaignSaveStateV2) {
+    if !world.contains_resource::<CampaignSaveStatusProjection>() {
+        world.insert_resource(CampaignSaveStatusProjection::default());
+    }
+    let mut projection = world.resource_mut::<CampaignSaveStatusProjection>();
+    projection.operation_id = operation_id;
+    projection.state = Some(state);
+    let session = world
+        .get_resource::<SessionAdmissionAuthority>()
+        .filter(|authority| {
+            authority.manifest().launch_kind == hex_multiplayer::SessionLaunchKindV1::Campaign
+        })
+        .map(|authority| authority.manifest().session_instance_id);
+    let Some(session_instance_id) = session else {
+        return;
+    };
+    if let Some(mut messages) = world.get_resource_mut::<
+        bevy::ecs::message::Messages<bevy_replicon::prelude::ToClients<CampaignSaveStatusV2>>,
+    >() {
+        messages.write(bevy_replicon::prelude::ToClients {
+            targets: bevy_replicon::prelude::SendTargets::All,
+            message: CampaignSaveStatusV2 {
+                session_instance_id,
+                operation_id,
+                state,
+            },
+        });
+    }
+}
+
+fn capture_remote_campaign_save_status(
+    role: Res<SimulationRole>,
+    mut statuses: MessageReader<CampaignSaveStatusV2>,
+    mut projection: ResMut<CampaignSaveStatusProjection>,
+    mut notice: ResMut<CampaignSaveNotice>,
+) {
+    if *role != SimulationRole::Replica {
+        statuses.clear();
+        return;
+    }
+    for status in statuses.read() {
+        if status.operation_id < projection.operation_id {
+            continue;
+        }
+        projection.operation_id = status.operation_id;
+        projection.state = Some(status.state);
+        notice.0 = Some(match status.state {
+            CampaignSaveStateV2::Saving => "The host is saving the Campaign…".to_owned(),
+            CampaignSaveStateV2::Saved => "The host saved the Campaign.".to_owned(),
+            CampaignSaveStateV2::Refused(_) => {
+                "The host could not save the Campaign at this boundary.".to_owned()
+            }
+        });
     }
 }
 
@@ -1685,6 +2514,10 @@ mod tests {
         ArtPalette, ContentIndex, ElementFile, Encounter, LatticeFile, ScenarioCategory, SpellBook,
         SpellFile, SubstanceFile, SubstanceTable, TerrainDamageFile, TerrainDamageTable,
     };
+    use hex_multiplayer::{
+        BoundedVec, CampaignEffectLedgerV2, PublicWorldFingerprint, WorldColumnSnapshotV1,
+        WorldRunSnapshotV1, WorldSnapshotV1, WORLD_SNAPSHOT_VERSION_V1,
+    };
     use hex_units::Standing;
 
     use super::*;
@@ -1923,30 +2756,93 @@ mod tests {
     }
 
     #[test]
-    fn manual_save_serializes_the_bound_slot_with_exact_character_state_and_active_time() {
-        let spell_file: SpellFile =
-            ron::from_str(include_str!("../../../assets/config/spells.ron"))
-                .expect("the shipped spells should parse");
-        let accepted = {
-            let mut content_app = App::new();
-            content_app
-                .add_plugins(MinimalPlugins)
-                .add_plugins(hex_assets::content_index::plugin);
-            insert_coherent_content(&mut content_app, spell_file);
-            content_app.update();
-            *content_app.world().resource::<AcceptedContentRevision>()
+    fn version_one_document_remains_readable_until_its_selected_slot_is_upgraded() {
+        let mut version_one = CampaignsFile {
+            format_version: CAMPAIGNS_VERSION_V1,
+            ..Default::default()
         };
-        let map: MapSettings = ron::from_str(include_str!("../../../assets/config/world.ron"))
-            .expect("the shipped authored map should parse");
+        version_one.slots[0] = Some(campaign(CampaignSlotId::One));
+        let encoded = encode_campaigns(&version_one).expect("V1 document should encode");
+        let decoded = decode_campaigns(&encoded);
+
+        assert!(matches!(
+            decoded.record(CampaignSlotId::One),
+            Ok(Some(CampaignRecord::V1(_)))
+        ));
+        assert!(matches!(decoded.record(CampaignSlotId::Two), Ok(None)));
+        assert!(decoded.unreadable.is_none());
+    }
+
+    #[test]
+    fn document_rejects_v1_v2_overlap_and_v2_data_under_a_v1_header() {
+        let empty_world = WorldSnapshotV1 {
+            version: WORLD_SNAPSHOT_VERSION_V1,
+            public_fingerprint: PublicWorldFingerprint(0),
+            columns: BoundedVec::default(),
+            damage: BoundedVec::default(),
+            anchors: BoundedVec::default(),
+            interior_surfaces: BoundedVec::default(),
+            interior_roofs: BoundedVec::default(),
+            special_regions: BoundedVec::default(),
+            biome_regions: BoundedVec::default(),
+            blockers: BoundedVec::default(),
+            view_hint: None,
+            lights: BoundedVec::default(),
+            liquids: BoundedVec::default(),
+            objects: BoundedVec::default(),
+        };
+        let v2 = CampaignSaveV2 {
+            slot: CampaignSlotId::One,
+            checkpoint: HostCampaignCheckpointV2 {
+                version: CAMPAIGN_CHECKPOINT_VERSION_V2,
+                build: crate::screens::multiplayer::local_build_identity()
+                    .expect("test build identity fits"),
+                content_fingerprint: ContentFingerprint(1),
+                scenario_identity: BoundedText::new("fixture".to_owned()).expect("identity fits"),
+                scenario_digest: 2,
+                map_catalog_identity: BoundedText::new("map".to_owned()).expect("identity fits"),
+                generator_identity: BoundedText::new("generator".to_owned())
+                    .expect("identity fits"),
+                generator_version: 1,
+                resolved_seed: None,
+                rules: RulesManifestV1 {
+                    profile_identity: BoundedText::new("rules".to_owned()).expect("identity fits"),
+                    fingerprint: 3,
+                },
+                simulation_seeds: SimSeeds::default(),
+                world: empty_world,
+                units: BoundedVec::default(),
+                effects: CampaignEffectLedgerV2::default(),
+                formation: PartyFormation::default(),
+                active_play_millis: 0,
+            },
+        };
+        let mut overlap = CampaignsFile::default();
+        overlap.slots[0] = Some(campaign(CampaignSlotId::One));
+        overlap.v2_slots[0] = Some(v2.clone());
+        assert_eq!(
+            campaigns_file_refusal(&overlap).as_deref(),
+            Some("Campaign data contains two records for one slot.")
+        );
+
+        let mut wrong_header = CampaignsFile {
+            format_version: CAMPAIGNS_VERSION_V1,
+            ..Default::default()
+        };
+        wrong_header.v2_slots[0] = Some(v2);
+        assert_eq!(
+            campaigns_file_refusal(&wrong_header).as_deref(),
+            Some("Campaign format 1 contains an impossible V2 checkpoint.")
+        );
+    }
+
+    #[test]
+    fn manual_save_serializes_the_bound_slot_with_exact_character_state_and_active_time() {
         let (_, lattices) = shipped_lattice_tables();
         let archetype = lattices
             .get("hedge-mage")
             .expect("the shipped Hedge Mage should resolve");
         let lattice = LatticeState::new(&archetype.spec, &archetype.stats);
-        let standing = Standing {
-            pos: TilePos::ORIGIN,
-            span: HexSpan::new(0.0, 1.0),
-        };
         let root = scratch_root("system-save");
         let paths = StoragePaths::under(&root);
         let slot_one = campaign(CampaignSlotId::One);
@@ -1960,45 +2856,108 @@ mod tests {
             runtime_invalid: std::array::from_fn(|_| None),
             catalog_invalid: std::array::from_fn(|_| None),
         };
-        let mut active = ActiveCampaign::new(CampaignSlotId::Two, accepted.fingerprint(), 12_000);
+        let accepted_fingerprint = 0xC0DE_CAFE;
+        let mut active = ActiveCampaign::new(CampaignSlotId::Two, accepted_fingerprint, 12_000);
         active.session_active_play = Duration::from_millis(345);
-        let mut keys = ButtonInput::<KeyCode>::default();
-        keys.press(KeyCode::F5);
+        let scenario = scenario();
+        let position = TilePos::ORIGIN;
+        let checkpoint = HostCampaignCheckpointV2 {
+            version: CAMPAIGN_CHECKPOINT_VERSION_V2,
+            build: crate::screens::multiplayer::local_build_identity()
+                .expect("test build identity fits"),
+            content_fingerprint: ContentFingerprint(accepted_fingerprint),
+            scenario_identity: BoundedText::new(scenario.name.clone())
+                .expect("scenario identity fits"),
+            scenario_digest: scenario_digest(&scenario),
+            map_catalog_identity: BoundedText::new(scenario.world.clone())
+                .expect("map identity fits"),
+            generator_identity: BoundedText::new("showcase".to_owned())
+                .expect("generator identity fits"),
+            generator_version: 1,
+            resolved_seed: None,
+            rules: RulesManifestV1 {
+                profile_identity: BoundedText::new("campaign-rules-v1".to_owned())
+                    .expect("rules identity fits"),
+                fingerprint: 7,
+            },
+            simulation_seeds: SimSeeds {
+                world: 1,
+                ai_flavor: 2,
+                cosmetic: 3,
+            },
+            world: WorldSnapshotV1 {
+                version: WORLD_SNAPSHOT_VERSION_V1,
+                public_fingerprint: PublicWorldFingerprint(9),
+                columns: BoundedVec::new(vec![WorldColumnSnapshotV1 {
+                    coord: position.coord,
+                    runs: BoundedVec::new(vec![WorldRunSnapshotV1 {
+                        position,
+                        run_bottom: 0,
+                        span_bottom_bits: 0.0_f32.to_bits(),
+                        span_top_bits: 1.0_f32.to_bits(),
+                        substance: BoundedText::new("stone".to_owned())
+                            .expect("substance identity fits"),
+                        headroom: hex_core::MAX_HEADROOM,
+                    }])
+                    .expect("one run fits"),
+                }])
+                .expect("one column fits"),
+                damage: BoundedVec::default(),
+                anchors: BoundedVec::default(),
+                interior_surfaces: BoundedVec::default(),
+                interior_roofs: BoundedVec::default(),
+                special_regions: BoundedVec::default(),
+                biome_regions: BoundedVec::default(),
+                blockers: BoundedVec::default(),
+                view_hint: None,
+                lights: BoundedVec::default(),
+                liquids: BoundedVec::default(),
+                objects: BoundedVec::default(),
+            },
+            units: BoundedVec::new(vec![CampaignUnitCheckpointV2 {
+                unit: UnitId(0),
+                faction: Faction::Player,
+                archetype_identity: BoundedText::new("hedge-mage".to_owned())
+                    .expect("archetype identity fits"),
+                position,
+                lattice: Some(lattice.clone()),
+                downed: false,
+                display_name: BoundedText::new("Saved Hedge Mage".to_owned())
+                    .expect("display name fits"),
+            }])
+            .expect("one unit fits"),
+            effects: CampaignEffectLedgerV2::default(),
+            formation: compact_formation(&[UnitId(0)]),
+            active_play_millis: 12_345,
+        };
+        checkpoint.validate().expect("checkpoint should be valid");
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .insert_resource(State::new(Screen::Gameplay))
-            .insert_resource(State::new(Mode::Exploring))
-            .insert_resource(State::new(Pause(true)))
-            .insert_resource(GameplayPhase::Active)
-            .insert_resource(CommandQueue::default())
-            .insert_resource(PendingDecision::None)
-            .insert_resource(EncounterResolution(None))
-            .insert_resource(ActiveScenario(ScenarioToLoad {
-                scenario: scenario(),
-                resolved_seed: None,
-                encounter_override: None,
-            }))
             .insert_resource(active)
-            .insert_resource(GameplaySessionOrigin::Campaign(CampaignSlotId::Two))
-            .insert_resource(accepted)
-            .insert_resource(map)
-            .insert_resource(compact_formation(&[UnitId(0)]))
-            .insert_resource(keys)
-            .insert_resource(InputBindings::default())
             .insert_resource(paths.clone())
             .insert_resource(store)
             .insert_resource(CampaignSaveNotice::default())
-            .add_systems(Update, save_exploration);
-        app.world_mut().spawn((
-            UnitId(0),
-            Faction::Player,
-            UnitArchetype("hedge-mage".to_owned()),
-            StandsOn(standing),
-            lattice.clone(),
-            Name::new("Saved Hedge Mage"),
-            Selected,
-        ));
+            .insert_resource(CampaignSaveStatusProjection::default())
+            .insert_resource(CampaignSaveRuntime {
+                next_operation_id: 1,
+                pending: Some(PendingCampaignWriteV2 {
+                    operation_id: 1,
+                    slot: CampaignSlotId::Two,
+                    save: CampaignSaveV2 {
+                        slot: CampaignSlotId::Two,
+                        checkpoint: checkpoint.clone(),
+                    },
+                }),
+            })
+            .add_systems(Update, commit_pending_campaign_save);
+
+        publish_campaign_save_status(app.world_mut(), 1, CampaignSaveStateV2::Saving);
+        assert_eq!(
+            app.world().resource::<CampaignSaveStatusProjection>().state,
+            Some(CampaignSaveStateV2::Saving),
+            "the accepted operation must be observable before its atomic commit"
+        );
 
         app.update();
 
@@ -2019,21 +2978,33 @@ mod tests {
             Some(&slot_three),
             "saving slot two must leave slot three byte-equivalent in the document"
         );
-        let saved = persisted.slots[1]
+        assert!(persisted.slots[1].is_none());
+        let saved = persisted.v2_slots[1]
             .as_ref()
-            .expect("the first normal save should occupy the bound slot two");
+            .expect("the V2 save should occupy the bound slot two");
         assert_eq!(saved.slot, CampaignSlotId::Two);
-        assert_eq!(saved.selected, Some(UnitId(0)));
-        assert_eq!(saved.active_play_millis, 12_345);
-        assert_eq!(saved.content_revision, Some(accepted.fingerprint()));
-        assert_eq!(saved.units.len(), 1);
+        assert_eq!(saved.checkpoint.active_play_millis, 12_345);
+        assert_eq!(
+            saved.checkpoint.content_fingerprint,
+            ContentFingerprint(accepted_fingerprint)
+        );
+        assert_eq!(saved.checkpoint.units.len(), 1);
         let saved_unit = saved
+            .checkpoint
             .units
             .first()
             .expect("the exact saved player should remain present");
-        assert_eq!(saved_unit.archetype, "hedge-mage");
-        assert_eq!(saved_unit.display_name, "Saved Hedge Mage");
+        assert_eq!(saved_unit.archetype_identity.as_str(), "hedge-mage");
+        assert_eq!(saved_unit.display_name.as_str(), "Saved Hedge Mage");
         assert_eq!(saved_unit.lattice.as_ref(), Some(&lattice));
+        let serialized_v2 = ron::to_string(saved).expect("the V2 record should serialize");
+        assert!(!serialized_v2.contains("selected"));
+        assert!(!serialized_v2.contains("credential"));
+        assert!(!serialized_v2.contains("principal"));
+        assert_eq!(
+            app.world().resource::<CampaignSaveStatusProjection>().state,
+            Some(CampaignSaveStateV2::Saved)
+        );
         let active = app.world().resource::<ActiveCampaign>();
         assert_eq!(active.active_play_millis(), 12_345);
         assert_eq!(active.session_active_play, Duration::ZERO);
@@ -3471,6 +4442,50 @@ mod tests {
             campaign_origin_refusal(None, CampaignSlotId::One),
             Some("Campaign not saved: this session is temporary.")
         );
+    }
+
+    #[test]
+    fn replica_save_request_is_typed_not_authority_and_never_touches_disk() {
+        let root = scratch_root("replica-save");
+        let paths = StoragePaths::under(&root);
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .insert_state(Screen::Gameplay)
+            .insert_resource(paths.clone())
+            .insert_resource(InputBindings::default())
+            .insert_resource(ButtonInput::<KeyCode>::default())
+            .insert_resource(SimulationRole::Replica)
+            .insert_resource(ActiveCampaign::new(CampaignSlotId::One, 0xC0DE_CAFE, 0))
+            .insert_resource(CampaignSaveNotice::default())
+            .insert_resource(CampaignSaveStatusProjection::default())
+            .insert_resource(CampaignSaveRuntime::default())
+            .add_systems(Update, save_exploration);
+        let save_key = app
+            .world()
+            .resource::<InputBindings>()
+            .chord(InputAction::Save)
+            .key;
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(save_key);
+
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<CampaignSaveStatusProjection>().state,
+            Some(CampaignSaveStateV2::Refused(
+                CampaignSaveRefusalV2::NotAuthority
+            ))
+        );
+        assert!(!paths.campaigns.exists());
+        assert!(app
+            .world()
+            .resource::<CampaignSaveRuntime>()
+            .pending
+            .is_none());
+        if root.exists() {
+            std::fs::remove_dir_all(root).expect("scratch directory should clean up");
+        }
     }
 
     #[test]

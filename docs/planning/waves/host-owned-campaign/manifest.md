@@ -193,7 +193,7 @@ owner adapters.
     full: false
   evidence: logic-only
   sizing: { model: gpt-5.6-sol, effort: high }
-  state: active
+  state: in_review
   pr: null
 
 - id: L4
