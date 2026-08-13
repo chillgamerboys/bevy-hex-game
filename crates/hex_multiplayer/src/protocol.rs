@@ -26,15 +26,16 @@ use crate::{
         MAX_ABS_LATTICE_COORDINATE, MAX_COMMAND_BYTES, MAX_DECISION_CELLS, MAX_IDENTITY_BYTES,
         MAX_PARTY_MEMBERS, MAX_ROUTE_STEPS,
     },
-    split_bounded_snapshot, BuildIdentityV1, ClientLobbyRequest, ContentFingerprint,
-    LiveSessionSnapshotV1, LiveSnapshotHeaderV1, LobbySnapshot, PlayerKnowledgeSnapshotV1,
-    PublicWorldFingerprint, ReconnectCredential, SessionControlResult, SessionManifestV1,
-    SessionPeerId, SessionReplica, UnitReplica, WorldDeltaV1, MAX_LIVE_SNAPSHOT_BYTES,
+    split_bounded_snapshot, BuildIdentityV1, CampaignSaveStatusV2, ClientLobbyRequest,
+    ContentFingerprint, LiveSessionSnapshotV1, LiveSnapshotHeaderV1, LobbySnapshot,
+    PlayerKnowledgeSnapshotV1, PublicWorldFingerprint, ReconnectCredential, SessionControlResult,
+    SessionManifestV1, SessionPeerId, SessionReplica, UnitReplica, WorldDeltaV1,
+    MAX_LIVE_SNAPSHOT_BYTES,
 };
 
 /// Project-owned schema material not visible to Replicon's type/order hashing.
 pub const PROTOCOL_SCHEMA_TAG: &str =
-    "hex-multiplayer/v1;seatless-command-and-lobby;bounded-wire;authorized-projections;session-bound-live-world-v1;ordered-player-knowledge-v1;run-level-liquid-flow;shipped-projection-524288;visible-archetype-v1;explicit-host-map-ready;system-boundary-sequence";
+    "hex-multiplayer/v1;seatless-command-and-lobby;bounded-wire;authorized-projections;session-bound-live-world-v1;ordered-player-knowledge-v1;run-level-liquid-flow;shipped-projection-524288;visible-archetype-v1;explicit-host-map-ready;system-boundary-sequence;explicit-session-launch-kind-v1;campaign-save-status-v2";
 
 /// Monotonic ordering assigned by the simulation authority.
 #[derive(
@@ -248,6 +249,8 @@ pub fn register_protocol(app: &mut App) {
         .make_message_independent::<CommandResult>()
         .add_server_message::<SessionControlResult>(Channel::Ordered)
         .make_message_independent::<SessionControlResult>()
+        .add_server_message::<CampaignSaveStatusV2>(Channel::Ordered)
+        .make_message_independent::<CampaignSaveStatusV2>()
         .add_server_message::<SessionManifestV1>(Channel::Ordered)
         .make_message_independent::<SessionManifestV1>()
         .add_server_message::<LobbySnapshot>(Channel::Ordered)

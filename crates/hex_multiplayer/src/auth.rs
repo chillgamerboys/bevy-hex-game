@@ -994,6 +994,7 @@ mod tests {
             build: BuildIdentityV1::new("0.4.0", "fixture").expect("valid build"),
             content_fingerprint: ContentFingerprint(11),
             scenario_identity: text("sandbox"),
+            launch_kind: crate::SessionLaunchKindV1::Sandbox,
             map: MapManifestV1 {
                 catalog_identity: text("small"),
                 seed: 9,

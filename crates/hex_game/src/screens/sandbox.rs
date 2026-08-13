@@ -1688,6 +1688,7 @@ fn prepare_direct_sandbox_session(
             .map_err(|error| format!("local build identity is invalid: {error}"))?,
         content_fingerprint: ContentFingerprint(accepted_content_revision),
         scenario_identity: direct_identity(&sandbox.launch.scenario)?,
+        launch_kind: hex_multiplayer::SessionLaunchKindV1::Sandbox,
         map: MapManifestV1 {
             catalog_identity: direct_identity(&sandbox.launch.map.catalog_id)?,
             seed: sandbox.launch.map.resolved_seed.unwrap_or_default(),

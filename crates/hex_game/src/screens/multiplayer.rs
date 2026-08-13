@@ -2303,6 +2303,7 @@ mod tests {
             build: local_build_identity().expect("local build fits"),
             content_fingerprint: ContentFingerprint(7),
             scenario_identity: text("sandbox"),
+            launch_kind: hex_multiplayer::SessionLaunchKindV1::Sandbox,
             map: MapManifestV1 {
                 catalog_identity: text("flat-arena"),
                 seed: 8,

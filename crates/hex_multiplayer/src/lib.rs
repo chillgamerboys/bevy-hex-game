@@ -37,9 +37,9 @@ pub use auth::{
     SessionActivationError, SessionAdmissionAuthority, StoredReconnectCredential,
 };
 pub use campaign::{
-    CampaignEffectCheckpointV2, CampaignEffectLedgerV2, CampaignUnitCheckpointV2,
-    CampaignValidationError, HostCampaignCheckpointV2, CAMPAIGN_CHECKPOINT_VERSION_V2,
-    MAX_CAMPAIGN_EFFECTS,
+    CampaignEffectCheckpointV2, CampaignEffectLedgerV2, CampaignSaveRefusalV2, CampaignSaveStateV2,
+    CampaignSaveStatusV2, CampaignUnitCheckpointV2, CampaignValidationError,
+    HostCampaignCheckpointV2, CAMPAIGN_CHECKPOINT_VERSION_V2, MAX_CAMPAIGN_EFFECTS,
 };
 pub use connection_code::{
     CertificateFingerprint, ConnectionCodeError, DirectConnectionCode, DirectEndpoint,
@@ -69,7 +69,8 @@ pub use lobby::{
 pub use manifest::{
     BuildIdentityV1, ContentFingerprint, ManifestValidationError, MapManifestV1, ProtocolVersion,
     PublicWorldFingerprint, PublicWorldFingerprintV1, RosterEntryV1, RulesManifestV1,
-    SessionInstanceId, SessionManifestV1, UnitDeploymentV1, SESSION_PROTOCOL_VERSION,
+    SessionInstanceId, SessionLaunchKindV1, SessionManifestV1, UnitDeploymentV1,
+    SESSION_PROTOCOL_VERSION,
 };
 pub use online::{
     OnlineIdentityProvider, OnlineIdentityState, OnlineJoinCode, OnlineJoinCodeDigest,

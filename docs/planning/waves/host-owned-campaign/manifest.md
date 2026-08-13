@@ -1,6 +1,6 @@
 # Host-owned Campaign multiplayer wave
 
-- **Status:** dispatching; L1 is merged and L2 is the active lane
+- **Status:** dispatching; L1/L2 are merged and L3 is the active lane
 - **Wave branch:** `wave/host-owned-campaign`
 - **Planning base:** `origin/dev@a0f95e62d02c663902b864cc08a89e831d9ba437`
 - **Wave base:** `origin/dev@c8506a71166a23777d31cc8504a53e61966bb069`
@@ -56,7 +56,18 @@ stack after Universal Online.
    transport fact. Direct/LAN and future EOS sessions consume the same fresh assignment
    and authoritative checkpoint contracts.”
 10. **Current rules.** “One global exploration/combat `Mode`, one active turn, no
-    prediction, no rollback, and no host migration remain unchanged.”
+   prediction, no rollback, and no host migration remain unchanged.”
+
+### Coordinator amendment — Campaign launch and save status (2026-08-12)
+
+Ratified by `@shrav-k` while activating L3:
+
+- “`SessionManifestV1` explicitly distinguishes a reproducible Sandbox launch from a
+  Campaign launch. A Campaign client waits for and transactionally imports the host's
+  complete live baseline; it never regenerates the Campaign world.”
+- “Campaign save progress is an ordered, disclosure-safe server event scoped to the
+  session and a monotonic operation id. It carries no checkpoint, slot, path, transport
+  fact, credential, or player/store identity.”
 
 Decisions are amendable, never silently edited. An amendment records its ratifier and
 date, and every affected order receives the exact new text.
@@ -150,7 +161,7 @@ owner adapters.
     full: true
   evidence: logic-only
   sizing: { model: gpt-5.6-sol, effort: high }
-  state: in_review
+  state: merged
   pr: 204
 
 - id: L3
@@ -182,7 +193,7 @@ owner adapters.
     full: false
   evidence: logic-only
   sizing: { model: gpt-5.6-sol, effort: high }
-  state: queued
+  state: active
   pr: null
 
 - id: L4
