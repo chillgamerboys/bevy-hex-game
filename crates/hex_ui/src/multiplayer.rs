@@ -1100,11 +1100,17 @@ mod tests {
             route: MultiplayerRoute::HostCampaign,
             ..Default::default()
         };
-        view.campaign_slots[1].status = CampaignSlotStatusView::Available {
+        view.campaign_slots
+            .get_mut(1)
+            .expect("the default view has Campaign slot two")
+            .status = CampaignSlotStatusView::Available {
             party: Vec::new(),
             active_time: "42m".to_owned(),
         };
-        view.campaign_slots[2].status = CampaignSlotStatusView::Invalid {
+        view.campaign_slots
+            .get_mut(2)
+            .expect("the default view has Campaign slot three")
+            .status = CampaignSlotStatusView::Invalid {
             reason: "Incompatible shipped content".to_owned(),
         };
         app.world_mut().insert_resource(view);
