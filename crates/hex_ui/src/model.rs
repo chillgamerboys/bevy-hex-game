@@ -1237,6 +1237,31 @@ pub struct CampaignSlotView {
     pub status: CampaignSlotStatusView,
 }
 
+/// Immutable progress/refusal state for preparing one host-owned Campaign lobby.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct MultiplayerCampaignHostView {
+    /// Selected durable slot, if preparation has been attempted.
+    pub slot: Option<CampaignSlotId>,
+    /// Whether the app is transactionally restoring and validating the checkpoint.
+    pub preparing: bool,
+    /// Sanitized typed refusal copy; never a path or checkpoint detail.
+    pub refusal: Option<String>,
+}
+
+/// Disclosure-safe Campaign save status rendered by multiplayer presentation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MultiplayerCampaignSaveStatusView {
+    /// The host accepted a save and is building the atomic checkpoint.
+    Saving,
+    /// The host atomically committed the checkpoint.
+    Saved,
+    /// The host refused or could not commit the save.
+    Refused {
+        /// Sanitized stable refusal copy.
+        reason: String,
+    },
+}
+
 /// Immutable Main Menu hierarchy supplied by the composition root.
 #[derive(Resource, Debug, Clone, PartialEq, Eq)]
 pub struct MainMenuView {
@@ -1359,6 +1384,14 @@ pub struct MultiplayerView {
     pub join_code: SensitiveText,
     /// Whether a private reconnect credential is available in temporary storage.
     pub reconnect_available: bool,
+    /// Exactly three host-owned Campaign slots in stable order.
+    pub campaign_slots: Vec<CampaignSlotView>,
+    /// Typed Campaign-lobby preparation state.
+    pub campaign_host: MultiplayerCampaignHostView,
+    /// Whether the current frozen session restores a Campaign checkpoint.
+    pub campaign_session: bool,
+    /// Latest ordered Campaign save status for the current session.
+    pub campaign_save_status: Option<MultiplayerCampaignSaveStatusView>,
     /// Six stable seat cards in canonical order.
     pub seats: Vec<MultiplayerSeatView>,
     /// Scenario/map summary from the frozen manifest.
@@ -1384,6 +1417,16 @@ impl Default for MultiplayerView {
             share_code: None,
             join_code: SensitiveText::default(),
             reconnect_available: false,
+            campaign_slots: CampaignSlotId::ALL
+                .into_iter()
+                .map(|slot| CampaignSlotView {
+                    slot,
+                    status: CampaignSlotStatusView::Empty,
+                })
+                .collect(),
+            campaign_host: MultiplayerCampaignHostView::default(),
+            campaign_session: false,
+            campaign_save_status: None,
             seats: (0_u8..=PlayerSeat::LAST_HUMAN.0)
                 .filter_map(PlayerSeat::human)
                 .map(MultiplayerSeatView::vacant)
@@ -1411,6 +1454,8 @@ pub enum MultiplayerTextField {
 /// Typed Multiplayer screen/local-menu intentions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MultiplayerIntent {
+    /// Open the three-slot host-owned Campaign browser.
+    OpenHostCampaign,
     /// Open Direct Host setup/help.
     OpenHostDirect,
     /// Open Direct Join code entry/help.
@@ -1419,6 +1464,8 @@ pub enum MultiplayerIntent {
     SetText(MultiplayerTextField, SensitiveText),
     /// Configure a shipped encounter through the existing Sandbox/deployment flow.
     ConfigureSandbox,
+    /// Prepare a new or resumable Campaign slot for a fresh assignment lobby.
+    HostCampaign(CampaignSlotId),
     /// Copy the current host-issued private connection code to the system clipboard.
     CopyConnectionCode,
     /// Start one explicit pinned direct connection.
@@ -1621,6 +1668,7 @@ mod tests {
 
         view.share_code = None;
         assert_eq!(view.seats.len(), PlayerSeat::HUMAN_COUNT);
+        assert_eq!(view.campaign_slots.len(), CampaignSlotId::ALL.len());
         assert_eq!(
             view.seats.first().map(|seat| seat.seat),
             Some(PlayerSeat::HOST)

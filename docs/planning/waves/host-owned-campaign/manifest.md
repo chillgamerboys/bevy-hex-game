@@ -210,6 +210,7 @@ owner adapters.
     - crates/hex_game/src/screens/multiplayer.rs (immutable Campaign view/intent adapter only)
     - crates/hex_game/src/save.rs (immutable save-status projection only)
     - crates/hex_ui/src/review.rs (Campaign multiplayer fixtures only)
+    - crates/hex_game/src/walk.rs (Campaign multiplayer fixture-name registration only)
     - walks/multiplayer_session.ron (Campaign frames only)
     - docs/planning/waves/host-owned-campaign/manifest.md (L4 queue row only)
   dispatch_blockers:
@@ -228,7 +229,7 @@ owner adapters.
     full: false
   evidence: static-presentation
   sizing: { model: gpt-5.6-sol, effort: high }
-  state: active
+  state: in-review
   pr: null
 ```
 
