@@ -352,11 +352,20 @@ generator-neutral world and authorized player-knowledge/unit/session baseline be
 ordered later deltas. Host loss ends the session, while client Escape opens a local
 non-pausing menu.
 
-This first milestone supports shipped Sandbox content only. Internet hosts must arrange
-UDP forwarding themselves and may still fail behind CGNAT; there is no UPnP, STUN/TURN,
+The same Direct/LAN session can now host a Campaign from one of the host's three local
+slots. An empty slot starts a new host-owned Campaign; an occupied compatible slot
+transactionally restores its complete generator-neutral world, units, lattices, effects,
+formation, rules, seeds, and active time before opening a fresh assignment lobby. Resume
+never restores old seats, credentials, cameras, selections, or transport state. Only the
+listen host can save, and only during paused, quiescent exploration; clients receive an
+ordered, non-blocking save-status projection and never read or write the checkpoint.
+Legacy/V1 records retain their strict compatibility behavior and upgrade only after a
+successful next save.
+
+Direct multiplayer still requires shipped content. Internet hosts must arrange UDP
+forwarding themselves and may still fail behind CGNAT; there is no UPnP, STUN/TURN,
 public matchmaking, cross-store relay, host migration, spectator mode, or dedicated
-server. Multiplayer Campaign saves and universal EOS Internet sessions remain later
-milestones; the existing local Campaign slots are not exposed as multiplayer saves.
+server. Universal EOS Internet sessions remain a later milestone.
 
 The default-off online feasibility foundation now fixes transport-neutral EOS identity,
 lobby, reconnect, join-code, and streamed-snapshot vocabulary plus a safe mock backend.

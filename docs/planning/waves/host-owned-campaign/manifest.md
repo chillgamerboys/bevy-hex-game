@@ -1,6 +1,6 @@
 # Host-owned Campaign multiplayer wave
 
-- **Status:** dispatching; L1/L2/L3 are merged and L4 is the active lane
+- **Status:** integrating; all four lanes are merged into the wave candidate
 - **Wave branch:** `wave/host-owned-campaign`
 - **Planning base:** `origin/dev@a0f95e62d02c663902b864cc08a89e831d9ba437`
 - **Wave base:** `origin/dev@c8506a71166a23777d31cc8504a53e61966bb069`
@@ -230,7 +230,7 @@ owner adapters.
     full: false
   evidence: static-presentation
   sizing: { model: gpt-5.6-sol, effort: high }
-  state: in-review
+  state: merged
   pr: 206
 ```
 
