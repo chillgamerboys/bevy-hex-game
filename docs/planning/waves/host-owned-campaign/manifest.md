@@ -193,8 +193,8 @@ owner adapters.
     full: false
   evidence: logic-only
   sizing: { model: gpt-5.6-sol, effort: high }
-  state: active
-  pr: null
+  state: in_review
+  pr: 205
 
 - id: L4
   title: C4 multiplayer Campaign UI
