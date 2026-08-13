@@ -56,7 +56,7 @@ pub mod turns;
 
 pub use ai::{AiAlgorithmRegistry, AiDecisionTraces, MAX_AI_DECISION_TRACES};
 pub use commands::{channel_refusal, delivers_anything, ChannelReadiness, UNDELIVERABLE};
-pub use effects::PersistentEffects;
+pub use effects::{PersistentEffects, PersistentEffectsCheckpointError};
 pub use hex_core::Turn;
 pub use knowledge::{
     BaseVisibility, FactionLatticeKnowledge, KnownCell, LatticeKnowledge, RevealAll,

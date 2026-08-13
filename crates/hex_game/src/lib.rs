@@ -22,6 +22,7 @@ use hex_core::{
     PerceptionSystems, Screen,
 };
 
+pub mod campaign_authority;
 #[cfg(any(feature = "map-review", feature = "visual-walk"))]
 mod capture;
 mod casting;

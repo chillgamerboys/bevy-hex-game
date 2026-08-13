@@ -150,8 +150,8 @@ owner adapters.
     full: true
   evidence: logic-only
   sizing: { model: gpt-5.6-sol, effort: high }
-  state: active
-  pr: null
+  state: in_review
+  pr: 204
 
 - id: L3
   title: C3 host-owned Campaign session lifecycle
