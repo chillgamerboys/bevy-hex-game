@@ -8,7 +8,8 @@ compile against one boundary without reaching into one another's crates.
 > **Status:** authoritative illumination, obstruction-aware pooled faction sight,
 > Unknown/Remembered/Observed map knowledge, and the live-map tactical shroud are
 > live.
-> V3 Caves publishes fixed local gameplay lights into that live pipeline.
+> V3 Caves and Crystal Ascent publish fixed local gameplay lights into that live
+> pipeline.
 > Casting anchors, hostile lattice disclosure, and AI observation/traversal now
 > consume that authority. Authored cave crystals and restrained physical lights
 > present those sources without becoming gameplay authority. Unknown-frontier
@@ -78,9 +79,15 @@ volumes. Overlapping sources take the maximum level rather than adding brightnes
 
 V3 Caves places fixed Bright sources with radii from four through seven. They cover
 the entrance, required route, and critical chambers while preserving dark optional
-branches. Authored emissive crystal meshes and restrained physical point lights
-communicate the rule at those exact sites, but they never implement gameplay
-illumination.
+branches. Crystal Ascent treats its chamber and complete stair as one Dark interior:
+each of its eighteen landing crystals publishes a Bright-radius-4/Dim-radius-18 pair,
+and its cathedral heart publishes a Bright-radius-8/Dim-radius-24 pair. Only the
+Bright member owns the shared visual fixture. The apron and non-stair woodland crown
+remain exterior; the stair footprint stays Interior through the upper terminal and
+transitions after leaving the route. Exterior daylight therefore does not leak
+through the entrance or summit aperture under the domain contract. Authored emissive
+crystal meshes and restrained physical point lights communicate these rules at their
+exact sites, but they never implement gameplay illumination.
 
 ## Sight
 
@@ -125,15 +132,24 @@ even inside that level band. Runs topped two or more levels away also retain the
 complete volume; character-height walls and vertically remote roofs or decks therefore
 remain blockers.
 
-Only exact material runs in `TerrainOccupancy` block; liquids follow the same rule as
-every other terrain material. A ray is blocked when its open segment crosses a
-material voxel's open interior for nonzero length. Exact face, edge, corner, and
-endpoint-only tangencies are clear. Units, trees, props, renderer meshes, shadows, and
-opacity do not establish obstruction. This strict-interior policy shares the exact
-rational kernel with casting while leaving casting's conservative closed-contact
-`supercover` unchanged. The raw strict-interior segment query always intersects the
-complete supplied runs and is source/destination symmetric. The low-cover projection
-belongs only to standing-character LOS and is chosen from the observer's support
+Exact material runs in `TerrainOccupancy` block; liquids follow the same rule as every
+other terrain material. Objects opt in separately by publishing compact
+`AuthoredObjectVoxelRuns`, which `hex_units` validates and unions into the always-present
+`AuthoredObjectOccupancy` resource before perception. Missing or malformed publication
+fails setup closed; a valid empty projection means no authored object opted in. Object
+changes invalidate observation in the same update.
+
+A ray is blocked when its open segment crosses an occupied voxel's open interior for
+nonzero length. Exact face, edge, corner, and endpoint-only tangencies are clear.
+Authored-object runs always retain their full supplied volume: terrain's
+observer-relative low-cover omission never applies to them. Generic units, trees,
+props without the opt-in component, renderer meshes, shadows, and opacity do not
+establish obstruction. This strict-interior policy shares the exact rational kernel
+with casting while leaving casting's conservative closed-contact terrain `supercover`
+unchanged; authored objects do not obstruct casting in this contract. The raw
+strict-interior segment query always intersects the complete supplied runs and is
+source/destination symmetric. The low-cover projection belongs only to
+standing-character LOS against terrain and is chosen from the observer's support
 level, so observation from one surface to another is allowed to differ in the reverse
 direction.
 
@@ -345,7 +361,7 @@ below 150 ms, keep the LOS maximum at seven segment tests per observer-target pa
 and prove 10,000 unchanged frames perform no downstream recomputation. Fog checks
 bound overlays to one per shaded surface and one shared mesh/material. Visual review
 captures one seed and azimuth at noon, moonlight, darkness, wall occlusion, and an open
-cave threshold in both map and character cameras. The chosen cap renderer shades top
+cave threshold in Map, Third Person, and First Person. The chosen cap renderer shades top
 surfaces; complete cliff-side and tall-prop darkening remains a future full-scene
 renderer concern.
 
@@ -358,7 +374,8 @@ renderer concern.
 - spatial divination that reveals unknown terrain; Divination's current
   observed-subject, bounded lattice Reveal is live in `hex_combat`, while Scrying
   Eye's proposed readable off-sight live feed remains later work
-- semantic prop, vegetation, and unit sight obstruction
+- semantic obstruction for props that have not opted into authored-object occupancy,
+  plus vegetation and units
 - full-scene fog shading, soft edges, and fades
 - saved-game persistence for remembered terrain
 

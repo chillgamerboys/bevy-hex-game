@@ -6,12 +6,23 @@
 use bevy::{prelude::*, window::WindowPlugin};
 use hex_anim::Transformation;
 use hex_assets::{
-    ArtPalette, CameraSettings, CustomCharacterId, GameAssets, SubstanceFile, SubstanceTable,
+    ArtPalette, CameraSettings, ContentIndex, CustomCharacterId, ElementCatalog, ElementFile,
+    FormationCatalog, GameAssets, LatticeFile, LatticeLibrary, SpellBook, SpellFile, SubstanceFile,
+    SubstanceTable,
 };
-use hex_combat::{CombatSummary, EncounterOutcome, EncounterResolution, UnitCombatSummary};
+use hex_combat::{
+    CombatSummary, EncounterOutcome, EncounterResolution, PersistentEffects, UnitCombatSummary,
+};
 use hex_core::{
-    CameraFocusTarget, GameplayPhase, Headroom, HexCoord, HexSpan, HexTile, PresentationOcclusion,
-    PresentationOcclusionReason, RunBottom, SubstanceId, TerrainEdit, TilePos, Turn, UnitId,
+    CameraFocusTarget, EffectEnd, EffectId, EffectPayload, Faction, GameplayPhase, Headroom,
+    HexCoord, HexSpan, HexTile, PartyFormation, PartyMovementMode, PersistentEffect,
+    PresentationOcclusion, PresentationOcclusionReason, RunBottom, Sextant, SubstanceId,
+    TerrainEdit, TilePos, Turn, UnitId, MAX_HEADROOM,
+};
+use hex_game::campaign_authority::{
+    export_campaign_gameplay_checkpoint, queue_campaign_gameplay_restore,
+    CampaignGameplayCheckpointError, CampaignGameplayRestoreOutcomeV2,
+    CampaignGameplayRestoreResultV2,
 };
 use hex_game::test_support::{
     combat_observation_snapshot, deterministic_fixture_launch_snapshot,
@@ -20,9 +31,10 @@ use hex_game::test_support::{
     DeterministicFixtureLaunchRequest, GameplaySessionOriginSnapshot,
 };
 use hex_gameplay_model::{CampaignSlotId, SandboxCharacter};
+use hex_lattice::LatticeState;
 use hex_map::{MapSettings, PerlinSettings, TerrainSettings};
 use hex_test_support::{enter_gameplay, TestAppBuilder};
-use hex_units::{HexPathingLine, Standing, StandsOn};
+use hex_units::{Archetype, Downed, HexPathingLine, Party, Selected, Standing, StandsOn};
 use hex_world::{CameraMode, PanOrbitCamera};
 
 fn position(q: i32, r: i32, level: i32) -> TilePos {
@@ -657,12 +669,12 @@ fn combat_observation_preserves_canonical_summary_and_zero_unit_identity() {
 }
 
 #[test]
-fn shipping_main_menu_has_four_actions_and_campaign_has_three_slots() {
+fn shipping_main_menu_has_five_actions_and_campaign_has_three_slots() {
     use hex_ui::test_support::UiTaskCase;
 
     assert_eq!(
         UiTaskCase::MainMenu.contract().immediate_controls,
-        ["Campaign", "Sandbox", "Tools", "Settings"]
+        ["Campaign", "Sandbox", "Multiplayer", "Tools", "Settings"]
     );
     let menu = hex_ui::MainMenuView::default();
     assert_eq!(menu.campaign_slots.len(), 3);
@@ -783,4 +795,386 @@ fn gameplay_snapshot_names_hud_actions_as_a_presentation_projection() {
 
     let snapshot = gameplay_state_snapshot(&mut world);
     assert_eq!(snapshot.presented_actions, vec![presented]);
+}
+
+struct CampaignCheckpointContent {
+    elements: ElementCatalog,
+    content: ContentIndex,
+    lattices: LatticeLibrary,
+    formations: FormationCatalog,
+    substances: SubstanceTable,
+}
+
+fn campaign_checkpoint_content() -> Result<CampaignCheckpointContent, String> {
+    let elements_file: ElementFile =
+        ron::from_str(include_str!("../../../assets/config/elements.ron"))
+            .map_err(|error| format!("shipped elements are invalid: {error}"))?;
+    let spells_file: SpellFile = ron::from_str(include_str!("../../../assets/config/spells.ron"))
+        .map_err(|error| format!("shipped spells are invalid: {error}"))?;
+    let lattices_file: LatticeFile =
+        ron::from_str(include_str!("../../../assets/config/lattices.ron"))
+            .map_err(|error| format!("shipped lattices are invalid: {error}"))?;
+    let formations: FormationCatalog =
+        ron::from_str(include_str!("../../../assets/config/formations.ron"))
+            .map_err(|error| format!("shipped formations are invalid: {error}"))?;
+    let substances_file: SubstanceFile =
+        ron::from_str(include_str!("../../../assets/config/substances.ron"))
+            .map_err(|error| format!("shipped substances are invalid: {error}"))?;
+    let palette: ArtPalette = ron::from_str(include_str!("../../../assets/art/palette.ron"))
+        .map_err(|error| format!("shipped palette is invalid: {error}"))?;
+    let elements = ElementCatalog::from_file(&elements_file);
+    let spells = SpellBook::from_file(&spells_file);
+    let substances = SubstanceTable::from_file(&substances_file, &palette)
+        .map_err(|error| format!("shipped substances do not resolve: {error}"))?;
+    let content = ContentIndex::build(&elements, &spells, &substances)
+        .map_err(|errors| format!("shipped spell content does not resolve: {errors:?}"))?;
+    let lattices = LatticeLibrary::build(&lattices_file, &elements, &spells)
+        .map_err(|errors| format!("shipped lattices do not resolve: {errors:?}"))?;
+    Ok(CampaignCheckpointContent {
+        elements,
+        content,
+        lattices,
+        formations,
+        substances,
+    })
+}
+
+fn campaign_checkpoint_app(mutated: bool, selected: UnitId) -> Result<App, String> {
+    let fixture = campaign_checkpoint_content()?;
+    let definition = fixture
+        .lattices
+        .get("raider")
+        .ok_or_else(|| "shipped raider lattice is unavailable".to_owned())?;
+    let mut player_lattice = LatticeState::new(&definition.spec, &definition.stats);
+    let mut hostile_lattice = LatticeState::new(&definition.spec, &definition.stats);
+    if mutated {
+        let first = definition
+            .spec
+            .cells()
+            .next()
+            .map(|(coord, _)| coord)
+            .ok_or_else(|| "shipped raider lattice is empty".to_owned())?;
+        hex_lattice::apply_disables(&mut player_lattice, &[first]);
+        let hostile_cells = definition
+            .spec
+            .cells()
+            .map(|(coord, _)| coord)
+            .collect::<Vec<_>>();
+        hex_lattice::apply_disables(&mut hostile_lattice, &hostile_cells);
+    }
+    let preset = fixture
+        .formations
+        .get("Compact")
+        .ok_or_else(|| "shipped Compact formation is unavailable".to_owned())?;
+    let mut formation = PartyFormation::default();
+    formation.select_preset(preset, &[UnitId(0)]);
+    if mutated {
+        formation.facing = Sextant::E;
+        formation.mode = PartyMovementMode::Solo;
+    }
+
+    let stone = fixture
+        .substances
+        .id("stone")
+        .ok_or_else(|| "shipped stone substance is unavailable".to_owned())?;
+    let mut builder = TestAppBuilder::new();
+    builder
+        .app_mut()
+        .insert_resource(fixture.elements)
+        .insert_resource(fixture.content)
+        .insert_resource(fixture.lattices)
+        .insert_resource(fixture.formations)
+        .insert_resource(fixture.substances)
+        .insert_resource(PersistentEffects::default())
+        .insert_resource(Party {
+            members: vec![UnitId(0)],
+        })
+        .insert_resource(formation)
+        .add_plugins(hex_game::campaign_authority::plugin);
+    let mut app = builder.build();
+
+    for coord in HexCoord::ORIGIN.within_radius(3) {
+        let position = TilePos::new(coord, 0);
+        app.world_mut().spawn((
+            HexTile,
+            coord,
+            position,
+            HexSpan::new(0.0, 1.0),
+            stone,
+            Headroom(MAX_HEADROOM),
+        ));
+    }
+    let player_position = position(-1, 0, 0);
+    let hostile_position = position(1, 0, 0);
+    let mut player = app.world_mut().spawn((
+        UnitId(0),
+        Faction::Player,
+        Archetype("raider".to_owned()),
+        StandsOn(Standing {
+            pos: player_position,
+            span: HexSpan::new(0.0, 1.0),
+        }),
+        Transform::from_translation(player_position.coord.to_world(1.0)),
+        player_lattice,
+        Name::new(if mutated {
+            "Veteran Campaign Hero"
+        } else {
+            "Fresh Campaign Hero"
+        }),
+    ));
+    if selected == UnitId(0) {
+        player.insert(Selected);
+    }
+    let mut hostile = app.world_mut().spawn((
+        UnitId(1),
+        Faction::Hostile,
+        Archetype("raider".to_owned()),
+        StandsOn(Standing {
+            pos: hostile_position,
+            span: HexSpan::new(0.0, 1.0),
+        }),
+        Transform::from_translation(hostile_position.coord.to_world(1.0)),
+        hostile_lattice,
+        Name::new(if mutated {
+            "Scarred Campaign Raider"
+        } else {
+            "Fresh Campaign Raider"
+        }),
+    ));
+    if selected == UnitId(1) {
+        hostile.insert(Selected);
+    }
+    if mutated {
+        hostile.insert(Downed);
+        app.world_mut()
+            .resource_mut::<PersistentEffects>()
+            .replace_authority_checkpoint(
+                5,
+                &[(
+                    EffectId(4),
+                    PersistentEffect {
+                        source: UnitId(1),
+                        target: UnitId(0),
+                        payload: EffectPayload::Burn,
+                        start: 2,
+                        end: EffectEnd::AfterTurns(4),
+                        ticks: 1,
+                    },
+                )],
+            )
+            .map_err(|error| format!("effect fixture is invalid: {error}"))?;
+    }
+    Ok(app)
+}
+
+fn selected_units(app: &mut App) -> Vec<UnitId> {
+    let world = app.world_mut();
+    let mut selected = world.query_filtered::<&UnitId, With<Selected>>();
+    let mut ids = selected.iter(world).copied().collect::<Vec<_>>();
+    ids.sort_unstable();
+    ids
+}
+
+fn campaign_restore_attempt(
+    checkpoint: hex_game::campaign_authority::CampaignGameplayCheckpointV2,
+) -> Result<
+    (
+        CampaignGameplayRestoreOutcomeV2,
+        hex_game::campaign_authority::CampaignGameplayCheckpointV2,
+        hex_game::campaign_authority::CampaignGameplayCheckpointV2,
+    ),
+    String,
+> {
+    let mut app = campaign_checkpoint_app(false, UnitId(0))?;
+    let before = export_campaign_gameplay_checkpoint(app.world_mut())
+        .map_err(|error| format!("fresh gameplay export failed: {error}"))?;
+    queue_campaign_gameplay_restore(app.world_mut(), checkpoint);
+    enter_gameplay(&mut app);
+    let outcome = app
+        .world()
+        .get_resource::<CampaignGameplayRestoreResultV2>()
+        .ok_or_else(|| "gameplay restore produced no typed outcome".to_owned())?
+        .outcome
+        .clone();
+    let after = export_campaign_gameplay_checkpoint(app.world_mut())
+        .map_err(|error| format!("post-refusal gameplay export failed: {error}"))?;
+    Ok((outcome, before, after))
+}
+
+#[test]
+fn campaign_gameplay_checkpoint_round_trips_after_process_teardown() {
+    let mut authority =
+        campaign_checkpoint_app(true, UnitId(1)).expect("authority fixture should build");
+    let checkpoint = export_campaign_gameplay_checkpoint(authority.world_mut())
+        .expect("settled authority gameplay should export");
+    drop(authority);
+
+    let mut restored =
+        campaign_checkpoint_app(false, UnitId(0)).expect("fresh process fixture should build");
+    queue_campaign_gameplay_restore(restored.world_mut(), checkpoint.clone());
+    enter_gameplay(&mut restored);
+
+    assert_eq!(
+        restored
+            .world()
+            .resource::<CampaignGameplayRestoreResultV2>()
+            .outcome,
+        CampaignGameplayRestoreOutcomeV2::Applied {
+            unit_count: 2,
+            effect_count: 1,
+        }
+    );
+    assert_eq!(
+        export_campaign_gameplay_checkpoint(restored.world_mut()),
+        Ok(checkpoint),
+        "actors, lattice damage, downed state, effects, and formation must be exact"
+    );
+    assert_eq!(
+        selected_units(&mut restored),
+        [UnitId(0)],
+        "the fresh process keeps its ordinary local selection"
+    );
+}
+
+#[test]
+fn malformed_campaign_gameplay_restore_is_transactional() {
+    let mut app =
+        campaign_checkpoint_app(false, UnitId(0)).expect("transaction fixture should build");
+    let before = export_campaign_gameplay_checkpoint(app.world_mut())
+        .expect("fresh gameplay state should export");
+    let mut malformed = before.clone();
+    let mut units = malformed.units.clone().into_vec();
+    units
+        .first_mut()
+        .expect("fixture roster is non-empty")
+        .archetype_identity =
+        hex_multiplayer::BoundedText::new("wolf").expect("fixture identity remains bounded");
+    malformed.units =
+        hex_multiplayer::BoundedVec::new(units).expect("unchanged roster length remains bounded");
+    queue_campaign_gameplay_restore(app.world_mut(), malformed);
+
+    enter_gameplay(&mut app);
+
+    assert_eq!(
+        app.world()
+            .resource::<CampaignGameplayRestoreResultV2>()
+            .outcome,
+        CampaignGameplayRestoreOutcomeV2::Refused(
+            CampaignGameplayCheckpointError::ArchetypeMismatch(UnitId(0))
+        )
+    );
+    assert_eq!(
+        export_campaign_gameplay_checkpoint(app.world_mut()),
+        Ok(before),
+        "a refused candidate must not change any actor, effect, or formation state"
+    );
+}
+
+#[test]
+fn campaign_gameplay_preflight_rejects_each_owned_invalidity_before_mutation() {
+    let mut source =
+        campaign_checkpoint_app(true, UnitId(1)).expect("authority fixture should build");
+    let canonical = export_campaign_gameplay_checkpoint(source.world_mut())
+        .expect("authority fixture should export");
+
+    let mut wrong_footing = canonical.clone();
+    let mut units = wrong_footing.units.clone().into_vec();
+    units
+        .first_mut()
+        .expect("fixture roster is non-empty")
+        .position = position(99, 99, 0);
+    wrong_footing.units =
+        hex_multiplayer::BoundedVec::new(units).expect("unchanged roster length remains bounded");
+
+    let mut wrong_downed = canonical.clone();
+    let mut units = wrong_downed.units.clone().into_vec();
+    let player = units.first_mut().expect("fixture roster is non-empty");
+    player.downed = !player.downed;
+    wrong_downed.units =
+        hex_multiplayer::BoundedVec::new(units).expect("unchanged roster length remains bounded");
+
+    let mut dangling_effect = canonical.clone();
+    let mut effects = dangling_effect.effects.effects.clone().into_vec();
+    effects
+        .first_mut()
+        .expect("fixture ledger is non-empty")
+        .effect
+        .target = UnitId(99);
+    dangling_effect.effects.effects =
+        hex_multiplayer::BoundedVec::new(effects).expect("unchanged effect count remains bounded");
+
+    let mut invalid_lifetime = canonical.clone();
+    let mut effects = invalid_lifetime.effects.effects.clone().into_vec();
+    let effect = &mut effects
+        .first_mut()
+        .expect("fixture ledger is non-empty")
+        .effect;
+    effect.end = EffectEnd::AfterTurns(1);
+    effect.ticks = 1;
+    invalid_lifetime.effects.effects =
+        hex_multiplayer::BoundedVec::new(effects).expect("unchanged effect count remains bounded");
+
+    let mut wrong_formation = canonical.clone();
+    wrong_formation.formation.assignments.clear();
+
+    let mut wrong_lattice_presence = canonical.clone();
+    let mut units = wrong_lattice_presence.units.clone().into_vec();
+    units
+        .first_mut()
+        .expect("fixture roster is non-empty")
+        .lattice = None;
+    wrong_lattice_presence.units =
+        hex_multiplayer::BoundedVec::new(units).expect("unchanged roster length remains bounded");
+
+    let mut invalid_lattice = canonical.clone();
+    let mut units = invalid_lattice.units.clone().into_vec();
+    units
+        .first_mut()
+        .expect("fixture roster is non-empty")
+        .lattice = Some(LatticeState::default());
+    invalid_lattice.units =
+        hex_multiplayer::BoundedVec::new(units).expect("unchanged roster length remains bounded");
+
+    let cases = [
+        (
+            wrong_footing,
+            CampaignGameplayCheckpointError::InvalidFooting(UnitId(0)),
+        ),
+        (
+            wrong_downed,
+            CampaignGameplayCheckpointError::InvalidDownedState(UnitId(0)),
+        ),
+        (
+            dangling_effect,
+            CampaignGameplayCheckpointError::DanglingEffectUnit(EffectId(4)),
+        ),
+        (
+            invalid_lifetime,
+            CampaignGameplayCheckpointError::InvalidEffectLifetime(EffectId(4)),
+        ),
+        (
+            wrong_formation,
+            CampaignGameplayCheckpointError::FormationMembership,
+        ),
+        (
+            wrong_lattice_presence,
+            CampaignGameplayCheckpointError::LatticePresenceMismatch(UnitId(0)),
+        ),
+        (
+            invalid_lattice,
+            CampaignGameplayCheckpointError::InvalidLattice(
+                UnitId(0),
+                hex_lattice::LatticeStateError::ManaShape,
+            ),
+        ),
+    ];
+    for (candidate, expected) in cases {
+        let (outcome, before, after) =
+            campaign_restore_attempt(candidate).expect("refusal fixture should run");
+        assert_eq!(outcome, CampaignGameplayRestoreOutcomeV2::Refused(expected));
+        assert_eq!(
+            after, before,
+            "every owned refusal must leave actors, effects, and formation unchanged"
+        );
+    }
 }

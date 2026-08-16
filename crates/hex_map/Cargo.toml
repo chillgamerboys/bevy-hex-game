@@ -18,6 +18,7 @@ description = "Voxel storage, terrain generation, tile spawning, and map setting
 bevy = { workspace = true }
 hex_assets = { workspace = true }
 hex_core = { workspace = true }
+hex_multiplayer = { workspace = true }
 rand = { workspace = true }
 serde = { version = "1.0.229", features = ["derive"] }
 xxhash-rust = { workspace = true }

@@ -1,0 +1,30 @@
+// The standalone Crystal Ascent landmark: a dark 144-level cathedral stair around
+// an open crystal shaft, emerging into a woodland clearing.
+//
+// The recipe is intentionally a Single radius-40 V3 patch. Its stable terminals make
+// it ready for a future authored-world composer without making Macro placement part of
+// this showcase.
+(
+    grid_radius: 40,
+    level_height: 0.4,
+    terrain: Procedural((
+        generator_version: 3,
+        layout: Single((
+            environment: TemperateGrassland,
+            recipe: CrystalAscent((
+                base_level: 6,
+                rise_levels: 144,
+            )),
+            overlays: [],
+            mask: WholeWorld,
+            edges: (
+                east: WorldBoundary,
+                south_east: WorldBoundary,
+                south_west: WorldBoundary,
+                west: WorldBoundary,
+                north_west: WorldBoundary,
+                north_east: WorldBoundary,
+            ),
+        )),
+    )),
+)

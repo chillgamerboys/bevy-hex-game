@@ -138,10 +138,13 @@ impl TerrainOccupancy {
     /// Consumers performing exact segment tests can intersect a whole run directly
     /// instead of expanding every occupied voxel. Missing columns yield no ranges.
     pub fn runs_in_column(&self, coord: HexCoord) -> impl Iterator<Item = (Level, Level)> + '_ {
-        self.columns
-            .get(&coord)
-            .into_iter()
-            .flat_map(|ranges| ranges.iter().copied())
+        self.column_runs(coord).iter().copied()
+    }
+
+    /// Compact inclusive material runs in one exact column, ordered bottom first.
+    #[must_use]
+    pub fn column_runs(&self, coord: HexCoord) -> &[(Level, Level)] {
+        self.columns.get(&coord).map_or(&[], Vec::as_slice)
     }
 
     /// Whether no material run has been published.

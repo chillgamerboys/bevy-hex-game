@@ -4,15 +4,17 @@ use bevy::prelude::*;
 
 use crate::{
     ActivityLogView, CastingPanelView, GameplayChromeView, GameplayHudView, GameplayLatticesView,
-    InitiativeView, OutcomeView, PartyView,
+    InitiativeView, MultiplayerView, OutcomeView, PartyView,
 };
 
 #[cfg(any(feature = "visual-review", feature = "test-support"))]
 use crate::{
     ActionAffordance, ActionAvailability, ActionPriority, CastingAimView, CastingPanelContentView,
     CastingSpellView, CellInteraction, DecisionChoiceView, GameplayAction, InitiativeEntryView,
-    InitiativeSide, LatticeCellView, OutcomeAction, OutcomeActionView, OwnLatticeView,
-    PartyMemberView, SandboxLatticeCellKind, SandboxLatticeCellView, TargetLatticeStateView,
+    InitiativeSide, LatticeCellView, MultiplayerAssignmentView, MultiplayerCampaignHostView,
+    MultiplayerCampaignSaveStatusView, MultiplayerLanSessionView, MultiplayerSeatConnectionView,
+    MultiplayerSeatView, OutcomeAction, OutcomeActionView, OwnLatticeView, PartyMemberView,
+    SandboxLatticeCellKind, SandboxLatticeCellView, SensitiveText, TargetLatticeStateView,
     TargetLatticeView,
 };
 
@@ -26,6 +28,7 @@ pub(crate) struct UiReviewPresentation {
     pub(crate) casting: Option<CastingPanelView>,
     pub(crate) lattices: Option<GameplayLatticesView>,
     pub(crate) outcome: Option<OutcomeView>,
+    pub(crate) multiplayer: Option<MultiplayerView>,
 }
 
 /// Narrow presentation overrides used only by authored review fixtures.
@@ -255,6 +258,102 @@ pub fn apply_ui_review_fixture(commands: &mut Commands, name: &str) -> Result<()
             });
             review.lattices = Some(populated_own_lattice());
         }
+        "multiplayer-lobby" => {
+            review.multiplayer = Some(multiplayer_lobby_fixture(false));
+        }
+        "multiplayer-lan-browser" => {
+            review.multiplayer = Some(MultiplayerView {
+                route: hex_gameplay_model::MultiplayerRoute::BrowseLan,
+                lan_searching: true,
+                lan_sessions: vec![
+                    MultiplayerLanSessionView {
+                        service_id: "sandbox-a._hexgame._udp.local.".to_owned(),
+                        label: "Sandbox · A1B2C3".to_owned(),
+                        endpoint: "192.168.1.42:7777".to_owned(),
+                        claimed_seats: 1,
+                        seat_capacity: 6,
+                        compatible: true,
+                    },
+                    MultiplayerLanSessionView {
+                        service_id: "sandbox-b._hexgame._udp.local.".to_owned(),
+                        label: "Sandbox · D4E5F6".to_owned(),
+                        endpoint: "192.168.1.77:7777".to_owned(),
+                        claimed_seats: 2,
+                        seat_capacity: 6,
+                        compatible: false,
+                    },
+                ],
+                ..default()
+            });
+        }
+        "multiplayer-lan-host" => {
+            let mut view = multiplayer_lobby_fixture(false);
+            view.role = Some(hex_gameplay_model::MultiplayerRole::Host);
+            view.local_seat = Some(hex_core::PlayerSeat::HOST);
+            view.lan_hosting = true;
+            view.lan_advertising = true;
+            for seat in &mut view.seats {
+                seat.local = seat.seat == hex_core::PlayerSeat::HOST;
+            }
+            review.multiplayer = Some(view);
+        }
+        "multiplayer-campaign" => {
+            review.multiplayer = Some(multiplayer_campaign_fixture(false));
+        }
+        "multiplayer-campaign-refusal" => {
+            review.multiplayer = Some(multiplayer_campaign_fixture(true));
+        }
+        "multiplayer-campaign-lobby" => {
+            let mut view = multiplayer_lobby_fixture(false);
+            view.role = Some(hex_gameplay_model::MultiplayerRole::Host);
+            view.local_seat = Some(hex_core::PlayerSeat::HOST);
+            view.campaign_session = true;
+            view.launch_summary =
+                Some("Campaign slot 2 · Party Trial · 6 party members · fresh session".to_owned());
+            for seat in &mut view.seats {
+                seat.local = seat.seat == hex_core::PlayerSeat::HOST;
+            }
+            review.multiplayer = Some(view);
+        }
+        "multiplayer-campaign-save" => {
+            let mut view = multiplayer_lobby_fixture(false);
+            view.role = Some(hex_gameplay_model::MultiplayerRole::Client);
+            view.campaign_session = true;
+            view.campaign_save_status = Some(MultiplayerCampaignSaveStatusView::Saving);
+            review.multiplayer = Some(view);
+        }
+        "multiplayer-mismatch" => {
+            let view = MultiplayerView {
+                route: hex_gameplay_model::MultiplayerRoute::Ended,
+                notice: Some(
+                    "Build mismatch: host and client must use the exact same shipped build."
+                        .to_owned(),
+                ),
+                ..default()
+            };
+            review.multiplayer = Some(view);
+        }
+        "multiplayer-reconnect" => {
+            review.multiplayer = Some(multiplayer_lobby_fixture(true));
+        }
+        "multiplayer-host" => {
+            let mut view = multiplayer_lobby_fixture(false);
+            view.role = Some(hex_gameplay_model::MultiplayerRole::Host);
+            view.local_seat = Some(hex_core::PlayerSeat::HOST);
+            view.local_menu_open = false;
+            for seat in &mut view.seats {
+                seat.local = seat.seat == hex_core::PlayerSeat::HOST;
+            }
+            view.share_code = Some(SensitiveText::new("HEX1.REDACTED_REVIEW_CODE"));
+            review.multiplayer = Some(view);
+        }
+        "multiplayer-client-menu" => {
+            let mut view = multiplayer_lobby_fixture(false);
+            view.role = Some(hex_gameplay_model::MultiplayerRole::Client);
+            view.local_seat = Some(hex_core::PlayerSeat(1));
+            view.local_menu_open = true;
+            review.multiplayer = Some(view);
+        }
         "sandbox-outcome" => {
             review.chrome = Some(GameplayChromeOverride::encounter_complete());
             review.outcome = Some(OutcomeView {
@@ -281,6 +380,135 @@ pub fn apply_ui_review_fixture(commands: &mut Commands, name: &str) -> Result<()
     }
     commands.insert_resource(review);
     Ok(())
+}
+
+#[cfg(any(feature = "visual-review", feature = "test-support"))]
+fn multiplayer_campaign_fixture(refused: bool) -> MultiplayerView {
+    use crate::{CampaignPartyMemberView, CampaignSlotStatusView, CampaignSlotView};
+    use hex_gameplay_model::CampaignSlotId;
+
+    MultiplayerView {
+        route: hex_gameplay_model::MultiplayerRoute::HostCampaign,
+        campaign_slots: vec![
+            CampaignSlotView {
+                slot: CampaignSlotId::One,
+                status: CampaignSlotStatusView::Empty,
+            },
+            CampaignSlotView {
+                slot: CampaignSlotId::Two,
+                status: CampaignSlotStatusView::Available {
+                    party: vec![
+                        CampaignPartyMemberView {
+                            name: "Hedge Mage".to_owned(),
+                            lattice: "Fire 4 · Air 3 · Water 2".to_owned(),
+                            cells: Vec::new(),
+                        },
+                        CampaignPartyMemberView {
+                            name: "Stone Warden".to_owned(),
+                            lattice: "Earth 5 · Life 3".to_owned(),
+                            cells: Vec::new(),
+                        },
+                    ],
+                    active_time: "2h 14m".to_owned(),
+                },
+            },
+            CampaignSlotView {
+                slot: CampaignSlotId::Three,
+                status: CampaignSlotStatusView::Invalid {
+                    reason: "This save belongs to a different shipped content revision.".to_owned(),
+                },
+            },
+        ],
+        campaign_host: MultiplayerCampaignHostView {
+            slot: refused.then_some(CampaignSlotId::Two),
+            preparing: false,
+            refusal: refused.then(|| {
+                "The Campaign checkpoint belongs to incompatible shipped content.".to_owned()
+            }),
+        },
+        ..default()
+    }
+}
+
+#[cfg(any(feature = "visual-review", feature = "test-support"))]
+fn multiplayer_lobby_fixture(reconnecting: bool) -> MultiplayerView {
+    let assignment = |unit, label: &str| MultiplayerAssignmentView {
+        unit: hex_core::UnitId(unit),
+        label: label.to_owned(),
+    };
+    let local_seat = if reconnecting {
+        hex_core::PlayerSeat(4)
+    } else {
+        hex_core::PlayerSeat(1)
+    };
+    MultiplayerView {
+        route: hex_gameplay_model::MultiplayerRoute::Lobby,
+        role: Some(hex_gameplay_model::MultiplayerRole::Client),
+        local_seat: Some(local_seat),
+        seats: vec![
+            MultiplayerSeatView {
+                seat: hex_core::PlayerSeat::HOST,
+                connection: MultiplayerSeatConnectionView::Connected,
+                player_label: Some("Host · Aria".to_owned()),
+                assignments: vec![assignment(0, "Hedge Mage"), assignment(5, "Stone Warden")],
+                ready: true,
+                local: local_seat == hex_core::PlayerSeat::HOST,
+            },
+            MultiplayerSeatView {
+                seat: hex_core::PlayerSeat(1),
+                connection: MultiplayerSeatConnectionView::Connected,
+                player_label: Some("Milo".to_owned()),
+                assignments: vec![assignment(1, "Ember Knight")],
+                ready: true,
+                local: local_seat == hex_core::PlayerSeat(1),
+            },
+            MultiplayerSeatView {
+                seat: hex_core::PlayerSeat(2),
+                connection: MultiplayerSeatConnectionView::Connected,
+                player_label: Some("Nia".to_owned()),
+                assignments: vec![assignment(2, "Tidecaller")],
+                ready: true,
+                local: local_seat == hex_core::PlayerSeat(2),
+            },
+            MultiplayerSeatView {
+                seat: hex_core::PlayerSeat(3),
+                connection: if reconnecting {
+                    MultiplayerSeatConnectionView::Delegated
+                } else {
+                    MultiplayerSeatConnectionView::Reserved { seconds: 17 }
+                },
+                player_label: Some("Oren".to_owned()),
+                assignments: vec![assignment(3, "Gale Adept")],
+                ready: false,
+                local: local_seat == hex_core::PlayerSeat(3),
+            },
+            MultiplayerSeatView {
+                seat: hex_core::PlayerSeat(4),
+                connection: if reconnecting {
+                    MultiplayerSeatConnectionView::ReclaimPending
+                } else {
+                    MultiplayerSeatConnectionView::Delegated
+                },
+                player_label: Some("Pia".to_owned()),
+                assignments: vec![assignment(4, "Bloom Sage")],
+                ready: false,
+                local: local_seat == hex_core::PlayerSeat(4),
+            },
+            MultiplayerSeatView::vacant(hex_core::PlayerSeat(5)),
+        ],
+        launch_summary: Some("Shipped Sandbox · Party Trial · seed 77".to_owned()),
+        notice: reconnecting.then(|| {
+            "Seat 5 reconnected. Control returns after the current command, decision, and movement finish."
+                .to_owned()
+        }),
+        can_launch: false,
+        launch_blocker: Some(if reconnecting {
+            "Seat 5 is waiting for a safe authority boundary.".to_owned()
+        } else {
+            "Seat 4 is disconnected; wait for reconnection or delegation.".to_owned()
+        }),
+        ..default()
+    }
 }
 
 #[cfg(any(feature = "visual-review", feature = "test-support"))]

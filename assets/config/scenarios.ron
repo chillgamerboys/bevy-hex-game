@@ -144,6 +144,14 @@
             encounter: "config/encounters/anchored-skirmish.ron",
         ),
         (
+            name: "Crystal Ascent",
+            category: Map,
+            blurb: "A monumental crystal-lit cathedral stair climbs 144 levels from a dark open chamber into a woodland clearing.",
+            world: "config/worlds/procedural-crystal-ascent.ron",
+            generation_seed: Some(1592598566),
+            encounter: "config/encounters/crystal-ascent-showcase.ron",
+        ),
+        (
             name: "Seven Regions",
             category: Map,
             blurb: "One connected V3 world joining hills, mountains, waterfall, forest, fort, caves, and sky islands.",

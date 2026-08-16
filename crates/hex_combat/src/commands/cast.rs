@@ -21,7 +21,7 @@
 
 use bevy::prelude::*;
 
-use hex_assets::{CastingAxis, Effect, Spell, TargetShape};
+use hex_assets::{CastingAxis, Effect, Spell, TargetShape, TargetingReach};
 use hex_core::{
     KnowledgeExpiry, KnowledgeState, LatticeCoord, PendingDecision, TerrainEdit, TerrainImpact,
     TilePos, UnitId,
@@ -29,13 +29,15 @@ use hex_core::{
 use hex_lattice::{apply_cast, castable, CastBlocked, CellKind, LatticeSpec, LatticeState};
 use hex_units::trajectories::clip_effect_volume;
 use hex_units::{
-    resolve_creation_volume, targeting, trajectory_destination, trajectory_is_clear,
-    validate_creation_volume, volumes, CreationBody,
+    in_touch_reach, resolve_creation_volume, targeting, trajectory_destination,
+    trajectory_is_clear, validate_creation_volume, volumes, CreationBody, Footing,
 };
 
-use crate::{CastBlockReason, CombatData, CombatEvent, CommandRefusal, UnitData};
+use crate::{
+    CastBlockReason, CombatData, CombatEvent, CommandRefusal, RestorationTargetRefusal, UnitData,
+};
 
-use super::{presentation, ActorQuery, Verb};
+use super::{presentation, ActorQuery, TileQuery, Verb};
 
 /// Applies a cast, or returns the reason it was refused.
 #[expect(
@@ -50,6 +52,7 @@ pub(super) fn apply(
     terrain_edits: &mut MessageWriter<TerrainEdit>,
     terrain_impacts: &mut MessageWriter<TerrainImpact>,
     commands: &mut Commands,
+    tiles: &TileQuery,
     actors: &mut ActorQuery,
     lattices: &mut LatticeQuery,
     unit: UnitId,
@@ -132,8 +135,8 @@ pub(super) fn apply(
         });
     }
 
-    let (standing, busy, caster_faction) = {
-        let Ok((standing, _, turn, busy, _, faction, _)) = actors.get(entity) else {
+    let (standing, body, busy, caster_faction) = {
+        let Ok((standing, body, turn, busy, _, faction, _)) = actors.get(entity) else {
             return Err(CommandRefusal::MissingUnitData {
                 unit,
                 data: UnitData::EntityRecord,
@@ -161,12 +164,17 @@ pub(super) fn apply(
                 data: UnitData::Faction,
             });
         };
-        (standing.0, busy, faction)
+        (standing.0, body.copied(), busy, faction)
     };
     if busy || ctx.committed.contains(&entity) {
         return Err(CommandRefusal::Busy);
     }
 
+    let Some(spatial) = ctx.spatial else {
+        return Err(CommandRefusal::MissingCombatData {
+            data: CombatData::SpatialKnowledge,
+        });
+    };
     // --- rung 3: targeting -------------------------------------------------
 
     // Directed shapes need a facing, and a directed cast without one is a malformed
@@ -176,21 +184,72 @@ pub(super) fn apply(
             spell: spell_name.to_owned(),
         });
     }
-    // `SelfCast` is the one shape whose range is not a question.
-    if !matches!(spec.targeting.shape, TargetShape::SelfCast) {
-        let levels = ctx.combat.map_or(DEFAULT_LEVELS_PER_BONUS, |settings| {
-            settings.levels_per_bonus_range
-        });
-        if !targeting::in_reach(
-            standing.pos,
-            target,
-            u32::from(spec.targeting.range),
-            levels,
-        ) {
+    // `SelfCast` is bound to the caster's exact authoritative anchor. The command still
+    // carries a target, so reject a stale or malicious off-self anchor before observation
+    // and payment rather than silently retargeting it during volume resolution. Touch is
+    // a distinct occupied-unit rule, never range one: it receives no high-ground bonus
+    // and never authorizes an empty adjacent surface.
+    if matches!(spec.targeting.shape, TargetShape::SelfCast) {
+        if target != standing.pos {
             return Err(CommandRefusal::TargetOutOfRange {
                 spell: spell_name.to_owned(),
                 target,
             });
+        }
+    } else {
+        match spec.targeting.reach {
+            TargetingReach::Ranged => {
+                let levels = ctx.combat.map_or(DEFAULT_LEVELS_PER_BONUS, |settings| {
+                    settings.levels_per_bonus_range
+                });
+                if !targeting::in_reach(
+                    standing.pos,
+                    target,
+                    u32::from(spec.targeting.range),
+                    levels,
+                ) {
+                    return Err(CommandRefusal::TargetOutOfRange {
+                        spell: spell_name.to_owned(),
+                        target,
+                    });
+                }
+            }
+            TargetingReach::Touch => {}
+        }
+    }
+
+    // Observation is the sole authority to ask what occupies an anchor. Keep this
+    // shared gate before every occupancy lookup so ranged restoration and Touch have
+    // identical no-oracle ordering.
+    if spatial.faction(caster_faction).state(target) != KnowledgeState::Observed {
+        return Err(CommandRefusal::TargetUnobserved {
+            spell: spell_name.to_owned(),
+            target,
+        });
+    }
+    let target_unit = unit_standing_on(ctx, actors, target);
+    if !matches!(spec.targeting.shape, TargetShape::SelfCast)
+        && matches!(spec.targeting.reach, TargetingReach::Touch)
+    {
+        let Some((target_id, _, _)) = target_unit else {
+            return Err(CommandRefusal::TargetUnoccupied { target });
+        };
+        if target_id != unit {
+            let Some(body) = body else {
+                return Err(CommandRefusal::MissingUnitData {
+                    unit,
+                    data: UnitData::Body,
+                });
+            };
+            let Some(table) = ctx.table else {
+                return Err(CommandRefusal::MissingCombatData {
+                    data: CombatData::SubstanceTable,
+                });
+            };
+            let footing = Footing::from_tiles(tiles.iter(), table, body, ctx.blockers);
+            if !in_touch_reach(&footing, standing.pos, target) {
+                return Err(CommandRefusal::TargetOutOfTouchReach { target: target_id });
+            }
         }
     }
     // Resolved but not yet consumed: rungs 4 and 5 are what read a volume, and both
@@ -204,17 +263,6 @@ pub(super) fn apply(
         });
     };
 
-    let Some(spatial) = ctx.spatial else {
-        return Err(CommandRefusal::MissingCombatData {
-            data: CombatData::SpatialKnowledge,
-        });
-    };
-    if spatial.faction(caster_faction).state(target) != KnowledgeState::Observed {
-        return Err(CommandRefusal::TargetUnobserved {
-            spell: spell_name.to_owned(),
-            target,
-        });
-    }
     let effect_volume = if !matches!(spec.targeting.trajectory, hex_assets::Trajectory::None) {
         let Some(terrain) = ctx.terrain else {
             return Err(CommandRefusal::MissingCombatData {
@@ -240,7 +288,57 @@ pub(super) fn apply(
     } else {
         raw_volume
     };
-    let target_unit = unit_standing_on(ctx, actors, target);
+
+    // Restoration is the exception to the usual "an empty cast still costs" rule.
+    // It opens an exact-cell decision, so every fact needed for that decision is
+    // validated before lattice payment or the action flag changes. Hostile truth is
+    // inspected only after the faction's current knowledge proves complete.
+    if spec
+        .effects
+        .iter()
+        .any(|effect| matches!(effect, Effect::RestoreHexes { .. }))
+    {
+        let Some((target_id, target_entity, _)) = target_unit else {
+            return Err(CommandRefusal::TargetUnoccupied { target });
+        };
+        let target_faction = actors
+            .get(target_entity)
+            .ok()
+            .and_then(|(_, _, _, _, _, faction, _)| faction.copied())
+            .ok_or(CommandRefusal::MissingUnitData {
+                unit: target_id,
+                data: UnitData::Faction,
+            })?;
+        let hostile = caster_faction.is_hostile_to(target_faction);
+        let hostile_knowledge = hostile
+            .then(|| ctx.knowledge.view(caster_faction, target_id))
+            .flatten();
+        if hostile && !hostile_knowledge.is_some_and(|known| known.is_complete()) {
+            return Err(CommandRefusal::RestorationTarget {
+                reason: RestorationTargetRefusal::IncompleteHostileKnowledge { target: target_id },
+            });
+        }
+        let target_lattice = lattices.get(target_entity).ok();
+        let Some((target_spec, target_state)) = target_lattice else {
+            return Err(CommandRefusal::RestorationTarget {
+                reason: RestorationTargetRefusal::MissingLattice { target: target_id },
+            });
+        };
+        if hostile && !hostile_knowledge.is_some_and(|known| known.is_complete_for(target_spec)) {
+            return Err(CommandRefusal::RestorationTarget {
+                reason: RestorationTargetRefusal::IncompleteHostileKnowledge { target: target_id },
+            });
+        }
+        if !target_spec
+            .cells()
+            .any(|(coord, _)| target_state.is_disabled(coord))
+        {
+            return Err(CommandRefusal::RestorationTarget {
+                reason: RestorationTargetRefusal::FullyRestored { target: target_id },
+            });
+        }
+    }
+
     if let Some((target, _, true)) = target_unit {
         if spec.effects.iter().any(effect_damages_unit) {
             return Err(CommandRefusal::TargetDowned { target });
@@ -898,7 +996,8 @@ pub(super) type LatticeQuery<'w, 's> =
 #[cfg(test)]
 mod tests {
     use hex_assets::{
-        CastingAxis, Effect, GemRequirement, ManaAxis, Spell, TargetShape, TargetingSpec,
+        CastingAxis, Effect, GemRequirement, ManaAxis, Spell, TargetShape, TargetingReach,
+        TargetingSpec,
     };
     use hex_core::{LatticeCoord, SpellId};
     use hex_lattice::{apply_disables, CellKind, LatticeSpec, LatticeState, LatticeStats};
@@ -917,6 +1016,7 @@ mod tests {
             co_castable: false,
             targeting: TargetingSpec {
                 range: 2,
+                reach: TargetingReach::Ranged,
                 shape,
                 trajectory: hex_assets::Trajectory::Direct,
             },

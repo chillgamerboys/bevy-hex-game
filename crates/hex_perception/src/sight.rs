@@ -8,7 +8,9 @@ use bevy_reflect::Reflect;
 use hex_core::{
     upper_dome_contains, ExactGridPoint, ExteriorIllumination, SightProfile, TilePos, UnitId,
 };
-use hex_units::{terrain_sight_is_clear, Faction, TerrainOccupancy};
+use hex_units::{
+    terrain_and_authored_object_sight_is_clear, AuthoredObjectOccupancy, Faction, TerrainOccupancy,
+};
 
 use crate::{
     resolve_illumination_at, FactionMapKnowledge, LightSourceSnapshot, ObservedUnit,
@@ -155,13 +157,41 @@ pub fn can_observe(
     profile: SightProfile,
     terrain: &TerrainOccupancy,
 ) -> bool {
+    can_observe_with_authored_objects(
+        observer,
+        target,
+        illumination,
+        profile,
+        terrain,
+        &AuthoredObjectOccupancy::default(),
+    )
+}
+
+/// Whether one exact current surface observes another through all authoritative
+/// terrain and opt-in authored-object occupancy.
+#[must_use]
+pub fn can_observe_with_authored_objects(
+    observer: TilePos,
+    target: TilePos,
+    illumination: &ResolvedIllumination,
+    profile: SightProfile,
+    terrain: &TerrainOccupancy,
+    authored_objects: &AuthoredObjectOccupancy,
+) -> bool {
     if illumination.get(observer).is_none() {
         return false;
     }
     let Some(target_light) = illumination.get(target) else {
         return false;
     };
-    can_observe_resolved(observer, target, target_light, profile, terrain)
+    can_observe_resolved(
+        observer,
+        target,
+        target_light,
+        profile,
+        terrain,
+        authored_objects,
+    )
 }
 
 /// Resolves pooled observations for both factions.
@@ -182,6 +212,29 @@ pub fn resolve_observations(
     profile: SightProfile,
     terrain: &TerrainOccupancy,
 ) -> Result<FactionObservations, PerceptionError> {
+    resolve_observations_with_authored_objects(
+        units,
+        illumination,
+        prior_knowledge,
+        exterior,
+        lights,
+        profile,
+        terrain,
+        &AuthoredObjectOccupancy::default(),
+    )
+}
+
+/// Resolves pooled observations while enforcing opt-in authored-object obstruction.
+pub fn resolve_observations_with_authored_objects(
+    units: impl IntoIterator<Item = ObservedUnit>,
+    illumination: &ResolvedIllumination,
+    prior_knowledge: &FactionMapKnowledge,
+    exterior: ExteriorIllumination,
+    lights: &[LightSourceSnapshot],
+    profile: SightProfile,
+    terrain: &TerrainOccupancy,
+    authored_objects: &AuthoredObjectOccupancy,
+) -> Result<FactionObservations, PerceptionError> {
     let units = index_units(units)?;
     for unit in units.values() {
         if illumination.get(unit.pos).is_none() {
@@ -200,6 +253,7 @@ pub fn resolve_observations(
         lights,
         profile,
         terrain,
+        authored_objects,
     )?;
     let hostile = resolve_faction(
         Faction::Hostile,
@@ -210,6 +264,7 @@ pub fn resolve_observations(
         lights,
         profile,
         terrain,
+        authored_objects,
     )?;
     Ok(FactionObservations { player, hostile })
 }
@@ -237,6 +292,7 @@ fn resolve_faction(
     lights: &[LightSourceSnapshot],
     profile: SightProfile,
     terrain: &TerrainOccupancy,
+    authored_objects: &AuthoredObjectOccupancy,
 ) -> Result<FactionObservation, PerceptionError> {
     let mut observers = Vec::new();
     for unit in units
@@ -265,10 +321,16 @@ fn resolve_faction(
 
     let mut observation = FactionObservation::new();
     for (target, target_light) in targets {
-        if observers
-            .iter()
-            .any(|&observer| can_observe_resolved(observer, target, target_light, profile, terrain))
-        {
+        if observers.iter().any(|&observer| {
+            can_observe_resolved(
+                observer,
+                target,
+                target_light,
+                profile,
+                terrain,
+                authored_objects,
+            )
+        }) {
             observation.insert_surface(target);
         }
     }
@@ -287,6 +349,7 @@ fn can_observe_resolved(
     target_light: ResolvedLight,
     profile: SightProfile,
     terrain: &TerrainOccupancy,
+    authored_objects: &AuthoredObjectOccupancy,
 ) -> bool {
     let band = profile.band(target_light.level);
     if !upper_dome_contains(
@@ -296,14 +359,15 @@ fn can_observe_resolved(
     ) {
         return false;
     }
-    terrain_sight_is_clear(observer, target, terrain)
+    terrain_and_authored_object_sight_is_clear(observer, target, terrain, authored_objects)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use hex_core::{
-        GameplayLight, HexCoord, IlluminationLevel, InteriorRegionId, LightDomain, SightBand,
+        AuthoredObjectVoxelRun, GameplayLight, HexCoord, IlluminationLevel, InteriorRegionId,
+        LightDomain, SightBand,
     };
 
     use crate::{
@@ -678,6 +742,46 @@ mod tests {
         let player_behind_full_wall = behind_full_wall.faction(Faction::Player);
         assert!(!player_behind_full_wall.observes(target));
         assert_eq!(player_behind_full_wall.unit(hostile.id), None);
+    }
+
+    #[test]
+    fn opted_in_object_volume_blocks_without_terrain_low_cover_exemption() {
+        let observer = pos(0, 0, 0);
+        let target = pos(4, 0, 0);
+        let illumination = ResolvedIllumination::try_resolve(
+            [
+                (observer, LightDomain::Exterior),
+                (target, LightDomain::Exterior),
+            ],
+            ExteriorIllumination::new(IlluminationLevel::Bright),
+            &[],
+        )
+        .expect("illumination");
+        let terrain = TerrainOccupancy::default();
+        // A one-voxel-deep lip legitimately leaves the paired body-corner rays
+        // tangent to its top face. Make the low object thick enough that those
+        // descending rays cross its open interior farther along the segment.
+        let object = AuthoredObjectOccupancy::from_runs(
+            (1..=3)
+                .flat_map(|q| (-2..=2).map(move |r| AuthoredObjectVoxelRun::new(pos(q, r, 1), 0))),
+        )
+        .expect("object occupancy");
+
+        assert!(can_observe(
+            observer,
+            target,
+            &illumination,
+            profile(6, 6, 1),
+            &terrain,
+        ));
+        assert!(!can_observe_with_authored_objects(
+            observer,
+            target,
+            &illumination,
+            profile(6, 6, 1),
+            &terrain,
+            &object,
+        ));
     }
 
     #[test]

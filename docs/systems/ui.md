@@ -75,15 +75,16 @@ handles, or invisible hit targets.
 
 The canonical default component bindings are `P`, `I`, `L`, and `B` for Party,
 Initiative, Activity, and Action Bar. Character and Formation default to `V` and `F`,
-and Camera remains separate on `C`; all are configurable. On Standard/Wide,
+and Cycle Camera View remains separate on `C`; all are configurable. On Standard/Wide,
 component activation toggles its saved preference. While the HUD is master-hidden,
 it summons only the requested temporary surface and leaves everything else hidden.
 Main View activation changes no selection, turn, caster, or command authority.
 
 Activating a Party or disclosed Initiative entry once inspects and centers that unit.
 Activating the same entry again opens its Character Main View. Map camera centering is
-one-shot; Character camera mode follows the authorized inspected subject. Unobserved
-hostiles cannot be activated and publish neither a camera subject nor a location.
+one-shot; Third Person and First Person follow the authorized inspected subject.
+Unobserved hostiles cannot be activated and publish neither a camera subject nor a
+location.
 
 Acting/selected identity, retained target identity, movement range, pathing, and aim
 remain world-space feedback rather than another HUD panel. The continuous foot ring
@@ -315,6 +316,7 @@ cargo run -p hex_game --features visual-walk
 | Sandbox Map Browser / Detail | choose and confirm one map | Back / Use Map | pending seed, Regenerate only for generated maps |
 | Sandbox Party / Enemies | edit an ordered six-slot side | Back | shared roster component and Map-ready diagnostics |
 | Character Picker | preview then commit one character | Back / Use Character | templates, saved characters, Creator entry |
+| Multiplayer | discover/configure a host, assign seats, and launch | Back or the role-authorized lobby action | LAN browser compatibility, Direct code entry, six stable seats, readiness, and typed connection state |
 | Tools | choose an authoring tool | Back | Character Creator, Spell Creator, disabled Map Creator |
 | Settings | change general preferences or keyboard bindings | Back | category tabs, capture/conflict state, persistence notice |
 | Character / Spell Creator | finish the current authoring step | Library / Save / Test where applicable | palettes, catalogs, validation, history, typed origin |

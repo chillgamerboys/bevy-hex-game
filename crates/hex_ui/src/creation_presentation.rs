@@ -7,7 +7,7 @@
 use hex_assets::{
     creator_character_issues, creator_spell_issues, CastingAxis, CreationCellKind,
     CreationLibraryFile, Effect, ElementCatalog, SavedCharacter, SavedSpell, Spell, SpellBook,
-    SpellReference, TargetShape,
+    SpellReference, TargetShape, TargetingReach,
 };
 
 /// Compact, factual description of one spell.
@@ -69,15 +69,16 @@ impl SpellBuildSummary {
                 format!("Enchantment · defense {defense}")
             }
         };
-        let targeting = format!(
-            "{} · range {}",
-            match spell.targeting.shape {
-                TargetShape::SelfCast => "Self",
-                TargetShape::Single => "Single target",
-                _ => "Unsupported target",
-            },
-            spell.targeting.range
-        );
+        let subject = match spell.targeting.shape {
+            TargetShape::SelfCast => "Self",
+            TargetShape::Single => "Single target",
+            _ => "Unsupported target",
+        };
+        let reach = match spell.targeting.reach {
+            TargetingReach::Ranged => format!("range {}", spell.targeting.range),
+            TargetingReach::Touch => "touch".to_owned(),
+        };
+        let targeting = format!("{subject} · {reach}");
         let effects = spell.effects.iter().map(effect_summary).collect::<Vec<_>>();
         let outcome = if effects.is_empty() {
             match spell.casting {
@@ -240,6 +241,7 @@ mod tests {
                 co_castable: false,
                 targeting: TargetingSpec {
                     range: 4,
+                    reach: TargetingReach::Ranged,
                     shape: TargetShape::Single,
                     trajectory: Trajectory::None,
                 },
@@ -262,6 +264,18 @@ mod tests {
             "Single target · range 4 · Disable 1, then Burn 2 turns"
         );
         assert_eq!(summary.effects, ["Disable 1", "Burn 2 turns"]);
+    }
+
+    #[test]
+    fn touch_is_presented_as_touch_instead_of_range_zero() {
+        let mut spell = burn_spell().spell;
+        spell.targeting.range = 0;
+        spell.targeting.reach = TargetingReach::Touch;
+        let summary = SpellBuildSummary::from_spell("Mend", &spell, Vec::new());
+
+        assert_eq!(summary.targeting, "Single target · touch");
+        assert!(summary.sentence.starts_with("Single target · touch · "));
+        assert!(!summary.sentence.contains("range 0"));
     }
 
     #[test]

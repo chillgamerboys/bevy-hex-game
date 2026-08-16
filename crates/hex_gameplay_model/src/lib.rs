@@ -7,6 +7,7 @@
 mod creator;
 mod hud;
 mod main_menu;
+mod multiplayer;
 mod sandbox;
 
 pub use creator::{
@@ -17,6 +18,10 @@ pub use hud::{
     HudState, HudTransientSurface, HudViewportMode, MainViewDestination,
 };
 pub use main_menu::{CampaignSlotId, MainMenuModel, MainMenuRoute};
+pub use multiplayer::{
+    MultiplayerBackResult, MultiplayerEndReason, MultiplayerModel, MultiplayerRole,
+    MultiplayerRoute,
+};
 pub use sandbox::{
     SandboxBackResult, SandboxCharacter, SandboxDeploymentModel, SandboxDeploymentSlot,
     SandboxDeploymentStage, SandboxDestination, SandboxDraft, SandboxEntryOrigin,

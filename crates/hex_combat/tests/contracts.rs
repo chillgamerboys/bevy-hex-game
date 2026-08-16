@@ -14,3 +14,5 @@ mod funnel;
 mod knowledge;
 #[path = "contracts/loop.rs"]
 mod loop_contract;
+#[path = "contracts/multiplayer_authority.rs"]
+mod multiplayer_authority;

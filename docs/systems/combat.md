@@ -170,6 +170,14 @@ authored amount and the cells currently disabled. Restoring at least one cell re
 `Downed`, but the unit is held outside `TurnOrder` until the next wrap. At that boundary
 it rejoins the initiative sort by initiative then stable `UnitId`.
 
+Restoration validates the complete unit target before payment: the anchor is Observed
+and occupied, the target owns at least one disabled lattice cell, and a hostile target's
+complete current lattice is available through faction knowledge. `Touch` restoration
+accepts the caster itself or a different unit connected by a mutual edge in the
+caster's body-specific `Footing`; it is not range one and receives no high-ground
+bonus. Empty, unreachable, lattice-less, fully restored, and incompletely known hostile
+targets produce typed refusals without spending mana or the action.
+
 ### Channel closes the mana loop
 
 `GameCommand::Channel` is a canonical combat action for an active, non-downed unit

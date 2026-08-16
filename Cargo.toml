@@ -23,6 +23,9 @@ hex_perception = { path = "crates/hex_perception" }
 hex_dev = { path = "crates/hex_dev" }
 hex_test_app = { path = "crates/hex_test_app" }
 hex_test_support = { path = "crates/hex_test_support" }
+hex_multiplayer = { path = "crates/hex_multiplayer" }
+hex_eos_ffi = { path = "crates/hex_eos_ffi" }
+hex_online = { path = "crates/hex_online" }
 
 bevy = { version = "0.19", features = ["tga"] }
 bevy_app = "0.19"
@@ -33,6 +36,7 @@ bevy_math = "0.19"
 bevy_platform = "0.19"
 bevy_reflect = "0.19"
 bevy_state = "0.19"
+bevy_time = "0.19"
 bevy-inspector-egui = "0.37"
 bevy_egui = { version = "0.40.1", default-features = false, features = [
     "bevy_ui",
@@ -46,9 +50,22 @@ bevy_hanabi = { version = "0.19", default-features = false, features = [
 atomicwrites = "0.4.4"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 rand = "0.8.5"
+rcgen = "=0.13.2"
 ron = "0.12.2"
+sha2 = "=0.10.9"
 xxhash-rust = { version = "0.8.6", features = ["xxh3"] }
+x509-parser = "=0.17.0"
 serde = { version = "1.0.229", features = ["derive"] }
+base64 = "0.22.1"
+libloading = "=0.8.9"
+bevy_replicon = { version = "=0.41.1", default-features = false, features = ["client", "server"] }
+aeronet = { version = "=0.21.0", default-features = false, features = ["std"] }
+aeronet_replicon = { version = "=0.21.0", default-features = false, features = ["std", "client", "server"] }
+aeronet_webtransport = { version = "=0.21.0", default-features = false, features = ["client", "server", "self-signed"] }
+aeronet_channel = "=0.21.0"
+mdns-sd = { version = "=0.21.0", default-features = false }
+dns-sd-native = { version = "=0.1.1" }
+tokio = { version = "=1.53.1", default-features = false, features = ["rt"] }
 
 [workspace.package]
 version = "0.4.0"

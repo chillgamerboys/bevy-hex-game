@@ -521,6 +521,7 @@ mod tests {
             co_castable: false,
             targeting: TargetingSpec {
                 range: 1,
+                reach: crate::TargetingReach::Ranged,
                 shape: TargetShape::Single,
                 trajectory: Trajectory::None,
             },

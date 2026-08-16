@@ -10,13 +10,13 @@ use std::collections::BTreeMap;
 use bevy::prelude::*;
 use hex_assets::SubstanceTable;
 use hex_core::{
-    Busy, PausableSystems, PendingDecision, Screen, TerrainImpactOutcome, TerrainReady,
-    TerrainSystems, Turn, UnitId,
+    AuthoritativeSystems, Busy, PausableSystems, PendingDecision, Screen, TerrainImpactOutcome,
+    TerrainReady, TerrainSystems, Turn, UnitId,
 };
 use hex_lattice::{LatticeSpec, LatticeState};
 use hex_units::{
-    plan_unsupported_actor_landing, Body, Downed, Footing, MovingTo, StandsOn, StopMovingAt,
-    TerrainOccupancy, UnitOccupancy, UnitRegistry,
+    plan_unsupported_actor_landing, AuthoredObjectOccupancy, Body, Downed, Footing, MovingTo,
+    StandsOn, StopMovingAt, TerrainOccupancy, UnitOccupancy, UnitRegistry,
 };
 
 use crate::{CombatEvent, SpellResolutionFailure, SpellResolutionStatus};
@@ -44,6 +44,7 @@ pub(super) fn plugin(app: &mut App) {
     app.add_systems(
         Update,
         stage_applied_outcomes
+            .in_set(AuthoritativeSystems)
             .in_set(TerrainSystems::RefreshProjections)
             .in_set(PausableSystems)
             .run_if(in_state(Screen::Gameplay)),
@@ -51,6 +52,7 @@ pub(super) fn plugin(app: &mut App) {
     .add_systems(
         Update,
         settle_unsupported_actors
+            .in_set(AuthoritativeSystems)
             .in_set(TerrainSystems::ReconcileActors)
             .in_set(PausableSystems)
             .run_if(in_state(Screen::Gameplay)),
@@ -58,6 +60,7 @@ pub(super) fn plugin(app: &mut App) {
     .add_systems(
         Update,
         consume_terrain_outcomes
+            .in_set(AuthoritativeSystems)
             .in_set(TerrainSystems::ConsumeOutcomes)
             .in_set(PausableSystems)
             .run_if(in_state(Screen::Gameplay)),
@@ -154,6 +157,7 @@ fn settle_unsupported_actors(
     mut resolution: ResMut<crate::SpellResolutionState>,
     terrain_ready: Option<Res<TerrainReady>>,
     terrain_occupancy: Option<Res<TerrainOccupancy>>,
+    authored_objects: Option<Res<AuthoredObjectOccupancy>>,
     substances: Option<Res<SubstanceTable>>,
     blockers: Option<Res<hex_core::TraversalBlockers>>,
     tiles: TileQuery,
@@ -170,11 +174,10 @@ fn settle_unsupported_actors(
     if !resolution.needs_terrain_settlement_attempt() {
         return;
     }
-    if terrain_ready.is_none() || terrain_occupancy.is_none() {
+    if terrain_ready.is_none() || terrain_occupancy.is_none() || authored_objects.is_none() {
         if resolution.terrain_settlement_required() {
             resolution.freeze(SpellResolutionFailure::SettlementUnavailable {
-                reason: "complete terrain publication is unavailable after an applied impact"
-                    .to_owned(),
+                reason: "complete terrain or authored-object publication is unavailable after an applied impact".to_owned(),
             });
         }
         return;
@@ -183,6 +186,14 @@ fn settle_unsupported_actors(
         if resolution.terrain_settlement_required() {
             resolution.freeze(SpellResolutionFailure::SettlementUnavailable {
                 reason: "SubstanceTable is unavailable after an applied impact".to_owned(),
+            });
+        }
+        return;
+    };
+    let Some(authored_objects) = authored_objects.as_deref() else {
+        if resolution.terrain_settlement_required() {
+            resolution.freeze(SpellResolutionFailure::SettlementUnavailable {
+                reason: "AuthoredObjectOccupancy is unavailable during settlement".to_owned(),
             });
         }
         return;
@@ -228,7 +239,13 @@ fn settle_unsupported_actors(
             });
             return;
         };
-        let footing = Footing::from_tiles(tiles.iter(), substances, body, blockers.as_deref());
+        let footing = Footing::from_tiles_with_object_occupancy(
+            tiles.iter(),
+            substances,
+            body,
+            blockers.as_deref(),
+            authored_objects,
+        );
         if footing.at(standing.pos).is_some() {
             continue;
         }

@@ -23,5 +23,5 @@ pub use content::{
 };
 pub use outcomes::{
     CastBlockReason, CombatData, CombatEvent, CommandRefusal, EncounterOutcome, PartyMoveRefusal,
-    RestorationRefusal, UnitData,
+    RestorationRefusal, RestorationTargetRefusal, UnitData,
 };

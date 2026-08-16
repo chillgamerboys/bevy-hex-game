@@ -99,7 +99,10 @@ mod tests {
         app.insert_resource(hex_assets::CombatSettings::default())
             .init_resource::<InitiativeView>()
             .init_resource::<RenderedInitiative>()
-            .add_plugins(hex_combat::plugin)
+            .add_plugins((
+                hex_units::authored_object_occupancy::plugin,
+                hex_combat::plugin,
+            ))
             .add_plugins(plugin)
             .add_systems(
                 Update,

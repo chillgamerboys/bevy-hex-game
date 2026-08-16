@@ -7,6 +7,8 @@
 //
 // `effects` is a CLOSED enum (audit §8) — no scripting. Element names must exist in
 // elements.ron and substance names in substances.ron (checked at load by ContentIndex).
+// `reach` is explicit shipped authority: Ranged uses `range`; Touch uses exact occupied
+// unit adjacency and therefore requires range 0, Single, and no trajectory.
 //
 // This roster is provisional: it exists to exercise every effect variant and both
 // axes end to end, not to be balanced. The design owner sets the real numbers.
@@ -18,7 +20,7 @@
             casting: Evocation,
             mana: Fixed,
             co_castable: false,
-            targeting: (range: 3, shape: Single, trajectory: Direct),
+            targeting: (range: 3, reach: Ranged, shape: Single, trajectory: Direct),
             effects: [
                 DisableHexes(count: 1, targeted: false),
                 Burn(turns: 2),
@@ -39,7 +41,7 @@
             casting: Evocation,
             mana: Fixed,
             co_castable: false,
-            targeting: (range: 4, shape: Sphere(radius: 2), trajectory: Direct),
+            targeting: (range: 4, reach: Ranged, shape: Sphere(radius: 2), trajectory: Direct),
             effects: [
                 DisableHexes(count: 3, targeted: false),
                 Impact(element: "Fire", power: 2),
@@ -54,7 +56,7 @@
             casting: Evocation,
             mana: Fixed,
             co_castable: false,
-            targeting: (range: 4, shape: Single, trajectory: Direct),
+            targeting: (range: 4, reach: Ranged, shape: Single, trajectory: Direct),
             effects: [DisableHexes(count: 2, targeted: false)],
         ),
 
@@ -68,8 +70,19 @@
             casting: Evocation,
             mana: Variable,
             co_castable: true,
-            targeting: (range: 2, shape: Line(length: 2, width: 0), trajectory: Direct),
+            targeting: (range: 2, reach: Ranged, shape: Line(length: 2, width: 0), trajectory: Direct),
             effects: [Burn(turns: 2)],
+        ),
+
+        // Tier-1 Life evocation: restore one chosen disabled lattice cell on the
+        // caster or on a unit within exact touch reach.
+        "Heal": (
+            requirements: [(element: "Life", mana: 1)],
+            casting: Evocation,
+            mana: Fixed,
+            co_castable: false,
+            targeting: (range: 0, reach: Touch, shape: Single, trajectory: None),
+            effects: [RestoreHexes(count: 1)],
         ),
 
         // Defensive enchantment: ties up Metal mana to subtract from incoming disables.
@@ -82,7 +95,7 @@
             casting: Enchantment(defense: 2),
             mana: Fixed,
             co_castable: false,
-            targeting: (range: 0, shape: SelfCast, trajectory: None),
+            targeting: (range: 0, reach: Ranged, shape: SelfCast, trajectory: None),
             effects: [],
         ),
 
@@ -95,7 +108,7 @@
             casting: Evocation,
             mana: Fixed,
             co_castable: false,
-            targeting: (range: 2, shape: Column(height: 2), trajectory: Direct),
+            targeting: (range: 2, reach: Ranged, shape: Column(height: 2), trajectory: Direct),
             effects: [SpawnWall(substance: "stone")],
         ),
 
@@ -105,7 +118,7 @@
             casting: Evocation,
             mana: Fixed,
             co_castable: false,
-            targeting: (range: 2, shape: Single, trajectory: None),
+            targeting: (range: 2, reach: Ranged, shape: Single, trajectory: None),
             effects: [SetTerrain(substance: "stone")],
         ),
 
@@ -116,7 +129,7 @@
             casting: Evocation,
             mana: Fixed,
             co_castable: false,
-            targeting: (range: 6, shape: Single, trajectory: None),
+            targeting: (range: 6, reach: Ranged, shape: Single, trajectory: None),
             effects: [Reveal(tier: 1)],
         ),
 
@@ -129,7 +142,7 @@
             casting: Evocation,
             mana: Fixed,
             co_castable: false,
-            targeting: (range: 3, shape: Single, trajectory: Direct),
+            targeting: (range: 3, reach: Ranged, shape: Single, trajectory: Direct),
             effects: [RestoreHexes(count: 2)],
         ),
     },

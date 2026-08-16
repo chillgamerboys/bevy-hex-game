@@ -31,7 +31,10 @@ Creator chart with retained SVG masters and runtime glyphs. E0 rehomes the curre
 Scrying Eye content under Divination and removes Daylight; it does not add Scrying
 Eye's off-sight live feed, Invisibility, spell-created illumination, or any other
 school mechanic. Those follow-on releases remain separately sequenced after the
-foundation.
+foundation. PR #189 / HEX-79 delivers tier-one Life Heal, explicit touch reach,
+pre-payment restoration refusals, and effect-semantic AI selection. The remaining
+Life release still owns Cleanse, Conjure Plant, starter-template migration, and its
+combined school acceptance.
 
 ## Upcoming
 
@@ -43,18 +46,21 @@ foundation.
 | Co-casting and rituals | variable-mana group casting after Wave 7 supplies a real Channel action and evidence for initiative and action economy | combat | <!-- linear: HEX-26 owner: shravan-kumaran -->
 | Engine upkeep | the one budgeted Bevy 0.20 upgrade (~Q4 2026) plus the feature trim, landed together in a quiet window before any release | game | <!-- linear: HEX-18 owner: shravan-kumaran -->
 | Fog presentation refinements | full-scene shading for cliff sides and tall props, soft transitions, and fades beyond the live exact-surface tactical caps; current terrain intentionally remains public and pickable | perception |
-| Scenario camera policy | decide when Map mode is appropriate and limit its availability by scenario now that the human-approved Character view is live | world / presentation |
+| Tactical first-person camera | **Delivered / HEX-89:** #190's rebindable `C` action cycles Map → Third Person → First Person → Map with fixed-eye right-drag look, tactical click movement, disclosure-safe retargeting, composable model hiding, and exact Map-pose restoration; automated contracts and the exact-`dev` native acceptance route passed at `8a8e45e4` | world / presentation |
+| Scenario camera policy | decide when Map mode is appropriate and limit its availability by scenario after the three-view cycle lands; do not conflate that policy with first-person locomotion | world / presentation |
 | Remaining movement and combat perception adapters | unknown-route restriction; detection, engagement, ordinary-attack targeting, and one-round last-known-position behavior in isolated owner-reviewed PRs; AI and casting anchors are already live | units/combat |
 | V1/V2 legacy removal | remove the frozen V1/V2 parsers, generators, assets, and runtime tests now that every active shipped procedural scenario resolves through V3 | map |
 | Named rule regions | revisit a content-addressable exact-surface overlay when the first region-sensitive spell lands; do not combine biome identity, lighting, and anti-magic into generic tile tags | map/combat |
 | Pre-spawn terrain edit replay | drain a `PendingTerrainEdits` resource after map build and before first spawn, so save-restore and authored pre-battle terrain cost zero respawns | map |
-| Terrain snapshot | a name-keyed `VoxelMap` dump behind a request/response pair, making saves survive generator changes | map |
+| Universal EOS Internet multiplayer | add store-neutral Device ID/Steam-ticket identity, one EOS lobby and short-code discovery path, EOS P2P traversal/relay, authenticated reconnect, bounded streamed snapshots, outage recovery, and release staging behind the live transport-neutral protocol; Direct/LAN remains available without EOS | shared / game |
+| Steam-native online entry | add optional Steam ticket acquisition for EOS Connect plus rich-presence `connect`, native invitations, Join Game/cold-launch handling, and release acceptance; every Steam and standalone peer remains in the one EOS lobby and uses EOS P2P | shared / game |
 
 ## Delivered
 
 | Epic | Delivered |
 |---|---|
 | Canonical elemental-grid foundation | PR #184 / HEX-37, HEX-56, and HEX-57: 18 canonical schools, revision-bound packaged-content migration, a neutral 180-pair element × tough-substance matrix, retained SVG/runtime glyphs, and the accessible radius-two Creator chart |
+| Tier-one Life Heal | PR #189 / HEX-79: exact `Touch` reach, one-cell caster-chosen restoration, pre-payment privacy and eligibility refusals, next-round revival, effect-semantic AI selection, and explicit self/ally aiming feedback |
 | Run bottoms on tiles | Every material-run entity publishes exact inclusive integer bounds through `RunBottom` and `TilePos`, including stacked platform/cave runs and terrain-edit rebuilds |
 | Casting UX | HEX-21 landed in Wave 3: cursor shape previews, blocked reasons, target cycling, and per-element cast presentation |
 | Combat readability | HEX-23 landed in Wave 3: initiative order, detailed lattice panels, and the structured combat log |
@@ -65,7 +71,9 @@ foundation.
 | Formation traversal | Wave 4: per-segment sextant rotation, deterministic bottleneck compression/reformation, and all-or-nothing exact-path `MoveParty` validation |
 | Outcomes and recovery | Wave 4: retained-world Victory/Defeat, exact same-seed Retry, caster-chosen Renewal restoration with next-round revival, and whole-party exploration Rest |
 | Party-combat checkpoint | Wave 4: deterministic 3v3 Party Trial summary/replay, focused Ability Lab and Raider Mirror walks, and the completed human Crossing playtest |
-| Campaign/Sandbox app shell | Main Menu with exactly Campaign, Sandbox, Tools, and Settings; three indexed Campaign slots; one persistent in-memory six-slot-per-side Sandbox; typed Creator destinations; Party Trial remains the canonical new Campaign |
+| Campaign/Sandbox app shell | Main Menu with exactly Campaign, Sandbox, Multiplayer, Tools, and Settings; three indexed Campaign slots; one persistent in-memory six-slot-per-side Sandbox; typed Creator destinations; Party Trial remains the canonical new Campaign |
+| Direct client-hosted Sandbox multiplayer | One authoritative listen host plus up to five guests; encrypted SPKI-pinned Direct Connect, exact compatibility/map verification, six-seat party assignment/readiness, seatless idempotent command ingress, disclosure-safe projections, 30-second delegation, restart-capable reconnect from a generator-neutral world/session baseline plus ordered deltas, and host-owned outcome flow |
+| Client-hosted Campaign multiplayer | Host-owned V2 checkpoints with complete generator-neutral world and authoritative gameplay state, strict legacy/V1 preservation, transactional process-restart restore, fresh six-seat assignment and reconnect identity on resume, host-only quiescent paused-exploration saves, ordered client save status, and no persisted transport ids, secrets, cameras, selections, or prior seats |
 | Campaign persistence | Three atomic, build/content-bound indexed records, safe manual saves from Campaign exploration, active-play time, invalid-record preservation, and one-time non-destructive import of the Wave 5 resume with semantic-drift records retained as Invalid <!-- linear: HEX-15 owner: shravan-kumaran --> |
 | Settings and seams | Persistent display, semantic UI scale, volume, ordinary HUD visibility, and categorized keyboard overrides with explicit capture/conflict/restore behavior; empty music/SFX/UI buses remain ready for later content <!-- linear: HEX-16 owner: shravan-kumaran --> |
 | Release artifact scaffold | Wave 5 / HEX-17: stable app identity, normalized packages, retained symbol material, and documented future credential slots with no live integrations <!-- linear: HEX-17 owner: shravan-kumaran --> |
@@ -73,7 +81,8 @@ foundation.
 | Tactical integrity (Wave 7; player-facing organization superseded) | Exact-surface occupancy, Channel, deterministic summaries/simulations, and the measured decision to retain the shipped four-hex movement default remain; old tuning/report UI does not |
 | Gameplay foundation and scoped validation | Wave 8: one pure serializable combat authority projected through ECS/animation/UI, renderer-free gameplay screen models, concern-specific integration targets, and fail-closed dependency-scoped validation with unchanged broad owner gates <!-- linear: HEX-28 owner: shravan-kumaran --> |
 | Unified map validation | Map unit, deterministic generation, and real-plugin publication contracts now share the repository scope selector, one explicit integration target, optimized dependency execution, per-concern timing/JUnit evidence, and unchanged PR/stress/visual acceptance |
-| V3 active recipe migration | Hills, Sky Islands, Mountains, Caves, Waterfall, Forest, Fort, Volcano, Deep Forest, Prairie, Shallow Sea, Beach, Shore, and Deep Mountain all use the V3 semantic pipeline in shipped scenarios |
+| V3 active recipe migration | Hills, Sky Islands, Mountains, Caves, Waterfall, Forest, Fort, Volcano, Deep Forest, Prairie, Shallow Sea, Beach, Shore, Deep Mountain, and Crystal Ascent all use the V3 semantic pipeline in shipped scenarios |
+| Crystal Ascent authored landmark | Selectable radius-40 vertical biome with a monumental lower aperture, open chamber and 30-level irregular-prism heart, three four-wide contracting stair circuits on outward-deepening worked-stone haunches over 100–200 levels, eighteen crystal-lit landings, exact heart occupancy, and a woodland-clearing crown around the radius-11 summit oculus |
 | Forest authored objects | Forest publishes rotated vegetation `ObjectInstance`s and exact blockers; `hex_objects` propagates whole-tree camera roots and retains authored canopy masks as separate art metadata |
 | Structures and Fort | V3 Fort ships worked-stone walls, towers, gates, keep, wall walks, stairs, battlements, and validated defensive circulation |
 | Seven-region composition | Ring7 composes all seven V3 recipe variants in one connected radius-33 world with global routes, elevation seams, and hydrology |
@@ -82,7 +91,7 @@ foundation.
 | Macro Mountain Range | The selectable radius-77 / 18,019-column world composes 37 atomic cells into 30 logical biome instances with Macro-only adjacency validation, coastal and alpine recipes, one joined watershed, graded mountain tiers, a five-cell massif, generated framing, and a validated Shore-to-massif-base route |
 | Cave lighting and presentation | V3 Caves publishes deterministic gameplay lights over required routes plus authored emissive crystals and restrained presentation-only physical lights |
 | Obstruction-aware visibility and tactical shroud | Target-lit 36/12/1 upper-dome range, a global paired seven-ray character-volume LOS bundle with observer-relative grounded exposed-top low cover, intact deeper cores and disconnected/remote roof-deck blockers, physical cross-domain sight, current-map dark caps, and composable concealment of unobserved hostiles |
-| Character-first camera | Player-authoritative full-range look, radius-only terrain collision with stable recovery, near-character occlusion, whole-tree fading, ordinary opaque cave roofs, seed-exact multi-azimuth traversal over every selectable map and Two Rings region, and Alberto's 2026-08-01 native motion/readability approval |
+| Third-person camera foundation | Player-authoritative full-range look, radius-only terrain collision with stable recovery, near-character occlusion, whole-tree fading, ordinary opaque cave roofs, seed-exact multi-azimuth traversal over every selectable map and Two Rings region, and Alberto's 2026-08-01 native motion/readability approval |
 
 ## Sequencing — independent lanes behind one contract
 
@@ -320,12 +329,13 @@ today, and its status, is [contracts.md](../contracts.md).
 
 ### Pre-alpha app shell and default game
 
-The responsive Main Menu keeps exactly Campaign, Sandbox, Tools, and Settings as its
-primary routes. Campaign always shows three cards. Party Trial is the canonical new
-Campaign and is bound to the selected empty slot. Sandbox owns the player-facing map
-catalog, pending/committed generated seed, two ordered six-slot rosters, character
-selection, deployment, and frozen launch. Tools owns the two Creators and a disabled
-Map Creator marked Coming Soon.
+The responsive Main Menu keeps exactly Campaign, Sandbox, Multiplayer, Tools, and
+Settings as its primary routes. Campaign always shows three cards. Party Trial is the
+canonical new Campaign and is bound to the selected empty slot. Sandbox owns the
+player-facing map catalog, pending/committed generated seed, two ordered six-slot
+rosters, character selection, deployment, and frozen launch. Multiplayer owns Direct
+Host/Join setup and the six-seat session lobby. Tools owns the two Creators and a
+disabled Map Creator marked Coming Soon.
 
 Scenario definitions remain internal launch inputs. Ability Lab, Raider Mirror, and
 other stable deterministic cases are available only through default-off test support.
@@ -345,8 +355,8 @@ partially loaded or treated as empty.
 If `campaigns.ron` is absent, a valid legacy `resume.ron` is copied into slot 1 with
 zero prior play time; invalid legacy data and its reason remain visible. The legacy
 file is never overwritten or deleted. Combat state, durable cross-version
-compatibility, deletion/overwrite UI, and a terrain edit log remain outside this
-scaffold.
+compatibility, deletion/overwrite UI, multiplayer Campaign persistence, and a terrain
+edit log remain outside this scaffold.
 
 ### Settings menu, persistence, and audio
 
@@ -366,7 +376,10 @@ Wave 5 builds use an app identity and icon, normalized release artifact names an
 layout, and retained debug symbols. Release documentation reserves the future
 credential and configuration slots for signing, Steam upload, and crash reporting.
 Live integrations, codesigning, notarization, upload, consent UI, and telemetry remain
-later productization work.
+later productization work. The direct multiplayer protocol is live independently of
+online services. EOS is the planned universal Internet lobby/P2P service; Steam later
+supplies silent platform identity and native invitations into that EOS session, not a
+second lobby or gameplay transport.
 
 ### Engine upkeep
 

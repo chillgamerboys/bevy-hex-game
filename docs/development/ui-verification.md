@@ -10,15 +10,15 @@ own cases. `FormationMainView`, `SettingsKeybindings`, `SettingsCapture`, and
 `SettingsConflict` therefore cannot be hidden inside a generic Gameplay or Settings
 fixture merely because they share the same coarse `Screen`.
 
-`hex_ui` renders route-specific views and emits only typed `MainMenuIntent` and
-`SandboxIntent` values. It owns no navigation, persistence, map/seed selection,
-roster, character, deployment, content, or launch state. `hex_gameplay_model` owns
-pure transitions, while `hex_game` adapts them to Bevy, assets, persistence, and
-loading.
+`hex_ui` renders route-specific views and emits only typed `MainMenuIntent`,
+`SandboxIntent`, and `MultiplayerIntent` values. It owns no navigation, persistence,
+map/seed selection, roster, character, deployment, content, launch, or session
+authority. `hex_gameplay_model` owns pure transitions, while `hex_game` adapts them to
+Bevy, assets, persistence, loading, and the transport-neutral multiplayer runtime.
 
 ## Shipping route inventory
 
-The Main Menu exposes exactly four actions:
+The Main Menu exposes exactly five actions:
 
 ```
 Main Menu
@@ -26,6 +26,11 @@ Main Menu
 ├── Sandbox ──> Overview ─┬─> Map Browser ─> Map Detail
 │                         ├─> Party ────> Character Picker
 │                         └─> Enemies ──> Character Picker
+├── Multiplayer ─┬─> Host LAN Sandbox ─> Sandbox / Deployment ─> Lobby
+│                ├─> Find LAN Games ────────────────────────────> Lobby
+│                ├─> Host Campaign ─────────────────────────────> Lobby
+│                ├─> Host Direct ─> shipped Sandbox / Deployment ─> Lobby
+│                └─> Join Direct ──────────────────────────────────> Lobby
 ├── Tools ────────────────────────────> Character / Spell Creator
 │                                         └─> Map Creator (Coming Soon)
 └── Settings
@@ -41,7 +46,7 @@ only from the Creator's local mechanics test.
 
 | Surface | Required state | Persistent actions | Content and behavioral oracle |
 |---|---|---|---|
-| Main Menu | root | Campaign, Sandbox, Tools, Settings | exactly four enabled named controls in that order; no obsolete route label |
+| Main Menu | root | Campaign, Sandbox, Multiplayer, Tools, Settings | exactly five enabled named controls in that order; no obsolete route label |
 | Campaign | all empty | Back; New Game per card | exactly slots 1–3; selecting an empty card binds that exact `CampaignSlotId` |
 | Campaign | mixed | Back; New Game or Continue as applicable | Empty, Available, and Invalid project distinctly; invalid data and reason remain visible |
 | Campaign occupied card | representative party | Continue | existing character/lattice presentation, formatted accumulated active-play time, exact slot intent |
@@ -55,6 +60,12 @@ only from the Creator's local mechanics test.
 | Compact roster | six slots | Back | one vertical scroll owner; every slot and action reachable without horizontal clipping |
 | Character Picker | template + saved choices | Back, Use Character, Create a New Character | preview does not mutate; commit targets exact side/slot; Back cancels |
 | Character Picker after Creator | newly saved choice | Back | exact picker restored, new record highlighted, not automatically applied |
+| Multiplayer | home | Host LAN Sandbox, Find LAN Games, Host a Campaign, Host Direct, Join Direct, Back | LAN is the primary same-network path; Direct remains the advanced private-code path; Steam is not presented as live |
+| LAN browser | searching, empty, compatible, and incompatible records | Join per compatible record, Refresh LAN Games, Back | no IP/code entry; incompatible sessions remain visible but disabled; local-network permission and open-LAN admission warning remain visible |
+| Host Direct | endpoint draft | Configure Shipped Sandbox, Back | editable advertised host and UDP port; forwarding/CGNAT/no-relay limits remain visible; no socket opens before explicit configuration completes |
+| Join Direct | code draft | Join Session when non-empty, optional Reconnect Reserved Seat, Back | bounded credential-bearing input; ordinary diagnostics redact the complete code |
+| Multiplayer lobby | host and guest projections | host assignment/kick/launch/close or guest ready/leave | six stable seats; connection/reservation/delegation, assignments, readiness, host, local seat, and exact launch blocker are visible without granting UI authority |
+| Multiplayer verification/reconnect/end | representative typed states | Leave Session or Multiplayer Home | loading cannot enter gameplay before exact local-world readiness; reconnect and terminal reasons remain distinct |
 | Character Creator | saved clean Map-ready character | Library, Save, Local Test, Open in Sandbox | Open in Sandbox preserves map/Enemies, replaces Party with slot 1 only, retains typed Creator origin |
 | Spell Creator | library/workspace variants | Library, Save | Tools-origin return stays typed as Tools |
 | Tools | complete | Back, Character Creator, Spell Creator | Map Creator visible, disabled, and labelled Coming Soon; exactly those three tools |
@@ -134,20 +145,23 @@ temporary summons, and forced decisions. Main View replacement/close rules, repe
 inspection activation, component preference preservation, and restart-only state are
 renderer-free contracts.
 
-Headless application tests cover exactly four Main Menu actions, exactly three
+Headless application tests cover exactly five Main Menu actions, exactly three
 Campaign cards, mixed slot projection, absence of obsolete shipping navigation,
 canonical catalog/content/rules/deployment resources, a real exact-terrain placement
 outside the staging regions, complete ordinary-HUD suppression, cold launch, Sandbox
 re-entry, outcome return, Creator-origin return, and actual focus-tree/control names.
-Those tests may build UI trees through default-off `test-support`; production plugins
-do not gain test fixture routes.
+Multiplayer tests separately cover role-gated intents, six-seat structure, local-client
+menus, LAN record compatibility and join enablement, open-lobby advertisement lifecycle,
+exact-world activation gating, and the fail-closed L3 handoff. Those tests may build UI
+trees through default-off `test-support`; production plugins do not gain test fixture
+routes.
 
 Application tests additionally cover input capture priority, fixed UI navigation,
 Swap/Cancel conflict handling, row and confirmed-all restoration, schema-v3 migration,
 and preference survival across restart. Inspection tests prove first activation
 publishes one disclosed camera subject and one Map-center request, repeated activation
-opens Character Main View, Character mode follows, and none of those paths mutates
-selection, turn, caster, command ownership, or formation. Hostile cases must prove
+opens Character Main View, both character camera modes follow, and none of those paths
+mutates selection, turn, caster, command ownership, or formation. Hostile cases must prove
 that missing observation publishes no identity or location.
 
 Screenshots prove static presentation structure: hierarchy, layout, legibility,
@@ -186,7 +200,10 @@ native text rendering, and taste. It follows Main Menu → Campaign save/Continu
 Main Menu → Sandbox map/rosters/deployment/outcome/retry/return, Tools → Creator
 return, and post-restart presentation. During gameplay it exercises `H`, every
 component shortcut, both Main View shortcuts, first/repeated Party and disclosed
-Initiative activation in Map and Character camera modes, required-decision ownership,
-deployment/outcome suppression, Compact map-only presentation, key capture and one
-Swap conflict, then restarts to inspect how the saved preference/keybinding state is
-presented. Typed restart hooks separately prove exactly what persisted.
+Initiative activation in Map, Third Person, and First Person, required-decision
+ownership, deployment/outcome suppression, Compact map-only presentation, key capture
+and one Swap conflict, then restarts to inspect how the saved preference/keybinding
+state is presented. The First Person portion also checks a visible cursor, right-drag
+look, wheel no-op, WASD no-locomotion, click movement, exact followed-model restoration,
+and exact Map-pose restoration. Typed restart hooks separately prove exactly what
+persisted.

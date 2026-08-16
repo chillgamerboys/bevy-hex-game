@@ -17,7 +17,7 @@ use crate::settings::{
     MacroLiquidConnectionSettings, PatchEdgeContractSettings, PatchEdgesSettings,
     PatchMaskSettings, PatchSpec, ProceduralV3Settings, Ring19BoundarySide, SharedEdgeSettings,
     V3LayoutSettings, V3RecipeSettings, V3Ring19Settings, V3Ring7Settings, WalkerPortSettings,
-    MAX_PROCEDURAL_LEVEL, MAX_SEAM_PORT_WIDTH, MAX_WALKER_PORT_COUNT, V3_MACRO_CELL_COUNT,
+    MAX_SEAM_PORT_WIDTH, MAX_V3_LEVEL, MAX_WALKER_PORT_COUNT, V3_MACRO_CELL_COUNT,
     V3_RING19_REGION_COUNT,
 };
 
@@ -1070,7 +1070,7 @@ fn macro_shared_settings(
     let elevation = EdgeElevationSettings {
         preferred,
         min: preferred.saturating_sub(1),
-        max: preferred.saturating_add(1).min(MAX_PROCEDURAL_LEVEL),
+        max: preferred.saturating_add(1).min(MAX_V3_LEVEL),
     };
     let land_connection = walker_connection
         && matches!(first.access, MacroAccessSettings::Land)
@@ -2534,7 +2534,7 @@ fn validate_resolved_edge(
         || edge.elevation.min < 0
         || edge.elevation.min > edge.elevation.preferred
         || edge.elevation.preferred > edge.elevation.max
-        || edge.elevation.max > MAX_PROCEDURAL_LEVEL
+        || edge.elevation.max > MAX_V3_LEVEL
         || edge.walker.count > MAX_WALKER_PORT_COUNT
         || !walker_count_matches
         || !walker_width_matches
@@ -2557,7 +2557,7 @@ fn validate_resolved_edge(
         let elevation_valid = matches!(
             (kind, elevation),
             (LayoutKind::Macro, ResolvedLiquidElevation::Exact(level))
-                if (3..=MAX_PROCEDURAL_LEVEL).contains(level)
+                if (3..=MAX_V3_LEVEL).contains(level)
         );
         if !width_valid || !elevation_valid {
             issues.push(LayoutIssue::InvalidResolvedContract(id));
@@ -2574,10 +2574,10 @@ fn validate_resolved_edge(
             .is_ok_and(|width| (2..=MAX_SEAM_PORT_WIDTH).contains(&width));
         let elevation_valid = match (kind, elevation) {
             (LayoutKind::Ring19, ResolvedLiquidElevation::Exact(level)) => {
-                (3..=MAX_PROCEDURAL_LEVEL).contains(level)
+                (3..=MAX_V3_LEVEL).contains(level)
             }
             (LayoutKind::Macro, ResolvedLiquidElevation::Exact(level)) => {
-                (3..=MAX_PROCEDURAL_LEVEL).contains(level)
+                (3..=MAX_V3_LEVEL).contains(level)
             }
             (LayoutKind::Single | LayoutKind::Ring7, ResolvedLiquidElevation::EdgeBand) => true,
             _ => false,
@@ -2661,7 +2661,7 @@ fn validate_boundary_liquid_outlets(layout: &ResolvedLayoutPlan, issues: &mut Ve
                 &patch.mask,
                 &layout.footprint,
             )
-            && (3..=MAX_PROCEDURAL_LEVEL).contains(&outlet.level)
+            && (3..=MAX_V3_LEVEL).contains(&outlet.level)
             && reserved
                 .get(source)
                 .is_none_or(|existing| existing.is_disjoint(&outlet.inward_approach));
@@ -3783,7 +3783,7 @@ mod tests {
         let corruptions: [(&str, fn(&mut ResolvedElevationBand)); 2] = [
             ("negative minimum", |elevation| elevation.min = -1),
             ("maximum above the procedural ceiling", |elevation| {
-                elevation.max = MAX_PROCEDURAL_LEVEL + 1
+                elevation.max = MAX_V3_LEVEL + 1
             }),
         ];
         for (label, corrupt) in corruptions {

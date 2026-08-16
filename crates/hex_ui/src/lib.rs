@@ -26,6 +26,7 @@ mod lattice_demo;
 mod layout;
 mod main_menu;
 mod model;
+mod multiplayer;
 mod outcome;
 mod party;
 mod review;
@@ -58,13 +59,16 @@ pub use model::{
     DeploymentIntent, DeploymentQueueEntryView, DeploymentView, FormationSlotView, GameplayAction,
     GameplayChromeView, GameplayHudView, GameplayLatticesView, InitiativeEntryView,
     InitiativeIntent, InitiativeSide, InitiativeView, LatticeDemoIntent, LatticeDemoSpellView,
-    LatticeDemoView, LatticeIntent, MainMenuIntent, MainMenuView, OutcomeAction, OutcomeActionView,
-    OutcomeIntent, OutcomeView, OwnLatticeView, PartyIntent, PartyMemberView, PartyView, PauseView,
+    LatticeDemoView, LatticeIntent, MainMenuIntent, MainMenuView, MultiplayerAssignmentView,
+    MultiplayerCampaignHostView, MultiplayerCampaignSaveStatusView, MultiplayerIntent,
+    MultiplayerLanSessionView, MultiplayerSeatConnectionView, MultiplayerSeatView,
+    MultiplayerTextField, MultiplayerView, OutcomeAction, OutcomeActionView, OutcomeIntent,
+    OutcomeView, OwnLatticeView, PartyIntent, PartyMemberView, PartyView, PauseView,
     SandboxCharacterView, SandboxIntent, SandboxLatticeCellKind, SandboxLatticeCellView,
-    SandboxMapView, SandboxRosterSlotView, SandboxView, SettingsIntent, SettingsModalView,
-    SettingsTab, TargetLatticeStateView, TargetLatticeView, TargetPulseView, UiBindingRow,
-    UiIntent, UiSetting, UiSettingRow, UiSettingsView, VfxTunerControl, VfxTunerField,
-    VfxTunerIntent, VfxTunerRowView, VfxTunerSpellView, VfxTunerView,
+    SandboxMapView, SandboxRosterSlotView, SandboxView, SensitiveText, SettingsIntent,
+    SettingsModalView, SettingsTab, TargetLatticeStateView, TargetLatticeView, TargetPulseView,
+    UiBindingRow, UiIntent, UiSetting, UiSettingRow, UiSettingsView, VfxTunerControl,
+    VfxTunerField, VfxTunerIntent, VfxTunerRowView, VfxTunerSpellView, VfxTunerView,
 };
 #[cfg(feature = "dev-tools")]
 pub use model::{DevTimeIntent, DevTimeView};
@@ -1012,7 +1016,7 @@ mod structural_tests {
                 if case == UiTaskCase::MainMenu {
                     assert_eq!(
                         snapshot.focus_order,
-                        ["Campaign", "Sandbox", "Tools", "Settings"]
+                        ["Campaign", "Sandbox", "Multiplayer", "Tools", "Settings"]
                     );
                 }
                 if case == UiTaskCase::Campaign {
@@ -1183,7 +1187,7 @@ mod structural_tests {
             let view = sandbox_view(SandboxRoute::MapBrowser);
             assert_eq!(
                 view.maps.len(),
-                17,
+                18,
                 "the full shipped catalog is the fixture"
             );
             assert_eq!(
@@ -1203,7 +1207,7 @@ mod structural_tests {
                     .iter()
                     .filter(|node| node.name.starts_with("Inspect "))
                     .count(),
-                17
+                18
             );
             let final_row = snapshot
                 .nodes
@@ -2009,6 +2013,7 @@ impl Plugin for UiPlugin {
         .init_resource::<DeploymentView>()
         .init_resource::<InitiativeView>()
         .init_resource::<MainMenuView>()
+        .init_resource::<MultiplayerView>()
         .init_resource::<VfxTunerView>()
         .init_resource::<TargetPulseView>()
         .add_plugins(element_visual::plugin)
@@ -2026,6 +2031,7 @@ impl Plugin for UiPlugin {
             screens::plugin,
             action_rail::plugin,
             main_menu::plugin,
+            multiplayer::plugin,
         ))
         .add_plugins((
             sandbox::plugin,
@@ -2596,7 +2602,8 @@ pub mod test_support {
         }
     }
 
-    const MAIN_MENU_CONTROLS: &[&str] = &["Campaign", "Sandbox", "Tools", "Settings"];
+    const MAIN_MENU_CONTROLS: &[&str] =
+        &["Campaign", "Sandbox", "Multiplayer", "Tools", "Settings"];
     const SETTINGS_NAV_CONTROLS: &[&str] = &[
         "Back",
         "Settings Tab General",

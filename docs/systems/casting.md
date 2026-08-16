@@ -203,11 +203,15 @@ applier in `hex_combat` is authoritative.
 2. **Lattice** — [`castable()`](../../crates/hex_lattice/src/cast.rs) returns a
    `CastPlan` or a blocked reason the UI shows. **Built and wired**.
 3. **Targeting** — the anchor is in range, the shape resolves to a voxel set, and the
-   trajectory is clear. Range uses
+   trajectory is clear. `TargetingSpec::reach` explicitly chooses ordinary `Ranged`
+   geometry or exact `Touch` reach. Ranged targeting uses
    [`in_reach`](../../crates/hex_units/src/targeting.rs) (**built**), so **spells
    inherit high-ground-buys-range automatically** from the same rule engagement uses.
    Direct, authored-rise Arc, and None trajectory checks are built and wired; see
-   *Obstruction*. Radial per-voxel clipping runs after the anchor remains legal.
+   *Obstruction*. Touch is checked against an occupied unit rather than an empty
+   surface; self is always in reach, while another unit requires a bidirectional edge
+   in the caster's body-specific `Footing`. Radial per-voxel clipping runs after the
+   anchor remains legal.
 4. **Unit interaction — exact commit snapshot.** The implementation snapshots every
    exact `StandsOn` occupant in the clipped volume when the cast commits, then resolves
    authored effects and stable `UnitId`s in that order without a faction filter. It
@@ -248,6 +252,23 @@ design rather than an oversight: divination is the *lattice*-information channel
 designed, and Unknown positions are unpickable by design so there would be nothing to
 name anyway. If one is ever specified, the exception is one condition in this ladder
 and changes nothing about the boundary with the world owner.
+
+### Ranged and touch reach
+
+`Touch` is a distinct authored reach, not shorthand for range one. Content validation
+requires `range: 0`, `shape: Single`, and `trajectory: None`; omitted `reach` in older
+content continues to mean `Ranged`. A touch anchor must be a currently Observed,
+occupied unit position. The caster may target itself without a graph edge. Any other
+target must have an exact support-to-support step that the caster's current `Footing`
+admits in both directions, so an ordinary mutual step is touch while a one-way drop,
+cliff, stacked surface, or merely adjacent empty tile is not.
+
+Touch and restoration eligibility are pre-payment gates. An unobserved or empty
+anchor, an out-of-touch unit, a target without a lattice, or a fully restored lattice
+refuses without spending mana or the action. A hostile restoration target additionally
+requires a complete current lattice view through faction knowledge before authority
+may inspect whether it is damaged. There is still no faction filter: once that
+knowledge gate is satisfied, healing an enemy is legal.
 
 ### Occupancy
 
@@ -475,13 +496,14 @@ without touching the framework, which is the point of having one.
   unit from the turn order and leaves it revivable by a restoring spell. Functional
   death and permadeath remain separate design decisions. Further damaging casts refuse
   a downed target before payment, while Reveal may still inspect its retained lattice.
-- **Renewal is an exact caster choice.** `RestoreHexes` parks
+- **Restoration is an exact caster choice.** `RestoreHexes` parks
   `PendingDecision::ChooseRestores`; a player caster selects disabled cells on the
   target lattice, while a non-player caster uses its registered deterministic
   algorithm. The answer remains a replayable `ChooseRestores` command rather than an
-  internal healing policy. Shipped Renewal carries only `RestoreHexes(count: 2)`;
-  its former `ModifyIncomingDisables` entry was removed because one-shot wards have
-  no delivered runtime lifecycle.
+  internal healing policy. Canonical Heal is a tier-one Life, fixed-mana Evocation
+  using `Touch` and `RestoreHexes(count: 1)`. Renewal remains the stronger ranged
+  `RestoreHexes(count: 2)` spell; its former `ModifyIncomingDisables` entry was removed
+  because one-shot wards have no delivered runtime lifecycle.
 - **Only one exact-cell choice is public at a time.** Content validation still prevents
   incompatible choice-producing effects, while the implementation may queue several
   area Disable recipients behind the existing `PendingDecision`. It publishes the next

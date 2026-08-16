@@ -115,15 +115,23 @@ ordinary-network destination in all 19 regions. The Sky Islands case intentional
 stops at its grounded bridge because upper surfaces require flight.
 
 `OrbitCamera(yaw_turns, pitch_fraction)` injects a bounded, multi-frame held-right-
-button cursor drag. It never writes `PanOrbitCamera` or Character collision state.
+button cursor drag. It never writes `PanOrbitCamera` or camera-collision state.
 Each gesture is limited to half a yaw turn and one quarter-turn of pitch, and the
-ordinary camera system remains responsible for Character pitch clamping and desired-
-pose authorship. `walks/camera_routes.ron` contains exactly one seed-pinned case for
+ordinary camera system remains responsible for character-view pitch clamping and
+desired-pose authorship. `walks/camera_routes.ron` contains exactly one seed-pinned case for
 every selectable Map scenario, with exact destinations and the azimuths that must be
 reviewed. Scripted destinations must be members of that manifest. These steps provide
 route evidence only when a map owner has authored and validated the waypoint sequence;
 a capture-only script is not a traversal test, and no script may teleport, suppress
 combat, fake flight reachability, or bypass pathfinding.
+
+`AssertCameraMode(Map|Character|FirstPerson)` reads the public camera-mode resource and
+fails immediately when ordinary input did not produce the authored transition. The
+focused `walks/camera_first_person.ron` Mountains route uses those assertions to prove
+the three-state cycle, then exercises normal click movement and right-drag look before
+capturing the returned Map frame; typed tests prove exact pose and projection
+restoration. It is presentation evidence, not another entry in the 17-map third-person
+route manifest.
 
 ## Scope selection
 
@@ -305,10 +313,10 @@ conflict-safe row restore after a swap, focused Enter/Space refusal, confirmed R
 All, shipping/development action-inventory separation, and schema-v3 restart.
 Cross-build restart coverage also proves a development-only binding is deterministically
 rehomed when a shipping edit later occupies its chord without rewriting player actions.
-Inspection cases prove
-first activation centers one disclosed subject, repeated activation opens Character
-Main View, Character camera follows, and selection, turn, caster, command ownership,
-formation, and unobserved hostile location remain unchanged.
+Inspection cases prove first activation centers one disclosed subject, repeated
+activation opens Character Main View, both character cameras follow with fallback to
+gameplay selection, and selection, turn, caster, command ownership, formation, and
+unobserved hostile location remain unchanged.
 
 ### Campaign persistence evidence
 
@@ -427,12 +435,12 @@ does not convert a known gameplay failure into a pass. Release promotions still
 require the named-human presentation PASS over the complete shipped build.
 
 HUD sign-off includes every default shortcut, a custom visibility combination,
-master-hidden one-surface summons, Map centering and Character follow, a blocking
-decision, deployment/outcome suppression, Compact map-only presentation, one binding
-conflict resolved through Swap, and the post-restart presentation of hook-proven
-preference state. The reviewer confirms that ordinary hidden components leave no
-drawer, handle, tooltip, or hit region behind; typed restart contracts prove exactly
-what persisted.
+master-hidden one-surface summons, Map centering and both character-camera follow
+paths, a blocking decision, deployment/outcome suppression, Compact map-only
+presentation, one binding conflict resolved through Swap, and the post-restart
+presentation of hook-proven preference state. The reviewer confirms that ordinary
+hidden components leave no drawer, handle, tooltip, or hit region behind; typed
+restart contracts prove exactly what persisted.
 
 ## Anti-patterns
 

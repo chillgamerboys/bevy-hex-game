@@ -22,6 +22,8 @@
 
 use bevy::prelude::*;
 
+/// Exact occupancy projected from opt-in authored non-terrain objects.
+pub mod authored_object_occupancy;
 /// Planning exact, rotating, compressed whole-party routes.
 pub mod formation;
 /// Which surfaces a piece may step between.
@@ -49,9 +51,13 @@ pub mod units;
 /// Turning a spell's shape into the exact voxels it reaches.
 pub mod volumes;
 
+pub use authored_object_occupancy::{
+    AuthoredObjectOccupancy, AuthoredObjectOccupancySystems, InvalidAuthoredObjectRun,
+};
 pub use formation::{
-    plan_formation_move, plan_formation_move_with_occupancy, rotated, FormationMember,
-    FormationPlan, FormationPlanError,
+    formation_subset_anchor, plan_formation_move, plan_formation_move_with_occupancy,
+    plan_formation_subset_move_with_occupancy, rotated, FormationMember, FormationPlan,
+    FormationPlanError,
 };
 pub use hex_core::{Faction, OccupancyBlock, UnitOccupancy};
 pub use movement::{
@@ -62,7 +68,7 @@ pub use selection::{
     HoveredSurface, OutOfRangeOverlay, PathOverlay, RangeOverlay, Selected, TargetReticle,
     TerrainRevision, UnitRing,
 };
-pub use targeting::{either_in_reach, high_ground_bonus, in_reach};
+pub use targeting::{either_in_reach, high_ground_bonus, in_reach, in_touch_reach};
 pub use terrain_creation::{
     resolve_creation_volume, validate_creation_volume, CreationBody, TerrainCreationBlock,
 };
@@ -71,12 +77,13 @@ pub use terrain_occupancy::{
 };
 pub use terrain_reconciliation::{plan_unsupported_actor_landing, NoLanding};
 pub use trajectories::{
-    known_trajectory_is_clear, sight_segment_is_clear, supercover, terrain_sight_is_clear,
+    authored_object_sight_segment_is_clear, known_trajectory_is_clear, sight_segment_is_clear,
+    supercover, terrain_and_authored_object_sight_is_clear, terrain_sight_is_clear,
     trajectory_destination, trajectory_is_clear, trajectory_voxels,
 };
 pub use units::{
-    Archetype, Downed, Enemy, MovingTo, Party, Player, StandsOn, StopMovingAt, UnitAllocator,
-    UnitRegistry,
+    spawn_replica_unit, Archetype, Downed, Enemy, MovingTo, Party, Player, ReplicaUnitSpawn,
+    ReplicaUnitSpawnError, StandsOn, StopMovingAt, UnitAllocator, UnitRegistry,
 };
 // `volumes` is deliberately not re-exported here. Its names are bare verbs —
 // `line`, `column`, `path`, `resolve` — that only read correctly qualified, and
@@ -91,6 +98,7 @@ pub fn plugin(app: &mut App) {
     app.add_plugins((
         hex_anim::plugin,
         terrain_occupancy::plugin,
+        authored_object_occupancy::plugin,
         movement::plugin,
         units::plugin,
         selection::plugin,

@@ -55,8 +55,8 @@ cargo editor -- --project-root /path/to/bevy-hex-game
 
 ## First-run smoke test
 
-The Main Menu should show exactly **Campaign**, **Sandbox**, **Tools**, and
-**Settings**. On a fresh data directory, Campaign must show exactly three empty
+The Main Menu should show exactly **Campaign**, **Sandbox**, **Multiplayer**, **Tools**,
+and **Settings**. On a fresh data directory, Campaign must show exactly three empty
 indexed cards. Tools must show Character Creator, Spell Creator, and a disabled Map
 Creator labelled Coming Soon.
 
@@ -73,10 +73,10 @@ six-slot interaction is used for Party and Enemies.
 
 | Default input | Action |
 |---|---|
-| Right-mouse drag | Orbit the camera around its focus |
-| `W` `A` `S` `D` | Pan the camera in Map mode |
-| Mouse wheel | Zoom |
-| `C` | Toggle Map / Character camera modes |
+| Right-mouse drag | Look around the current camera focus; First Person keeps the cursor visible |
+| `W` `A` `S` `D` | Pan the camera in Map mode; First Person remains click-to-move |
+| Mouse wheel | Zoom in Map and Third Person; First Person keeps a fixed eye |
+| `C` | Cycle Map → Third Person → First Person → Map |
 | Hover a hex tile | Preview the reachable area and route |
 | Left-click a hex tile | Move the piece along that route |
 | Click a spell row, then a lit target | Aim a cast |
@@ -179,6 +179,10 @@ through Dozen, compared with roughly 11 FPS through llvmpipe.
 - Change designer-facing values through [config.md](config.md).
 - Diagnose a wrong or silent window with
   [troubleshooting.md](troubleshooting.md).
+- Run same-network Sandbox multiplayer through the zero-configuration
+  [LAN discovery procedure](lan-multiplayer-testing.md).
+- Run Direct multiplayer between remote testers through the temporary
+  [Tailscale playtest procedure](remote-multiplayer-testing.md).
 - Learn the project boundaries in [architecture.md](../architecture.md).
 - Read the contribution workflow and required checks in
   [CONTRIBUTING.md](../../CONTRIBUTING.md).

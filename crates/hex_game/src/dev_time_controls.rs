@@ -412,6 +412,7 @@ mod tests {
             .add_plugins((
                 hex_world::sky::plugin,
                 hex_units::terrain_occupancy::plugin,
+                hex_units::authored_object_occupancy::plugin,
                 hex_perception::plugin,
                 plugin,
             ));

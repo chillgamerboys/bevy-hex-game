@@ -42,7 +42,10 @@ fn test_app() -> App {
         .expect("the shared synthetic arena must be valid");
     let app = builder.app_mut();
     app.insert_resource(hex_assets::CombatSettings::default());
-    app.add_plugins(hex_combat::plugin);
+    app.add_plugins((
+        hex_units::authored_object_occupancy::plugin,
+        hex_combat::plugin,
+    ));
     app.init_resource::<UnitRegistry>();
     let mut app = builder.build();
     app.world_mut()
@@ -331,13 +334,16 @@ fn exploring_rest_recovers_only_the_party() {
         disable(&mut app, entity, &[LatticeCoord::ORIGIN]);
         app.world_mut().entity_mut(entity).insert(Downed);
     }
+    app.world_mut()
+        .entity_mut(second)
+        .insert(ControlOwner(PlayerSeat(5)));
     app.world_mut().resource_mut::<Party>().members = vec![UnitId(0), UnitId(1)];
 
     app.world_mut()
         .resource_mut::<CommandQueue>()
         .push(IssuedCommand {
-            seat: PlayerSeat::default(),
-            command: GameCommand::Rest { unit: UnitId(0) },
+            seat: PlayerSeat(5),
+            command: GameCommand::Rest { unit: UnitId(1) },
         });
     app.update();
 

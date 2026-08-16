@@ -20,8 +20,13 @@ use hex_core::{HexCoord, Level};
 use serde::de::{Error as _, IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
+/// Highest level admitted by the frozen V1 and V2 generators.
 pub(crate) const MAX_PROCEDURAL_LEVEL: Level = 128;
+/// Highest occupied voxel level admitted by V3 settings and semantic volumes.
+pub(crate) const MAX_V3_LEVEL: Level = 256;
 const SKY_UPPER_VERTICAL_BUDGET: Level = 20;
+/// Fixed shell, woodland crown, and clear-space budget above the stair rise.
+pub(crate) const CRYSTAL_ASCENT_CROWN_VERTICAL_BUDGET: Level = 24;
 pub(crate) const MAX_WALKER_PORT_COUNT: u8 = 4;
 pub(crate) const MAX_SEAM_PORT_WIDTH: u32 = 4;
 /// Exact region count of the V3 two-rings composite.
@@ -796,6 +801,8 @@ pub enum V3RecipeSettings {
     Shore(V3ShoreSettings),
     /// One dominant massif generated over a connected multi-cell union mask.
     DeepMountain(V3DeepMountainSettings),
+    /// A monumental authored stair tower around an open crystal shaft.
+    CrystalAscent(V3CrystalAscentSettings),
 }
 
 /// V3 Hills parameters, intentionally independent from the frozen V2 payload.
@@ -928,6 +935,16 @@ pub struct V3DeepMountainSettings {
     pub treeline: Level,
     /// Level at which exposed surfaces become snow covered.
     pub snowline: Level,
+}
+
+/// V3 Crystal Ascent parameters.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V3CrystalAscentSettings {
+    /// Surface level of the lower entrance and central chamber.
+    pub base_level: Level,
+    /// Exact vertical rise from the lower chamber to the wooded crown.
+    pub rise_levels: Level,
 }
 
 /// Reserved Waterfall recipe payload.
@@ -1512,10 +1529,16 @@ impl MacroLayoutSettings {
             }
             if instance.elevation.low < 0
                 || instance.elevation.low > instance.elevation.high
-                || instance.elevation.high > MAX_PROCEDURAL_LEVEL
+                || instance.elevation.high > MAX_V3_LEVEL
             {
                 return Err(format!(
-                    "V3 Macro instance {:?} elevation must satisfy 0 <= low <= high <= {MAX_PROCEDURAL_LEVEL}",
+                    "V3 Macro instance {:?} elevation must satisfy 0 <= low <= high <= {MAX_V3_LEVEL}",
+                    instance.name
+                ));
+            }
+            if matches!(instance.recipe, V3RecipeSettings::CrystalAscent(_)) {
+                return Err(format!(
+                    "V3 Macro instance {:?} uses CrystalAscent, whose union-mask implementation is unavailable",
                     instance.name
                 ));
             }
@@ -1829,6 +1852,7 @@ enum MacroBiomeKind {
     Beach,
     Shore,
     DeepMountain,
+    CrystalAscent,
 }
 
 impl MacroBiomeKind {
@@ -1848,6 +1872,7 @@ impl MacroBiomeKind {
             V3RecipeSettings::Beach(_) => Self::Beach,
             V3RecipeSettings::Shore(_) => Self::Shore,
             V3RecipeSettings::DeepMountain(_) => Self::DeepMountain,
+            V3RecipeSettings::CrystalAscent(_) => Self::CrystalAscent,
         }
     }
 }
@@ -2093,9 +2118,9 @@ fn validate_macro_liquid_width(width: u32) -> Result<(), String> {
 }
 
 fn validate_macro_liquid_level(level: Level) -> Result<(), String> {
-    if !(3..=MAX_PROCEDURAL_LEVEL).contains(&level) {
+    if !(3..=MAX_V3_LEVEL).contains(&level) {
         return Err(format!(
-            "V3 Macro liquid level must be between 3 and {MAX_PROCEDURAL_LEVEL}"
+            "V3 Macro liquid level must be between 3 and {MAX_V3_LEVEL}"
         ));
     }
     Ok(())
@@ -2745,6 +2770,7 @@ const fn ring19_recipe_name(recipe: &V3RecipeSettings) -> &'static str {
         V3RecipeSettings::Beach(_) => "Beach",
         V3RecipeSettings::Shore(_) => "Shore",
         V3RecipeSettings::DeepMountain(_) => "DeepMountain",
+        V3RecipeSettings::CrystalAscent(_) => "CrystalAscent",
     }
 }
 
@@ -2874,16 +2900,22 @@ fn validate_v3_recipe(
                 || settings.treeline >= settings.snowline
                 || settings.snowline >= settings.summit_level
                 || settings.summit_level > settings.hard_cap
-                || settings.hard_cap > MAX_PROCEDURAL_LEVEL
+                || settings.hard_cap > MAX_V3_LEVEL
             {
                 return Err(format!(
-                    "V3 DeepMountain must satisfy 5 <= treeline < snowline < summit_level <= hard_cap <= {MAX_PROCEDURAL_LEVEL}"
+                    "V3 DeepMountain must satisfy 5 <= treeline < snowline < summit_level <= hard_cap <= {MAX_V3_LEVEL}"
                 ));
             }
             Ok(())
         }
         (V3RecipeSettings::DeepMountain(_), _) => {
             Err("V3 DeepMountain requires the Alpine environment".to_owned())
+        }
+        (V3RecipeSettings::CrystalAscent(settings), V3EnvironmentSettings::TemperateGrassland) => {
+            settings.validate(grid_radius)
+        }
+        (V3RecipeSettings::CrystalAscent(_), _) => {
+            Err("V3 CrystalAscent requires the TemperateGrassland environment".to_owned())
         }
     }
 }
@@ -2917,9 +2949,9 @@ fn validate_ring19_liquid_width(width: u32, label: &str) -> Result<(), String> {
 }
 
 fn validate_ring19_liquid_level(level: Level, label: &str) -> Result<(), String> {
-    if !(3..=MAX_PROCEDURAL_LEVEL).contains(&level) {
+    if !(3..=MAX_V3_LEVEL).contains(&level) {
         return Err(format!(
-            "V3 Ring19 {label} level must be between 3 and {MAX_PROCEDURAL_LEVEL}"
+            "V3 Ring19 {label} level must be between 3 and {MAX_V3_LEVEL}"
         ));
     }
     Ok(())
@@ -3157,11 +3189,11 @@ impl EdgeElevationSettings {
         if self.min < 0
             || self.min > self.preferred
             || self.preferred > self.max
-            || self.max > MAX_PROCEDURAL_LEVEL
+            || self.max > MAX_V3_LEVEL
         {
             return Err(format!(
                 "{label} elevation must satisfy 0 <= min <= preferred <= max <= \
-                 {MAX_PROCEDURAL_LEVEL}"
+                 {MAX_V3_LEVEL}"
             ));
         }
         Ok(())
@@ -3347,9 +3379,9 @@ impl V3HillsSettings {
         let Some(highest_surface) = self.valley_level.checked_add(self.max_relief) else {
             return Err("V3 Hills level relationship overflows Level".to_owned());
         };
-        if highest_surface > MAX_PROCEDURAL_LEVEL {
+        if highest_surface > MAX_V3_LEVEL {
             return Err(format!(
-                "V3 Hills surfaces cannot exceed level {MAX_PROCEDURAL_LEVEL}"
+                "V3 Hills surfaces cannot exceed level {MAX_V3_LEVEL}"
             ));
         }
         if !(1..=6).contains(&self.hills_per_bank) {
@@ -3379,9 +3411,9 @@ impl V3SkyIslandsSettings {
             .checked_add(self.min_clearance)
             .and_then(|level| level.checked_add(SKY_UPPER_VERTICAL_BUDGET))
             .ok_or_else(|| "V3 SkyIslands level relationship overflows Level".to_owned())?;
-        if highest_reserved > MAX_PROCEDURAL_LEVEL {
+        if highest_reserved > MAX_V3_LEVEL {
             return Err(format!(
-                "V3 SkyIslands reserved volume cannot exceed level {MAX_PROCEDURAL_LEVEL}"
+                "V3 SkyIslands reserved volume cannot exceed level {MAX_V3_LEVEL}"
             ));
         }
         Ok(())
@@ -3407,9 +3439,9 @@ impl V3MountainsSettings {
         let Some(highest_surface) = self.base_level.checked_add(self.relief) else {
             return Err("V3 Mountains level relationship overflows Level".to_owned());
         };
-        if highest_surface > MAX_PROCEDURAL_LEVEL {
+        if highest_surface > MAX_V3_LEVEL {
             return Err(format!(
-                "V3 Mountains surfaces cannot exceed level {MAX_PROCEDURAL_LEVEL}"
+                "V3 Mountains surfaces cannot exceed level {MAX_V3_LEVEL}"
             ));
         }
         Ok(())
@@ -3466,9 +3498,9 @@ impl V3VolcanoSettings {
         let Some(highest_surface) = self.base_level.checked_add(self.summit_relief) else {
             return Err("V3 Volcano level relationship overflows Level".to_owned());
         };
-        if highest_surface > MAX_PROCEDURAL_LEVEL {
+        if highest_surface > MAX_V3_LEVEL {
             return Err(format!(
-                "V3 Volcano surfaces cannot exceed level {MAX_PROCEDURAL_LEVEL}"
+                "V3 Volcano surfaces cannot exceed level {MAX_V3_LEVEL}"
             ));
         }
         Ok(())
@@ -3500,6 +3532,33 @@ impl V3PrairieSettings {
     }
 }
 
+impl V3CrystalAscentSettings {
+    fn validate(&self, grid_radius: u32) -> Result<(), String> {
+        if grid_radius != 40 {
+            return Err("procedural V3 CrystalAscent requires grid_radius exactly 40".to_owned());
+        }
+        if self.base_level < 5 {
+            return Err(
+                "V3 CrystalAscent base_level must leave room for bedrock and strata".to_owned(),
+            );
+        }
+        if !(100..=200).contains(&self.rise_levels) {
+            return Err("V3 CrystalAscent rise_levels must be between 100 and 200".to_owned());
+        }
+        let highest_reserved = self
+            .base_level
+            .checked_add(self.rise_levels)
+            .and_then(|level| level.checked_add(CRYSTAL_ASCENT_CROWN_VERTICAL_BUDGET))
+            .ok_or_else(|| "V3 CrystalAscent level relationship overflows Level".to_owned())?;
+        if highest_reserved > MAX_V3_LEVEL {
+            return Err(format!(
+                "V3 CrystalAscent crown and reserved headroom cannot exceed level {MAX_V3_LEVEL}"
+            ));
+        }
+        Ok(())
+    }
+}
+
 fn validate_vegetation_landform(
     grid_radius: u32,
     base_level: Level,
@@ -3520,9 +3579,9 @@ fn validate_vegetation_landform(
     let Some(highest_surface) = base_level.checked_add(max_relief) else {
         return Err(format!("V3 {recipe} level relationship overflows Level"));
     };
-    if highest_surface > MAX_PROCEDURAL_LEVEL {
+    if highest_surface > MAX_V3_LEVEL {
         return Err(format!(
-            "V3 {recipe} surfaces cannot exceed level {MAX_PROCEDURAL_LEVEL}"
+            "V3 {recipe} surfaces cannot exceed level {MAX_V3_LEVEL}"
         ));
     }
     Ok(())
@@ -4128,6 +4187,25 @@ mod tests {
             west: PatchEdgeContractSettings::WorldBoundary,
             north_west: PatchEdgeContractSettings::WorldBoundary,
             north_east: PatchEdgeContractSettings::WorldBoundary,
+        }
+    }
+
+    fn crystal_ascent_settings(base_level: Level, rise_levels: Level) -> MapSettings {
+        MapSettings {
+            grid_radius: 40,
+            level_height: 0.4,
+            terrain: TerrainSettings::Procedural(ProceduralSettings::V3(ProceduralV3Settings {
+                layout: V3LayoutSettings::Single(PatchSpec {
+                    environment: V3EnvironmentSettings::TemperateGrassland,
+                    recipe: V3RecipeSettings::CrystalAscent(V3CrystalAscentSettings {
+                        base_level,
+                        rise_levels,
+                    }),
+                    overlays: Vec::new(),
+                    mask: PatchMaskSettings::WholeWorld,
+                    edges: world_boundary_edges(),
+                }),
+            })),
         }
     }
 
@@ -4858,7 +4936,7 @@ mod tests {
             "a boundary outlet must name an exact outer side"
         );
 
-        for invalid_level in [2, MAX_PROCEDURAL_LEVEL + 1] {
+        for invalid_level in [2, MAX_V3_LEVEL + 1] {
             let mut invalid_connection_level = valid_ring19();
             invalid_connection_level
                 .liquid_connections
@@ -5220,6 +5298,95 @@ mod tests {
         );
         ron::from_str::<MapSettings>(&nested_unknown)
             .expect_err("V3 recipe payloads must reject derived or misspelled fields");
+    }
+
+    #[test]
+    fn crystal_ascent_validates_supported_rises_and_reserved_ceiling() {
+        for rise_levels in [100, 144, 200] {
+            crystal_ascent_settings(6, rise_levels)
+                .validate()
+                .unwrap_or_else(|error| {
+                    panic!("CrystalAscent rise {rise_levels} should validate: {error}")
+                });
+        }
+
+        for rise_levels in [99, 201] {
+            let error = crystal_ascent_settings(6, rise_levels)
+                .validate()
+                .expect_err("a rise outside 100 through 200 must fail");
+            assert!(
+                error.contains("rise_levels must be between 100 and 200"),
+                "unexpected error: {error}"
+            );
+        }
+
+        crystal_ascent_settings(32, 200)
+            .validate()
+            .expect("a crown ending exactly at the inclusive V3 ceiling should validate");
+        let error = crystal_ascent_settings(33, 200)
+            .validate()
+            .expect_err("reserved crown headroom above the V3 ceiling must fail");
+        assert!(
+            error.contains("cannot exceed level 256"),
+            "unexpected error: {error}"
+        );
+
+        let mut wrong_radius = crystal_ascent_settings(6, 144);
+        wrong_radius.grid_radius = 39;
+        let error = wrong_radius
+            .validate()
+            .expect_err("the authored standalone footprint requires radius 40");
+        assert!(error.contains("exactly 40"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn crystal_ascent_ron_is_strict_and_temperate_only() {
+        let recipe: V3RecipeSettings =
+            ron::from_str("CrystalAscent((base_level: 6, rise_levels: 144))")
+                .expect("the CrystalAscent payload should deserialize");
+        assert_eq!(
+            recipe,
+            V3RecipeSettings::CrystalAscent(V3CrystalAscentSettings {
+                base_level: 6,
+                rise_levels: 144,
+            })
+        );
+        ron::from_str::<V3RecipeSettings>(
+            "CrystalAscent((base_level: 6, rise_levels: 144, typoed_field: 1))",
+        )
+        .expect_err("CrystalAscent payloads must reject unknown fields");
+        assert!(
+            validate_v3_recipe(&recipe, V3EnvironmentSettings::Rocky, 40).is_err(),
+            "CrystalAscent remains temperate-only"
+        );
+    }
+
+    #[test]
+    fn crystal_ascent_is_rejected_by_the_current_macro_composer() {
+        let mut settings = shipped_macro_settings();
+        let TerrainSettings::Procedural(ProceduralSettings::V3(ProceduralV3Settings {
+            layout: V3LayoutSettings::Macro(layout),
+        })) = &mut settings.terrain
+        else {
+            panic!("the shipped Mountain Range settings should use V3 Macro")
+        };
+        let instance = layout
+            .instances
+            .first_mut()
+            .expect("the shipped Macro fixture has at least one instance");
+        instance.environment = V3EnvironmentSettings::TemperateGrassland;
+        instance.recipe = V3RecipeSettings::CrystalAscent(V3CrystalAscentSettings {
+            base_level: 6,
+            rise_levels: 144,
+        });
+
+        let error = settings
+            .validate()
+            .expect_err("Macro must reject CrystalAscent until union-mask composition lands");
+        assert!(
+            error.contains("CrystalAscent, whose union-mask implementation is unavailable"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
@@ -5976,25 +6143,51 @@ mod tests {
             "unexpected error: {v1_error}"
         );
 
-        let v2_hills = include_str!("../../../assets/config/worlds/procedural-hills.ron").replacen(
-            "valley_level: 15",
-            "valley_level: 125",
-            1,
-        );
-        let v2_error = ron::from_str::<MapSettings>(&v2_hills)
-            .expect_err("V2 Hills above the allocation ceiling should fail");
+        let v2_error = V2HillsSettings {
+            valley_level: 125,
+            max_relief: 8,
+            hills_per_bank: 3,
+        }
+        .validate(12)
+        .expect_err("V2 Hills above the allocation ceiling should fail");
         assert!(
-            v2_error.to_string().contains("cannot exceed level 128"),
+            v2_error.contains("cannot exceed level 128"),
             "unexpected error: {v2_error}"
         );
 
-        let sky = include_str!("../../../assets/config/worlds/procedural-sky-islands.ron")
-            .replacen("valley_level: 15", "valley_level: 125", 1);
-        let sky_error = ron::from_str::<MapSettings>(&sky)
-            .expect_err("sky islands must reserve bounded space for optional relief");
+        let sky_error = LayeredSkyIslandsSettings {
+            ground: V2HillsSettings {
+                valley_level: 100,
+                max_relief: 8,
+                hills_per_bank: 3,
+            },
+            min_clearance: 14,
+            upper_coverage_percent: 20,
+        }
+        .validate(12)
+        .expect_err("V2 sky islands must reserve bounded space for optional relief");
         assert!(
-            sky_error.to_string().contains("cannot exceed level 128"),
+            sky_error.contains("cannot exceed level 128"),
             "unexpected error: {sky_error}"
+        );
+
+        V3HillsSettings {
+            valley_level: 244,
+            max_relief: 12,
+            hills_per_bank: 3,
+        }
+        .validate(40)
+        .expect("V3 should admit a surface exactly at its independent level-256 ceiling");
+        let v3_error = V3HillsSettings {
+            valley_level: 245,
+            max_relief: 12,
+            hills_per_bank: 3,
+        }
+        .validate(40)
+        .expect_err("V3 must reject a surface above its independent level ceiling");
+        assert!(
+            v3_error.contains("cannot exceed level 256"),
+            "unexpected error: {v3_error}"
         );
     }
 
