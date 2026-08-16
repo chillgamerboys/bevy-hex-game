@@ -301,6 +301,13 @@ fn render_tools(root: &mut ChildSpawnerCommands, assets: &UiAssets) {
                 MainMenuIntent::OpenSpellCreator,
                 UiVisibilityRequirement::Immediate,
             );
+            menu_button(
+                tools,
+                assets,
+                "VFX Tuner",
+                MainMenuIntent::OpenVfxTuner,
+                UiVisibilityRequirement::Immediate,
+            );
         });
     menu_button(
         root,

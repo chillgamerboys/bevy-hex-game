@@ -12,6 +12,7 @@ mod main_menu;
 pub(crate) mod sandbox;
 mod settings;
 mod splash;
+mod vfx_tuner;
 
 pub use hex_ui::despawn_screen;
 
@@ -27,5 +28,6 @@ pub(super) fn plugin(app: &mut App) {
         lattice_demo::plugin,
         loading::plugin,
         gameplay::plugin,
+        vfx_tuner::plugin,
     ));
 }

@@ -8,7 +8,9 @@ description = "Thin launcher library and composition root for gameplay, world, a
 
 [dependencies]
 bevy = { workspace = true }
+bevy_hanabi = { workspace = true }
 atomicwrites = { workspace = true }
+hex_anim = { workspace = true }
 hex_assets = { workspace = true }
 hex_objects = { workspace = true }
 hex_combat = { workspace = true }
@@ -21,6 +23,7 @@ hex_map = { workspace = true }
 hex_perception = { workspace = true }
 hex_world = { workspace = true }
 hex_dev = { workspace = true, optional = true }
+rand = { workspace = true }
 ron = { workspace = true }
 serde = { workspace = true }
 serde_json = "1"
@@ -30,7 +33,6 @@ xxhash-rust = { workspace = true }
 # Only for the tests that open each scenario's world file and check it parses.
 ron = { workspace = true }
 hex_ai = { workspace = true }
-hex_anim = { workspace = true }
 hex_test_support = { workspace = true }
 
 [features]
@@ -39,9 +41,15 @@ hex_test_support = { workspace = true }
 default = []
 # Development tooling: world inspector, debug overlays, and live asset reload so
 # editing a file under assets/config/ takes effect without restarting.
+# `bevy/dynamic_linking` links Bevy as a shared library instead of statically
+# into every binary/example/test, which is most of what makes target/debug/deps
+# huge in a workspace with several Bevy binaries. It rides this feature so it
+# is on for `cargo dev` and absent from `cargo build --release` with no
+# separate flag to remember.
 dev = [
     "dep:hex_dev",
     "bevy/file_watcher",
+    "bevy/dynamic_linking",
     "hex_core/dev-input",
     "hex_ui/dev-tools",
 ]

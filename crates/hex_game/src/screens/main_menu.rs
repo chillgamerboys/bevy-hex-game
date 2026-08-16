@@ -79,6 +79,7 @@ fn handle_intents(
                 )));
                 next.set(Screen::SpellCreator);
             }
+            MainMenuIntent::OpenVfxTuner => next.set(Screen::VfxTuner),
             MainMenuIntent::Back => {
                 let _consumed = model.back();
             }

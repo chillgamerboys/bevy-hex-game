@@ -31,6 +31,15 @@ pub enum Screen {
     /// Exists as an isolated manual-verification surface for casting, fusions, mana,
     /// disables, and enchantments. It is not part of Main Menu navigation.
     LatticeDemo,
+    /// Spell VFX authoring: a caster and a target dummy on a bare plate, with no
+    /// terrain, combat, mana, or turn order in the way, and the selected spell's
+    /// animation parameters editable beside them.
+    ///
+    /// Exists so a designer can tune `spell_animations.ron` and replay the cast on
+    /// demand — edit, play, edit, play — instead of waiting for a real turn in a
+    /// real encounter. Reached from Main Menu Tools, beside the Character and Spell
+    /// Creators, which is the same authoring role.
+    VfxTuner,
     /// Saved character authoring, reached through the primary Creator workspace.
     CharacterCreator,
     /// Saved spell authoring, reached through the primary Creator workspace.

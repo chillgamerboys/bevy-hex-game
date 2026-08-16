@@ -477,6 +477,118 @@ pub enum LatticeDemoIntent {
     Reset,
 }
 
+/// One authored spell animation as the VFX tuner's spell list shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VfxTunerSpellView {
+    /// Spell name, the key into `spell_animations.ron`.
+    pub name: String,
+    /// Short motion/style summary, e.g. "Beam · Spark".
+    pub summary: String,
+    /// Whether this is the spell currently being tuned.
+    pub selected: bool,
+}
+
+/// Which tunable parameter a VFX tuner row edits.
+///
+/// Deliberately a flat enum rather than a reflection path: the tuner is a fixed set
+/// of authored knobs, and naming them as data keeps `hex_ui` free of any dependency
+/// on `hex_assets`, which owns the struct these map onto.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VfxTunerField {
+    /// The motion archetype: instant flash, beam, or travelling projectile.
+    Motion,
+    /// The particle look: spark or flame.
+    Style,
+    /// The archetype's leading timing — hold, flash, or travel seconds.
+    TimingPrimary,
+    /// Seconds the impact burst is held. Absent for an instant flash.
+    TimingImpact,
+    /// A beam or arc line's cross-section width, independent of particle size.
+    BeamThickness,
+    /// How far an arc's path wanders off the straight line to its target.
+    ArcDisplacement,
+    /// How many times an arc's path is subdivided, i.e. how fine its crackle is.
+    ArcSubdivisions,
+    /// How many forked branches split off an arc.
+    ArcBranches,
+    /// Whether a projectile trails particles across its flight.
+    Trail,
+    /// How many particles the effect spawns.
+    ParticleCount,
+    /// World units/second particles leave the emitter at.
+    ParticleSpeed,
+    /// Seconds an individual particle lives.
+    ParticleLifetime,
+    /// Individual particle size, and a beam's thickness.
+    Scale,
+    /// Radius of the ball particles spawn inside and fly out from.
+    Spread,
+    /// Whether an explicit color replaces the spell's flavor-element tint.
+    ColorOverride,
+    /// Red channel of the color override.
+    ColorRed,
+    /// Green channel of the color override.
+    ColorGreen,
+    /// Blue channel of the color override.
+    ColorBlue,
+}
+
+/// How a VFX tuner row is operated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VfxTunerControl {
+    /// A decrement/increment pair around a numeric readout.
+    Nudge,
+    /// A single button advancing to the next value in a closed set.
+    Cycle,
+}
+
+/// One tunable parameter row in the VFX tuner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VfxTunerRowView {
+    /// The parameter this row edits.
+    pub field: VfxTunerField,
+    /// Player-facing parameter name.
+    pub label: String,
+    /// Formatted current value.
+    pub value: String,
+    /// How the row is operated.
+    pub control: VfxTunerControl,
+}
+
+/// Immutable spell VFX tuner presentation.
+#[derive(Resource, Debug, Default, Clone, PartialEq, Eq)]
+pub struct VfxTunerView {
+    /// Whether authored animation content has loaded.
+    pub ready: bool,
+    /// Every authored spell animation, in stable name order.
+    pub spells: Vec<VfxTunerSpellView>,
+    /// Tunable parameters of the selected spell, empty when none is selected.
+    pub rows: Vec<VfxTunerRowView>,
+    /// Result of the most recent save, or other transient notice.
+    pub status: Option<String>,
+    /// Whether the live values differ from what is on disk.
+    pub dirty: bool,
+}
+
+/// Typed spell VFX tuner controls.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VfxTunerIntent {
+    /// Tune a different spell.
+    Select(String),
+    /// Step the field's value down.
+    Decrement(VfxTunerField),
+    /// Step the field's value up.
+    Increment(VfxTunerField),
+    /// Advance the field to the next value in its closed set.
+    Cycle(VfxTunerField),
+    /// Replay the selected spell's cast on the preview dummies.
+    Play,
+    /// Write the live values back to `spell_animations.ron`.
+    Save,
+    /// Discard live edits and reload the values on disk.
+    Revert,
+}
+
 /// Creator workspace selected beneath the Character/Spell library route.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CreatorWorkspace {
@@ -1271,6 +1383,8 @@ pub enum MainMenuIntent {
     OpenCharacterCreator,
     /// Open Spell Creator from Tools.
     OpenSpellCreator,
+    /// Open the spell VFX tuner from Tools.
+    OpenVfxTuner,
     /// Bind and launch the default campaign in one empty slot.
     NewCampaign(CampaignSlotId),
     /// Continue one exact occupied slot.
@@ -1322,6 +1436,8 @@ pub enum UiIntent {
     Outcome(OutcomeIntent),
     /// Act on the isolated Lattice Demo.
     LatticeDemo(LatticeDemoIntent),
+    /// Tune or replay an authored spell animation.
+    VfxTuner(VfxTunerIntent),
     /// Act on Character or Spell Creator presentation.
     Creator(CreatorIntent),
     /// Act on Sandbox composition.

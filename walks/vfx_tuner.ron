@@ -1,0 +1,52 @@
+// Spell VFX tuner: reached from Main Menu Tools beside the two Creators, tuned
+// inline, and replayed on its own preview dummies. Proves the authoring route and
+// the panel's structure; the effect's motion and aesthetics stay a human check,
+// since a still frame cannot establish either.
+[
+    AwaitScreen("Title"),
+    Settle(45),
+    Click(name: "Tools"),
+    AwaitButton("VFX Tuner"),
+    Click(name: "VFX Tuner"),
+    AwaitScreen("VfxTuner"),
+    Settle(20),
+    Capture("vfx-tuner-01-entry"),
+
+    // Selecting the other shipped spell must repopulate the parameter rows with
+    // that spell's own archetype, not leave the previous spell's timings behind.
+    Click(name: "Tune Lightning Bolt"),
+    Settle(10),
+    Capture("vfx-tuner-02-lightning-bolt"),
+
+    // A nudge has to reach the live resource: the value readout is rebuilt from
+    // SpellAnimationFile, so a changed frame here is the edit actually landing.
+    Click(name: "Spread Increment"),
+    Click(name: "Spread Increment"),
+    Click(name: "Particles Increment"),
+    Settle(10),
+    Capture("vfx-tuner-03-tuned"),
+
+    // Play spawns the cast directly against the dummies, with no combat behind it.
+    // Lightning Bolt's beam is a 0.08s flash, so this frame lands on its impact
+    // burst rather than the line itself.
+    // Stretch the 0.08s flash so the beam is still on screen when the frame is
+    // taken. This doubles as proof that a nudge reaches the effect builder, not
+    // just the readout: the beam only lasts longer because the value changed.
+    Click(name: "Flash Increment"),
+    Click(name: "Flash Increment"),
+    Click(name: "Flash Increment"),
+    Click(name: "Flash Increment"),
+    Click(name: "Flash Increment"),
+    Click(name: "Flash Increment"),
+    Click(name: "Play"),
+    Settle(2),
+    Capture("vfx-tuner-04-bolt-playing"),
+
+    // Ember holds far longer, which makes it the readable frame for proving the
+    // flame layers reach the target dummy at all.
+    Click(name: "Tune Ember"),
+    Settle(4),
+    Click(name: "Play"),
+    Settle(8),
+    Capture("vfx-tuner-05-ember-playing"),
+]
