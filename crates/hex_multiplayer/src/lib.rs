@@ -16,6 +16,8 @@ mod connection_code;
 mod control;
 #[cfg(feature = "direct")]
 mod direct;
+#[cfg(feature = "lan-discovery")]
+mod lan;
 mod limits;
 mod lobby;
 mod manifest;
@@ -53,6 +55,11 @@ pub use control::{
 pub use direct::{
     DirectTransportError, PreparedDirectHost, PreparedDirectJoin, PreparedDirectReconnect,
     SpkiPinVerifier, DEFAULT_DIRECT_PORT, DIRECT_SESSION_PATH,
+};
+#[cfg(feature = "lan-discovery")]
+pub use lan::{
+    LanCompatibilityKey, LanDiscoveredSession, LanDiscoveryAdvertiser, LanDiscoveryBrowser,
+    LanDiscoveryError, LanSessionAdvertisement, LanSessionKind, LAN_DISCOVERY_SERVICE_TYPE,
 };
 pub use limits::{
     BoundError, BoundedText, BoundedVec, MAX_ABS_COMMAND_COORDINATE, MAX_ABS_COMMAND_LEVEL,

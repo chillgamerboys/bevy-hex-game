@@ -6,6 +6,10 @@ It lets a remote group exercise the real listen host, `HEX1` admission, protocol
 authority, disclosure, reconnect, and gameplay behavior without requiring a publicly
 routable address in the shared game connection code or configuring a router.
 
+If both computers are on the same physical network, use the simpler
+[automatic LAN discovery procedure](lan-multiplayer-testing.md) instead. mDNS is a
+same-link mechanism and is deliberately not part of this remote Tailscale route.
+
 Tailscale is **external test infrastructure**. It is not linked into, launched by, or
 distributed with Hex, and it is not the intended player-facing multiplayer service.
 The shipping direction remains EOS-backed Play Online with Steam-native invitations;

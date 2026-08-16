@@ -418,6 +418,8 @@ fn validate_step(step: &WalkStep) -> Result<(), String> {
                     | "restore-decision"
                     | "aiming-disabled"
                     | "multiplayer-lobby"
+                    | "multiplayer-lan-browser"
+                    | "multiplayer-lan-host"
                     | "multiplayer-campaign"
                     | "multiplayer-campaign-refusal"
                     | "multiplayer-campaign-lobby"

@@ -148,6 +148,9 @@ manually forwarded UDP port. A host can launch a shipped Sandbox or select one o
 Campaign slots; Campaign resume restores the complete host-owned checkpoint, then opens
 a fresh party-assignment lobby. Only the host can save a multiplayer Campaign, and only
 while exploration is safely paused. Client menus do not pause the host simulation.
+For two computers on the same network, **Host LAN Sandbox** and **Find LAN Games** use
+[automatic LAN discovery](docs/development/lan-multiplayer-testing.md), so neither player
+needs to find an IP address or exchange a code.
 Before the EOS-backed Play Online path is live, remote testers can avoid public-IP and
 router setup by following the external
 [Tailscale playtest procedure](docs/development/remote-multiplayer-testing.md). Tailscale

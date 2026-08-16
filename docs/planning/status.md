@@ -342,6 +342,15 @@ party members, every connected guest must own at least one, assignment changes c
 readiness, and no new player is admitted after launch. Offline single-player uses the
 same seatless command ingress without opening a socket.
 
+Same-network Sandbox testing also has an explicit zero-configuration path. **Host LAN
+Sandbox** uses the existing Sandbox and deployment flow, then advertises the open
+assignment lobby with mDNS/DNS-SD. **Find LAN Games** continuously lists compatible
+lobbies on the same multicast link and joins the chosen host through the same pinned
+Direct transport; no IP address or copied code is needed. Advertisement stops at launch
+and resumes only if the host returns to the lobby. Because the current ephemeral invite
+is necessarily visible in unauthenticated LAN metadata, this mode is for trusted local
+networks; exact admission and authority checks remain unchanged.
+
 The listen host owns simulation, AI, world mutation, pause, admission, and outcome
 actions. Clients submit intents and interpolate exact authoritative motion; they do not
 run rollback, lockstep, prediction, or private combat authority. A disconnected seat is
@@ -362,10 +371,12 @@ ordered, non-blocking save-status projection and never read or write the checkpo
 Legacy/V1 records retain their strict compatibility behavior and upgrade only after a
 successful next save.
 
-Direct multiplayer still requires shipped content. Internet hosts must arrange UDP
-forwarding themselves and may still fail behind CGNAT; there is no UPnP, STUN/TURN,
-public matchmaking, cross-store relay, host migration, spectator mode, or dedicated
-server. Universal EOS Internet sessions remain a later milestone.
+Direct multiplayer still requires shipped content. LAN discovery does not cross
+routers, VLANs, guest-network isolation, or most VPNs. Internet hosts must arrange UDP
+forwarding themselves or use the documented temporary Tailscale test route and may
+still fail behind CGNAT; there is no UPnP, STUN/TURN, public matchmaking, cross-store
+relay, host migration, spectator mode, or dedicated server. Universal EOS Internet
+sessions remain a later milestone.
 
 The default-off online feasibility foundation now fixes transport-neutral EOS identity,
 lobby, reconnect, join-code, and streamed-snapshot vocabulary plus a safe mock backend.

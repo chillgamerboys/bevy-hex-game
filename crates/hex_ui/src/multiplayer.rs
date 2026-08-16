@@ -195,6 +195,7 @@ fn render_screen(root: &mut ChildSpawnerCommands, assets: &UiAssets, view: &Mult
     match view.route {
         MultiplayerRoute::Home => render_home(root, assets),
         MultiplayerRoute::HostCampaign => render_host_campaign(root, assets, view),
+        MultiplayerRoute::BrowseLan => render_lan_browser(root, assets, view),
         MultiplayerRoute::HostDirect => render_host_direct(root, assets, view),
         MultiplayerRoute::JoinDirect => render_join_direct(root, assets, view),
         MultiplayerRoute::Connecting => render_waiting(
@@ -231,6 +232,7 @@ fn route_title(route: MultiplayerRoute) -> &'static str {
     match route {
         MultiplayerRoute::Home => "Hex / Multiplayer",
         MultiplayerRoute::HostCampaign => "Hex / Host Campaign",
+        MultiplayerRoute::BrowseLan => "Hex / Find LAN Games",
         MultiplayerRoute::HostDirect => "Hex / Host Direct",
         MultiplayerRoute::JoinDirect => "Hex / Join Direct",
         MultiplayerRoute::Connecting => "Hex / Connecting",
@@ -249,6 +251,21 @@ fn render_home(root: &mut ChildSpawnerCommands, assets: &UiAssets) {
     root.spawn((Name::new("Multiplayer Home Actions"), panel()))
         .insert(action_panel_node(520.0))
         .with_children(|actions| {
+            actions.spawn(heading(assets, "Play on this LAN"));
+            action_button(
+                actions,
+                assets,
+                "Host LAN Sandbox",
+                MultiplayerIntent::HostLanSandbox,
+                true,
+            );
+            action_button(
+                actions,
+                assets,
+                "Find LAN Games",
+                MultiplayerIntent::OpenLanBrowser,
+                true,
+            );
             actions.spawn(heading(assets, "Host a Campaign"));
             action_button(
                 actions,
@@ -276,7 +293,77 @@ fn render_home(root: &mut ChildSpawnerCommands, assets: &UiAssets) {
         });
     root.spawn(fine(
         assets,
-        "Direct/LAN remains available without an online service. Internet play currently requires a reachable forwarded UDP port.",
+        "LAN discovery needs no IP address or online service. Advanced Direct remains available for private codes and manually forwarded Internet connections.",
+    ));
+}
+
+fn render_lan_browser(root: &mut ChildSpawnerCommands, assets: &UiAssets, view: &MultiplayerView) {
+    root.spawn(blurb(
+        assets,
+        "Open Hex lobbies on this local network appear automatically. Both computers must be on the same LAN and may need permission to access the local network.",
+    ));
+    root.spawn((Name::new("LAN Discovery Status"), panel()))
+        .insert(action_panel_node(760.0))
+        .with_children(|status| {
+            status.spawn(heading(assets, "Local games"));
+            if view.lan_searching {
+                status.spawn(fine(assets, "Searching this LAN…"));
+            } else {
+                status.spawn(fine(assets, "LAN discovery is not currently running."));
+            }
+            if view.lan_sessions.is_empty() {
+                status.spawn(blurb(
+                    assets,
+                    "No open Hex lobby has been found yet. Ask the host to finish deployment and wait in the assignment lobby.",
+                ));
+            }
+        });
+
+    for (index, session) in view.lan_sessions.iter().enumerate() {
+        root.spawn((Name::new(format!("LAN Session {}", index + 1)), panel()))
+            .insert(action_panel_node(760.0))
+            .with_children(|card| {
+                card.spawn(heading(assets, session.label.clone()));
+                card.spawn(label(
+                    assets,
+                    format!(
+                        "{} / {} seats claimed · {}",
+                        session.claimed_seats, session.seat_capacity, session.endpoint
+                    ),
+                ));
+                card.spawn(fine(
+                    assets,
+                    if session.compatible {
+                        "Compatible build and shipped content"
+                    } else {
+                        "Unavailable · different build or shipped content"
+                    },
+                ));
+                scrollable_action_button(
+                    card,
+                    assets,
+                    &format!("Join LAN Session {}", index + 1),
+                    MultiplayerIntent::JoinLanSession(session.service_id.clone()),
+                    session.compatible,
+                );
+            });
+    }
+
+    root.spawn((Name::new("LAN Browser Actions"), panel()))
+        .insert(action_panel_node(760.0))
+        .with_children(|actions| {
+            action_button(
+                actions,
+                assets,
+                "Refresh LAN Games",
+                MultiplayerIntent::RefreshLanBrowser,
+                true,
+            );
+            action_button(actions, assets, "Back", MultiplayerIntent::Back, true);
+        });
+    root.spawn(fine(
+        assets,
+        "An advertised LAN lobby is open to people on this local network while it is waiting for launch. The encrypted Direct connection and exact admission checks still apply.",
     ));
 }
 
@@ -571,7 +658,36 @@ fn render_lobby(root: &mut ChildSpawnerCommands, assets: &UiAssets, view: &Multi
         ));
     }
     if host {
-        if let Some(code) = &view.share_code {
+        if view.lan_hosting {
+            root.spawn((Name::new("Lobby LAN Invite"), panel()))
+                .insert(action_panel_node(680.0))
+                .with_children(|invite| {
+                    invite.spawn(heading(assets, "LAN lobby"));
+                    invite.spawn(blurb(
+                        assets,
+                        if view.lan_advertising {
+                            "Discoverable now. Guests on this network can choose Multiplayer → Find LAN Games; no IP address or code is needed."
+                        } else if view.lan_advertisement_failed {
+                            "LAN advertisement stopped. The game session remains open, but guests cannot discover it until advertisement is retried."
+                        } else {
+                            "Starting LAN discovery…"
+                        },
+                    ));
+                    invite.spawn(fine(
+                        assets,
+                        "Anyone on this local network may request an open seat until Launch closes admission.",
+                    ));
+                    if view.lan_advertisement_failed {
+                        action_button(
+                            invite,
+                            assets,
+                            "Retry LAN Advertisement",
+                            MultiplayerIntent::RetryLanAdvertisement,
+                            true,
+                        );
+                    }
+                });
+        } else if let Some(code) = &view.share_code {
             root.spawn((Name::new("Lobby Direct Invite"), panel()))
                 .insert(action_panel_node(680.0))
                 .with_children(|invite| {
@@ -1079,6 +1195,7 @@ mod tests {
         for route in [
             MultiplayerRoute::Home,
             MultiplayerRoute::HostCampaign,
+            MultiplayerRoute::BrowseLan,
             MultiplayerRoute::HostDirect,
             MultiplayerRoute::JoinDirect,
             MultiplayerRoute::Connecting,
@@ -1089,6 +1206,66 @@ mod tests {
         ] {
             assert!(!route_title(route).is_empty());
         }
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn lan_browser_renders_only_compatible_sessions_as_joinable() {
+        let mut app = App::new();
+        app.add_plugins(crate::test_support::HeadlessUiPlugin::new(1280, 720));
+        app.world_mut().insert_resource(MultiplayerView {
+            route: MultiplayerRoute::BrowseLan,
+            lan_searching: true,
+            lan_sessions: vec![
+                crate::MultiplayerLanSessionView {
+                    service_id: "compatible._hexgame._udp.local.".to_owned(),
+                    label: "Sandbox · A1B2C3".to_owned(),
+                    endpoint: "192.168.1.4:7777".to_owned(),
+                    claimed_seats: 1,
+                    seat_capacity: 6,
+                    compatible: true,
+                },
+                crate::MultiplayerLanSessionView {
+                    service_id: "incompatible._hexgame._udp.local.".to_owned(),
+                    label: "Sandbox · D4E5F6".to_owned(),
+                    endpoint: "192.168.1.5:7777".to_owned(),
+                    claimed_seats: 2,
+                    seat_capacity: 6,
+                    compatible: false,
+                },
+            ],
+            ..Default::default()
+        });
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Multiplayer);
+        for _ in 0..8 {
+            app.update();
+        }
+
+        let sessions = app
+            .world_mut()
+            .query::<&Name>()
+            .iter(app.world())
+            .filter(|name| name.as_str().starts_with("LAN Session "))
+            .count();
+        assert_eq!(sessions, 2);
+        let join_states = app
+            .world_mut()
+            .query::<(&Name, Option<&InteractionDisabled>, &MultiplayerControl)>()
+            .iter(app.world())
+            .filter_map(|(name, disabled, control)| {
+                matches!(&control.0, MultiplayerIntent::JoinLanSession(_))
+                    .then_some((name.as_str().to_owned(), disabled.is_some()))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            join_states,
+            [
+                ("Join LAN Session 1".to_owned(), false),
+                ("Join LAN Session 2".to_owned(), true),
+            ]
+        );
     }
 
     #[cfg(feature = "test-support")]

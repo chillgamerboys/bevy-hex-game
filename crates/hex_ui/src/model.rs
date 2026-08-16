@@ -1365,6 +1365,23 @@ impl MultiplayerSeatView {
     }
 }
 
+/// Disclosure-safe presentation of one mDNS-resolved open lobby on the current LAN.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MultiplayerLanSessionView {
+    /// Opaque DNS-SD identity returned unchanged by a typed join intent.
+    pub service_id: String,
+    /// Stable public session label; never a machine/user identity.
+    pub label: String,
+    /// Resolved public LAN endpoint selected by the discovery adapter.
+    pub endpoint: String,
+    /// Currently claimed human seats.
+    pub claimed_seats: u8,
+    /// Maximum human seats.
+    pub seat_capacity: u8,
+    /// Discovery-hint compatibility; final custom admission still checks exact identities.
+    pub compatible: bool,
+}
+
 /// Immutable Direct Connect and lobby presentation.
 #[derive(Resource, Debug, Clone, PartialEq, Eq)]
 pub struct MultiplayerView {
@@ -1384,6 +1401,16 @@ pub struct MultiplayerView {
     pub join_code: SensitiveText,
     /// Whether a private reconnect credential is available in temporary storage.
     pub reconnect_available: bool,
+    /// Whether this process is actively browsing the local multicast link.
+    pub lan_searching: bool,
+    /// Current same-network lobby projections in deterministic service order.
+    pub lan_sessions: Vec<MultiplayerLanSessionView>,
+    /// Whether this host session was explicitly opened for LAN discovery.
+    pub lan_hosting: bool,
+    /// Whether the open host lobby is currently being advertised successfully.
+    pub lan_advertising: bool,
+    /// Whether LAN advertisement stopped and can be explicitly retried.
+    pub lan_advertisement_failed: bool,
     /// Exactly three host-owned Campaign slots in stable order.
     pub campaign_slots: Vec<CampaignSlotView>,
     /// Typed Campaign-lobby preparation state.
@@ -1417,6 +1444,11 @@ impl Default for MultiplayerView {
             share_code: None,
             join_code: SensitiveText::default(),
             reconnect_available: false,
+            lan_searching: false,
+            lan_sessions: Vec::new(),
+            lan_hosting: false,
+            lan_advertising: false,
+            lan_advertisement_failed: false,
             campaign_slots: CampaignSlotId::ALL
                 .into_iter()
                 .map(|slot| CampaignSlotView {
@@ -1456,6 +1488,14 @@ pub enum MultiplayerTextField {
 pub enum MultiplayerIntent {
     /// Open the three-slot host-owned Campaign browser.
     OpenHostCampaign,
+    /// Configure a shipped Sandbox whose open lobby is discoverable on this LAN.
+    HostLanSandbox,
+    /// Start same-network mDNS/DNS-SD browsing.
+    OpenLanBrowser,
+    /// Restart same-network browsing after a local-network change or failure.
+    RefreshLanBrowser,
+    /// Join one exact service identity returned by LAN discovery.
+    JoinLanSession(String),
     /// Open Direct Host setup/help.
     OpenHostDirect,
     /// Open Direct Join code entry/help.
@@ -1468,6 +1508,8 @@ pub enum MultiplayerIntent {
     HostCampaign(CampaignSlotId),
     /// Copy the current host-issued private connection code to the system clipboard.
     CopyConnectionCode,
+    /// Retry advertisement for the current explicitly open LAN host lobby.
+    RetryLanAdvertisement,
     /// Start one explicit pinned direct connection.
     JoinDirect,
     /// Reconnect through the persisted pinned endpoint and private rotating credential.

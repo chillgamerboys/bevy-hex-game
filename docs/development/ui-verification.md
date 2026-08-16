@@ -26,8 +26,11 @@ Main Menu
 ├── Sandbox ──> Overview ─┬─> Map Browser ─> Map Detail
 │                         ├─> Party ────> Character Picker
 │                         └─> Enemies ──> Character Picker
-├── Multiplayer ─┬─> Host Direct ─> shipped Sandbox / Deployment ─> Lobby
-│                └─> Join Direct ────────────────────────────────> Lobby
+├── Multiplayer ─┬─> Host LAN Sandbox ─> Sandbox / Deployment ─> Lobby
+│                ├─> Find LAN Games ────────────────────────────> Lobby
+│                ├─> Host Campaign ─────────────────────────────> Lobby
+│                ├─> Host Direct ─> shipped Sandbox / Deployment ─> Lobby
+│                └─> Join Direct ──────────────────────────────────> Lobby
 ├── Tools ────────────────────────────> Character / Spell Creator
 │                                         └─> Map Creator (Coming Soon)
 └── Settings
@@ -57,7 +60,8 @@ only from the Creator's local mechanics test.
 | Compact roster | six slots | Back | one vertical scroll owner; every slot and action reachable without horizontal clipping |
 | Character Picker | template + saved choices | Back, Use Character, Create a New Character | preview does not mutate; commit targets exact side/slot; Back cancels |
 | Character Picker after Creator | newly saved choice | Back | exact picker restored, new record highlighted, not automatically applied |
-| Multiplayer | home | Host Direct, Join Direct, Back | exactly one explicit entry for each direct role; Steam is described as later traversal, not an available route |
+| Multiplayer | home | Host LAN Sandbox, Find LAN Games, Host a Campaign, Host Direct, Join Direct, Back | LAN is the primary same-network path; Direct remains the advanced private-code path; Steam is not presented as live |
+| LAN browser | searching, empty, compatible, and incompatible records | Join per compatible record, Refresh LAN Games, Back | no IP/code entry; incompatible sessions remain visible but disabled; local-network permission and open-LAN admission warning remain visible |
 | Host Direct | endpoint draft | Configure Shipped Sandbox, Back | editable advertised host and UDP port; forwarding/CGNAT/no-relay limits remain visible; no socket opens before explicit configuration completes |
 | Join Direct | code draft | Join Session when non-empty, optional Reconnect Reserved Seat, Back | bounded credential-bearing input; ordinary diagnostics redact the complete code |
 | Multiplayer lobby | host and guest projections | host assignment/kick/launch/close or guest ready/leave | six stable seats; connection/reservation/delegation, assignments, readiness, host, local seat, and exact launch blocker are visible without granting UI authority |
@@ -147,9 +151,10 @@ canonical catalog/content/rules/deployment resources, a real exact-terrain place
 outside the staging regions, complete ordinary-HUD suppression, cold launch, Sandbox
 re-entry, outcome return, Creator-origin return, and actual focus-tree/control names.
 Multiplayer tests separately cover role-gated intents, six-seat structure, local-client
-menus, exact-world activation gating, and the fail-closed L3 handoff. Those tests may
-build UI trees through default-off `test-support`; production plugins do not gain test
-fixture routes.
+menus, LAN record compatibility and join enablement, open-lobby advertisement lifecycle,
+exact-world activation gating, and the fail-closed L3 handoff. Those tests may build UI
+trees through default-off `test-support`; production plugins do not gain test fixture
+routes.
 
 Application tests additionally cover input capture priority, fixed UI navigation,
 Swap/Cancel conflict handling, row and confirmed-all restoration, schema-v3 migration,

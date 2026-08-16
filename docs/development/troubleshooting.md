@@ -75,6 +75,13 @@ host's Tailscale address, that the selected UDP port and local firewall permit i
 traffic, and that both processes run the exact candidate. Never work around a typed
 protocol, build, content, certificate, or map mismatch.
 
+**A same-network host does not appear under Find LAN Games.** Follow the
+[LAN discovery diagnostics](lan-multiplayer-testing.md#diagnose-a-missing-lobby). The
+host must have finished deployment and be waiting in the open assignment lobby. Both
+machines must share one multicast-capable network, have granted local-network/firewall
+permission, and run the exact candidate. Guest Wi-Fi isolation, separate VLANs, and
+most VPNs do not carry mDNS. Do not weaken a typed compatibility or admission refusal.
+
 ## Editing settings
 
 **A change had no effect.** Check that you saved the file, and that you are running

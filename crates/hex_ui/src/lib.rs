@@ -60,13 +60,13 @@ pub use model::{
     InitiativeIntent, InitiativeSide, InitiativeView, LatticeDemoIntent, LatticeDemoSpellView,
     LatticeDemoView, LatticeIntent, MainMenuIntent, MainMenuView, MultiplayerAssignmentView,
     MultiplayerCampaignHostView, MultiplayerCampaignSaveStatusView, MultiplayerIntent,
-    MultiplayerSeatConnectionView, MultiplayerSeatView, MultiplayerTextField, MultiplayerView,
-    OutcomeAction, OutcomeActionView, OutcomeIntent, OutcomeView, OwnLatticeView, PartyIntent,
-    PartyMemberView, PartyView, PauseView, SandboxCharacterView, SandboxIntent,
-    SandboxLatticeCellKind, SandboxLatticeCellView, SandboxMapView, SandboxRosterSlotView,
-    SandboxView, SensitiveText, SettingsIntent, SettingsModalView, SettingsTab,
-    TargetLatticeStateView, TargetLatticeView, TargetPulseView, UiBindingRow, UiIntent, UiSetting,
-    UiSettingRow, UiSettingsView,
+    MultiplayerLanSessionView, MultiplayerSeatConnectionView, MultiplayerSeatView,
+    MultiplayerTextField, MultiplayerView, OutcomeAction, OutcomeActionView, OutcomeIntent,
+    OutcomeView, OwnLatticeView, PartyIntent, PartyMemberView, PartyView, PauseView,
+    SandboxCharacterView, SandboxIntent, SandboxLatticeCellKind, SandboxLatticeCellView,
+    SandboxMapView, SandboxRosterSlotView, SandboxView, SensitiveText, SettingsIntent,
+    SettingsModalView, SettingsTab, TargetLatticeStateView, TargetLatticeView, TargetPulseView,
+    UiBindingRow, UiIntent, UiSetting, UiSettingRow, UiSettingsView,
 };
 #[cfg(feature = "dev-tools")]
 pub use model::{DevTimeIntent, DevTimeView};

@@ -179,6 +179,8 @@ through Dozen, compared with roughly 11 FPS through llvmpipe.
 - Change designer-facing values through [config.md](config.md).
 - Diagnose a wrong or silent window with
   [troubleshooting.md](troubleshooting.md).
+- Run same-network Sandbox multiplayer through the zero-configuration
+  [LAN discovery procedure](lan-multiplayer-testing.md).
 - Run Direct multiplayer between remote testers through the temporary
   [Tailscale playtest procedure](remote-multiplayer-testing.md).
 - Learn the project boundaries in [architecture.md](../architecture.md).

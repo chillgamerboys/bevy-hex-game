@@ -15,7 +15,7 @@ hex_core → hex_ai → {hex_assets, hex_units, hex_combat}   (contracts, contro
 hex_core → {hex_assets, hex_units} → hex_perception → {hex_combat, hex_game}
 hex_core → hex_lattice → {hex_assets, hex_units, hex_combat}   (the pure rules engine)
 hex_core → hex_anim ─────────────────────→ hex_units
-{hex_core, hex_lattice, Replicon, Aeronet} → hex_multiplayer ───────→ hex_game
+{hex_core, hex_lattice, Replicon, Aeronet, DNS-SD} → hex_multiplayer → hex_game
 {official EOS C runtime, libloading} → hex_eos_ffi ─→ hex_online ───→ hex_game
                                       hex_multiplayer ────────┘
 {Bevy, bevy-inspector-egui} → hex_dev ──────────────────────────────→ hex_game
@@ -48,7 +48,7 @@ will, and no amount of documentation prevents it. A compiler error does.
 | `hex_units` | Units and their lattices, AI-controller attachment, picking, pathfinding, body size, and the movement preview | `hex_core`, `hex_ai`, `hex_assets`, `hex_anim`, `hex_lattice` | gameplay |
 | `hex_perception` | Authoritative illumination, faction sight, and remembered map knowledge | `hex_core`, `hex_assets`, `hex_units` | world |
 | `hex_combat` | The loop: modes, turn order, algorithm-neutral AI host and legal-action enumeration, persistent effects, and faction lattice knowledge | `hex_core`, `hex_ai`, `hex_assets`, `hex_anim`, `hex_units`, `hex_lattice`, `hex_perception` | gameplay |
-| `hex_multiplayer` | Transport-neutral protocol, bounded wire containers, custom-admission vocabulary, lobby/manifest contracts, disclosure-safe replicas, and default-off Replicon/Aeronet composition | `hex_core`, `hex_lattice`, Bevy app/ECS sub-crates, Replicon, Aeronet; never map/unit/combat/perception implementations | shared infrastructure |
+| `hex_multiplayer` | Transport-neutral protocol, bounded wire containers, custom-admission vocabulary, lobby/manifest contracts, disclosure-safe replicas, default-off Replicon/Aeronet composition, and opt-in same-link DNS-SD discovery | `hex_core`, `hex_lattice`, Bevy app/ECS sub-crates, Replicon, Aeronet, DNS-SD; never map/unit/combat/perception implementations | shared infrastructure |
 | `hex_eos_ffi` | Minimal dynamically loaded official EOS C declarations and owned safe RAII results; the workspace's sole audited `unsafe` boundary | `libloading` and the explicitly staged official EOS runtime only | shared infrastructure |
 | `hex_online` | Safe store-neutral EOS identity/lobby/P2P lifecycle, callback validation, and Aeronet I/O adapters; deterministic mocks remain runtime-free | `hex_eos_ffi`, `hex_multiplayer`, Bevy app/ECS sub-crates | shared infrastructure |
 | `hex_dev` | World inspector. Behind the `dev` feature | Bevy, `bevy-inspector-egui` | gameplay |
@@ -90,13 +90,18 @@ Perception alone exports/imports `PlayerKnowledgeSnapshotV1` and decides which h
 projections exist; networking applies that authorized view and cannot represent or
 reconstruct private generator plans, hostile knowledge, or `CombatState`.
 
-`MultiplayerPlugin` installs custom-auth Replicon, Aeronet adapters, and WebTransport
-capability in one deterministic registration order. It does not spawn an endpoint or
-open a socket. Offline play defaults to `SimulationRole::Authority`; a remote client
-must explicitly select `Replica`. Direct Connect and the future EOS P2P path share the
-same messages, manifests, snapshots, seat checks, and saves. Steam does not become a
-second lobby or gameplay transport: its adapter supplies an EOS Connect credential and
-native rich-presence/invitation entry into the same EOS lobby.
+`MultiplayerPlugin` installs custom-auth Replicon, Aeronet adapters, WebTransport, and
+same-link DNS-SD capability in one deterministic registration order. Installing the
+plugin does not spawn an endpoint or open a socket. Host Direct/Join Direct explicitly
+open the game transport; Host LAN Sandbox and Find LAN Games additionally start their
+bounded multicast advertiser/browser. DNS-SD records are untrusted discovery metadata,
+not admission: a selected peer still uses the pinned Direct transport and passes exact
+protocol, build, content, lobby, and seat checks. Offline play defaults to
+`SimulationRole::Authority`; a remote client must explicitly select `Replica`. Direct
+Connect and the future EOS P2P path share the same messages, manifests, snapshots, seat
+checks, and saves. Steam does not become a second lobby or gameplay transport: its
+adapter supplies an EOS Connect credential and native rich-presence/invitation entry
+into the same EOS lobby.
 
 `hex_eos_ffi` is the only crate that opts out of the workspace-wide `unsafe_code =
 "forbid"` rule. It loads only an explicit absolute, release-staged EOS runtime path;

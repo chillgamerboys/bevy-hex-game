@@ -23,6 +23,7 @@ doc or the code, not drift.
 | Running a wave: its manifest, lane ownership, and merge order | [development/wave-protocol.md](development/wave-protocol.md) |
 | Adding or reviewing gameplay tests | [development/gameplay-testing.md](development/gameplay-testing.md) |
 | Adding or reviewing runtime UI paths | [development/ui-verification.md](development/ui-verification.md) |
+| Running Sandbox multiplayer on one local network | [development/lan-multiplayer-testing.md](development/lan-multiplayer-testing.md) |
 | Running Direct multiplayer between remote testers | [development/remote-multiplayer-testing.md](development/remote-multiplayer-testing.md) |
 | Adding or reviewing map tests | [development/map-testing.md](development/map-testing.md) |
 | Taking ownership of the map | [development/onboarding.md](development/onboarding.md) |
@@ -70,6 +71,7 @@ doc or the code, not drift.
 | [development/delivery-state.md](development/delivery-state.md) | Contributors, agents, integrators | Reconciling implementation, repository docs, GitHub, and optional Linear state before planning or completion | Both, jointly |
 | [development/gameplay-testing.md](development/gameplay-testing.md) | Gameplay contributors and reviewers | Concern partitions, dependency ceilings, authoritative oracles, commands, budgets, and visual-evidence limits | Gameplay owner |
 | [development/ui-verification.md](development/ui-verification.md) | UI contributors and reviewers | Exhaustive player-task inventory, fail-closed fixtures, viewport tiers, and bounded visual selection | Shared presentation |
+| [development/lan-multiplayer-testing.md](development/lan-multiplayer-testing.md) | Same-network testers and multiplayer reviewers | Zero-configuration mDNS/DNS-SD discovery procedure and LAN acceptance route | Shared integration/testing |
 | [development/remote-multiplayer-testing.md](development/remote-multiplayer-testing.md) | Remote testers and multiplayer reviewers | Temporary Tailscale procedure for exercising the real Direct transport without public addressing or router configuration | Shared integration/testing |
 | [development/map-testing.md](development/map-testing.md) | Map contributors and reviewers | Unit/generation/publication partitions, owner fixtures, corpus budgets, scope selection, and stress/visual boundaries | World owner |
 | [development/wave-7-tempo-decision.md](development/wave-7-tempo-decision.md) | Gameplay contributors and reviewers | Bounded evidence and rationale for retaining the shipped movement/action tempo during Wave 7 | Gameplay owner |

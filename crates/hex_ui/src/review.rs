@@ -12,9 +12,10 @@ use crate::{
     ActionAffordance, ActionAvailability, ActionPriority, CastingAimView, CastingPanelContentView,
     CastingSpellView, CellInteraction, DecisionChoiceView, GameplayAction, InitiativeEntryView,
     InitiativeSide, LatticeCellView, MultiplayerAssignmentView, MultiplayerCampaignHostView,
-    MultiplayerCampaignSaveStatusView, MultiplayerSeatConnectionView, MultiplayerSeatView,
-    OutcomeAction, OutcomeActionView, OwnLatticeView, PartyMemberView, SandboxLatticeCellKind,
-    SandboxLatticeCellView, SensitiveText, TargetLatticeStateView, TargetLatticeView,
+    MultiplayerCampaignSaveStatusView, MultiplayerLanSessionView, MultiplayerSeatConnectionView,
+    MultiplayerSeatView, OutcomeAction, OutcomeActionView, OwnLatticeView, PartyMemberView,
+    SandboxLatticeCellKind, SandboxLatticeCellView, SensitiveText, TargetLatticeStateView,
+    TargetLatticeView,
 };
 
 #[derive(Resource, Default)]
@@ -259,6 +260,42 @@ pub fn apply_ui_review_fixture(commands: &mut Commands, name: &str) -> Result<()
         }
         "multiplayer-lobby" => {
             review.multiplayer = Some(multiplayer_lobby_fixture(false));
+        }
+        "multiplayer-lan-browser" => {
+            review.multiplayer = Some(MultiplayerView {
+                route: hex_gameplay_model::MultiplayerRoute::BrowseLan,
+                lan_searching: true,
+                lan_sessions: vec![
+                    MultiplayerLanSessionView {
+                        service_id: "sandbox-a._hexgame._udp.local.".to_owned(),
+                        label: "Sandbox · A1B2C3".to_owned(),
+                        endpoint: "192.168.1.42:7777".to_owned(),
+                        claimed_seats: 1,
+                        seat_capacity: 6,
+                        compatible: true,
+                    },
+                    MultiplayerLanSessionView {
+                        service_id: "sandbox-b._hexgame._udp.local.".to_owned(),
+                        label: "Sandbox · D4E5F6".to_owned(),
+                        endpoint: "192.168.1.77:7777".to_owned(),
+                        claimed_seats: 2,
+                        seat_capacity: 6,
+                        compatible: false,
+                    },
+                ],
+                ..default()
+            });
+        }
+        "multiplayer-lan-host" => {
+            let mut view = multiplayer_lobby_fixture(false);
+            view.role = Some(hex_gameplay_model::MultiplayerRole::Host);
+            view.local_seat = Some(hex_core::PlayerSeat::HOST);
+            view.lan_hosting = true;
+            view.lan_advertising = true;
+            for seat in &mut view.seats {
+                seat.local = seat.seat == hex_core::PlayerSeat::HOST;
+            }
+            review.multiplayer = Some(view);
         }
         "multiplayer-campaign" => {
             review.multiplayer = Some(multiplayer_campaign_fixture(false));

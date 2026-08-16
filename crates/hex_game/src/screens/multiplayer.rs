@@ -38,22 +38,23 @@ use hex_multiplayer::{
     ClientLobbyRequest, ClientMapReady, CommandSequencer, ContentFingerprint,
     CredentialStorageOperation, CredentialStorageStatus, DirectConnectionCode, DirectEndpoint,
     EncodedConnectionCode, HostCampaignCheckpointV2, HostSessionAction, HostSessionControlRequest,
-    LiveSessionSnapshotV1, LiveSnapshotHeaderV1, LobbyPhase, LobbySnapshot, MapManifestV1,
-    PlayerKnowledgeSnapshotV1, PreparedDirectHost, PreparedDirectJoin, PreparedDirectReconnect,
-    ProtocolVersion, PublicWorldFingerprint, ReconnectCredentialStorage, ReconnectEndpointBinding,
-    RosterEntryV1, SeatConnectionState, SessionAdmissionAuthority, SessionCloseReason,
-    SessionClosed, SessionControlOutcome, SessionControlRefusal, SessionControlResult,
-    SessionInstanceId, SessionLaunchKindV1, SessionManifestV1, SessionReplica,
-    StoredReconnectCredential, UnitDeploymentV1, UnitReplica, WorldDeltaV1, WorldSnapshotV1,
-    LIVE_SESSION_SNAPSHOT_VERSION_V1, MAX_SESSION_UNITS,
+    LanCompatibilityKey, LanDiscoveryAdvertiser, LanDiscoveryBrowser, LanSessionAdvertisement,
+    LanSessionKind, LiveSessionSnapshotV1, LiveSnapshotHeaderV1, LobbyPhase, LobbySnapshot,
+    MapManifestV1, PlayerKnowledgeSnapshotV1, PreparedDirectHost, PreparedDirectJoin,
+    PreparedDirectReconnect, ProtocolVersion, PublicWorldFingerprint, ReconnectCredentialStorage,
+    ReconnectEndpointBinding, RosterEntryV1, SeatConnectionState, SessionAdmissionAuthority,
+    SessionCloseReason, SessionClosed, SessionControlOutcome, SessionControlRefusal,
+    SessionControlResult, SessionInstanceId, SessionLaunchKindV1, SessionManifestV1,
+    SessionReplica, StoredReconnectCredential, UnitDeploymentV1, UnitReplica, WorldDeltaV1,
+    WorldSnapshotV1, LIVE_SESSION_SNAPSHOT_VERSION_V1, MAX_SESSION_UNITS,
 };
 use hex_perception::{
     export_player_knowledge_snapshot_v1, import_player_knowledge_snapshot_v1, FactionMapKnowledge,
 };
 use hex_ui::{
     MultiplayerAssignmentView, MultiplayerCampaignHostView, MultiplayerCampaignSaveStatusView,
-    MultiplayerIntent, MultiplayerSeatConnectionView, MultiplayerSeatView, MultiplayerTextField,
-    MultiplayerView, SensitiveText, UiIntent, UiSystems,
+    MultiplayerIntent, MultiplayerLanSessionView, MultiplayerSeatConnectionView,
+    MultiplayerSeatView, MultiplayerTextField, MultiplayerView, SensitiveText, UiIntent, UiSystems,
 };
 
 use crate::campaign_authority::{
@@ -232,6 +233,10 @@ pub(crate) struct PendingDirectHostSetup {
     pub(crate) endpoint: DirectEndpoint,
 }
 
+/// Opt-in marker retained across the existing Sandbox/deployment host setup flow.
+#[derive(Resource, Debug)]
+pub(crate) struct PendingLanHostDiscovery;
+
 #[derive(Resource, Debug, Clone)]
 struct MultiplayerDraft {
     advertised_host: String,
@@ -295,6 +300,7 @@ enum DirectStartQueue {
     Host {
         endpoint: DirectEndpoint,
         prepared: Box<PreparedDirectSession>,
+        advertise_on_lan: bool,
     },
     Join {
         target: DirectJoinTarget,
@@ -321,6 +327,45 @@ struct ActiveDirectSession {
     entity: Entity,
     role: MultiplayerRole,
     hosted_code: Option<HostedCodeSource>,
+}
+
+/// Session-lifetime marker that reopens LAN advertisement when a host returns to its lobby.
+#[derive(Resource, Debug)]
+struct LanHostSession;
+
+#[derive(Resource, Debug)]
+struct ActiveLanAdvertisement(LanDiscoveryAdvertiser);
+
+#[derive(Resource, Debug)]
+struct LanHostDiscoveryFailure;
+
+#[derive(Resource, Debug)]
+struct ActiveLanBrowser {
+    browser: LanDiscoveryBrowser,
+    compatibility: LanCompatibilityKey,
+}
+
+#[derive(SystemParam)]
+struct MultiplayerIntentContext<'w> {
+    projection: Res<'w, SessionProjection>,
+    accepted_content: Option<Res<'w, AcceptedContentRevision>>,
+    authority: Option<Res<'w, SessionAdmissionAuthority>>,
+    active: Option<Res<'w, ActiveDirectSession>>,
+    lan_browser: Option<Res<'w, ActiveLanBrowser>>,
+    lan_host: Option<Res<'w, LanHostSession>>,
+}
+
+#[derive(SystemParam)]
+struct MultiplayerViewInputs<'w> {
+    projection: Res<'w, SessionProjection>,
+    authority: Option<Res<'w, SessionAdmissionAuthority>>,
+    active: Option<Res<'w, ActiveDirectSession>>,
+    lan_browser: Option<Res<'w, ActiveLanBrowser>>,
+    lan_host: Option<Res<'w, LanHostSession>>,
+    lan_advertisement: Option<Res<'w, ActiveLanAdvertisement>>,
+    lan_failure: Option<Res<'w, LanHostDiscoveryFailure>>,
+    prepared: Option<Res<'w, PreparedDirectSandboxSession>>,
+    prepared_campaign: Option<Res<'w, PreparedDirectCampaignSession>>,
 }
 
 trait ClipboardTextWriter {
@@ -356,20 +401,24 @@ fn hosted_connection_code(
     active: Option<&ActiveDirectSession>,
     authority: Option<&SessionAdmissionAuthority>,
 ) -> Option<EncodedConnectionCode> {
+    current_hosted_connection_code(active, authority).map(|code| code.encode())
+}
+
+fn current_hosted_connection_code(
+    active: Option<&ActiveDirectSession>,
+    authority: Option<&SessionAdmissionAuthority>,
+) -> Option<DirectConnectionCode> {
     let source = active
         .filter(|active| active.role == MultiplayerRole::Host)?
         .hosted_code
         .as_ref()?;
     let authority = authority?;
-    Some(
-        DirectConnectionCode {
-            endpoint: source.endpoint.clone(),
-            certificate_fingerprint: source.certificate_fingerprint,
-            certificate_expires_unix_seconds: source.certificate_expires_unix_seconds,
-            invite_token: authority.invite_token(),
-        }
-        .encode(),
-    )
+    Some(DirectConnectionCode {
+        endpoint: source.endpoint.clone(),
+        certificate_fingerprint: source.certificate_fingerprint,
+        certificate_expires_unix_seconds: source.certificate_expires_unix_seconds,
+        invite_token: authority.invite_token(),
+    })
 }
 
 fn copy_hosted_connection_code<W: ClipboardTextWriter>(
@@ -511,6 +560,7 @@ pub(super) fn plugin(app: &mut App) {
                 detect_failed_client_connection,
                 detect_failed_host_endpoint,
                 sync_host_session,
+                (poll_lan_browser, sync_lan_host_advertisement).chain(),
                 drive_direct_map_loading,
                 finish_host_shutdown,
                 observe_current_world_ready,
@@ -585,6 +635,7 @@ fn load_stored_credential(
 fn queue_prepared_host_after_sandbox(
     mut commands: Commands,
     pending: Option<Res<PendingDirectHostSetup>>,
+    pending_lan: Option<Res<PendingLanHostDiscovery>>,
     prepared: Option<Res<PreparedDirectSandboxSession>>,
     prepared_campaign: Option<Res<PreparedDirectCampaignSession>>,
     active: Option<Res<ActiveDirectSession>>,
@@ -629,6 +680,7 @@ fn queue_prepared_host_after_sandbox(
     commands.insert_resource(DirectStartQueue::Host {
         endpoint: pending.endpoint.clone(),
         prepared: Box::new(prepared),
+        advertise_on_lan: pending_lan.is_some(),
     });
 }
 
@@ -642,9 +694,7 @@ fn handle_intents(
     mut draft: ResMut<MultiplayerDraft>,
     mut stored: ResMut<StoredCredentialState>,
     storage: Option<Res<ReconnectCredentialStorage>>,
-    projection: Res<SessionProjection>,
-    authority: Option<Res<SessionAdmissionAuthority>>,
-    active: Option<Res<ActiveDirectSession>>,
+    context: MultiplayerIntentContext,
     mut ids: ResMut<SessionUiRequestIds>,
     mut notice: ResMut<SessionUiNotice>,
     mut clipboard: Option<ResMut<Clipboard>>,
@@ -678,14 +728,91 @@ fn handle_intents(
         };
         match intent {
             MultiplayerIntent::OpenHostCampaign => {
+                commands.remove_resource::<ActiveLanBrowser>();
                 notice.0 = None;
                 model.show_host_campaign();
             }
+            MultiplayerIntent::HostLanSandbox => {
+                if context.active.is_some() {
+                    notice.0 = Some("A direct session is already active.".to_owned());
+                    continue;
+                }
+                let endpoint = match lan_host_endpoint(&draft) {
+                    Ok(endpoint) => endpoint,
+                    Err(reason) => {
+                        notice.0 = Some(reason);
+                        continue;
+                    }
+                };
+                commands.remove_resource::<ActiveLanBrowser>();
+                commands.insert_resource(PendingDirectHostSetup { endpoint });
+                commands.insert_resource(PendingLanHostDiscovery);
+                commands.remove_resource::<PreparedDirectSandboxSession>();
+                commands.remove_resource::<PreparedDirectCampaignSession>();
+                notice.0 = None;
+                next_screen.set(Screen::Sandbox);
+            }
+            MultiplayerIntent::OpenLanBrowser | MultiplayerIntent::RefreshLanBrowser => {
+                if context.active.is_some() {
+                    notice.0 =
+                        Some("Leave the active session before browsing LAN games.".to_owned());
+                    continue;
+                }
+                model.show_lan_browser();
+                match prepare_lan_browser(context.accepted_content.as_deref()) {
+                    Ok(browser) => {
+                        commands.insert_resource(browser);
+                        notice.0 = None;
+                    }
+                    Err(reason) => {
+                        commands.remove_resource::<ActiveLanBrowser>();
+                        notice.0 = Some(reason);
+                    }
+                }
+            }
+            MultiplayerIntent::JoinLanSession(service_id) => {
+                if context.active.is_some() {
+                    notice.0 = Some("A direct session is already active.".to_owned());
+                    continue;
+                }
+                let Some(browser) = context.lan_browser.as_deref() else {
+                    notice.0 = Some(
+                        "LAN discovery is not running. Refresh the LAN browser and try again."
+                            .to_owned(),
+                    );
+                    continue;
+                };
+                let Some(session) = browser.browser.session(service_id) else {
+                    notice.0 = Some(
+                        "That LAN lobby is no longer advertised. Refresh and choose it again."
+                            .to_owned(),
+                    );
+                    continue;
+                };
+                if !session.is_compatible_with(browser.compatibility) {
+                    notice.0 = Some(
+                        "That LAN lobby uses a different build or shipped content.".to_owned(),
+                    );
+                    continue;
+                }
+                let code = session.connection_code();
+                let credential = AdmissionCredential::Invite(code.invite_token);
+                model.connecting(MultiplayerRole::Client);
+                notice.0 = None;
+                commands.remove_resource::<ActiveLanBrowser>();
+                commands.insert_resource(DirectStartQueue::Join {
+                    target: DirectJoinTarget::Invite(code),
+                    credential,
+                    reconnecting: false,
+                });
+            }
             MultiplayerIntent::OpenHostDirect => {
+                commands.remove_resource::<ActiveLanBrowser>();
                 notice.0 = None;
                 model.show_host_direct();
             }
             MultiplayerIntent::OpenJoinDirect => {
+                commands.remove_resource::<ActiveLanBrowser>();
                 notice.0 = None;
                 model.show_join_direct();
             }
@@ -707,13 +834,14 @@ fn handle_intents(
                     }
                 };
                 commands.insert_resource(PendingDirectHostSetup { endpoint });
+                commands.remove_resource::<PendingLanHostDiscovery>();
                 commands.remove_resource::<PreparedDirectSandboxSession>();
                 commands.remove_resource::<PreparedDirectCampaignSession>();
                 notice.0 = None;
                 next_screen.set(Screen::Sandbox);
             }
             MultiplayerIntent::HostCampaign(slot) => {
-                if active.is_some() {
+                if context.active.is_some() {
                     notice.0 = Some("A direct session is already active.".to_owned());
                     continue;
                 }
@@ -725,6 +853,7 @@ fn handle_intents(
                     }
                 };
                 commands.insert_resource(PendingDirectHostSetup { endpoint });
+                commands.remove_resource::<PendingLanHostDiscovery>();
                 commands.insert_resource(CampaignMultiplayerHostRequest { slot: *slot });
                 commands.remove_resource::<PreparedDirectSandboxSession>();
                 commands.remove_resource::<PreparedDirectCampaignSession>();
@@ -733,8 +862,8 @@ fn handle_intents(
             MultiplayerIntent::CopyConnectionCode => {
                 notice.0 = Some(
                     match copy_hosted_connection_code(
-                        active.as_deref(),
-                        authority.as_deref(),
+                        context.active.as_deref(),
+                        context.authority.as_deref(),
                         clipboard.as_deref_mut(),
                     ) {
                         Ok(()) => "Direct connection code copied to the clipboard.",
@@ -743,8 +872,17 @@ fn handle_intents(
                     .to_owned(),
                 );
             }
+            MultiplayerIntent::RetryLanAdvertisement => {
+                if model.role != Some(MultiplayerRole::Host) || context.lan_host.is_none() {
+                    notice.0 =
+                        Some("Only an active LAN host can retry lobby advertisement.".to_owned());
+                    continue;
+                }
+                commands.remove_resource::<LanHostDiscoveryFailure>();
+                notice.0 = Some("Retrying LAN lobby advertisement…".to_owned());
+            }
             MultiplayerIntent::JoinDirect | MultiplayerIntent::ReconnectDirect => {
-                if active.is_some() {
+                if context.active.is_some() {
                     notice.0 = Some("A direct session is already active.".to_owned());
                     continue;
                 }
@@ -836,10 +974,11 @@ fn handle_intents(
                 );
             }
             MultiplayerIntent::Launch => {
-                let fingerprint = authority
+                let fingerprint = context
+                    .authority
                     .as_deref()
                     .map(SessionAdmissionAuthority::manifest)
-                    .or(projection.manifest.as_ref())
+                    .or(context.projection.manifest.as_ref())
                     .map(|manifest| manifest.map.expected_public_fingerprint);
                 let Some(fingerprint) = fingerprint else {
                     notice.0 = Some(
@@ -859,10 +998,11 @@ fn handle_intents(
                 );
             }
             MultiplayerIntent::RetryExact => {
-                let fingerprint = authority
+                let fingerprint = context
+                    .authority
                     .as_deref()
                     .map(SessionAdmissionAuthority::manifest)
-                    .or(projection.manifest.as_ref())
+                    .or(context.projection.manifest.as_ref())
                     .map(|manifest| manifest.map.expected_public_fingerprint);
                 let Some(fingerprint) = fingerprint else {
                     notice.0 =
@@ -896,7 +1036,7 @@ fn handle_intents(
             MultiplayerIntent::LeaveSession => {
                 leave_session(
                     &mut model,
-                    active.as_deref(),
+                    context.active.as_deref(),
                     &mut ids,
                     &mut client_controls,
                     &mut commands,
@@ -912,13 +1052,15 @@ fn handle_intents(
                 MultiplayerBackResult::Home => {
                     commands.remove_resource::<DirectStartQueue>();
                     commands.remove_resource::<PendingDirectHostSetup>();
+                    commands.remove_resource::<PendingLanHostDiscovery>();
+                    commands.remove_resource::<ActiveLanBrowser>();
                     commands.remove_resource::<PreparedDirectSandboxSession>();
                     commands.remove_resource::<PreparedDirectCampaignSession>();
                     notice.0 = None;
                 }
                 MultiplayerBackResult::LeaveSession => leave_session(
                     &mut model,
-                    active.as_deref(),
+                    context.active.as_deref(),
                     &mut ids,
                     &mut client_controls,
                     &mut commands,
@@ -941,12 +1083,41 @@ fn current_unix_seconds() -> Option<u64> {
 }
 
 fn direct_endpoint(draft: &MultiplayerDraft) -> Result<DirectEndpoint, String> {
-    let port = draft
-        .advertised_port
-        .parse::<u16>()
-        .map_err(|_error| "UDP port must be a number from 1 through 65535.".to_owned())?;
+    let port = direct_port(draft)?;
     DirectEndpoint::new(draft.advertised_host.trim(), port)
         .map_err(|error| format!("Advertised endpoint refused: {error}."))
+}
+
+fn lan_host_endpoint(draft: &MultiplayerDraft) -> Result<DirectEndpoint, String> {
+    DirectEndpoint::new("127.0.0.1", direct_port(draft)?)
+        .map_err(|error| format!("LAN host endpoint refused: {error}."))
+}
+
+fn direct_port(draft: &MultiplayerDraft) -> Result<u16, String> {
+    draft
+        .advertised_port
+        .parse::<u16>()
+        .map_err(|_error| "UDP port must be a number from 1 through 65535.".to_owned())
+}
+
+fn prepare_lan_browser(
+    accepted_content: Option<&AcceptedContentRevision>,
+) -> Result<ActiveLanBrowser, String> {
+    let accepted_content = accepted_content.ok_or_else(|| {
+        "Shipped content is still loading; LAN browsing was not started.".to_owned()
+    })?;
+    let build = local_build_identity()
+        .map_err(|error| format!("Local build identity is invalid: {error}."))?;
+    let compatibility = LanCompatibilityKey::from_build_and_content(
+        &build,
+        ContentFingerprint(accepted_content.fingerprint()),
+    );
+    let browser = LanDiscoveryBrowser::start()
+        .map_err(|error| format!("Could not browse this local network: {error}."))?;
+    Ok(ActiveLanBrowser {
+        browser,
+        compatibility,
+    })
 }
 
 fn write_host_control(
@@ -1025,9 +1196,11 @@ fn start_queued_direct_session(world: &mut World) {
         return;
     };
     let result = match request {
-        DirectStartQueue::Host { endpoint, prepared } => {
-            start_direct_host(world, endpoint, *prepared)
-        }
+        DirectStartQueue::Host {
+            endpoint,
+            prepared,
+            advertise_on_lan,
+        } => start_direct_host(world, endpoint, *prepared, advertise_on_lan),
         DirectStartQueue::Join {
             target,
             credential,
@@ -1042,6 +1215,10 @@ fn start_queued_direct_session(world: &mut World) {
             notice.0 = Some(reason);
         }
         world.insert_resource(SimulationRole::Authority);
+        world.remove_resource::<PendingLanHostDiscovery>();
+        world.remove_resource::<LanHostSession>();
+        world.remove_resource::<ActiveLanAdvertisement>();
+        world.remove_resource::<LanHostDiscoveryFailure>();
     }
 }
 
@@ -1049,6 +1226,7 @@ fn start_direct_host(
     world: &mut World,
     endpoint: DirectEndpoint,
     prepared: PreparedDirectSession,
+    advertise_on_lan: bool,
 ) -> Result<(), String> {
     let protocol_hash = *world.resource::<ProtocolHash>();
     let manifest = prepared.manifest().clone();
@@ -1084,6 +1262,14 @@ fn start_direct_host(
     }
     world.insert_resource(SimulationRole::Authority);
     world.remove_resource::<PendingDirectHostSetup>();
+    world.remove_resource::<PendingLanHostDiscovery>();
+    world.remove_resource::<ActiveLanAdvertisement>();
+    world.remove_resource::<LanHostDiscoveryFailure>();
+    if advertise_on_lan {
+        world.insert_resource(LanHostSession);
+    } else {
+        world.remove_resource::<LanHostSession>();
+    }
     world.remove_resource::<DirectWorldReady>();
     world.insert_resource(DirectMapLoadState::default());
     world.insert_resource(PendingReconnectSnapshotTargets::default());
@@ -1123,6 +1309,10 @@ fn start_direct_join(
         role: MultiplayerRole::Client,
         hosted_code: None,
     });
+    world.remove_resource::<ActiveLanBrowser>();
+    world.remove_resource::<LanHostSession>();
+    world.remove_resource::<ActiveLanAdvertisement>();
+    world.remove_resource::<LanHostDiscoveryFailure>();
     world.insert_resource(PendingClientHello {
         credential,
         sent: false,
@@ -1140,6 +1330,105 @@ fn start_direct_join(
         world.resource_mut::<MultiplayerModel>().show_reconnecting();
     }
     Ok(())
+}
+
+fn poll_lan_browser(
+    mut browser: Option<ResMut<ActiveLanBrowser>>,
+    mut notice: ResMut<SessionUiNotice>,
+    mut commands: Commands,
+) {
+    let Some(browser) = browser.as_mut() else {
+        return;
+    };
+    if let Err(error) = browser.browser.poll() {
+        notice.0 = Some(format!(
+            "LAN discovery stopped: {error}. Check local-network permission, then refresh."
+        ));
+        commands.remove_resource::<ActiveLanBrowser>();
+    }
+}
+
+fn sync_lan_host_advertisement(
+    active: Option<Res<ActiveDirectSession>>,
+    authority: Option<Res<SessionAdmissionAuthority>>,
+    lan_host: Option<Res<LanHostSession>>,
+    failure: Option<Res<LanHostDiscoveryFailure>>,
+    mut advertisement: Option<ResMut<ActiveLanAdvertisement>>,
+    mut notice: ResMut<SessionUiNotice>,
+    mut commands: Commands,
+) {
+    let open_lan_lobby = lan_host.is_some()
+        && active
+            .as_deref()
+            .is_some_and(|active| active.role == MultiplayerRole::Host)
+        && authority
+            .as_deref()
+            .is_some_and(|authority| authority.lobby().snapshot().phase == LobbyPhase::Open);
+    if !open_lan_lobby {
+        if advertisement.is_some() {
+            commands.remove_resource::<ActiveLanAdvertisement>();
+        }
+        return;
+    }
+    if failure.is_some() {
+        return;
+    }
+    let built = lan_session_advertisement(active.as_deref(), authority.as_deref());
+    let result = match (advertisement.as_mut(), built) {
+        (_, Err(error)) => Err(error),
+        (Some(current), Ok(next)) => current.0.refresh(next).map(|_changed| ()),
+        (None, Ok(next)) => LanDiscoveryAdvertiser::start(next).map(|publisher| {
+            commands.insert_resource(ActiveLanAdvertisement(publisher));
+        }),
+    };
+    match result {
+        Ok(()) => {
+            if notice.0.as_deref() == Some("Retrying LAN lobby advertisement…") {
+                notice.0 = None;
+            }
+        }
+        Err(error) => {
+            commands.remove_resource::<ActiveLanAdvertisement>();
+            commands.insert_resource(LanHostDiscoveryFailure);
+            notice.0 = Some(format!(
+                "LAN lobby advertisement stopped: {error}. Check local-network permission and retry."
+            ));
+        }
+    }
+}
+
+fn lan_session_advertisement(
+    active: Option<&ActiveDirectSession>,
+    authority: Option<&SessionAdmissionAuthority>,
+) -> Result<LanSessionAdvertisement, hex_multiplayer::LanDiscoveryError> {
+    let authority = authority.ok_or(hex_multiplayer::LanDiscoveryError::MalformedAnnouncement(
+        "host authority",
+    ))?;
+    let connection_code = current_hosted_connection_code(active, Some(authority)).ok_or(
+        hex_multiplayer::LanDiscoveryError::MalformedAnnouncement("host connection code"),
+    )?;
+    let manifest = authority.manifest();
+    let compatibility =
+        LanCompatibilityKey::from_build_and_content(&manifest.build, manifest.content_fingerprint);
+    let claimed_seats = u8::try_from(
+        authority
+            .lobby()
+            .snapshot()
+            .seats
+            .iter()
+            .filter(|seat| seat.connection.is_claimed())
+            .count(),
+    )
+    .unwrap_or(u8::MAX);
+    let capacity = u8::try_from(PlayerSeat::HUMAN_COUNT).unwrap_or(u8::MAX);
+    LanSessionAdvertisement::new(
+        manifest.session_instance_id,
+        LanSessionKind::from(manifest.launch_kind),
+        compatibility,
+        connection_code,
+        claimed_seats,
+        capacity,
+    )
 }
 
 fn send_client_hello(
@@ -2328,21 +2617,19 @@ fn publish_view(
     campaign_host_status: Res<CampaignMultiplayerHostStatus>,
     campaign_save_status: Res<CampaignSaveStatusProjection>,
     stored: Res<StoredCredentialState>,
-    projection: Res<SessionProjection>,
-    authority: Option<Res<SessionAdmissionAuthority>>,
-    active: Option<Res<ActiveDirectSession>>,
-    prepared: Option<Res<PreparedDirectSandboxSession>>,
-    prepared_campaign: Option<Res<PreparedDirectCampaignSession>>,
+    inputs: MultiplayerViewInputs,
     mut view: ResMut<MultiplayerView>,
 ) {
-    let lobby = authority
+    let lobby = inputs
+        .authority
         .as_deref()
         .map(|authority| authority.lobby().snapshot_owned())
-        .or_else(|| projection.lobby.clone());
-    let manifest = authority
+        .or_else(|| inputs.projection.lobby.clone());
+    let manifest = inputs
+        .authority
         .as_deref()
         .map(|authority| authority.manifest().clone())
-        .or_else(|| projection.manifest.clone());
+        .or_else(|| inputs.projection.manifest.clone());
     let seats = lobby.as_ref().map_or_else(default_seats, |lobby| {
         lobby
             .seats
@@ -2388,8 +2675,20 @@ fn publish_view(
             })
         }),
     };
-    let share_code = hosted_connection_code(active.as_deref(), authority.as_deref())
+    let share_code = (inputs.lan_host.is_none())
+        .then(|| hosted_connection_code(inputs.active.as_deref(), inputs.authority.as_deref()))
+        .flatten()
         .map(|code| SensitiveText::new(code.expose_for_sharing()));
+    let lan_sessions = inputs
+        .lan_browser
+        .as_deref()
+        .map_or_else(Vec::new, |browser| {
+            browser
+                .browser
+                .sessions()
+                .map(|session| multiplayer_lan_session_view(session, browser.compatibility))
+                .collect()
+        });
     let launch_summary = lobby
         .as_ref()
         .and_then(|lobby| lobby.launch_summary.as_ref())
@@ -2402,9 +2701,15 @@ fn publish_view(
                 summary.public_world_fingerprint.0
             )
         })
-        .or_else(|| prepared.as_deref().map(|prepared| prepared.summary.clone()))
         .or_else(|| {
-            prepared_campaign
+            inputs
+                .prepared
+                .as_deref()
+                .map(|prepared| prepared.summary.clone())
+        })
+        .or_else(|| {
+            inputs
+                .prepared_campaign
                 .as_deref()
                 .map(|prepared| prepared.summary.clone())
         });
@@ -2417,6 +2722,12 @@ fn publish_view(
         share_code,
         join_code: draft.join_code.clone(),
         reconnect_available: stored.value.is_some(),
+        lan_searching: model.route == hex_gameplay_model::MultiplayerRoute::BrowseLan
+            && inputs.lan_browser.is_some(),
+        lan_sessions,
+        lan_hosting: inputs.lan_host.is_some(),
+        lan_advertising: inputs.lan_advertisement.is_some(),
+        lan_advertisement_failed: inputs.lan_failure.is_some(),
         campaign_slots: campaign_store
             .slot_views(campaign_lattices.as_deref(), campaign_elements.as_deref()),
         campaign_host,
@@ -2431,6 +2742,37 @@ fn publish_view(
     };
     if *view != next {
         *view = next;
+    }
+}
+
+fn multiplayer_lan_session_view(
+    session: &hex_multiplayer::LanDiscoveredSession,
+    compatibility: LanCompatibilityKey,
+) -> MultiplayerLanSessionView {
+    let suffix = session
+        .session_instance_id()
+        .to_bytes()
+        .iter()
+        .take(3)
+        .map(|byte| format!("{byte:02X}"))
+        .collect::<String>();
+    let kind = match session.kind() {
+        LanSessionKind::Sandbox => "Sandbox",
+        LanSessionKind::Campaign => "Campaign",
+    };
+    let host = session.endpoint().host();
+    let endpoint = if host.contains(':') && !(host.starts_with('[') && host.ends_with(']')) {
+        format!("[{host}]:{}", session.endpoint().port())
+    } else {
+        format!("{host}:{}", session.endpoint().port())
+    };
+    MultiplayerLanSessionView {
+        service_id: session.service_id().to_owned(),
+        label: format!("{kind} · {suffix}"),
+        endpoint,
+        claimed_seats: session.claimed_seats(),
+        seat_capacity: session.seat_capacity(),
+        compatible: session.is_compatible_with(compatibility),
     }
 }
 
@@ -2566,6 +2908,11 @@ fn end_active_session(
         commands.entity(active.entity).try_despawn();
     }
     commands.remove_resource::<ActiveDirectSession>();
+    commands.remove_resource::<ActiveLanAdvertisement>();
+    commands.remove_resource::<LanHostSession>();
+    commands.remove_resource::<LanHostDiscoveryFailure>();
+    commands.remove_resource::<PendingLanHostDiscovery>();
+    commands.remove_resource::<ActiveLanBrowser>();
     commands.remove_resource::<PendingClientHello>();
     commands.remove_resource::<SessionAdmissionAuthority>();
     commands.remove_resource::<DirectWorldReady>();
@@ -2851,6 +3198,20 @@ mod tests {
         assert!(direct_endpoint(&draft).is_err());
         draft.advertised_port = "not-a-port".to_owned();
         assert!(direct_endpoint(&draft).is_err());
+    }
+
+    #[test]
+    fn lan_host_uses_the_selected_port_without_requiring_an_advertised_ip() {
+        let mut draft = MultiplayerDraft {
+            advertised_host: "not-a-reachable-address".to_owned(),
+            ..Default::default()
+        };
+        draft.advertised_port = "42424".to_owned();
+
+        let endpoint = lan_host_endpoint(&draft).expect("LAN host endpoint should be local");
+
+        assert_eq!(endpoint.host(), "127.0.0.1");
+        assert_eq!(endpoint.port(), 42_424);
     }
 
     #[derive(Default)]

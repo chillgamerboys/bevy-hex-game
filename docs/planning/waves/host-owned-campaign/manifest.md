@@ -72,6 +72,25 @@ Ratified by `@shrav-k` while activating L3:
 Decisions are amendable, never silently edited. An amendment records its ratifier and
 date, and every affected order receives the exact new text.
 
+### Coordinator amendment — same-link Sandbox discovery (2026-08-16)
+
+User-authorized integration work while this wave is still open:
+
+- “Host LAN Sandbox and Find LAN Games add opt-in mDNS/DNS-SD discovery around the
+  existing Direct Sandbox flow. Installing the multiplayer plugin or visiting ordinary
+  offline screens opens no discovery socket.”
+- “Only an open pre-launch assignment lobby is advertised. Launch/loading/gameplay and
+  outcome stop advertisement; Return to Lobby may advertise the same live session again.”
+- “The DNS-SD record is untrusted local-link metadata and carries the current ephemeral
+  invite for an explicitly open LAN lobby. It never bypasses the pinned certificate,
+  exact protocol/build/content, capacity, lobby-phase, seat, or command checks.”
+- “The current UI scope is shipped Sandbox discovery on a trusted LAN. Campaign hosting
+  retains its private Direct flow, and mDNS provides neither Internet discovery nor a
+  relay.”
+- “Acceptance requires bounded schema/redaction tests, a real local multicast exchange,
+  deterministic LAN-browser and host-lobby frames, and a two-process same-network human
+  route on the exact combined head.”
+
 ## Source maps
 
 - [World authority](maps/world-authority.md)

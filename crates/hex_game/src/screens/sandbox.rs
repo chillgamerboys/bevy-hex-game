@@ -847,6 +847,7 @@ fn handle_sandbox_intents(
                 }
                 SandboxBackResult::Exit(SandboxDestination::Multiplayer) => {
                     commands.remove_resource::<super::multiplayer::PendingDirectHostSetup>();
+                    commands.remove_resource::<super::multiplayer::PendingLanHostDiscovery>();
                     commands.remove_resource::<super::multiplayer::PreparedDirectSandboxSession>();
                     next.set(Screen::Multiplayer);
                 }
@@ -2389,6 +2390,33 @@ mod tests {
         assert_eq!(state.draft, expected);
         assert_eq!(state.route, SandboxRoute::Overview);
         assert_eq!(state.entry_origin, SandboxEntryOrigin::MainMenu);
+    }
+
+    #[test]
+    fn leaving_lan_host_setup_clears_both_pending_host_markers() {
+        let mut app = sandbox_navigation_app(Screen::Sandbox);
+        app.insert_resource(super::super::multiplayer::PendingDirectHostSetup {
+            endpoint: hex_multiplayer::DirectEndpoint::new("127.0.0.1", 7_777)
+                .expect("valid local endpoint"),
+        });
+        app.insert_resource(super::super::multiplayer::PendingLanHostDiscovery);
+        app.update();
+
+        app.world_mut()
+            .write_message(UiIntent::Sandbox(SandboxIntent::Back));
+        app.update();
+
+        assert!(!app
+            .world()
+            .contains_resource::<super::super::multiplayer::PendingDirectHostSetup>());
+        assert!(!app
+            .world()
+            .contains_resource::<super::super::multiplayer::PendingLanHostDiscovery>());
+        app.update();
+        assert_eq!(
+            *app.world().resource::<State<Screen>>().get(),
+            Screen::Multiplayer
+        );
     }
 
     #[test]

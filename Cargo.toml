@@ -60,6 +60,7 @@ aeronet = { version = "=0.21.0", default-features = false, features = ["std"] }
 aeronet_replicon = { version = "=0.21.0", default-features = false, features = ["std", "client", "server"] }
 aeronet_webtransport = { version = "=0.21.0", default-features = false, features = ["client", "server", "self-signed"] }
 aeronet_channel = "=0.21.0"
+mdns-sd = { version = "=0.21.0", default-features = false }
 
 [workspace.package]
 version = "0.4.0"
