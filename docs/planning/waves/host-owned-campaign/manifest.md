@@ -1,6 +1,7 @@
 # Host-owned Campaign multiplayer wave
 
-- **Status:** integrating; all four lanes are merged into the wave candidate
+- **Status:** closed; delivered to `dev` through PR #207 at merge commit
+  `b9feb082a8ea62d4a7d1f81511b4aa5faea7232f`
 - **Wave branch:** `wave/host-owned-campaign`
 - **Planning base:** `origin/dev@a0f95e62d02c663902b864cc08a89e831d9ba437`
 - **Wave base:** `origin/dev@c8506a71166a23777d31cc8504a53e61966bb069`
@@ -315,3 +316,27 @@ Lane tickets therefore remain deliberately `null`; the manifest is the durable q
 
 On a stop condition, mark the lane blocked and amend this manifest after owner review;
 do not improvise inside the lane.
+
+## Closeout — 2026-08-16
+
+PR #207 merged the exact wave candidate
+`a798dd12b570c66b07d6dbeac0fa2e44f90d59a1` into `dev` as merge commit
+`b9feb082a8ea62d4a7d1f81511b4aa5faea7232f`. The delivered outcome includes all four
+Campaign lanes plus the user-authorized same-link Sandbox discovery amendment and its
+native macOS Bonjour-publication repair.
+
+The exact candidate passed the selector, dependency policy, documentation, gameplay,
+map, domain-coverage, Linux shipping, and strict Clippy/test GitHub gates. Shravan
+Kumaran and a coworker then recorded an exact-head two-computer same-Wi-Fi PASS for
+Host LAN Sandbox discovery and join. The maintainer explicitly authorized an
+administrator merge while the macOS and Windows shipping jobs were still running; no
+failing check was bypassed, and the bypass is retained here rather than represented as
+ordinary all-green evidence.
+
+The repository status, roadmap, design, contracts, and implementation agree that
+host-owned Campaign multiplayer and trusted-link Sandbox discovery are delivered,
+while universal EOS Internet play and Steam-native entry remain upcoming. A live Linear
+sweep found no Campaign, LAN-discovery, EOS, or Steam delivery ticket to retire.
+`HEX-95` remains Backlog because its multiplayer heading-clipping defect is independent
+of this wave. Source branches are retained and may be deleted after dependent PR review;
+this closeout does not delete them automatically.
