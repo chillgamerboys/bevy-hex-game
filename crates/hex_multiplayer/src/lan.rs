@@ -6,7 +6,7 @@
 //! transport and passes the ordinary protocol, build, content, lobby, and seat checks.
 
 use std::{
-    collections::BTreeMap,
+    collections::{btree_map::Entry, BTreeMap},
     fmt,
     net::IpAddr,
     time::{SystemTime, UNIX_EPOCH},
@@ -37,6 +37,7 @@ const PROPERTY_INVITE: &str = "invite";
 const PROPERTY_CLAIMED_SEATS: &str = "seats";
 const PROPERTY_SEAT_CAPACITY: &str = "capacity";
 const MAX_SERVICE_ID_BYTES: usize = 512;
+const MAX_DISCOVERED_LAN_SESSIONS: usize = 64;
 const MAX_LAN_SEATS: u8 = 6;
 
 /// Non-secret digest used to mark obviously incompatible discovered builds before connecting.
@@ -379,9 +380,7 @@ impl LanDiscoveryBrowser {
                 Ok(ServiceEvent::ServiceResolved(service)) => {
                     match discovered_session(&service, now) {
                         Ok(discovered) => {
-                            let id = discovered.service_id.clone();
-                            changed |= self.sessions.get(&id) != Some(&discovered);
-                            self.sessions.insert(id, discovered);
+                            changed |= cache_discovered_session(&mut self.sessions, discovered);
                         }
                         Err(_untrusted_record) => {
                             changed |= self.sessions.remove(&service.fullname).is_some();
@@ -418,6 +417,29 @@ impl LanDiscoveryBrowser {
                 Err(TryRecvError::Disconnected) => return Err(LanDiscoveryError::DaemonStopped),
             }
         }
+    }
+}
+
+fn cache_discovered_session(
+    sessions: &mut BTreeMap<String, LanDiscoveredSession>,
+    discovered: LanDiscoveredSession,
+) -> bool {
+    let id = discovered.service_id.clone();
+    let at_capacity = sessions.len() >= MAX_DISCOVERED_LAN_SESSIONS;
+    match sessions.entry(id) {
+        Entry::Occupied(mut current) => {
+            if current.get() == &discovered {
+                false
+            } else {
+                current.insert(discovered);
+                true
+            }
+        }
+        Entry::Vacant(vacant) if !at_capacity => {
+            vacant.insert(discovered);
+            true
+        }
+        Entry::Vacant(_) => false,
     }
 }
 
@@ -888,6 +910,39 @@ mod tests {
             6,
         )
         .is_err());
+    }
+
+    #[test]
+    fn discovery_cache_is_bounded_but_still_refreshes_known_sessions() {
+        let properties = announcement_properties(&advertisement());
+        let fixture = |index: usize| {
+            let service = ServiceInfo::new(
+                LAN_DISCOVERY_SERVICE_TYPE,
+                &format!("Hex Sandbox fixture {index}"),
+                &format!("hex-fixture-{index}.local."),
+                "192.168.1.42",
+                7_777,
+                properties.as_slice(),
+            )
+            .expect("valid fixture service")
+            .as_resolved_service();
+            discovered_session(&service, 1_900_000_000).expect("valid announcement should resolve")
+        };
+        let mut sessions = BTreeMap::new();
+        for index in 0..MAX_DISCOVERED_LAN_SESSIONS {
+            assert!(cache_discovered_session(&mut sessions, fixture(index)));
+        }
+        assert!(!cache_discovered_session(
+            &mut sessions,
+            fixture(MAX_DISCOVERED_LAN_SESSIONS)
+        ));
+        assert_eq!(sessions.len(), MAX_DISCOVERED_LAN_SESSIONS);
+
+        let mut refreshed = fixture(0);
+        refreshed.claimed_seats = 2;
+        assert!(cache_discovered_session(&mut sessions, refreshed.clone()));
+        assert_eq!(sessions.len(), MAX_DISCOVERED_LAN_SESSIONS);
+        assert_eq!(sessions.get(refreshed.service_id()), Some(&refreshed));
     }
 
     #[test]
