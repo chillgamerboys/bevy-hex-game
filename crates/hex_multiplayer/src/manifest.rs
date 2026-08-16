@@ -144,6 +144,20 @@ pub struct UnitDeploymentV1 {
     pub position: TilePos,
 }
 
+/// How peers obtain the immutable world and actor baseline for this session.
+///
+/// A Sandbox launch is reproducible from the frozen manifest. A Campaign launch must
+/// import the host's complete disclosure-safe live snapshot; regenerating its original
+/// map would discard authoritative mutations retained by the Campaign checkpoint.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SessionLaunchKindV1 {
+    /// Generate the shipped Sandbox world from [`SessionManifestV1::map`].
+    #[default]
+    Sandbox,
+    /// Wait for and transactionally import the host's complete live baseline.
+    Campaign,
+}
+
 /// Immutable launch contract frozen before a direct lobby opens.
 ///
 /// This type intentionally contains no transport ids, credentials, cameras, or local
@@ -160,6 +174,8 @@ pub struct SessionManifestV1 {
     pub content_fingerprint: ContentFingerprint,
     /// Stable built-in scenario identity.
     pub scenario_identity: BoundedText<MAX_IDENTITY_BYTES>,
+    /// Whether peers generate a fresh Sandbox or import a Campaign baseline.
+    pub launch_kind: SessionLaunchKindV1,
     /// Frozen deterministic map contract.
     pub map: MapManifestV1,
     /// Frozen gameplay rules contract.
@@ -272,6 +288,7 @@ mod tests {
                 .expect("fixture build identity should fit"),
             content_fingerprint: ContentFingerprint(11),
             scenario_identity: text("sandbox"),
+            launch_kind: SessionLaunchKindV1::Sandbox,
             map: MapManifestV1 {
                 catalog_identity: text("small-island"),
                 seed: 42,

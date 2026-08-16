@@ -11,7 +11,8 @@ use crate::{
 use crate::{
     ActionAffordance, ActionAvailability, ActionPriority, CastingAimView, CastingPanelContentView,
     CastingSpellView, CellInteraction, DecisionChoiceView, GameplayAction, InitiativeEntryView,
-    InitiativeSide, LatticeCellView, MultiplayerAssignmentView, MultiplayerSeatConnectionView,
+    InitiativeSide, LatticeCellView, MultiplayerAssignmentView, MultiplayerCampaignHostView,
+    MultiplayerCampaignSaveStatusView, MultiplayerLanSessionView, MultiplayerSeatConnectionView,
     MultiplayerSeatView, OutcomeAction, OutcomeActionView, OwnLatticeView, PartyMemberView,
     SandboxLatticeCellKind, SandboxLatticeCellView, SensitiveText, TargetLatticeStateView,
     TargetLatticeView,
@@ -260,6 +261,67 @@ pub fn apply_ui_review_fixture(commands: &mut Commands, name: &str) -> Result<()
         "multiplayer-lobby" => {
             review.multiplayer = Some(multiplayer_lobby_fixture(false));
         }
+        "multiplayer-lan-browser" => {
+            review.multiplayer = Some(MultiplayerView {
+                route: hex_gameplay_model::MultiplayerRoute::BrowseLan,
+                lan_searching: true,
+                lan_sessions: vec![
+                    MultiplayerLanSessionView {
+                        service_id: "sandbox-a._hexgame._udp.local.".to_owned(),
+                        label: "Sandbox · A1B2C3".to_owned(),
+                        endpoint: "192.168.1.42:7777".to_owned(),
+                        claimed_seats: 1,
+                        seat_capacity: 6,
+                        compatible: true,
+                    },
+                    MultiplayerLanSessionView {
+                        service_id: "sandbox-b._hexgame._udp.local.".to_owned(),
+                        label: "Sandbox · D4E5F6".to_owned(),
+                        endpoint: "192.168.1.77:7777".to_owned(),
+                        claimed_seats: 2,
+                        seat_capacity: 6,
+                        compatible: false,
+                    },
+                ],
+                ..default()
+            });
+        }
+        "multiplayer-lan-host" => {
+            let mut view = multiplayer_lobby_fixture(false);
+            view.role = Some(hex_gameplay_model::MultiplayerRole::Host);
+            view.local_seat = Some(hex_core::PlayerSeat::HOST);
+            view.lan_hosting = true;
+            view.lan_advertising = true;
+            for seat in &mut view.seats {
+                seat.local = seat.seat == hex_core::PlayerSeat::HOST;
+            }
+            review.multiplayer = Some(view);
+        }
+        "multiplayer-campaign" => {
+            review.multiplayer = Some(multiplayer_campaign_fixture(false));
+        }
+        "multiplayer-campaign-refusal" => {
+            review.multiplayer = Some(multiplayer_campaign_fixture(true));
+        }
+        "multiplayer-campaign-lobby" => {
+            let mut view = multiplayer_lobby_fixture(false);
+            view.role = Some(hex_gameplay_model::MultiplayerRole::Host);
+            view.local_seat = Some(hex_core::PlayerSeat::HOST);
+            view.campaign_session = true;
+            view.launch_summary =
+                Some("Campaign slot 2 · Party Trial · 6 party members · fresh session".to_owned());
+            for seat in &mut view.seats {
+                seat.local = seat.seat == hex_core::PlayerSeat::HOST;
+            }
+            review.multiplayer = Some(view);
+        }
+        "multiplayer-campaign-save" => {
+            let mut view = multiplayer_lobby_fixture(false);
+            view.role = Some(hex_gameplay_model::MultiplayerRole::Client);
+            view.campaign_session = true;
+            view.campaign_save_status = Some(MultiplayerCampaignSaveStatusView::Saving);
+            review.multiplayer = Some(view);
+        }
         "multiplayer-mismatch" => {
             let view = MultiplayerView {
                 route: hex_gameplay_model::MultiplayerRoute::Ended,
@@ -318,6 +380,54 @@ pub fn apply_ui_review_fixture(commands: &mut Commands, name: &str) -> Result<()
     }
     commands.insert_resource(review);
     Ok(())
+}
+
+#[cfg(any(feature = "visual-review", feature = "test-support"))]
+fn multiplayer_campaign_fixture(refused: bool) -> MultiplayerView {
+    use crate::{CampaignPartyMemberView, CampaignSlotStatusView, CampaignSlotView};
+    use hex_gameplay_model::CampaignSlotId;
+
+    MultiplayerView {
+        route: hex_gameplay_model::MultiplayerRoute::HostCampaign,
+        campaign_slots: vec![
+            CampaignSlotView {
+                slot: CampaignSlotId::One,
+                status: CampaignSlotStatusView::Empty,
+            },
+            CampaignSlotView {
+                slot: CampaignSlotId::Two,
+                status: CampaignSlotStatusView::Available {
+                    party: vec![
+                        CampaignPartyMemberView {
+                            name: "Hedge Mage".to_owned(),
+                            lattice: "Fire 4 · Air 3 · Water 2".to_owned(),
+                            cells: Vec::new(),
+                        },
+                        CampaignPartyMemberView {
+                            name: "Stone Warden".to_owned(),
+                            lattice: "Earth 5 · Life 3".to_owned(),
+                            cells: Vec::new(),
+                        },
+                    ],
+                    active_time: "2h 14m".to_owned(),
+                },
+            },
+            CampaignSlotView {
+                slot: CampaignSlotId::Three,
+                status: CampaignSlotStatusView::Invalid {
+                    reason: "This save belongs to a different shipped content revision.".to_owned(),
+                },
+            },
+        ],
+        campaign_host: MultiplayerCampaignHostView {
+            slot: refused.then_some(CampaignSlotId::Two),
+            preparing: false,
+            refusal: refused.then(|| {
+                "The Campaign checkpoint belongs to incompatible shipped content.".to_owned()
+            }),
+        },
+        ..default()
+    }
 }
 
 #[cfg(any(feature = "visual-review", feature = "test-support"))]

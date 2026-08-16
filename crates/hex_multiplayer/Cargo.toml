@@ -6,10 +6,13 @@ publish = false
 description = "Shared, transport-neutral multiplayer protocol and session contracts."
 
 [features]
-default = ["direct"]
+default = ["direct", "lan-discovery"]
 # Direct native Internet/LAN transport. Installing the plugin never opens a socket;
 # a session runtime must explicitly request Host Direct or Join Direct.
 direct = ["dep:aeronet_webtransport", "dep:x509-parser"]
+# Opt-in mDNS/DNS-SD advertisement and browsing for open Direct lobbies on one LAN.
+# Constructing these adapters is the explicit action that opens multicast sockets.
+lan-discovery = ["direct", "dep:mdns-sd", "dep:dns-sd-native", "dep:tokio"]
 # In-memory multi-app transport used only by deterministic session tests.
 test-harness = ["dep:aeronet_channel"]
 
@@ -27,10 +30,15 @@ bevy_state = { workspace = true }
 bevy_time = { workspace = true }
 hex_core = { workspace = true }
 hex_lattice = { workspace = true }
+mdns-sd = { workspace = true, optional = true }
 rand = { workspace = true }
 serde = { workspace = true }
 sha2 = { workspace = true }
 x509-parser = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+dns-sd-native = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
 rcgen = { workspace = true }

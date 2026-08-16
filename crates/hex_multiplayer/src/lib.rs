@@ -16,6 +16,8 @@ mod connection_code;
 mod control;
 #[cfg(feature = "direct")]
 mod direct;
+#[cfg(feature = "lan-discovery")]
+mod lan;
 mod limits;
 mod lobby;
 mod manifest;
@@ -37,9 +39,9 @@ pub use auth::{
     SessionActivationError, SessionAdmissionAuthority, StoredReconnectCredential,
 };
 pub use campaign::{
-    CampaignEffectCheckpointV2, CampaignEffectLedgerV2, CampaignUnitCheckpointV2,
-    CampaignValidationError, HostCampaignCheckpointV2, CAMPAIGN_CHECKPOINT_VERSION_V2,
-    MAX_CAMPAIGN_EFFECTS,
+    CampaignEffectCheckpointV2, CampaignEffectLedgerV2, CampaignSaveRefusalV2, CampaignSaveStateV2,
+    CampaignSaveStatusV2, CampaignUnitCheckpointV2, CampaignValidationError,
+    HostCampaignCheckpointV2, CAMPAIGN_CHECKPOINT_VERSION_V2, MAX_CAMPAIGN_EFFECTS,
 };
 pub use connection_code::{
     CertificateFingerprint, ConnectionCodeError, DirectConnectionCode, DirectEndpoint,
@@ -53,6 +55,11 @@ pub use control::{
 pub use direct::{
     DirectTransportError, PreparedDirectHost, PreparedDirectJoin, PreparedDirectReconnect,
     SpkiPinVerifier, DEFAULT_DIRECT_PORT, DIRECT_SESSION_PATH,
+};
+#[cfg(feature = "lan-discovery")]
+pub use lan::{
+    LanCompatibilityKey, LanDiscoveredSession, LanDiscoveryAdvertiser, LanDiscoveryBrowser,
+    LanDiscoveryError, LanSessionAdvertisement, LanSessionKind, LAN_DISCOVERY_SERVICE_TYPE,
 };
 pub use limits::{
     BoundError, BoundedText, BoundedVec, MAX_ABS_COMMAND_COORDINATE, MAX_ABS_COMMAND_LEVEL,
@@ -69,7 +76,8 @@ pub use lobby::{
 pub use manifest::{
     BuildIdentityV1, ContentFingerprint, ManifestValidationError, MapManifestV1, ProtocolVersion,
     PublicWorldFingerprint, PublicWorldFingerprintV1, RosterEntryV1, RulesManifestV1,
-    SessionInstanceId, SessionManifestV1, UnitDeploymentV1, SESSION_PROTOCOL_VERSION,
+    SessionInstanceId, SessionLaunchKindV1, SessionManifestV1, UnitDeploymentV1,
+    SESSION_PROTOCOL_VERSION,
 };
 pub use online::{
     OnlineIdentityProvider, OnlineIdentityState, OnlineJoinCode, OnlineJoinCodeDigest,

@@ -11,13 +11,56 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     BoundError, BoundedText, BoundedVec, BuildIdentityV1, ContentFingerprint, RulesManifestV1,
-    WorldSnapshotV1, WorldSnapshotValidationError, MAX_IDENTITY_BYTES, MAX_SESSION_UNITS,
+    SessionInstanceId, WorldSnapshotV1, WorldSnapshotValidationError, MAX_IDENTITY_BYTES,
+    MAX_SESSION_UNITS,
 };
+
+use bevy_ecs::prelude::Message;
 
 /// Current complete host-owned Campaign checkpoint version.
 pub const CAMPAIGN_CHECKPOINT_VERSION_V2: u16 = 2;
 /// Maximum persistent effects retained by one Campaign checkpoint.
 pub const MAX_CAMPAIGN_EFFECTS: usize = 4_096;
+
+/// Disclosure-safe progress of one host-owned Campaign save operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CampaignSaveStateV2 {
+    /// The host has accepted the request and is preparing an atomic checkpoint write.
+    Saving,
+    /// The complete checkpoint was atomically committed.
+    Saved,
+    /// The host refused the request or the atomic write failed.
+    Refused(CampaignSaveRefusalV2),
+}
+
+/// Sanitized reason a Campaign save did not complete.
+///
+/// This deliberately omits local paths and operating-system error details. The host may
+/// retain richer local diagnostics, but clients receive only this stable projection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CampaignSaveRefusalV2 {
+    /// The requester is not the authoritative Campaign host.
+    NotAuthority,
+    /// Simulation is not at quiescent paused exploration.
+    UnsafeBoundary,
+    /// World or gameplay authority could not produce a complete checkpoint.
+    IncompleteCheckpoint,
+    /// Accepted shipped content changed or is incompatible.
+    IncompatibleContent,
+    /// The host could not atomically commit the checkpoint.
+    StorageUnavailable,
+}
+
+/// Ordered, disclosure-safe Campaign save status sent by the listen host.
+#[derive(Message, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CampaignSaveStatusV2 {
+    /// Concrete session whose host owns the operation.
+    pub session_instance_id: SessionInstanceId,
+    /// Host-local monotonic operation identity used to discard stale status.
+    pub operation_id: u64,
+    /// Current terminal or in-flight state.
+    pub state: CampaignSaveStateV2,
+}
 
 /// One authority-private persistent effect with its stable ledger handle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

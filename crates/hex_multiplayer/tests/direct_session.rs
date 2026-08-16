@@ -35,6 +35,7 @@ fn manifest() -> SessionManifestV1 {
         build: BuildIdentityV1::new("0.4.0", "direct-session-test").expect("valid build"),
         content_fingerprint: ContentFingerprint(100),
         scenario_identity: text("sandbox"),
+        launch_kind: hex_multiplayer::SessionLaunchKindV1::Sandbox,
         map: MapManifestV1 {
             catalog_identity: text("small"),
             seed: 77,

@@ -44,10 +44,11 @@ use crate::terrain::{build_non_procedural_map, TerrainPalette};
 use crate::terrain_damage::TerrainDamageState;
 use crate::voxel::{runs, Column, SubstanceRun, VoxelMap};
 use crate::world_snapshot::{
-    apply_world_delta_v1, export_from_parts, prepare_world_snapshot_v1, CurrentWorldSnapshotV1,
-    PreparedWorldSnapshotV1, WorldExportParts, WorldReplicationOutcomeV1,
-    WorldReplicationRefusalV1, WorldReplicationRequestV1, WorldReplicationResultV1,
-    WorldReplicationStateV1,
+    apply_world_delta_v1, export_from_parts, prepare_world_snapshot_v1,
+    CampaignWorldRestoreOutcomeV2, CampaignWorldRestoreRefusalV2, CampaignWorldRestoreResultV2,
+    CurrentWorldSnapshotV1, PendingCampaignWorldSnapshotV2, PreparedWorldSnapshotV1,
+    WorldExportParts, WorldReplicationOutcomeV1, WorldReplicationRefusalV1,
+    WorldReplicationRequestV1, WorldReplicationResultV1, WorldReplicationStateV1,
 };
 use crate::{
     CavesReportMetrics, DeepForestReportMetrics, ForestReportMetrics, FortReportMetrics,
@@ -87,6 +88,12 @@ struct WorldSnapshotDirty(bool);
 struct PendingSnapshotGridBuild {
     ordered_results: Vec<WorldReplicationResultV1>,
     previous_sequence: Option<hex_multiplayer::AuthoritySequence>,
+}
+
+/// A validated Campaign world waiting for the terrain publication set to finish.
+#[derive(Resource, Debug, Clone, Copy)]
+struct PendingCampaignWorldPublication {
+    public_fingerprint: hex_multiplayer::PublicWorldFingerprint,
 }
 
 const MAX_WORLD_REPLICATION_REQUESTS_PER_UPDATE: usize = 64;
@@ -229,6 +236,7 @@ fn generate_world(
     settings: Res<MapSettings>,
     table: Res<SubstanceTable>,
     art_catalog: Option<Res<RuntimeArtCatalog>>,
+    mut pending_campaign: Option<ResMut<PendingCampaignWorldSnapshotV2>>,
     resolved_seed: Option<Res<ResolvedMapSeed>>,
     mut damage_state: ResMut<TerrainDamageState>,
     mut damaged_voxels: ResMut<DamagedVoxels>,
@@ -262,6 +270,40 @@ fn generate_world(
     commands.remove_resource::<MapViewHint>();
     commands.remove_resource::<CurrentWorldSnapshotV1>();
     commands.remove_resource::<PendingSnapshotGridBuild>();
+    commands.remove_resource::<PendingCampaignWorldPublication>();
+    commands.remove_resource::<CampaignWorldRestoreResultV2>();
+
+    if let Some(pending_campaign) = pending_campaign.as_deref_mut() {
+        let candidate = pending_campaign.take();
+        commands.remove_resource::<PendingCampaignWorldSnapshotV2>();
+        let Some(candidate) = candidate else {
+            refuse_campaign_world_restore(
+                &mut commands,
+                CampaignWorldRestoreRefusalV2::MissingSnapshot,
+            );
+            return;
+        };
+        let prepared =
+            match prepare_world_snapshot_v1(candidate, &table, &settings, art_catalog.as_deref()) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    refuse_campaign_world_restore(
+                        &mut commands,
+                        CampaignWorldRestoreRefusalV2::InvalidSnapshot(error),
+                    );
+                    return;
+                }
+            };
+        stage_campaign_world_restore(
+            &mut commands,
+            prepared,
+            &mut damage_state,
+            &mut damaged_voxels,
+            &mut snapshot_dirty,
+        );
+        return;
+    }
+
     let palette = match TerrainPalette::for_terrain(&table, &settings.terrain) {
         Ok(palette) => palette,
         Err(error) => {
@@ -408,6 +450,63 @@ fn generate_world(
     }
 }
 
+fn stage_campaign_world_restore(
+    commands: &mut Commands,
+    prepared: PreparedWorldSnapshotV1,
+    damage_state: &mut TerrainDamageState,
+    damaged_voxels: &mut DamagedVoxels,
+    snapshot_dirty: &mut WorldSnapshotDirty,
+) {
+    let PreparedWorldSnapshotV1 {
+        snapshot,
+        map,
+        damage,
+        anchors,
+        interiors,
+        special_regions,
+        biome_regions,
+        blockers,
+        view_hint,
+        presentation,
+    } = prepared;
+    let public_fingerprint = snapshot.public_fingerprint;
+
+    damage_state.restore(damage, damaged_voxels);
+    snapshot_dirty.0 = false;
+    commands.insert_resource(map);
+    commands.insert_resource(anchors);
+    commands.insert_resource(interiors);
+    commands.insert_resource(special_regions);
+    commands.insert_resource(biome_regions);
+    commands.insert_resource(blockers);
+    if let Some(view_hint) = view_hint {
+        commands.insert_resource(view_hint);
+    }
+    if let Some(presentation) = presentation {
+        commands.insert_resource(presentation);
+    }
+    commands.insert_resource(CurrentWorldSnapshotV1::new(snapshot));
+    commands.insert_resource(PendingCampaignWorldPublication { public_fingerprint });
+    commands.insert_resource(TerrainReady);
+}
+
+fn refuse_campaign_world_restore(commands: &mut Commands, reason: CampaignWorldRestoreRefusalV2) {
+    let description = match &reason {
+        CampaignWorldRestoreRefusalV2::MissingSnapshot => {
+            "the pending Campaign world was already consumed".to_owned()
+        }
+        CampaignWorldRestoreRefusalV2::InvalidSnapshot(error) => error.to_string(),
+        CampaignWorldRestoreRefusalV2::PresentationFailed(error) => error.clone(),
+    };
+    error!("cannot restore Campaign world: {description}");
+    commands.insert_resource(CampaignWorldRestoreResultV2 {
+        outcome: CampaignWorldRestoreOutcomeV2::Refused(reason),
+    });
+    commands.insert_resource(GameplaySetupFailure::new(format!(
+        "The saved Campaign world is incompatible: {description}."
+    )));
+}
+
 fn teardown_map(
     mut commands: Commands,
     grids: Query<Entity, With<HexGrid>>,
@@ -443,6 +542,8 @@ fn teardown_map(
     commands.remove_resource::<MapPresentationProjection>();
     commands.remove_resource::<CurrentWorldSnapshotV1>();
     commands.remove_resource::<PendingSnapshotGridBuild>();
+    commands.remove_resource::<PendingCampaignWorldPublication>();
+    commands.remove_resource::<CampaignWorldRestoreResultV2>();
     liquid_render::clear_material_cache(&mut commands);
     commands.remove_resource::<TerrainReady>();
 }
@@ -464,8 +565,11 @@ fn spawn_grid(
     interiors: Option<Res<InteriorRegions>>,
     presentation: Option<Res<MapPresentationProjection>>,
     art_catalog: Option<Res<RuntimeArtCatalog>>,
+    pending_campaign: Option<Res<PendingCampaignWorldPublication>>,
+    mut damage_state: ResMut<TerrainDamageState>,
+    mut damaged_voxels: ResMut<DamagedVoxels>,
 ) {
-    if let Err(error) = build_grid(
+    let built = build_grid(
         &mut commands,
         &assets,
         &mut presentation_assets.materials,
@@ -478,9 +582,53 @@ fn spawn_grid(
         interiors.as_deref(),
         presentation.as_deref(),
         art_catalog.as_deref(),
-    ) {
-        fail_presentation_setup(&mut commands, &error);
+    );
+    match built {
+        Ok(()) => {
+            if let Some(pending_campaign) = pending_campaign {
+                commands.insert_resource(CampaignWorldRestoreResultV2 {
+                    outcome: CampaignWorldRestoreOutcomeV2::Applied {
+                        public_fingerprint: pending_campaign.public_fingerprint,
+                    },
+                });
+                commands.remove_resource::<PendingCampaignWorldPublication>();
+            }
+        }
+        Err(error) => {
+            fail_presentation_setup(&mut commands, &error);
+            if pending_campaign.is_some() {
+                discard_staged_campaign_world(
+                    &mut commands,
+                    &mut damage_state,
+                    &mut damaged_voxels,
+                );
+                refuse_campaign_world_restore(
+                    &mut commands,
+                    CampaignWorldRestoreRefusalV2::PresentationFailed(error.to_string()),
+                );
+                commands.remove_resource::<PendingCampaignWorldPublication>();
+            }
+        }
     }
+}
+
+fn discard_staged_campaign_world(
+    commands: &mut Commands,
+    damage_state: &mut TerrainDamageState,
+    damaged_voxels: &mut DamagedVoxels,
+) {
+    damage_state.reset(damaged_voxels);
+    commands.remove_resource::<VoxelMap>();
+    commands.remove_resource::<MapAnchors>();
+    commands.remove_resource::<SpecialMovementRegions>();
+    commands.remove_resource::<InteriorRegions>();
+    commands.remove_resource::<TraversalBlockers>();
+    commands.remove_resource::<BiomeRegions>();
+    commands.remove_resource::<MapViewHint>();
+    commands.remove_resource::<MapPresentationProjection>();
+    commands.remove_resource::<CurrentWorldSnapshotV1>();
+    commands.remove_resource::<TerrainReady>();
+    liquid_render::clear_material_cache(commands);
 }
 
 /// Spawns the grid entities. Shared by first construction and by rebuilds after an

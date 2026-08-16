@@ -71,6 +71,67 @@ impl CurrentWorldSnapshotV1 {
     }
 }
 
+/// Complete world waiting to replace generator output during Campaign bootstrap.
+///
+/// The shared save/session layer inserts this resource before entering gameplay. Map
+/// authority consumes it exactly once in [`hex_core::GameplaySetup::Resources`], validates
+/// it against the accepted shipped content, and publishes it through the ordinary
+/// `TerrainReady` path. The option is private so callers cannot construct an empty request.
+#[derive(Resource, Debug)]
+pub struct PendingCampaignWorldSnapshotV2 {
+    snapshot: Option<Box<WorldSnapshotV1>>,
+}
+
+impl PendingCampaignWorldSnapshotV2 {
+    /// Wraps one complete generator-neutral Campaign world.
+    #[must_use]
+    pub fn new(snapshot: WorldSnapshotV1) -> Self {
+        Self {
+            snapshot: Some(Box::new(snapshot)),
+        }
+    }
+
+    /// Borrows the pending snapshot without exposing map-private prepared state.
+    #[must_use]
+    pub fn snapshot(&self) -> Option<&WorldSnapshotV1> {
+        self.snapshot.as_deref()
+    }
+
+    pub(crate) fn take(&mut self) -> Option<WorldSnapshotV1> {
+        self.snapshot.take().map(|snapshot| *snapshot)
+    }
+}
+
+/// Typed result retained after a Campaign world bootstrap attempt.
+#[derive(Resource, Debug, Clone, PartialEq, Eq)]
+pub struct CampaignWorldRestoreResultV2 {
+    /// Applied or fail-closed outcome.
+    pub outcome: CampaignWorldRestoreOutcomeV2,
+}
+
+/// Result of restoring the world portion of a host Campaign checkpoint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CampaignWorldRestoreOutcomeV2 {
+    /// The exact snapshot was validated and published as ordinary terrain.
+    Applied {
+        /// Complete resulting public-world identity.
+        public_fingerprint: PublicWorldFingerprint,
+    },
+    /// The candidate did not activate any world.
+    Refused(CampaignWorldRestoreRefusalV2),
+}
+
+/// Why a pending Campaign world was rejected before actor restoration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CampaignWorldRestoreRefusalV2 {
+    /// The pending wrapper had already been consumed.
+    MissingSnapshot,
+    /// Structural, content, or semantic validation failed before ECS mutation.
+    InvalidSnapshot(WorldSnapshotError),
+    /// Validated map truth could not be published through the presentation path.
+    PresentationFailed(String),
+}
+
 /// Ordered world-owned state application requested by a transport/session adapter.
 #[derive(Message, Debug, Clone, PartialEq, Eq)]
 pub enum WorldReplicationRequestV1 {

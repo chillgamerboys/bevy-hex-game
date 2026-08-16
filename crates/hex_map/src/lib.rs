@@ -90,9 +90,10 @@ pub use voxel::{runs, Column, SubstanceRun, VoxelMap};
 pub use world_snapshot::{
     apply_world_delta_v1, diff_world_snapshots_v1, export_world_snapshot_v1,
     fingerprint_world_snapshot_v1, validate_world_snapshot_v1_against_content,
-    CurrentWorldSnapshotV1, WorldReplicationOutcomeV1, WorldReplicationRefusalV1,
-    WorldReplicationRequestV1, WorldReplicationResultV1, WorldReplicationStateV1,
-    WorldSnapshotError,
+    CampaignWorldRestoreOutcomeV2, CampaignWorldRestoreRefusalV2, CampaignWorldRestoreResultV2,
+    CurrentWorldSnapshotV1, PendingCampaignWorldSnapshotV2, WorldReplicationOutcomeV1,
+    WorldReplicationRefusalV1, WorldReplicationRequestV1, WorldReplicationResultV1,
+    WorldReplicationStateV1, WorldSnapshotError,
 };
 
 /// Registers map settings, terrain generation, and tile spawning.

@@ -59,13 +59,14 @@ pub use model::{
     GameplayChromeView, GameplayHudView, GameplayLatticesView, InitiativeEntryView,
     InitiativeIntent, InitiativeSide, InitiativeView, LatticeDemoIntent, LatticeDemoSpellView,
     LatticeDemoView, LatticeIntent, MainMenuIntent, MainMenuView, MultiplayerAssignmentView,
-    MultiplayerIntent, MultiplayerSeatConnectionView, MultiplayerSeatView, MultiplayerTextField,
-    MultiplayerView, OutcomeAction, OutcomeActionView, OutcomeIntent, OutcomeView, OwnLatticeView,
-    PartyIntent, PartyMemberView, PartyView, PauseView, SandboxCharacterView, SandboxIntent,
-    SandboxLatticeCellKind, SandboxLatticeCellView, SandboxMapView, SandboxRosterSlotView,
-    SandboxView, SensitiveText, SettingsIntent, SettingsModalView, SettingsTab,
-    TargetLatticeStateView, TargetLatticeView, TargetPulseView, UiBindingRow, UiIntent, UiSetting,
-    UiSettingRow, UiSettingsView,
+    MultiplayerCampaignHostView, MultiplayerCampaignSaveStatusView, MultiplayerIntent,
+    MultiplayerLanSessionView, MultiplayerSeatConnectionView, MultiplayerSeatView,
+    MultiplayerTextField, MultiplayerView, OutcomeAction, OutcomeActionView, OutcomeIntent,
+    OutcomeView, OwnLatticeView, PartyIntent, PartyMemberView, PartyView, PauseView,
+    SandboxCharacterView, SandboxIntent, SandboxLatticeCellKind, SandboxLatticeCellView,
+    SandboxMapView, SandboxRosterSlotView, SandboxView, SensitiveText, SettingsIntent,
+    SettingsModalView, SettingsTab, TargetLatticeStateView, TargetLatticeView, TargetPulseView,
+    UiBindingRow, UiIntent, UiSetting, UiSettingRow, UiSettingsView,
 };
 #[cfg(feature = "dev-tools")]
 pub use model::{DevTimeIntent, DevTimeView};

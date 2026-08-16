@@ -1,11 +1,9 @@
 # Host-owned Campaign multiplayer wave
 
-- **Status:** planned; dispatch begins only after the EOS feasibility/shared-contract
-  foundation lands on `dev`
+- **Status:** integrating; all four lanes are merged into the wave candidate
 - **Wave branch:** `wave/host-owned-campaign`
 - **Planning base:** `origin/dev@a0f95e62d02c663902b864cc08a89e831d9ba437`
-- **Wave base:** assigned from the exact post-foundation `origin/dev` merge before lane
-  branches are cut
+- **Wave base:** `origin/dev@c8506a71166a23777d31cc8504a53e61966bb069`
 - **Coordinator:** `@shrav-k`
 - **Epic:** user-approved Seamless Cross-Store Multiplayer plan, 2026-08-12
   (`ticket: null`)
@@ -58,10 +56,40 @@ stack after Universal Online.
    transport fact. Direct/LAN and future EOS sessions consume the same fresh assignment
    and authoritative checkpoint contracts.”
 10. **Current rules.** “One global exploration/combat `Mode`, one active turn, no
-    prediction, no rollback, and no host migration remain unchanged.”
+   prediction, no rollback, and no host migration remain unchanged.”
+
+### Coordinator amendment — Campaign launch and save status (2026-08-12)
+
+Ratified by `@shrav-k` while activating L3:
+
+- “`SessionManifestV1` explicitly distinguishes a reproducible Sandbox launch from a
+  Campaign launch. A Campaign client waits for and transactionally imports the host's
+  complete live baseline; it never regenerates the Campaign world.”
+- “Campaign save progress is an ordered, disclosure-safe server event scoped to the
+  session and a monotonic operation id. It carries no checkpoint, slot, path, transport
+  fact, credential, or player/store identity.”
 
 Decisions are amendable, never silently edited. An amendment records its ratifier and
 date, and every affected order receives the exact new text.
+
+### Coordinator amendment — same-link Sandbox discovery (2026-08-16)
+
+User-authorized integration work while this wave is still open:
+
+- “Host LAN Sandbox and Find LAN Games add opt-in mDNS/DNS-SD discovery around the
+  existing Direct Sandbox flow. Installing the multiplayer plugin or visiting ordinary
+  offline screens opens no discovery socket.”
+- “Only an open pre-launch assignment lobby is advertised. Launch/loading/gameplay and
+  outcome stop advertisement; Return to Lobby may advertise the same live session again.”
+- “The DNS-SD record is untrusted local-link metadata and carries the current ephemeral
+  invite for an explicitly open LAN lobby. It never bypasses the pinned certificate,
+  exact protocol/build/content, capacity, lobby-phase, seat, or command checks.”
+- “The current UI scope is shipped Sandbox discovery on a trusted LAN. Campaign hosting
+  retains its private Direct flow, and mDNS provides neither Internet discovery nor a
+  relay.”
+- “Acceptance requires bounded schema/redaction tests, a real local multicast exchange,
+  deterministic LAN-browser and host-lobby frames, and a two-process same-network human
+  route on the exact combined head.”
 
 ## Source maps
 
@@ -122,8 +150,8 @@ owner adapters.
     full: true
   evidence: logic-only
   sizing: { model: gpt-5.6-sol, effort: high }
-  state: queued
-  pr: null
+  state: merged
+  pr: 203
 
 - id: L2
   title: C2 authoritative gameplay checkpoint
@@ -152,8 +180,8 @@ owner adapters.
     full: true
   evidence: logic-only
   sizing: { model: gpt-5.6-sol, effort: high }
-  state: queued
-  pr: null
+  state: merged
+  pr: 204
 
 - id: L3
   title: C3 host-owned Campaign session lifecycle
@@ -184,8 +212,8 @@ owner adapters.
     full: false
   evidence: logic-only
   sizing: { model: gpt-5.6-sol, effort: high }
-  state: queued
-  pr: null
+  state: merged
+  pr: 205
 
 - id: L4
   title: C4 multiplayer Campaign UI
@@ -197,10 +225,12 @@ owner adapters.
   owns:
     - crates/hex_gameplay_model/src/multiplayer.rs (Campaign routes/transitions only)
     - crates/hex_ui/src/model.rs (Campaign multiplayer view/intent fields only)
+    - crates/hex_ui/src/lib.rs (alphabetical Campaign view exports only)
     - crates/hex_ui/src/multiplayer.rs (Campaign browser/save/resume rendering only)
     - crates/hex_game/src/screens/multiplayer.rs (immutable Campaign view/intent adapter only)
     - crates/hex_game/src/save.rs (immutable save-status projection only)
     - crates/hex_ui/src/review.rs (Campaign multiplayer fixtures only)
+    - crates/hex_game/src/walk.rs (Campaign multiplayer fixture-name registration only)
     - walks/multiplayer_session.ron (Campaign frames only)
     - docs/planning/waves/host-owned-campaign/manifest.md (L4 queue row only)
   dispatch_blockers:
@@ -219,8 +249,8 @@ owner adapters.
     full: false
   evidence: static-presentation
   sizing: { model: gpt-5.6-sol, effort: high }
-  state: queued
-  pr: null
+  state: merged
+  pr: 206
 ```
 
 ## Territory sweep

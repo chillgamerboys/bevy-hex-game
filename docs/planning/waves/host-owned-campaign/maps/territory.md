@@ -3,6 +3,11 @@
 Sweep time: 2026-08-12. Base:
 `origin/dev@a0f95e62d02c663902b864cc08a89e831d9ba437`.
 
+Pre-dispatch refresh: the EOS/shared checkpoint foundation landed through PR #202 at
+`origin/dev@c8506a71166a23777d31cc8504a53e61966bb069`. PR #196 remains unchanged at
+`25d0be5d9a492d5c3ef679c087c126b51db722a9`, with the same measured footprint below;
+the refreshed Campaign sources agree with all three banked maps.
+
 ## Open pull requests
 
 | PR | Base / head | Measured footprint | Relationship |

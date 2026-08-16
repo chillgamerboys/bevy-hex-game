@@ -316,6 +316,7 @@ cargo run -p hex_game --features visual-walk
 | Sandbox Map Browser / Detail | choose and confirm one map | Back / Use Map | pending seed, Regenerate only for generated maps |
 | Sandbox Party / Enemies | edit an ordered six-slot side | Back | shared roster component and Map-ready diagnostics |
 | Character Picker | preview then commit one character | Back / Use Character | templates, saved characters, Creator entry |
+| Multiplayer | discover/configure a host, assign seats, and launch | Back or the role-authorized lobby action | LAN browser compatibility, Direct code entry, six stable seats, readiness, and typed connection state |
 | Tools | choose an authoring tool | Back | Character Creator, Spell Creator, disabled Map Creator |
 | Settings | change general preferences or keyboard bindings | Back | category tabs, capture/conflict state, persistence notice |
 | Character / Spell Creator | finish the current authoring step | Library / Save / Test where applicable | palettes, catalogs, validation, history, typed origin |

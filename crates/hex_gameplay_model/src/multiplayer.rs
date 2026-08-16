@@ -9,6 +9,10 @@ pub enum MultiplayerRoute {
     /// Direct Host / Direct Join entry.
     #[default]
     Home,
+    /// Three-slot Campaign browser and Direct/LAN host endpoint.
+    HostCampaign,
+    /// Continuous mDNS/DNS-SD browser for explicitly open lobbies on this LAN.
+    BrowseLan,
     /// Endpoint help and Sandbox configuration handoff.
     HostDirect,
     /// Bounded connection-code entry.
@@ -101,6 +105,16 @@ impl MultiplayerModel {
         self.set_session_route(MultiplayerRoute::HostDirect, None, None);
     }
 
+    /// Opens the host-owned Campaign slot browser.
+    pub fn show_host_campaign(&mut self) {
+        self.set_session_route(MultiplayerRoute::HostCampaign, None, None);
+    }
+
+    /// Opens same-network lobby discovery without assuming a session role.
+    pub fn show_lan_browser(&mut self) {
+        self.set_session_route(MultiplayerRoute::BrowseLan, None, None);
+    }
+
     /// Opens Join Direct connection-code entry.
     pub fn show_join_direct(&mut self) {
         self.set_session_route(MultiplayerRoute::JoinDirect, None, None);
@@ -153,7 +167,9 @@ impl MultiplayerModel {
     pub fn back(&mut self) -> MultiplayerBackResult {
         match self.route {
             MultiplayerRoute::Home => MultiplayerBackResult::MainMenu,
-            MultiplayerRoute::HostDirect
+            MultiplayerRoute::HostCampaign
+            | MultiplayerRoute::BrowseLan
+            | MultiplayerRoute::HostDirect
             | MultiplayerRoute::JoinDirect
             | MultiplayerRoute::Ended => {
                 self.enter_home();
@@ -210,6 +226,8 @@ mod tests {
     #[test]
     fn back_matrix_distinguishes_setup_live_and_root_routes() {
         for route in [
+            MultiplayerRoute::HostCampaign,
+            MultiplayerRoute::BrowseLan,
             MultiplayerRoute::HostDirect,
             MultiplayerRoute::JoinDirect,
             MultiplayerRoute::Ended,

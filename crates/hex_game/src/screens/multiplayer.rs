@@ -9,11 +9,13 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy_replicon::prelude::{ClientId, ClientState, ProtocolHash, SendTargets, ToClients};
 use hex_assets::{
-    AcceptedContentRevision, CombatSettings, CubeCoord, Encounter, EncounterFaction,
-    EncounterPlacement, FormationCenter, Roster, RosterEntry, ScenarioLibrary, SubstanceTable,
+    AcceptedContentRevision, CombatSettings, CubeCoord, ElementCatalog, Encounter,
+    EncounterFaction, EncounterPlacement, FormationCenter, LatticeLibrary, Roster, RosterEntry,
+    ScenarioLibrary, SubstanceTable,
 };
 use hex_core::{
     CommandRequestId, GameplayPhase, InputAction, InputBindings, LocalMapKnowledge, PlayerSeat,
@@ -24,33 +26,45 @@ use hex_gameplay_model::{
     MultiplayerRole,
 };
 use hex_map::{
-    diff_world_snapshots_v1, CurrentWorldSnapshotV1, WorldReplicationOutcomeV1,
-    WorldReplicationRefusalV1, WorldReplicationRequestV1, WorldReplicationResultV1,
+    diff_world_snapshots_v1, CurrentWorldSnapshotV1, PendingCampaignWorldSnapshotV2,
+    WorldReplicationOutcomeV1, WorldReplicationRefusalV1, WorldReplicationRequestV1,
+    WorldReplicationResultV1,
 };
 use hex_multiplayer::{
     AdmissionAccepted, AdmissionCredential, AdmissionRefusal, AdmissionRefusalReason,
     AtomicFileReconnectCredentialStore, AuthorityBoundary, AuthoritySequence,
-    AuthorizedSessionClient, BoundedVec, BuildIdentityV1, CertificateFingerprint, ClientHello,
-    ClientLobbyAction, ClientLobbyRequest, ClientMapReady, CommandSequencer, ContentFingerprint,
+    AuthorizedSessionClient, BoundedVec, BuildIdentityV1, CampaignSaveRefusalV2,
+    CampaignSaveStateV2, CertificateFingerprint, ClientHello, ClientLobbyAction,
+    ClientLobbyRequest, ClientMapReady, CommandSequencer, ContentFingerprint,
     CredentialStorageOperation, CredentialStorageStatus, DirectConnectionCode, DirectEndpoint,
-    EncodedConnectionCode, HostSessionAction, HostSessionControlRequest, LiveSessionSnapshotV1,
-    LiveSnapshotHeaderV1, LobbyPhase, LobbySnapshot, PlayerKnowledgeSnapshotV1, PreparedDirectHost,
-    PreparedDirectJoin, PreparedDirectReconnect, PublicWorldFingerprint,
-    ReconnectCredentialStorage, ReconnectEndpointBinding, SeatConnectionState,
-    SessionAdmissionAuthority, SessionCloseReason, SessionClosed, SessionControlOutcome,
-    SessionControlRefusal, SessionControlResult, SessionInstanceId, SessionManifestV1,
-    SessionReplica, StoredReconnectCredential, UnitReplica, WorldDeltaV1, WorldSnapshotV1,
-    LIVE_SESSION_SNAPSHOT_VERSION_V1, MAX_SESSION_UNITS,
+    EncodedConnectionCode, HostCampaignCheckpointV2, HostSessionAction, HostSessionControlRequest,
+    LanCompatibilityKey, LanDiscoveryAdvertiser, LanDiscoveryBrowser, LanSessionAdvertisement,
+    LanSessionKind, LiveSessionSnapshotV1, LiveSnapshotHeaderV1, LobbyPhase, LobbySnapshot,
+    MapManifestV1, PlayerKnowledgeSnapshotV1, PreparedDirectHost, PreparedDirectJoin,
+    PreparedDirectReconnect, ProtocolVersion, PublicWorldFingerprint, ReconnectCredentialStorage,
+    ReconnectEndpointBinding, RosterEntryV1, SeatConnectionState, SessionAdmissionAuthority,
+    SessionCloseReason, SessionClosed, SessionControlOutcome, SessionControlRefusal,
+    SessionControlResult, SessionInstanceId, SessionLaunchKindV1, SessionManifestV1,
+    SessionReplica, StoredReconnectCredential, UnitDeploymentV1, UnitReplica, WorldDeltaV1,
+    WorldSnapshotV1, LIVE_SESSION_SNAPSHOT_VERSION_V1, MAX_SESSION_UNITS,
 };
 use hex_perception::{
     export_player_knowledge_snapshot_v1, import_player_knowledge_snapshot_v1, FactionMapKnowledge,
 };
 use hex_ui::{
-    MultiplayerAssignmentView, MultiplayerIntent, MultiplayerSeatConnectionView,
+    MultiplayerAssignmentView, MultiplayerCampaignHostView, MultiplayerCampaignSaveStatusView,
+    MultiplayerIntent, MultiplayerLanSessionView, MultiplayerSeatConnectionView,
     MultiplayerSeatView, MultiplayerTextField, MultiplayerView, SensitiveText, UiIntent, UiSystems,
 };
 
+use crate::campaign_authority::{
+    CampaignGameplayCheckpointV2, PendingCampaignGameplayCheckpointV2,
+};
 use crate::multiplayer_gameplay::{ApplyReplicaBaseline, MultiplayerGameplaySystems};
+use crate::save::{
+    CampaignMultiplayerHostRequest, CampaignMultiplayerHostStatus, CampaignSaveStatusProjection,
+    CampaignStore,
+};
 use crate::storage::StoragePaths;
 
 /// World-owned, fully validated handoff created after shipped Sandbox deployment.
@@ -73,6 +87,140 @@ impl PreparedDirectSandboxSession {
     }
 }
 
+/// Complete host-owned Campaign handoff retained while a fresh assignment lobby is open.
+#[derive(Resource, Debug, Clone)]
+pub(crate) struct PreparedDirectCampaignSession {
+    pub(crate) manifest: SessionManifestV1,
+    pub(crate) summary: String,
+    pub(crate) checkpoint: HostCampaignCheckpointV2,
+}
+
+impl PreparedDirectCampaignSession {
+    pub(crate) fn from_checkpoint(
+        checkpoint: HostCampaignCheckpointV2,
+        slot: hex_gameplay_model::CampaignSlotId,
+    ) -> Result<Self, String> {
+        checkpoint
+            .validate()
+            .map_err(|error| format!("Campaign checkpoint is invalid: {error}."))?;
+        let local_build = local_build_identity()
+            .map_err(|error| format!("Local build identity is invalid: {error}."))?;
+        if checkpoint.build != local_build {
+            return Err("Campaign checkpoint belongs to a different build.".to_owned());
+        }
+
+        let players = checkpoint
+            .units
+            .as_slice()
+            .iter()
+            .filter(|unit| unit.faction == hex_core::Faction::Player)
+            .collect::<Vec<_>>();
+        let roster = players
+            .iter()
+            .map(|unit| RosterEntryV1 {
+                unit: unit.unit,
+                archetype_identity: unit.archetype_identity.clone(),
+                // The checkpoint deliberately stores no mutable UI selection or
+                // store identity. Its stable shipped archetype is therefore also
+                // the fresh lobby's character identity.
+                character_identity: unit.archetype_identity.clone(),
+                faction: hex_core::Faction::Player,
+            })
+            .collect::<Vec<_>>();
+        let deployment = players
+            .iter()
+            .map(|unit| UnitDeploymentV1 {
+                unit: unit.unit,
+                position: unit.position,
+            })
+            .collect::<Vec<_>>();
+        let manifest = SessionManifestV1 {
+            session_instance_id: SessionInstanceId::generate(),
+            protocol: ProtocolVersion::default(),
+            build: local_build,
+            content_fingerprint: checkpoint.content_fingerprint,
+            scenario_identity: checkpoint.scenario_identity.clone(),
+            launch_kind: SessionLaunchKindV1::Campaign,
+            map: MapManifestV1 {
+                catalog_identity: checkpoint.map_catalog_identity.clone(),
+                seed: checkpoint.resolved_seed.unwrap_or_default(),
+                generator_identity: checkpoint.generator_identity.clone(),
+                generator_version: checkpoint.generator_version,
+                expected_public_fingerprint: checkpoint.world.public_fingerprint,
+            },
+            rules: checkpoint.rules.clone(),
+            shipped_roster: BoundedVec::new(roster)
+                .map_err(|error| format!("Campaign party is invalid: {error}."))?,
+            deployment: BoundedVec::new(deployment)
+                .map_err(|error| format!("Campaign deployment is invalid: {error}."))?,
+            simulation_seeds: checkpoint.simulation_seeds,
+        };
+        let summary = format!(
+            "Campaign slot {} · {} · {} party member{}",
+            slot.number(),
+            checkpoint.scenario_identity.as_str(),
+            players.len(),
+            if players.len() == 1 { "" } else { "s" }
+        );
+        Self::new(manifest, summary, checkpoint)
+            .ok_or_else(|| "The Campaign checkpoint could not form a fresh lobby.".to_owned())
+    }
+
+    pub(crate) fn new(
+        manifest: SessionManifestV1,
+        summary: impl Into<String>,
+        checkpoint: HostCampaignCheckpointV2,
+    ) -> Option<Self> {
+        manifest.validate().ok()?;
+        checkpoint.validate().ok()?;
+        if manifest.launch_kind != SessionLaunchKindV1::Campaign
+            || manifest.content_fingerprint != checkpoint.content_fingerprint
+            || manifest.scenario_identity != checkpoint.scenario_identity
+            || manifest.map.expected_public_fingerprint != checkpoint.world.public_fingerprint
+            || manifest.rules != checkpoint.rules
+            || manifest.simulation_seeds != checkpoint.simulation_seeds
+        {
+            return None;
+        }
+        let checkpoint_players = checkpoint
+            .units
+            .as_slice()
+            .iter()
+            .filter(|unit| unit.faction == hex_core::Faction::Player)
+            .map(|unit| (unit.unit, unit.position))
+            .collect::<BTreeMap<_, _>>();
+        let manifest_players = manifest
+            .deployment
+            .as_slice()
+            .iter()
+            .map(|deployment| (deployment.unit, deployment.position))
+            .collect::<BTreeMap<_, _>>();
+        if checkpoint_players != manifest_players {
+            return None;
+        }
+        Some(Self {
+            manifest,
+            summary: summary.into(),
+            checkpoint,
+        })
+    }
+}
+
+#[derive(Debug)]
+enum PreparedDirectSession {
+    Sandbox(Box<PreparedDirectSandboxSession>),
+    Campaign(Box<PreparedDirectCampaignSession>),
+}
+
+impl PreparedDirectSession {
+    fn manifest(&self) -> &SessionManifestV1 {
+        match self {
+            Self::Sandbox(prepared) => &prepared.manifest,
+            Self::Campaign(prepared) => &prepared.manifest,
+        }
+    }
+}
+
 /// Complete local-world verification supplied by L3 after generation/import.
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct DirectWorldReady {
@@ -84,6 +232,10 @@ pub(crate) struct DirectWorldReady {
 pub(crate) struct PendingDirectHostSetup {
     pub(crate) endpoint: DirectEndpoint,
 }
+
+/// Opt-in marker retained across the existing Sandbox/deployment host setup flow.
+#[derive(Resource, Debug)]
+pub(crate) struct PendingLanHostDiscovery;
 
 #[derive(Resource, Debug, Clone)]
 struct MultiplayerDraft {
@@ -106,9 +258,17 @@ impl Default for MultiplayerDraft {
 struct SessionUiNotice(Option<String>);
 
 #[derive(Resource, Debug, Default)]
-struct SessionProjection {
+pub(crate) struct SessionProjection {
     lobby: Option<LobbySnapshot>,
     manifest: Option<SessionManifestV1>,
+}
+
+impl SessionProjection {
+    pub(crate) fn session_instance_id(&self) -> Option<SessionInstanceId> {
+        self.manifest
+            .as_ref()
+            .map(|manifest| manifest.session_instance_id)
+    }
 }
 
 #[derive(Resource, Debug, Default)]
@@ -139,7 +299,8 @@ impl SessionUiRequestIds {
 enum DirectStartQueue {
     Host {
         endpoint: DirectEndpoint,
-        prepared: Box<PreparedDirectSandboxSession>,
+        prepared: Box<PreparedDirectSession>,
+        advertise_on_lan: bool,
     },
     Join {
         target: DirectJoinTarget,
@@ -166,6 +327,45 @@ struct ActiveDirectSession {
     entity: Entity,
     role: MultiplayerRole,
     hosted_code: Option<HostedCodeSource>,
+}
+
+/// Session-lifetime marker that reopens LAN advertisement when a host returns to its lobby.
+#[derive(Resource, Debug)]
+struct LanHostSession;
+
+#[derive(Resource, Debug)]
+struct ActiveLanAdvertisement(LanDiscoveryAdvertiser);
+
+#[derive(Resource, Debug)]
+struct LanHostDiscoveryFailure;
+
+#[derive(Resource, Debug)]
+struct ActiveLanBrowser {
+    browser: LanDiscoveryBrowser,
+    compatibility: LanCompatibilityKey,
+}
+
+#[derive(SystemParam)]
+struct MultiplayerIntentContext<'w> {
+    projection: Res<'w, SessionProjection>,
+    accepted_content: Option<Res<'w, AcceptedContentRevision>>,
+    authority: Option<Res<'w, SessionAdmissionAuthority>>,
+    active: Option<Res<'w, ActiveDirectSession>>,
+    lan_browser: Option<Res<'w, ActiveLanBrowser>>,
+    lan_host: Option<Res<'w, LanHostSession>>,
+}
+
+#[derive(SystemParam)]
+struct MultiplayerViewInputs<'w> {
+    projection: Res<'w, SessionProjection>,
+    authority: Option<Res<'w, SessionAdmissionAuthority>>,
+    active: Option<Res<'w, ActiveDirectSession>>,
+    lan_browser: Option<Res<'w, ActiveLanBrowser>>,
+    lan_host: Option<Res<'w, LanHostSession>>,
+    lan_advertisement: Option<Res<'w, ActiveLanAdvertisement>>,
+    lan_failure: Option<Res<'w, LanHostDiscoveryFailure>>,
+    prepared: Option<Res<'w, PreparedDirectSandboxSession>>,
+    prepared_campaign: Option<Res<'w, PreparedDirectCampaignSession>>,
 }
 
 trait ClipboardTextWriter {
@@ -201,20 +401,24 @@ fn hosted_connection_code(
     active: Option<&ActiveDirectSession>,
     authority: Option<&SessionAdmissionAuthority>,
 ) -> Option<EncodedConnectionCode> {
+    current_hosted_connection_code(active, authority).map(|code| code.encode())
+}
+
+fn current_hosted_connection_code(
+    active: Option<&ActiveDirectSession>,
+    authority: Option<&SessionAdmissionAuthority>,
+) -> Option<DirectConnectionCode> {
     let source = active
         .filter(|active| active.role == MultiplayerRole::Host)?
         .hosted_code
         .as_ref()?;
     let authority = authority?;
-    Some(
-        DirectConnectionCode {
-            endpoint: source.endpoint.clone(),
-            certificate_fingerprint: source.certificate_fingerprint,
-            certificate_expires_unix_seconds: source.certificate_expires_unix_seconds,
-            invite_token: authority.invite_token(),
-        }
-        .encode(),
-    )
+    Some(DirectConnectionCode {
+        endpoint: source.endpoint.clone(),
+        certificate_fingerprint: source.certificate_fingerprint,
+        certificate_expires_unix_seconds: source.certificate_expires_unix_seconds,
+        invite_token: authority.invite_token(),
+    })
 }
 
 fn copy_hosted_connection_code<W: ClipboardTextWriter>(
@@ -275,6 +479,12 @@ struct HostShutdownCountdown(u8);
 #[derive(Resource, Debug, Default)]
 struct PendingReconnectSnapshotTargets(BTreeSet<Entity>);
 
+#[derive(Resource, Debug, Default)]
+struct CampaignInitialSnapshotState {
+    session: Option<SessionInstanceId>,
+    delivered: BTreeSet<Entity>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReplicaWorldRequestKind {
     Baseline(AuthoritySequence),
@@ -323,6 +533,7 @@ pub(super) fn plugin(app: &mut App) {
         .init_resource::<DirectMapLoadState>()
         .init_resource::<HostOutcomeState>()
         .init_resource::<PendingReconnectSnapshotTargets>()
+        .init_resource::<CampaignInitialSnapshotState>()
         .init_resource::<ReplicaWorldSyncState>()
         .init_resource::<HostWorldDeltaState>()
         .init_resource::<HostPlayerKnowledgeState>()
@@ -349,6 +560,7 @@ pub(super) fn plugin(app: &mut App) {
                 detect_failed_client_connection,
                 detect_failed_host_endpoint,
                 sync_host_session,
+                (poll_lan_browser, sync_lan_host_advertisement).chain(),
                 drive_direct_map_loading,
                 finish_host_shutdown,
                 observe_current_world_ready,
@@ -423,7 +635,9 @@ fn load_stored_credential(
 fn queue_prepared_host_after_sandbox(
     mut commands: Commands,
     pending: Option<Res<PendingDirectHostSetup>>,
+    pending_lan: Option<Res<PendingLanHostDiscovery>>,
     prepared: Option<Res<PreparedDirectSandboxSession>>,
+    prepared_campaign: Option<Res<PreparedDirectCampaignSession>>,
     active: Option<Res<ActiveDirectSession>>,
     mut model: ResMut<MultiplayerModel>,
     mut notice: ResMut<SessionUiNotice>,
@@ -431,30 +645,42 @@ fn queue_prepared_host_after_sandbox(
     let Some(pending) = pending else {
         return;
     };
-    model.show_host_direct();
     if active.is_some() {
         return;
     }
-    let Some(prepared) = prepared else {
-        notice.0 = Some(
-            "The complete public-world snapshot contract is not available yet; hosting was not started."
-                .to_owned(),
-        );
-        return;
+    let prepared = if let Some(prepared) = prepared_campaign.as_deref() {
+        PreparedDirectCampaignSession::new(
+            prepared.manifest.clone(),
+            prepared.summary.clone(),
+            prepared.checkpoint.clone(),
+        )
+        .map(Box::new)
+        .map(PreparedDirectSession::Campaign)
+    } else {
+        prepared.as_deref().and_then(|prepared| {
+            PreparedDirectSandboxSession::new(prepared.manifest.clone(), prepared.summary.clone())
+                .map(Box::new)
+                .map(PreparedDirectSession::Sandbox)
+        })
     };
-    let Some(prepared) =
-        PreparedDirectSandboxSession::new(prepared.manifest.clone(), prepared.summary.clone())
-    else {
-        notice.0 = Some(
-            "The world adapter supplied an invalid frozen session manifest; hosting was not started."
-                .to_owned(),
-        );
+    let Some(prepared) = prepared else {
+        if model.route == hex_gameplay_model::MultiplayerRoute::HostCampaign {
+            model.show_host_campaign();
+            notice.0 = None;
+        } else {
+            model.show_host_direct();
+            notice.0 = Some(
+                "The complete frozen launch contract is not available yet; hosting was not started."
+                    .to_owned(),
+            );
+        }
         return;
     };
     model.connecting(MultiplayerRole::Host);
     commands.insert_resource(DirectStartQueue::Host {
         endpoint: pending.endpoint.clone(),
         prepared: Box::new(prepared),
+        advertise_on_lan: pending_lan.is_some(),
     });
 }
 
@@ -468,9 +694,7 @@ fn handle_intents(
     mut draft: ResMut<MultiplayerDraft>,
     mut stored: ResMut<StoredCredentialState>,
     storage: Option<Res<ReconnectCredentialStorage>>,
-    projection: Res<SessionProjection>,
-    authority: Option<Res<SessionAdmissionAuthority>>,
-    active: Option<Res<ActiveDirectSession>>,
+    context: MultiplayerIntentContext,
     mut ids: ResMut<SessionUiRequestIds>,
     mut notice: ResMut<SessionUiNotice>,
     mut clipboard: Option<ResMut<Clipboard>>,
@@ -503,11 +727,92 @@ fn handle_intents(
             }
         };
         match intent {
+            MultiplayerIntent::OpenHostCampaign => {
+                commands.remove_resource::<ActiveLanBrowser>();
+                notice.0 = None;
+                model.show_host_campaign();
+            }
+            MultiplayerIntent::HostLanSandbox => {
+                if context.active.is_some() {
+                    notice.0 = Some("A direct session is already active.".to_owned());
+                    continue;
+                }
+                let endpoint = match lan_host_endpoint(&draft) {
+                    Ok(endpoint) => endpoint,
+                    Err(reason) => {
+                        notice.0 = Some(reason);
+                        continue;
+                    }
+                };
+                commands.remove_resource::<ActiveLanBrowser>();
+                commands.insert_resource(PendingDirectHostSetup { endpoint });
+                commands.insert_resource(PendingLanHostDiscovery);
+                commands.remove_resource::<PreparedDirectSandboxSession>();
+                commands.remove_resource::<PreparedDirectCampaignSession>();
+                notice.0 = None;
+                next_screen.set(Screen::Sandbox);
+            }
+            MultiplayerIntent::OpenLanBrowser | MultiplayerIntent::RefreshLanBrowser => {
+                if context.active.is_some() {
+                    notice.0 =
+                        Some("Leave the active session before browsing LAN games.".to_owned());
+                    continue;
+                }
+                model.show_lan_browser();
+                match prepare_lan_browser(context.accepted_content.as_deref()) {
+                    Ok(browser) => {
+                        commands.insert_resource(browser);
+                        notice.0 = None;
+                    }
+                    Err(reason) => {
+                        commands.remove_resource::<ActiveLanBrowser>();
+                        notice.0 = Some(reason);
+                    }
+                }
+            }
+            MultiplayerIntent::JoinLanSession(service_id) => {
+                if context.active.is_some() {
+                    notice.0 = Some("A direct session is already active.".to_owned());
+                    continue;
+                }
+                let Some(browser) = context.lan_browser.as_deref() else {
+                    notice.0 = Some(
+                        "LAN discovery is not running. Refresh the LAN browser and try again."
+                            .to_owned(),
+                    );
+                    continue;
+                };
+                let Some(session) = browser.browser.session(service_id) else {
+                    notice.0 = Some(
+                        "That LAN lobby is no longer advertised. Refresh and choose it again."
+                            .to_owned(),
+                    );
+                    continue;
+                };
+                if !session.is_compatible_with(browser.compatibility) {
+                    notice.0 = Some(
+                        "That LAN lobby uses a different build or shipped content.".to_owned(),
+                    );
+                    continue;
+                }
+                let code = session.connection_code();
+                let credential = AdmissionCredential::Invite(code.invite_token);
+                model.connecting(MultiplayerRole::Client);
+                notice.0 = None;
+                commands.remove_resource::<ActiveLanBrowser>();
+                commands.insert_resource(DirectStartQueue::Join {
+                    target: DirectJoinTarget::Invite(code),
+                    credential,
+                    reconnecting: false,
+                });
+            }
             MultiplayerIntent::OpenHostDirect => {
+                commands.remove_resource::<ActiveLanBrowser>();
                 notice.0 = None;
                 model.show_host_direct();
             }
             MultiplayerIntent::OpenJoinDirect => {
+                commands.remove_resource::<ActiveLanBrowser>();
                 notice.0 = None;
                 model.show_join_direct();
             }
@@ -529,15 +834,36 @@ fn handle_intents(
                     }
                 };
                 commands.insert_resource(PendingDirectHostSetup { endpoint });
+                commands.remove_resource::<PendingLanHostDiscovery>();
                 commands.remove_resource::<PreparedDirectSandboxSession>();
+                commands.remove_resource::<PreparedDirectCampaignSession>();
                 notice.0 = None;
                 next_screen.set(Screen::Sandbox);
+            }
+            MultiplayerIntent::HostCampaign(slot) => {
+                if context.active.is_some() {
+                    notice.0 = Some("A direct session is already active.".to_owned());
+                    continue;
+                }
+                let endpoint = match direct_endpoint(&draft) {
+                    Ok(endpoint) => endpoint,
+                    Err(reason) => {
+                        notice.0 = Some(reason);
+                        continue;
+                    }
+                };
+                commands.insert_resource(PendingDirectHostSetup { endpoint });
+                commands.remove_resource::<PendingLanHostDiscovery>();
+                commands.insert_resource(CampaignMultiplayerHostRequest { slot: *slot });
+                commands.remove_resource::<PreparedDirectSandboxSession>();
+                commands.remove_resource::<PreparedDirectCampaignSession>();
+                notice.0 = None;
             }
             MultiplayerIntent::CopyConnectionCode => {
                 notice.0 = Some(
                     match copy_hosted_connection_code(
-                        active.as_deref(),
-                        authority.as_deref(),
+                        context.active.as_deref(),
+                        context.authority.as_deref(),
                         clipboard.as_deref_mut(),
                     ) {
                         Ok(()) => "Direct connection code copied to the clipboard.",
@@ -546,8 +872,17 @@ fn handle_intents(
                     .to_owned(),
                 );
             }
+            MultiplayerIntent::RetryLanAdvertisement => {
+                if model.role != Some(MultiplayerRole::Host) || context.lan_host.is_none() {
+                    notice.0 =
+                        Some("Only an active LAN host can retry lobby advertisement.".to_owned());
+                    continue;
+                }
+                commands.remove_resource::<LanHostDiscoveryFailure>();
+                notice.0 = Some("Retrying LAN lobby advertisement…".to_owned());
+            }
             MultiplayerIntent::JoinDirect | MultiplayerIntent::ReconnectDirect => {
-                if active.is_some() {
+                if context.active.is_some() {
                     notice.0 = Some("A direct session is already active.".to_owned());
                     continue;
                 }
@@ -639,10 +974,11 @@ fn handle_intents(
                 );
             }
             MultiplayerIntent::Launch => {
-                let fingerprint = authority
+                let fingerprint = context
+                    .authority
                     .as_deref()
                     .map(SessionAdmissionAuthority::manifest)
-                    .or(projection.manifest.as_ref())
+                    .or(context.projection.manifest.as_ref())
                     .map(|manifest| manifest.map.expected_public_fingerprint);
                 let Some(fingerprint) = fingerprint else {
                     notice.0 = Some(
@@ -662,10 +998,11 @@ fn handle_intents(
                 );
             }
             MultiplayerIntent::RetryExact => {
-                let fingerprint = authority
+                let fingerprint = context
+                    .authority
                     .as_deref()
                     .map(SessionAdmissionAuthority::manifest)
-                    .or(projection.manifest.as_ref())
+                    .or(context.projection.manifest.as_ref())
                     .map(|manifest| manifest.map.expected_public_fingerprint);
                 let Some(fingerprint) = fingerprint else {
                     notice.0 =
@@ -699,7 +1036,7 @@ fn handle_intents(
             MultiplayerIntent::LeaveSession => {
                 leave_session(
                     &mut model,
-                    active.as_deref(),
+                    context.active.as_deref(),
                     &mut ids,
                     &mut client_controls,
                     &mut commands,
@@ -715,12 +1052,15 @@ fn handle_intents(
                 MultiplayerBackResult::Home => {
                     commands.remove_resource::<DirectStartQueue>();
                     commands.remove_resource::<PendingDirectHostSetup>();
+                    commands.remove_resource::<PendingLanHostDiscovery>();
+                    commands.remove_resource::<ActiveLanBrowser>();
                     commands.remove_resource::<PreparedDirectSandboxSession>();
+                    commands.remove_resource::<PreparedDirectCampaignSession>();
                     notice.0 = None;
                 }
                 MultiplayerBackResult::LeaveSession => leave_session(
                     &mut model,
-                    active.as_deref(),
+                    context.active.as_deref(),
                     &mut ids,
                     &mut client_controls,
                     &mut commands,
@@ -743,12 +1083,41 @@ fn current_unix_seconds() -> Option<u64> {
 }
 
 fn direct_endpoint(draft: &MultiplayerDraft) -> Result<DirectEndpoint, String> {
-    let port = draft
-        .advertised_port
-        .parse::<u16>()
-        .map_err(|_error| "UDP port must be a number from 1 through 65535.".to_owned())?;
+    let port = direct_port(draft)?;
     DirectEndpoint::new(draft.advertised_host.trim(), port)
         .map_err(|error| format!("Advertised endpoint refused: {error}."))
+}
+
+fn lan_host_endpoint(draft: &MultiplayerDraft) -> Result<DirectEndpoint, String> {
+    DirectEndpoint::new("127.0.0.1", direct_port(draft)?)
+        .map_err(|error| format!("LAN host endpoint refused: {error}."))
+}
+
+fn direct_port(draft: &MultiplayerDraft) -> Result<u16, String> {
+    draft
+        .advertised_port
+        .parse::<u16>()
+        .map_err(|_error| "UDP port must be a number from 1 through 65535.".to_owned())
+}
+
+fn prepare_lan_browser(
+    accepted_content: Option<&AcceptedContentRevision>,
+) -> Result<ActiveLanBrowser, String> {
+    let accepted_content = accepted_content.ok_or_else(|| {
+        "Shipped content is still loading; LAN browsing was not started.".to_owned()
+    })?;
+    let build = local_build_identity()
+        .map_err(|error| format!("Local build identity is invalid: {error}."))?;
+    let compatibility = LanCompatibilityKey::from_build_and_content(
+        &build,
+        ContentFingerprint(accepted_content.fingerprint()),
+    );
+    let browser = LanDiscoveryBrowser::start()
+        .map_err(|error| format!("Could not browse this local network: {error}."))?;
+    Ok(ActiveLanBrowser {
+        browser,
+        compatibility,
+    })
 }
 
 fn write_host_control(
@@ -827,9 +1196,11 @@ fn start_queued_direct_session(world: &mut World) {
         return;
     };
     let result = match request {
-        DirectStartQueue::Host { endpoint, prepared } => {
-            start_direct_host(world, endpoint, *prepared)
-        }
+        DirectStartQueue::Host {
+            endpoint,
+            prepared,
+            advertise_on_lan,
+        } => start_direct_host(world, endpoint, *prepared, advertise_on_lan),
         DirectStartQueue::Join {
             target,
             credential,
@@ -844,16 +1215,22 @@ fn start_queued_direct_session(world: &mut World) {
             notice.0 = Some(reason);
         }
         world.insert_resource(SimulationRole::Authority);
+        world.remove_resource::<PendingLanHostDiscovery>();
+        world.remove_resource::<LanHostSession>();
+        world.remove_resource::<ActiveLanAdvertisement>();
+        world.remove_resource::<LanHostDiscoveryFailure>();
     }
 }
 
 fn start_direct_host(
     world: &mut World,
     endpoint: DirectEndpoint,
-    prepared: PreparedDirectSandboxSession,
+    prepared: PreparedDirectSession,
+    advertise_on_lan: bool,
 ) -> Result<(), String> {
     let protocol_hash = *world.resource::<ProtocolHash>();
-    let authority = SessionAdmissionAuthority::new(protocol_hash, prepared.manifest.clone())
+    let manifest = prepared.manifest().clone();
+    let authority = SessionAdmissionAuthority::new(protocol_hash, manifest.clone())
         .map_err(|error| format!("Host session refused its frozen manifest: {error}."))?;
     let direct = PreparedDirectHost::new(endpoint.clone(), authority.invite_token())
         .map_err(|error| format!("Could not prepare the encrypted direct host: {error}."))?;
@@ -871,14 +1248,32 @@ fn start_direct_host(
     });
     world.insert_resource(SessionProjection {
         lobby: None,
-        manifest: Some(prepared.manifest.clone()),
+        manifest: Some(manifest),
     });
-    world.insert_resource(prepared);
+    match prepared {
+        PreparedDirectSession::Sandbox(prepared) => {
+            world.insert_resource(*prepared);
+            world.remove_resource::<PreparedDirectCampaignSession>();
+        }
+        PreparedDirectSession::Campaign(prepared) => {
+            world.insert_resource(*prepared);
+            world.remove_resource::<PreparedDirectSandboxSession>();
+        }
+    }
     world.insert_resource(SimulationRole::Authority);
     world.remove_resource::<PendingDirectHostSetup>();
+    world.remove_resource::<PendingLanHostDiscovery>();
+    world.remove_resource::<ActiveLanAdvertisement>();
+    world.remove_resource::<LanHostDiscoveryFailure>();
+    if advertise_on_lan {
+        world.insert_resource(LanHostSession);
+    } else {
+        world.remove_resource::<LanHostSession>();
+    }
     world.remove_resource::<DirectWorldReady>();
     world.insert_resource(DirectMapLoadState::default());
     world.insert_resource(PendingReconnectSnapshotTargets::default());
+    world.insert_resource(CampaignInitialSnapshotState::default());
     world.insert_resource(ReplicaWorldSyncState::default());
     world.insert_resource(HostWorldDeltaState::default());
     world.insert_resource(HostPlayerKnowledgeState::default());
@@ -914,6 +1309,10 @@ fn start_direct_join(
         role: MultiplayerRole::Client,
         hosted_code: None,
     });
+    world.remove_resource::<ActiveLanBrowser>();
+    world.remove_resource::<LanHostSession>();
+    world.remove_resource::<ActiveLanAdvertisement>();
+    world.remove_resource::<LanHostDiscoveryFailure>();
     world.insert_resource(PendingClientHello {
         credential,
         sent: false,
@@ -931,6 +1330,105 @@ fn start_direct_join(
         world.resource_mut::<MultiplayerModel>().show_reconnecting();
     }
     Ok(())
+}
+
+fn poll_lan_browser(
+    mut browser: Option<ResMut<ActiveLanBrowser>>,
+    mut notice: ResMut<SessionUiNotice>,
+    mut commands: Commands,
+) {
+    let Some(browser) = browser.as_mut() else {
+        return;
+    };
+    if let Err(error) = browser.browser.poll() {
+        notice.0 = Some(format!(
+            "LAN discovery stopped: {error}. Check local-network permission, then refresh."
+        ));
+        commands.remove_resource::<ActiveLanBrowser>();
+    }
+}
+
+fn sync_lan_host_advertisement(
+    active: Option<Res<ActiveDirectSession>>,
+    authority: Option<Res<SessionAdmissionAuthority>>,
+    lan_host: Option<Res<LanHostSession>>,
+    failure: Option<Res<LanHostDiscoveryFailure>>,
+    mut advertisement: Option<ResMut<ActiveLanAdvertisement>>,
+    mut notice: ResMut<SessionUiNotice>,
+    mut commands: Commands,
+) {
+    let open_lan_lobby = lan_host.is_some()
+        && active
+            .as_deref()
+            .is_some_and(|active| active.role == MultiplayerRole::Host)
+        && authority
+            .as_deref()
+            .is_some_and(|authority| authority.lobby().snapshot().phase == LobbyPhase::Open);
+    if !open_lan_lobby {
+        if advertisement.is_some() {
+            commands.remove_resource::<ActiveLanAdvertisement>();
+        }
+        return;
+    }
+    if failure.is_some() {
+        return;
+    }
+    let built = lan_session_advertisement(active.as_deref(), authority.as_deref());
+    let result = match (advertisement.as_mut(), built) {
+        (_, Err(error)) => Err(error),
+        (Some(current), Ok(next)) => current.0.refresh(next).map(|_changed| ()),
+        (None, Ok(next)) => LanDiscoveryAdvertiser::start(next).map(|publisher| {
+            commands.insert_resource(ActiveLanAdvertisement(publisher));
+        }),
+    };
+    match result {
+        Ok(()) => {
+            if notice.0.as_deref() == Some("Retrying LAN lobby advertisement…") {
+                notice.0 = None;
+            }
+        }
+        Err(error) => {
+            commands.remove_resource::<ActiveLanAdvertisement>();
+            commands.insert_resource(LanHostDiscoveryFailure);
+            notice.0 = Some(format!(
+                "LAN lobby advertisement stopped: {error}. Check local-network permission and retry."
+            ));
+        }
+    }
+}
+
+fn lan_session_advertisement(
+    active: Option<&ActiveDirectSession>,
+    authority: Option<&SessionAdmissionAuthority>,
+) -> Result<LanSessionAdvertisement, hex_multiplayer::LanDiscoveryError> {
+    let authority = authority.ok_or(hex_multiplayer::LanDiscoveryError::MalformedAnnouncement(
+        "host authority",
+    ))?;
+    let connection_code = current_hosted_connection_code(active, Some(authority)).ok_or(
+        hex_multiplayer::LanDiscoveryError::MalformedAnnouncement("host connection code"),
+    )?;
+    let manifest = authority.manifest();
+    let compatibility =
+        LanCompatibilityKey::from_build_and_content(&manifest.build, manifest.content_fingerprint);
+    let claimed_seats = u8::try_from(
+        authority
+            .lobby()
+            .snapshot()
+            .seats
+            .iter()
+            .filter(|seat| seat.connection.is_claimed())
+            .count(),
+    )
+    .unwrap_or(u8::MAX);
+    let capacity = u8::try_from(PlayerSeat::HUMAN_COUNT).unwrap_or(u8::MAX);
+    LanSessionAdvertisement::new(
+        manifest.session_instance_id,
+        LanSessionKind::from(manifest.launch_kind),
+        compatibility,
+        connection_code,
+        claimed_seats,
+        capacity,
+    )
 }
 
 fn send_client_hello(
@@ -1179,19 +1677,22 @@ fn sync_host_session(
     );
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the composition adapter joins the frozen lobby, local launch owner, and screen state without moving authority into shared protocol code"
-)]
+#[derive(SystemParam)]
+struct DirectMapLaunchInputs<'w> {
+    scenarios: Option<Res<'w, ScenarioLibrary>>,
+    sandbox: Option<Res<'w, super::sandbox::SandboxSession>>,
+    campaign: Option<Res<'w, PreparedDirectCampaignSession>>,
+    local_rules: Option<Res<'w, CombatSettings>>,
+    ready: Option<Res<'w, DirectWorldReady>>,
+    replica_sync: Res<'w, ReplicaWorldSyncState>,
+}
+
 fn drive_direct_map_loading(
     screen: Res<State<Screen>>,
     active: Option<Res<ActiveDirectSession>>,
     authority: Option<Res<SessionAdmissionAuthority>>,
     projection: Res<SessionProjection>,
-    scenarios: Option<Res<ScenarioLibrary>>,
-    sandbox: Option<Res<super::sandbox::SandboxSession>>,
-    local_rules: Option<Res<CombatSettings>>,
-    ready: Option<Res<DirectWorldReady>>,
+    inputs: DirectMapLaunchInputs,
     mut state: ResMut<DirectMapLoadState>,
     mut report_state: ResMut<MapReadyReportState>,
     mut phase: ResMut<GameplayPhase>,
@@ -1219,11 +1720,11 @@ fn drive_direct_map_loading(
 
     let reconnect_epoch = active.role == MultiplayerRole::Client
         && matches!(lobby.phase, LobbyPhase::Active | LobbyPhase::Outcome)
-        && (state.awaiting_snapshot || (ready.is_none() && !state.restored_reconnect));
+        && (state.awaiting_snapshot || (inputs.ready.is_none() && !state.restored_reconnect));
     let requires_load = lobby.phase == LobbyPhase::Loading || reconnect_epoch;
     if !requires_load {
         if matches!(lobby.phase, LobbyPhase::Active | LobbyPhase::Outcome)
-            && ready.as_deref().is_some_and(|ready| {
+            && inputs.ready.as_deref().is_some_and(|ready| {
                 state.restored_reconnect
                     || ready.fingerprint == manifest.map.expected_public_fingerprint
             })
@@ -1242,7 +1743,9 @@ fn drive_direct_map_loading(
         state.session = Some(manifest.session_instance_id);
         state.loading = true;
         state.started = false;
-        state.awaiting_snapshot = reconnect_epoch;
+        state.awaiting_snapshot = reconnect_epoch
+            || (active.role == MultiplayerRole::Client
+                && manifest.launch_kind == SessionLaunchKindV1::Campaign);
         state.restored_reconnect = false;
         report_state.sent = false;
         *phase = GameplayPhase::Preparing;
@@ -1253,37 +1756,100 @@ fn drive_direct_map_loading(
         return;
     }
 
+    if active.role == MultiplayerRole::Client
+        && manifest.launch_kind == SessionLaunchKindV1::Campaign
+        && inputs.replica_sync.baseline.is_none()
+    {
+        return;
+    }
+
     let loading_input = match active.role {
-        MultiplayerRole::Host => {
-            let Some(sandbox) = sandbox.as_deref() else {
-                notice.0 = Some(
-                    "The host's frozen Sandbox launch is unavailable; exact map loading was refused."
-                        .to_owned(),
-                );
-                end_active_session(
-                    MultiplayerEndReason::ProtocolViolation,
-                    Some(&active),
-                    &mut model,
-                    &mut commands,
-                );
-                next_screen.set(Screen::Multiplayer);
-                return;
-            };
-            commands.insert_resource(sandbox.launch.rules.clone());
-            sandbox.launch.loading_input()
-        }
+        MultiplayerRole::Host => match manifest.launch_kind {
+            SessionLaunchKindV1::Sandbox => {
+                let Some(sandbox) = inputs.sandbox.as_deref() else {
+                    notice.0 = Some(
+                        "The host's frozen Sandbox launch is unavailable; exact map loading was refused."
+                            .to_owned(),
+                    );
+                    end_active_session(
+                        MultiplayerEndReason::ProtocolViolation,
+                        Some(&active),
+                        &mut model,
+                        &mut commands,
+                    );
+                    next_screen.set(Screen::Multiplayer);
+                    return;
+                };
+                commands.insert_resource(sandbox.launch.rules.clone());
+                sandbox.launch.loading_input()
+            }
+            SessionLaunchKindV1::Campaign => {
+                let (Some(campaign), Some(scenarios), Some(local_rules)) = (
+                    inputs.campaign.as_deref(),
+                    inputs.scenarios.as_deref(),
+                    inputs.local_rules.as_deref(),
+                ) else {
+                    return;
+                };
+                if campaign.manifest != manifest
+                    || campaign.checkpoint.rules.fingerprint
+                        != super::sandbox::direct_rules_fingerprint(local_rules)
+                {
+                    notice.0 = Some(
+                        "The prepared Campaign no longer matches local rules or the admitted manifest."
+                            .to_owned(),
+                    );
+                    end_active_session(
+                        MultiplayerEndReason::Incompatible,
+                        Some(&active),
+                        &mut model,
+                        &mut commands,
+                    );
+                    next_screen.set(Screen::Multiplayer);
+                    return;
+                }
+                commands.insert_resource(PendingCampaignWorldSnapshotV2::new(
+                    campaign.checkpoint.world.clone(),
+                ));
+                commands.insert_resource(PendingCampaignGameplayCheckpointV2(
+                    CampaignGameplayCheckpointV2 {
+                        units: campaign.checkpoint.units.clone(),
+                        effects: campaign.checkpoint.effects.clone(),
+                        formation: campaign.checkpoint.formation.clone(),
+                    },
+                ));
+                match campaign_scenario_to_load(&manifest, scenarios) {
+                    Ok(loading_input) => loading_input,
+                    Err(reason) => {
+                        notice.0 = Some(reason);
+                        end_active_session(
+                            MultiplayerEndReason::Incompatible,
+                            Some(&active),
+                            &mut model,
+                            &mut commands,
+                        );
+                        next_screen.set(Screen::Multiplayer);
+                        return;
+                    }
+                }
+            }
+        },
         MultiplayerRole::Client => {
             let (Some(scenarios), Some(local_rules)) =
-                (scenarios.as_deref(), local_rules.as_deref())
+                (inputs.scenarios.as_deref(), inputs.local_rules.as_deref())
             else {
                 return;
             };
             let local_rules_fingerprint = super::sandbox::direct_rules_fingerprint(local_rules);
-            if manifest.rules.profile_identity.as_str() != "sandbox-rules-v1"
+            let expected_profile = match manifest.launch_kind {
+                SessionLaunchKindV1::Sandbox => "sandbox-rules-v1",
+                SessionLaunchKindV1::Campaign => "campaign-rules-v1",
+            };
+            if manifest.rules.profile_identity.as_str() != expected_profile
                 || manifest.rules.fingerprint != local_rules_fingerprint
             {
                 notice.0 = Some(
-                    "Rules mismatch: Direct multiplayer requires the exact shipped Sandbox rules."
+                    "Rules mismatch: Direct multiplayer requires the host's exact shipped rules."
                         .to_owned(),
                 );
                 end_active_session(
@@ -1294,6 +1860,13 @@ fn drive_direct_map_loading(
                 );
                 next_screen.set(Screen::Multiplayer);
                 return;
+            }
+            if manifest.launch_kind == SessionLaunchKindV1::Campaign {
+                let Some(baseline) = inputs.replica_sync.baseline.as_ref() else {
+                    return;
+                };
+                commands
+                    .insert_resource(PendingCampaignWorldSnapshotV2::new(baseline.world.clone()));
             }
             match client_scenario_to_load(&manifest, scenarios) {
                 Ok(loading_input) => loading_input,
@@ -1316,6 +1889,27 @@ fn drive_direct_map_loading(
     commands.insert_resource(GameplayPhase::Preparing);
     next_screen.set(Screen::Loading);
     state.started = true;
+}
+
+fn campaign_scenario_to_load(
+    manifest: &SessionManifestV1,
+    scenarios: &ScenarioLibrary,
+) -> Result<crate::scenarios::ScenarioToLoad, String> {
+    let scenario = scenarios
+        .scenarios
+        .iter()
+        .find(|scenario| scenario.name == manifest.scenario_identity.as_str())
+        .cloned()
+        .ok_or_else(|| {
+            "Scenario mismatch: the host's Campaign scenario is unavailable locally.".to_owned()
+        })?;
+    Ok(crate::scenarios::ScenarioToLoad {
+        resolved_seed: scenario
+            .generation_seed
+            .map(|_configured| ResolvedMapSeed(manifest.map.seed)),
+        scenario,
+        encounter_override: None,
+    })
 }
 
 fn client_scenario_to_load(
@@ -1372,7 +1966,7 @@ fn observe_current_world_ready(
     existing: Option<Res<DirectWorldReady>>,
     mut commands: Commands,
 ) {
-    if !state.loading || *screen.get() != Screen::Gameplay {
+    if !state.loading || state.awaiting_snapshot || *screen.get() != Screen::Gameplay {
         return;
     }
     let Some(current) = current.as_deref() else {
@@ -1420,20 +2014,34 @@ fn send_pending_reconnect_snapshots(
     units: Query<&UnitReplica>,
     sessions: Query<&SessionReplica>,
     mut pending: ResMut<PendingReconnectSnapshotTargets>,
+    mut campaign_initial: ResMut<CampaignInitialSnapshotState>,
     mut snapshots: MessageWriter<ToClients<LiveSessionSnapshotV1>>,
 ) {
-    if pending.0.is_empty() || !boundary.is_quiescent() {
-        return;
-    }
     let (Some(authority), Some(current_world), Some(knowledge), Some(substances)) =
         (authority, current_world, knowledge, substances)
     else {
         return;
     };
-    if !matches!(
-        authority.lobby().snapshot().phase,
-        LobbyPhase::Active | LobbyPhase::Outcome
-    ) {
+    let phase = authority.lobby().snapshot().phase;
+    let campaign_loading = authority.manifest().launch_kind == SessionLaunchKindV1::Campaign
+        && phase == LobbyPhase::Loading;
+    if campaign_initial.session != Some(authority.manifest().session_instance_id) {
+        campaign_initial.session = Some(authority.manifest().session_instance_id);
+        campaign_initial.delivered.clear();
+    }
+    if campaign_loading {
+        for (_seat, connection) in authority.connected_peers() {
+            if !campaign_initial.delivered.contains(&connection) {
+                pending.0.insert(connection);
+            }
+        }
+    } else if phase == LobbyPhase::Open {
+        campaign_initial.delivered.clear();
+    }
+    if pending.0.is_empty() || !boundary.is_quiescent() {
+        return;
+    }
+    if !campaign_loading && !matches!(phase, LobbyPhase::Active | LobbyPhase::Outcome) {
         return;
     }
     let Some(mut session) = sessions
@@ -1475,6 +2083,7 @@ fn send_pending_reconnect_snapshots(
         .into_iter()
         .map(|(_seat, connection)| connection)
         .collect::<BTreeSet<_>>();
+    let mut delivered = Vec::new();
     pending.0.retain(|connection| {
         if !connected.contains(connection) {
             return false;
@@ -1483,8 +2092,12 @@ fn send_pending_reconnect_snapshots(
             targets: SendTargets::Single(ClientId::Client(*connection)),
             message: snapshot.clone(),
         });
+        if campaign_loading {
+            delivered.push(*connection);
+        }
         false
     });
+    campaign_initial.delivered.extend(delivered);
 }
 
 fn capture_replica_world_messages(
@@ -1998,21 +2611,25 @@ fn publish_view(
     model: Res<MultiplayerModel>,
     draft: Res<MultiplayerDraft>,
     notice: Res<SessionUiNotice>,
+    campaign_store: Res<CampaignStore>,
+    campaign_lattices: Option<Res<LatticeLibrary>>,
+    campaign_elements: Option<Res<ElementCatalog>>,
+    campaign_host_status: Res<CampaignMultiplayerHostStatus>,
+    campaign_save_status: Res<CampaignSaveStatusProjection>,
     stored: Res<StoredCredentialState>,
-    projection: Res<SessionProjection>,
-    authority: Option<Res<SessionAdmissionAuthority>>,
-    active: Option<Res<ActiveDirectSession>>,
-    prepared: Option<Res<PreparedDirectSandboxSession>>,
+    inputs: MultiplayerViewInputs,
     mut view: ResMut<MultiplayerView>,
 ) {
-    let lobby = authority
+    let lobby = inputs
+        .authority
         .as_deref()
         .map(|authority| authority.lobby().snapshot_owned())
-        .or_else(|| projection.lobby.clone());
-    let manifest = authority
+        .or_else(|| inputs.projection.lobby.clone());
+    let manifest = inputs
+        .authority
         .as_deref()
         .map(|authority| authority.manifest().clone())
-        .or_else(|| projection.manifest.clone());
+        .or_else(|| inputs.projection.manifest.clone());
     let seats = lobby.as_ref().map_or_else(default_seats, |lobby| {
         lobby
             .seats
@@ -2042,8 +2659,36 @@ fn publish_view(
             .collect()
     });
     let (can_launch, launch_blocker) = launch_gate(lobby.as_ref(), manifest.as_ref());
-    let share_code = hosted_connection_code(active.as_deref(), authority.as_deref())
+    let campaign_session = manifest
+        .as_ref()
+        .is_some_and(|manifest| manifest.launch_kind == SessionLaunchKindV1::Campaign);
+    let campaign_save_status = campaign_session
+        .then_some(campaign_save_status.state)
+        .flatten()
+        .map(campaign_save_status_view);
+    let campaign_host = MultiplayerCampaignHostView {
+        slot: campaign_host_status.slot,
+        preparing: campaign_host_status.preparing,
+        refusal: campaign_host_status.refusal.map(|_refusal| {
+            campaign_host_status.notice.clone().unwrap_or_else(|| {
+                "The Campaign checkpoint could not be prepared for multiplayer.".to_owned()
+            })
+        }),
+    };
+    let share_code = (inputs.lan_host.is_none())
+        .then(|| hosted_connection_code(inputs.active.as_deref(), inputs.authority.as_deref()))
+        .flatten()
         .map(|code| SensitiveText::new(code.expose_for_sharing()));
+    let lan_sessions = inputs
+        .lan_browser
+        .as_deref()
+        .map_or_else(Vec::new, |browser| {
+            browser
+                .browser
+                .sessions()
+                .map(|session| multiplayer_lan_session_view(session, browser.compatibility))
+                .collect()
+        });
     let launch_summary = lobby
         .as_ref()
         .and_then(|lobby| lobby.launch_summary.as_ref())
@@ -2056,7 +2701,18 @@ fn publish_view(
                 summary.public_world_fingerprint.0
             )
         })
-        .or_else(|| prepared.as_deref().map(|prepared| prepared.summary.clone()));
+        .or_else(|| {
+            inputs
+                .prepared
+                .as_deref()
+                .map(|prepared| prepared.summary.clone())
+        })
+        .or_else(|| {
+            inputs
+                .prepared_campaign
+                .as_deref()
+                .map(|prepared| prepared.summary.clone())
+        });
     let next = MultiplayerView {
         route: model.route,
         role: model.role,
@@ -2066,6 +2722,20 @@ fn publish_view(
         share_code,
         join_code: draft.join_code.clone(),
         reconnect_available: stored.value.is_some(),
+        lan_searching: model.route == hex_gameplay_model::MultiplayerRoute::BrowseLan
+            && inputs.lan_browser.is_some(),
+        lan_sessions,
+        lan_hosting: inputs.lan_host.is_some(),
+        lan_advertising: inputs
+            .lan_advertisement
+            .as_deref()
+            .is_some_and(|advertisement| advertisement.0.is_announced()),
+        lan_advertisement_failed: inputs.lan_failure.is_some(),
+        campaign_slots: campaign_store
+            .slot_views(campaign_lattices.as_deref(), campaign_elements.as_deref()),
+        campaign_host,
+        campaign_session,
+        campaign_save_status,
         seats,
         launch_summary,
         notice: notice.0.clone(),
@@ -2075,6 +2745,63 @@ fn publish_view(
     };
     if *view != next {
         *view = next;
+    }
+}
+
+fn multiplayer_lan_session_view(
+    session: &hex_multiplayer::LanDiscoveredSession,
+    compatibility: LanCompatibilityKey,
+) -> MultiplayerLanSessionView {
+    let suffix = session
+        .session_instance_id()
+        .to_bytes()
+        .iter()
+        .take(3)
+        .map(|byte| format!("{byte:02X}"))
+        .collect::<String>();
+    let kind = match session.kind() {
+        LanSessionKind::Sandbox => "Sandbox",
+        LanSessionKind::Campaign => "Campaign",
+    };
+    let host = session.endpoint().host();
+    let endpoint = if host.contains(':') && !(host.starts_with('[') && host.ends_with(']')) {
+        format!("[{host}]:{}", session.endpoint().port())
+    } else {
+        format!("{host}:{}", session.endpoint().port())
+    };
+    MultiplayerLanSessionView {
+        service_id: session.service_id().to_owned(),
+        label: format!("{kind} · {suffix}"),
+        endpoint,
+        claimed_seats: session.claimed_seats(),
+        seat_capacity: session.seat_capacity(),
+        compatible: session.is_compatible_with(compatibility),
+    }
+}
+
+fn campaign_save_status_view(state: CampaignSaveStateV2) -> MultiplayerCampaignSaveStatusView {
+    match state {
+        CampaignSaveStateV2::Saving => MultiplayerCampaignSaveStatusView::Saving,
+        CampaignSaveStateV2::Saved => MultiplayerCampaignSaveStatusView::Saved,
+        CampaignSaveStateV2::Refused(refusal) => MultiplayerCampaignSaveStatusView::Refused {
+            reason: campaign_save_refusal_copy(refusal).to_owned(),
+        },
+    }
+}
+
+const fn campaign_save_refusal_copy(refusal: CampaignSaveRefusalV2) -> &'static str {
+    match refusal {
+        CampaignSaveRefusalV2::NotAuthority => "only the Campaign host can save",
+        CampaignSaveRefusalV2::UnsafeBoundary => "saving requires paused, quiescent exploration",
+        CampaignSaveRefusalV2::IncompleteCheckpoint => {
+            "the complete world or gameplay checkpoint was unavailable"
+        }
+        CampaignSaveRefusalV2::IncompatibleContent => {
+            "the accepted shipped content changed or is incompatible"
+        }
+        CampaignSaveRefusalV2::StorageUnavailable => {
+            "the host could not atomically write the checkpoint"
+        }
     }
 }
 
@@ -2184,6 +2911,11 @@ fn end_active_session(
         commands.entity(active.entity).try_despawn();
     }
     commands.remove_resource::<ActiveDirectSession>();
+    commands.remove_resource::<ActiveLanAdvertisement>();
+    commands.remove_resource::<LanHostSession>();
+    commands.remove_resource::<LanHostDiscoveryFailure>();
+    commands.remove_resource::<PendingLanHostDiscovery>();
+    commands.remove_resource::<ActiveLanBrowser>();
     commands.remove_resource::<PendingClientHello>();
     commands.remove_resource::<SessionAdmissionAuthority>();
     commands.remove_resource::<DirectWorldReady>();
@@ -2283,13 +3015,17 @@ fn session_close_copy(reason: SessionCloseReason) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
     use hex_assets::ScenarioCategory;
-    use hex_core::{Faction, HexCoord, SimSeeds, TilePos};
+    use hex_core::{Faction, HexCoord, PartyFormation, SimSeeds, TilePos};
     use hex_multiplayer::{
-        BoundedText, BoundedVec, InviteToken, MapManifestV1, ProtocolVersion, ReconnectCredential,
-        RosterEntryV1, RulesManifestV1, SessionInstanceId, SessionPeerId, UnitDeploymentV1,
-        MAX_IDENTITY_BYTES,
+        BoundedText, BoundedVec, CampaignEffectLedgerV2, CampaignUnitCheckpointV2, InviteToken,
+        MapManifestV1, ProtocolVersion, ReconnectCredential, RosterEntryV1, RulesManifestV1,
+        SessionInstanceId, SessionPeerId, UnitDeploymentV1, WorldColumnSnapshotV1,
+        WorldRunSnapshotV1, WorldSnapshotV1, CAMPAIGN_CHECKPOINT_VERSION_V2, MAX_IDENTITY_BYTES,
+        WORLD_SNAPSHOT_VERSION_V1,
     };
 
     fn text(value: &str) -> BoundedText<MAX_IDENTITY_BYTES> {
@@ -2303,6 +3039,7 @@ mod tests {
             build: local_build_identity().expect("local build fits"),
             content_fingerprint: ContentFingerprint(7),
             scenario_identity: text("sandbox"),
+            launch_kind: hex_multiplayer::SessionLaunchKindV1::Sandbox,
             map: MapManifestV1 {
                 catalog_identity: text("flat-arena"),
                 seed: 8,
@@ -2342,6 +3079,120 @@ mod tests {
         }
     }
 
+    fn campaign_checkpoint() -> HostCampaignCheckpointV2 {
+        let position = TilePos::ORIGIN;
+        HostCampaignCheckpointV2 {
+            version: CAMPAIGN_CHECKPOINT_VERSION_V2,
+            build: local_build_identity().expect("local build fits"),
+            content_fingerprint: ContentFingerprint(7),
+            scenario_identity: text("Party Trial"),
+            scenario_digest: 8,
+            map_catalog_identity: text("config/world.ron"),
+            generator_identity: text("showcase"),
+            generator_version: 1,
+            resolved_seed: None,
+            rules: RulesManifestV1 {
+                profile_identity: text("campaign-rules-v1"),
+                fingerprint: 10,
+            },
+            simulation_seeds: SimSeeds {
+                world: 11,
+                ai_flavor: 12,
+                cosmetic: 13,
+            },
+            world: WorldSnapshotV1 {
+                version: WORLD_SNAPSHOT_VERSION_V1,
+                public_fingerprint: PublicWorldFingerprint(9),
+                columns: BoundedVec::new(vec![WorldColumnSnapshotV1 {
+                    coord: position.coord,
+                    runs: BoundedVec::new(vec![WorldRunSnapshotV1 {
+                        position,
+                        run_bottom: 0,
+                        span_bottom_bits: 0.0_f32.to_bits(),
+                        span_top_bits: 1.0_f32.to_bits(),
+                        substance: text("stone"),
+                        headroom: hex_core::MAX_HEADROOM,
+                    }])
+                    .expect("one run fits"),
+                }])
+                .expect("one column fits"),
+                damage: BoundedVec::default(),
+                anchors: BoundedVec::default(),
+                interior_surfaces: BoundedVec::default(),
+                interior_roofs: BoundedVec::default(),
+                special_regions: BoundedVec::default(),
+                biome_regions: BoundedVec::default(),
+                blockers: BoundedVec::default(),
+                view_hint: None,
+                lights: BoundedVec::default(),
+                liquids: BoundedVec::default(),
+                objects: BoundedVec::default(),
+            },
+            units: BoundedVec::new(vec![CampaignUnitCheckpointV2 {
+                unit: UnitId(0),
+                faction: Faction::Player,
+                archetype_identity: text("hedge-mage"),
+                position,
+                lattice: None,
+                downed: false,
+                display_name: text("Hedge Mage"),
+            }])
+            .expect("one unit fits"),
+            effects: CampaignEffectLedgerV2::default(),
+            formation: PartyFormation {
+                preset: "solo".to_owned(),
+                assignments: BTreeMap::from([(UnitId(0), HexCoord::ORIGIN)]),
+                ..Default::default()
+            },
+            active_play_millis: 42,
+        }
+    }
+
+    #[test]
+    fn campaign_checkpoint_creates_a_fresh_session_and_assignment_lobby() {
+        let checkpoint = campaign_checkpoint();
+        checkpoint.validate().expect("fixture checkpoint is valid");
+        let first = PreparedDirectCampaignSession::from_checkpoint(
+            checkpoint.clone(),
+            hex_gameplay_model::CampaignSlotId::Two,
+        )
+        .expect("checkpoint should prepare");
+        let second = PreparedDirectCampaignSession::from_checkpoint(
+            checkpoint.clone(),
+            hex_gameplay_model::CampaignSlotId::Two,
+        )
+        .expect("checkpoint should prepare again");
+
+        assert_eq!(first.manifest.launch_kind, SessionLaunchKindV1::Campaign);
+        assert_ne!(
+            first.manifest.session_instance_id, second.manifest.session_instance_id,
+            "resume must never reuse a previous concrete session"
+        );
+        assert_eq!(first.checkpoint, checkpoint);
+        assert_eq!(first.manifest.shipped_roster.len(), 1);
+        assert_eq!(
+            first
+                .manifest
+                .shipped_roster
+                .as_slice()
+                .first()
+                .expect("the prepared party has one member")
+                .archetype_identity
+                .as_str(),
+            "hedge-mage"
+        );
+
+        let lobby = LobbySnapshot::new(SessionPeerId::from_bytes([1; 16]), &first.manifest)
+            .expect("fresh manifest creates a lobby");
+        assert_eq!(lobby.phase, LobbyPhase::Open);
+        assert_eq!(lobby.seats[0].connection, SeatConnectionState::Connected);
+        assert_eq!(lobby.seats[0].assigned_units.as_slice(), &[UnitId(0)]);
+        assert!(lobby.seats[1..]
+            .iter()
+            .all(|seat| seat.connection == SeatConnectionState::Vacant
+                && seat.assigned_units.is_empty()));
+    }
+
     #[test]
     fn endpoint_validation_is_explicit_and_rejects_zero_or_non_numeric_ports() {
         let mut draft = MultiplayerDraft::default();
@@ -2350,6 +3201,20 @@ mod tests {
         assert!(direct_endpoint(&draft).is_err());
         draft.advertised_port = "not-a-port".to_owned();
         assert!(direct_endpoint(&draft).is_err());
+    }
+
+    #[test]
+    fn lan_host_uses_the_selected_port_without_requiring_an_advertised_ip() {
+        let mut draft = MultiplayerDraft {
+            advertised_host: "not-a-reachable-address".to_owned(),
+            ..Default::default()
+        };
+        draft.advertised_port = "42424".to_owned();
+
+        let endpoint = lan_host_endpoint(&draft).expect("LAN host endpoint should be local");
+
+        assert_eq!(endpoint.host(), "127.0.0.1");
+        assert_eq!(endpoint.port(), 42_424);
     }
 
     #[derive(Default)]
@@ -2528,8 +3393,45 @@ mod tests {
         assert_eq!(
             app.world().resource::<SessionUiNotice>().0.as_deref(),
             Some(
-                "The complete public-world snapshot contract is not available yet; hosting was not started."
+                "The complete frozen launch contract is not available yet; hosting was not started."
             )
+        );
+    }
+
+    #[test]
+    fn failed_campaign_handoff_returns_to_the_typed_campaign_browser() {
+        let endpoint = DirectEndpoint::new("127.0.0.1", 7_777).expect("loopback endpoint is valid");
+        let mut model = MultiplayerModel::default();
+        model.show_host_campaign();
+        let mut app = App::new();
+        app.insert_resource(model)
+            .init_resource::<SessionUiNotice>()
+            .insert_resource(PendingDirectHostSetup { endpoint })
+            .add_systems(Update, queue_prepared_host_after_sandbox);
+
+        app.update();
+
+        assert!(app.world().get_resource::<DirectStartQueue>().is_none());
+        assert_eq!(
+            app.world().resource::<MultiplayerModel>().route,
+            hex_gameplay_model::MultiplayerRoute::HostCampaign
+        );
+        assert_eq!(app.world().resource::<SessionUiNotice>().0, None);
+    }
+
+    #[test]
+    fn campaign_save_projection_uses_only_sanitized_refusal_copy() {
+        assert_eq!(
+            campaign_save_status_view(CampaignSaveStateV2::Saving),
+            MultiplayerCampaignSaveStatusView::Saving
+        );
+        assert_eq!(
+            campaign_save_status_view(CampaignSaveStateV2::Refused(
+                CampaignSaveRefusalV2::StorageUnavailable,
+            )),
+            MultiplayerCampaignSaveStatusView::Refused {
+                reason: "the host could not atomically write the checkpoint".to_owned(),
+            }
         );
     }
 
@@ -2987,6 +3889,32 @@ mod tests {
             .drain()
             .next()
             .is_none());
+    }
+
+    #[test]
+    fn campaign_host_intent_stages_only_slot_and_direct_endpoint_for_l3() {
+        let mut app = intent_adapter_app(MultiplayerRole::Host);
+        app.world_mut()
+            .resource_mut::<MultiplayerModel>()
+            .show_host_campaign();
+        app.world_mut()
+            .write_message(UiIntent::Multiplayer(MultiplayerIntent::HostCampaign(
+                hex_gameplay_model::CampaignSlotId::Two,
+            )));
+
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .resource::<CampaignMultiplayerHostRequest>()
+                .slot,
+            hex_gameplay_model::CampaignSlotId::Two
+        );
+        let endpoint = &app.world().resource::<PendingDirectHostSetup>().endpoint;
+        assert_eq!(endpoint.host(), "127.0.0.1");
+        assert_eq!(endpoint.port(), hex_multiplayer::DEFAULT_DIRECT_PORT);
+        assert!(app.world().get_resource::<DirectStartQueue>().is_none());
+        assert!(app.world().get_resource::<ActiveDirectSession>().is_none());
     }
 
     fn map_ready_report(

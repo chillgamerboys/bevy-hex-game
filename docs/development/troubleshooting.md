@@ -67,6 +67,21 @@ defender-choice prompt is open. The decision names session-local units and must 
 survive into the next scenario. The same warning without an explicit screen/combat
 exit is a bug.
 
+**A remote Direct guest cannot join.** Use the
+[Tailscale remote-playtest runbook](remote-multiplayer-testing.md#diagnose-a-failed-connection)
+when that private test network is in use. First prove the guest can reach the shared
+host with `tailscale ping`; then verify that the issued `HEX1` code advertises the
+host's Tailscale address, that the selected UDP port and local firewall permit inbound
+traffic, and that both processes run the exact candidate. Never work around a typed
+protocol, build, content, certificate, or map mismatch.
+
+**A same-network host does not appear under Find LAN Games.** Follow the
+[LAN discovery diagnostics](lan-multiplayer-testing.md#diagnose-a-missing-lobby). The
+host must have finished deployment and be waiting in the open assignment lobby. Both
+machines must share one multicast-capable network, have granted local-network/firewall
+permission, and run the exact candidate. Guest Wi-Fi isolation, separate VLANs, and
+most VPNs do not carry mDNS. Do not weaken a typed compatibility or admission refusal.
+
 ## Editing settings
 
 **A change had no effect.** Check that you saved the file, and that you are running
