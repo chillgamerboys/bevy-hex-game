@@ -67,6 +67,14 @@ defender-choice prompt is open. The decision names session-local units and must 
 survive into the next scenario. The same warning without an explicit screen/combat
 exit is a bug.
 
+**A remote Direct guest cannot join.** Use the
+[Tailscale remote-playtest runbook](remote-multiplayer-testing.md#diagnose-a-failed-connection)
+when that private test network is in use. First prove the guest can reach the shared
+host with `tailscale ping`; then verify that the issued `HEX1` code advertises the
+host's Tailscale address, that the selected UDP port and local firewall permit inbound
+traffic, and that both processes run the exact candidate. Never work around a typed
+protocol, build, content, certificate, or map mismatch.
+
 ## Editing settings
 
 **A change had no effect.** Check that you saved the file, and that you are running

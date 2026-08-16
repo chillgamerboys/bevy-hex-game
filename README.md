@@ -148,6 +148,10 @@ manually forwarded UDP port. A host can launch a shipped Sandbox or select one o
 Campaign slots; Campaign resume restores the complete host-owned checkpoint, then opens
 a fresh party-assignment lobby. Only the host can save a multiplayer Campaign, and only
 while exploration is safely paused. Client menus do not pause the host simulation.
+Before the EOS-backed Play Online path is live, remote testers can avoid public-IP and
+router setup by following the external
+[Tailscale playtest procedure](docs/development/remote-multiplayer-testing.md). Tailscale
+is testing infrastructure, not a shipped game dependency.
 
 Sandbox is the single temporary encounter setup. Its default draft is Flat Arena
 with one Hedge Mage in Party and one Raider in Enemies. Choose one of the shipped

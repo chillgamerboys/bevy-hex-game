@@ -55,8 +55,8 @@ cargo editor -- --project-root /path/to/bevy-hex-game
 
 ## First-run smoke test
 
-The Main Menu should show exactly **Campaign**, **Sandbox**, **Tools**, and
-**Settings**. On a fresh data directory, Campaign must show exactly three empty
+The Main Menu should show exactly **Campaign**, **Sandbox**, **Multiplayer**, **Tools**,
+and **Settings**. On a fresh data directory, Campaign must show exactly three empty
 indexed cards. Tools must show Character Creator, Spell Creator, and a disabled Map
 Creator labelled Coming Soon.
 
@@ -179,6 +179,8 @@ through Dozen, compared with roughly 11 FPS through llvmpipe.
 - Change designer-facing values through [config.md](config.md).
 - Diagnose a wrong or silent window with
   [troubleshooting.md](troubleshooting.md).
+- Run Direct multiplayer between remote testers through the temporary
+  [Tailscale playtest procedure](remote-multiplayer-testing.md).
 - Learn the project boundaries in [architecture.md](../architecture.md).
 - Read the contribution workflow and required checks in
   [CONTRIBUTING.md](../../CONTRIBUTING.md).
