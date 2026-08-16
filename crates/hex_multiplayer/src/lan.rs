@@ -13,10 +13,9 @@ use std::{
 };
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use mdns_sd::{
-    DaemonEvent, Receiver, ResolvedService, ServiceDaemon, ServiceEvent, ServiceInfo, TryRecvError,
-};
 use sha2::{Digest as _, Sha256};
+
+mod platform;
 
 use crate::{
     BuildIdentityV1, CertificateFingerprint, ContentFingerprint, DirectConnectionCode,
@@ -37,6 +36,9 @@ const PROPERTY_INVITE: &str = "invite";
 const PROPERTY_CLAIMED_SEATS: &str = "seats";
 const PROPERTY_SEAT_CAPACITY: &str = "capacity";
 const MAX_SERVICE_ID_BYTES: usize = 512;
+const MAX_DISCOVERED_ADDRESSES: usize = 32;
+const MAX_TXT_PROPERTIES: usize = 16;
+const MAX_TXT_METADATA_BYTES: usize = 4_096;
 const MAX_DISCOVERED_LAN_SESSIONS: usize = 64;
 const MAX_LAN_SEATS: u8 = 6;
 
@@ -269,24 +271,16 @@ impl fmt::Debug for LanDiscoveredSession {
 
 /// Active publisher for one explicitly open LAN lobby.
 pub struct LanDiscoveryAdvertiser {
-    daemon: ServiceDaemon,
-    monitor: Receiver<DaemonEvent>,
-    fullname: String,
+    backend: Option<platform::Advertiser>,
     current: LanSessionAdvertisement,
 }
 
 impl LanDiscoveryAdvertiser {
     /// Starts multicast advertisement. This is the explicit socket-opening action.
     pub fn start(advertisement: LanSessionAdvertisement) -> Result<Self, LanDiscoveryError> {
-        let daemon = ServiceDaemon::new().map_err(LanDiscoveryError::daemon)?;
-        let monitor = daemon.monitor().map_err(LanDiscoveryError::daemon)?;
-        let info = service_info(&advertisement)?;
-        let fullname = info.get_fullname().to_owned();
-        daemon.register(info).map_err(LanDiscoveryError::daemon)?;
+        let backend = platform::Advertiser::start(&advertisement)?;
         Ok(Self {
-            daemon,
-            monitor,
-            fullname,
+            backend: Some(backend),
             current: advertisement,
         })
     }
@@ -303,24 +297,28 @@ impl LanDiscoveryAdvertiser {
         if advertisement == self.current {
             return Ok(false);
         }
-        let info = service_info(&advertisement)?;
-        self.daemon
-            .register(info)
-            .map_err(LanDiscoveryError::daemon)?;
+        // Native Bonjour cannot update TXT metadata in place. Drop the old registration before
+        // replacing it so conflict auto-renaming cannot leave this session under a stale alias.
+        self.backend = None;
+        self.backend = Some(platform::Advertiser::start(&advertisement)?);
         self.current = advertisement;
         Ok(true)
     }
 
-    /// Surfaces lazy multicast socket failures reported by the daemon thread.
-    pub fn poll_health(&self) -> Result<(), LanDiscoveryError> {
-        loop {
-            match self.monitor.try_recv() {
-                Ok(DaemonEvent::Error(error)) => return Err(LanDiscoveryError::daemon(error)),
-                Ok(_) => {}
-                Err(TryRecvError::Empty) => return Ok(()),
-                Err(TryRecvError::Disconnected) => return Err(LanDiscoveryError::DaemonStopped),
-            }
-        }
+    /// Polls the native discovery service and surfaces lazy registration failures.
+    pub fn poll_health(&mut self) -> Result<(), LanDiscoveryError> {
+        self.backend
+            .as_mut()
+            .ok_or(LanDiscoveryError::DaemonStopped)?
+            .poll_health()
+    }
+
+    /// Whether the operating system has confirmed the current service registration.
+    #[must_use]
+    pub fn is_announced(&self) -> bool {
+        self.backend
+            .as_ref()
+            .is_some_and(platform::Advertiser::is_announced)
     }
 }
 
@@ -328,46 +326,31 @@ impl fmt::Debug for LanDiscoveryAdvertiser {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("LanDiscoveryAdvertiser")
-            .field("fullname", &self.fullname)
+            .field("announced", &self.is_announced())
             .field("current", &self.current)
             .finish_non_exhaustive()
     }
 }
 
-impl Drop for LanDiscoveryAdvertiser {
-    fn drop(&mut self) {
-        let _status = self.daemon.unregister(&self.fullname);
-        let _status = self.daemon.shutdown();
-    }
-}
-
 /// Active continuous browser for open LAN lobbies.
 pub struct LanDiscoveryBrowser {
-    daemon: ServiceDaemon,
-    events: Receiver<ServiceEvent>,
-    monitor: Receiver<DaemonEvent>,
+    backend: platform::Browser,
     sessions: BTreeMap<String, LanDiscoveredSession>,
 }
 
 impl LanDiscoveryBrowser {
     /// Starts browsing. This is the explicit socket-opening action.
     pub fn start() -> Result<Self, LanDiscoveryError> {
-        let daemon = ServiceDaemon::new().map_err(LanDiscoveryError::daemon)?;
-        let monitor = daemon.monitor().map_err(LanDiscoveryError::daemon)?;
-        let events = daemon
-            .browse(LAN_DISCOVERY_SERVICE_TYPE)
-            .map_err(LanDiscoveryError::daemon)?;
+        let backend = platform::Browser::start()?;
         Ok(Self {
-            daemon,
-            events,
-            monitor,
+            backend,
             sessions: BTreeMap::new(),
         })
     }
 
     /// Drains currently available events without blocking the Bevy frame.
     pub fn poll(&mut self) -> Result<bool, LanDiscoveryError> {
-        self.poll_health()?;
+        self.backend.poll_health()?;
         let mut changed = false;
         let now = current_unix_seconds();
         let previous_count = self.sessions.len();
@@ -376,23 +359,21 @@ impl LanDiscoveryBrowser {
         });
         changed |= self.sessions.len() != previous_count;
         loop {
-            match self.events.try_recv() {
-                Ok(ServiceEvent::ServiceResolved(service)) => {
+            match self.backend.try_recv()? {
+                Some(platform::BrowserEvent::Resolved(service)) => {
                     match discovered_session(&service, now) {
                         Ok(discovered) => {
                             changed |= cache_discovered_session(&mut self.sessions, discovered);
                         }
                         Err(_untrusted_record) => {
-                            changed |= self.sessions.remove(&service.fullname).is_some();
+                            changed |= self.sessions.remove(&service.service_id).is_some();
                         }
                     }
                 }
-                Ok(ServiceEvent::ServiceRemoved(_service_type, fullname)) => {
+                Some(platform::BrowserEvent::Removed(fullname)) => {
                     changed |= self.sessions.remove(&fullname).is_some();
                 }
-                Ok(_) => {}
-                Err(TryRecvError::Empty) => return Ok(changed),
-                Err(TryRecvError::Disconnected) => return Err(LanDiscoveryError::DaemonStopped),
+                None => return Ok(changed),
             }
         }
     }
@@ -406,17 +387,6 @@ impl LanDiscoveryBrowser {
     #[must_use]
     pub fn session(&self, service_id: &str) -> Option<&LanDiscoveredSession> {
         self.sessions.get(service_id)
-    }
-
-    fn poll_health(&self) -> Result<(), LanDiscoveryError> {
-        loop {
-            match self.monitor.try_recv() {
-                Ok(DaemonEvent::Error(error)) => return Err(LanDiscoveryError::daemon(error)),
-                Ok(_) => {}
-                Err(TryRecvError::Empty) => return Ok(()),
-                Err(TryRecvError::Disconnected) => return Err(LanDiscoveryError::DaemonStopped),
-            }
-        }
     }
 }
 
@@ -449,13 +419,6 @@ impl fmt::Debug for LanDiscoveryBrowser {
             .debug_struct("LanDiscoveryBrowser")
             .field("sessions", &self.sessions)
             .finish_non_exhaustive()
-    }
-}
-
-impl Drop for LanDiscoveryBrowser {
-    fn drop(&mut self) {
-        let _status = self.daemon.stop_browse(LAN_DISCOVERY_SERVICE_TYPE);
-        let _status = self.daemon.shutdown();
     }
 }
 
@@ -497,22 +460,10 @@ impl fmt::Display for LanDiscoveryError {
 
 impl std::error::Error for LanDiscoveryError {}
 
-fn service_info(advertisement: &LanSessionAdvertisement) -> Result<ServiceInfo, LanDiscoveryError> {
+fn service_instance_name(advertisement: &LanSessionAdvertisement) -> String {
     let session_hex = encode_hex(&advertisement.session_instance_id.to_bytes());
     let short_session = session_hex.chars().take(8).collect::<String>();
-    let instance = format!("Hex {} {}", kind_label(advertisement.kind), short_session);
-    let hostname = format!("hex-{session_hex}.local.");
-    let properties = announcement_properties(advertisement);
-    ServiceInfo::new(
-        LAN_DISCOVERY_SERVICE_TYPE,
-        &instance,
-        &hostname,
-        "",
-        advertisement.connection_code.endpoint.port(),
-        properties.as_slice(),
-    )
-    .map(ServiceInfo::enable_addr_auto)
-    .map_err(LanDiscoveryError::daemon)
+    format!("Hex {} {}", kind_label(advertisement.kind), short_session)
 }
 
 fn announcement_properties(advertisement: &LanSessionAdvertisement) -> Vec<(String, String)> {
@@ -561,14 +512,31 @@ fn announcement_properties(advertisement: &LanSessionAdvertisement) -> Vec<(Stri
     ]
 }
 
+struct LanResolvedRecord {
+    service_id: String,
+    service_type: String,
+    addresses: Vec<IpAddr>,
+    port: u16,
+    properties: BTreeMap<String, String>,
+}
+
 fn discovered_session(
-    service: &ResolvedService,
+    service: &LanResolvedRecord,
     now_unix_seconds: u64,
 ) -> Result<LanDiscoveredSession, LanDiscoveryError> {
-    if service.ty_domain != LAN_DISCOVERY_SERVICE_TYPE
-        || service.fullname.is_empty()
-        || service.fullname.len() > MAX_SERVICE_ID_BYTES
+    let txt_bytes = service
+        .properties
+        .iter()
+        .try_fold(0_usize, |total, (key, value)| {
+            total.checked_add(key.len())?.checked_add(value.len())
+        });
+    if service.service_type != LAN_DISCOVERY_SERVICE_TYPE
+        || service.service_id.is_empty()
+        || service.service_id.len() > MAX_SERVICE_ID_BYTES
         || service.port == 0
+        || service.addresses.len() > MAX_DISCOVERED_ADDRESSES
+        || service.properties.len() > MAX_TXT_PROPERTIES
+        || txt_bytes.is_none_or(|bytes| bytes > MAX_TXT_METADATA_BYTES)
     {
         return Err(LanDiscoveryError::MalformedAnnouncement("service identity"));
     }
@@ -611,7 +579,7 @@ fn discovered_session(
     let endpoint = DirectEndpoint::new(address.to_string(), service.port)
         .map_err(|_error| LanDiscoveryError::MalformedAnnouncement("reachable address"))?;
     Ok(LanDiscoveredSession {
-        service_id: service.fullname.clone(),
+        service_id: service.service_id.clone(),
         session_instance_id,
         kind,
         compatibility,
@@ -627,15 +595,20 @@ fn discovered_session(
 }
 
 fn property<'a>(
-    service: &'a ResolvedService,
+    service: &'a LanResolvedRecord,
     key: &'static str,
 ) -> Result<&'a str, LanDiscoveryError> {
     service
-        .get_property_val_str(key)
+        .properties
+        .get(key)
+        .map(String::as_str)
         .ok_or(LanDiscoveryError::MalformedAnnouncement(key))
 }
 
-fn parse_seat_count(service: &ResolvedService, key: &'static str) -> Result<u8, LanDiscoveryError> {
+fn parse_seat_count(
+    service: &LanResolvedRecord,
+    key: &'static str,
+) -> Result<u8, LanDiscoveryError> {
     let count = property(service, key)?
         .parse::<u8>()
         .map_err(|_error| LanDiscoveryError::MalformedAnnouncement(key))?;
@@ -657,11 +630,11 @@ fn decode_exact<const LENGTH: usize>(
         .map_err(|_length_error| LanDiscoveryError::MalformedAnnouncement(field))
 }
 
-fn preferred_address(service: &ResolvedService) -> Option<IpAddr> {
+fn preferred_address(service: &LanResolvedRecord) -> Option<IpAddr> {
     let mut addresses = service
-        .get_addresses()
+        .addresses
         .iter()
-        .map(mdns_sd::ScopedIp::to_ip_addr)
+        .copied()
         .filter(|address| usable_address(*address))
         .collect::<Vec<_>>();
     addresses.sort_by_key(|address| (address_rank(*address), address_bytes(*address)));
@@ -752,20 +725,32 @@ mod tests {
         .expect("valid LAN advertisement")
     }
 
+    fn resolved_record(
+        service_name: &str,
+        addresses: &[&str],
+        properties: Vec<(String, String)>,
+    ) -> LanResolvedRecord {
+        LanResolvedRecord {
+            service_id: format!("{service_name}.{LAN_DISCOVERY_SERVICE_TYPE}"),
+            service_type: LAN_DISCOVERY_SERVICE_TYPE.to_owned(),
+            addresses: addresses
+                .iter()
+                .map(|address| address.parse().expect("valid fixture address"))
+                .collect(),
+            port: 7_777,
+            properties: properties.into_iter().collect(),
+        }
+    }
+
     #[test]
     fn resolved_record_replaces_the_hosts_placeholder_with_a_private_lan_address() {
         let advertisement = advertisement();
         let properties = announcement_properties(&advertisement);
-        let service = ServiceInfo::new(
-            LAN_DISCOVERY_SERVICE_TYPE,
+        let service = resolved_record(
             "Hex Sandbox fixture",
-            "hex-fixture.local.",
-            "100.64.0.9,192.168.1.42",
-            7_777,
-            properties.as_slice(),
-        )
-        .expect("valid fixture service")
-        .as_resolved_service();
+            &["100.64.0.9", "192.168.1.42"],
+            properties,
+        );
 
         let discovered =
             discovered_session(&service, 1_900_000_000).expect("valid announcement should resolve");
@@ -782,22 +767,69 @@ mod tests {
     }
 
     #[test]
+    fn loopback_is_only_selected_when_no_lan_route_is_available() {
+        let service = resolved_record(
+            "Hex Sandbox fixture",
+            &["127.0.0.1", "10.0.0.42"],
+            announcement_properties(&advertisement()),
+        );
+        let discovered =
+            discovered_session(&service, 1_900_000_000).expect("private LAN route is preferred");
+        assert_eq!(discovered.endpoint().host(), "10.0.0.42");
+
+        let loopback = resolved_record(
+            "Hex Sandbox fixture",
+            &["127.0.0.1"],
+            announcement_properties(&advertisement()),
+        );
+        let discovered = discovered_session(&loopback, 1_900_000_000)
+            .expect("same-machine native processes may discover one another");
+        assert_eq!(discovered.endpoint().host(), "127.0.0.1");
+    }
+
+    #[test]
+    fn resolved_record_collections_are_bounded_before_admission_fields_are_read() {
+        let mut too_many_addresses = resolved_record(
+            "Hex Sandbox fixture",
+            &["192.168.1.42"],
+            announcement_properties(&advertisement()),
+        );
+        too_many_addresses.addresses = (1..=MAX_DISCOVERED_ADDRESSES + 1)
+            .map(|suffix| {
+                format!("192.168.1.{suffix}")
+                    .parse()
+                    .expect("fixture address")
+            })
+            .collect();
+        assert_eq!(
+            discovered_session(&too_many_addresses, 1_900_000_000),
+            Err(LanDiscoveryError::MalformedAnnouncement("service identity"))
+        );
+
+        let mut too_many_properties = resolved_record(
+            "Hex Sandbox fixture",
+            &["192.168.1.42"],
+            announcement_properties(&advertisement()),
+        );
+        for index in 0..=MAX_TXT_PROPERTIES {
+            too_many_properties
+                .properties
+                .insert(format!("extra{index}"), "bounded".to_owned());
+        }
+        assert_eq!(
+            discovered_session(&too_many_properties, 1_900_000_000),
+            Err(LanDiscoveryError::MalformedAnnouncement("service identity"))
+        );
+    }
+
+    #[test]
     fn discovery_debug_output_never_contains_the_open_lobby_invite() {
         let advertisement = advertisement();
         let encoded_invite = URL_SAFE_NO_PAD.encode([5; 16]);
         assert!(!format!("{advertisement:?}").contains(&encoded_invite));
 
         let properties = announcement_properties(&advertisement);
-        let service = ServiceInfo::new(
-            LAN_DISCOVERY_SERVICE_TYPE,
-            "Hex Sandbox fixture",
-            "hex-fixture.local.",
-            "192.168.1.42",
-            7_777,
-            properties.as_slice(),
-        )
-        .expect("valid fixture service")
-        .as_resolved_service();
+        let service = resolved_record("Hex Sandbox fixture", &["192.168.1.42"], properties);
         let discovered =
             discovered_session(&service, 1_900_000_000).expect("valid announcement should resolve");
         assert!(!format!("{discovered:?}").contains(&encoded_invite));
@@ -834,32 +866,14 @@ mod tests {
         let advertisement = advertisement();
         let mut properties = announcement_properties(&advertisement);
         properties.retain(|(key, _value)| key != PROPERTY_INVITE);
-        let missing = ServiceInfo::new(
-            LAN_DISCOVERY_SERVICE_TYPE,
-            "Hex Sandbox fixture",
-            "hex-fixture.local.",
-            "192.168.1.42",
-            7_777,
-            properties.as_slice(),
-        )
-        .expect("the DNS record itself is syntactically valid")
-        .as_resolved_service();
+        let missing = resolved_record("Hex Sandbox fixture", &["192.168.1.42"], properties);
         assert_eq!(
             discovered_session(&missing, 1_900_000_000),
             Err(LanDiscoveryError::MalformedAnnouncement(PROPERTY_INVITE))
         );
 
         let properties = announcement_properties(&advertisement);
-        let expired = ServiceInfo::new(
-            LAN_DISCOVERY_SERVICE_TYPE,
-            "Hex Sandbox fixture",
-            "hex-fixture.local.",
-            "192.168.1.42",
-            7_777,
-            properties.as_slice(),
-        )
-        .expect("the DNS record itself is syntactically valid")
-        .as_resolved_service();
+        let expired = resolved_record("Hex Sandbox fixture", &["192.168.1.42"], properties);
         assert_eq!(
             discovered_session(&expired, 2_000_000_000),
             Err(LanDiscoveryError::MalformedAnnouncement(
@@ -916,16 +930,11 @@ mod tests {
     fn discovery_cache_is_bounded_but_still_refreshes_known_sessions() {
         let properties = announcement_properties(&advertisement());
         let fixture = |index: usize| {
-            let service = ServiceInfo::new(
-                LAN_DISCOVERY_SERVICE_TYPE,
+            let service = resolved_record(
                 &format!("Hex Sandbox fixture {index}"),
-                &format!("hex-fixture-{index}.local."),
-                "192.168.1.42",
-                7_777,
-                properties.as_slice(),
-            )
-            .expect("valid fixture service")
-            .as_resolved_service();
+                &["192.168.1.42"],
+                properties.clone(),
+            );
             discovered_session(&service, 1_900_000_000).expect("valid announcement should resolve")
         };
         let mut sessions = BTreeMap::new();
@@ -950,18 +959,19 @@ mod tests {
     fn advertiser_and_browser_exchange_on_the_local_link() {
         let advertisement = advertisement();
         let expected_session = advertisement.session_instance_id();
-        let _advertiser =
+        let mut advertiser =
             LanDiscoveryAdvertiser::start(advertisement).expect("start local advertiser");
         let mut browser = LanDiscoveryBrowser::start().expect("start local browser");
         let deadline = Instant::now() + Duration::from_secs(5);
 
         while Instant::now() < deadline {
-            _advertiser.poll_health().expect("poll advertiser health");
+            advertiser.poll_health().expect("poll advertiser health");
             browser.poll().expect("poll local browser");
             if browser
                 .sessions()
                 .any(|session| session.session_instance_id() == expected_session)
             {
+                assert!(advertiser.is_announced());
                 return;
             }
             thread::sleep(Duration::from_millis(50));

@@ -103,6 +103,13 @@ checks, and saves. Steam does not become a second lobby or gameplay transport: i
 adapter supplies an EOS Connect credential and native rich-presence/invitation entry
 into the same EOS lobby.
 
+On macOS, LAN publication uses the operating system's native Bonjour registration API;
+the UI reports an open lobby as discoverable only after that API confirms registration.
+This is still the same open mDNS/DNS-SD record consumed by every platform, not an Apple
+identity, account, lobby, or game transport. Windows and Linux retain the bounded
+cross-platform responder, and all platforms retain the same bounded DNS-SD browser and
+Direct admission boundary.
+
 `hex_eos_ffi` is the only crate that opts out of the workspace-wide `unsafe_code =
 "forbid"` rule. It loads only an explicit absolute, release-staged EOS runtime path;
 ordinary source builds neither search for nor load a library. Raw pointers, C callbacks,

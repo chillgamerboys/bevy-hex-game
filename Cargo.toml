@@ -61,6 +61,8 @@ aeronet_replicon = { version = "=0.21.0", default-features = false, features = [
 aeronet_webtransport = { version = "=0.21.0", default-features = false, features = ["client", "server", "self-signed"] }
 aeronet_channel = "=0.21.0"
 mdns-sd = { version = "=0.21.0", default-features = false }
+dns-sd-native = { version = "=0.1.1" }
+tokio = { version = "=1.53.1", default-features = false, features = ["rt"] }
 
 [workspace.package]
 version = "0.4.0"

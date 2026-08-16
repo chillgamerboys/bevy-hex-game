@@ -12,7 +12,7 @@ default = ["direct", "lan-discovery"]
 direct = ["dep:aeronet_webtransport", "dep:x509-parser"]
 # Opt-in mDNS/DNS-SD advertisement and browsing for open Direct lobbies on one LAN.
 # Constructing these adapters is the explicit action that opens multicast sockets.
-lan-discovery = ["direct", "dep:mdns-sd"]
+lan-discovery = ["direct", "dep:mdns-sd", "dep:dns-sd-native", "dep:tokio"]
 # In-memory multi-app transport used only by deterministic session tests.
 test-harness = ["dep:aeronet_channel"]
 
@@ -35,6 +35,10 @@ rand = { workspace = true }
 serde = { workspace = true }
 sha2 = { workspace = true }
 x509-parser = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+dns-sd-native = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
 rcgen = { workspace = true }

@@ -12,6 +12,13 @@ For testers on different Internet connections, use the temporary
 [Tailscale procedure](remote-multiplayer-testing.md); the eventual player-facing Internet
 path remains EOS-backed Play Online.
 
+On macOS, the host publishes the standard DNS-SD record through Apple's built-in Bonjour
+daemon. Bonjour is the operating system implementation of mDNS/DNS-SD, not an Apple
+account or online service. The game says **Discoverable now** only after native Bonjour
+confirms the current registration. Guests on macOS, Windows, and Linux browse the same
+`_hexgame._udp.local.` record and still connect through the ordinary encrypted Direct
+transport.
+
 ## Before starting
 
 1. Put both computers on the same trusted home or test network. A guest Wi-Fi network,
@@ -90,6 +97,17 @@ the underlying invite or reconnect credential.
 | Discovery works but joining times out | Permit inbound UDP `7777` (or the host-selected port), disable access-point client isolation, and confirm the host is still pre-launch |
 | Devices are on different VLANs, subnets with multicast filtering, or Internet connections | mDNS does not provide routed discovery; use Direct with a reachable route or the documented Tailscale test procedure |
 | The host returned to Main Menu or quit | Create a new LAN session; its certificate and invitation are intentionally ephemeral |
+
+On a macOS host, this read-only diagnostic proves whether Bonjour published the service
+on the actual network interface without printing its private TXT invitation:
+
+```sh
+dns-sd -i en0 -B _hexgame._udp local.
+```
+
+Replace `en0` with the active Ethernet/Wi-Fi interface when necessary. A healthy open
+lobby appears with that interface's index. Seeing it only in an unconstrained browse or
+on loopback does not prove another computer can discover it.
 
 Discovery chooses a private IPv4 address where available and ignores unspecified,
 multicast, and unscoped IPv6 link-local addresses. IPv4 loopback is the last-resort

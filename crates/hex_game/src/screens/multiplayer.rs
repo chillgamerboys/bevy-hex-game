@@ -2726,7 +2726,10 @@ fn publish_view(
             && inputs.lan_browser.is_some(),
         lan_sessions,
         lan_hosting: inputs.lan_host.is_some(),
-        lan_advertising: inputs.lan_advertisement.is_some(),
+        lan_advertising: inputs
+            .lan_advertisement
+            .as_deref()
+            .is_some_and(|advertisement| advertisement.0.is_announced()),
         lan_advertisement_failed: inputs.lan_failure.is_some(),
         campaign_slots: campaign_store
             .slot_views(campaign_lattices.as_deref(), campaign_elements.as_deref()),
