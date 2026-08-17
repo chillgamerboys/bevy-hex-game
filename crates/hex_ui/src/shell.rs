@@ -49,7 +49,7 @@ pub fn screen_root(screen: Screen, name: &'static str) -> impl Bundle {
 ///
 /// Identical to [`screen_root`] except that it paints nothing: it carries no
 /// `BackgroundColor` and, critically, no `MenuBackground`, whose
-/// [`paint_menu_background`] would otherwise re-apply the opaque authored menu
+/// `paint_menu_background` would otherwise re-apply the opaque authored menu
 /// color every frame and hide the scene the screen exists to show.
 #[must_use]
 pub fn transparent_screen_root(screen: Screen, name: &'static str) -> impl Bundle {

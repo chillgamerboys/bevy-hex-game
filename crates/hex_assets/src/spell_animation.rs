@@ -220,7 +220,7 @@ pub struct SpellAnimation {
 
 /// The smallest duration the tuner may drive a timing down to, in seconds.
 ///
-/// [`SpellAnimation::validate`] only requires "greater than 0", which neither a
+/// `SpellAnimation::validate` only requires "greater than 0", which neither a
 /// stepper nor a typed-in value can express — both have to stop at some epsilon.
 /// This is that stop, one frame at 100fps.
 ///
