@@ -1,0 +1,33 @@
+(
+    animations: {
+        "Ember": (
+            motion: InstantFlash(
+                hold_seconds: 0.151,
+            ),
+            style: Flame,
+            color_override: None,
+            particle_count: 65,
+            particle_speed: 0.5,
+            particle_lifetime_seconds: 1.5799996,
+            scale: 0.31499982,
+            spread: 0.24000011,
+        ),
+        "Lightning Bolt": (
+            motion: Arc(
+                flash_seconds: 0.45,
+                impact_hold_seconds: 0.26,
+                thickness: 0.059999976,
+                displacement: 0.7999999,
+                subdivisions: 4,
+                branches: 2,
+            ),
+            style: Spark,
+            color_override: Some((0.75, 0.95, 1.0, 1.0)),
+            particle_count: 170,
+            particle_speed: 2.2,
+            particle_lifetime_seconds: 0.18,
+            scale: 0.08999999,
+            spread: 0.281,
+        ),
+    },
+)

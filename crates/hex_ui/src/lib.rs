@@ -35,6 +35,7 @@ mod scale;
 mod screens;
 mod shell;
 mod theme;
+mod vfx_tuner;
 
 pub use creation_presentation::{effect_summary, CharacterBuildSummary, SpellBuildSummary};
 pub use element_visual::{
@@ -66,7 +67,8 @@ pub use model::{
     SandboxCharacterView, SandboxIntent, SandboxLatticeCellKind, SandboxLatticeCellView,
     SandboxMapView, SandboxRosterSlotView, SandboxView, SensitiveText, SettingsIntent,
     SettingsModalView, SettingsTab, TargetLatticeStateView, TargetLatticeView, TargetPulseView,
-    UiBindingRow, UiIntent, UiSetting, UiSettingRow, UiSettingsView,
+    UiBindingRow, UiIntent, UiSetting, UiSettingRow, UiSettingsView, VfxTunerControl,
+    VfxTunerField, VfxTunerIntent, VfxTunerRowView, VfxTunerSpellView, VfxTunerView,
 };
 #[cfg(feature = "dev-tools")]
 pub use model::{DevTimeIntent, DevTimeView};
@@ -76,7 +78,10 @@ pub use scale::{
     resolve_auto_scale, resolve_ui_metrics, resolve_viewport_class, ResolvedUiMetrics, UiScaleMode,
     UiScalePreference, UiViewportClass,
 };
-pub use shell::{despawn_screen, overlay_root, screen_root, screen_root_node, DespawnOnExit};
+pub use shell::{
+    despawn_screen, overlay_root, screen_root, screen_root_node, transparent_screen_root,
+    DespawnOnExit,
+};
 pub use theme::{
     blurb, button, display, divider, element_color, fine, heading, label, panel, panel_node,
     row_button, screen_title, small_button, stacked_row_button, OwnColors, UiAssets, ACCENT,
@@ -2009,6 +2014,7 @@ impl Plugin for UiPlugin {
         .init_resource::<InitiativeView>()
         .init_resource::<MainMenuView>()
         .init_resource::<MultiplayerView>()
+        .init_resource::<VfxTunerView>()
         .init_resource::<TargetPulseView>()
         .add_plugins(element_visual::plugin)
         .add_plugins((
@@ -2033,6 +2039,7 @@ impl Plugin for UiPlugin {
             lattice_demo::plugin,
             creator::plugin,
             deployment::plugin,
+            vfx_tuner::plugin,
         ));
         #[cfg(feature = "dev-tools")]
         app.init_resource::<DevTimeView>()

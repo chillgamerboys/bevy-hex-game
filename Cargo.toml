@@ -27,7 +27,7 @@ hex_multiplayer = { path = "crates/hex_multiplayer" }
 hex_eos_ffi = { path = "crates/hex_eos_ffi" }
 hex_online = { path = "crates/hex_online" }
 
-bevy = "0.19"
+bevy = { version = "0.19", features = ["tga"] }
 bevy_app = "0.19"
 bevy_ecs = "0.19"
 bevy_input = "0.19"
@@ -43,6 +43,9 @@ bevy_egui = { version = "0.40.1", default-features = false, features = [
     "default_fonts",
     "picking",
     "render",
+] }
+bevy_hanabi = { version = "0.19", default-features = false, features = [
+    "3d",
 ] }
 atomicwrites = "0.4.4"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
@@ -160,13 +163,19 @@ nonstandard_macro_braces = "warn"
 [workspace.metadata.bevy_lint]
 # panicking_methods = "deny"
 
-# Enable a small amount of optimization in debug mode
+# Enable a small amount of optimization in debug mode. Line-tables-only debug
+# info keeps `cargo dev` stack traces/breakpoints working while dropping the
+# full DWARF payload that otherwise dominates target/'s size.
 [profile.dev]
 opt-level = 1
+debug = "line-tables-only"
 
-# Enable high optimizations for dependencies (incl. Bevy), but not for our code:
+# Enable high optimizations for dependencies (incl. Bevy), but not for our code.
+# No debug info for deps either: we don't step into Bevy/wgpu internals, and
+# their debug symbols are most of target/debug's size in a workspace this size.
 [profile.dev.package."*"]
 opt-level = 3
+debug = false
 
 # wgpu's debug assertions are expensive enough to distort dev-build profiling.
 # <https://github.com/bevyengine/bevy/issues/14291>

@@ -619,6 +619,7 @@ fn capture_timeout_diagnostic(
             | Screen::Title
             | Screen::Settings
             | Screen::LatticeDemo
+            | Screen::VfxTuner
             | Screen::CharacterCreator
             | Screen::SpellCreator
             | Screen::Sandbox

@@ -533,10 +533,11 @@ fn parse_screen(name: &str) -> Result<Screen, String> {
         "LatticeDemo" => Ok(Screen::LatticeDemo),
         "CharacterCreator" => Ok(Screen::CharacterCreator),
         "SpellCreator" => Ok(Screen::SpellCreator),
+        "VfxTuner" => Ok(Screen::VfxTuner),
         "Loading" => Ok(Screen::Loading),
         "Gameplay" => Ok(Screen::Gameplay),
         _ => Err(format!(
-            "unknown screen {name:?}; expected Splash, Title, Multiplayer, Sandbox, Settings, CharacterCreator, SpellCreator, LatticeDemo, Loading, or Gameplay"
+            "unknown screen {name:?}; expected Splash, Title, Multiplayer, Sandbox, Settings, CharacterCreator, SpellCreator, LatticeDemo, VfxTuner, Loading, or Gameplay"
         )),
     }
 }
@@ -976,6 +977,7 @@ fn capture_structural_issues(
             Screen::Title => &["Main Menu"],
             Screen::Settings => &["Settings Screen"],
             Screen::LatticeDemo => &["Lattice Demo Screen"],
+            Screen::VfxTuner => &["VFX Tuner Screen"],
             Screen::CharacterCreator | Screen::SpellCreator => &["Creator Screen"],
             Screen::Sandbox => &["Sandbox"],
             Screen::Multiplayer => &["Multiplayer"],
@@ -3276,6 +3278,7 @@ mod tests {
             "CharacterCreator",
             "SpellCreator",
             "LatticeDemo",
+            "VfxTuner",
             "Loading",
             "Gameplay",
         ] {
@@ -3293,6 +3296,7 @@ mod tests {
             "../../walks/forest.ron",
             "../../walks/readme_party_trial.ron",
             "../../walks/readme_creator_sandbox.ron",
+            "../../walks/vfx_tuner.ron",
         ]
         .into_iter()
         .chain(CAMERA_ROUTE_SCRIPTS.iter().map(|(path, _)| *path))

@@ -11,6 +11,7 @@ description = "Thin launcher library and composition root for gameplay, world, a
 # Bevy otherwise accepts writes into an in-process fallback that cannot be pasted
 # into a second game process.
 bevy = { workspace = true, features = ["system_clipboard"] }
+bevy_hanabi = { workspace = true }
 bevy_replicon = { workspace = true }
 atomicwrites = { workspace = true }
 hex_anim = { workspace = true }
@@ -28,6 +29,7 @@ hex_world = { workspace = true }
 hex_multiplayer = { workspace = true }
 hex_online = { workspace = true, optional = true }
 hex_dev = { workspace = true, optional = true }
+rand = { workspace = true }
 ron = { workspace = true }
 serde = { workspace = true }
 serde_json = "1"
@@ -48,9 +50,15 @@ default = []
 online = ["dep:hex_online"]
 # Development tooling: world inspector, debug overlays, and live asset reload so
 # editing a file under assets/config/ takes effect without restarting.
+# `bevy/dynamic_linking` links Bevy as a shared library instead of statically
+# into every binary/example/test, which is most of what makes target/debug/deps
+# huge in a workspace with several Bevy binaries. It rides this feature so it
+# is on for `cargo dev` and absent from `cargo build --release` with no
+# separate flag to remember.
 dev = [
     "dep:hex_dev",
     "bevy/file_watcher",
+    "bevy/dynamic_linking",
     "hex_core/dev-input",
     "hex_ui/dev-tools",
 ]

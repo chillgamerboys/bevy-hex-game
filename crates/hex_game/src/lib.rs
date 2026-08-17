@@ -41,6 +41,7 @@ mod review;
 mod save;
 mod scenarios;
 mod screens;
+mod spell_vfx;
 mod storage;
 mod terrain_health_bars;
 #[cfg(feature = "test-support")]
@@ -147,6 +148,7 @@ impl Plugin for AppPlugin {
         );
 
         app.add_plugins(MeshPickingPlugin);
+        app.add_plugins(bevy_hanabi::HanabiPlugin);
         app.add_plugins(hex_ui::UiPlugin);
         app.add_systems(Startup, log_app_identity);
 
@@ -254,6 +256,7 @@ impl Plugin for AppPlugin {
             casting::plugin,
             readouts::plugin,
         ));
+        app.add_plugins(spell_vfx::plugin);
         app.add_plugins((fog::plugin, terrain_health_bars::plugin));
 
         #[cfg(feature = "test-support")]
