@@ -3815,24 +3815,33 @@ impl std::error::Error for LayoutValidationError {}
 mod tests {
     use super::*;
     use crate::settings::{
-        CubeCoord, EdgeElevationSettings, EdgeLiquidPortSettings, MacroAnchorAliasSettings,
-        MacroAnchorReferenceSettings, MacroBoundarySideSettings, MacroBoundaryTerminalSettings,
-        MacroSpanningFeatureSettings, MacroTunnelSettings, MacroWalkerConnectionSettings,
-        MapSettings, PatchEdgesSettings, ProceduralSettings, Ring19BoundaryOutletSettings,
-        Ring19LiquidConnectionSettings, Ring19RegionSettings, TerrainSettings, V3CavesSettings,
-        V3CrystalAscentSettings, V3EnvironmentSettings, V3ForestSettings, V3FortSettings,
-        V3HillsSettings, V3MountainsSettings, V3RecipeSettings, V3Ring19Settings,
-        V3SkyIslandsSettings, V3WaterfallSettings, WalkerPortSettings,
+        CubeCoord, EdgeElevationSettings, EdgeLiquidPortSettings, MapSettings, PatchEdgesSettings,
+        ProceduralSettings, Ring19BoundaryOutletSettings, Ring19LiquidConnectionSettings,
+        Ring19RegionSettings, TerrainSettings, V3CavesSettings, V3CrystalAscentSettings,
+        V3EnvironmentSettings, V3ForestSettings, V3FortSettings, V3HillsSettings,
+        V3MountainsSettings, V3RecipeSettings, V3Ring19Settings, V3SkyIslandsSettings,
+        V3WaterfallSettings, WalkerPortSettings,
     };
 
     const MOUNTAIN_RANGE_RON: &str =
         include_str!("../../../../assets/config/worlds/procedural-mountain-range.ron");
+    const CRYSTAL_MOUNTAIN_RON: &str =
+        include_str!("../../../../assets/config/worlds/procedural-crystal-mountain.ron");
 
     fn mountain_range_settings() -> ProceduralV3Settings {
         let settings: MapSettings =
             ron::from_str(MOUNTAIN_RANGE_RON).expect("shipped Mountain Range settings parse");
         let TerrainSettings::Procedural(ProceduralSettings::V3(settings)) = settings.terrain else {
             panic!("shipped Mountain Range settings should use procedural V3");
+        };
+        settings
+    }
+
+    fn crystal_mountain_settings() -> ProceduralV3Settings {
+        let settings: MapSettings =
+            ron::from_str(CRYSTAL_MOUNTAIN_RON).expect("shipped Crystal Mountain settings parse");
+        let TerrainSettings::Procedural(ProceduralSettings::V3(settings)) = settings.terrain else {
+            panic!("shipped Crystal Mountain settings should use procedural V3");
         };
         settings
     }
@@ -4367,47 +4376,12 @@ mod tests {
 
     #[test]
     fn explicit_macro_walker_reuses_shared_edge_while_tunnel_ports_stay_subsurface() {
-        let mut settings = crystal_ascent_macro_settings();
-        let V3LayoutSettings::Macro(macro_settings) = &mut settings.layout else {
-            unreachable!("Crystal Ascent fixture must use Macro");
-        };
-        macro_settings.walker_connections = vec![MacroWalkerConnectionSettings {
-            first_instance: "hills-center".to_owned(),
-            second_instance: "hills-lower".to_owned(),
-            width: 4,
-            level: 150,
-        }];
-        macro_settings.spanning_features =
-            vec![MacroSpanningFeatureSettings::Tunnel(MacroTunnelSettings {
-                name: "crystal_mountain.tunnel".to_owned(),
-                canonical_route: true,
-                instance_route: ["hills-lower-outer", "hills-lower", "hills-center"]
-                    .map(str::to_owned)
-                    .to_vec(),
-                boundary_terminal: MacroBoundaryTerminalSettings {
-                    instance: "hills-lower-outer".to_owned(),
-                    side: MacroBoundarySideSettings::NorthWest,
-                },
-                destination_anchor: MacroAnchorReferenceSettings {
-                    instance: "hills-center".to_owned(),
-                    anchor: "crystal_ascent.lower_entry".to_owned(),
-                },
-                floor_level: 6,
-                width: 4,
-                clearance: 6,
-                roof_thickness: 3,
-            })];
-        macro_settings.anchor_aliases = vec![MacroAnchorAliasSettings {
-            alias: "crystal_mountain.ascent_threshold".to_owned(),
-            instance: "hills-center".to_owned(),
-            anchor: "crystal_ascent.lower_entry".to_owned(),
-        }];
-        macro_settings.critical_route.clear();
+        let settings = crystal_mountain_settings();
 
         let layout = resolve_layout(MACRO_RADIUS, &settings)
-            .expect("Crystal Mountain-style Macro contracts resolve");
+            .expect("shipped Crystal Mountain Macro contracts resolve");
         let V3LayoutSettings::Macro(macro_settings) = &settings.layout else {
-            unreachable!("Crystal Ascent fixture must remain Macro");
+            unreachable!("Crystal Mountain fixture must remain Macro");
         };
         let contracts = resolve_macro_contracts(macro_settings, &layout)
             .expect("resolved extension contracts match the final masks");

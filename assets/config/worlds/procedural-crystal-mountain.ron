@@ -74,8 +74,10 @@
                     access: Scenic,
                     elevation: (low: 170, high: 184, grade_axis: West),
                 ),
-                // The complete radius-three ring is one broad outer slope and the
-                // map's highest enclosing ridge.
+                // The complete radius-three ring climbs from the level-6 western
+                // foot into the map's highest enclosing ridge. The Mountain cap
+                // still fixes the crown at 192; the broad datum supplies the
+                // actual exterior slope instead of a sheer map-edge pedestal.
                 (
                     name: "outer-mountain",
                     cells: [
@@ -106,7 +108,7 @@
                     )),
                     rotation_turns: 0,
                     access: Scenic,
-                    elevation: (low: 178, high: 192, grade_axis: West),
+                    elevation: (low: 6, high: 192, grade_axis: East),
                 ),
             ],
             liquid_connections: [],

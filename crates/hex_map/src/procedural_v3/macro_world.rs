@@ -5209,7 +5209,10 @@ mod tests {
 
     use super::super::selection::{CandidateNote, CANDIDATE_COUNT};
     use super::*;
-    use crate::settings::{MapSettings, ProceduralSettings, TerrainSettings};
+    use crate::settings::{
+        CubeCoord, MacroAxisSettings, MacroBoundarySideSettings, MacroSpanningFeatureSettings,
+        MapSettings, ProceduralSettings, TerrainSettings,
+    };
 
     const MOUNTAIN_RANGE_RON: &str =
         include_str!("../../../../assets/config/worlds/procedural-mountain-range.ron");
@@ -5468,6 +5471,65 @@ mod tests {
         ] {
             assert!(world.anchors.contains_key(anchor), "missing {anchor:?}");
         }
+        let review_anchors = [
+            PARTY_START,
+            "crystal_mountain.tunnel_mouth",
+            "crystal_mountain.midpoint",
+            "crystal_mountain.gothic_transition",
+            "crystal_mountain.ascent_threshold",
+            "crystal_mountain.summit_exit",
+            "crystal_mountain.basin_clearing",
+            "crystal_mountain.ridge",
+        ]
+        .into_iter()
+        .map(|name| {
+            (
+                name,
+                world
+                    .anchors
+                    .get(name)
+                    .copied()
+                    .expect("review anchor should exist"),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            review_anchors,
+            BTreeMap::from([
+                (
+                    PARTY_START,
+                    TilePos::new(HexCoord::from_axial(-77, 3), 6),
+                ),
+                (
+                    "crystal_mountain.tunnel_mouth",
+                    TilePos::new(HexCoord::from_axial(-76, 1), 6),
+                ),
+                (
+                    "crystal_mountain.midpoint",
+                    TilePos::new(HexCoord::from_axial(-48, -1), 6),
+                ),
+                (
+                    "crystal_mountain.gothic_transition",
+                    TilePos::new(HexCoord::from_axial(-29, -15), 6),
+                ),
+                (
+                    "crystal_mountain.ascent_threshold",
+                    TilePos::new(HexCoord::from_axial(-17, -15), 6),
+                ),
+                (
+                    "crystal_mountain.summit_exit",
+                    TilePos::new(HexCoord::from_axial(16, 15), 150),
+                ),
+                (
+                    "crystal_mountain.basin_clearing",
+                    TilePos::new(HexCoord::from_axial(15, 20), 150),
+                ),
+                (
+                    "crystal_mountain.ridge",
+                    TilePos::new(HexCoord::from_axial(77, 0), 192),
+                ),
+            ])
+        );
     }
 
     #[test]
@@ -5503,6 +5565,121 @@ mod tests {
                 ),
                 None => expected_route = Some(route),
             }
+        }
+    }
+
+    #[test]
+    fn crystal_mountain_global_rotation_contracts_resolve_for_all_six_turns() {
+        let expected_boundary_sides = [
+            MacroBoundarySideSettings::West,
+            MacroBoundarySideSettings::SouthWest,
+            MacroBoundarySideSettings::SouthEast,
+            MacroBoundarySideSettings::East,
+            MacroBoundarySideSettings::NorthEast,
+            MacroBoundarySideSettings::NorthWest,
+        ];
+        let expected_outer_axes = [
+            MacroAxisSettings::East,
+            MacroAxisSettings::NorthEast,
+            MacroAxisSettings::NorthWest,
+            MacroAxisSettings::West,
+            MacroAxisSettings::SouthWest,
+            MacroAxisSettings::SouthEast,
+        ];
+
+        for turns in 0..6 {
+            let map = rotated_crystal_mountain_map(turns);
+            map.validate()
+                .unwrap_or_else(|error| panic!("rotation {turns} settings failed: {error}"));
+            let settings = v3_settings(&map);
+            let V3LayoutSettings::Macro(layout) = &settings.layout else {
+                panic!("rotated Crystal Mountain settings should remain Macro");
+            };
+            let outer = layout
+                .instances
+                .iter()
+                .find(|instance| instance.name == "outer-mountain")
+                .expect("rotated settings retain the outer mountain");
+            assert_eq!(
+                outer.elevation.grade_axis,
+                *expected_outer_axes
+                    .get(usize::from(turns))
+                    .expect("six expected grade axes")
+            );
+            assert!(layout
+                .instances
+                .iter()
+                .all(|instance| instance.rotation_turns == turns));
+            let MacroSpanningFeatureSettings::Tunnel(tunnel) = layout
+                .spanning_features
+                .first()
+                .expect("rotated settings retain the canonical tunnel");
+            assert_eq!(
+                tunnel.boundary_terminal.side,
+                *expected_boundary_sides
+                    .get(usize::from(turns))
+                    .expect("six expected boundary sides")
+            );
+
+            let setup = resolve_macro_world_setup(map.grid_radius, settings, runtime_art_catalog())
+                .unwrap_or_else(|error| panic!("rotation {turns} setup failed: {error}"));
+            assert_eq!(setup.layout.footprint.len(), 18_019);
+            assert_eq!(setup.contracts.walker_connections.len(), 1);
+            assert_eq!(setup.contracts.spanning_features.len(), 1);
+        }
+    }
+
+    #[test]
+    #[ignore = "release acceptance constructs and validates six radius-77 Crystal Mountain rotations"]
+    fn crystal_mountain_constructs_as_one_valid_world_in_all_six_global_rotations() {
+        let ascent_threshold = TilePos::new(HexCoord::from_axial(-17, -15), 6);
+        let summit_exit = TilePos::new(HexCoord::from_axial(16, 15), 150);
+
+        for turns in 0..6 {
+            let map = rotated_crystal_mountain_map(turns);
+            let settings = v3_settings(&map);
+            let setup = resolve_macro_world_setup(map.grid_radius, settings, runtime_art_catalog())
+                .unwrap_or_else(|error| panic!("rotation {turns} setup failed: {error}"));
+            let world = construct_world(map.level_height, setup, Some((1_592_598_566, 0)))
+                .unwrap_or_else(|error| panic!("rotation {turns} construction failed: {error}"));
+            match validate_macro_world(settings, &world) {
+                WorldValidation::Valid(_) => {}
+                WorldValidation::Invalid(issues) => panic!(
+                    "rotation {turns} validation failed: {}",
+                    format_issues(&issues)
+                ),
+            }
+
+            assert_eq!(world.layout.footprint.len(), 18_019);
+            let route = world
+                .features
+                .protected_routes
+                .get("crystal_mountain.tunnel")
+                .expect("every rotation should publish the spanning route");
+            assert!(route.surfaces.iter().all(|surface| surface.level == 6));
+            for anchor in [
+                "crystal_mountain.foot_apron",
+                "crystal_mountain.ascent_threshold",
+                "crystal_mountain.summit_exit",
+                "crystal_mountain.basin_clearing",
+                "crystal_mountain.ridge",
+            ] {
+                assert!(
+                    world.anchors.contains_key(anchor),
+                    "rotation {turns} omitted {anchor:?}"
+                );
+            }
+            assert_eq!(
+                world
+                    .anchors
+                    .get("crystal_mountain.ascent_threshold")
+                    .copied(),
+                Some(rotate_tile_pos(ascent_threshold, turns))
+            );
+            assert_eq!(
+                world.anchors.get("crystal_mountain.summit_exit").copied(),
+                Some(rotate_tile_pos(summit_exit, turns))
+            );
         }
     }
 
@@ -6383,6 +6560,80 @@ mod tests {
             ron::from_str(CRYSTAL_MOUNTAIN_RON)
                 .expect("tracked Crystal Mountain settings should parse")
         })
+    }
+
+    fn rotated_crystal_mountain_map(turns: u8) -> MapSettings {
+        let mut map = crystal_mountain_map().clone();
+        let TerrainSettings::Procedural(ProceduralSettings::V3(settings)) = &mut map.terrain else {
+            panic!("tracked Crystal Mountain settings should use procedural V3");
+        };
+        let V3LayoutSettings::Macro(layout) = &mut settings.layout else {
+            panic!("tracked Crystal Mountain settings should use Macro");
+        };
+        for instance in &mut layout.instances {
+            for cell in &mut instance.cells {
+                *cell = rotate_cube(*cell, turns);
+            }
+            instance.rotation_turns = (instance.rotation_turns + turns % 6) % 6;
+            instance.elevation.grade_axis = rotate_macro_axis(instance.elevation.grade_axis, turns);
+        }
+        for feature in &mut layout.spanning_features {
+            let MacroSpanningFeatureSettings::Tunnel(tunnel) = feature;
+            tunnel.boundary_terminal.side =
+                rotate_boundary_side(tunnel.boundary_terminal.side, turns);
+        }
+        map
+    }
+
+    fn rotate_cube(mut cell: CubeCoord, turns: u8) -> CubeCoord {
+        for _ in 0..turns % 6 {
+            cell = CubeCoord {
+                x: -cell.z,
+                y: -cell.x,
+                z: -cell.y,
+            };
+        }
+        cell
+    }
+
+    fn rotate_tile_pos(position: TilePos, turns: u8) -> TilePos {
+        let [x, y, z] = position.coord.to_cubic_array();
+        let rotated = rotate_cube(CubeCoord { x, y, z }, turns);
+        TilePos::new(
+            HexCoord::new_cubic(rotated.x, rotated.y, rotated.z),
+            position.level,
+        )
+    }
+
+    fn rotate_macro_axis(mut axis: MacroAxisSettings, turns: u8) -> MacroAxisSettings {
+        for _ in 0..turns % 6 {
+            axis = match axis {
+                MacroAxisSettings::East => MacroAxisSettings::NorthEast,
+                MacroAxisSettings::NorthEast => MacroAxisSettings::NorthWest,
+                MacroAxisSettings::NorthWest => MacroAxisSettings::West,
+                MacroAxisSettings::West => MacroAxisSettings::SouthWest,
+                MacroAxisSettings::SouthWest => MacroAxisSettings::SouthEast,
+                MacroAxisSettings::SouthEast => MacroAxisSettings::East,
+            };
+        }
+        axis
+    }
+
+    fn rotate_boundary_side(
+        mut side: MacroBoundarySideSettings,
+        turns: u8,
+    ) -> MacroBoundarySideSettings {
+        for _ in 0..turns % 6 {
+            side = match side {
+                MacroBoundarySideSettings::East => MacroBoundarySideSettings::NorthEast,
+                MacroBoundarySideSettings::NorthEast => MacroBoundarySideSettings::NorthWest,
+                MacroBoundarySideSettings::NorthWest => MacroBoundarySideSettings::West,
+                MacroBoundarySideSettings::West => MacroBoundarySideSettings::SouthWest,
+                MacroBoundarySideSettings::SouthWest => MacroBoundarySideSettings::SouthEast,
+                MacroBoundarySideSettings::SouthEast => MacroBoundarySideSettings::East,
+            };
+        }
+        side
     }
 
     fn two_rings_map() -> &'static MapSettings {
