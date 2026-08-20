@@ -16,8 +16,8 @@ use hex_core::{
 };
 
 use super::layout::{
-    HexSide, LayoutKind, PatchId, ResolvedLayoutPlan, ResolvedMacroContracts,
-    ResolvedMacroSpanningFeature, ResolvedMacroTunnel,
+    HexSide, LayoutKind, PatchId, ResolvedLayoutPlan, ResolvedMacroBoundaryTerminal,
+    ResolvedMacroContracts, ResolvedMacroSpanningFeature, ResolvedMacroTunnel,
 };
 use super::routing::vertex_disjoint_paths;
 use super::volume::{
@@ -227,73 +227,7 @@ fn plan_tunnel(
     validate_tunnel_contract(layout, contract, destination)?;
     let width = usize::try_from(contract.width)
         .map_err(|error| MacroSpanningError::new(format!("tunnel width overflowed: {error}")))?;
-    let mut current_starts = ordered_coords(
-        contract
-            .boundary_terminal
-            .lanes
-            .iter()
-            .map(|(inside, _)| *inside),
-    );
-    let mut lanes = current_starts
-        .iter()
-        .copied()
-        .map(|coord| vec![coord])
-        .collect::<Vec<_>>();
-
-    for (patch_index, patch_id) in contract.instance_route.iter().copied().enumerate() {
-        let patch = layout.patches.get(&patch_id).ok_or_else(|| {
-            MacroSpanningError::new(format!("tunnel names missing route patch {patch_id:?}"))
-        })?;
-        let target_coords = if let Some(seam) = contract.seams.get(patch_index) {
-            if seam.source != patch_id {
-                return Err(MacroSpanningError::new(format!(
-                    "tunnel seam {patch_index} starts in {:?}, expected {patch_id:?}",
-                    seam.source
-                )));
-            }
-            ordered_coords(seam.port.lanes.iter().map(|(source, _)| *source))
-        } else {
-            ordered_coords(destination.terminal.iter().map(|surface| surface.coord))
-        };
-        if current_starts.len() != width || target_coords.len() != width {
-            return Err(MacroSpanningError::new(format!(
-                "tunnel patch {patch_id:?} does not expose exactly {width} starts and targets"
-            )));
-        }
-        let segment =
-            route_lane_bundle(&patch.mask, &current_starts, &target_coords).ok_or_else(|| {
-                MacroSpanningError::new(format!(
-                    "tunnel {:?} cannot route four disjoint lanes through patch {patch_id:?}",
-                    contract.name
-                ))
-            })?;
-        for (lane, segment_path) in lanes.iter_mut().zip(&segment) {
-            lane.extend(segment_path.iter().copied().skip(1));
-        }
-
-        if let Some(seam) = contract.seams.get(patch_index) {
-            let crossing_by_source = seam.port.lanes.iter().copied().collect::<BTreeMap<_, _>>();
-            let mut next_starts = Vec::with_capacity(width);
-            for lane in &mut lanes {
-                let source = lane.last().copied().ok_or_else(|| {
-                    MacroSpanningError::new("a tunnel lane unexpectedly became empty")
-                })?;
-                let target = crossing_by_source.get(&source).copied().ok_or_else(|| {
-                    MacroSpanningError::new(format!(
-                        "routed source {source:?} is not one of seam {patch_index}'s exact lanes"
-                    ))
-                })?;
-                if source.distance(target) != 1 {
-                    return Err(MacroSpanningError::new(format!(
-                        "tunnel seam lane {source:?} -> {target:?} is not adjacent"
-                    )));
-                }
-                lane.push(target);
-                next_starts.push(target);
-            }
-            current_starts = next_starts;
-        }
-    }
+    let (lanes, center_lane) = route_complete_lane_bundle(layout, contract, destination, width)?;
 
     if lanes.len() != width
         || lanes.iter().any(|lane| {
@@ -319,7 +253,6 @@ fn plan_tunnel(
         ));
     }
 
-    let center_lane = width.saturating_sub(1) / 2;
     let centerline = lanes
         .get(center_lane)
         .cloned()
@@ -329,8 +262,40 @@ fn plan_tunnel(
             .iter()
             .all(|center| coord.distance(*center) > MAX_RIBBON_RADIUS)
     }) {
+        let lane_summaries = lanes
+            .iter()
+            .map(|lane| {
+                let nearest = lane
+                    .iter()
+                    .map(|coord| spread.distance(*coord))
+                    .min()
+                    .unwrap_or(u32::MAX);
+                (lane.first().copied(), lane.last().copied(), nearest)
+            })
+            .collect::<Vec<_>>();
+        let lane_scores = lanes
+            .iter()
+            .map(|lane| {
+                ribbon
+                    .iter()
+                    .map(|coord| {
+                        lane.iter()
+                            .map(|center| coord.distance(*center))
+                            .min()
+                            .unwrap_or(u32::MAX)
+                    })
+                    .fold((0_u32, 0_u64), |(maximum, total), distance| {
+                        (
+                            maximum.max(distance),
+                            total.saturating_add(u64::from(distance)),
+                        )
+                    })
+            })
+            .collect::<Vec<_>>();
         return Err(MacroSpanningError::new(format!(
-            "planned tunnel ribbon spreads beyond width-four corridor at {spread:?}"
+            "planned tunnel ribbon spreads beyond width-four corridor at {spread:?}; \
+             representative lane {center_lane}, scores {lane_scores:?}, \
+             lane start/end/nearest-distance {lane_summaries:?}"
         )));
     }
     let (exterior_apron, mouth) = plan_mouth(layout, contract, &lanes, &ribbon)?;
@@ -491,6 +456,131 @@ fn plan_tunnel(
     })
 }
 
+/// Routes the complete ordered feature around one stable lane identity at a time.
+///
+/// A segment-local choice can switch between the two middle lanes at a seam and
+/// produce two individually compact halves whose union is too wide. Retrying the
+/// whole feature preserves one reference identity across every patch. The lower
+/// middle lane remains first so existing canonical fingerprints do not move; the
+/// other middle and outer identities are deterministic fallbacks for rotated,
+/// concave boundary terminals.
+fn route_complete_lane_bundle(
+    layout: &ResolvedLayoutPlan,
+    contract: &ResolvedMacroTunnel,
+    destination: &RawSpanningDestination,
+    width: usize,
+) -> Result<(Vec<Vec<HexCoord>>, usize), MacroSpanningError> {
+    let initial_starts = ordered_boundary_starts(&contract.boundary_terminal);
+    let lower_middle = width.saturating_sub(1) / 2;
+    let upper_middle = width / 2;
+    let mut reference_order = vec![lower_middle];
+    if upper_middle != lower_middle {
+        reference_order.push(upper_middle);
+    }
+    let outer_references = (0..width)
+        .filter(|index| !reference_order.contains(index))
+        .collect::<Vec<_>>();
+    reference_order.extend(outer_references);
+
+    'reference: for reference_lane in reference_order {
+        let mut current_starts = initial_starts.clone();
+        let mut lanes = current_starts
+            .iter()
+            .copied()
+            .map(|coord| vec![coord])
+            .collect::<Vec<_>>();
+        for (patch_index, patch_id) in contract.instance_route.iter().copied().enumerate() {
+            let patch = layout.patches.get(&patch_id).ok_or_else(|| {
+                MacroSpanningError::new(format!("tunnel names missing route patch {patch_id:?}"))
+            })?;
+            let target_coords = if let Some(seam) = contract.seams.get(patch_index) {
+                if seam.source != patch_id {
+                    return Err(MacroSpanningError::new(format!(
+                        "tunnel seam {patch_index} starts in {:?}, expected {patch_id:?}",
+                        seam.source
+                    )));
+                }
+                ordered_coords(seam.port.lanes.iter().map(|(source, _)| *source))
+            } else {
+                ordered_coords(destination.terminal.iter().map(|surface| surface.coord))
+            };
+            if current_starts.len() != width || target_coords.len() != width {
+                return Err(MacroSpanningError::new(format!(
+                    "tunnel patch {patch_id:?} does not expose exactly {width} starts and targets"
+                )));
+            }
+            let Some(segment) = route_lane_bundle_in_patch_frame(
+                &patch.mask,
+                &current_starts,
+                &target_coords,
+                reference_lane,
+                patch.rotation_turns,
+            ) else {
+                continue 'reference;
+            };
+            for (lane, segment_path) in lanes.iter_mut().zip(&segment) {
+                lane.extend(segment_path.iter().copied().skip(1));
+            }
+
+            if let Some(seam) = contract.seams.get(patch_index) {
+                let crossing_by_source =
+                    seam.port.lanes.iter().copied().collect::<BTreeMap<_, _>>();
+                let mut next_starts = Vec::with_capacity(width);
+                for lane in &mut lanes {
+                    let source = lane.last().copied().ok_or_else(|| {
+                        MacroSpanningError::new("a tunnel lane unexpectedly became empty")
+                    })?;
+                    let target = crossing_by_source.get(&source).copied().ok_or_else(|| {
+                        MacroSpanningError::new(format!(
+                            "routed source {source:?} is not one of seam {patch_index}'s exact lanes"
+                        ))
+                    })?;
+                    if source.distance(target) != 1 {
+                        return Err(MacroSpanningError::new(format!(
+                            "tunnel seam lane {source:?} -> {target:?} is not adjacent"
+                        )));
+                    }
+                    lane.push(target);
+                    next_starts.push(target);
+                }
+                current_starts = next_starts;
+            }
+        }
+
+        if lanes.len() != width
+            || lanes.iter().any(|lane| {
+                lane.is_empty()
+                    || lane.windows(2).any(
+                        |pair| !matches!(pair, [first, second] if first.distance(*second) == 1),
+                    )
+                    || lane.iter().copied().collect::<BTreeSet<_>>().len() != lane.len()
+            })
+        {
+            continue;
+        }
+        let ribbon = lanes.iter().flatten().copied().collect::<BTreeSet<_>>();
+        if ribbon.len() != lanes.iter().map(Vec::len).sum::<usize>() {
+            continue;
+        }
+        let Some(reference) = lanes.get(reference_lane) else {
+            continue;
+        };
+        if ribbon.iter().any(|coord| {
+            reference
+                .iter()
+                .all(|center| coord.distance(*center) > MAX_RIBBON_RADIUS)
+        }) {
+            continue;
+        }
+        return Ok((lanes, reference_lane));
+    }
+
+    Err(MacroSpanningError::new(format!(
+        "tunnel {:?} cannot route one compact four-lane bundle through its ordered patches",
+        contract.name
+    )))
+}
+
 fn validate_tunnel_contract(
     layout: &ResolvedLayoutPlan,
     contract: &ResolvedMacroTunnel,
@@ -599,6 +689,39 @@ fn ordered_coords(coords: impl IntoIterator<Item = HexCoord>) -> Vec<HexCoord> {
         .collect()
 }
 
+/// Orders the boundary lanes in the authored west-facing frame.
+///
+/// Raw coordinate ordering reverses or reshuffles a curved four-cell terminal
+/// under sixty-degree rotation. Normalizing the terminal back to the west-facing
+/// frame preserves lane identity, so the same middle lane remains the compact
+/// routing reference in every global orientation.
+fn ordered_boundary_starts(terminal: &ResolvedMacroBoundaryTerminal) -> Vec<HexCoord> {
+    let turns = match terminal.side {
+        HexSide::West => 0,
+        HexSide::SouthWest => 1,
+        HexSide::SouthEast => 2,
+        HexSide::East => 3,
+        HexSide::NorthEast => 4,
+        HexSide::NorthWest => 5,
+    };
+    let inverse_turns = (6_u8.saturating_sub(turns)) % 6;
+    let mut starts = terminal
+        .lanes
+        .iter()
+        .map(|(inside, _)| (rotate_coord(*inside, inverse_turns), *inside))
+        .collect::<Vec<_>>();
+    starts.sort_unstable();
+    starts.into_iter().map(|(_, inside)| inside).collect()
+}
+
+fn rotate_coord(mut coord: HexCoord, turns: u8) -> HexCoord {
+    for _ in 0..turns % 6 {
+        let [x, y, z] = coord.to_cubic_array();
+        coord = HexCoord::new_cubic(-z, -x, -y);
+    }
+    coord
+}
+
 fn patch_owners(
     layout: &ResolvedLayoutPlan,
 ) -> Result<BTreeMap<HexCoord, PatchId>, MacroSpanningError> {
@@ -646,9 +769,11 @@ fn route_lane_bundle(
     allowed: &BTreeSet<HexCoord>,
     starts: &[HexCoord],
     targets: &[HexCoord],
+    reference_lane: usize,
 ) -> Option<Vec<Vec<HexCoord>>> {
     if starts.len() != targets.len()
         || starts.is_empty()
+        || reference_lane >= starts.len()
         || starts.iter().any(|coord| !allowed.contains(coord))
         || targets.iter().any(|coord| !allowed.contains(coord))
         || starts.iter().copied().collect::<BTreeSet<_>>().len() != starts.len()
@@ -659,7 +784,6 @@ fn route_lane_bundle(
 
     let mut target_permutations = Vec::new();
     permutations(targets.to_vec(), 0, &mut target_permutations);
-    let reference_lane = starts.len().saturating_sub(1) / 2;
     let mut fixed_order = vec![reference_lane];
     fixed_order.extend(
         (0..starts.len())
@@ -706,6 +830,7 @@ fn route_lane_bundle(
             }
         }
     }
+
     if best.is_none() {
         for paths in flow_bundles_around_reference(allowed, starts, targets, reference_lane) {
             let score = bundle_score(&paths);
@@ -722,6 +847,44 @@ fn route_lane_bundle(
         }
     }
     best.map(|(_, paths)| paths)
+}
+
+fn route_lane_bundle_in_patch_frame(
+    allowed: &BTreeSet<HexCoord>,
+    starts: &[HexCoord],
+    targets: &[HexCoord],
+    reference_lane: usize,
+    rotation_turns: u8,
+) -> Option<Vec<Vec<HexCoord>>> {
+    let inverse_turns = (6_u8.saturating_sub(rotation_turns % 6)) % 6;
+    let normalized_allowed = allowed
+        .iter()
+        .map(|coord| rotate_coord(*coord, inverse_turns))
+        .collect::<BTreeSet<_>>();
+    let normalized_starts = starts
+        .iter()
+        .map(|coord| rotate_coord(*coord, inverse_turns))
+        .collect::<Vec<_>>();
+    let normalized_targets = targets
+        .iter()
+        .map(|coord| rotate_coord(*coord, inverse_turns))
+        .collect::<Vec<_>>();
+    route_lane_bundle(
+        &normalized_allowed,
+        &normalized_starts,
+        &normalized_targets,
+        reference_lane,
+    )
+    .map(|paths| {
+        paths
+            .into_iter()
+            .map(|path| {
+                path.into_iter()
+                    .map(|coord| rotate_coord(coord, rotation_turns))
+                    .collect()
+            })
+            .collect()
+    })
 }
 
 fn tighten_flow_bundle(
@@ -2575,6 +2738,39 @@ mod tests {
             .iter()
             .take(EXTERIOR_MOUTH_ROUTE_ROWS)
             .all(|coord| tunnel.mouth.contains(coord))));
+    }
+
+    #[test]
+    fn boundary_lane_identity_is_stable_under_global_rotation() {
+        let west_inside = [coord(-77, 0), coord(-77, 1), coord(-76, -1), coord(-75, -2)];
+        let west = ResolvedMacroBoundaryTerminal {
+            instance: PatchId(0),
+            side: HexSide::West,
+            lanes: west_inside
+                .into_iter()
+                .map(|inside| (inside, HexSide::West.neighbor(inside)))
+                .collect(),
+            inward_approach: BTreeSet::new(),
+        };
+        let expected = ordered_boundary_starts(&west);
+
+        let rotated = ResolvedMacroBoundaryTerminal {
+            instance: PatchId(0),
+            side: HexSide::SouthWest,
+            lanes: west
+                .lanes
+                .iter()
+                .map(|(inside, outside)| (rotate_coord(*inside, 1), rotate_coord(*outside, 1)))
+                .collect(),
+            inward_approach: BTreeSet::new(),
+        };
+        assert_eq!(
+            ordered_boundary_starts(&rotated),
+            expected
+                .into_iter()
+                .map(|inside| rotate_coord(inside, 1))
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
