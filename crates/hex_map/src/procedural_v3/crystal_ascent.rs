@@ -14,6 +14,7 @@ use hex_core::{
 
 use super::composition::{compose_single_patch, GeneratedPatchPlan};
 use super::layout::{resolve_layout, LayoutKind, PatchId, ResolvedLayoutPlan};
+use super::local_frame::LocalPatchFrame;
 use super::patch::{PatchBuildMode, PatchRecipeContext};
 use super::seed::SeedStream;
 use super::selection::{
@@ -72,6 +73,49 @@ const SUMMIT_CLEARING: &str = "crystal_ascent.summit_clearing";
 const MID_FLIGHT: &str = "crystal_ascent.mid_flight";
 const CORNER_LANDING: &str = "crystal_ascent.corner_landing";
 const UPPER_CONTRACTION: &str = "crystal_ascent.upper_contraction";
+
+/// Resolves the exact world-space upper terminal before the authored fragment is built.
+///
+/// Macro seam selection consumes this same local-frame projection so its explicit
+/// four-wide summit port cannot drift to another segment of the landmark boundary.
+pub(crate) fn macro_upper_terminal_coords(
+    mask: &BTreeSet<HexCoord>,
+    rotation_turns: u8,
+    summit_level: Level,
+) -> Result<BTreeSet<HexCoord>, String> {
+    let frame = LocalPatchFrame::resolve_rotated(mask, LayoutKind::Macro, 77, rotation_turns)?;
+    radial_pad(31, 3, 4, summit_level)
+        .into_iter()
+        .map(|position| frame.to_world(position.coord))
+        .collect()
+}
+
+/// Resolves the authored four-wide summit trail rows consumed by a Macro seam.
+pub(crate) fn macro_upper_terminal_approach_coords(
+    mask: &BTreeSet<HexCoord>,
+    rotation_turns: u8,
+    summit_level: Level,
+    approach_depth: u32,
+) -> Result<BTreeSet<HexCoord>, String> {
+    let frame = LocalPatchFrame::resolve_rotated(mask, LayoutKind::Macro, 77, rotation_turns)?;
+    (0..approach_depth)
+        .flat_map(|offset| radial_pad(SITE_RADIUS.saturating_sub(offset), 3, 4, summit_level))
+        .map(|position| frame.to_world(position.coord))
+        .collect()
+}
+
+/// Resolves the exact world-space lower terminal for a Macro landmark.
+pub(crate) fn macro_lower_terminal_coords(
+    mask: &BTreeSet<HexCoord>,
+    rotation_turns: u8,
+    base_level: Level,
+) -> Result<BTreeSet<HexCoord>, String> {
+    let frame = LocalPatchFrame::resolve_rotated(mask, LayoutKind::Macro, 77, rotation_turns)?;
+    radial_pad(SITE_RADIUS, 0, 4, base_level)
+        .into_iter()
+        .map(|position| frame.to_world(position.coord))
+        .collect()
+}
 
 /// Deterministic diagnostics for selection, reports, and acceptance tests.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -8,21 +8,29 @@ use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use hex_assets::{HexObjectRotation, RuntimeArtCatalog};
-use hex_core::{HexCoord, Level, MapViewHint, TilePos};
+use hex_core::{
+    upper_dome_contains, ExactGridPoint, HexCoord, IlluminationLevel, Level, MapViewHint, TilePos,
+};
 
 use crate::procedural::{MacroMetrics, MountainRangeMetrics};
 use crate::settings::{
     MacroAxisSettings, MacroBiomeInstanceSettings, MacroHeadwaterSettings, MacroLayoutSettings,
-    ProceduralV3Settings, V3LayoutSettings, V3RecipeSettings, MAX_V3_LEVEL,
+    MacroSpanningFeatureSettings, ProceduralV3Settings, V3CrystalAscentSettings, V3LayoutSettings,
+    V3RecipeSettings, MAX_V3_LEVEL,
 };
 
 use super::composition::{
-    compose_world, GeneratedPatchPlan, PatchAnchorRef, WorldCompositionSettings,
+    compose_world, finalize_world, merge_world, GeneratedPatchPlan, PatchAnchorRef,
+    WorldCompositionSettings,
 };
 use super::layout::{
-    resolve_layout, PatchId, ResolvedLayoutPlan, ResolvedLiquidElevation, ResolvedLiquidPort,
+    resolve_layout, resolve_macro_contracts, PatchId, ResolvedLayoutPlan, ResolvedLiquidElevation,
+    ResolvedLiquidPort, ResolvedMacroContracts,
 };
 use super::liquid::{LiquidBodyId, LiquidBodyPlan, LiquidFlowState, LiquidNode, LiquidPlan};
+use super::macro_spanning::{
+    apply_macro_spanning, plan_macro_spanning, RawSpanningDestination, RawSpanningDestinations,
+};
 use super::patch::{PatchBuildMode, PatchRecipeContext};
 use super::seam::shape_walker_seams;
 use super::seed::SeedStreams;
@@ -37,8 +45,8 @@ use super::volume::{
     SurfaceMetadata, VolumeColumn, VolumeElement, VolumePlan,
 };
 use super::world::{
-    FeatureId, FeatureKind, FeaturePlan, GeneratedWorldPlan, InteriorPlan, PlannedFeature,
-    StructurePlan, WorldIssueCode, WorldValidationIssue,
+    FeatureClearing, FeatureId, FeatureKind, FeaturePlan, GeneratedWorldPlan, InteriorPlan,
+    PlannedFeature, PlannedLightPresentation, StructurePlan, WorldIssueCode, WorldValidationIssue,
 };
 use super::{CrystalAscentObjectSet, V3GenerationError};
 
@@ -57,6 +65,8 @@ const RIVULET_SOURCE_REVIEW: &str = "rivulet_source_review";
 const DEFAULT_ALPINE_TREELINE: Level = 36;
 const DEFAULT_ALPINE_SNOWLINE: Level = 52;
 const MACRO_GRASS_CEILING: Level = 36;
+const CRYSTAL_LOWER_TERMINAL: &str = "crystal_ascent.lower_terminal_pad";
+const CRYSTAL_UPPER_TERMINAL: &str = "crystal_ascent.upper_terminal_pad";
 
 #[derive(Debug, Clone)]
 pub(crate) struct MacroWorldMetrics {
@@ -73,6 +83,7 @@ struct MacroWorldRecipe<'a> {
 
 struct MacroWorldSetup<'a> {
     layout: ResolvedLayoutPlan,
+    contracts: ResolvedMacroContracts,
     settings: &'a MacroLayoutSettings,
     vegetation: TemperateVegetationSet,
     canonical_anchors: BTreeMap<String, PatchAnchorRef>,
@@ -201,7 +212,10 @@ fn resolve_macro_world_setup<'a>(
     let layout = resolve_layout(grid_radius, settings).map_err(|error| {
         V3GenerationError::RecipeContract(format!("Macro layout resolution failed: {error}"))
     })?;
-    let canonical_anchors = canonical_anchor_settings(macro_settings)?;
+    let contracts = resolve_macro_contracts(macro_settings, &layout).map_err(|error| {
+        V3GenerationError::RecipeContract(format!("Macro extension resolution failed: {error}"))
+    })?;
+    let canonical_anchors = canonical_anchor_settings(macro_settings, &contracts)?;
     let alpine_climate = resolve_macro_alpine_climate(macro_settings)?;
     let crystal_ascent_assets = macro_settings
         .instances
@@ -220,6 +234,7 @@ fn resolve_macro_world_setup<'a>(
         .transpose()?;
     Ok(MacroWorldSetup {
         layout,
+        contracts,
         settings: macro_settings,
         vegetation,
         canonical_anchors,
@@ -260,6 +275,7 @@ fn construct_world(
 ) -> Result<GeneratedWorldPlan, V3GenerationError> {
     let MacroWorldSetup {
         layout,
+        contracts,
         settings: macro_settings,
         vegetation,
         canonical_anchors,
@@ -303,78 +319,71 @@ fn construct_world(
         .max()
         .unwrap_or_default();
     let provisional_view_hint = macro_view_hint(&layout, configured_maximum_level, level_height);
-    let mut fragments = Vec::with_capacity(macro_settings.instances.len());
+    // Authored destinations are built first so the whole-world tunnel planner can
+    // consume their exact apertures and interior identity. The resulting corridor
+    // is then reserved in every ordinary patch before liquids and decoration run.
+    let mut fragments_by_patch = BTreeMap::new();
     for (index, instance) in macro_settings.instances.iter().enumerate() {
         let patch_id = PatchId(u32::try_from(index).unwrap_or(u32::MAX));
+        let V3RecipeSettings::CrystalAscent(settings) = &instance.recipe else {
+            continue;
+        };
+        let patch = PatchRecipeContext::resolve(&layout, patch_id)?;
+        let assets = crystal_ascent_assets.as_ref().ok_or_else(|| {
+            V3GenerationError::RecipeContract(
+                "Macro Crystal Ascent assets were not preflighted".to_owned(),
+            )
+        })?;
+        let fragment = construct_macro_crystal_ascent(
+            patch,
+            settings,
+            level_height,
+            candidate,
+            &layout,
+            assets,
+        )?;
+        fragments_by_patch.insert(patch_id, fragment);
+    }
+
+    let raw_destinations = raw_spanning_destinations(&contracts, &fragments_by_patch)?;
+    let spanning =
+        plan_macro_spanning(&layout, &contracts, &raw_destinations).map_err(|error| {
+            V3GenerationError::RecipeContract(format!(
+                "Macro spanning-feature planning failed: {error}"
+            ))
+        })?;
+
+    let no_spanning_reservations = BTreeSet::new();
+    for (index, instance) in macro_settings.instances.iter().enumerate() {
+        let patch_id = PatchId(u32::try_from(index).unwrap_or(u32::MAX));
+        if matches!(instance.recipe, V3RecipeSettings::CrystalAscent(_)) {
+            continue;
+        }
         let patch = PatchRecipeContext::resolve(&layout, patch_id)?;
         let streams =
             candidate.map(|(seed, candidate)| SeedStreams::new(seed, candidate, patch_id.0));
-        let fragment = if let V3RecipeSettings::CrystalAscent(settings) = &instance.recipe {
-            let assets = crystal_ascent_assets.as_ref().ok_or_else(|| {
-                V3GenerationError::RecipeContract(
-                    "Macro Crystal Ascent assets were not preflighted".to_owned(),
-                )
-            })?;
-            let mode = candidate.map_or(PatchBuildMode::CanonicalFallback, |(seed, candidate)| {
-                PatchBuildMode::Candidate {
-                    world_seed: seed,
-                    candidate,
-                }
-            });
-            let fragment = super::crystal_ascent::construct_patch(
-                patch,
-                settings,
-                level_height,
-                mode,
-                &assets.trees,
-                &assets.objects,
-            )
-            .map_err(|issues| {
-                V3GenerationError::RecipeContract(format!(
-                    "Macro Crystal Ascent construction failed: {}",
-                    issues
-                        .into_iter()
-                        .map(|issue| issue.detail)
-                        .collect::<Vec<_>>()
-                        .join("; ")
-                ))
-            })?;
-            match super::crystal_ascent::validate_composite_fragment(
-                &fragment,
-                &layout,
-                settings,
-                &assets.objects,
-            ) {
-                WorldValidation::Valid(_) => fragment,
-                WorldValidation::Invalid(issues) => {
-                    return Err(V3GenerationError::RecipeContract(format!(
-                        "Macro Crystal Ascent validation failed: {}",
-                        issues
-                            .into_iter()
-                            .map(|issue| issue.detail)
-                            .collect::<Vec<_>>()
-                            .join("; ")
-                    )));
-                }
-            }
-        } else {
-            construct_fragment(
-                patch,
-                instance,
-                macro_settings,
-                alpine_climate,
-                natural_levels
-                    .get(&patch_id)
-                    .or_else(|| alpine_levels.get(&patch_id)),
-                &alpine_levels,
-                &world_support,
-                streams,
-                &vegetation,
-                provisional_view_hint,
-            )?
-        };
-        fragments.push(fragment);
+        let reservations = spanning
+            .reservations_by_patch
+            .get(&patch_id)
+            .unwrap_or(&no_spanning_reservations);
+        let fragment = construct_fragment(
+            patch,
+            instance,
+            macro_settings,
+            alpine_climate,
+            natural_levels
+                .get(&patch_id)
+                .or_else(|| alpine_levels.get(&patch_id)),
+            &alpine_levels,
+            &world_support,
+            reservations,
+            streams,
+            &vegetation,
+            provisional_view_hint,
+        )?;
+        fragments_by_patch.insert(patch_id, fragment);
     }
+    let mut fragments = fragments_by_patch.into_values().collect::<Vec<_>>();
 
     let generated_maximum_level = fragments
         .iter()
@@ -387,17 +396,174 @@ fn construct_world(
         fragment.view_hint = view_hint;
     }
 
-    compose_world(
-        layout,
-        fragments,
-        WorldCompositionSettings {
-            canonical_anchors,
-            view_hint,
-        },
-    )
-    .map_err(|error| {
-        V3GenerationError::RecipeContract(format!("Macro composition failed: {error:?}"))
+    let composition = WorldCompositionSettings {
+        canonical_anchors,
+        view_hint,
+    };
+    if spanning.tunnels.is_empty() {
+        return compose_world(layout, fragments, composition).map_err(|error| {
+            V3GenerationError::RecipeContract(format!("Macro composition failed: {error:?}"))
+        });
+    }
+
+    let world = merge_world(layout, fragments, composition).map_err(|error| {
+        V3GenerationError::RecipeContract(format!("Macro merge failed: {error:?}"))
+    })?;
+    let mut world = apply_macro_spanning(world, &spanning).map_err(|error| {
+        V3GenerationError::RecipeContract(format!(
+            "Macro spanning-feature application failed: {error}"
+        ))
+    })?;
+    finalize_crystal_mountain_landscape(macro_settings, &contracts, &mut world)?;
+    finalize_world(world).map_err(|error| {
+        V3GenerationError::RecipeContract(format!("Macro finalization failed: {error:?}"))
     })
+}
+
+fn raw_spanning_destinations(
+    contracts: &ResolvedMacroContracts,
+    fragments: &BTreeMap<PatchId, GeneratedPatchPlan>,
+) -> Result<RawSpanningDestinations, V3GenerationError> {
+    let mut destinations = RawSpanningDestinations::new();
+    for feature in contracts.spanning_features.values() {
+        let super::layout::ResolvedMacroSpanningFeature::Tunnel(tunnel) = feature;
+        let fragment = fragments
+            .get(&tunnel.destination_anchor.instance)
+            .ok_or_else(|| {
+                V3GenerationError::RecipeContract(format!(
+                    "Macro tunnel {:?} destination patch was not authored before planning",
+                    tunnel.name
+                ))
+            })?;
+        let anchor = fragment
+            .anchors
+            .get(&tunnel.destination_anchor.anchor)
+            .copied()
+            .ok_or_else(|| {
+                V3GenerationError::RecipeContract(format!(
+                    "Macro tunnel {:?} destination anchor {:?} is missing",
+                    tunnel.name, tunnel.destination_anchor.anchor
+                ))
+            })?;
+        let terminal = fragment
+            .features
+            .protected_routes
+            .get(CRYSTAL_LOWER_TERMINAL)
+            .map(|route| route.surfaces.clone())
+            .ok_or_else(|| {
+                V3GenerationError::RecipeContract(format!(
+                    "Macro tunnel {:?} destination has no exact lower terminal",
+                    tunnel.name
+                ))
+            })?;
+        let summit_threshold = fragment
+            .features
+            .protected_routes
+            .get(CRYSTAL_UPPER_TERMINAL)
+            .map(|route| route.surfaces.clone())
+            .ok_or_else(|| {
+                V3GenerationError::RecipeContract(format!(
+                    "Macro tunnel {:?} destination has no exact upper terminal",
+                    tunnel.name
+                ))
+            })?;
+        let interiors = fragment
+            .interiors
+            .by_id
+            .iter()
+            .filter_map(|(id, interior)| {
+                terminal
+                    .iter()
+                    .any(|surface| {
+                        surface
+                            .coord
+                            .neighbors()
+                            .into_iter()
+                            .map(|coord| TilePos::new(coord, surface.level))
+                            .any(|neighbor| interior.floors.contains(&neighbor))
+                    })
+                    .then_some(*id)
+            })
+            .collect::<Vec<_>>();
+        let [interior] = interiors.as_slice() else {
+            return Err(V3GenerationError::RecipeContract(format!(
+                "Macro tunnel {:?} destination terminal must border exactly one authored interior",
+                tunnel.name
+            )));
+        };
+        let key = (
+            tunnel.destination_anchor.instance,
+            tunnel.destination_anchor.anchor.clone(),
+        );
+        if destinations
+            .insert(
+                key,
+                RawSpanningDestination {
+                    anchor,
+                    terminal,
+                    interior: Some(*interior),
+                    summit_threshold,
+                },
+            )
+            .is_some()
+        {
+            return Err(V3GenerationError::RecipeContract(format!(
+                "Macro tunnel {:?} duplicates one authored destination",
+                tunnel.name
+            )));
+        }
+    }
+    Ok(destinations)
+}
+
+fn construct_macro_crystal_ascent(
+    patch: PatchRecipeContext<'_>,
+    settings: &V3CrystalAscentSettings,
+    level_height: f32,
+    candidate: Option<(u64, u8)>,
+    layout: &ResolvedLayoutPlan,
+    assets: &MacroCrystalAscentAssets,
+) -> Result<GeneratedPatchPlan, V3GenerationError> {
+    let mode = candidate.map_or(PatchBuildMode::CanonicalFallback, |(seed, candidate)| {
+        PatchBuildMode::Candidate {
+            world_seed: seed,
+            candidate,
+        }
+    });
+    let fragment = super::crystal_ascent::construct_patch(
+        patch,
+        settings,
+        level_height,
+        mode,
+        &assets.trees,
+        &assets.objects,
+    )
+    .map_err(|issues| {
+        V3GenerationError::RecipeContract(format!(
+            "Macro Crystal Ascent construction failed: {}",
+            issues
+                .into_iter()
+                .map(|issue| issue.detail)
+                .collect::<Vec<_>>()
+                .join("; ")
+        ))
+    })?;
+    match super::crystal_ascent::validate_composite_fragment(
+        &fragment,
+        layout,
+        settings,
+        &assets.objects,
+    ) {
+        WorldValidation::Valid(_) => Ok(fragment),
+        WorldValidation::Invalid(issues) => Err(V3GenerationError::RecipeContract(format!(
+            "Macro Crystal Ascent validation failed: {}",
+            issues
+                .into_iter()
+                .map(|issue| issue.detail)
+                .collect::<Vec<_>>()
+                .join("; ")
+        ))),
+    }
 }
 
 fn reject_candidate_construction(error: V3GenerationError) -> CandidateAttemptError {
@@ -416,6 +582,7 @@ fn construct_fragment(
     planned_levels: Option<&BTreeMap<HexCoord, Level>>,
     alpine_levels: &super::macro_alpine::AlpineHeightField,
     world_support: &BTreeMap<HexCoord, Level>,
+    spanning_reservations: &BTreeSet<HexCoord>,
     streams: Option<SeedStreams>,
     vegetation: &TemperateVegetationSet,
     view_hint: MapViewHint,
@@ -463,6 +630,7 @@ fn construct_fragment(
         .copied()
         .collect::<BTreeSet<_>>();
     let mut protected = patch.protected_approaches();
+    protected.extend(spanning_reservations.iter().copied());
     protected.extend(land_route.iter().copied());
     let liquid_geometry = plan_liquids(
         &patch,
@@ -3371,6 +3539,7 @@ fn canonical_coord_hash(coord: HexCoord) -> u64 {
 
 fn canonical_anchor_settings(
     settings: &MacroLayoutSettings,
+    contracts: &ResolvedMacroContracts,
 ) -> Result<BTreeMap<String, PatchAnchorRef>, V3GenerationError> {
     let ids = settings
         .instances
@@ -3383,22 +3552,35 @@ fn canonical_anchor_settings(
             )
         })
         .collect::<BTreeMap<_, _>>();
-    let route_start = settings.critical_route.first().ok_or_else(|| {
-        V3GenerationError::RecipeContract("Macro critical route has no first instance".to_owned())
-    })?;
-    let route_end = settings.critical_route.last().ok_or_else(|| {
-        V3GenerationError::RecipeContract("Macro critical route has no last instance".to_owned())
-    })?;
-    let hostile_index = settings.critical_route.len().saturating_sub(1).min(2);
-    let hostile = settings
-        .critical_route
-        .get(hostile_index)
-        .unwrap_or(route_end);
-    let mut targets = vec![
-        (PARTY_START, route_start.as_str(), PARTY_START),
-        (HOSTILE_START, hostile.as_str(), HOSTILE_START),
-        (MACRO_ROUTE_END, route_end.as_str(), MACRO_ROUTE_END),
-    ];
+    let mut canonical = contracts
+        .anchor_aliases
+        .iter()
+        .map(|(alias, reference)| {
+            (
+                alias.clone(),
+                PatchAnchorRef {
+                    patch: reference.instance,
+                    local_name: reference.anchor.clone(),
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut targets = Vec::new();
+    if let (Some(route_start), Some(route_end)) = (
+        settings.critical_route.first(),
+        settings.critical_route.last(),
+    ) {
+        let hostile_index = settings.critical_route.len().saturating_sub(1).min(2);
+        let hostile = settings
+            .critical_route
+            .get(hostile_index)
+            .unwrap_or(route_end);
+        targets.extend([
+            (PARTY_START, route_start.as_str(), PARTY_START),
+            (HOSTILE_START, hostile.as_str(), HOSTILE_START),
+            (MACRO_ROUTE_END, route_end.as_str(), MACRO_ROUTE_END),
+        ]);
+    }
     targets.extend(
         [
             (BEACH_REVIEW, "beach-lower", BEACH_REVIEW),
@@ -3426,23 +3608,28 @@ fn canonical_anchor_settings(
             RIVULET_SOURCE_REVIEW,
         ),
     }));
-    targets
-        .into_iter()
-        .map(|(alias, instance, local)| {
-            let patch = ids.get(instance).copied().ok_or_else(|| {
-                V3GenerationError::RecipeContract(format!(
-                    "Macro canonical anchor references missing instance {instance:?}"
-                ))
-            })?;
-            Ok((
+    for (alias, instance, local) in targets {
+        let patch = ids.get(instance).copied().ok_or_else(|| {
+            V3GenerationError::RecipeContract(format!(
+                "Macro canonical anchor references missing instance {instance:?}"
+            ))
+        })?;
+        if canonical
+            .insert(
                 alias.to_owned(),
                 PatchAnchorRef {
                     patch,
                     local_name: local.to_owned(),
                 },
-            ))
-        })
-        .collect()
+            )
+            .is_some()
+        {
+            return Err(V3GenerationError::RecipeContract(format!(
+                "Macro canonical anchor alias {alias:?} is declared more than once"
+            )));
+        }
+    }
+    Ok(canonical)
 }
 
 fn macro_view_hint(
@@ -3516,6 +3703,218 @@ fn is_mountain_range_layout(settings: &MacroLayoutSettings) -> bool {
         )
 }
 
+fn is_crystal_mountain_layout(settings: &MacroLayoutSettings) -> bool {
+    let recipe = |name: &str| {
+        settings
+            .instances
+            .iter()
+            .find(|instance| instance.name == name)
+            .map(|instance| &instance.recipe)
+    };
+    let canonical_tunnels = settings
+        .spanning_features
+        .iter()
+        .filter(|feature| match feature {
+            MacroSpanningFeatureSettings::Tunnel(tunnel) => tunnel.canonical_route,
+        })
+        .count();
+    settings.instances.len() == 4
+        && settings.critical_route.is_empty()
+        && canonical_tunnels == 1
+        && matches!(
+            recipe("crystal-ascent"),
+            Some(V3RecipeSettings::CrystalAscent(_))
+        )
+        && matches!(recipe("summit-forest"), Some(V3RecipeSettings::Forest(_)))
+        && matches!(
+            recipe("inner-mountain"),
+            Some(V3RecipeSettings::Mountains(_))
+        )
+        && matches!(
+            recipe("outer-mountain"),
+            Some(V3RecipeSettings::Mountains(_))
+        )
+}
+
+fn finalize_crystal_mountain_landscape(
+    settings: &MacroLayoutSettings,
+    contracts: &ResolvedMacroContracts,
+    world: &mut GeneratedWorldPlan,
+) -> Result<(), V3GenerationError> {
+    if !is_crystal_mountain_layout(settings) {
+        return Ok(());
+    }
+    let patch_id = |name: &str| {
+        settings
+            .instances
+            .iter()
+            .position(|instance| instance.name == name)
+            .and_then(|index| u32::try_from(index).ok())
+            .map(PatchId)
+            .ok_or_else(|| {
+                V3GenerationError::RecipeContract(format!(
+                    "Crystal Mountain is missing logical instance {name:?}"
+                ))
+            })
+    };
+    let crystal = patch_id("crystal-ascent")?;
+    let forest = patch_id("summit-forest")?;
+    let outer = patch_id("outer-mountain")?;
+    let connection = contracts
+        .walker_connections
+        .iter()
+        .find(|connection| {
+            BTreeSet::from([connection.first, connection.second])
+                == BTreeSet::from([crystal, forest])
+        })
+        .ok_or_else(|| {
+            V3GenerationError::RecipeContract(
+                "Crystal Mountain has no explicit Crystal-to-Forest walker connection".to_owned(),
+            )
+        })?;
+    if connection.level != 150 || connection.port.lanes.len() != 4 {
+        return Err(V3GenerationError::RecipeContract(
+            "Crystal Mountain summit walker connection must remain exactly four-wide at level 150"
+                .to_owned(),
+        ));
+    }
+    let (forest_approach, forest_seam) = if connection.first == forest {
+        (
+            &connection.port.first_approach,
+            connection
+                .port
+                .lanes
+                .iter()
+                .map(|(first, _)| *first)
+                .collect::<BTreeSet<_>>(),
+        )
+    } else {
+        (
+            &connection.port.second_approach,
+            connection
+                .port
+                .lanes
+                .iter()
+                .map(|(_, second)| *second)
+                .collect::<BTreeSet<_>>(),
+        )
+    };
+    let clearing_surfaces = forest_approach
+        .iter()
+        .copied()
+        .map(|coord| TilePos::new(coord, connection.level))
+        .collect::<BTreeSet<_>>();
+    if clearing_surfaces.len() < 4
+        || clearing_surfaces.iter().any(|surface| {
+            world
+                .volume
+                .surfaces
+                .get(surface)
+                .is_none_or(|metadata| metadata.access != SurfaceAccess::Ordinary)
+                || world.blockers.contains(surface)
+                || world
+                    .features
+                    .by_id
+                    .values()
+                    .any(|feature| feature.root == *surface)
+        })
+    {
+        return Err(V3GenerationError::RecipeContract(
+            "Crystal Mountain basin approach is not a feature-free ordinary level-150 clearing"
+                .to_owned(),
+        ));
+    }
+    let basin = clearing_surfaces
+        .iter()
+        .copied()
+        .min_by_key(|surface| {
+            let seam_distance = forest_seam
+                .iter()
+                .map(|coord| surface.coord.distance(*coord))
+                .min()
+                .unwrap_or_default();
+            (Reverse(seam_distance), *surface)
+        })
+        .ok_or_else(|| {
+            V3GenerationError::RecipeContract(
+                "Crystal Mountain basin clearing has no stable review footing".to_owned(),
+            )
+        })?;
+    match world
+        .features
+        .clearings
+        .get("crystal_mountain.basin_clearing")
+    {
+        Some(existing) if existing.surfaces == clearing_surfaces => {}
+        Some(_) => {
+            return Err(V3GenerationError::RecipeContract(
+                "Crystal Mountain basin clearing collides with another feature membership"
+                    .to_owned(),
+            ));
+        }
+        None => {
+            world.features.clearings.insert(
+                "crystal_mountain.basin_clearing".to_owned(),
+                FeatureClearing {
+                    surfaces: clearing_surfaces,
+                },
+            );
+        }
+    }
+
+    let outer_patch = world.layout.patches.get(&outer).ok_or_else(|| {
+        V3GenerationError::RecipeContract(
+            "Crystal Mountain outer ridge has no resolved patch".to_owned(),
+        )
+    })?;
+    let ridge = world
+        .volume
+        .surfaces
+        .iter()
+        .filter(|(surface, metadata)| {
+            outer_patch.mask.contains(&surface.coord)
+                && metadata.access == SurfaceAccess::Ordinary
+                && !world.blockers.contains(surface)
+        })
+        .map(|(surface, _)| *surface)
+        .min_by_key(|surface| (Reverse(surface.level), *surface))
+        .ok_or_else(|| {
+            V3GenerationError::RecipeContract(
+                "Crystal Mountain outer ridge has no ordinary review footing".to_owned(),
+            )
+        })?;
+
+    let foot = world
+        .anchors
+        .get("crystal_mountain.foot_apron")
+        .copied()
+        .ok_or_else(|| {
+            V3GenerationError::RecipeContract(
+                "Crystal Mountain tunnel did not publish its foot apron".to_owned(),
+            )
+        })?;
+    for (name, position) in [
+        ("crystal_mountain.basin_clearing", basin),
+        ("crystal_mountain.ridge", ridge),
+        (PARTY_START, foot),
+        (HOSTILE_START, basin),
+        (MACRO_ROUTE_END, basin),
+    ] {
+        match world.anchors.get(name) {
+            Some(existing) if *existing == position => {}
+            Some(existing) => {
+                return Err(V3GenerationError::RecipeContract(format!(
+                    "Crystal Mountain anchor {name:?} conflicts at {existing:?} instead of {position:?}"
+                )));
+            }
+            None => {
+                world.anchors.insert(name.to_owned(), position);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_macro_world(
     settings: &ProceduralV3Settings,
     plan: &GeneratedWorldPlan,
@@ -3526,6 +3925,7 @@ fn validate_macro_world(
         )]);
     };
     let mountain_range_layout = is_mountain_range_layout(macro_settings);
+    let crystal_mountain_layout = is_crystal_mountain_layout(macro_settings);
     let mut issues = plan.validate();
     if plan.layout.grid_radius != 77 || plan.layout.footprint.len() != 18_019 {
         issues.push(macro_issue(format!(
@@ -3675,6 +4075,9 @@ fn validate_macro_world(
     validate_coastal_coverage(macro_settings, plan, &mut issues);
     validate_coastal_vegetation(macro_settings, plan, &mut issues);
     validate_waterfall_flow(macro_settings, plan, &mut issues);
+    if crystal_mountain_layout {
+        validate_crystal_mountain(macro_settings, plan, &distances, &mut issues);
+    }
     if mountain_range_layout {
         validate_mountain_watershed(macro_settings, plan, &mut issues);
         issues.extend(
@@ -3822,6 +4225,380 @@ fn validate_macro_world(
         report,
         mountain_range,
     })
+}
+
+fn validate_crystal_mountain(
+    settings: &MacroLayoutSettings,
+    plan: &GeneratedWorldPlan,
+    distances: &BTreeMap<TilePos, u32>,
+    issues: &mut Vec<WorldValidationIssue>,
+) {
+    const WORLD_NAMESPACE_PREFIX: u32 = 63;
+    const MACRO_LOCAL_ID_BITS: u32 = 26;
+    const TUNNEL_ROUTE: &str = "crystal_mountain.tunnel";
+    const REQUIRED_ANCHORS: [&str; 9] = [
+        "crystal_mountain.foot_apron",
+        "crystal_mountain.tunnel_mouth",
+        "crystal_mountain.midpoint",
+        "crystal_mountain.gothic_transition",
+        "crystal_mountain.ascent_threshold",
+        "crystal_mountain.summit_exit",
+        "crystal_mountain.basin_clearing",
+        "crystal_mountain.ridge",
+        MACRO_ROUTE_END,
+    ];
+
+    let instance_id = |name: &str| {
+        settings
+            .instances
+            .iter()
+            .position(|instance| instance.name == name)
+            .and_then(|index| u32::try_from(index).ok())
+            .map(PatchId)
+    };
+    let patch = |name: &str| {
+        instance_id(name).and_then(|id| plan.layout.patches.get(&id).map(|patch| (id, patch)))
+    };
+
+    let expected_site = HexCoord::ORIGIN
+        .within_radius(32)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    match patch("crystal-ascent") {
+        Some((_, crystal)) if expected_site.is_subset(&crystal.mask) => {}
+        Some((_, crystal)) => issues.push(macro_issue(format!(
+            "Crystal Mountain landmark must contain the complete radius-32 site, got {} columns",
+            crystal.mask.len()
+        ))),
+        None => issues.push(macro_issue(
+            "Crystal Mountain has no resolved Crystal Ascent patch",
+        )),
+    }
+
+    for name in REQUIRED_ANCHORS {
+        if !plan.anchors.contains_key(name) {
+            issues.push(macro_issue(format!(
+                "Crystal Mountain is missing stable anchor {name:?}"
+            )));
+        }
+    }
+    for (alias, expected_level) in [
+        ("crystal_mountain.foot_apron", 6),
+        ("crystal_mountain.tunnel_mouth", 6),
+        ("crystal_mountain.midpoint", 6),
+        ("crystal_mountain.gothic_transition", 6),
+        ("crystal_mountain.ascent_threshold", 6),
+        ("crystal_mountain.summit_exit", 150),
+    ] {
+        if plan
+            .anchors
+            .get(alias)
+            .is_some_and(|anchor| anchor.level != expected_level)
+        {
+            issues.push(macro_issue(format!(
+                "Crystal Mountain anchor {alias:?} must remain at level {expected_level}"
+            )));
+        }
+    }
+    if plan
+        .anchors
+        .get("crystal_mountain.basin_clearing")
+        .is_some_and(|anchor| !(149..=151).contains(&anchor.level))
+    {
+        issues.push(macro_issue(
+            "Crystal Mountain basin clearing must remain within levels 149..=151",
+        ));
+    }
+    if plan
+        .anchors
+        .get("crystal_mountain.ridge")
+        .is_some_and(|anchor| !(178..=192).contains(&anchor.level))
+    {
+        issues.push(macro_issue(
+            "Crystal Mountain ridge review anchor must remain within levels 178..=192",
+        ));
+    }
+
+    let Some(route) = plan.features.protected_routes.get(TUNNEL_ROUTE) else {
+        issues.push(macro_issue(
+            "Crystal Mountain has no exact protected tunnel route",
+        ));
+        return;
+    };
+    if route.centerline.is_empty() || route.surfaces.is_empty() {
+        issues.push(macro_issue(
+            "Crystal Mountain tunnel route has no centerline or reserved footprint",
+        ));
+    }
+    if route.surfaces.iter().any(|surface| {
+        surface.level != 6
+            || plan
+                .volume
+                .surfaces
+                .get(surface)
+                .is_none_or(|metadata| metadata.access != SurfaceAccess::Ordinary)
+    }) {
+        issues.push(macro_issue(
+            "Crystal Mountain tunnel must contain only exact level-6 ordinary floors",
+        ));
+    }
+
+    let route_owners = route
+        .surfaces
+        .iter()
+        .filter_map(|surface| {
+            plan.layout
+                .patches
+                .iter()
+                .find_map(|(id, patch)| patch.mask.contains(&surface.coord).then_some(*id))
+        })
+        .collect::<BTreeSet<_>>();
+    let expected_route_owners = [
+        instance_id("outer-mountain"),
+        instance_id("inner-mountain"),
+        instance_id("crystal-ascent"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<BTreeSet<_>>();
+    if route_owners != expected_route_owners {
+        issues.push(macro_issue(format!(
+            "Crystal Mountain tunnel crosses unexpected logical instances: {route_owners:?}"
+        )));
+    }
+
+    let contracts = resolve_macro_contracts(settings, &plan.layout);
+    match contracts {
+        Ok(contracts) => {
+            for feature in contracts.spanning_features.values() {
+                let super::layout::ResolvedMacroSpanningFeature::Tunnel(tunnel) = feature;
+                if !tunnel.canonical_route {
+                    continue;
+                }
+                for seam in &tunnel.seams {
+                    for (source, destination) in &seam.port.lanes {
+                        for coord in [source, destination] {
+                            if !route
+                                .surfaces
+                                .contains(&TilePos::new(*coord, tunnel.floor_level))
+                            {
+                                issues.push(macro_issue(format!(
+                                    "Crystal Mountain tunnel omits declared seam lane {coord:?}"
+                                )));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Err(error) => issues.push(macro_issue(format!(
+            "Crystal Mountain resolved contracts changed during validation: {error}"
+        ))),
+    }
+
+    let unified = plan
+        .interiors
+        .by_id
+        .iter()
+        .find(|(id, _)| id.0 >> MACRO_LOCAL_ID_BITS == WORLD_NAMESPACE_PREFIX);
+    if plan.interiors.by_id.len() != 1 || unified.is_none() {
+        issues.push(macro_issue(
+            "Crystal Mountain tunnel and Crystal Ascent must form one world-owned interior",
+        ));
+    }
+    if let Some((region, interior)) = unified {
+        if interior.entrances.len() != 8
+            || interior
+                .entrances
+                .iter()
+                .filter(|entrance| entrance.level == 6)
+                .count()
+                != 4
+            || interior
+                .entrances
+                .iter()
+                .filter(|entrance| entrance.level == 150)
+                .count()
+                != 4
+        {
+            issues.push(macro_issue(
+                "Crystal Mountain interior must expose only four foot and four summit threshold entrances",
+            ));
+        }
+        let exterior_apron = route
+            .surfaces
+            .iter()
+            .filter(|surface| {
+                plan.volume
+                    .surfaces
+                    .get(surface)
+                    .is_some_and(|metadata| metadata.interior.is_none())
+            })
+            .copied()
+            .collect::<BTreeSet<_>>();
+        if exterior_apron.len() != 8
+            || exterior_apron.iter().any(|surface| {
+                surface
+                    .coord
+                    .neighbors()
+                    .into_iter()
+                    .all(|neighbor| plan.volume.mask.contains(&neighbor))
+            })
+            || route.surfaces.iter().any(|surface| {
+                !exterior_apron.contains(surface)
+                    && plan
+                        .volume
+                        .surfaces
+                        .get(surface)
+                        .is_none_or(|metadata| metadata.interior != Some(*region))
+            })
+        {
+            issues.push(macro_issue(
+                "Crystal Mountain tunnel must have exactly eight exterior apron floors before its unified interior",
+            ));
+        }
+
+        let world_lights = plan
+            .lights
+            .iter()
+            .filter(|(id, _)| id.0 >> MACRO_LOCAL_ID_BITS == WORLD_NAMESPACE_PREFIX)
+            .collect::<Vec<_>>();
+        let fixture_origins = world_lights
+            .iter()
+            .map(|(_, light)| light.origin)
+            .collect::<BTreeSet<_>>();
+        for origin in fixture_origins {
+            let pair = world_lights
+                .iter()
+                .filter(|(_, light)| light.origin == origin)
+                .map(|(_, light)| *light)
+                .collect::<Vec<_>>();
+            let bright = pair.iter().filter(|light| {
+                light.level == IlluminationLevel::Bright
+                    && light.radius == 4
+                    && matches!(
+                        light.presentation,
+                        Some(PlannedLightPresentation::CaveCrystal(_))
+                    )
+            });
+            let dim = pair.iter().filter(|light| {
+                light.level == IlluminationLevel::Dim
+                    && light.radius == 18
+                    && light.presentation.is_none()
+            });
+            if pair.len() != 2 || bright.count() != 1 || dim.count() != 1 {
+                issues.push(macro_issue(format!(
+                    "Crystal Mountain tunnel fixture at {origin:?} lacks one exact Bright-4/Dim-18 pair"
+                )));
+                break;
+            }
+        }
+        let dim_sources = world_lights
+            .iter()
+            .map(|(_, light)| *light)
+            .filter(|light| light.level == IlluminationLevel::Dim)
+            .collect::<Vec<_>>();
+        if route.surfaces.iter().any(|surface| {
+            !dim_sources.iter().any(|source| {
+                upper_dome_contains(
+                    ExactGridPoint::voxel_center(source.origin),
+                    ExactGridPoint::voxel_center(*surface),
+                    source.radius,
+                )
+            })
+        }) {
+            issues.push(macro_issue(
+                "every required Crystal Mountain tunnel floor must resolve to at least Dim",
+            ));
+        }
+    }
+
+    let route_order = [
+        "crystal_mountain.foot_apron",
+        "crystal_mountain.tunnel_mouth",
+        "crystal_mountain.midpoint",
+        "crystal_mountain.gothic_transition",
+        "crystal_mountain.ascent_threshold",
+        "crystal_mountain.summit_exit",
+        "crystal_mountain.basin_clearing",
+    ]
+    .into_iter()
+    .filter_map(|name| {
+        plan.anchors
+            .get(name)
+            .and_then(|anchor| distances.get(anchor))
+    })
+    .copied()
+    .collect::<Vec<_>>();
+    if route_order.len() != 7
+        || route_order
+            .windows(2)
+            .any(|pair| matches!(pair, [first, second] if first >= second))
+    {
+        issues.push(macro_issue(format!(
+            "Crystal Mountain route anchors are not reached in canonical order: {route_order:?}"
+        )));
+    }
+
+    if let (Some(party), Some(basin), Some(lower_terminal)) = (
+        plan.anchors.get(PARTY_START).copied(),
+        plan.anchors.get("crystal_mountain.basin_clearing").copied(),
+        plan.features
+            .protected_routes
+            .iter()
+            .find(|(name, _)| name.ends_with("crystal_ascent.lower_terminal_pad"))
+            .map(|(_, route)| route),
+    ) {
+        let mut cut_blockers = plan.blockers.clone();
+        cut_blockers.extend(lower_terminal.surfaces.iter().copied());
+        let without_ascent = OrdinaryGraph::from_volume(&plan.volume, Some(&cut_blockers));
+        if without_ascent.distances_from(party).contains_key(&basin) {
+            issues.push(macro_issue(
+                "Crystal Mountain exposes an ordinary foot-to-basin bypass outside Crystal Ascent",
+            ));
+        }
+    }
+
+    for name in ["inner-mountain", "outer-mountain"] {
+        let Some((_, mountain)) = patch(name) else {
+            continue;
+        };
+        if distances.keys().any(|surface| {
+            mountain.mask.contains(&surface.coord)
+                && surface.level != 6
+                && !route.surfaces.contains(surface)
+        }) {
+            issues.push(macro_issue(format!(
+                "Crystal Mountain party can reach the high {name:?} surface outside the tunnel"
+            )));
+        }
+    }
+    if let Some((_, forest)) = patch("summit-forest") {
+        let tree_count = plan
+            .features
+            .by_id
+            .values()
+            .filter(|feature| {
+                feature.kind == FeatureKind::Tree && forest.mask.contains(&feature.root.coord)
+            })
+            .count();
+        if tree_count == 0 {
+            issues.push(macro_issue(
+                "Crystal Mountain summit Forest must retain high-elevation broadleaf trees",
+            ));
+        }
+        if plan
+            .volume
+            .surfaces
+            .keys()
+            .filter(|surface| forest.mask.contains(&surface.coord))
+            .any(|surface| !(149..=151).contains(&surface.level))
+        {
+            issues.push(macro_issue(
+                "Crystal Mountain summit Forest must remain within levels 149..=151",
+            ));
+        }
+    }
 }
 
 fn validate_sea_strata(
@@ -4380,6 +5157,8 @@ mod tests {
 
     const MOUNTAIN_RANGE_RON: &str =
         include_str!("../../../../assets/config/worlds/procedural-mountain-range.ron");
+    const CRYSTAL_MOUNTAIN_RON: &str =
+        include_str!("../../../../assets/config/worlds/procedural-crystal-mountain.ron");
     const TWO_RINGS_RON: &str =
         include_str!("../../../../assets/config/worlds/procedural-two-rings.ron");
 
@@ -4427,6 +5206,212 @@ mod tests {
         assert_eq!(adjacencies, 90);
         assert_eq!(outer_sides, 42);
         assert_eq!(HexCoord::ORIGIN.within_radius(77).len(), 18_019);
+    }
+
+    #[test]
+    fn shipped_crystal_mountain_resolves_exact_landmark_tunnel_and_summit_contracts() {
+        let map = crystal_mountain_map();
+        let settings = v3_settings(map);
+        let setup = resolve_macro_world_setup(map.grid_radius, settings, runtime_art_catalog())
+            .expect("shipped Crystal Mountain setup should resolve");
+        assert_eq!(setup.layout.footprint.len(), 18_019);
+        let crystal = setup
+            .layout
+            .patches
+            .get(&PatchId(0))
+            .expect("central Crystal patch should resolve");
+        let authored_site = HexCoord::ORIGIN
+            .within_radius(32)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        assert!(
+            authored_site.is_subset(&crystal.mask),
+            "the central-seven mask must be expanded enough to contain the authored site"
+        );
+        let mask_is_connected = |mask: &BTreeSet<HexCoord>| {
+            let Some(start) = mask.first().copied() else {
+                return false;
+            };
+            let mut reached = BTreeSet::from([start]);
+            let mut pending = VecDeque::from([start]);
+            while let Some(coord) = pending.pop_front() {
+                for neighbor in coord.neighbors() {
+                    if mask.contains(&neighbor) && reached.insert(neighbor) {
+                        pending.push_back(neighbor);
+                    }
+                }
+            }
+            reached.len() == mask.len()
+        };
+        assert!(setup
+            .layout
+            .patches
+            .values()
+            .all(|patch| mask_is_connected(&patch.mask)));
+
+        let connection = setup
+            .contracts
+            .walker_connections
+            .first()
+            .expect("summit walker connection should resolve");
+        assert_eq!(connection.level, 150);
+        assert_eq!(connection.port.lanes.len(), 4);
+        let tunnel = setup
+            .contracts
+            .spanning_features
+            .values()
+            .next()
+            .expect("canonical tunnel should resolve");
+        let super::super::layout::ResolvedMacroSpanningFeature::Tunnel(tunnel) = tunnel;
+        assert!(tunnel.canonical_route);
+        assert_eq!(
+            tunnel.instance_route,
+            vec![PatchId(3), PatchId(2), PatchId(0)]
+        );
+        assert_eq!(tunnel.seams.len(), 2);
+        assert!(tunnel.seams.iter().all(|seam| seam.port.lanes.len() == 4));
+
+        let assets = setup
+            .crystal_ascent_assets
+            .as_ref()
+            .expect("Crystal assets should be preflighted");
+        let V3LayoutSettings::Macro(macro_settings) = &settings.layout else {
+            panic!("shipped Crystal Mountain must remain Macro");
+        };
+        let Some(V3RecipeSettings::CrystalAscent(crystal_settings)) = macro_settings
+            .instances
+            .first()
+            .map(|instance| &instance.recipe)
+        else {
+            panic!("central instance must remain Crystal Ascent");
+        };
+        let patch = PatchRecipeContext::resolve(&setup.layout, PatchId(0))
+            .expect("central Crystal patch context should resolve");
+        let fragment = construct_macro_crystal_ascent(
+            patch,
+            crystal_settings,
+            map.level_height,
+            None,
+            &setup.layout,
+            assets,
+        )
+        .expect("composite Crystal Ascent should construct");
+        let upper_terminal = fragment
+            .features
+            .protected_routes
+            .get("crystal_ascent.upper_terminal_pad")
+            .expect("Crystal Ascent should publish its four-wide upper terminal");
+        assert_eq!(upper_terminal.surfaces.len(), 4);
+        let crystal_approach = if connection.first == PatchId(0) {
+            &connection.port.first_approach
+        } else {
+            &connection.port.second_approach
+        };
+        assert!(
+            upper_terminal
+                .surfaces
+                .iter()
+                .all(|surface| crystal_approach.contains(&surface.coord)),
+            "upper terminal {:?} must belong to resolved Crystal approach {:?}",
+            upper_terminal.surfaces,
+            crystal_approach
+        );
+        let crystal_lanes = if connection.first == PatchId(0) {
+            connection
+                .port
+                .lanes
+                .iter()
+                .map(|(coord, _)| *coord)
+                .collect::<BTreeSet<_>>()
+        } else {
+            connection
+                .port
+                .lanes
+                .iter()
+                .map(|(_, coord)| *coord)
+                .collect::<BTreeSet<_>>()
+        };
+        assert!(crystal_lanes.iter().all(|coord| {
+            fragment
+                .volume
+                .surfaces
+                .contains_key(&TilePos::new(*coord, 150))
+        }));
+
+        let aliases = canonical_anchor_settings(macro_settings, &setup.contracts)
+            .expect("Crystal Mountain aliases should resolve");
+        assert_eq!(aliases.len(), 8);
+        assert!(!aliases.contains_key(PARTY_START));
+        assert!(aliases.contains_key("crystal_mountain.summit_exit"));
+    }
+
+    #[test]
+    fn shipped_crystal_mountain_constructs_one_complete_spanning_interior() {
+        const WORLD_NAMESPACE_PREFIX: u32 = 63;
+        const MACRO_LOCAL_ID_BITS: u32 = 26;
+
+        let map = crystal_mountain_map();
+        let settings = v3_settings(map);
+        let setup = resolve_macro_world_setup(map.grid_radius, settings, runtime_art_catalog())
+            .expect("shipped Crystal Mountain setup should resolve");
+        let world = construct_world(map.level_height, setup, None)
+            .expect("shipped Crystal Mountain canonical world should construct");
+        assert!(world.validate().is_empty());
+        match validate_macro_world(settings, &world) {
+            WorldValidation::Valid(_) => {}
+            WorldValidation::Invalid(issues) => panic!(
+                "shipped Crystal Mountain recipe validation failed: {}",
+                format_issues(&issues)
+            ),
+        }
+
+        let world_interiors = world
+            .interiors
+            .by_id
+            .iter()
+            .filter(|(id, _)| id.0 >> MACRO_LOCAL_ID_BITS == WORLD_NAMESPACE_PREFIX)
+            .collect::<Vec<_>>();
+        assert_eq!(world_interiors.len(), 1);
+        let (interior_id, interior) = world_interiors
+            .first()
+            .copied()
+            .expect("Crystal Mountain must publish one world-owned interior");
+        assert_eq!(interior.entrances.len(), 8);
+
+        let route = world
+            .features
+            .protected_routes
+            .get("crystal_mountain.tunnel")
+            .expect("Crystal Mountain should publish its exact tunnel route");
+        let exterior = route
+            .surfaces
+            .iter()
+            .filter(|surface| {
+                world
+                    .volume
+                    .surfaces
+                    .get(surface)
+                    .is_some_and(|metadata| metadata.interior.is_none())
+            })
+            .count();
+        assert_eq!(exterior, 8);
+        assert!(route.surfaces.iter().all(|surface| {
+            world.volume.surfaces.get(surface).is_some_and(|metadata| {
+                metadata.interior.is_none() || metadata.interior == Some(*interior_id)
+            })
+        }));
+        for anchor in [
+            PARTY_START,
+            "crystal_mountain.tunnel_mouth",
+            "crystal_mountain.midpoint",
+            "crystal_mountain.gothic_transition",
+            "crystal_mountain.ascent_threshold",
+            "crystal_mountain.summit_exit",
+            "crystal_mountain.basin_clearing",
+            "crystal_mountain.ridge",
+        ] {
+            assert!(world.anchors.contains_key(anchor), "missing {anchor:?}");
+        }
     }
 
     #[test]
@@ -4588,8 +5573,10 @@ mod tests {
         let V3LayoutSettings::Macro(settings) = &v3_settings(mountain_range_map()).layout else {
             panic!("tracked Mountain Range should use the Macro layout");
         };
-        let anchor_settings =
-            canonical_anchor_settings(settings).expect("tracked canonical anchors should resolve");
+        let contracts = resolve_macro_contracts(settings, &plan.layout)
+            .expect("tracked Macro contracts should resolve");
+        let anchor_settings = canonical_anchor_settings(settings, &contracts)
+            .expect("tracked canonical anchors should resolve");
         let liquid_coords = plan
             .liquids
             .bodies
@@ -5214,6 +6201,14 @@ mod tests {
         static SETTINGS: OnceLock<MapSettings> = OnceLock::new();
         SETTINGS.get_or_init(|| {
             ron::from_str(MOUNTAIN_RANGE_RON).expect("tracked Mountain Range settings should parse")
+        })
+    }
+
+    fn crystal_mountain_map() -> &'static MapSettings {
+        static SETTINGS: OnceLock<MapSettings> = OnceLock::new();
+        SETTINGS.get_or_init(|| {
+            ron::from_str(CRYSTAL_MOUNTAIN_RON)
+                .expect("tracked Crystal Mountain settings should parse")
         })
     }
 

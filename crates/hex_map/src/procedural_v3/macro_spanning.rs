@@ -45,6 +45,7 @@ const WORLD_NAMESPACE_PREFIX: u32 = 63;
 const WORLD_NAMESPACE_BASE: u32 = WORLD_NAMESPACE_PREFIX << MACRO_LOCAL_ID_BITS;
 const WORLD_LOCAL_ID_LIMIT: u32 = 1 << MACRO_LOCAL_ID_BITS;
 const INTERIOR_LOCAL_BASE: u32 = 1;
+const SEAM_CLOSURE_LOCAL_BASE: u32 = 512;
 const LIGHT_LOCAL_BASE: u32 = 1_024;
 const LIGHTS_PER_TUNNEL: u32 = 4_096;
 
@@ -1196,6 +1197,11 @@ fn plan_light_sites(
                         && !occupied.contains(candidate)
                         && !mouth.contains(candidate)
                         && !forbidden.contains(candidate)
+                        && candidate.neighbors().into_iter().all(|neighbor| {
+                            owner_by_coord
+                                .get(&neighbor)
+                                .is_none_or(|neighbor_owner| *neighbor_owner == owner)
+                        })
                         && candidate
                             .neighbors()
                             .into_iter()
@@ -1435,15 +1441,22 @@ fn preflight_application(
             )));
         }
     }
-    for structure in world.structures.by_id.values() {
-        if structure
+    for (structure_id, structure) in &world.structures.by_id {
+        if let Some(voxel) = structure
             .voxels
             .iter()
-            .any(|voxel| removed_by_tunnel(tunnel, *voxel).unwrap_or(true))
+            .copied()
+            .find(|voxel| removed_by_tunnel(tunnel, *voxel).unwrap_or(true))
         {
             return Err(MacroSpanningError::new(format!(
-                "tunnel {:?} would remove an authored structure voxel",
-                tunnel.name
+                "tunnel {:?} would remove authored structure {structure_id:?} voxel {voxel:?} (ribbon={}, mouth={}, light_alcove={})",
+                tunnel.name,
+                tunnel.ribbon.contains(&voxel.coord),
+                tunnel.mouth.contains(&voxel.coord),
+                tunnel
+                    .light_sites
+                    .iter()
+                    .any(|site| site.position.coord == voxel.coord),
             )));
         }
     }
@@ -1618,10 +1631,66 @@ fn apply_tunnel(
         metadata.interior = Some(tunnel.unified_interior);
     }
 
+    close_undeclared_tunnel_seams(world, tunnel, ordinal)?;
     publish_tunnel_lights(world, tunnel, ordinal)?;
     publish_tunnel_route(world, tunnel)?;
     rebuild_unified_interior(world, tunnel)?;
     publish_tunnel_anchors(world, tunnel)?;
+    Ok(())
+}
+
+fn close_undeclared_tunnel_seams(
+    world: &mut GeneratedWorldPlan,
+    tunnel: &PlannedMacroTunnel,
+    ordinal: usize,
+) -> Result<(), MacroSpanningError> {
+    let ordinal = u32::try_from(ordinal)
+        .map_err(|error| MacroSpanningError::new(format!("tunnel ordinal overflowed: {error}")))?;
+    let region = SpecialMovementRegion(world_owned_id(
+        SEAM_CLOSURE_LOCAL_BASE
+            .checked_add(ordinal)
+            .ok_or_else(|| MacroSpanningError::new("seam-closure namespace overflowed"))?,
+    )?);
+    let route = tunnel
+        .ribbon
+        .union(&tunnel.mouth)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let mut close = BTreeSet::new();
+    for edge in world.layout.shared_edges.values() {
+        for (first, second) in &edge.boundary_pairs {
+            let first_position = TilePos::new(*first, tunnel.floor_level);
+            let second_position = TilePos::new(*second, tunnel.floor_level);
+            let first_ordinary = world
+                .volume
+                .surfaces
+                .get(&first_position)
+                .is_some_and(|metadata| metadata.access == SurfaceAccess::Ordinary);
+            let second_ordinary = world
+                .volume
+                .surfaces
+                .get(&second_position)
+                .is_some_and(|metadata| metadata.access == SurfaceAccess::Ordinary);
+            if !first_ordinary || !second_ordinary {
+                continue;
+            }
+            match (route.contains(first), route.contains(second)) {
+                (true, false) => {
+                    close.insert(second_position);
+                }
+                (false, true) => {
+                    close.insert(first_position);
+                }
+                (true, true) | (false, false) => {}
+            }
+        }
+    }
+    for position in close {
+        let metadata = world.volume.surfaces.get_mut(&position).ok_or_else(|| {
+            MacroSpanningError::new(format!("tunnel seam closure lost surface {position:?}"))
+        })?;
+        metadata.access = SurfaceAccess::SpecialMovement(region);
+    }
     Ok(())
 }
 

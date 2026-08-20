@@ -1078,6 +1078,21 @@ fn resolve_macro(
                     ResolvedLiquidPort::Dry => {}
                 }
             }
+            if let Some((width, level)) = explicit_walker_pairs.get(&pair) {
+                align_macro_crystal_walker_port(
+                    &mut contract,
+                    first_id,
+                    first_instance,
+                    second_id,
+                    second_instance,
+                    *width,
+                    *level,
+                    &all_pairs,
+                    &masks,
+                    &footprint,
+                    settings.approach_depth,
+                )?;
+            }
             let edge_id = ResolvedEdgeId(u32::try_from(shared_edges.len()).unwrap_or(u32::MAX));
             shared_edges.insert(edge_id, contract);
         }
@@ -1093,6 +1108,133 @@ fn resolve_macro(
     };
     resolve_macro_contracts(settings, &resolved)?;
     Ok(resolved)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the exact authored port is resolved from both endpoint recipes and final masks"
+)]
+fn align_macro_crystal_walker_port(
+    contract: &mut ResolvedEdgeContract,
+    first_id: PatchId,
+    first: &MacroBiomeInstanceSettings,
+    second_id: PatchId,
+    second: &MacroBiomeInstanceSettings,
+    width: u32,
+    level: Level,
+    boundary_pairs: &BTreeSet<(HexCoord, HexCoord)>,
+    masks: &BTreeMap<PatchId, BTreeSet<HexCoord>>,
+    footprint: &BTreeSet<HexCoord>,
+    approach_depth: u32,
+) -> Result<(), LayoutValidationError> {
+    let crystal = match (&first.recipe, &second.recipe) {
+        (V3RecipeSettings::CrystalAscent(settings), _) => Some((first_id, first, settings, true)),
+        (_, V3RecipeSettings::CrystalAscent(settings)) => {
+            Some((second_id, second, settings, false))
+        }
+        _ => None,
+    };
+    let Some((crystal_id, instance, settings, crystal_is_first)) = crystal else {
+        return Ok(());
+    };
+    let summit = settings
+        .base_level
+        .checked_add(settings.rise_levels)
+        .ok_or_else(|| invalid_macro_contract("CrystalAscent summit level overflowed"))?;
+    if level != summit {
+        return Err(invalid_macro_contract(format!(
+            "CrystalAscent explicit walker must meet its upper terminal at level {summit}"
+        )));
+    }
+    let crystal_mask = masks.get(&crystal_id).ok_or_else(|| {
+        invalid_macro_contract("CrystalAscent explicit walker has no resolved mask")
+    })?;
+    let terminal = super::crystal_ascent::macro_upper_terminal_coords(
+        crystal_mask,
+        instance.rotation_turns,
+        summit,
+    )
+    .map_err(|error| {
+        invalid_macro_contract(format!(
+            "CrystalAscent upper-terminal projection failed: {error}"
+        ))
+    })?;
+    let authored_approach = super::crystal_ascent::macro_upper_terminal_approach_coords(
+        crystal_mask,
+        instance.rotation_turns,
+        summit,
+        approach_depth,
+    )
+    .map_err(|error| {
+        invalid_macro_contract(format!(
+            "CrystalAscent upper-terminal approach projection failed: {error}"
+        ))
+    })?;
+    let first_mask = masks.get(&first_id).ok_or_else(|| {
+        invalid_macro_contract("explicit walker first instance has no resolved mask")
+    })?;
+    let second_mask = masks.get(&second_id).ok_or_else(|| {
+        invalid_macro_contract("explicit walker second instance has no resolved mask")
+    })?;
+    let selected = macro_boundary_port_candidates(
+        boundary_pairs,
+        first_mask,
+        second_mask,
+        width,
+        approach_depth,
+        footprint,
+    )
+    .into_iter()
+    .filter(|candidate| {
+        let crystal_approach = if crystal_is_first {
+            &candidate.port.first_approach
+        } else {
+            &candidate.port.second_approach
+        };
+        let crystal_lanes =
+            candidate.port.lanes.iter().map(
+                |(first, second)| {
+                    if crystal_is_first {
+                        *first
+                    } else {
+                        *second
+                    }
+                },
+            );
+        terminal.is_subset(crystal_approach)
+            && crystal_lanes
+                .into_iter()
+                .all(|coord| authored_approach.contains(&coord))
+            && liquid_port_ref(&contract.liquid)
+                .is_none_or(|liquid| ports_are_disjoint(liquid, &candidate.port))
+    })
+    .map(|candidate| candidate.port)
+    .min();
+    let Some(mut port) = selected else {
+        return Err(invalid_macro_contract(
+            "CrystalAscent upper terminal cannot resolve one exact four-wide summit port",
+        ));
+    };
+    if crystal_is_first {
+        port.first_approach.clone_from(&authored_approach);
+    } else {
+        port.second_approach.clone_from(&authored_approach);
+    }
+    contract.walker.ports = vec![port];
+    let mut first_approach = BTreeSet::new();
+    let mut second_approach = BTreeSet::new();
+    for port in contract
+        .walker
+        .ports
+        .iter()
+        .chain(liquid_port_ref(&contract.liquid))
+    {
+        first_approach.extend(port.first_approach.iter().copied());
+        second_approach.extend(port.second_approach.iter().copied());
+    }
+    contract.protected_approaches =
+        BTreeMap::from([(first_id, first_approach), (second_id, second_approach)]);
+    Ok(())
 }
 
 /// Applies exact authored landmark claims before shared seams are constructed.
@@ -1283,6 +1425,20 @@ pub(crate) fn resolve_macro_contracts(
             .iter()
             .map(|name| macro_named_patch(&named_ids, name, "tunnel instance route"))
             .collect::<Result<Vec<_>, _>>()?;
+        let destination_anchor = ResolvedMacroAnchorReference {
+            instance: macro_named_patch(
+                &named_ids,
+                &tunnel.destination_anchor.instance,
+                "tunnel destination anchor",
+            )?,
+            anchor: tunnel.destination_anchor.anchor,
+        };
+        let authored_terminal = resolved_macro_tunnel_destination_terminal(
+            settings,
+            layout,
+            &destination_anchor,
+            tunnel.floor_level,
+        )?;
         let mut previous = boundary_terminal
             .lanes
             .iter()
@@ -1296,6 +1452,11 @@ pub(crate) fn resolve_macro_contracts(
             let Some(destination) = pair.get(1).copied() else {
                 continue;
             };
+            let preferred_destination = if destination == destination_anchor.instance {
+                authored_terminal.as_ref()
+            } else {
+                None
+            };
             let port = resolve_exact_macro_seam_port(
                 layout,
                 source,
@@ -1303,6 +1464,7 @@ pub(crate) fn resolve_macro_contracts(
                 tunnel.width,
                 settings.approach_depth,
                 Some(&previous),
+                preferred_destination,
             )?;
             previous = port
                 .lanes
@@ -1315,14 +1477,6 @@ pub(crate) fn resolve_macro_contracts(
                 port,
             });
         }
-        let destination_anchor = ResolvedMacroAnchorReference {
-            instance: macro_named_patch(
-                &named_ids,
-                &tunnel.destination_anchor.instance,
-                "tunnel destination anchor",
-            )?,
-            anchor: tunnel.destination_anchor.anchor,
-        };
         let name = tunnel.name;
         let resolved = ResolvedMacroSpanningFeature::Tunnel(ResolvedMacroTunnel {
             name: name.clone(),
@@ -1366,6 +1520,41 @@ pub(crate) fn resolve_macro_contracts(
         walker_connections,
         spanning_features,
         anchor_aliases,
+    })
+}
+
+fn resolved_macro_tunnel_destination_terminal(
+    settings: &MacroLayoutSettings,
+    layout: &ResolvedLayoutPlan,
+    destination: &ResolvedMacroAnchorReference,
+    floor_level: Level,
+) -> Result<Option<BTreeSet<HexCoord>>, LayoutValidationError> {
+    let instance = usize::try_from(destination.instance.0)
+        .ok()
+        .and_then(|index| settings.instances.get(index))
+        .ok_or_else(|| invalid_macro_contract("tunnel destination instance is missing"))?;
+    let V3RecipeSettings::CrystalAscent(crystal) = &instance.recipe else {
+        return Ok(None);
+    };
+    if destination.anchor != "crystal_ascent.lower_entry" || floor_level != crystal.base_level {
+        return Err(invalid_macro_contract(
+            "CrystalAscent tunnel must terminate at crystal_ascent.lower_entry on its base level",
+        ));
+    }
+    let patch = layout
+        .patches
+        .get(&destination.instance)
+        .ok_or_else(|| invalid_macro_contract("CrystalAscent tunnel destination has no patch"))?;
+    super::crystal_ascent::macro_lower_terminal_coords(
+        &patch.mask,
+        patch.rotation_turns,
+        crystal.base_level,
+    )
+    .map(Some)
+    .map_err(|error| {
+        invalid_macro_contract(format!(
+            "CrystalAscent lower-terminal projection failed: {error}"
+        ))
     })
 }
 
@@ -1429,6 +1618,7 @@ fn resolve_exact_macro_seam_port(
     width: u32,
     approach_depth: u32,
     previous: Option<&BTreeSet<HexCoord>>,
+    authored_destination: Option<&BTreeSet<HexCoord>>,
 ) -> Result<ResolvedPort, LayoutValidationError> {
     let source_mask = layout
         .patches
@@ -1451,11 +1641,24 @@ fn resolve_exact_macro_seam_port(
         approach_depth,
         &layout.footprint,
     );
-    let selected = candidates.into_iter().min_by(|first, second| {
-        macro_candidate_route_score(&first.port, previous)
-            .cmp(&macro_candidate_route_score(&second.port, previous))
-            .then_with(|| first.port.cmp(&second.port))
-    });
+    let selected = candidates
+        .into_iter()
+        .filter(|candidate| {
+            authored_destination.is_none_or(|terminal| {
+                candidate
+                    .port
+                    .lanes
+                    .iter()
+                    .map(|(_, destination)| *destination)
+                    .collect::<BTreeSet<_>>()
+                    == *terminal
+            })
+        })
+        .min_by(|first, second| {
+            macro_candidate_route_score(&first.port, previous)
+                .cmp(&macro_candidate_route_score(&second.port, previous))
+                .then_with(|| first.port.cmp(&second.port))
+        });
     selected.map(|candidate| candidate.port).ok_or_else(|| {
         invalid_macro_contract(format!(
             "instances {source:?} and {destination:?} cannot resolve one width-{width} exact seam port"
@@ -3439,6 +3642,17 @@ fn valid_resolved_port(
             .is_some_and(|(first, second)| {
                 port.first_approach == first && port.second_approach == second
             })
+            || (valid_authored_macro_approach(
+                &port.first_approach,
+                &first_boundary,
+                first_mask,
+                edge.approach_depth,
+            ) && valid_authored_macro_approach(
+                &port.second_approach,
+                &second_boundary,
+                second_mask,
+                edge.approach_depth,
+            ))
     } else {
         approach_corridor(
             &first_boundary,
@@ -3477,6 +3691,29 @@ fn valid_resolved_port(
             second_mask,
             footprint,
         )
+}
+
+fn valid_authored_macro_approach(
+    approach: &BTreeSet<HexCoord>,
+    boundary: &BTreeSet<HexCoord>,
+    mask: &BTreeSet<HexCoord>,
+    depth: u32,
+) -> bool {
+    let expected_len = usize::try_from(depth)
+        .ok()
+        .and_then(|depth| boundary.len().checked_mul(depth));
+    !approach.is_empty()
+        && expected_len == Some(approach.len())
+        && boundary.is_subset(approach)
+        && approach.is_subset(mask)
+        && connected(approach)
+        && approach.iter().all(|coord| {
+            boundary
+                .iter()
+                .map(|boundary| coord.distance(*boundary))
+                .min()
+                .is_some_and(|distance| distance < depth)
+        })
 }
 
 /// One deterministic resolved-layout contract failure.

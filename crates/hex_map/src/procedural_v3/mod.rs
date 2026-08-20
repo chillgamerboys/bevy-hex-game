@@ -50,10 +50,6 @@ mod layout;
 mod local_frame;
 mod macro_alpine;
 mod macro_landform;
-#[expect(
-    dead_code,
-    reason = "the coordinated Macro world lane wires this spanning engine after its isolated commit"
-)]
 mod macro_spanning;
 mod macro_world;
 pub(crate) use layout::HexSide;

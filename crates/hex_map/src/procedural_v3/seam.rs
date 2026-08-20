@@ -421,7 +421,11 @@ pub(crate) fn validate_world_walker_seams(
                             .contains(&(*first_coord, *second_coord))
                             && first.level == edge.elevation.preferred
                             && second.level == edge.elevation.preferred;
-                        if !declared_exact {
+                        let declared_spanning =
+                            plan.features.protected_routes.values().any(|route| {
+                                route.surfaces.contains(first) && route.surfaces.contains(second)
+                            });
+                        if !declared_exact && !declared_spanning {
                             issues.push(seam_issue(format!(
                                 "shared seam {edge_id:?} admits undeclared crossing {first:?} -> {second:?}"
                             )));
