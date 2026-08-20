@@ -202,13 +202,13 @@ synthetic flat radius-55 lower-level benchmark,
 a 2,048-render-chunk tree-fade
 performance gate, 10,000 unchanged frames, whole-tree/material isolation, review-only
 roofs, and 100 gameplay lifecycles. An ignored release composition diagnostic
-generates the pinned shipped Two Rings and Mountain Range scenarios, builds and
+generates the pinned shipped Two Rings, Mountain Range, and Crystal Mountain scenarios, builds and
 repeatedly rebuilds the camera index from each public
 `HexTile`/`TilePos`/`HexSpan` projection, and keeps steady Character collision below
-1 ms p95 for Two Rings and defines a 2 ms p95 budget for Mountain Range across their
-exact published anchors and six yaws.
+1 ms p95 for Two Rings and defines a 2 ms p95 budget for both radius-77 Macro worlds
+across their exact published anchors and six yaws.
 
-The tracked route manifest pins 17 camera-walk Sandbox catalog maps—every entry except
+The tracked route manifest pins 18 camera-walk Sandbox catalog maps—every entry except
 the deployment-only Flat Arena—to their exact scenario seed and representative
 stack-safe destinations. Each has an executable multi-azimuth Character walk using
 ordinary pointer movement and bounded party-idle waiting, followed by an exact check
@@ -221,9 +221,13 @@ eight-level clearance and adjacent fixture are reviewed from both close cameras.
 The route switches through the real Formation panel into Solo movement before the
 ascent, leaving the other party members on the apron so the long camera proof does not
 turn into an unrelated atomic-formation routing test.
+Crystal Mountain extends that same proof from the opaque enclosing massif and exterior
+portal through the natural tunnel, Gothic transition, approved Crystal Ascent route,
+summit threshold, and wooded basin. Its ordinary walk never enables a cutaway or
+illumination diagnostic; those remain separate deterministic `map-review` captures.
 
 The separate `walks/camera_first_person.ron` route is a focused Mountains proof, not
-an eighteenth manifest entry. It uses typed `AssertCameraMode(Map|Character|FirstPerson)`
+a camera-route manifest entry. It uses typed `AssertCameraMode(Map|Character|FirstPerson)`
 steps around ordinary `C` input, performs click-to-move through the normal pointer
 adapter, applies a bounded right-drag look, and captures the restored Map frame. Run it
 with:

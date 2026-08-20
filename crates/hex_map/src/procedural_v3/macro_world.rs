@@ -5496,10 +5496,7 @@ mod tests {
         assert_eq!(
             review_anchors,
             BTreeMap::from([
-                (
-                    PARTY_START,
-                    TilePos::new(HexCoord::from_axial(-77, 3), 6),
-                ),
+                (PARTY_START, TilePos::new(HexCoord::from_axial(-77, 3), 6),),
                 (
                     "crystal_mountain.tunnel_mouth",
                     TilePos::new(HexCoord::from_axial(-76, 1), 6),

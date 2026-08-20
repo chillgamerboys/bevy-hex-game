@@ -23,9 +23,11 @@ unified domain. The lower Crystal aperture is an internal opening. Exterior dayl
 therefore stops at the domain boundary and does not illuminate the route through
 either threshold under the authored-domain contract.
 
-The tunnel planner samples its representative centerline every sixteen steps, then
-fits one nonblocking small crystal into a deterministic adjacent alcove for each
-sample. Every fixture publishes one Bright radius-4 and one Dim radius-18 gameplay
+The tunnel planner samples its representative centerline every four steps, then fits
+one nonblocking small crystal into a deterministic adjacent alcove for each sample.
+The shipped 63-step route resolves sixteen fixtures, keeping the established
+4,500-lumen, 4.5-range physical pools visually continuous along the passage without
+changing authoritative illumination. Every fixture publishes one Bright radius-4 and one Dim radius-18 gameplay
 source under Macro's world-owned namespace; only the Bright member owns its visual
 object and presentation-only, non-shadow-casting point light. Crystal Ascent retains
 its eighteen landing pairs and cathedral-heart Bright-8/Dim-24 pair with four physical

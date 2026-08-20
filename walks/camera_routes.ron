@@ -124,6 +124,19 @@
             ],
         ),
         (
+            scenario: "Crystal Mountain",
+            seed: Some(1592598566),
+            points: [
+                (label: "foot portal", destination: Anchor(name: "crystal_mountain.foot_apron", expected: (q: -77, r: 3, level: 6)), azimuth_turns: [0.0]),
+                (label: "natural tunnel", destination: Anchor(name: "crystal_mountain.midpoint", expected: (q: -48, r: -1, level: 6)), azimuth_turns: [0.0]),
+                (label: "Gothic transition", destination: Anchor(name: "crystal_mountain.gothic_transition", expected: (q: -29, r: -15, level: 6)), azimuth_turns: [0.0]),
+                (label: "crystal chamber", destination: Anchor(name: "crystal_ascent.bottom_chamber", expected: (q: -8, r: -8, level: 6)), azimuth_turns: [0.0]),
+                (label: "mid-ascent", destination: Anchor(name: "crystal_ascent.mid_flight", expected: (q: 22, r: 0, level: 74)), azimuth_turns: [0.0, -0.16666667]),
+                (label: "summit exit", destination: Anchor(name: "crystal_mountain.summit_exit", expected: (q: 16, r: 15, level: 150)), azimuth_turns: [0.0, 0.16666667]),
+                (label: "wooded basin", destination: Anchor(name: "crystal_mountain.basin_clearing", expected: (q: 15, r: 20, level: 150)), azimuth_turns: [0.0]),
+            ],
+        ),
+        (
             scenario: "Seven Regions",
             seed: Some(703700113),
             points: [

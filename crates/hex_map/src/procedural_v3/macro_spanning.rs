@@ -37,7 +37,11 @@ const EXTERIOR_MOUTH_WIDTH: usize = 8;
 const EXTERIOR_MOUTH_CLEARANCE: u32 = 12;
 const EXTERIOR_MOUTH_ROUTE_ROWS: usize = 12;
 const GOTHIC_ROW_COUNT: usize = 12;
-const LIGHT_SPACING_STEPS: usize = 16;
+// The paired Dim-18 gameplay sources may be much farther apart, but the matching
+// presentation light has the established 4.5-world-unit cave-crystal range. Four
+// centerline steps keeps those physical pools visually continuous without changing
+// either authoritative illumination radius or the shared 4,500 lm / 4.5 rig.
+const LIGHT_SPACING_STEPS: usize = 4;
 const MAX_RIBBON_RADIUS: u32 = 8;
 const DIM_LIGHT_RADIUS: u32 = 18;
 const BRIGHT_LIGHT_RADIUS: u32 = 4;
@@ -1168,21 +1172,7 @@ fn plan_light_sites(
             "cannot place tunnel lights along an empty centerline",
         ));
     }
-    let last = centerline.len().saturating_sub(1);
-    let mut indices = Vec::new();
-    let mut index = last.min(LIGHT_SPACING_STEPS / 2);
-    loop {
-        indices.push(index);
-        if index.saturating_add(LIGHT_SPACING_STEPS) >= last {
-            break;
-        }
-        index = index.saturating_add(LIGHT_SPACING_STEPS);
-    }
-    if last.saturating_sub(*indices.last().unwrap_or(&0)) > LIGHT_SPACING_STEPS / 2 {
-        indices.push(last.saturating_sub(LIGHT_SPACING_STEPS / 2));
-    }
-    indices.sort_unstable();
-    indices.dedup();
+    let indices = light_sample_indices(centerline.len());
 
     let mut sites = Vec::new();
     for (fixture_index, requested) in indices.into_iter().enumerate() {
@@ -1244,6 +1234,28 @@ fn plan_light_sites(
         });
     }
     Ok(sites)
+}
+
+fn light_sample_indices(centerline_len: usize) -> Vec<usize> {
+    if centerline_len == 0 {
+        return Vec::new();
+    }
+    let last = centerline_len.saturating_sub(1);
+    let mut indices = Vec::new();
+    let mut index = last.min(LIGHT_SPACING_STEPS / 2);
+    loop {
+        indices.push(index);
+        if index.saturating_add(LIGHT_SPACING_STEPS) >= last {
+            break;
+        }
+        index = index.saturating_add(LIGHT_SPACING_STEPS);
+    }
+    if last.saturating_sub(*indices.last().unwrap_or(&0)) > LIGHT_SPACING_STEPS / 2 {
+        indices.push(last.saturating_sub(LIGHT_SPACING_STEPS / 2));
+    }
+    indices.sort_unstable();
+    indices.dedup();
+    indices
 }
 
 fn stable_middle<T: Copy + Ord>(values: &BTreeSet<T>) -> Option<T> {
@@ -2590,7 +2602,39 @@ mod tests {
         assert_eq!(tunnel.exterior_apron.len(), 8);
         assert_eq!(tunnel.foot_threshold.len(), 4);
         assert!(tunnel.ribbon.len() > 100);
-        assert!(tunnel.light_sites.len() >= 4);
+        assert_eq!(
+            tunnel.light_sites.len(),
+            16,
+            "the shipped 63-step centerline should retain sixteen physical light pools"
+        );
+        assert_eq!(
+            tunnel.gothic.len(),
+            GOTHIC_ROW_COUNT * 4,
+            "the final twelve rows must remain worked across all four lanes"
+        );
+        for lane in &tunnel.lanes {
+            let mut transition = lane.iter().rev().copied().filter(|coord| {
+                !tunnel
+                    .destination_terminal
+                    .iter()
+                    .any(|surface| surface.coord == *coord)
+                    && !tunnel.mouth.contains(coord)
+            });
+            assert!(
+                transition
+                    .by_ref()
+                    .take(GOTHIC_ROW_COUNT)
+                    .all(|coord| tunnel.gothic.contains(&coord)),
+                "each lane must contribute its final twelve rows to the Gothic transition"
+            );
+            let preceding = transition
+                .next()
+                .expect("the shipped tunnel must retain a rough row before the transition");
+            assert!(
+                !tunnel.gothic.contains(&preceding),
+                "the row immediately before the Gothic transition must remain rough"
+            );
+        }
         assert!(planned.reservations_by_patch.keys().copied().eq([
             PatchId(0),
             PatchId(2),
@@ -2608,6 +2652,20 @@ mod tests {
                 .expect("straight path resolves");
         assert_eq!(path_turns(&path), 0);
         assert_eq!(path.len(), 7);
+    }
+
+    #[test]
+    fn physical_light_sampling_bounds_requested_centerline_gaps() {
+        assert!(light_sample_indices(0).is_empty());
+        assert_eq!(light_sample_indices(1), vec![0]);
+
+        let indices = light_sample_indices(63);
+        assert_eq!(indices.len(), 16);
+        assert_eq!(indices.first().copied(), Some(LIGHT_SPACING_STEPS / 2));
+        assert_eq!(indices.last().copied(), Some(62 - LIGHT_SPACING_STEPS / 2));
+        assert!(indices.windows(2).all(|window| {
+            matches!(window, [first, second] if second.saturating_sub(*first) <= LIGHT_SPACING_STEPS)
+        }));
     }
 
     #[test]
