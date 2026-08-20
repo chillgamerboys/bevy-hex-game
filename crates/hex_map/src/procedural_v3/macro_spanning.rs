@@ -39,8 +39,9 @@ const EXTERIOR_MOUTH_ROUTE_ROWS: usize = 12;
 const GOTHIC_ROW_COUNT: usize = 12;
 // The paired Dim-18 gameplay sources may be much farther apart, but the matching
 // presentation light has the established 4.5-world-unit cave-crystal range. Four
-// centerline steps keeps those physical pools visually continuous without changing
-// either authoritative illumination radius or the shared 4,500 lm / 4.5 rig.
+// centerline steps produces frequent physical pools without changing either
+// authoritative illumination radius or the shared 4,500 lm / 4.5 rig. Exact route
+// coverage remains the paired gameplay-light contract, not a renderer claim.
 const LIGHT_SPACING_STEPS: usize = 4;
 const MAX_RIBBON_RADIUS: u32 = 8;
 const DIM_LIGHT_RADIUS: u32 = 18;
@@ -1172,15 +1173,28 @@ fn plan_light_sites(
             "cannot place tunnel lights along an empty centerline",
         ));
     }
-    let indices = light_sample_indices(centerline.len());
+    // The widened exterior mouth is daylight-facing and intentionally has no
+    // authored tunnel roof. Sample only the roofed body so an alcove can never
+    // turn an exposed foothill column into an interior light reservation.
+    let light_centerline = centerline
+        .iter()
+        .copied()
+        .filter(|coord| !mouth.contains(coord))
+        .collect::<Vec<_>>();
+    if light_centerline.is_empty() {
+        return Err(MacroSpanningError::new(
+            "cannot place tunnel lights without a roofed centerline",
+        ));
+    }
+    let indices = light_sample_indices(light_centerline.len());
 
     let mut sites = Vec::new();
     for (fixture_index, requested) in indices.into_iter().enumerate() {
-        let mut search_indices = (0..centerline.len()).collect::<Vec<_>>();
+        let mut search_indices = (0..light_centerline.len()).collect::<Vec<_>>();
         search_indices
             .sort_unstable_by_key(|candidate| (candidate.abs_diff(requested), *candidate));
         let selected = search_indices.into_iter().find_map(|candidate_index| {
-            let spine = *centerline.get(candidate_index)?;
+            let spine = *light_centerline.get(candidate_index)?;
             let owner = *owner_by_coord.get(&spine)?;
             let patch = layout.patches.get(&owner)?;
             let mut candidates = spine
@@ -1756,7 +1770,7 @@ fn validate_applied_tunnel_geometry(
         for level in clear_top..roof_end {
             let roof_mass = solid_mass_at(column, level).ok_or_else(|| {
                 MacroSpanningError::new(format!(
-                    "applied tunnel {coord:?} lacks its exact roof at level {level}"
+                    "applied tunnel {coord:?} lacks its exact roof at level {level}; column is {column:?}"
                 ))
             })?;
             if roof_mass.material != expected_material
@@ -2604,8 +2618,8 @@ mod tests {
         assert!(tunnel.ribbon.len() > 100);
         assert_eq!(
             tunnel.light_sites.len(),
-            16,
-            "the shipped 63-step centerline should retain sixteen physical light pools"
+            13,
+            "the shipped roofed body should retain thirteen physical light pools"
         );
         assert_eq!(
             tunnel.gothic.len(),

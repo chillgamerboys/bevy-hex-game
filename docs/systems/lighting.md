@@ -25,9 +25,10 @@ either threshold under the authored-domain contract.
 
 The tunnel planner samples its representative centerline every four steps, then fits
 one nonblocking small crystal into a deterministic adjacent alcove for each sample.
-The shipped 63-step route resolves sixteen fixtures, keeping the established
-4,500-lumen, 4.5-range physical pools visually continuous along the passage without
-changing authoritative illumination. Every fixture publishes one Bright radius-4 and one Dim radius-18 gameplay
+The shipped route resolves thirteen fixtures along its roofed body, making the
+established 4,500-lumen, 4.5-range physical pools frequent visual landmarks without
+claiming that renderer light spheres are gameplay coverage. Every fixture publishes
+one Bright radius-4 and one Dim radius-18 gameplay
 source under Macro's world-owned namespace; only the Bright member owns its visual
 object and presentation-only, non-shadow-casting point light. Crystal Ascent retains
 its eighteen landing pairs and cathedral-heart Bright-8/Dim-24 pair with four physical
