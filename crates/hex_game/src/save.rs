@@ -3825,7 +3825,7 @@ mod tests {
         let example: LegacyResumeFile =
             ron::from_str(example_text).expect("the elemental example resume should parse");
         assert_eq!(example.build_version, build_identity());
-        assert_eq!(example.scenario_digest, 0x5DF9_C632_EA7D_97D3);
+        assert_eq!(example.scenario_digest, 0xF8E1_3246_74EB_146E);
         assert_eq!(example.units.len(), 6, "Party Trial is a complete 3v3");
         validate_legacy_resume(&example).expect("the elemental example record itself is valid");
 

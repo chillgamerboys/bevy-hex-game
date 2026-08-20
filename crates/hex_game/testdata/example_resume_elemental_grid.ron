@@ -3,7 +3,7 @@
     build_version: "0.4.0",
     scenario_name: "Party Trial",
     // Recomputed from the composed canonical catalog after every content-bearing merge.
-    scenario_digest: 6771661436713015251,
+    scenario_digest: 17933670469356688494,
     resolved_seed: None,
     generator_version: None,
     formation: (

@@ -2860,6 +2860,7 @@ mod tests {
             let mut movement_steps = 0_usize;
             let mut pending_proof = None;
             let mut saw_idle_after_click = false;
+            let mut proved_manifested_start = false;
             for step in &steps {
                 let destination = match step {
                     WalkStep::ClickAnchor { name, expected } => {
@@ -2915,23 +2916,48 @@ mod tests {
                         saw_idle_after_click = true;
                     }
                     WalkStep::AssertSelectedAt { expected } if require_exact_arrival_proof => {
-                        let clicked = pending_proof.take().unwrap_or_else(|| {
-                            panic!(
+                        if let Some(clicked) = pending_proof.take() {
+                            assert!(
+                                saw_idle_after_click,
+                                "{} proves {clicked:?} before awaiting party idle",
+                                path.display()
+                            );
+                            assert_eq!(
+                                *expected,
+                                clicked,
+                                "{} proves a different surface than it clicked",
+                                path.display()
+                            );
+                        } else {
+                            assert_eq!(
+                                movement_steps,
+                                0,
                                 "{} proves a position without a pending movement",
                                 path.display()
-                            )
-                        });
-                        assert!(
-                            saw_idle_after_click,
-                            "{} proves {clicked:?} before awaiting party idle",
-                            path.display()
-                        );
-                        assert_eq!(
-                            *expected,
-                            clicked,
-                            "{} proves a different surface than it clicked",
-                            path.display()
-                        );
+                            );
+                            assert!(
+                                !proved_manifested_start,
+                                "{} proves its initial position more than once",
+                                path.display()
+                            );
+                            let manifested_start = route
+                                .points
+                                .first()
+                                .map(|point| match &point.destination {
+                                    CameraRouteDestination::Anchor { expected, .. }
+                                    | CameraRouteDestination::Exact(expected) => *expected,
+                                })
+                                .unwrap_or_else(|| {
+                                    panic!("{} has no manifested route start", path.display())
+                                });
+                            assert_eq!(
+                                *expected,
+                                manifested_start,
+                                "{} proves an initial position other than its first manifested route point",
+                                path.display()
+                            );
+                            proved_manifested_start = true;
+                        }
                     }
                     WalkStep::Capture(name) => assert!(
                         pending_proof.is_none(),
