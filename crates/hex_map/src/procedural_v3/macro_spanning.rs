@@ -35,6 +35,7 @@ const REQUIRED_CLEARANCE: u32 = 6;
 const REQUIRED_ROOF_THICKNESS: u32 = 3;
 const EXTERIOR_MOUTH_WIDTH: usize = 8;
 const EXTERIOR_MOUTH_CLEARANCE: u32 = 12;
+const EXTERIOR_MOUTH_ROUTE_ROWS: usize = 12;
 const GOTHIC_ROW_COUNT: usize = 12;
 const LIGHT_SPACING_STEPS: usize = 16;
 const MAX_RIBBON_RADIUS: u32 = 8;
@@ -101,7 +102,7 @@ pub(crate) struct PlannedMacroTunnel {
     pub(crate) ribbon: BTreeSet<HexCoord>,
     /// The complete widened entrance treatment, including the open apron.
     pub(crate) mouth: BTreeSet<HexCoord>,
-    /// Eight boundary-row cells whose overburden is removed to exterior sky.
+    /// Eight exterior boundary-row cells under the exact twelve-level-high mouth roof.
     pub(crate) exterior_apron: BTreeSet<HexCoord>,
     /// The first exact four-wide roofed row and the only lower entrance set.
     pub(crate) foot_threshold: BTreeSet<TilePos>,
@@ -395,11 +396,9 @@ fn plan_tunnel(
             .map(|center| uncovered.distance(*center))
             .min()
             .unwrap_or(u32::MAX);
-        return Err(MacroSpanningError::new(
-            format!(
-                "planned tunnel crystals do not cover {uncovered:?}; its distance from the representative lane is {center_distance}"
-            ),
-        ));
+        return Err(MacroSpanningError::new(format!(
+            "planned tunnel crystals do not cover {uncovered:?}; its distance from the representative lane is {center_distance}"
+        )));
     }
 
     let mut full_footprint = occupied;
@@ -1064,7 +1063,15 @@ fn plan_mouth(
             mouth.insert(shifted);
         }
     }
-    mouth.extend(lanes.iter().flat_map(|lane| lane.iter().copied().take(3)));
+    // Continue the 8 -> 6 -> 4 taper into a monumental twelve-row, four-lane
+    // authored entrance. The low outer slope intentionally has no natural
+    // overburden here, so the complete approach receives the same exact masonry
+    // arch as the widened facade rather than depending on terrain height.
+    mouth.extend(
+        lanes
+            .iter()
+            .flat_map(|lane| lane.iter().copied().take(EXTERIOR_MOUTH_ROUTE_ROWS)),
+    );
     if !starts.is_subset(&exterior_apron)
         || !ribbon.is_superset(&starts)
         || mouth.iter().any(|coord| !patch.mask.contains(coord))
@@ -1403,7 +1410,8 @@ fn preflight_application(
         )));
     }
     let apron_removes = |position: TilePos| {
-        tunnel.exterior_apron.contains(&position.coord) && position.level > tunnel.floor_level
+        tunnel.exterior_apron.contains(&position.coord)
+            && removed_by_tunnel(tunnel, position).unwrap_or(true)
     };
     if world.anchors.values().copied().any(apron_removes)
         || world
@@ -1432,9 +1440,7 @@ fn preflight_application(
     }
     for blocker in &world.blockers {
         let clearance_top = clearance_top(tunnel, blocker.coord)?;
-        if tunnel.full_footprint.contains(&blocker.coord)
-            && (tunnel.exterior_apron.contains(&blocker.coord) || blocker.level < clearance_top)
-        {
+        if tunnel.full_footprint.contains(&blocker.coord) && blocker.level < clearance_top {
             return Err(MacroSpanningError::new(format!(
                 "tunnel {:?} intersects traversal blocker {blocker:?}",
                 tunnel.name
@@ -1481,10 +1487,6 @@ fn preflight_application(
     }
 
     for coord in &tunnel.full_footprint {
-        let existing_floor = existing_clear_floor(world, tunnel, *coord)?;
-        if existing_floor && !tunnel.exterior_apron.contains(coord) {
-            continue;
-        }
         let column = world.volume.columns.get(coord).ok_or_else(|| {
             MacroSpanningError::new(format!("tunnel column {coord:?} is missing"))
         })?;
@@ -1499,20 +1501,28 @@ fn preflight_application(
                 "tunnel floor at {coord:?} breaches authored bedrock"
             )));
         }
-        if tunnel.exterior_apron.contains(coord) {
+        if is_destination_terminal_coord(tunnel, *coord) {
+            if !existing_clear_floor(world, tunnel, *coord)? {
+                return Err(MacroSpanningError::new(format!(
+                    "authored destination terminal {coord:?} is not a clear supported level-{} floor",
+                    tunnel.floor_level
+                )));
+            }
             continue;
         }
-        let clear_top = clearance_top(tunnel, *coord)?;
-        let roof_end = clear_top
-            .checked_add(i32::try_from(tunnel.roof_thickness).map_err(|error| {
-                MacroSpanningError::new(format!("roof thickness overflowed: {error}"))
-            })?)
-            .ok_or_else(|| MacroSpanningError::new("tunnel roof level overflowed"))?;
-        for level in clear_top..roof_end {
-            if solid_mass_at(column, level).is_none() {
-                return Err(MacroSpanningError::new(format!(
-                    "tunnel {coord:?} lacks solid roof at level {level}"
-                )));
+        if !tunnel.mouth.contains(coord) {
+            let clear_top = clearance_top(tunnel, *coord)?;
+            let roof_end = clear_top
+                .checked_add(i32::try_from(tunnel.roof_thickness).map_err(|error| {
+                    MacroSpanningError::new(format!("roof thickness overflowed: {error}"))
+                })?)
+                .ok_or_else(|| MacroSpanningError::new("tunnel roof level overflowed"))?;
+            for level in clear_top..roof_end {
+                if solid_mass_at(column, level).is_none() {
+                    return Err(MacroSpanningError::new(format!(
+                        "tunnel {coord:?} lacks solid roof at level {level}"
+                    )));
+                }
             }
         }
     }
@@ -1526,18 +1536,25 @@ fn removed_by_tunnel(
     if !tunnel.full_footprint.contains(&voxel.coord) {
         return Ok(false);
     }
-    if tunnel.exterior_apron.contains(&voxel.coord) {
-        return Ok(voxel.level > tunnel.floor_level);
+    if is_destination_terminal_coord(tunnel, voxel.coord) {
+        return Ok(false);
     }
     let clear_top = clearance_top(tunnel, voxel.coord)?;
     Ok(tunnel.floor_level < voxel.level && voxel.level < clear_top)
+}
+
+fn is_destination_terminal_coord(tunnel: &PlannedMacroTunnel, coord: HexCoord) -> bool {
+    tunnel
+        .destination_terminal
+        .iter()
+        .any(|position| position.coord == coord)
 }
 
 fn clearance_top(
     tunnel: &PlannedMacroTunnel,
     coord: HexCoord,
 ) -> Result<Level, MacroSpanningError> {
-    let clearance = if tunnel.mouth.contains(&coord) && !tunnel.exterior_apron.contains(&coord) {
+    let clearance = if tunnel.mouth.contains(&coord) {
         EXTERIOR_MOUTH_CLEARANCE
     } else {
         tunnel.clearance
@@ -1590,25 +1607,21 @@ fn apply_tunnel(
     let mut coords = tunnel.full_footprint.iter().copied().collect::<Vec<_>>();
     coords.sort_unstable();
     for coord in coords {
-        let existing_floor = existing_clear_floor(world, tunnel, coord)?;
-        if tunnel.exterior_apron.contains(&coord) {
-            carve_column(world, tunnel, coord, CarveKind::OpenApron)?;
-        } else if !existing_floor {
-            let material = if tunnel.gothic.contains(&coord) {
-                SolidMaterialRole::WorkedStone
-            } else {
-                SolidMaterialRole::Stone
-            };
-            carve_column(
-                world,
-                tunnel,
-                coord,
-                CarveKind::Roofed {
-                    clear_top: clearance_top(tunnel, coord)?,
-                    material,
-                },
-            )?;
+        if is_destination_terminal_coord(tunnel, coord) {
+            continue;
         }
+        let material = if tunnel.gothic.contains(&coord) {
+            SolidMaterialRole::WorkedStone
+        } else {
+            SolidMaterialRole::Stone
+        };
+        carve_column(
+            world,
+            tunnel,
+            coord,
+            clearance_top(tunnel, coord)?,
+            material,
+        )?;
     }
 
     for coord in &tunnel.full_footprint {
@@ -1631,11 +1644,119 @@ fn apply_tunnel(
         metadata.interior = Some(tunnel.unified_interior);
     }
 
+    validate_applied_tunnel_geometry(world, tunnel)?;
+
     close_undeclared_tunnel_seams(world, tunnel, ordinal)?;
     publish_tunnel_lights(world, tunnel, ordinal)?;
     publish_tunnel_route(world, tunnel)?;
     rebuild_unified_interior(world, tunnel)?;
     publish_tunnel_anchors(world, tunnel)?;
+    Ok(())
+}
+
+/// Verifies the semantic volume produced by the atomic carve before any route,
+/// light, or interior publication can make it observable.
+///
+/// Crystal Ascent's exact four authored destination columns deliberately retain
+/// their taller pointed aperture. Every other reserved column has an exact empty
+/// run followed immediately by the configured solid roof; a naturally open
+/// mountain column is never allowed to masquerade as a valid tunnel.
+fn validate_applied_tunnel_geometry(
+    world: &GeneratedWorldPlan,
+    tunnel: &PlannedMacroTunnel,
+) -> Result<(), MacroSpanningError> {
+    if tunnel.destination_terminal.len() != 4 {
+        return Err(MacroSpanningError::new(format!(
+            "tunnel {:?} no longer has exactly four authored destination columns",
+            tunnel.name
+        )));
+    }
+
+    for coord in &tunnel.full_footprint {
+        let position = TilePos::new(*coord, tunnel.floor_level);
+        let metadata = world.volume.surfaces.get(&position).ok_or_else(|| {
+            MacroSpanningError::new(format!(
+                "applied tunnel floor {position:?} is not an exposed surface"
+            ))
+        })?;
+        if metadata.access != SurfaceAccess::Ordinary {
+            return Err(MacroSpanningError::new(format!(
+                "applied tunnel floor {position:?} is not ordinary footing"
+            )));
+        }
+        let expected_interior =
+            (!tunnel.exterior_apron.contains(coord)).then_some(tunnel.unified_interior);
+        if metadata.interior != expected_interior {
+            return Err(MacroSpanningError::new(format!(
+                "applied tunnel floor {position:?} has interior {:?}, expected {expected_interior:?}",
+                metadata.interior
+            )));
+        }
+
+        let column = world.volume.columns.get(coord).ok_or_else(|| {
+            MacroSpanningError::new(format!("applied tunnel column {coord:?} is missing"))
+        })?;
+        if is_destination_terminal_coord(tunnel, *coord) {
+            if !existing_clear_floor(world, tunnel, *coord)? {
+                return Err(MacroSpanningError::new(format!(
+                    "authored destination terminal {coord:?} was not preserved as a clear supported floor"
+                )));
+            }
+            continue;
+        }
+
+        let expected_material = if tunnel.gothic.contains(coord) {
+            SolidMaterialRole::WorkedStone
+        } else {
+            SolidMaterialRole::Stone
+        };
+        let floor_mass = solid_mass_at(column, tunnel.floor_level).ok_or_else(|| {
+            MacroSpanningError::new(format!(
+                "applied tunnel floor level {} is unsupported at {coord:?}",
+                tunnel.floor_level
+            ))
+        })?;
+        if floor_mass.material != expected_material {
+            return Err(MacroSpanningError::new(format!(
+                "applied tunnel floor at {coord:?} has material {:?}, expected {expected_material:?}",
+                floor_mass.material
+            )));
+        }
+
+        let clear_bottom = tunnel
+            .floor_level
+            .checked_add(1)
+            .ok_or_else(|| MacroSpanningError::new("applied tunnel clearance bottom overflowed"))?;
+        let clear_top = clearance_top(tunnel, *coord)?;
+        for level in clear_bottom..clear_top {
+            if column_occupied_at(column, level) {
+                return Err(MacroSpanningError::new(format!(
+                    "applied tunnel {coord:?} is occupied inside its clearance at level {level}"
+                )));
+            }
+        }
+
+        let roof_end = clear_top
+            .checked_add(i32::try_from(tunnel.roof_thickness).map_err(|error| {
+                MacroSpanningError::new(format!("roof thickness overflowed: {error}"))
+            })?)
+            .ok_or_else(|| MacroSpanningError::new("applied tunnel roof level overflowed"))?;
+        for level in clear_top..roof_end {
+            let roof_mass = solid_mass_at(column, level).ok_or_else(|| {
+                MacroSpanningError::new(format!(
+                    "applied tunnel {coord:?} lacks its exact roof at level {level}"
+                ))
+            })?;
+            if roof_mass.material != expected_material
+                || roof_mass.cutaway_for != Some(tunnel.unified_interior)
+            {
+                return Err(MacroSpanningError::new(format!(
+                    "applied tunnel {coord:?} roof at level {level} has material/cutaway {:?}/{:?}, expected {expected_material:?}/{:?}",
+                    roof_mass.material, roof_mass.cutaway_for, tunnel.unified_interior
+                )));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1721,20 +1842,12 @@ fn rewrite_destination_interior(
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy)]
-enum CarveKind {
-    OpenApron,
-    Roofed {
-        clear_top: Level,
-        material: SolidMaterialRole,
-    },
-}
-
 fn carve_column(
     world: &mut GeneratedWorldPlan,
     tunnel: &PlannedMacroTunnel,
     coord: HexCoord,
-    kind: CarveKind,
+    clear_top: Level,
+    material: SolidMaterialRole,
 ) -> Result<(), MacroSpanningError> {
     let original =
         world.volume.columns.get(&coord).cloned().ok_or_else(|| {
@@ -1743,10 +1856,11 @@ fn carve_column(
     let _floor_mass = solid_mass_at(&original, tunnel.floor_level).ok_or_else(|| {
         MacroSpanningError::new(format!("cannot carve unsupported floor at {coord:?}"))
     })?;
-    let floor_material = match kind {
-        CarveKind::OpenApron => SolidMaterialRole::Stone,
-        CarveKind::Roofed { material, .. } => material,
-    };
+    let roof_end = clear_top
+        .checked_add(i32::try_from(tunnel.roof_thickness).map_err(|error| {
+            MacroSpanningError::new(format!("roof thickness overflowed: {error}"))
+        })?)
+        .ok_or_else(|| MacroSpanningError::new("tunnel roof level overflowed"))?;
     let mut elements = Vec::new();
     for element in original.elements {
         let VolumeElement::Solid(mass) = element else {
@@ -1762,39 +1876,24 @@ fn carve_column(
                 cutaway_for: mass.cutaway_for,
             }));
         }
-        let CarveKind::Roofed {
-            clear_top,
-            material,
-        } = kind
-        else {
-            continue;
-        };
-        let above_bottom = mass.levels.bottom.max(clear_top);
+        let above_bottom = mass.levels.bottom.max(roof_end);
         if above_bottom >= mass.levels.top {
             continue;
         }
-        let masonry_top =
-            clear_top.saturating_add(i32::try_from(tunnel.roof_thickness).unwrap_or(i32::MAX));
-        let first_top = mass.levels.top.min(masonry_top);
-        if above_bottom < first_top {
-            elements.push(VolumeElement::Solid(SolidMass {
-                levels: LevelInterval::new(above_bottom, first_top),
-                material,
-                cutaway_for: Some(tunnel.unified_interior),
-            }));
-        }
-        let remaining_bottom = above_bottom.max(first_top);
-        if remaining_bottom < mass.levels.top {
-            elements.push(VolumeElement::Solid(SolidMass {
-                levels: LevelInterval::new(remaining_bottom, mass.levels.top),
-                material: mass.material,
-                cutaway_for: Some(tunnel.unified_interior),
-            }));
-        }
+        elements.push(VolumeElement::Solid(SolidMass {
+            levels: LevelInterval::new(above_bottom, mass.levels.top),
+            material: mass.material,
+            cutaway_for: Some(tunnel.unified_interior),
+        }));
     }
     elements.push(VolumeElement::Solid(SolidMass {
+        levels: LevelInterval::new(clear_top, roof_end),
+        material,
+        cutaway_for: Some(tunnel.unified_interior),
+    }));
+    elements.push(VolumeElement::Solid(SolidMass {
         levels: LevelInterval::new(tunnel.floor_level, tunnel.floor_level.saturating_add(1)),
-        material: floor_material,
+        material,
         cutaway_for: None,
     }));
     elements.sort_unstable_by_key(element_interval);
@@ -1807,6 +1906,13 @@ fn element_interval(element: &VolumeElement) -> (Level, Level) {
         VolumeElement::Solid(mass) => (mass.levels.bottom, mass.levels.top),
         VolumeElement::Fill(fill) => (fill.levels.bottom, fill.levels.top),
     }
+}
+
+fn column_occupied_at(column: &VolumeColumn, level: Level) -> bool {
+    column.elements.iter().any(|element| {
+        let (bottom, top) = element_interval(element);
+        bottom <= level && level < top
+    })
 }
 
 fn coalesce_elements(elements: Vec<VolumeElement>) -> Vec<VolumeElement> {
@@ -1885,12 +1991,29 @@ fn replace_column_and_surfaces(
         .find(|patch| patch.mask.contains(&coord))
         .map(|patch| patch.biome_region)
         .ok_or_else(|| MacroSpanningError::new(format!("carved column {coord:?} has no owner")))?;
+    let authored_mouth_roof = if tunnel.mouth.contains(&coord) {
+        let clear_top = clearance_top(tunnel, coord)?;
+        let roof_top = clear_top
+            .checked_add(i32::try_from(tunnel.roof_thickness).map_err(|error| {
+                MacroSpanningError::new(format!("roof thickness overflowed: {error}"))
+            })?)
+            .and_then(|level| level.checked_sub(1))
+            .ok_or_else(|| MacroSpanningError::new("tunnel roof surface level overflowed"))?;
+        Some(TilePos::new(coord, roof_top))
+    } else {
+        None
+    };
     for position in exposed {
         let metadata = if position.level == tunnel.floor_level {
             SurfaceMetadata {
                 access: SurfaceAccess::Ordinary,
                 interior: (!tunnel.exterior_apron.contains(&coord))
                     .then_some(tunnel.unified_interior),
+            }
+        } else if Some(position) == authored_mouth_roof {
+            SurfaceMetadata {
+                access: SurfaceAccess::Ordinary,
+                interior: None,
             }
         } else {
             old_surfaces.get(&position).copied().ok_or_else(|| {
@@ -2141,7 +2264,7 @@ mod tests {
 
     fn fixture_layout() -> ResolvedLayoutPlan {
         let masks = [
-            rectangular_mask(-8, -3),
+            rectangular_mask(-20, -3),
             rectangular_mask(-2, 1),
             rectangular_mask(2, 8),
         ];
@@ -2197,7 +2320,7 @@ mod tests {
             boundary_terminal: ResolvedMacroBoundaryTerminal {
                 instance: PatchId(0),
                 side: HexSide::West,
-                lanes: lanes(-8, -9),
+                lanes: lanes(-20, -21),
                 inward_approach: BTreeSet::new(),
             },
             destination_anchor: ResolvedMacroAnchorReference {
@@ -2405,9 +2528,10 @@ mod tests {
         for seam in &tunnel.seam_lanes {
             assert_eq!(seam.len(), 4);
             for crossing in seam {
-                assert!(tunnel.lanes.iter().any(|lane| lane
-                    .windows(2)
-                    .any(|window| window == [crossing.0, crossing.1])));
+                assert!(tunnel.lanes.iter().any(|lane| {
+                    lane.windows(2)
+                        .any(|window| window == [crossing.0, crossing.1])
+                }));
             }
         }
         for (patch, reservation) in &first.reservations_by_patch {
@@ -2421,6 +2545,10 @@ mod tests {
         }
         assert_eq!(tunnel.exterior_apron.len(), 8);
         assert_eq!(tunnel.foot_threshold.len(), 4);
+        assert!(tunnel.lanes.iter().all(|lane| lane
+            .iter()
+            .take(EXTERIOR_MOUTH_ROUTE_ROWS)
+            .all(|coord| tunnel.mouth.contains(coord))));
     }
 
     #[test]
@@ -2483,10 +2611,69 @@ mod tests {
     }
 
     #[test]
-    fn apply_carves_exact_clearance_and_roof_and_opens_the_apron() {
+    fn apply_carves_exact_clearance_and_roofs_the_exterior_mouth() {
         let plan = fixture_plan();
         let tunnel = plan.tunnels.values().next().expect("one tunnel").clone();
-        let world = apply_macro_spanning(fixture_world(), &plan)
+        let mut original = fixture_world();
+        let original_terminal_columns = tunnel
+            .destination_terminal
+            .iter()
+            .map(|position| {
+                (
+                    position.coord,
+                    original
+                        .volume
+                        .columns
+                        .get(&position.coord)
+                        .expect("authored destination column exists")
+                        .clone(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        for apron in &tunnel.exterior_apron {
+            original
+                .volume
+                .columns
+                .get_mut(apron)
+                .expect("low-slope exterior column exists")
+                .elements = vec![
+                VolumeElement::Solid(SolidMass {
+                    levels: LevelInterval::new(0, 1),
+                    material: SolidMaterialRole::Bedrock,
+                    cutaway_for: None,
+                }),
+                VolumeElement::Solid(SolidMass {
+                    levels: LevelInterval::new(1, 7),
+                    material: SolidMaterialRole::Stone,
+                    cutaway_for: None,
+                }),
+            ];
+            original
+                .volume
+                .surfaces
+                .retain(|position, _| position.coord != *apron);
+            original
+                .biome_regions
+                .retain(|position, _| position.coord != *apron);
+            let floor = TilePos::new(*apron, tunnel.floor_level);
+            original.volume.surfaces.insert(
+                floor,
+                SurfaceMetadata {
+                    access: SurfaceAccess::Ordinary,
+                    interior: None,
+                },
+            );
+            let region = original
+                .layout
+                .patches
+                .values()
+                .find(|patch| patch.mask.contains(apron))
+                .expect("exterior mouth column has one owner")
+                .biome_region;
+            original.biome_regions.insert(floor, region);
+        }
+        assert!(original.volume.validate().is_ok());
+        let world = apply_macro_spanning(original, &plan)
             .expect("valid planned tunnel should apply atomically");
         let core = tunnel
             .centerline
@@ -2517,10 +2704,142 @@ mod tests {
             .volume
             .columns
             .get(&apron)
-            .expect("open apron column exists");
+            .expect("exterior mouth column exists");
         assert!(solid_mass_at(apron_column, 6).is_some());
-        assert!((7..31).all(|level| solid_mass_at(apron_column, level).is_none()));
+        assert!((7..19).all(|level| !column_occupied_at(apron_column, level)));
+        assert!((19..22).all(|level| {
+            solid_mass_at(apron_column, level).is_some_and(|mass| {
+                mass.cutaway_for == Some(tunnel.unified_interior)
+                    && mass.material == SolidMaterialRole::Stone
+            })
+        }));
+        for apron in &tunnel.exterior_apron {
+            let floor = TilePos::new(*apron, tunnel.floor_level);
+            assert_eq!(
+                world
+                    .volume
+                    .surfaces
+                    .get(&floor)
+                    .expect("every exterior mouth floor remains exposed")
+                    .interior,
+                None
+            );
+        }
+        assert!(tunnel
+            .mouth
+            .difference(&tunnel.exterior_apron)
+            .all(|coord| {
+                world
+                    .volume
+                    .surfaces
+                    .get(&TilePos::new(*coord, tunnel.floor_level))
+                    .is_some_and(|metadata| metadata.interior == Some(tunnel.unified_interior))
+            }));
+        assert_eq!(tunnel.destination_terminal.len(), 4);
+        for (coord, original_column) in original_terminal_columns {
+            assert_eq!(
+                world
+                    .volume
+                    .columns
+                    .get(&coord)
+                    .expect("authored destination column remains present"),
+                &original_column,
+                "only the exact authored destination terminal keeps its taller aperture"
+            );
+        }
         assert!(world.volume.validate().is_ok());
+    }
+
+    #[test]
+    fn naturally_clear_nonterminal_column_cannot_bypass_exact_roof_preflight() {
+        let plan = fixture_plan();
+        let tunnel = plan.tunnels.values().next().expect("one tunnel");
+        let core = tunnel
+            .centerline
+            .iter()
+            .copied()
+            .find(|coord| {
+                !tunnel.mouth.contains(coord) && !is_destination_terminal_coord(tunnel, *coord)
+            })
+            .expect("fixture exposes a nonterminal tunnel core");
+        let mut world = fixture_world();
+        world
+            .volume
+            .columns
+            .get_mut(&core)
+            .expect("core column exists")
+            .elements = vec![
+            VolumeElement::Solid(SolidMass {
+                levels: LevelInterval::new(0, 1),
+                material: SolidMaterialRole::Bedrock,
+                cutaway_for: None,
+            }),
+            VolumeElement::Solid(SolidMass {
+                levels: LevelInterval::new(1, 7),
+                material: SolidMaterialRole::Stone,
+                cutaway_for: None,
+            }),
+            VolumeElement::Solid(SolidMass {
+                levels: LevelInterval::new(20, 31),
+                material: SolidMaterialRole::Stone,
+                cutaway_for: None,
+            }),
+        ];
+        let floor = TilePos::new(core, 6);
+        world.volume.surfaces.insert(
+            floor,
+            SurfaceMetadata {
+                access: SurfaceAccess::Ordinary,
+                interior: None,
+            },
+        );
+        let region = world
+            .layout
+            .patches
+            .values()
+            .find(|patch| patch.mask.contains(&core))
+            .expect("core has one owner")
+            .biome_region;
+        world.biome_regions.insert(floor, region);
+
+        let error = apply_macro_spanning(world, &plan)
+            .expect_err("a naturally open body column without the exact roof must fail closed");
+        assert!(error.to_string().contains("lacks solid roof at level 13"));
+    }
+
+    #[test]
+    fn post_carve_validator_detects_corrupted_body_roof() {
+        let plan = fixture_plan();
+        let tunnel = plan.tunnels.values().next().expect("one tunnel");
+        let mut world = apply_macro_spanning(fixture_world(), &plan)
+            .expect("fixture tunnel applies before deliberate corruption");
+        let core = tunnel
+            .centerline
+            .iter()
+            .copied()
+            .find(|coord| {
+                !tunnel.mouth.contains(coord) && !is_destination_terminal_coord(tunnel, *coord)
+            })
+            .expect("fixture exposes a nonterminal tunnel core");
+        let roof = world
+            .volume
+            .columns
+            .get_mut(&core)
+            .expect("carved core exists")
+            .elements
+            .iter_mut()
+            .find_map(|element| {
+                let VolumeElement::Solid(mass) = element else {
+                    return None;
+                };
+                (mass.levels.bottom <= 13 && 13 < mass.levels.top).then_some(mass)
+            })
+            .expect("core has its exact roof");
+        roof.cutaway_for = None;
+
+        let error = validate_applied_tunnel_geometry(&world, tunnel)
+            .expect_err("post-carve validation must reject corrupted roof semantics");
+        assert!(error.to_string().contains("roof at level 13"));
     }
 
     #[test]

@@ -1798,10 +1798,21 @@ impl MacroLayoutSettings {
         adjacency: &[BTreeSet<usize>],
         owners: &BTreeMap<(i32, i32, i32), usize>,
     ) -> Result<(), String> {
+        if self.spanning_features.len() > 1 {
+            return Err(
+                "V3 Macro currently supports exactly one canonical spanning feature".to_owned(),
+            );
+        }
         let mut feature_names = BTreeSet::new();
         for feature in &self.spanning_features {
             match feature {
                 MacroSpanningFeatureSettings::Tunnel(tunnel) => {
+                    if !tunnel.canonical_route {
+                        return Err(format!(
+                            "V3 Macro tunnel {:?} must own the canonical route in the initial spanning-feature implementation",
+                            tunnel.name
+                        ));
+                    }
                     if !is_stable_identifier(&tunnel.name) {
                         return Err(format!(
                             "V3 Macro tunnel name {:?} must be a lowercase stable identifier",
@@ -1911,22 +1922,27 @@ impl MacroLayoutSettings {
                 tunnel.name, tunnel.destination_anchor.anchor
             ));
         }
-        validate_macro_walker_width(tunnel.width)?;
-        if tunnel.floor_level < 1 {
+        if tunnel.width != 4 {
             return Err(format!(
-                "V3 Macro tunnel {:?} floor_level must be at least 1",
+                "V3 Macro tunnel {:?} width must be exactly 4",
                 tunnel.name
             ));
         }
-        if tunnel.clearance < 2 {
+        if tunnel.floor_level != 6 {
             return Err(format!(
-                "V3 Macro tunnel {:?} clearance must be at least 2",
+                "V3 Macro tunnel {:?} floor_level must be exactly 6",
                 tunnel.name
             ));
         }
-        if tunnel.roof_thickness == 0 {
+        if tunnel.clearance != 6 {
             return Err(format!(
-                "V3 Macro tunnel {:?} roof_thickness must be at least 1",
+                "V3 Macro tunnel {:?} clearance must be exactly 6",
+                tunnel.name
+            ));
+        }
+        if tunnel.roof_thickness < 3 {
+            return Err(format!(
+                "V3 Macro tunnel {:?} roof_thickness must be at least 3",
                 tunnel.name
             ));
         }
@@ -2154,28 +2170,22 @@ impl MacroLayoutSettings {
         names: &BTreeMap<&str, usize>,
         adjacency: &[BTreeSet<usize>],
     ) -> Result<(), String> {
-        let canonical_features = self
-            .spanning_features
-            .iter()
-            .filter(|feature| match feature {
-                MacroSpanningFeatureSettings::Tunnel(tunnel) => tunnel.canonical_route,
-            })
-            .count();
         if self.critical_route.is_empty() {
-            return if canonical_features == 1 {
+            return if self.spanning_features.len() == 1
+                && self.spanning_features.iter().all(|feature| match feature {
+                    MacroSpanningFeatureSettings::Tunnel(tunnel) => tunnel.canonical_route,
+                }) {
                 Ok(())
             } else {
-                Err(format!(
-                    "V3 Macro empty critical_route requires exactly one canonical spanning feature, got {canonical_features}"
-                ))
+                Err("V3 Macro empty critical_route requires exactly one spanning feature and it must own the canonical route".to_owned())
             };
         }
         if self.critical_route.len() < 2 {
             return Err("V3 Macro critical_route must contain at least two instances".to_owned());
         }
-        if canonical_features != 0 {
+        if !self.spanning_features.is_empty() {
             return Err(
-                "V3 Macro cannot combine a legacy critical_route with a canonical spanning feature"
+                "V3 Macro cannot combine a legacy critical_route with a spanning feature"
                     .to_owned(),
             );
         }
@@ -5892,7 +5902,63 @@ mod tests {
         let error = missing_canonical
             .validate()
             .expect_err("an empty critical route needs one canonical spanning feature");
-        assert!(error.contains("exactly one canonical spanning feature"));
+        assert!(error.contains("exactly one spanning feature"));
+
+        let mut noncanonical = settings.clone();
+        let MacroSpanningFeatureSettings::Tunnel(tunnel) = macro_layout_mut(&mut noncanonical)
+            .spanning_features
+            .first_mut()
+            .expect("the fixture has one tunnel");
+        tunnel.canonical_route = false;
+        let error = noncanonical
+            .validate()
+            .expect_err("the initial spanning pass cannot accept a noncanonical tunnel");
+        assert!(error.contains("must own the canonical route"), "{error}");
+
+        let mut multiple = settings.clone();
+        let second = macro_layout(&multiple)
+            .spanning_features
+            .first()
+            .expect("the fixture has one tunnel")
+            .clone();
+        macro_layout_mut(&mut multiple)
+            .spanning_features
+            .push(second);
+        let error = multiple
+            .validate()
+            .expect_err("one canonical tunnel plus another feature must fail settings validation");
+        assert!(
+            error.contains("exactly one canonical spanning feature"),
+            "{error}"
+        );
+
+        for (label, mutate) in [
+            (
+                "width",
+                (|tunnel: &mut MacroTunnelSettings| tunnel.width = 3)
+                    as fn(&mut MacroTunnelSettings),
+            ),
+            ("floor_level", |tunnel: &mut MacroTunnelSettings| {
+                tunnel.floor_level = 7;
+            }),
+            ("clearance", |tunnel: &mut MacroTunnelSettings| {
+                tunnel.clearance = 5;
+            }),
+            ("roof_thickness", |tunnel: &mut MacroTunnelSettings| {
+                tunnel.roof_thickness = 2;
+            }),
+        ] {
+            let mut invalid = settings.clone();
+            let MacroSpanningFeatureSettings::Tunnel(tunnel) = macro_layout_mut(&mut invalid)
+                .spanning_features
+                .first_mut()
+                .expect("the fixture has one tunnel");
+            mutate(tunnel);
+            let error = invalid
+                .validate()
+                .expect_err("unsupported tunnel geometry must fail during settings validation");
+            assert!(error.contains(label), "{label}: {error}");
+        }
 
         for level in [-1, MAX_V3_LEVEL + 1] {
             let mut invalid = settings.clone();
