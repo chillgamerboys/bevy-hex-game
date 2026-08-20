@@ -103,7 +103,8 @@ cargo run -p hex_game --features visual-walk
 
 Exit code is the mechanical verdict: any stalled step, structural UI failure, or
 black frame fails the run. The scoped gameplay route contains at most ten
-deterministic Bevy image-target frames. It reviews hierarchy, layout, focus,
+deterministic Bevy image-target frames unless an approved authored-map acceptance
+matrix names more distinct landmark/camera frames. It reviews hierarchy, layout, focus,
 legibility, and responsive composition only; gameplay correctness is proved by
 canonical state snapshots in the rules/contracts/simulation/app partitions. Each
 capture has an explicit logical canvas and device scale, and uses Bevy's
@@ -411,7 +412,8 @@ Gameplay and map tests are partitioned by concern in
 [`docs/development/map-testing.md`](docs/development/map-testing.md); logical combat
 evidence comes from rules/contracts/simulation/app data, while map logic uses
 unit/generation/publication data and retains its existing visual criteria. The scoped
-gameplay visual run contains exactly ten reviewed presentation frames.
+UI gameplay visual run contains exactly ten reviewed presentation frames; an approved
+authored-map matrix may exceed that UI budget only for its named landmark/camera views.
 Ordinary PRs run only the selector-chosen producer/consumer closure; trajectory-only
 changes use their dedicated pure/direct-consumer concern without application/UI tests.
 The combined terrain-impact source, unknown/unclassified paths, command-manifest or CI

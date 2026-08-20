@@ -30,6 +30,82 @@ pub(crate) struct LocalPatchFrame {
     compose_presentation_rotation: bool,
 }
 
+#[derive(Debug)]
+struct AxisDistanceIndex {
+    values: Vec<i64>,
+    prefix_sums: Vec<i128>,
+}
+
+impl AxisDistanceIndex {
+    fn new(values: impl IntoIterator<Item = i32>) -> Self {
+        let mut values = values.into_iter().map(i64::from).collect::<Vec<_>>();
+        values.sort_unstable();
+        let mut prefix_sums = Vec::<i128>::with_capacity(values.len().saturating_add(1));
+        prefix_sums.push(0);
+        for value in &values {
+            let next = prefix_sums.last().copied().unwrap_or_default() + i128::from(*value);
+            prefix_sums.push(next);
+        }
+        Self {
+            values,
+            prefix_sums,
+        }
+    }
+
+    fn maximum_difference(&self, value: i32) -> u32 {
+        let value = i64::from(value);
+        let Some(first) = self.values.first().copied() else {
+            return 0;
+        };
+        let last = self.values.last().copied().unwrap_or(first);
+        u32::try_from((value - first).abs().max((last - value).abs())).unwrap_or(u32::MAX)
+    }
+
+    fn total_difference(&self, value: i32) -> i128 {
+        let value = i64::from(value);
+        let split = self.values.partition_point(|candidate| *candidate <= value);
+        let split_i128 = split as i128;
+        let len_i128 = self.values.len() as i128;
+        let value_i128 = i128::from(value);
+        let left_sum = self.prefix_sums.get(split).copied().unwrap_or_default();
+        let total_sum = self.prefix_sums.last().copied().unwrap_or_default();
+        let left = value_i128 * split_i128 - left_sum;
+        let right = total_sum - left_sum - value_i128 * (len_i128 - split_i128);
+        left + right
+    }
+}
+
+fn exact_mask_medoid(mask: &BTreeSet<HexCoord>) -> Option<HexCoord> {
+    let axes: [AxisDistanceIndex; 3] = std::array::from_fn(|axis| {
+        AxisDistanceIndex::new(mask.iter().map(|coord| {
+            coord
+                .to_cubic_array()
+                .get(axis)
+                .copied()
+                .unwrap_or_default()
+        }))
+    });
+    mask.iter().copied().min_by_key(|candidate| {
+        let cube = candidate.to_cubic_array();
+        let max_distance = axes
+            .iter()
+            .zip(cube)
+            .map(|(axis, value)| axis.maximum_difference(value))
+            .max()
+            .unwrap_or_default();
+        // Cube coordinates satisfy dx + dy + dz = 0, so their L1 distance is
+        // exactly twice the hex distance. Three sorted axis-prefix indexes make
+        // the exact total-distance tie-breaker O(log n) per candidate instead of
+        // scanning the complete patch mask again.
+        let doubled_total = axes
+            .iter()
+            .zip(cube)
+            .map(|(axis, value)| axis.total_difference(value))
+            .sum::<i128>();
+        (max_distance, doubled_total, *candidate)
+    })
+}
+
 impl LocalPatchFrame {
     pub(crate) const fn from_resolved_ring19(center: HexCoord, scale: u32, rotation: u8) -> Self {
         Self {
@@ -66,21 +142,7 @@ impl LocalPatchFrame {
             });
         }
 
-        let center = mask
-            .iter()
-            .copied()
-            .min_by_key(|candidate| {
-                let max_distance = mask
-                    .iter()
-                    .map(|coord| candidate.distance(*coord))
-                    .max()
-                    .unwrap_or_default();
-                let total_distance = mask
-                    .iter()
-                    .map(|coord| u64::from(candidate.distance(*coord)))
-                    .sum::<u64>();
-                (max_distance, total_distance, *candidate)
-            })
+        let center = exact_mask_medoid(mask)
             .ok_or_else(|| "cannot frame an empty V3 patch mask".to_owned())?;
         let max_distance = mask
             .iter()
@@ -537,6 +599,21 @@ mod tests {
     };
     use super::*;
 
+    fn quadratic_mask_medoid(mask: &BTreeSet<HexCoord>) -> Option<HexCoord> {
+        mask.iter().copied().min_by_key(|candidate| {
+            let max_distance = mask
+                .iter()
+                .map(|coord| candidate.distance(*coord))
+                .max()
+                .unwrap_or_default();
+            let total_distance = mask
+                .iter()
+                .map(|coord| u64::from(candidate.distance(*coord)))
+                .sum::<u64>();
+            (max_distance, total_distance, *candidate)
+        })
+    }
+
     fn presentation_fixture() -> GeneratedPatchPlan {
         let feature_root = TilePos::new(HexCoord::from_axial(1, 0), 3);
         GeneratedPatchPlan {
@@ -671,6 +748,47 @@ mod tests {
             translated.eye,
             (local.eye.0 + offset.x, local.eye.1, local.eye.2 + offset.z),
         );
+    }
+
+    #[test]
+    fn indexed_composite_medoid_exactly_matches_the_quadratic_contract() {
+        let mut masks = (0..=8)
+            .map(|radius| {
+                HexCoord::ORIGIN
+                    .within_radius(radius)
+                    .into_iter()
+                    .filter(|coord| {
+                        let [x, y, _] = coord.to_cubic_array();
+                        radius < 3 || (x + 2 * y).rem_euclid(5) != 0
+                    })
+                    .collect::<BTreeSet<_>>()
+            })
+            .collect::<Vec<_>>();
+        let irregular = BTreeSet::from([
+            HexCoord::from_axial(-9, 4),
+            HexCoord::from_axial(-8, 4),
+            HexCoord::from_axial(-4, 1),
+            HexCoord::from_axial(0, 0),
+            HexCoord::from_axial(1, -1),
+            HexCoord::from_axial(7, -3),
+        ]);
+        masks.push(irregular);
+        let translation = HexCoord::from_axial(1_000_000, -900_000);
+        masks.push(
+            HexCoord::ORIGIN
+                .within_radius(12)
+                .into_iter()
+                .filter(|coord| {
+                    let [x, _, _] = coord.to_cubic_array();
+                    x <= 7
+                })
+                .map(|coord| checked_coord_sum(coord, translation).expect("bounded translation"))
+                .collect(),
+        );
+
+        for mask in masks {
+            assert_eq!(exact_mask_medoid(&mask), quadratic_mask_medoid(&mask));
+        }
     }
 
     #[test]

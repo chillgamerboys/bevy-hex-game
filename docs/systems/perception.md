@@ -8,8 +8,9 @@ compile against one boundary without reaching into one another's crates.
 > **Status:** authoritative illumination, obstruction-aware pooled faction sight,
 > Unknown/Remembered/Observed map knowledge, and the live-map tactical shroud are
 > live.
-> V3 Caves and Crystal Ascent publish fixed local gameplay lights into that live
-> pipeline.
+> V3 Caves, Crystal Ascent, and Crystal Mountain's tunnel publish fixed local
+> gameplay lights into that live pipeline; [lighting](lighting.md) owns their exact
+> tier and domain contracts.
 > Casting anchors, hostile lattice disclosure, and AI observation/traversal now
 > consume that authority. Authored cave crystals and restrained physical lights
 > present those sources without becoming gameplay authority. Unknown-frontier

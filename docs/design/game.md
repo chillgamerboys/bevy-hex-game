@@ -399,8 +399,8 @@ properties and elevations:
 
 ### Crystal Ascent landmark
 
-Crystal Ascent is a vertical transition biome intended to become one landmark inside
-a larger authored world. A monumental aperture enters at the bottom into an open,
+Crystal Ascent is a vertical transition biome that also serves as the central landmark
+inside Crystal Mountain. A monumental aperture enters at the bottom into an open,
 dark chamber dominated by one large cyan crystal. The playable route does not cross
 the central void: it coils upward in three broad circuits along the enclosing walls,
 contracts inward like a Gothic cathedral, and emerges through an oculus into a wooded

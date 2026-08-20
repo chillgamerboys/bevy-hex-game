@@ -224,7 +224,13 @@ turn into an unrelated atomic-formation routing test.
 Crystal Mountain extends that same proof from the opaque enclosing massif and exterior
 portal through the natural tunnel, Gothic transition, approved Crystal Ascent route,
 summit threshold, and wooded basin. Its ordinary walk never enables a cutaway or
-illumination diagnostic; those remain separate deterministic `map-review` captures.
+illumination diagnostic; those remain separate deterministic `map-review` captures. The
+showcase stages the selected explorer on the stable foot-apron anchor and resolves the
+other two exterior cells by running candidate footprints through the production Compact
+formation planner before Restore, which remains authoritative for saves. The review route
+enters the four-wide mouth once in default Group mode, then chooses Solo movement and leaves
+the two allies at the threshold so the vertical camera proof does not become a formation
+benchmark.
 
 The separate `walks/camera_first_person.ron` route is a focused Mountains proof, not
 a camera-route manifest entry. It uses typed `AssertCameraMode(Map|Character|FirstPerson)`

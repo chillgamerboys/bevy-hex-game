@@ -1,6 +1,6 @@
 # Crystal Mountain wave
 
-- Status: `integration-validation`
+- Status: `integrating`
 - Wave branch: `wave/crystal-mountain`
 - Refreshed base: `origin/dev @ fc55bd5` before final validation
 - Prerequisite: Crystal Ascent and First Person through `7da9cd29` landed on `dev`
@@ -65,12 +65,13 @@ one wave rather than unrelated PRs.
   order: orders/L1-macro-contracts.md
   ticket: null
   authority: world
-  builder: "@codex"
+  builder: worker
   branch: feat/crystal-mountain-contracts
   owns:
     - crates/hex_map/src/settings.rs (Macro settings vocabulary and validation)
     - crates/hex_map/src/procedural_v3/layout.rs (resolved walker/subsurface/alias contracts)
     - crates/hex_map/src/procedural_v3/fingerprint.rs (conditional Macro extension)
+    - crates/hex_map/src/procedural_v3/seam.rs (explicit four-wide walker seam validation)
     - docs/planning/waves/crystal-mountain/manifest.md (L1 queue row only)
   dispatch_blockers: []
   merge_blockers: []
@@ -78,23 +79,27 @@ one wave rather than unrelated PRs.
     - path: crates/hex_map/src/procedural_v3/fingerprint.rs
       disposition: keep
       reason: old Mountain Range and Two Rings fingerprints must remain byte-identical
-  selector: { concerns: [map_unit, map_generation, map_contracts], full: false }
+  selector:
+    concerns: [map_unit, map_generation, map_contracts, clippy, docs, shipping]
+    full: false
   evidence: logic-only
   sizing: { model: inherited, effort: high }
-  state: integrated
+  state: merged-to-wave
   pr: null
 - id: L2
   title: Crystal Mountain composition and tunnel
   order: orders/L2-world-composition.md
   ticket: null
   authority: world
-  builder: "@codex"
+  builder: worker
   branch: wave/crystal-mountain
   owns:
     - crates/hex_map/src/procedural_v3/macro_world.rs (merge/finalize and global tunnel)
-    - crates/hex_map/src/procedural_v3/macro_landform.rs (Crystal Mountain elevation policy)
+    - crates/hex_map/src/procedural_v3/macro_spanning.rs (global tunnel planning and carving)
+    - crates/hex_map/src/procedural_v3/composition.rs (staged composition seam)
     - crates/hex_map/src/procedural_v3/crystal_ascent.rs (Macro landmark validation seam only)
     - crates/hex_map/src/procedural_v3/mod.rs (Crystal Mountain dispatch/report regions)
+    - crates/hex_map/tests/contracts/composed_worlds.rs (Crystal Mountain composed-world contracts and budgets)
     - docs/planning/waves/crystal-mountain/manifest.md (L2 queue row and integration ledger)
   dispatch_blockers: []
   merge_blockers: [L1]
@@ -102,21 +107,23 @@ one wave rather than unrelated PRs.
     - path: crates/hex_map/src/procedural_v3/macro_world.rs
       disposition: keep
       reason: existing Macro route, generation-budget, and full-world validators remain live
-  selector: { concerns: [map_generation, map_contracts], full: false }
+  selector:
+    concerns: [map_generation, map_contracts, clippy, docs, shipping]
+    full: false
   evidence: static-presentation
   sizing: { model: inherited, effort: high }
-  state: integrated
+  state: merged-to-wave
   pr: null
 - id: L3
   title: Interior cutaway and overlying-feature reconciliation
   order: orders/L3-presentation.md
   ticket: null
   authority: world
-  builder: "@codex"
+  builder: worker
   branch: feat/crystal-mountain-presentation
   owns:
     - crates/hex_world/src (Crystal Mountain cutaway and feature-lifecycle regions only)
-    - crates/hex_map/src/procedural_v3/world.rs (presentation facts only)
+    - crates/hex_map/src/grid.rs (rendered-run visibility ownership)
     - docs/planning/waves/crystal-mountain/manifest.md (L3 queue row only)
   dispatch_blockers: []
   merge_blockers: [L2]
@@ -124,17 +131,19 @@ one wave rather than unrelated PRs.
     - path: crates/hex_world/src
       disposition: keep
       reason: Map remains opaque and gameplay camera behavior remains unchanged
-  selector: { concerns: [world, visual_walk], full: false }
+  selector:
+    concerns: [selector, rules, trajectory_contracts, contracts, simulation, app, map_unit, map_generation, map_contracts, residual, clippy, docs, shipping]
+    full: true
   evidence: static-presentation
   sizing: { model: inherited, effort: high }
-  state: integrated
+  state: merged-to-wave
   pr: null
 - id: L4
   title: Crystal Mountain selection, review route, and docs
   order: orders/L4-content-docs.md
   ticket: null
   authority: shared
-  builder: "@codex"
+  builder: worker
   branch: feat/crystal-mountain-content
   owns:
     - assets/config/worlds/procedural-crystal-mountain.ron
@@ -142,26 +151,39 @@ one wave rather than unrelated PRs.
     - assets/config/scenarios.ron (Crystal Mountain entry only)
     - assets/config/sandbox_maps.ron (Crystal Mountain entry only)
     - crates/hex_game/src/scenarios.rs (embedded Crystal Mountain path only)
+    - crates/hex_game/src/save.rs (embedded Crystal Mountain path allowlist only)
     - crates/hex_game/src/walk.rs (Crystal Mountain review route only)
     - crates/hex_assets/src/sandbox.rs (Crystal Mountain catalog regression only)
+    - .config/test-scopes.json (map partition-count refresh only)
+    - .github/workflows/stress.yaml (Crystal Mountain ignored acceptance jobs only)
+    - tools/test_test_scope.py (Crystal Mountain selector regression only)
     - assets/ui/sandbox/crystal-mountain.png
     - walks/camera_crystal_mountain.ron
     - walks/camera_routes.ron (Crystal Mountain route only)
+    - CLAUDE.md (authored-map visual-matrix exception only)
+    - docs/README.md
+    - docs/contracts.md
+    - docs/design/game.md
     - docs/development/config.md
+    - docs/development/gameplay-testing.md
+    - docs/systems/map.md
     - docs/systems/world-generation-v3.md
     - docs/systems/interiors.md
     - docs/systems/lighting.md
     - docs/systems/camera.md
+    - docs/systems/perception.md
     - docs/planning/status.md
     - docs/planning/roadmap.md
     - docs/planning/waves/crystal-mountain/manifest.md (L4 queue row only)
   dispatch_blockers: []
   merge_blockers: [L1, L2]
   fences: []
-  selector: { concerns: [app, config, docs, visual_walk], full: true }
+  selector:
+    concerns: [selector, rules, trajectory_contracts, contracts, simulation, app, map_unit, map_generation, map_contracts, residual, clippy, docs, shipping]
+    full: true
   evidence: motion-or-feel
   sizing: { model: inherited, effort: high }
-  state: integrated
+  state: merged-to-wave
   pr: null
 ```
 
@@ -179,6 +201,15 @@ one wave rather than unrelated PRs.
   coordinator reconciles all rows after integrating commits.
 - Hotspot rule: L2 refreshes after L1 before compiling. L3 refreshes after L2 before its
   final tests. L4 refreshes after the final config schema and generated anchor names exist.
+- The coordinator owns post-lane final-candidate repairs and their narrow regression hooks.
+  Current territory is the exact Macro framing/selection/composition performance path in
+  `local_frame.rs`, `selection.rs`, `composition.rs`, and `macro_world.rs`; rendered-run
+  cutaway ownership in `hex_map/src/grid.rs`; test-only fog snapshots and the composed
+  Crystal Mountain runtime lifecycle in `hex_game/src/fog.rs` and `scenarios.rs`; plus the
+  additive `Cargo.lock` base refresh and final authored-map acceptance repairs in
+  `CLAUDE.md`, `docs/design/game.md`, `docs/systems/perception.md`, and the Crystal Mountain
+  walk. These edits remain identifiable integration work and do not retroactively widen a
+  source lane's crate authority.
 
 ## Territory
 
@@ -201,10 +232,15 @@ one wave rather than unrelated PRs.
 | Lane | Integrated commits | Result |
 |---|---|---|
 | L1 | `1ae8712`, `c264d93`, `82df844` | defaulted spanning, walker, alias, fingerprint, and seam contracts |
-| L2 | `cbac20c` through `90ac1bf` | staged composition, exact tunnel, landscape, validation, and benchmarks |
+| L2 | `cbac20c` through `90ac1bf`, `fcfa603`, `98c9fce` | staged composition, exact tunnel, landscape, validation, lighting containment, rotation stability, and benchmarks |
 | L3 | `e6a638c` | review cutaway hides and restores exact overlying roof trees |
 | L4 | `b9d7361`, `044b088`, `5686748` | selectable content, docs, preview, and deterministic camera route |
-| Refresh | merge of `origin/dev @ fc55bd5` | multiplayer/VFX additions retained additively before final gates |
+| Refresh | `b887ecb`, `8bd1fe3` (`origin/dev @ fc55bd5`) | multiplayer/VFX additions retained additively before final gates and lockfile refreshed |
+
+`merged-to-wave` records only that each lane's commits are present on the composed branch.
+It does not record candidate acceptance. The release build, selector-chosen complete gate,
+visual captures/review, and named-human runtime review remain release blockers and are not
+recorded as passed by this manifest.
 
 ## Combined acceptance
 
@@ -214,7 +250,8 @@ one wave rather than unrelated PRs.
 - Prove the only ordinary route is foot apron -> four-wide level-6 tunnel -> Crystal lower
   threshold -> approved 144-level ascent -> summit -> every basin section.
 - Prove tunnel clearance/roof/seam lane pairs, unified Dark interior/domain, Dim route
-  coverage, exact Bright pools, physical occupancy/LOS/fog, and no liquids or blockers.
+  coverage, exact Bright pools, and physical occupancy/LOS/fog. No liquid or traversal
+  blocker may intersect the tunnel, apron, or reserved clearance; basin trees remain valid.
 - Regenerate representative seeds and all six rotations; teardown and re-enter gameplay and
   review cutaway without stale roofs, lights, features, anchors, or floating trees.
 - Inspect Map, First Person, and Third Person frames for foot portal, natural tunnel, Gothic
@@ -222,6 +259,86 @@ one wave rather than unrelated PRs.
 - Run selector-chosen CI, full candidate gate, the radius-77 camera budget, preserved
   radius-40 perception budgets, the 10,000-idle-frame perception gate, and Macro
   generation/materialization/entity/peak-memory comparisons.
+
+The approved authored-map walk exception is exactly these 23 deterministic frames:
+
+| # | Scripted capture name |
+|---:|---|
+| 1 | `01-crystal-mountain-opaque-massif-map` |
+| 2 | `02-crystal-mountain-rear-ridge-basin-map` |
+| 3 | `03-crystal-mountain-foot-portal-map` |
+| 4 | `04-crystal-mountain-foot-portal-character` |
+| 5 | `05-crystal-mountain-foot-portal-first-person` |
+| 6 | `06-crystal-mountain-natural-tunnel-map` |
+| 7 | `07-crystal-mountain-natural-tunnel-character` |
+| 8 | `08-crystal-mountain-natural-tunnel-first-person` |
+| 9 | `09-crystal-mountain-gothic-transition-map` |
+| 10 | `10-crystal-mountain-gothic-transition-character` |
+| 11 | `11-crystal-mountain-gothic-transition-first-person` |
+| 12 | `12-crystal-mountain-crystal-chamber-map` |
+| 13 | `13-crystal-mountain-crystal-chamber-character` |
+| 14 | `14-crystal-mountain-crystal-chamber-first-person` |
+| 15 | `15-crystal-mountain-mid-ascent-map` |
+| 16 | `16-crystal-mountain-mid-ascent-character` |
+| 17 | `17-crystal-mountain-mid-ascent-first-person` |
+| 18 | `18-crystal-mountain-summit-exit-map` |
+| 19 | `19-crystal-mountain-summit-exit-character` |
+| 20 | `20-crystal-mountain-summit-exit-first-person` |
+| 21 | `21-crystal-mountain-wooded-basin-map` |
+| 22 | `22-crystal-mountain-wooded-basin-character` |
+| 23 | `23-crystal-mountain-wooded-basin-first-person` |
+
+Five separately launched review captures complete the approved matrix without changing the
+ordinary movement walk: `24-crystal-mountain-ridge-map`,
+`25-crystal-mountain-ridge-character`, `26-crystal-mountain-ridge-first-person`,
+`27-crystal-mountain-illumination-overlay-map`, and
+`28-crystal-mountain-full-cutaway-map`.
+
+All five use scenario `Crystal Mountain`, seed `1592598566`, a release build with the
+default-off `map-review` feature, and the named output file below. Empty cells mean the
+environment variable is omitted.
+
+| Capture | Focus anchor | View | Camera | Cutaway | Illumination |
+|---|---|---|---|---|---|
+| `24-crystal-mountain-ridge-map` | `crystal_mountain.ridge` | `default` | `map` |  |  |
+| `25-crystal-mountain-ridge-character` | `crystal_mountain.ridge` | `rotated` | `character` |  |  |
+| `26-crystal-mountain-ridge-first-person` | `crystal_mountain.ridge` | `rotated` | `first-person` |  |  |
+| `27-crystal-mountain-illumination-overlay-map` | `crystal_mountain.midpoint` | `top-down` | `map` | `full` | `overlay` |
+| `28-crystal-mountain-full-cutaway-map` | `crystal_mountain.midpoint` | `top-down` | `map` | `full` |  |
+
+Map each non-empty column to `HEX_REVIEW_FOCUS_ANCHOR`, `HEX_REVIEW_VIEW`,
+`HEX_REVIEW_CAMERA`, `HEX_REVIEW_CUTAWAY`, and `HEX_REVIEW_ILLUMINATION`; map the capture
+name to an absolute `HEX_REVIEW_CAPTURE` path ending in `.png`.
+
+## Exact-head evidence ledger
+
+This table is the release ledger, not a list of focused development runs. Every result must
+name the exact `wave/crystal-mountain` candidate SHA it exercised. A later commit invalidates
+every applicable row until it is rerun. Static frames may establish only rendered geometry,
+lighting, cutaway, and camera composition; the typed map/runtime rows establish all exact
+world and gameplay facts.
+
+| Evidence | Required record | Candidate head / result |
+|---|---|---|
+| Selector and CI-equivalent gate | selector plan, every selected concern, workspace doctests, formatting, dependency policy, strict Clippy, docs, shipping build, rules/simulation graph closure, map partition closure, relative links, and terminology scan | `PENDING` |
+| Deterministic world contracts | all six rotations, representative/32-seed corpus, exact four-wide route and seam closures, unified interior/light domain, basin reachability, and teardown/re-entry | `PENDING` |
+| Runtime authority contracts | terrain, occupancy, authored-heart LOS, perception/fog, cutaway/feature lifecycle, and clean gameplay re-entry from typed snapshots | `PENDING` |
+| Release budgets | Macro generation, materialization/entity/peak-memory comparison, radius-77 camera, radius-40 perception, dense six-observer perception, and 10,000 idle frames | `PENDING` |
+| Static presentation | bounded automated walk plus Map/First Person/Third Person review matrix, illumination overlay, and full cutaway; retain artifact paths and mechanical verdict | `PENDING` |
+| Human runtime | named human, native route, date, exact SHA, and explicit `PASS`; required before the PR leaves draft | `PENDING` |
+
+The named-human route starts at `crystal_mountain.foot_apron` and uses native pointer input
+through tunnel mouth, midpoint, Gothic transition, Ascent threshold, bottom chamber,
+mid-flight, summit exit, the exact level-150 summit walker connection, basin clearing, and
+one adjacent Forest basin section. At the portal, tunnel, ascent, summit seam, basin, and
+ridge, the reviewer cycles Map -> Character -> First Person -> Map, exercises native orbit
+and forward/back movement, and checks camera collision, first-person roof/subject occlusion,
+ordinary opaque-Map restoration, route responsiveness, and motion/feel. The record names the
+reviewer, date, exact SHA, and explicit `PASS`; any later push makes it stale.
+
+Focused tests and benchmark samples run before this ledger receives an exact candidate SHA are
+useful development evidence only. They must not be promoted to combined acceptance by wording
+in status, roadmap, a PR description, or a screenshot caption.
 
 ## Stop conditions
 
@@ -236,9 +353,13 @@ one wave rather than unrelated PRs.
 ## Injection log
 
 - 2026-08-10: initial four-lane implementation wave approved by the user.
+- 2026-08-20: coordinator reconciled the live queue metadata, selector vocabulary, lane
+  ownership, and pending-evidence state after integration; no locked decision was amended.
 
 ## Close-out
 
-Open one `wave/crystal-mountain -> dev` PR after combined acceptance and named human runtime
-PASS. After landing, record the exact merge SHA, close superseded source PRs, update delivery
-state, and remove transient `orders/` files in the close-out PR.
+Keep the `wave/crystal-mountain -> dev` PR in draft while combined acceptance is pending.
+It must not become non-draft until a named human records `PASS` against the exact candidate
+head; any later commit invalidates that classification. After landing, record the exact merge
+SHA, close superseded source PRs, update delivery state, and remove transient `orders/` files
+in the close-out PR.

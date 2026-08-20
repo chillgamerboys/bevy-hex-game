@@ -16,7 +16,7 @@ sight after the target's illumination chooses its sight radius.
 
 ## Crystal Mountain
 
-The Crystal Mountain candidate makes its roofed tunnel and Crystal Ascent one Dark
+Crystal Mountain makes its roofed tunnel and Crystal Ascent one Dark
 domain. The eight open foot-apron floors remain exterior; the first roofed four-wide
 foot threshold and the four-wide summit threshold are entrance floors inside the
 unified domain. The lower Crystal aperture is an internal opening. Exterior daylight

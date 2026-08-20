@@ -17,7 +17,7 @@ remove and rebuild both roof and feature presentation from current published fac
 
 ## Crystal Mountain
 
-The Crystal Mountain candidate joins the complete tunnel and Crystal Ascent into one
+Crystal Mountain joins the complete tunnel and Crystal Ascent into one
 authored interior and therefore one Dark light domain. Exactly eight surfaces are
 registered as entrances: the first roofed four-wide foot threshold and the four-wide
 summit threshold. These threshold surfaces remain floors of the unified interior. The

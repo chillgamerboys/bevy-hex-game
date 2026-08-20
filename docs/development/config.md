@@ -102,8 +102,8 @@ The optional review overrides are:
 | `HEX_REVIEW_CUTAWAY` | `full` hides the complete roof of the selected interior; ordinary gameplay never removes it |
 | `HEX_REVIEW_ILLUMINATION` | `overlay` draws exact authored-interior gameplay illumination tiers: charcoal Dark, blue Dim, and cyan-green Bright |
 
-`HEX_REVIEW_VIEW`, `HEX_REVIEW_CAMERA`, `HEX_REVIEW_FOCUS_ANCHOR`, and
-`HEX_REVIEW_CUTAWAY` and `HEX_REVIEW_ILLUMINATION` require `HEX_REVIEW_CAPTURE`.
+`HEX_REVIEW_VIEW`, `HEX_REVIEW_CAMERA`, `HEX_REVIEW_FOCUS_ANCHOR`,
+`HEX_REVIEW_CUTAWAY`, and `HEX_REVIEW_ILLUMINATION` require `HEX_REVIEW_CAPTURE`.
 The focus override resolves the anchor's full `TilePos`, not just its horizontal
 coordinate, so it can target an underground floor beneath a surface. It also applies
 the selected actor's normal solidity and headroom rules. An unknown anchor or one the
@@ -421,10 +421,11 @@ anchor_aliases: [
 critical_route: [],
 ```
 
-Walker widths are `2..=4`; tunnel widths use the same bound. A tunnel route contains
-at least two unique, pairwise-adjacent non-aquatic instances. Its boundary terminal
-belongs to the first route instance, its destination to the last, and
-`floor_level + clearance + roof_thickness` must remain inside V3's level-256 ceiling.
+Walker widths are `2..=4`. The initial tunnel implementation is deliberately fixed at
+width `4`, floor level `6`, and clearance `6`, with a roof thickness of at least `3`.
+A tunnel route contains at least two unique, pairwise-adjacent non-aquatic instances.
+Its boundary terminal belongs to the first route instance, its destination to the
+last, and the complete vertical reservation must remain inside V3's level-256 ceiling.
 
 The configuration resolves into exact geometry before ordinary fragments are
 decorated. The authored destination is constructed first; the global planner reserves

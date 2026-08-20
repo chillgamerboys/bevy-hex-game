@@ -696,6 +696,8 @@ fn build_grid(
                     scale: Vec3::new(1., span.height(), 1.),
                     ..default()
                 },
+                // A roof run can be hidden independently of the grid that owns it.
+                Visibility::Inherited,
                 Name::new("HexTile"),
                 HexTile,
                 coord,

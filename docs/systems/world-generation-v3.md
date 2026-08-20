@@ -215,6 +215,10 @@ feature. Four logical instances own the complete 37-cell graph:
 4. `outer-mountain` owns all eighteen radius-three cells and rises into the enclosing
    level-178-through-192 ridge.
 
+Alpine treeline filtering applies only to alpine vegetation. It does not remove the
+temperate Forest basin's trees at levels 149–151 or Crystal Ascent's authored crown
+trees; both remain valid above the surrounding alpine recipes' normal treeline.
+
 The initial seven-cell union is not itself a radius-32 disk: it both misses a small
 part of the authored site and protrudes beyond it. Resolution transfers only the
 missing disk columns from adjacent atomic masks and does not trim the central seven's

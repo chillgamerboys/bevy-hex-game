@@ -14,10 +14,12 @@
 //! the *previous* scenario's terrain still installed — a wrong-map bug that renders
 //! perfectly and logs nothing.
 
+use std::sync::Arc;
+
 use bevy::prelude::*;
 use hex_assets::{
-    choose_settings, Encounter, EncounterPlacement, LightingSettings, Scenario, SelectSettings,
-    SettingsRegistry, SubstanceTable, CONFIG_EXTENSIONS,
+    choose_settings, Encounter, EncounterPlacement, FormationCatalog, LightingSettings, Scenario,
+    SelectSettings, SettingsRegistry, SubstanceTable, CONFIG_EXTENSIONS,
 };
 use hex_core::{
     GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexSpan, HexTile, InteriorRegions,
@@ -26,7 +28,10 @@ use hex_core::{
     UnitId,
 };
 use hex_map::{MapSettings, TerrainSettings};
-use hex_units::{Body, Faction, Footing, Player, StandsOn};
+use hex_units::{
+    plan_formation_move_with_occupancy, route_with_occupancy, Body, Faction, Footing,
+    FormationMember, Player, StandsOn, UnitOccupancy,
+};
 use hex_world::TimeOfDay;
 
 use crate::screens::CreatorSandboxReturn;
@@ -55,6 +60,9 @@ pub(super) fn plugin(app: &mut App) {
                 stage_crystal_ascent_showcase_party
                     .after(GameplaySetup::Actors)
                     .before(GameplaySetup::Restore),
+                stage_crystal_mountain_showcase_party
+                    .after(GameplaySetup::Actors)
+                    .before(GameplaySetup::Restore),
                 finalize_gameplay_setup.in_set(GameplaySetup::Finalize),
             ),
         )
@@ -69,6 +77,10 @@ const CRYSTAL_ASCENT_SHOWCASE: &str = "Crystal Ascent Showcase";
 const CRYSTAL_ASCENT_SITE_RADIUS: u32 = 32;
 const CRYSTAL_ASCENT_LOWER_ENTRY: &str = "crystal_ascent.lower_entry";
 const CRYSTAL_ASCENT_BOTTOM_CHAMBER: &str = "crystal_ascent.bottom_chamber";
+const CRYSTAL_MOUNTAIN_SHOWCASE: &str = "Crystal Mountain Showcase";
+const CRYSTAL_MOUNTAIN_RADIUS: u32 = 77;
+const CRYSTAL_MOUNTAIN_FOOT_APRON: &str = "crystal_mountain.foot_apron";
+const CRYSTAL_MOUNTAIN_TUNNEL_MOUTH: &str = "crystal_mountain.tunnel_mouth";
 
 /// Stages the shipped Crystal Ascent party on its exact exterior terminal.
 ///
@@ -176,6 +188,186 @@ fn stage_crystal_ascent_showcase_party(
 
     if let Err(detail) = result {
         let reason = format!("Crystal Ascent showcase staging failed: {detail}.");
+        error!("{reason}");
+        commands.insert_resource(GameplaySetupFailure::new(reason));
+    }
+}
+
+/// Stages the Crystal Mountain party in a group-safe exterior footprint.
+///
+/// Nearest-first generic staging can give three individually valid cells whose routes
+/// conflict when the default Compact group enters the boundary mouth. Keep the anchor
+/// exact, enumerate only nearby exterior footing, and retain the first deterministic
+/// placement/facing whose production formation planner proves atomic. The camera walk
+/// switches to Solo only after that ordinary Group move completes.
+fn stage_crystal_mountain_showcase_party(
+    mut commands: Commands,
+    encounter: Option<Res<Encounter>>,
+    anchors: Option<Res<MapAnchors>>,
+    interiors: Option<Res<InteriorRegions>>,
+    table: Option<Res<SubstanceTable>>,
+    formations: Option<Res<FormationCatalog>>,
+    blockers: Option<Res<TraversalBlockers>>,
+    failure: Option<Res<GameplaySetupFailure>>,
+    mut formation: Option<ResMut<PartyFormation>>,
+    players: Query<(Entity, &UnitId, &Body), With<Player>>,
+    tiles: Query<(&TilePos, &HexSpan, &SubstanceId, &Headroom), With<HexTile>>,
+) {
+    let Some(encounter) = encounter else { return };
+    if encounter.name != CRYSTAL_MOUNTAIN_SHOWCASE || failure.is_some() {
+        return;
+    }
+
+    let result = (|| {
+        let anchors = anchors
+            .as_deref()
+            .ok_or("the generated map published no anchors")?;
+        let interiors = interiors
+            .as_deref()
+            .ok_or("the generated map published no interior regions")?;
+        let table = table
+            .as_deref()
+            .ok_or("the substance table is unavailable")?;
+        let formations = formations
+            .as_deref()
+            .ok_or("the formation catalog is unavailable")?;
+        let formation = formation
+            .as_deref_mut()
+            .ok_or("party formation state is unavailable")?;
+        let foot_apron = anchors
+            .get(&MapAnchorId::from(CRYSTAL_MOUNTAIN_FOOT_APRON))
+            .ok_or("the Crystal Mountain foot-apron anchor is missing")?;
+        let tunnel_mouth = anchors
+            .get(&MapAnchorId::from(CRYSTAL_MOUNTAIN_TUNNEL_MOUTH))
+            .ok_or("the Crystal Mountain tunnel-mouth anchor is missing")?;
+
+        let mut members = players
+            .iter()
+            .map(|(entity, unit, body)| (entity, *unit, *body))
+            .collect::<Vec<_>>();
+        members.sort_by_key(|(_, unit, _)| *unit);
+        if members.len() != 3 {
+            return Err("the standard showcase party did not spawn exactly three members");
+        }
+        let body = members
+            .first()
+            .map(|(_, _, body)| *body)
+            .ok_or("the standard showcase party is empty")?;
+        if members
+            .iter()
+            .any(|(_, _, member_body)| *member_body != body)
+        {
+            return Err("the standard showcase party no longer shares one staging footprint");
+        }
+
+        let footing = Arc::new(Footing::from_tiles(
+            tiles.iter(),
+            table,
+            body,
+            blockers.as_deref(),
+        ));
+        let selected = footing
+            .at(foot_apron)
+            .ok_or("the foot-apron anchor is not standable")?;
+        let selected_unit = members
+            .first()
+            .map(|(_, unit, _)| *unit)
+            .ok_or("the standard showcase party is empty")?;
+        let preset = formations
+            .get(&formation.preset)
+            .ok_or("the selected formation preset is unavailable")?;
+        let anchor_slot = preset
+            .anchor()
+            .ok_or("the selected formation preset has no anchor")?;
+        let anchor = formation
+            .assignments
+            .iter()
+            .find_map(|(&unit, &slot)| (slot == anchor_slot).then_some(unit))
+            .ok_or("the selected formation has no assigned anchor")?;
+        if anchor != selected_unit {
+            return Err("the stable foot-apron explorer is not the formation anchor");
+        }
+        let destination = footing
+            .at(tunnel_mouth)
+            .ok_or("the tunnel-mouth anchor is not standable")?;
+        let external_occupancy = UnitOccupancy::default();
+        let anchor_path =
+            route_with_occupancy(selected, destination, &footing, &external_occupancy, anchor)
+                .ok_or("the formation anchor cannot route into the tunnel mouth")?;
+
+        let mut candidates = foot_apron
+            .coord
+            .within_radius(4)
+            .into_iter()
+            .filter(|coord| coord.distance(HexCoord::ORIGIN) == CRYSTAL_MOUNTAIN_RADIUS)
+            .map(|coord| TilePos::new(coord, foot_apron.level))
+            .filter(|position| *position != foot_apron)
+            .filter(|position| interiors.get(*position).is_none())
+            .filter_map(|position| footing.at(position))
+            .collect::<Vec<_>>();
+        candidates.sort_by_key(|standing| standing.pos);
+        candidates.dedup_by_key(|standing| standing.pos);
+
+        let mut directions = Sextant::ALL;
+        directions.sort_by_key(|direction| {
+            (
+                foot_apron
+                    .coord
+                    .neighbor(*direction)
+                    .distance(tunnel_mouth.coord),
+                *direction,
+            )
+        });
+        let mut accepted = None;
+        'placements: for direction in directions {
+            for (second_index, second) in candidates.iter().enumerate() {
+                for (third_index, third) in candidates.iter().enumerate() {
+                    if second_index == third_index {
+                        continue;
+                    }
+                    let staged = [selected, *second, *third];
+                    let mut candidate_formation = formation.clone();
+                    candidate_formation.facing = direction;
+                    let planned_members = members
+                        .iter()
+                        .zip(staged)
+                        .map(|((_, unit, _), standing)| FormationMember {
+                            unit: *unit,
+                            standing,
+                            footing: Arc::clone(&footing),
+                        })
+                        .collect::<Vec<_>>();
+                    if plan_formation_move_with_occupancy(
+                        preset,
+                        &candidate_formation,
+                        &anchor_path,
+                        planned_members,
+                        &external_occupancy,
+                    )
+                    .is_ok()
+                    {
+                        accepted = Some((direction, staged));
+                        break 'placements;
+                    }
+                }
+            }
+        }
+        let Some((facing, staged)) = accepted else {
+            return Err("no nearby exterior staging footprint can enter the mouth atomically");
+        };
+
+        for ((entity, _, _), standing) in members.into_iter().zip(staged) {
+            commands.entity(entity).insert((
+                StandsOn(standing),
+                Transform::from_translation(standing.world_position()),
+            ));
+        }
+        formation.facing = facing;
+        Ok::<(), &'static str>(())
+    })();
+
+    if let Err(detail) = result {
+        let reason = format!("Crystal Mountain showcase staging failed: {detail}.");
         error!("{reason}");
         commands.insert_resource(GameplaySetupFailure::new(reason));
     }
@@ -579,7 +771,7 @@ fn sim_seeds_for(name: &str, resolved: Option<ResolvedMapSeed>) -> SimSeeds {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -608,9 +800,9 @@ pub(crate) mod tests {
         GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile, IlluminationLevel,
         InteriorRegions, IssuedCommand, KnowledgeState, LatticeCoord, LightDomain,
         LocalMapKnowledge, MapAnchorId, MapAnchors, MapViewHint, Mode, PartyFormation,
-        PausableSystems, Pause, PendingDecision, PerceptionSystems, PlayerSeat, ResolvedMapSeed,
-        Screen, Sextant, SpecialMovementRegion, SpecialMovementRegions, SubstanceId, TerrainReady,
-        TilePos, TraversalBlockers, TraversalProfile, Turn, UnitId,
+        PartyMovementMode, PausableSystems, Pause, PendingDecision, PerceptionSystems, PlayerSeat,
+        ResolvedMapSeed, Screen, Sextant, SpecialMovementRegion, SpecialMovementRegions,
+        SubstanceId, TerrainReady, TilePos, TraversalBlockers, TraversalProfile, Turn, UnitId,
     };
     use hex_lattice::{LatticeSpec, LatticeState};
     use hex_map::{
@@ -620,18 +812,28 @@ pub(crate) mod tests {
         can_observe, can_observe_with_authored_objects, FactionMapKnowledge, ResolvedIllumination,
     };
     use hex_units::{
-        either_in_reach, plan_formation_move, Archetype, AuthoredObjectOccupancy, Body, Downed,
-        Enemy, Faction, Footing, FormationMember, Player, Reach, StandsOn, TerrainOccupancy,
-        UnitOccupancy,
+        either_in_reach, plan_formation_move, plan_formation_move_with_occupancy,
+        route_with_occupancy, Archetype, AuthoredObjectOccupancy, Body, Downed, Enemy, Faction,
+        Footing, FormationMember, Player, Reach, StandsOn, TerrainOccupancy, UnitOccupancy,
     };
     use hex_world::TimeOfDay;
+
+    #[cfg(feature = "test-support")]
+    use hex_assets::CameraSettings;
+    #[cfg(feature = "test-support")]
+    use hex_core::{
+        CameraFocusTarget, CutawayOccluder, PresentationOcclusion, PresentationOcclusionReason,
+        RunBottom, TreeOccluder,
+    };
+    #[cfg(feature = "test-support")]
+    use hex_units::Standing;
 
     use super::{
         clear_session_resources, finalize_gameplay_setup, initialize_time_of_day,
         scenario_contract_error, scenario_contract_error_for_launch, setup_failure_destination,
-        stage_crystal_ascent_showcase_party, validate_gameplay_lighting_contract,
-        validate_loaded_scenario, ActiveScenario, ScenarioContractStatus, ScenarioTimeOverride,
-        ScenarioToLoad,
+        stage_crystal_ascent_showcase_party, stage_crystal_mountain_showcase_party,
+        validate_gameplay_lighting_contract, validate_loaded_scenario, ActiveScenario,
+        ScenarioContractStatus, ScenarioTimeOverride, ScenarioToLoad,
     };
 
     fn library() -> ScenarioLibrary {
@@ -832,6 +1034,199 @@ pub(crate) mod tests {
             }
         }
         panic!("the shipped heart should block at least one otherwise-clear chamber sight bundle");
+    }
+
+    #[cfg(feature = "test-support")]
+    fn crystal_mountain_presentation_app() -> App {
+        let mut app = unfinished_procedural_gameplay_app("Crystal Mountain", false);
+        let settings: CameraSettings =
+            ron::from_str(include_str!("../../../assets/config/camera.ron"))
+                .expect("the shipped camera settings should deserialize");
+        settings
+            .validate()
+            .expect("the shipped camera settings should remain valid");
+        app.insert_resource(settings);
+        app.add_plugins(bevy::window::WindowPlugin {
+            primary_window: None,
+            ..default()
+        });
+        app.add_plugins(bevy::transform::TransformPlugin);
+        app.add_plugins((
+            hex_world::test_support::headless_camera_plugin,
+            crate::fog::plugin,
+        ));
+        hex_world::install_full_cutaway_review_override(&mut app);
+        finish_test_app(app)
+    }
+
+    #[cfg(feature = "test-support")]
+    fn focus_crystal_mountain_interior(app: &mut App) -> TilePos {
+        let target = app
+            .world()
+            .resource::<MapAnchors>()
+            .get(&MapAnchorId::from("crystal_mountain.midpoint"))
+            .expect("Crystal Mountain should publish its tunnel midpoint");
+        let span = {
+            let world = app.world_mut();
+            let mut surfaces =
+                world.query_filtered::<(&TilePos, &HexSpan, &Headroom), With<HexTile>>();
+            surfaces
+                .iter(world)
+                .find(|(position, _, headroom)| **position == target && headroom.0 > 0)
+                .map(|(_, span, _)| *span)
+                .expect("the tunnel midpoint should be an exposed published surface")
+        };
+        let standing = Standing { pos: target, span };
+        {
+            let world = app.world_mut();
+            let player = {
+                let mut players = world.query_filtered::<(Entity, &UnitId), With<Player>>();
+                players
+                    .iter(world)
+                    .min_by_key(|(_, unit)| **unit)
+                    .map(|(entity, _)| entity)
+                    .expect("Crystal Mountain should retain its player party")
+            };
+            world.entity_mut(player).insert((
+                StandsOn(standing),
+                Transform::from_translation(standing.world_position()),
+                CameraFocusTarget::new(target),
+            ));
+        }
+        app.update();
+
+        let world = app.world_mut();
+        let mut focused = world.query_filtered::<&CameraFocusTarget, With<Player>>();
+        assert_eq!(
+            focused
+                .single(world)
+                .expect("the review fixture should publish one exact camera focus")
+                .surface,
+            target,
+            "review cutaway must consume the relocated actor's exact interior surface"
+        );
+        target
+    }
+
+    #[cfg(feature = "test-support")]
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct CrystalMountainRuntimeSnapshot {
+        map_fingerprint: u64,
+        terrain: TerrainOccupancy,
+        authored: AuthoredObjectOccupancy,
+        blocked_sight_pair: (TilePos, TilePos),
+        fog_surfaces: BTreeSet<TilePos>,
+        cutaway_roofs: BTreeSet<TilePos>,
+        cutaway_tree_roots: BTreeSet<TilePos>,
+    }
+
+    #[cfg(feature = "test-support")]
+    fn crystal_mountain_runtime_snapshot(app: &mut App) -> CrystalMountainRuntimeSnapshot {
+        let target = focus_crystal_mountain_interior(app);
+        let expected_terrain = {
+            let world = app.world_mut();
+            let mut runs = world.query_filtered::<(&TilePos, &RunBottom), With<HexTile>>();
+            TerrainOccupancy::from_runs(
+                runs.iter(world)
+                    .map(|(position, bottom)| (*position, *bottom)),
+            )
+            .expect("Crystal Mountain should publish only valid terrain runs")
+        };
+        let terrain = app.world().resource::<TerrainOccupancy>().clone();
+        assert_eq!(
+            terrain, expected_terrain,
+            "runtime terrain authority must derive from every composed material run"
+        );
+        assert!(terrain.contains(target));
+
+        let (heart, _, authored) = crystal_heart_occupancy_snapshot(app);
+        let blocked_sight_pair = crystal_heart_blocked_sight_pair(app, heart.origin());
+        let active_region = app
+            .world()
+            .resource::<InteriorRegions>()
+            .get(target)
+            .expect("the tunnel midpoint should belong to the combined interior");
+        let projected_regions = {
+            let world = app.world_mut();
+            let mut cutaways = world.query::<&CutawayOccluder>();
+            cutaways
+                .iter(world)
+                .map(|cutaway| cutaway.0)
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            projected_regions.contains(&active_region),
+            "the combined interior omitted its exact rendered roof projection: active={active_region:?}, projected={projected_regions:?}"
+        );
+        let cutaway_roofs = {
+            let world = app.world_mut();
+            let mut roofs = world.query_filtered::<(
+                &TilePos,
+                &CutawayOccluder,
+                &PresentationOcclusion,
+                Option<&Visibility>,
+            ), With<HexTile>>();
+            roofs
+                .iter(world)
+                .filter(|(_, cutaway, _, _)| cutaway.0 == active_region)
+                .map(|(position, _, occlusion, visibility)| {
+                    assert!(occlusion.contains(PresentationOcclusionReason::InteriorCutaway));
+                    assert_eq!(visibility, Some(&Visibility::Hidden));
+                    *position
+                })
+                .collect::<BTreeSet<_>>()
+        };
+        assert!(
+            !cutaway_roofs.is_empty(),
+            "the combined tunnel/ascent interior should hide authored roof runs"
+        );
+        let interior_regions = app.world().resource::<InteriorRegions>().clone();
+        let cutaway_tree_roots = {
+            let world = app.world_mut();
+            let mut trees = world.query::<(
+                &TreeOccluder,
+                Option<&PresentationOcclusion>,
+                Option<&Visibility>,
+            )>();
+            let mut all_roots = BTreeSet::new();
+            let mut hidden_roots = BTreeSet::new();
+            for (tree, occlusion, visibility) in trees.iter(world) {
+                all_roots.insert(tree.0);
+                if interior_regions.roof_region(tree.0) == Some(active_region) {
+                    assert!(occlusion.is_some_and(|occlusion| {
+                        occlusion.contains(PresentationOcclusionReason::InteriorCutaway)
+                    }));
+                    assert_eq!(visibility, Some(&Visibility::Hidden));
+                    hidden_roots.insert(tree.0);
+                }
+            }
+            assert!(
+                !all_roots.is_empty(),
+                "Crystal Mountain should retain its generated tree roots"
+            );
+            hidden_roots
+        };
+        assert_eq!(
+            app.world().resource::<LocalMapKnowledge>().state(target),
+            KnowledgeState::Observed,
+            "relocating the real observer should rebuild local visibility at the tunnel midpoint"
+        );
+        let fog_surfaces = crate::fog::fog_overlay_positions(app.world_mut());
+        assert!(!fog_surfaces.is_empty());
+        assert!(
+            !fog_surfaces.contains(&target),
+            "an observed tunnel midpoint must not retain a fog cap"
+        );
+
+        CrystalMountainRuntimeSnapshot {
+            map_fingerprint: app.world().resource::<GenerationReport>().map_fingerprint,
+            terrain,
+            authored,
+            blocked_sight_pair,
+            fog_surfaces,
+            cutaway_roofs,
+            cutaway_tree_roots,
+        }
     }
 
     /// The encounter a scenario names, read off disk.
@@ -1858,6 +2253,244 @@ pub(crate) mod tests {
         );
     }
 
+    #[test]
+    fn crystal_mountain_showcase_stages_a_clear_default_group_route_from_the_outer_apron() {
+        let mut app = procedural_gameplay_app("Crystal Mountain");
+        enter_screen(&mut app, Screen::Gameplay);
+
+        assert!(
+            !app.world().contains_resource::<GameplaySetupFailure>(),
+            "exact outer-apron staging failed: {:?}",
+            app.world()
+                .get_resource::<GameplaySetupFailure>()
+                .map(|failure| failure.reason.as_str())
+        );
+        let (foot_apron, tunnel_mouth) = {
+            let anchors = app.world().resource::<MapAnchors>();
+            (
+                anchors
+                    .get(&MapAnchorId::from("crystal_mountain.foot_apron"))
+                    .expect("Crystal Mountain should publish its exterior apron"),
+                anchors
+                    .get(&MapAnchorId::from("crystal_mountain.tunnel_mouth"))
+                    .expect("Crystal Mountain should publish its roofed threshold"),
+            )
+        };
+        let mut party = {
+            let world = app.world_mut();
+            let mut players =
+                world.query_filtered::<(&UnitId, &StandsOn, &Transform), With<Player>>();
+            players
+                .iter(world)
+                .map(|(unit, standing, transform)| {
+                    assert_eq!(transform.translation, standing.0.world_position());
+                    (*unit, standing.0.pos)
+                })
+                .collect::<Vec<_>>()
+        };
+        party.sort_by_key(|(unit, _)| *unit);
+        assert_eq!(party.len(), 3);
+        assert_eq!(
+            party.first().map(|(_, position)| *position),
+            Some(foot_apron)
+        );
+        let occupied = party
+            .iter()
+            .map(|(_, position)| *position)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(occupied.len(), party.len());
+        assert_eq!(
+            party
+                .iter()
+                .map(|(_, position)| *position)
+                .collect::<Vec<_>>(),
+            vec![
+                foot_apron,
+                TilePos::new(HexCoord::from_axial(-77, 0), 6),
+                TilePos::new(HexCoord::from_axial(-77, 4), 6),
+            ],
+            "the fresh party should retain its stable group-safe exterior footprint"
+        );
+        let interiors = app.world().resource::<InteriorRegions>();
+        assert!(party.iter().all(|(_, position)| {
+            position.level == foot_apron.level
+                && position.coord.distance(HexCoord::ORIGIN) <= 77
+                && interiors.get(*position).is_none()
+        }));
+
+        let formation = app.world().resource::<PartyFormation>();
+        let inward = TilePos::new(
+            foot_apron.coord.neighbor(formation.facing),
+            foot_apron.level,
+        );
+        assert!(
+            inward.coord.distance(tunnel_mouth.coord)
+                < foot_apron.coord.distance(tunnel_mouth.coord),
+            "the staged party must face inward toward the tunnel"
+        );
+        let inward_is_standable = {
+            let world = app.world_mut();
+            let mut surfaces = world.query_filtered::<(&TilePos, &Headroom), With<HexTile>>();
+            surfaces
+                .iter(world)
+                .any(|(position, headroom)| *position == inward && headroom.0 > 0)
+        };
+        assert!(inward_is_standable);
+
+        let (selected, body) = {
+            let world = app.world_mut();
+            let mut players = world.query_filtered::<(&UnitId, &Body, &StandsOn), With<Player>>();
+            players
+                .iter(world)
+                .min_by_key(|(unit, _, _)| **unit)
+                .map(|(unit, body, _)| (*unit, *body))
+                .expect("the standard party should retain its selected explorer")
+        };
+        let table = app.world().resource::<SubstanceTable>().clone();
+        let blockers = app.world().resource::<TraversalBlockers>().clone();
+        let authored = app.world().resource::<AuthoredObjectOccupancy>().clone();
+        let footing = Arc::new({
+            let world = app.world_mut();
+            let mut tiles = world
+                .query_filtered::<(&TilePos, &HexSpan, &SubstanceId, &Headroom), With<HexTile>>();
+            Footing::from_tiles_with_object_occupancy(
+                tiles.iter(world),
+                &table,
+                body,
+                Some(&blockers),
+                &authored,
+            )
+        });
+        let destination = footing
+            .at(tunnel_mouth)
+            .expect("the roofed tunnel threshold should remain standable");
+
+        let formation = app.world().resource::<PartyFormation>().clone();
+        let formations = app.world().resource::<FormationCatalog>();
+        let preset = formations
+            .get(&formation.preset)
+            .expect("fresh gameplay should resolve the shipped formation preset")
+            .clone();
+        let anchor_slot = preset
+            .anchor()
+            .expect("the shipped formation preset should have one anchor");
+        let anchor = formation
+            .assignments
+            .iter()
+            .find_map(|(&unit, &slot)| (slot == anchor_slot).then_some(unit))
+            .expect("the staged standard party should retain its formation anchor");
+        assert_eq!(anchor, selected);
+        let members = {
+            let world = app.world_mut();
+            let mut players = world.query_filtered::<(&UnitId, &StandsOn), With<Player>>();
+            players
+                .iter(world)
+                .map(|(unit, standing)| FormationMember {
+                    unit: *unit,
+                    standing: standing.0,
+                    footing: Arc::clone(&footing),
+                })
+                .collect::<Vec<_>>()
+        };
+        let anchor_standing = members
+            .iter()
+            .find_map(|member| (member.unit == anchor).then_some(member.standing))
+            .expect("the formation anchor should be one of the staged players");
+        let external_occupancy = UnitOccupancy::default();
+        let anchor_route = route_with_occupancy(
+            anchor_standing,
+            destination,
+            &footing,
+            &external_occupancy,
+            anchor,
+        )
+        .expect("the default Group anchor should route to the tunnel mouth");
+        let group_plan = plan_formation_move_with_occupancy(
+            &preset,
+            &formation,
+            &anchor_route,
+            members,
+            &external_occupancy,
+        )
+        .expect("the default Group party should compress through the four-wide mouth");
+        assert_eq!(group_plan.paths.len(), party.len());
+        assert!(group_plan.paths.iter().all(|path| path.path.len() > 1));
+        let anchor_path = group_plan
+            .paths
+            .iter()
+            .find(|path| path.member == anchor)
+            .expect("the group plan should retain its anchor path");
+        assert_eq!(anchor_path.path.first().copied(), Some(foot_apron));
+        assert_eq!(anchor_path.path.last().copied(), Some(tunnel_mouth));
+    }
+
+    fn restore_staging_override_fixture(
+        mut commands: Commands,
+        mut formation: ResMut<PartyFormation>,
+        players: Query<(Entity, &UnitId, &StandsOn), With<Player>>,
+    ) {
+        let mut staged = players
+            .iter()
+            .map(|(entity, unit, standing)| (entity, *unit, standing.0))
+            .collect::<Vec<_>>();
+        staged.sort_by_key(|(_, unit, _)| *unit);
+        let restored = staged
+            .iter()
+            .map(|(_, _, standing)| *standing)
+            .cycle()
+            .skip(1)
+            .take(staged.len())
+            .collect::<Vec<_>>();
+        for ((entity, _, _), standing) in staged.into_iter().zip(restored) {
+            commands.entity(entity).insert((
+                StandsOn(standing),
+                Transform::from_translation(standing.world_position()),
+            ));
+        }
+        formation.facing = Sextant::D;
+        formation.mode = PartyMovementMode::Solo;
+    }
+
+    #[test]
+    fn crystal_mountain_restore_remains_authoritative_over_fresh_showcase_staging() {
+        let mut app = procedural_gameplay_app("Crystal Mountain");
+        app.add_systems(
+            OnEnter(Screen::Gameplay),
+            restore_staging_override_fixture.in_set(GameplaySetup::Restore),
+        );
+        enter_screen(&mut app, Screen::Gameplay);
+
+        assert!(
+            !app.world().contains_resource::<GameplaySetupFailure>(),
+            "the restore fixture should retain a valid composed setup"
+        );
+        let mut party = {
+            let world = app.world_mut();
+            let mut players =
+                world.query_filtered::<(&UnitId, &StandsOn, &Transform), With<Player>>();
+            players
+                .iter(world)
+                .map(|(unit, standing, transform)| {
+                    assert_eq!(transform.translation, standing.0.world_position());
+                    (*unit, standing.0.pos)
+                })
+                .collect::<Vec<_>>()
+        };
+        party.sort_by_key(|(unit, _)| *unit);
+        assert_eq!(
+            party,
+            vec![
+                (UnitId(0), TilePos::new(HexCoord::from_axial(-77, 0), 6)),
+                (UnitId(1), TilePos::new(HexCoord::from_axial(-77, 4), 6)),
+                (UnitId(2), TilePos::new(HexCoord::from_axial(-77, 3), 6)),
+            ],
+            "Restore must overwrite every fresh staging position"
+        );
+        let formation = app.world().resource::<PartyFormation>();
+        assert_eq!(formation.facing, Sextant::D);
+        assert_eq!(formation.mode, PartyMovementMode::Solo);
+    }
+
     /// The generic encounter formation owns a spawn *region*. This landmark's terminal
     /// is narrower: freeze the exact fresh-launch staging that the scenario adapter
     /// publishes before perception sees any party member.
@@ -2202,6 +2835,71 @@ pub(crate) mod tests {
             crystal_heart_blocked_sight_pair(&app, second_heart.origin()),
             first_blocked_pair,
             "re-entry must rebuild identical seven-ray obstruction"
+        );
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn crystal_mountain_rebuilds_visibility_fog_and_cutaway_from_composed_authority() {
+        let mut app = crystal_mountain_presentation_app();
+        enter_screen(&mut app, Screen::Gameplay);
+        assert!(
+            app.world().contains_resource::<TerrainReady>(),
+            "Crystal Mountain setup failed: {:?}",
+            app.world()
+                .get_resource::<GameplaySetupFailure>()
+                .map(|failure| failure.reason.as_str())
+        );
+        let first = crystal_mountain_runtime_snapshot(&mut app);
+
+        enter_screen(&mut app, Screen::Title);
+        assert!(!app.world().contains_resource::<VoxelMap>());
+        assert!(!app.world().contains_resource::<TerrainOccupancy>());
+        assert!(!app.world().contains_resource::<AuthoredObjectOccupancy>());
+        assert!(!app.world().contains_resource::<ResolvedIllumination>());
+        assert!(!app.world().contains_resource::<LocalMapKnowledge>());
+        assert!(!app.world().contains_resource::<FactionMapKnowledge>());
+        assert!(crate::fog::fog_overlay_positions(app.world_mut()).is_empty());
+        assert_eq!(
+            app.world_mut()
+                .query_filtered::<Entity, With<HexGrid>>()
+                .iter(app.world())
+                .count(),
+            0,
+            "Crystal Mountain left a rendered grid after teardown"
+        );
+        assert_eq!(
+            app.world_mut()
+                .query::<&CutawayOccluder>()
+                .iter(app.world())
+                .count(),
+            0,
+            "Crystal Mountain left cutaway-tagged roof entities after teardown"
+        );
+        assert_eq!(
+            app.world_mut()
+                .query::<&TreeOccluder>()
+                .iter(app.world())
+                .count(),
+            0,
+            "Crystal Mountain left generated tree roots after teardown"
+        );
+        {
+            let world = app.world_mut();
+            let mut occlusions = world.query::<&PresentationOcclusion>();
+            assert!(occlusions.iter(world).all(|occlusion| {
+                !occlusion.contains(PresentationOcclusionReason::Fog)
+                    && !occlusion.contains(PresentationOcclusionReason::InteriorCutaway)
+            }));
+        }
+
+        enter_screen(&mut app, Screen::Gameplay);
+        assert!(app.world().contains_resource::<TerrainReady>());
+        assert!(!app.world().contains_resource::<GameplaySetupFailure>());
+        let second = crystal_mountain_runtime_snapshot(&mut app);
+        assert_eq!(
+            second, first,
+            "Crystal Mountain re-entry rebuilt stale or divergent visibility presentation state"
         );
     }
 
@@ -2742,6 +3440,14 @@ pub(crate) mod tests {
         procedural_gameplay_app_with_combat(scenario_name, false)
     }
 
+    fn finish_test_app(mut app: App) -> App {
+        while app.plugins_state() != PluginsState::Cleaned {
+            app.finish();
+            app.cleanup();
+        }
+        app
+    }
+
     fn shipped_combat_content(
         substances: &SubstanceTable,
     ) -> (
@@ -2781,6 +3487,13 @@ pub(crate) mod tests {
         scenario_name: &str,
         with_combat: bool,
     ) -> App {
+        finish_test_app(unfinished_procedural_gameplay_app(
+            scenario_name,
+            with_combat,
+        ))
+    }
+
+    fn unfinished_procedural_gameplay_app(scenario_name: &str, with_combat: bool) -> App {
         let entry = library()
             .scenarios
             .into_iter()
@@ -2874,6 +3587,10 @@ pub(crate) mod tests {
         app.insert_resource(palette);
         app.insert_resource(encounter_of(&entry));
         app.insert_resource(world);
+        let formations: FormationCatalog =
+            ron::from_str(include_str!("../../../assets/config/formations.ron"))
+                .expect("the shipped formation catalog should deserialize");
+        app.insert_resource(formations);
         if let Some(seed) = seed {
             app.insert_resource(seed);
         }
@@ -2909,14 +3626,13 @@ pub(crate) mod tests {
                 stage_crystal_ascent_showcase_party
                     .after(GameplaySetup::Actors)
                     .before(GameplaySetup::Restore),
+                stage_crystal_mountain_showcase_party
+                    .after(GameplaySetup::Actors)
+                    .before(GameplaySetup::Restore),
                 finalize_gameplay_setup.in_set(GameplaySetup::Finalize),
             ),
         );
 
-        while app.plugins_state() != PluginsState::Cleaned {
-            app.finish();
-            app.cleanup();
-        }
         app
     }
 

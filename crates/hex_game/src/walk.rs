@@ -2370,7 +2370,6 @@ mod tests {
         assert_eq!(
             anchor_clicks,
             vec![
-                "crystal_mountain.foot_apron",
                 "crystal_mountain.tunnel_mouth",
                 "crystal_mountain.midpoint",
                 "crystal_mountain.gothic_transition",
@@ -2381,6 +2380,17 @@ mod tests {
                 "crystal_mountain.basin_clearing",
             ]
         );
+        assert!(steps
+            .windows(3)
+            .filter(|window| { matches!(window.first(), Some(WalkStep::ClickAnchor { .. })) })
+            .all(|window| matches!(
+                window,
+                [
+                    WalkStep::ClickAnchor { .. },
+                    WalkStep::Settle(5),
+                    WalkStep::AwaitPartyIdle { .. },
+                ]
+            )));
         let captures = steps
             .iter()
             .filter_map(|step| match step {
@@ -2393,14 +2403,27 @@ mod tests {
             vec![
                 "01-crystal-mountain-opaque-massif-map",
                 "02-crystal-mountain-rear-ridge-basin-map",
-                "03-crystal-mountain-foot-portal-character",
-                "04-crystal-mountain-foot-portal-first-person",
-                "05-crystal-mountain-natural-tunnel-first-person",
-                "06-crystal-mountain-gothic-transition-first-person",
-                "07-crystal-mountain-crystal-chamber-first-person",
-                "08-crystal-mountain-mid-ascent-character",
-                "09-crystal-mountain-summit-exit-first-person",
-                "10-crystal-mountain-wooded-basin-character",
+                "03-crystal-mountain-foot-portal-map",
+                "04-crystal-mountain-foot-portal-character",
+                "05-crystal-mountain-foot-portal-first-person",
+                "06-crystal-mountain-natural-tunnel-map",
+                "07-crystal-mountain-natural-tunnel-character",
+                "08-crystal-mountain-natural-tunnel-first-person",
+                "09-crystal-mountain-gothic-transition-map",
+                "10-crystal-mountain-gothic-transition-character",
+                "11-crystal-mountain-gothic-transition-first-person",
+                "12-crystal-mountain-crystal-chamber-map",
+                "13-crystal-mountain-crystal-chamber-character",
+                "14-crystal-mountain-crystal-chamber-first-person",
+                "15-crystal-mountain-mid-ascent-map",
+                "16-crystal-mountain-mid-ascent-character",
+                "17-crystal-mountain-mid-ascent-first-person",
+                "18-crystal-mountain-summit-exit-map",
+                "19-crystal-mountain-summit-exit-character",
+                "20-crystal-mountain-summit-exit-first-person",
+                "21-crystal-mountain-wooded-basin-map",
+                "22-crystal-mountain-wooded-basin-character",
+                "23-crystal-mountain-wooded-basin-first-person",
             ]
         );
         for camera in [
@@ -2414,6 +2437,7 @@ mod tests {
             );
         }
         assert!(steps.ends_with(&[
+            WalkStep::Settle(5),
             WalkStep::Key("Backspace".to_owned()),
             WalkStep::AwaitScreen("Title".to_owned()),
         ]));

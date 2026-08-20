@@ -743,7 +743,7 @@ fn patch_owners(
     Ok(owners)
 }
 
-fn namespace_patch_local_interior(
+pub(super) fn namespace_patch_local_interior(
     patch: PatchId,
     local: InteriorRegionId,
 ) -> Result<InteriorRegionId, MacroSpanningError> {
@@ -1336,9 +1336,10 @@ fn plan_light_sites(
             "cannot place tunnel lights along an empty centerline",
         ));
     }
-    // The widened exterior mouth is daylight-facing and intentionally has no
-    // authored tunnel roof. Sample only the roofed body so an alcove can never
-    // turn an exposed foothill column into an interior light reservation.
+    // The monumental mouth receives its own exact masonry roof, but an adjacent
+    // alcove candidate can fall on the exposed foothill outside that footprint.
+    // Sample only beyond the mouth in the naturally roofed body so a light
+    // reservation never extends the entrance roof into an unrelated exterior column.
     let light_centerline = centerline
         .iter()
         .copied()
@@ -1699,13 +1700,27 @@ fn preflight_application(
             }
             continue;
         }
+        let clear_top = clearance_top(tunnel, *coord)?;
+        let roof_end = clear_top
+            .checked_add(i32::try_from(tunnel.roof_thickness).map_err(|error| {
+                MacroSpanningError::new(format!("roof thickness overflowed: {error}"))
+            })?)
+            .ok_or_else(|| MacroSpanningError::new("tunnel roof level overflowed"))?;
+        if column.elements.iter().any(|element| {
+            matches!(
+                element,
+                VolumeElement::Solid(mass)
+                    if mass.material == SolidMaterialRole::Bedrock
+                        && mass.levels.bottom < roof_end
+                        && tunnel.floor_level < mass.levels.top
+            )
+        }) {
+            return Err(MacroSpanningError::new(format!(
+                "tunnel at {coord:?} overwrites authored bedrock between levels {} and {roof_end}",
+                tunnel.floor_level
+            )));
+        }
         if !tunnel.mouth.contains(coord) {
-            let clear_top = clearance_top(tunnel, *coord)?;
-            let roof_end = clear_top
-                .checked_add(i32::try_from(tunnel.roof_thickness).map_err(|error| {
-                    MacroSpanningError::new(format!("roof thickness overflowed: {error}"))
-                })?)
-                .ok_or_else(|| MacroSpanningError::new("tunnel roof level overflowed"))?;
             for level in clear_top..roof_end {
                 if solid_mass_at(column, level).is_none() {
                     return Err(MacroSpanningError::new(format!(
@@ -3073,6 +3088,73 @@ mod tests {
         let error = apply_macro_spanning(world, &plan)
             .expect_err("a naturally open body column without the exact roof must fail closed");
         assert!(error.to_string().contains("lacks solid roof at level 13"));
+    }
+
+    #[test]
+    fn authored_bedrock_in_the_overwritten_tunnel_volume_fails_before_carving() {
+        let plan = fixture_plan();
+        let tunnel = plan.tunnels.values().next().expect("one tunnel");
+        let core = tunnel
+            .centerline
+            .iter()
+            .copied()
+            .find(|coord| {
+                !tunnel.mouth.contains(coord) && !is_destination_terminal_coord(tunnel, *coord)
+            })
+            .expect("fixture exposes a nonterminal tunnel core");
+        let mut floor_world = fixture_world();
+        let floor_mass = floor_world
+            .volume
+            .columns
+            .get_mut(&core)
+            .expect("core column exists")
+            .elements
+            .iter_mut()
+            .find_map(|element| {
+                let VolumeElement::Solid(mass) = element else {
+                    return None;
+                };
+                (mass.levels.bottom <= tunnel.floor_level && tunnel.floor_level < mass.levels.top)
+                    .then_some(mass)
+            })
+            .expect("core floor has one supporting mass");
+        floor_mass.material = SolidMaterialRole::Bedrock;
+
+        let error = apply_macro_spanning(floor_world, &plan)
+            .expect_err("authored bedrock at the tunnel floor must fail closed");
+        assert!(error.to_string().contains("breaches authored bedrock"));
+
+        let mut clearance_world = fixture_world();
+        clearance_world
+            .volume
+            .columns
+            .get_mut(&core)
+            .expect("core column exists")
+            .elements = vec![
+            VolumeElement::Solid(SolidMass {
+                levels: LevelInterval::new(0, 1),
+                material: SolidMaterialRole::Bedrock,
+                cutaway_for: None,
+            }),
+            VolumeElement::Solid(SolidMass {
+                levels: LevelInterval::new(1, 14),
+                material: SolidMaterialRole::Stone,
+                cutaway_for: None,
+            }),
+            VolumeElement::Solid(SolidMass {
+                levels: LevelInterval::new(14, 15),
+                material: SolidMaterialRole::Bedrock,
+                cutaway_for: None,
+            }),
+            VolumeElement::Solid(SolidMass {
+                levels: LevelInterval::new(15, 31),
+                material: SolidMaterialRole::Stone,
+                cutaway_for: None,
+            }),
+        ];
+        let error = apply_macro_spanning(clearance_world, &plan)
+            .expect_err("authored bedrock in the synthesized tunnel roof must fail closed");
+        assert!(error.to_string().contains("overwrites authored bedrock"));
     }
 
     #[test]
