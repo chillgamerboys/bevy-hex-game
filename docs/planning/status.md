@@ -9,18 +9,24 @@ What is *planned* is [roadmap.md](roadmap.md). What the game is *for* is
 
 ## In delivery
 
-The **Crystal Mountain** wave is under implementation and is not yet a claim about
-`dev`. Its intended selectable radius-77 Macro world places the existing
+The **Crystal Mountain** wave is implemented on its delivery branch and is not yet a
+claim about `dev`. Its selectable radius-77 Macro candidate places the existing
 base-6/rise-144 Crystal Ascent at world origin, surrounds its level-150 summit with a
 five-cell temperate Forest basin and higher inner/outer ridges, and makes one
 four-wide level-6 tunnel the only ordinary route from the mountain foot to that basin.
-The tunnel crosses the outer and inner mountain instances before joining the landmark,
-then shares one Dark interior and light domain with the complete Ascent. The wave also
-adds explicit surface-walker connections, cross-biome spanning-feature settings,
-stable anchor aliases, a selectable non-combat showcase, and review-cutaway feature
-reconciliation. Its generator, typed integration closure, deterministic captures,
-benchmarks, and named human camera/play review remain acceptance work until the
-combined wave lands.
+The landmark mask contains its complete radius-32 site while retaining the protruding
+central-cell fringe as summit terrain. The tunnel crosses the outer and inner mountain
+instances before joining the landmark, then shares one Dark interior and light domain
+with the complete Ascent; of the tunnel route floors, only its eight-cell boundary
+apron remains exterior.
+
+The branch now contains the defaulted surface-walker, spanning-feature, and anchor
+contracts; authored summit-port alignment; reserve/merge/carve/finalize composition;
+exact subsurface seam closures; unified interior, tunnel crystals, anchors and
+validators; selectable non-combat content; and review-cutaway feature reconciliation.
+The remaining acceptance work is the combined CI-equivalent gate, deterministic
+captures and benchmarks, named human camera/play review, and publication of the
+reviewed candidate to `dev`.
 
 ## What is built
 
@@ -50,8 +56,10 @@ seed-independent, publishes stable lower/chamber/upper anchors, an upper
 corner-landing review anchor, and terminal pads, and
 validates exact handoff edges, ordinary traversal, one-level transitions, turning-pad
 headroom, per-crystal light pairs, and the absence of non-handoff cross-loop shortcuts.
-The standalone party starts on the exterior apron facing inward. Macro composition
-remains deferred.
+The standalone party starts on the exterior apron facing inward. Arbitrary Macro
+placement remains rejected; the in-delivery Crystal Mountain candidate is the one
+specialized composition that constructs the landmark at world origin, aligns its
+authored summit approach, and joins its lower aperture to the global tunnel.
 
 V3 now has fifteen recipe variants: Hills, Sky Islands, Mountains, Caves, Waterfall,
 Forest, Fort, Volcano, Deep Forest, Prairie, Shallow Sea, Beach, Shore, Deep Mountain,

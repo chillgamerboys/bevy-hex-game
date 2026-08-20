@@ -366,11 +366,14 @@ recipe invariants rather than additional tuning fields. Crystal Ascent requires
 `TemperateGrassland`, rejects overlays, and varies only crystal presentation and
 summit trees with the scenario seed. The standalone world still owns the complete
 radius-40 footprint. Macro may dispatch the recipe only through Crystal Mountain's
-specialized exact radius-32 landmark claim; an arbitrary Macro instance cannot stretch
-or clip the authored site.
+specialized landmark mask: it must contain the complete radius-32 authored site and
+may retain the protruding fringe inherited from the landmark's central seven atomic
+cells. In composite mode that outside-site fringe is authored at the level-150 crown
+rather than clipped or filled at the standalone base level. An arbitrary Macro
+instance still cannot stretch, clip, or relocate the landmark.
 
-**Compose Crystal Mountain with a cross-biome tunnel.** The in-delivery selectable
-world uses a radius-three `Macro` layout over a radius-77 map. Four logical instances
+**Compose Crystal Mountain with a cross-biome tunnel.** The selectable configuration
+uses a radius-three `Macro` layout over a radius-77 map. Four logical instances
 own all 37 atomic cells: the central seven-cell Crystal Ascent landmark, five
 consecutive radius-two Forest cells at level 149–151, the remaining radius-two inner
 mountain wall, and the complete radius-three outer ridge. Crystal Ascent keeps
@@ -380,8 +383,8 @@ Macro's defaulted extensions separate surface connectivity from a feature that c
 several biomes:
 
 - `walker_connections` declares ordinary surface ports without making them part of the
-  legacy `critical_route`; Crystal Mountain joins the summit terminal to the Forest
-  basin at level 150;
+  legacy `critical_route`; Crystal Mountain aligns the exact authored four-wide
+  Crystal summit terminal and inward trail with the Forest approach at level 150;
 - `spanning_features` declares the ordered instance route and exact dimensions of the
   level-6, four-wide tunnel from the world boundary to Crystal Ascent's lower aperture;
   and
@@ -422,6 +425,21 @@ Walker widths are `2..=4`; tunnel widths use the same bound. A tunnel route cont
 at least two unique, pairwise-adjacent non-aquatic instances. Its boundary terminal
 belongs to the first route instance, its destination to the last, and
 `floor_level + clearance + roof_thickness` must remain inside V3's level-256 ceiling.
+
+The configuration resolves into exact geometry before ordinary fragments are
+decorated. The authored destination is constructed first; the global planner reserves
+the tunnel ribbon, widened mouth, and crystal alcoves in every crossed patch so local
+liquids and vegetation cannot occupy them. Composition then merges the fragments,
+carves the passage once, retains the authored summit approach, publishes review
+anchors, and runs the normal final classification and validation pass. At each crossed
+biome boundary, only the declared four subsurface lane pairs remain ordinary;
+incidental level-6 seam contacts beside the ribbon are closed under a world-owned
+special-movement region.
+
+The eight-wide open boundary apron is exterior. Its first roofed four-wide row and the
+four-wide summit threshold are the eight registered entrances of one world-owned
+interior containing the tunnel and Crystal Ascent. Crystal Ascent's lower aperture is
+therefore an internal handoff, not a second light domain or exterior entrance.
 
 **Use V3 Waterfall terrain.** The first shipped V3 recipe uses an explicit
 single-patch layout. Its edge-to-edge three-wide liquid topology, eleven-level fall,

@@ -16,18 +16,23 @@ sight after the target's illumination chooses its sight radius.
 
 ## Crystal Mountain
 
-The Crystal Mountain wave makes its tunnel and Crystal Ascent one Dark domain. The
-foot and summit thresholds are exterior, while the lower Crystal aperture is an
-internal opening. Exterior daylight therefore does not illuminate the route through
-either opening under the authored-domain contract.
+The Crystal Mountain candidate makes its roofed tunnel and Crystal Ascent one Dark
+domain. The eight open foot-apron floors remain exterior; the first roofed four-wide
+foot threshold and the four-wide summit threshold are entrance floors inside the
+unified domain. The lower Crystal aperture is an internal opening. Exterior daylight
+therefore stops at the domain boundary and does not illuminate the route through
+either threshold under the authored-domain contract.
 
-Nonblocking small crystals occupy alcoves no more than 24 centerline steps apart.
-Each fixture publishes one Bright radius-4 and one Dim radius-18 gameplay source; only
-the Bright member owns its visual object and presentation-only, non-shadow-casting
-point light. Crystal Ascent retains its eighteen landing pairs and cathedral-heart
-Bright-8/Dim-24 pair with four physical heart lights. Validation requires every
-canonical tunnel, stair, and landing surface to resolve to at least Dim, while exact
-Bright pools remain local to their fixtures. Optional recesses may remain Dark.
+The tunnel planner samples its representative centerline every sixteen steps, then
+fits one nonblocking small crystal into a deterministic adjacent alcove for each
+sample. Every fixture publishes one Bright radius-4 and one Dim radius-18 gameplay
+source under Macro's world-owned namespace; only the Bright member owns its visual
+object and presentation-only, non-shadow-casting point light. Crystal Ascent retains
+its eighteen landing pairs and cathedral-heart Bright-8/Dim-24 pair with four physical
+heart lights after its interior id is unified with the tunnel. Validation uses exact
+upper-dome range and requires every canonical tunnel, stair, and landing surface to
+resolve to at least Dim, while exact Bright pools remain local to their fixtures.
+Optional recesses may remain Dark.
 
 The renderer's illumination overlay is diagnostic presentation over
 `ResolvedIllumination`; it never changes a source, domain, observation, fog, or
