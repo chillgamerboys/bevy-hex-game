@@ -15,6 +15,9 @@ hex_core → hex_ai → {hex_assets, hex_units, hex_combat}   (contracts, contro
 hex_core → {hex_assets, hex_units} → hex_perception → {hex_combat, hex_game}
 hex_core → hex_lattice → {hex_assets, hex_units, hex_combat}   (the pure rules engine)
 hex_core → hex_anim ─────────────────────→ hex_units
+{hex_core, hex_lattice, Replicon, Aeronet, DNS-SD} → hex_multiplayer → hex_game
+{official EOS C runtime, libloading} → hex_eos_ffi ─→ hex_online ───→ hex_game
+                                      hex_multiplayer ────────┘
 {Bevy, bevy-inspector-egui} → hex_dev ──────────────────────────────→ hex_game
 {Bevy, bevy_egui, hex_core, hex_assets} → hex_editor  (standalone tool)
 {Bevy, hex_core} → hex_test_app → hex_test_support  (test-only app mechanics)
@@ -35,7 +38,7 @@ will, and no amount of documentation prevents it. A compiler error does.
 | `hex_lattice` | **The lattice**: gems, fusions, spells, mana, disables, enchantments — the game's core rules, as a pure engine | `hex_core` | gameplay |
 | `hex_ai` | Authorized observations, canonical legal-action requests, profile/controller identities, and replaceable algorithm traits; no legality or simulation mutation | `hex_core`, Bevy sub-crates | gameplay |
 | `hex_combat_core` | Frozen combat inputs, serializable state, the command reducer, typed outcomes, canonical snapshots and bounded simulation | `hex_core`, `hex_lattice`, `bevy_ecs` derive support only | gameplay |
-| `hex_gameplay_model` | Pure Main Menu, Campaign, Sandbox, and Creator routes; bounded slot identities; draft edits; launch blockers; and edit history | `hex_core`, `bevy_ecs` derive support only | gameplay |
+| `hex_gameplay_model` | Pure Main Menu, Campaign, Sandbox, Multiplayer, and Creator routes; bounded slot/seat identities; draft edits; launch blockers; and edit history | `hex_core`, `bevy_ecs` derive support only | gameplay |
 | `hex_ui` | Runtime UI rendering, immutable presentation models, typed UI intentions, responsive scale, semantic styling, focus/accessibility, and presentation-only observations | Bevy, `hex_core`, `hex_assets`, `hex_gameplay_model`; never gameplay/world implementations | shared presentation |
 | `hex_assets` | Generic asset loading plus domain-owned RON schema and settings modules | `hex_core`, `hex_lattice` | loader infrastructure: gameplay; each schema/settings module and its content: that domain's owner |
 | `hex_objects` | Palette-backed rendering of static authored voxel objects and isolated per-tree fade materials | `hex_core`, `hex_assets` | shared presentation |
@@ -45,6 +48,9 @@ will, and no amount of documentation prevents it. A compiler error does.
 | `hex_units` | Units and their lattices, AI-controller attachment, picking, pathfinding, body size, and the movement preview | `hex_core`, `hex_ai`, `hex_assets`, `hex_anim`, `hex_lattice` | gameplay |
 | `hex_perception` | Authoritative illumination, faction sight, and remembered map knowledge | `hex_core`, `hex_assets`, `hex_units` | world |
 | `hex_combat` | The loop: modes, turn order, algorithm-neutral AI host and legal-action enumeration, persistent effects, and faction lattice knowledge | `hex_core`, `hex_ai`, `hex_assets`, `hex_anim`, `hex_units`, `hex_lattice`, `hex_perception` | gameplay |
+| `hex_multiplayer` | Transport-neutral protocol, bounded wire containers, custom-admission vocabulary, lobby/manifest contracts, disclosure-safe replicas, default-off Replicon/Aeronet composition, and opt-in same-link DNS-SD discovery | `hex_core`, `hex_lattice`, Bevy app/ECS sub-crates, Replicon, Aeronet, DNS-SD; never map/unit/combat/perception implementations | shared infrastructure |
+| `hex_eos_ffi` | Minimal dynamically loaded official EOS C declarations and owned safe RAII results; the workspace's sole audited `unsafe` boundary | `libloading` and the explicitly staged official EOS runtime only | shared infrastructure |
+| `hex_online` | Safe store-neutral EOS identity/lobby/P2P lifecycle, callback validation, and Aeronet I/O adapters; deterministic mocks remain runtime-free | `hex_eos_ffi`, `hex_multiplayer`, Bevy app/ECS sub-crates | shared infrastructure |
 | `hex_dev` | World inspector. Behind the `dev` feature | Bevy, `bevy-inspector-egui` | gameplay |
 | `hex_game` | Thin executable library and composition root: observes authority, builds immutable UI view models, applies typed intents, and wires plugins | all runtime crates | shared |
 | `hex_editor` | Standalone palette, voxel-style, and object authoring; validated explicit writes, untracked recovery, and deterministic review packs | Bevy, `bevy_egui`, `hex_core`, `hex_assets` | shared tooling |
@@ -59,6 +65,69 @@ explicit saves are the only operations that change `assets/art/`. The canonical
 palette and object contracts are described in
 [design/visual-language.md](design/visual-language.md), and the operational workflow
 is in [systems/asset-workshop.md](systems/asset-workshop.md).
+
+### `hex_multiplayer` is a shared protocol boundary
+
+Multiplayer is a server-authoritative listen-host projection, not a second simulator.
+`GameCommandRequest` contains only a request id and `GameCommand`; an authenticated
+connection lookup supplies its seat and temporary delegation before the existing
+authority reducer sees an `IssuedCommand`. The host retains AI, combat truth, world
+mutation, admission, global pause, and persistence. In particular, `CombatState` never
+crosses the network boundary.
+
+Lobby mutation follows the same rule. `ClientLobbyRequest` can only set the authenticated
+guest's readiness or leave; it has no seat field. Assignment, kick, launch, retry,
+return-to-lobby, and close use `HostSessionControlRequest`, which is a trusted local Bevy
+message and is deliberately absent from protocol registration. Both paths converge on the
+one `SessionAdmissionAuthority`, return a typed `SessionControlResult`, and publish its
+canonical `LobbySnapshot`.
+
+The shared crate owns stable data and transport registration, while each domain owns its
+adapter. Gameplay publishes authorized `UnitReplica`/`SessionReplica` values. The world
+owner alone exports/imports the ratified generator-neutral `WorldSnapshotV1`, computes
+`PublicWorldFingerprintV1`, and transactionally derives/applies `WorldDeltaV1`.
+Perception alone exports/imports `PlayerKnowledgeSnapshotV1` and decides which hostile
+projections exist; networking applies that authorized view and cannot represent or
+reconstruct private generator plans, hostile knowledge, or `CombatState`.
+
+`MultiplayerPlugin` installs custom-auth Replicon, Aeronet adapters, WebTransport, and
+same-link DNS-SD capability in one deterministic registration order. Installing the
+plugin does not spawn an endpoint or open a socket. Host Direct/Join Direct explicitly
+open the game transport; Host LAN Sandbox and Find LAN Games additionally start their
+bounded multicast advertiser/browser. DNS-SD records are untrusted discovery metadata,
+not admission: a selected peer still uses the pinned Direct transport and passes exact
+protocol, build, content, lobby, and seat checks. Offline play defaults to
+`SimulationRole::Authority`; a remote client must explicitly select `Replica`. Direct
+Connect and the future EOS P2P path share the same messages, manifests, snapshots, seat
+checks, and saves. Steam does not become a second lobby or gameplay transport: its
+adapter supplies an EOS Connect credential and native rich-presence/invitation entry
+into the same EOS lobby.
+
+On macOS, LAN publication uses the operating system's native Bonjour registration API;
+the UI reports an open lobby as discoverable only after that API confirms registration.
+This is still the same open mDNS/DNS-SD record consumed by every platform, not an Apple
+identity, account, lobby, or game transport. Windows and Linux retain the bounded
+cross-platform responder, and all platforms retain the same bounded DNS-SD browser and
+Direct admission boundary.
+
+`hex_eos_ffi` is the only crate that opts out of the workspace-wide `unsafe_code =
+"forbid"` rule. It loads only an explicit absolute, release-staged EOS runtime path;
+ordinary source builds neither search for nor load a library. Raw pointers, C callbacks,
+and SDK handles never leave that crate. `hex_online` consumes only owned safe values and
+is default-off: adding its plugin without an explicitly installed backend opens no socket
+and emits typed `Disabled` refusals. SDK headers, redistributable binaries, product
+credentials, and deployment identifiers remain protected release inputs.
+
+Direct transport pins SHA-256 of the exact certificate `SubjectPublicKeyInfo` through the
+project-owned `SpkiPinVerifier`. It retains certificate validity/lifetime, P-256 key, and
+TLS handshake-signature checks; the production-unsafe disable-validation path is never
+used. This preserves the connection-code contract despite `wtransport 0.6.1`'s safe
+convenience verifier hashing complete leaf-certificate DER instead.
+
+Every concrete host run has a random `SessionInstanceId`. Reconnect persistence binds
+that id to the endpoint, SPKI pin, exact verified certificate expiry, seat/player
+identity, and rotating credential. Only a matching typed closure, expiry, or successful
+replacement can remove it; an unrelated failed endpoint never consumes recoverable state.
 
 ### `hex_map` is a leaf, on purpose
 
@@ -144,8 +213,11 @@ Two roles, named so the arrangement survives a change of people:
 | **Gameplay owner** | `hex_core`, `hex_units`, `hex_combat`, `hex_lattice`, `hex_anim`, `hex_dev`, generic `hex_assets` loader infrastructure, and gameplay schema/settings modules and content: `combat.ron`, `spells.ron`, `elements.ron` |
 
 `hex_game` is **shared** — it is wiring, screens, scenarios and review tooling, and
-whoever needs a change makes it. `scenario.rs` and `scenarios.ron` sit in the same
-shared middle, flagged to the other side when a change touches their domain.
+whoever needs a change makes it. `hex_multiplayer`, `hex_eos_ffi`, and `hex_online` are
+also shared, with strict dependency ceilings: they own protocol, the audited SDK edge,
+and online-session infrastructure respectively, but no gameplay or world truth.
+`scenario.rs` and `scenarios.ron` sit in the same shared middle, flagged to the other
+side when a change touches their domain.
 
 `hex_ui` is also shared presentation, but its dependency ceiling is strict. Domain
 facts flow into it as immutable view models and player actions flow out as typed

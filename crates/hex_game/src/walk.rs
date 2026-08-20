@@ -417,6 +417,17 @@ fn validate_step(step: &WalkStep) -> Result<(), String> {
                     | "required-decision"
                     | "restore-decision"
                     | "aiming-disabled"
+                    | "multiplayer-lobby"
+                    | "multiplayer-lan-browser"
+                    | "multiplayer-lan-host"
+                    | "multiplayer-campaign"
+                    | "multiplayer-campaign-refusal"
+                    | "multiplayer-campaign-lobby"
+                    | "multiplayer-campaign-save"
+                    | "multiplayer-mismatch"
+                    | "multiplayer-reconnect"
+                    | "multiplayer-host"
+                    | "multiplayer-client-menu"
                     | "sandbox-outcome"
             ) =>
         {
@@ -516,15 +527,17 @@ fn parse_screen(name: &str) -> Result<Screen, String> {
     match name {
         "Splash" => Ok(Screen::Splash),
         "Title" => Ok(Screen::Title),
+        "Multiplayer" => Ok(Screen::Multiplayer),
         "Sandbox" => Ok(Screen::Sandbox),
         "Settings" => Ok(Screen::Settings),
         "LatticeDemo" => Ok(Screen::LatticeDemo),
         "CharacterCreator" => Ok(Screen::CharacterCreator),
         "SpellCreator" => Ok(Screen::SpellCreator),
+        "VfxTuner" => Ok(Screen::VfxTuner),
         "Loading" => Ok(Screen::Loading),
         "Gameplay" => Ok(Screen::Gameplay),
         _ => Err(format!(
-            "unknown screen {name:?}; expected Splash, Title, Sandbox, Settings, CharacterCreator, SpellCreator, LatticeDemo, Loading, or Gameplay"
+            "unknown screen {name:?}; expected Splash, Title, Multiplayer, Sandbox, Settings, CharacterCreator, SpellCreator, LatticeDemo, VfxTuner, Loading, or Gameplay"
         )),
     }
 }
@@ -964,8 +977,10 @@ fn capture_structural_issues(
             Screen::Title => &["Main Menu"],
             Screen::Settings => &["Settings Screen"],
             Screen::LatticeDemo => &["Lattice Demo Screen"],
+            Screen::VfxTuner => &["VFX Tuner Screen"],
             Screen::CharacterCreator | Screen::SpellCreator => &["Creator Screen"],
             Screen::Sandbox => &["Sandbox"],
+            Screen::Multiplayer => &["Multiplayer"],
             Screen::Loading => &["Loading Screen"],
             Screen::Gameplay => &["Gameplay HUD Safe Frame"],
         };
@@ -2382,14 +2397,10 @@ mod tests {
                 "04-crystal-mountain-foot-portal-first-person",
                 "05-crystal-mountain-natural-tunnel-first-person",
                 "06-crystal-mountain-gothic-transition-first-person",
-                "07-crystal-mountain-crystal-chamber-character",
-                "08-crystal-mountain-crystal-chamber-first-person",
-                "09-crystal-mountain-mid-ascent-first-person",
-                "10-crystal-mountain-mid-ascent-character",
-                "11-crystal-mountain-summit-exit-character",
-                "12-crystal-mountain-summit-exit-first-person",
-                "13-crystal-mountain-wooded-basin-first-person",
-                "14-crystal-mountain-wooded-basin-character",
+                "07-crystal-mountain-crystal-chamber-first-person",
+                "08-crystal-mountain-mid-ascent-character",
+                "09-crystal-mountain-summit-exit-first-person",
+                "10-crystal-mountain-wooded-basin-character",
             ]
         );
         for camera in [
@@ -3342,11 +3353,13 @@ mod tests {
         for name in [
             "Splash",
             "Title",
+            "Multiplayer",
             "Sandbox",
             "Settings",
             "CharacterCreator",
             "SpellCreator",
             "LatticeDemo",
+            "VfxTuner",
             "Loading",
             "Gameplay",
         ] {
@@ -3359,10 +3372,12 @@ mod tests {
     fn the_shipped_walk_scripts_parse_and_validate() {
         for script in [
             "../../walks/gameplay_ui.ron",
+            "../../walks/multiplayer_session.ron",
             "../../walks/waterfall.ron",
             "../../walks/forest.ron",
             "../../walks/readme_party_trial.ron",
             "../../walks/readme_creator_sandbox.ron",
+            "../../walks/vfx_tuner.ron",
         ]
         .into_iter()
         .chain(CAMERA_ROUTE_SCRIPTS.iter().map(|(path, _)| *path))
@@ -3473,6 +3488,7 @@ mod tests {
         let mut launches_sandbox = false;
         for script in [
             "../../walks/gameplay_ui.ron",
+            "../../walks/multiplayer_session.ron",
             "../../walks/waterfall.ron",
             "../../walks/forest.ron",
             "../../walks/readme_party_trial.ron",

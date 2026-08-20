@@ -780,6 +780,7 @@ mod tests {
                 co_castable: false,
                 targeting: TargetingSpec {
                     range: 3,
+                    reach: crate::TargetingReach::Ranged,
                     shape: TargetShape::Sphere { radius: 2 },
                     trajectory: Trajectory::None,
                 },

@@ -128,7 +128,7 @@ much of the larger design remain ahead. The exact boundary is recorded in the
 
 ### Play the current build
 
-The Main Menu exposes exactly **Campaign**, **Sandbox**, **Tools**, and **Settings**.
+The Main Menu exposes exactly **Campaign**, **Sandbox**, **Multiplayer**, **Tools**, and **Settings**.
 Campaign contains exactly three indexed cards. An empty card starts the canonical
 Party Trial and binds that session to the selected slot; the card becomes occupied
 only after the first ordinary manual save. An occupied card shows its party and
@@ -141,6 +141,20 @@ bound to its explicit slot number, build, scenario content, generator contract,
 party, selected unit, formation, and terrain. `campaigns.ron` is replaced atomically.
 On first run after this cutover, a valid legacy `resume.ron` is copied into Campaign
 slot 1 with zero prior play time; the legacy file is never overwritten or deleted.
+
+Multiplayer supports an authoritative listen host and up to five guests. Host Direct
+and Join Direct use an encrypted, certificate-pinned connection code over LAN or a
+manually forwarded UDP port. A host can launch a shipped Sandbox or select one of their
+Campaign slots; Campaign resume restores the complete host-owned checkpoint, then opens
+a fresh party-assignment lobby. Only the host can save a multiplayer Campaign, and only
+while exploration is safely paused. Client menus do not pause the host simulation.
+For two computers on the same network, **Host LAN Sandbox** and **Find LAN Games** use
+[automatic LAN discovery](docs/development/lan-multiplayer-testing.md), so neither player
+needs to find an IP address or exchange a code.
+Before the EOS-backed Play Online path is live, remote testers can avoid public-IP and
+router setup by following the external
+[Tailscale playtest procedure](docs/development/remote-multiplayer-testing.md). Tailscale
+is testing infrastructure, not a shipped game dependency.
 
 Sandbox is the single temporary encounter setup. Its default draft is Flat Arena
 with one Hedge Mage in Party and one Raider in Enemies. Choose one of the shipped

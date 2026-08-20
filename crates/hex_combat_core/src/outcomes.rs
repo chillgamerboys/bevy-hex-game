@@ -133,6 +133,26 @@ pub enum RestorationRefusal {
     },
 }
 
+/// Why a restoration spell's unit target was ineligible before payment.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RestorationTargetRefusal {
+    /// The occupied target has no lattice to restore.
+    MissingLattice {
+        /// Unit occupying the spell anchor.
+        target: UnitId,
+    },
+    /// Every cell in the target lattice is already active.
+    FullyRestored {
+        /// Unit occupying the spell anchor.
+        target: UnitId,
+    },
+    /// A hostile target's complete current lattice has not been revealed.
+    IncompleteHostileKnowledge {
+        /// Hostile unit whose lattice remains incomplete.
+        target: UnitId,
+    },
+}
+
 /// Terminal result of an encounter.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EncounterOutcome {
@@ -218,6 +238,16 @@ pub enum CommandRefusal {
         /// The unreachable target.
         target: UnitId,
     },
+    /// A spell requiring an occupied target named an empty observed surface.
+    TargetUnoccupied {
+        /// The empty spell anchor.
+        target: TilePos,
+    },
+    /// A touch spell's occupied target was outside bidirectional actor-specific reach.
+    TargetOutOfTouchReach {
+        /// The unreachable target.
+        target: UnitId,
+    },
     /// The unit had no active turn to spend or end.
     NoTurn,
     /// The unit had already spent its action.
@@ -300,6 +330,11 @@ pub enum CommandRefusal {
     CastPlanStale {
         /// The stable spell name from the command.
         spell: String,
+    },
+    /// A restoration target was ineligible before the caster paid for the spell.
+    RestorationTarget {
+        /// Exact restoration-target reason.
+        reason: RestorationTargetRefusal,
     },
     /// Atomic party movement is contracted but its applier is not active yet.
     PartyMovementUnavailable,
@@ -604,6 +639,8 @@ mod tests {
             CommandRefusal::TargetDowned { target: UnitId(2) },
             CommandRefusal::TargetNotHostile { target: UnitId(2) },
             CommandRefusal::TargetOutOfMeleeReach { target: UnitId(2) },
+            CommandRefusal::TargetUnoccupied { target },
+            CommandRefusal::TargetOutOfTouchReach { target: UnitId(2) },
             CommandRefusal::NoTurn,
             CommandRefusal::ActionAlreadySpent,
             CommandRefusal::ActingUnitDowned { unit: UnitId(1) },
@@ -654,6 +691,15 @@ mod tests {
             },
             CommandRefusal::CastPlanStale {
                 spell: "Ember".to_owned(),
+            },
+            CommandRefusal::RestorationTarget {
+                reason: RestorationTargetRefusal::MissingLattice { target: UnitId(2) },
+            },
+            CommandRefusal::RestorationTarget {
+                reason: RestorationTargetRefusal::FullyRestored { target: UnitId(2) },
+            },
+            CommandRefusal::RestorationTarget {
+                reason: RestorationTargetRefusal::IncompleteHostileKnowledge { target: UnitId(2) },
             },
             CommandRefusal::PartyMovementUnavailable,
             CommandRefusal::RestorationUnavailable,

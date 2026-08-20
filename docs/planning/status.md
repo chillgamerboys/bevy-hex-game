@@ -261,9 +261,12 @@ legality ladder, and drains the lattice that paid for it. Damage names a count; 
 chooses which hexes go down**, answering through a `ChooseDisables` command so the choice
 is replayable rather than made inside the applier. A unit whose every hex is disabled
 leaves the turn order and is **downed** — retained with its lattice rather than
-despawned. Renewal restores chosen cells, removes `Downed`, and returns the unit at the
-next round boundary; exploration Rest recovers the party immediately. A strike deals
-damage the same way, through the same decision.
+despawned. Heal restores one chosen cell on the caster or a mutually touch-adjacent
+Observed unit; a hostile also requires complete current lattice knowledge. Renewal
+remains the stronger ranged two-cell restoration. Either removes `Downed` after a
+successful restore and returns the unit at the next round boundary; exploration Rest
+recovers the party immediately. A strike deals damage the same way, through the same
+decision.
 
 **Channel is live.** An active, non-downed combatant can spend its one action to
 restore each element by that unit's Channelling value, capped by Attunement capacity.
@@ -313,9 +316,9 @@ the host validates count, uniqueness, eligibility, and fingerprint before buildi
 the same replayable command. Movement scoring shares one authorized graph, one actor
 reach/predecessor projection, and one reverse distance map per live observed hostile.
 Victory and Defeat retain the
-battlefield, Retry rebuilds the same resolved seed, Renewal revives at the next round
-boundary, and exploration Rest recovers the whole party. The minimalist tactical HUD
-keeps Party, Initiative, Activity, and Action Bar independently configurable, hosts
+battlefield, Retry rebuilds the same resolved seed, Heal and Renewal revive at the next
+round boundary, and exploration Rest recovers the whole party. The minimalist tactical
+HUD keeps Party, Initiative, Activity, and Action Bar independently configurable, hosts
 Character/Formation/Required Decision in one typed Main View, and keeps actor,
 selected ally, decision owner, aimed target, and retained target as explicit roles.
 Required decisions remain forced while ordinary components are hidden. Party and
@@ -324,19 +327,19 @@ mutating selection, turn, caster, command ownership, or formation.
 Party Trial is the 3v3 integration and human regression case; Ability Lab and Raider
 Mirror remain its focused automated companions behind default-off stable fixture IDs.
 
-The **Campaign/Sandbox application shell is live**. The Main Menu exposes exactly
-Campaign, Sandbox, Tools, and Settings. Campaign projects exactly three indexed local
-records as Empty, Available, or Invalid. A new canonical Party Trial is bound to the
-chosen empty slot and occupies it only on its first safe manual save. Available cards
-show their party and accumulated active-play time; invalid records remain preserved
-and visibly refused. `campaigns.ron` is replaced atomically. When it is absent, one
-structurally valid legacy `resume.ron` is copied to slot 1 without modifying the
-legacy file, then checked against the current semantic content. Mountain Range changes
-those digest-bound shipped world inputs, so the narrow PR #175 legacy translation is
-intentionally no longer compatible: the imported record remains preserved as Invalid
-with a visible scenario-changed refusal. Only active, unpaused, non-terminal Campaign
-gameplay accrues time. Manual saving instead requires paused, safe, quiescent Campaign
-exploration.
+The **Campaign/Sandbox/Multiplayer application shell is live**. The Main Menu exposes
+exactly Campaign, Sandbox, Multiplayer, Tools, and Settings. Campaign projects exactly
+three indexed local records as Empty, Available, or Invalid. A new canonical Party
+Trial is bound to the chosen empty slot and occupies it only on its first safe manual
+save. Available cards show their party and accumulated active-play time; invalid
+records remain preserved and visibly refused. `campaigns.ron` is replaced atomically.
+When it is absent, one structurally valid legacy `resume.ron` is copied to slot 1
+without modifying the legacy file, then checked against the current semantic content.
+Mountain Range changes those digest-bound shipped world inputs, so the narrow PR #175
+legacy translation is intentionally no longer compatible: the imported record remains
+preserved as Invalid with a visible scenario-changed refusal. Only active, unpaused,
+non-terminal Campaign gameplay accrues time. Manual saving instead requires paused,
+safe, quiescent Campaign exploration.
 
 Sandbox is the sole player-facing authority for a temporary map, two ordered fixed
 six-slot rosters, character picks, deployment, and launch. Its in-memory default is
@@ -352,6 +355,61 @@ regions remain only as hidden actor-staging compatibility metadata. Start freeze
 shipped combat rules plus exact map/seed, ordered rosters, content revision, and
 deployment for Loading and Retry Exact. Terminal Sandbox play shows only
 Victory/Defeat, Retry Exact, and Return to Sandbox.
+
+Direct client-hosted Sandbox multiplayer is live for one listen host and up to five
+guests across the six human seats. Host Direct freezes one shipped Sandbox setup,
+opens an encrypted WebTransport endpoint, and shares a redacted `HEX1` connection
+code; Join Direct verifies the exact protocol, build, shipped content, certificate
+SPKI pin, and generated-world fingerprint before activation. The host assigns the six
+party members, every connected guest must own at least one, assignment changes clear
+readiness, and no new player is admitted after launch. Offline single-player uses the
+same seatless command ingress without opening a socket.
+
+Same-network Sandbox testing also has an explicit zero-configuration path. **Host LAN
+Sandbox** uses the existing Sandbox and deployment flow, then advertises the open
+assignment lobby with mDNS/DNS-SD. **Find LAN Games** continuously lists compatible
+lobbies on the same multicast link and joins the chosen host through the same pinned
+Direct transport; no IP address or copied code is needed. Advertisement stops at launch
+and resumes only if the host returns to the lobby. Because the current ephemeral invite
+is necessarily visible in unauthenticated LAN metadata, this mode is for trusted local
+networks; exact admission and authority checks remain unchanged.
+
+The listen host owns simulation, AI, world mutation, pause, admission, and outcome
+actions. Clients submit intents and interpolate exact authoritative motion; they do not
+run rollback, lockstep, prediction, or private combat authority. A disconnected seat is
+reserved for 30 real-time seconds, then temporarily delegated to the host without
+changing canonical ownership. An admitted player can restart and rejoin with a rotating
+credential bound to the session, endpoint, and SPKI pin; reconnect restores a complete
+generator-neutral world and authorized player-knowledge/unit/session baseline before
+ordered later deltas. Host loss ends the session, while client Escape opens a local
+non-pausing menu.
+
+The same Direct/LAN session can now host a Campaign from one of the host's three local
+slots. An empty slot starts a new host-owned Campaign; an occupied compatible slot
+transactionally restores its complete generator-neutral world, units, lattices, effects,
+formation, rules, seeds, and active time before opening a fresh assignment lobby. Resume
+never restores old seats, credentials, cameras, selections, or transport state. Only the
+listen host can save, and only during paused, quiescent exploration; clients receive an
+ordered, non-blocking save-status projection and never read or write the checkpoint.
+Legacy/V1 records retain their strict compatibility behavior and upgrade only after a
+successful next save.
+
+Direct multiplayer still requires shipped content. LAN discovery does not cross
+routers, VLANs, guest-network isolation, or most VPNs. Internet hosts must arrange UDP
+forwarding themselves or use the documented temporary Tailscale test route and may
+still fail behind CGNAT; there is no UPnP, STUN/TURN, public matchmaking, cross-store
+relay, host migration, spectator mode, or dedicated server. Universal EOS Internet
+sessions remain a later milestone.
+
+The default-off online feasibility foundation now fixes transport-neutral EOS identity,
+lobby, reconnect, join-code, and streamed-snapshot vocabulary plus a safe mock backend.
+Its isolated `hex_eos_ffi` crate is the sole audited unsafe boundary and loads only an
+explicit checksum-staged official runtime path. This foundation does **not** make Play
+Online functional: no EOS platform, identity, lobby, packet connection, or socket is
+created by ordinary builds. Protected official headers/runtime, a configured development
+deployment, and live Device ID/Steam/lobby/P2P evidence remain required before the
+Universal Online wave dispatches. Steam is planned as identity and native invitation
+integration into the same EOS lobby, not as a second gameplay transport.
 
 Tools contains Character Creator, Spell Creator, and a disabled Map Creator marked
 Coming Soon. Creator origins and destinations are typed. Creating from a character
@@ -392,9 +450,9 @@ turn, no-progress, or outcome termination. It consumes exact per-unit scripts or
 deterministic non-random baseline controller. This is a regression workbench, not a
 claim that the baseline is optimal or balance is fun.
 
-Pure `hex_gameplay_model` transitions own Main Menu, Campaign, Sandbox, and Creator
-navigation, map/draft edits, slot identity, launch blockers, Retry identity, re-entry,
-and edit history without exposing mutable widget state.
+Pure `hex_gameplay_model` transitions own Main Menu, Campaign, Sandbox, Multiplayer,
+and Creator navigation, map/draft edits, slot identity, launch blockers, Retry identity,
+re-entry, and edit history without exposing mutable widget state.
 
 Gameplay validation is split by oracle into pure rules, focused ECS contracts,
 deterministic simulation, and model/headless-app partitions. One fail-closed concern
@@ -512,11 +570,13 @@ lifecycle, idle-churn, and release-performance gates are live. Seed-exact
 multi-azimuth walks exercise ordinary pointer movement to a proved destination on every
 standalone selectable map and every Two Rings region. Alberto approved the corrected
 third-person camera's motion and readability in a native Two Rings release walk at
-runtime head `2397d8e` on 2026-08-01; First Person still requires its own native
-motion/control-feel review for final acceptance. Map remains available without a
-scenario restriction. A generated `MapViewHint` may extend its zoom ceiling with ten
-percent headroom, so a large initial frame such as Mountain Range does not snap inward
-on the first scroll; Third Person retains its authored ceiling.
+runtime head `2397d8e` on 2026-08-01. On 2026-08-10, `shrav-k` approved First Person's
+native three-state cycle, look and movement feel, retargeting, model restoration, and
+exact Map-pose restoration on the combined `dev` head `8a8e45e4`. Map remains
+available without a scenario restriction. A generated `MapViewHint` may extend its
+zoom ceiling with ten percent headroom, so a large initial frame such as Mountain
+Range does not snap inward on the first scroll; Third Person retains its authored
+ceiling.
 
 ## What is provisional
 
@@ -544,7 +604,7 @@ produce the same order across runs and saves.
 It disables hexes and it can put a unit down, and that is deliberately as far as it
 goes. **Downed is provisional**: the design leaves both functional death — a threshold
 arriving before zero — and permadeath open, and a unit whose lattice is spent simply
-leaves the turn order while retaining its lattice for restoration. Renewal can
+leaves the turn order while retaining its lattice for restoration. Heal or Renewal can
 reactivate it for the next round, and exploration Rest recovers it. How many hexes a
 spell disables, how long a fight runs, and what a strike costs are all knobs rather
 than answers; `strike_disables`
@@ -672,8 +732,8 @@ The live implementation retains these explicit limitations:
   unsupported actors deterministically, adopt their exact positions into combat
   authority, and freeze with a typed diagnostic if no legal landing exists.
 - **Downed-first death is provisional.** A fully disabled unit initially leaves the
-  turn order and retains its lattice. Renewal restores it into the next round and Rest
-  recovers it after combat; functional death and permadeath remain open.
+  turn order and retains its lattice. Heal or Renewal restores it into the next round
+  and Rest recovers it after combat; functional death and permadeath remain open.
 - **Supported area unit effects reach every exact occupant in the clipped volume.**
   `volumes::resolve` produces the full voxel list, and the transaction snapshots exact
   occupants at payment, orders authored effect then stable `UnitId`, queues one public

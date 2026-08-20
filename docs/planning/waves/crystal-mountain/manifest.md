@@ -1,10 +1,10 @@
 # Crystal Mountain wave
 
-- Status: `dispatching`
+- Status: `integration-validation`
 - Wave branch: `wave/crystal-mountain`
-- Base: `origin/dev @ 9267d9f899a6caaec870980e10668c82cdcf1d06`
-- Pending prerequisite carried by this branch: Crystal Ascent and First Person through
-  `7da9cd29fe27ce81baa7c64304a82792647be6d5` (PR #197)
+- Refreshed base: `origin/dev @ fc55bd5` before final validation
+- Prerequisite: Crystal Ascent and First Person through `7da9cd29` landed on `dev`
+  before this wave's final refresh
 - Coordinator: Codex / world integration
 - Epic: Crystal Mountain and cross-biome tunnel
 - Shippable outcome: one selectable radius-77 mountain whose only ordinary foot-to-basin
@@ -65,7 +65,7 @@ one wave rather than unrelated PRs.
   order: orders/L1-macro-contracts.md
   ticket: null
   authority: world
-  builder: worker
+  builder: "@codex"
   branch: feat/crystal-mountain-contracts
   owns:
     - crates/hex_map/src/settings.rs (Macro settings vocabulary and validation)
@@ -81,7 +81,7 @@ one wave rather than unrelated PRs.
   selector: { concerns: [map_unit, map_generation, map_contracts], full: false }
   evidence: logic-only
   sizing: { model: inherited, effort: high }
-  state: queued
+  state: integrated
   pr: null
 - id: L2
   title: Crystal Mountain composition and tunnel
@@ -105,14 +105,14 @@ one wave rather than unrelated PRs.
   selector: { concerns: [map_generation, map_contracts], full: false }
   evidence: static-presentation
   sizing: { model: inherited, effort: high }
-  state: dispatched
+  state: integrated
   pr: null
 - id: L3
   title: Interior cutaway and overlying-feature reconciliation
   order: orders/L3-presentation.md
   ticket: null
   authority: world
-  builder: worker
+  builder: "@codex"
   branch: feat/crystal-mountain-presentation
   owns:
     - crates/hex_world/src (Crystal Mountain cutaway and feature-lifecycle regions only)
@@ -127,14 +127,14 @@ one wave rather than unrelated PRs.
   selector: { concerns: [world, visual_walk], full: false }
   evidence: static-presentation
   sizing: { model: inherited, effort: high }
-  state: queued
+  state: integrated
   pr: null
 - id: L4
   title: Crystal Mountain selection, review route, and docs
   order: orders/L4-content-docs.md
   ticket: null
   authority: shared
-  builder: worker
+  builder: "@codex"
   branch: feat/crystal-mountain-content
   owns:
     - assets/config/worlds/procedural-crystal-mountain.ron
@@ -143,10 +143,15 @@ one wave rather than unrelated PRs.
     - assets/config/sandbox_maps.ron (Crystal Mountain entry only)
     - crates/hex_game/src/scenarios.rs (embedded Crystal Mountain path only)
     - crates/hex_game/src/walk.rs (Crystal Mountain review route only)
+    - crates/hex_assets/src/sandbox.rs (Crystal Mountain catalog regression only)
+    - assets/ui/sandbox/crystal-mountain.png
+    - walks/camera_crystal_mountain.ron
+    - walks/camera_routes.ron (Crystal Mountain route only)
     - docs/development/config.md
     - docs/systems/world-generation-v3.md
     - docs/systems/interiors.md
     - docs/systems/lighting.md
+    - docs/systems/camera.md
     - docs/planning/status.md
     - docs/planning/roadmap.md
     - docs/planning/waves/crystal-mountain/manifest.md (L4 queue row only)
@@ -156,7 +161,7 @@ one wave rather than unrelated PRs.
   selector: { concerns: [app, config, docs, visual_walk], full: true }
   evidence: motion-or-feel
   sizing: { model: inherited, effort: high }
-  state: queued
+  state: integrated
   pr: null
 ```
 
@@ -188,8 +193,18 @@ one wave rather than unrelated PRs.
 2. L2 mask claim, terrain composition, tunnel, interior, lights, anchors, and validators.
 3. L3 presentation reconciliation and lifecycle coverage.
 4. L4 selectable content, visual walk, documentation, and benchmark records.
-5. Coordinator aggregate review, selector plan, full CI-equivalent gate, captures, and human
+5. Coordinator aggregate review, selector plan, full CI-equivalent gate, captures, and named
    First/Third/Map camera review.
+
+## Integration ledger
+
+| Lane | Integrated commits | Result |
+|---|---|---|
+| L1 | `1ae8712`, `c264d93`, `82df844` | defaulted spanning, walker, alias, fingerprint, and seam contracts |
+| L2 | `cbac20c` through `90ac1bf` | staged composition, exact tunnel, landscape, validation, and benchmarks |
+| L3 | `e6a638c` | review cutaway hides and restores exact overlying roof trees |
+| L4 | `b9d7361`, `044b088`, `5686748` | selectable content, docs, preview, and deterministic camera route |
+| Refresh | merge of `origin/dev @ fc55bd5` | multiplayer/VFX additions retained additively before final gates |
 
 ## Combined acceptance
 
@@ -204,8 +219,9 @@ one wave rather than unrelated PRs.
   review cutaway without stale roofs, lights, features, anchors, or floating trees.
 - Inspect Map, First Person, and Third Person frames for foot portal, natural tunnel, Gothic
   transition, chamber, ascent, summit, basin, ridge, lighting overlay, and review cutaway.
-- Run selector-chosen CI, full candidate gate, radius-77 camera/perception budgets, 10,000
-  idle-frame perception gate, and Macro generation/materialization/entity/memory comparisons.
+- Run selector-chosen CI, full candidate gate, the radius-77 camera budget, preserved
+  radius-40 perception budgets, the 10,000-idle-frame perception gate, and Macro
+  generation/materialization/entity/peak-memory comparisons.
 
 ## Stop conditions
 

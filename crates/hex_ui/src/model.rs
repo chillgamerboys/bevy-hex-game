@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use hex_core::{GameplayPhase, InputAction, UnitId};
+use hex_core::{GameplayPhase, InputAction, PlayerSeat, UnitId};
 use hex_gameplay_model::{
     CampaignSlotId, MainMenuRoute, MainViewDestination, SandboxCharacter, SandboxDeploymentSlot,
     SandboxDeploymentStage, SandboxRoute, SandboxSide, SandboxSlotIndex, SandboxStartBlocker,
@@ -399,6 +399,12 @@ pub enum OutcomeAction {
     Retry,
     /// Retry the exact frozen Sandbox launch.
     RetryExact,
+    /// Reopen the host-owned assignment lobby after a multiplayer outcome.
+    ReturnToLobby,
+    /// Close the host-owned multiplayer session for every peer.
+    CloseSession,
+    /// Leave a multiplayer session without asserting a host transition.
+    LeaveSession,
     /// Return to the session's owning screen.
     Return,
 }
@@ -475,6 +481,118 @@ pub enum LatticeDemoIntent {
     EndTurn,
     /// Rebuild fresh battle state from the inscription.
     Reset,
+}
+
+/// One authored spell animation as the VFX tuner's spell list shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VfxTunerSpellView {
+    /// Spell name, the key into `spell_animations.ron`.
+    pub name: String,
+    /// Short motion/style summary, e.g. "Beam · Spark".
+    pub summary: String,
+    /// Whether this is the spell currently being tuned.
+    pub selected: bool,
+}
+
+/// Which tunable parameter a VFX tuner row edits.
+///
+/// Deliberately a flat enum rather than a reflection path: the tuner is a fixed set
+/// of authored knobs, and naming them as data keeps `hex_ui` free of any dependency
+/// on `hex_assets`, which owns the struct these map onto.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VfxTunerField {
+    /// The motion archetype: instant flash, beam, or travelling projectile.
+    Motion,
+    /// The particle look: spark or flame.
+    Style,
+    /// The archetype's leading timing — hold, flash, or travel seconds.
+    TimingPrimary,
+    /// Seconds the impact burst is held. Absent for an instant flash.
+    TimingImpact,
+    /// A beam or arc line's cross-section width, independent of particle size.
+    BeamThickness,
+    /// How far an arc's path wanders off the straight line to its target.
+    ArcDisplacement,
+    /// How many times an arc's path is subdivided, i.e. how fine its crackle is.
+    ArcSubdivisions,
+    /// How many forked branches split off an arc.
+    ArcBranches,
+    /// Whether a projectile trails particles across its flight.
+    Trail,
+    /// How many particles the effect spawns.
+    ParticleCount,
+    /// World units/second particles leave the emitter at.
+    ParticleSpeed,
+    /// Seconds an individual particle lives.
+    ParticleLifetime,
+    /// Individual particle size, and a beam's thickness.
+    Scale,
+    /// Radius of the ball particles spawn inside and fly out from.
+    Spread,
+    /// Whether an explicit color replaces the spell's flavor-element tint.
+    ColorOverride,
+    /// Red channel of the color override.
+    ColorRed,
+    /// Green channel of the color override.
+    ColorGreen,
+    /// Blue channel of the color override.
+    ColorBlue,
+}
+
+/// How a VFX tuner row is operated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VfxTunerControl {
+    /// A decrement/increment pair around a numeric readout.
+    Nudge,
+    /// A single button advancing to the next value in a closed set.
+    Cycle,
+}
+
+/// One tunable parameter row in the VFX tuner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VfxTunerRowView {
+    /// The parameter this row edits.
+    pub field: VfxTunerField,
+    /// Player-facing parameter name.
+    pub label: String,
+    /// Formatted current value.
+    pub value: String,
+    /// How the row is operated.
+    pub control: VfxTunerControl,
+}
+
+/// Immutable spell VFX tuner presentation.
+#[derive(Resource, Debug, Default, Clone, PartialEq, Eq)]
+pub struct VfxTunerView {
+    /// Whether authored animation content has loaded.
+    pub ready: bool,
+    /// Every authored spell animation, in stable name order.
+    pub spells: Vec<VfxTunerSpellView>,
+    /// Tunable parameters of the selected spell, empty when none is selected.
+    pub rows: Vec<VfxTunerRowView>,
+    /// Result of the most recent save, or other transient notice.
+    pub status: Option<String>,
+    /// Whether the live values differ from what is on disk.
+    pub dirty: bool,
+}
+
+/// Typed spell VFX tuner controls.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VfxTunerIntent {
+    /// Tune a different spell.
+    Select(String),
+    /// Step the field's value down.
+    Decrement(VfxTunerField),
+    /// Step the field's value up.
+    Increment(VfxTunerField),
+    /// Advance the field to the next value in its closed set.
+    Cycle(VfxTunerField),
+    /// Replay the selected spell's cast on the preview dummies.
+    Play,
+    /// Write the live values back to `spell_animations.ron`.
+    Save,
+    /// Discard live edits and reload the values on disk.
+    Revert,
 }
 
 /// Creator workspace selected beneath the Character/Spell library route.
@@ -678,6 +796,8 @@ pub enum CreatorIntent {
     SetEnchantment(bool),
     /// Select single-target or self-cast targeting.
     SetSingleTarget(bool),
+    /// Select exact occupied-unit touch or ordinary ranged targeting.
+    SetTouch(bool),
     /// Adjust spell range.
     AdjustRange(i8),
     /// Adjust enchantment defense.
@@ -1229,6 +1349,31 @@ pub struct CampaignSlotView {
     pub status: CampaignSlotStatusView,
 }
 
+/// Immutable progress/refusal state for preparing one host-owned Campaign lobby.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct MultiplayerCampaignHostView {
+    /// Selected durable slot, if preparation has been attempted.
+    pub slot: Option<CampaignSlotId>,
+    /// Whether the app is transactionally restoring and validating the checkpoint.
+    pub preparing: bool,
+    /// Sanitized typed refusal copy; never a path or checkpoint detail.
+    pub refusal: Option<String>,
+}
+
+/// Disclosure-safe Campaign save status rendered by multiplayer presentation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MultiplayerCampaignSaveStatusView {
+    /// The host accepted a save and is building the atomic checkpoint.
+    Saving,
+    /// The host atomically committed the checkpoint.
+    Saved,
+    /// The host refused or could not commit the save.
+    Refused {
+        /// Sanitized stable refusal copy.
+        reason: String,
+    },
+}
+
 /// Immutable Main Menu hierarchy supplied by the composition root.
 #[derive(Resource, Debug, Clone, PartialEq, Eq)]
 pub struct MainMenuView {
@@ -1238,6 +1383,274 @@ pub struct MainMenuView {
     pub setup_failure: Option<String>,
     /// Exactly three Campaign slots in stable order.
     pub campaign_slots: Vec<CampaignSlotView>,
+}
+
+/// Sensitive text that may be rendered only on an explicit connection-code surface.
+/// Ordinary `Debug` output is always redacted so intents and immutable views remain safe
+/// to inspect in diagnostics.
+#[derive(Default, Clone, PartialEq, Eq)]
+pub struct SensitiveText(String);
+
+impl SensitiveText {
+    /// Wraps player-entered or explicitly shareable credential-bearing text.
+    #[must_use]
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Borrows the complete value for the explicit edit/copy/share surface only.
+    #[must_use]
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+
+    /// Whether no sensitive characters are present.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl std::fmt::Debug for SensitiveText {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("SensitiveText([REDACTED])")
+    }
+}
+
+/// Presentation-only connection state for one stable human seat.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum MultiplayerSeatConnectionView {
+    /// No admitted player owns the seat.
+    #[default]
+    Vacant,
+    /// The admitted player is online.
+    Connected,
+    /// A disconnected player retains the seat for the displayed whole seconds.
+    Reserved {
+        /// Whole real-time seconds remaining before temporary host delegation.
+        seconds: u32,
+    },
+    /// The reservation expired and host delegation is active.
+    Delegated,
+    /// The player reconnected and waits for a quiescent authority boundary.
+    ReclaimPending,
+}
+
+/// One party assignment rendered inside a seat card.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MultiplayerAssignmentView {
+    /// Stable unit identity used only by typed assignment controls.
+    pub unit: UnitId,
+    /// Shipped player-facing character identity.
+    pub label: String,
+}
+
+/// Immutable presentation of one of the six stable human seats.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MultiplayerSeatView {
+    /// Canonical human seat.
+    pub seat: PlayerSeat,
+    /// Current connection/reservation/delegation projection.
+    pub connection: MultiplayerSeatConnectionView,
+    /// Safe short player label; never a credential or transport entity id.
+    pub player_label: Option<String>,
+    /// Assigned shipped party members in stable manifest order.
+    pub assignments: Vec<MultiplayerAssignmentView>,
+    /// Guest readiness; host readiness is implicit.
+    pub ready: bool,
+    /// Whether this seat owns the local process.
+    pub local: bool,
+}
+
+impl MultiplayerSeatView {
+    /// Empty stable seat fixture.
+    #[must_use]
+    pub fn vacant(seat: PlayerSeat) -> Self {
+        Self {
+            seat,
+            connection: MultiplayerSeatConnectionView::Vacant,
+            player_label: None,
+            assignments: Vec::new(),
+            ready: false,
+            local: false,
+        }
+    }
+}
+
+/// Disclosure-safe presentation of one mDNS-resolved open lobby on the current LAN.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MultiplayerLanSessionView {
+    /// Opaque DNS-SD identity returned unchanged by a typed join intent.
+    pub service_id: String,
+    /// Stable public session label; never a machine/user identity.
+    pub label: String,
+    /// Resolved public LAN endpoint selected by the discovery adapter.
+    pub endpoint: String,
+    /// Currently claimed human seats.
+    pub claimed_seats: u8,
+    /// Maximum human seats.
+    pub seat_capacity: u8,
+    /// Discovery-hint compatibility; final custom admission still checks exact identities.
+    pub compatible: bool,
+}
+
+/// Immutable Direct Connect and lobby presentation.
+#[derive(Resource, Debug, Clone, PartialEq, Eq)]
+pub struct MultiplayerView {
+    /// Renderer-free local route.
+    pub route: hex_gameplay_model::MultiplayerRoute,
+    /// Host/client role after starting a session.
+    pub role: Option<hex_gameplay_model::MultiplayerRole>,
+    /// Host-derived local seat after admission.
+    pub local_seat: Option<PlayerSeat>,
+    /// Editable advertised host name/IP. This is public endpoint data, not a secret.
+    pub advertised_host: String,
+    /// Editable UDP port text; the app adapter performs typed validation.
+    pub advertised_port: String,
+    /// Explicit host share surface; ordinary diagnostics redact it.
+    pub share_code: Option<SensitiveText>,
+    /// Explicit join-code editor; ordinary diagnostics redact it.
+    pub join_code: SensitiveText,
+    /// Whether a private reconnect credential is available in temporary storage.
+    pub reconnect_available: bool,
+    /// Whether this process is actively browsing the local multicast link.
+    pub lan_searching: bool,
+    /// Current same-network lobby projections in deterministic service order.
+    pub lan_sessions: Vec<MultiplayerLanSessionView>,
+    /// Whether this host session was explicitly opened for LAN discovery.
+    pub lan_hosting: bool,
+    /// Whether the open host lobby is currently being advertised successfully.
+    pub lan_advertising: bool,
+    /// Whether LAN advertisement stopped and can be explicitly retried.
+    pub lan_advertisement_failed: bool,
+    /// Exactly three host-owned Campaign slots in stable order.
+    pub campaign_slots: Vec<CampaignSlotView>,
+    /// Typed Campaign-lobby preparation state.
+    pub campaign_host: MultiplayerCampaignHostView,
+    /// Whether the current frozen session restores a Campaign checkpoint.
+    pub campaign_session: bool,
+    /// Latest ordered Campaign save status for the current session.
+    pub campaign_save_status: Option<MultiplayerCampaignSaveStatusView>,
+    /// Six stable seat cards in canonical order.
+    pub seats: Vec<MultiplayerSeatView>,
+    /// Scenario/map summary from the frozen manifest.
+    pub launch_summary: Option<String>,
+    /// Player-facing typed status/refusal/end copy.
+    pub notice: Option<String>,
+    /// Whether every canonical launch invariant currently passes.
+    pub can_launch: bool,
+    /// Visible reason Launch is disabled.
+    pub launch_blocker: Option<String>,
+    /// Remote-client Escape surface; never global pause.
+    pub local_menu_open: bool,
+}
+
+impl Default for MultiplayerView {
+    fn default() -> Self {
+        Self {
+            route: hex_gameplay_model::MultiplayerRoute::Home,
+            role: None,
+            local_seat: None,
+            advertised_host: "127.0.0.1".to_owned(),
+            advertised_port: "7777".to_owned(),
+            share_code: None,
+            join_code: SensitiveText::default(),
+            reconnect_available: false,
+            lan_searching: false,
+            lan_sessions: Vec::new(),
+            lan_hosting: false,
+            lan_advertising: false,
+            lan_advertisement_failed: false,
+            campaign_slots: CampaignSlotId::ALL
+                .into_iter()
+                .map(|slot| CampaignSlotView {
+                    slot,
+                    status: CampaignSlotStatusView::Empty,
+                })
+                .collect(),
+            campaign_host: MultiplayerCampaignHostView::default(),
+            campaign_session: false,
+            campaign_save_status: None,
+            seats: (0_u8..=PlayerSeat::LAST_HUMAN.0)
+                .filter_map(PlayerSeat::human)
+                .map(MultiplayerSeatView::vacant)
+                .collect(),
+            launch_summary: None,
+            notice: None,
+            can_launch: false,
+            launch_blocker: Some("Configure a shipped Sandbox encounter first.".to_owned()),
+            local_menu_open: false,
+        }
+    }
+}
+
+/// Editable field identity on Direct Host/Join setup.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MultiplayerTextField {
+    /// Public advertised hostname or IP literal.
+    AdvertisedHost,
+    /// Public UDP port.
+    AdvertisedPort,
+    /// Credential-bearing `HEX1` join code.
+    JoinCode,
+}
+
+/// Typed Multiplayer screen/local-menu intentions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MultiplayerIntent {
+    /// Open the three-slot host-owned Campaign browser.
+    OpenHostCampaign,
+    /// Configure a shipped Sandbox whose open lobby is discoverable on this LAN.
+    HostLanSandbox,
+    /// Start same-network mDNS/DNS-SD browsing.
+    OpenLanBrowser,
+    /// Restart same-network browsing after a local-network change or failure.
+    RefreshLanBrowser,
+    /// Join one exact service identity returned by LAN discovery.
+    JoinLanSession(String),
+    /// Open Direct Host setup/help.
+    OpenHostDirect,
+    /// Open Direct Join code entry/help.
+    OpenJoinDirect,
+    /// Replace one editable setup field.
+    SetText(MultiplayerTextField, SensitiveText),
+    /// Configure a shipped encounter through the existing Sandbox/deployment flow.
+    ConfigureSandbox,
+    /// Prepare a new or resumable Campaign slot for a fresh assignment lobby.
+    HostCampaign(CampaignSlotId),
+    /// Copy the current host-issued private connection code to the system clipboard.
+    CopyConnectionCode,
+    /// Retry advertisement for the current explicitly open LAN host lobby.
+    RetryLanAdvertisement,
+    /// Start one explicit pinned direct connection.
+    JoinDirect,
+    /// Reconnect through the persisted pinned endpoint and private rotating credential.
+    ReconnectDirect,
+    /// Move one character to a claimed destination seat (host-only).
+    AssignUnit {
+        /// Stable shipped party-member identity.
+        unit: UnitId,
+        /// Claimed human seat that should receive the member.
+        destination: PlayerSeat,
+    },
+    /// Remove one non-host seat from an open lobby (host-only).
+    Kick(PlayerSeat),
+    /// Toggle the authenticated guest's own ready state.
+    SetReady(bool),
+    /// Freeze admission and begin exact world verification (host-only).
+    Launch,
+    /// Retry the exact frozen encounter (host-only).
+    RetryExact,
+    /// Reopen assignment and clear readiness (host-only).
+    ReturnToLobby,
+    /// Close the host-owned session (host-only).
+    CloseSession,
+    /// Leave a connecting or admitted remote session.
+    LeaveSession,
+    /// Close the remote client's local, non-pausing Escape menu.
+    ResumeLocal,
+    /// Apply canonical route-aware Back/Escape behavior.
+    Back,
 }
 
 impl Default for MainMenuView {
@@ -1261,6 +1674,8 @@ impl Default for MainMenuView {
 pub enum MainMenuIntent {
     /// Open the three Campaign slots.
     OpenCampaign,
+    /// Open client-hosted multiplayer.
+    OpenMultiplayer,
     /// Enter the persistent Sandbox draft.
     OpenSandbox,
     /// Open the creator tools hierarchy.
@@ -1271,6 +1686,8 @@ pub enum MainMenuIntent {
     OpenCharacterCreator,
     /// Open Spell Creator from Tools.
     OpenSpellCreator,
+    /// Open the spell VFX tuner from Tools.
+    OpenVfxTuner,
     /// Bind and launch the default campaign in one empty slot.
     NewCampaign(CampaignSlotId),
     /// Continue one exact occupied slot.
@@ -1322,6 +1739,8 @@ pub enum UiIntent {
     Outcome(OutcomeIntent),
     /// Act on the isolated Lattice Demo.
     LatticeDemo(LatticeDemoIntent),
+    /// Tune or replay an authored spell animation.
+    VfxTuner(VfxTunerIntent),
     /// Act on Character or Spell Creator presentation.
     Creator(CreatorIntent),
     /// Act on Sandbox composition.
@@ -1337,6 +1756,8 @@ pub enum UiIntent {
     Back,
     /// Navigate the Main Menu, Campaign, and Tools hierarchy.
     MainMenu(MainMenuIntent),
+    /// Act on Direct Connect, lobby, reconnect, or the client-local menu.
+    Multiplayer(MultiplayerIntent),
 }
 
 #[cfg(test)]
@@ -1385,5 +1806,30 @@ mod tests {
             view.start_blocker,
             Some(SandboxStartBlocker::MapsLoading)
         ));
+    }
+
+    #[test]
+    fn multiplayer_secrets_are_redacted_from_views_and_intents() {
+        let secret = SensitiveText::new("HEX1.private-invite-material");
+        assert_eq!(format!("{secret:?}"), "SensitiveText([REDACTED])");
+        assert!(!format!("{secret:?}").contains(secret.expose()));
+
+        let mut view = MultiplayerView {
+            share_code: Some(secret.clone()),
+            join_code: secret.clone(),
+            ..Default::default()
+        };
+        assert!(!format!("{view:?}").contains(secret.expose()));
+
+        let intent = MultiplayerIntent::SetText(MultiplayerTextField::JoinCode, secret.clone());
+        assert!(!format!("{intent:?}").contains(secret.expose()));
+
+        view.share_code = None;
+        assert_eq!(view.seats.len(), PlayerSeat::HUMAN_COUNT);
+        assert_eq!(view.campaign_slots.len(), CampaignSlotId::ALL.len());
+        assert_eq!(
+            view.seats.first().map(|seat| seat.seat),
+            Some(PlayerSeat::HOST)
+        );
     }
 }

@@ -16,11 +16,13 @@ use bevy::picking::mesh_picking::MeshPickingPlugin;
 use bevy::prelude::*;
 use bevy::render::settings::{InstanceFlags, WgpuSettings};
 use bevy::render::RenderPlugin;
+use bevy::window::WindowMode;
 use hex_core::{
     AppSystems, GameplayPhase, GameplaySetup, InputBindings, PausableSystems, Pause,
     PerceptionSystems, Screen,
 };
 
+pub mod campaign_authority;
 #[cfg(any(feature = "map-review", feature = "visual-walk"))]
 mod capture;
 mod casting;
@@ -31,6 +33,7 @@ mod creation_store;
 mod dev_time_controls;
 mod fog;
 mod menus;
+mod multiplayer_gameplay;
 mod preferences;
 mod readouts;
 #[cfg(feature = "map-review")]
@@ -38,6 +41,7 @@ mod review;
 mod save;
 mod scenarios;
 mod screens;
+mod spell_vfx;
 mod storage;
 mod terrain_health_bars;
 #[cfg(feature = "test-support")]
@@ -87,6 +91,22 @@ fn file_log_layer(_app: &mut App) -> Option<BoxedLayer> {
     }
 }
 
+/// Native play starts fullscreen before the first rendered frame.
+///
+/// Preferences still project immediately after startup, so an explicit persisted
+/// windowed choice wins. Automated review builds retain a stable ordinary window;
+/// their image targets, rather than the OS window, own the evidence viewport.
+fn initial_window_mode() -> WindowMode {
+    #[cfg(any(feature = "map-review", feature = "visual-walk"))]
+    {
+        WindowMode::Windowed
+    }
+    #[cfg(not(any(feature = "map-review", feature = "visual-walk")))]
+    {
+        WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Primary)
+    }
+}
+
 /// The root plugin. Everything the game does hangs off this one place, so the
 /// composition of the app is readable end to end without chasing plugin groups.
 pub struct AppPlugin;
@@ -107,6 +127,7 @@ impl Plugin for AppPlugin {
                 .set(WindowPlugin {
                     primary_window: Some(Window {
                         title: storage::APP_NAME.to_owned(),
+                        mode: initial_window_mode(),
                         ..default()
                     }),
                     ..default()
@@ -127,6 +148,7 @@ impl Plugin for AppPlugin {
         );
 
         app.add_plugins(MeshPickingPlugin);
+        app.add_plugins(bevy_hanabi::HanabiPlugin);
         app.add_plugins(hex_ui::UiPlugin);
         app.add_systems(Startup, log_app_identity);
 
@@ -234,6 +256,7 @@ impl Plugin for AppPlugin {
             casting::plugin,
             readouts::plugin,
         ));
+        app.add_plugins(spell_vfx::plugin);
         app.add_plugins((fog::plugin, terrain_health_bars::plugin));
 
         #[cfg(feature = "test-support")]
@@ -256,4 +279,20 @@ impl Plugin for AppPlugin {
 
 fn log_app_identity() {
     info!("starting {} ({})", storage::APP_NAME, storage::APP_ID);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn initial_window_mode_matches_the_build_shape() {
+        #[cfg(any(feature = "map-review", feature = "visual-walk"))]
+        assert_eq!(initial_window_mode(), WindowMode::Windowed);
+        #[cfg(not(any(feature = "map-review", feature = "visual-walk")))]
+        assert_eq!(
+            initial_window_mode(),
+            WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Primary)
+        );
+    }
 }

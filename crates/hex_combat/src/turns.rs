@@ -40,9 +40,9 @@ use std::collections::BTreeMap;
 
 use hex_assets::CombatSettings;
 use hex_core::{
-    AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, InputAction, InputBindings,
-    IssuedCommand, Mode, PausableSystems, PendingDecision, RoundElapsed, Screen, TilePos, Turn,
-    UnitId,
+    AppSystems, AuthoritativeSystems, Busy, CommandQueue, ControlOwner, GameCommand, InputAction,
+    InputBindings, IssuedCommand, Mode, PausableSystems, PendingDecision, RoundElapsed, Screen,
+    SimulationRole, TilePos, Turn, UnitId,
 };
 use hex_lattice::{LatticeSpec, LatticeState};
 use hex_units::{
@@ -127,6 +127,14 @@ impl TurnOrder {
         self.order.iter().position(|u| *u == unit)
     }
 
+    /// Applies a disclosure-safe authoritative turn projection on a replica.
+    ///
+    /// This updates only the public initiative/order clock. It does not expose or
+    /// construct the host-only combat authority.
+    pub fn apply_replica(&mut self, order: &[UnitId], current: Option<UnitId>, round: u32) {
+        self.project(order, current, round);
+    }
+
     /// Projects the pure authority's current order without deriving any rule.
     pub(crate) fn project(&mut self, order: &[UnitId], current: Option<UnitId>, round: u32) {
         self.order.clear();
@@ -208,8 +216,14 @@ pub fn plugin(app: &mut App) {
         // only the combat half.
         .init_resource::<UnitAllocator>()
         .init_resource::<UnitRegistry>()
-        .add_systems(OnEnter(Mode::Combat), begin_combat)
-        .add_systems(OnExit(Mode::Combat), end_combat)
+        .add_systems(
+            OnEnter(Mode::Combat),
+            begin_combat.run_if(resource_equals(SimulationRole::Authority)),
+        )
+        .add_systems(
+            OnExit(Mode::Combat),
+            end_combat.run_if(resource_equals(SimulationRole::Authority)),
+        )
         // Both are pausable. A fight starting or a turn passing while the player is
         // staring at the pause menu would mean coming back to a world that had moved
         // on without them — the one thing a pause is supposed to prevent.
@@ -217,6 +231,7 @@ pub fn plugin(app: &mut App) {
             Update,
             engagement
                 .in_set(AppSystems::Update)
+                .in_set(AuthoritativeSystems)
                 .in_set(PausableSystems)
                 .after(hex_units::MovementSystems::Reconcile)
                 .run_if(in_state(Screen::Gameplay)),

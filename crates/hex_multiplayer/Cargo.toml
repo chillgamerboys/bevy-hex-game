@@ -1,0 +1,53 @@
+[package]
+name = "hex_multiplayer"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "Shared, transport-neutral multiplayer protocol and session contracts."
+
+[features]
+default = ["direct", "lan-discovery"]
+# Direct native Internet/LAN transport. Installing the plugin never opens a socket;
+# a session runtime must explicitly request Host Direct or Join Direct.
+direct = ["dep:aeronet_webtransport", "dep:x509-parser"]
+# Opt-in mDNS/DNS-SD advertisement and browsing for open Direct lobbies on one LAN.
+# Constructing these adapters is the explicit action that opens multicast sockets.
+lan-discovery = ["direct", "dep:mdns-sd", "dep:dns-sd-native", "dep:tokio"]
+# In-memory multi-app transport used only by deterministic session tests.
+test-harness = ["dep:aeronet_channel"]
+
+[dependencies]
+aeronet = { workspace = true }
+aeronet_channel = { workspace = true, optional = true }
+aeronet_replicon = { workspace = true }
+aeronet_webtransport = { workspace = true, optional = true }
+atomicwrites = { workspace = true }
+base64 = { workspace = true }
+bevy_app = { workspace = true }
+bevy_ecs = { workspace = true }
+bevy_replicon = { workspace = true }
+bevy_state = { workspace = true }
+bevy_time = { workspace = true }
+hex_core = { workspace = true }
+hex_lattice = { workspace = true }
+mdns-sd = { workspace = true, optional = true }
+rand = { workspace = true }
+serde = { workspace = true }
+sha2 = { workspace = true }
+x509-parser = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+dns-sd-native = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+
+[dev-dependencies]
+rcgen = { workspace = true }
+serde_json = "1"
+
+[[test]]
+name = "direct_session"
+path = "tests/direct_session.rs"
+required-features = ["test-harness"]
+
+[lints]
+workspace = true

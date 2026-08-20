@@ -109,6 +109,20 @@ impl Transformation {
         self.elapsed
     }
 
+    /// Replaces the local presentation clock with an authoritative route clock.
+    ///
+    /// Returns `false` and leaves the animation unchanged for a negative or non-finite
+    /// value. Network adapters validate before calling this, while the guard keeps the
+    /// generic animation crate safe for other callers.
+    pub fn synchronize_clock(&mut self, elapsed: f64, started: bool) -> bool {
+        if !elapsed.is_finite() || elapsed < 0.0 {
+            return false;
+        }
+        self.elapsed = elapsed;
+        self.started = started;
+        true
+    }
+
     /// `elapsed` is seconds since this transformation started.
     /// Advances the transform to where it should be at `elapsed`.
     pub fn update(&self, transform: &mut Transform, elapsed: f64) {

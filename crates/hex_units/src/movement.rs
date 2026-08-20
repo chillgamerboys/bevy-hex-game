@@ -44,8 +44,9 @@ use serde::{Deserialize, Serialize};
 
 use hex_assets::SubstanceTable;
 use hex_core::{
-    AppSystems, Headroom, HexCoord, HexSpan, Mode, PausableSystems, SubstanceId, TerrainSystems,
-    TilePos, TraversalBlockers, TraversalEndpoint, TraversalProfile, UnitId,
+    AppSystems, AuthoritativeSystems, Headroom, HexCoord, HexSpan, Mode, PausableSystems,
+    SimulationRole, SubstanceId, TerrainSystems, TilePos, TraversalBlockers, TraversalEndpoint,
+    TraversalProfile, UnitId,
 };
 
 use crate::{
@@ -107,7 +108,12 @@ impl MovementCrossings {
 /// domain route.
 pub fn plugin(app: &mut App) {
     app.register_type::<Body>()
+        .init_resource::<SimulationRole>()
         .init_resource::<MovementCrossings>();
+    app.configure_sets(
+        Update,
+        AuthoritativeSystems.run_if(resource_equals(SimulationRole::Authority)),
+    );
 
     // Where a unit *is*, kept true as it walks. Separated from `units::plugin`, which
     // also reads the active scenario placements and spawns pieces: anything that needs
@@ -120,6 +126,7 @@ pub fn plugin(app: &mut App) {
             .in_set(MovementSystems::Reconcile)
             .in_set(TerrainSystems::RefreshProjections)
             .in_set(AppSystems::Update)
+            .in_set(AuthoritativeSystems)
             .in_set(PausableSystems)
             .after(TerrainOccupancySystems::Publish)
             .after(AuthoredObjectOccupancySystems::Publish)
@@ -129,7 +136,9 @@ pub fn plugin(app: &mut App) {
     // where the ambush happened.
     app.add_systems(
         OnEnter(Mode::Combat),
-        crate::units::halt_on_combat.in_set(MovementSystems::HaltOnCombat),
+        crate::units::halt_on_combat
+            .in_set(MovementSystems::HaltOnCombat)
+            .run_if(resource_equals(SimulationRole::Authority)),
     );
 }
 

@@ -14,10 +14,10 @@ use hex_assets::{
     character_lattice_file, combined_spell_file, creator_character_issues, AiProfileCatalog,
     ArtPalette, AxialPair, CastingAxis, ContentIndex, CreationCellKind, CreationLibraryFile,
     CreationPresetCatalog, CustomCharacterId, Effect, ElementCatalog, ElementFile, Encounter,
-    FormationCatalog, GemRequirement, LatticeFile, LatticeLibrary, ManaAxis, PresetAudience,
-    SavedCharacter, Spell, SpellBook, SpellFile, SubstanceFile, SubstanceTable, TargetShape,
-    TargetingSpec, TerrainDamageFile, TerrainDamageTable, Trajectory, UnvalidatedArchetype,
-    UnvalidatedCell, UnvalidatedEntry,
+    FormationCatalog, GemRequirement, LatticeFile, LatticeLibrary, ManaAxis, MotionArchetype,
+    PresetAudience, SavedCharacter, Spell, SpellAnimationFile, SpellBook, SpellFile, SubstanceFile,
+    SubstanceTable, TargetShape, TargetingSpec, TerrainDamageFile, TerrainDamageTable, Trajectory,
+    UnvalidatedArchetype, UnvalidatedCell, UnvalidatedEntry,
 };
 use hex_core::{LatticeCoord, Sextant};
 use hex_lattice::{castable, CellKind, LatticeState};
@@ -44,6 +44,10 @@ fn parse_palette() -> Result<ArtPalette, SpannedError> {
 
 fn parse_terrain_damage() -> Result<TerrainDamageFile, SpannedError> {
     ron::from_str(include_str!("../../../assets/config/terrain_damage.ron"))
+}
+
+fn parse_spell_animations() -> Result<SpellAnimationFile, SpannedError> {
+    ron::from_str(include_str!("../../../assets/config/spell_animations.ron"))
 }
 
 fn parse_lattices() -> Result<LatticeFile, SpannedError> {
@@ -429,6 +433,71 @@ fn the_shipped_archetypes_match_the_design() {
     );
 }
 
+/// `spell_animations.ron` is presentation-only and never gates a cast, but a name
+/// that has drifted from `spells.ron` is still an authoring mistake worth catching in
+/// CI rather than as a silent missing VFX at runtime (see
+/// `hex_assets::spell_animation`'s `warn_on_dangling_animation_references`, which is
+/// the runtime-soft half of this same check).
+#[test]
+fn shipped_spell_animations_parse_and_resolve_against_the_spell_book() {
+    let spells = SpellBook::from_file(&parse_spells().expect("spells.ron parses and validates"));
+    let animations = parse_spell_animations().expect("spell_animations.ron parses and validates");
+    assert!(
+        !animations.animations.is_empty(),
+        "the shipped file should author at least one spell's VFX"
+    );
+    for name in animations.animations.keys() {
+        assert!(
+            spells.id(name).is_some(),
+            "spell_animations.ron references unknown spell {name:?}"
+        );
+    }
+
+    let ember = animations
+        .animations
+        .get("Ember")
+        .expect("Ember has an authored animation");
+    assert!(
+        matches!(ember.motion, MotionArchetype::InstantFlash { .. }),
+        "Ember is a short-range single-target burn with no travel leg"
+    );
+
+    let lightning_bolt = animations
+        .animations
+        .get("Lightning Bolt")
+        .expect("Lightning Bolt has an authored animation");
+    assert!(
+        matches!(lightning_bolt.motion, MotionArchetype::Arc { .. }),
+        "Lightning Bolt strikes instantly along a jagged procedural path, rather than \
+         travelling like a thrown object or snapping as a straight beam"
+    );
+}
+
+#[test]
+fn shipped_heal_is_the_tier_one_life_touch_restoration() {
+    let spells = SpellBook::from_file(&parse_spells().expect("spells.ron parses and validates"));
+    let heal = spells
+        .id("Heal")
+        .and_then(|id| spells.spell(id))
+        .expect("Heal is shipped");
+
+    assert_eq!(
+        heal.requirements,
+        vec![GemRequirement {
+            element: "Life".to_owned(),
+            mana: 1,
+        }]
+    );
+    assert_eq!(heal.casting, CastingAxis::Evocation);
+    assert_eq!(heal.mana, ManaAxis::Fixed);
+    assert!(!heal.co_castable);
+    assert_eq!(heal.targeting.range, 0);
+    assert_eq!(heal.targeting.reach, hex_assets::TargetingReach::Touch);
+    assert_eq!(heal.targeting.shape, TargetShape::Single);
+    assert_eq!(heal.targeting.trajectory, Trajectory::None);
+    assert_eq!(heal.effects, vec![Effect::RestoreHexes { count: 1 }]);
+}
+
 #[test]
 fn shipped_element_catalog_is_the_exact_canonical_grid() {
     let elements =
@@ -507,6 +576,7 @@ fn every_canonical_fusion_is_castable_only_with_all_distinct_direct_feeders() {
                 co_castable: false,
                 targeting: TargetingSpec {
                     range: 0,
+                    reach: hex_assets::TargetingReach::Ranged,
                     shape: TargetShape::SelfCast,
                     trajectory: Trajectory::None,
                 },

@@ -47,8 +47,8 @@ use std::collections::{BTreeMap, VecDeque};
 use bevy::prelude::*;
 
 use hex_core::{
-    AppSystems, EffectEnd, EffectId, EffectPayload, Mode, PausableSystems, PendingDecision,
-    PersistentEffect, RoundElapsed, Screen, TerrainSystems, Turn, UnitId,
+    AppSystems, AuthoritativeSystems, EffectEnd, EffectId, EffectPayload, Mode, PausableSystems,
+    PendingDecision, PersistentEffect, RoundElapsed, Screen, TerrainSystems, Turn, UnitId,
 };
 use hex_lattice::LatticeState;
 use hex_units::UnitRegistry;
@@ -92,6 +92,33 @@ pub struct PersistentEffects {
     due: VecDeque<DueHit>,
 }
 
+/// Why an authority checkpoint cannot be exported or installed.
+///
+/// This is deliberately separate from replica projection. A Campaign checkpoint keeps
+/// authority-private handles and the monotonic allocator, while a replica is free to
+/// allocate disclosure-local handles for the effects it may observe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PersistentEffectsCheckpointError {
+    /// A tick has already been spent but has not reached the defender-choice seam.
+    PendingDueHit,
+    /// Effect handles are not in strict ascending order.
+    NonCanonicalIds,
+    /// An effect handle is not below the retained next-id counter.
+    IdOutsideSequence,
+}
+
+impl std::fmt::Display for PersistentEffectsCheckpointError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::PendingDueHit => "persistent effects have undelivered damage",
+            Self::NonCanonicalIds => "persistent effect handles are not canonical",
+            Self::IdOutsideSequence => "persistent effect handle is outside its sequence",
+        })
+    }
+}
+
+impl std::error::Error for PersistentEffectsCheckpointError {}
+
 impl PersistentEffects {
     /// Every running effect, in allocation order.
     pub fn iter(&self) -> impl Iterator<Item = (EffectId, &PersistentEffect)> + '_ {
@@ -114,6 +141,71 @@ impl PersistentEffects {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.effects.is_empty()
+    }
+
+    /// Exports the exact authority ledger at a checkpoint-safe boundary.
+    ///
+    /// A due hit cannot be serialized as a running effect: its tick has already advanced,
+    /// but the defender has not yet chosen the disabled cells. Saving there would either
+    /// duplicate or forgive damage after restore, so the boundary fails closed.
+    pub fn authority_checkpoint(
+        &self,
+    ) -> Result<(u64, Vec<(EffectId, PersistentEffect)>), PersistentEffectsCheckpointError> {
+        if !self.due.is_empty() {
+            return Err(PersistentEffectsCheckpointError::PendingDueHit);
+        }
+        let effects = self
+            .iter()
+            .map(|(id, effect)| (id, *effect))
+            .collect::<Vec<_>>();
+        Self::validate_authority_checkpoint(self.next, &effects)?;
+        Ok((self.next, effects))
+    }
+
+    /// Validates an exact authority ledger without changing the live resource.
+    pub fn validate_authority_checkpoint(
+        next_id: u64,
+        effects: &[(EffectId, PersistentEffect)],
+    ) -> Result<(), PersistentEffectsCheckpointError> {
+        let mut previous = None;
+        for (id, _) in effects {
+            if previous.is_some_and(|previous| previous >= *id) {
+                return Err(PersistentEffectsCheckpointError::NonCanonicalIds);
+            }
+            if id.0 >= next_id {
+                return Err(PersistentEffectsCheckpointError::IdOutsideSequence);
+            }
+            previous = Some(*id);
+        }
+        Ok(())
+    }
+
+    /// Transactionally installs an exact authority ledger.
+    ///
+    /// Validation completes before any field is changed. Due work is necessarily empty:
+    /// a legal Campaign checkpoint can only be produced before a tick enters that seam.
+    pub fn replace_authority_checkpoint(
+        &mut self,
+        next_id: u64,
+        effects: &[(EffectId, PersistentEffect)],
+    ) -> Result<(), PersistentEffectsCheckpointError> {
+        Self::validate_authority_checkpoint(next_id, effects)?;
+        self.effects = effects.iter().copied().collect();
+        self.next = next_id;
+        self.due.clear();
+        Ok(())
+    }
+
+    /// Replaces the local ledger with an ordered disclosure-safe replica projection.
+    ///
+    /// Effect handles are authority-private implementation details, so replicas allocate
+    /// local handles in the already-authoritative projection order. No due work is copied:
+    /// only the listen host may tick or resolve persistent effects.
+    pub fn replace_replica(&mut self, projected: impl IntoIterator<Item = PersistentEffect>) {
+        self.clear();
+        for effect in projected {
+            self.insert(effect);
+        }
     }
 
     /// Removes every persistent effect carried by `target`.
@@ -481,6 +573,7 @@ pub(crate) fn plugin(app: &mut App) {
         (tick_turn_effects, open_due_decision)
             .chain()
             .in_set(AppSystems::Update)
+            .in_set(AuthoritativeSystems)
             .in_set(PausableSystems)
             // A shared set, not `.before(a_system)`: the tick has to be complete
             // before anything decides what to do with the turn, and `Act` is what
@@ -493,6 +586,7 @@ pub(crate) fn plugin(app: &mut App) {
         Update,
         expire_round_effects
             .in_set(AppSystems::Update)
+            .in_set(AuthoritativeSystems)
             .in_set(PausableSystems)
             .after(crate::CombatSystems::Advance)
             .run_if(in_state(Mode::Combat)),
@@ -714,5 +808,69 @@ mod tests {
         assert_eq!(effects.remove_on(UnitId(2)), 1);
         assert!(effects.on(UnitId(2)).next().is_none());
         assert_eq!(effects.on(UnitId(3)).count(), 1);
+    }
+
+    #[test]
+    fn authority_checkpoint_preserves_handles_and_the_next_allocator() {
+        let mut effects = PersistentEffects::default();
+        apply_burn(&mut effects, 2, UnitId(1), UnitId(2), 3);
+        apply_burn(&mut effects, 2, UnitId(3), UnitId(2), 4);
+        effects.effects.remove(&EffectId(0));
+
+        let (next_id, checkpoint) = effects
+            .authority_checkpoint()
+            .expect("settled authority effects should export");
+        assert_eq!(next_id, 2);
+        assert_eq!(checkpoint.first().map(|(id, _)| *id), Some(EffectId(1)));
+
+        let mut restored = PersistentEffects::default();
+        restored
+            .replace_authority_checkpoint(next_id, &checkpoint)
+            .expect("canonical authority effects should restore");
+        assert_eq!(restored.authority_checkpoint(), Ok((next_id, checkpoint)));
+
+        apply_burn(&mut restored, 3, UnitId(4), UnitId(2), 1);
+        assert_eq!(
+            restored.iter().last().map(|(id, _)| id),
+            Some(EffectId(2)),
+            "restored allocation must continue after the retained counter"
+        );
+    }
+
+    #[test]
+    fn authority_checkpoint_rejects_an_undelivered_tick() {
+        let mut effects = PersistentEffects::default();
+        apply_burn(&mut effects, 0, UnitId(1), UnitId(2), 2);
+        assert_eq!(effects.tick_personal(UnitId(2)), 1);
+        effects.due.push_back(DueHit {
+            target: UnitId(2),
+            count: 1,
+            source: UnitId(1),
+        });
+
+        assert_eq!(
+            effects.authority_checkpoint(),
+            Err(PersistentEffectsCheckpointError::PendingDueHit)
+        );
+    }
+
+    #[test]
+    fn malformed_authority_replacement_leaves_the_ledger_unchanged() {
+        let mut effects = PersistentEffects::default();
+        apply_burn(&mut effects, 0, UnitId(1), UnitId(2), 2);
+        let before = effects
+            .authority_checkpoint()
+            .expect("fixture ledger should export");
+        let malformed = [(EffectId(1), burn_for(2)), (EffectId(0), burn_for(2))];
+
+        assert_eq!(
+            effects.replace_authority_checkpoint(2, &malformed),
+            Err(PersistentEffectsCheckpointError::NonCanonicalIds)
+        );
+        assert_eq!(effects.authority_checkpoint(), Ok(before));
+        assert_eq!(
+            PersistentEffects::validate_authority_checkpoint(1, &[(EffectId(1), burn_for(2))]),
+            Err(PersistentEffectsCheckpointError::IdOutsideSequence)
+        );
     }
 }

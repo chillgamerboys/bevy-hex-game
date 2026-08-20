@@ -41,6 +41,27 @@ impl TerrainDamageState {
         damaged.clear();
     }
 
+    /// Hydrates exact partial health from an already validated world snapshot.
+    ///
+    /// Batch identities are session-local command state rather than world state, so
+    /// an imported world starts with an empty idempotence ledger while preserving the
+    /// private remaining-health truth and its public read-only projection together.
+    pub(crate) fn restore(
+        &mut self,
+        damage: impl IntoIterator<Item = (TilePos, TerrainVoxelHealth)>,
+        damaged: &mut DamagedVoxels,
+    ) {
+        self.remaining.clear();
+        self.consumed_batches.clear();
+        damaged.clear();
+        for (position, health) in damage {
+            if health.is_damaged() {
+                self.remaining.insert(position, health.remaining);
+                damaged.publish(position, health);
+            }
+        }
+    }
+
     /// Applies one already-admitted impact in its exact announced order.
     pub(crate) fn apply(
         &mut self,

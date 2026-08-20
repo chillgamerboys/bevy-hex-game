@@ -88,6 +88,7 @@ fn spell(effects: Vec<Effect>) -> Spell {
         co_castable: false,
         targeting: TargetingSpec {
             range: 2,
+            reach: hex_assets::TargetingReach::Ranged,
             shape: TargetShape::Single,
             trajectory: Trajectory::None,
         },

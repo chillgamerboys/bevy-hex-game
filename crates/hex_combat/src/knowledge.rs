@@ -43,8 +43,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use bevy::prelude::*;
 
 use hex_core::{
-    AppSystems, KnowledgeExpiry, KnowledgeSource, LatticeCoord, PausableSystems, PerceptionSystems,
-    RoundElapsed, Screen, UnitId,
+    AppSystems, AuthoritativeSystems, KnowledgeExpiry, KnowledgeSource, LatticeCoord,
+    PausableSystems, PerceptionSystems, RoundElapsed, Screen, UnitId,
 };
 use hex_lattice::{CellKind, LatticeSpec, LatticeState};
 use hex_perception::FactionMapKnowledge;
@@ -170,6 +170,35 @@ impl LatticeKnowledge {
     pub fn unknown_count(&self) -> Option<usize> {
         self.known_capacity()
             .map(|capacity| capacity.saturating_sub(self.cells.len()))
+    }
+
+    /// Whether every cell promised by the learned capacity has been revealed.
+    ///
+    /// This is the knowledge-only authorization check used before consulting an
+    /// authoritative hostile lattice. Equality is deliberate: a stale or malformed
+    /// capacity smaller than the revealed set must fail closed rather than inheriting
+    /// the saturating behavior of [`Self::unknown_count`].
+    #[must_use]
+    pub fn is_complete(&self) -> bool {
+        self.known_capacity() == Some(self.cells.len())
+    }
+
+    /// Whether a complete view exactly matches an already-authorized lattice spec.
+    ///
+    /// This is an integrity/test predicate, not the initial hostile-information gate:
+    /// callers must establish [`Self::is_complete`] before reading an authoritative
+    /// hostile spec. Once access is authorized, this stronger comparison also checks
+    /// every exact coordinate and cell kind.
+    #[must_use]
+    pub fn is_complete_for(&self, spec: &LatticeSpec) -> bool {
+        let expected = spec.cells().count();
+        self.is_complete()
+            && self.cells.len() == expected
+            && spec.cells().all(|(coord, kind)| {
+                self.cells
+                    .get(&coord)
+                    .is_some_and(|known| known.kind == kind)
+            })
     }
 
     /// Whether nothing at all has been revealed about this lattice.
@@ -421,6 +450,7 @@ pub(crate) fn plugin(app: &mut App) {
             Update,
             sync_spatial_visibility
                 .in_set(AppSystems::Update)
+                .in_set(AuthoritativeSystems)
                 .in_set(PausableSystems)
                 // World perception publishes the authoritative observation first;
                 // combat only adapts it into the lattice read seam.
@@ -436,6 +466,7 @@ pub(crate) fn plugin(app: &mut App) {
             (refresh_known_truth, mirror_truth)
                 .chain()
                 .in_set(AppSystems::Update)
+                .in_set(AuthoritativeSystems)
                 .in_set(PausableSystems)
                 // Payment, damage and Reveal all write facts this projection reads.
                 .after(crate::CombatSystems::Apply)
@@ -446,6 +477,7 @@ pub(crate) fn plugin(app: &mut App) {
             Update,
             decay_on_round
                 .in_set(AppSystems::Update)
+                .in_set(AuthoritativeSystems)
                 .in_set(PausableSystems)
                 // A shared set, not `.chain()`: `RoundElapsed` is written inside
                 // `Advance`, and reading it in a system merely *declared* later
@@ -838,6 +870,55 @@ mod tests {
             cell(KnowledgeExpiry::Sustained, KnowledgeSource::Divination),
         );
         assert_eq!(view.unknown_count(), Some(0));
+    }
+
+    #[test]
+    fn completeness_matches_the_exact_current_spec_not_saturating_unknown_count() {
+        let spec = LatticeSpec::default()
+            .with(
+                LatticeCoord::ORIGIN,
+                CellKind::Gem {
+                    element: ElementId(0),
+                },
+            )
+            .with(
+                LatticeCoord::new(1, 0),
+                CellKind::Gem {
+                    element: ElementId(0),
+                },
+            );
+        let mut view = LatticeKnowledge::new(base());
+        view.learn_capacity(0, KnowledgeExpiry::Sustained);
+        view.learn(
+            LatticeCoord::ORIGIN,
+            cell(KnowledgeExpiry::Sustained, KnowledgeSource::Divination),
+        );
+        assert_eq!(view.unknown_count(), Some(0));
+        assert!(!view.is_complete());
+        assert!(!view.is_complete_for(&spec));
+
+        view.learn_capacity(2, KnowledgeExpiry::Sustained);
+        assert!(!view.is_complete_for(&spec));
+        view.learn(
+            LatticeCoord::new(1, 0),
+            cell(KnowledgeExpiry::Sustained, KnowledgeSource::Divination),
+        );
+        assert!(view.is_complete());
+        assert!(view.is_complete_for(&spec));
+
+        view.forget(LatticeCoord::new(1, 0));
+        view.learn(
+            LatticeCoord::new(0, 1),
+            cell(KnowledgeExpiry::Sustained, KnowledgeSource::Divination),
+        );
+        assert!(
+            view.is_complete(),
+            "capacity alone cannot distinguish a stale same-size lattice shape"
+        );
+        assert!(
+            !view.is_complete_for(&spec),
+            "exact current coordinates remain mandatory after the knowledge-only gate"
+        );
     }
 
     /// A later reveal replaces an earlier one rather than merging with it: the

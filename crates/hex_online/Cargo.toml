@@ -1,0 +1,20 @@
+[package]
+name = "hex_online"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "Safe, store-neutral EOS identity, lobby, and P2P session integration."
+
+[features]
+default = []
+# Deterministic backend helpers for headless multi-app tests.
+test-support = []
+
+[dependencies]
+bevy_app = { workspace = true }
+bevy_ecs = { workspace = true }
+hex_eos_ffi = { workspace = true }
+hex_multiplayer = { workspace = true }
+
+[lints]
+workspace = true

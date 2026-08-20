@@ -45,7 +45,10 @@ use serde::{Deserialize, Serialize};
 #[reflect(Component)]
 pub struct UnitId(pub u64);
 
-/// One player's chair at the table. Seat 0 is the local player today.
+/// One player's chair at the table.
+///
+/// Human seats are exactly `0..=5`. [`Self::AI`] is reserved for host-owned AI and
+/// system commands, so the host's human seat never grants authority over hostile units.
 #[derive(
     Reflect,
     Serialize,
@@ -62,11 +65,48 @@ pub struct UnitId(pub u64);
 )]
 pub struct PlayerSeat(pub u8);
 
+impl PlayerSeat {
+    /// Number of human seats supported by one session.
+    pub const HUMAN_COUNT: usize = 6;
+    /// First valid human seat and the offline/listen-host default.
+    pub const HOST: Self = Self(0);
+    /// Last valid human seat.
+    pub const LAST_HUMAN: Self = Self(5);
+    /// Host-only AI and system command authority.
+    pub const AI: Self = Self(u8::MAX);
+
+    /// Constructs one of the six human seats.
+    #[must_use]
+    pub const fn human(index: u8) -> Option<Self> {
+        if index <= Self::LAST_HUMAN.0 {
+            Some(Self(index))
+        } else {
+            None
+        }
+    }
+
+    /// Whether this is one of the six human seats.
+    #[must_use]
+    pub const fn is_human(self) -> bool {
+        self.0 <= Self::LAST_HUMAN.0
+    }
+
+    /// Zero-based human seat index, excluding AI/system authority.
+    #[must_use]
+    pub const fn human_index(self) -> Option<usize> {
+        if self.is_human() {
+            Some(self.0 as usize)
+        } else {
+            None
+        }
+    }
+}
+
 /// Which seat commands a unit.
 ///
-/// Hostile units carry seat 0 too for now — "the only session there is". The
-/// distinction between seats becomes real when the command funnel validates
-/// ownership, and becomes load-bearing in co-op.
+/// Player units default to [`PlayerSeat::HOST`]. Hostile units carry
+/// [`PlayerSeat::AI`], assigned by their spawn owner. Temporary disconnect delegation is
+/// session authorization and never rewrites this canonical component.
 #[derive(
     Component, Reflect, Serialize, Deserialize, Debug, Default, Copy, Clone, PartialEq, Eq,
 )]
@@ -88,4 +128,24 @@ pub struct SimSeeds {
     pub ai_flavor: u64,
     /// Seed for presentation-only variation; never allowed to touch the sim.
     pub cosmetic: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn human_and_ai_seats_are_disjoint_and_bounded() {
+        assert_eq!(PlayerSeat::default(), PlayerSeat::HOST);
+        assert_eq!(PlayerSeat::HUMAN_COUNT, 6);
+        for index in 0_u8..=5 {
+            let seat = PlayerSeat::human(index).expect("0 through 5 are human seats");
+            assert!(seat.is_human());
+            assert_eq!(seat.human_index(), Some(usize::from(index)));
+        }
+        assert_eq!(PlayerSeat::human(6), None);
+        assert_eq!(PlayerSeat::human(u8::MAX), None);
+        assert!(!PlayerSeat::AI.is_human());
+        assert_eq!(PlayerSeat::AI.human_index(), None);
+    }
 }

@@ -45,6 +45,22 @@ pub fn screen_root(screen: Screen, name: &'static str) -> impl Bundle {
     )
 }
 
+/// Transparent full-screen root for a screen rendered over a live 3D scene.
+///
+/// Identical to [`screen_root`] except that it paints nothing: it carries no
+/// `BackgroundColor` and, critically, no `MenuBackground`, whose
+/// `paint_menu_background` would otherwise re-apply the opaque authored menu
+/// color every frame and hide the scene the screen exists to show.
+#[must_use]
+pub fn transparent_screen_root(screen: Screen, name: &'static str) -> impl Bundle {
+    (
+        Name::new(name),
+        screen_root_node(),
+        TabGroup::new(0),
+        DespawnOnExit(screen),
+    )
+}
+
 /// Responsive layout portion of [`screen_root`].
 #[must_use]
 pub fn screen_root_node() -> Node {
@@ -119,6 +135,33 @@ mod tests {
                 .get::<BackgroundColor>()
                 .map(|background| background.0),
             Some(FALLBACK_BACKGROUND)
+        );
+    }
+
+    /// The VFX tuner renders over its own live preview. A root that painted the
+    /// menu background — or merely carried `MenuBackground` for
+    /// `paint_menu_background` to fill in later — would hide the effect being
+    /// tuned behind an opaque panel.
+    #[test]
+    fn a_transparent_root_never_paints_over_the_scene_behind_it() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        let entity = app
+            .world_mut()
+            .spawn(transparent_screen_root(Screen::VfxTuner, "Test Screen"))
+            .id();
+        let entity = app.world().entity(entity);
+        // `Node` requires `BackgroundColor`, so one is always present; what matters
+        // is that it is fully transparent and that nothing will later fill it in.
+        assert_eq!(
+            entity
+                .get::<BackgroundColor>()
+                .map(|background| background.0.alpha()),
+            Some(0.0)
+        );
+        assert!(
+            entity.get::<MenuBackground>().is_none(),
+            "a transparent root must not be repainted by paint_menu_background"
         );
     }
 

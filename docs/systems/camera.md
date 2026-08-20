@@ -265,8 +265,9 @@ evidence proves only their grounded bridges. The harness does not invent movemen
 capabilities or treat static frames as play-feel approval. Alberto completed the human
 motion/readability gate on 2026-08-01 in the shipped release path on Two Rings at
 runtime head `2397d8e` and approved the corrected player-controlled camera for merge.
-The HEX-89 First Person candidate still requires a native motion review covering the
-three-state cycle, full look range, steps, walls and ceilings, retargeting, complete
-model restoration, and exact Map-pose restoration. Future camera-behavior changes must
-also repeat the applicable native route, including blocked third-person yaw cases that
-confirm immediate safe retraction and smooth recovery after the player rotates clear.
+`shrav-k` completed the corresponding HEX-89 First Person route on 2026-08-10 at the
+combined `dev` head `8a8e45e4`, approving the three-state cycle, full look range,
+steps, walls and ceilings, retargeting, complete model restoration, and exact Map-pose
+restoration. Future camera-behavior changes must repeat the applicable native route,
+including blocked third-person yaw cases that confirm immediate safe retraction and
+smooth recovery after the player rotates clear.

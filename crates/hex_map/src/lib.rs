@@ -55,6 +55,7 @@ mod terrain;
 mod terrain_damage;
 /// Voxel storage and the run-merging that turns it into prisms.
 pub mod voxel;
+mod world_snapshot;
 
 pub use generator::{FlatGenerator, HeightGenerator, HeightMap, PerlinGenerator, PerlinStep};
 pub use liquid_render::LiquidVisualTime;
@@ -86,6 +87,14 @@ pub use settings::{
     V3_MACRO_CELL_COUNT, V3_MOUNTAIN_RANGE_REGION_COUNT, V3_RING19_REGION_COUNT,
 };
 pub use voxel::{runs, Column, SubstanceRun, VoxelMap};
+pub use world_snapshot::{
+    apply_world_delta_v1, diff_world_snapshots_v1, export_world_snapshot_v1,
+    fingerprint_world_snapshot_v1, validate_world_snapshot_v1_against_content,
+    CampaignWorldRestoreOutcomeV2, CampaignWorldRestoreRefusalV2, CampaignWorldRestoreResultV2,
+    CurrentWorldSnapshotV1, PendingCampaignWorldSnapshotV2, WorldReplicationOutcomeV1,
+    WorldReplicationRefusalV1, WorldReplicationRequestV1, WorldReplicationResultV1,
+    WorldReplicationStateV1, WorldSnapshotError,
+};
 
 /// Registers map settings, terrain generation, and tile spawning.
 pub fn plugin(app: &mut App) {

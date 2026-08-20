@@ -77,6 +77,7 @@ fn render(root: &mut ChildSpawnerCommands, assets: &UiAssets, view: &MainMenuVie
     match view.route {
         MainMenuRoute::Root => render_root(root, assets, view),
         MainMenuRoute::Campaign => render_campaign(root, assets, view),
+        MainMenuRoute::Multiplayer => render_root(root, assets, view),
         MainMenuRoute::Tools => render_tools(root, assets),
     }
 }
@@ -100,6 +101,7 @@ fn render_root(root: &mut ChildSpawnerCommands, assets: &UiAssets, view: &MainMe
             for (name, intent) in [
                 ("Campaign", MainMenuIntent::OpenCampaign),
                 ("Sandbox", MainMenuIntent::OpenSandbox),
+                ("Multiplayer", MainMenuIntent::OpenMultiplayer),
                 ("Tools", MainMenuIntent::OpenTools),
                 ("Settings", MainMenuIntent::OpenSettings),
             ] {
@@ -299,6 +301,13 @@ fn render_tools(root: &mut ChildSpawnerCommands, assets: &UiAssets) {
                 assets,
                 "Spell Creator",
                 MainMenuIntent::OpenSpellCreator,
+                UiVisibilityRequirement::Immediate,
+            );
+            menu_button(
+                tools,
+                assets,
+                "VFX Tuner",
+                MainMenuIntent::OpenVfxTuner,
                 UiVisibilityRequirement::Immediate,
             );
         });

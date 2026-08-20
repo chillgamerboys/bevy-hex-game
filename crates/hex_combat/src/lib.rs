@@ -29,7 +29,7 @@
 
 use bevy::prelude::*;
 use hex_assets::{Effect, ManaAxis, Spell};
-use hex_core::{AppSystems, PerceptionSystems};
+use hex_core::{AppSystems, AuthoritativeSystems, PerceptionSystems, SimulationRole};
 
 /// What an enemy does with its turn. A placeholder, and says so.
 mod ai;
@@ -56,14 +56,14 @@ pub mod turns;
 
 pub use ai::{AiAlgorithmRegistry, AiDecisionTraces, MAX_AI_DECISION_TRACES};
 pub use commands::{channel_refusal, delivers_anything, ChannelReadiness, UNDELIVERABLE};
-pub use effects::PersistentEffects;
+pub use effects::{PersistentEffects, PersistentEffectsCheckpointError};
 pub use hex_core::Turn;
 pub use knowledge::{
     BaseVisibility, FactionLatticeKnowledge, KnownCell, LatticeKnowledge, RevealAll,
 };
 pub use outcomes::{
     CastBlockReason, CombatData, CombatEvent, CommandRefusal, EncounterOutcome, PartyMoveRefusal,
-    RestorationRefusal, UnitData,
+    RestorationRefusal, RestorationTargetRefusal, UnitData,
 };
 pub use resolution::{encounter_unresolved, EncounterResolution};
 pub use spell_resolution::{SpellResolutionFailure, SpellResolutionState, SpellResolutionStatus};
@@ -171,8 +171,13 @@ pub enum CombatSystems {
 
 /// Adds the combat loop.
 pub fn plugin(app: &mut App) {
-    app.init_resource::<hex_core::InputBindings>();
+    app.init_resource::<hex_core::InputBindings>()
+        .init_resource::<SimulationRole>();
     app.add_message::<CombatEvent>();
+    app.configure_sets(
+        Update,
+        AuthoritativeSystems.run_if(resource_equals(SimulationRole::Authority)),
+    );
     app.configure_sets(
         Update,
         (
@@ -187,6 +192,7 @@ pub fn plugin(app: &mut App) {
             CombatSystems::Advance,
         )
             .chain()
+            .in_set(AuthoritativeSystems)
             .in_set(AppSystems::Update),
     );
     app.configure_sets(
@@ -221,6 +227,7 @@ mod creator_tests {
             co_castable: false,
             targeting: TargetingSpec {
                 range: 3,
+                reach: hex_assets::TargetingReach::Ranged,
                 shape: TargetShape::Single,
                 trajectory: Trajectory::None,
             },

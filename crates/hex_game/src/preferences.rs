@@ -122,7 +122,7 @@ impl Default for UserPreferences {
     fn default() -> Self {
         Self {
             version: PREFERENCES_VERSION,
-            fullscreen: false,
+            fullscreen: true,
             window_width: 1280,
             window_height: 720,
             presentation: FramePresentation::Vsync,
@@ -360,6 +360,11 @@ mod tests {
     use super::*;
     use hex_core::input::KeyChord;
     use hex_core::InputAction;
+
+    #[test]
+    fn fresh_preferences_launch_fullscreen_by_default() {
+        assert!(UserPreferences::default().fullscreen);
+    }
 
     #[test]
     fn invalid_volumes_and_versions_are_refused() {

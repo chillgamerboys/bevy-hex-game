@@ -40,6 +40,8 @@ pub mod sandbox;
 /// Internal world, lighting, and encounter launch definitions.
 pub mod scenario;
 pub mod settings;
+/// Spell VFX presentation config, keyed by spell name.
+pub mod spell_animation;
 pub mod spells;
 pub mod substances;
 /// World-owned Boolean elemental admission for voxel damage.
@@ -101,9 +103,13 @@ pub use settings::{
     LightingKeyframe, LightingProfile, LightingSettings, MenuSettings, PlayerSettings,
     PresentModeSetting, ResolvedLighting, Rgb, RoutPolicy,
 };
+pub use spell_animation::{
+    MotionArchetype, SpellAnimation, SpellAnimationFile, SpriteSheet, VfxStyle, MAX_ARC_BRANCHES,
+    MAX_ARC_SUBDIVISIONS, MAX_PARTICLE_COUNT, MIN_DURATION_SECONDS, MIN_SIZE,
+};
 pub use spells::{
     CastingAxis, Effect, GemRequirement, ManaAxis, Spell, SpellBook, SpellFile, TargetShape,
-    TargetingSpec, Trajectory, VoxelOffset, MAX_ARC_RISE, MAX_TARGET_RANGE,
+    TargetingReach, TargetingSpec, Trajectory, VoxelOffset, MAX_ARC_RISE, MAX_TARGET_RANGE,
 };
 pub use substances::{Substance, SubstanceFile, SubstanceTable, SubstanceTableError};
 pub use terrain_damage::{
@@ -146,6 +152,7 @@ pub fn plugin(app: &mut App) {
     app.add_plugins(terrain_damage::plugin);
     app.add_plugins(creation::plugin);
     app.add_plugins(spells::plugin);
+    app.add_plugins(spell_animation::plugin);
     app.add_plugins(content_index::plugin);
     app.add_plugins(lattices::plugin);
     app.add_plugins(formations::plugin);

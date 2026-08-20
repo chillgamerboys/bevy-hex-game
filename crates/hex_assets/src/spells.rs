@@ -148,12 +148,29 @@ impl TargetShape {
     }
 }
 
+/// How the caster may reach a selected spell target.
+///
+/// Ordinary ranged targeting retains the configured range and high-ground rules.
+/// Touch instead uses the target unit's exact movement adjacency at cast time; its
+/// other authored targeting fields are deliberately fixed by [`SpellFile::validate`]
+/// so range or trajectory rules cannot accidentally leak into it.
+#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TargetingReach {
+    /// Use the spell's ordinary authored range.
+    #[default]
+    Ranged,
+    /// Reach the caster or one unit in bidirectional step adjacency.
+    Touch,
+}
+
 /// Where a spell can be cast, reusing `hex_units::targeting`'s height-advantage
-/// geometry at cast time. Pure data here.
+/// geometry at cast time for ordinary ranged targeting. Pure data here.
 #[derive(Reflect, Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TargetingSpec {
     /// Base range in hexes, before any high-ground bonus.
     pub range: u8,
+    /// Whether this target uses ordinary range or exact touch reach.
+    pub reach: TargetingReach,
     /// The shape the spell covers.
     pub shape: TargetShape,
     /// How material occupancy between caster and target affects the cast.
@@ -178,6 +195,8 @@ pub enum Trajectory {
 #[serde(deny_unknown_fields)]
 struct UnvalidatedTargetingSpec {
     range: u8,
+    #[serde(default)]
+    reach: TargetingReach,
     shape: TargetShape,
     #[serde(default, deserialize_with = "present_value")]
     trajectory: Option<Trajectory>,
@@ -219,6 +238,7 @@ impl<'de> Deserialize<'de> for TargetingSpec {
         };
         Ok(Self {
             range: raw.range,
+            reach: raw.reach,
             shape: raw.shape,
             trajectory,
         })
@@ -478,6 +498,24 @@ impl SpellFile {
                     "spell '{name}' targeting range is {}; the technical maximum is {MAX_TARGET_RANGE}",
                     spell.targeting.range
                 ));
+            }
+            if matches!(spell.targeting.reach, TargetingReach::Touch) {
+                if spell.targeting.range != 0 {
+                    return Err(format!(
+                        "spell '{name}' uses Touch targeting but has range {}; touch spells have range 0",
+                        spell.targeting.range
+                    ));
+                }
+                if !matches!(spell.targeting.shape, TargetShape::Single) {
+                    return Err(format!(
+                        "spell '{name}' uses Touch targeting but is not Single target"
+                    ));
+                }
+                if !matches!(spell.targeting.trajectory, Trajectory::None) {
+                    return Err(format!(
+                        "spell '{name}' uses Touch targeting but has a trajectory; touch spells use None"
+                    ));
+                }
             }
             validate_shape(name, &spell.targeting.shape)?;
             if matches!(spell.targeting.trajectory, Trajectory::Arc { rise: 0 }) {
@@ -772,7 +810,7 @@ impl SpellBook {
 }
 
 fn spell_file_fingerprint(file: &SpellFile) -> u64 {
-    let mut encoder = FingerprintEncoder::new(b"hex-spell-file-v1");
+    let mut encoder = FingerprintEncoder::new(b"hex-spell-file-v2");
     let mut entries: Vec<_> = file.spells.iter().collect();
     entries.sort_by_key(|(name, _)| *name);
     encoder.usize(entries.len());
@@ -796,6 +834,10 @@ fn spell_file_fingerprint(file: &SpellFile) -> u64 {
         });
         encoder.bool(spell.co_castable);
         encoder.u8(spell.targeting.range);
+        encoder.u8(match spell.targeting.reach {
+            TargetingReach::Ranged => 0,
+            TargetingReach::Touch => 1,
+        });
         fingerprint_shape(&mut encoder, &spell.targeting.shape);
         match spell.targeting.trajectory {
             Trajectory::Direct => encoder.u8(0),
@@ -935,6 +977,7 @@ mod tests {
     fn targeting() -> TargetingSpec {
         TargetingSpec {
             range: 3,
+            reach: TargetingReach::Ranged,
             shape: TargetShape::Single,
             trajectory: Trajectory::Direct,
         }
@@ -973,6 +1016,7 @@ mod tests {
                 co_castable: true,
                 targeting: TargetingSpec {
                     range: 2,
+                    reach: TargetingReach::Ranged,
                     shape: TargetShape::Line {
                         length: 2,
                         width: 0,
@@ -1062,6 +1106,34 @@ mod tests {
             vec![Effect::RestoreHexes { count: 2 }],
             "Renewal must not advertise the deferred one-shot ward effect",
         );
+        assert_eq!(renewal.targeting.range, 3);
+        assert_eq!(renewal.targeting.reach, TargetingReach::Ranged);
+        assert_eq!(renewal.targeting.shape, TargetShape::Single);
+        assert_eq!(renewal.targeting.trajectory, Trajectory::Direct);
+    }
+
+    #[test]
+    fn shipped_heal_is_the_canonical_life_touch_restoration() {
+        let file = shipped_file();
+        let heal = file
+            .spells
+            .get("Heal")
+            .expect("the shipped spell roster defines Heal");
+
+        assert_eq!(heal.requirements, vec![gem("Life", 1)]);
+        assert_eq!(heal.casting, CastingAxis::Evocation);
+        assert_eq!(heal.mana, ManaAxis::Fixed);
+        assert!(!heal.co_castable);
+        assert_eq!(
+            heal.targeting,
+            TargetingSpec {
+                range: 0,
+                reach: TargetingReach::Touch,
+                shape: TargetShape::Single,
+                trajectory: Trajectory::None,
+            }
+        );
+        assert_eq!(heal.effects, vec![Effect::RestoreHexes { count: 1 }]);
     }
 
     #[test]
@@ -1291,9 +1363,12 @@ mod tests {
             ron::from_str("(range: 3, shape: Single, needs_los: false)").expect("legacy targeting");
         assert_eq!(direct.trajectory, Trajectory::Direct);
         assert_eq!(none.trajectory, Trajectory::None);
+        assert_eq!(direct.reach, TargetingReach::Ranged);
+        assert_eq!(none.reach, TargetingReach::Ranged);
 
         let serialized = ron::to_string(&direct).expect("new targeting serializes");
         assert!(serialized.contains("trajectory:Direct"), "{serialized}");
+        assert!(serialized.contains("reach:Ranged"), "{serialized}");
         assert!(!serialized.contains("needs_los"), "{serialized}");
         assert!(
             ron::from_str::<TargetingSpec>(
@@ -1301,6 +1376,104 @@ mod tests {
             )
             .is_err(),
             "two trajectory authorities must be rejected"
+        );
+    }
+
+    #[test]
+    fn touch_targeting_round_trips_as_an_explicit_authority() {
+        let touch = TargetingSpec {
+            range: 0,
+            reach: TargetingReach::Touch,
+            shape: TargetShape::Single,
+            trajectory: Trajectory::None,
+        };
+
+        let serialized = ron::to_string(&touch).expect("touch targeting serializes");
+        assert!(serialized.contains("reach:Touch"), "{serialized}");
+        assert_eq!(
+            ron::from_str::<TargetingSpec>(&serialized).expect("touch targeting decodes"),
+            touch
+        );
+    }
+
+    #[test]
+    fn touch_targeting_requires_zero_range_single_shape_and_no_trajectory() {
+        let mut valid = test_file();
+        let targeting = &mut valid
+            .spells
+            .get_mut("Ember")
+            .expect("the fixture contains Ember")
+            .targeting;
+        targeting.range = 0;
+        targeting.reach = TargetingReach::Touch;
+        targeting.shape = TargetShape::Single;
+        targeting.trajectory = Trajectory::None;
+        valid
+            .validate()
+            .expect("canonical touch targeting is valid");
+
+        let mut ranged = valid.clone();
+        ranged
+            .spells
+            .get_mut("Ember")
+            .expect("the fixture contains Ember")
+            .targeting
+            .range = 1;
+        let error = ranged
+            .validate()
+            .expect_err("touch targeting with authored range must fail");
+        assert!(error.contains("touch spells have range 0"), "{error}");
+
+        let mut shaped = valid.clone();
+        shaped
+            .spells
+            .get_mut("Ember")
+            .expect("the fixture contains Ember")
+            .targeting
+            .shape = TargetShape::SelfCast;
+        let error = shaped
+            .validate()
+            .expect_err("touch targeting with a non-Single shape must fail");
+        assert!(error.contains("not Single target"), "{error}");
+
+        let mut obstructed = valid;
+        obstructed
+            .spells
+            .get_mut("Ember")
+            .expect("the fixture contains Ember")
+            .targeting
+            .trajectory = Trajectory::Direct;
+        let error = obstructed
+            .validate()
+            .expect_err("touch targeting with a trajectory must fail");
+        assert!(error.contains("touch spells use None"), "{error}");
+    }
+
+    #[test]
+    fn targeting_reach_participates_in_the_spell_semantic_fingerprint() {
+        let mut ranged = test_file();
+        let targeting = &mut ranged
+            .spells
+            .get_mut("Ember")
+            .expect("the fixture contains Ember")
+            .targeting;
+        targeting.range = 0;
+        targeting.trajectory = Trajectory::None;
+        ranged.validate().expect("the ranged comparison is valid");
+
+        let mut touch = ranged.clone();
+        touch
+            .spells
+            .get_mut("Ember")
+            .expect("the fixture contains Ember")
+            .targeting
+            .reach = TargetingReach::Touch;
+        touch.validate().expect("the touch comparison is valid");
+
+        assert_ne!(
+            spell_file_fingerprint(&ranged),
+            spell_file_fingerprint(&touch),
+            "reach semantics must change the accepted spell revision"
         );
     }
 

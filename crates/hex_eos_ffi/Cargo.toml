@@ -1,0 +1,41 @@
+[package]
+name = "hex_eos_ffi"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "Audited dynamic boundary to the official Epic Online Services C runtime."
+
+[features]
+default = []
+# Protected CI enables this only when the checksum-pinned official SDK headers/runtime
+# artifact is mounted. Ordinary source builds never require the private portal artifact.
+sdk-abi = []
+
+[dependencies]
+libloading = { workspace = true }
+
+# This is the sole crate allowed to contain unsafe code. It deliberately does not inherit
+# the workspace's `unsafe_code = forbid`; the remaining workspace still does.
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "allow"
+unsafe_op_in_unsafe_fn = "deny"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(bevy_lint)"] }
+
+[lints.clippy]
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+unwrap_used = "deny"
+get_unwrap = "deny"
+unwrap_in_result = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+panic_in_result_fn = "deny"
+let_underscore_must_use = "deny"
+unused_result_ok = "deny"
+map_err_ignore = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"

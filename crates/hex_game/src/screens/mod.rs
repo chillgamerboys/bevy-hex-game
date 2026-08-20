@@ -9,9 +9,11 @@ pub(crate) mod gameplay;
 mod lattice_demo;
 mod loading;
 mod main_menu;
+pub(crate) mod multiplayer;
 pub(crate) mod sandbox;
 mod settings;
 mod splash;
+mod vfx_tuner;
 
 pub use hex_ui::despawn_screen;
 
@@ -19,13 +21,19 @@ pub(super) fn plugin(app: &mut App) {
     app.init_state::<Screen>();
     app.register_type::<Screen>();
     app.add_plugins((
+        hex_multiplayer::MultiplayerPlugin,
+        crate::multiplayer_gameplay::plugin,
+    ));
+    app.add_plugins((
         splash::plugin,
         main_menu::plugin,
+        multiplayer::plugin,
         settings::plugin,
         creator::plugin,
         sandbox::plugin,
         lattice_demo::plugin,
         loading::plugin,
         gameplay::plugin,
+        vfx_tuner::plugin,
     ));
 }
