@@ -2298,6 +2298,123 @@ pub(crate) mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct MacroRuntimeProfile {
+        scenario_name: &'static str,
+        setup_elapsed: std::time::Duration,
+        generation_and_materialization_micros: u64,
+        columns: usize,
+        material_runs: usize,
+        tile_entities: usize,
+        total_entities: usize,
+        object_instances: usize,
+        point_lights: usize,
+        illumination_surfaces: usize,
+        illumination_resolutions: u64,
+        observation_resolutions: u64,
+    }
+
+    fn macro_runtime_profile(scenario_name: &'static str) -> MacroRuntimeProfile {
+        let mut app = procedural_gameplay_app(scenario_name);
+        let started = Instant::now();
+        enter_screen(&mut app, Screen::Gameplay);
+        let setup_elapsed = started.elapsed();
+        assert!(
+            app.world().contains_resource::<TerrainReady>(),
+            "{scenario_name} setup failed: {:?}",
+            app.world()
+                .get_resource::<GameplaySetupFailure>()
+                .map(|failure| failure.reason.as_str())
+        );
+
+        let report = app.world().resource::<GenerationReport>().clone();
+        let (columns, material_runs) = {
+            let map = app.world().resource::<VoxelMap>();
+            (
+                map.columns().count(),
+                map.columns()
+                    .map(|(_, column)| hex_map::runs(column).len())
+                    .sum::<usize>(),
+            )
+        };
+        let illumination_surfaces = app.world().resource::<ResolvedIllumination>().len();
+        let perception = *app
+            .world()
+            .resource::<hex_perception::PerceptionRuntimeStats>();
+        let (tile_entities, total_entities, object_instances, point_lights) = {
+            let world = app.world_mut();
+            let tile_entities = world
+                .query_filtered::<Entity, With<HexTile>>()
+                .iter(world)
+                .count();
+            let object_instances = world.query::<&ObjectInstance>().iter(world).count();
+            let point_lights = world.query::<&PointLight>().iter(world).count();
+            (
+                tile_entities,
+                world.iter_entities().count(),
+                object_instances,
+                point_lights,
+            )
+        };
+
+        enter_screen(&mut app, Screen::Title);
+        assert!(!app.world().contains_resource::<VoxelMap>());
+        assert!(!app.world().contains_resource::<ResolvedIllumination>());
+        assert!(!app.world().contains_resource::<AuthoredObjectOccupancy>());
+
+        MacroRuntimeProfile {
+            scenario_name,
+            setup_elapsed,
+            generation_and_materialization_micros: report.elapsed_micros,
+            columns,
+            material_runs,
+            tile_entities,
+            total_entities,
+            object_instances,
+            point_lights,
+            illumination_surfaces,
+            illumination_resolutions: perception.illumination_resolutions,
+            observation_resolutions: perception.observation_resolutions,
+        }
+    }
+
+    #[test]
+    #[ignore = "manual release-mode Mountain Range/Crystal Mountain runtime comparison"]
+    fn crystal_mountain_runtime_profile_compares_materialization_and_entities_to_mountain_range() {
+        let mountain_range = macro_runtime_profile("Mountain Range");
+        let crystal_mountain = macro_runtime_profile("Crystal Mountain");
+
+        for profile in [&mountain_range, &crystal_mountain] {
+            assert_eq!(profile.columns, 18_019);
+            assert!(profile.setup_elapsed > std::time::Duration::ZERO);
+            assert!(profile.generation_and_materialization_micros > 0);
+            assert!(profile.material_runs >= profile.columns);
+            assert!(profile.tile_entities >= profile.material_runs);
+            assert!(profile.total_entities >= profile.tile_entities);
+            assert!(profile.illumination_surfaces > 0);
+            assert!((1..=2).contains(&profile.illumination_resolutions));
+            assert!((1..=2).contains(&profile.observation_resolutions));
+            eprintln!(
+                "MACRO_RUNTIME scenario={:?} setup={:?} generation_and_materialization_us={} \
+                 columns={} material_runs={} tile_entities={} total_entities={} \
+                 object_instances={} point_lights={} illumination_surfaces={} \
+                 illumination_resolutions={} observation_resolutions={}",
+                profile.scenario_name,
+                profile.setup_elapsed,
+                profile.generation_and_materialization_micros,
+                profile.columns,
+                profile.material_runs,
+                profile.tile_entities,
+                profile.total_entities,
+                profile.object_instances,
+                profile.point_lights,
+                profile.illumination_surfaces,
+                profile.illumination_resolutions,
+                profile.observation_resolutions,
+            );
+        }
+    }
+
     /// Automated combat UI walks use minimal flat fixtures instead of making ability
     /// assertions depend on the Crossing's routing and six-unit initiative.
     #[test]
@@ -3737,6 +3854,11 @@ pub(crate) mod tests {
             ("Two Rings", 9_241, std::time::Duration::from_millis(1)),
             (
                 "Mountain Range",
+                18_019,
+                std::time::Duration::from_millis(2),
+            ),
+            (
+                "Crystal Mountain",
                 18_019,
                 std::time::Duration::from_millis(2),
             ),
