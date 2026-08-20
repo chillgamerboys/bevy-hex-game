@@ -4370,6 +4370,7 @@ fn validate_crystal_mountain(
     let contracts = resolve_macro_contracts(settings, &plan.layout);
     match contracts {
         Ok(contracts) => {
+            let ordinary = OrdinaryGraph::from_volume(&plan.volume, Some(&plan.blockers));
             for feature in contracts.spanning_features.values() {
                 let super::layout::ResolvedMacroSpanningFeature::Tunnel(tunnel) = feature;
                 if !tunnel.canonical_route {
@@ -4387,6 +4388,61 @@ fn validate_crystal_mountain(
                                 )));
                             }
                         }
+                    }
+                    let edge = plan.layout.shared_edges.values().find(|edge| {
+                        BTreeSet::from([edge.first.0, edge.second.0])
+                            == BTreeSet::from([seam.source, seam.destination])
+                    });
+                    let Some(edge) = edge else {
+                        issues.push(macro_issue(format!(
+                            "Crystal Mountain tunnel seam {:?}->{:?} has no shared edge",
+                            seam.source, seam.destination
+                        )));
+                        continue;
+                    };
+                    let source_cells = seam
+                        .port
+                        .lanes
+                        .iter()
+                        .map(|(source, _)| *source)
+                        .collect::<BTreeSet<_>>();
+                    let destination_cells = seam
+                        .port
+                        .lanes
+                        .iter()
+                        .map(|(_, destination)| *destination)
+                        .collect::<BTreeSet<_>>();
+                    let oriented = |first: HexCoord, second: HexCoord| {
+                        if edge.first.0 == seam.source {
+                            (first, second)
+                        } else {
+                            (second, first)
+                        }
+                    };
+                    let expected = edge
+                        .boundary_pairs
+                        .iter()
+                        .map(|(first, second)| oriented(*first, *second))
+                        .filter(|(source, destination)| {
+                            source_cells.contains(source) && destination_cells.contains(destination)
+                        })
+                        .collect::<BTreeSet<_>>();
+                    let actual = edge
+                        .boundary_pairs
+                        .iter()
+                        .map(|(first, second)| oriented(*first, *second))
+                        .filter(|(source, destination)| {
+                            let source = TilePos::new(*source, tunnel.floor_level);
+                            let destination = TilePos::new(*destination, tunnel.floor_level);
+                            ordinary.admits(source, destination)
+                                || ordinary.admits(destination, source)
+                        })
+                        .collect::<BTreeSet<_>>();
+                    if actual != expected {
+                        issues.push(macro_issue(format!(
+                            "Crystal Mountain tunnel seam {:?}->{:?} admits {actual:?}, expected exact port footprint {expected:?}",
+                            seam.source, seam.destination
+                        )));
                     }
                 }
             }
@@ -5415,6 +5471,55 @@ mod tests {
     }
 
     #[test]
+    fn crystal_mountain_representative_seed_candidates_preserve_the_authored_route() {
+        let map = crystal_mountain_map();
+        let settings = v3_settings(map);
+        let mut expected_route = None;
+        for (seed, candidate) in [(0_u64, 0_u8), (1_592_598_566, 7), (u64::MAX, 31)] {
+            let setup = resolve_macro_world_setup(map.grid_radius, settings, runtime_art_catalog())
+                .unwrap_or_else(|error| panic!("seed {seed} setup failed: {error}"));
+            let world = construct_world(map.level_height, setup, Some((seed, candidate)))
+                .unwrap_or_else(|error| {
+                    panic!("seed {seed} candidate {candidate} failed: {error}")
+                });
+            match validate_macro_world(settings, &world) {
+                WorldValidation::Valid(_) => {}
+                WorldValidation::Invalid(issues) => panic!(
+                    "seed {seed} candidate {candidate} failed validation: {}",
+                    format_issues(&issues)
+                ),
+            }
+            let route = world
+                .features
+                .protected_routes
+                .get("crystal_mountain.tunnel")
+                .expect("candidate should publish the canonical tunnel")
+                .surfaces
+                .clone();
+            match &expected_route {
+                Some(expected) => assert_eq!(
+                    &route, expected,
+                    "seed variation must not move the authored spanning route"
+                ),
+                None => expected_route = Some(route),
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "32-seed release corpus for the radius-77 Crystal Mountain world"]
+    fn crystal_mountain_release_corpus_validates_32_seeds() {
+        for seed in 0..32_u64 {
+            let selection = generate_crystal_mountain(seed)
+                .unwrap_or_else(|error| panic!("Crystal Mountain seed {seed} failed: {error}"));
+            assert!(
+                !selection.used_fallback,
+                "Crystal Mountain seed {seed} unexpectedly used its fallback"
+            );
+        }
+    }
+
+    #[test]
     fn deep_mountain_thresholds_drive_macro_snow_and_vegetation_ceilings() {
         let map = mountain_range_map();
         let V3LayoutSettings::Macro(mut settings) = v3_settings(map).layout.clone() else {
@@ -6146,10 +6251,78 @@ mod tests {
         );
     }
 
+    #[test]
+    #[ignore = "manual release-mode Crystal Mountain/Ring19 generation benchmark"]
+    fn crystal_mountain_generation_p95_stays_within_existing_macro_budget() {
+        require_release_benchmark();
+
+        const WARMUP_RUNS: usize = 1;
+        const SAMPLE_COUNT: usize = 4;
+        const REVIEW_SEED: u64 = 1_592_598_566;
+        let ring19 = two_rings_map();
+        let generate_ring19 = || {
+            super::super::ring19::generate(
+                ring19.grid_radius,
+                ring19.level_height,
+                v3_settings(ring19),
+                REVIEW_SEED,
+                runtime_art_catalog(),
+            )
+            .expect("canonical Ring19 generation should succeed")
+        };
+        let generate_crystal = || {
+            generate_crystal_mountain(REVIEW_SEED)
+                .expect("canonical Crystal Mountain generation should succeed")
+        };
+
+        for _ in 0..WARMUP_RUNS {
+            std::hint::black_box(generate_ring19());
+            std::hint::black_box(generate_crystal());
+        }
+        let mut ring19_samples = Vec::with_capacity(SAMPLE_COUNT);
+        let mut crystal_samples = Vec::with_capacity(SAMPLE_COUNT);
+        for sample in 0..SAMPLE_COUNT {
+            if sample.is_multiple_of(2) {
+                ring19_samples.push(measure_generation(generate_ring19));
+                crystal_samples.push(measure_generation(generate_crystal));
+            } else {
+                crystal_samples.push(measure_generation(generate_crystal));
+                ring19_samples.push(measure_generation(generate_ring19));
+            }
+        }
+        ring19_samples.sort_unstable();
+        crystal_samples.sort_unstable();
+        let ring19_p95 = sample_p95(&ring19_samples);
+        let crystal_p95 = sample_p95(&crystal_samples);
+        eprintln!(
+            "Crystal Mountain generation release benchmark ({SAMPLE_COUNT} samples, \
+             {WARMUP_RUNS} warm-up): Ring19 p95={ring19_p95:?}; \
+             Crystal Mountain p95={crystal_p95:?}"
+        );
+        assert!(
+            crystal_p95.as_nanos().saturating_mul(2)
+                <= ring19_p95.as_nanos().saturating_mul(5),
+            "Crystal Mountain p95 {crystal_p95:?} exceeded the existing 2.5x Ring19 Macro budget ({ring19_p95:?})"
+        );
+    }
+
     fn generate_mountain_range(
         seed: u64,
     ) -> Result<ValidatedWorldSelection<MacroWorldMetrics>, V3GenerationError> {
         let map = mountain_range_map();
+        generate(
+            map.grid_radius,
+            map.level_height,
+            v3_settings(map),
+            seed,
+            runtime_art_catalog(),
+        )
+    }
+
+    fn generate_crystal_mountain(
+        seed: u64,
+    ) -> Result<ValidatedWorldSelection<MacroWorldMetrics>, V3GenerationError> {
+        let map = crystal_mountain_map();
         generate(
             map.grid_radius,
             map.level_height,
