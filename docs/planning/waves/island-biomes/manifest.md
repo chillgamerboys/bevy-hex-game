@@ -1,6 +1,6 @@
 # Island biomes wave
 
-- Status: `planning`
+- Status: `dispatching`
 - Wave branch: `wave/island-biomes`
 - Base `origin/dev`: `fc55bd5a1c3c0181b6506d5ac59e1189d287838a`
 - Required stacked dependency: Desert biomes exact review-ready head
@@ -100,7 +100,7 @@ lanes:
       full: true
     evidence: logic-only
     sizing: {model: inherited, effort: high}
-    state: queued
+    state: dispatched
     pr: null
 
   - id: L2
@@ -124,7 +124,7 @@ lanes:
       full: true
     evidence: static-presentation
     sizing: {model: inherited, effort: high}
-    state: queued
+    state: dispatched
     pr: null
 
   - id: L3
@@ -150,7 +150,7 @@ lanes:
       full: true
     evidence: static-presentation
     sizing: {model: inherited, effort: high}
-    state: queued
+    state: in_progress
     pr: null
 
   - id: L4
@@ -195,7 +195,7 @@ lanes:
       full: true
     evidence: motion-or-feel
     sizing: {model: inherited, effort: high}
-    state: queued
+    state: dispatched
     pr: null
 ```
 
