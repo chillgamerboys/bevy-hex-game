@@ -174,8 +174,8 @@
             scenario: "Wooded Island",
             seed: Some(1592598566),
             points: [
-                (label: "broad sand fringe", destination: Anchor(name: "wooded_island_beach", expected: (q: -33, r: 4, level: 9)), azimuth_turns: [0.0, 0.33333334]),
-                (label: "wooded route 1", destination: Exact((q: -30, r: 1, level: 11)), azimuth_turns: [0.0]),
+                (label: "broad sand fringe", destination: Anchor(name: "wooded_island_beach", expected: (q: -33, r: 4, level: 9)), azimuth_turns: [0.0]),
+                (label: "wooded route 1", destination: Exact((q: -30, r: 1, level: 11)), azimuth_turns: [0.0, 0.16666667]),
                 (label: "wooded route 2", destination: Exact((q: -27, r: -2, level: 12)), azimuth_turns: [0.0]),
                 (label: "wooded route 3", destination: Exact((q: -23, r: -2, level: 16)), azimuth_turns: [0.0]),
                 (label: "wooded route 4", destination: Exact((q: -19, r: -2, level: 16)), azimuth_turns: [0.0]),
@@ -218,7 +218,7 @@
                 (label: "wooded route 11", destination: Exact((q: 11, r: 12, level: 14)), azimuth_turns: [0.0]),
                 (label: "wooded route 12", destination: Exact((q: 13, r: 12, level: 12)), azimuth_turns: [0.0]),
                 (label: "wooded heart terminal", destination: Anchor(name: "macro_route_end", expected: (q: 17, r: 12, level: 9)), azimuth_turns: [0.0, -0.33333334]),
-                (label: "wooded heart ridge", destination: Anchor(name: "archipelago.home_ridge", expected: (q: 10, r: 11, level: 16)), azimuth_turns: [0.33333334]),
+                (label: "wooded heart ridge", destination: Anchor(name: "archipelago.home_ridge", expected: (q: 10, r: 2, level: 16)), azimuth_turns: [0.33333334]),
             ],
         ),
         (

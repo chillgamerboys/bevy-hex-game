@@ -72,11 +72,11 @@
     Settle(5),
     AwaitPartyIdle(max_frames: 7200),
     AssertSelectedAt(expected: (q: -10, r: 21, level: 134)),
-    // Look across the landing so the outward crystal stays at the frame edge,
-    // clear of the Character-camera boom, with the next flight still visible.
+    // Look across the landing so the outward fixture stays compact and fully
+    // outside the Character-camera boom. The next frame proves the onward route.
     Key("C"),
     AssertCameraMode(Character),
-    OrbitCamera(yaw_turns: -0.41666667, pitch_fraction: -0.12),
+    OrbitCamera(yaw_turns: -0.16666667, pitch_fraction: 0.0),
     Settle(60),
     Capture("06-crystal-ascent-corner-landing-character"),
     Key("C"),

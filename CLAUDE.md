@@ -119,6 +119,10 @@ exactly complete capture set atomically publishes a completed index beside the P
 index records run/script/scenario provenance and starts every frame as `UNREVIEWED` with
 explicit PASS/FAIL and notes fields. Inspect and classify every frame before selecting hero
 images or calling the pack reviewed. The exit code proves capture mechanics, not pixel quality.
+Close corrective visual work with two distinct passes: inspect every frame at full resolution,
+then scan a complete contact sheet and have a fresh-eyes reviewer challenge the PASS notes.
+Do not reuse one generic note across unrelated frames unless that exact criterion is visibly
+proved in every one; a technically complete but obstructed or poorly framed image is a FAIL.
 Emissive, translucent, or animated geometry additionally requires a named native-camera
 motion pass; static captures cannot clear flicker.
 `walks/camera_routes.ron` is the seed-exact route authority for every selectable Map

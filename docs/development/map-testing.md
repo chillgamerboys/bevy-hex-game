@@ -115,6 +115,13 @@ with explicit `PASS` or `FAIL` and fill in its notes before curating a smaller h
 the candidate review-ready. Looking only at the images selected for a summary is not a review of
 the pack.
 
+Corrective packs require a second, fresh-eyes evidence pass after the primary full-resolution
+inspection. Scan a contact sheet containing the complete capture set to expose inconsistent
+framing or systematic artifacts, then challenge each PASS note against the pixels it actually
+shows. Repeated generic notes are not acceptable when a frame is occluded, dominated by a
+near-camera prop, or does not visibly support that criterion. Recapture such a frame or mark it
+FAIL; capture-count completeness never upgrades weak evidence.
+
 Authored and composed maps add two required stress checks:
 
 - Inspect a character-height view across every landmark/biome seam and entrance apron, with

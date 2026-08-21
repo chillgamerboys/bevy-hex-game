@@ -111,6 +111,19 @@
     Capture("06-ocean-archipelagoes-satellite-coast-character"),
     Key("C"),
     AssertCameraMode(FirstPerson),
+    Key("C"),
+    AssertCameraMode(Map),
+    // Reset both the camera state and the review origin before the close view.
+    // The terminal tile is tree-adjacent; this higher protected ridge keeps the
+    // first-person proof clear of trunks and canopy near planes.
+    ClickAnchor(name: "archipelago.home_ridge", expected: (q: 10, r: 2, level: 16)),
+    Settle(5),
+    AwaitPartyIdle(max_frames: 4800),
+    AssertSelectedAt(expected: (q: 10, r: 2, level: 16)),
+    Key("C"),
+    AssertCameraMode(Character),
+    Key("C"),
+    AssertCameraMode(FirstPerson),
     OrbitCamera(yaw_turns: 0.33333334, pitch_fraction: -0.05),
     Settle(45),
     Capture("07-ocean-archipelagoes-wooded-heart-first-person"),

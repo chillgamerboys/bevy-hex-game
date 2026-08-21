@@ -3147,7 +3147,7 @@ mod tests {
             IslandWalkCase {
                 script_path: OCEAN_ARCHIPELAGOES_CAMERA_SCRIPT,
                 scenario: "Ocean Archipelagoes",
-                anchors: &["archipelago.home_beach"],
+                anchors: &["archipelago.home_beach", "archipelago.home_ridge"],
                 captures: &[
                     "01-ocean-archipelagoes-complete-map",
                     "02-ocean-archipelagoes-home-channel-character",
