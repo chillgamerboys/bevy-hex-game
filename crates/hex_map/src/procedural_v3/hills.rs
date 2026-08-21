@@ -276,6 +276,10 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
         V3RecipeSettings::Shore(_) => "Shore",
         V3RecipeSettings::DeepMountain(_) => "DeepMountain",
         V3RecipeSettings::CrystalAscent(_) => "CrystalAscent",
+        V3RecipeSettings::DesertTransition(_) => "DesertTransition",
+        V3RecipeSettings::DesertPlain(_) => "DesertPlain",
+        V3RecipeSettings::Dunes(_) => "Dunes",
+        V3RecipeSettings::Oasis(_) => "Oasis",
     }
 }
 
@@ -2962,6 +2966,7 @@ fn land_column(surface: Level, environment: V3EnvironmentSettings) -> VolumeColu
         V3EnvironmentSettings::Rocky => SolidMaterialRole::Stone,
         V3EnvironmentSettings::Coastal => SolidMaterialRole::Grass,
         V3EnvironmentSettings::Alpine => SolidMaterialRole::Stone,
+        V3EnvironmentSettings::Arid => SolidMaterialRole::Sand,
     };
     let core_material = if environment == V3EnvironmentSettings::Volcanic {
         SolidMaterialRole::Basalt

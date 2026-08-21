@@ -135,8 +135,12 @@ New Map** is visible but disabled with **Coming Soon**.
 
 The catalog currently resolves Flat Arena, The Crossing, Procedural Hills, Rolling
 Hills, Frozen Hills, Volcanic Hills, Sky Islands, Mountains, Caves, Waterfall,
-Forest, Deep Forest, Prairie, Fort, Seven Regions, Two Rings, and Mountain Range.
-Duplicate internal scenario uses do not create duplicate choices.
+Forest, Deep Forest, Prairie, Desert Transition, Desert Plain, Dunes, Desert Oasis
+Rings, Fort, Crystal Ascent, Crystal Mountain, Seven Regions, Two Rings, and Mountain
+Range. Duplicate internal scenario uses do not create duplicate choices. Several
+maps may share one environment when their recipe or layout creates a distinct
+player-facing experience; Arid intentionally supplies three focused `Single` maps
+and one Ring19 composite.
 
 ## Deployment and frozen launch
 

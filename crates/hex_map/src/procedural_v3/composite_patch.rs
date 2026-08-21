@@ -11,7 +11,10 @@ use super::patch::{PatchBuildMode, PatchRecipeContext};
 use super::selection::WorldValidation;
 use super::vegetation::CaveVegetationSet;
 use super::world::{GeneratedWorldPlan, WorldIssueCode, WorldValidationIssue};
-use super::{caves, deep_forest, forest, fort, hills, mountains, prairie, sky, volcano, waterfall};
+use super::{
+    caves, deep_forest, desert_plain, desert_transition, dunes, forest, fort, hills, mountains,
+    oasis, prairie, sky, volcano, waterfall,
+};
 use crate::settings::{V3EnvironmentSettings, V3RecipeSettings};
 
 pub(crate) fn construct_fragment(
@@ -81,6 +84,23 @@ pub(crate) fn construct_fragment(
             art_catalog,
         ),
         V3RecipeSettings::Prairie(settings) => prairie::construct_patch(
+            patch,
+            settings,
+            environment,
+            level_height,
+            mode,
+            art_catalog,
+        ),
+        V3RecipeSettings::DesertTransition(settings) => {
+            desert_transition::construct_patch(patch, settings, environment, level_height, mode)
+        }
+        V3RecipeSettings::DesertPlain(settings) => {
+            desert_plain::construct_patch(patch, settings, environment, level_height, mode)
+        }
+        V3RecipeSettings::Dunes(settings) => {
+            dunes::construct_patch(patch, settings, environment, level_height, mode)
+        }
+        V3RecipeSettings::Oasis(settings) => oasis::construct_patch(
             patch,
             settings,
             environment,
@@ -167,6 +187,21 @@ pub(crate) fn validate_fragment(
             art_catalog,
         )),
         V3RecipeSettings::Prairie(settings) => discard_metrics(prairie::validate_patch(
+            patch,
+            settings,
+            fragment,
+            art_catalog,
+        )),
+        V3RecipeSettings::DesertTransition(settings) => {
+            discard_metrics(desert_transition::validate_patch(patch, settings, fragment))
+        }
+        V3RecipeSettings::DesertPlain(settings) => {
+            discard_metrics(desert_plain::validate_patch(patch, settings, fragment))
+        }
+        V3RecipeSettings::Dunes(settings) => {
+            discard_metrics(dunes::validate_patch(patch, settings, fragment))
+        }
+        V3RecipeSettings::Oasis(settings) => discard_metrics(oasis::validate_patch(
             patch,
             settings,
             fragment,

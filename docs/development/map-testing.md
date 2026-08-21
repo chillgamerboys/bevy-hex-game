@@ -85,5 +85,10 @@ timing JSON, and logs for all three ordinary concerns.
   voxel occupancy; publication tests assert the integer contract directly.
 - Fixed-frame tests remain fixed when frame count is the invariant. Bounded settling
   is used only when convergence, rather than an exact frame, is the contract.
-- Forest, Waterfall, map-review captures, and their acceptance criteria remain owned
-  by the existing visual workflow and are not redefined by this partition.
+- Forest, Waterfall, Arid, map-review captures, and their acceptance criteria remain
+  owned by the existing visual workflow and are not redefined by this partition.
+  Arid review must show all three Desert Transition bands, Desert Plain's open
+  relief, both a dune crest and trough, and the oasis with both surrounding rings;
+  typed map tests, not those frames, prove exact material coverage, one-level dune
+  traversal, local-water isolation, date-palm blockers, seam redundancy, and
+  reachability.

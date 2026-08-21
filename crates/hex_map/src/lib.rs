@@ -61,8 +61,10 @@ pub use generator::{FlatGenerator, HeightGenerator, HeightMap, PerlinGenerator, 
 pub use liquid_render::LiquidVisualTime;
 pub use procedural::{
     CavesMetrics as CavesReportMetrics, CrystalAscentMetrics as CrystalAscentReportMetrics,
-    DeepForestMetrics as DeepForestReportMetrics, ForestMetrics as ForestReportMetrics,
-    FortMetrics as FortReportMetrics, GenerationReport, MacroMetrics, MountainRangeMetrics,
+    DeepForestMetrics as DeepForestReportMetrics, DesertPlainMetrics as DesertPlainReportMetrics,
+    DesertTransitionMetrics as DesertTransitionReportMetrics, DunesMetrics as DunesReportMetrics,
+    ForestMetrics as ForestReportMetrics, FortMetrics as FortReportMetrics, GenerationReport,
+    MacroMetrics, MountainRangeMetrics, OasisMetrics as OasisReportMetrics,
     PrairieMetrics as PrairieReportMetrics, ProceduralRecipeMetrics, Ring19Metrics, Ring7Metrics,
     TacticalMetrics, VolcanoMetrics as VolcanoReportMetrics,
     WaterfallMetrics as WaterfallReportMetrics,

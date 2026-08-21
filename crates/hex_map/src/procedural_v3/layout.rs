@@ -3407,7 +3407,17 @@ fn validate_boundary_liquid_outlets(layout: &ResolvedLayoutPlan, issues: &mut Ve
         return;
     }
     if layout.boundary_liquid_outlets.is_empty() {
-        issues.push(LayoutIssue::MissingBoundaryLiquidOutlet);
+        // A completely dry Ring19 is a valid closed world (for example the
+        // Desert Oasis profile, whose water is local to its centre patch).
+        // A boundary outlet is required only when a resolved internal seam
+        // actually transports liquid.
+        if layout
+            .shared_edges
+            .values()
+            .any(|edge| !matches!(edge.liquid, ResolvedLiquidPort::Dry))
+        {
+            issues.push(LayoutIssue::MissingBoundaryLiquidOutlet);
+        }
         return;
     }
 
@@ -4048,6 +4058,7 @@ mod tests {
         .collect();
         ProceduralV3Settings {
             layout: V3LayoutSettings::Ring19(V3Ring19Settings {
+                profile: crate::settings::V3Ring19ProfileSettings::TwoRings,
                 regions,
                 seam_defaults: SharedEdgeSettings {
                     elevation: EdgeElevationSettings {
@@ -5246,6 +5257,16 @@ mod tests {
         missing.boundary_liquid_outlets.clear();
         let mut issues = Vec::new();
         validate_boundary_liquid_outlets(&missing, &mut issues);
+        assert!(
+            issues.is_empty(),
+            "a dry Ring19 does not need a boundary liquid outlet: {issues:?}"
+        );
+
+        let mut wet_missing =
+            resolve_layout(55, &ring19_settings()).expect("canonical wet Ring19 resolves");
+        wet_missing.boundary_liquid_outlets.clear();
+        let mut issues = Vec::new();
+        validate_boundary_liquid_outlets(&wet_missing, &mut issues);
         assert_eq!(issues, vec![LayoutIssue::MissingBoundaryLiquidOutlet]);
 
         let mut wrong_level = layout.clone();

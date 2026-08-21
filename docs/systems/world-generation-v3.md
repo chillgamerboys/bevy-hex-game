@@ -113,11 +113,11 @@ Sky Islands upper layer remain within their owning horizontal masks for the firs
 composite. The critical ordinary-walker network must connect every region through
 redundant macro routes, but every shared boundary need not be open.
 
-`Ring19` is the fixed **Two Rings** composite. Its deterministic Voronoi masks cover
+`Ring19` admits fixed profile rosters over one composite geometry. Its deterministic Voronoi masks cover
 exactly 9,241 columns around patch centres 22 columns apart, with 42 reciprocal
 internal seams and 30 outer boundary sides. Slot order is stable: centre, six
-first-ring slots clockwise, then twelve second-ring slots clockwise. The shipped
-roster is:
+first-ring slots clockwise, then twelve second-ring slots clockwise. The original
+selectable **Two Rings** map uses the `TwoRings` profile roster:
 
 1. central Hills confluence;
 2. Frozen Hills, Forest A, Prairie A, downstream Hills, Waterfall B, and Waterfall A;
@@ -144,6 +144,23 @@ are level 16. The outlet Waterfall reaches its boundary terminal at level 3.
 Volcano owns a separate lava body which exits the western boundary at level 14; lava
 never joins the water graph. Every liquid crossing is explicit, directed, acyclic,
 level or descending, and checked against the exact seam lanes.
+
+The `DesertOasis` Ring19 profile keeps the same masks, slot order, 42 seams, redundant
+ordinary-walker graph, and 5-bit patch namespace while replacing the biome roster:
+
+1. one central Oasis with a radius-five local pool, a three-column green ring, and
+   twelve date palms;
+2. six clockwise Dunes patches, rotated once through all six local orientations; and
+3. an outer ring alternating six taller Dunes patches with six Desert Plain patches.
+
+Every patch uses the `Arid` environment. Its seams remain Dry and expose the same two
+width-two walker ports with depth-three approaches. The oasis is an explicit local-
+water exception: its connected Still pool has no cross-region liquid connection and
+no boundary outlet, so this profile declares empty `liquid_connections` and
+`boundary_outlets`. That is not permission for an omitted hydrology graph in the
+`TwoRings` profile or another composite. `DesertOasis` appends a conditional profile
+extension to the settings fingerprint; the original defaulted `TwoRings` byte stream
+and fingerprint remain unchanged.
 
 `Macro` separates atomic ownership from logical biome identity. Atomic cells provide
 exact coverage, adjacency, and masks. Each named biome instance claims one connected
@@ -298,6 +315,9 @@ Macro's walker, spanning-feature, and anchor-alias settings extend the settings
 fingerprint only when at least one collection is nonempty. A legacy Macro file whose
 three defaulted collections are empty retains its exact prior byte stream and
 fingerprint; adding the schema with empty defaults cannot rewrite Mountain Range.
+Ring19 follows the same compatibility principle for its defaulted profile: `TwoRings`
+retains its prior settings bytes, while `DesertOasis` carries an explicit versioned
+profile suffix.
 
 Reports record generator version, resolved seed, candidate, repair actions, fallback
 use, the three fingerprints, metrics, and timings. Diagnostic collections are sorted
@@ -407,6 +427,32 @@ Both recipes retain exact object ids, six-way rotations, complete rotated bounds
 blocker footprints, and deterministic semantic fingerprints. Their standalone
 selectable maps are **Deep Forest** and **Prairie**, both pinned to seed
 `1592598566`.
+
+### Arid recipes
+
+`Arid` is the sand, sparse-vegetation, dune, and isolated-oasis environment. Its four
+recipes are deliberately separate so a focused `Single` map does not need to pretend
+to be a complete desert region:
+
+- Desert Transition assigns connected grass, dirt-ecotone, and sand bands from exact
+  slices of the recipe-local frame. Rotation turns the complete transition. The band
+  boundaries and requested dry coverage are exact consequences of settings; the
+  modest rolling relief varies through its named landform stream.
+- Desert Plain is connected, low-relief sand without authored structures or
+  vegetation. Its rolling surface varies by seed while its material coverage,
+  relief bound, seams, routes, and anchors remain exact.
+- Dunes authors the requested number, spacing, and height of parallel ridges. A named
+  seed stream varies only their bounded lateral warp; the resulting sand surface
+  remains one-level-Lipschitz and ordinary-walkable from trough to crest.
+- Oasis authors one exact local Still-water pool, a grass-and-soil shore ring, dry
+  sand approaches, and the requested exact count of `plant/date-palm` instances.
+  Pool and shore geometry do not vary with the seed. Palm priority and rotation do,
+  while their visual volumes, reserved-route clearance, and single-root traversal
+  blockers remain exact. Oasis water never participates in a composite seam.
+
+All four reject non-Arid environments and overlays. The selectable **Desert
+Transition**, **Desert Plain**, and **Dunes** scenarios are radius-12 `Single` maps;
+**Desert Oasis Rings** is the radius-55 `DesertOasis` Ring19 profile described above.
 
 ### Volcano
 
@@ -642,7 +688,9 @@ The normative delivery order is:
 14. Macro layout, adjacency, coastal/alpine recipes, and the selectable Mountain
     Range map;
 15. Macro spanning features and the selectable Crystal Mountain map;
-16. V1/V2 removal.
+16. Arid recipes and the selectable Desert Transition, Desert Plain, Dunes, and
+    Desert Oasis Rings maps;
+17. V1/V2 removal.
 
 See [planning/status.md](../planning/status.md) for progress through this sequence.
 
@@ -695,6 +743,13 @@ undeclared seam opening, liquid collision, bedrock breach, or shortcut.
 Representative seeds and all six landmark rotations exercise the patch constructor
 even though the shipped world fixes rotation zero.
 
+Arid coverage fixes connected and rotated transition bands, exact sand coverage,
+bounded low relief, dune ridge count/spacing/height, one-level dune transitions, the
+local oasis pool and green ring, exact date-palm count and blocker projection, and
+Dry Ring19 seams around the local-water exception. Composite tests retain all 9,241
+columns, 19 region ids, 42 reciprocal seams, single-seam-removal reachability, stable
+world aliases, and the original `TwoRings` fingerprint.
+
 Recipe tests must enforce each runnable recipe's topology and protected routes.
 Fast fixed corpora run in CI; ignored 10,000-seed recipe corpora must produce 100%
 valid final maps including fallback and target less than 1% fallback use.
@@ -712,7 +767,12 @@ front-massif, and rear-silhouette views. Crystal Mountain requires Map, First Pe
 and Third Person frames of the foot portal, natural tunnel, Gothic transition,
 Crystal chamber, ascent, summit, Forest basin, and ridge, plus review-only illumination
 and full-cutaway frames. Manual review must traverse every critical recipe route and
-every open composite seam before that surface ships. The landed Two
+every open composite seam before that surface ships. Desert acceptance adds Map and
+character-camera views of all three Desert Transition bands, Desert Plain's long
+sightlines, Dunes from both a crest and trough, and the central oasis plus both
+surrounding rings. Those frames establish presentation only;
+typed recipe and composite tests remain the authority for coverage, elevation,
+liquid isolation, date-palm blockers, seams, and reachability. The landed Two
 Rings surface received its final visual and play approval at the reviewed wave head;
 Mountain Range's 2026-08-03 delivery record contains its four-view deterministic pack
 and a 45-step, eight-frame feature-only walk with exact arrival and focus assertions.

@@ -15,7 +15,8 @@ use crate::settings::{
     MacroSpanningFeatureSettings, NamedOverlaySettings, PatchEdgeContractSettings,
     PatchEdgesSettings, PatchMaskSettings, PatchSpec, ProceduralV3Settings, Ring19BoundarySide,
     Ring19RegionSettings, SharedEdgeSettings, V3EnvironmentSettings, V3LayoutSettings,
-    V3OverlaySettings, V3RecipeSettings, V3Ring19Settings, V3Ring7Settings,
+    V3OverlaySettings, V3RecipeSettings, V3Ring19ProfileSettings, V3Ring19Settings,
+    V3Ring7Settings,
 };
 
 use super::layout::{
@@ -39,6 +40,8 @@ const SEMANTIC_PLAN_DOMAIN: &[u8] = b"bevy-hex-game/procedural-v3/semantic-plan"
 const MATERIALIZED_WORLD_DOMAIN: &[u8] = b"bevy-hex-game/procedural-v3/materialized-world";
 const MACRO_EXTENSION_TAG: u8 = 128;
 const MACRO_EXTENSION_VERSION: u8 = 1;
+const RING19_EXTENSION_TAG: u8 = 129;
+const RING19_EXTENSION_VERSION: u8 = 1;
 
 /// Canonical V3 fingerprint payload.
 ///
@@ -463,6 +466,11 @@ fn encode_ring19_settings(
         encoder.u32(outlet.width);
         encoder.i32(outlet.level);
     }
+    if ring.profile != V3Ring19ProfileSettings::TwoRings {
+        encoder.tag(RING19_EXTENSION_TAG);
+        encoder.u8(RING19_EXTENSION_VERSION);
+        encoder.tag(ring19_profile_tag(ring.profile));
+    }
     Ok(())
 }
 
@@ -607,6 +615,32 @@ fn encode_recipe_settings(encoder: &mut FingerprintEncoder, recipe: &V3RecipeSet
             encoder.i32(settings.base_level);
             encoder.i32(settings.rise_levels);
         }
+        V3RecipeSettings::DesertTransition(settings) => {
+            encoder.tag(17);
+            encoder.i32(settings.base_level);
+            encoder.i32(settings.max_relief);
+            encoder.u8(settings.transition_width);
+            encoder.u8(settings.dry_coverage_percent);
+        }
+        V3RecipeSettings::DesertPlain(settings) => {
+            encoder.tag(18);
+            encoder.i32(settings.base_level);
+            encoder.i32(settings.max_relief);
+        }
+        V3RecipeSettings::Dunes(settings) => {
+            encoder.tag(19);
+            encoder.i32(settings.base_level);
+            encoder.i32(settings.ridge_height);
+            encoder.u8(settings.ridge_spacing);
+            encoder.u8(settings.ridge_count);
+        }
+        V3RecipeSettings::Oasis(settings) => {
+            encoder.tag(20);
+            encoder.i32(settings.base_level);
+            encoder.u8(settings.pool_radius);
+            encoder.u8(settings.palm_count);
+            encoder.u8(settings.grass_ring_width);
+        }
     }
 }
 
@@ -638,6 +672,14 @@ const fn environment_tag(environment: V3EnvironmentSettings) -> u8 {
         V3EnvironmentSettings::Rocky => 3,
         V3EnvironmentSettings::Coastal => 4,
         V3EnvironmentSettings::Alpine => 5,
+        V3EnvironmentSettings::Arid => 6,
+    }
+}
+
+const fn ring19_profile_tag(profile: V3Ring19ProfileSettings) -> u8 {
+    match profile {
+        V3Ring19ProfileSettings::TwoRings => 0,
+        V3Ring19ProfileSettings::DesertOasis => 1,
     }
 }
 
@@ -1174,8 +1216,9 @@ mod tests {
         MacroBoundaryTerminalSettings, MacroSpanningFeatureSettings, MacroTunnelSettings,
         MacroWalkerConnectionSettings, MapSettings, ProceduralSettings,
         Ring19BoundaryOutletSettings, Ring19LiquidConnectionSettings, SharedEdgeSettings,
-        TerrainSettings, V3CrystalAscentSettings, V3HillsSettings, V3PrairieSettings,
-        WalkerPortSettings,
+        TerrainSettings, V3CrystalAscentSettings, V3DesertPlainSettings,
+        V3DesertTransitionSettings, V3DunesSettings, V3HillsSettings, V3OasisSettings,
+        V3PrairieSettings, WalkerPortSettings,
     };
 
     const MOUNTAIN_RANGE_RON: &str =
@@ -1392,6 +1435,70 @@ mod tests {
     }
 
     #[test]
+    fn arid_environment_and_desert_recipe_tags_are_append_only_and_complete() {
+        assert_eq!(environment_tag(V3EnvironmentSettings::Arid), 6);
+
+        let recipes = [
+            V3RecipeSettings::DesertTransition(V3DesertTransitionSettings {
+                base_level: 15,
+                max_relief: 3,
+                transition_width: 8,
+                dry_coverage_percent: 55,
+            }),
+            V3RecipeSettings::DesertPlain(V3DesertPlainSettings {
+                base_level: 15,
+                max_relief: 2,
+            }),
+            V3RecipeSettings::Dunes(V3DunesSettings {
+                base_level: 15,
+                ridge_height: 6,
+                ridge_spacing: 12,
+                ridge_count: 5,
+            }),
+            V3RecipeSettings::Oasis(V3OasisSettings {
+                base_level: 15,
+                pool_radius: 5,
+                palm_count: 12,
+                grass_ring_width: 3,
+            }),
+        ];
+        let expected = [
+            {
+                let mut bytes = vec![17];
+                bytes.extend_from_slice(&15_i32.to_le_bytes());
+                bytes.extend_from_slice(&3_i32.to_le_bytes());
+                bytes.extend_from_slice(&[8, 55]);
+                bytes
+            },
+            {
+                let mut bytes = vec![18];
+                bytes.extend_from_slice(&15_i32.to_le_bytes());
+                bytes.extend_from_slice(&2_i32.to_le_bytes());
+                bytes
+            },
+            {
+                let mut bytes = vec![19];
+                bytes.extend_from_slice(&15_i32.to_le_bytes());
+                bytes.extend_from_slice(&6_i32.to_le_bytes());
+                bytes.extend_from_slice(&[12, 5]);
+                bytes
+            },
+            {
+                let mut bytes = vec![20];
+                bytes.extend_from_slice(&15_i32.to_le_bytes());
+                bytes.extend_from_slice(&[5, 12, 3]);
+                bytes
+            },
+        ];
+
+        for (recipe, expected) in recipes.iter().zip(expected) {
+            let mut encoder = FingerprintEncoder::new();
+            encode_recipe_settings(&mut encoder, recipe);
+            assert_eq!(encoder.bytes, expected);
+        }
+    }
+
+    #[test]
     fn empty_macro_extensions_preserve_shipped_settings_fingerprints() {
         let (radius, level_height, mountain_range) = shipped_v3_settings(MOUNTAIN_RANGE_RON);
         let V3LayoutSettings::Macro(layout) = &mountain_range.layout else {
@@ -1413,6 +1520,54 @@ mod tests {
                 .expect("Two Rings settings encode"),
             2_347_243_186_379_186_390,
             "the unrelated Ring19 settings identity remains byte-identical"
+        );
+    }
+
+    #[test]
+    fn ring19_profile_extension_is_conditional_and_preserves_two_rings() {
+        let (radius, level_height, two_rings) = shipped_v3_settings(TWO_RINGS_RON);
+        let baseline = settings_fingerprint(radius, level_height, &two_rings)
+            .expect("defaulted Two Rings settings encode");
+        assert_eq!(baseline, 2_347_243_186_379_186_390);
+
+        let explicit_source = TWO_RINGS_RON.replacen(
+            "layout: Ring19((",
+            "layout: Ring19((\n            profile: TwoRings,",
+            1,
+        );
+        let (_, _, explicit) = shipped_v3_settings(&explicit_source);
+        assert_eq!(
+            settings_fingerprint(radius, level_height, &explicit)
+                .expect("explicit TwoRings settings encode"),
+            baseline,
+            "the default profile appends no bytes"
+        );
+
+        let V3LayoutSettings::Ring19(default_ring) = &two_rings.layout else {
+            unreachable!("the fixture is Ring19");
+        };
+        let mut base_encoder = FingerprintEncoder::new();
+        encode_ring19_settings(&mut base_encoder, default_ring).expect("Ring19 encodes");
+        let mut desert_ring = default_ring.clone();
+        desert_ring.profile = V3Ring19ProfileSettings::DesertOasis;
+        let mut desert_encoder = FingerprintEncoder::new();
+        encode_ring19_settings(&mut desert_encoder, &desert_ring).expect("Ring19 encodes");
+        assert_eq!(
+            desert_encoder
+                .bytes
+                .strip_suffix(&[RING19_EXTENSION_TAG, RING19_EXTENSION_VERSION, 1,]),
+            Some(base_encoder.bytes.as_slice()),
+            "DesertOasis appends exactly the versioned profile suffix"
+        );
+        assert_eq!(RING19_EXTENSION_TAG, 129);
+        assert_eq!(RING19_EXTENSION_VERSION, 1);
+        assert_eq!(
+            [
+                V3Ring19ProfileSettings::TwoRings,
+                V3Ring19ProfileSettings::DesertOasis,
+            ]
+            .map(ring19_profile_tag),
+            [0, 1]
         );
     }
 
@@ -1767,6 +1922,7 @@ mod tests {
         };
         let original = ProceduralV3Settings {
             layout: V3LayoutSettings::Ring19(V3Ring19Settings {
+                profile: V3Ring19ProfileSettings::TwoRings,
                 regions: vec![region; 19],
                 seam_defaults: SharedEdgeSettings {
                     elevation: EdgeElevationSettings {
