@@ -214,6 +214,42 @@ mod tests {
                 SandboxRegionCenter::Anchor("hostile_start".to_owned())
             );
         }
+        for (id, scenario, identifying_tag, preview) in [
+            (
+                "sandy-islets",
+                "Sandy Islets",
+                "Islands",
+                "ui/sandbox/sandy-islets.png",
+            ),
+            (
+                "wooded-island",
+                "Wooded Island",
+                "Forest",
+                "ui/sandbox/wooded-island.png",
+            ),
+            (
+                "ocean-archipelagoes",
+                "Ocean Archipelagoes",
+                "Archipelago",
+                "ui/sandbox/ocean-archipelagoes.png",
+            ),
+        ] {
+            let map = catalog
+                .get(id)
+                .unwrap_or_else(|| panic!("{scenario} should be selectable in Sandbox"));
+            assert_eq!(map.scenario, scenario);
+            assert_eq!(map.fixed_seed, Some(1_592_598_566));
+            assert_eq!(map.preview, preview);
+            assert_eq!(
+                map.player_region.center,
+                SandboxRegionCenter::Anchor("party_start".to_owned())
+            );
+            assert_eq!(
+                map.hostile_region.center,
+                SandboxRegionCenter::Anchor("hostile_start".to_owned())
+            );
+            assert!(map.tags.iter().any(|tag| tag == identifying_tag));
+        }
         assert!(catalog.get("fort").is_some());
         let crystal_ascent = catalog
             .get("crystal-ascent")
@@ -256,7 +292,7 @@ mod tests {
         assert_eq!(mountain_range.scenario, "Mountain Range");
         assert_eq!(mountain_range.fixed_seed, Some(129_704_046));
         assert_eq!(mountain_range.preview, "ui/sandbox/mountain-range.png");
-        assert_eq!(catalog.maps.len(), 23);
+        assert_eq!(catalog.maps.len(), 26);
         assert_eq!(
             catalog
                 .maps
@@ -281,6 +317,9 @@ mod tests {
                 "desert-plain",
                 "dunes",
                 "desert-oasis-rings",
+                "sandy-islets",
+                "wooded-island",
+                "ocean-archipelagoes",
                 "fort",
                 "crystal-ascent",
                 "crystal-mountain",

@@ -51,14 +51,14 @@ use hex_map::{
     CavesReportMetrics, CrossingSettings, EnvironmentSettings, GenerationReport, HillsSettings,
     LandformSettings, LayeredSkyIslandsSettings, LinkedIslandsSettings, MacroHeadwaterSettings,
     MacroLiquidConnectionSettings, MacroMetrics, MapSettings, MountainRangeMetrics,
-    MountainsSettings, PatchEdgeContractSettings, PatchEdgesSettings, PatchMaskSettings, PatchSpec,
-    PerlinSettings, PerlinStepSettings, ProceduralRecipeMetrics, ProceduralSettings,
-    ProceduralV1Settings, ProceduralV2Settings, ProceduralV3Settings, Ring19Metrics, Ring7Metrics,
-    SkyIslandsSettings, SubstanceRun, TacticalMetrics, TacticalSettings, TerrainSettings,
-    V2EnvironmentSettings, V2HillsSettings, V2RecipeSettings, V3CavesSettings,
-    V3CrystalAscentSettings, V3DeepForestSettings, V3EnvironmentSettings, V3ForestSettings,
-    V3FortSettings, V3HillsSettings, V3LayoutSettings, V3RecipeSettings, V3WaterfallSettings,
-    VoxelMap,
+    MountainsSettings, OceanArchipelagoMetrics, PatchEdgeContractSettings, PatchEdgesSettings,
+    PatchMaskSettings, PatchSpec, PerlinSettings, PerlinStepSettings, ProceduralRecipeMetrics,
+    ProceduralSettings, ProceduralV1Settings, ProceduralV2Settings, ProceduralV3Settings,
+    Ring19Metrics, Ring7Metrics, SandyIsletsReportMetrics, SkyIslandsSettings, SubstanceRun,
+    TacticalMetrics, TacticalSettings, TerrainSettings, V2EnvironmentSettings, V2HillsSettings,
+    V2RecipeSettings, V3CavesSettings, V3CrystalAscentSettings, V3DeepForestSettings,
+    V3EnvironmentSettings, V3ForestSettings, V3FortSettings, V3HillsSettings, V3LayoutSettings,
+    V3RecipeSettings, V3WaterfallSettings, VoxelMap, WoodedIslandReportMetrics,
 };
 use hex_test_support::{enter_gameplay, TestAppBuilder};
 

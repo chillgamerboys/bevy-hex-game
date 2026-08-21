@@ -182,6 +182,84 @@ fn generic_macro_metrics_are_public_reflected_and_exhaustive() {
 }
 
 #[test]
+fn focused_island_metrics_are_public_reflected_and_exhaustive() {
+    let sandy = SandyIsletsReportMetrics {
+        world_columns: 1,
+        land_surfaces: 2,
+        water_cells: 3,
+        land_components: 4,
+        primary_reachable_surfaces: 5,
+        sand_fringe_surfaces: 6,
+        reachable_elevation_levels: 7,
+        relief: 8,
+        critical_route_steps: 9,
+    };
+    let wooded = WoodedIslandReportMetrics {
+        world_columns: 10,
+        land_surfaces: 11,
+        water_cells: 12,
+        sand_fringe_surfaces: 13,
+        grass_interior_surfaces: 14,
+        tree_roots: 15,
+        reachable_surfaces: 16,
+        reachable_elevation_levels: 17,
+        relief: 18,
+        critical_route_steps: 19,
+    };
+    let ProceduralRecipeMetrics::SandyIslets(reflected_sandy) =
+        ProceduralRecipeMetrics::SandyIslets(sandy)
+    else {
+        panic!("the Sandy Islets report must retain its exact aggregate metrics");
+    };
+    let ProceduralRecipeMetrics::WoodedIsland(reflected_wooded) =
+        ProceduralRecipeMetrics::WoodedIsland(wooded)
+    else {
+        panic!("the Wooded Island report must retain its exact aggregate metrics");
+    };
+    assert_eq!(reflected_sandy, sandy);
+    assert_eq!(reflected_wooded, wooded);
+
+    let app = test_app();
+    let registry = app.world().resource::<AppTypeRegistry>().read();
+    for type_id in [
+        TypeId::of::<SandyIsletsReportMetrics>(),
+        TypeId::of::<WoodedIslandReportMetrics>(),
+    ] {
+        assert!(registry.get(type_id).is_some());
+    }
+}
+
+#[test]
+fn ocean_archipelago_metrics_are_public_reflected_and_exhaustive() {
+    let metrics = OceanArchipelagoMetrics {
+        world_columns: 1,
+        macro_cells: 2,
+        biome_regions: 3,
+        standing_water_seams: 4,
+        liquid_cells: 5,
+        dry_components: 6,
+        scenic_dry_components: 7,
+        ordinary_surfaces: 8,
+        reachable_surfaces: 9,
+        critical_route_steps: 10,
+        shoreline_surfaces: 11,
+        tree_roots: 12,
+    };
+    let ProceduralRecipeMetrics::OceanArchipelago(reflected) =
+        ProceduralRecipeMetrics::OceanArchipelago(metrics)
+    else {
+        panic!("the Ocean Archipelagoes report must retain its exact aggregate metrics");
+    };
+    assert_eq!(reflected, metrics);
+
+    let app = test_app();
+    let registry = app.world().resource::<AppTypeRegistry>().read();
+    assert!(registry
+        .get(TypeId::of::<OceanArchipelagoMetrics>())
+        .is_some());
+}
+
+#[test]
 fn mountain_range_metrics_are_public_reflected_and_exhaustive() {
     let recipe_metrics = ProceduralRecipeMetrics::MountainRange(MountainRangeMetrics {
         world_columns: 1,

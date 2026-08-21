@@ -731,7 +731,7 @@ struct WalkContent<'w, 's> {
     party: Option<Res<'w, Party>>,
     registry: Option<Res<'w, UnitRegistry>>,
     queue: Option<Res<'w, CommandQueue>>,
-    movement: Query<'w, 's, (Has<Busy>, Has<MovingTo>)>,
+    movement: Query<'w, 's, (Has<Busy>, Has<MovingTo>, Option<&'static StandsOn>)>,
     selected: Query<
         'w,
         's,
@@ -770,7 +770,7 @@ impl WalkContent<'_, '_> {
                 return Some(false);
             }
             let entity = registry.entity_of(*member)?;
-            let Ok((busy, moving)) = self.movement.get(entity) else {
+            let Ok((busy, moving, _)) = self.movement.get(entity) else {
                 return None;
             };
             if busy || moving {
@@ -785,9 +785,25 @@ impl WalkContent<'_, '_> {
             format!("visual walk needs exactly one selected unit before position proof: {error}")
         })?;
         if standing.0.pos != expected {
+            let party_positions = self
+                .party
+                .as_deref()
+                .zip(self.registry.as_deref())
+                .map(|(party, registry)| {
+                    party
+                        .members
+                        .iter()
+                        .filter_map(|unit| {
+                            let entity = registry.entity_of(*unit)?;
+                            let (_, _, standing) = self.movement.get(entity).ok()?;
+                            Some((*unit, standing.map(|standing| standing.0.pos)))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
             return Err(format!(
-                "selected unit {entity:?} stands at {:?}, not expected {expected:?}",
-                standing.0.pos
+                "selected unit {entity:?} stands at {:?}, not expected {expected:?}; party positions: {party_positions:?}",
+                standing.0.pos,
             ));
         }
         let Some(focus) = focus else {
@@ -1603,6 +1619,9 @@ mod tests {
     const DESERT_PLAIN_CAMERA_SCRIPT: &str = "../../walks/camera_desert_plain.ron";
     const DUNES_CAMERA_SCRIPT: &str = "../../walks/camera_dunes.ron";
     const DESERT_OASIS_RINGS_CAMERA_SCRIPT: &str = "../../walks/camera_desert_oasis_rings.ron";
+    const SANDY_ISLETS_CAMERA_SCRIPT: &str = "../../walks/camera_sandy_islets.ron";
+    const WOODED_ISLAND_CAMERA_SCRIPT: &str = "../../walks/camera_wooded_island.ron";
+    const OCEAN_ARCHIPELAGOES_CAMERA_SCRIPT: &str = "../../walks/camera_ocean_archipelagoes.ron";
 
     const CAMERA_ROUTE_SCRIPTS: &[(&str, &str)] = &[
         ("../../walks/camera_crossing.ron", "The Crossing"),
@@ -1630,6 +1649,9 @@ mod tests {
             "../../walks/camera_desert_oasis_rings.ron",
             "Desert Oasis Rings",
         ),
+        (SANDY_ISLETS_CAMERA_SCRIPT, "Sandy Islets"),
+        (WOODED_ISLAND_CAMERA_SCRIPT, "Wooded Island"),
+        (OCEAN_ARCHIPELAGOES_CAMERA_SCRIPT, "Ocean Archipelagoes"),
         ("../../walks/camera_fort.ron", "Fort"),
         ("../../walks/camera_crystal_ascent.ron", "Crystal Ascent"),
         (
@@ -2176,7 +2198,7 @@ mod tests {
                 "deployment-only Sandbox map {id:?} must remain in the shipping catalog"
             );
         }
-        assert_eq!(routes.len(), 22);
+        assert_eq!(routes.len(), 25);
 
         for route in &manifest.routes {
             assert!(
@@ -2649,6 +2671,135 @@ mod tests {
             }
             assert!(destinations.len() > case.anchors.len(), "{scenario}");
             assert!(CAMERA_ROUTE_SCRIPTS.contains(&(script_path, scenario)));
+        }
+    }
+
+    #[test]
+    fn island_camera_walks_pin_coasts_canopies_and_all_camera_modes() {
+        struct IslandWalkCase<'a> {
+            script_path: &'a str,
+            scenario: &'a str,
+            anchors: &'a [&'a str],
+            captures: &'a [&'a str],
+        }
+
+        let cases = [
+            IslandWalkCase {
+                script_path: SANDY_ISLETS_CAMERA_SCRIPT,
+                scenario: "Sandy Islets",
+                anchors: &["sandy_islets_primary_overlook"],
+                captures: &[
+                    "01-sandy-islets-five-islet-map",
+                    "02-sandy-islets-primary-overlook-character",
+                    "03-sandy-islets-satellite-channel-character",
+                    "04-sandy-islets-primary-overlook-first-person",
+                ],
+            },
+            IslandWalkCase {
+                script_path: WOODED_ISLAND_CAMERA_SCRIPT,
+                scenario: "Wooded Island",
+                anchors: &["wooded_island_clearing"],
+                captures: &[
+                    "01-wooded-island-coast-and-canopy-map",
+                    "02-wooded-island-beach-character",
+                    "03-wooded-island-beach-coast-character",
+                    "04-wooded-island-high-clearing-character",
+                    "05-wooded-island-ridge-and-canopy-character",
+                    "06-wooded-island-high-clearing-first-person",
+                ],
+            },
+            IslandWalkCase {
+                script_path: OCEAN_ARCHIPELAGOES_CAMERA_SCRIPT,
+                scenario: "Ocean Archipelagoes",
+                anchors: &["archipelago.home_beach"],
+                captures: &[
+                    "01-ocean-archipelagoes-complete-map",
+                    "02-ocean-archipelagoes-home-channel-character",
+                    "03-ocean-archipelagoes-home-channel-first-person",
+                    "04-ocean-archipelagoes-causeway-character",
+                    "05-ocean-archipelagoes-wooded-heart-character",
+                    "06-ocean-archipelagoes-satellite-coast-character",
+                    "07-ocean-archipelagoes-wooded-heart-first-person",
+                ],
+            },
+        ];
+
+        for case in cases {
+            let text = std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(case.script_path),
+            )
+            .unwrap_or_else(|error| panic!("cannot read {}: {error}", case.script_path));
+            let steps: Vec<WalkStep> = ron::from_str(&text)
+                .unwrap_or_else(|error| panic!("cannot parse {}: {error}", case.script_path));
+            for step in &steps {
+                validate_step(step)
+                    .unwrap_or_else(|error| panic!("{} is invalid: {error}", case.script_path));
+            }
+
+            assert!(steps.contains(&WalkStep::StartScenario {
+                name: case.scenario.to_owned(),
+                seed: Some(1_592_598_566),
+                suppress_hostiles: false,
+            }));
+            for camera in [
+                WalkCameraMode::Map,
+                WalkCameraMode::Character,
+                WalkCameraMode::FirstPerson,
+            ] {
+                assert!(
+                    steps.contains(&WalkStep::AssertCameraMode(camera)),
+                    "{} omits {camera:?} review evidence",
+                    case.scenario
+                );
+            }
+            assert_eq!(
+                steps
+                    .iter()
+                    .filter_map(|step| match step {
+                        WalkStep::ClickAnchor { name, .. } => Some(name.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+                case.anchors,
+                "{}",
+                case.scenario
+            );
+            assert_eq!(
+                steps
+                    .iter()
+                    .filter_map(|step| match step {
+                        WalkStep::Capture(name) => Some(name.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+                case.captures,
+                "{}",
+                case.scenario
+            );
+            assert!(
+                steps
+                    .windows(4)
+                    .filter(|window| matches!(
+                        window.first(),
+                        Some(WalkStep::ClickAnchor { .. } | WalkStep::ClickTile { .. })
+                    ))
+                    .all(|window| matches!(
+                        window,
+                        [
+                            WalkStep::ClickAnchor { .. } | WalkStep::ClickTile { .. },
+                            WalkStep::Settle(5),
+                            WalkStep::AwaitPartyIdle { .. },
+                            WalkStep::AssertSelectedAt { .. },
+                        ]
+                    )),
+                "{} movement legs need exact arrival proofs",
+                case.scenario
+            );
+            assert!(CAMERA_ROUTE_SCRIPTS.contains(&(case.script_path, case.scenario)));
+            assert!(steps.ends_with(&[
+                WalkStep::Key("Backspace".to_owned()),
+                WalkStep::AwaitScreen("Title".to_owned()),
+            ]));
         }
     }
 

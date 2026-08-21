@@ -12,7 +12,7 @@ use hex_core::{
     upper_dome_contains, ExactGridPoint, HexCoord, IlluminationLevel, Level, MapViewHint, TilePos,
 };
 
-use crate::procedural::{MacroMetrics, MountainRangeMetrics};
+use crate::procedural::{MacroMetrics, MountainRangeMetrics, OceanArchipelagoMetrics};
 use crate::settings::{
     MacroAxisSettings, MacroBiomeInstanceSettings, MacroHeadwaterSettings, MacroLayoutSettings,
     MacroSpanningFeatureSettings, ProceduralV3Settings, V3CrystalAscentSettings, V3LayoutSettings,
@@ -73,6 +73,7 @@ const CRYSTAL_UPPER_TERMINAL: &str = "crystal_ascent.upper_terminal_pad";
 pub(crate) struct MacroWorldMetrics {
     pub(crate) report: MacroMetrics,
     pub(crate) mountain_range: Option<MountainRangeMetrics>,
+    pub(crate) ocean_archipelago: Option<OceanArchipelagoMetrics>,
 }
 
 struct MacroWorldRecipe<'a> {
@@ -457,6 +458,15 @@ fn construct_world(
             continue;
         }
         let patch = PatchRecipeContext::resolve(layout, patch_id)?;
+        if matches!(
+            instance.recipe,
+            V3RecipeSettings::SandyIslets(_) | V3RecipeSettings::WoodedIsland(_)
+        ) {
+            let fragment =
+                construct_macro_island(patch, instance, level_height, candidate, vegetation)?;
+            fragments_by_patch.insert(patch_id, fragment);
+            continue;
+        }
         let streams =
             candidate.map(|(seed, candidate)| SeedStreams::new(seed, candidate, patch_id.0));
         let reservations = spanning
@@ -524,6 +534,84 @@ fn construct_world(
     } else {
         Ok(world)
     }
+}
+
+fn construct_macro_island(
+    patch: PatchRecipeContext<'_>,
+    instance: &MacroBiomeInstanceSettings,
+    level_height: f32,
+    candidate: Option<(u64, u8)>,
+    vegetation: &TemperateVegetationSet,
+) -> Result<GeneratedPatchPlan, V3GenerationError> {
+    let mode = candidate.map_or(PatchBuildMode::CanonicalFallback, |(seed, candidate)| {
+        PatchBuildMode::Candidate {
+            world_seed: seed,
+            candidate,
+        }
+    });
+    let fragment = match &instance.recipe {
+        V3RecipeSettings::SandyIslets(settings) => {
+            let fragment = super::sandy_islets::construct_patch(
+                patch,
+                settings,
+                instance.environment,
+                level_height,
+                mode,
+            )
+            .map_err(|issues| island_recipe_error(&instance.name, "Sandy Islets", issues))?;
+            match super::sandy_islets::validate_patch(patch, settings, &fragment) {
+                WorldValidation::Valid(_) => fragment,
+                WorldValidation::Invalid(issues) => {
+                    return Err(island_recipe_error(
+                        &instance.name,
+                        "Sandy Islets validation",
+                        issues,
+                    ));
+                }
+            }
+        }
+        V3RecipeSettings::WoodedIsland(settings) => {
+            let fragment = super::wooded_island::construct_patch_with_vegetation(
+                patch,
+                settings,
+                instance.environment,
+                level_height,
+                mode,
+                vegetation,
+            )
+            .map_err(|issues| island_recipe_error(&instance.name, "Wooded Island", issues))?;
+            match super::wooded_island::validate_patch_with_vegetation(
+                patch, settings, &fragment, vegetation,
+            ) {
+                WorldValidation::Valid(_) => fragment,
+                WorldValidation::Invalid(issues) => {
+                    return Err(island_recipe_error(
+                        &instance.name,
+                        "Wooded Island validation",
+                        issues,
+                    ));
+                }
+            }
+        }
+        _ => {
+            return Err(V3GenerationError::RecipeContract(format!(
+                "Macro instance {:?} is not an island recipe",
+                instance.name
+            )));
+        }
+    };
+    Ok(fragment)
+}
+
+fn island_recipe_error(
+    instance: &str,
+    phase: &str,
+    issues: Vec<WorldValidationIssue>,
+) -> V3GenerationError {
+    V3GenerationError::RecipeContract(format!(
+        "Macro instance {instance:?} {phase} failed: {}",
+        format_issues(&issues)
+    ))
 }
 
 fn raw_spanning_destinations(
@@ -4070,6 +4158,39 @@ fn is_crystal_mountain_layout(settings: &MacroLayoutSettings) -> bool {
         )
 }
 
+fn is_ocean_archipelago_layout(settings: &MacroLayoutSettings) -> bool {
+    let recipe = |name: &str| {
+        settings
+            .instances
+            .iter()
+            .find(|instance| instance.name == name)
+            .map(|instance| &instance.recipe)
+    };
+    settings.instances.len() == 6
+        && settings
+            .critical_route
+            .iter()
+            .map(String::as_str)
+            .eq(["home-landing", "wooded-heart"])
+        && settings.liquid_connections.len() == 10
+        && settings.walker_connections.len() == 1
+        && settings.headwaters.is_empty()
+        && settings.spanning_features.is_empty()
+        && matches!(recipe("open-sea"), Some(V3RecipeSettings::ShallowSea(_)))
+        && [
+            "east-islets",
+            "south-islets",
+            "northwest-islets",
+            "home-landing",
+        ]
+        .into_iter()
+        .all(|name| matches!(recipe(name), Some(V3RecipeSettings::SandyIslets(_))))
+        && matches!(
+            recipe("wooded-heart"),
+            Some(V3RecipeSettings::WoodedIsland(_))
+        )
+}
+
 fn finalize_crystal_mountain_landscape(
     settings: &MacroLayoutSettings,
     contracts: &ResolvedMacroContracts,
@@ -4261,6 +4382,7 @@ fn validate_macro_world(
     };
     let mountain_range_layout = is_mountain_range_layout(macro_settings);
     let crystal_mountain_layout = is_crystal_mountain_layout(macro_settings);
+    let ocean_archipelago_layout = is_ocean_archipelago_layout(macro_settings);
     // `V3Recipe::validate` is reached only after the shared selection runner has
     // admitted the complete recipe-independent world contract. Keep this pass
     // Macro-specific so radius-77 candidates do not repeat that full validation.
@@ -4430,6 +4552,9 @@ fn validate_macro_world(
                 .map(|issue| macro_issue(format!("river terrain: {issue}"))),
         );
     }
+    let ocean_archipelago = ocean_archipelago_layout.then(|| {
+        validate_ocean_archipelago(macro_settings, plan, &ordinary, &distances, &mut issues)
+    });
     let deep_patch = macro_settings
         .instances
         .iter()
@@ -4568,7 +4693,380 @@ fn validate_macro_world(
     WorldValidation::Valid(MacroWorldMetrics {
         report,
         mountain_range,
+        ocean_archipelago,
     })
+}
+
+fn validate_ocean_archipelago(
+    settings: &MacroLayoutSettings,
+    plan: &GeneratedWorldPlan,
+    ordinary: &OrdinaryGraph,
+    distances: &BTreeMap<TilePos, u32>,
+    issues: &mut Vec<WorldValidationIssue>,
+) -> OceanArchipelagoMetrics {
+    const INSTANCE_CELLS: [(&str, &[(i32, i32, i32)]); 6] = [
+        (
+            "open-sea",
+            &[
+                (3, 0, -3),
+                (2, 1, -3),
+                (1, 2, -3),
+                (0, 3, -3),
+                (-1, 3, -2),
+                (-2, 3, -1),
+                (-3, 3, 0),
+                (-3, 2, 1),
+                (-3, 1, 2),
+                (-3, 0, 3),
+                (-2, -1, 3),
+                (-1, -2, 3),
+                (0, -3, 3),
+                (1, -3, 2),
+                (2, -3, 1),
+                (3, -3, 0),
+                (3, -2, -1),
+                (3, -1, -2),
+                (2, -2, 0),
+                (1, -2, 1),
+                (-2, 0, 2),
+                (-2, 1, 1),
+                (0, 2, -2),
+                (1, 1, -2),
+            ],
+        ),
+        ("east-islets", &[(2, 0, -2), (2, -1, -1)]),
+        ("south-islets", &[(0, -2, 2), (-1, -1, 2)]),
+        ("northwest-islets", &[(-2, 2, 0), (-1, 2, -1)]),
+        ("home-landing", &[(-1, 0, 1)]),
+        (
+            "wooded-heart",
+            &[
+                (0, 0, 0),
+                (1, -1, 0),
+                (1, 0, -1),
+                (0, 1, -1),
+                (-1, 1, 0),
+                (0, -1, 1),
+            ],
+        ),
+    ];
+
+    for (name, expected) in INSTANCE_CELLS {
+        let actual = settings
+            .instances
+            .iter()
+            .find(|instance| instance.name == name)
+            .map(|instance| {
+                instance
+                    .cells
+                    .iter()
+                    .map(|cell| (cell.x, cell.y, cell.z))
+                    .collect::<BTreeSet<_>>()
+            })
+            .unwrap_or_default();
+        let expected = expected.iter().copied().collect::<BTreeSet<_>>();
+        if actual != expected {
+            issues.push(macro_issue(format!(
+                "Ocean Archipelagoes instance {name:?} changed its exact atomic-cell roster"
+            )));
+        }
+    }
+
+    let mut remaining = ordinary.positions().collect::<BTreeSet<_>>();
+    let mut dry_components = Vec::<BTreeSet<TilePos>>::new();
+    while let Some(start) = remaining.first().copied() {
+        let mut component = BTreeSet::from([start]);
+        let mut frontier = VecDeque::from([start]);
+        remaining.remove(&start);
+        while let Some(position) = frontier.pop_front() {
+            for neighbor in ordinary.neighbors(position) {
+                if remaining.remove(neighbor) {
+                    component.insert(*neighbor);
+                    frontier.push_back(*neighbor);
+                }
+            }
+        }
+        dry_components.push(component);
+    }
+    let scenic_components = dry_components
+        .iter()
+        .filter(|component| {
+            component
+                .iter()
+                .all(|surface| !distances.contains_key(surface))
+        })
+        .count();
+    if dry_components.len() != 7 || scenic_components != 6 {
+        issues.push(macro_issue(format!(
+            "Ocean Archipelagoes requires seven dry components with six scenic satellites, got {} and {scenic_components}",
+            dry_components.len()
+        )));
+    }
+
+    if plan.liquids.bodies.len() != 1
+        || plan.liquids.bodies.values().any(|body| {
+            body.material != FillMaterialRole::Water
+                || body
+                    .nodes
+                    .values()
+                    .any(|node| node.state != LiquidFlowState::Still)
+        })
+    {
+        issues.push(macro_issue(
+            "Ocean Archipelagoes requires exactly one connected still-water body",
+        ));
+    }
+    let liquid_coords = plan
+        .liquids
+        .bodies
+        .values()
+        .flat_map(|body| body.nodes.keys().map(|position| position.coord))
+        .collect::<BTreeSet<_>>();
+    let dry_coords = ordinary
+        .positions()
+        .map(|surface| surface.coord)
+        .collect::<BTreeSet<_>>();
+    let boundary_is_water = plan
+        .layout
+        .footprint
+        .iter()
+        .filter(|coord| coord.distance(HexCoord::ORIGIN) == plan.layout.grid_radius)
+        .all(|coord| liquid_coords.contains(coord) && !dry_coords.contains(coord));
+    if !boundary_is_water {
+        issues.push(macro_issue(
+            "Ocean Archipelagoes requires uninterrupted ocean on every world-boundary column",
+        ));
+    }
+
+    let standing_water_seams = plan
+        .layout
+        .shared_edges
+        .values()
+        .filter(|edge| matches!(edge.liquid, ResolvedLiquidPort::Standing { .. }))
+        .count();
+    if standing_water_seams != 10 {
+        issues.push(macro_issue(format!(
+            "Ocean Archipelagoes requires exactly ten Standing-water seams, got {standing_water_seams}"
+        )));
+    }
+    let ids = settings
+        .instances
+        .iter()
+        .enumerate()
+        .map(|(index, instance)| {
+            (
+                instance.name.as_str(),
+                PatchId(u32::try_from(index).unwrap_or(u32::MAX)),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let normalized_pair = |first: PatchId, second: PatchId| {
+        if first <= second {
+            (first, second)
+        } else {
+            (second, first)
+        }
+    };
+    let named_pair = |first: &str, second: &str| {
+        ids.get(first)
+            .copied()
+            .zip(ids.get(second).copied())
+            .map(|(first, second)| normalized_pair(first, second))
+    };
+    let expected_standing_pairs = [
+        ("open-sea", "east-islets"),
+        ("open-sea", "south-islets"),
+        ("open-sea", "northwest-islets"),
+        ("open-sea", "home-landing"),
+        ("open-sea", "wooded-heart"),
+        ("east-islets", "wooded-heart"),
+        ("south-islets", "home-landing"),
+        ("south-islets", "wooded-heart"),
+        ("northwest-islets", "wooded-heart"),
+        ("home-landing", "wooded-heart"),
+    ]
+    .into_iter()
+    .filter_map(|(first, second)| named_pair(first, second))
+    .collect::<BTreeSet<_>>();
+    let standing_edges = plan
+        .layout
+        .shared_edges
+        .values()
+        .filter(|edge| matches!(edge.liquid, ResolvedLiquidPort::Standing { .. }))
+        .map(|edge| (normalized_pair(edge.first.0, edge.second.0), edge))
+        .collect::<BTreeMap<_, _>>();
+    if standing_edges.keys().copied().collect::<BTreeSet<_>>() != expected_standing_pairs {
+        issues.push(macro_issue(
+            "Ocean Archipelagoes Standing water changed its exact ten instance pairs",
+        ));
+    }
+    let causeway_pair = named_pair("home-landing", "wooded-heart");
+    for (pair, edge) in &standing_edges {
+        let ResolvedLiquidPort::Standing { port, elevation } = &edge.liquid else {
+            continue;
+        };
+        if *elevation != ResolvedLiquidElevation::Exact(8) {
+            issues.push(macro_issue(format!(
+                "Ocean Archipelagoes Standing seam {pair:?} must remain exactly level 8"
+            )));
+        }
+        if Some(*pair) == causeway_pair {
+            let first_approach = edge
+                .walker
+                .ports
+                .iter()
+                .flat_map(|walker| walker.first_approach.iter().copied())
+                .collect::<BTreeSet<_>>();
+            let second_approach = edge
+                .walker
+                .ports
+                .iter()
+                .flat_map(|walker| walker.second_approach.iter().copied())
+                .collect::<BTreeSet<_>>();
+            let exclusions = edge
+                .boundary_pairs
+                .iter()
+                .filter(|(first, second)| {
+                    first_approach.contains(first) || second_approach.contains(second)
+                })
+                .copied()
+                .collect::<BTreeSet<_>>();
+            if edge.elevation.preferred != 9
+                || edge.walker.ports.len() != 1
+                || edge
+                    .walker
+                    .ports
+                    .first()
+                    .is_none_or(|walker| walker.lanes.len() != 4)
+                || port
+                    .lanes
+                    .union(&exclusions)
+                    .copied()
+                    .collect::<BTreeSet<_>>()
+                    != edge.boundary_pairs
+                || !port.lanes.is_disjoint(&exclusions)
+            {
+                issues.push(macro_issue(
+                    "Ocean Archipelagoes home causeway must remain four-wide at level 9 with its exact standing-water exclusion",
+                ));
+            }
+        } else if !edge.walker.ports.is_empty() || port.lanes != edge.boundary_pairs {
+            issues.push(macro_issue(format!(
+                "Ocean Archipelagoes non-causeway Standing seam {pair:?} must remain full-width"
+            )));
+        }
+    }
+    let exact_coastal_walker = plan
+        .layout
+        .shared_edges
+        .values()
+        .filter(|edge| {
+            matches!(edge.liquid, ResolvedLiquidPort::Standing { .. })
+                && edge.walker.ports.len() == 1
+                && edge
+                    .walker
+                    .ports
+                    .first()
+                    .is_some_and(|port| port.lanes.len() == 4)
+        })
+        .count();
+    if exact_coastal_walker != 1 {
+        issues.push(macro_issue(format!(
+            "Ocean Archipelagoes requires one exact four-lane causeway excluded from standing water, got {exact_coastal_walker}"
+        )));
+    }
+
+    let expected_aliases = [
+        (
+            "archipelago.home_beach",
+            "home-landing",
+            "sandy_islets_primary_overlook",
+        ),
+        (
+            "archipelago.channel_overlook",
+            "home-landing",
+            "sandy_islets_channel_overlook",
+        ),
+        (
+            "archipelago.home_ridge",
+            "wooded-heart",
+            "wooded_island_ridge",
+        ),
+    ]
+    .into_iter()
+    .collect::<BTreeSet<_>>();
+    let actual_aliases = settings
+        .anchor_aliases
+        .iter()
+        .map(|alias| {
+            (
+                alias.alias.as_str(),
+                alias.instance.as_str(),
+                alias.anchor.as_str(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    if actual_aliases != expected_aliases {
+        issues.push(macro_issue(
+            "Ocean Archipelagoes changed its exact world-level anchor alias sources",
+        ));
+    }
+
+    for anchor in [
+        PARTY_START,
+        MACRO_ROUTE_END,
+        "archipelago.home_beach",
+        "archipelago.channel_overlook",
+        "archipelago.home_ridge",
+    ] {
+        if !plan.anchors.contains_key(anchor) {
+            issues.push(macro_issue(format!(
+                "Ocean Archipelagoes is missing stable anchor {anchor:?}"
+            )));
+        }
+    }
+
+    let shoreline_surfaces = ordinary
+        .positions()
+        .filter(|surface| {
+            surface
+                .coord
+                .neighbors()
+                .into_iter()
+                .any(|neighbor| liquid_coords.contains(&neighbor))
+        })
+        .count();
+    let tree_roots = plan
+        .features
+        .by_id
+        .values()
+        .filter(|feature| feature.kind == FeatureKind::Tree)
+        .count();
+    if tree_roots == 0 {
+        issues.push(macro_issue(
+            "Ocean Archipelagoes wooded heart requires rooted broadleaf trees",
+        ));
+    }
+
+    OceanArchipelagoMetrics {
+        world_columns: count_u32(plan.layout.footprint.len()),
+        macro_cells: 37,
+        biome_regions: count_u32(plan.layout.patches.len()),
+        standing_water_seams: count_u32(standing_water_seams),
+        liquid_cells: count_u32(liquid_coords.len()),
+        dry_components: u8::try_from(dry_components.len()).unwrap_or(u8::MAX),
+        scenic_dry_components: u8::try_from(scenic_components).unwrap_or(u8::MAX),
+        ordinary_surfaces: count_u32(ordinary.len()),
+        reachable_surfaces: count_u32(distances.len()),
+        critical_route_steps: plan
+            .anchors
+            .get(MACRO_ROUTE_END)
+            .and_then(|end| distances.get(end))
+            .copied()
+            .unwrap_or_default(),
+        shoreline_surfaces: count_u32(shoreline_surfaces),
+        tree_roots: count_u32(tree_roots),
+    }
 }
 
 fn validate_crystal_mountain(
@@ -5594,6 +6092,8 @@ mod tests {
         include_str!("../../../../assets/config/worlds/procedural-mountain-range.ron");
     const CRYSTAL_MOUNTAIN_RON: &str =
         include_str!("../../../../assets/config/worlds/procedural-crystal-mountain.ron");
+    const OCEAN_ARCHIPELAGO_RON: &str =
+        include_str!("../../../../assets/config/worlds/procedural-ocean-archipelagoes.ron");
     const TWO_RINGS_RON: &str =
         include_str!("../../../../assets/config/worlds/procedural-two-rings.ron");
 
@@ -5933,6 +6433,162 @@ mod tests {
             authored_interior.0.saturating_add(1),
         ));
         assert_rejected(&forged_interior, "destination interior");
+    }
+
+    #[test]
+    fn shipped_ocean_archipelago_resolves_exact_cells_water_seams_and_home_port() {
+        let map = ocean_archipelago_map();
+        let settings = v3_settings(map);
+        let V3LayoutSettings::Macro(macro_settings) = &settings.layout else {
+            panic!("tracked Ocean Archipelagoes settings should use Macro");
+        };
+        assert!(is_ocean_archipelago_layout(macro_settings));
+        let layout = super::super::layout::resolve_layout(map.grid_radius, settings)
+            .expect("tracked Ocean Archipelagoes layout should resolve");
+        assert_eq!(layout.grid_radius, 77);
+        assert_eq!(layout.footprint.len(), 18_019);
+        assert_eq!(layout.patches.len(), 6);
+        assert_eq!(
+            macro_settings
+                .instances
+                .iter()
+                .map(|instance| instance.cells.len())
+                .collect::<Vec<_>>(),
+            [24, 2, 2, 2, 1, 6]
+        );
+        assert_eq!(
+            layout
+                .shared_edges
+                .values()
+                .filter(|edge| matches!(edge.liquid, ResolvedLiquidPort::Standing { .. }))
+                .count(),
+            10
+        );
+        let causeway_edges = layout
+            .shared_edges
+            .values()
+            .filter(|edge| !edge.walker.ports.is_empty())
+            .collect::<Vec<_>>();
+        assert_eq!(causeway_edges.len(), 1);
+        assert_eq!(
+            causeway_edges.first().map(|edge| edge.walker.ports.len()),
+            Some(1)
+        );
+        assert_eq!(
+            causeway_edges
+                .first()
+                .and_then(|edge| edge.walker.ports.first())
+                .map(|port| port.lanes.len()),
+            Some(4)
+        );
+        assert_eq!(
+            causeway_edges.first().map(|edge| edge.elevation.preferred),
+            Some(9)
+        );
+        let causeway = causeway_edges
+            .first()
+            .copied()
+            .expect("Ocean Archipelagoes should resolve one causeway seam");
+        let ResolvedLiquidPort::Standing { port, elevation } = &causeway.liquid else {
+            panic!("the causeway coast must retain standing ocean");
+        };
+        let walker_first_approach = causeway
+            .walker
+            .ports
+            .iter()
+            .flat_map(|port| port.first_approach.iter().copied())
+            .collect::<BTreeSet<_>>();
+        let walker_second_approach = causeway
+            .walker
+            .ports
+            .iter()
+            .flat_map(|port| port.second_approach.iter().copied())
+            .collect::<BTreeSet<_>>();
+        let causeway_exclusions = causeway
+            .boundary_pairs
+            .iter()
+            .filter(|(first, second)| {
+                walker_first_approach.contains(first) || walker_second_approach.contains(second)
+            })
+            .copied()
+            .collect::<BTreeSet<_>>();
+        assert_eq!(*elevation, ResolvedLiquidElevation::Exact(8));
+        assert_eq!(
+            port.lanes,
+            causeway
+                .boundary_pairs
+                .difference(&causeway_exclusions)
+                .copied()
+                .collect(),
+            "the full standing coast must exclude the exact protected causeway footprint"
+        );
+    }
+
+    #[test]
+    fn shipped_ocean_archipelago_constructs_seven_dry_components_and_one_sea() {
+        let map = ocean_archipelago_map();
+        let settings = v3_settings(map);
+        let setup = resolve_macro_world_setup(map.grid_radius, settings, runtime_art_catalog())
+            .expect("shipped Ocean Archipelagoes setup should resolve");
+        let world = construct_world(map.level_height, &setup, None, None, true)
+            .expect("shipped Ocean Archipelagoes canonical world should construct");
+        assert!(world.validate().is_empty());
+        let metrics = match validate_macro_world(settings, &world, None) {
+            WorldValidation::Valid(MacroWorldMetrics {
+                ocean_archipelago: Some(metrics),
+                ..
+            }) => metrics,
+            WorldValidation::Valid(_) => {
+                panic!("shipped Ocean Archipelagoes must publish its exact profile metrics")
+            }
+            WorldValidation::Invalid(issues) => panic!(
+                "shipped Ocean Archipelagoes recipe validation failed: {}",
+                format_issues(&issues)
+            ),
+        };
+        assert_eq!(metrics.world_columns, 18_019);
+        assert_eq!(metrics.macro_cells, 37);
+        assert_eq!(metrics.biome_regions, 6);
+        assert_eq!(metrics.standing_water_seams, 10);
+        assert_eq!(metrics.dry_components, 7);
+        assert_eq!(metrics.scenic_dry_components, 6);
+        assert_eq!(world.liquids.bodies.len(), 1);
+        assert!(metrics.tree_roots > 0);
+        assert!(metrics.critical_route_steps > 0);
+        assert!(metrics.reachable_surfaces < metrics.ordinary_surfaces);
+    }
+
+    #[test]
+    fn shipped_ocean_archipelago_rejects_retargeted_world_aliases() {
+        let map = ocean_archipelago_map();
+        let setup =
+            resolve_macro_world_setup(map.grid_radius, v3_settings(map), runtime_art_catalog())
+                .expect("shipped Ocean Archipelagoes setup should resolve");
+        let world = construct_world(map.level_height, &setup, None, None, true)
+            .expect("shipped Ocean Archipelagoes canonical world should construct");
+
+        let mut retargeted = map.clone();
+        let TerrainSettings::Procedural(ProceduralSettings::V3(settings)) = &mut retargeted.terrain
+        else {
+            panic!("tracked Ocean Archipelagoes settings should use procedural V3");
+        };
+        let V3LayoutSettings::Macro(layout) = &mut settings.layout else {
+            panic!("tracked Ocean Archipelagoes settings should use Macro");
+        };
+        layout
+            .anchor_aliases
+            .first_mut()
+            .expect("the shipped profile should publish aliases")
+            .anchor = "sandy_islets_channel_overlook".to_owned();
+
+        let WorldValidation::Invalid(issues) = validate_macro_world(settings, &world, None) else {
+            panic!("the exact Ocean Archipelagoes profile must reject a retargeted alias");
+        };
+        assert!(
+            format_issues(&issues).contains("anchor alias sources"),
+            "unexpected alias-profile diagnostic: {}",
+            format_issues(&issues)
+        );
     }
 
     #[test]
@@ -7159,6 +7815,14 @@ mod tests {
         SETTINGS.get_or_init(|| {
             ron::from_str(CRYSTAL_MOUNTAIN_RON)
                 .expect("tracked Crystal Mountain settings should parse")
+        })
+    }
+
+    fn ocean_archipelago_map() -> &'static MapSettings {
+        static SETTINGS: OnceLock<MapSettings> = OnceLock::new();
+        SETTINGS.get_or_init(|| {
+            ron::from_str(OCEAN_ARCHIPELAGO_RON)
+                .expect("tracked Ocean Archipelagoes settings should parse")
         })
     }
 

@@ -463,6 +463,35 @@ the crater to the boundary with distinct static, current, fall, and deterministi
 landing presentation. There is no ford. The only ordinary crossing is an elevated
 bridge at least four levels above lava, reached by one-level stair approaches.
 
+### Coastal island recipes
+
+The Coastal environment also admits two island recipes. `SandyIslets` authors an
+exact requested count of separated low sand components inside one level-8 still sea;
+only its designated primary component owns actor anchors and a protected ordinary
+route. `WoodedIsland` authors one broad connected dry component with an exact
+two-column sand fringe, grass-and-soil interior, protected route, and deterministic
+eligible broadleaf placement. Its configured tree percentage describes canopy
+coverage; exact roots use half that density because every accepted silhouette spans
+multiple columns and visual volumes may not overlap. Both keep material topology and
+component count stable while named streams vary bounded relief and feature placement.
+
+Their focused scenarios are radius-24 **Sandy Islets** with exactly five dry
+components and radius-40 **Wooded Island** with one connected island. The radius-77
+**Ocean Archipelagoes** Macro profile composes one 24-cell Shallow Sea, three two-cell
+scenic Sandy Islets instances, one one-cell sandy landing, and one six-cell Wooded
+Island heart. Ten Standing seams form one ocean; one width-four landing-to-heart
+walker aperture excludes its exact protected causeway footprint from the otherwise wet coast and
+forms the entire ordinary inter-instance route. Its seven dry
+components are intentional: the landing/heart component is playable and six satellite
+components are scenic. Sandy Islets and Wooded Island currently reject Macro spanning
+features because their specialized coastline construction does not yet consume global
+feature reservations.
+
+Island metrics retain exact world columns, water and dry coverage, dry-component and
+reachable-surface counts, shoreline coverage, relief, route length, and trees where
+applicable. The Macro report additionally fixes 37 cells, six logical regions, ten
+standing-water seams, seven dry components, and six scenic dry components.
+
 ### Coastal and alpine Macro recipes
 
 Shallow Sea uses an exact deliberately simple column profile: Bedrock at level 0,
@@ -690,7 +719,9 @@ The normative delivery order is:
 15. Macro spanning features and the selectable Crystal Mountain map;
 16. Arid recipes and the selectable Desert Transition, Desert Plain, Dunes, and
     Desert Oasis Rings maps;
-17. V1/V2 removal.
+17. Coastal island recipes and the selectable Sandy Islets, Wooded Island, and Ocean
+    Archipelagoes maps;
+18. V1/V2 removal.
 
 See [planning/status.md](../planning/status.md) for progress through this sequence.
 
@@ -750,6 +781,15 @@ Dry Ring19 seams around the local-water exception. Composite tests retain all 9,
 columns, 19 region ids, 42 reciprocal seams, single-seam-removal reachability, stable
 world aliases, and the original `TwoRings` fingerprint.
 
+Island coverage fixes Sandy Islets' exact requested component count, primary ordinary
+route, level-8 connected water, relief bound, and two-column sand fringes; Wooded
+Island's single connected dry component, grass-and-soil interior, tree exclusions,
+and complete ordinary route; and Ocean Archipelagoes' 18,019 columns, 37 cells, six
+logical instances, ten Standing seams, seven dry components, six scenic components,
+and sole width-four landing-heart connection. Focused and Macro tests also prove
+stable semantic anchors, deterministic re-entry, and that no ordinary cross-water
+route appears.
+
 Recipe tests must enforce each runnable recipe's topology and protected routes.
 Fast fixed corpora run in CI; ignored 10,000-seed recipe corpora must produce 100%
 valid final maps including fallback and target less than 1% fallback use.
@@ -771,6 +811,10 @@ every open composite seam before that surface ships. Desert acceptance adds Map 
 character-camera views of all three Desert Transition bands, Desert Plain's long
 sightlines, Dunes from both a crest and trough, and the central oasis plus both
 surrounding rings. Those frames establish presentation only;
+Island acceptance adds Map and character-camera views of Sandy Islets' complete
+component roster, Wooded Island's beach-to-ridge progression, and Ocean
+Archipelagoes' open-water gaps, sandy clusters, landing, and wooded heart. Those
+frames likewise establish presentation only;
 typed recipe and composite tests remain the authority for coverage, elevation,
 liquid isolation, date-palm blockers, seams, and reachability. The landed Two
 Rings surface received its final visual and play approval at the reviewed wave head;

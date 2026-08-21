@@ -1,0 +1,32 @@
+// Seed-pinned review of the five-islet coastline and its playable primary island.
+[
+    AwaitScreen("Title"),
+    StartScenario(name: "Sandy Islets", seed: Some(1592598566)),
+    AwaitScreen("Gameplay"),
+    AwaitTerrain,
+    Key("H"),
+    AssertCameraMode(Map),
+    Settle(45),
+    Capture("01-sandy-islets-five-islet-map"),
+
+    ClickAnchor(name: "sandy_islets_primary_overlook", expected: (q: 5, r: 0, level: 11)),
+    Settle(5),
+    AwaitPartyIdle(max_frames: 1800),
+    AssertSelectedAt(expected: (q: 5, r: 0, level: 11)),
+    Key("C"),
+    AssertCameraMode(Character),
+    Settle(45),
+    Capture("02-sandy-islets-primary-overlook-character"),
+    OrbitCamera(yaw_turns: 0.33333334),
+    Settle(45),
+    Capture("03-sandy-islets-satellite-channel-character"),
+    OrbitCamera(yaw_turns: -0.33333334),
+    Settle(20),
+    Key("C"),
+    AssertCameraMode(FirstPerson),
+    Settle(45),
+    Capture("04-sandy-islets-primary-overlook-first-person"),
+
+    Key("Backspace"),
+    AwaitScreen("Title"),
+]

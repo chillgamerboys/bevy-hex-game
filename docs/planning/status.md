@@ -9,6 +9,22 @@ What is *planned* is [roadmap.md](roadmap.md). What the game is *for* is
 
 ## In delivery
 
+The **Coastal islands** wave is in parallel delivery and is not yet a claim about
+`dev`. Its locked content surface consists of focused **Sandy Islets** and **Wooded
+Island** maps plus the radius-77 **Ocean Archipelagoes** Macro world. The focused
+profiles reuse the Coastal environment at sea level 8: five separated sandy
+components in a radius-24 world, and one broad radius-40 island with a two-column
+beach and broadleaf interior. The Macro roster assigns 24 of 37 atomic cells to one
+continuous ocean, six cells to three scenic sandy clusters, one to a playable sandy
+landing, and six to the wooded heart. Its landing-heart seam is the only ordinary dry
+cross-instance route; six remote dry components remain scenery.
+
+Typed settings, metrics, generation, and Macro composition are being built in
+separate lanes. Selectable scenario/Sandbox wiring, dependency invalidation,
+lifecycle checks, semantic review routes, documentation, and coordinator-owned visual
+captures follow those generators. The full selector gate, optimized benchmarks,
+deterministic capture pack, and human visual/play approval are still pending.
+
 The **Crystal Mountain** wave is implemented on its delivery branch and is not yet a
 claim about `dev`. Its selectable radius-77 Macro candidate places the existing
 base-6/rise-144 Crystal Ascent at world origin, surrounds its level-150 summit with a
@@ -96,10 +112,11 @@ placement remains rejected; the in-delivery Crystal Mountain candidate is the on
 specialized composition that constructs the landmark at world origin, aligns its
 authored summit approach, and joins its lower aperture to the global tunnel.
 
-V3 now has nineteen recipe variants: Hills, Sky Islands, Mountains, Caves, Waterfall,
+V3 now has twenty-one recipe variants: Hills, Sky Islands, Mountains, Caves, Waterfall,
 Forest, Fort, Volcano, Deep Forest, Prairie, Shallow Sea, Beach, Shore, Deep Mountain,
-Crystal Ascent, Desert Transition, Desert Plain, Dunes, and Oasis. Ring7 places its
-fixed seven-recipe roster in one connected radius-33 world. Ring19 powers two
+Crystal Ascent, Desert Transition, Desert Plain, Dunes, Oasis, Sandy Islets, and
+Wooded Island. Ring7 places its fixed seven-recipe roster in one connected radius-33
+world. Ring19 powers two
 selectable radius-55, 9,241-column profiles. **Two Rings** retains its 19 fixed mixed
 regions, 42 reciprocal seams, 30 outer boundary sides, and physical ordinary-walker
 graph that keeps all regions reachable after any one seam is removed. Its three

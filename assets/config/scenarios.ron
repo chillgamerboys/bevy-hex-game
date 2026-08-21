@@ -27,9 +27,9 @@
 // named here, so a wrong path fails `cargo test` rather than at the loading screen.
 //
 // An `encounter` is a roster: many units a side, each naming an archetype and a
-// placement. Several scenarios share one — every generated map below uses the same
-// anchored skirmish. The placement vocabulary and how to add a party member are
-// documented in `config/encounters/anchored-skirmish.ron`.
+// placement. Several generated maps share the anchored skirmish, while non-combat
+// traversal and biome reviews may reuse one standard showcase party. The placement
+// vocabulary and how to add a party member are documented in the encounter files.
 //
 // Authored maps place units on exact CUBE coordinates; generated maps use the named
 // anchors the generator publishes after validating the map, so rerolling a seed does not
@@ -166,6 +166,30 @@
             world: "config/worlds/procedural-desert-oasis-rings.ron",
             generation_seed: Some(1592598566),
             encounter: "config/encounters/anchored-skirmish.ron",
+        ),
+        (
+            name: "Sandy Islets",
+            category: Map,
+            blurb: "Five low sandy islets rise separately from one continuous shallow sea, with one playable landing route.",
+            world: "config/worlds/procedural-sandy-islets.ron",
+            generation_seed: Some(1592598566),
+            encounter: "config/encounters/island-showcase.ron",
+        ),
+        (
+            name: "Wooded Island",
+            category: Map,
+            blurb: "A broad connected island climbs from a sandy fringe into a rolling broadleaf interior.",
+            world: "config/worlds/procedural-wooded-island.ron",
+            generation_seed: Some(1592598566),
+            encounter: "config/encounters/island-showcase.ron",
+        ),
+        (
+            name: "Ocean Archipelagoes",
+            category: Map,
+            blurb: "A radius-77 ocean surrounds sandy satellite archipelagoes and a large wooded island heart.",
+            world: "config/worlds/procedural-ocean-archipelagoes.ron",
+            generation_seed: Some(1592598566),
+            encounter: "config/encounters/island-showcase.ron",
         ),
         (
             name: "Fort",

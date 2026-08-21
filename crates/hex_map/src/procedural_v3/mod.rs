@@ -20,8 +20,9 @@ use crate::procedural::{
     ForestMetrics as ForestReportMetrics, FortMetrics as FortReportMetrics, GenerationReport,
     HillsMetrics as HillsReportMetrics, MountainsMetrics as MountainsReportMetrics,
     OasisMetrics as OasisReportMetrics, PrairieMetrics as PrairieReportMetrics,
-    ProceduralRecipeMetrics, TacticalMetrics, VolcanoMetrics as VolcanoReportMetrics,
-    WaterfallMetrics as WaterfallReportMetrics,
+    ProceduralRecipeMetrics, SandyIsletsMetrics as SandyIsletsReportMetrics, TacticalMetrics,
+    VolcanoMetrics as VolcanoReportMetrics, WaterfallMetrics as WaterfallReportMetrics,
+    WoodedIslandMetrics as WoodedIslandReportMetrics,
 };
 use crate::settings::{ProceduralV3Settings, V3LayoutSettings, V3RecipeSettings};
 use crate::terrain::TerrainPalette;
@@ -33,6 +34,7 @@ use world::WorldValidationIssue;
 mod arid_landform;
 mod caves;
 pub(crate) use caves::{CaveCrystalAssetError, CaveCrystalObjectSet};
+mod coastal_island;
 mod crystal_ascent;
 mod crystal_ascent_assets;
 pub(crate) use crystal_ascent_assets::{CrystalAscentAssetError, CrystalAscentObjectSet};
@@ -76,6 +78,7 @@ mod ring19;
 mod ring7;
 mod river_terrain;
 mod routing;
+mod sandy_islets;
 mod seam;
 mod seed;
 #[cfg_attr(
@@ -98,6 +101,7 @@ mod volcano;
 mod volume;
 pub(crate) use volume::FillMaterialRole;
 mod waterfall;
+mod wooded_island;
 mod world;
 pub(crate) use world::{
     CaveCrystalKind, CaveCrystalPresentation, CaveCrystalSiteKind, CrystalAscentCrystalKind,
@@ -219,6 +223,8 @@ pub(crate) fn ensure_recipe_available(
                     | V3RecipeSettings::DesertPlain(_)
                     | V3RecipeSettings::Dunes(_)
                     | V3RecipeSettings::Oasis(_)
+                    | V3RecipeSettings::SandyIslets(_)
+                    | V3RecipeSettings::WoodedIsland(_)
             ) =>
         {
             Ok(())
@@ -546,6 +552,47 @@ pub(crate) fn build(
                 |metrics| ProceduralRecipeMetrics::Oasis(oasis_recipe_metrics(metrics)),
             )
         }
+        V3LayoutSettings::Single(patch)
+            if matches!(patch.recipe, V3RecipeSettings::SandyIslets(_)) =>
+        {
+            finish_build(
+                sandy_islets::generate(grid_radius, level_height, settings, seed)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                sandy_islets_report_metrics,
+                |metrics| {
+                    ProceduralRecipeMetrics::SandyIslets(sandy_islets_recipe_metrics(metrics))
+                },
+            )
+        }
+        V3LayoutSettings::Single(patch)
+            if matches!(patch.recipe, V3RecipeSettings::WoodedIsland(_)) =>
+        {
+            let art_catalog = art_catalog.ok_or_else(|| {
+                V3GenerationError::RecipeContract(
+                    "Wooded Island requires the accepted runtime art catalog".to_owned(),
+                )
+            })?;
+            finish_build(
+                wooded_island::generate(grid_radius, level_height, settings, seed, art_catalog)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                wooded_island_report_metrics,
+                |metrics| {
+                    ProceduralRecipeMetrics::WoodedIsland(wooded_island_recipe_metrics(metrics))
+                },
+            )
+        }
         V3LayoutSettings::Single(patch) => Err(V3GenerationError::RecipeUnavailable(recipe_name(
             &patch.recipe,
         ))),
@@ -604,10 +651,13 @@ pub(crate) fn build(
                 started,
                 macro_report_metrics,
                 |metrics| {
-                    metrics.mountain_range.map_or_else(
-                        || ProceduralRecipeMetrics::Macro(metrics.report),
-                        ProceduralRecipeMetrics::MountainRange,
-                    )
+                    if let Some(metrics) = metrics.ocean_archipelago {
+                        ProceduralRecipeMetrics::OceanArchipelago(metrics)
+                    } else if let Some(metrics) = metrics.mountain_range {
+                        ProceduralRecipeMetrics::MountainRange(metrics)
+                    } else {
+                        ProceduralRecipeMetrics::Macro(metrics.report)
+                    }
                 },
             )
         }
@@ -807,6 +857,50 @@ fn oasis_report_metrics(metrics: &OasisReportMetrics) -> TacticalMetrics {
 }
 
 const fn oasis_recipe_metrics(metrics: &OasisReportMetrics) -> OasisReportMetrics {
+    *metrics
+}
+
+fn sandy_islets_report_metrics(metrics: &SandyIsletsReportMetrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: metrics.relief,
+        barrier_cells: metrics.water_cells,
+        critical_route_steps: metrics.critical_route_steps,
+        reachable_surfaces: metrics.primary_reachable_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        environment_signature_percent: metrics
+            .land_surfaces
+            .saturating_mul(100)
+            .checked_div(metrics.world_columns)
+            .unwrap_or_default(),
+        ..Default::default()
+    }
+}
+
+const fn sandy_islets_recipe_metrics(
+    metrics: &SandyIsletsReportMetrics,
+) -> SandyIsletsReportMetrics {
+    *metrics
+}
+
+fn wooded_island_report_metrics(metrics: &WoodedIslandReportMetrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: metrics.relief,
+        barrier_cells: metrics.water_cells,
+        critical_route_steps: metrics.critical_route_steps,
+        reachable_surfaces: metrics.reachable_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        environment_signature_percent: metrics
+            .tree_roots
+            .saturating_mul(100)
+            .checked_div(metrics.grass_interior_surfaces)
+            .unwrap_or_default(),
+        ..Default::default()
+    }
+}
+
+const fn wooded_island_recipe_metrics(
+    metrics: &WoodedIslandReportMetrics,
+) -> WoodedIslandReportMetrics {
     *metrics
 }
 
@@ -1211,6 +1305,8 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
         V3RecipeSettings::DesertPlain(_) => "DesertPlain",
         V3RecipeSettings::Dunes(_) => "Dunes",
         V3RecipeSettings::Oasis(_) => "Oasis",
+        V3RecipeSettings::SandyIslets(_) => "SandyIslets",
+        V3RecipeSettings::WoodedIsland(_) => "WoodedIsland",
     }
 }
 
@@ -1221,6 +1317,7 @@ mod tests {
         PatchEdgeContractSettings, PatchEdgesSettings, PatchMaskSettings, PatchSpec,
         V3CrystalAscentSettings, V3DesertPlainSettings, V3DesertTransitionSettings,
         V3DunesSettings, V3EnvironmentSettings, V3HillsSettings, V3OasisSettings,
+        V3SandyIsletsSettings, V3WoodedIslandSettings,
     };
 
     fn world_edges() -> PatchEdgesSettings {
@@ -1302,6 +1399,37 @@ mod tests {
             let settings = ProceduralV3Settings {
                 layout: V3LayoutSettings::Single(PatchSpec {
                     environment: V3EnvironmentSettings::Arid,
+                    recipe,
+                    overlays: Vec::new(),
+                    mask: PatchMaskSettings::WholeWorld,
+                    edges: world_edges(),
+                }),
+            };
+            assert_eq!(ensure_recipe_available(&settings), Ok(()));
+        }
+    }
+
+    #[test]
+    fn both_native_coastal_island_recipes_are_reported_available() {
+        let recipes = [
+            V3RecipeSettings::SandyIslets(V3SandyIsletsSettings {
+                sea_level: 8,
+                land_coverage_percent: 28,
+                islet_count: 5,
+                max_relief: 3,
+            }),
+            V3RecipeSettings::WoodedIsland(V3WoodedIslandSettings {
+                sea_level: 8,
+                land_coverage_percent: 68,
+                max_relief: 6,
+                tree_coverage_percent: 26,
+            }),
+        ];
+
+        for recipe in recipes {
+            let settings = ProceduralV3Settings {
+                layout: V3LayoutSettings::Single(PatchSpec {
+                    environment: V3EnvironmentSettings::Coastal,
                     recipe,
                     overlays: Vec::new(),
                     mask: PatchMaskSettings::WholeWorld,

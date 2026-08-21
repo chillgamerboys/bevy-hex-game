@@ -284,12 +284,20 @@ const SHIPPED_CAMPAIGN_INPUTS: &[(&str, &str)] = &[
         include_str!("../../../assets/config/worlds/procedural-mountain-range.ron"),
     ),
     (
+        "config/worlds/procedural-ocean-archipelagoes.ron",
+        include_str!("../../../assets/config/worlds/procedural-ocean-archipelagoes.ron"),
+    ),
+    (
         "config/worlds/procedural-prairie.ron",
         include_str!("../../../assets/config/worlds/procedural-prairie.ron"),
     ),
     (
         "config/worlds/procedural-ring7.ron",
         include_str!("../../../assets/config/worlds/procedural-ring7.ron"),
+    ),
+    (
+        "config/worlds/procedural-sandy-islets.ron",
+        include_str!("../../../assets/config/worlds/procedural-sandy-islets.ron"),
     ),
     (
         "config/worlds/procedural-two-rings.ron",
@@ -306,6 +314,10 @@ const SHIPPED_CAMPAIGN_INPUTS: &[(&str, &str)] = &[
     (
         "config/worlds/procedural-waterfall.ron",
         include_str!("../../../assets/config/worlds/procedural-waterfall.ron"),
+    ),
+    (
+        "config/worlds/procedural-wooded-island.ron",
+        include_str!("../../../assets/config/worlds/procedural-wooded-island.ron"),
     ),
     (
         "config/worlds/rolling-hills.ron",
@@ -326,6 +338,10 @@ const SHIPPED_CAMPAIGN_INPUTS: &[(&str, &str)] = &[
     (
         "config/encounters/crystal-ascent-showcase.ron",
         include_str!("../../../assets/config/encounters/crystal-ascent-showcase.ron"),
+    ),
+    (
+        "config/encounters/island-showcase.ron",
+        include_str!("../../../assets/config/encounters/island-showcase.ron"),
     ),
     (
         "config/encounters/crystal-mountain-showcase.ron",
@@ -3845,7 +3861,7 @@ mod tests {
         let example: LegacyResumeFile =
             ron::from_str(example_text).expect("the elemental example resume should parse");
         assert_eq!(example.build_version, build_identity());
-        assert_eq!(example.scenario_digest, 0x79B7_A6A8_C52F_8BDF);
+        assert_eq!(example.scenario_digest, 0x00A7_9FC8_F076_64FF);
         assert_eq!(example.units.len(), 6, "Party Trial is a complete 3v3");
         validate_legacy_resume(&example).expect("the elemental example record itself is valid");
 

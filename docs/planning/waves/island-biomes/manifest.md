@@ -1,6 +1,7 @@
 # Island biomes wave
 
-- Status: `dispatching`
+- Status: `candidate-assembly` (implementation and visual walks complete; final exact-tree
+  selector gate and named-human review pending)
 - Wave branch: `wave/island-biomes`
 - Base `origin/dev`: `fc55bd5a1c3c0181b6506d5ac59e1189d287838a`
 - Required stacked dependency: Desert biomes exact review-ready head
@@ -22,6 +23,11 @@ The focused recipes must be independently useful, but the final value comes from
 that they compose into one continuous ocean without pretending disconnected scenic islands
 are ordinarily walkable. That makes this one candidate with four ownership lanes.
 
+The four lanes are now composed in the shared wave working tree. `merged-to-wave` below
+means their implementation has been reconciled there; it does not claim a source-lane PR,
+a committed candidate head, the final selector-chosen CI-equivalent gate, or delivery to
+`dev`.
+
 ## Locked decisions
 
 1. **I1:** "Reuse the existing `Coastal` environment. `SandyIslets` and `WoodedIsland`
@@ -36,9 +42,9 @@ are ordinarily walkable. That makes this one candidate with four ownership lanes
    owns the playable ordinary route. Remote islands remain intentionally unreachable until
    a future swimming or boat mechanic exists."
 4. **I4:** "The final Macro uses exactly 37 atomic cells: 24 open-sea cells, three two-cell
-   sandy clusters, one sandy landing cell, and a six-cell wooded heart. It declares nine
-   exact Standing-water seams and one dry landing-to-heart walker seam; every other dry
-   component is scenic."
+   sandy clusters, one sandy landing cell, and a six-cell wooded heart. It declares ten
+   exact Standing-water seams; the landing-to-heart coast excludes exactly one four-lane
+   walker causeway, and every other dry component is scenic."
 5. **I5:** "Seed changes shoreline detail, relief, and vegetation placement but never map
    radius, sea level, requested island count, land-component count, route ownership,
    terminal identity, or Macro cell roster."
@@ -100,7 +106,7 @@ lanes:
       full: true
     evidence: logic-only
     sizing: {model: inherited, effort: high}
-    state: dispatched
+    state: merged-to-wave
     pr: null
 
   - id: L2
@@ -124,7 +130,7 @@ lanes:
       full: true
     evidence: static-presentation
     sizing: {model: inherited, effort: high}
-    state: dispatched
+    state: merged-to-wave
     pr: null
 
   - id: L3
@@ -137,8 +143,9 @@ lanes:
     owns:
       - crates/hex_map/src/procedural_v3/macro_world.rs (Ocean Archipelagoes profile only)
       - crates/hex_map/src/procedural_v3/composition.rs (ocean liquid-union tests only)
-      - crates/hex_map/src/procedural.rs (Ocean Archipelagoes metrics only)
-      - crates/hex_map/src/lib.rs (Ocean Archipelagoes exports only)
+      - crates/hex_map/src/procedural.rs (focused-island and Ocean Archipelagoes report metrics only)
+      - crates/hex_map/src/lib.rs (island report exports only)
+      - crates/hex_map/src/grid.rs (island report reflection registration only)
       - crates/hex_map/tests/contracts/composed_worlds.rs (Ocean Archipelagoes tests only)
       - assets/config/worlds/procedural-ocean-archipelagoes.ron
       - docs/planning/waves/island-biomes/manifest.md (L3 queue row only)
@@ -150,7 +157,7 @@ lanes:
       full: true
     evidence: static-presentation
     sizing: {model: inherited, effort: high}
-    state: in_progress
+    state: merged-to-wave
     pr: null
 
   - id: L4
@@ -163,6 +170,7 @@ lanes:
     owns:
       - assets/config/worlds/procedural-sandy-islets.ron
       - assets/config/worlds/procedural-wooded-island.ron
+      - assets/config/encounters/island-showcase.ron
       - assets/config/scenarios.ron (three island entries only)
       - assets/config/sandbox_maps.ron (three island entries only)
       - assets/ui/sandbox/sandy-islets.png
@@ -195,7 +203,7 @@ lanes:
       full: true
     evidence: motion-or-feel
     sizing: {model: inherited, effort: high}
-    state: dispatched
+    state: merged-to-wave
     pr: null
 ```
 
@@ -246,7 +254,7 @@ lanes:
   boundary ocean, no submerged feature roots, and representative-seed determinism.
 - Wooded Island proves one broad land component, shoreline fringe, relief bound, protected
   dry route, broadleaf density, unblocked anchors, boundary ocean, and determinism.
-- Ocean Archipelagoes proves all 18,019 columns, the exact 37-cell/six-region roster, nine
+- Ocean Archipelagoes proves all 18,019 columns, the exact 37-cell/six-region roster, ten
   Standing-water seams, one connected ocean, seven intentional dry components, one
   connected landing-to-heart ordinary route, scenic satellite isolation, stable aliases,
   unique ids, lifecycle, teardown, and deterministic re-entry.
@@ -258,6 +266,21 @@ lanes:
 - The full selector-chosen CI-equivalent gate, formatting, dependency policy, doctests,
   clippy, docs, optimized shipping build, and named-human presentation/play classification
   are required before delivery.
+
+## Evidence ledger
+
+| Acceptance slice | Current evidence | Remaining work |
+|---|---|---|
+| Focused island contracts and geometry | The targeted island unit slice passes all 13 tests, including settings, fingerprints, exact component counts, coastline/strata, protected routes, and deterministic construction. | Re-run through the selector-chosen final candidate gate. |
+| Ocean Archipelagoes composition | Canonical radius-77 construction, exact aliases, and the alias-retarget mutation test pass; the generated report covers 18,019 columns, the 37-cell roster, one ocean, seven dry components, ten wet seams, and the four-wide playable causeway. | Re-run the complete map-contract and release corpus at the final committed head. |
+| Runtime lifecycle | Island generation, teardown, and deterministic gameplay re-entry passed in the targeted lifecycle test before the compact encounter was added. | Re-run lifecycle on the exact final tree so the new encounter and dependency digest are included. |
+| Selectable presentation | All three current visual-walk scripts completed and produced 17 real frames: four Sandy Islets, six Wooded Island, and seven Ocean Archipelagoes captures. The three shipped Sandbox previews are real 640x360 renders derived from this review work. | Named-human visual/play classification remains required. |
+| Party formation | `assets/config/encounters/island-showcase.ron` keeps the standard three-character noncombat party but uses compact formation spread `1`, allowing ordinary movement through the authored four-wide coastal routes. | Include encounter parsing, scenario wiring, save dependency digest, and exact-route assertions in the final gate. |
+| Candidate closure | Targeted static, construction, alias, lifecycle, and live visual-walk checks have passed as recorded above. | The final exact-tree selector plan, full CI-equivalent command set, doctests, format/lint/policy/docs checks, optimized shipping build, and benchmarks have not yet been claimed. |
+
+The visual review index is
+`.context/waves/island-biomes-review.md`. Captures are presentation evidence only; the
+typed tests remain authoritative for topology, connectivity, determinism, and lifecycle.
 
 ## Stop conditions
 
@@ -273,8 +296,19 @@ lanes:
 
 ## Injection log
 
-- 2026-08-21: initial four-lane island wave recorded from the user's overnight sequence;
-  no later injections yet.
+- 2026-08-20: initial four-lane island wave recorded from the user's overnight sequence;
+  no source work dispatched before the manifest commit.
+- 2026-08-20: L3 ownership expanded narrowly to the focused-island public report structs,
+  enum variants, exports, and reflection registration. L2 owns private construction metrics,
+  while the report boundary remains coordinator-integrated with the Ocean profile; no geometry
+  or serialized settings ownership moved.
+- 2026-08-20: all four lanes were reconciled into the shared wave tree. Sandy Islets,
+  Wooded Island, and Ocean Archipelagoes are selectable; the dedicated compact encounter
+  uses formation spread `1`; three successful live walks produced 17 review frames and
+  three real 640x360 Sandbox previews.
+- 2026-08-20: targeted island unit, canonical Ocean construction, alias mutation, and
+  lifecycle slices passed as recorded in the evidence ledger. The final committed-head
+  selector-chosen CI-equivalent gate and named-human review remain deliberately open.
 
 ## Close-out
 

@@ -218,6 +218,20 @@ impl LandformVegetationSet {
             [&self.small_broadleaf, &self.tall_narrow]
         }
     }
+
+    /// Adapts the preflighted temperate catalog to the Coastal island recipes.
+    ///
+    /// Coastal is a surface-material family, not a separate authored-tree
+    /// family. Keeping this conversion explicit lets Macro preflight the shared
+    /// temperate assets once without teaching unrelated landform dispatch that
+    /// every Coastal recipe owns vegetation.
+    pub(super) fn from_coastal_temperate(source: &TemperateVegetationSet) -> Self {
+        Self {
+            small_broadleaf: source.small_broadleaf.clone(),
+            tall_narrow: source.tall_narrow.clone(),
+            grass_tuft: source.grass_tuft.clone(),
+        }
+    }
 }
 
 /// Deterministic feature counts produced by one shared placement pass.
